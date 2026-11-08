@@ -11,7 +11,9 @@
 
 #include <QMetaObject>
 
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace frost::ui::cmake {
 
@@ -30,6 +32,14 @@ QString toQString(std::string_view text) { return QString::fromUtf8(text.data(),
 struct CMakeController::Bridge {
     Mutex mutex;
     CMakeController* controller FROST_GUARDED_BY(mutex) = nullptr;
+    ICMakeBackend* backend FROST_GUARDED_BY(mutex) = nullptr; // setBackend's, for presetFiles().
+
+    // The backend's presets files, read on the calling thread (empty without a backend). The lock
+    // keeps a backend that setBackend is detaching alive until the read ends.
+    std::vector<std::string> presetFiles() {
+        LockGuard lock(mutex);
+        return backend != nullptr ? backend->presetFiles() : std::vector<std::string>{};
+    }
 
     // Runs function(controller) on the controller's thread, unless it was destroyed.
     template<class F>
@@ -53,6 +63,13 @@ CMakeController::CMakeController(QObject* parent)
 CMakeController::~CMakeController() {
     LockGuard lock(m_bridge->mutex);
     m_bridge->controller = nullptr;
+    m_bridge->backend = nullptr;
+}
+
+void CMakeController::setBackend(ICMakeBackend* backend) noexcept {
+    m_backend = backend;
+    LockGuard lock(m_bridge->mutex);
+    m_bridge->backend = backend;
 }
 
 build::CMakeServiceCallbacks CMakeController::callbacks() {
@@ -73,7 +90,15 @@ build::CMakeServiceCallbacks CMakeController::callbacks() {
         bridge->post([outcome](CMakeController& self) { self.applyConfigureFinished(outcome); });
     };
     out.onModelChanged = [bridge](std::shared_ptr<const project::CMakeProject> model) {
-        bridge->post([model = std::move(model)](CMakeController& self) mutable { self.applyModel(std::move(model)); });
+        // The tree is built here, on the service's thread (header comment, Threads).
+        std::shared_ptr<const project::CMakeViewModel> view;
+        if (model) {
+            view = std::make_shared<const project::CMakeViewModel>(
+                project::CMakeViewModel::build(*model, bridge->presetFiles()));
+        }
+        bridge->post([model = std::move(model), view = std::move(view)](CMakeController& self) mutable {
+            self.applyModel(std::move(model), std::move(view));
+        });
     };
     out.onProfilesChanged = [bridge](const std::vector<project::CMakeProfile>& profiles,
                                      std::optional<std::size_t> active) {
@@ -107,16 +132,10 @@ void CMakeController::cancel() {
     }
 }
 
-void CMakeController::applyModel(std::shared_ptr<const project::CMakeProject> model) {
+void CMakeController::applyModel(std::shared_ptr<const project::CMakeProject> model,
+                                 std::shared_ptr<const project::CMakeViewModel> view) {
     m_model = std::move(model);
-    if (!m_model) {
-        m_tree->setViewModel(nullptr);
-    } else {
-        const std::vector<std::string> presets =
-            m_backend != nullptr ? m_backend->presetFiles() : std::vector<std::string>{};
-        m_tree->setViewModel(
-            std::make_shared<const project::CMakeViewModel>(project::CMakeViewModel::build(*m_model, presets)));
-    }
+    m_tree->setViewModel(m_model ? std::move(view) : nullptr);
     emit modelChanged();
 }
 

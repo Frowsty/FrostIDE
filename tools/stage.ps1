@@ -9,7 +9,15 @@
 # bundle the pinned clangd with its resource directory, lldb-dap, LuaLS (ADR 0079), the managed
 # language server and the managed debugger; a missing one fails the stage (FND-13). Next to the
 # folder, <Destination>-symbols.zip holds frost.exe and frost_app.dll with the PDBs whose GUID and
-# age match them (tools/symbolize.py archive; symbolize.py --symbol-archive reads it). Windows only.
+# age match them (tools/symbolize.py archive; symbolize.py --symbol-archive reads it). Windows only;
+# tools/stage.sh stages a Linux build.
+#
+# Every check that can fail on the inputs (the build tree, the ProjectHost, the resources, the HTTPS
+# backend, the dependency notices, the bundled tools, the PDB identities of frost.exe and
+# frost_app.dll) runs before the destination is touched. A failure after that, whether a check of
+# the staged folder or an unexpected cmdlet error (a locked or unreadable file, a full disk: the
+# script-scope trap), removes the destination and symbol archive this run created, so a failed
+# stage never leaves a partial folder behind (R0-close item 7).
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage.ps1 -Destination E:\FrostBuilds\preview\x
 #              -QtSourceArchive <pinned-qtbase-source.tar.xz>
@@ -17,6 +25,8 @@
 #              [-Python <python.exe>] [-BundleTools]
 #
 # -Python defaults to the SDK's (E:\sdk\py\Scripts\python.exe), which runs tools/symbolize.py.
+# -ManagedServerDir and -ManagedDebugDir default to FROST_MANAGED_SERVER_DIR and FROST_MANAGED_DEBUG_DIR
+# when those are set, else to this machine's reviewed builds under E:\FrostBuilds.
 # The destination and its symbol archive must not exist (or the folder be empty); -Force replaces
 # them. -SkipBuild stages what the build
 # tree already holds (also -Config Debug, which the script's test uses). -WinDeployQt overrides the
@@ -34,8 +44,10 @@ param(
     [string]$SdkRoot = 'E:\sdk',
     [string]$WinDeployQt = '',
     [string]$QtSourceArchive = '',
-    [string]$ManagedServerDir = 'E:\FrostBuilds\managed-server-0.28.0-reviewed',
-    [string]$ManagedDebugDir = 'E:\FrostBuilds\managed-debug\installed-app-v13\FrostManagedDebug',
+    [string]$ManagedServerDir = $(if ($env:FROST_MANAGED_SERVER_DIR) { $env:FROST_MANAGED_SERVER_DIR }
+        else { 'E:\FrostBuilds\managed-server-0.28.0-reviewed' }),
+    [string]$ManagedDebugDir = $(if ($env:FROST_MANAGED_DEBUG_DIR) { $env:FROST_MANAGED_DEBUG_DIR }
+        else { 'E:\FrostBuilds\managed-debug\installed-app-v13\FrostManagedDebug' }),
     [string]$Python = '',
     [switch]$BundleTools,
     [switch]$SkipBuild,
@@ -48,9 +60,44 @@ if (-not $BuildDir) { $BuildDir = Join-Path $repoRoot 'build\win-clangcl' }
 $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
 $Destination = [System.IO.Path]::GetFullPath($Destination)
 
+# What this run created, removed again by Fail (no partial stage survives a failure). Step 2 sets
+# them: the destination (emptied rather than removed when the caller made it, empty, beforehand)
+# and the symbol archive. Every path is literal, so a destination with [ or ] in its name is
+# cleaned like any other.
+$script:ownedDestination = $null
+$script:destinationExisted = $false
+$script:ownedArchive = $null
 function Fail([string]$message) {
     Write-Host "stage: FAIL $message"
+    $destination = $script:ownedDestination
+    if ($destination -and (Test-Path -LiteralPath $destination)) {
+        if ($script:destinationExisted) {
+            Get-ChildItem -LiteralPath $destination -Force -ErrorAction SilentlyContinue |
+                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            if (@(Get-ChildItem -LiteralPath $destination -Force -ErrorAction SilentlyContinue).Count -gt 0) {
+                Write-Host "stage: could not empty the partial $destination"
+            }
+            else { Write-Host "stage: emptied the partial $destination" }
+        }
+        else {
+            Remove-Item -LiteralPath $destination -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $destination) { Write-Host "stage: could not remove the partial $destination" }
+            else { Write-Host "stage: removed the partial $destination" }
+        }
+    }
+    $archive = $script:ownedArchive
+    if ($archive -and (Test-Path -LiteralPath $archive)) {
+        Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $archive) { Write-Host "stage: could not remove the partial $archive" }
+        else { Write-Host "stage: removed the partial $archive" }
+    }
     exit 1
+}
+
+# Any terminating error ($ErrorActionPreference is Stop, so every failed cmdlet) goes through Fail,
+# which cleans up and exits with 1. A trap covers the whole script scope wherever it is written.
+trap {
+    Fail ("unexpected error at line {0}: {1}" -f $_.InvocationInfo.ScriptLineNumber, $_.Exception.Message)
 }
 
 # Release staging must include source and notices. Debug remains useful for local
@@ -95,6 +142,37 @@ $binDir = Join-Path $BuildDir "src\app\$Config"
 foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $binDir $name))) { Fail "the build tree has no $name in $binDir" }
 }
+$projectHost = Join-Path $binDir 'project-host'
+foreach ($name in @('ProjectHostVsProbe.exe', 'ProjectHostVsProbe.exe.config')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $projectHost $name))) { Fail "the build tree has no ProjectHost $name" }
+}
+$resources = Join-Path $binDir 'resources'
+if (-not (Test-Path -LiteralPath $resources)) { Fail "the build tree has no resources in $binDir" }
+$unityPackage = Join-Path $repoRoot 'integrations\unity\com.frostide.editor'
+if (-not (Test-Path -LiteralPath $unityPackage -PathType Container)) { Fail "the repository has no Unity package at $unityPackage" }
+# Qt's default plugin selection adds optional image formats, styles and network backends; step 4
+# copies only the reviewed platform and system TLS backends from our build output.
+$tlsPlugin = if ($Config -eq 'Debug') { 'qschannelbackendd.dll' } else { 'qschannelbackend.dll' }
+$tlsSource = Join-Path (Join-Path $binDir 'tls') $tlsPlugin
+if (-not (Test-Path -LiteralPath $tlsSource)) { Fail "the build has no HTTPS backend: $tlsSource" }
+
+# The dependency notices (step 5). The overlay's Microsoft MIT notice covers the port recipe, not
+# the linked sodium library, so the actual upstream ISC notice comes from this build's installed prefix.
+$cachePath = Join-Path $BuildDir 'CMakeCache.txt'
+if (-not (Test-Path -LiteralPath $cachePath)) { Fail 'no CMake cache for dependency notice provenance' }
+$cacheText = Get-Content -Raw -LiteralPath $cachePath
+$installedMatch = [regex]::Match($cacheText, '(?m)^VCPKG_INSTALLED_DIR:[^=]+=([^\r\n]+)')
+$tripletMatch = [regex]::Match($cacheText, '(?m)^VCPKG_TARGET_TRIPLET:[^=]+=([a-zA-Z0-9_-]+)\r?$')
+if (-not $installedMatch.Success -or -not $tripletMatch.Success -or
+    -not [System.IO.Path]::IsPathRooted($installedMatch.Groups[1].Value)) {
+    Fail 'no absolute installed prefix and target triplet for dependency notices'
+}
+$sodiumNotice = Join-Path $installedMatch.Groups[1].Value ($tripletMatch.Groups[1].Value + '/share/libsodium/copyright')
+if (-not (Test-Path -LiteralPath $sodiumNotice -PathType Leaf)) { Fail 'missing upstream libsodium copyright notice' }
+if ($QtSourceArchive) {
+    $packagingPython = Join-Path $SdkRoot 'py\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $packagingPython -PathType Leaf)) { Fail 'packaging requires the SDK Python' }
+}
 
 # The bundled tools must all be there (FND-13): a stage without one would ship a feature that
 # cannot work, so a missing tool fails here, before the destination is touched.
@@ -135,6 +213,19 @@ if (-not [System.IO.Path]::IsPathRooted($Python) -or -not (Test-Path -LiteralPat
 }
 $symbolArchive = $Destination.TrimEnd('\', '/') + '-symbols.zip'
 
+# The PDB identities, before the destination is touched: the staged frost.exe and frost_app.dll are
+# copies of the build tree's, so a stale or missing PDB fails here (step 7 writes the archive).
+$previous = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$out = & $Python -I (Join-Path $PSScriptRoot 'symbolize.py') archive --stage $binDir --pdb-dir $binDir `
+    --check --require frost.exe --require frost_app.dll 2>&1
+$code = $LASTEXITCODE
+$ErrorActionPreference = $previous
+if ($code -ne 0) {
+    $out | ForEach-Object { Write-Host "stage: symbols: $_" }
+    Fail "the build tree's frost.exe and frost_app.dll have no matching PDBs ($code)"
+}
+
 # 2. A fresh destination (and symbol archive).
 if (Test-Path -LiteralPath $Destination) {
     $existing = @(Get-ChildItem -LiteralPath $Destination -Force)
@@ -147,15 +238,16 @@ if (Test-Path -LiteralPath $symbolArchive) {
     if (-not $Force) { Fail "$symbolArchive exists (use -Force to replace it)" }
     Remove-Item -LiteralPath $symbolArchive -Force
 }
-New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+# An empty folder that was already there is emptied again on failure rather than removed. The
+# ownership is recorded before New-Item, so a failure of New-Item itself is cleaned up too.
+$script:destinationExisted = Test-Path -LiteralPath $Destination
+$script:ownedDestination = $Destination
+$script:ownedArchive = $symbolArchive
+if (-not $script:destinationExisted) { [void][System.IO.Directory]::CreateDirectory($Destination) }
 
 # 3. FrostIDE's own files.
 foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
-}
-$projectHost = Join-Path $binDir 'project-host'
-foreach ($name in @('ProjectHostVsProbe.exe', 'ProjectHostVsProbe.exe.config')) {
-    if (-not (Test-Path -LiteralPath (Join-Path $projectHost $name))) { Fail "the build tree has no ProjectHost $name" }
 }
 $projectHostDestination = Join-Path $Destination 'project-host'
 New-Item -ItemType Directory -Force -Path $projectHostDestination | Out-Null
@@ -173,11 +265,8 @@ if ($Config -ne 'Release') {
         if (Test-Path -LiteralPath $pdb) { Copy-Item -LiteralPath $pdb -Destination $Destination }
     }
 }
-$resources = Join-Path $binDir 'resources'
-if (-not (Test-Path -LiteralPath $resources)) { Fail "the build tree has no resources in $binDir" }
 Copy-Item -LiteralPath $resources -Destination $Destination -Recurse
 # Distribute the original Unity package for explicit installation in a Unity project.
-$unityPackage = Join-Path $repoRoot 'integrations\unity\com.frostide.editor'
 $unityDestination = Join-Path $Destination 'unity'
 New-Item -ItemType Directory -Force -Path $unityDestination | Out-Null
 Copy-Item -LiteralPath $unityPackage -Destination $unityDestination -Recurse
@@ -232,12 +321,7 @@ if (Test-Path -LiteralPath $platforms) {
     New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'platforms') | Out-Null
     Copy-Item -Path (Join-Path $platforms '*') -Destination (Join-Path $Destination 'platforms') -Force
 }
-# Qt's default plugin selection adds optional image formats, styles and network
-# backends. Plugins are disabled above; copy only the reviewed platform and system
-# TLS backends from our build output.
-$tlsPlugin = if ($Config -eq 'Debug') { 'qschannelbackendd.dll' } else { 'qschannelbackend.dll' }
-$tlsSource = Join-Path (Join-Path $binDir 'tls') $tlsPlugin
-if (-not (Test-Path -LiteralPath $tlsSource)) { Fail "the build has no HTTPS backend: $tlsSource" }
+# Plugins are disabled above; the reviewed system TLS backend comes from our build output.
 New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'tls') | Out-Null
 Copy-Item -LiteralPath $tlsSource -Destination (Join-Path $Destination 'tls') -Force
 
@@ -247,19 +331,7 @@ foreach ($name in @('LICENSE', 'NOTICE')) {
 }
 $licenses = Join-Path $Destination 'licenses'
 New-Item -ItemType Directory -Force -Path $licenses | Out-Null
-# The overlay's Microsoft MIT notice covers the port recipe, not the linked sodium
-# library. Preserve the actual upstream ISC notice from this build's installed prefix.
-$cachePath = Join-Path $BuildDir 'CMakeCache.txt'
-if (-not (Test-Path -LiteralPath $cachePath)) { Fail 'no CMake cache for dependency notice provenance' }
-$cacheText = Get-Content -Raw -LiteralPath $cachePath
-$installedMatch = [regex]::Match($cacheText, '(?m)^VCPKG_INSTALLED_DIR:[^=]+=([^\r\n]+)')
-$tripletMatch = [regex]::Match($cacheText, '(?m)^VCPKG_TARGET_TRIPLET:[^=]+=([a-zA-Z0-9_-]+)\r?$')
-if (-not $installedMatch.Success -or -not $tripletMatch.Success -or
-    -not [System.IO.Path]::IsPathRooted($installedMatch.Groups[1].Value)) {
-    Fail 'no absolute installed prefix and target triplet for dependency notices'
-}
-$sodiumNotice = Join-Path $installedMatch.Groups[1].Value ($tripletMatch.Groups[1].Value + '/share/libsodium/copyright')
-if (-not (Test-Path -LiteralPath $sodiumNotice -PathType Leaf)) { Fail 'missing upstream libsodium copyright notice' }
+# The upstream libsodium ISC notice the preflight found in this build's installed prefix.
 $stagedSodiumNotice = Join-Path $licenses 'libsodium-copyright.txt'
 Copy-Item -LiteralPath $sodiumNotice -Destination $stagedSodiumNotice
 if ((Get-FileHash -LiteralPath $sodiumNotice -Algorithm SHA256).Hash -ne
@@ -293,10 +365,8 @@ foreach ($name in @('conpty.dll', 'OpenConsole.exe')) {
 $qtCore = if ($Config -eq 'Debug') { 'Qt6Cored.dll' } else { 'Qt6Core.dll' }
 if (-not (Test-Path -LiteralPath (Join-Path $Destination $qtCore))) { Fail "the staged folder has no $qtCore" }
 if ($QtSourceArchive) {
-    $python = Join-Path $SdkRoot 'py\Scripts\python.exe'
-    if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { Fail 'packaging requires the SDK Python' }
     $qtRoot = Split-Path -Parent (Split-Path -Parent $WinDeployQt)
-    & $python (Join-Path $PSScriptRoot 'package_notices.py') --repo $repoRoot --stage $Destination `
+    & $packagingPython (Join-Path $PSScriptRoot 'package_notices.py') --repo $repoRoot --stage $Destination `
         --installed $installedMatch.Groups[1].Value --triplet $tripletMatch.Groups[1].Value `
         --qt-root $qtRoot --qt-source $QtSourceArchive
     if ($LASTEXITCODE -ne 0) { Fail 'dependency source/notice packaging failed' }

@@ -16,11 +16,12 @@
 file(READ "${FROST_SOURCE_DIR}/sdk/sdk.lock.json" _frost_sdk_lock)
 if(WIN32)
     string(JSON _frost_lldb_version GET "${_frost_sdk_lock}" windows lldb version)
-    set(_frost_sdk_root "E:/sdk")
 else()
     string(JSON _frost_lldb_version GET "${_frost_sdk_lock}" linux lldb version)
-    set(_frost_sdk_root "$ENV{HOME}/sdk")
 endif()
+# The SDK root the configure saw (tools/env.ps1 and ~/sdk/env.sh set FROST_SDK); the test prefers
+# FROST_SDK at run time. No machine-specific default root (FND-10, frost-lint dev-path).
+file(TO_CMAKE_PATH "$ENV{FROST_SDK}" _frost_sdk_root)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FROST_SOURCE_DIR}/sdk/sdk.lock.json")
 
 set(_frost_debuggee_dir ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/lldb_debuggee)

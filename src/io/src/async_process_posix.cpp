@@ -10,7 +10,8 @@
  * Reaping (the ChildReaper; child_reaper_posix.cpp). The exit watch never reaps: the zombie keeps the pid
  * and the process-group id reserved while the public object lives, so terminate() can never signal an
  * unrelated process. Release (the object destroyed) closes the pipes and, with killOnClose, kills the
- * process group; the watch then keeps the state alive until the child has exited and reaps it by pid.
+ * process group and the rest of the child's session (killSessionTree); the watch then keeps the state
+ * alive until the child has exited and reaps it by pid.
  * Without killOnClose the child keeps running and is reaped whenever it exits. If the reactor shuts
  * down first, the watch stops, and a child still running when the last reference drops is left
  * unreaped (killed first with killOnClose); it is reparented when frost exits.
@@ -56,7 +57,7 @@ public:
     ~PosixAsyncProcess() override {
         if (!m_reaped) {
             if (m_ownGroup) {
-                static_cast<void>(::kill(-m_pid, SIGKILL));
+                killSessionTree(m_pid);
             }
             static_cast<void>(reapIfExited(m_pid));
         }
@@ -67,6 +68,9 @@ public:
         const pid_t target = m_ownGroup ? -m_pid : m_pid;
         if (::kill(target, SIGKILL) != 0 && errno != ESRCH) {
             return std::unexpected(errnoError(errno, "kill"));
+        }
+        if (m_ownGroup) {
+            killSessionTree(m_pid); // The descendants that left the group (ninja's commands).
         }
         return {};
     }
@@ -120,8 +124,9 @@ protected:
     void releaseChild() noexcept override {
         m_released = true;
         if (m_ownGroup) {
-            // The zombie (or live) leader keeps the group id reserved, so this reaches only our group.
-            static_cast<void>(::kill(-m_pid, SIGKILL));
+            // The zombie (or live) leader keeps the group and session ids reserved, so this reaches
+            // only our tree.
+            killSessionTree(m_pid);
         }
         if (exitKnown()) {
             reapNow();

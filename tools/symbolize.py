@@ -7,7 +7,7 @@
 #   python -I tools/symbolize.py minidump <file.dmp> [common options]
 #   python -I tools/symbolize.py freeze <freeze-*.json> [--samples] [common options]
 #   python -I tools/symbolize.py check-selftest --artifacts <dir> [--source-root <repo>] [common options]
-#   python -I tools/symbolize.py archive --stage <dir> --pdb-dir <dir> --output <zip> [--require <image>]
+#   python -I tools/symbolize.py archive --stage <dir> --pdb-dir <dir> (--output <zip> | --check) [--require <image>]
 #
 # Common options: --llvm-symbolizer <path> (default: $FROST_LLVM_ROOT/bin, then PATH),
 # --search-dir <dir> (repeatable; where to look for a module whose recorded path is gone) and
@@ -325,10 +325,12 @@ def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def command_archive(stage: Path, pdb_dirs: list[Path], output: Path, required: list[str]) -> int:
+def command_archive(stage: Path, pdb_dirs: list[Path], output: Path | None, required: list[str]) -> int:
     """Writes the symbol archive for the PE images directly in `stage` whose PDB is in one of
     `pdb_dirs` (images named in `required` must have one). Prints one line per module; exit 0, or 1
-    when a required image is missing or has no matching PDB."""
+    when a required image is missing or has no matching PDB. With `output` None (--check) only the
+    checks run and nothing is written: stage.ps1 checks the build tree's images this way before it
+    creates the destination, so a stale PDB fails the stage without leaving a partial folder."""
     if not stage.is_dir():
         raise UsageError(f"{stage} is not a directory")
     modules, failures = [], []
@@ -367,6 +369,9 @@ def command_archive(stage: Path, pdb_dirs: list[Path], output: Path, required: l
         print(f"FAIL   {failure}")
     if failures:
         return 1
+    if output is None:
+        print(f"check: {len(modules)} modules match their PDBs")
+        return 0
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_name(output.name + ".part")
     manifest = {"schema": SYMBOL_ARCHIVE_SCHEMA,
@@ -1025,7 +1030,9 @@ def main(argv: list[str]) -> int:
     archive = commands.add_parser("archive", help="write a stage's symbol archive (FND-13)")
     archive.add_argument("--stage", type=Path, required=True)
     archive.add_argument("--pdb-dir", action="append", type=Path, required=True)
-    archive.add_argument("--output", type=Path, required=True)
+    archive_output = archive.add_mutually_exclusive_group(required=True)
+    archive_output.add_argument("--output", type=Path)
+    archive_output.add_argument("--check", action="store_true", help="check the identities only; write nothing")
     archive.add_argument("--require", action="append", default=[], help="an image that must be archived")
     try:
         args = parser.parse_args(argv)

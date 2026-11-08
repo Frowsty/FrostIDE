@@ -451,5 +451,68 @@ TEST(CMakeRealBuild, PlansNestedMembershipAndRefreshesTheActualModel) {
     ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded()) << failureDetails();
 }
 
+/*
+ * Cancel Build ends the commands Ninja started, not just Ninja (cross review of R0-close). Ninja
+ * runs every command in a process group of its own, and a SIGKILLed Ninja cannot pass the signal
+ * on, so on Linux a cancelled build used to leave its compilers and custom commands running,
+ * reparented to init (the job object always covered Windows). The custom command here is one
+ * shell line, touch `started`, sleep 3 s, touch `finished`: cancelled once `started` exists, the
+ * line must never reach `finished`. The same build run to its end then writes `finished`, which
+ * shows the absence above is the cancel's doing. No compiler: the project has no languages.
+ */
+TEST(CMakeRealBuild, CancellingABuildEndsTheCommandsNinjaStarted) {
+    frost::test::ScratchDir scratch("cmake-cancel");
+    const std::string folder = scratch.join("slow");
+    auto& fs = io::realFileSystem();
+    ASSERT_TRUE(fs.createDirectories(folder).has_value());
+    const std::string started = under(folder, "started.txt");
+    const std::string finished = under(folder, "finished.txt");
+    ASSERT_TRUE(fs.writeFileAtomic(under(folder, "CMakeLists.txt"),
+                                   "cmake_minimum_required(VERSION 3.21)\n"
+                                   "project(slow NONE)\n"
+                                   "add_custom_target(slow ALL\n"
+                                   "  COMMAND \"${CMAKE_COMMAND}\" -E touch \"${CMAKE_SOURCE_DIR}/started.txt\"\n"
+                                   "  COMMAND \"${CMAKE_COMMAND}\" -E sleep 3\n"
+                                   "  COMMAND \"${CMAKE_COMMAND}\" -E touch \"${CMAKE_SOURCE_DIR}/finished.txt\")\n")
+                    .has_value());
+    auto trustStore = project::TrustStore::open(fs, scratch.join("trusted-roots.txt"));
+    ASSERT_TRUE(trustStore.has_value()) << trustStore.error().describe();
+    ASSERT_TRUE((*trustStore)->trust(folder).has_value());
+
+    CMakeServiceOptions options;
+    options.cmakePath = native(FROST_TEST_CMAKE);
+    options.ninjaPath = native(FROST_TEST_NINJA);
+    options.useVisualStudio = false; // No compiler, so no MSVC environment either.
+    options.captureMsvcEnvironment = false;
+    options.profileRecords = {project::CMakeProfileRecord{.name = "Debug"}};
+    CMakeServiceCallbacks callbacks;
+    callbacks.onConfigureOutput = [](BuildOutputKind, std::string_view line) {
+        std::cout << "[configure] " << line << '\n';
+    };
+    callbacks.onOutput = [](BuildOutputKind, std::string_view line) { std::cout << "[build] " << line << '\n'; };
+    auto service = CMakeService::create(fs, io::realProcessLauncher(), **trustStore, options, callbacks);
+    ASSERT_TRUE(service->openFolder(folder).has_value()); // Trusted: configures.
+    ASSERT_TRUE(service->waitForIdle(240s));
+    ASSERT_TRUE(service->lastConfigure().has_value() && service->lastConfigure()->succeeded());
+
+    ASSERT_TRUE(service->build(BuildAction::Build).has_value());
+    ASSERT_TRUE(eventually([&] { return fs.exists(started).value_or(false); }, 120s))
+        << "the custom command never started";
+    service->cancel();
+    ASSERT_TRUE(service->waitForIdle(120s));
+    ASSERT_TRUE(service->lastOutcome().has_value());
+    EXPECT_TRUE(service->lastOutcome()->result.cancelled);
+    // An absence check: three times the command's remaining sleep, so a surviving line under load
+    // still reaches `finished` inside the window.
+    EXPECT_FALSE(eventually([&] { return fs.exists(finished).value_or(false); }, 10s))
+        << "the cancelled build's command line ran on to its end";
+
+    ASSERT_TRUE(fs.removeFile(started).has_value());
+    ASSERT_TRUE(service->build(BuildAction::Build).has_value());
+    ASSERT_TRUE(service->waitForIdle(240s));
+    ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded());
+    EXPECT_TRUE(fs.exists(finished).value_or(false)) << "the uncancelled build did not write " << finished;
+}
+
 } // namespace
 } // namespace frost::build

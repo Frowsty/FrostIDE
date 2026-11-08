@@ -261,6 +261,11 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     std::optional<Job> job FROST_GUARDED_BY(mutex);
     std::uint64_t lastJobId FROST_GUARDED_BY(mutex) = 0;
     std::uint64_t profileGeneration FROST_GUARDED_BY(mutex) = 0;
+    // Changes when the reply the model comes from changes (open, close, profile switch), so a
+    // queued loadReply of an earlier folder or profile publishes nothing.
+    std::uint64_t replyGeneration FROST_GUARDED_BY(mutex) = 0;
+    // loadReply tasks queued and not yet run (CMakeService::modelLoading).
+    int replyLoadsPending FROST_GUARDED_BY(mutex) = 0;
     DiagnosticIndex diagnostics FROST_GUARDED_BY(mutex);
     std::optional<CMakeConfigureOutcome> lastConfigure FROST_GUARDED_BY(mutex);
     std::optional<CMakeBuildOutcome> lastBuild FROST_GUARDED_BY(mutex);
@@ -475,6 +480,57 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             return nullptr;
         }
         return std::make_shared<const project::CMakeProject>(std::move(**reply));
+    }
+
+    /*
+     * Service thread: reads `profile`'s existing reply and publishes it as the model, then calls
+     * onModelChanged with it (or nullptr). The read is blocking (the File API reply of a large
+     * project is several MB of JSON: about 500 ms for FrostEngine in Debug), which is why
+     * openFolder and setActiveProfile queue it here instead of reading on their caller's (the GUI)
+     * thread (R0 exit criterion, FND-9a). It runs in queue order, before any job those calls start,
+     * and publishes nothing when the folder or profile changed since it was queued (`generation`)
+     * or a configure published a model first. `lease` keeps the profile switch's admission until
+     * the read ends. Each call was counted in replyLoadsPending when it was queued; the count drops
+     * under the same lock that publishes the model, so modelLoading() and state() never both read
+     * "nothing pending" before the model and any configure it starts are in place.
+     *
+     * With `configureIfMissing` (a profile switch whose reply directory existed when it was made,
+     * but whose reply did not parse), an idle, trusted folder configures it (configureOnOpen). A
+     * switch to a profile with no reply directory at all starts that configure synchronously in
+     * setActiveProfile instead, so state() is Configuring when it returns (R0 follow-up 10). A job
+     * the user started between the switch and this read makes startJobLocked answer Busy, and the
+     * configure is dropped on purpose: that job began while model() was nullptr, so build() gave
+     * it a Configure step of its own (and configure() is one), and a second configure after it
+     * would only repeat that work.
+     *
+     * openFolder queues this read and then starts configure-on-open at once, so a trusted open may
+     * read the old reply while cmake rewrites it. That is intended: the configure publishes its own
+     * model (configuredOnce, then this read publishes nothing), and a torn read only yields nullptr
+     * or a parse error, which the configure's publication replaces.
+     */
+    void loadReply(std::uint64_t generation, const project::CMakeProfile& profile, bool configureIfMissing,
+                   const std::shared_ptr<AdmissionLease>& lease) {
+        static_cast<void>(lease);
+        auto reply = readReply(profile);
+        {
+            LockGuard lock(mutex);
+            --replyLoadsPending;
+            if (replyGeneration != generation || configuredOnce || model) {
+                return;
+            }
+            model = reply;
+            stale = false;
+            recomputeWatchedLocked();
+            if (configureIfMissing && !reply && options.configureOnOpen) {
+                // Busy only for a job started since the switch, which configures itself (above).
+                static_cast<void>(startJobLocked(JobKind::Configure, true, {}, {CMakeStep::Configure}));
+            }
+        }
+        // Directly, not through emit: this task holds the place in the event order where the model
+        // of the open or switch belongs (before the events of the job it may have started).
+        if (callbacks.onModelChanged) {
+            callbacks.onModelChanged(reply);
+        }
     }
 
     std::optional<std::string> persistedProfile(const std::string& folder) {
@@ -1311,10 +1367,6 @@ Result<void> CMakeService::openFolder(std::string_view sourceDir) {
     }
     std::vector<project::CMakeProfile> profiles = project::cmakeProfilesFor(*folder, presets, records, recordSource);
     const std::optional<std::size_t> active = State::chooseProfile(profiles, s.persistedProfile(*folder));
-    std::shared_ptr<const project::CMakeProject> model;
-    if (active) {
-        model = s.readReply(profiles[*active]);
-    }
 
     LockGuard lock(s.mutex);
     if (s.state != BuildState::Idle) {
@@ -1326,7 +1378,8 @@ Result<void> CMakeService::openFolder(std::string_view sourceDir) {
     s.presetsProblem = std::move(problem);
     s.profiles = std::move(profiles);
     s.active = active;
-    s.model = model;
+    const std::uint64_t load = ++s.replyGeneration;
+    s.model = nullptr; // Until loadReply publishes the existing reply, on the service thread.
     s.stale = false;
     s.configuredOnce = false;
     s.presetsTouched = false;
@@ -1337,7 +1390,12 @@ Result<void> CMakeService::openFolder(std::string_view sourceDir) {
     s.recomputeWatchedLocked();
     s.emitDiagnosticsCleared();
     s.emitProfilesLocked();
-    s.emitModel(model);
+    if (active) {
+        ++s.replyLoadsPending;
+        s.post([state = &s, load, profile = s.profiles[*active]] { state->loadReply(load, profile, false, nullptr); });
+    } else {
+        s.emitModel(nullptr);
+    }
     if (s.options.configureOnOpen) {
         static_cast<void>(s.startJobLocked(State::JobKind::Configure, true, {}, {CMakeStep::Configure}));
     }
@@ -1355,6 +1413,7 @@ Result<void> CMakeService::closeFolder() {
     }
     s.sourceDir.clear();
     ++s.profileGeneration;
+    ++s.replyGeneration;
     s.presets.reset();
     s.presetsProblem.reset();
     s.profiles.clear();
@@ -1392,23 +1451,18 @@ std::optional<project::CMakeProfile> CMakeService::activeProfile() const {
 
 Result<void> CMakeService::setActiveProfile(std::size_t index) {
     State& s = *m_state;
-    bool admissionReserved = false;
+    // The admission covers the switch through its reply read on the service thread (loadReply).
+    std::shared_ptr<State::AdmissionLease> lease;
     if (s.options.reserveProjectCode && s.options.releaseProjectCode) {
         auto reserved = s.options.reserveProjectCode();
         if (!reserved)
             return std::unexpected(std::move(reserved.error()));
-        admissionReserved = true;
+        lease = std::make_shared<State::AdmissionLease>();
+        lease->release = s.options.releaseProjectCode;
     }
-    struct Release {
-        State& state;
-        bool active;
-        ~Release() {
-            if (active)
-                state.options.releaseProjectCode();
-        }
-    } release{s, admissionReserved};
     project::CMakeProfile profile;
     std::string folder;
+    std::uint64_t generation = 0;
     {
         LockGuard lock(s.mutex);
         if (s.sourceDir.empty()) {
@@ -1426,22 +1480,40 @@ Result<void> CMakeService::setActiveProfile(std::size_t index) {
         }
         profile = s.profiles[index];
         folder = s.sourceDir;
+        generation = s.profileGeneration;
     }
-    auto model = s.readReply(profile);
+    /* R0 follow-up 10: whether the profile needs its configure is decided here, with one status
+     * call (the reply itself is read on the service thread, loadReply). A profile without a reply
+     * directory starts its configure before this returns, so state() is Configuring at once and
+     * clangd's trust watch never sees an idle service with the new, database-less build directory
+     * (which restarted clangd once without a database and once more on the configure's). An
+     * unreadable status counts as a reply: loadReply then decides on what it reads. */
+    bool hasReply = true;
+    if (auto replyDir = project::cmakeFileApiReplyDirectory(profile.buildDirectory)) {
+        hasReply = s.fs.exists(*replyDir).value_or(true);
+    }
     {
         LockGuard lock(s.mutex);
-        if (s.sourceDir != folder || index >= s.profiles.size() || s.state != BuildState::Idle) {
+        if (s.sourceDir != folder || s.profileGeneration != generation || s.state != BuildState::Idle) {
             return fail(ErrorCode::Busy, "the folder changed while the profile was being switched");
+        }
+        if (s.active == index) {
+            return {};
         }
         s.active = index;
         ++s.profileGeneration;
-        s.model = model;
+        const std::uint64_t load = ++s.replyGeneration;
+        s.model = nullptr; // Until loadReply publishes this profile's reply.
         s.stale = false;
         s.configuredOnce = false;
         s.recomputeWatchedLocked();
         s.emitProfilesLocked();
-        s.emitModel(model);
-        if (s.options.configureOnOpen && !model) {
+        // Queued before the configure below starts, so its model (nullptr) precedes the job's events.
+        ++s.replyLoadsPending;
+        s.post([state = &s, load, profile, hasReply, lease = std::move(lease)] {
+            state->loadReply(load, profile, hasReply, lease);
+        });
+        if (!hasReply && s.options.configureOnOpen) {
             static_cast<void>(s.startJobLocked(State::JobKind::Configure, true, {}, {CMakeStep::Configure}));
         }
     }
@@ -1633,9 +1705,31 @@ Result<void> CMakeService::trust(std::string_view root) {
     return {};
 }
 
+void CMakeService::trustChanged() {
+    State& s = *m_state;
+    LockGuard lock(s.mutex);
+    if (s.state == BuildState::NeedsTrust && s.job) {
+        const bool all = std::ranges::all_of(s.job->untrusted,
+                                             [&](const std::string& root) { return s.trustStore.isTrusted(root); });
+        if (all && s.folderTrustedLocked()) {
+            s.afterTrustLocked();
+        }
+        return;
+    }
+    if (s.state == BuildState::Idle && !s.sourceDir.empty() && s.options.configureOnOpen && !s.configuredOnce &&
+        s.folderTrustedLocked()) {
+        static_cast<void>(s.startJobLocked(State::JobKind::Configure, true, {}, {CMakeStep::Configure}));
+    }
+}
+
 BuildState CMakeService::state() const {
     LockGuard lock(m_state->mutex);
     return m_state->state;
+}
+
+bool CMakeService::modelLoading() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->replyLoadsPending > 0;
 }
 
 std::optional<CMakeStep> CMakeService::currentStep() const {

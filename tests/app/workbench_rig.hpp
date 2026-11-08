@@ -193,6 +193,21 @@ public:
         lastDeleteFolder = folder;
         return confirmDeleteAnswer;
     }
+    // Records each CMakeLists.txt preview; answers cmakeEditAnswer (default: decline, as the GUI's
+    // Cancel would, so no test edits a CMakeLists.txt without asking for it).
+    [[nodiscard]] bool confirmCMakeListsEdit(QWidget*, const std::string& listsPath, const std::string& before,
+                                             const std::string& after) override {
+        ++cmakeEditPrompts;
+        lastCMakeEditPath = listsPath;
+        lastCMakeEditBefore = before;
+        lastCMakeEditAfter = after;
+        return cmakeEditAnswer;
+    }
+    bool cmakeEditAnswer = false;
+    std::size_t cmakeEditPrompts = 0;
+    std::string lastCMakeEditPath;
+    std::string lastCMakeEditBefore;
+    std::string lastCMakeEditAfter;
 
     std::string openPath;
     OpenKind lastOpenKind = OpenKind::SolutionOrFile;
@@ -243,7 +258,8 @@ struct RigOptions {
 
 /*
  * A Workbench and its MainWindow over files in `dir`: data/settings.json, data/trusted-roots.txt,
- * data/hot-exit, data/local-history.db, data/sessions, data/run-settings.txt, data/luals. Several rigs over one
+ * data/hot-exit, data/local-history.db, data/sessions, data/run-settings.txt, data/luals,
+ * data/caches/metadata. Several rigs over one
  * directory share them, as two runs of FrostIDE would. clangd is off unless the options turn it on;
  * runs write to the Run console (no external console).
  */
@@ -280,6 +296,9 @@ public:
         }
         if (wb.compileCommandsCache.empty()) {
             wb.compileCommandsCache = dir.join("data/compile-commands");
+        }
+        if (wb.metadataCacheDirectory.empty()) {
+            wb.metadataCacheDirectory = dir.join("data/caches/metadata"); // The profile's, never the workspace.
         }
         if (options.disableProjectEvaluation) {
             wb.compileCommandsCache.clear();

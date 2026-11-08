@@ -18,6 +18,7 @@
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
 #include "frost/ui/run_console.hpp"
+#include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/navigation_bar.hpp"
@@ -30,6 +31,7 @@
 #include "frost/ui/toolwindows/solution_explorer.hpp"
 #include "frost/ui/toolwindows/solution_tree_model.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
+#include "frost/ui/workbench/file_system_view.hpp"
 #include "frost/ui/workbench/merge_view.hpp"
 
 #include "../../src/app/src/language_bridge.hpp"
@@ -41,6 +43,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -63,6 +66,7 @@
 #include <cctype>
 #include <chrono>
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <optional>
@@ -597,6 +601,37 @@ TEST(Workbench, LanguageLocationUsesActiveSplitAndDocumentsAreUnique) {
     bridge.openLocation(dir.join("a.cpp"), frost::lang::LspPosition{2, 0});
     EXPECT_EQ(second->status().line, 3);
     EXPECT_EQ(first->status().line, 1);
+}
+
+// R0 follow-up 4: the language features get the profile's metadata cache (never the workspace),
+// and a metadata source opens in an editor that stays read-only through a refresh; a normal
+// location of the same workbench stays editable.
+TEST(Workbench, MetadataSourcesOpenReadOnlyFromTheProfileCache) {
+    WorkDir dir("metadata-read-only");
+    dir.write("proj/a.cs", "class A {}\n");
+    dir.write("data/caches/metadata/0123-Console.cs", "namespace System\n{\n    public static class Console {}\n}\n");
+    WorkbenchRig rig(dir);
+    rig.show();
+    EXPECT_EQ(rig.workbench->metadataCacheDirectory(), dir.join("data/caches/metadata"));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("proj")));
+    frost::app::LanguageBridge bridge(*rig.workbench);
+    bridge.openLocation(dir.join("proj/a.cs"), frost::lang::LspPosition{0, 0});
+    ASSERT_NE(rig.workbench->currentView(), nullptr);
+    EXPECT_FALSE(rig.workbench->currentView()->editor().isReadOnly());
+
+    const std::string cached = dir.join("data/caches/metadata/0123-Console.cs");
+    bridge.openReadOnlyLocation(cached, frost::lang::LspPosition{2, 24});
+    auto* view = rig.workbench->currentView();
+    ASSERT_NE(view, nullptr);
+    EXPECT_EQ(view->path(), cached);
+    EXPECT_EQ(view->status().line, 3);
+    EXPECT_TRUE(view->forcedReadOnly());
+    EXPECT_TRUE(view->editor().isReadOnly());
+    view->refresh(); // A refresh (save, reload) re-reads the file facts: still read-only.
+    EXPECT_TRUE(view->editor().isReadOnly());
+    EXPECT_FALSE(view->editor().typeText("x"));
+    EXPECT_EQ(dir.read("data/caches/metadata/0123-Console.cs"),
+              "namespace System\n{\n    public static class Console {}\n}\n");
 }
 
 TEST(Workbench, ClosingADirtyTabSavesIt) {
@@ -1483,10 +1518,27 @@ TEST(Workbench, NewFileAndNewFolderInAppWorkbenchAndCMakeTargetMembership) {
     EXPECT_EQ(rig.workbench->currentView()->path(), helperPath);
     EXPECT_EQ(dir.read("Demo/CMakeLists.txt"), originalLists);
 
-    // Explicit addSourceToCMakeLists adds helper.cpp to add_executable(...) and keeps CMakeLists valid.
+    // addSourceToCMakeLists shows the edit first; declined, CMakeLists.txt keeps every byte.
+    const auto noticesBefore = rig.window->notifications().log().size();
+    auto declined = rig.workbench->addSourceToCMakeLists(helperPath);
+    ASSERT_FALSE(declined.has_value());
+    EXPECT_EQ(declined.error().code(), frost::ErrorCode::Cancelled);
+    EXPECT_EQ(rig.prompts.cmakeEditPrompts, 1U);
+    EXPECT_EQ(rig.prompts.lastCMakeEditPath, dir.join("Demo/CMakeLists.txt"));
+    EXPECT_EQ(rig.prompts.lastCMakeEditBefore, originalLists);
+    EXPECT_TRUE(rig.prompts.lastCMakeEditAfter.contains("helper.cpp")) << rig.prompts.lastCMakeEditAfter;
+    EXPECT_EQ(dir.read("Demo/CMakeLists.txt"), originalLists);
+    ASSERT_GT(rig.window->notifications().log().size(), noticesBefore);
+    EXPECT_EQ(rig.window->notifications().log().back().notification.title,
+              QStringLiteral("CMakeLists.txt not changed"));
+
+    // Applied, the file on disk is exactly the previewed text, with helper.cpp added to add_executable(...).
+    rig.prompts.cmakeEditAnswer = true;
     auto added = rig.workbench->addSourceToCMakeLists(helperPath);
     ASSERT_TRUE(added.has_value()) << added.error().describe();
+    EXPECT_EQ(rig.prompts.cmakeEditPrompts, 2U);
     const std::string updatedLists = dir.read("Demo/CMakeLists.txt");
+    EXPECT_EQ(updatedLists, rig.prompts.lastCMakeEditAfter);
     EXPECT_TRUE(updatedLists.contains("helper.cpp")) << updatedLists;
     EXPECT_TRUE(updatedLists.contains("main.cpp")) << updatedLists;
 
@@ -1519,6 +1571,8 @@ TEST(Workbench, NewFileAndNewFolderInAppWorkbenchAndCMakeTargetMembership) {
     rig.workbench->checkExternalChanges();
     EXPECT_FALSE(rig.workbench->addSourceToCMakeLists(*extraFile).has_value());
     EXPECT_EQ(dir.read("Demo/CMakeLists.txt"), conditionalLists);
+    // Refused edits are never previewed.
+    EXPECT_EQ(rig.prompts.cmakeEditPrompts, 2U);
 }
 
 TEST(Workbench, SaveAsUpdatesAppWorkbenchEditorLspAndTabsWithoutDuplicates) {
@@ -1755,10 +1809,14 @@ TEST(Workbench, NewProjectSupportsVisualStudioCppLibrariesAndDotNetTemplates) {
     }
 }
 
-TEST(Workbench, RenameAndDeleteItemUpdatesCMakeListsVcxprojCsprojAndDirtyTabs) {
+TEST(Workbench, RenameMoveAndDeleteEditCMakeListsOnlyAfterAPreviewAndNeverMsBuildProjects) {
     WorkDir dir("rename-delete-project-items");
     WorkbenchRig rig(dir);
     rig.show();
+    rig.prompts.cmakeEditAnswer = true; // Part 1 applies the previewed CMakeLists.txt edits.
+    const auto lastNotice = [&]() -> const frost::ui::Notification& {
+        return rig.window->notifications().log().back().notification;
+    };
 
     // 1. CMake project: rename dirty main.cpp -> entry.cpp updates CMakeLists.txt and preserves dirty tab.
     {
@@ -1786,6 +1844,8 @@ TEST(Workbench, RenameAndDeleteItemUpdatesCMakeListsVcxprojCsprojAndDirtyTabs) {
         EXPECT_TRUE(
             rig.workbench->currentView()->document().document().committedText().text().starts_with("// dirty edit\n"));
         const std::string cmakeLists = dir.read("CMakeRenameDemo/CMakeLists.txt");
+        EXPECT_EQ(rig.prompts.cmakeEditPrompts, 1U);
+        EXPECT_EQ(cmakeLists, rig.prompts.lastCMakeEditAfter);
         EXPECT_TRUE(cmakeLists.contains("entry.cpp")) << cmakeLists;
         EXPECT_FALSE(cmakeLists.contains("main.cpp")) << cmakeLists;
 
@@ -1802,12 +1862,25 @@ TEST(Workbench, RenameAndDeleteItemUpdatesCMakeListsVcxprojCsprojAndDirtyTabs) {
         EXPECT_EQ(rig.prompts.discardCalls, discardBefore);
         EXPECT_FALSE(frost::io::realFileSystem().exists(*helper).value_or(true));
         EXPECT_FALSE(dir.read("CMakeRenameDemo/CMakeLists.txt").contains("helper.cpp"));
-        // Save entry.cpp so the project can close cleanly for the next subtest.
+        EXPECT_EQ(rig.prompts.cmakeEditPrompts, 3U); // Add and remove were previewed too.
+
+        // Declined: the file is renamed on disk, CMakeLists.txt keeps every byte and the user is told.
+        rig.prompts.cmakeEditAnswer = false;
+        const std::string listsBefore = dir.read("CMakeRenameDemo/CMakeLists.txt");
+        auto declined = rig.workbench->renameItem(entryCpp, "start.cpp");
+        ASSERT_TRUE(declined.has_value()) << declined.error().describe();
+        EXPECT_EQ(rig.prompts.cmakeEditPrompts, 4U);
+        EXPECT_TRUE(frost::io::realFileSystem().exists(dir.join("CMakeRenameDemo/start.cpp")).value_or(false));
+        EXPECT_EQ(dir.read("CMakeRenameDemo/CMakeLists.txt"), listsBefore);
+        EXPECT_EQ(lastNotice().title, QStringLiteral("CMakeLists.txt not changed"));
+        EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("entry.cpp"))) << lastNotice().text.toStdString();
+        // Save start.cpp so the project can close cleanly for the next subtest.
         ASSERT_NE(rig.workbench->currentView(), nullptr);
         ASSERT_TRUE(rig.workbench->documents().save(rig.workbench->currentView()->document()).has_value());
     }
 
-    // 2. Visual Studio C++ project (.sln + .vcxproj): rename main.cpp -> app.cpp updates .vcxproj and .vcxproj.filters.
+    // 2. Visual Studio C++ project (.sln + .vcxproj): rename, move and delete happen on disk, the
+    // .vcxproj and .vcxproj.filters keep every byte (SLN-6), and the user is told which still list the file.
     {
         auto created = rig.workbench->createNewProject({
             .name = "VsRenameDemo",
@@ -1815,16 +1888,49 @@ TEST(Workbench, RenameAndDeleteItemUpdatesCMakeListsVcxprojCsprojAndDirtyTabs) {
             .kind = frost::app::NewProjectTemplate::VsCppConsole,
         });
         ASSERT_TRUE(created.has_value()) << created.error().describe();
+        const std::string vcxprojBefore = dir.read("VsRenameDemo/VsRenameDemo.vcxproj");
+        const std::string filtersBefore = dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters");
+        const auto expectProjectsUntouched = [&](const char* what) {
+            EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj"), vcxprojBefore) << what;
+            EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters"), filtersBefore) << what;
+            EXPECT_EQ(lastNotice().title, QStringLiteral("Project files not updated")) << what;
+            EXPECT_EQ(lastNotice().kind, frost::ui::NotificationKind::Warning) << what;
+            EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("SLN-6"))) << what;
+            EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("VsRenameDemo.vcxproj"))) << what;
+        };
         const std::string mainCpp = dir.join("VsRenameDemo/main.cpp");
         const std::string appCpp = dir.join("VsRenameDemo/app.cpp");
         auto renamed = rig.workbench->renameItem(mainCpp, "app.cpp");
         ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
         EXPECT_EQ(*renamed, appCpp);
-        const std::string vcxproj = dir.read("VsRenameDemo/VsRenameDemo.vcxproj");
-        const std::string filters = dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters");
-        EXPECT_TRUE(vcxproj.contains("Include=\"app.cpp\"")) << vcxproj;
-        EXPECT_FALSE(vcxproj.contains("Include=\"main.cpp\"")) << vcxproj;
-        EXPECT_TRUE(filters.contains("Include=\"app.cpp\"")) << filters;
+        EXPECT_TRUE(frost::io::realFileSystem().exists(appCpp).value_or(false));
+        expectProjectsUntouched("rename");
+        EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("renamed"))) << lastNotice().text.toStdString();
+
+        // The project still lists main.cpp, so moving app.cpp names nothing the project lists: no notice.
+        const auto noticesBefore = rig.window->notifications().log().size();
+        auto* explorer = rig.workbench->solutionExplorer();
+        ASSERT_NE(explorer, nullptr);
+        ASSERT_TRUE(frost::io::realFileSystem().createDirectories(dir.join("VsRenameDemo/src")).has_value());
+        emit explorer->movePhysicalPathsRequested({QString::fromStdString(appCpp)},
+                                                  QString::fromStdString(dir.join("VsRenameDemo/src")), QString());
+        EXPECT_TRUE(frost::io::realFileSystem().exists(dir.join("VsRenameDemo/src/app.cpp")).value_or(false));
+        EXPECT_EQ(rig.window->notifications().log().size(), noticesBefore);
+        EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj"), vcxprojBefore);
+
+        // Back to main.cpp, which the project lists: moving it is reported, deleting it too.
+        dir.write("VsRenameDemo/main.cpp", "int main() { return 0; }\n");
+        rig.workbench->checkExternalChanges();
+        emit explorer->movePhysicalPathsRequested({QString::fromStdString(mainCpp)},
+                                                  QString::fromStdString(dir.join("VsRenameDemo/src")), QString());
+        EXPECT_TRUE(frost::io::realFileSystem().exists(dir.join("VsRenameDemo/src/main.cpp")).value_or(false));
+        expectProjectsUntouched("move");
+        EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("moved"))) << lastNotice().text.toStdString();
+        dir.write("VsRenameDemo/main.cpp", "int main() { return 0; }\n");
+        ASSERT_TRUE(rig.workbench->deleteItem(mainCpp).has_value());
+        EXPECT_FALSE(frost::io::realFileSystem().exists(mainCpp).value_or(true));
+        expectProjectsUntouched("delete");
+        EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("deleted"))) << lastNotice().text.toStdString();
     }
 
     // 3. C# .slnx/.csproj project: rename Program.cs -> Startup.cs updates SolutionModel hierarchy.
@@ -1837,9 +1943,16 @@ TEST(Workbench, RenameAndDeleteItemUpdatesCMakeListsVcxprojCsprojAndDirtyTabs) {
         ASSERT_TRUE(created.has_value()) << created.error().describe();
         const std::string programCs = dir.join("CsRenameDemo/Program.cs");
         const std::string startupCs = dir.join("CsRenameDemo/Startup.cs");
+        const std::string csprojBefore = dir.read("CsRenameDemo/CsRenameDemo.csproj");
+        const auto noticesBefore = rig.window->notifications().log().size();
         auto renamed = rig.workbench->renameItem(programCs, "Startup.cs");
         ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
         EXPECT_EQ(*renamed, startupCs);
+        // An SDK-style project includes its folder implicitly: nothing to edit, nothing to report.
+        EXPECT_EQ(dir.read("CsRenameDemo/CsRenameDemo.csproj"), csprojBefore);
+        for (auto i = noticesBefore; i < rig.window->notifications().log().size(); ++i)
+            EXPECT_NE(rig.window->notifications().log()[i].notification.title,
+                      QStringLiteral("Project files not updated"));
         ASSERT_NE(rig.workbench->solution(), nullptr);
         EXPECT_FALSE(rig.workbench->solution()->findFileNode(programCs).has_value());
         EXPECT_TRUE(rig.workbench->solution()->findFileNode(startupCs).has_value());
@@ -2061,6 +2174,19 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
     }
     // Only main() gets a run marker: per-test gutter markers stay hidden until RUN-10 runs one test.
     EXPECT_EQ(runTestMarkerCount, 1);
+    // App.vcxproj does not list math_tests.cpp, so the marker says no project builds it and a click
+    // runs nothing (it would otherwise run the startup project, which never compiles this main).
+    const auto runMarker =
+        std::ranges::find_if(markers, [](const auto& m) { return m.severity == frost::ui::MarkerSeverity::RunTest; });
+    ASSERT_NE(runMarker, markers.end());
+    EXPECT_EQ(runMarker->line.value(), 6U);
+    EXPECT_TRUE(runMarker->message.contains("No loaded C++ project")) << runMarker->message;
+    const auto noticesBeforeClick = rig.window->notifications().log().size();
+    emit rig.view()->editor().gutterRunMarkerClicked(6, QPoint());
+    ASSERT_GT(rig.window->notifications().log().size(), noticesBeforeClick);
+    EXPECT_EQ(rig.window->notifications().log().back().notification.text.toStdString(), runMarker->message);
+    EXPECT_FALSE(rig.workbench->runController()->running());
+    EXPECT_FALSE(rig.workbench->runService()->lastOutcome().has_value());
 
     rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow, false);
     QWidget* unitTestsWidget = rig.window->toolWindows().content(frost::app::kUnitTestsToolWindow);
@@ -2166,6 +2292,201 @@ void clickOk(QDialog& dlg) {
     ok->click();
 }
 
+// The Debugging page shows the per-user LocalDebugger* settings read-only (RUN-1): the values come
+// from App.vcxproj.user, the fields cannot be edited, and OK writes neither project file.
+// A FrostEngine asset's metadata sidecar (<asset>.fmeta) moves with it on rename and on move; when
+// the target's sidecar name is taken, neither file moves.
+TEST(Workbench, RenamingOrMovingAnAssetMovesItsFmetaSidecar) {
+    WorkDir dir("fmeta-sidecar");
+    dir.write("game/Game.frostproj", "{}");
+    dir.write("game/Assets/Click.wav", "RIFF");
+    dir.write("game/Assets/Click.wav.fmeta", "guid: 1\n");
+    dir.write("game/Assets/Taken.wav.fmeta", "guid: 2\n");
+    dir.write("game/Assets/Lone.png", "PNG");
+    WorkbenchRig rig(dir);
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("game")).has_value());
+    auto& fs = frost::io::realFileSystem();
+    const auto exists = [&](const char* rel) { return fs.exists(dir.join(rel)).value_or(false); };
+
+    auto renamed = rig.workbench->renameItem(dir.join("game/Assets/Click.wav"), "Tap.wav");
+    ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
+    EXPECT_TRUE(exists("game/Assets/Tap.wav"));
+    EXPECT_TRUE(exists("game/Assets/Tap.wav.fmeta"));
+    EXPECT_FALSE(exists("game/Assets/Click.wav"));
+    EXPECT_FALSE(exists("game/Assets/Click.wav.fmeta"));
+    EXPECT_EQ(dir.read("game/Assets/Tap.wav.fmeta"), "guid: 1\n");
+
+    // The target's sidecar name belongs to another asset: refused, both files stay.
+    auto refused = rig.workbench->renameItem(dir.join("game/Assets/Tap.wav"), "Taken.wav");
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code(), frost::ErrorCode::AlreadyExists);
+    EXPECT_TRUE(exists("game/Assets/Tap.wav"));
+    EXPECT_TRUE(exists("game/Assets/Tap.wav.fmeta"));
+    EXPECT_EQ(dir.read("game/Assets/Taken.wav.fmeta"), "guid: 2\n");
+
+    // An asset without a sidecar renames alone.
+    ASSERT_TRUE(rig.workbench->renameItem(dir.join("game/Assets/Lone.png"), "Alone.png").has_value());
+    EXPECT_TRUE(exists("game/Assets/Alone.png"));
+    EXPECT_FALSE(exists("game/Assets/Alone.png.fmeta"));
+
+    // Moving to another folder carries the sidecar too.
+    ASSERT_TRUE(fs.createDirectories(dir.join("game/Assets/Audio")).has_value());
+    auto* fsView = rig.nav().fileSystemView();
+    ASSERT_NE(fsView, nullptr);
+    emit fsView->movePathsToDirectoryRequested({QString::fromStdString(dir.join("game/Assets/Tap.wav"))},
+                                               QString::fromStdString(dir.join("game/Assets/Audio")));
+    EXPECT_TRUE(exists("game/Assets/Audio/Tap.wav"));
+    EXPECT_TRUE(exists("game/Assets/Audio/Tap.wav.fmeta"));
+    EXPECT_FALSE(exists("game/Assets/Tap.wav"));
+    EXPECT_FALSE(exists("game/Assets/Tap.wav.fmeta"));
+
+    // A move whose sidecar target is taken is refused with a notice; nothing moves.
+    dir.write("game/Assets/Audio/Boom.wav.fmeta", "guid: 3\n");
+    dir.write("game/Assets/Boom.wav", "RIFF");
+    dir.write("game/Assets/Boom.wav.fmeta", "guid: 4\n");
+    const auto notices = rig.window->notifications().log().size();
+    emit fsView->movePathsToDirectoryRequested({QString::fromStdString(dir.join("game/Assets/Boom.wav"))},
+                                               QString::fromStdString(dir.join("game/Assets/Audio")));
+    EXPECT_TRUE(exists("game/Assets/Boom.wav"));
+    EXPECT_FALSE(exists("game/Assets/Audio/Boom.wav"));
+    EXPECT_EQ(dir.read("game/Assets/Audio/Boom.wav.fmeta"), "guid: 3\n");
+    EXPECT_EQ(dir.read("game/Assets/Boom.wav.fmeta"), "guid: 4\n");
+    ASSERT_GT(rig.window->notifications().log().size(), notices);
+    EXPECT_TRUE(rig.window->notifications().log().back().notification.title.contains(QStringLiteral("Boom.wav")));
+}
+
+// readProcProcesses over a synthetic /proc: kernel threads and this process are skipped, the
+// executable's name wins over the 15-byte comm, a " (deleted)" link is cleaned, and a dotted
+// .NET apphost (no .exe suffix) is recognised by its runtimeconfig.json.
+TEST(Workbench, ProcParsingNamesProcessesFromTheExecutableAndSkipsKernelThreads) {
+    WorkDir dir("synthetic-proc");
+    const auto argv = [](std::initializer_list<const char*> args) {
+        std::string out;
+        for (const char* arg : args) {
+            out += arg;
+            out.push_back('\0');
+        }
+        return out;
+    };
+    const std::string bin = dir.join("bin");
+    dir.write("bin/My.App", "apphost");
+    dir.write("bin/My.App.runtimeconfig.json", "{}");
+    // 2: a kernel thread (comm only). 10: an executable longer than comm's 15 bytes. 11: a deleted
+    // executable. 12: another user's process (no exe link) with a truncated comm. 13: a short comm
+    // without an exe link. 14: the dotted apphost. 40: this process. 0: never a process.
+    dir.write("proc/2/comm", "kthreadd\n");
+    dir.write("proc/2/cmdline", "");
+    dir.write("proc/10/comm", "frost-language-\n");
+    dir.write("proc/10/cmdline", argv({"/usr/bin/frost-language-server", "--stdio"}));
+    dir.write("proc/11/comm", "old-tool\n");
+    dir.write("proc/11/cmdline", argv({"/opt/old-tool"}));
+    dir.write("proc/12/comm", "someone-elses-l\n");
+    dir.write("proc/12/cmdline", argv({"/usr/lib/someone-elses-long-daemon", "-d"}));
+    dir.write("proc/13/comm", "bash\n");
+    dir.write("proc/13/cmdline", argv({"-bash"}));
+    dir.write("proc/14/comm", "My.App\n");
+    dir.write("proc/14/cmdline", argv({"./My.App"}));
+    dir.write("proc/40/comm", "frost_app_tests\n");
+    dir.write("proc/40/cmdline", argv({"frost_app_tests"}));
+    dir.write("proc/0/comm", "zero\n");
+    dir.write("proc/0/cmdline", argv({"zero"}));
+    dir.write("proc/self/comm", "self\n");
+    dir.write("proc/version", "Linux\n");
+
+    const std::map<std::string, std::string> links{
+        {"10", "/usr/bin/frost-language-server"},
+        {"11", "/opt/old-tool (deleted)"},
+        {"14", bin + "/My.App"},
+        {"40", "/usr/bin/frost_app_tests"},
+        {"0", "/usr/bin/zero"},
+    };
+    std::vector<std::string> asked;
+    const auto readLink = [&](const std::string& linkPath) -> std::string {
+        asked.push_back(linkPath);
+        const QFileInfo link(QString::fromStdString(linkPath));
+        EXPECT_EQ(link.fileName(), QStringLiteral("exe"));
+        const auto it = links.find(QFileInfo(link.path()).fileName().toStdString());
+        return it == links.end() ? std::string() : it->second;
+    };
+    auto processes = frost::app::readProcProcesses(dir.join("proc"), 40, readLink);
+    std::ranges::sort(processes, {}, &frost::app::RunningProcessInfo::pid);
+    std::vector<std::uint32_t> pids;
+    for (const auto& process : processes)
+        pids.push_back(process.pid);
+    EXPECT_EQ(pids, (std::vector<std::uint32_t>{10, 11, 12, 13, 14}));
+    ASSERT_EQ(processes.size(), 5U);
+    EXPECT_EQ(processes[0].name, "frost-language-server");
+    EXPECT_EQ(processes[0].executablePath, "/usr/bin/frost-language-server");
+    EXPECT_EQ(processes[1].name, "old-tool");
+    EXPECT_EQ(processes[1].executablePath, "/opt/old-tool");
+    EXPECT_EQ(processes[2].name, "someone-elses-long-daemon");
+    EXPECT_TRUE(processes[2].executablePath.empty());
+    EXPECT_EQ(processes[3].name, "bash");
+    EXPECT_EQ(processes[4].name, "My.App");
+    EXPECT_TRUE(processes[4].isDotNet);
+    for (std::size_t i = 0; i < 4; ++i)
+        EXPECT_FALSE(processes[i].isDotNet) << processes[i].name;
+    EXPECT_FALSE(asked.empty());
+
+    // A missing root yields nothing rather than failing.
+    EXPECT_TRUE(frost::app::readProcProcesses(dir.join("no-proc"), 0, readLink).empty());
+}
+
+TEST(Workbench, ProjectPropertiesDebuggingPageIsReadOnlyAndWritesNothing) {
+    WorkDir dir("project-properties-debugging", "tiny_sln");
+    WorkbenchRig rig(dir);
+    rig.show();
+    const std::string vcxproj = dir.read("App/App.vcxproj");
+    const std::string user = dir.read("App/App.vcxproj.user");
+    ASSERT_TRUE(user.contains("LocalDebuggerCommandArguments"));
+    ASSERT_FALSE(vcxproj.contains("LocalDebugger"));
+    bool inspected = false;
+    bool savedCalled = false;
+    QTimer::singleShot(0, rig.window.get(), [&] {
+        auto* dlg = rig.window->findChild<QDialog*>(QStringLiteral("projectPropertiesDialog"));
+        ASSERT_NE(dlg, nullptr);
+        const auto closeOnExit = qScopeGuard([dlg] {
+            if (dlg->isVisible())
+                dlg->reject();
+        });
+        auto* args = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerCommandArguments"));
+        auto* cwd = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerWorkingDirectory"));
+        auto* command = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerCommand"));
+        ASSERT_NE(args, nullptr);
+        ASSERT_NE(cwd, nullptr);
+        ASSERT_NE(command, nullptr);
+        EXPECT_EQ(args->text(), QStringLiteral("--print \"two words\" --echo --exit 3"));
+        EXPECT_EQ(cwd->text(), QStringLiteral("$(SolutionDir)Lib"));
+        for (QLineEdit* edit : {args, cwd, command}) {
+            EXPECT_TRUE(edit->isReadOnly()) << edit->objectName().toStdString();
+            EXPECT_TRUE(edit->toolTip().contains(QStringLiteral("RUN-1"))) << edit->objectName().toStdString();
+        }
+        bool noteFound = false;
+        for (auto* note : dlg->findChildren<QLabel*>(QStringLiteral("projectPropertiesReadOnlyNote")))
+            noteFound = noteFound || note->text().contains(QStringLiteral("RUN-1"));
+        EXPECT_TRUE(noteFound);
+        // An editable page next to it still saves; here nothing else changes.
+        auto* deps = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Link.AdditionalDependencies"));
+        ASSERT_NE(deps, nullptr);
+        EXPECT_FALSE(deps->isReadOnly());
+        // Text set programmatically past the read-only flag is still never saved.
+        args->setText(QStringLiteral("--changed"));
+        command->setText(QStringLiteral("C:/evil.exe"));
+        auto* buttons = dlg->findChild<QDialogButtonBox*>();
+        QPushButton* ok = buttons != nullptr ? buttons->button(QDialogButtonBox::Ok) : nullptr;
+        ASSERT_NE(ok, nullptr);
+        ok->click();
+        inspected = true;
+    });
+    frost::app::showProjectPropertiesDialog(rig.window.get(), frost::io::realFileSystem(), dir.join("App/App.vcxproj"),
+                                            "Debug|x64", [&] { savedCalled = true; });
+    EXPECT_TRUE(inspected);
+    EXPECT_EQ(dir.read("App/App.vcxproj"), vcxproj);
+    EXPECT_EQ(dir.read("App/App.vcxproj.user"), user);
+    (void)savedCalled; // Whether OK reports a save of unchanged values is not what this test pins.
+}
+
 TEST(Workbench, ProjectMembershipEditsAreRefusedAndLeaveSolutionFilesUnchanged) {
     WorkDir dir("project-edit-refusals", "tiny_sln");
     dir.write("App/App.vcxproj.filters",
@@ -2245,6 +2566,46 @@ TEST(Workbench, SolutionExplorerProjectEditsNotifyRefusalAndChangeNothing) {
                         "remove solution folder");
     expectRefusalNotice([&] { emit explorer->moveProjectToSolutionFolderRequested(app, QStringLiteral("/Folder/")); },
                         "move project to solution folder");
+    // These used to open a picker or a name prompt before refusing; now they refuse at once (no modal
+    // dialog opens, or the emit would not return).
+    expectRefusalNotice(
+        [&] { emit explorer->addExistingProjectRequested(QString::fromStdString(dir.join("Tiny.sln"))); },
+        "add existing project");
+    expectRefusalNotice([&] { emit explorer->removeProjectFromSolutionRequested(app); }, "remove project");
+    expectRefusalNotice([&] { emit explorer->addFilterRequested(app, QString()); }, "add filter");
+    expectRefusalNotice([&] { emit explorer->renameFilterRequested(app, QStringLiteral("Source Files")); },
+                        "rename filter");
+    expectRefusalNotice([&] { emit explorer->addSolutionFolderRequested(QString()); }, "add solution folder");
+    expectRefusalNotice(
+        [&] { emit explorer->renameSolutionFolderRequested(QStringLiteral("/Folder/"), QStringLiteral("Folder")); },
+        "rename solution folder");
+    expectRefusalNotice([&] { emit explorer->moveProjectToNewSolutionFolderRequested(app); },
+                        "move project to a new solution folder");
+    expectRefusalNotice([&] { emit explorer->moveFilesToNewFilterRequested(app, {mainCpp}); },
+                        "move files to a new filter");
+    expectRefusalNotice([&] { emit explorer->addExistingFolderToFilterRequested(app, QString()); },
+                        "add existing folder");
+    EXPECT_EQ(QApplication::activeModalWidget(), nullptr);
+
+    // The menus offer none of these: they are disabled up front, the tooltip naming SLN-6.
+    {
+        const QModelIndex appIndex =
+            explorer->filterModel()->mapFromSource(explorer->model()->indexOfPath(dir.join("App/main.cpp")).parent());
+        ASSERT_TRUE(appIndex.isValid());
+        std::unique_ptr<QMenu> projectMenu(explorer->createContextMenu(appIndex));
+        ASSERT_NE(projectMenu, nullptr);
+        int disabled = 0;
+        for (QAction* action : projectMenu->actions()) {
+            const QString name = action->menu() ? action->menu()->objectName() : action->objectName();
+            if (name == QStringLiteral("removeProjectFromSolution") || name == QStringLiteral("addNewFilter") ||
+                name == QStringLiteral("moveToSolutionFolderMenu")) {
+                EXPECT_FALSE(action->isEnabled()) << name.toStdString();
+                EXPECT_TRUE(action->toolTip().contains(QStringLiteral("SLN-6"))) << name.toStdString();
+                ++disabled;
+            }
+        }
+        EXPECT_EQ(disabled, 3);
+    }
 
     // Remove from Project goes to the ProjectHost helper. None is installed beside the test binary
     // and none is configured, so the request is refused with a notification (on Linux: Windows only).
@@ -2547,6 +2908,35 @@ TEST(Workbench, SaveActionsFollowTheSettingsAndEditorConfigAndSpareTheCaretLine)
     ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("x"));
     ASSERT_TRUE(rig.workbench->save(*rig.workbench->currentView()));
     EXPECT_EQ(dir.read("proj/plain.txt"), "xa  \nb  ");
+}
+
+// Every caret's line is spared, not only the primary caret's: whitespace typed under a secondary
+// caret survives the save as well.
+TEST(Workbench, SaveActionsSpareTheLineOfEveryCaret) {
+    WorkDir dir("save-actions-multi-caret");
+    dir.write("proj/code.txt", "one  \ntwo  \nthree  \nfour  \n");
+    dir.write("proj/.editorconfig", "root = true\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application,
+                                  frost::settings::key::editorTrimTrailingWhitespace, std::string("all")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("proj/code.txt")));
+    ASSERT_NE(rig.view(), nullptr);
+    auto& editor = rig.view()->editor();
+    // Carets at the start of lines 1 and 3; the primary is the first.
+    const std::vector<frost::text::Selection> carets{frost::text::Selection::caret(frost::ByteOffset{0}),
+                                                     frost::text::Selection::caret(frost::ByteOffset{12})};
+    editor.setState(frost::text::EditorState::from(frost::text::SelectionSet::fromSelections(carets, 0)));
+    ASSERT_EQ(editor.editor().state().selections.size(), 2U);
+    ASSERT_TRUE(editor.typeText("#"));
+    ASSERT_EQ(rig.view()->document().document().text().text(), "#one  \ntwo  \n#three  \nfour  \n");
+    ASSERT_TRUE(rig.workbench->save(*rig.view()));
+    EXPECT_EQ(dir.read("proj/code.txt"), "#one  \ntwo\n#three  \nfour\n");
+
+    // With one caret left (line 3, after "#thr"), line 1 is trimmed on the next save.
+    editor.setState(frost::text::EditorState::caretAt(frost::ByteOffset{15}));
+    ASSERT_TRUE(editor.typeText("!"));
+    ASSERT_TRUE(rig.workbench->save(*rig.view()));
+    EXPECT_EQ(dir.read("proj/code.txt"), "#one\ntwo\n#thr!ee  \nfour\n");
 }
 
 TEST(Workbench, SaveActionsReachTheFileWhenAutosavesRanFirstWithTheDefaultSettings) {

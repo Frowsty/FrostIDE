@@ -200,15 +200,23 @@ std::string metadataFileName(std::string_view uri) {
     return std::format("{:016x}-{}", hash, name);
 }
 
+// What metadataSourceTask found: the cached source's location, and whether the server answered
+// textDocument/definition with a metadata URI at all (so "no cache" can be told from "no metadata").
+struct MetadataSource {
+    std::optional<fl::Location> location;
+    bool offered = false;
+};
+
 /*
  * Real metadata-as-source for the symbol at `position` (LTR-1): textDocument/definition answered
  * with a metadata URI, and the server's csharp/metadata answered with its source. The source is
  * written to `cacheDir` (never the workspace) and the location points into that file at the range
- * the server gave. nullopt when the server has no metadata (or no cache directory is configured).
+ * the server gave. No location when the server has no metadata, or when no cache directory is
+ * configured (then nothing more is asked or written, and `offered` tells whether there was some).
  */
-sched::Task<Result<std::optional<fl::Location>>> metadataSourceTask(fl::ILspRequester& server, io::IFileSystem& fs,
-                                                                    std::string cacheDir, std::string path,
-                                                                    fl::LspPosition position, std::stop_token token) {
+sched::Task<Result<MetadataSource>> metadataSourceTask(fl::ILspRequester& server, io::IFileSystem& fs,
+                                                       std::string cacheDir, std::string path, fl::LspPosition position,
+                                                       std::stop_token token) {
     const auto uri = fl::pathToUri(path);
     if (!uri) {
         co_return std::unexpected(uri.error());
@@ -248,13 +256,14 @@ sched::Task<Result<std::optional<fl::Location>>> metadataSourceTask(fl::ILspRequ
             }
         }
     }
+    MetadataSource found{.location = std::nullopt, .offered = !metadataUri.empty()};
     if (metadataUri.empty() || cacheDir.empty()) {
-        co_return std::optional<fl::Location>();
+        co_return found;
     }
     auto metadata = co_await server.request(
         "csharp/metadata", fl::Json::object().set("textDocument", fl::Json::object().set("uri", metadataUri)), token);
     if (!metadata || !metadata->isObject() || metadata->stringAt("source").empty()) {
-        co_return std::optional<fl::Location>();
+        co_return found;
     }
     auto file = io::joinPath(cacheDir, metadataFileName(metadataUri));
     if (!file) {
@@ -267,14 +276,16 @@ sched::Task<Result<std::optional<fl::Location>>> metadataSourceTask(fl::ILspRequ
         co_return std::unexpected(std::move(wrote.error()));
     }
     const std::string fileUri = fl::pathToUri(*file).value_or("");
-    co_return std::optional<fl::Location>(fl::Location{.path = *file, .uri = fileUri, .range = range});
+    found.location = fl::Location{.path = *file, .uri = fileUri, .range = range};
+    co_return found;
 }
 
 // Go to Declaration or Usages from the server alone; when it found nothing for a C# document, the
 // server's metadata source (metadataSourceTask) if it has one.
 struct GotoOutcome {
     fl::GotoResult result;
-    bool metadata = false; // result.locations holds one location in the metadata cache.
+    bool metadata = false;        // result.locations holds one location in the metadata cache.
+    bool metadataNoCache = false; // The server offered metadata, but no cache is configured (LTR-6).
 };
 
 sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, io::IFileSystem& fs,
@@ -286,10 +297,13 @@ sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, 
     }
     GotoOutcome outcome{.result = std::move(*result), .metadata = false};
     if (askMetadata && !outcome.result.showUsages && outcome.result.locations.empty()) {
+        const bool noCache = cacheDir.empty();
         auto metadata = co_await metadataSourceTask(server, fs, std::move(cacheDir), path, position, token);
-        if (metadata && *metadata) {
-            outcome.result.locations.push_back(std::move(**metadata));
+        if (metadata && metadata->location) {
+            outcome.result.locations.push_back(std::move(*metadata->location));
             outcome.metadata = true;
+        } else if (metadata && metadata->offered && noCache) {
+            outcome.metadataNoCache = true;
         }
     }
     co_return outcome;
@@ -1100,6 +1114,13 @@ void LanguageController::gotoDeclarationAtPosition(fl::LspPosition position) {
                 openMetadataLocation(outcome->result.locations.front(), qs(symbol));
                 return;
             }
+            if (outcome->metadataNoCache) {
+                // A real answer that cannot be shown here: say so instead of "returned no result".
+                emit statusMessage(QStringLiteral("Source not available for '%1': %2 has metadata source for it, "
+                                                  "but no metadata cache is configured (LTR-6)")
+                                       .arg(qs(symbol), qs(capabilities().serverName)));
+                return;
+            }
             openTargets(std::move(outcome->result.locations), QStringLiteral("Choose Declaration"),
                         emptyResultMessage(QStringLiteral("Cannot find a declaration to go to")));
         });
@@ -1135,24 +1156,25 @@ void LanguageController::decompileExternalSymbol() {
             QStringLiteral("Source not available for '%1': no metadata cache is configured (LTR-6)").arg(qs(symbol)));
         return;
     }
-    start<std::optional<fl::Location>>(
+    start<MetadataSource>(
         m_navigationSlot,
         [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir, path,
          position](std::stop_token token) {
             return metadataSourceTask(server, fs, cacheDir, path, position, std::move(token));
         },
-        [this, symbol](Result<std::optional<fl::Location>> location) {
-            if (!location) {
-                report(location.error(), "Metadata source");
+        [this, symbol](Result<MetadataSource> source) {
+            if (!source) {
+                report(source.error(), "Metadata source");
                 return;
             }
-            if (!*location) {
+            const std::optional<fl::Location>& location = source->location;
+            if (!location) {
                 emit statusMessage(
                     QStringLiteral("Source not available for '%1': %2 returned no metadata source (LTR-6)")
                         .arg(qs(symbol), qs(capabilities().serverName)));
                 return;
             }
-            openMetadataLocation(**location, qs(symbol));
+            openMetadataLocation(*location, qs(symbol));
         });
 }
 

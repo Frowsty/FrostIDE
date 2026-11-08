@@ -10,8 +10,9 @@
 #   python tools/hooks/verify_stamp.py check-msg MESSAGE_FILE [--repo R]
 #
 # `tree` prints the tree hash of the working tree as a commit of everything would record it:
-# tracked and untracked files that are not ignored, through a temporary copy of the index, so
-# the real index is never touched (`git add -A` then `git write-tree` on the copy).
+# tracked and untracked files that are not ignored, through a temporary index holding the real
+# index's entries without their stat data, so the real index is never touched and every file is
+# compared by content (`git add -A` then `git write-tree` on the temporary index).
 #
 # `write` is run by tools/verify.ps1 and tools/verify.sh after a passing run. It records the
 # summary line ("Verified: win debug 3/3, ...", or verify.sh's "wsl: debug 3/3, ..." whose items
@@ -21,7 +22,9 @@
 #
 # `check-msg` is the commit-msg hook (tools/hooks/commit-msg). On the protected branches
 # (PROTECTED_BRANCHES) a commit needs a "Verified:" footer, a stamp for the tree being committed
-# (`git write-tree` of the index git commits), and every footer item among that stamp's items.
+# (`git write-tree` of the index git commits), every footer item among that stamp's items, and
+# every test-count item (TEST_COUNT_ITEM: "win debug 3/3 ...", "wsl debug 2/2 ...") of each stamp
+# record the footer quotes from, so a footer cannot keep the "ok" items and drop the counts.
 # Other branches pass. Install the hook in a checkout with
 #   git config core.hooksPath tools/hooks
 # A fast-forward merge creates no commit and runs no hook: merge to main with --no-ff after
@@ -47,6 +50,9 @@ from pathlib import Path
 PROTECTED_BRANCHES = ("main",)
 STAMP_DIR = ("frost", "verify-stamps")
 FOOTER = re.compile(r"^Verified:\s*(.*\S)\s*$")
+# A test-count item of a summary: a leg ("win", "wsl"), its configuration and passed/total, e.g.
+# "win debug 3167/3195 (28 skipped, 1 disabled)" or "wsl release 12/12".
+TEST_COUNT_ITEM = re.compile(r"^(?:win|wsl)\b[^,]*?\b\d+/\d+\b")
 
 
 class StampError(Exception):
@@ -69,12 +75,16 @@ class Git:
 
     def run(self, *args: str, env: dict[str, str] | None = None) -> str:
         """Runs git (no shell); returns stdout without the trailing newline; raises StampError."""
-        result = subprocess.run([*self.base, *args], capture_output=True, stdin=subprocess.DEVNULL, env=env,
-                                check=False)
+        return self.run_bytes(*args, env=env).decode("utf-8", "replace").rstrip("\n")
+
+    def run_bytes(self, *args: str, env: dict[str, str] | None = None, stdin: bytes | None = None) -> bytes:
+        """Runs git (no shell) with `stdin` (none: the null device); returns raw stdout; raises StampError."""
+        result = subprocess.run([*self.base, *args], capture_output=True, env=env, check=False,
+                                **({"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}))
         if result.returncode != 0:
             lines = result.stderr.decode("utf-8", "replace").strip().splitlines()
             raise StampError(f"git {' '.join(args)} failed: {lines[-1] if lines else result.returncode}")
-        return result.stdout.decode("utf-8", "replace").rstrip("\n")
+        return result.stdout
 
     def path(self, option: str) -> Path:
         """An absolute path from `git rev-parse <option>` (--git-common-dir, --git-path index)."""
@@ -119,11 +129,17 @@ def working_tree_hash(git: Git) -> str:
     index = git.path("--git-path index")
     with tempfile.TemporaryDirectory(prefix="frost-stamp-") as tmp:
         scratch = Path(tmp) / "index"
-        if index.is_file():
-            shutil.copyfile(index, scratch)
         env = dict(os.environ, GIT_INDEX_FILE=str(scratch))
-        # Minimal stat checks: an index written by Git for Windows is read from WSL too.
-        git.run("-c", "core.checkStat=minimal", "-c", "core.trustctime=false", "add", "-A", env=env)
+        if index.is_file():
+            # The real index's entries (paths, modes, staged blobs; the executable bits a Windows
+            # checkout cannot see) but no stat data, so `add -A` compares every file by content. A
+            # copy of the index file kept its stat data under a newer file time: git then took an
+            # entry whose second and size still matched as clean (no racy-entry recheck), and a
+            # same-size edit made in the second of the last index write was stamped as the old
+            # tree. Stat data also differ between Git for Windows and WSL reading one index.
+            entries = git.run_bytes("ls-files", "--stage", "-z")
+            git.run_bytes("update-index", "-z", "--index-info", env=env, stdin=entries)
+        git.run("add", "-A", env=env)
         return git.run("write-tree", env=env)
 
 
@@ -214,11 +230,21 @@ def check_message(git: Git, message: str) -> tuple[bool, str]:
     if not stamp["records"]:
         return False, (f"no verify-stamp for the tree being committed ({tree}); run tools\\verify.ps1 "
                        f"(or tools/verify.sh) on exactly this tree, then commit it unchanged")
+    footer_items = split_items(footer)
     backed = {item for record in stamp["records"] for item in record.get("items", [])}
-    unbacked = [item for item in split_items(footer) if item not in backed]
+    unbacked = [item for item in footer_items if item not in backed]
     if unbacked:
         return False, (f"the footer claims {', '.join(repr(i) for i in unbacked)}, which no verify-stamp of tree "
                        f"{tree[:12]} records; copy the summary line verify printed")
+    # Every record the footer draws on must be quoted with all its test counts (FND-2 review): a
+    # footer of "lint ok" items, or one leg's counts without the other's from the same record,
+    # would hide failed, skipped or missing tests.
+    matched = [record for record in stamp["records"] if set(record.get("items", [])) & set(footer_items)]
+    missing = [item for record in matched for item in record.get("items", [])
+               if TEST_COUNT_ITEM.match(item) and item not in footer_items]
+    if missing:
+        return False, (f"the footer leaves out the test counts {', '.join(repr(i) for i in missing)} of the "
+                       f"verify-stamp it quotes (tree {tree[:12]}); copy every test-count item verify printed")
     return True, f"stamped tree {tree}"
 
 

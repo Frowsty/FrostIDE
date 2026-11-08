@@ -21,7 +21,9 @@
  *
  * Threads: a QObject of the thread that created it (the UI thread); every member except
  * callbacks()'s functions is called there. The callbacks may run on any thread and outlive the
- * controller: after its destruction they do nothing.
+ * controller: after its destruction they do nothing. A new model's tree (CMakeViewModel::build,
+ * hundreds of ms for a project of FrostEngine's size in Debug) is built in onModelChanged, on the
+ * service's thread, and only handed to the UI thread (the R0 stall criterion, FND-9a).
  */
 #pragma once
 
@@ -99,8 +101,10 @@ public:
 
     // Callbacks for CMakeService::create that post each event to this controller (header comment).
     [[nodiscard]] build::CMakeServiceCallbacks callbacks();
-    // The backend Reload and the profile selector act on (not owned); nullptr detaches.
-    void setBackend(ICMakeBackend* backend) noexcept { m_backend = backend; }
+    // The backend Reload and the profile selector act on (not owned); nullptr detaches. The
+    // callbacks also read its presetFiles() on the service thread (header comment, Threads), so the
+    // backend must be thread-safe there, as CMakeServiceBackend is.
+    void setBackend(ICMakeBackend* backend) noexcept;
 
     // The Solution Explorer's model of the folder; owned by the controller.
     [[nodiscard]] CMakeTreeModel* treeModel() const noexcept { return m_tree; }
@@ -127,7 +131,8 @@ signals:
 private:
     struct Bridge; // Shared with the callbacks; cleared by the destructor.
 
-    void applyModel(std::shared_ptr<const project::CMakeProject> model);
+    void applyModel(std::shared_ptr<const project::CMakeProject> model,
+                    std::shared_ptr<const project::CMakeViewModel> view);
     void applyProfiles(const std::vector<project::CMakeProfile>& profiles, std::optional<std::size_t> active);
     void applyConfigureFinished(const build::CMakeConfigureOutcome& outcome);
     void setProblem(QString problem);

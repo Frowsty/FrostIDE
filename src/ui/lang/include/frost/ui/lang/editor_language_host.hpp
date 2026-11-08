@@ -76,8 +76,8 @@ public:
     /*
      * Opens a file of the metadata cache (LanguageServices::metadataCacheDir: source the language
      * server generated for a library symbol) at `position`. A host should open it read-only; the
-     * default opens it like openLocation. A read-only editor tab for it in the workbench is LTR-6
-     * work.
+     * default opens it like openLocation. The workbench's host (LanguageBridge) opens it in an
+     * editor that stays read-only.
      */
     virtual void openReadOnlyLocation(std::string_view path, ::frost::lang::LspPosition position) {
         openLocation(path, position);

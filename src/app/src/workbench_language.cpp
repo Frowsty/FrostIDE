@@ -1,14 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // LanguageBridge (language_bridge.hpp): the language features' server, editor host and open
-// documents over the Workbench's clangd and editor views.
+// documents over the Workbench's clangd and editor views; and Workbench::languageReadiness, the
+// reason the language features give for an empty answer (ServerReadiness, R0 follow-up 4).
 
 #include "frost/app/workbench.hpp"
+#include "frost/io/path.hpp"
+#include "frost/lang/clangd.hpp"
 #include "frost/lang/document_sync.hpp"
+#include "frost/lang/json.hpp"
+#include "frost/lang/lua_service.hpp"
 #include "frost/lang/symbols.hpp"
+#include "frost/lang/uri.hpp"
 #include "frost/text/editor/commands.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
+#include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 
 #include "language_bridge.hpp"
@@ -17,9 +24,24 @@
 
 #include <algorithm>
 #include <format>
+#include <memory>
 #include <utility>
 
 namespace frost::app {
+
+// What a compile_commands.json holds, as far as clangd's fallback is concerned
+// (Workbench::clangdUsesFallbackFlags).
+struct CompileDatabaseState {
+    enum class Kind {
+        Unreadable,  // The read failed: nothing is known.
+        Unparseable, // Not a JSON array: clangd cannot load it either.
+        Empty,       // "[]": clangd loads it and has no file to infer a command from.
+        Entries,     // At least one entry: clangd infers a command for any file from them.
+    };
+    std::string database;  // The compile_commands.json that was read.
+    io::FileStatus status; // Its size and modification time then; a change means a new read.
+    Kind kind = Kind::Unreadable;
+};
 
 namespace {
 
@@ -207,6 +229,13 @@ void LanguageBridge::openLocation(std::string_view path, lang::LspPosition posit
     view->goToLine(static_cast<int>(point.line.value()) + 1, static_cast<int>(point.column.value()) + 1);
 }
 
+void LanguageBridge::openReadOnlyLocation(std::string_view path, lang::LspPosition position) {
+    openLocation(path, position);
+    DocumentEditorView* view = m_workbench.currentView();
+    if (view != nullptr && lang::documentKey(view->path()) == lang::documentKey(path))
+        view->setForcedReadOnly(true);
+}
+
 void LanguageBridge::setUsageHighlights(std::vector<lang::DocumentHighlight> highlights) {
     ui::EditorView* editor = activeEditor();
     if (editor == nullptr) {
@@ -293,7 +322,192 @@ sched::Task<void> runWorkspaceSymbolQuery(lang::ILspRequester& server, std::stri
         Qt::QueuedConnection);
 }
 
+// Reads `database` (JSON compilation database format: an array of {directory, file, ...}). Runs on
+// a worker; O(size of the file).
+std::shared_ptr<const CompileDatabaseState> readCompileDatabase(io::IFileSystem& fs, std::string database,
+                                                                io::FileStatus status) {
+    auto state = std::make_shared<CompileDatabaseState>();
+    state->database = std::move(database);
+    state->status = status;
+    auto bytes = fs.readFile(state->database);
+    if (!bytes)
+        return state;
+    auto json = lang::parseJson(*bytes);
+    if (!json || !json->isArray()) {
+        state->kind = CompileDatabaseState::Kind::Unparseable;
+        return state;
+    }
+    // An array whose entries clangd rejects (no "file", no command) still counts as Entries: clangd
+    // would then fall back, but claiming nothing (Unknown) is never false.
+    state->kind = json->items().empty() ? CompileDatabaseState::Kind::Empty : CompileDatabaseState::Kind::Entries;
+    return state;
+}
+
+/*
+ * Whether clangd's own config could point it at a compilation database the readiness model does not
+ * search (clangdUsesFallbackFlags): a `CompileFlags: CompilationDatabase:` directive in a .clangd in
+ * one of `path`'s folders, or in the user's clangd config.yaml (%LOCALAPPDATA%\clangd on Windows,
+ * $XDG_CONFIG_HOME/clangd or ~/.config/clangd on Linux). Only a config file that names the key can
+ * hold the directive; one that exists but cannot be read counts as naming it. Only asked when
+ * clangd runs with its config enabled (trusted). GUI thread: a stat per folder level, and reads of
+ * the (small) config files that exist.
+ */
+bool clangdConfigMayMoveTheDatabase(io::IFileSystem& fs, std::string_view path) {
+    const auto names = [&fs](const std::string& file) {
+        auto found = fs.exists(file);
+        if (!found)
+            return true; // Cannot tell.
+        if (!*found)
+            return false;
+        auto bytes = fs.readFile(file);
+        return !bytes || bytes->find("CompilationDatabase") != std::string::npos;
+    };
+    std::string user;
+    if constexpr (io::kNativePathStyle == io::PathStyle::Windows) {
+        if (const QString local = qEnvironmentVariable("LOCALAPPDATA"); !local.isEmpty())
+            user = local.toStdString() + "/clangd/config.yaml"; // normalizePath makes it native.
+    } else if (const QString xdg = qEnvironmentVariable("XDG_CONFIG_HOME"); !xdg.isEmpty()) {
+        user = xdg.toStdString() + "/clangd/config.yaml";
+    } else if (const QString home = qEnvironmentVariable("HOME"); !home.isEmpty()) {
+        user = home.toStdString() + "/.config/clangd/config.yaml";
+    }
+    if (!user.empty()) {
+        auto file = io::normalizePath(user);
+        if (!file || names(*file))
+            return true;
+    }
+    auto normalized = io::normalizePath(path);
+    if (!normalized)
+        return true;
+    for (std::string_view directory = io::parentPath(*normalized); !directory.empty();
+         directory = io::parentPath(directory)) {
+        auto config = io::joinPath(directory, ".clangd");
+        if (!config || names(*config))
+            return true;
+    }
+    return false;
+}
+
+sched::Task<void> readCompileDatabaseTask(io::IFileSystem* fs, std::string database, io::FileStatus status,
+                                          std::function<void(std::shared_ptr<const CompileDatabaseState>)> done) {
+    done(readCompileDatabase(*fs, std::move(database), status));
+    co_return;
+}
+
 } // namespace
+
+ui::lang::ServerReadiness Workbench::languageReadiness(std::string_view path) {
+    using Readiness = ui::lang::ServerReadiness;
+    if (isLuaSource(path))
+        return m_lua && m_lua->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;
+    if (isManagedSource(path))
+        return m_managed && m_managed->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;
+    if (!isCFamilySource(path) || !m_clangd || m_clangd->state() != lang::ClangdState::Running)
+        return Readiness::NotRunning;
+    if (clangdUsesFallbackFlags(path) == true)
+        return Readiness::NoCompileCommand;
+    return m_clangdIndexing ? Readiness::Indexing : Readiness::Unknown;
+}
+
+std::optional<bool> Workbench::clangdUsesFallbackFlags(std::string_view path) {
+    using Kind = CompileDatabaseState::Kind;
+    if (!m_clangd)
+        return std::nullopt;
+    // A trusted clangd reads .clangd and the user's config, whose CompilationDatabase directive
+    // moves its database search where this model does not follow: claim nothing then (truth rule).
+    if (m_clangdTrusted && clangdConfigMayMoveTheDatabase(m_services.fs, path))
+        return std::nullopt;
+    // <directory>/<name> when it exists, "" when it does not, nullopt when that cannot be told.
+    const auto existing = [&](std::string_view directory, std::string_view name) -> std::optional<std::string> {
+        auto joined = io::joinPath(directory, name);
+        auto file = joined ? io::normalizePath(*joined) : joined;
+        if (!file)
+            return std::nullopt;
+        auto found = m_services.fs.exists(*file);
+        if (!found)
+            return std::nullopt;
+        return *found ? std::move(*file) : std::string();
+    };
+    if (const std::optional<lang::CompileCommandsLocation> location = m_clangd->compileCommands()) {
+        // --compile-commands-dir: clangd reads that folder's compile_commands.json and nothing else;
+        // a missing or unparseable one leaves the fallback (both checked with `clangd --check`).
+        const std::optional<std::string> database = existing(location->directory, "compile_commands.json");
+        if (!database)
+            return std::nullopt;
+        if (database->empty())
+            return true;
+        const CompileDatabaseState* state = compileDatabaseState(*database);
+        if (state == nullptr || state->kind == Kind::Unreadable)
+            return std::nullopt;
+        return state->kind != Kind::Entries;
+    }
+    /*
+     * No --compile-commands-dir: the nearest folder that gives clangd a database, from the file's
+     * own upward. Checked with `clangd --check`: in one folder compile_commands.json wins over
+     * compile_flags.txt, an empty database there stops the search (fallback), and one clangd cannot
+     * parse is skipped and the search goes on.
+     */
+    auto normalized = io::normalizePath(path);
+    if (!normalized)
+        return std::nullopt;
+    for (std::string_view directory = io::parentPath(*normalized); !directory.empty();
+         directory = io::parentPath(directory)) {
+        for (const std::string_view name :
+             {std::string_view("compile_commands.json"), std::string_view("build/compile_commands.json")}) {
+            const std::optional<std::string> database = existing(directory, name);
+            if (!database)
+                return std::nullopt;
+            if (database->empty())
+                continue;
+            const CompileDatabaseState* state = compileDatabaseState(*database);
+            if (state == nullptr || state->kind == Kind::Unreadable)
+                return std::nullopt;
+            if (state->kind == Kind::Unparseable)
+                continue;
+            return state->kind == Kind::Empty;
+        }
+        const std::optional<std::string> flags = existing(directory, "compile_flags.txt");
+        if (!flags)
+            return std::nullopt;
+        if (!flags->empty())
+            return false; // clangd gives every file below it these flags.
+    }
+    return true; // No database above the file: clangd's "Failed to find compilation database".
+}
+
+const CompileDatabaseState* Workbench::compileDatabaseState(const std::string& database) {
+    const Result<io::FileStatus> status = m_services.fs.status(database);
+    if (!status)
+        return nullptr;
+    if (const auto known = m_compileDatabases.find(database);
+        known != m_compileDatabases.end() && known->second->status == *status)
+        return known->second.get();
+    // Not read yet, or changed since (a reconfigure rewrites it in place): read it on a worker and
+    // claim nothing until then. One read at a time; the next question after it ends checks again.
+    if (!m_compileDatabaseReading && m_pool && !m_shutDown) {
+        m_compileDatabaseReading = true;
+        const QPointer<Workbench> self(this);
+        auto done = [self](std::shared_ptr<const CompileDatabaseState> state) {
+            QMetaObject::invokeMethod(
+                QCoreApplication::instance(),
+                [self, state = std::move(state)] {
+                    if (!self)
+                        return;
+                    self->m_compileDatabaseReading = false;
+                    // clangd's database and those above a few files: a handful, bounded anyway.
+                    if (self->m_compileDatabases.size() >= 16)
+                        self->m_compileDatabases.clear();
+                    self->m_compileDatabases[state->database] = state;
+                },
+                Qt::QueuedConnection);
+        };
+        m_pool
+            ->spawn(sched::Lane::Background,
+                    readCompileDatabaseTask(&m_services.fs, database, *status, std::move(done)))
+            .detach();
+    }
+    return nullptr;
+}
 
 void Workbench::queryWorkspaceSymbols(std::string_view query, bool classesOnly,
                                       std::function<void(std::vector<ui::WorkbenchSymbol>)> done) {

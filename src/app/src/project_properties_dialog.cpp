@@ -52,6 +52,8 @@
 #include <windows.h>
 
 #include <tlhelp32.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace frost::app {
@@ -80,7 +82,20 @@ struct PageSpec {
     const char* category;
     const char* title;
     std::vector<FieldSpec> fields;
+    // Non-null: the page is shown read-only with this reason and its fields are never written.
+    const char* readOnlyReason = nullptr;
 };
+
+/*
+ * The Debugging page's LocalDebugger* properties are per-user settings (Visual Studio keeps them in
+ * <project>.vcxproj.user); writing them into the shared project file would put one user's command
+ * line into every checkout. Editing them requires run configurations (RUN-1), so the page shows
+ * them read-only, as MSBuild sees them: the .vcxproj.user values over the project file's.
+ */
+constexpr const char* kDebuggingReadOnlyReason =
+    "Read-only: editing debugger settings requires run configurations (RUN-1). The values are read from "
+    "the project's .vcxproj.user file, else from the project file; nothing on this page is saved.";
+constexpr std::string_view kLocalDebuggerPrefix = "Prop.LocalDebugger";
 
 std::vector<PageSpec> cppPropertyPages() {
     return {
@@ -118,7 +133,8 @@ std::vector<PageSpec> cppPropertyPages() {
              {"Prop.LocalDebuggerCommandArguments", "Command Arguments", nullptr},
              {"Prop.LocalDebuggerWorkingDirectory", "Working Directory", nullptr},
              {"Prop.LocalDebuggerEnvironment", "Environment", nullptr},
-         }},
+         },
+         kDebuggingReadOnlyReason},
         {"C/C++",
          "General",
          {
@@ -332,6 +348,7 @@ struct BoundField {
     std::string key;
     std::function<std::string()> getValue;
     std::function<void(const std::string&)> setValue;
+    bool readOnly = false; // Shown only; saveCurrentChanges never writes it.
 };
 
 void buildPropertyPagesUi(const std::vector<PageSpec>& specs, QTreeWidget* tree, QStackedWidget* stack,
@@ -358,6 +375,13 @@ void buildPropertyPagesUi(const std::vector<PageSpec>& specs, QTreeWidget* tree,
         auto* form = new QFormLayout(container);
         form->setContentsMargins(16, 12, 16, 12);
         form->setSpacing(10);
+        const bool readOnly = page.readOnlyReason != nullptr;
+        if (readOnly) {
+            auto* note = new QLabel(QString::fromUtf8(page.readOnlyReason), container);
+            note->setObjectName(QStringLiteral("projectPropertiesReadOnlyNote"));
+            note->setWordWrap(true);
+            form->addRow(note);
+        }
 
         for (const FieldSpec& f : page.fields) {
             const std::string keyStr(f.key);
@@ -367,15 +391,23 @@ void buildPropertyPagesUi(const std::vector<PageSpec>& specs, QTreeWidget* tree,
                 combo->setObjectName(QString::fromStdString("prop_" + keyStr));
                 const QStringList opts = QString::fromUtf8(f.options).split(QLatin1Char(';'));
                 combo->addItems(opts);
+                if (readOnly) {
+                    combo->setEnabled(false);
+                    combo->setToolTip(QString::fromUtf8(page.readOnlyReason));
+                }
                 form->addRow(QString::fromUtf8(f.label) + QLatin1Char(':'), combo);
                 bindings.push_back({keyStr, [combo] { return combo->currentText().trimmed().toStdString(); },
-                                    [combo](const std::string& val) { combo->setEditText(toQs(val)); }});
+                                    [combo](const std::string& val) { combo->setEditText(toQs(val)); }, readOnly});
             } else {
                 auto* edit = new QLineEdit(container);
                 edit->setObjectName(QString::fromStdString("prop_" + keyStr));
+                if (readOnly) {
+                    edit->setReadOnly(true);
+                    edit->setToolTip(QString::fromUtf8(page.readOnlyReason));
+                }
                 form->addRow(QString::fromUtf8(f.label) + QLatin1Char(':'), edit);
                 bindings.push_back({keyStr, [edit] { return edit->text().trimmed().toStdString(); },
-                                    [edit](const std::string& val) { edit->setText(toQs(val)); }});
+                                    [edit](const std::string& val) { edit->setText(toQs(val)); }, readOnly});
             }
         }
         scroll->setWidget(container);
@@ -443,6 +475,19 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
     const auto loadCurrentConfig = [&] {
         const std::string cfg = cfgCombo ? cfgCombo->currentText().toStdString() : std::string();
         loadedProps = isCpp ? parseVcxprojPropertiesForConfig(currentXml, cfg) : parseCsprojProperties(currentXml);
+        // MSBuild imports <project>.user after the project, so its debugger settings win; they are
+        // shown read-only (kDebuggingReadOnlyReason) and the .user file is never written here.
+        if (isCpp) {
+            const std::string userPath = projectPath + ".user";
+            if (fs.exists(userPath).value_or(false)) {
+                if (auto user = fs.readFile(userPath)) {
+                    for (auto& [key, value] : parseVcxprojPropertiesForConfig(*user, cfg)) {
+                        if (std::string_view(key).starts_with(kLocalDebuggerPrefix))
+                            loadedProps[key] = std::move(value);
+                    }
+                }
+            }
+        }
         for (const BoundField& b : bindings) {
             const auto it = loadedProps.find(b.key);
             b.setValue(it != loadedProps.end() ? it->second : std::string());
@@ -453,6 +498,8 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
     const auto saveCurrentChanges = [&]() -> bool {
         ProjectPropertyMap updates;
         for (const BoundField& b : bindings) {
+            if (b.readOnly)
+                continue;
             const std::string val = b.getValue();
             const auto it = loadedProps.find(b.key);
             const std::string prev = it != loadedProps.end() ? it->second : std::string();
@@ -679,7 +726,11 @@ void showConfigurationManagerDialog(QWidget* parent, io::IFileSystem& fs, const 
 }
 
 namespace {
-// A .NET process: the dotnet host itself, or an apphost with its <name>.runtimeconfig.json beside it.
+/*
+ * A .NET process: the dotnet host itself, or an apphost with its <name>.runtimeconfig.json beside
+ * it. The apphost's <name> is its file name without a ".exe" suffix (Windows) or the whole file
+ * name (Linux apphosts have no suffix), so a dotted name such as "My.App" keeps every dot.
+ */
 void markDotNet(RunningProcessInfo& info) {
     const QString qName = toQs(info.name);
     if (qName.compare(QStringLiteral("dotnet.exe"), Qt::CaseInsensitive) == 0 ||
@@ -687,13 +738,67 @@ void markDotNet(RunningProcessInfo& info) {
         info.isDotNet = true;
     } else if (!info.executablePath.empty()) {
         const QFileInfo exeInfo(toQs(info.executablePath));
-        const QString runtimeCfg =
-            exeInfo.dir().filePath(exeInfo.completeBaseName() + QStringLiteral(".runtimeconfig.json"));
-        if (QFileInfo::exists(runtimeCfg))
+        QString stem = exeInfo.fileName();
+        if (stem.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive))
+            stem.chop(4);
+        const QString runtimeCfg = exeInfo.dir().filePath(stem + QStringLiteral(".runtimeconfig.json"));
+        if (!stem.isEmpty() && QFileInfo::exists(runtimeCfg))
             info.isDotNet = true;
     }
 }
+
+// The whole content of `path`, empty when it cannot be read (the process exited, or no access).
+QByteArray readSmallFile(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+    return file.readAll();
+}
 } // namespace
+
+std::vector<RunningProcessInfo> readProcProcesses(const std::string& procRoot, std::uint32_t selfPid,
+                                                  const ReadProcLink& readLink) {
+    std::vector<RunningProcessInfo> processes;
+    const QDir root(toQs(procRoot));
+    for (const QString& entry : root.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        bool numeric = false;
+        const uint pid = entry.toUInt(&numeric);
+        if (!numeric || pid == 0 || pid == selfPid)
+            continue;
+        const QDir dir(root.filePath(entry));
+        std::string exe = readLink ? readLink(dir.filePath(QStringLiteral("exe")).toStdString()) : std::string();
+        // The kernel marks the link of an executable that was replaced or removed after it started.
+        constexpr std::string_view kDeleted = " (deleted)";
+        if (exe.ends_with(kDeleted))
+            exe.resize(exe.size() - kDeleted.size());
+        const QByteArray cmdline = readSmallFile(dir.filePath(QStringLiteral("cmdline")));
+        // Kernel threads have neither an executable nor a command line; nor does a process that is
+        // gone or a zombie. Nothing could attach to them.
+        if (exe.empty() && cmdline.isEmpty())
+            continue;
+        RunningProcessInfo info;
+        info.pid = static_cast<std::uint32_t>(pid);
+        info.executablePath = exe;
+        if (!exe.empty()) {
+            // comm holds at most 15 bytes of the name; the executable's own name is the real one.
+            info.name = QFileInfo(toQs(exe)).fileName().toStdString();
+        } else {
+            // Another user's process: no executable link, but comm and the command line are readable.
+            const QString comm = QString::fromUtf8(readSmallFile(dir.filePath(QStringLiteral("comm")))).trimmed();
+            const qsizetype argv0End = cmdline.indexOf('\0');
+            const QString argv0 =
+                QFileInfo(QString::fromUtf8(argv0End < 0 ? cmdline : cmdline.left(argv0End))).fileName();
+            constexpr qsizetype kCommLimit = 15;
+            const bool truncated = comm.toUtf8().size() >= kCommLimit && argv0.startsWith(comm);
+            info.name = (comm.isEmpty() || truncated ? argv0 : comm).toStdString();
+        }
+        if (info.name.empty())
+            continue;
+        markDotNet(info);
+        processes.push_back(std::move(info));
+    }
+    return processes;
+}
 
 std::vector<RunningProcessInfo> enumerateRunningProcesses() {
     std::vector<RunningProcessInfo> processes;
@@ -757,31 +862,17 @@ std::vector<RunningProcessInfo> enumerateRunningProcesses() {
         CloseHandle(snapshot);
     }
 #else
-    /* Linux: every numeric /proc entry, its name from /proc/<pid>/comm and its executable from the
-     * /proc/<pid>/exe link. The link is unreadable for other users' processes, which then have no
-     * path (and Attach refuses them); a process that exits during the walk is skipped. There are
-     * no window titles on this path. O(processes). */
+    // Linux: /proc through readProcProcesses; the exe links are read with readlink(2), which gives
+    // the kernel's text (" (deleted)" included) and fails for other users' processes.
     const auto selfPid = static_cast<std::uint32_t>(QCoreApplication::applicationPid());
-    const QDir procRoot(QStringLiteral("/proc"));
-    for (const QString& entry : procRoot.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
-        bool numeric = false;
-        const uint pid = entry.toUInt(&numeric);
-        if (!numeric || pid == 0 || pid == selfPid)
-            continue;
-        RunningProcessInfo info;
-        info.pid = static_cast<std::uint32_t>(pid);
-        if (QFile comm(procRoot.filePath(entry + QStringLiteral("/comm"))); comm.open(QIODevice::ReadOnly))
-            info.name = QString::fromUtf8(comm.readAll()).trimmed().toStdString();
-        const QString exe = QFileInfo(procRoot.filePath(entry + QStringLiteral("/exe"))).symLinkTarget();
-        if (!exe.isEmpty())
-            info.executablePath = exe.toStdString();
-        if (info.name.empty() && !exe.isEmpty())
-            info.name = QFileInfo(exe).fileName().toStdString();
-        if (info.name.empty())
-            continue; // Gone, or a kernel thread without a readable name.
-        markDotNet(info);
-        processes.push_back(std::move(info));
-    }
+    processes = readProcProcesses("/proc", selfPid, [](const std::string& link) {
+        std::string target(4096, '\0');
+        const ssize_t length = ::readlink(link.c_str(), target.data(), target.size());
+        if (length <= 0 || static_cast<std::size_t>(length) >= target.size())
+            return std::string();
+        target.resize(static_cast<std::size_t>(length));
+        return target;
+    });
 #endif
     std::ranges::sort(processes, [](const RunningProcessInfo& a, const RunningProcessInfo& b) {
         if (a.windowTitle.empty() != b.windowTitle.empty())

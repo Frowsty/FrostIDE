@@ -140,10 +140,16 @@ void DocumentEditorView::restoreViewState(const ui::EditorViewState& state) {
 
 void DocumentEditorView::refresh() {
     m_editor->setFileInfo(ui::EditorFileInfo{encodingToken(*m_document), lineSeparatorToken(*m_document),
-                                             m_document->readOnly() != document::ReadOnlyReason::None ||
+                                             m_forcedReadOnly ||
+                                                 m_document->readOnly() != document::ReadOnlyReason::None ||
                                                  m_path.find("[Decompiled]") != std::string::npos,
                                              m_document->readOnly() == document::ReadOnlyReason::LongLine});
     m_host.editorStatusChanged(*this);
+}
+
+void DocumentEditorView::setForcedReadOnly(bool readOnly) {
+    m_forcedReadOnly = readOnly;
+    refresh();
 }
 
 void DocumentEditorView::markSaved() {

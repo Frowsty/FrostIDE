@@ -343,14 +343,22 @@ Result<void> writeCMakeFileApiQuery(io::IFileSystem& fs, std::string_view buildD
     return fs.writeFileAtomic(*path, kQuery);
 }
 
+Result<std::string> cmakeFileApiReplyDirectory(std::string_view buildDirectory) {
+    auto build = io::normalizePath(buildDirectory);
+    if (!build) {
+        return std::unexpected(std::move(build.error()));
+    }
+    constexpr std::string_view kSeparator = io::kNativePathStyle == io::PathStyle::Windows ? "\\" : "/";
+    return io::joinPath(*build, std::format(".cmake{0}api{0}v1{0}reply", kSeparator));
+}
+
 Result<std::optional<CMakeProject>> readCMakeFileApiReply(io::IFileSystem& fs, std::string_view buildDirectory,
                                                           std::string_view configuration) {
     auto build = io::normalizePath(buildDirectory);
     if (!build) {
         return std::unexpected(std::move(build.error()));
     }
-    constexpr std::string_view kSeparator = io::kNativePathStyle == io::PathStyle::Windows ? "\\" : "/";
-    auto replyDir = io::joinPath(*build, std::format(".cmake{0}api{0}v1{0}reply", kSeparator));
+    auto replyDir = cmakeFileApiReplyDirectory(*build);
     if (!replyDir) {
         return std::unexpected(std::move(replyDir.error()));
     }

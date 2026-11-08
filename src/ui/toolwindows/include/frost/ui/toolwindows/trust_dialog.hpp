@@ -9,7 +9,13 @@
  * build service continues the build on its own and the dialog closes (accepted). A folder that
  * cannot be trusted stops there: the error shows in the dialog, which stays open, and the folders
  * still untrusted can be tried again. Cancel (or closing) cancels a waiting build only for a
- * Build-purpose dialog; declining Lua language-server trust leaves an unrelated build alone.
+ * Build-purpose dialog; declining Lua language-server trust, or a debugger attach, leaves an
+ * unrelated build alone.
+ *
+ * DebugAttach (Attach to Process) says that attaching runs no project code but gives the debugger
+ * full access to the process. With setSessionGrant, Trust calls that grant instead of
+ * BuildController::trust, and the dialog says the permission is not saved: the workbench uses it
+ * for a one-off attach with no project open, so a system folder never becomes a trusted project.
  * TrustPrompter keeps at most one dialog: a repeated NeedsTrust updates the open one's list, and
  * the dialog closes by itself when the build leaves NeedsTrust some other way.
  *
@@ -18,10 +24,15 @@
  */
 #pragma once
 
+#include "frost/core/error.hpp"
+
 #include <QDialog>
 #include <QObject>
 #include <QPointer>
 #include <QStringList>
+
+#include <functional>
+#include <string_view>
 
 class QLabel;
 class QListWidget;
@@ -32,7 +43,7 @@ namespace frost::ui {
 class BuildController;
 
 // The operation whose project-controlled content needs trust.
-enum class TrustPurpose { Build, LuaLanguageServer, ManagedLanguageServer, GitRepository, ProjectOpen };
+enum class TrustPurpose { Build, LuaLanguageServer, ManagedLanguageServer, GitRepository, ProjectOpen, DebugAttach };
 
 class TrustDialog final : public QDialog {
     Q_OBJECT
@@ -44,6 +55,19 @@ public:
 
     // Replaces the listed folders (a repeated NeedsTrust).
     void setRoots(const QStringList& roots);
+    /*
+     * Trust calls `grant` for each listed folder instead of BuildController::trust (nothing is saved
+     * through the controller); the explanation and the button say the permission is for this
+     * operation only. Call before the dialog is shown. Null restores the controller's trust. The
+     * dialog never ends a grant: if a later folder fails and the user then cancels, the grants for
+     * the folders before it stay, so the caller ends its grants when the dialog finishes, accepted
+     * or rejected (the workbench's one-off attach does).
+     */
+    void setSessionGrant(std::function<Result<void>(std::string_view root)> grant);
+    [[nodiscard]] bool sessionOnly() const noexcept { return static_cast<bool>(m_sessionGrant); }
+    [[nodiscard]] TrustPurpose purpose() const noexcept { return m_purpose; }
+    // The explanation shown above the folder list.
+    [[nodiscard]] QString description() const;
     [[nodiscard]] const QStringList& roots() const noexcept { return m_roots; }
 
     [[nodiscard]] QPushButton* trustButton() const noexcept { return m_trust; }
@@ -56,9 +80,14 @@ public:
 private:
     void trustAll();
 
+    // The explanation for the purpose and the session-only mode.
+    [[nodiscard]] QString explanation() const;
+
     BuildController& m_controller;
     TrustPurpose m_purpose;
+    std::function<Result<void>(std::string_view root)> m_sessionGrant;
     QStringList m_roots;
+    QLabel* m_body = nullptr;
     QListWidget* m_list = nullptr;
     QLabel* m_error = nullptr;
     QPushButton* m_trust = nullptr;

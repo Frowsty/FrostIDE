@@ -97,6 +97,10 @@ public:
     // Reads the document's file facts (encoding, separator, read-only) into the editor and tells the
     // host the status changed (after a save, a reload or an external-change decision).
     void refresh();
+    // Keeps this view read-only whatever the document's load said, for files that are shown, not
+    // edited: a language server's metadata source in the metadata cache (LTR-1). Then refresh().
+    void setForcedReadOnly(bool readOnly);
+    [[nodiscard]] bool forcedReadOnly() const noexcept { return m_forcedReadOnly; }
     // After a save: the editor's undo baseline becomes the saved one, then refresh().
     void markSaved();
     // After the document's text changed outside the editor (a reload): the editor follows it.
@@ -119,6 +123,7 @@ private:
     ui::IEditorHost& m_host;
     IDocumentEditorListener& m_listener;
     DocumentEditorFactory* m_factory;
+    bool m_forcedReadOnly = false;
 };
 
 class DocumentEditorFactory final : public ui::IEditorFactory {

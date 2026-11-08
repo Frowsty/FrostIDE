@@ -16,9 +16,11 @@
  * Opening (openFolder). Reads the presets (cmake_presets.hpp) and builds the profiles
  * (cmake_profile.hpp) from them or from CMakeServiceOptions::profileRecords; the active profile is
  * the persisted one (stateFilePath) or the first usable one. The active profile's existing File
- * API reply, if any, is read at once, so the target tree shows before anything runs (restricted
- * mode, PLAN.md section 3.5). If the folder is trusted and configureOnOpen is set, a configure
- * starts in the background.
+ * API reply, if any, is read next on the service's thread (it is several MB of JSON for a large
+ * project, too slow for the caller's GUI thread: the R0 stall criterion) and published through
+ * onModelChanged, so the target tree shows before anything runs (restricted mode, PLAN.md section
+ * 3.5). If the folder is trusted and configureOnOpen is set, a configure starts in the background,
+ * after that read.
  *
  * Trust. Configure runs the project's CMake code and a build its build steps, so both pass the
  * gate first: the folder (the source directory) must be trusted (TrustStore); its profiles' build
@@ -227,9 +229,11 @@ public:
 
     /*
      * Opens the CMake folder `sourceDir` (absolute, holding CMakeLists.txt), as the header comment
-     * says. Blocking reads (presets, an existing reply). A presets file that does not parse leaves
-     * the settings profiles and is reported by presetsError(). Errors: InvalidArgument (not
-     * absolute), NotFound (no CMakeLists.txt), Busy (a job is running).
+     * says. Reads the presets (blocking, small files). The active profile's existing reply is read
+     * on the service's thread: model() is nullptr until onModelChanged publishes it (waitForIdle
+     * waits for that too). A presets file that does not parse leaves the settings profiles and is
+     * reported by presetsError(). Errors: InvalidArgument (not absolute), NotFound (no
+     * CMakeLists.txt), Busy (a job is running).
      */
     [[nodiscard]] Result<void> openFolder(std::string_view sourceDir);
     // Closes the folder and clears the model and diagnostics. Errors: Busy.
@@ -240,9 +244,14 @@ public:
     [[nodiscard]] std::optional<std::size_t> activeProfileIndex() const;
     [[nodiscard]] std::optional<project::CMakeProfile> activeProfile() const;
     /*
-     * Makes profiles()[index] active, persists it, reads that profile's existing reply (or clears
-     * the model) and, when the folder is trusted and configureOnOpen is set, configures it if it has
-     * no reply. Errors: InvalidArgument (no folder), OutOfRange, Busy, the state file's errors.
+     * Makes profiles()[index] active, persists it and clears the model; that profile's existing
+     * reply is then read on the service's thread and published through onModelChanged (nullptr
+     * without one). When the folder is trusted and configureOnOpen is set, a profile without a
+     * reply directory starts its configure before this returns (state() is Configuring), and one
+     * whose reply does not parse configures once the read finds that out. Blocking: one status
+     * call on the reply directory. Errors: InvalidArgument (no folder), OutOfRange, Busy
+     * (including a folder or profile change by another thread during the call), the state file's
+     * errors.
      */
     [[nodiscard]] Result<void> setActiveProfile(std::size_t index);
     [[nodiscard]] Result<void> setActiveProfile(std::string_view name); // NotFound for an unknown name.
@@ -293,8 +302,25 @@ public:
     // Trusts `root` and lets a job waiting in NeedsTrust go on; once the folder is trusted and has no
     // configured model yet, configures it (configureOnOpen). Errors: those of TrustStore::trust.
     [[nodiscard]] Result<void> trust(std::string_view root);
+    /*
+     * The trust store changed by another route (Settings, another instance, a revocation): what
+     * trust() does after its grant, and nothing else. It never writes the store, so it can neither
+     * re-grant a root revoked meanwhile nor save a folder covered by a trusted parent as a root of
+     * its own (R0 follow-up 15). A job waiting in NeedsTrust goes on when the folder and every root
+     * it waits for are trusted now; an idle, trusted folder without a configured model configures
+     * (configureOnOpen). Any thread; reads the store once per root.
+     */
+    void trustChanged();
 
     [[nodiscard]] BuildState state() const;
+    /*
+     * Whether a reply read that openFolder or setActiveProfile queued has not run yet: model() and
+     * state() may still change without a job (the read publishes the model, and a profile switch's
+     * read may start a configure). It drops under the lock that publishes that model or starts that
+     * configure, so a caller that sees false and then state() Idle sees the switch's final state. Callers
+     * that react to the active build directory (clangd's restart) treat it like a running job.
+     */
+    [[nodiscard]] bool modelLoading() const;
     [[nodiscard]] std::optional<CMakeStep> currentStep() const;
     [[nodiscard]] std::vector<std::string> untrustedRoots() const;
     [[nodiscard]] std::optional<CMakeBuildOutcome> lastOutcome() const;

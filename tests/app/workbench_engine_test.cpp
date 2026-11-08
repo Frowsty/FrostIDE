@@ -3,6 +3,7 @@
 #include "frost/build/cmake_service.hpp"
 #include "frost/debug/fake_debug_adapter.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
+#include "frost/lang/lua_service.hpp"
 #include "frost/rpc/framing.hpp"
 #include "frost/rpc/json.hpp"
 #include "frost/ui/debug_controller.hpp"
@@ -27,6 +28,7 @@
 #include <filesystem>
 #include <span>
 #include <stop_token>
+#include <string_view>
 #include <thread>
 
 #ifdef _WIN32
@@ -578,6 +580,32 @@ TEST(WorkbenchEngine, ToolWindowExistsOnlyForFrostEngineProjectsAndHasNoLuaDebug
     EXPECT_TRUE(hasStatus(panel, QStringLiteral("needs a FrostEngine project")));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("legacy")));
     EXPECT_TRUE(play->isEnabled());
+}
+
+// The tool window's gate and the LuaLS FrostEngine defaults use one rule
+// (lang::isFrostEngineProjectRoot): both suffixes, any ASCII case, a non-empty stem, the root only.
+TEST(WorkbenchEngine, ToolWindowGateAndLuaDefaultsAgreeOnWhatAFrostEngineProjectIs) {
+    WorkDir dir("engine-one-rule");
+    dir.write("upper/GAME.FROSTPROJ", "{}");
+    dir.write("legacy/Old.FeProject", "{}");
+    dir.write("stemless/.frostproj", "{}");
+    dir.write("nested/sub/Game.frostproj", "{}");
+    dir.write("plain/main.lua", "return 1\n");
+    WorkbenchRig rig(dir);
+    for (const char* folder : {"upper", "legacy", "stemless", "nested", "plain"}) {
+        ASSERT_TRUE(rig.workbench->openPath(dir.join(folder))) << folder;
+        const bool lua = frost::lang::isFrostEngineLuaWorkspace(frost::io::realFileSystem(), dir.join(folder));
+        const bool expected = std::string_view(folder) == "upper" || std::string_view(folder) == "legacy";
+        EXPECT_EQ(lua, expected) << folder;
+        // The window, once created, stays registered; its actions follow the open project.
+        QWidget* panel = nullptr;
+        if (rig.window->toolWindows().contains("frostEngine")) {
+            rig.window->toolWindows().show("frostEngine");
+            panel = rig.window->toolWindows().content("frostEngine");
+        }
+        auto* play = panel != nullptr ? button(panel, QStringLiteral("Play")) : nullptr;
+        EXPECT_EQ(play != nullptr && play->isEnabled(), lua) << folder;
+    }
 }
 
 TEST(WorkbenchEngine, ShowsTheEngineErrorInsteadOfAGenericFailure) {

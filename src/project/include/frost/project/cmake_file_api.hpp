@@ -168,6 +168,10 @@ struct CMakeProject {
 // exactly that text. Errors: InvalidArgument (not absolute), the file system's errors.
 [[nodiscard]] Result<void> writeCMakeFileApiQuery(io::IFileSystem& fs, std::string_view buildDirectory);
 
+// <buildDirectory>/.cmake/api/v1/reply, the directory cmake writes its replies to (normalised,
+// native separators). Pure. Errors: InvalidArgument (not absolute).
+[[nodiscard]] Result<std::string> cmakeFileApiReplyDirectory(std::string_view buildDirectory);
+
 /*
  * Reads the current reply of `buildDirectory` (absolute). `configuration` picks the configuration
  * of a multi-config reply (ASCII case ignored); empty takes the first. nullopt when there is no

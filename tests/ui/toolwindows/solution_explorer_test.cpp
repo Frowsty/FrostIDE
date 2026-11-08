@@ -17,6 +17,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QColor>
+#include <QItemSelectionModel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QTreeView>
@@ -356,6 +357,82 @@ TEST(SolutionExplorer, ContextMenuOpensTheContainingFolderAndCopiesThePath) {
     ASSERT_NE(copy, nullptr);
     copy->trigger();
     EXPECT_EQ(QApplication::clipboard()->text().toStdString(), cpp); // Already native.
+}
+
+// setUnsupportedEditsReason: the edits the owner refuses are disabled up front with the reason as
+// tooltip, so no picker or confirmation opens for them; the supported ones stay enabled.
+TEST(SolutionExplorer, UnsupportedEditsAreDisabledUpFrontWithTheReason) {
+    const QString reason = QStringLiteral("Requires safe solution and project edits (SLN-6).");
+    // Finds `name` among the actions of `menu` and its submenus (a submenu by its menu's name).
+    const auto find = [](QMenu& menu, const char* name) -> QAction* {
+        for (QAction* action : menu.actions()) {
+            const QString actionName = action->menu() ? action->menu()->objectName() : action->objectName();
+            if (actionName == QLatin1String(name))
+                return action;
+        }
+        return nullptr;
+    };
+    const auto expectDisabled = [&](QMenu& menu, const char* name) {
+        QAction* action = find(menu, name);
+        ASSERT_NE(action, nullptr) << name;
+        EXPECT_FALSE(action->isEnabled()) << name;
+        EXPECT_EQ(action->toolTip(), reason) << name;
+    };
+    const auto expectEnabled = [&](QMenu& menu, const char* name) {
+        QAction* action = find(menu, name);
+        ASSERT_NE(action, nullptr) << name;
+        EXPECT_TRUE(action->isEnabled()) << name;
+    };
+    SolutionExplorer explorer;
+    explorer.setSolution(loadTiny("Tiny.sln"));
+    explorer.setRemoveProjectFileHandler([](const QString&, const QString&) {});
+    explorer.setAddProjectFileHandler([](const QString&) {});
+    explorer.setAddNewProjectFileHandler([](const QString&) {});
+    explorer.setUnsupportedEditsReason(reason);
+    test::SignalLog addProject(&explorer, &SolutionExplorer::addExistingProjectRequested);
+    test::SignalLog addFolder(&explorer, &SolutionExplorer::addSolutionFolderRequested);
+
+    const QModelIndex solutionIdx = explorer.filterModel()->index(0, 0);
+    std::unique_ptr<QMenu> solutionMenu(explorer.createContextMenu(solutionIdx));
+    EXPECT_TRUE(solutionMenu->toolTipsVisible());
+    expectDisabled(*solutionMenu, "addSolutionFolder");
+    expectDisabled(*solutionMenu, "addExistingProject");
+    expectEnabled(*solutionMenu, "solutionProperties");
+    find(*solutionMenu, "addExistingProject")->trigger();
+    find(*solutionMenu, "addSolutionFolder")->trigger();
+    EXPECT_EQ(addProject.count(), 0);
+    EXPECT_EQ(addFolder.count(), 0);
+
+    const NodeId appNode = nodeAt(*explorer.solution(), {"App"});
+    std::unique_ptr<QMenu> projectMenu(
+        explorer.createContextMenu(explorer.filterModel()->mapFromSource(explorer.model()->indexOf(appNode))));
+    for (const char* name :
+         {"removeProjectFromSolution", "moveToSolutionFolderMenu", "addNewFilter", "addExistingProjectFolder"})
+        expectDisabled(*projectMenu, name);
+    for (const char* name : {"addNewProjectFile", "addExistingProjectFile", "projectProperties"})
+        expectEnabled(*projectMenu, name);
+
+    // One file: Remove from Project (ProjectHost) stays; several files and Move to Filter do not.
+    const QModelIndex libCpp =
+        explorer.filterModel()->mapFromSource(explorer.model()->indexOfPath(tiny("Lib/lib.cpp")));
+    const QModelIndex libH = explorer.filterModel()->mapFromSource(explorer.model()->indexOfPath(tiny("Lib/lib.h")));
+    ASSERT_TRUE(libCpp.isValid());
+    ASSERT_TRUE(libH.isValid());
+    std::unique_ptr<QMenu> oneFile(explorer.createContextMenu(libCpp));
+    expectEnabled(*oneFile, "removeFromProject");
+    expectDisabled(*oneFile, "moveToFilterMenu");
+    explorer.view()->selectionModel()->select(libCpp, QItemSelectionModel::Select);
+    explorer.view()->selectionModel()->select(libH, QItemSelectionModel::Select);
+    std::unique_ptr<QMenu> twoFiles(explorer.createContextMenu(libCpp));
+    EXPECT_EQ(find(*twoFiles, "removeFromProject"), nullptr);
+    expectDisabled(*twoFiles, "removeFilesFromProject");
+
+    // Without a reason (the default) the same menus offer every action.
+    SolutionExplorer plain;
+    plain.setSolution(loadTiny("Tiny.sln"));
+    std::unique_ptr<QMenu> plainMenu(plain.createContextMenu(plain.filterModel()->index(0, 0)));
+    expectEnabled(*plainMenu, "addExistingProject");
+    expectEnabled(*plainMenu, "addSolutionFolder");
 }
 
 TEST(SolutionExplorer, RemoveFromProjectRequiresHandlerAndRejectsStaleMenu) {

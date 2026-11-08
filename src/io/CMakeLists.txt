@@ -3,7 +3,8 @@
 # frost::io (PLAN.md section 3.2): the OS boundary for files and processes.
 # UTF-8 <-> UTF-16 conversion, path rules (extended-length paths on Windows),
 # the IFileSystem and IProcessLauncher seams with their real implementations,
-# the MemFs and ScriptedProcessLauncher doubles, and the asio reactor, async pipes,
+# the MemFs and ScriptedProcessLauncher doubles, the SpawnLogLauncher decorator (FND-8), and the
+# asio reactor, async pipes,
 # the file watchers, the gitignore matcher and the tree scan (ADR 0020). Qt-free;
 # depends on core and sched (watches, pipes and scans resume through IScheduler).
 # TODO(M5): IHttpClient (WinHTTP; the libcurl client for Linux follows in M6, PLAN.md section 2.2).
@@ -24,6 +25,7 @@ set(frost_io_sources
     src/reactor.cpp
     src/real_file_watcher.cpp
     src/scripted_process_launcher.cpp
+    src/spawn_log.cpp
     src/tree_scan.cpp
     src/utf.cpp
     src/watch_queue.cpp)

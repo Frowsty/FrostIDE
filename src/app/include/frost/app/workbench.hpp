@@ -126,6 +126,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 class QApplication;
@@ -146,6 +147,7 @@ class TerminalIntegration;
 
 namespace frost::ui::lang {
 class LanguageController;
+enum class ServerReadiness : std::uint8_t; // frost/ui/lang/language_controller.hpp
 } // namespace frost::ui::lang
 
 class QTemporaryFile;
@@ -162,6 +164,7 @@ class EngineIntegration;
 class UnityControlIntegration;
 class GitIntegration;
 struct GitClone;
+struct CompileDatabaseState; // workbench_language.cpp
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
 // file.reloadFromDisk and file.closeProject; the shell, editor, build, run and language slices the
@@ -247,6 +250,16 @@ public:
         (void)folder;
         return false;
     }
+    // Shows the text edit FrostIDE would make to `listsPath` (a CMakeLists.txt) from `before` to
+    // `after`: true writes it. The default writes nothing.
+    [[nodiscard]] virtual bool confirmCMakeListsEdit(QWidget* parent, const std::string& listsPath,
+                                                     const std::string& before, const std::string& after) {
+        (void)parent;
+        (void)listsPath;
+        (void)before;
+        (void)after;
+        return false;
+    }
     // The specification chosen in File > New Project; nullopt when cancelled.
     [[nodiscard]] virtual std::optional<NewProjectSpec> chooseNewProject(QWidget* parent,
                                                                          const std::string& defaultLocation) {
@@ -281,6 +294,9 @@ public:
     [[nodiscard]] std::string chooseNewItemName(QWidget* parent, const std::string& directory, bool folder) override;
     [[nodiscard]] std::string chooseRenameName(QWidget* parent, const std::string& currentPath, bool folder) override;
     [[nodiscard]] bool confirmDelete(QWidget* parent, const QString& name, bool folder) override;
+    // A modal preview of the changed lines with Apply and Cancel (workbench_project.cpp).
+    [[nodiscard]] bool confirmCMakeListsEdit(QWidget* parent, const std::string& listsPath, const std::string& before,
+                                             const std::string& after) override;
     [[nodiscard]] std::optional<NewProjectSpec> chooseNewProject(QWidget* parent,
                                                                  const std::string& defaultLocation) override;
     [[nodiscard]] bool confirmDiscard(QWidget* parent, const QString& file, const QString& error) override;
@@ -326,6 +342,10 @@ struct WorkbenchOptions {
     // Where FrostIDE-written compile_commands.json files go (absolute; one directory per solution);
     // "" uses only existing databases.
     std::string compileCommandsCache;
+    // Where a language server's metadata sources are written to be shown read-only (absolute,
+    // <profile>/caches/metadata, never a workspace; LanguageServices::metadataCacheDir); "" shows
+    // none and navigation names LTR-6.
+    std::string metadataCacheDirectory;
     // The build service's persisted active configurations (absolute); "" persists nothing.
     std::string buildStatePath;
     // The CMake service's selected profiles (absolute); "" persists nothing.
@@ -432,9 +452,16 @@ public:
     // Creates a new file or folder in `directory` (empty: active tree/editor/project directory).
     [[nodiscard]] Result<std::string> createNewFile(std::string_view directory, std::string_view relativeName);
     [[nodiscard]] Result<std::string> createNewFolder(std::string_view directory, std::string_view relativeName);
-    // Renames a file or folder on disk and updates open tabs, project files (CMakeLists.txt/.vcxproj/.csproj), and LSP.
+    /*
+     * Renames a file or folder on disk and updates open tabs and LSP. A FrostEngine asset's .fmeta
+     * sidecar (<name>.fmeta beside it) is renamed with it, both or neither. CMakeLists.txt is
+     * edited only after the user confirms a preview (IWorkbenchPrompts::confirmCMakeListsEdit).
+     * .vcxproj, .vcxproj.filters and .csproj files are never edited (SLN-6): a notification names
+     * the projects that still list the old path.
+     */
     [[nodiscard]] Result<std::string> renameItem(std::string_view oldPath, std::string_view newRelativeName);
-    // Deletes a file or folder on disk, closes open tabs under it, and updates project files and LSP.
+    // Deletes a file or folder on disk, closes open tabs under it and updates LSP; project files as
+    // renameItem (CMakeLists.txt after a confirmed preview; MSBuild project files never, SLN-6).
     [[nodiscard]] Result<void> deleteItem(std::string_view path);
     // Prompts for a new name and renames `path` (empty: active tree selection or editor path).
     void promptAndRenameItem(std::string_view path = {});
@@ -444,7 +471,8 @@ public:
     // ProjectHost helper to add it to the .vcxproj (asynchronous; a refusal is a notification).
     [[nodiscard]] Result<std::string> createNewProjectSource(std::string_view projectPath,
                                                              std::string_view relativeName);
-    // Adds an existing project file to a simple top-level CMake target in CMakeLists.txt.
+    // Adds an existing project file to a simple top-level CMake target in CMakeLists.txt, once the
+    // user confirmed the preview (Cancelled, nothing written, when declined).
     [[nodiscard]] Result<void> addSourceToCMakeLists(std::string_view sourcePath, std::string_view targetName = {});
     /*
      * Get from Version Control: clones `url` (a URL or a local path) into `directory` (absolute)
@@ -522,6 +550,18 @@ public:
     // Live UI, navigation and current-project scan readiness; GUI thread only.
     [[nodiscard]] bool interactiveReady() const;
     [[nodiscard]] ui::lang::LanguageController* language() const noexcept { return m_language.get(); }
+    /*
+     * Why the language server may answer nothing for `path` (LanguageServices::readiness, R0
+     * follow-up 4): NotRunning when no server for its language runs (or the file has no language
+     * server); for a clangd file, NoCompileCommand when clangd parses it with its generic fallback
+     * command (clangdUsesFallbackFlags), else Indexing while clangd reports its background index
+     * ($/progress), else Unknown. GUI thread; a few stats per call (clangdUsesFallbackFlags).
+     */
+    [[nodiscard]] ui::lang::ServerReadiness languageReadiness(std::string_view path);
+    // WorkbenchOptions::metadataCacheDirectory, as the language features got it.
+    [[nodiscard]] const std::string& metadataCacheDirectory() const noexcept {
+        return m_options.metadataCacheDirectory;
+    }
     [[nodiscard]] ui::RunController* runController() const noexcept { return m_runController.get(); }
     [[nodiscard]] ui::RunConsole* runConsole() const noexcept { return m_runConsole.data(); }
     [[nodiscard]] ui::SolutionExplorer* solutionExplorer() const noexcept { return m_explorer.data(); }
@@ -625,6 +665,26 @@ private:
     // A CMake model change, or a trust change, restarts clangd only when the compile-commands
     // location or the trust its launch flags came from changed.
     void restartClangdIfCMakeStateChanged();
+    // Where a CMake folder's clangd would read its compile commands now (the active build
+    // directory and whether its database exists; "" without CMake). One stat, GUI thread.
+    [[nodiscard]] std::string clangdCMakeStateNow() const;
+    /*
+     * Whether clangd 23 parses `path` with its generic fallback command (languageReadiness). The
+     * model, checked against `clangd --check` (WorkbenchClangd.ReadinessFollowsCompileCommandsAndIndexing):
+     * a compilation database with at least one entry gives every file a command, a listed one or one
+     * inferred from the closest listed file, sources and headers alike; only no database, an empty
+     * one or (with --compile-commands-dir) one clangd cannot parse leaves the fallback. Without
+     * --compile-commands-dir clangd takes the nearest folder, from the file's own upward, holding a
+     * compile_commands.json it can load, a build/compile_commands.json or a compile_flags.txt.
+     * nullopt (nothing claimed) while a database is being read, when one cannot be read, and for
+     * cases the model does not cover: among them a trusted clangd (config enabled) whose .clangd or
+     * user config.yaml may name a CompilationDatabase. GUI thread; at most four stats per folder
+     * level, and reads of the config files that exist.
+     */
+    [[nodiscard]] std::optional<bool> clangdUsesFallbackFlags(std::string_view path);
+    // What `database` (a compile_commands.json) holds, when read and unchanged since; otherwise
+    // null, and a read on a worker starts (one at a time). One stat.
+    const CompileDatabaseState* compileDatabaseState(const std::string& database);
     // Starts the clangd that openFolder deferred until its configure finished (FND-9a). With
     // `retryUntilIdle`, a CMake service that is not idle yet is asked again shortly.
     void resumeDeferredClangd(bool retryUntilIdle = false);
@@ -650,7 +710,15 @@ private:
     void refreshSolutionExplorerForFsChange(std::string_view selectPath = {});
     void renameSourceInCMakeLists(const std::string& oldPath, const std::string& newPath, bool directory);
     void removeSourceFromCMakeLists(const std::string& deletedPath, bool directory);
+    // Writes `after` over `before` in `canonicalLists` only after a confirmed preview (`change`
+    // describes it in the declined notice); Cancelled when declined.
+    [[nodiscard]] Result<void> writeCMakeListsWithPreview(const std::string& canonicalLists, const std::string& before,
+                                                          const std::string& after, const QString& change);
+    // Never writes: tells the user which loaded projects still list `oldPath` (SLN-6).
     void updatePathInVcxproj(const std::string& oldPath, const std::string& newPath, bool directory, bool deleted);
+    // Renames `from` to `to` with its .fmeta sidecar move (from, to) if any, both or neither.
+    [[nodiscard]] Result<void> moveWithSidecar(const std::string& from, const std::string& to,
+                                               const std::optional<std::pair<std::string, std::string>>& sidecar);
     void queryWorkspaceSymbols(std::string_view query, bool classesOnly,
                                std::function<void(std::vector<ui::WorkbenchSymbol>)> done);
     void openLocation(const QString& path, int line, int column);
@@ -748,6 +816,8 @@ private:
     std::string m_luaUnavailable;
     std::string m_luaUnavailableNotifiedRoot;
     std::shared_ptr<lang::ClangdService> m_clangd;
+    // The root already told that clangd was not found (the notice appears once per project; ADR 0078).
+    std::string m_clangdUnavailableNotifiedRoot;
     std::vector<sched::JoinHandle<void>> m_retiredClangd;
     std::uint64_t m_clangdGeneration = 0;
     // FND-9a, one clangd per project open: the CMake compile-commands state the running clangd was
@@ -762,6 +832,11 @@ private:
     std::uint64_t m_clangdListener = 0;
     std::shared_ptr<ui::BackgroundTask> m_indexing;
     std::string m_indexToken;
+    // clangd reports its background index (between the "indexing" progress begin and end).
+    bool m_clangdIndexing = false;
+    // The compilation databases clangdUsesFallbackFlags looked at, read on a worker, by path.
+    std::map<std::string, std::shared_ptr<const CompileDatabaseState>, std::less<>> m_compileDatabases;
+    bool m_compileDatabaseReading = false;
     sched::LatestWins m_searchSymbolsSlot;
     std::unique_ptr<LanguageBridge> m_bridge;
     std::unique_ptr<ui::lang::LanguageController> m_language;

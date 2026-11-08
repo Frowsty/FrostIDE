@@ -252,20 +252,24 @@ public:
         LockGuard lock(m_mutex);
         return m_received;
     }
-    // Waits until `count` messages arrived (true) or `timeout` passed (false).
+    // Waits until `count` messages arrived (true) or `timeout` passed (false). The count is checked
+    // before the deadline on every round, so the check that ended the wait decides (also for a zero
+    // timeout), and a deadline that passes during the sleep still gets one last check.
     [[nodiscard]] bool waitForMessages(std::size_t count,
                                        std::chrono::milliseconds timeout = std::chrono::seconds(10)) {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
-        while (std::chrono::steady_clock::now() < deadline) {
+        for (;;) {
             {
                 LockGuard lock(m_mutex);
                 if (m_received.size() >= count) {
                     return true;
                 }
             }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        return false;
     }
 
 private:

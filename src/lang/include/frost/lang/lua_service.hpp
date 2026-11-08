@@ -19,9 +19,10 @@ struct LuaSearch {
 [[nodiscard]] Result<std::string> findLuaLanguageServer(io::IFileSystem& fs, const LuaSearch& search);
 /*
  * The default search, in priority order: the LuaLS bundled beside this executable
- * (<exe dir>/luals-<pinned>/bin from tools/stage.ps1, then the older lua-language-server/bin and the
- * executable's own directory), the pinned SDK install (<$FROST_SDK>/luals-<pinned>/bin, then
- * E:\sdk on Windows or ~/sdk on Linux, the bootstrap scripts' roots), then this process's PATH.
+ * (<exe dir>/luals-<pinned>/bin from tools/stage.ps1 and tools/stage.sh, then the older
+ * lua-language-server/bin and the executable's own directory), the pinned SDK install
+ * <$FROST_SDK>/luals-<pinned>/bin when FROST_SDK is set (tools/env.ps1 and ~/sdk/env.sh set it for
+ * development and tests; there is no machine-specific default root, FND-10), then this process's PATH.
  * Reads the environment once; thread-safe.
  */
 [[nodiscard]] LuaSearch defaultLuaSearch(std::string configuredPath = {});
@@ -32,8 +33,16 @@ struct LuaSearch {
  * them. Errors: InvalidArgument (relative directory).
  */
 [[nodiscard]] Result<std::vector<std::string>> luaLanguageServerArguments(std::string_view stateDirectory);
-// True when `root` directly holds a regular *.frostproj file (a FrostEngine project, whose Lua gets
-// luaDefaults(..., true)). One directory listing; false when it cannot be read.
+/*
+ * FrostEngine project detection, the one rule every feature uses (the FrostEngine tool window and
+ * the LuaLS defaults): a project file is named <stem>.frostproj or <stem>.feproject with a
+ * non-empty stem, ASCII case ignored on every platform. isFrostEngineProjectRoot is true when
+ * `root` directly holds such a regular file (symlinks and directories do not count); one directory
+ * listing, false when `root` is empty or cannot be read. Thread-safe as `fs` is.
+ */
+[[nodiscard]] bool isFrostEngineProjectFileName(std::string_view name) noexcept;
+[[nodiscard]] bool isFrostEngineProjectRoot(io::IFileSystem& fs, std::string_view root);
+// A FrostEngine project root (isFrostEngineProjectRoot), whose Lua gets luaDefaults(..., true).
 [[nodiscard]] bool isFrostEngineLuaWorkspace(io::IFileSystem& fs, std::string_view root);
 
 // Client defaults; .luarc.json has priority in LuaLS. FrostEngine generates and owns its API files:

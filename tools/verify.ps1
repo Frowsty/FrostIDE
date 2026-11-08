@@ -5,7 +5,7 @@
 #
 #   powershell -ExecutionPolicy Bypass -File tools\verify.ps1 [-Quick | -Full] [-WindowsOnly]
 #              [-BuildDir build\win-clangcl] [-WslMirror ~/frost-src-x] [-Jobs 8] [-TestJobs 8]
-#              [-Tidy] [-TsanQuick] [-Base main]
+#              [-Tidy] [-TsanQuick] [-Corpus] [-Base main]
 #
 # Steps:
 #   1. With -Tidy or -TsanQuick (and without -Full): the changed-file list, the files that differ
@@ -13,14 +13,21 @@
 #      (tools/verify_support.py changed; ADR 0027 decision 2). It selects what clang-tidy checks
 #      here and in WSL, and which modules WSL's TSan quick leg runs.
 #   2. Windows: configure win-clangcl, build Debug, run ctest in parallel (-j -TestJobs; tests
-#      labelled `stress` are skipped in Debug). Tests that must not overlap hold ctest resource
-#      locks, RUN_SERIAL or PROCESSORS (frost_add_test, cmake/FrostLayers.cmake: integration
-#      suites share the frost_desktop lock, perf suites run serially). ctest runs in
+#      labelled `stress` are skipped in Debug, tests labelled `corpus` everywhere but step 3b).
+#      Tests that must not overlap hold ctest resource locks, RUN_SERIAL or PROCESSORS
+#      (frost_add_test, cmake/FrostLayers.cmake: integration suites share the frost_desktop lock,
+#      perf suites run serially). ctest runs in
 #      non-interactive mode, so no test can raise an error box (see Test-WindowsConfig).
-#   3. -Full adds Release and the ASan configuration (RelWithDebInfo), with every label, also in
+#   3. -Full adds Release and the ASan configuration (RelWithDebInfo), every label but corpus, also in
 #      parallel, and the /MT fuzz smoke: the win-clangcl-fuzz tree (libFuzzer + ASan,
 #      RelWithDebInfo) runs each fuzz target for FROST_FUZZ_SECONDS (60) through ctest -L fuzz,
 #      serially so each target gets its full CPU time.
+#   3b. -Corpus adds the corpus tier (ADR 0077 decision 7, ADR 0078): tools\corpora.py verify must
+#      find every pinned corpus of tests\corpus\corpora.lock.json (a missing or changed corpus
+#      fails the tier, it is never skipped), then the Debug tree's tests labelled `corpus` run alone
+#      and serially with a 3600 s per-test limit (they configure and index a whole engine). No
+#      corpus test, or a skipped one, fails the tier ("win corpus no-tests", "... (1 skipped)").
+#      Without -Corpus no corpus test runs, in -Quick or -Full.
 #   0. The tree hash of the working tree (tools/hooks/verify_stamp.py tree; FND-2).
 #   4. Repository checks: clang-format on tracked C/C++ files, frost-lint, the
 #      licence check (Windows build trees), the feature-matrix check and the source-to-test
@@ -34,8 +41,8 @@
 #   6. Linux: tools/verify.sh inside WSL (unless -WindowsOnly), with --full under -Full, --tidy
 #      under -Tidy and --tsan-quick under -TsanQuick. It gets the same changed-file list
 #      (FROST_CHANGED_FILES; empty when step 1 failed, so it does not recompute one) and -Base
-#      (FROST_VERIFY_BASE). The tree checks are not repeated there (same tree); the licence check
-#      and tidy are, because they inspect the Linux build trees.
+#      (FROST_VERIFY_BASE), and --corpus under -Corpus. The tree checks are not repeated there
+#      (same tree); the licence check and tidy are, because they inspect the Linux build trees.
 # -Quick is the default and only names that choice explicitly. -Tidy and -TsanQuick are off by
 # default during the feature-first phase (ADR 0031): they slow the edit-verify loop (the TSan
 # quick leg cost about 32 s per triggering run in B28's measurements) and are meant to be on by
@@ -69,6 +76,8 @@ param(
     [switch]$Tidy,
     # WSL's TSan quick leg for the modules the changed files affect (off by default, ADR 0031).
     [switch]$TsanQuick,
+    # The corpus tier (step 3b): the pinned FrostEngine corpora's tests, here and in WSL.
+    [switch]$Corpus,
     # The branch or commit whose merge base with HEAD defines the changed files (resolved as
     # <Base>, then origin/<Base>).
     [string]$Base = 'main'
@@ -108,7 +117,7 @@ function ConvertTo-WslPath([string]$Path) {
 # re-parsing the arguments, so the mirror path needs no quoting; verify.sh expands a leading "~/"
 # itself. No side effects; tests/tools/test_verify_scripts.py takes it from this script's syntax tree.
 function Get-WslArgs($Script, [int]$Jobs, [string]$Base, $ChangedList, [string]$Mirror, [bool]$Full,
-        [bool]$Tidy, [bool]$TsanQuick) {
+        [bool]$Tidy, [bool]$TsanQuick, [bool]$Corpus = $false) {
     $wslArgs = @('-d', 'Ubuntu-24.04', '--exec', 'env', "FROST_JOBS=$Jobs", "FROST_VERIFY_BASE=$Base")
     if ($null -ne $ChangedList) { $wslArgs += "FROST_CHANGED_FILES=$ChangedList" }
     if ($Mirror) { $wslArgs += "FROST_MIRROR=$Mirror" }
@@ -116,6 +125,7 @@ function Get-WslArgs($Script, [int]$Jobs, [string]$Base, $ChangedList, [string]$
     if ($Full) { $wslArgs += '--full' }
     if ($Tidy) { $wslArgs += '--tidy' }
     if ($TsanQuick) { $wslArgs += '--tsan-quick' }
+    if ($Corpus) { $wslArgs += '--corpus' }
     return , $wslArgs
 }
 
@@ -238,15 +248,40 @@ try {
 
     # 2. and 3. The Windows configurations.
     $parallel = @('-j', $TestJobs)
-    Test-WindowsConfig 'debug' 'win-clangcl' 'Debug' $BuildDir (@('-LE', '^stress$') + $parallel)
+    Test-WindowsConfig 'debug' 'win-clangcl' 'Debug' $BuildDir (@('-LE', '^(stress|corpus)$') + $parallel)
     if ($Full) {
-        Test-WindowsConfig 'release' 'win-clangcl' 'Release' $BuildDir $parallel
+        Test-WindowsConfig 'release' 'win-clangcl' 'Release' $BuildDir (@('-LE', '^corpus$') + $parallel)
         $asanDir = ''
         if ($BuildDir) { $asanDir = "$BuildDir-asan" }
-        Test-WindowsConfig 'asan' 'win-clangcl-asan' 'RelWithDebInfo' $asanDir $parallel
+        Test-WindowsConfig 'asan' 'win-clangcl-asan' 'RelWithDebInfo' $asanDir (@('-LE', '^corpus$') + $parallel)
         $fuzzDir = ''
         if ($BuildDir) { $fuzzDir = "$BuildDir-fuzz" }
         Test-WindowsConfig 'fuzz' 'win-clangcl-fuzz' 'RelWithDebInfo' $fuzzDir @('-L', '^fuzz$')
+    }
+
+    # 3b. The corpus tier (-Corpus only; see the header). The corpora are checked first, so a missing
+    # corpus is reported as such and fails, rather than surfacing as a test's failure.
+    if ($Corpus) {
+        Write-Host '=== corpus verify'
+        $null = Invoke-Native { & $python -I (Join-Path $PSScriptRoot 'corpora.py') --repo $repo verify }
+        if ($LASTEXITCODE -ne 0) {
+            $summary.Add('win corpus FAILED (corpus missing or not at its pin; tools\corpora.py fetch)'); $failed = $true
+        } elseif (-not $script:debugBuilt) {
+            $summary.Add('win corpus not-run (debug build failed)'); $failed = $true
+        } else {
+            Write-Host '=== corpus test'
+            # The corpus tests read the corpora root from here, so they name no machine path (FND-10).
+            $env:FROST_CORPORA_ROOT = (& $python -I (Join-Path $PSScriptRoot 'corpora.py') --repo $repo root | Select-Object -Last 1)
+            $out = Invoke-Native { ctest --test-dir $script:debugDir -C Debug --output-on-failure --interactive-debug-mode 0 -L '^corpus$' --timeout 3600 }
+            $ok = ($LASTEXITCODE -eq 0)
+            $counts = Get-CtestCounts $out
+            if (-not $counts) { $summary.Add('win corpus no-tests'); $failed = $true }
+            else {
+                $summary.Add("win corpus $counts")
+                # In the corpus tier a skipped test is a failure (PLAN.md section 7, Principles).
+                if (-not $ok -or $counts -match 'skipped') { $failed = $true }
+            }
+        }
     }
 
     # Symbolization of the self-test artifacts (-Full only; ADR 0022). The Debug and Release ctest
@@ -358,7 +393,7 @@ try {
         if ($needList) { $wslList = '' }
         if ($changedOk) { $wslList = ConvertTo-WslPath $changedList }
         $wslArgs = Get-WslArgs -Script $wslScript -Jobs $Jobs -Base $Base -ChangedList $wslList -Mirror $WslMirror `
-            -Full ([bool]$Full) -Tidy ([bool]$Tidy) -TsanQuick ([bool]$TsanQuick)
+            -Full ([bool]$Full) -Tidy ([bool]$Tidy) -TsanQuick ([bool]$TsanQuick) -Corpus ([bool]$Corpus)
         Write-Host "=== wsl $wslScript"
         $wslOut = Invoke-Native { wsl.exe @wslArgs }
         if ($LASTEXITCODE -ne 0) { $failed = $true }

@@ -47,10 +47,15 @@ template<typename Done>
 bool waitFor(Done done) {
     QElapsedTimer timer;
     timer.start();
-    while (!done() && timer.elapsed() < 2000) {
+    // Returns the evaluation that ended the wait (as tests/app/workbench_rig.hpp does): evaluating
+    // again after the loop could see a state changed in between (R0 follow-up 16).
+    for (;;) {
+        if (done())
+            return true;
+        if (timer.elapsed() >= 2000)
+            return false;
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     }
-    return done();
 }
 
 TEST(EditorChangeMarkers, MarksTheLinesThatDifferFromTheBase) {

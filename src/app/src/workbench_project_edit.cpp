@@ -12,7 +12,6 @@
 #include "frost/ui/tr.hpp"
 #include "frost/ui/workbench/workbench.hpp"
 
-#include "engine_integration.hpp"
 #include "managed_debug_preparation.hpp"
 #include "project_edit_process.hpp"
 #include <QCoreApplication>
@@ -51,8 +50,7 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
     const auto solution = m_solution;
     const std::string root = m_projectRoot;
     const auto managedIdle = [this] {
-        return (!m_engine || !m_engine->luaReservationPending()) &&
-               (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
+        return (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
     if (!solution || !m_projectEdit || m_projectEdit->busy() || root.empty() || !m_services.trust.isTrusted(root) ||
         !m_services.trust.isTrusted(projectPath) || m_buildService->state() != build::BuildState::Idle ||

@@ -53,14 +53,19 @@ RendererEnvironment windowsDesktop() {
     return environment;
 }
 
-// Delivers events until `done` holds or two seconds pass; returns `done()`.
+// Delivers events until `done` holds or two seconds pass; true when `done` was reached.
 bool pumpUntil(const std::function<bool()>& done) {
     QElapsedTimer timer;
     timer.start();
-    while (!done() && timer.elapsed() < 2000) {
+    // Returns the evaluation that ended the wait (as tests/app/workbench_rig.hpp does): evaluating
+    // again after the loop could see a state changed in between (R0 follow-up 16).
+    for (;;) {
+        if (done())
+            return true;
+        if (timer.elapsed() >= 2000)
+            return false;
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     }
-    return done();
 }
 
 // Delivers events for a short while (queued renderer switches, paints).

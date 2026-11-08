@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -95,8 +96,37 @@ class CommitMsgHookTest(ScratchRepo):
         result = self.commit("feat: two\n\nVerified: win debug 4/4, frost_lint ok")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("'win debug 4/4'", result.stderr)
-        # A subset of the stamped items is still true.
+        # A subset of the stamped items is still true, as long as it keeps the test counts.
         self.assertEqual(self.commit("feat: two\n\nVerified: win debug 3/3 (1 skipped)").returncode, 0)
+
+    def test_the_footer_must_quote_every_test_count_of_its_stamp(self) -> None:
+        # FND-2 review: "Verified: frost_lint ok" is stamped, but it drops the test counts.
+        self.write("a.txt", "two\n")
+        self.git("add", "a.txt")
+        self.assertEqual(self.stamp("write", "--summary", SUMMARY).returncode, 0)
+        result = self.commit("feat: two\n\nVerified: format ok, frost_lint ok")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("leaves out the test counts 'win debug 3/3 (1 skipped)'", result.stderr)
+        self.assertEqual(self.commit(f"feat: two\n\n{SUMMARY}").returncode, 0)
+
+    def test_quoting_a_wsl_item_needs_the_wsl_counts_too(self) -> None:
+        self.write("a.txt", "two\n")
+        self.git("add", "a.txt")
+        self.assertEqual(self.stamp("write", "--summary", "Verified: win debug 3/3, frost_lint ok").returncode, 0)
+        self.assertEqual(self.stamp("write", "--script", "verify.sh", "--summary",
+                                    "wsl: debug 2/3 (1 skipped), licensecheck ok").returncode, 0)
+        # The Windows counts alone are true for the Windows record...
+        result = self.commit("feat: two\n\nVerified: win debug 3/3, wsl licensecheck ok")
+        self.assertNotEqual(result.returncode, 0, "...but quoting the WSL record needs its counts")
+        self.assertIn("'wsl debug 2/3 (1 skipped)'", result.stderr)
+        self.assertEqual(self.commit("feat: two\n\nVerified: win debug 3/3, frost_lint ok").returncode, 0)
+
+    def test_test_count_items(self) -> None:
+        for item, counts in {"win debug 3167/3195 (28 skipped, 1 disabled)": True, "wsl release 12/12": True,
+                             "wsl debug 2/2 (1 disabled)": True, "frost_lint ok": False, "wsl licensecheck ok": False,
+                             "ratchet ok (src +10 net, tests +5)": False, "tidy ok (2 TUs)": False}.items():
+            with self.subTest(item=item):
+                self.assertEqual(bool(verify_stamp.TEST_COUNT_ITEM.match(item)), counts)
 
     def test_main_needs_a_footer(self) -> None:
         self.write("a.txt", "two\n")
@@ -147,6 +177,35 @@ class StampTest(ScratchRepo):
         # The hash is the tree of committing everything.
         self.git("add", "-A")
         self.assertEqual(self.git("write-tree").stdout.strip(), tree.stdout.strip())
+
+    def test_tree_compares_contents_not_the_stat_data_of_the_index(self) -> None:
+        # The index records a.txt at second T; a same-size edit lands in that second (other
+        # nanoseconds) and the index file is newer, so stat data alone (whole seconds and size,
+        # without git's racy-entry recheck) would call a.txt clean and hash the old tree. This was
+        # an intermittent tools.hooks failure under load, where a second passed before the hash.
+        self.git("config", "core.filemode", "false")
+        self.git("switch", "-q", "-c", "stat-data")  # The hook lets commits off main through.
+        self.write("run.sh", "#!/bin/sh\n")
+        self.git("add", "run.sh")
+        self.git("update-index", "--chmod=+x", "run.sh")
+        second = (int(Path(self.repo / "a.txt").stat().st_mtime) - 100) * 1_000_000_000
+        os.utime(self.repo / "a.txt", ns=(second + 100, second + 100))
+        self.git("add", "a.txt")
+        self.git("commit", "-q", "-m", "a.txt at second T")
+        self.write("a.txt", "two\n")
+        os.utime(self.repo / "a.txt", ns=(second + 900, second + 900))
+        tree = self.stamp("tree")
+        self.assertEqual(tree.returncode, 0, tree.stderr)
+        stamped = tree.stdout.strip()
+        # Oracle: the blob of the file's bytes, and the mode the index holds.
+        self.assertEqual(self.git("rev-parse", f"{stamped}:a.txt").stdout.strip(),
+                         self.git("hash-object", "a.txt").stdout.strip())
+        self.assertIn("100755 blob", self.git("ls-tree", stamped, "run.sh").stdout,
+                      "the executable bit the index holds is kept")
+        # The real index still holds the committed blob (git status may not see the edit either:
+        # Git for Windows compares whole seconds too).
+        self.assertIn(self.git("rev-parse", "HEAD:a.txt").stdout.strip(),
+                      self.git("ls-files", "--stage", "a.txt").stdout, "the real index is untouched")
 
     def test_a_tree_changed_mid_run_is_not_stamped(self) -> None:
         before = self.stamp("tree").stdout.strip()

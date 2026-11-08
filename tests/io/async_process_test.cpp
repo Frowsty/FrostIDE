@@ -35,6 +35,8 @@
 
 #include <cerrno>
 #include <csignal>
+
+#include <unistd.h>
 #endif
 
 namespace {
@@ -390,6 +392,46 @@ TEST(AsyncProcess, DestroyingTheProcessEndsTheWholeTree) {
     process->reset();
     EXPECT_TRUE(grandchild.exitsWithin(30s)) << "the release left the grandchild running";
     grandchild.kill();
+}
+
+// A descendant in a process group of its own (ninja's commands) is ended by terminate() and by the
+// release: the Windows job, the Linux session sweep.
+TEST(AsyncProcess, TerminateAndReleaseEndADescendantInAProcessGroupOfItsOwn) {
+    AsyncEnv env;
+    for (const bool terminate : {true, false}) {
+        SCOPED_TRACE(terminate ? "terminate" : "release");
+        auto process = env.launch(childSpec({"grandchild-own-group", terminate ? "wait" : "exit"}));
+        ASSERT_TRUE(process.has_value()) << process.error().describe();
+        std::string text;
+        std::array<char, 256> buffer{};
+        while (text.find('\n') == std::string::npos) {
+            const auto got = env.run((*process)->readStdout(buffer));
+            ASSERT_TRUE(got.has_value()) << got.error().describe();
+            ASSERT_NE(*got, 0U) << text;
+            text.append(buffer.data(), *got);
+        }
+        ASSERT_TRUE(text.starts_with("grandchild ")) << text;
+        const auto pid = static_cast<frost::io::ProcessId>(std::stoul(text.substr(11)));
+        const ProcessWatch grandchild(pid);
+        ASSERT_TRUE(grandchild.valid());
+#ifndef _WIN32
+        ASSERT_EQ(::getpgid(static_cast<pid_t>(pid)), static_cast<pid_t>(pid)) << "not in a group of its own";
+#endif
+        if (terminate) {
+            ASSERT_TRUE((*process)->terminate().has_value());
+            const auto status = env.run((*process)->exited());
+            ASSERT_TRUE(status.has_value()) << status.error().describe();
+            EXPECT_EQ(status->exitCode, frost::io::kTerminatedExitCode);
+        } else {
+            const auto status = env.run((*process)->exited());
+            ASSERT_TRUE(status.has_value()) << status.error().describe();
+            EXPECT_EQ(status->exitCode, 0);
+            EXPECT_FALSE(grandchild.exitsWithin(200ms));
+            process->reset();
+        }
+        EXPECT_TRUE(grandchild.exitsWithin(30s)) << "the grandchild in its own group is still running";
+        grandchild.kill();
+    }
 }
 
 TEST(AsyncProcess, WithoutKillOnCloseTheChildOutlivesItsObject) {

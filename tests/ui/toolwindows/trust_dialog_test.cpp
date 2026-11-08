@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Tests for the trust prompt (frost/ui/toolwindows/trust_dialog.hpp): Trust calls trust() for each
-// listed folder, a failure keeps the dialog open with the error, Cancel cancels the waiting build,
-// and TrustPrompter opens one dialog per NeedsTrust and closes it when the build moves on.
+// listed folder, a failure keeps the dialog open with the error, Cancel cancels the waiting build
+// (only for a Build prompt: Lua, managed and Attach to Process prompts leave it alone), a session
+// grant trusts nothing through the controller, and TrustPrompter opens one dialog per NeedsTrust
+// and closes it when the build moves on.
 // Offscreen: the dialogs are opened on the offscreen platform, never on a screen.
 #include "frost/ui/toolwindows/build_controller.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
@@ -155,6 +157,74 @@ TEST(TrustDialog, DecliningManagedTrustDoesNotCancelAnUnrelatedWaitingBuild) {
     TrustDialog build(rig.controller, roots, nullptr, TrustPurpose::Build);
     build.cancelButton()->click();
     EXPECT_EQ(rig.backend.cancels, 1);
+}
+
+// R0 follow-up 1: the Attach to Process prompt has its own wording, and declining it (Cancel,
+// closing, Escape) never cancels a build waiting in NeedsTrust.
+TEST(TrustDialog, DecliningDebugAttachDoesNotCancelAWaitingBuild) {
+    Rig rig;
+    rig.needTrust({kApp});
+    const QStringList roots{QString::fromUtf8(kApp)};
+    {
+        TrustDialog attach(rig.controller, roots, nullptr, TrustPurpose::DebugAttach);
+        EXPECT_EQ(attach.windowTitle(), QStringLiteral("Attach Debugger?"));
+        EXPECT_TRUE(attach.description().contains(QStringLiteral("runs no project code")))
+            << attach.description().toStdString();
+        EXPECT_TRUE(attach.description().contains(QStringLiteral("debugger full access")));
+        EXPECT_EQ(attach.trustButton()->text(), QStringLiteral("Trust and Attach"));
+        EXPECT_FALSE(attach.sessionOnly());
+        attach.cancelButton()->click();
+        EXPECT_EQ(attach.result(), QDialog::Rejected);
+        EXPECT_EQ(rig.backend.cancels, 0);
+        EXPECT_EQ(rig.controller.state(), BuildState::NeedsTrust);
+    }
+    {
+        TrustDialog attach(rig.controller, roots, nullptr, TrustPurpose::DebugAttach);
+        attach.show();
+        attach.close();
+        EXPECT_EQ(attach.result(), QDialog::Rejected);
+        EXPECT_EQ(rig.backend.cancels, 0);
+    }
+    {
+        TrustDialog attach(rig.controller, roots, nullptr, TrustPurpose::DebugAttach);
+        attach.show();
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QCoreApplication::sendEvent(&attach, &escape);
+        EXPECT_EQ(attach.result(), QDialog::Rejected);
+        EXPECT_EQ(rig.backend.cancels, 0);
+    }
+    EXPECT_EQ(rig.controller.state(), BuildState::NeedsTrust);
+    EXPECT_TRUE(rig.backend.trusted.empty());
+}
+
+// With a session grant (a one-off attach, no project open) Trust calls the grant only: nothing is
+// trusted through the controller, the wording says the permission is not saved, and a failing
+// grant keeps the dialog open with its error.
+TEST(TrustDialog, SessionGrantTrustsNothingThroughTheController) {
+    Rig rig;
+    rig.needTrust({kApp});
+    TrustDialog attach(rig.controller, {QString::fromUtf8(kShared)}, nullptr, TrustPurpose::DebugAttach);
+    std::vector<std::string> granted;
+    bool refuse = true;
+    attach.setSessionGrant([&](std::string_view root) -> frost::Result<void> {
+        if (refuse)
+            return frost::fail(frost::ErrorCode::InvalidArgument, "not a folder");
+        granted.emplace_back(root);
+        return {};
+    });
+    EXPECT_TRUE(attach.sessionOnly());
+    EXPECT_TRUE(attach.description().contains(QStringLiteral("not saved"))) << attach.description().toStdString();
+    EXPECT_EQ(attach.trustButton()->text(), QStringLiteral("Attach Once"));
+    attach.trustButton()->click();
+    EXPECT_TRUE(attach.errorText().contains(QStringLiteral("not a folder")));
+    EXPECT_NE(attach.result(), QDialog::Accepted);
+    refuse = false;
+    attach.trustButton()->click();
+    EXPECT_EQ(granted, std::vector<std::string>{kShared});
+    EXPECT_EQ(attach.result(), QDialog::Accepted);
+    EXPECT_TRUE(rig.backend.trusted.empty());
+    EXPECT_EQ(rig.backend.cancels, 0);
+    EXPECT_EQ(rig.controller.state(), BuildState::NeedsTrust);
 }
 
 TEST(TrustDialog, AcceptingLuaTrustStillTrustsTheProject) {

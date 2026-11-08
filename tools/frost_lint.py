@@ -24,6 +24,10 @@
 #   qt-svg        Qt Svg headers are included only under **/icon_baker/** (ADR 0015 decision 7:
 #                 the runtime draws baked atlases and never renders SVG);
 #   no-ci         there is no .github/workflows directory (D24);
+#   dev-path      source files under src/ and tests/ name no developer machine path (DEV_PATH_PATTERNS:
+#                 E:\sdk, E:\FrostBuilds, D:\dev\FrostEngine-AI-Claude and their /mnt/<drive> forms;
+#                 FND-10): products search beside the executable, then FROST_SDK, then PATH, and
+#                 tests take the SDK from FROST_SDK (tools/env.ps1, ~/sdk/env.sh);
 # and the truth rule (ADR 0078 decision 1, FND-5), in C, C++ and C# outside tests/**:
 #   fabricated-result     values of the result types (RESULT_TYPES: test outcomes, packages,
 #                         usages, disassembly, diagnostics) are built only in their allowlisted
@@ -160,6 +164,20 @@ EXE_SEARCH_EXEMPT_GLOBS = ("tests/app/startup_test.cpp",)
 # The only directories that may include Qt Svg headers (the build-time icon baker).
 QT_SVG_ALLOWED_GLOBS = ("**/icon_baker/**",)
 
+# Developer machine paths (FND-10). A product never guesses where a developer keeps the SDK, the
+# build outputs or the user's live FrostEngine tree; tests take the SDK from FROST_SDK and corpora
+# from FROST_CORPUS_ROOT. Checked in whole source files (code, strings and comments) under
+# DEV_PATH_GLOBS; fixtures and goldens (DATA_GLOBS) are data and exempt. The development machine's
+# roots (E:\sdk, E:\FrostBuilds; the live tree on any drive) with any run of separators, also in
+# the WSL /mnt/<drive>/ spelling. Made-up roots in unit tests (C:\sdk on a MemFs) are not matched.
+DEV_PATH_GLOBS = ("src/**", "tests/**")
+DEV_PATH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("the SDK root", re.compile(r"(?i)(?:\bE:|/mnt/e)[\\/]+sdk(?![\w.-])")),
+    ("the build-output root", re.compile(r"(?i)(?:\bE:|/mnt/e)[\\/]+FrostBuilds(?![\w.-])")),
+    ("the user's live FrostEngine tree",
+     re.compile(r"(?i)(?:\b[a-z]:|/mnt/[a-z])[\\/]+dev[\\/]+FrostEngine-AI-Claude(?![\w.-])")),
+)
+
 # ---------------------------------------------------------------------------------------
 # Truth rule (ADR 0078 decision 1, FND-5): result types, tool-output strings, parity claims
 # ---------------------------------------------------------------------------------------
@@ -234,8 +252,11 @@ class SiteAllowance:
     harm that another slice removes. `line` is the reported source line, stripped and with
     whitespace runs collapsed; `context`, when given, must appear (collapsed the same way) in
     that line and the SITE_CONTEXT_LINES after it, which tells apart sites whose first lines
-    are equal. A moved site still matches, an edited one does not. An entry that matches
-    nothing is itself a violation, so a removed harm cannot leave its entry behind.
+    are equal. A moved site still matches, an edited one does not. `count` is the number of
+    findings the entry covers: a second identical site beyond it is reported (so one reviewed
+    entry cannot silently cover a new copy), and an entry that covers fewer than `count`
+    findings, none above all, is itself a violation, so a removed harm cannot leave its entry
+    behind.
     """
 
     path: str
@@ -243,6 +264,7 @@ class SiteAllowance:
     line: str
     reason: str
     context: str = ""
+    count: int = 1
 
 
 SITE_CONTEXT_LINES = 8
@@ -253,9 +275,10 @@ SITE_CONTEXT_LINES = 8
 SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
     # Reviewed, labelled heuristic: the Unit Tests window lists tests found by regular expressions
     # over the source text and labels every one "Discovered, not run"; no outcome is shown. RUN-7
-    # replaces it with ctest -N / --gtest_list_tests.
+    # replaces it with ctest -N / --gtest_list_tests. Five sites, one per recogniser: C# test
+    # attributes and Main, C++ gtest, Catch2 and main.
     SiteAllowance("src/app/src/project_properties_dialog.cpp", "DiscoveredTestEntry", "DiscoveredTestEntry entry;",
-                  "source-text discovery shown as 'Discovered, not run' until RUN-7"),
+                  "source-text discovery shown as 'Discovered, not run' until RUN-7", count=5),
     # Reviewed real site: the Problems window's live rows adapt LSP LiveDiagnostics (clangd, LuaLS,
     # the managed server) into BuildDiagnostic rows field by field.
     SiteAllowance("src/app/src/workbench_project.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
@@ -456,6 +479,7 @@ _DATA_RE = compile_globs(DATA_GLOBS)
 _VENDORED_RE = compile_globs(VENDORED_GLOBS)
 _CPP26_EXEMPT_RE = compile_globs(CPP26_EXEMPT_GLOBS)
 _EXE_SEARCH_EXEMPT_RE = compile_globs(EXE_SEARCH_EXEMPT_GLOBS)
+_DEV_PATH_RE = compile_globs(DEV_PATH_GLOBS)
 _QT_SVG_ALLOWED_RE = compile_globs(QT_SVG_ALLOWED_GLOBS)
 
 
@@ -992,6 +1016,17 @@ _EXE_SEARCH_CALL = re.compile(r"(?<![\w.>:])(?:std\s*::\s*|::\s*)?\b(" +
                               "|".join(sorted(EXE_SEARCH_APIS)) + r")\s*\(")
 
 
+def check_dev_paths(rel: str, text: str) -> list[Violation]:
+    """dev-path: no developer machine path (DEV_PATH_PATTERNS) in a source file under DEV_PATH_GLOBS."""
+    if not _DEV_PATH_RE.match(rel):
+        return []
+    lines = _Lines(text)
+    return [Violation(rel, lines.line(m.start()), "dev-path",
+                      f"{m.group(0)!r} is a developer machine path ({what}); search beside the executable, then "
+                      f"FROST_SDK, then PATH, and let tests read FROST_SDK or FROST_CORPUS_ROOT (FND-10)")
+            for what, pattern in DEV_PATH_PATTERNS for m in pattern.finditer(text)]
+
+
 def check_exe_search(rel: str, code: str, lines: _Lines) -> list[Violation]:
     """exe-search: no calls that look an executable up in the current directory or PATH."""
     return [Violation(rel, lines.line(m.start(1)), "exe-search",
@@ -1182,21 +1217,165 @@ def _construction_patterns(result: ResultType, header: bool) -> list[tuple[re.Pa
          "container literal"),
         # make_shared<T>, make_unique<T>, make_optional<T>.
         (re.compile(r"\bmake_(?:shared|unique|optional)\s*<\s*" + name + r"\s*>"), "factory"),
+        # T x[N] = {...}; T x[]{...}; and, outside headers, T x[N]; (a C array of results).
+        (re.compile(name + r"\s+[A-Za-z_]\w*\s*\[[^\]\n]*\]\s*(?:=\s*)?" +
+                    (r"\{(?!\s*\})" if header else r"(?:\{|;)")), "C array"),
+        # static_cast<T>(...), bit_cast<T>(...), reinterpret_cast<T>(...): a value converted into a result
+        # (for an enum, an outcome produced from a number). Casts to T& or T* do not construct.
+        (re.compile(r"\b(?:static_cast|reinterpret_cast|bit_cast)\s*<\s*(?:const\s+)?" + name + r"\s*>"), "cast"),
+        # T x(...); and T(...): checked further by _paren_construction (function declarations and types
+        # also have this shape).
+        (re.compile(name + r"\s+[A-Za-z_]\w*\s*\("), "parenthesized declaration"),
+        (re.compile(r"(?<!~)" + name + r"\s*\("), "temporary"),
     ]
     if result.outcomes:
         forms.append((re.compile(name + r"\s*::\s*(?:" + "|".join(result.outcomes) + r")\b"), "outcome"))
     return forms
 
 
+# The words that can start or make up a parameter's type, so `(const T& x)` reads as a parameter
+# list and not as constructor arguments.
+_TYPE_WORDS = frozenset("""
+    auto bool char char8_t char16_t char32_t class const double enum float int long short signed
+    std struct typename unsigned void volatile wchar_t size_t ptrdiff_t
+""".split())
+# One parameter declaration: a type (qualified, templated, with & * or const) and an optional name
+# and default; or a bare type spelled like one (a builtin, qualified, a pointer or reference, or a
+# capitalised name: FrostIDE spells types in UpperCamelCase and variables in lowerCamelCase).
+_PARAMETER = re.compile(r"^(?:(?:const|volatile|struct|class|enum|typename|unsigned|signed|long|short)\s+)*"
+                        r"[A-Za-z_][\w:]*(?:\s*<[^()]*>)?(?:\s*::\s*\w+)*(?:\s*(?:const|volatile))?"
+                        r"(?:[\s&*]+(?:const\s+)?[A-Za-z_]\w*(?:\s*\[[^\]]*\])?(?:\s*=.*)?|\s*[&*]+)$", re.S)
+_BARE_TYPE = re.compile(r"^(?:const\s+)?(?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*(?:\s*<[^()]*>)?\s*[&*]*$")
+
+
+def _closing_paren(code: str, open_index: int) -> int:
+    """The index of the ')' that closes the '(' at `open_index`, or -1."""
+    depth = 0
+    for i in range(open_index, len(code)):
+        c = code[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i if c == ")" else -1
+    return -1
+
+
+def _split_arguments(text: str) -> list[str]:
+    """`text` split at the commas outside brackets, each part stripped; [] for an empty list."""
+    parts, depth, current = [], 0, []
+    for c in text:
+        if c in "([{<":
+            depth += 1
+        elif c in ")]}>" and depth > 0:
+            depth -= 1
+        if c == "," and depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(c)
+    last = "".join(current).strip()
+    return parts + [last] if (parts or last) else []
+
+
+def _is_parameter(argument: str) -> bool:
+    """Whether `argument` reads as a parameter declaration rather than a value."""
+    if argument in ("...", "void") or _PARAMETER.match(argument):
+        return True
+    if _BARE_TYPE.match(argument):
+        word = argument.replace("const ", "").strip()
+        return "::" in word or word[-1:] in "&*" or word in _TYPE_WORDS or word[:1].isupper()
+    return False
+
+
+def _paren_construction(code: str, m: re.Match[str], form: str, type_name: str) -> bool:
+    """
+    Whether the `T x(...)` or `T(...)` at `m` constructs a value. A parameter list (every argument
+    reads as a parameter) is a function declaration or a function type; `T x(...)` followed by a body,
+    qualifiers or `= default` is a function; `T x();` is the vexing-parse declaration; `T::T(` is a
+    constructor definition; `T()` in a declaration context (a class body: after ; { } : or a
+    specifier) followed by ; = { : or a qualifier declares a constructor; `T()` between < or , and
+    > or , is a function type in a template argument (std::function<T()>).
+    """
+    open_index = m.end() - 1
+    close = _closing_paren(code, open_index)
+    if close < 0:
+        return False
+    arguments = _split_arguments(code[open_index + 1 : close])
+    after = code[close + 1 : close + 40].lstrip()
+    if arguments and all(_is_parameter(a) for a in arguments):
+        return False
+    if arguments and arguments[0][:1] in ("*", "&"):
+        return False  # A function pointer or reference type: T(*)(...).
+    if form == "parenthesized declaration":
+        if not after[:1] in (";", ","):
+            return False  # A function definition, a qualified declaration, or not a declaration at all.
+        return bool(arguments)  # `T x();` declares a function.
+    # A temporary T(...).
+    if re.search(r"\b" + re.escape(type_name) + r"\s*::\s*" + re.escape(type_name) + r"\s*\($", m.group(0)):
+        return False  # T::T( defines a constructor.
+    before = _before(code, m.start(), 60).rstrip()
+    if not arguments:
+        if re.search(r"(?:^|[;{}]|(?<!:):|\b(?:explicit|inline|constexpr|consteval|virtual|friend))$", before) and \
+                re.match(r"(?:;|=|\{|:(?!:)|noexcept\b|const\b|override\b|->)", after):
+            return False  # A constructor declaration in a class body.
+        if before.endswith(("<", ",")) and after[:1] in (">", ","):
+            return False  # std::function<T()>, a function type.
+    return True
+
+
+# The element containers whose implicit braced or emplaced elements construct a result.
+_CONTAINER_TEMPLATE = r"(?:std\s*::\s*)?(?:vector|deque|list|forward_list|optional|QList|QVector|span|set|multiset)"
+_ELEMENT_INSERTION = r"(?:push_back|push_front|emplace_back|emplace_front|emplace|insert)"
+
+
+def _element_constructions(result: ResultType, code: str) -> list[tuple[int, str]]:
+    """
+    Results built as elements of a container declared in this file with the result as its element
+    type (`std::vector<T> rows;`, a parameter `std::vector<T>& out`, a member `QList<T> m_rows;`):
+    `rows.push_back({...})` (implicit braced), `rows.emplace_back(a, b)` and `rows.emplace_back()`
+    (emplaced; a single argument may be a copy or move of an existing result, so it is not counted),
+    and `rows = {{...}}` / `rows.insert(rows.end(), {...})`. Containers declared in another file
+    (a member declared in a header, a type alias) are not resolved: the lexer reads one file at a time.
+    """
+    name = _qualified(result.name)
+    declared = re.compile(r"\b" + _CONTAINER_TEMPLATE + r"\s*<\s*(?:const\s+)?" + name +
+                          r"\s*(?:,[^<>;{}()]*)?>\s*(?:const\s*)?[&*]*\s*([A-Za-z_]\w*)\b")
+    variables = {m.group(1) for m in declared.finditer(code)}
+    out = []
+    for variable in sorted(variables):
+        # Not a member of something else (`.all = {` in a designated initializer is not `all`).
+        member = r"(?<![\w.>:])" + re.escape(variable) + r"\s*(?:\.|->)\s*"
+        for m in re.finditer(member + _ELEMENT_INSERTION + r"\s*\(", code):
+            close = _closing_paren(code, m.end() - 1)
+            if close < 0:
+                continue
+            arguments = _split_arguments(code[m.end() : close])
+            method = re.search(_ELEMENT_INSERTION, m.group(0)).group(0)  # type: ignore[union-attr]
+            if any(a.startswith("{") for a in arguments):
+                out.append((m.start(), "implicit braced element"))
+            elif method.startswith("emplace") and (len(arguments) == 0 or
+                                                   len(arguments) >= (3 if method == "emplace" else 2)):
+                out.append((m.start(), "emplaced element"))
+        for m in re.finditer(r"(?<![\w.>:])" + re.escape(variable) + r"\s*=\s*\{(?!\s*\})", code):
+            out.append((m.start(), "container literal"))
+    return out
+
+
 def check_fabricated_results(rel: str, code: str, lines: _Lines) -> list[_Hit]:
     """
     fabricated-result: a RESULT_TYPES value constructed outside the type's allowlisted parsers.
     Constructions are recognised structurally in lexed code (comments and strings blanked):
-    braced temporaries and aggregates, declarations with an initializer (or default-constructed
-    outside headers), container literals, make_shared/make_unique/make_optional, and, for
+    braced temporaries and aggregates, declarations with an initializer (braced, `= ...` or
+    parenthesized, or default-constructed outside headers), temporaries T(...), C arrays,
+    container literals, implicit braced or emplaced elements of a container of results declared
+    in the same file, make_shared/make_unique/make_optional, casts (static_cast<T>), and, for
     enums, producing an outcome enumerator (anything but comparing with == or != or a case
-    label). Not recognised: emplace_back arguments and conversions hidden behind a function,
-    which the independent review still reads (ADR 0078 decision 4).
+    label). Not recognised, so the independent review still reads them (ADR 0078 decision 4):
+    `return {...};` from a function returning a result (it needs the enclosing function's
+    declared type), elements of a container declared in another file or behind a type alias,
+    and conversions hidden behind a function. One finding per line and type.
     """
     if _TRUTH_EXEMPT_RE.match(rel):
         return []
@@ -1207,21 +1386,34 @@ def check_fabricated_results(rel: str, code: str, lines: _Lines) -> list[_Hit]:
             continue
         if result.parsers and compile_globs(result.parsers).match(rel):
             continue
+        found: list[tuple[int, str]] = []
         for pattern, form in _construction_patterns(result, header):
             for m in pattern.finditer(code):
                 before = _before(code, m.start())
-                if form in ("braced", "declaration") and _DEFINITION_TAIL.search(before):
+                if form in ("braced", "declaration", "C array", "parenthesized declaration", "temporary") and \
+                        _DEFINITION_TAIL.search(before):
                     continue
-                if form in ("braced", "container literal") and _TRAILING_ARROW.search(before):
+                if form in ("braced", "container literal", "temporary") and _TRAILING_ARROW.search(before):
+                    continue
+                if form in ("parenthesized declaration", "temporary") and \
+                        not _paren_construction(code, m, form, result.name):
                     continue
                 if form == "outcome" and (_COMPARISON_TAIL.search(before) or
                                           re.match(r"\s*(?:==|!=)", code[m.end() : m.end() + 4])):
                     continue
-                where = ("; allowed only in " + ", ".join(result.parsers)) if result.parsers else \
-                        "; no parser feeds it yet, so its owning epic must add one and list it in RESULT_TYPES"
-                out.append(_Hit(lines.line(m.start()), "fabricated-result", result.name,
-                                f"{result.name} ({result.category}, {form}) is built outside a parser of a real "
-                                f"tool's output{where} (ADR 0078 decision 1)"))
+                found.append((m.start(), form))
+        found += _element_constructions(result, code)
+        where = ("; allowed only in " + ", ".join(result.parsers)) if result.parsers else \
+                "; no parser feeds it yet, so its owning epic must add one and list it in RESULT_TYPES"
+        reported: set[int] = set()
+        for offset, form in sorted(found):
+            line = lines.line(offset)
+            if line in reported:
+                continue  # One finding per line and type, whichever forms matched there.
+            reported.add(line)
+            out.append(_Hit(line, "fabricated-result", result.name,
+                            f"{result.name} ({result.category}, {form}) is built outside a parser of a real "
+                            f"tool's output{where} (ADR 0078 decision 1)"))
     return out
 
 
@@ -1243,35 +1435,62 @@ def check_result_registry(rel: str, code: str, lines: _Lines) -> list[_Hit]:
     return out
 
 
-def _joined_literals(text: str, strings: list[tuple[int, int]]) -> list[tuple[int, str]]:
-    """String literal contents, with adjacent literals ("a" "b") joined; each with its start offset."""
-    joined: list[tuple[int, str]] = []
+_LITERAL_GAP = re.compile(r"\s*(?:u8|u|U|L)?")
+
+
+def _literal_groups(text: str, strings: list[tuple[int, int]]) -> list[list[tuple[int, int]]]:
+    """The string literals' content ranges, adjacent literals ("a" "b", only whitespace and the next
+    literal's encoding prefix L, u, U or u8 between the closing and the next opening quote) grouped
+    together, as the compiler concatenates them."""
+    groups: list[list[tuple[int, int]]] = []
     previous_end = -2
     for start, end in strings:
         gap = text[previous_end + 1 : start - 1] if previous_end >= 0 else None
-        if joined and gap is not None and gap.strip() == "" and start - 1 > previous_end:
-            joined[-1] = (joined[-1][0], joined[-1][1] + text[start:end])
+        if groups and gap is not None and _LITERAL_GAP.fullmatch(gap) and start - 1 > previous_end:
+            groups[-1].append((start, end))
         else:
-            joined.append((start, text[start:end]))
+            groups.append([(start, end)])
         previous_end = end
-    return joined
+    return groups
+
+
+def _joined_literals(text: str, strings: list[tuple[int, int]]) -> list[tuple[int, str]]:
+    """String literal contents, with adjacent literals ("a" "b") joined; each with its start offset."""
+    return [(group[0][0], "".join(text[s:e] for s, e in group)) for group in _literal_groups(text, strings)]
 
 
 def check_tool_output_strings(rel: str, text: str, scanned: Scan, lines: _Lines) -> list[_Hit]:
-    """synthesized-output: string literals that imitate a tool's output lines (TOOL_OUTPUT_MARKERS)."""
+    """
+    synthesized-output: string literals that imitate a tool's output lines (TOOL_OUTPUT_MARKERS).
+    The markers are matched in the joined text of adjacent literals, so splitting a marker across
+    literals ("[ RUN " "     ]") does not hide it; each match is reported at the source line where
+    it starts, once per line and marker.
+    """
     if _TRUTH_EXEMPT_RE.match(rel):
         return []
+    markers = [(name, pattern) for name, pattern, parsers in TOOL_OUTPUT_MARKERS
+               if not (parsers and compile_globs(parsers).match(rel))]
     out = []
-    for start, end in scanned.strings:
-        literal = text[start:end]
-        for name, pattern, parsers in TOOL_OUTPUT_MARKERS:
-            if parsers and compile_globs(parsers).match(rel):
-                continue
-            m = pattern.search(literal)
-            if m:
-                out.append(_Hit(lines.line(start + m.start()), "synthesized-output", name,
-                                f"string literal imitates {name} output ({m.group(0)!r}); show only what the tool "
-                                f"printed, parsed from its process stream (ADR 0078 decision 1)"))
+    seen: set[tuple[int, str]] = set()
+    for group in _literal_groups(text, scanned.strings):
+        joined = "".join(text[s:e] for s, e in group)
+        # offsets[i]: where segment i starts in `joined`, to map a match back to the source.
+        offsets, total = [], 0
+        for s, e in group:
+            offsets.append(total)
+            total += e - s
+        for name, pattern in markers:
+            for m in pattern.finditer(joined):
+                segment = bisect.bisect_right(offsets, m.start()) - 1
+                line = lines.line(group[segment][0] + m.start() - offsets[segment])
+                if (line, name) in seen:
+                    continue
+                seen.add((line, name))
+                split = " (split across adjacent literals)" if \
+                    bisect.bisect_right(offsets, m.end() - 1) - 1 != segment else ""
+                out.append(_Hit(line, "synthesized-output", name,
+                                f"string literal imitates {name} output ({m.group(0)!r}){split}; show only what "
+                                f"the tool printed, parsed from its process stream (ADR 0078 decision 1)"))
     return out
 
 
@@ -1306,32 +1525,48 @@ def _collapse(text: str) -> str:
     return " ".join(text.split())
 
 
-def apply_site_allowances(rel: str, text: str, hits: list[_Hit], used: set[int]) -> list[Violation]:
-    """Drops hits that a SITE_ALLOWANCES entry covers (recording the entry in `used`)."""
+def apply_site_allowances(rel: str, text: str, hits: list[_Hit], used: dict[int, int]) -> list[Violation]:
+    """
+    Drops hits that a SITE_ALLOWANCES entry covers, at most entry.count per entry, counting them in
+    `used` (entry index -> findings covered). A matching hit beyond an entry's count is reported
+    with a note that the entry is exhausted: a new copy of a reviewed site needs its own review.
+    """
     source_lines = text.split("\n")
     out = []
     for hit in hits:
         reported = _collapse(source_lines[hit.line - 1]) if 0 < hit.line <= len(source_lines) else ""
         window = _collapse(" ".join(source_lines[hit.line - 1 : hit.line - 1 + SITE_CONTEXT_LINES + 1]))
         allowed = False
+        exhausted = None
         for index, entry in enumerate(SITE_ALLOWANCES):
             if entry.path == rel and entry.symbol == hit.symbol and _collapse(entry.line) == reported and \
                     (not entry.context or _collapse(entry.context) in window):
-                used.add(index)
+                if used.get(index, 0) >= entry.count:
+                    exhausted = entry
+                    continue
+                used[index] = used.get(index, 0) + 1
                 allowed = True
                 break
         if not allowed:
-            out.append(Violation(rel, hit.line, hit.rule, hit.message))
+            note = (f" (the SITE_ALLOWANCES entry for this line covers {exhausted.count} finding(s) and they are "
+                    f"all taken: a new identical site needs its own review and count)") if exhausted else ""
+            out.append(Violation(rel, hit.line, hit.rule, hit.message + note))
     return out
 
 
-def stale_site_allowances(linted: set[str], used: set[int]) -> list[Violation]:
-    """Every SITE_ALLOWANCES entry for a linted file that covered nothing."""
-    return [Violation(entry.path, 1, "fabricated-result",
-                      f"stale site allowance for {entry.symbol} ({entry.reason}): no site matches "
-                      f"{entry.line!r}{' with ' + repr(entry.context) if entry.context else ''}; delete the entry "
-                      f"from SITE_ALLOWANCES in tools/frost_lint.py")
-            for index, entry in enumerate(SITE_ALLOWANCES) if entry.path in linted and index not in used]
+def stale_site_allowances(linted: set[str], used: dict[int, int]) -> list[Violation]:
+    """Every SITE_ALLOWANCES entry for a linted file that covered fewer findings than its count."""
+    out = []
+    for index, entry in enumerate(SITE_ALLOWANCES):
+        if entry.path not in linted or used.get(index, 0) >= entry.count:
+            continue
+        covered = used.get(index, 0)
+        what = "no site matches" if covered == 0 else f"only {covered} of its {entry.count} findings match"
+        out.append(Violation(entry.path, 1, "fabricated-result",
+                             f"stale site allowance for {entry.symbol} ({entry.reason}): {what} "
+                             f"{entry.line!r}{' with ' + repr(entry.context) if entry.context else ''}; delete the "
+                             f"entry or correct its count in SITE_ALLOWANCES in tools/frost_lint.py"))
+    return out
 
 
 # ---------------------------------------------------------------------------------------
@@ -1553,8 +1788,8 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
-def lint_file(repo: Path, rel: str, budget_ids: set[str] | None, used: set[int] | None = None) -> list[Violation]:
-    """Runs the content rules on one source file; `used` collects the SITE_ALLOWANCES it applied."""
+def lint_file(repo: Path, rel: str, budget_ids: set[str] | None, used: dict[int, int] | None = None) -> list[Violation]:
+    """Runs the content rules on one source file; `used` counts the findings each SITE_ALLOWANCES entry covered."""
     syntax = source_syntax(rel)
     assert syntax is not None
     text = _read_text(repo / rel)
@@ -1565,6 +1800,7 @@ def lint_file(repo: Path, rel: str, budget_ids: set[str] | None, used: set[int] 
     out = check_header(rel, text, syntax, scanned)
     out += check_todos(rel, scanned.comments)
     out += check_budgets(rel, scanned.comments, budget_ids)
+    out += check_dev_paths(rel, text)
     if syntax.c_family:
         lines = _Lines(scanned.code)
         out += check_narrow_win32(rel, scanned.code, lines)
@@ -1579,7 +1815,7 @@ def lint_file(repo: Path, rel: str, budget_ids: set[str] | None, used: set[int] 
         hits = check_fabricated_results(rel, scanned.code, lines)
         hits += check_result_registry(rel, scanned.code, lines)
         hits += check_tool_output_strings(rel, text, scanned, lines)
-        out += apply_site_allowances(rel, text, hits, set() if used is None else used)
+        out += apply_site_allowances(rel, text, hits, {} if used is None else used)
         out += check_parity_claims_in_strings(rel, text, scanned, lines)
     return out
 
@@ -1594,7 +1830,7 @@ def lint(repo: Path, files: list[str] | None = None) -> list[Violation]:
     if (repo / ".github" / "workflows").is_dir() or any(f.startswith(".github/workflows/") for f in files):
         violations.append(Violation(".github/workflows", 1, "no-ci",
                                     "CI workflows are banned; verification is local only (D24)"))
-    used: set[int] = set()
+    used: dict[int, int] = {}
     for rel in files:
         if _PARITY_DOC_RE.match(rel):
             violations.extend(check_parity_claims_in_document(rel, (_read_text(repo / rel) or "").replace("\r\n", "\n")))

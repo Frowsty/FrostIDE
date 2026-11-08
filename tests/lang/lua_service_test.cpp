@@ -10,11 +10,13 @@
 #include "frost/sched/sim_executor.hpp"
 #include "frost/text/document.hpp"
 
+#include "support/test_env.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <chrono>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -46,8 +48,15 @@ TEST(LuaService, DefaultSearchPrefersThePinnedInstall) {
     const std::string pinned = "luals-" + std::string(frost::lang::pinnedLuaLanguageServerVersion());
     const auto pinnedDirs = std::ranges::count_if(
         search.directories, [&](const std::string& dir) { return dir.find(pinned) != std::string::npos; });
-    EXPECT_GE(pinnedDirs, 2) << "the staged folder and the SDK root";
+    // The staged folder, and the SDK root when FROST_SDK names one (FND-10: no machine-specific
+    // default root such as the bootstrap roots; tools/env.ps1 and ~/sdk/env.sh set FROST_SDK).
+    const std::string sdk = frost::test::environment("FROST_SDK");
+    EXPECT_EQ(pinnedDirs, sdk.empty() ? 1 : 2) << "the staged folder and the SDK root";
     EXPECT_NE(search.directories.front().find(pinned), std::string::npos) << search.directories.front();
+    // <exe>/luals-<pinned>/bin, <exe>/lua-language-server/bin, <exe>, then $FROST_SDK/luals-<pinned>/bin.
+    ASSERT_EQ(search.directories.size(), sdk.empty() ? 3U : 4U);
+    if (!sdk.empty())
+        EXPECT_EQ(search.directories.back(), frost::io::joinPath(sdk, pinned + "/bin").value());
     for (const auto& dir : search.directories)
         EXPECT_TRUE(frost::io::isAbsolutePath(dir)) << dir;
 }
@@ -70,6 +79,31 @@ TEST(LuaService, FrostEngineWorkspaceNeedsAFrostprojInTheRoot) {
     ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(root, "Game.frostproj").value(), "{}").has_value());
     EXPECT_TRUE(frost::lang::isFrostEngineLuaWorkspace(fs, root));
     EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, frost::io::joinPath(root, "missing").value()));
+}
+// One rule for the LuaLS defaults and the FrostEngine tool window: .frostproj or .feproject, ASCII
+// case ignored on every platform, a non-empty stem, a regular file directly in the root.
+TEST(LuaService, FrostEngineProjectDetectionIsOneRuleForBothSuffixesAndAnyCase) {
+    using frost::lang::isFrostEngineProjectFileName;
+    for (const char* name : {"Game.frostproj", "Game.FROSTPROJ", "Old.feproject", "Old.FeProject", "a.b.frostproj"})
+        EXPECT_TRUE(isFrostEngineProjectFileName(name)) << name;
+    for (const char* name : {".frostproj", ".feproject", "Game.frostproj.bak", "Game.frost", "frostproj", ""})
+        EXPECT_FALSE(isFrostEngineProjectFileName(name)) << name;
+
+    frost::io::MemFs fs(frost::systemClock());
+    const std::string legacy = frost::io::joinPath(root, "legacy").value();
+    const std::string upper = frost::io::joinPath(root, "upper").value();
+    const std::string hidden = frost::io::joinPath(root, "hidden").value();
+    ASSERT_TRUE(fs.createDirectories(legacy).has_value());
+    ASSERT_TRUE(fs.createDirectories(upper).has_value());
+    ASSERT_TRUE(fs.createDirectories(hidden).has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(legacy, "Old.feproject").value(), "{}").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(upper, "GAME.FROSTPROJ").value(), "{}").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(hidden, ".frostproj").value(), "{}").has_value());
+    for (const auto& [dir, expected] : {std::pair{legacy, true}, std::pair{upper, true}, std::pair{hidden, false}}) {
+        EXPECT_EQ(frost::lang::isFrostEngineProjectRoot(fs, dir), expected) << dir;
+        EXPECT_EQ(frost::lang::isFrostEngineLuaWorkspace(fs, dir), expected) << dir;
+    }
+    EXPECT_FALSE(frost::lang::isFrostEngineProjectRoot(fs, ""));
 }
 TEST(ManagedService, RequiresTrustAndConfiguresCSharpProcess) {
     auto reactor = frost::io::Reactor::create();

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "description": "The pinned FrostEngine corpora of the -Corpus verify tier (ADR 0077 decision 7, ADR 0078; PLAN.md section 7, Roadmap v2). tools/corpora.py fetch makes each one a full `git clone --no-hardlinks` of 'url' (or, only when that fails, of a local path given with --fallback-source) checked out detached at 'sha', in <root>/<id>-<sha[:12]>; <root> is $FROST_CORPORA_ROOT, else E:\\FrostBuilds\\corpora on Windows and ~/FrostBuilds/corpora (ext4) on Linux. tools/corpora.py pin re-resolves 'sha' from the tip of 'branch' with git ls-remote. The tests and the verify scripts never read a developer's live engine tree, only these clones. 'presets' names the configure preset each platform's corpus tests use.",
+  "corpora": [
+    {
+      "id": "frostengine",
+      "name": "FrostEngine",
+      "url": "https://github.com/Frowsty/FrostEngine-AI-Claude",
+      "branch": "main",
+      "sha": "8237e1ecfeb9456c231ea30e41c23c75cd426a2d",
+      "pinned": "2026-11-07",
+      "presets": {
+        "windows": "windows-debug",
+        "linux": "linux-debug"
+      },
+      "purpose": "R0 exit (FND-9a): opening the engine folder records no GUI stall above 250 ms, starts exactly one clangd and negotiates positionEncodings; later the R1/R2 journeys (j1_cmake) and FEC-10a's generated Lua API."
+    }
+  ]
+}

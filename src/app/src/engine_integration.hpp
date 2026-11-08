@@ -13,10 +13,6 @@ public:
     void cancel();
     // Called when the current project's trust changes.
     void trustChanged();
-    // Always false: Lua debugging and its reservation were removed until FER-8. Kept only for the
-    // project-edit admission checks owned elsewhere (workbench_project_edit.cpp, Workbench's run gates).
-    // TODO(M2): remove with FER-8's redesign.
-    [[nodiscard]] bool luaReservationPending() const noexcept;
     // Stops accepting work, cancels requests and drains them before the scheduler is destroyed.
     void shutdown();
 

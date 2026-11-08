@@ -136,14 +136,10 @@ std::string configuredClangdPath(const settings::SettingsSnapshot& settings) {
 ClangdSearch defaultClangdSearch(std::string configuredPath) {
     ClangdSearch search;
     search.configuredPath = std::move(configuredPath);
-    if (const std::string llvmRoot = environment("FROST_LLVM_ROOT"); !llvmRoot.empty()) {
-        if (auto bin = io::joinPath(llvmRoot, "bin")) {
-            search.sdkDirectories.push_back(std::move(*bin));
-        }
-    }
-    if (const std::string sdk = environment("FROST_SDK"); !sdk.empty()) {
-        search.sdkDirectories.push_back(llvmBin(sdk));
-    }
+    // The clangd bundled beside this executable first (tools/stage.ps1 and tools/stage.sh stage
+    // llvm-<pinned>/bin), then the pinned SDK of FROST_SDK and FROST_LLVM_ROOT (tools/env.ps1 and
+    // ~/sdk/env.sh set them for development and tests), then PATH. No machine-specific default
+    // root (FND-10): the product never guesses a developer's drive.
     if (const std::string exeDir = executableDirectory(); !exeDir.empty()) {
         if (std::string bundledPinned = llvmBin(exeDir); !bundledPinned.empty()) {
             search.sdkDirectories.push_back(std::move(bundledPinned));
@@ -156,15 +152,16 @@ ClangdSearch defaultClangdSearch(std::string configuredPath) {
         }
         search.sdkDirectories.push_back(exeDir);
     }
-#ifdef _WIN32
-    search.sdkDirectories.push_back(llvmBin("E:\\sdk")); // tools/bootstrap.ps1's default -SdkRoot.
-#else
-    if (const std::string home = environment("HOME"); !home.empty()) {
-        if (auto sdk = io::joinPath(home, "sdk")) { // tools/bootstrap-wsl.sh's root.
-            search.sdkDirectories.push_back(llvmBin(*sdk));
+    if (const std::string sdk = environment("FROST_SDK"); !sdk.empty()) {
+        if (std::string pinned = llvmBin(sdk); !pinned.empty()) {
+            search.sdkDirectories.push_back(std::move(pinned));
         }
     }
-#endif
+    if (const std::string llvmRoot = environment("FROST_LLVM_ROOT"); !llvmRoot.empty()) {
+        if (auto bin = io::joinPath(llvmRoot, "bin")) {
+            search.sdkDirectories.push_back(std::move(*bin));
+        }
+    }
     search.pathVariable = environment("PATH");
     return search;
 }

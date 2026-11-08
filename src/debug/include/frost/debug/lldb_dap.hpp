@@ -4,10 +4,12 @@
 // the process spec it runs with, the launch request's arguments for a program, and the trust gate
 // that every debug session goes through.
 /*
- * Finding it. The settings key tools.lldbDap.path (absolute) wins; otherwise the SDK's pinned copy,
- * <sdk>/lldb-<version>/bin/lldb-dap(.exe), under $FROST_SDK, E:\sdk (tools/bootstrap.ps1) and
- * $HOME/sdk (tools/bootstrap-wsl.sh), in that order. PATH is never searched: a debugger runs the
- * user's program with full rights, so it must be the one FrostIDE ships or one the user named.
+ * Finding it. The settings key tools.lldbDap.path (absolute) wins; otherwise the pinned copy,
+ * <root>/lldb-<version>/bin/lldb-dap(.exe), under the directory of this executable (the copy that
+ * tools/stage.ps1 and tools/stage.sh bundle), then under $FROST_SDK when it is set (tools/env.ps1
+ * and ~/sdk/env.sh set it for development and tests), in that order. There is no machine-specific
+ * default root (FND-10). PATH is never searched: a debugger runs the user's program with full
+ * rights, so it must be the one FrostIDE ships or one the user named.
  *
  * Environment. lldb-dap starts with FrostIDE's environment minus _NT_SYMBOL_PATH,
  * _NT_ALT_SYMBOL_PATH and DEBUGINFOD_URLS, so a machine-wide symbol server setting never makes a
