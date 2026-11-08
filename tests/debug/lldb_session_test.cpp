@@ -61,10 +61,8 @@ std::int64_t lineOf(std::string_view source, std::string_view marker) {
 TEST(LldbDebugSession, BreaksInAFixtureProgramAndReadsALocal) {
     io::IFileSystem& fs = io::realFileSystem();
     auto adapterPath = findLldbDap(fs, defaultLldbDapSearch());
-    if (!adapterPath) {
-        GTEST_SKIP() << "the pinned lldb-dap is not installed, so the real debugger is not tested: "
-                     << adapterPath.error().message();
-    }
+    // A missing pinned tool fails the test, never skips it (FND-6).
+    ASSERT_TRUE(adapterPath.has_value()) << "the pinned lldb-dap is required: " << adapterPath.error().message();
     const std::string program = io::normalizePath(FROST_DEBUGGEE_PATH).value();
     const std::string sourcePath = io::normalizePath(FROST_DEBUGGEE_SOURCE).value();
     auto source = fs.readFile(sourcePath);

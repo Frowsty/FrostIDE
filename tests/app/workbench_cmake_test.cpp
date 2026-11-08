@@ -406,8 +406,7 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
 TEST(WorkbenchCMake, DebugUsesConfiguredWrapperAndRetainedTarget) {
     auto& fs = frost::io::realFileSystem();
     const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
-    if (!lldb)
-        GTEST_SKIP() << "pinned lldb-dap is unavailable";
+    ASSERT_TRUE(lldb.has_value()) << "the pinned lldb-dap is required (FND-6): " << lldb.error().describe();
     WorkDir dir("cmake-wrapper-debug");
     std::string compiler = FROST_TEST_C_COMPILER;
     std::ranges::replace(compiler, '\\', '/');
@@ -454,8 +453,7 @@ TEST(WorkbenchCMake, DebugUsesConfiguredWrapperAndRetainedTarget) {
 TEST(WorkbenchCMake, DebugBuildsStopsInspectsStepsAndStops) {
     auto& fs = frost::io::realFileSystem();
     const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
-    if (!lldb)
-        GTEST_SKIP() << "pinned lldb-dap is unavailable: " << lldb.error().describe();
+    ASSERT_TRUE(lldb.has_value()) << "the pinned lldb-dap is required (FND-6): " << lldb.error().describe();
     WorkDir dir("cmake-debug-app");
     std::string compiler = FROST_TEST_C_COMPILER;
     std::ranges::replace(compiler, '\\', '/');

@@ -509,10 +509,9 @@ class NinjaDepsTest(TempDirTestCase):
 
     def test_real_ninja_deps(self):
         ninja = shutil.which("ninja")
-        if ninja is None and (os.environ.get("FROST_SDK") or os.environ.get("FROST_LLVM_ROOT")):
-            self.fail("ninja is missing although the FrostIDE SDK environment is set")
+        # The pinned ninja is required: missing, the test fails, never skips (FND-6).
         if ninja is None:
-            self.skipTest("ninja not available")
+            self.fail("the pinned ninja is not on PATH (tools/env.ps1, ~/sdk/env.sh)")
         root = self.tmp / "repo"
         build = _real_build(root, {"src/x/x.cpp": ["src/x/x.hpp"], "src/x/clean.cpp": []})
         deps = vs._ninja_deps(os.path.abspath(ninja), build, "Debug")
@@ -1099,8 +1098,8 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # are tags that ctest -L selects by and that keep the kind's scheduling default. Every test has
         # exactly one kind label; the tagged suites are build_msbuild_tests and
         # app_workbench_msbuild_tests (Windows only), lang_clangd_tests, lang_msbuild_tests (Windows
-        # only; both tags), build_cmake_tests (tag "cmake"), build_msvc_env_tests (Windows only; tag
-        # "msvc"; ADR 0046), vcs_git_tests, ui_vcs_git_tests and app_workbench_git_tests (tag "git";
+        # only; both tags), build_cmake_tests and app_automation_endpoint_tests (tag "cmake"),
+        # build_msvc_env_tests (Windows only; tag "msvc"; ADR 0046), vcs_git_tests, ui_vcs_git_tests and app_workbench_git_tests (tag "git";
         # ADR 0048 and 0067), sdk_lldb_tests
         # (tag "lldb"; ADR 0049), and in trees with the UI app_workbench_clangd_tests and
         # ui_screenshot_tests.
@@ -1110,7 +1109,8 @@ class BuildTreeLabelsTest(unittest.TestCase):
                                               "WorkbenchProjectEdit.")),
                   "clangd": ("integration", ("ClangdE2E.", "ClangdEncoding.", "MsBuildEvaluationE2E.",
                                               "WorkbenchClangd.", "WorkbenchCMake.", "WorkbenchClangdSpawn.")),
-                  "cmake": ("integration", ("CMakeRealBuild.", "WorkbenchCMake.", "WorkbenchClangdSpawn.")),
+                  "cmake": ("integration", ("CMakeRealBuild.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
+                                            "AutomationEndpoint.")),
                   "msvc": ("integration", ("MsvcEnvironmentCapture.",)),
                   "git": ("integration", ("GitE2E.", "GitUiE2E.", "WorkbenchGit.")),
                   "lldb": ("integration", ("LldbDapE2E.", "LldbDebugSession.")),

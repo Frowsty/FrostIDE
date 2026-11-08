@@ -5,8 +5,11 @@
 # tests/corpus/corpora.lock.json (ADR 0077 decision 7; ADR 0078; PLAN.md section 7, Roadmap v2).
 #
 #   python tools/corpora.py [--lock <file>] [--root <dir>] list
-#   python tools/corpora.py ... fetch [--only <id>] [--fallback-source <path>] [--replace] [--keep-old]
+#   python tools/corpora.py ... fetch [--only <id>] [--fallback-source <path>] [--cpm-source <dir>] [--replace]
+#                                     [--keep-old]
 #   python tools/corpora.py ... verify [--only <id>]
+#   python tools/corpora.py ... engine [--only <id>] [--preset <name>] [--configure]
+#   python tools/corpora.py ... wsl-fetch [--only <id>] [--distro Ubuntu-24.04] [--configure]   (Windows)
 #   python tools/corpora.py ... path <id>
 #   python tools/corpora.py ... root
 #   python tools/corpora.py ... pin [--only <id>] [--sha <sha>]
@@ -28,6 +31,27 @@
 #           no tracked file changed and a full (not shallow) history. Untracked files (build trees,
 #           download caches) are allowed: the corpus tests configure and index the corpus in place.
 #           A missing corpus is a failure, never a skip (the -Corpus tier relies on this).
+#   engine  the one configured engine per pinned sha and preset (FND-6b): for every corpus with
+#           'presets' (or --only), the preset of this platform (or --preset) must be configured in
+#           <dir>/build/<preset> (CMakeCache.txt of this source directory, compile_commands.json and
+#           the stamp .frost-corpus-engine.json naming the pinned sha); exit 1 when it is not. With
+#           --configure a missing one is configured first with `cmake --preset <preset>` (the pinned
+#           cmake and ninja from PATH, checked against sdk/sdk.lock.json; on Windows inside the
+#           pinned MSVC toolset's vcvarsall environment, on Linux with CC/CXX the pinned clang of
+#           FROST_LLVM_ROOT), logged to <root>/<id>-<sha12>.<preset>.configure.log. Nothing is ever
+#           built (a full engine build is about 49 GB): the corpus tests build single small targets.
+#           Configure and the corpus tests that configure or build in place hold the build lock
+#           <root>/<id>-<sha12>.build.lock (an exclusive lock on that file; frost::test's
+#           tests/support/engine_lock.hpp and tests/journeys take the same lock).
+#   CPM source cache: the configure fills <dir>/.cache/cpm (the engine's CPM_SOURCE_CACHE preset
+#           variable) from the network; afterwards new packages are copied into
+#           <root>/cpm-source-cache, and fetch seeds a new clone's .cache/cpm from that copy (or
+#           from --cpm-source), so a re-pin or the WSL clone downloads nothing that is cached. The
+#           cache only ever comes from a corpus clone's own fetch, never from a developer tree.
+#   wsl-fetch  (Windows) runs `fetch` inside WSL (python3 and git of the distribution) for the
+#           ext4 root ~/FrostBuilds/corpora, cloning from the url, else from this machine's corpus
+#           clone (/mnt/<drive>/...) as the fallback source, with that clone's .cache/cpm as
+#           --cpm-source; with --configure then `engine --configure` there (linux-debug).
 #   path    prints the directory of corpus <id>.
 #   root    prints the corpora root. The verify scripts' corpus tier exports it as FROST_CORPORA_ROOT,
 #           so the corpus tests (tests/app/corpus_test.cpp) name no developer machine path (FND-10).
@@ -35,9 +59,10 @@
 #           --sha, and rewrites the lock file.
 #
 # Side effects: git clones under <root>; fetch --replace and the pruning of older pins delete
-# directories under <root> that match <id>-<12 hex digits> only. Exit status: 0 success, 1 a fetch
-# or verification failed, 2 usage error or invalid lock file. Python 3.11+, standard library only;
-# needs git on PATH.
+# directories (and build lock files) under <root> that match <id>-<12 hex digits> only; engine
+# --configure writes the build tree, the stamp, the log and the CPM cache copy named above. Exit
+# status: 0 success, 1 a fetch, configure or verification failed, 2 usage error or invalid lock
+# file. Python 3.11+, standard library only; needs git on PATH (and cmake, ninja for engine).
 
 from __future__ import annotations
 
@@ -50,9 +75,17 @@ import shutil
 import stat
 import subprocess
 import sys
-from pathlib import Path
+import time
+from pathlib import Path, PureWindowsPath
 
 LOCK_FILE = "tests/corpus/corpora.lock.json"
+SDK_LOCK_FILE = "sdk/sdk.lock.json"
+# The shared copy of the corpora's CPM download caches under <root> (header comment).
+CPM_CACHE_NAME = "cpm-source-cache"
+# Written into a configured engine's build directory: which pin and preset configured it.
+ENGINE_STAMP = ".frost-corpus-engine.json"
+WINDOWS = sys.platform == "win32"
+PLATFORM = "windows" if WINDOWS else "linux"
 REQUIRED_FIELDS = ("id", "name", "url", "branch", "sha", "purpose")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -117,8 +150,11 @@ class Git:
         if cwd is not None:
             command += ["-C", str(cwd)]
         command += list(args)
+        # Never ask for credentials (a terminal prompt in WSL would wait forever, Git Credential
+        # Manager would open a window): an unreachable url fails, and fetch falls back.
+        env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
         result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                check=False)
+                                stdin=subprocess.DEVNULL, env=env, check=False)
         if check and result.returncode != 0:
             raise RuntimeError(f"git {' '.join(args)} failed ({result.returncode}): {result.stderr.strip()}")
         return result
@@ -210,6 +246,16 @@ def fetch(git: Git, entry: dict, root: Path, fallback: str | None, replace: bool
     return f"{entry['id']}: cloned {sha} from {source} into {directory}"
 
 
+def seed_cpm_cache(root: Path, entry: dict, cpm_source: Path | None) -> str | None:
+    """Copies the packages of `cpm_source` (else <root>/cpm-source-cache) that the corpus's
+    .cache/cpm lacks into it; a status line, or None when there was nothing to copy from."""
+    source = cpm_source or root / CPM_CACHE_NAME
+    if not source.is_dir():
+        return None
+    copied = copy_new_packages(source, corpus_dir(root, entry) / ".cache" / "cpm")
+    return f"{entry['id']}: CPM source cache: {len(copied)} packages copied from {source}"
+
+
 def stale_dirs(root: Path, entry: dict) -> list[Path]:
     """Older pins of `entry` under `root` (<id>-<12 hex>, with or without .partial), never the pinned one."""
     if not root.is_dir():
@@ -217,6 +263,273 @@ def stale_dirs(root: Path, entry: dict) -> list[Path]:
     pattern = re.compile(rf"^{re.escape(entry['id'])}-[0-9a-f]{{12}}(\.partial)?$")
     keep = corpus_dir(root, entry).name
     return sorted(p for p in root.iterdir() if p.is_dir() and pattern.match(p.name) and p.name != keep)
+
+
+def stale_lock_files(root: Path, entry: dict) -> list[Path]:
+    """Build lock files and configure logs of older pins of `entry` under `root`."""
+    if not root.is_dir():
+        return []
+    pattern = re.compile(rf"^{re.escape(entry['id'])}-([0-9a-f]{{12}})\.(build\.lock|[\w.-]+\.configure\.log)$")
+    keep = entry["sha"][:12]
+    return sorted(p for p in root.iterdir()
+                  if p.is_file() and (m := pattern.match(p.name)) and m.group(1) != keep)
+
+
+# ---------------------------------------------------------------------------------------------
+# The CPM source cache copy
+# ---------------------------------------------------------------------------------------------
+
+def copy_new_packages(source: Path, target: Path) -> list[str]:
+    """Copies every top-level package directory of the CPM cache `source` that `target` lacks
+    (CPM names a package's cache <package>/<hash of its download>; existing entries are never
+    overwritten). Returns the copied entries as "<package>/<hash>"."""
+    copied = []
+    if not source.is_dir():
+        return copied
+    for package in sorted(p for p in source.iterdir() if p.is_dir()):
+        for version in sorted(p for p in package.iterdir() if p.is_dir()):
+            destination = target / package.name / version.name
+            if destination.exists():
+                continue
+            partial = destination.with_name(destination.name + ".partial")
+            if partial.exists():
+                remove_tree(partial)
+            partial.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(version, partial, symlinks=True)
+            partial.rename(destination)
+            copied.append(f"{package.name}/{version.name}")
+    return copied
+
+
+# ---------------------------------------------------------------------------------------------
+# The configured engine (one per pinned sha and preset) and its build lock
+# ---------------------------------------------------------------------------------------------
+
+def build_lock_path(root: Path, entry: dict) -> Path:
+    """<root>/<id>-<sha12>.build.lock: held while the engine is configured or built in place."""
+    return root / f"{entry['id']}-{entry['sha'][:12]}.build.lock"
+
+
+class BuildLock:
+    """An exclusive lock on the build lock file (msvcrt.locking of its first byte on Windows, flock
+    elsewhere), waiting up to `timeout` seconds. A context manager; raises TimeoutError."""
+
+    def __init__(self, path: Path, timeout: float = 7200.0) -> None:
+        self.path, self.timeout, self.handle = path, timeout, None
+
+    def __enter__(self) -> "BuildLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = open(self.path, "a+b")  # noqa: SIM115 (closed in __exit__)
+        deadline = time.monotonic() + self.timeout
+        told = False
+        while True:
+            try:
+                if WINDOWS:
+                    import msvcrt
+                    self.handle.seek(0)
+                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if time.monotonic() >= deadline:
+                    self.handle.close()
+                    raise TimeoutError(f"{self.path} stayed locked for {self.timeout:.0f} s") from None
+                if not told:
+                    print(f"corpora: waiting for the build lock {self.path}", flush=True)
+                    told = True
+                time.sleep(1.0)  # Polling a lock held by another process; nothing to wait on instead.
+
+    def __exit__(self, *_exc) -> None:
+        if self.handle is None:
+            return
+        if WINDOWS:
+            import msvcrt
+            self.handle.seek(0)
+            try:
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        self.handle.close()
+        self.handle = None
+
+
+def engine_preset(entry: dict, preset: str | None) -> str | None:
+    """The preset to configure: `preset`, else the lock's presets[PLATFORM], else None."""
+    if preset:
+        return preset
+    presets = entry.get("presets")
+    return presets.get(PLATFORM) if isinstance(presets, dict) else None
+
+
+def _same_dir(a: str, b: Path) -> bool:
+    left = os.path.normpath(a.replace("/", os.sep))
+    right = os.path.normpath(str(b))
+    return os.path.normcase(left) == os.path.normcase(right)
+
+
+def engine_problem(directory: Path, entry: dict, preset: str) -> str | None:
+    """Why <directory>/build/<preset> is not the configured engine of the pin, or None when it is."""
+    build = directory / "build" / preset
+    cache = build / "CMakeCache.txt"
+    if not cache.is_file():
+        return f"missing: {build} is not configured (run: python tools/corpora.py engine --configure)"
+    home = re.search(r"^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$", cache.read_text(encoding="utf-8", errors="replace"),
+                     re.M)
+    if not home or not _same_dir(home.group(1).strip(), directory):
+        return f"{cache} was configured for another source directory ({home.group(1) if home else 'none'})"
+    commands = build / "compile_commands.json"
+    if not commands.is_file() or commands.stat().st_size < 3:
+        return f"{build} has no compile_commands.json"
+    try:
+        stamp = json.loads((build / ENGINE_STAMP).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return f"{build} has no {ENGINE_STAMP} (configured outside corpora.py engine)"
+    if stamp.get("sha") != entry["sha"] or stamp.get("preset") != preset:
+        return f"{build / ENGINE_STAMP} names {stamp.get('sha')} {stamp.get('preset')}, not {entry['sha']} {preset}"
+    return None
+
+
+def pinned_tool(name: str, repo: Path) -> str:
+    """The absolute path of `name` on PATH, which must report the version sdk/sdk.lock.json pins for
+    this platform (cmake, ninja). Raises RuntimeError naming what was found instead."""
+    found = shutil.which(name)
+    if not found:
+        raise RuntimeError(f"{name} is not on PATH (tools/env.ps1, ~/sdk/env.sh)")
+    sdk = json.loads((repo / SDK_LOCK_FILE).read_text(encoding="utf-8"))
+    version = sdk[PLATFORM][name]["version"]
+    out = subprocess.run([found, "--version"], capture_output=True, text=True, errors="replace", check=False)
+    if version not in out.stdout + out.stderr:
+        raise RuntimeError(f"{found} is not the pinned {name} {version}: {(out.stdout + out.stderr).strip()[:200]}")
+    return str(Path(found).resolve())
+
+
+def msvc_environment(repo: Path) -> dict[str, str]:
+    """The environment vcvarsall.bat x64 sets up for the pinned MSVC toolset (sdk.lock.json msvc).
+    The same capture as tools/s10_dap_spike.py's. Raises RuntimeError."""
+    version = json.loads((repo / SDK_LOCK_FILE).read_text(encoding="utf-8"))["msvc"]["vcToolsVersion"]
+    vswhere = Path(os.environ["ProgramFiles(x86)"]) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    listed = subprocess.run([str(vswhere), "-all", "-products", "*", "-property", "installationPath"],
+                            capture_output=True, text=True, check=False).stdout
+    installs = [Path(p.strip()) for p in listed.splitlines() if p.strip()]
+    install = next((p for p in installs if (p / "VC" / "Tools" / "MSVC" / version / "include").is_dir()), None)
+    if install is None:
+        raise RuntimeError(f"the pinned MSVC toolset {version} was not found by vswhere")
+    vcvarsall = install / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
+    cmd = Path(os.environ["SystemRoot"]) / "System32" / "cmd.exe"
+    # /s strips the outer quotes, so cmd runs: "<vcvarsall>" x64 -vcvars_ver=<v> >nul 2>&1 && set
+    line = f'"{cmd}" /d /s /c ""{vcvarsall}" x64 -vcvars_ver={version} >nul 2>&1 && set"'
+    result = subprocess.run(line, capture_output=True, text=True, errors="replace",
+                            creationflags=0x08000000, check=False)  # CREATE_NO_WINDOW
+    env = {}
+    for entry in result.stdout.splitlines():
+        name, sep, value = entry.partition("=")
+        if sep and name:
+            env[name] = value
+    if result.returncode != 0 or "INCLUDE" not in env:
+        raise RuntimeError(f"vcvarsall failed ({result.returncode}) for {vcvarsall}")
+    return env
+
+
+def configure_engine(repo: Path, root: Path, entry: dict, preset: str) -> str:
+    """Configures <corpus>/build/<preset> with `cmake --preset` under the build lock unless it is
+    already the pin's (header comment, engine). Returns a status line; raises RuntimeError."""
+    directory = corpus_dir(root, entry)
+    with BuildLock(build_lock_path(root, entry)):
+        if engine_problem(directory, entry, preset) is None:
+            return f"{entry['id']}: {preset} reused, configured in {directory / 'build' / preset}"
+        cmake = pinned_tool("cmake", repo)
+        ninja = pinned_tool("ninja", repo)
+        env = msvc_environment(repo) if WINDOWS else dict(os.environ)
+        # The pinned cmake and ninja first: the Visual Studio environment brings its own. Windows
+        # spells the variable "Path"; one entry, whatever its case.
+        path_key = next((key for key in env if key.upper() == "PATH"), "PATH")
+        env[path_key] = os.pathsep.join([str(Path(cmake).parent), str(Path(ninja).parent), env.get(path_key, "")])
+        if not WINDOWS and os.environ.get("FROST_LLVM_ROOT"):
+            llvm = Path(os.environ["FROST_LLVM_ROOT"]) / "bin"
+            env["CC"], env["CXX"] = str(llvm / "clang"), str(llvm / "clang++")
+        cpm = directory / ".cache" / "cpm"
+        seeded = copy_new_packages(root / CPM_CACHE_NAME, cpm)
+        log = root / f"{entry['id']}-{entry['sha'][:12]}.{preset}.configure.log"
+        started = time.monotonic()
+        with open(log, "wb") as out:
+            result = subprocess.run([cmake, "--preset", preset], cwd=directory, env=env, stdout=out,
+                                    stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=3600, check=False)
+        if result.returncode != 0:
+            tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
+            raise RuntimeError(f"{entry['id']}: cmake --preset {preset} failed ({result.returncode}); see {log}:\n"
+                               + "\n".join(tail))
+        build = directory / "build" / preset
+        version = subprocess.run([cmake, "--version"], capture_output=True, text=True, check=False).stdout
+        (build / ENGINE_STAMP).write_text(json.dumps({
+            "sha": entry["sha"], "preset": preset, "configured": datetime.datetime.now().isoformat(timespec="seconds"),
+            "cmake": version.splitlines()[0] if version else "", "seconds": round(time.monotonic() - started, 1),
+        }, indent=2) + "\n", encoding="utf-8")
+        problem_now = engine_problem(directory, entry, preset)
+        if problem_now is not None:
+            raise RuntimeError(f"{entry['id']}: configured, but {problem_now}")
+        shared = copy_new_packages(cpm, root / CPM_CACHE_NAME)
+        return (f"{entry['id']}: {preset} configured in {build} ({time.monotonic() - started:.0f} s; CPM cache: "
+                f"{len(seeded)} seeded, {len(shared)} copied to {root / CPM_CACHE_NAME})")
+
+
+def to_wsl_path(path: Path | str) -> str:
+    """
+    /mnt/<drive>/... for a Windows drive path (tools/verify.ps1's ConvertTo-WslPath). On Windows a
+    relative path is resolved first; elsewhere (the unit tests' Linux runs) the path is taken as
+    written, parsed with Windows rules, because Path.resolve() there would treat "F:/x" as relative.
+    Raises ValueError for a path without a drive letter (UNC or POSIX), which WSL cannot mount.
+    """
+    native = Path(path).resolve() if os.name == "nt" else path
+    text = str(PureWindowsPath(native))
+    if not re.match(r"^[A-Za-z]:\\", text):  # PureWindowsPath writes backslashes
+        raise ValueError(f"not a drive path: {text!r}")
+    return "/mnt/" + text[0].lower() + text[2:].replace("\\", "/")
+
+
+def problem_or_none(entry: dict, root: Path) -> str | None:
+    """problem() for the corpus of `entry` under `root`, with git resolved here; a missing git is a problem."""
+    try:
+        git = Git()
+    except FileNotFoundError as error:
+        return str(error)
+    return problem(git, corpus_dir(root, entry), entry["sha"])
+
+
+def wsl_fetch(args, root: Path, by_id: dict, wanted: list[str]) -> int:
+    """`wsl-fetch` (header comment): fetch (and with --configure, engine --configure) inside WSL,
+    from this machine's corpus clones. Returns the exit status of the last WSL run that failed, or 0."""
+    wsl = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "wsl.exe"
+    script = to_wsl_path(Path(__file__))
+    lock = to_wsl_path(args.lock or (args.repo / LOCK_FILE))
+    repo = to_wsl_path(args.repo)
+    status = 0
+    for corpus_id in wanted:
+        entry = by_id[corpus_id]
+        local = corpus_dir(root, entry)
+        why = problem_or_none(entry, root)
+        if why is not None:
+            print(f"{corpus_id}: the Windows clone is not usable as the source ({why}); run fetch here first")
+            status = 1
+            continue
+        steps = [["fetch", "--only", corpus_id, "--fallback-source", to_wsl_path(local)]]
+        if (local / ".cache" / "cpm").is_dir():
+            steps[0] += ["--cpm-source", to_wsl_path(local / ".cache" / "cpm")]
+        if args.configure:
+            steps.append(["engine", "--only", corpus_id, "--configure"])
+        for step in steps:
+            # --exec runs bash without a shell parsing these arguments; bash sources the SDK
+            # environment (FROST_LLVM_ROOT, the pinned cmake and ninja) and then runs python3.
+            command = [str(wsl), "-d", args.distro, "--exec", "bash", "-c",
+                       'source "$HOME/sdk/env.sh" && exec python3 -I "$0" "$@"', script, "--repo", repo, "--lock",
+                       lock, *step]
+            print(f"corpora: wsl {' '.join(step)}", flush=True)
+            result = subprocess.run(command, check=False)
+            if result.returncode != 0:
+                status = result.returncode
+                break
+    return status
 
 
 def pin(git: Git, lock_path: Path, document: dict, wanted: list[str], sha: str | None) -> list[str]:
@@ -258,8 +571,19 @@ def main(argv: list[str] | None = None) -> int:
     fetch_parser.add_argument("--replace", action="store_true",
                               help="delete and re-clone a corpus directory that does not verify")
     fetch_parser.add_argument("--keep-old", action="store_true", help="keep the clones of older pins")
+    fetch_parser.add_argument("--cpm-source", type=Path, default=None, metavar="DIR",
+                              help="a corpus clone's .cache/cpm to seed the new clone's from (default: "
+                                   f"<root>/{CPM_CACHE_NAME} when it exists)")
     verify_parser = commands.add_parser("verify", help="check every corpus against its pin")
     verify_parser.add_argument("--only", action="append", metavar="ID", help="only this corpus (repeatable)")
+    engine_parser = commands.add_parser("engine", help="check (or --configure) the configured engine per preset")
+    engine_parser.add_argument("--only", action="append", metavar="ID", help="only this corpus (repeatable)")
+    engine_parser.add_argument("--preset", default=None, help=f"the configure preset (default: presets.{PLATFORM})")
+    engine_parser.add_argument("--configure", action="store_true", help="configure it when it is missing")
+    wsl_parser = commands.add_parser("wsl-fetch", help="(Windows) fetch the corpora into WSL's ext4 root")
+    wsl_parser.add_argument("--only", action="append", metavar="ID", help="only this corpus (repeatable)")
+    wsl_parser.add_argument("--distro", default="Ubuntu-24.04", help="the WSL distribution (default Ubuntu-24.04)")
+    wsl_parser.add_argument("--configure", action="store_true", help="then configure the engine there")
     path_parser = commands.add_parser("path", help="print the directory of a corpus")
     path_parser.add_argument("id")
     commands.add_parser("root", help="print the corpora root (the verify scripts export it as "
@@ -291,6 +615,33 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "path":
         print(corpus_dir(root, by_id[args.id]))
         return 0
+    if args.command == "engine":
+        status = 0
+        for corpus_id in wanted:
+            entry = by_id[corpus_id]
+            preset = engine_preset(entry, args.preset)
+            if preset is None:
+                continue  # A corpus without presets has no engine leg.
+            why = problem_or_none(entry, root)
+            if why is None and args.configure:
+                try:
+                    print(configure_engine(args.repo, root, entry, preset))
+                    continue
+                except (RuntimeError, TimeoutError, subprocess.TimeoutExpired, OSError) as error:
+                    why = str(error)
+            elif why is None:
+                why = engine_problem(corpus_dir(root, entry), entry, preset)
+            if why is None:
+                print(f"{corpus_id}: {preset} ok in {corpus_dir(root, entry) / 'build' / preset}")
+            else:
+                print(f"{corpus_id}: {preset}: {why}")
+                status = 1
+        return status
+    if args.command == "wsl-fetch":
+        if not WINDOWS:
+            print("corpora: wsl-fetch runs on Windows; in WSL run fetch", file=sys.stderr)
+            return 2
+        return wsl_fetch(args, root, by_id, wanted)
     try:
         git = Git()
     except FileNotFoundError as error:
@@ -316,11 +667,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.fallback_source and not Path(args.fallback_source).is_dir():
             print(f"corpora: --fallback-source {args.fallback_source} is not a directory", file=sys.stderr)
             return 2
+        if args.cpm_source and not args.cpm_source.is_dir():
+            print(f"corpora: --cpm-source {args.cpm_source} is not a directory", file=sys.stderr)
+            return 2
         for corpus_id in wanted:
             entry = by_id[corpus_id]
             try:
                 print(fetch(git, entry, root, args.fallback_source, args.replace))
-            except RuntimeError as error:
+                seeded = seed_cpm_cache(root, entry, args.cpm_source)
+                if seeded:
+                    print(seeded)
+            except (RuntimeError, OSError) as error:
                 print(f"{lock_path.as_posix()}: {error}")
                 status = 1
                 continue
@@ -328,6 +685,9 @@ def main(argv: list[str] | None = None) -> int:
                 for old in stale_dirs(root, entry):
                     remove_tree(old)
                     print(f"{corpus_id}: removed the older pin {old}")
+                for old in stale_lock_files(root, entry):
+                    old.unlink()
+                    print(f"{corpus_id}: removed {old.name} of an older pin")
     elif args.command == "pin":
         try:
             for line in pin(git, lock_path, document, wanted, args.sha):

@@ -233,9 +233,111 @@ class CorporaToolTest(TempDirTestCase):
         lock = self._lock(self.first)
         self.assertEqual(self._run(lock, "verify", "--only", "nope").returncode, 2)
         self.assertEqual(self._run(lock, "fetch", "--fallback-source", str(self.tmp / "absent")).returncode, 2)
+        self.assertEqual(self._run(lock, "fetch", "--cpm-source", str(self.tmp / "absent")).returncode, 2)
         broken = self.tmp / "broken.json"
         broken.write_text("{", encoding="utf-8")
         self.assertEqual(self._run(broken, "list").returncode, 2)
+
+
+class EngineTest(TempDirTestCase):
+    """The configured engine (one per pin and preset), its build lock and the CPM source cache copy.
+    Fixture trees only: no cmake runs here (configure_engine runs in the corpus tier)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.root = self.tmp / "corpora"
+        self.entry = {"id": "engine", "sha": "ab" * 20, "presets": {"windows": "win-dbg", "linux": "lin-dbg"}}
+        self.corpus = corpora.corpus_dir(self.root, self.entry)
+
+    def _configured(self, preset: str, *, sha: str | None = None, source: Path | None = None) -> Path:
+        build = self.corpus / "build" / preset
+        build.mkdir(parents=True)
+        home = (source or self.corpus).as_posix()
+        (build / "CMakeCache.txt").write_text(f"CMAKE_HOME_DIRECTORY:INTERNAL={home}\n", encoding="utf-8")
+        (build / "compile_commands.json").write_text("[]\n", encoding="utf-8")
+        stamp = {"sha": sha or self.entry["sha"], "preset": preset}
+        (build / corpora.ENGINE_STAMP).write_text(json.dumps(stamp), encoding="utf-8")
+        return build
+
+    def test_the_platform_preset_comes_from_the_lock_unless_named(self) -> None:
+        self.assertEqual(corpora.engine_preset(self.entry, None), self.entry["presets"][corpora.PLATFORM])
+        self.assertEqual(corpora.engine_preset(self.entry, "other"), "other")
+        self.assertIsNone(corpora.engine_preset({"id": "x"}, None))
+
+    def test_engine_problem_names_each_missing_or_foreign_part(self) -> None:
+        self.assertIn("is not configured", corpora.engine_problem(self.corpus, self.entry, "win-dbg"))
+        build = self._configured("win-dbg")
+        self.assertIsNone(corpora.engine_problem(self.corpus, self.entry, "win-dbg"))
+        # Another preset, another pin, another source directory, no database, no stamp.
+        self.assertIn("is not configured", corpora.engine_problem(self.corpus, self.entry, "lin-dbg"))
+        other = self._configured("old", sha="cd" * 20)
+        self.assertIn("names " + "cd" * 20, corpora.engine_problem(self.corpus, self.entry, "old"))
+        self._configured("foreign", source=self.tmp / "elsewhere")
+        self.assertIn("another source directory", corpora.engine_problem(self.corpus, self.entry, "foreign"))
+        (build / "compile_commands.json").unlink()
+        self.assertIn("no compile_commands.json", corpora.engine_problem(self.corpus, self.entry, "win-dbg"))
+        (other / corpora.ENGINE_STAMP).unlink()
+        self.assertIn("configured outside", corpora.engine_problem(self.corpus, self.entry, "old"))
+
+    def test_the_engine_command_reports_a_missing_engine_as_a_failure(self) -> None:
+        # A lock whose corpus is absent: engine fails (the -Corpus tier's "pinned engine missing").
+        entry = {"id": "engine", "name": "fixture", "url": "file:///absent", "branch": "main", "sha": "ab" * 20,
+                 "purpose": "tests", "presets": {"windows": "win-dbg", "linux": "lin-dbg"}}
+        lock = self.tmp / "lock.json"
+        lock.write_text(json.dumps({"schemaVersion": 1, "corpora": [entry]}), encoding="utf-8")
+        result = run_tool("corpora.py", "--lock", str(lock), "--root", str(self.root), "engine", env=clean_env())
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("engine: " + corpora.engine_preset(entry, None) + ":", result.stdout)
+
+    def test_the_build_lock_is_exclusive_and_named_after_the_pin(self) -> None:
+        path = corpora.build_lock_path(self.root, self.entry)
+        self.assertEqual(path, self.root / ("engine-" + "ab" * 6 + ".build.lock"))
+        with corpora.BuildLock(path, timeout=5):
+            with self.assertRaises(TimeoutError):
+                with corpora.BuildLock(path, timeout=0):
+                    pass
+        with corpora.BuildLock(path, timeout=5):  # Released on exit.
+            pass
+
+    def test_stale_lock_files_are_the_older_pins_only(self) -> None:
+        self.root.mkdir(parents=True)
+        names = ["engine-" + "ab" * 6 + ".build.lock", "engine-" + "ab" * 6 + ".win-dbg.configure.log",
+                 "engine-" + "cd" * 6 + ".build.lock", "engine-" + "cd" * 6 + ".lin-dbg.configure.log",
+                 "other-" + "cd" * 6 + ".build.lock"]
+        for name in names:
+            (self.root / name).write_text("", encoding="utf-8")
+        self.assertEqual([p.name for p in corpora.stale_lock_files(self.root, self.entry)], sorted(names[2:4]))
+
+    def test_new_cpm_packages_are_copied_and_existing_ones_kept(self) -> None:
+        source, target = self.tmp / "source", self.tmp / "target"
+        for package, version in (("fmt", "h1"), ("glm", "h2"), ("glm", "h3")):
+            (source / package / version).mkdir(parents=True)
+            (source / package / version / "f.txt").write_text("new", encoding="utf-8")
+        (target / "glm" / "h2").mkdir(parents=True)
+        (target / "glm" / "h2" / "f.txt").write_text("kept", encoding="utf-8")
+        (target / "fmt" / "h1.partial").mkdir(parents=True)  # An interrupted copy is redone.
+        self.assertEqual(corpora.copy_new_packages(source, target), ["fmt/h1", "glm/h3"])
+        self.assertEqual((target / "glm" / "h2" / "f.txt").read_text(encoding="utf-8"), "kept")
+        self.assertEqual((target / "fmt" / "h1" / "f.txt").read_text(encoding="utf-8"), "new")
+        self.assertFalse((target / "fmt" / "h1.partial").exists())
+        self.assertEqual(corpora.copy_new_packages(source, target), [])
+        self.assertEqual(corpora.copy_new_packages(self.tmp / "absent", target), [])
+
+    def test_a_clone_is_seeded_from_the_shared_cpm_cache(self) -> None:
+        self.assertIsNone(corpora.seed_cpm_cache(self.root, self.entry, None))  # Nothing to copy from.
+        shared = self.root / corpora.CPM_CACHE_NAME / "fmt" / "h1"
+        shared.mkdir(parents=True)
+        (shared / "f.txt").write_text("x", encoding="utf-8")
+        self.assertIn("1 packages copied", corpora.seed_cpm_cache(self.root, self.entry, None))
+        self.assertTrue((self.corpus / ".cache" / "cpm" / "fmt" / "h1" / "f.txt").is_file())
+
+    def test_wsl_paths(self) -> None:
+        # Both separators, on Windows and on Linux (where Path.resolve() would treat these as relative).
+        self.assertEqual(corpora.to_wsl_path(Path("F:/Builds/corpora")), "/mnt/f/Builds/corpora")
+        self.assertEqual(corpora.to_wsl_path(r"F:\Builds\x y"), "/mnt/f/Builds/x y")
+        self.assertEqual(corpora.to_wsl_path("e:\\"), "/mnt/e/")
+        with self.assertRaises(ValueError):
+            corpora.to_wsl_path(r"\\server\share\corpora")
 
 
 class VerifyCorpusTierTest(unittest.TestCase):
@@ -253,6 +355,9 @@ class VerifyCorpusTierTest(unittest.TestCase):
         # The corpus tests get the root from corpora.py, not from a path of their own (FND-10).
         self.assertIn("$env:FROST_CORPORA_ROOT = (& $python -I (Join-Path $PSScriptRoot 'corpora.py') "
                       "--repo $repo root", text)
+        # A missing pinned engine fails the tier (FND-6b): the configured engine is checked first.
+        self.assertIn("--repo $repo engine --configure", text)
+        self.assertIn("pinned engine not configured", text)
 
     def test_verify_sh_has_a_corpus_tier_that_quick_excludes(self) -> None:
         text = (TOOLS / "verify.sh").read_text(encoding="utf-8")
@@ -262,12 +367,17 @@ class VerifyCorpusTierTest(unittest.TestCase):
         self.assertIn("corpora.py", text)
         self.assertIn('FROST_CORPORA_ROOT="$(python3 -I tools/corpora.py --repo "$MIRROR" root)"', text)
         self.assertIn("export FROST_CORPORA_ROOT", text)
+        self.assertIn('tools/corpora.py --repo "$MIRROR" engine --configure', text)
 
     def test_corpus_tests_carry_the_corpus_label(self) -> None:
         text = (REPO / "tests" / "app" / "CMakeLists.txt").read_text(encoding="utf-8")
         match = re.search(r"frost_add_test\(app_corpus_tests\b.*?\)\n", text, re.S)
         self.assertIsNotNone(match, "app_corpus_tests is registered")
         self.assertRegex(match.group(0), r"LABELS[^\n]*\bcorpus\b")
+        # The journeys are corpus tests too (FND-7a).
+        journeys = (REPO / "tests" / "journeys" / "CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertRegex(journeys, r"add_test\(NAME journeys\.j1_cmake\b")
+        self.assertIn('LABELS "corpus;', journeys)
 
 
 if __name__ == "__main__":

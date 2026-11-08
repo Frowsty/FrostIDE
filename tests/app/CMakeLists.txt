@@ -243,3 +243,20 @@ frost_add_test(app_corpus_tests QT
 target_include_directories(app_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_corpus_tests PRIVATE ${_frost_workbench_definitions}
     FROST_CORPUS_FROSTENGINE_SHA="${_frost_engine_sha}" FROST_CORPUS_FROSTENGINE_PRESET="${_frost_engine_preset}")
+
+# The automation endpoint (FND-7a, ADR 0080) in this process over a WorkbenchRig: the session token,
+# the R0 trust criterion through the endpoint, and a small j1 over a C project with this build's
+# cmake, Ninja and compiler (label integration, frost_desktop lock; tags cmake). The endpoint's code
+# is in Debug only (FROST_AUTOMATION_ENDPOINT), so the other configurations test its absence.
+frost_add_test(app_automation_endpoint_tests QT
+    SOURCES automation_endpoint_test.cpp
+    DEPS frost::app frost::build frost::io frost::rpc
+    THIRD_PARTY Qt6::Network
+    LABELS integration cmake)
+target_include_directories(app_automation_endpoint_tests PRIVATE ${FROST_SOURCE_DIR}/tests
+    ${FROST_SOURCE_DIR}/src/app/src)
+target_compile_definitions(app_automation_endpoint_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_TEST_C_COMPILER="${CMAKE_C_COMPILER}" FROST_TEST_CMAKE="${CMAKE_COMMAND}")
+if(FROST_ENABLE_AUTOMATION_ENDPOINT)
+    target_compile_definitions(app_automation_endpoint_tests PRIVATE $<$<CONFIG:Debug>:FROST_AUTOMATION_ENDPOINT=1>)
+endif()

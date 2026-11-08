@@ -135,8 +135,7 @@ TEST(WorkbenchMsBuild, DebugBuildsStopsInspectsStepsAndStops) {
         GTEST_SKIP() << "no Visual Studio with MSBuild";
     auto& fs = frost::io::realFileSystem();
     const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
-    if (!lldb)
-        GTEST_SKIP() << "pinned lldb-dap is unavailable: " << lldb.error().describe();
+    ASSERT_TRUE(lldb.has_value()) << "the pinned lldb-dap is required (FND-6): " << lldb.error().describe();
     WorkDir dir("msbuild-debug", "tiny_sln");
     dir.write("App/main.cpp", "int main() {\n  int value = 41;\n  value += 1;\n  return value == 42 ? 0 : 1;\n}\n");
     RigOptions options;
@@ -221,8 +220,7 @@ TEST(WorkbenchMsBuild, AbortStopsAtTheUserCallSite) {
         GTEST_SKIP() << "no Visual Studio with MSBuild";
     auto& fs = frost::io::realFileSystem();
     const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
-    if (!lldb)
-        GTEST_SKIP() << "pinned lldb-dap is unavailable: " << lldb.error().describe();
+    ASSERT_TRUE(lldb.has_value()) << "the pinned lldb-dap is required (FND-6): " << lldb.error().describe();
     WorkDir dir("msbuild-debug-abort", "tiny_sln");
     dir.write("App/main.cpp", "#include <cstdlib>\n#include <windows.h>\nint main() {\n"
                               "  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);\n"
