@@ -32,6 +32,20 @@ using test::workPath;
 
 const std::string kExe = kWindows ? "lldb-dap.exe" : "lldb-dap";
 
+// The initCommands lldbDapLaunchArguments adds on this platform after `first` (lldb_dap.hpp).
+std::string expectedInitCommands(std::vector<std::string> first) {
+#ifdef __linux__
+    for (std::string& command : lldbDapLibstdcxxCommands()) {
+        first.push_back(std::move(command));
+    }
+#endif
+    rpc::Json list = rpc::Json::array();
+    for (std::string& command : first) {
+        list.push(rpc::Json(std::move(command)));
+    }
+    return list.dump();
+}
+
 // Whether `spec` removes `name` from the inherited environment.
 bool removes(const io::ProcessSpec& spec, std::string_view name) {
     return std::ranges::any_of(spec.environment,
@@ -119,7 +133,7 @@ TEST(LldbDap, LaunchArgumentsCarryTheResolvedRun) {
     EXPECT_EQ(launch.find("args")->dump(), R"(["--flag","two words"])");
     EXPECT_EQ(launch.find("env")->dump(), R"(["FROST_RUN_TEST=1"])");
     ASSERT_NE(launch.find("initCommands"), nullptr) << "the environment is not merged";
-    EXPECT_EQ(launch.find("initCommands")->dump(), R"(["settings set target.inherit-env false"])");
+    EXPECT_EQ(launch.find("initCommands")->dump(), expectedInitCommands({"settings set target.inherit-env false"}));
 
     target.workingDirectory.clear();
     target.inheritEnvironment = true;
@@ -127,7 +141,81 @@ TEST(LldbDap, LaunchArgumentsCarryTheResolvedRun) {
     const rpc::Json defaults = lldbDapLaunchArguments(target);
     EXPECT_EQ(defaults.stringAt("cwd"), workPath("App/x64/Debug")) << "the program's folder";
     EXPECT_EQ(defaults.stringAt("name"), "App.exe");
-    EXPECT_EQ(defaults.find("initCommands"), nullptr);
+    if constexpr (kWindows) {
+        EXPECT_EQ(defaults.find("initCommands"), nullptr);
+    } else {
+        ASSERT_NE(defaults.find("initCommands"), nullptr);
+        EXPECT_EQ(defaults.find("initCommands")->dump(), expectedInitCommands({}));
+    }
+}
+
+TEST(LldbDap, StopOnEntryReachesTheLaunchRequest) {
+    DebugTarget target{.program = workPath("App/App.exe")};
+    target.stopOnEntry = true;
+    EXPECT_EQ(lldbDapLaunchArguments(target).boolAt("stopOnEntry"), true);
+}
+
+TEST(LldbDap, LibstdcxxCommandsCoverThePythonBackedContainersQuietly) {
+    const std::vector<std::string> commands = lldbDapLibstdcxxCommands();
+    ASSERT_FALSE(commands.empty());
+    EXPECT_EQ(commands.front(), "?type category define -e frost-libstdcxx -l c++");
+    for (const std::string_view type : {"std::vector", "std::list", "std::forward_list", "std::deque", "map|set",
+                                        "std::unordered_", "std::variant"}) {
+        EXPECT_TRUE(std::ranges::any_of(commands, [&](const std::string& c) {
+            return c.find(type) != std::string::npos;
+        })) << type;
+    }
+    for (const std::string& command : commands) {
+        EXPECT_TRUE(command.starts_with("?")) << command; // Echoed only when it fails.
+        EXPECT_EQ(command.find("size="), std::string::npos) << "a summary never claims a size";
+    }
+    DebugTarget target{.program = workPath("App/App.exe")};
+    EXPECT_EQ(lldbDapLaunchArguments(target, true).find("initCommands")->dump(), [&] {
+        rpc::Json list = rpc::Json::array();
+        for (const std::string& command : commands) {
+            list.push(rpc::Json(command));
+        }
+        return list.dump();
+    }());
+    EXPECT_EQ(lldbDapLaunchArguments(target, false).find("initCommands"), nullptr);
+}
+
+TEST(LldbDap, PtraceHintExplainsTheYamaPolicy) {
+    EXPECT_EQ(ptraceAttachHint("0\n"), "");
+    EXPECT_EQ(ptraceAttachHint(""), "");
+    EXPECT_EQ(ptraceAttachHint("garbage"), "");
+    const std::string one = ptraceAttachHint("1\n");
+    for (const std::string_view part : {"ptrace_scope is 1", "/proc/sys/kernel/yama/ptrace_scope", "PR_SET_PTRACER",
+                                        "sudo sysctl kernel.yama.ptrace_scope=0", "CAP_SYS_PTRACE", "descendants"}) {
+        EXPECT_NE(one.find(part), std::string::npos) << part << " in " << one;
+    }
+    EXPECT_NE(ptraceAttachHint("2").find("ptrace_scope is 2"), std::string::npos);
+    EXPECT_NE(ptraceAttachHint("3").find("next boot"), std::string::npos);
+}
+
+TEST(LldbDap, PtraceHintReadsTheYamaFile) {
+    ManualClock clock;
+    io::MemFs fs(clock);
+    if constexpr (kWindows) {
+        EXPECT_EQ(ptraceAttachHint(fs), "") << "Windows has no Yama policy";
+    } else {
+        EXPECT_EQ(ptraceAttachHint(fs), "") << "an unreadable file gives no hint";
+        ASSERT_TRUE(fs.createDirectories("/proc/sys/kernel/yama").has_value());
+        ASSERT_TRUE(fs.writeFileAtomic("/proc/sys/kernel/yama/ptrace_scope", "1\n").has_value());
+        EXPECT_EQ(ptraceAttachHint(fs), ptraceAttachHint("1"));
+    }
+}
+
+TEST(LldbDap, SessionOptionsFitThePlatform) {
+    const DebugSessionOptions launch = lldbDapSessionOptions(DebugTargetMode::Launch);
+    const DebugSessionOptions attach = lldbDapSessionOptions(DebugTargetMode::Attach);
+    EXPECT_EQ(launch.adapterId, "lldb-dap");
+    EXPECT_EQ(attach.targetMode, DebugTargetMode::Attach);
+    EXPECT_EQ(launch.msvcExceptions, kWindows);
+    EXPECT_EQ(attach.msvcExceptions, kWindows);
+    EXPECT_EQ(launch.breakOnAbort, kWindows);
+    EXPECT_FALSE(attach.breakOnAbort);
+    EXPECT_TRUE(launch.attachHint.empty());
 }
 
 TEST(LldbDap, TheFactoryStartsLldbDapThroughTheLauncher) {

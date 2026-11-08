@@ -21,6 +21,18 @@
 
 namespace frost::debug::dap {
 
+// One exception breakpoint filter an adapter offers (Capabilities.exceptionBreakpointFilters):
+// lldb-dap 23 offers cpp_throw, cpp_catch, objc_throw and objc_catch.
+struct ExceptionFilter {
+    std::string filter;        // The id setExceptionBreakpoints takes ("cpp_throw").
+    std::string label;         // "C++ Throw".
+    std::string description{}; // The adapter's longer text; may be empty.
+    bool defaultOn = false;    // DAP "default".
+    bool supportsCondition = false;
+
+    friend bool operator==(const ExceptionFilter&, const ExceptionFilter&) = default;
+};
+
 // The capabilities of an adapter (the initialize response's body) that FrostIDE reads.
 struct Capabilities {
     bool supportsConfigurationDoneRequest = false;
@@ -31,9 +43,45 @@ struct Capabilities {
     bool supportsDelayedStackTraceLoading = false;
     bool supportsExceptionInfoRequest = false;
     bool supportsSteppingGranularity = false;
+    bool supportsConditionalBreakpoints = false;
+    bool supportsHitConditionalBreakpoints = false;
+    bool supportsLogPoints = false;
+    bool supportsSetVariable = false;
+    bool supportsRestartRequest = false; // lldb-dap announces it in a later capabilities event.
+    bool supportsDisassembleRequest = false;
+    std::vector<ExceptionFilter> exceptionBreakpointFilters{};
 };
 
 [[nodiscard]] Capabilities parseCapabilities(const rpc::Json& body);
+/*
+ * The capabilities event (DAP 1.71: "the adapter's capabilities changed"): `base` with every
+ * member the event's body.capabilities names replaced; members it leaves out keep their value.
+ * Pure.
+ */
+[[nodiscard]] Capabilities mergeCapabilities(Capabilities base, const rpc::Json& eventBody);
+
+// A function breakpoint as sent with setFunctionBreakpoints (DAP FunctionBreakpoint).
+struct FunctionBreakpoint {
+    std::string name;
+    std::string condition{};
+    std::string hitCondition{};
+
+    friend bool operator==(const FunctionBreakpoint&, const FunctionBreakpoint&) = default;
+};
+
+// {"breakpoints": [{"name": ..., "condition"?: ..., "hitCondition"?: ...}, ...]}; empty strings are
+// left out.
+[[nodiscard]] rpc::Json setFunctionBreakpointsArguments(const std::vector<FunctionBreakpoint>& breakpoints);
+
+// The process event's body: the debuggee's operating-system process id (0 when the adapter does not
+// know it, as lldb-dap says for a launch that failed).
+struct ProcessEvent {
+    std::string name;
+    std::int64_t systemProcessId = 0;
+    std::string startMethod; // "launch", "attach", "attachForSuspendedLaunch".
+};
+
+[[nodiscard]] ProcessEvent parseProcessEvent(const rpc::Json& body);
 
 // A source file: `path` for files on disk; `sourceReference` > 0 for sources the adapter serves.
 struct Source {

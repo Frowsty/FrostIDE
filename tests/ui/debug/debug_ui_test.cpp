@@ -34,6 +34,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
+#include <QTreeWidget>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -956,6 +957,153 @@ TEST_F(DebugUiTest, EvaluateShowsAnExpandableResult) {
         return result.rowCount() == 1 && result.pendingRequests() == 0 &&
                result.data(result.index(0, 1), Qt::DisplayRole).toString() == QStringLiteral("42");
     }));
+    stopSession();
+}
+
+// Every row of the Breakpoints tab's column 1.
+QStringList breakpointRows(DebugToolWindow& window) {
+    QStringList rows;
+    QTreeWidget* tree = window.breakpointsView();
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+        rows << tree->topLevelItem(i)->text(1);
+    }
+    return rows;
+}
+
+TEST_F(DebugUiTest, BreakpointsTabListsOnlyTheAdaptersExceptionFiltersAndSendsThem) {
+    FROST_REQUIRE_OFFSCREEN();
+    DebugToolWindow window(*controller);
+    // Before any session: no made-up filters, and a note saying where they come from.
+    QStringList rows = breakpointRows(window);
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_TRUE(rows.front().contains(QStringLiteral("start a debug session"))) << rows.front().toStdString();
+
+    debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .codeLines = {}, .runsForever = true});
+    adapter.on("initialize", [](const rpc::Json&) {
+        return debug::FakeDebugAdapter::Reply{
+            .body =
+                rpc::Json::object()
+                    .set("supportsConfigurationDoneRequest", true)
+                    .set("supportsFunctionBreakpoints", true)
+                    .set("exceptionBreakpointFilters",
+                         rpc::Json::array({rpc::Json::object().set("filter", "cpp_catch").set("label", "C++ Catch"),
+                                           rpc::Json::object().set("filter", "cpp_throw").set("label", "C++ Throw")}))};
+    });
+    adapter.on("configurationDone", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{}; });
+    ASSERT_TRUE(controller->startTarget(target()).has_value());
+    ASSERT_TRUE(spinUntil([&] { return breakpoints.exceptionFilters().size() == 2; }));
+    rows = breakpointRows(window);
+    EXPECT_TRUE(rows.contains(QStringLiteral("Exception: C++ Throw"))) << rows.join(", ").toStdString();
+    EXPECT_TRUE(rows.contains(QStringLiteral("Exception: C++ Catch")));
+    QTreeWidget* tree = window.breakpointsView();
+    QTreeWidgetItem* throwRow = nullptr;
+    QTreeWidgetItem* catchRow = nullptr;
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* item = tree->topLevelItem(i);
+        if (item->text(1) == QStringLiteral("Exception: C++ Throw"))
+            throwRow = item;
+        if (item->text(1) == QStringLiteral("Exception: C++ Catch"))
+            catchRow = item;
+    }
+    ASSERT_NE(throwRow, nullptr);
+    ASSERT_NE(catchRow, nullptr);
+    if constexpr (debug::test::kWindows) {
+        // lldb cannot stop at an MSVC catch: the row says why and cannot be checked.
+        EXPECT_FALSE(catchRow->flags().testFlag(Qt::ItemIsUserCheckable));
+        EXPECT_TRUE(catchRow->text(4).contains(QStringLiteral("DBG-2b"))) << catchRow->text(4).toStdString();
+    } else {
+        EXPECT_TRUE(catchRow->flags().testFlag(Qt::ItemIsUserCheckable));
+    }
+    throwRow->setCheckState(0, Qt::Checked);
+    EXPECT_EQ(breakpoints.sessionExceptionFilters(), std::vector<std::string>{"cpp_throw"});
+    if constexpr (debug::test::kWindows) {
+        // MSVC: cpp_throw is the runtime's throw function (DebugSession, "Exception filters").
+        // (The launch's first request holds only abort.)
+        EXPECT_TRUE(spinUntil([&] {
+            const auto requests = adapter.argumentsOf("setFunctionBreakpoints");
+            return !requests.empty() &&
+                   std::ranges::any_of(requests.back().find("breakpoints")->items(),
+                                       [](const rpc::Json& b) { return b.stringAt("name") == "_CxxThrowException"; });
+        }));
+    } else {
+        /* Up to three requests go out in order: the empty one at configure, an empty resend when the
+           adapter's filters reach the BreakpointManager, then [cpp_throw] after the row is checked. The
+           count of requests says nothing about which has arrived, so wait until the latest one holds
+           exactly the checked filter. */
+        const auto latestIsCppThrowOnly = [&] {
+            const auto requests = adapter.argumentsOf("setExceptionBreakpoints");
+            if (requests.empty())
+                return false;
+            const rpc::Json* filters = requests.back().find("filters");
+            if (filters == nullptr || filters->size() != 1U)
+                return false;
+            const auto name = filters->items().front().asString();
+            return name && *name == "cpp_throw";
+        };
+        EXPECT_TRUE(spinUntil(latestIsCppThrowOnly)) << "no setExceptionBreakpoints request with [cpp_throw]";
+    }
+    stopSession();
+}
+
+TEST_F(DebugUiTest, FunctionBreakpointsAreListedAndSentToTheSession) {
+    FROST_REQUIRE_OFFSCREEN();
+    DebugToolWindow window(*controller);
+    ASSERT_TRUE(controller->addFunctionBreakpoint(QStringLiteral(" frost_target ")).has_value());
+    EXPECT_TRUE(breakpointRows(window).contains(QStringLiteral("Function: frost_target")));
+    debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .codeLines = {}, .runsForever = true});
+    adapter.on("initialize", [](const rpc::Json&) {
+        return debug::FakeDebugAdapter::Reply{.body = rpc::Json::object()
+                                                          .set("supportsConfigurationDoneRequest", true)
+                                                          .set("supportsFunctionBreakpoints", true)};
+    });
+    adapter.on("configurationDone", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{}; });
+    adapter.on("setFunctionBreakpoints", [](const rpc::Json& arguments) {
+        rpc::Json answers = rpc::Json::array();
+        for (std::size_t i = 0; i < arguments.find("breakpoints")->size(); ++i) {
+            answers.push(rpc::Json::object().set("id", static_cast<std::int64_t>(i + 1)).set("verified", i == 0));
+        }
+        return debug::FakeDebugAdapter::Reply{.body = rpc::Json::object().set("breakpoints", std::move(answers))};
+    });
+    ASSERT_TRUE(controller->startTarget(target()).has_value());
+    ASSERT_TRUE(spinUntil([&] {
+        const auto functions = breakpoints.functionBreakpoints();
+        return !functions.empty() && functions.front().status == debug::BreakpointStatus::Verified;
+    }));
+    const rpc::Json first = adapter.argumentsOf("setFunctionBreakpoints").front();
+    EXPECT_EQ(first.find("breakpoints")->items().front().stringAt("name"), "frost_target");
+    stopSession();
+}
+
+TEST_F(DebugUiTest, InlineValuesShowTheFramesOwnVariablesOnly) {
+    FROST_REQUIRE_OFFSCREEN();
+    // Line 10 names x and y; the frame has a local x, and y only as a member of p (fake program).
+    std::string text;
+    for (int line = 1; line <= 30; ++line) {
+        text += line == 10 ? std::string("int z = x + y;\n") : "line " + std::to_string(line) + "\n";
+    }
+    test::HarnessOptions options;
+    options.path = source;
+    editor = std::make_unique<test::EditorHarness>(text, options);
+    controller->attachEditor(editor->view.get());
+    ASSERT_TRUE(breakpoints.add(source, 10).has_value());
+    startAndStop(debug::FakeProgram{.codeLines = {10}});
+    std::optional<debug::ScopeList> scopes;
+    controller->scopes(controller->selectedFrame()->id, [&](Result<debug::ScopeList> list) { scopes = list.value(); });
+    ASSERT_TRUE(spinUntil([&] { return scopes.has_value(); }));
+    std::optional<debug::VariableList> locals;
+    controller->variables(scopes->front().variablesReference, 0, 0,
+                          [&](Result<debug::VariableList> list) { locals = list.value(); });
+    ASSERT_TRUE(spinUntil([&] { return locals.has_value(); }));
+    const auto p = std::ranges::find(*locals, std::string("p"), &debug::dap::Variable::name);
+    ASSERT_NE(p, locals->end());
+    std::optional<debug::VariableList> members;
+    controller->variables(p->variablesReference, 0, 0,
+                          [&](Result<debug::VariableList> list) { members = list.value(); });
+    ASSERT_TRUE(spinUntil([&] { return members.has_value(); }));
+    const auto& values = editor->view->inlineDebuggerValues();
+    ASSERT_EQ(values.size(), 1U);
+    EXPECT_EQ(values.front().line, LineIndex{9});
+    EXPECT_EQ(values.front().text, "x = 42") << "p's member y is not the y on this line";
     stopSession();
 }
 

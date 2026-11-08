@@ -13,12 +13,25 @@
  * Unverified (it did not, with the adapter's message, such as "No code is generated for this
  * line"). The gutter draws Verified as a filled red dot and the others as a hollow grey one.
  *
- * Persistence. The personal scope file's "breakpoints" member, one breakpoint per line:
+ * Function breakpoints and exception filters (DBG-2a). Function breakpoints (by function name, with
+ * a condition and a hit condition) share the id space, enabling, muting and statuses of line
+ * breakpoints. Exception filters are the adapter's: setAvailableExceptionFilters records the list a
+ * session's capabilities report (lldb-dap: cpp_throw, cpp_catch, ...) with each filter's
+ * availability, keeping what the user enabled; until a session has reported them the list holds only
+ * what was persisted (the labels came from an earlier session's capabilities), never a filter
+ * FrostIDE made up.
+ *
+ * Persistence. The personal scope file's "breakpoints", "functionBreakpoints" and
+ * "exceptionBreakpoints" members:
  *     "breakpoints": [
- *       {"file": "src/main.cpp", "line": 12}
- *     ]
- * Paths under the root are stored relative to it with '/', others absolute. Every other byte of
- * the file is kept (SettingsDocument); an empty list removes the member.
+ *       {"file": "src/main.cpp", "line": 12, "condition": "i == 4", "hitCondition": "3",
+ *        "logMessage": "i={i}", "enabled": false}
+ *     ],
+ *     "functionBreakpoints": [{"name": "frost_function_target", "condition": "value > 1"}],
+ *     "exceptionBreakpoints": [{"filter": "cpp_throw", "label": "C++ Throw", "enabled": true}]
+ * (optional members only when set). Paths under the root are stored relative to it with '/', others
+ * absolute. Every other byte of the file is kept (SettingsDocument); an empty list removes its
+ * member.
  *
  * Moving with edits. DocumentBreakpointTracker holds one text anchor (Bias::Right) at the start of
  * each breakpoint's line, so inserting lines above moves it down, typing at the line start keeps it,
@@ -69,10 +82,34 @@ struct LineBreakpoint {
     friend bool operator==(const LineBreakpoint&, const LineBreakpoint&) = default;
 };
 
+struct FunctionBreakpointEntry {
+    BreakpointId id = 0;
+    std::string name;
+    BreakpointStatus status = BreakpointStatus::Unknown;
+    std::string message;
+    bool enabled = true;
+    std::string condition{};
+    std::string hitCondition{};
+
+    friend bool operator==(const FunctionBreakpointEntry&, const FunctionBreakpointEntry&) = default;
+};
+
+// One exception filter as the Breakpoints window lists it (header comment).
+struct ExceptionFilterEntry {
+    std::string filter; // "cpp_throw".
+    std::string label;  // "C++ Throw", the adapter's.
+    bool enabled = false;
+    std::string unavailable{}; // Why it cannot stop in this session's programs; "" when it can.
+
+    friend bool operator==(const ExceptionFilterEntry&, const ExceptionFilterEntry&) = default;
+};
+
 class BreakpointManager {
 public:
-    // What changed in a file: its lines (added, removed, moved) or only statuses.
-    enum class Change : std::uint8_t { Lines, Status };
+    // What changed: a file's lines (added, removed, moved), only statuses (a function breakpoint's
+    // with an empty path), the function breakpoints or the exception filters (these two with an
+    // empty path).
+    enum class Change : std::uint8_t { Lines, Status, Functions, Exceptions };
     using Listener = std::function<void(std::string_view path, Change change)>;
 
     explicit BreakpointManager(io::PathStyle style = io::kNativePathStyle) noexcept : m_style(style) {}
@@ -82,13 +119,38 @@ public:
     [[nodiscard]] Result<std::optional<BreakpointId>> toggle(std::string_view path, std::int64_t line);
     // Adds a breakpoint (the existing one's id when the line has one). Errors: as toggle().
     [[nodiscard]] Result<BreakpointId> add(std::string_view path, std::int64_t line);
-    // Removes a breakpoint; false when there is none with `id`.
+    // Removes a line or function breakpoint; false when there is none with `id`.
     bool remove(BreakpointId id);
-    // Removes every breakpoint.
+    // Removes every line and function breakpoint (exception filters stay).
     void clear();
 
+    // A line or function breakpoint.
     bool setEnabled(BreakpointId id, bool enabled);
+    // A line breakpoint's properties, or a function breakpoint's (its logMessage must be empty: DAP
+    // function breakpoints have none).
     bool setProperties(BreakpointId id, std::string condition, std::string hitCondition, std::string logMessage);
+
+    // Adds a function breakpoint (the existing one's id for a name that has one). Errors:
+    // InvalidArgument (an empty name or one with a line break).
+    [[nodiscard]] Result<BreakpointId> addFunction(std::string name);
+    [[nodiscard]] std::optional<FunctionBreakpointEntry> findFunction(BreakpointId id) const;
+    // By id.
+    [[nodiscard]] std::vector<FunctionBreakpointEntry> functionBreakpoints() const;
+    // The enabled function breakpoints for a session; none while muted.
+    [[nodiscard]] std::vector<FunctionBreakpointLine> sessionFunctions() const;
+
+    /*
+     * Records the filters a session's capabilities report (header comment). `unavailable(filter)`
+     * says why one cannot work in this session ("" when it can). Filters the adapter no longer
+     * reports are dropped; enabled flags of the others are kept.
+     */
+    void setAvailableExceptionFilters(const std::vector<dap::ExceptionFilter>& filters,
+                                      const std::function<std::string(std::string_view)>& unavailable = {});
+    // Enables or disables a known filter; false when `filter` is unknown or unavailable (enabling).
+    bool setExceptionFilterEnabled(std::string_view filter, bool enabled);
+    [[nodiscard]] std::vector<ExceptionFilterEntry> exceptionFilters() const { return m_exceptionFilters; }
+    // The enabled, available filter ids for a session; none while muted.
+    [[nodiscard]] std::vector<std::string> sessionExceptionFilters() const;
     [[nodiscard]] bool muted() const noexcept { return m_muted; }
     void setMuted(bool muted);
 
@@ -138,6 +200,8 @@ private:
     io::PathStyle m_style;
     BreakpointId m_nextId = 1;
     std::map<BreakpointId, LineBreakpoint> m_byId;
+    std::map<BreakpointId, FunctionBreakpointEntry> m_functions;
+    std::vector<ExceptionFilterEntry> m_exceptionFilters;
     std::map<std::string, std::string, std::less<>> m_displayPath; // key -> path as first given.
     std::uint64_t m_nextToken = 1;
     std::map<std::uint64_t, Listener> m_listeners;
