@@ -2,9 +2,9 @@
 //
 // TestResultsTree (RUN-7, PLAN.md Appendix C R2): the Unit Tests window's minimal results tree. It
 // lists the tests ctest discovered, grouped by their program, and shows for each the outcome and
-// duration the test runner parsed from ctest's and Google Test's own output (frost/run/
-// test_model.hpp), with a Google Test program's cases below it. It only displays: it never decides
-// an outcome. A test without a result shows an empty status (nothing ran, so nothing is claimed);
+// duration the test runner parsed from ctest's, Google Test's and doctest's own output (frost/run/
+// test_model.hpp), with a Google Test program's or a doctest program's cases below it (RUN-8). It only displays: it
+// never decides an outcome. A test without a result shows an empty status (nothing ran, so nothing is claimed);
 // "Pending" and "Running" are the window's own state while a run goes on, not results.
 //
 /*
@@ -22,6 +22,7 @@
  */
 #pragma once
 
+#include "frost/run/doctest_parsers.hpp"
 #include "frost/run/test_model.hpp"
 #include "frost/run/test_runner.hpp"
 
@@ -31,6 +32,7 @@
 #include <cstddef>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace frost::ui {
@@ -51,6 +53,14 @@ public:
     void setTests(std::vector<run::DiscoveredTest> tests);
     // Lists the cases `--gtest_list_tests` gave for `test` below it (without results).
     void setGTestCases(const std::string& test, const std::vector<run::GTestCase>& cases);
+    /*
+     * Lists the cases doctest's --list-test-cases gave for each test of `listings` (test name ->
+     * cases) below it, without results; a later result's cases are shown on these rows (by name).
+     * Rebuilds the tree once for all of them: O(rows). FrostEngine lists ~650 suites with ~8500 cases.
+     */
+    void setDoctestCases(std::vector<std::pair<std::string, std::vector<run::DoctestCase>>> listings);
+    // The doctest cases listed for `test`, or null when none were.
+    [[nodiscard]] const std::vector<run::DoctestCase>* doctestCases(const std::string& test) const;
     // Marks `names` Pending: a run of them was started.
     void markPending(const std::vector<std::string>& names);
     // ctest started `name`.
@@ -66,6 +76,9 @@ public:
     [[nodiscard]] std::vector<std::string> testNames() const;
     // The tests under the selected items (a group stands for its tests, a case for its test).
     [[nodiscard]] std::vector<std::string> selectedTestNames() const;
+    // The selected case rows as (test, case) pairs, in the tree's order; test and group rows are not
+    // in it.
+    [[nodiscard]] std::vector<std::pair<std::string, std::string>> selectedCases() const;
     // The tests whose last result counts as a failure (run::countsAsFailure).
     [[nodiscard]] std::vector<std::string> failedTestNames() const;
     // The discovered test, or null.
@@ -102,6 +115,7 @@ private:
     std::vector<std::string> m_unlisted; // Named by a report, not by the last discovery.
     std::map<std::string, run::TestResult> m_results;
     std::map<std::string, std::vector<run::GTestCase>> m_listedCases;
+    std::map<std::string, std::vector<run::DoctestCase>> m_doctestCases;
     std::map<std::string, QString> m_state; // "Pending" / "Running" while a run goes on.
     std::map<std::string, QTreeWidgetItem*> m_items;
     std::map<QString, QTreeWidgetItem*> m_groups;

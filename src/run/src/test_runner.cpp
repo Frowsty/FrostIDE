@@ -2,7 +2,7 @@
 //
 // TestRunner (test_runner.hpp): ctest and Google Test programs run through build::RunSession (the
 // process tree contained and ended on cancel), their output handed to the parsers in
-// ctest_parsers.cpp and gtest_parsers.cpp. This file builds no result itself.
+// ctest_parsers.cpp, gtest_parsers.cpp and doctest_parsers.cpp. This file builds no result itself.
 
 #include "frost/run/test_runner.hpp"
 
@@ -140,6 +140,16 @@ struct TestRunner::State {
         auto temporary = dir ? io::joinPath(*dir, "Temporary") : dir;
         auto path = temporary ? io::joinPath(*temporary, name) : temporary;
         return path.value_or(std::string{});
+    }
+
+    // Creates <build>/Testing/Temporary (a doctest program cannot write its --out file into a
+    // directory that does not exist; ctest creates it for its own runs only).
+    Result<void> makeScratchDirectory(const CTestSetup& setup) const {
+        auto dir = io::joinPath(setup.buildDirectory, "Testing");
+        auto temporary = dir ? io::joinPath(*dir, "Temporary") : dir;
+        if (!temporary)
+            return std::unexpected(temporary.error());
+        return fs.createDirectories(*temporary);
     }
 };
 
@@ -497,6 +507,14 @@ Result<void> TestRunner::run(const CTestSetup& setup, std::vector<DiscoveredTest
                 }
             }
             attachGTestReports(*results, tests, gtestReports);
+            // A failed doctest program's failing cases, from doctest's console output (header comment).
+            for (TestResult& result : *results) {
+                if (result.outcome != TestOutcome::Failed || !result.cases.empty())
+                    continue;
+                const auto test = std::ranges::find(tests, result.name, &DiscoveredTest::name);
+                if (test != tests.end() && isDoctestCommand(test->command))
+                    result.cases = parseDoctestConsoleFailures(result.output);
+            }
             report.results = std::move(*results);
             end();
         });
@@ -533,6 +551,182 @@ Result<void> TestRunner::listGTestCases(const CTestSetup& setup, const Discovere
                         if (done)
                             done(std::move(result));
                     });
+}
+
+namespace {
+
+// The process of a doctest job for `test` (test_runner.hpp, listDoctestCases and runDoctest): its
+// program in its working directory (ctest's build directory when it has none), the setup's
+// environment and then its ENVIRONMENT property.
+io::ProcessSpec doctestSpec(const CTestSetup& setup, const DiscoveredTest& test, std::vector<std::string> arguments) {
+    io::ProcessSpec spec;
+    spec.executable = test.command.front();
+    spec.arguments = std::move(arguments);
+    spec.workingDirectory = !test.workingDirectory.empty() && io::isAbsolutePath(test.workingDirectory)
+                                ? test.workingDirectory
+                                : setup.buildDirectory;
+    spec.environment = setup.environment;
+    for (const std::string& entry : test.environment) {
+        const auto equals = entry.find('=');
+        if (equals == std::string::npos || equals == 0)
+            continue;
+        spec.environment.emplace_back(entry.substr(0, equals), entry.substr(equals + 1));
+    }
+    return spec;
+}
+
+Result<void> checkProgram(const DiscoveredTest& test) {
+    if (test.command.empty() || !io::isAbsolutePath(test.command.front()))
+        return fail(ErrorCode::InvalidArgument, std::format("the test '{}' has no program to run", test.name));
+    return {};
+}
+
+} // namespace
+
+Result<void> TestRunner::listDoctestCases(const CTestSetup& setup, std::vector<DiscoveredTest> tests,
+                                          std::function<void(std::vector<DoctestListing>)> done) {
+    if (auto valid = checkSetup(setup); !valid)
+        return valid;
+    for (const DiscoveredTest& test : tests)
+        if (auto valid = checkProgram(test); !valid)
+            return valid;
+    return startJob(
+        *m_state, m_state,
+        [setup, tests = std::move(tests), done = std::move(done)](
+            State& state, std::stop_token token, std::uint64_t job, const std::function<void()>& finish) {
+            std::vector<DoctestListing> listings(tests.size());
+            std::atomic<std::size_t> next{0};
+            if (auto made = state.makeScratchDirectory(setup); !made) {
+                for (std::size_t i = 0; i < tests.size(); ++i)
+                    listings[i] = DoctestListing{tests[i].name, std::unexpected(made.error())};
+                next = tests.size();
+            }
+            // Each worker takes the next test until none is left; a listing is one short process.
+            const auto work = [&](std::size_t worker) {
+                for (std::size_t i = next++; i < tests.size(); i = next++) {
+                    const DiscoveredTest& test = tests[i];
+                    DoctestListing& listing = listings[i];
+                    listing.test = test.name;
+                    if (token.stop_requested()) {
+                        listing.cases = fail(ErrorCode::Cancelled, "listing the doctest cases was stopped");
+                        continue;
+                    }
+                    const std::string reportPath =
+                        state.scratchPath(setup, job, std::format("doctest-list-{}-{}.xml", worker, i));
+                    if (reportPath.empty()) {
+                        listing.cases =
+                            fail(ErrorCode::InvalidArgument, "the build directory cannot hold doctest's case list");
+                        continue;
+                    }
+                    auto outcome = state.runProcess(
+                        doctestSpec(setup, test, doctestListArguments(test.command, reportPath)), token, {});
+                    if (!outcome) {
+                        listing.cases = std::unexpected(std::move(outcome.error()));
+                    } else if (outcome->exit.stopped || token.stop_requested()) {
+                        listing.cases = fail(ErrorCode::Cancelled, "listing the doctest cases was stopped");
+                    } else if (outcome->exit.exitCode != 0 || outcome->exit.waitFailed) {
+                        listing.cases =
+                            fail(ErrorCode::IoError,
+                                 toolFailure(test.command.front(), outcome->exit.exitCode, outcome->out, outcome->err));
+                    } else if (auto text = state.fs.readFile(reportPath); !text) {
+                        listing.cases =
+                            fail(ErrorCode::Corrupt, toolFailure(test.command.front(), 0, outcome->out, outcome->err) +
+                                                         "\n(it wrote no doctest case list)");
+                    } else {
+                        listing.cases = parseDoctestCaseList(*text);
+                    }
+                    static_cast<void>(state.fs.remove(reportPath));
+                }
+            };
+            {
+                const std::size_t workers = std::min(kDoctestListJobs, std::max<std::size_t>(tests.size(), 1));
+                std::vector<std::jthread> pool;
+                for (std::size_t w = 1; w < workers; ++w)
+                    pool.emplace_back(work, w);
+                work(0);
+            } // Joins the pool.
+            finish();
+            if (done)
+                done(std::move(listings));
+        });
+}
+
+Result<void> TestRunner::runDoctest(const CTestSetup& setup, std::vector<DoctestRunRequest> requests,
+                                    TestRunHandlers handlers) {
+    if (auto valid = checkSetup(setup); !valid)
+        return valid;
+    for (const DoctestRunRequest& request : requests)
+        if (auto valid = checkProgram(request.test); !valid)
+            return valid;
+    return startJob(
+        *m_state, m_state,
+        [setup, requests = std::move(requests), handlers = std::move(handlers)](
+            State& state, std::stop_token token, std::uint64_t job, const std::function<void()>& finish) {
+            TestRunReport report;
+            std::vector<std::string> errors;
+            if (auto made = state.makeScratchDirectory(setup); !made) {
+                report.error = made.error();
+                finish();
+                if (handlers.onFinished)
+                    handlers.onFinished(report);
+                return;
+            }
+            for (std::size_t i = 0; i < requests.size(); ++i) {
+                const DoctestRunRequest& request = requests[i];
+                if (token.stop_requested()) {
+                    report.stopped = true;
+                    break;
+                }
+                const std::string reportPath = state.scratchPath(setup, job, std::format("doctest-run-{}.xml", i));
+                if (reportPath.empty()) {
+                    errors.emplace_back("the build directory cannot hold doctest's report");
+                    break;
+                }
+                io::ProcessSpec spec = doctestSpec(
+                    setup, request.test, doctestRunArguments(request.test.command, request.cases, reportPath));
+                if (i == 0 || report.commandLine.empty())
+                    report.commandLine = programDisplay(spec);
+                if (handlers.onTestStarted)
+                    handlers.onTestStarted(request.test.name);
+                auto outcome = state.runProcess(std::move(spec), token, handlers.onOutput);
+                if (!outcome) {
+                    errors.push_back(std::format("{}: {}", request.test.name, outcome.error().describe()));
+                    continue;
+                }
+                DoctestProcessEnd processEnd;
+                processEnd.exitCode = outcome->exit.exitCode;
+                processEnd.stopped = outcome->exit.stopped || token.stop_requested();
+                processEnd.duration = std::chrono::duration_cast<std::chrono::microseconds>(outcome->exit.duration);
+                processEnd.output = outcome->err.empty() ? outcome->out : outcome->out + outcome->err;
+                auto text = state.fs.readFile(reportPath);
+                static_cast<void>(state.fs.remove(reportPath));
+                const Result<DoctestReport> parsed =
+                    text ? parseDoctestXmlReport(*text) : Result<DoctestReport>(fail(ErrorCode::NotFound, "no report"));
+                if (auto result = doctestRunResult(request.test.name, parsed, processEnd)) {
+                    if (handlers.onTestFinished)
+                        handlers.onTestFinished(*result);
+                    report.results.push_back(std::move(*result));
+                } else if (!processEnd.stopped) {
+                    errors.push_back(std::format(
+                        "{}: {}", request.test.name,
+                        toolFailure(request.test.command.front(), outcome->exit.exitCode, outcome->out, outcome->err) +
+                            (text ? "\n(" + parsed.error().message() + ")" : "\n(it wrote no doctest report)")));
+                }
+                if (processEnd.stopped) {
+                    report.stopped = true;
+                    break;
+                }
+            }
+            if (!errors.empty()) {
+                std::string message;
+                for (const std::string& error : errors)
+                    message += (message.empty() ? "" : "\n") + error;
+                report.error = Error{ErrorCode::IoError, std::move(message)};
+            }
+            finish();
+            if (handlers.onFinished)
+                handlers.onFinished(report);
+        });
 }
 
 void TestRunner::cancel() {

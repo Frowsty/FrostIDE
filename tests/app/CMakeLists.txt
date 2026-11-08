@@ -239,7 +239,7 @@ if(NOT _frost_engine_sha MATCHES "^[0-9a-f]+$")
     message(FATAL_ERROR "${_frost_corpora_lock_file} pins no frostengine corpus")
 endif()
 frost_add_test(app_corpus_tests QT
-    SOURCES corpus_test.cpp corpus_dirs_lua_test.cpp corpus_unit_tests_test.cpp
+    SOURCES corpus_test.cpp corpus_dirs_lua_test.cpp corpus_unit_tests_test.cpp corpus_doctest_test.cpp
     DEPS frost::app frost::build frost::diag frost::lang frost::io frost::vcs frost::search frost::ui_nav
          frost::project frost::document frost::ui_run
     LABELS integration corpus)

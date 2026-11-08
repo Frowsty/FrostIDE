@@ -14,6 +14,13 @@
  *                    [--stop-on-failure] --no-tests=error --output-junit <report>
  *                    [--tests-from-file <list> | -R ^(<escaped names>)$]
  *   list:      <program> --gtest_list_tests   (in the test's working directory)
+ *   doctest:   <test's command> --list-test-cases --reporters=xml --out=<report>
+ *              <test's command> [--test-case=<names>] --reporters=xml --duration=true
+ *                    --no-skipped-summary=true --out=<report>   (RUN-8, doctest_parsers.hpp)
+ *
+ * A failed ctest test whose command runs a doctest program (isDoctestCommand) gets the cases that
+ * doctest's console output in ctest's report names as failed (parseDoctestConsoleFailures), with
+ * their failure locations; passing cases have no result there (only a direct doctest run gives one).
  *
  * A run of some tests names them exactly: --tests-from-file with ctest 3.29+ (one name per line),
  * else an anchored -R of the names with every regular-expression character escaped. Each run
@@ -46,6 +53,7 @@
 #include "frost/project/cmake_file_api.hpp"
 #include "frost/project/cmake_presets.hpp"
 #include "frost/project/cmake_profile.hpp"
+#include "frost/run/doctest_parsers.hpp"
 #include "frost/run/test_model.hpp"
 
 #include <functional>
@@ -157,6 +165,39 @@ public:
      */
     [[nodiscard]] Result<void> listGTestCases(const CTestSetup& setup, const DiscoveredTest& test,
                                               std::function<void(Result<std::vector<GTestCase>>)> done);
+
+    /*
+     * Lists the doctest cases of each of `tests` (RUN-8, doctest_parsers.hpp): its own command with
+     * doctest's --list-test-cases and XML reporter (doctestListArguments), in its working directory,
+     * with the setup's environment and its ENVIRONMENT, up to kDoctestListJobs at a time. `done` gets
+     * one listing per test, in `tests`' order: its cases, or how listing it failed (the launcher's
+     * error, IoError for a non-zero exit, Corrupt for a report that is no case list, Cancelled).
+     * Errors here: Busy, InvalidArgument (a test without an absolute program).
+     */
+    struct DoctestListing {
+        std::string test{};
+        Result<std::vector<DoctestCase>> cases = std::vector<DoctestCase>{};
+    };
+    static constexpr std::size_t kDoctestListJobs = 4;
+    [[nodiscard]] Result<void> listDoctestCases(const CTestSetup& setup, std::vector<DiscoveredTest> tests,
+                                                std::function<void(std::vector<DoctestListing>)> done);
+
+    /*
+     * Runs doctest cases directly, without ctest (RUN-8): for each request, its test's command with
+     * doctestRunArguments (the request's cases, all of the test's when empty), one process at a
+     * time, in the test's working directory with the setup's environment and its ENVIRONMENT. Each
+     * finished process gives its test's result (doctestRunResult: the cases from doctest's XML
+     * report, the run time measured from launch to exit) through onTestFinished and in the report.
+     * A process that writes no report gives no result, and `error` names it (the other tests keep
+     * theirs). Stopping ends the running process; the report then has stopped set and the results so
+     * far. Errors here: Busy, InvalidArgument (a request whose test has no absolute program).
+     */
+    struct DoctestRunRequest {
+        DiscoveredTest test{};
+        std::vector<std::string> cases{};
+    };
+    [[nodiscard]] Result<void> runDoctest(const CTestSetup& setup, std::vector<DoctestRunRequest> requests,
+                                          TestRunHandlers handlers);
 
     // Ends the current job's process tree; the job then finishes as stopped/Cancelled. Idempotent.
     void cancel();

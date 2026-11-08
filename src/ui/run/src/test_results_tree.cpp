@@ -7,6 +7,7 @@
 #include "frost/run/gtest_parsers.hpp"
 
 #include <QHeaderView>
+#include <QTreeWidgetItemIterator>
 
 #include <algorithm>
 #include <set>
@@ -65,6 +66,7 @@ void TestResultsTree::setTests(std::vector<run::DiscoveredTest> tests) {
     m_unlisted.clear();
     m_results.clear();
     m_listedCases.clear();
+    m_doctestCases.clear();
     m_state.clear();
     rebuild();
 }
@@ -111,13 +113,18 @@ void TestResultsTree::rebuild() {
     m_groups.clear();
     const QString filter = m_filter;
     const auto matches = [&filter](const run::DiscoveredTest& test, const run::TestResult* result,
-                                   const std::vector<run::GTestCase>* listed) {
+                                   const std::vector<run::GTestCase>* listed,
+                                   const std::vector<run::DoctestCase>* doctest) {
         if (filter.isEmpty())
             return true;
         if (qs(test.name).contains(filter, Qt::CaseInsensitive) ||
             programGroup(test).contains(filter, Qt::CaseInsensitive))
             return true;
         if (result && std::ranges::any_of(result->cases, [&](const run::TestResult& c) {
+                return qs(c.name).contains(filter, Qt::CaseInsensitive);
+            }))
+            return true;
+        if (doctest && std::ranges::any_of(*doctest, [&](const run::DoctestCase& c) {
                 return qs(c.name).contains(filter, Qt::CaseInsensitive);
             }))
             return true;
@@ -128,10 +135,28 @@ void TestResultsTree::rebuild() {
     for (const run::DiscoveredTest& test : m_tests) {
         const auto result = m_results.find(test.name);
         const auto listed = m_listedCases.find(test.name);
+        const auto doctest = m_doctestCases.find(test.name);
         if (!matches(test, result == m_results.end() ? nullptr : &result->second,
-                     listed == m_listedCases.end() ? nullptr : &listed->second))
+                     listed == m_listedCases.end() ? nullptr : &listed->second,
+                     doctest == m_doctestCases.end() ? nullptr : &doctest->second))
             continue;
         QTreeWidgetItem* item = addTestItem(test);
+        if (doctest != m_doctestCases.end()) {
+            std::set<std::string> shown; // doctest allows one name in several files; one row per name.
+            for (const run::DoctestCase& testCase : doctest->second) {
+                if (!shown.insert(testCase.name).second)
+                    continue;
+                auto* child = new QTreeWidgetItem(item, {qs(testCase.name)});
+                child->setData(0, kTestNameRole, qs(test.name));
+                child->setData(0, kCaseNameRole, qs(testCase.name));
+                QStringList tip;
+                if (!testCase.suite.empty())
+                    tip << QStringLiteral("Test suite: %1").arg(qs(testCase.suite));
+                if (testCase.location)
+                    tip << QStringLiteral("%1:%2").arg(qs(testCase.location->file)).arg(testCase.location->line);
+                child->setToolTip(NameColumn, tip.join(QLatin1Char('\n')));
+            }
+        }
         if (listed != m_listedCases.end()) {
             for (const run::GTestCase& testCase : listed->second) {
                 auto* child = new QTreeWidgetItem(item, {qs(testCase.fullName())});
@@ -185,6 +210,17 @@ void TestResultsTree::showResult(QTreeWidgetItem* item, const run::TestResult& r
 void TestResultsTree::setGTestCases(const std::string& test, const std::vector<run::GTestCase>& cases) {
     m_listedCases[test] = cases;
     rebuild();
+}
+
+void TestResultsTree::setDoctestCases(std::vector<std::pair<std::string, std::vector<run::DoctestCase>>> listings) {
+    for (auto& [test, cases] : listings)
+        m_doctestCases[test] = std::move(cases);
+    rebuild();
+}
+
+const std::vector<run::DoctestCase>* TestResultsTree::doctestCases(const std::string& test) const {
+    const auto found = m_doctestCases.find(test);
+    return found == m_doctestCases.end() ? nullptr : &found->second;
 }
 
 void TestResultsTree::markPending(const std::vector<std::string>& names) {
@@ -266,6 +302,17 @@ std::vector<std::string> TestResultsTree::selectedTestNames() const {
     for (const auto& name : testNames())
         if (chosen.contains(name))
             out.push_back(name);
+    return out;
+}
+
+std::vector<std::pair<std::string, std::string>> TestResultsTree::selectedCases() const {
+    std::vector<std::pair<std::string, std::string>> out;
+    for (QTreeWidgetItemIterator it(const_cast<TestResultsTree*>(this)); *it; ++it) {
+        const QTreeWidgetItem* item = *it;
+        const QString caseName = item->data(0, kCaseNameRole).toString();
+        if (item->isSelected() && !caseName.isEmpty())
+            out.emplace_back(item->data(0, kTestNameRole).toString().toStdString(), caseName.toStdString());
+    }
     return out;
 }
 

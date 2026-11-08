@@ -49,6 +49,9 @@ struct DiscoveredTest {
     std::optional<TestLocation> definition{};  // DEF_SOURCE_LINE (gtest_discover_tests sets it).
     std::optional<TestLocation> declaration{}; // The add_test call (the backtrace's innermost frame).
     std::string gtestFilter{};                 // The --gtest_filter=... value of the command; "" without one.
+    // ENVIRONMENT, as ctest printed it ("NAME=value" each, in order); the doctest runner (RUN-8)
+    // sets it when it starts the test's program itself.
+    std::vector<std::string> environment{};
 
     friend bool operator==(const DiscoveredTest&, const DiscoveredTest&) = default;
 };

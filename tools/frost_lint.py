@@ -226,7 +226,9 @@ class ResultType:
 # that change goes through the independent review (ADR 0078 decision 4). Types are matched by
 # name in C, C++ and C# code outside tests/** (test doubles are welcome there, decision 2).
 # Names declared in several modules (Diagnostic) list every module's own parser.
-_RUN7_TEST_PARSERS = ("src/run/src/ctest_parsers.cpp", "src/run/src/gtest_parsers.cpp")
+_RUN7_TEST_PARSERS = ("src/run/src/ctest_parsers.cpp", "src/run/src/gtest_parsers.cpp",
+                      # RUN-8: doctest's XML case list and run report and its console failure blocks.
+                      "src/run/src/doctest_parsers.cpp")
 
 RESULT_TYPES: tuple[ResultType, ...] = (
     # Test outcomes and test discovery. RUN-7 (gtest, CTest), RUN-8 (doctest), RUN-10 (the Unit
@@ -242,6 +244,7 @@ RESULT_TYPES: tuple[ResultType, ...] = (
     ResultType("TestFailure", "test outcome", _RUN7_TEST_PARSERS),
     ResultType("DiscoveredTest", "test discovery", _RUN7_TEST_PARSERS),
     ResultType("GTestCase", "test discovery", _RUN7_TEST_PARSERS),
+    ResultType("DoctestCase", "test discovery", _RUN7_TEST_PARSERS),
     # Packages: PackageReference items read from the user's own .csproj are file contents, not
     # invented; a package catalogue needs a real feed (LTR-7).
     ResultType("NuGetPackageEntry", "package", ("src/app/src/project_properties_xml.cpp",)),

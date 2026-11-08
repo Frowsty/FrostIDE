@@ -144,6 +144,14 @@ Result<std::vector<DiscoveredTest>> parseCTestShowOnly(std::string_view output) 
                     } else if (const std::string* text = value->asString()) {
                         test.labels.push_back(*text);
                     }
+                } else if (propertyName == "ENVIRONMENT") {
+                    if (value->isArray()) {
+                        for (const rpc::Json& entry : value->items())
+                            if (const std::string* text = entry.asString())
+                                test.environment.push_back(*text);
+                    } else if (const std::string* text = value->asString()) {
+                        test.environment.push_back(*text);
+                    }
                 } else if (propertyName == "DISABLED") {
                     test.disabled = value->asBool().value_or(false);
                 } else if (propertyName == "DEF_SOURCE_LINE") {

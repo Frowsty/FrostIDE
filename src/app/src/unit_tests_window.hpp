@@ -26,6 +26,16 @@
  * is RUN-10's: Debug Selected Test is disabled and says so. Double-click opens a failure's location,
  * else where the test is defined (DEF_SOURCE_LINE, a case's report entry), else its add_test call.
  *
+ * doctest (RUN-8). After each listing, every test whose command runs a doctest program
+ * (run::isDoctestCommand; FrostEngine's one test per doctest suite) gets its cases listed below it,
+ * from its own command with doctest's --list-test-cases (TestRunner::listDoctestCases); "List
+ * doctest Cases" does the same for any other test. Run All, Run Failed and Run Selected on tests run
+ * ctest, which gives one result per test and, for a failed doctest test, the cases doctest's output
+ * names as failed. Run Selected on a selection of doctest cases (and doctest tests), and "Run with
+ * doctest (Every Case's Result)", start the tests' programs directly with doctest's XML reporter
+ * (TestRunner::runDoctest): every case that ran gets its outcome, duration and failure locations.
+ * Double-click on a listed case opens where doctest says it is defined.
+ *
  * Threads: the GUI thread only; the runner's callbacks are posted to it. Destroying the widget
  * stops a running job and waits for it.
  */
