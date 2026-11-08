@@ -310,6 +310,7 @@ CMakeIntegration::~CMakeIntegration() {
     if (m_runId)
         m_runs.stop(*m_runId);
     m_runId.reset();
+    detachTab(m_running);
     m_runAdmission.reset();
     m_configureStop.reset();
     if (m_configureTask)
@@ -713,13 +714,24 @@ Result<build::RunId> CMakeIntegration::run() {
     m_stopRequested = false;
     {
         // RUN-3: the target's tab in the Run tool window (a rerun reuses it once it has finished).
+        // The tab outlives this integration (the Run window is the workbench's; closing or reopening
+        // a folder destroys us), so the handlers hold a QPointer and detachTab() clears them.
         ui::RunTabHandlers handlers;
-        handlers.stop = [this] { stop(); };
-        handlers.rerun = [this] {
-            if (auto again = rerun(); !again)
-                console().appendOutput(build::RunOutputKind::System, again.error().message() + "\n");
+        const QPointer<CMakeIntegration> self(this);
+        handlers.stop = [self] {
+            if (self)
+                self->stop();
         };
-        handlers.input = [this](const QString& line) { input(line); };
+        handlers.rerun = [self] {
+            if (!self)
+                return;
+            if (auto again = self->rerun(); !again)
+                self->console().appendOutput(build::RunOutputKind::System, again.error().message() + "\n");
+        };
+        handlers.input = [self](const QString& line) {
+            if (self)
+                self->input(line);
+        };
         const std::string& name = model->targets[*target].name;
         m_console = m_runWindow.openRun(QStringLiteral("cmake:") + QString::fromStdString(name),
                                         QString::fromStdString(name), std::move(handlers));
@@ -914,6 +926,7 @@ void CMakeIntegration::shutdown() {
     m_rerun = false;
     m_pending = false;
     ++m_runGeneration;
+    const bool launched = m_running; // Read before it is cleared: the tab's last line depends on it.
     m_service->cancel();
     if (m_runId) {
         m_runs.stop(*m_runId); // Ends the whole tree; the RunManager collects the exit.
@@ -921,7 +934,27 @@ void CMakeIntegration::shutdown() {
     }
     m_running = false;
     m_runAdmission.reset();
+    detachTab(launched);
     m_runStateChanged();
+}
+
+void CMakeIntegration::detachTab(bool launched) {
+    // A live m_console means the Run window (its parent) is alive too.
+    if (!m_console)
+        return;
+    if (m_console->active()) {
+        // The run's tree was just stopped and the relay drops its exit, so the tab says so itself;
+        // "(running)" would claim a run that no longer exists.
+        build::RunOutcome stopped;
+        stopped.stopped = true;
+        // Without an exit code the default line reads "Stopped before the program started", which is
+        // true only while the build was pending; a launched program ran (its output is above).
+        m_console->finish(stopped, launched ? QStringLiteral("Stopped: FrostIDE ended the program when the "
+                                                             "project closed (its exit code was not collected)")
+                                            : QString());
+    }
+    m_runWindow.detach(m_console);
+    m_console = nullptr;
 }
 
 Result<build::RunId> CMakeIntegration::rerun() {

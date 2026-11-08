@@ -108,6 +108,10 @@ private:
     // The console messages go to: the run's tab, else the Run tool window's current one.
     [[nodiscard]] ui::RunConsole& console();
     void finishConsole(const build::RunOutcome& outcome);
+    // Ends the run's tab as stopped when it is still active and clears its handlers (destructor and
+    // shutdown(): the tab outlives this object). `launched`: the program had started (its last line
+    // then says it was ended, not that it never started).
+    void detachTab(bool launched);
     run::RunManager& m_runs;
     std::function<run::RunConfiguration(run::RunConfiguration)> m_launchConfigurator;
     std::function<void(const std::string&)> m_runTargetObserver;

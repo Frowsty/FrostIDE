@@ -349,4 +349,46 @@ TEST(WorkbenchRun, AnUntrustedWorkspaceStartsNoNativeConfiguration) {
     EXPECT_EQ(tabOf(rig, QStringLiteral("config:") + QString::fromStdString(id)), nullptr);
 }
 
+TEST(WorkbenchRun, AStoreThatCouldNotBeReadIsNeverOverwritten) {
+    /* A damaged store, or one a newer FrostIDE wrote (version 99), is not read when the folder opens.
+       Before the fix, the next Run/Debug Configurations OK (or run.edit) replaced it with the list in
+       memory: every saved configuration was lost. Now the save is refused, and the file stays byte
+       for byte until a reopen reads it. */
+    for (const std::string& damaged : {std::string("{\"version\": 1, \"configurations\": [7]}"),
+                                       std::string("{\"version\": 99, \"configurations\": []}")}) {
+        SCOPED_TRACE(damaged);
+        WorkDir dir("run-unreadable-store");
+        dir.write("readme.txt", "a workspace whose run configurations cannot be read\n");
+        const auto storePath = run::workspaceRunConfigurationsPath(dir.path());
+        ASSERT_TRUE(storePath.has_value());
+        auto& fs = io::realFileSystem();
+        ASSERT_TRUE(fs.createDirectories(std::string(io::parentPath(*storePath))).has_value());
+        ASSERT_TRUE(fs.writeFileAtomic(*storePath, damaged).has_value());
+        WorkbenchRig rig(dir);
+        ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+        ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+        auto* controller = rig.workbench->runController();
+        ASSERT_NE(controller, nullptr);
+        std::vector<run::RunConfiguration> edited = controller->configurations().all();
+        edited.push_back(treeConfiguration(edited, {"tree"}));
+        auto saved = controller->replaceConfigurations(edited);
+        ASSERT_FALSE(saved.has_value()) << "an unreadable store must not be overwritten";
+        EXPECT_EQ(saved.error().code(), frost::ErrorCode::Corrupt);
+        EXPECT_EQ(fs.readFile(*storePath).value_or("<unreadable>"), damaged);
+
+        // Once the file is gone (or fixed) and the folder is reopened, edits are saved again.
+        ASSERT_TRUE(fs.removeFile(*storePath).has_value());
+        ASSERT_TRUE(rig.workbench->closeProject()); // Opening the open folder again reads nothing.
+        ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+        controller = rig.workbench->runController();
+        ASSERT_NE(controller, nullptr);
+        edited = controller->configurations().all();
+        edited.push_back(treeConfiguration(edited, {"tree"}));
+        ASSERT_TRUE(controller->replaceConfigurations(edited).has_value());
+        auto reloaded = run::loadRunConfigurations(fs, *storePath);
+        ASSERT_TRUE(reloaded.has_value()) << reloaded.error().describe();
+        EXPECT_EQ(reloaded->size(), 1U);
+    }
+}
+
 } // namespace

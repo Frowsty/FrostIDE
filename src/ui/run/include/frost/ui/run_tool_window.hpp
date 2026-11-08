@@ -79,6 +79,11 @@ public:
     bool rerunCurrent();
     // Closes tab `index` (header comment). Out of range: nothing.
     void closeTab(int index);
+    /* Clears the handlers of `console`'s tab because their owner is going away (the CMake integration
+       of a closed folder). From then on its Stop, Rerun and input line do nothing, and a Rerun does
+       not fall back to rerunWithoutRunRequested, which only a tab that never ran gets. The tab and
+       its output stay. Null or a foreign console: nothing. */
+    void detach(const RunConsole* console);
 
 signals:
     // A tab was opened or closed, or a run in one began or finished.

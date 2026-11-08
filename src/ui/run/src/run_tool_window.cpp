@@ -67,8 +67,8 @@ RunConsole* RunToolWindow::addTab() {
         if (const Tab* tab = tabOf(console); tab && tab->handlers.rerun) {
             const auto rerun = tab->handlers.rerun; // The handler may open this tab again.
             rerun();
-        } else {
-            emit rerunWithoutRunRequested(); // A tab that has not run anything yet.
+        } else if (tab == nullptr || tab->key.isEmpty()) {
+            emit rerunWithoutRunRequested(); // A tab that has not run anything yet (not a detached one).
         }
     });
     connect(console, &RunConsole::inputSubmitted, this, [this, console](const QString& line) {
@@ -171,6 +171,12 @@ bool RunToolWindow::rerunCurrent() {
     const auto rerun = tab->handlers.rerun;
     rerun();
     return true;
+}
+
+void RunToolWindow::detach(const RunConsole* console) {
+    if (Tab* tab = tabOf(console)) {
+        tab->handlers = {};
+    }
 }
 
 void RunToolWindow::closeTab(int index) {

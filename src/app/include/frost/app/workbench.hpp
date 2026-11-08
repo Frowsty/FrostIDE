@@ -939,6 +939,10 @@ private:
     std::shared_ptr<const project::SolutionModel> m_solution;
     std::unique_ptr<ProjectEditProcess> m_projectEdit;
     std::string m_projectRoot;
+    // Why the workspace's run-configuration store could not be read when the folder opened (Corrupt,
+    // a newer version, a read error); "" when it loaded or does not exist. saveRunConfigurations()
+    // refuses while it is set, so the unreadable file is never replaced by what the IDE has in memory.
+    std::string m_runStoreUnreadable;
     // The explicitly opened project file or folder, used as the last-session identity.
     std::string m_projectIdentity;
     // Live gutter markers per document key (merged with the build's in refreshMarkers).

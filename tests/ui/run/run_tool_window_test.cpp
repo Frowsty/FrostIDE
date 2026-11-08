@@ -120,6 +120,28 @@ TEST(RunToolWindow, RerunInTheEmptyTabAsksTheOwner) {
     EXPECT_EQ(reruns, 2);
 }
 
+TEST(RunToolWindow, ADetachedTabCallsNoHandlerAndDoesNotAskTheOwner) {
+    // detach(): the tab's owner is gone (a closed folder's CMake integration); the tab stays inert.
+    RunToolWindow window;
+    int asked = 0;
+    int calls = 0;
+    QObject::connect(&window, &RunToolWindow::rerunWithoutRunRequested, [&] { ++asked; });
+    RunConsole* console = window.openRun(
+        QStringLiteral("cmake:t"), QStringLiteral("t"),
+        {.stop = [&] { ++calls; }, .rerun = [&] { ++calls; }, .input = [&](const QString&) { ++calls; }});
+    window.detach(console);
+    window.detach(nullptr); // Null: nothing.
+    emit console->stopRequested();
+    emit console->inputSubmitted(QStringLiteral("x"));
+    console->finish(exited(0));
+    emit console->rerunRequested();
+    EXPECT_FALSE(window.rerunCurrent());
+    window.closeTab(window.tabs()->indexOf(console));
+    EXPECT_EQ(calls, 0);
+    EXPECT_EQ(asked, 0) << "only a tab that never ran falls back to the owner's Rerun";
+    EXPECT_EQ(window.count(), 1);
+}
+
 TEST(RunConfigurationsText, ArgumentsAndEnvironmentRoundTrip) {
     const std::vector<std::string> arguments{"--offscreen", "two words", "quote\"inside", ""};
     const QString text = formatRunArguments(arguments);

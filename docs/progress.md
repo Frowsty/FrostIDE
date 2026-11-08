@@ -3,6 +3,110 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-08: R2 integration (DD-1: FrostEngine run, test and debug)
+
+- **Merged into `r2/integration`** (5026890) with `--no-ff` on top of RUN-1 (`r2/run-1-model`):
+  `r2/run-2-3-ui` (RUN-2, RUN-3), `r2/run-7-ctest` and `r2/run-8-doctest` (RUN-7, RUN-8), and `r2/dbg-1-2a`
+  (DBG-1, DBG-2a). Each slice had its own independent review, plus a fix pass where the review found blockers.
+- **Integration fixes** (dc73b64; all of them Linux or corpus problems that the slices' Windows runs could not show):
+  - RUN-7/RUN-8 cancel tests (`TestRunnerCancel.CancelEndsCTestAndEveryProcessItStarted`,
+    `DoctestRunner.StopEndsTheRunningProgram`) never saw their process trees on Linux. The process-table oracle
+    read `/proc/<pid>/stat`'s comm, which the kernel truncates to 15 bytes. It now uses the `/proc/<pid>/exe`
+    basename when comm is a prefix of it (`tests/run/process_table.hpp`).
+  - `RunLaunchPlan.UsesTheProgramsFolderWithoutAWorkingDirectory` expected `tools/..` to fold lexically on
+    Linux. POSIX normalisation keeps `..` on purpose (symlinks), so the expectation is now per platform.
+  - `CorpusFrostEngine.TheUnitTestsWindowListsRunsAndLocatesTheEnginesDoctestCases` passed only where an
+    earlier run had left FrostTests built (`corpora.py` never builds). On a fresh tree it waited out its
+    30 min limit. It now builds FrostTests first, and fails as soon as ctest lists no doctest suite.
+  - The TSan quick leg failed to compile `tests/diff/perf_test.cpp` (-Wunused-variable on the allocation counter
+    under sanitizers). The counter now exists only in unsanitized builds.
+  - `corpora.lock.json` gained per-platform `cacheVariables`, passed at engine configure and checked by
+    `engine_problem`. Linux sets `FROST_WARNINGS_AS_ERRORS=OFF`, because the pinned engine trips
+    `-Wunused-lambda-capture` under clang 23. Test: `EngineTest.test_engine_problem_names_a_cache_variable_the_lock_sets_otherwise`.
+- **Verification** (Windows gate run non-elevated through a RunLevel=Limited scheduled task):
+  `Verified: win debug 3500/3528 (28 skipped, 1 disabled), win corpus 12/12, format ok, frost_lint ok,
+  licensecheck ok, featurecheck ok, ratchet ok`. WSL: `debug 3312/3369 (57 skipped), tsan-quick 818/823
+  (5 skipped), corpus 9/11`. The run's format failure (2 files of these fixes) has been fixed since.
+  - **Run gates non-elevated.** Elevated, 25 crash-handler and FrostProcess restart tests fail by design
+    ("frost runs elevated; no crash handler is started"; the short-link restart is refused).
+- **Input-lag investigation** (the drag freeze reported 2026-11-08). The meter used before the reboot was broken:
+  - its 48-byte INPUT (x64 needs 40) made SendInput inject nothing, so its readings showed only real hand movement;
+  - relative moves under "Enhance pointer precision" could land on 0 px.
+  
+  `E:\FrostBuilds\diag-input-lag\cursor_latency_abs.ps1` (v3.1) uses absolute moves and an own WH_MOUSE_LL
+  hook, and drops samples that real mouse events disturbed. With it, every test group was measured one at a time,
+  and also mid-run: build, unit, Qt UI, real-tool integration, lldb, corpus with the journeys, and WSL. None of
+  them degraded the input path: hook median about 0.08 ms, cursor about 0.3 ms, maximum under 1.2 ms, 0 lost
+  moves. The next step needs a live freeze: run the probe and `lagmeter.ps1` while it happens.
+
+- **Cross review** (one independent agent; it re-ran `-L '^(mod\.run|mod\.debug|lldb)$'`, 299/299, which includes
+  104 DapReal scenarios against the exit criterion's 60). Two blockers, fixed in one pass, each with a
+  regression test that fails without its fix:
+  - **B1, a use-after-free and a stale "(running)" tab.** CMake target tabs in the Run tool window (which
+    outlives the CMake integration) held the integration's raw `this`. A finished tab's Rerun, Stop or input
+    after closing and reopening the folder called into freed memory. After `shutdown()` stopped a running
+    target, its tab still said "(running)". The handlers now hold a QPointer. On destruction and shutdown,
+    `CMakeIntegration::detachTab()` finishes an active tab as stopped and `RunToolWindow::detach()` clears its
+    handlers. A detached tab's Rerun no longer falls back to the owner's Rerun. Tests:
+    `WorkbenchCMake.TheTargetsTabOutlivesItsIntegrationInertAndNeverStillRunning` (checked to fail with the
+    fix removed) and `RunToolWindow.ADetachedTabCallsNoHandlerAndDoesNotAskTheOwner`.
+  - **B2, data loss.** A run-configuration store that could not be read (damaged, a newer version, a read
+    error) was overwritten by the next Run/Debug Configurations OK or `run.edit`. Saving is now refused
+    (Corrupt, with the reason) until a reopen reads the store. Test:
+    `WorkbenchRun.AStoreThatCouldNotBeReadIsNeverOverwritten`.
+- **Review of the fix diff** (a second independent agent; Windows mod.run, mod.ui and mod.app 962/974 in its
+  elevated session, where the 12 failures are the by-design FrostProcess restart and self-test refusals). One
+  truth-rule blocker, fixed: a target that `shutdown()` stopped after it had started ended with "Stopped before
+  the program started". The tab now says "Stopped: FrostIDE ended the program when the project closed (its
+  exit code was not collected)". The lifetime test checks that line.
+- **Review follow-ups** (deferred under the review budget):
+  - RUN-3: after a refused save, the edit stays in memory and differs from disk until the folder is reopened.
+    RunController's tab handlers capture a raw `this`, which is safe only while it outlives the Run window.
+  - RUN-10: pending tests keep the previous run's verdict after an errored or stopped run, with no "stale" mark
+    (`test_results_tree.cpp:259`).
+  - RUN-10: the Unit Tests summary counts NotRun as failed (`unit_tests_window.cpp:458`).
+  - RUN-2 hardening: CMake launch ids skip `uniqueRunConfigurationId`, so targets whose names clean to one id
+    share their edits (`cmake_integration.cpp`, the launch id).
+  - RUN-3: console input is enabled without asking the session whether it takes input.
+  - DBG-2b: exception filters exist only for lldb-dap sessions; CoreCLR and Mono have no filter UI (the old
+    combo's ids did not come from the adapter).
+  - FND-6b: the doctest corpus test injects into the clone in place under a restoring guard, not on a scratch
+    branch. Also, `engine_problem` does not notice a cacheVariables entry that was removed from the lock.
+
+### Blocker
+- **The pinned FrostEngine does not compile on Linux with clang 23.** The pin is 8237e1e, which is also
+  upstream `main`. `Frost/src/Frost/Social/Internal/SocialHost.h:114` gives "exception specification of overriding
+  function is more lax than base version" (`~SocialHost() override`). MSVC accepts it, clang and GCC reject
+  it. As a result, Linux `journeys.j2_run` (builds FrostEditor) and the doctest corpus test (builds FrostTests)
+  fail; FrostIDE correctly reports "Build failed; the program was not started". **User decision (2026-11-08):**
+  the user fixes the engine on `main`. Then the agent re-pins (`corpora.py pin`, `wsl-fetch --configure`),
+  re-runs both corpus tiers, and merges R2 only when Linux is green. The cacheVariables workaround can be
+  dropped if the fixed engine builds clean under -Werror.
+
+### UAT-1 (the user runs this; record pass/fail per step here)
+Use `build\win-clangcl\src\app\Debug\frost.exe` of the r2 tree (or the staged build) on your own FrostEngine
+checkout. Only pass/fail is recorded.
+1. Open the FrostEngine folder, trust it, and pick the `windows-debug` preset. The configure finishes, and the
+   CMake model shows the targets (j1).
+2. The Run configuration combo on the toolbar lists one configuration per executable target. Edit
+   Configurations... opens Run/Debug Configurations. Change FrostEditor's arguments; they are still there after
+   restarting frost.
+3. Select FrostEditor and press Run. It builds, starts, and its output streams into the Run tool window.
+   Stop (Ctrl+F2) ends it, and Task Manager shows no FrostEditor process left.
+4. Open the Unit Tests window. The list matches `ctest -N --preset windows-debug`, and the FrostTests suites
+   show their doctest cases. Run a suite: pass/fail and durations appear. A failed case's location opens the
+   source line.
+5. Set a line breakpoint in a FrostEditor .cpp on its startup path and Debug FrostEditor. It stops there.
+   Step Over (F8), Step Into (F7) and Step Out (Shift+F8) work, and Locals and the call stack are shown.
+6. Edit a breakpoint: a condition stops only when it is true, and a Log Message (tracepoint) prints without
+   stopping. Enable the C++ throw exception row in the Breakpoints tab: the debugger stops at a `throw`.
+
+### Next
+- Act on the cross review (one review, at most one fix pass).
+- After the engine fix: re-pin, re-run both corpus tiers, then the user's UAT-1, then merge `r2/integration`
+  into `main` with `--no-ff` and the Verified footer.
+- Cleanup: the worktrees wf_7eb18537-89e-1/5/6/7/9 and r2-int (remove the `build\vcpkg_installed` junction first).
+
 ## 2026-11-08: R1 integration (DD-1a: FrostEngine C++ on CMake presets and Lua basics)
 
 - **Merged into `r1/integration`** with `--no-ff`, in this order, on top of FND-12a (f767505, the god-file

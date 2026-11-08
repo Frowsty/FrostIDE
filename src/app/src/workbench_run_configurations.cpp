@@ -19,6 +19,7 @@
 #include "cmake_integration.hpp"
 #include <QDialog>
 
+#include <format>
 #include <utility>
 
 namespace frost::app {
@@ -65,6 +66,7 @@ void Workbench::loadRunConfigurations() {
     if (!m_runController)
         return;
     std::vector<run::RunConfiguration> stored;
+    m_runStoreUnreadable.clear();
     if (hasProject()) {
         auto path = run::workspaceRunConfigurationsPath(m_projectRoot);
         auto loaded = path ? run::loadRunConfigurations(m_services.fs, *path)
@@ -72,7 +74,9 @@ void Workbench::loadRunConfigurations() {
         if (loaded) {
             stored = std::move(*loaded);
         } else {
-            // A store that cannot be read is left as it is (never overwritten by an empty list).
+            // A store that cannot be read is left as it is: saveRunConfigurations() refuses until a
+            // reopen reads it, so no edit replaces it with the (stored-empty) list in memory.
+            m_runStoreUnreadable = loaded.error().message();
             log::warn(kLog, "run configurations: {}", loaded.error().describe());
             notify(text("Run configurations"), qs(loaded.error().message()), ui::NotificationKind::Error);
         }
@@ -83,6 +87,11 @@ void Workbench::loadRunConfigurations() {
 Result<void> Workbench::saveRunConfigurations(const std::vector<run::RunConfiguration>& stored) {
     if (!hasProject())
         return fail(ErrorCode::InvalidArgument, "run configurations need an open workspace");
+    if (!m_runStoreUnreadable.empty())
+        return fail(ErrorCode::Corrupt,
+                    std::format("the saved run configurations could not be read when the folder opened ({}), so "
+                                "they are not overwritten; fix or remove the file and reopen the folder",
+                                m_runStoreUnreadable));
     return run::saveWorkspaceRunConfigurations(m_services.fs, m_projectRoot, stored);
 }
 
