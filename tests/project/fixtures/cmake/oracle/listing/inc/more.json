@@ -1,0 +1,8 @@
+{
+  "version": 6,
+  "include": ["deeper.json"],
+  "configurePresets": [
+    {"name": "included", "binaryDir": "${fileDir}/../out/included", "generator": "Ninja", "displayName": "From inc/more.json"}
+  ],
+  "buildPresets": [{"name": "included-build", "configurePreset": "included"}]
+}

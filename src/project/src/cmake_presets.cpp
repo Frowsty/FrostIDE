@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The CMake presets reader (frost/project/cmake_presets.hpp): file loading with includes,
-// inheritance, macro expansion and condition evaluation.
+// The CMake presets reader (frost/project/cmake_presets.hpp): file loading with includes in CMake's
+// order, inheritance, macro expansion, condition evaluation, the five preset kinds and the
+// `cmake --list-presets` listing.
 
 #include "frost/project/cmake_presets.hpp"
 
@@ -13,10 +14,10 @@
 #include "process_environment.hpp"
 
 #include <algorithm>
+#include <array>
 #include <format>
 #include <map>
 #include <regex>
-#include <set>
 #include <span>
 #include <tuple>
 
@@ -31,22 +32,91 @@ struct RawPreset {
     std::string name;
     std::string file;
     bool user = false;
+    std::int64_t version = 0;       // The version of the file that defines it.
     const JsonNode* node = nullptr; // Points into Loader::documents, which never moves (std::map).
 };
 
-// The inheritable fields of a configure or build preset after inheritance, before expansion.
+// The inheritable fields of a preset after inheritance, before expansion.
 struct Merged {
-    std::map<std::string, const JsonNode*> fields; // Scalar fields by name (generator, binaryDir, ...).
+    // Scalar fields by name; members of the objects CMake merges member by member are dotted
+    // paths ("warnings.dev", "filter.include.name").
+    std::map<std::string, const JsonNode*> fields;
     std::vector<std::pair<std::string, const JsonNode*>> cacheVariables; // In precedence order.
     std::vector<std::pair<std::string, const JsonNode*>> environment;
 };
 
-// Inheritable scalar fields; every other member is handled separately or not inherited.
-constexpr std::string_view kConfigureFields[] = {"generator",    "binaryDir", "installDir", "toolchainFile",
-                                                 "architecture", "toolset",   "condition",  "cmakeExecutable"};
-constexpr std::string_view kBuildFields[] = {
-    "configurePreset", "configuration",     "targets",   "jobs",
-    "cleanFirst",      "nativeToolOptions", "condition", "inheritConfigureEnvironment"};
+// Preset kinds by index (CMakePresetKind order). Workflow presets have no inheritance.
+constexpr std::size_t kConfigure = 0;
+constexpr std::size_t kBuild = 1;
+constexpr std::size_t kTest = 2;
+constexpr std::size_t kPackage = 3;
+constexpr std::size_t kWorkflow = 4;
+constexpr std::size_t kKinds = 5;
+constexpr std::array<std::string_view, kKinds> kKindKeys = {"configurePresets", "buildPresets", "testPresets",
+                                                            "packagePresets", "workflowPresets"};
+constexpr std::array<std::int64_t, kKinds> kKindVersions = {2, 2, 2, 6, 6}; // The file version each kind needs.
+constexpr std::array<std::string_view, kKinds> kKindNames = {"configure preset", "build preset", "test preset",
+                                                             "package preset", "workflow preset"};
+
+// Inheritable scalar fields per kind; every other member is handled separately or not inherited.
+constexpr std::string_view kConfigureFields[] = {"generator",
+                                                 "binaryDir",
+                                                 "installDir",
+                                                 "toolchainFile",
+                                                 "architecture",
+                                                 "toolset",
+                                                 "condition",
+                                                 "cmakeExecutable",
+                                                 "warnings.dev",
+                                                 "warnings.deprecated",
+                                                 "warnings.uninitialized",
+                                                 "warnings.unusedCli",
+                                                 "warnings.systemVars",
+                                                 "errors.dev",
+                                                 "errors.deprecated",
+                                                 "debug.output",
+                                                 "debug.tryCompile",
+                                                 "debug.find"};
+constexpr std::string_view kBuildFields[] = {"configurePreset",
+                                             "configuration",
+                                             "targets",
+                                             "jobs",
+                                             "cleanFirst",
+                                             "verbose",
+                                             "nativeToolOptions",
+                                             "condition",
+                                             "inheritConfigureEnvironment"};
+constexpr std::string_view kTestFields[] = {
+    "configurePreset",       "configuration",           "condition",           "inheritConfigureEnvironment",
+    "filter.include.name",   "filter.include.label",    "filter.exclude.name", "filter.exclude.label",
+    "execution.jobs",        "execution.stopOnFailure", "execution.timeout",   "execution.noTestsAction",
+    "output.outputOnFailure"};
+constexpr std::string_view kPackageFields[] = {
+    "configurePreset", "generators",       "configurations", "packageName",
+    "packageVersion",  "packageDirectory", "condition",      "inheritConfigureEnvironment"};
+
+std::span<const std::string_view> fieldsOf(std::size_t kind) {
+    switch (kind) {
+    case kConfigure: return kConfigureFields;
+    case kBuild: return kBuildFields;
+    case kTest: return kTestFields;
+    default: return kPackageFields;
+    }
+}
+
+// The member at dotted `path` of `node` ("filter.include.name"), or nullptr.
+const JsonNode* findPath(const JsonNode& node, std::string_view path) {
+    const JsonNode* current = &node;
+    while (current != nullptr) {
+        const std::size_t dot = path.find('.');
+        current = current->find(path.substr(0, dot));
+        if (dot == std::string_view::npos) {
+            return current;
+        }
+        path.remove_prefix(dot + 1);
+    }
+    return nullptr;
+}
 
 std::string slashes(std::string_view path) {
     std::string out(path);
@@ -82,33 +152,50 @@ public:
         if (!*projectExists && !*userExists) {
             return std::optional<CMakePresets>{};
         }
+        m_projectFile = *projectFile;
+        m_projectExists = *projectExists;
+        // The user file leads and includes the project file (header comment, "Order").
         std::vector<std::string> stack;
-        if (*projectExists) {
-            if (auto read = readFile(*projectFile, false, stack); !read) {
-                return std::unexpected(std::move(read.error()));
-            }
-        }
-        if (*userExists) {
-            if (auto read = readFile(*userFile, true, stack); !read) {
-                return std::unexpected(std::move(read.error()));
-            }
+        if (auto read = *userExists ? readFile(*userFile, true, stack) : readFile(*projectFile, false, stack); !read) {
+            return std::unexpected(std::move(read.error()));
         }
         CMakePresets presets;
-        presets.version = m_version;
+        presets.version = static_cast<int>(m_projectVersion != 0 ? m_projectVersion : m_userVersion);
         presets.files = m_fileOrder;
-        for (const RawPreset& raw : m_configure) {
+        for (const RawPreset& raw : m_raw[kConfigure]) {
             auto resolved = resolveConfigure(raw);
             if (!resolved) {
                 return std::unexpected(std::move(resolved.error()));
             }
             presets.configurePresets.push_back(std::move(*resolved));
         }
-        for (const RawPreset& raw : m_build) {
+        for (const RawPreset& raw : m_raw[kBuild]) {
             auto resolved = resolveBuild(raw, presets);
             if (!resolved) {
                 return std::unexpected(std::move(resolved.error()));
             }
             presets.buildPresets.push_back(std::move(*resolved));
+        }
+        for (const RawPreset& raw : m_raw[kTest]) {
+            auto resolved = resolveTest(raw, presets);
+            if (!resolved) {
+                return std::unexpected(std::move(resolved.error()));
+            }
+            presets.testPresets.push_back(std::move(*resolved));
+        }
+        for (const RawPreset& raw : m_raw[kPackage]) {
+            auto resolved = resolvePackage(raw, presets);
+            if (!resolved) {
+                return std::unexpected(std::move(resolved.error()));
+            }
+            presets.packagePresets.push_back(std::move(*resolved));
+        }
+        for (const RawPreset& raw : m_raw[kWorkflow]) {
+            auto resolved = resolveWorkflow(raw, presets);
+            if (!resolved) {
+                return std::unexpected(std::move(resolved.error()));
+            }
+            presets.workflowPresets.push_back(std::move(*resolved));
         }
         return std::optional<CMakePresets>(std::move(presets));
     }
@@ -129,6 +216,11 @@ private:
 
     std::optional<std::string> parentEnv(std::string_view name) const { return m_context.environment(name); }
 
+    /*
+     * Reads `path` and what it includes. Its own presets are registered before its includes are
+     * read, and the user file's implicit include of the project file comes after its own includes,
+     * which is CMake's order (header comment).
+     */
     Result<void> readFile(const std::string& path, bool user, std::vector<std::string>& stack) {
         if (std::ranges::find(stack, path) != stack.end()) {
             return fail(ErrorCode::Corrupt, std::format("{}: the presets include each other in a cycle", path));
@@ -155,25 +247,54 @@ private:
             return fail(ErrorCode::Unsupported,
                         std::format("{}: presets version {} is not supported (2 and later are)", path, *version));
         }
-        if (m_version == 0 || (!user && m_fileOrder.empty())) {
-            m_version = static_cast<int>(*version);
+        const bool isProjectFile = path == m_projectFile;
+        const bool isUserFile = user && io::fileName(path) == kCMakeUserPresetsFile && stack.empty();
+        if (isProjectFile) {
+            m_projectVersion = *version;
+        } else if (isUserFile) {
+            m_userVersion = *version;
         }
         const JsonNode& root = m_documents.emplace(path, std::move(*parsed)).first->second;
         m_fileOrder.push_back(path);
-        stack.push_back(path);
         const std::string fileDir(io::parentPath(path));
 
-        // The user file includes the project file first (cmake-presets(7)).
-        std::vector<std::string> includes;
-        if (user && io::fileName(path) == kCMakeUserPresetsFile) {
-            auto projectFile = io::joinPath(m_sourceDir, kCMakePresetsFile);
-            if (projectFile && m_fs.exists(*projectFile).value_or(false)) {
-                includes.push_back(*projectFile);
+        for (std::size_t kind = 0; kind < kKinds; ++kind) {
+            const JsonNode* list = root.find(kKindKeys[kind]);
+            if (list == nullptr) {
+                continue;
+            }
+            if (!list->isArray()) {
+                return std::unexpected(error(path, std::format("\"{}\" is not an array", kKindKeys[kind])));
+            }
+            if (*version < kKindVersions[kind] && !list->items.empty()) {
+                return std::unexpected(error(path, std::format("file version {} has no {}s (version {} and later)",
+                                                               *version, kKindNames[kind], kKindVersions[kind])));
+            }
+            for (const JsonNode& node : list->items) {
+                if (!node.isObject() || node.stringAt("name").empty()) {
+                    return std::unexpected(error(path, std::format("a preset in \"{}\" has no name", kKindKeys[kind])));
+                }
+                if (*version < 3 && node.find("condition") != nullptr) {
+                    return std::unexpected(error(path, "conditions need presets version 3 or later"));
+                }
+                std::string name = node.stringAt("name");
+                std::vector<RawPreset>& raws = m_raw[kind];
+                if (std::ranges::any_of(raws, [&](const RawPreset& other) { return other.name == name; })) {
+                    return std::unexpected(
+                        error(path, std::format("{} '{}' is defined twice", kKindNames[kind], name)));
+                }
+                raws.push_back(
+                    RawPreset{.name = std::move(name), .file = path, .user = user, .version = *version, .node = &node});
             }
         }
+
+        std::vector<std::pair<std::string, bool>> includes; // Path, and whether it is user-only.
         if (const JsonNode* list = root.find("include")) {
             if (!list->isArray()) {
                 return std::unexpected(error(path, "\"include\" is not an array"));
+            }
+            if (*version < 4 && !list->items.empty()) {
+                return std::unexpected(error(path, "\"include\" needs presets version 4 or later"));
             }
             for (const JsonNode& item : list->items) {
                 if (!item.isString()) {
@@ -188,37 +309,23 @@ private:
                 if (!absolute) {
                     return std::unexpected(error(path, std::format("include '{}' is not a valid path", item.text)));
                 }
-                includes.push_back(std::move(*absolute));
+                includes.emplace_back(std::move(*absolute), user);
             }
         }
-        for (const std::string& include : includes) {
-            if (auto read = readFile(include, user, stack); !read) {
+        if (isUserFile && m_projectExists) {
+            includes.emplace_back(m_projectFile, false); // The user file includes the project file, last.
+        }
+        std::vector<std::string>& edges = m_includes[path];
+        for (const auto& include : includes) {
+            edges.push_back(include.first);
+        }
+        stack.push_back(path);
+        for (const auto& [include, includeUser] : includes) {
+            if (auto read = readFile(include, includeUser, stack); !read) {
                 return read;
             }
         }
         stack.pop_back();
-
-        for (const auto& [kind, list] :
-             {std::pair<std::string_view, std::vector<RawPreset>*>{"configurePresets", &m_configure},
-              std::pair<std::string_view, std::vector<RawPreset>*>{"buildPresets", &m_build}}) {
-            const JsonNode* presets = root.find(kind);
-            if (presets == nullptr) {
-                continue;
-            }
-            if (!presets->isArray()) {
-                return std::unexpected(error(path, std::format("\"{}\" is not an array", kind)));
-            }
-            for (const JsonNode& node : presets->items) {
-                if (!node.isObject() || node.stringAt("name").empty()) {
-                    return std::unexpected(error(path, std::format("a preset in \"{}\" has no name", kind)));
-                }
-                std::string name = node.stringAt("name");
-                if (std::ranges::any_of(*list, [&](const RawPreset& other) { return other.name == name; })) {
-                    return std::unexpected(error(path, std::format("preset '{}' is defined twice", name)));
-                }
-                list->push_back(RawPreset{.name = std::move(name), .file = path, .user = user, .node = &node});
-            }
-        }
         return {};
     }
 
@@ -238,6 +345,32 @@ private:
         return collapsed.empty() ? std::nullopt : std::optional<std::string>(std::move(collapsed));
     }
 
+    /*
+     * Whether a preset of file `from` may refer to one of file `to`: CMake allows only presets of
+     * the same file or of a file it includes, directly or not ("... is unreachable from preset's
+     * file"; the user file reaches the project file through its implicit include).
+     * O(files + includes).
+     */
+    bool reachable(const std::string& from, const std::string& to) const {
+        std::vector<std::string_view> pending = {from};
+        std::vector<std::string_view> seen;
+        while (!pending.empty()) {
+            const std::string_view file = pending.back();
+            pending.pop_back();
+            if (file == to) {
+                return true;
+            }
+            if (std::ranges::find(seen, file) != seen.end()) {
+                continue;
+            }
+            seen.push_back(file);
+            if (const auto edges = m_includes.find(std::string(file)); edges != m_includes.end()) {
+                pending.insert(pending.end(), edges->second.begin(), edges->second.end());
+            }
+        }
+        return false;
+    }
+
     std::vector<std::string> inheritsOf(const RawPreset& raw) const {
         std::vector<std::string> parents;
         if (const JsonNode* inherits = raw.node->find("inherits")) {
@@ -254,10 +387,9 @@ private:
         return parents;
     }
 
-    // Inheritance (header comment) over `raws`; memoised per kind.
-    Result<Merged> merge(const RawPreset& raw, const std::vector<RawPreset>& raws,
-                         std::span<const std::string_view> fields, std::map<std::string, Merged>& memo,
-                         std::vector<std::string>& stack) {
+    // Inheritance (header comment) of a preset of kind `kind`; memoised per kind.
+    Result<Merged> merge(const RawPreset& raw, std::size_t kind, std::vector<std::string>& stack) {
+        std::map<std::string, Merged>& memo = m_memo[kind];
         if (auto found = memo.find(raw.name); found != memo.end()) {
             return found->second;
         }
@@ -266,8 +398,8 @@ private:
         }
         stack.push_back(raw.name);
         Merged merged;
-        for (std::string_view field : fields) {
-            if (const JsonNode* value = raw.node->find(field)) {
+        for (std::string_view field : fieldsOf(kind)) {
+            if (const JsonNode* value = findPath(*raw.node, field)) {
                 merged.fields.emplace(std::string(field), value);
             }
         }
@@ -281,15 +413,24 @@ private:
                 }
             }
         };
-        addMap(merged.cacheVariables, raw.node->find("cacheVariables"));
+        if (kind == kConfigure) {
+            addMap(merged.cacheVariables, raw.node->find("cacheVariables"));
+        }
         addMap(merged.environment, raw.node->find("environment"));
+        const std::vector<RawPreset>& raws = m_raw[kind];
         for (const std::string& parentName : inheritsOf(raw)) {
             const auto parent = std::ranges::find(raws, parentName, &RawPreset::name);
             if (parent == raws.end()) {
                 return std::unexpected(error(
                     raw.file, std::format("preset '{}' inherits from unknown preset '{}'", raw.name, parentName)));
             }
-            auto parentMerged = merge(*parent, raws, fields, memo, stack);
+            if (!reachable(raw.file, parent->file)) {
+                return std::unexpected(
+                    error(raw.file, std::format("preset '{}' inherits '{}', which is not in its file "
+                                                "or a file it includes",
+                                                raw.name, parentName)));
+            }
+            auto parentMerged = merge(*parent, kind, stack);
             if (!parentMerged) {
                 return parentMerged;
             }
@@ -368,6 +509,34 @@ private:
                 ++i;
                 continue;
             }
+            /*
+             * CMake reads the characters after '$' as a macro namespace while they can still
+             * begin "", "env", "penv" or "vendor"; any other text (another '$', a space, "e{")
+             * is copied as written, including the character that ended the namespace, and the
+             * scan goes on after it (so "$${x}" and "$a{b}" stay as written, while "$a{${x}}"
+             * expands the inner macro). Checked against cmake 4.4 (CMakePresetsOracle).
+             */
+            {
+                constexpr std::array<std::string_view, 3> kNamespaces = {"env", "penv", "vendor"};
+                std::size_t j = i + 1;
+                while (j < text.size() && text[j] != '{') {
+                    const std::string_view prefix = text.substr(i + 1, j - i);
+                    if (std::ranges::none_of(kNamespaces,
+                                             [&](std::string_view ns) { return ns.starts_with(prefix); })) {
+                        break;
+                    }
+                    ++j;
+                }
+                const std::string_view ns = text.substr(i + 1, j - i - 1);
+                const bool known = j < text.size() && text[j] == '{' &&
+                                   (ns.empty() || std::ranges::find(kNamespaces, ns) != kNamespaces.end());
+                if (!known) {
+                    const std::size_t end = std::min(j + 1, text.size()); // The ending character too.
+                    out += text.substr(i, end - i);
+                    i = end;
+                    continue;
+                }
+            }
             const std::string_view rest = text.substr(i);
             const auto closing = [&](std::size_t open) -> std::optional<std::string_view> {
                 const std::size_t end = rest.find('}', open);
@@ -405,14 +574,16 @@ private:
                 }
                 out += parentEnv(*name).value_or(std::string());
                 i += name->size() + 7;
-            } else if (rest.starts_with("$vendor{")) {
-                const auto name = closing(8);
-                const std::size_t length = name ? name->size() + 9 : rest.size();
-                out += rest.substr(0, length); // Left as written.
-                i += length;
             } else {
-                out += c;
-                ++i;
+                // $vendor{}: left as written, and cmake ignores the preset that uses it (it is
+                // neither listed nor an error), so resolve*() disable it (m_vendorMacro).
+                const auto name = closing(8);
+                if (!name) {
+                    return std::unexpected(error(file, std::format("unterminated macro in '{}'", text)));
+                }
+                m_vendorMacro = true;
+                out += rest.substr(0, name->size() + 9);
+                i += name->size() + 9;
             }
         }
         return out;
@@ -450,17 +621,58 @@ private:
         return std::nullopt;
     }
 
+    static const JsonNode* field(const Merged& merged, std::string_view name) {
+        const auto found = merged.fields.find(std::string(name));
+        return found == merged.fields.end() ? nullptr : found->second;
+    }
+
     // A string field, expanded; "" when absent. Errors: not a string, expansion errors.
-    Result<std::string> stringField(const Merged& merged, std::string_view field, const Macros& macros,
+    Result<std::string> stringField(const Merged& merged, std::string_view name, const Macros& macros,
                                     const std::string& file) {
-        const auto found = merged.fields.find(std::string(field));
-        if (found == merged.fields.end() || found->second->isNull()) {
+        const JsonNode* value = field(merged, name);
+        if (value == nullptr || value->isNull()) {
             return std::string();
         }
-        if (!found->second->isString()) {
-            return std::unexpected(error(file, std::format("\"{}\" is not a string", field)));
+        if (!value->isString()) {
+            return std::unexpected(error(file, std::format("\"{}\" is not a string", name)));
         }
-        return expand(found->second->text, macros, file);
+        return expand(value->text, macros, file);
+    }
+
+    // A string or array-of-strings field, each item expanded. Errors: expansion errors.
+    Result<std::vector<std::string>> listField(const Merged& merged, std::string_view name, const Macros& macros,
+                                               const std::string& file) {
+        std::vector<std::string> out;
+        const JsonNode* node = field(merged, name);
+        if (node == nullptr) {
+            return out;
+        }
+        std::vector<const JsonNode*> items;
+        if (node->isString()) {
+            items.push_back(node);
+        } else if (node->isArray()) {
+            for (const JsonNode& item : node->items) {
+                items.push_back(&item);
+            }
+        }
+        for (const JsonNode* item : items) {
+            auto expanded = expand(item->text, macros, file);
+            if (!expanded) {
+                return std::unexpected(std::move(expanded.error()));
+            }
+            out.push_back(std::move(*expanded));
+        }
+        return out;
+    }
+
+    static std::optional<bool> boolField(const Merged& merged, std::string_view name) {
+        const JsonNode* node = field(merged, name);
+        return node != nullptr && node->isBool() ? std::optional<bool>(node->boolean) : std::nullopt;
+    }
+
+    static std::optional<int> intField(const Merged& merged, std::string_view name) {
+        const JsonNode* node = field(merged, name);
+        return node != nullptr && node->integer ? std::optional<int>(static_cast<int>(*node->integer)) : std::nullopt;
     }
 
     Result<bool> evaluate(const JsonNode& condition, const Macros& macros, const std::string& file) {
@@ -549,6 +761,12 @@ private:
         return std::unexpected(error(file, std::format("unknown condition type '{}'", type)));
     }
 
+    // The merged condition of a preset, evaluated with `macros`; true without one.
+    Result<bool> enabled(const Merged& merged, const Macros& macros, const std::string& file) {
+        const JsonNode* condition = field(merged, "condition");
+        return condition == nullptr ? Result<bool>(true) : evaluate(*condition, macros, file);
+    }
+
     Result<CMakeEnvironment> environmentOf(const std::vector<std::pair<std::string, const JsonNode*>>& entries,
                                            const Macros& macros, const std::string& file) {
         CMakeEnvironment out;
@@ -571,8 +789,9 @@ private:
     }
 
     Result<CMakeConfigurePreset> resolveConfigure(const RawPreset& raw) {
+        m_vendorMacro = false;
         std::vector<std::string> stack;
-        auto merged = merge(raw, m_configure, kConfigureFields, m_configureMemo, stack);
+        auto merged = merge(raw, kConfigure, stack);
         if (!merged) {
             return std::unexpected(std::move(merged.error()));
         }
@@ -595,40 +814,39 @@ private:
         preset.generator = *generator;
         macros.generator = *generator;
 
-        for (const auto& [field, target] :
+        for (const auto& [name, target] :
              {std::pair<std::string_view, std::string*>{"binaryDir", &preset.binaryDir},
               std::pair<std::string_view, std::string*>{"installDir", &preset.installDir},
               std::pair<std::string_view, std::string*>{"toolchainFile", &preset.toolchainFile}}) {
-            auto value = stringField(*merged, field, macros, raw.file);
+            auto value = stringField(*merged, name, macros, raw.file);
             if (!value) {
                 return std::unexpected(std::move(value.error()));
             }
             if (!value->empty()) {
                 auto absolute = absolutePath(*value, m_sourceDir);
                 if (!absolute) {
-                    return std::unexpected(error(raw.file, std::format("preset '{}': \"{}\" '{}' is not a valid path",
-                                                                       raw.name, field, *value)));
+                    return std::unexpected(error(
+                        raw.file, std::format("preset '{}': \"{}\" '{}' is not a valid path", raw.name, name, *value)));
                 }
                 *target = std::move(*absolute);
             }
         }
 
-        for (const auto& [field, value, external] :
+        for (const auto& [name, value, external] :
              {std::tuple<std::string_view, std::string*, bool*>{"architecture", &preset.architecture,
                                                                 &preset.architectureExternal},
               std::tuple<std::string_view, std::string*, bool*>{"toolset", &preset.toolset, &preset.toolsetExternal}}) {
-            const auto found = merged->fields.find(std::string(field));
-            if (found == merged->fields.end()) {
+            const JsonNode* node = field(*merged, name);
+            if (node == nullptr) {
                 continue;
             }
-            const JsonNode& node = *found->second;
-            std::string text = node.isString() ? node.text : node.stringAt("value");
+            std::string text = node->isString() ? node->text : node->stringAt("value");
             auto expanded = expand(text, macros, raw.file);
             if (!expanded) {
                 return std::unexpected(std::move(expanded.error()));
             }
             *value = std::move(*expanded);
-            *external = node.isObject() && node.stringAt("strategy") == "external";
+            *external = node->isObject() && node->stringAt("strategy") == "external";
         }
 
         for (const auto& [name, node] : merged->cacheVariables) {
@@ -662,116 +880,285 @@ private:
             preset.cacheVariables.push_back(std::move(variable));
         }
 
+        // warnings, errors and debug, as cmake --preset passes them (cmake-presets(7)).
+        const auto toggle = [&](std::string_view name, std::string_view on, std::string_view off) {
+            if (const auto value = boolField(*merged, name)) {
+                const std::string_view chosen = *value ? on : off;
+                if (!chosen.empty()) {
+                    preset.extraArguments.emplace_back(chosen);
+                }
+            }
+        };
+        toggle("warnings.dev", "-Wdev", "-Wno-dev");
+        toggle("warnings.deprecated", "-Wdeprecated", "-Wno-deprecated");
+        toggle("warnings.uninitialized", "--warn-uninitialized", "");
+        toggle("warnings.unusedCli", "", "--no-warn-unused-cli");
+        toggle("warnings.systemVars", "--check-system-vars", "");
+        toggle("errors.dev", "-Werror=dev", "-Wno-error=dev");
+        toggle("errors.deprecated", "-Werror=deprecated", "-Wno-error=deprecated");
+        toggle("debug.output", "--debug-output", "");
+        toggle("debug.tryCompile", "--debug-trycompile", "");
+        toggle("debug.find", "--debug-find", "");
+
         auto environment = environmentOf(merged->environment, macros, raw.file);
         if (!environment) {
             return std::unexpected(std::move(environment.error()));
         }
         preset.environment = std::move(*environment);
 
-        if (const auto condition = merged->fields.find("condition"); condition != merged->fields.end()) {
-            auto enabled = evaluate(*condition->second, macros, raw.file);
-            if (!enabled) {
-                return std::unexpected(std::move(enabled.error()));
-            }
-            preset.enabled = *enabled;
+        auto isEnabled = enabled(*merged, macros, raw.file);
+        if (!isEnabled) {
+            return std::unexpected(std::move(isEnabled.error()));
         }
+        preset.enabled = *isEnabled && !m_vendorMacro; // cmake ignores a preset using $vendor{}.
         return preset;
     }
 
-    Result<CMakeBuildPreset> resolveBuild(const RawPreset& raw, const CMakePresets& presets) {
+    // What build, test and package presets share: the configure preset named by
+    // "configurePreset" and the environment overlay (header comment of CMakeBuildPreset).
+    struct Dependent {
+        Merged merged;
+        std::string configurePreset;
+        const CMakeConfigurePreset* configure = nullptr;
+        std::vector<std::pair<std::string, const JsonNode*>> environment;
+    };
+
+    Result<Dependent> dependent(const RawPreset& raw, std::size_t kind, const CMakePresets& presets) {
         std::vector<std::string> stack;
-        auto merged = merge(raw, m_build, kBuildFields, m_buildMemo, stack);
+        auto merged = merge(raw, kind, stack);
         if (!merged) {
             return std::unexpected(std::move(merged.error()));
         }
-        CMakeBuildPreset preset;
+        Dependent out;
+        out.merged = std::move(*merged);
+        if (const JsonNode* configure = field(out.merged, "configurePreset");
+            configure != nullptr && configure->isString()) {
+            out.configurePreset = configure->text;
+        }
+        out.configure = presets.findConfigurePreset(out.configurePreset);
+        const bool hidden = raw.node->boolAt("hidden");
+        if (!hidden && out.configure == nullptr) {
+            return std::unexpected(error(raw.file, std::format("{} '{}' names no known configure preset ('{}')",
+                                                               kKindNames[kind], raw.name, out.configurePreset)));
+        }
+        if (out.configure != nullptr && !reachable(raw.file, out.configure->file)) {
+            return std::unexpected(error(raw.file, std::format("{} '{}' names configure preset '{}', which is not in "
+                                                               "its file or a file it includes",
+                                                               kKindNames[kind], raw.name, out.configurePreset)));
+        }
+        // The environment: the preset's own entries, then (by default) the configure preset's.
+        out.environment = out.merged.environment;
+        const auto inherit = boolField(out.merged, "inheritConfigureEnvironment");
+        if (out.configure != nullptr && inherit.value_or(true)) {
+            std::vector<std::string> configureStack;
+            const auto raws = std::ranges::find(m_raw[kConfigure], out.configure->name, &RawPreset::name);
+            auto configureMerged = merge(*raws, kConfigure, configureStack);
+            if (!configureMerged) {
+                return std::unexpected(std::move(configureMerged.error()));
+            }
+            for (const auto& entry : configureMerged->environment) {
+                if (std::ranges::none_of(out.environment, [&](const auto& e) { return e.first == entry.first; })) {
+                    out.environment.push_back(entry);
+                }
+            }
+        }
+        return out;
+    }
+
+    template<class Preset>
+    void common(Preset& preset, const RawPreset& raw) const {
         preset.name = raw.name;
         preset.file = raw.file;
         preset.user = raw.user;
         preset.displayName = raw.node->stringAt("displayName");
         preset.description = raw.node->stringAt("description");
         preset.hidden = raw.node->boolAt("hidden");
+    }
 
-        const auto field = [&](std::string_view name) -> const JsonNode* {
-            const auto found = merged->fields.find(std::string(name));
-            return found == merged->fields.end() ? nullptr : found->second;
-        };
-        if (const JsonNode* configure = field("configurePreset"); configure != nullptr && configure->isString()) {
-            preset.configurePreset = configure->text;
-        }
-        const CMakeConfigurePreset* configure = presets.findConfigurePreset(preset.configurePreset);
-        if (!preset.hidden && configure == nullptr) {
-            return std::unexpected(
-                error(raw.file, std::format("build preset '{}' names no known configure preset ('{}')", raw.name,
-                                            preset.configurePreset)));
-        }
-
-        // The environment: the build preset's own entries, then (by default) the configure preset's.
-        std::vector<std::pair<std::string, const JsonNode*>> environment = merged->environment;
-        const JsonNode* inherit = field("inheritConfigureEnvironment");
-        if (configure != nullptr && (inherit == nullptr || !inherit->isBool() || inherit->boolean)) {
-            std::vector<std::string> configureStack;
-            const auto raws = std::ranges::find(m_configure, configure->name, &RawPreset::name);
-            auto configureMerged = merge(*raws, m_configure, kConfigureFields, m_configureMemo, configureStack);
-            if (!configureMerged) {
-                return std::unexpected(std::move(configureMerged.error()));
-            }
-            for (const auto& entry : configureMerged->environment) {
-                if (std::ranges::none_of(environment, [&](const auto& e) { return e.first == entry.first; })) {
-                    environment.push_back(entry);
-                }
-            }
-        }
-        Macros macros{.presetName = raw.name,
-                      .generator = configure != nullptr ? configure->generator : std::string(),
+    Macros macrosOf(const RawPreset& raw, const Dependent& base) const {
+        return Macros{.presetName = raw.name,
+                      .generator = base.configure != nullptr ? base.configure->generator : std::string(),
                       .fileDir = slashes(io::parentPath(raw.file)),
-                      .environment = &environment};
+                      .environment = &base.environment};
+    }
 
-        auto configuration = stringField(*merged, "configuration", macros, raw.file);
-        if (!configuration) {
-            return std::unexpected(std::move(configuration.error()));
+    Result<CMakeBuildPreset> resolveBuild(const RawPreset& raw, const CMakePresets& presets) {
+        m_vendorMacro = false;
+        auto base = dependent(raw, kBuild, presets);
+        if (!base) {
+            return std::unexpected(std::move(base.error()));
+        }
+        CMakeBuildPreset preset;
+        common(preset, raw);
+        preset.configurePreset = base->configurePreset;
+        const Macros macros = macrosOf(raw, *base);
+        auto configuration = stringField(base->merged, "configuration", macros, raw.file);
+        auto targets = listField(base->merged, "targets", macros, raw.file);
+        auto options = listField(base->merged, "nativeToolOptions", macros, raw.file);
+        auto environment = environmentOf(base->environment, macros, raw.file);
+        auto isEnabled = enabled(base->merged, macros, raw.file);
+        if (!configuration || !targets || !options || !environment || !isEnabled) {
+            return std::unexpected(!configuration ? configuration.error()
+                                   : !targets     ? targets.error()
+                                   : !options     ? options.error()
+                                   : !environment ? environment.error()
+                                                  : isEnabled.error());
         }
         preset.configuration = std::move(*configuration);
+        preset.targets = std::move(*targets);
+        preset.nativeToolOptions = std::move(*options);
+        preset.jobs = intField(base->merged, "jobs");
+        preset.cleanFirst = boolField(base->merged, "cleanFirst").value_or(false);
+        preset.verbose = boolField(base->merged, "verbose").value_or(false);
+        preset.environment = std::move(*environment);
+        preset.enabled = *isEnabled && !m_vendorMacro; // cmake ignores a preset using $vendor{}.
+        return preset;
+    }
+
+    Result<CMakeTestPreset> resolveTest(const RawPreset& raw, const CMakePresets& presets) {
+        m_vendorMacro = false;
+        auto base = dependent(raw, kTest, presets);
+        if (!base) {
+            return std::unexpected(std::move(base.error()));
+        }
+        CMakeTestPreset preset;
+        common(preset, raw);
+        preset.configurePreset = base->configurePreset;
+        const Macros macros = macrosOf(raw, *base);
         for (const auto& [name, into] :
-             {std::pair<std::string_view, std::vector<std::string>*>{"targets", &preset.targets},
-              std::pair<std::string_view, std::vector<std::string>*>{"nativeToolOptions", &preset.nativeToolOptions}}) {
-            const JsonNode* node = field(name);
-            if (node == nullptr) {
-                continue;
+             {std::pair<std::string_view, std::string*>{"configuration", &preset.configuration},
+              std::pair<std::string_view, std::string*>{"filter.include.name", &preset.includeName},
+              std::pair<std::string_view, std::string*>{"filter.include.label", &preset.includeLabel},
+              std::pair<std::string_view, std::string*>{"filter.exclude.name", &preset.excludeName},
+              std::pair<std::string_view, std::string*>{"filter.exclude.label", &preset.excludeLabel},
+              std::pair<std::string_view, std::string*>{"execution.noTestsAction", &preset.noTestsAction}}) {
+            auto value = stringField(base->merged, name, macros, raw.file);
+            if (!value) {
+                return std::unexpected(std::move(value.error()));
             }
-            std::vector<const JsonNode*> items;
-            if (node->isString()) {
-                items.push_back(node);
-            } else if (node->isArray()) {
-                for (const JsonNode& item : node->items) {
-                    items.push_back(&item);
+            *into = std::move(*value);
+        }
+        preset.jobs = intField(base->merged, "execution.jobs");
+        preset.timeout = intField(base->merged, "execution.timeout");
+        preset.stopOnFailure = boolField(base->merged, "execution.stopOnFailure").value_or(false);
+        preset.outputOnFailure = boolField(base->merged, "output.outputOnFailure").value_or(false);
+        auto environment = environmentOf(base->environment, macros, raw.file);
+        if (!environment) {
+            return std::unexpected(std::move(environment.error()));
+        }
+        preset.environment = std::move(*environment);
+        auto isEnabled = enabled(base->merged, macros, raw.file);
+        if (!isEnabled) {
+            return std::unexpected(std::move(isEnabled.error()));
+        }
+        preset.enabled = *isEnabled && !m_vendorMacro; // cmake ignores a preset using $vendor{}.
+        return preset;
+    }
+
+    Result<CMakePackagePreset> resolvePackage(const RawPreset& raw, const CMakePresets& presets) {
+        m_vendorMacro = false;
+        auto base = dependent(raw, kPackage, presets);
+        if (!base) {
+            return std::unexpected(std::move(base.error()));
+        }
+        CMakePackagePreset preset;
+        common(preset, raw);
+        preset.configurePreset = base->configurePreset;
+        const Macros macros = macrosOf(raw, *base);
+        for (const auto& [name, into] :
+             {std::pair<std::string_view, std::string*>{"packageName", &preset.packageName},
+              std::pair<std::string_view, std::string*>{"packageVersion", &preset.packageVersion},
+              std::pair<std::string_view, std::string*>{"packageDirectory", &preset.packageDirectory}}) {
+            auto value = stringField(base->merged, name, macros, raw.file);
+            if (!value) {
+                return std::unexpected(std::move(value.error()));
+            }
+            *into = std::move(*value);
+        }
+        auto generators = listField(base->merged, "generators", macros, raw.file);
+        auto configurations = listField(base->merged, "configurations", macros, raw.file);
+        auto environment = environmentOf(base->environment, macros, raw.file);
+        auto isEnabled = enabled(base->merged, macros, raw.file);
+        if (!generators || !configurations || !environment || !isEnabled) {
+            return std::unexpected(!generators       ? generators.error()
+                                   : !configurations ? configurations.error()
+                                   : !environment    ? environment.error()
+                                                     : isEnabled.error());
+        }
+        preset.generators = std::move(*generators);
+        preset.configurations = std::move(*configurations);
+        preset.environment = std::move(*environment);
+        preset.enabled = *isEnabled && !m_vendorMacro; // cmake ignores a preset using $vendor{}.
+        return preset;
+    }
+
+    // A workflow preset's steps, checked as CMake checks them (header comment, "Kinds").
+    Result<CMakeWorkflowPreset> resolveWorkflow(const RawPreset& raw, const CMakePresets& presets) {
+        CMakeWorkflowPreset preset;
+        preset.name = raw.name;
+        preset.file = raw.file;
+        preset.user = raw.user;
+        preset.displayName = raw.node->stringAt("displayName");
+        preset.description = raw.node->stringAt("description");
+        const JsonNode* steps = raw.node->find("steps");
+        if (steps == nullptr || !steps->isArray() || steps->items.empty()) {
+            return std::unexpected(error(raw.file, std::format("workflow preset '{}' has no steps", raw.name)));
+        }
+        std::string configurePreset;
+        for (std::size_t i = 0; i < steps->items.size(); ++i) {
+            const JsonNode& step = steps->items[i];
+            const std::string type = step.stringAt("type");
+            const std::string name = step.stringAt("name");
+            std::optional<CMakePresetKind> kind;
+            for (CMakePresetKind candidate : {CMakePresetKind::Configure, CMakePresetKind::Build, CMakePresetKind::Test,
+                                              CMakePresetKind::Package}) {
+                if (type == toString(candidate)) {
+                    kind = candidate;
                 }
             }
-            for (const JsonNode* item : items) {
-                auto expanded = expand(item->text, macros, raw.file);
-                if (!expanded) {
-                    return std::unexpected(std::move(expanded.error()));
+            if (!kind || name.empty()) {
+                return std::unexpected(
+                    error(raw.file,
+                          std::format("workflow preset '{}': step {} has no valid type and name", raw.name, i + 1)));
+            }
+            if ((i == 0) != (*kind == CMakePresetKind::Configure)) {
+                return std::unexpected(error(
+                    raw.file,
+                    std::format("workflow preset '{}': only the first step is a configure step, and it must be one",
+                                raw.name)));
+            }
+            const auto stepError = [&](std::string_view why) {
+                return error(raw.file, std::format("workflow preset '{}': step {} ({} preset '{}') {}", raw.name, i + 1,
+                                                   type, name, why));
+            };
+            const auto check = [&](const auto& list) -> Result<std::string> {
+                const auto found =
+                    std::ranges::find(list, name, [](const auto& p) -> const std::string& { return p.name; });
+                if (found == list.end()) {
+                    return std::unexpected(stepError("does not exist"));
                 }
-                into->push_back(std::move(*expanded));
+                if (found->hidden) {
+                    return std::unexpected(stepError("is hidden"));
+                }
+                if constexpr (requires { found->configurePreset; }) {
+                    return found->configurePreset;
+                } else {
+                    return found->name;
+                }
+            };
+            Result<std::string> uses = *kind == CMakePresetKind::Configure ? check(presets.configurePresets)
+                                       : *kind == CMakePresetKind::Build   ? check(presets.buildPresets)
+                                       : *kind == CMakePresetKind::Test    ? check(presets.testPresets)
+                                                                           : check(presets.packagePresets);
+            if (!uses) {
+                return std::unexpected(std::move(uses.error()));
             }
-        }
-        if (const JsonNode* jobs = field("jobs"); jobs != nullptr && jobs->integer) {
-            preset.jobs = static_cast<int>(*jobs->integer);
-        }
-        if (const JsonNode* cleanFirst = field("cleanFirst"); cleanFirst != nullptr && cleanFirst->isBool()) {
-            preset.cleanFirst = cleanFirst->boolean;
-        }
-        auto expandedEnvironment = environmentOf(environment, macros, raw.file);
-        if (!expandedEnvironment) {
-            return std::unexpected(std::move(expandedEnvironment.error()));
-        }
-        preset.environment = std::move(*expandedEnvironment);
-        if (const JsonNode* condition = field("condition")) {
-            auto enabled = evaluate(*condition, macros, raw.file);
-            if (!enabled) {
-                return std::unexpected(std::move(enabled.error()));
+            if (i == 0) {
+                configurePreset = *uses;
+            } else if (*uses != configurePreset) {
+                return std::unexpected(stepError(std::format("does not use configure preset '{}'", configurePreset)));
             }
-            preset.enabled = *enabled;
+            preset.steps.push_back(CMakeWorkflowStep{.kind = *kind, .name = name});
         }
         return preset;
     }
@@ -779,14 +1166,28 @@ private:
     io::IFileSystem& m_fs;
     std::string m_sourceDir;
     CMakePresetsContext m_context;
-    int m_version = 0;
+    std::string m_projectFile;
+    bool m_projectExists = false;
+    std::int64_t m_projectVersion = 0;
+    std::int64_t m_userVersion = 0;
     std::map<std::string, JsonNode> m_documents; // By absolute path; nodes never move once inserted.
     std::vector<std::string> m_fileOrder;
-    std::vector<RawPreset> m_configure;
-    std::vector<RawPreset> m_build;
-    std::map<std::string, Merged> m_configureMemo;
-    std::map<std::string, Merged> m_buildMemo;
+    // Each read file's includes (the user file's implicit include of the project file too).
+    std::map<std::string, std::vector<std::string>> m_includes;
+    std::array<std::vector<RawPreset>, kKinds> m_raw;
+    std::array<std::map<std::string, Merged>, kKinds> m_memo;
+    // Set by expand() when it meets a $vendor{} macro; resolve*() disable such a preset.
+    bool m_vendorMacro = false;
 };
+
+template<class Preset>
+void listVisible(const std::vector<Preset>& presets, std::vector<CMakePresetListEntry>& into) {
+    for (const Preset& preset : presets) {
+        if (!preset.hidden && preset.enabled) {
+            into.push_back(CMakePresetListEntry{.name = preset.name, .displayName = preset.displayName});
+        }
+    }
+}
 
 } // namespace
 
@@ -800,8 +1201,28 @@ std::string_view cmakeHostSystemName() noexcept {
 #endif
 }
 
+std::string_view toString(CMakePresetKind kind) noexcept {
+    switch (kind) {
+    case CMakePresetKind::Configure: return "configure";
+    case CMakePresetKind::Build: return "build";
+    case CMakePresetKind::Test: return "test";
+    case CMakePresetKind::Package: return "package";
+    case CMakePresetKind::Workflow: return "workflow";
+    }
+    return "configure";
+}
+
 const CMakeConfigurePreset* CMakePresets::findConfigurePreset(std::string_view name) const noexcept {
     for (const CMakeConfigurePreset& preset : configurePresets) {
+        if (preset.name == name) {
+            return &preset;
+        }
+    }
+    return nullptr;
+}
+
+const CMakeBuildPreset* CMakePresets::findBuildPreset(std::string_view name) const noexcept {
+    for (const CMakeBuildPreset& preset : buildPresets) {
         if (preset.name == name) {
             return &preset;
         }
@@ -814,6 +1235,59 @@ std::vector<const CMakeBuildPreset*> CMakePresets::buildPresetsFor(std::string_v
     for (const CMakeBuildPreset& preset : buildPresets) {
         if (!preset.hidden && preset.enabled && preset.configurePreset == configurePreset) {
             out.push_back(&preset);
+        }
+    }
+    return out;
+}
+
+std::vector<const CMakeTestPreset*> CMakePresets::testPresetsFor(std::string_view configurePreset) const {
+    std::vector<const CMakeTestPreset*> out;
+    for (const CMakeTestPreset& preset : testPresets) {
+        if (!preset.hidden && preset.enabled && preset.configurePreset == configurePreset) {
+            out.push_back(&preset);
+        }
+    }
+    return out;
+}
+
+CMakePresetListing CMakePresets::listing() const {
+    CMakePresetListing out;
+    listVisible(configurePresets, out.configure);
+    listVisible(buildPresets, out.build);
+    listVisible(testPresets, out.test);
+    listVisible(packagePresets, out.package);
+    for (const CMakeWorkflowPreset& preset : workflowPresets) {
+        out.workflow.push_back(CMakePresetListEntry{.name = preset.name, .displayName = preset.displayName});
+    }
+    return out;
+}
+
+std::string formatCMakePresetListing(const CMakePresetListing& listing) {
+    std::string out;
+    for (const auto& [kind, entries] :
+         {std::pair<std::string_view, const std::vector<CMakePresetListEntry>*>{"configure", &listing.configure},
+          std::pair<std::string_view, const std::vector<CMakePresetListEntry>*>{"build", &listing.build},
+          std::pair<std::string_view, const std::vector<CMakePresetListEntry>*>{"test", &listing.test},
+          std::pair<std::string_view, const std::vector<CMakePresetListEntry>*>{"package", &listing.package},
+          std::pair<std::string_view, const std::vector<CMakePresetListEntry>*>{"workflow", &listing.workflow}}) {
+        if (entries->empty()) {
+            continue;
+        }
+        if (!out.empty()) {
+            out += '\n';
+        }
+        out += std::format("Available {} presets:\n\n", kind);
+        std::size_t longest = 0;
+        for (const CMakePresetListEntry& entry : *entries) {
+            longest = std::max(longest, entry.name.size());
+        }
+        for (const CMakePresetListEntry& entry : *entries) {
+            out += std::format("  \"{}\"", entry.name);
+            if (!entry.displayName.empty()) {
+                out += std::string(longest - entry.name.size(), ' ');
+                out += std::format(" - {}", entry.displayName);
+            }
+            out += '\n';
         }
     }
     return out;

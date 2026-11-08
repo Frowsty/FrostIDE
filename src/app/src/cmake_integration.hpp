@@ -16,6 +16,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,6 +31,7 @@ namespace frost::ui {
 class BuildController;
 class ShellWindow;
 class RunConsole;
+class BackgroundTask;
 } // namespace frost::ui
 namespace frost::build {
 class BuildService;
@@ -101,6 +103,10 @@ private:
     std::function<void(const std::vector<ui::nav::SessionCMakeArguments>&)> m_argumentPreferencesChanged;
     bool m_restoringTarget = false;
     std::uint64_t m_displayProfileGeneration = 0;
+    // CMK-15: the status bar task of the running configure (or reply read), cancelled through Stop.
+    void refreshConfigureTask();
+    std::shared_ptr<ui::BackgroundTask> m_configureTask;
+    std::optional<std::stop_callback<std::function<void()>>> m_configureStop;
     struct RunRelay;
     std::shared_ptr<RunRelay> m_runRelay;
     std::unique_ptr<build::RunSession> m_session;

@@ -34,6 +34,15 @@ constexpr std::string_view kStateHeader = "# FrostIDE CMake profiles v1";
 constexpr std::string_view kStateFileName = "cmake-profiles.txt";
 constexpr char kSeparator = kWindows ? '\\' : '/';
 
+// "a, b, c".
+std::string joinStrings(const std::vector<std::string>& items) {
+    std::string out;
+    for (const std::string& item : items) {
+        out += out.empty() ? item : ", " + item;
+    }
+    return out;
+}
+
 #ifdef _WIN32
 // Numbers the private mspdbsrv endpoints (_MSPDBSRV_ENDPOINT_) of cl.exe children.
 std::atomic<std::uint64_t> g_pdbEndpointCounter{0}; // Constant-initialised: no global constructor.
@@ -147,6 +156,32 @@ bool isPresetsFileName(std::string_view path) {
     return name == project::kCMakePresetsFile || name == project::kCMakeUserPresetsFile;
 }
 
+// The greatest index-*.json name in `buildDirectory`'s reply directory (the current reply), or "".
+std::string currentReplyIndex(io::IFileSystem& fs, std::string_view buildDirectory) {
+    auto replyDir = project::cmakeFileApiReplyDirectory(buildDirectory);
+    if (!replyDir) {
+        return {};
+    }
+    auto entries = fs.listDirectory(*replyDir);
+    if (!entries) {
+        return {};
+    }
+    std::string newest;
+    for (const io::DirEntry& entry : *entries) {
+        if (entry.type == io::FileType::Regular && entry.name.starts_with("index-") && entry.name.ends_with(".json") &&
+            entry.name > newest) {
+            newest = entry.name;
+        }
+    }
+    return newest.empty() ? std::string() : io::joinPath(*replyDir, newest).value_or(std::string());
+}
+
+// What identifies a profile's reply: the build directory, generator and the configuration it is read in.
+bool sameReply(const project::CMakeProfile& a, const project::CMakeProfile& b) {
+    return documentKey(a.buildDirectory) == documentKey(b.buildDirectory) && a.generator == b.generator &&
+           (!project::isMultiConfigGenerator(a.generator) || a.effectiveConfiguration() == b.effectiveConfiguration());
+}
+
 } // namespace
 
 std::string_view toString(CMakeStep step) noexcept {
@@ -156,6 +191,21 @@ std::string_view toString(CMakeStep step) noexcept {
     case CMakeStep::Build: return "Build";
     }
     return "Configure";
+}
+
+std::string_view toString(CMakeActivity activity) noexcept {
+    switch (activity) {
+    case CMakeActivity::Idle: return "Idle";
+    case CMakeActivity::ReadingModel: return "Reading the CMake project model";
+    case CMakeActivity::WaitingForTrust: return "Waiting for trust";
+    case CMakeActivity::Preparing: return "Preparing";
+    case CMakeActivity::Configuring: return "Configuring";
+    case CMakeActivity::Generating: return "Generating";
+    case CMakeActivity::Cleaning: return "Cleaning";
+    case CMakeActivity::Building: return "Building";
+    case CMakeActivity::Cancelling: return "Cancelling";
+    }
+    return "Idle";
 }
 
 std::vector<project::CMakeProfileRecord> cmakeProfileRecords(const settings::RecordList& records) {
@@ -223,6 +273,9 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         std::shared_ptr<AdmissionLease> admission;
         std::optional<CMakeBuildWrapper> wrapper{};
         std::uint64_t trustRevision = 0;
+        std::string replyIndexBefore{}; // The current reply's index when the configure step started.
+        bool generating = false;        // cmake printed "-- Configuring done" in this configure step.
+        bool readingReply = false;      // The configure step's reply is being read.
     };
 
     State(io::IFileSystem& fileSystem, io::IProcessLauncher& processLauncher, project::TrustStore& store,
@@ -266,6 +319,8 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     std::uint64_t replyGeneration FROST_GUARDED_BY(mutex) = 0;
     // loadReply tasks queued and not yet run (CMakeService::modelLoading).
     int replyLoadsPending FROST_GUARDED_BY(mutex) = 0;
+    bool replyLoadRunning FROST_GUARDED_BY(mutex) = false; // A loadReply is reading now.
+    CMakeProgress progressValue FROST_GUARDED_BY(mutex);
     DiagnosticIndex diagnostics FROST_GUARDED_BY(mutex);
     std::optional<CMakeConfigureOutcome> lastConfigure FROST_GUARDED_BY(mutex);
     std::optional<CMakeBuildOutcome> lastBuild FROST_GUARDED_BY(mutex);
@@ -386,6 +441,70 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         state = value;
         publishedState.store(value);
         emitState(value);
+        refreshProgressLocked();
+    }
+
+    /*
+     * Recomputes the activity (CMakeProgress) from the state and the job, and reports a change:
+     * posted as an event, or with `direct` returned for the caller, a task on the service thread,
+     * to deliver itself once it has released the lock (an event posted by a task runs only after
+     * the task, too late for "reading the reply" said by the task that reads it). Sequence
+     * numbers let the receiver drop an older value that arrives after a newer one.
+     */
+    std::optional<CMakeProgress> refreshProgressLocked(bool direct = false) FROST_REQUIRES(mutex) {
+        CMakeProgress next;
+        switch (state) {
+        case BuildState::Idle:
+            next.activity = replyLoadRunning ? CMakeActivity::ReadingModel : CMakeActivity::Idle;
+            break;
+        case BuildState::NeedsTrust:
+            next.activity = CMakeActivity::WaitingForTrust;
+            next.cancellable = true;
+            break;
+        case BuildState::SavingDocuments:
+        case BuildState::Starting:
+            next.activity = CMakeActivity::Preparing;
+            next.cancellable = true;
+            break;
+        case BuildState::Running:
+            if (job && job->readingReply) {
+                next.activity = CMakeActivity::ReadingModel;
+            } else if (job && job->current == CMakeStep::Configure) {
+                next.activity = job->generating ? CMakeActivity::Generating : CMakeActivity::Configuring;
+                next.cancellable = true;
+            } else {
+                next.activity =
+                    job && job->current == CMakeStep::Clean ? CMakeActivity::Cleaning : CMakeActivity::Building;
+                next.cancellable = true;
+            }
+            break;
+        case BuildState::Cancelling: next.activity = CMakeActivity::Cancelling; break;
+        }
+        if (next.activity != CMakeActivity::Idle) {
+            if (job) {
+                next.profile = job->profile.name;
+            } else if (auto profile = activeProfileLocked()) {
+                next.profile = profile->name;
+            }
+        }
+        if (next.activity == progressValue.activity && next.profile == progressValue.profile &&
+            next.cancellable == progressValue.cancellable) {
+            return std::nullopt;
+        }
+        next.since = std::chrono::steady_clock::now();
+        next.sequence = progressValue.sequence + 1;
+        progressValue = next;
+        if (direct) {
+            return next;
+        }
+        emit([this, next] { deliverProgress(next); });
+        return std::nullopt;
+    }
+
+    void deliverProgress(const std::optional<CMakeProgress>& value) const {
+        if (value && callbacks.onProgress) {
+            callbacks.onProgress(*value);
+        }
     }
 
     // ---- Folder state.
@@ -470,8 +589,13 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         return project::isMultiConfigGenerator(profile.generator) ? profile.effectiveConfiguration() : std::string();
     }
 
-    // Reads `profile`'s existing reply (blocking); nullptr when there is none or it does not parse.
-    std::shared_ptr<const project::CMakeProject> readReply(const project::CMakeProfile& profile) {
+    /*
+     * Reads `profile`'s existing reply (blocking); nullptr when there is none, it does not parse,
+     * or its codemodel names a source directory other than `folder` (header comment, "Stale
+     * replies": a build directory configured from another tree is not this folder's model).
+     */
+    std::shared_ptr<const project::CMakeProject> readReply(const project::CMakeProfile& profile,
+                                                           const std::string& folder) {
         auto reply = project::readCMakeFileApiReply(fs, profile.buildDirectory, replyConfiguration(profile));
         if (!reply && reply.error().code() == ErrorCode::NotFound) {
             reply = project::readCMakeFileApiReply(fs, profile.buildDirectory);
@@ -479,7 +603,28 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         if (!reply || !*reply) {
             return nullptr;
         }
+        if (documentKey((*reply)->sourceDirectory) != documentKey(folder)) {
+            return nullptr;
+        }
         return std::make_shared<const project::CMakeProject>(std::move(**reply));
+    }
+
+    /*
+     * Whether `reply` is older than one of its project inputs or the presets files
+     * `presetFiles` (modified after its index file was written: the inputs changed while nobody
+     * watched). A status that cannot be read counts as not newer. O(inputs) status calls.
+     */
+    bool replyOlderThanInputs(const project::CMakeProject& reply, const std::vector<std::string>& presetFiles) {
+        auto index = fs.status(reply.replyIndex);
+        if (!index) {
+            return false;
+        }
+        std::vector<std::string> inputs = reply.projectInputs();
+        inputs.insert(inputs.end(), presetFiles.begin(), presetFiles.end());
+        return std::ranges::any_of(inputs, [&](const std::string& input) {
+            auto status = fs.status(input);
+            return status && status->mtime > index->mtime;
+        });
     }
 
     /*
@@ -511,24 +656,45 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     void loadReply(std::uint64_t generation, const project::CMakeProfile& profile, bool configureIfMissing,
                    const std::shared_ptr<AdmissionLease>& lease) {
         static_cast<void>(lease);
-        auto reply = readReply(profile);
+        std::string folder;
+        std::vector<std::string> presetFiles;
+        std::optional<CMakeProgress> reading;
+        {
+            LockGuard lock(mutex);
+            folder = sourceDir;
+            presetFiles = presets ? presets->files : std::vector<std::string>{};
+            if (replyGeneration == generation) {
+                replyLoadRunning = true;
+                reading = refreshProgressLocked(true);
+            }
+        }
+        deliverProgress(reading);
+        auto reply = readReply(profile, folder);
+        const bool older = reply && replyOlderThanInputs(*reply, presetFiles);
+        std::optional<CMakeProgress> done;
+        bool publish = false;
         {
             LockGuard lock(mutex);
             --replyLoadsPending;
-            if (replyGeneration != generation || configuredOnce || model) {
-                return;
+            if (replyLoadRunning) {
+                replyLoadRunning = false;
+                done = refreshProgressLocked(true);
             }
-            model = reply;
-            stale = false;
-            recomputeWatchedLocked();
-            if (configureIfMissing && !reply && options.configureOnOpen) {
-                // Busy only for a job started since the switch, which configures itself (above).
-                static_cast<void>(startJobLocked(JobKind::Configure, true, {}, {CMakeStep::Configure}));
+            if (replyGeneration == generation && !configuredOnce && !model) {
+                publish = true;
+                model = reply;
+                stale = older;
+                recomputeWatchedLocked();
+                if (configureIfMissing && !reply && options.configureOnOpen) {
+                    // Busy only for a job started since the switch, which configures itself (above).
+                    static_cast<void>(startJobLocked(JobKind::Configure, true, {}, {CMakeStep::Configure}));
+                }
             }
         }
+        deliverProgress(done);
         // Directly, not through emit: this task holds the place in the event order where the model
         // of the open or switch belongs (before the events of the job it may have started).
-        if (callbacks.onModelChanged) {
+        if (publish && callbacks.onModelChanged) {
             callbacks.onModelChanged(reply);
         }
     }
@@ -566,7 +732,8 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         return fs.writeFileAtomic(options.stateFilePath, text);
     }
 
-    // The index of the profile named `name`, else the first usable profile, else 0.
+    // The index of the profile named `name`, else the first profile of configure preset `name`,
+    // else the first usable profile, else 0.
     static std::optional<std::size_t> chooseProfile(const std::vector<project::CMakeProfile>& list,
                                                     const std::optional<std::string>& name) {
         if (list.empty()) {
@@ -578,6 +745,11 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
                     return i;
                 }
             }
+            for (std::size_t i = 0; i < list.size(); ++i) {
+                if (list[i].source == project::CMakeProfileSource::Preset && list[i].configurePreset == *name) {
+                    return i;
+                }
+            }
         }
         for (std::size_t i = 0; i < list.size(); ++i) {
             if (list[i].usable()) {
@@ -585,6 +757,38 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             }
         }
         return 0;
+    }
+
+    /*
+     * Recomputes the profiles from the presets and records, keeping the active one by name. When
+     * the active profile's reply changes (another build directory, generator or configuration, or
+     * the profile is gone), the old model is dropped and the new active profile's reply is read
+     * on the service thread, as a switch reads it (header comment, "Stale replies"; CMK-1).
+     * `configureIfMissing` is loadReply's. Emits the profiles.
+     */
+    void recomputeProfilesLocked(bool configureIfMissing) FROST_REQUIRES(mutex) {
+        const std::optional<project::CMakeProfile> before = activeProfileLocked();
+        profiles = project::cmakeProfilesFor(sourceDir, presets, records, recordSource);
+        active = chooseProfile(profiles, before ? std::optional<std::string>(before->name) : std::nullopt);
+        const std::optional<project::CMakeProfile> after = activeProfileLocked();
+        const bool replyChanged = before.has_value() != after.has_value() ||
+                                  (before && after && (before->name != after->name || !sameReply(*before, *after)));
+        if (replyChanged) {
+            const std::uint64_t load = ++replyGeneration;
+            model = nullptr;
+            stale = false;
+            configuredOnce = false;
+            if (after) {
+                ++replyLoadsPending;
+                post([this, load, profile = *after, configureIfMissing] {
+                    loadReply(load, profile, configureIfMissing, nullptr);
+                });
+            } else {
+                emitModel(nullptr);
+            }
+        }
+        recomputeWatchedLocked();
+        emitProfilesLocked();
     }
 
     // ---- Jobs.
@@ -953,6 +1157,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         }
         const CMakeStep step = job->steps.front();
         job->current = step;
+        job->readingReply = false;
         const bool configure = step == CMakeStep::Configure;
         io::ProcessSpec spec;
         spec.executable = job->tools.cmake;
@@ -968,6 +1173,9 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
                 finishJobLocked(std::move(query.error()).withContext("while writing the CMake File API query"));
                 return;
             }
+            // The reply read after this configure must be newer (header comment, "Stale replies").
+            job->replyIndexBefore = currentReplyIndex(fs, job->profile.buildDirectory);
+            job->generating = false;
             auto arguments = project::cmakeConfigureArguments(job->profile, job->sourceDir, job->tools.ninja);
             if (!arguments) {
                 finishJobLocked(std::move(arguments.error()));
@@ -1014,9 +1222,13 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             spec.arguments = project::cmakeBuildArguments(job->profile, targets, step == CMakeStep::Clean,
                                                           static_cast<int>(options.buildJobs));
             spec.workingDirectory = job->profile.buildDirectory;
-            const std::string what = job->request.targetName.empty()
-                                         ? std::string("all targets")
-                                         : std::format("target {}", job->request.targetName);
+            // Without a chosen target the profile's build preset decides (its "targets").
+            std::string what = std::format("target {}", job->request.targetName);
+            if (job->request.targetName.empty()) {
+                what = job->profile.buildTargets.empty()
+                           ? std::string("all targets")
+                           : std::format("the build preset's targets ({})", joinStrings(job->profile.buildTargets));
+            }
             emitOutput(false, BuildOutputKind::Status,
                        std::format("{} started: {}, profile {}", toString(step), what, job->profile.name));
         }
@@ -1047,6 +1259,11 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
                             });
                         } else
                             emitOutput(configure, kind, std::string(line));
+                        // cmake's own phase marker (CMakeActivity::Generating).
+                        if (configure && !job->generating && line.starts_with("-- Configuring done")) {
+                            job->generating = true;
+                            refreshProgressLocked();
+                        }
                     }
                 },
             .onDiagnostic =
@@ -1087,6 +1304,9 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     void finishStep(std::uint64_t id, const BuildResult& result) {
         std::unique_ptr<BuildSession> session;
         std::optional<project::CMakeProfile> configured;
+        std::string folder;
+        std::string indexBefore;
+        std::optional<CMakeProgress> reading;
         {
             LockGuard lock(mutex);
             if (!isCurrentLocked(id)) {
@@ -1096,21 +1316,35 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             job->lastResult = result;
             if (job->current == CMakeStep::Configure && result.success) {
                 configured = job->profile;
+                folder = job->sourceDir;
+                indexBefore = job->replyIndexBefore;
+                job->readingReply = true;
+                reading = refreshProgressLocked(true);
             }
         }
+        deliverProgress(reading);
         session.reset(); // Joins the session's waiter, which has just returned from onFinished.
         std::shared_ptr<const project::CMakeProject> reply;
         std::optional<Error> replyError;
         if (configured) {
-            reply = readReply(*configured);
+            reply = readReply(*configured, folder);
             if (!reply) {
                 replyError = Error(ErrorCode::NotFound,
                                    std::format("cmake wrote no File API reply into {}", configured->buildDirectory));
+            } else if (!indexBefore.empty() && documentKey(reply->replyIndex) == documentKey(indexBefore)) {
+                // A reply from before this configure would show targets cmake did not just report.
+                replyError = Error(ErrorCode::NotFound, std::format("cmake wrote no new File API reply into {}",
+                                                                    configured->buildDirectory));
+                reply = nullptr;
             }
         }
         LockGuard lock(mutex);
         if (!isCurrentLocked(id)) {
             return;
+        }
+        // readingReply stays set until the next step starts or the job ends (runNextStepLocked).
+        if (job->current == CMakeStep::Configure && !reply && model) {
+            stale = true; // The configure failed or was cancelled: the last model no longer matches.
         }
         if (!wrapperTrustCurrentLocked()) {
             finishJobLocked(Error(ErrorCode::Cancelled, "project trust changed during wrapper execution"));
@@ -1276,12 +1510,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
             ++profileGeneration;
             presets = std::move(loaded);
             presetsProblem = std::move(problem);
-            const std::optional<std::string> keep =
-                active && *active < profiles.size() ? std::optional<std::string>(profiles[*active].name) : std::nullopt;
-            profiles = project::cmakeProfilesFor(sourceDir, presets, records, recordSource);
-            active = chooseProfile(profiles, keep);
-            recomputeWatchedLocked();
-            emitProfilesLocked();
+            recomputeProfilesLocked(false); // The configure below follows.
         }
         if (state != BuildState::Idle) {
             reloadPending = true;
@@ -1560,12 +1789,7 @@ Result<void> CMakeService::setProfileRecords(std::vector<project::CMakeProfileRe
     if (s.sourceDir.empty()) {
         return {};
     }
-    const std::optional<std::string> keep = s.active && *s.active < s.profiles.size()
-                                                ? std::optional<std::string>(s.profiles[*s.active].name)
-                                                : std::nullopt;
-    s.profiles = project::cmakeProfilesFor(s.sourceDir, s.presets, s.records, s.recordSource);
-    s.active = State::chooseProfile(s.profiles, keep);
-    s.emitProfilesLocked();
+    s.recomputeProfilesLocked(true);
     return {};
 }
 
@@ -1577,6 +1801,11 @@ std::optional<std::string> CMakeService::presetsError() const {
 std::vector<std::string> CMakeService::presetFiles() const {
     LockGuard lock(m_state->mutex);
     return m_state->presets ? m_state->presets->files : std::vector<std::string>{};
+}
+
+project::CMakePresetListing CMakeService::presetListing() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->presets ? m_state->presets->listing() : project::CMakePresetListing{};
 }
 
 std::shared_ptr<const project::CMakeProject> CMakeService::model() const {
@@ -1730,6 +1959,11 @@ BuildState CMakeService::state() const {
 bool CMakeService::modelLoading() const {
     LockGuard lock(m_state->mutex);
     return m_state->replyLoadsPending > 0;
+}
+
+CMakeProgress CMakeService::progress() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->progressValue;
 }
 
 std::optional<CMakeStep> CMakeService::currentStep() const {

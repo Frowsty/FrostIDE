@@ -242,4 +242,5 @@ frost_add_test(app_corpus_tests QT
     LABELS integration corpus)
 target_include_directories(app_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_corpus_tests PRIVATE ${_frost_workbench_definitions}
-    FROST_CORPUS_FROSTENGINE_SHA="${_frost_engine_sha}" FROST_CORPUS_FROSTENGINE_PRESET="${_frost_engine_preset}")
+    FROST_CORPUS_FROSTENGINE_SHA="${_frost_engine_sha}" FROST_CORPUS_FROSTENGINE_PRESET="${_frost_engine_preset}"
+    FROST_TEST_CMAKE="${CMAKE_COMMAND}")

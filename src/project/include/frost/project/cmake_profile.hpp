@@ -6,10 +6,16 @@
 //
 /*
  * Choice. When the folder has presets (cmake_presets.hpp) with at least one visible (not hidden,
- * enabled) configure preset, the profiles are those presets, in file order, each with its first
- * visible build preset. Otherwise they are the `cmake.profiles` setting's records that apply to the
- * folder; without any, the single default profile: "Debug", build directory cmake-build-debug,
- * generator Ninja, CMAKE_BUILD_TYPE=Debug (CLion's default).
+ * enabled) configure preset, the profiles come from those presets, in CMake's order. A configure
+ * preset with at most one visible build preset gives one profile, named after the configure preset
+ * and built with that build preset (if any). One with several visible build presets gives one
+ * profile per build preset, named after the build preset and labelled with its displayName, else
+ * "<configure label>: <build preset>" (CLion's rule; CMK-1: picking a profile picks the build
+ * preset, so `cmake --build` runs the one the user chose). Should a build preset's name meet another
+ * profile's, it becomes "<build preset> (<configure preset>)". Profiles of one configure preset
+ * share its build directory. Otherwise the profiles are the `cmake.profiles` setting's records that
+ * apply to the folder; without any, the single default profile: "Debug", build directory
+ * cmake-build-debug, generator Ninja, CMAKE_BUILD_TYPE=Debug (CLion's default).
  *
  * The trust rule (PLAN.md section 3.5). A profile's build directory may lie outside the folder only
  * when the user chose it in an application-scope profile for that folder (a record whose `root`
@@ -20,12 +26,15 @@
  * Command lines (cmakeConfigureArguments): -S <source> -B <build> [-G <generator>]
  * [-T <toolset>, unless the strategy is external]
  * [-A <architecture>, unless the strategy is external] [-DCMAKE_BUILD_TYPE=<type>]
- * [-DCMAKE_TOOLCHAIN_FILE=...] [-DCMAKE_INSTALL_PREFIX=...] [-DCMAKE_MAKE_PROGRAM=<ninja>]
+ * [-DCMAKE_TOOLCHAIN_FILE=...] [-DCMAKE_INSTALL_PREFIX=...] [the preset's warnings, errors and
+ * debug switches] [-DCMAKE_MAKE_PROGRAM=<ninja>]
  * -D<cache variables>... -DCMAKE_EXPORT_COMPILE_COMMANDS=ON (always last, so it wins). The
  * presets are resolved natively and passed as these switches rather than with --preset, so what
  * FrostIDE shows and checks is exactly what runs, whatever CMake version is installed.
- * cmakeBuildArguments: --build <build> [--config <c>] [--target <t>...] [-j <n>] [-- <native
- * options>]; Clean is --target clean.
+ * cmakeBuildArguments: --build <build> [--config <c>] [--target <t>...] [-j <n>] [--clean-first]
+ * [--verbose] [-- <native options>]; Clean is --target clean. A build preset's fields map to
+ * these switches one to one, so the build runs what `cmake --build --preset <name>` runs (the
+ * real-cmake oracle test, CMK-1).
  *
  * Pure functions over plain values; thread-compatible.
  */
@@ -61,6 +70,7 @@ struct CMakeProfile {
     std::string generator{};                          // "Ninja"; "" lets CMake choose.
     std::string buildDirectory{};                     // Absolute, native, normalised.
     std::vector<CMakeCacheVariable> cacheVariables{}; // Extra -D switches, in order.
+    std::vector<std::string> configureArguments{};    // CMakeConfigurePreset::extraArguments.
     CMakeEnvironment environment{};                   // For configure (and builds, see buildEnvironment).
     std::string toolchainFile{};
     std::string installDir{};
@@ -73,6 +83,8 @@ struct CMakeProfile {
     std::string buildConfiguration{};                   // --config for multi-config generators; "" uses buildType.
     std::vector<std::string> buildTargets{};            // The build preset's targets; empty builds "all".
     int buildJobs = 0;                                  // -j; 0 leaves it to the build tool.
+    bool buildCleanFirst = false;                       // --clean-first (a build preset's cleanFirst).
+    bool buildVerbose = false;                          // --verbose (a build preset's verbose).
     std::vector<std::string> buildToolOptions{};        // After "--".
     std::optional<CMakeEnvironment> buildEnvironment{}; // A build preset's; nullopt uses `environment`.
 

@@ -7,6 +7,9 @@
 // as few times as possible: configure and the model (targets, the generated source, includes,
 // defines), a clean build, a build with a warning and an error mapped to their lines, Clean, the
 // reconfigure the real file watcher triggers when CMakeLists.txt changes, and a CMake Error.
+// The build-presets fixture (fixtures/cmake/presets-build, CMK-1): profiles of build presets build
+// what `cmake --build --preset` builds, and compiler errors land in Problems at the compiler's
+// file:line (FrostIDE's compiler, then cl.exe on Windows or gcc on Linux).
 // Label "integration" with the tag "cmake". The service's destructor ends every process tree.
 
 #include "frost/build/cmake_service.hpp"
@@ -34,6 +37,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace frost::build {
@@ -512,6 +516,258 @@ TEST(CMakeRealBuild, CancellingABuildEndsTheCommandsNinjaStarted) {
     ASSERT_TRUE(service->waitForIdle(240s));
     ASSERT_TRUE(service->lastOutcome().has_value() && service->lastOutcome()->succeeded());
     EXPECT_TRUE(fs.exists(finished).value_or(false)) << "the uncancelled build did not write " << finished;
+}
+
+// `path` with '/' separators, as a presets file spells it.
+std::string slashes(std::string path) {
+    std::ranges::replace(path, '\\', '/');
+    return path;
+}
+
+// Runs the pinned cmake in `directory` (the oracle runs), collecting its output.
+Result<io::ProcessResult> runCMake(std::vector<std::string> arguments, const std::string& directory) {
+    io::ProcessSpec spec;
+    spec.executable = native(FROST_TEST_CMAKE);
+    spec.arguments = std::move(arguments);
+    spec.workingDirectory = directory;
+    return io::runToCompletion(io::realProcessLauncher(), spec, {}, 5min);
+}
+
+// The executables a ninja dry run (`cmake --build ... -- -n`) would link: the file names after
+// "Linking C executable ", without a directory or extension.
+std::vector<std::string> linkedExecutables(std::string_view output) {
+    std::vector<std::string> names;
+    constexpr std::string_view kLinking = "Linking C executable ";
+    for (std::size_t at = output.find(kLinking); at != std::string_view::npos; at = output.find(kLinking, at + 1)) {
+        std::string_view name = output.substr(at + kLinking.size());
+        name = name.substr(0, name.find_first_of("\r\n"));
+        if (const std::size_t slash = name.find_last_of("\\/"); slash != std::string_view::npos) {
+            name.remove_prefix(slash + 1);
+        }
+        if (name.ends_with(".exe")) {
+            name.remove_suffix(4);
+        }
+        names.emplace_back(name);
+    }
+    std::ranges::sort(names);
+    return names;
+}
+
+/*
+ * The lines of the build output that report `severity` ("warning" or "error") for `file` in the
+ * compiler's own format, and the line number each names: clang and gcc print
+ * "<file>:<line>:<column>: warning:", clang-cl "<file>(<line>,<column>): warning:" and cl.exe
+ * "<file>(<line>): warning C4189:". This reads the real output independently of the product's
+ * parser, as the oracle for the line the Problems entry must carry.
+ */
+std::vector<int> reportedLines(const std::vector<std::string>& lines, std::string_view file,
+                               std::string_view severity) {
+    std::vector<int> found;
+    for (const std::string& line : lines) {
+        const std::size_t name = line.find(file);
+        if (name == std::string::npos || line.find(std::string(": ") + std::string(severity)) == std::string::npos) {
+            continue;
+        }
+        std::size_t at = name + file.size();
+        if (at < line.size() && (line[at] == ':' || line[at] == '(')) {
+            ++at;
+            int value = 0;
+            bool digits = false;
+            while (at < line.size() && line[at] >= '0' && line[at] <= '9') {
+                value = value * 10 + (line[at] - '0');
+                ++at;
+                digits = true;
+            }
+            if (digits) {
+                found.push_back(value);
+            }
+        }
+    }
+    return found;
+}
+
+// The build-presets fixture in a scratch copy, its presets naming `compiler`, and a trusted
+// service over it whose output lines are kept.
+struct PresetsRig {
+    PresetsRig(std::string_view tag, const std::string& compiler) : scratch(tag) {
+        folder = scratch.join("presets");
+        copyTree(native(FROST_BUILD_FIXTURES "/cmake/presets-build"), folder);
+        auto& fs = io::realFileSystem();
+        const std::string presets = std::format(R"({{"version": 6,
+  "configurePresets": [{{"name": "dev", "displayName": "Dev", "generator": "Ninja", "binaryDir": "${{sourceDir}}/out/dev",
+    "cacheVariables": {{"CMAKE_BUILD_TYPE": "Debug", "CMAKE_C_COMPILER": "{}"}}}}],
+  "buildPresets": [
+    {{"name": "dev-first", "configurePreset": "dev", "targets": ["first"]}},
+    {{"name": "dev-second", "configurePreset": "dev", "targets": ["second"], "displayName": "Second only"}},
+    {{"name": "dev-broken", "configurePreset": "dev", "targets": ["broken"]}}]}})",
+                                                slashes(compiler));
+        EXPECT_TRUE(fs.writeFileAtomic(under(folder, "CMakePresets.json"), presets).has_value());
+        auto opened = project::TrustStore::open(fs, scratch.join("trusted-roots.txt"));
+        EXPECT_TRUE(opened.has_value()) << opened.error().describe();
+        trust = std::move(*opened);
+        EXPECT_TRUE(trust->trust(folder).has_value());
+        CMakeServiceOptions options;
+        options.cmakePath = native(FROST_TEST_CMAKE);
+        options.ninjaPath = native(FROST_TEST_NINJA);
+        options.msvcCacheDirectory = scratch.join("msvc");
+        CMakeServiceCallbacks callbacks;
+        callbacks.onConfigureOutput = [](BuildOutputKind, std::string_view line) {
+            std::cout << "[configure] " << line << '\n';
+        };
+        callbacks.onOutput = [this](BuildOutputKind, std::string_view line) {
+            std::cout << "[build] " << line << '\n';
+            const std::scoped_lock lock(mutex);
+            output.emplace_back(line);
+        };
+        service = CMakeService::create(fs, io::realProcessLauncher(), *trust, options, callbacks);
+    }
+    ~PresetsRig() { service.reset(); } // Ends cmake's process trees before the scratch goes.
+    PresetsRig(const PresetsRig&) = delete ("owns the service");
+    PresetsRig& operator=(const PresetsRig&) = delete ("owns the service");
+
+    std::vector<std::string> takeOutput() {
+        const std::scoped_lock lock(mutex);
+        return std::exchange(output, {});
+    }
+
+    frost::test::ScratchDir scratch;
+    std::string folder;
+    std::unique_ptr<project::TrustStore> trust;
+    std::unique_ptr<CMakeService> service;
+    std::mutex mutex;
+    std::vector<std::string> output;
+};
+
+/*
+ * Builds the broken target with the rig's active profile and checks the Problems entries
+ * (service->diagnostics()) against the compiler's own report: the warning and the error of
+ * broken.c are at the lines the compiler printed (lines 4 and 9 of the fixture), jumpable, with the
+ * fixture's identifiers in their messages.
+ */
+void expectBrokenDiagnostics(PresetsRig& rig) {
+    auto& service = *rig.service;
+    ASSERT_TRUE(service.setActiveProfile("dev-broken").has_value());
+    static_cast<void>(rig.takeOutput());
+    ASSERT_TRUE(service.build(BuildAction::Build).has_value());
+    ASSERT_TRUE(service.waitForIdle(240s));
+    ASSERT_TRUE(service.lastOutcome().has_value());
+    EXPECT_FALSE(service.lastOutcome()->succeeded());
+    const std::vector<std::string> output = rig.takeOutput();
+    const std::vector<int> warned = reportedLines(output, "broken.c", "warning");
+    const std::vector<int> failed = reportedLines(output, "broken.c", "error");
+    ASSERT_FALSE(warned.empty()) << "the compiler reported no warning for broken.c";
+    ASSERT_FALSE(failed.empty()) << "the compiler reported no error for broken.c";
+    EXPECT_EQ(warned.front(), 4); // The fixture's unused variable.
+    EXPECT_EQ(failed.front(), 9); // Its undeclared identifier.
+
+    const std::string broken = under(rig.folder, "broken.c");
+    const auto diagnostics = service.diagnostics();
+    const BuildDiagnostic* warning = findDiagnostic(diagnostics, Severity::Warning, broken);
+    const BuildDiagnostic* error = findDiagnostic(diagnostics, Severity::Error, broken);
+    ASSERT_NE(warning, nullptr) << describeDiagnostics(service);
+    ASSERT_NE(error, nullptr) << describeDiagnostics(service);
+    EXPECT_EQ(warning->diagnostic.line, warned.front());
+    EXPECT_EQ(error->diagnostic.line, failed.front());
+    EXPECT_TRUE(warning->jumpable);
+    EXPECT_TRUE(error->jumpable);
+    EXPECT_NE(warning->diagnostic.message.find("unused_local"), std::string::npos) << warning->diagnostic.message;
+    EXPECT_NE(error->diagnostic.message.find("frost_undeclared_symbol"), std::string::npos)
+        << error->diagnostic.message;
+}
+
+/*
+ * CMK-1 with the real cmake: a configure preset with three build presets gives three profiles,
+ * one per build preset in the order `cmake --list-presets=build` prints them; choosing the second
+ * builds what `cmake --build --preset dev-second` builds (ninja's dry run through the real cmake is
+ * the oracle) and nothing else. Then the third profile's build errors land in Problems at the
+ * compiler's file:line (FrostIDE's own compiler: clang-cl on Windows, clang on Linux).
+ */
+TEST(CMakeRealBuild, BuildPresetProfilesBuildWhatTheirPresetBuildsAndMapCompilerDiagnostics) {
+    PresetsRig rig("cmake-build-presets", native(FROST_TEST_C_COMPILER));
+    auto& fs = io::realFileSystem();
+    auto& service = *rig.service;
+    ASSERT_TRUE(service.openFolder(rig.folder).has_value()); // Trusted: configures.
+    ASSERT_TRUE(service.waitForIdle(240s));
+    ASSERT_TRUE(service.lastConfigure().has_value());
+    ASSERT_TRUE(service.lastConfigure()->succeeded())
+        << (service.lastConfigure()->error ? service.lastConfigure()->error->describe() : std::string("cmake failed"));
+
+    // The profiles are the build presets cmake lists, in its order.
+    auto listed = runCMake({"--list-presets=build"}, rig.folder);
+    ASSERT_TRUE(listed.has_value()) << listed.error().describe();
+    ASSERT_EQ(listed->exitCode, 0) << listed->stderrBytes;
+    std::vector<std::string> cmakeBuildPresets;
+    for (std::size_t at = listed->stdoutBytes.find("  \""); at != std::string::npos;
+         at = listed->stdoutBytes.find("  \"", at + 1)) {
+        const std::size_t end = listed->stdoutBytes.find('"', at + 3);
+        cmakeBuildPresets.push_back(listed->stdoutBytes.substr(at + 3, end - at - 3));
+        at = end;
+    }
+    std::vector<std::string> profileBuildPresets;
+    for (const project::CMakeProfile& profile : service.profiles()) {
+        profileBuildPresets.push_back(profile.buildPreset);
+    }
+    EXPECT_EQ(profileBuildPresets, cmakeBuildPresets);
+    ASSERT_EQ(service.activeProfile()->buildPreset, "dev-first");
+
+    // The oracle: what `cmake --build --preset dev-second` would link (a ninja dry run).
+    auto dry = runCMake({"--build", "--preset", "dev-second", "--", "-n"}, rig.folder);
+    ASSERT_TRUE(dry.has_value()) << dry.error().describe();
+    ASSERT_EQ(dry->exitCode, 0) << dry->stdoutBytes << dry->stderrBytes;
+    const std::vector<std::string> expected = linkedExecutables(dry->stdoutBytes);
+    ASSERT_FALSE(expected.empty()) << dry->stdoutBytes;
+
+    // Choosing the second profile and building links exactly those executables.
+    ASSERT_TRUE(service.setActiveProfile("dev-second").has_value());
+    EXPECT_EQ(service.activeProfile()->displayName, "Second only");
+    ASSERT_TRUE(service.waitForIdle(240s));
+    ASSERT_TRUE(service.build(BuildAction::Build).has_value());
+    ASSERT_TRUE(service.waitForIdle(240s));
+    ASSERT_TRUE(service.lastOutcome().has_value());
+    ASSERT_TRUE(service.lastOutcome()->succeeded()) << describeDiagnostics(service);
+    const auto model = service.model();
+    ASSERT_NE(model, nullptr);
+    std::vector<std::string> built;
+    for (const project::CMakeTarget& target : model->targets) {
+        if (target.type == project::CMakeTargetType::Executable && !target.artifacts.empty() &&
+            fs.exists(target.artifacts.front()).value_or(false)) {
+            built.push_back(target.name);
+        }
+    }
+    std::ranges::sort(built);
+    EXPECT_EQ(built, expected) << "the second profile did not build what its build preset builds; the dry run: "
+                               << dry->stdoutBytes;
+
+    expectBrokenDiagnostics(rig);
+}
+
+/*
+ * The Problems mapping on another compiler's real output: cl.exe on Windows (found through the
+ * MSVC environment the service captures, as for FrostEngine's presets), gcc on Linux. Skipped,
+ * and reported as skipped, when that compiler is not installed.
+ */
+TEST(CMakeRealBuild, BuildPresetDiagnosticsFromTheOtherCompilerLandAtTheirLines) {
+    std::string compiler;
+    if constexpr (kWindows) {
+        const std::string vswhere = "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe";
+        if (!io::realFileSystem().exists(vswhere).value_or(false)) {
+            GTEST_SKIP() << "no Visual Studio installation (vswhere.exe), so no cl.exe";
+        }
+        compiler = "cl"; // CMake finds it on the captured environment's PATH.
+    } else {
+        compiler = "/usr/bin/gcc";
+        if (!io::realFileSystem().exists(compiler).value_or(false)) {
+            GTEST_SKIP() << "no " << compiler;
+        }
+    }
+    PresetsRig rig("cmake-build-presets-other", compiler);
+    auto& service = *rig.service;
+    ASSERT_TRUE(service.openFolder(rig.folder).has_value());
+    ASSERT_TRUE(service.waitForIdle(240s));
+    ASSERT_TRUE(service.lastConfigure().has_value());
+    ASSERT_TRUE(service.lastConfigure()->succeeded())
+        << (service.lastConfigure()->error ? service.lastConfigure()->error->describe() : std::string("cmake failed"));
+    expectBrokenDiagnostics(rig);
 }
 
 } // namespace

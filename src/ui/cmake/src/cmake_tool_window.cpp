@@ -5,6 +5,7 @@
 
 #include "frost/ui/cmake/cmake_tool_window.hpp"
 
+#include "frost/project/cmake_presets.hpp"
 #include "frost/ui/frost_style.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/tr.hpp"
@@ -12,11 +13,20 @@
 #include <QComboBox>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QSignalBlocker>
+#include <QTabWidget>
+#include <QTimer>
 #include <QToolButton>
+#include <QTreeWidget>
 #include <QVBoxLayout>
+
+#include <chrono>
+#include <utility>
+#include <vector>
 
 namespace frost::ui::cmake {
 
@@ -24,6 +34,8 @@ namespace {
 
 constexpr std::string_view kContext = "cmake";
 constexpr int kOutputLines = 20'000; // The output keeps the newest lines of a long configure.
+
+QString toQString(std::string_view text) { return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())); }
 
 } // namespace
 
@@ -61,6 +73,28 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
     bar->addStretch(1);
     layout->addLayout(bar);
 
+    // The progress row (CMK-15): what the service is doing, for how long, with a busy bar.
+    m_progressRow = new QWidget(this);
+    m_progressRow->setObjectName(QStringLiteral("cmakeProgress"));
+    auto* progress = new QHBoxLayout(m_progressRow);
+    progress->setContentsMargins(6, 2, 6, 2);
+    progress->setSpacing(6);
+    m_progressLabel = new QLabel(m_progressRow);
+    m_progressLabel->setObjectName(QStringLiteral("cmakeProgressLabel"));
+    m_progressLabel->setTextFormat(Qt::PlainText);
+    m_progressBar = new QProgressBar(m_progressRow);
+    m_progressBar->setRange(0, 0); // Indeterminate: cmake reports phases, not fractions.
+    m_progressBar->setTextVisible(false);
+    m_progressBar->setMaximumHeight(6);
+    m_progressBar->setMaximumWidth(160);
+    progress->addWidget(m_progressLabel);
+    progress->addWidget(m_progressBar);
+    progress->addStretch(1);
+    m_progressRow->setVisible(false);
+    layout->addWidget(m_progressRow);
+    m_elapsed = new QTimer(this);
+    m_elapsed->setInterval(1000);
+
     m_banner = new QLabel(this);
     m_banner->setObjectName(QStringLiteral("cmakeErrorBanner"));
     m_banner->setWordWrap(true);
@@ -69,13 +103,24 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
     m_banner->setVisible(false);
     layout->addWidget(m_banner);
 
-    m_output = new QPlainTextEdit(this);
+    m_tabs = new QTabWidget(this);
+    m_tabs->setObjectName(QStringLiteral("cmakeTabs"));
+    m_tabs->setDocumentMode(true);
+    m_output = new QPlainTextEdit(m_tabs);
     m_output->setObjectName(QStringLiteral("cmakeOutput"));
     m_output->setFrameShape(QFrame::NoFrame);
     m_output->setReadOnly(true);
     m_output->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_output->setMaximumBlockCount(kOutputLines);
-    layout->addWidget(m_output, 1);
+    m_tabs->addTab(m_output, qtr(kContext, "Output"));
+    m_presets = new QTreeWidget(m_tabs);
+    m_presets->setObjectName(QStringLiteral("cmakePresets"));
+    m_presets->setFrameShape(QFrame::NoFrame);
+    m_presets->setColumnCount(2);
+    m_presets->setHeaderLabels({qtr(kContext, "Preset"), qtr(kContext, "Display name")});
+    m_presets->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_tabs->addTab(m_presets, qtr(kContext, "Presets"));
+    layout->addWidget(m_tabs, 1);
 
     connect(m_reload, &QToolButton::clicked, &m_controller, &CMakeController::reload);
     connect(m_stop, &QToolButton::clicked, &m_controller, &CMakeController::cancel);
@@ -84,14 +129,20 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
             m_controller.selectProfile(index);
         }
     });
-    connect(&m_controller, &CMakeController::profilesChanged, this, &CMakeToolWindow::refreshProfiles);
+    connect(&m_controller, &CMakeController::profilesChanged, this, [this] {
+        refreshProfiles();
+        refreshPresets();
+    });
     connect(&m_controller, &CMakeController::problemChanged, this, &CMakeToolWindow::refreshProblem);
     connect(&m_controller, &CMakeController::busyChanged, this, &CMakeToolWindow::refreshBusy);
+    connect(&m_controller, &CMakeController::progressChanged, this, &CMakeToolWindow::refreshProgress);
+    connect(m_elapsed, &QTimer::timeout, this, &CMakeToolWindow::refreshProgress);
     connect(&m_controller, &CMakeController::configureStarted, this, [this](const QString&) { m_output->clear(); });
     connect(&m_controller, &CMakeController::configureOutput, this,
             [this](int, const QString& line) { m_output->appendPlainText(line); });
 
     refreshProfiles();
+    refreshPresets();
     refreshProblem(m_controller.problem());
     refreshBusy(m_controller.busy());
 }
@@ -115,6 +166,50 @@ void CMakeToolWindow::refreshBusy(bool busy) {
     m_reload->setEnabled(!busy);
     m_stop->setEnabled(busy);
     m_profiles->setEnabled(m_controller.profileLabels().size() > 1 && !busy);
+    refreshProgress();
+}
+
+void CMakeToolWindow::refreshProgress() {
+    const build::CMakeProgress& progress = m_controller.progress();
+    const QString text = m_controller.progressText();
+    if (text.isEmpty()) {
+        m_elapsed->stop();
+        m_progressRow->setVisible(false);
+        m_progressLabel->clear();
+        return;
+    }
+    const auto seconds =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - progress.since).count();
+    m_progressLabel->setText(qtr(kContext, "%1 (%2 s)").arg(text).arg(static_cast<qlonglong>(seconds)));
+    m_progressRow->setVisible(true);
+    if (!m_elapsed->isActive()) {
+        m_elapsed->start();
+    }
+    // Stop follows the reported activity while the folder is busy (a reply read cannot be
+    // stopped); before the first report arrives refreshBusy keeps Stop on.
+    if (m_controller.busy()) {
+        m_stop->setEnabled(progress.cancellable);
+    }
+}
+
+void CMakeToolWindow::refreshPresets() {
+    m_presets->clear();
+    const project::CMakePresetListing& listing = m_controller.presetListing();
+    const std::pair<QString, const std::vector<project::CMakePresetListEntry>*> kinds[] = {
+        {qtr(kContext, "Configure presets"), &listing.configure}, {qtr(kContext, "Build presets"), &listing.build},
+        {qtr(kContext, "Test presets"), &listing.test},           {qtr(kContext, "Package presets"), &listing.package},
+        {qtr(kContext, "Workflow presets"), &listing.workflow},
+    };
+    for (const auto& [title, entries] : kinds) {
+        if (entries->empty()) {
+            continue; // cmake --list-presets leaves out empty kinds too.
+        }
+        auto* kind = new QTreeWidgetItem(m_presets, QStringList{title});
+        for (const project::CMakePresetListEntry& entry : *entries) {
+            (void)new QTreeWidgetItem(kind, QStringList{toQString(entry.name), toQString(entry.displayName)});
+        }
+    }
+    m_presets->expandAll();
 }
 
 } // namespace frost::ui::cmake

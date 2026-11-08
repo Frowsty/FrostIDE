@@ -1,0 +1,25 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "first",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/${presetName}",
+      "cacheVariables": {
+        "ORACLE_ORDER": "first",
+        "ORACLE_INHERITED": "${presetName} from ${fileDir}",
+        "ORACLE_OVERRIDDEN": "first",
+        "ORACLE_REMOVED": "first"
+      },
+      "environment": {"ORACLE_ENV_GONE": "gone", "ORACLE_ENV_FIRST": "first"}
+    },
+    {
+      "name": "second",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "cacheVariables": {"ORACLE_ORDER": "second", "ORACLE_SECOND_ONLY": "second"},
+      "environment": {"ORACLE_ENV_FIRST": "second", "ORACLE_ENV_SECOND": "second"}
+    }
+  ]
+}
