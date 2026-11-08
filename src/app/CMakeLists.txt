@@ -85,6 +85,7 @@ frost_add_library(app LAYER app
         src/workbench_clone.cpp
         src/workbench_prompts.cpp
         src/workbench_run.cpp
+        src/workbench_run_configurations.cpp
         src/workbench_tool_windows.cpp
         src/workbench_update.cpp
         src/language_bridge.hpp

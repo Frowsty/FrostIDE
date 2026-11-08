@@ -104,6 +104,7 @@
 #include "frost/ui/nav/session.hpp"
 #include "frost/ui/qt_os_appearance.hpp"
 #include "frost/ui/run_console.hpp"
+#include "frost/ui/run_tool_window.hpp"
 #include "frost/ui/shell/background_tasks.hpp"
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/shell/shell_window.hpp"
@@ -578,7 +579,16 @@ public:
         return m_options.metadataCacheDirectory;
     }
     [[nodiscard]] ui::RunController* runController() const noexcept { return m_runController.get(); }
-    [[nodiscard]] ui::RunConsole* runConsole() const noexcept { return m_runConsole.data(); }
+    // The Run tool window v2 (RUN-3): one tab per run.
+    [[nodiscard]] ui::RunToolWindow* runToolWindow() const noexcept { return m_runWindow.data(); }
+    // The console of the Run tool window's current tab (the newest run's, unless another tab was
+    // chosen); null only before createRunService.
+    [[nodiscard]] ui::RunConsole* runConsole() const noexcept {
+        return m_runWindow ? m_runWindow->currentConsole() : nullptr;
+    }
+    // Run > Edit Configurations... (RUN-3): the Run/Debug Configurations dialog over the open
+    // workspace's configurations; OK persists them. Nothing without a window or a workspace.
+    void editRunConfigurations();
     [[nodiscard]] ui::SolutionExplorer* solutionExplorer() const noexcept { return m_explorer.data(); }
     [[nodiscard]] ui::ProblemsView* problems() const noexcept { return m_problems.data(); }
     [[nodiscard]] ui::BuildOutputPane* buildOutput() const noexcept { return m_output.data(); }
@@ -620,6 +630,15 @@ private:
     void registerActions();
     void createBuildService();
     void createRunService();
+    // Run configurations (RUN-2/RUN-3, workbench_run_configurations.cpp): the generated ones of the
+    // open CMake model and solution, the workspace store, a CMake launch with the user's edits, and
+    // the trust gate of a native configuration.
+    [[nodiscard]] std::vector<run::RunConfiguration> generatedRunConfigurations() const;
+    void loadRunConfigurations();
+    [[nodiscard]] Result<void> saveRunConfigurations(const std::vector<run::RunConfiguration>& stored);
+    [[nodiscard]] run::RunConfiguration configureCMakeLaunch(run::RunConfiguration launch) const;
+    [[nodiscard]] Result<void> mayRunConfiguration(const run::RunConfiguration& configuration);
+    void connectCMakeRunConfigurations();
     void attachToolWindows();
     void attachNavigationBar();
     void attachToolbar();
@@ -796,6 +815,9 @@ private:
     // Declared before m_cmake, which runs through it, so it is destroyed after it (RUN-1).
     std::unique_ptr<run::RunManager> m_runManager;
     std::unique_ptr<CMakeIntegration> m_cmake;
+    // RUN-3: a CMake target chosen in the run configuration combo that the targets window could not
+    // take yet (it showed an older model); connectCMakeRunConfigurations applies it. "" for none.
+    std::string m_pendingCMakeTarget;
     ui::BuildActions* m_buildActions = nullptr; // Child of this.
     std::unique_ptr<build::IRunBuilder> m_runBuilder;
     std::unique_ptr<ui::RunController> m_runController;
@@ -886,7 +908,7 @@ private:
     QPointer<ui::SolutionExplorer> m_explorer;
     QPointer<ui::ProblemsView> m_problems;
     QPointer<ui::BuildOutputPane> m_output;
-    QPointer<ui::RunConsole> m_runConsole;
+    QPointer<ui::RunToolWindow> m_runWindow;
     QPointer<ui::ConfigurationCombo> m_configurations;
     QPointer<WelcomeScreen> m_welcome;
     QPointer<LauncherWindow> m_launcherWindow;

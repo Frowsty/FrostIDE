@@ -265,7 +265,18 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     ASSERT_NE(toolbarTargets, nullptr);
     ASSERT_NE(toolbarProfiles, nullptr);
     ASSERT_TRUE(waitFor([&] { return toolbarTargets->count() == 2 && toolbarProfiles->count() == 2; }, 30s));
-    EXPECT_TRUE(rig.window->mainToolbar().runConfigurations()->isHidden());
+    // RUN-3: the toolbar's run configuration combo (one per executable target) replaces the
+    // CMake target combo, which stays hidden and in step.
+    // (The toolbar's own actions say it: its layout may still fold a widget that does not fit.)
+    const auto onToolbar = [&](QWidget* widget) {
+        auto& toolbar = rig.window->mainToolbar();
+        for (QAction* action : toolbar.actions())
+            if (toolbar.widgetForAction(action) == widget)
+                return action->isVisible();
+        return false;
+    };
+    EXPECT_TRUE(onToolbar(rig.window->mainToolbar().runConfigurations()));
+    EXPECT_FALSE(onToolbar(toolbarTargets));
     const auto findTarget = [&](auto&& self, const QModelIndex& parent, const QString& name) -> QModelIndex {
         for (int row = 0; row < tree->model()->rowCount(parent); ++row) {
             const QModelIndex index = tree->model()->index(row, 0, parent);

@@ -175,19 +175,13 @@ void Workbench::attachToolWindows() {
             });
     });
     connect(explorer, &ui::SolutionExplorer::editRunConfigurationsRequested, this, [this](const QString& projectPath) {
-        if (!m_window || !m_solution || !m_runService)
-            return;
-        std::string activeCfg = "Debug|x64";
-        if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
-            activeCfg = m_build->configurations()[*idx].name();
-        showEditRunConfigurationsDialog(
-            m_window, m_services.fs, m_solution.get(), projectPath.toStdString(), activeCfg,
-            m_runService->useExternalConsole(),
-            [this](bool ext) {
-                if (m_runService)
-                    (void)m_runService->setUseExternalConsole(ext);
-            },
-            [this] { refreshSolutionExplorerForFsChange(); });
+        // RUN-3: the dialog opens on the project's msbuild configuration, if it has one.
+        if (m_runController) {
+            for (const run::RunConfiguration& configuration : m_runController->configurations().all())
+                if (configuration.type == run::RunType::MSBuild && configuration.target == projectPath.toStdString())
+                    (void)m_runController->selectConfiguration(configuration.id, false);
+        }
+        editRunConfigurations();
     });
     /*
      * Solution and project edits other than the single-file add and remove ProjectHost makes are

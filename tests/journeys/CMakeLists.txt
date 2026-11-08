@@ -27,6 +27,19 @@ set_tests_properties(journeys.j1_cmake PROPERTIES
     RESOURCE_LOCK frost_desktop
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
+# j2_run (RUN-2/RUN-3): the run configurations are the reply's EXECUTABLE targets; FrostEditor's,
+# edited, runs from the toolbar (built once under the corpus build lock), streams its output, and
+# Stop ends its whole process tree (j2_run.py's header). It imports j1_cmake.py's machinery.
+add_test(NAME journeys.j2_run
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/j2_run.py
+            --frost $<TARGET_FILE:frost> --config $<CONFIG>
+            --evidence ${CMAKE_BINARY_DIR}/journey-evidence)
+set_tests_properties(journeys.j2_run PROPERTIES
+    LABELS "corpus;integration"
+    TIMEOUT 18000
+    RESOURCE_LOCK frost_desktop
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
 # The journey helpers that need no frost, corpus or tool (evidence, spawn-log reading, oracle parsers).
 add_test(NAME journeys.support
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_journey_support.py -v)

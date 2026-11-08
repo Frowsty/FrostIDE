@@ -336,10 +336,10 @@ void Workbench::detach() {
     if (m_runController) {
         m_runController->bindStartupCombo(nullptr);
     }
-    // The Run console outlives the window with its controller (~Workbench deletes it).
-    if (m_runConsole != nullptr) {
-        m_runConsole->hide();
-        m_runConsole->setParent(nullptr);
+    // The Run tool window outlives the window with its controller (~Workbench deletes it).
+    if (m_runWindow != nullptr) {
+        m_runWindow->hide();
+        m_runWindow->setParent(nullptr);
     }
     m_window = nullptr;
 }

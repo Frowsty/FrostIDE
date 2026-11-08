@@ -360,8 +360,8 @@ Workbench::~Workbench() {
     m_managedDebugPreparation.reset();
     m_runService.reset(); // Stops every run and joins its thread before the builder goes.
     m_runBuilder.reset();
-    if (m_runConsole != nullptr && m_runConsole->parent() == nullptr) {
-        delete m_runConsole.data(); // Never docked (no window was attached).
+    if (m_runWindow != nullptr && m_runWindow->parent() == nullptr) {
+        delete m_runWindow.data(); // Never docked (no window was attached).
     }
     m_runController.reset();
     if (m_build) {

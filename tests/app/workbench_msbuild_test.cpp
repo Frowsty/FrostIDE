@@ -274,7 +274,10 @@ TEST(WorkbenchMsBuild, RunSavesBuildsAndShowsTheProgramInTheRunToolWindow) {
     EXPECT_TRUE(dir.read("App/main.cpp").starts_with("// saved by Run\n"));
     EXPECT_FALSE(rig.window->tabs().isDirty(0));
     EXPECT_TRUE(rig.window->toolWindows().isVisible(frost::ui::tool_windows::kRun));
-    EXPECT_EQ(rig.window->toolWindows().content(frost::ui::tool_windows::kRun), static_cast<QWidget*>(console));
+    // RUN-3: the run has its tab in the Run tool window.
+    EXPECT_EQ(rig.window->toolWindows().content(frost::ui::tool_windows::kRun),
+              static_cast<QWidget*>(rig.workbench->runToolWindow()));
+    EXPECT_TRUE(rig.workbench->runToolWindow()->isAncestorOf(console));
 
     // The program reads a line (--echo): typed into the console's input.
     ASSERT_TRUE(waitFor([&] { return console->input()->isEnabled(); }));

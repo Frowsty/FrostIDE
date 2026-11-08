@@ -17,16 +17,25 @@
 #include "frost/lang/compile_commands.hpp"
 #include "frost/project/cmake_file_api.hpp"
 #include "frost/rpc/json.hpp"
+#include "frost/run/run_configuration.hpp"
+#include "frost/run/run_manager.hpp"
 #include "frost/ui/lang/language_controller.hpp"
+#include "frost/ui/run_console.hpp"
+#include "frost/ui/run_controller.hpp"
+#include "frost/ui/run_tool_window.hpp"
+#include "frost/ui/shell/main_toolbar.hpp"
+#include "frost/ui/shell/shell_window.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 
 #include <QAbstractProxyModel>
 #include <QCoreApplication>
+#include <QLabel>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QPointer>
 #include <QRandomGenerator>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeView>
 
 #include <algorithm>
@@ -224,6 +233,20 @@ struct AutomationEndpoint::Impl {
      *   problems.activate {index} -> {}             Problems' own activation (opens the location)
      *   editor {} -> {path, line, column} | {}      the current editor and its caret
      *   navigate.definition {} -> {}                Go to Declaration or Definition at the caret
+     *   run.configurations {} -> {configurations: [{id, name, type, target, program, arguments,
+     *                               workingDirectory, environment, generated}], selected}
+     *                                               the toolbar combo's run configurations (RUN-2)
+     *   run.select {id} -> {}                       chooses a configuration, as the combo does
+     *   run.edit {id, name?, arguments?: [...], workingDirectory?, environment?: [{name, value?}]}
+     *                               -> {}           the Run/Debug Configurations dialog's OK with
+     *                                               these edits (persisted in the workspace store)
+     *   run.start {} -> {}                          clicks the toolbar's Run button (refused when
+     *                                               it is disabled, with its tooltip)
+     *   run.stop {} -> {}                           clicks the toolbar's Stop button
+     *   run.state {} -> {running, tabs: [{key, title, active, current, text}],
+     *                    runs: [{configuration, processId, commandLine}]}
+     *                                               the Run tool window's tabs (the console text,
+     *                                               its last 64 KiB) and the RunManager's runs
      *   quit {} -> {}                               QCoreApplication::quit after the reply
      */
     Result<Json> dispatch(const std::string& method, const Json& params) {
@@ -258,6 +281,122 @@ struct AutomationEndpoint::Impl {
             return Json::object();
         if (method.starts_with("cmake."))
             return cmake(method, params);
+        if (method.starts_with("run."))
+            return runMethod(method, params);
+        return fail(ErrorCode::NotFound, std::format("unknown method '{}'", method));
+    }
+
+    // --- Run (RUN-2/RUN-3) -------------------------------------------------------------------
+
+    [[nodiscard]] static Json configurationJson(const run::RunConfiguration& configuration, bool generated) {
+        Json arguments = Json::array();
+        for (const std::string& argument : configuration.arguments)
+            arguments.push(Json(argument));
+        Json environment = Json::array();
+        for (const run::EnvironmentEntry& entry : configuration.environment)
+            environment.push(
+                Json::object().set("name", entry.name).set("value", entry.value ? Json(*entry.value) : Json()));
+        return Json::object()
+            .set("id", configuration.id)
+            .set("name", configuration.name)
+            .set("type", std::string(run::toString(configuration.type)))
+            .set("target", configuration.target)
+            .set("program", configuration.program)
+            .set("arguments", std::move(arguments))
+            .set("workingDirectory", configuration.workingDirectory)
+            .set("environment", std::move(environment))
+            .set("generated", generated);
+    }
+
+    Result<Json> runMethod(const std::string& method, const Json& params) {
+        ui::RunController* controller = workbench.runController();
+        ui::ShellWindow* window = workbench.window();
+        if (controller == nullptr || window == nullptr)
+            return fail(ErrorCode::InvalidArgument, "the workbench has no run controller or window");
+        if (method == "run.configurations") {
+            Json list = Json::array();
+            for (const run::RunConfiguration& configuration : controller->configurations().all())
+                list.push(configurationJson(configuration, controller->configurations().isGenerated(configuration.id)));
+            const run::RunConfiguration* selected = controller->selectedConfiguration();
+            return Json::object()
+                .set("configurations", std::move(list))
+                .set("selected", selected ? Json(selected->id) : Json());
+        }
+        if (method == "run.select") {
+            if (auto selected = controller->selectConfiguration(std::string(params.stringAt("id"))); !selected)
+                return std::unexpected(selected.error());
+            return Json::object();
+        }
+        if (method == "run.edit") {
+            const std::string id(params.stringAt("id"));
+            std::vector<run::RunConfiguration> edited = controller->configurations().all();
+            const auto it = std::ranges::find(edited, id, &run::RunConfiguration::id);
+            if (it == edited.end())
+                return fail(ErrorCode::NotFound, std::format("no run configuration '{}'", id));
+            if (const Json* name = params.find("name"); name != nullptr && name->isString())
+                it->name = *name->asString();
+            if (const Json* arguments = params.find("arguments"); arguments != nullptr && arguments->isArray()) {
+                it->arguments.clear();
+                for (const Json& argument : arguments->items())
+                    if (argument.isString())
+                        it->arguments.push_back(*argument.asString());
+            }
+            if (const Json* cwd = params.find("workingDirectory"); cwd != nullptr && cwd->isString())
+                it->workingDirectory = *cwd->asString();
+            if (const Json* environment = params.find("environment");
+                environment != nullptr && environment->isArray()) {
+                it->environment.clear();
+                for (const Json& entry : environment->items()) {
+                    run::EnvironmentEntry variable;
+                    variable.name = std::string(entry.stringAt("name"));
+                    if (const Json* value = entry.find("value"); value != nullptr && value->isString())
+                        variable.value = *value->asString();
+                    it->environment.push_back(std::move(variable));
+                }
+            }
+            if (auto replaced = controller->replaceConfigurations(edited); !replaced)
+                return std::unexpected(replaced.error());
+            return Json::object();
+        }
+        if (method == "run.start" || method == "run.stop") {
+            QToolButton* button =
+                window->mainToolbar().button(method == "run.start" ? ui::MainToolbar::kRun : ui::MainToolbar::kStop);
+            if (button == nullptr)
+                return fail(ErrorCode::NotFound, "the toolbar has no such button");
+            if (!button->isEnabled())
+                return fail(ErrorCode::Busy,
+                            std::format("the toolbar button is disabled: {}", button->toolTip().toStdString()));
+            button->click();
+            return Json::object();
+        }
+        if (method == "run.state") {
+            Json tabs = Json::array();
+            if (ui::RunToolWindow* runs = workbench.runToolWindow()) {
+                const ui::RunConsole* current = runs->currentConsole();
+                for (ui::RunConsole* console : runs->consoles()) {
+                    // The console's last 64 KiB: enough to see the output stream; never the whole log.
+                    constexpr qsizetype kTail = 64 * 1024;
+                    const QString text = console->text();
+                    tabs.push(Json::object()
+                                  .set("key", runs->keyOf(console).toStdString())
+                                  .set("title", console->title()->text().toStdString())
+                                  .set("active", console->active())
+                                  .set("current", console == current)
+                                  .set("text", (text.size() > kTail ? text.right(kTail) : text).toStdString()));
+                }
+            }
+            Json active = Json::array();
+            if (run::RunManager* manager = workbench.runManager())
+                for (const run::RunStatus& status : manager->activeRuns())
+                    active.push(Json::object()
+                                    .set("configuration", status.configuration.id)
+                                    .set("processId", static_cast<std::int64_t>(status.processId))
+                                    .set("commandLine", status.commandLine));
+            return Json::object()
+                .set("running", controller->running())
+                .set("tabs", std::move(tabs))
+                .set("runs", std::move(active));
+        }
         return fail(ErrorCode::NotFound, std::format("unknown method '{}'", method));
     }
 
@@ -437,6 +576,7 @@ struct AutomationEndpoint::Impl {
                              .set("state", std::string(build::toString(service->state())))
                              .set("modelLoading", service->modelLoading())
                              .set("modelLoaded", service->model() != nullptr)
+                             .set("targetsCurrent", workbench.cmakeTargetsCurrent())
                              .set("activeProfile", active ? Json(active->name) : Json())
                              .set("buildDirectory", service->activeBuildDirectory())
                              .set("errors", static_cast<std::int64_t>(counts.errors))

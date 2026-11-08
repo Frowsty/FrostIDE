@@ -1099,7 +1099,7 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # exactly one kind label; the tagged suites are build_msbuild_tests and
         # app_workbench_msbuild_tests (Windows only), lang_clangd_tests, lang_msbuild_tests (Windows
         # only; both tags), lang_cmake_tests (both tags; CMK-4), build_cmake_tests,
-        # project_cmake_tests and app_automation_endpoint_tests (tag "cmake"),
+        # project_cmake_tests, app_automation_endpoint_tests and app_workbench_run_tests (tag "cmake"),
         # build_msvc_env_tests (Windows only; tag "msvc"; ADR 0046), vcs_git_tests, ui_vcs_git_tests
         # and app_workbench_git_tests (tag "git"; ADR 0048 and 0067), sdk_lldb_tests
         # (tag "lldb"; ADR 0049), and in trees with the UI app_workbench_clangd_tests and
@@ -1112,7 +1112,7 @@ class BuildTreeLabelsTest(unittest.TestCase):
                                               "WorkbenchClangd.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
                                               "CMakeCompileCommands.")),
                   "cmake": ("integration", ("CMakeRealBuild.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
-                                            "CMakeCompileCommands.", "AutomationEndpoint.",
+                                            "CMakeCompileCommands.", "AutomationEndpoint.", "WorkbenchRun.",
                                             "CMakePresetsOracle.", "Fixtures/CMakePresetsOracle.",
                                             "Fixtures/CMakePresetsRefusedOracle.")),
                   "msvc": ("integration", ("MsvcEnvironmentCapture.",)),

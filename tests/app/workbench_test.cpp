@@ -328,7 +328,9 @@ TEST(Workbench, SwitchingFromCMakeRestoresSolutionToolbar) {
     ASSERT_NE(rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarProfiles")), nullptr);
     ASSERT_NE(rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets")), nullptr);
     EXPECT_TRUE(rig.workbench->configurationCombo()->isHidden());
-    EXPECT_TRUE(rig.window->mainToolbar().runConfigurations()->isHidden());
+    // RUN-3: the run configuration combo replaces the CMake target combo on the toolbar.
+    EXPECT_FALSE(rig.window->mainToolbar().runConfigurations()->isHidden());
+    EXPECT_TRUE(rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets"))->isHidden());
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
     rig.window->resize(1200, 750);
     QApplication::processEvents();
@@ -1379,14 +1381,17 @@ TEST(Workbench, TheLastProjectComesBackWithItsTabsAndAClosedOneShowsWelcome) {
     EXPECT_EQ(frost::app::recentProjects(*third.settings->snapshot()).front(), project);
 }
 
-TEST(Workbench, TheRunToolWindowIsTheRunConsole) {
+// RUN-3: the Run tool window holds one tab per run; runConsole() is the current tab's console.
+TEST(Workbench, TheRunToolWindowHoldsTheRunConsoles) {
     WorkDir dir("run", "tiny_sln");
     WorkbenchRig rig(dir);
     rig.show();
     ASSERT_NE(rig.workbench->runConsole(), nullptr);
+    ASSERT_NE(rig.workbench->runToolWindow(), nullptr);
     rig.window->toolWindows().show(tool_windows::kRun, false);
     EXPECT_EQ(rig.window->toolWindows().content(tool_windows::kRun),
-              static_cast<QWidget*>(rig.workbench->runConsole()));
+              static_cast<QWidget*>(rig.workbench->runToolWindow()));
+    EXPECT_TRUE(rig.workbench->runToolWindow()->isAncestorOf(rig.workbench->runConsole()));
     // The solution's projects fill the startup project combo; Run is an action with Shift+F10.
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
     EXPECT_GT(rig.window->mainToolbar().runConfigurations()->count(), 0);
@@ -2742,34 +2747,6 @@ TEST(Workbench, ProjectDialogsAreReadOnlyAndWriteNoProjectFile) {
         rig.window.get(), fs, *solution, 0, [&](int index) { activeChosen = index; }, onWrite);
     EXPECT_EQ(activeChosen, 0);
 
-    // Run/Debug Configurations: the debugger settings as App.vcxproj.user declares them, read-only.
-    bool externalConsole = false;
-    inspectModal(rig.window.get(), QStringLiteral("editRunConfigurationsDialog"), [](QDialog& dlg) {
-        auto* project = dlg.findChild<QComboBox*>(QStringLiteral("runConfigProjectCombo"));
-        ASSERT_NE(project, nullptr);
-        ASSERT_GE(project->findText(QStringLiteral("App")), 0);
-        project->setCurrentIndex(project->findText(QStringLiteral("App")));
-        auto* args = dlg.findChild<QLineEdit*>(QStringLiteral("runConfigArgumentsEdit"));
-        auto* cwd = dlg.findChild<QLineEdit*>(QStringLiteral("runConfigWorkingDirEdit"));
-        auto* source = dlg.findChild<QLabel*>(QStringLiteral("runConfigSourceLabel"));
-        ASSERT_NE(args, nullptr);
-        ASSERT_NE(cwd, nullptr);
-        ASSERT_NE(source, nullptr);
-        EXPECT_TRUE(args->isReadOnly());
-        EXPECT_TRUE(cwd->isReadOnly());
-        EXPECT_EQ(args->text(), QStringLiteral("--print \"two words\" --echo --exit 3"));
-        EXPECT_EQ(cwd->text(), QStringLiteral("$(SolutionDir)Lib"));
-        EXPECT_TRUE(source->text().contains(QStringLiteral("App.vcxproj.user"))) << source->text().toStdString();
-        EXPECT_TRUE(source->text().contains(QStringLiteral("RUN-1")));
-        if (auto* check = dlg.findChild<QCheckBox*>())
-            check->setChecked(true);
-        clickOk(dlg);
-    });
-    frost::app::showEditRunConfigurationsDialog(
-        rig.window.get(), fs, solution.get(), app, "Debug|x64", false,
-        [&](bool external) { externalConsole = external; }, onWrite);
-    EXPECT_TRUE(externalConsole);
-
     // Add Project Reference and Solution Properties: references as loaded, not editable.
     const auto expectReadOnlyList = [](QDialog& dlg, const char* listName, const char* noteName) {
         auto* list = dlg.findChild<QListWidget*>(QLatin1String(listName));
@@ -3126,8 +3103,8 @@ TEST(Workbench, CompoundRunIsUnavailableUntilRunFiveAndStartsNothing) {
     EXPECT_TRUE(launcher.launches().empty());
 }
 
-// The Edit Run Configurations dialog's compound section reaches the same refusal: the RUN-5 notice
-// and no launch.
+// The Run/Debug Configurations dialog's compound section (RUN-3's dialog) reaches the same
+// refusal: the RUN-5 notice and no launch.
 TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAndStartsNothing) {
     WorkDir dir("compound-run-dialog", "tiny_sln");
     frost::io::ScriptedProcessLauncher launcher;
@@ -3139,20 +3116,15 @@ TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAn
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
     auto id = rig.workbench->registry().find("run.editConfigurations");
     ASSERT_TRUE(id);
-    int checked = 0;
     bool clicked = false;
     bool disabled = false;
     QString tooltip;
     QTimer::singleShot(0, rig.window.get(), [&] {
-        auto* list = rig.window->findChild<QListWidget*>(QStringLiteral("compoundProjectsList"));
+        auto* group = rig.window->findChild<QWidget*>(QStringLiteral("compoundRunGroup"));
         auto* launch = rig.window->findChild<QPushButton*>(QStringLiteral("compoundLaunchButton"));
-        if (list != nullptr && launch != nullptr) {
-            disabled = !launch->isEnabled() && !list->isEnabled();
+        if (group != nullptr && launch != nullptr) {
+            disabled = !launch->isEnabled() && !group->isEnabled();
             tooltip = launch->toolTip();
-            for (int row = 0; row < list->count(); ++row) {
-                list->item(row)->setCheckState(Qt::Checked);
-                ++checked;
-            }
             launch->click(); // A disabled button ignores the click.
             clicked = true;
         }
@@ -3165,7 +3137,6 @@ TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAn
     context.trusted = true;
     EXPECT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
     ASSERT_TRUE(clicked);
-    EXPECT_EQ(checked, 2); // App and Lib.
     EXPECT_TRUE(disabled) << "the compound launch controls must not be offered before RUN-5";
     EXPECT_TRUE(tooltip.contains(QStringLiteral("RUN-5"))) << tooltip.toStdString();
     EXPECT_TRUE(launcher.launches().empty());
