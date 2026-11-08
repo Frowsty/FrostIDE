@@ -246,8 +246,11 @@ public:
     /*
      * Makes profiles()[index] active, persists it and clears the model; that profile's existing
      * reply is then read on the service's thread and published through onModelChanged (nullptr
-     * without one), and when the folder is trusted and configureOnOpen is set, a profile without a
-     * reply configures. Errors: InvalidArgument (no folder), OutOfRange, Busy, the state file's
+     * without one). When the folder is trusted and configureOnOpen is set, a profile without a
+     * reply directory starts its configure before this returns (state() is Configuring), and one
+     * whose reply does not parse configures once the read finds that out. Blocking: one status
+     * call on the reply directory. Errors: InvalidArgument (no folder), OutOfRange, Busy
+     * (including a folder or profile change by another thread during the call), the state file's
      * errors.
      */
     [[nodiscard]] Result<void> setActiveProfile(std::size_t index);
@@ -310,6 +313,14 @@ public:
     void trustChanged();
 
     [[nodiscard]] BuildState state() const;
+    /*
+     * Whether a reply read that openFolder or setActiveProfile queued has not run yet: model() and
+     * state() may still change without a job (the read publishes the model, and a profile switch's
+     * read may start a configure). It drops under the lock that publishes that model or starts that
+     * configure, so a caller that sees false and then state() Idle sees the switch's final state. Callers
+     * that react to the active build directory (clangd's restart) treat it like a running job.
+     */
+    [[nodiscard]] bool modelLoading() const;
     [[nodiscard]] std::optional<CMakeStep> currentStep() const;
     [[nodiscard]] std::vector<std::string> untrustedRoots() const;
     [[nodiscard]] std::optional<CMakeBuildOutcome> lastOutcome() const;

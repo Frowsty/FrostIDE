@@ -347,6 +347,11 @@ public:
         }
         m_changed.notify_all();
     }
+    // Holds the reply reads that start from now on again, until the next release().
+    void holdAgain() {
+        LockGuard lock(m_mutex);
+        m_released = false;
+    }
     // Waits until a reply read is held, or `timeout` passes.
     bool waitForHeldRead(std::chrono::milliseconds timeout) {
         UniqueLock lock(m_mutex);
@@ -425,6 +430,72 @@ TEST_F(CMakeServiceTest, OpenAndProfileSwitchReadTheReplyOnTheServiceThread) {
         EXPECT_EQ(events.models, 1);
     }
     EXPECT_TRUE(launcher.launches().empty()); // Untrusted: neither the open nor the switches ran anything.
+}
+
+/*
+ * R0 follow-up 10 (clangd started about three times per profile switch): a switch to a profile
+ * whose build directory has no reply starts its configure before setActiveProfile returns, so the
+ * service is never idle on the new build directory while its reply read waits on the service
+ * thread (the trust watch restarted clangd without a database in that window). A Build asked for
+ * then is refused (Busy), as it was before the read moved to the service thread. A profile whose
+ * reply exists but does not parse is configured by the read itself, and modelLoading() reports the
+ * read until it has run. The reads are held to make that window as wide as a slow read is.
+ */
+TEST_F(CMakeServiceTest, AProfileSwitchDecidesItsConfigureBeforeTheReplyIsRead) {
+    installReply();
+    tree.write("tiny/cmake-build-release/.cmake/api/v1/reply/index-2026-01-01T00-00-00-0000.json", "not json");
+    HeldReplyFs fs(tree.fs);
+    // A failed assertion returns with a read held: release it and stop the service before `fs` goes.
+    struct StopFirst {
+        HeldReplyFs& fs;
+        std::unique_ptr<CMakeService>& service;
+        ~StopFirst() {
+            fs.release();
+            service.reset();
+        }
+    } stopFirst{fs, service};
+    CMakeServiceOptions opts = options();
+    opts.profileRecords = {project::CMakeProfileRecord{.name = "Debug"},
+                           project::CMakeProfileRecord{.name = "Release", .buildType = "Release"},
+                           project::CMakeProfileRecord{.name = "Fresh", .buildType = "RelWithDebInfo"}};
+    service = CMakeService::create(fs, launcher, *trustStore, std::move(opts), events.callbacks());
+    ASSERT_TRUE(service->openFolder(folder()).has_value()); // Untrusted: the open configures nothing.
+    EXPECT_TRUE(service->modelLoading());
+    fs.release();
+    waitIdle();
+    ASSERT_NE(service->model(), nullptr);
+    EXPECT_FALSE(service->modelLoading());
+    ASSERT_TRUE(trustStore->trust(folder()).has_value()); // The store only: nothing configures yet.
+    ASSERT_TRUE(launcher.launches().empty());
+
+    // No reply directory: Configuring when the call returns, with the read still held.
+    fs.holdAgain();
+    expectFirstConfigure();
+    ASSERT_TRUE(service->setActiveProfile("Fresh").has_value());
+    EXPECT_NE(service->state(), BuildState::Idle) << "the switch left its configure to the held reply read";
+    const auto built = service->build(BuildAction::Build);
+    ASSERT_FALSE(built.has_value()) << "a Build was accepted while the switch's configure should run";
+    EXPECT_EQ(built.error().code(), ErrorCode::Busy);
+    ASSERT_TRUE(fs.waitForHeldRead(kWait));
+    EXPECT_TRUE(service->modelLoading());
+    fs.release();
+    waitIdle();
+    EXPECT_FALSE(service->modelLoading());
+    EXPECT_EQ(launcher.launches().size(), 2U) << "the switch did not configure the new profile exactly once";
+    ASSERT_TRUE(service->lastConfigure().has_value());
+
+    // A reply that does not parse: idle on return while the read is pending; the read configures.
+    fs.holdAgain();
+    launcher.expect({.expectExecutable = cmake()});
+    const std::size_t before = launcher.launches().size();
+    ASSERT_TRUE(service->setActiveProfile("Release").has_value());
+    ASSERT_TRUE(fs.waitForHeldRead(kWait));
+    EXPECT_EQ(service->state(), BuildState::Idle);
+    EXPECT_TRUE(service->modelLoading()) << "a pending reply read must count as busy for clangd's restart";
+    fs.release();
+    waitIdle();
+    EXPECT_FALSE(service->modelLoading());
+    EXPECT_EQ(launcher.launches().size(), before + 1) << "the unreadable reply was not configured";
 }
 
 TEST_F(CMakeServiceTest, NothingRunsBeforeTrust) {

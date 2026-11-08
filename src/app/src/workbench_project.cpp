@@ -2912,16 +2912,19 @@ void Workbench::restartClangdIfCMakeStateChanged() {
         log::info(kLog, "the CMake model changed; clangd's compile commands did not, so it keeps running");
         return;
     }
-    /* R0 follow-up 10: a profile switch publishes the new profile's model (none yet when its build
-     * directory was never configured) and starts its configure at once. Restarting on that model
-     * would run clangd without a database and once more when the configure writes it, so clangd
-     * keeps the old database until the configure ends: its publication restarts clangd once, and
-     * when it writes no database the trust watch restarts it once the service is idle. A trust
-     * change does not wait (its launch flags apply at once), and neither does a job held in
-     * NeedsTrust: it runs nothing until the user answers, which may be never. */
+    /* R0 follow-up 10: a profile switch to a never-configured build directory starts its configure
+     * before setActiveProfile returns, and its reply is read on the service thread afterwards
+     * (modelLoading()). Restarting while either is pending would run clangd without a database
+     * and once more when the configure writes it, so clangd keeps the old database until the read
+     * and the configure end: the configure's publication restarts clangd once, and when it writes
+     * no database the trust watch restarts it once the service is idle. modelLoading is read
+     * first: the read may start the configure as it ends. A trust change does not wait (its launch
+     * flags apply at once), and neither does a job held in NeedsTrust: it runs nothing until the
+     * user answers, which may be never. */
+    const bool loading = m_cmake->service().modelLoading();
     const build::BuildState job = m_cmake->service().state();
-    if (trusted == m_clangdTrusted && !state.ends_with(kCMakeDatabasePresent) && job != build::BuildState::Idle &&
-        job != build::BuildState::NeedsTrust) {
+    if (trusted == m_clangdTrusted && !state.ends_with(kCMakeDatabasePresent) &&
+        (loading || (job != build::BuildState::Idle && job != build::BuildState::NeedsTrust))) {
         log::info(kLog, "the CMake compile commands moved ({} -> {}); clangd waits for the running CMake job",
                   m_clangdCMakeState, state);
         return;

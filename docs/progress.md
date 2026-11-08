@@ -80,6 +80,40 @@ what is next, blockers and open questions for the user.
     --check` with config enabled; without config the same file falls back, so the directive decides).
   - Nits: the readiness prefetch reads the database under the spelling `clangdUsesFallbackFlags` looks it up by;
     `updatePathInVcxproj`'s folder match reads the separator from the key, not from the unnormalised path.
+- **Second cross review** (not approved: one blocker, fixed in `r0/close` with tests that fail on the old code):
+  - **Follow-up 10 regressed** (clangd started three times per profile switch). Moving the reply read to the
+    service thread also moved the switch's configure-on-switch into that read, so between `setActiveProfile`
+    returning and the read running the service was Idle on the new, database-less build directory. The 1 s trust
+    watch restarted clangd without a database in that window and the configure's publication restarted it again;
+    the window is as long as whatever holds the service thread (a large reply read, or the CMake tree built for a
+    model published just before, about 350 ms on FrostEngine). Fix: `setActiveProfile` decides with one status
+    call whether the new profile has a reply directory and, when it has none, starts the configure before it
+    returns (state() is Configuring at once, and a Build asked for then is refused as before). A reply that exists
+    but does not parse is still configured by the read. The new `CMakeService::modelLoading()` reports a queued
+    reply read; the trust watch and `restartClangdIfCMakeStateChanged` treat it like a running job. Tests:
+    `WorkbenchClangdSpawn.AProfileSwitchWithABusyServiceThreadRestartsClangdOnce` (real cmake, Ninja and clangd;
+    holds the switch's reply read for more than two watch ticks, asserts exactly 2 clangd starts and no reply read
+    on the GUI thread) and `CMakeServiceTest.AProfileSwitchDecidesItsConfigureBeforeTheReplyIsRead`.
+  - Nits: `loadReply` documents why a configure it cannot start (a user job started since the switch) is dropped
+    (that job configures itself: `build()` adds a Configure step while `model()` is nullptr) and that a trusted
+    open's read may overlap the configure-on-open's rewrite of the reply on purpose. The clone corpus test now
+    compares the clone's `git rev-parse HEAD` with the source repository's, instead of only the shape of
+    `.git/HEAD`. Not done: caching `clangdConfigMayMoveTheDatabase`'s `.clangd` reads per folder (it stats each
+    ancestor's `.clangd` on every readiness call on the GUI thread; cheap today; owner CPP-1).
+- **The 16 R0 follow-ups** (numbered as in the R0 integration entry below): 1 attach trust wording (done); 2
+  Debugging page read-only (done, RUN-1); 3 `EngineIntegration::luaReservationPending` removed and one
+  FrostEngine detection rule for the tool window and the Lua defaults (done; the open-broker, `main.cpp` and
+  `--project` routing stays open, FEC-3); 4 metadata cache, readiness and read-only metadata locations wired (done;
+  current view only, LTR-6); 5 `updatePathInVcxproj` writes nothing and `.fmeta` sidecars move (done; gaps open,
+  SLN-6, FEC-9a); 6 refused explorer actions disabled up front (done); 7 `stage.ps1` preflight and `stage.sh` with
+  LuaLS (done); 8 lint joins literals, per-entry counts, footer test-count check and the spawn log (done; gaps
+  open, FND-7a, FND-5, FND-2); 9 no `E:\sdk` defaults (done, FND-10); 10 one clangd restart per profile switch
+  (done, and its regression above fixed); 11 autosave spares every caret, the `main` marker runs the owning project
+  (done); 12 Linux process list skips kernel threads, prefers the executable's name over `comm`, strips
+  " (deleted)" and recognises dotted .NET apphosts (done; test
+  `Workbench.ProcParsingNamesProcessesFromTheExecutableAndSkipsKernelThreads`); 13 engine helpers beside a running
+  LuaLS (done, `R0Engine.*`); 14 no change needed (the merged tree has the language slice's fix); 15 Settings
+  grants and revocations (done); 16 the wait helpers return the evaluation that ended the wait (done).
 - **What changed for the user.**
   - Project files are no longer rewritten by regexes on rename, move or delete: the file operation proceeds and a
     warning names the `.vcxproj`/`.csproj` files that still list the path (SLN-6). CMakeLists.txt source edits on
@@ -109,7 +143,11 @@ what is next, blockers and open questions for the user.
     reply is read and the CMake tree is built (about half a second for FrostEngine); the tree appears when both
     are done.
   - Cancel Build (and every other cancel or close of a contained process) on Linux ends the commands Ninja
-    started, not only Ninja.
+    started, not only Ninja. That covers every process of the child's session: closing an integrated terminal
+    (its shell leads a session of its own) also ends the background jobs started in it, `nohup` ones included;
+    only a process that calls `setsid` itself survives.
+  - A profile switch to a never-configured CMake profile starts its configure at once (Build is refused until it
+    ends, as before the reply read moved off the GUI thread), and clangd restarts once, on its new database.
   - Staging: `tools/stage.sh` stages Linux with the bundled LuaLS; `stage.ps1` checks every input before touching
     the destination and removes (or empties) a partial stage after any error. Debug test builds can record every
     child process in a spawn log (`FROST_SPAWN_LOG_DIR`), which the staged-LuaLS exit test uses.
@@ -124,9 +162,12 @@ what is next, blockers and open questions for the user.
   process before the trust grant (`R0Trust.*`), engine helpers beside a running pinned LuaLS (`R0Engine.*`,
   follow-up 13), the staged LuaLS test on both legs (`tools.staged_luals`) and the stage failure tests.
   - **Stall criterion: met on the Windows leg (Debug).** The corpus tier on Windows (`ctest -L corpus`, Debug, the
-    slower build): opening the FrostEngine clone recorded one stall over 50 ms, the longest 59 ms (destroying the
-    previous CMake tree on the GUI thread), against 552 ms and 529 ms before; it still starts exactly one clangd
-    and negotiates `positionEncoding` utf-8. Cloning it recorded no stall over 50 ms. Not measured: the WSL leg
+    slower build): opening the FrostEngine clone recorded one stall over 50 ms (destroying the previous CMake tree
+    on the GUI thread): 59 ms on the first fixed tree and 50 ms on the committed tree c4f2c52, against 552 ms and
+    529 ms before; on the final tree (after the second cross review) none over 50 ms. It still starts exactly one
+    clangd and negotiates `positionEncoding` utf-8. Cloning it recorded no stall over 50 ms on c4f2c52 and two on
+    the final tree, the longest 91 ms (under the 250 ms limit; the number varies from run to run with the
+    machine's load). Not measured: the WSL leg
     (no WSL corpus clone yet, owner FND-6b) and a Release build (Debug is the slower configuration; owner CMK-15).
   - **Deviation: the trust criterion's automation endpoint.** The criterion says "through the automation
     endpoint", which does not exist yet (FND-7a, R1). `R0Trust.*` drive `Workbench::openPath`, the call the
@@ -188,8 +229,10 @@ what is next, blockers and open questions for the user.
      its per-root guard is never cleared (CPP-1); `R0Trust` CMake asserts at least one cmake launch after the
      grant, not exactly one (FND-8).
 - **Verification.** The combined tree is verified with `tools\verify.ps1 -Quick` on both legs (Windows and WSL);
-  the real summary line is the `Verified:` footer of the `r0/close` head commit, which records this tree. Not
-  merged to `main` and not pushed yet.
+  the real summary line is the `Verified:` footer of the `r0/close` head commit, which records this tree. The
+  corpus tier ran separately on Windows on the final tree (`ctest -C Debug -L corpus`, `FROST_CORPORA_ROOT` from
+  `tools/corpora.py root`): both `CorpusFrostEngine` tests passed, with the stall numbers above. Not merged to
+  `main` and not pushed yet.
 
 ## 2026-11-07: R0 integration (FND-1, FND-3 harm wave, FND-9a/13 + LUA-1, FND-5/2/4/15)
 

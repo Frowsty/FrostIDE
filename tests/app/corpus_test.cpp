@@ -27,6 +27,7 @@
 #include "frost/io/process.hpp"
 #include "frost/lang/clangd.hpp"
 #include "frost/rpc/json.hpp"
+#include "frost/vcs/git_locator.hpp"
 
 #include "support/crash_dialogs.hpp"
 #include "workbench_rig.hpp"
@@ -68,6 +69,27 @@ std::string corpusDirectory() {
         return {};
     const std::string sha = FROST_CORPUS_FROSTENGINE_SHA;
     return frost::io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
+}
+
+// The commit HEAD resolves to in the repository at `directory`, from `git rev-parse HEAD` run with
+// the git the product resolves; trailing whitespace stripped.
+frost::Result<std::string> gitHead(const std::string& directory) {
+    auto git = frost::vcs::findGit(frost::io::realFileSystem(), frost::vcs::defaultGitSearch());
+    if (!git)
+        return std::unexpected(std::move(git.error()));
+    frost::io::ProcessSpec spec;
+    spec.executable = git->path;
+    spec.arguments = {"-C", directory, "rev-parse", "HEAD"};
+    auto run = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 120s);
+    if (!run)
+        return std::unexpected(std::move(run.error()));
+    if (run->exitCode != 0)
+        return frost::fail(frost::ErrorCode::IoError, std::format("git rev-parse HEAD in {} exited {}: {}", directory,
+                                                                  run->exitCode, run->stderrBytes));
+    std::string head = std::move(run->stdoutBytes);
+    while (!head.empty() && (head.back() == '\n' || head.back() == '\r' || head.back() == ' '))
+        head.pop_back();
+    return head;
 }
 
 // The real launcher, counting the clangd processes it starts.
@@ -379,9 +401,14 @@ TEST(CorpusFrostEngine, CloningARealRepositoryRecordsNoStallOver250msAndOpensThe
         // git's own checkout, compared with the source's tracked files at the pin.
         EXPECT_EQ(fs.readFile(target + "/CMakePresets.json").value_or("<missing>"),
                   fs.readFile(corpus + "/CMakePresets.json").value_or("<missing in the corpus>"));
-        const auto head = fs.readFile(target + "/.git/HEAD");
-        ASSERT_TRUE(head.has_value());
-        EXPECT_TRUE(head->starts_with("ref: ") || head->starts_with(FROST_CORPUS_FROSTENGINE_SHA)) << *head;
+        // The oracle for the clone's HEAD: the source repository's own `git rev-parse HEAD`, which
+        // checkedCorpus() already held to the pin.
+        const auto sourceHead = gitHead(corpus);
+        ASSERT_TRUE(sourceHead.has_value()) << sourceHead.error().describe();
+        EXPECT_EQ(*sourceHead, FROST_CORPUS_FROSTENGINE_SHA);
+        const auto cloneHead = gitHead(target);
+        ASSERT_TRUE(cloneHead.has_value()) << cloneHead.error().describe();
+        EXPECT_EQ(*cloneHead, *sourceHead) << "the clone's HEAD is not the source repository's HEAD commit";
         // The open's queued model, explorer and trust-prompt events, for a while longer.
         static_cast<void>(runUntil([] { return false; }, 5s));
         meter.stop(); // Before the rig's shutdown, which is not part of the clone.

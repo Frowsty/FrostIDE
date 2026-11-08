@@ -237,7 +237,7 @@ if(NOT _frost_engine_sha MATCHES "^[0-9a-f]+$")
 endif()
 frost_add_test(app_corpus_tests QT
     SOURCES corpus_test.cpp
-    DEPS frost::app frost::build frost::diag frost::lang frost::io
+    DEPS frost::app frost::build frost::diag frost::lang frost::io frost::vcs
     LABELS integration corpus)
 target_include_directories(app_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_corpus_tests PRIVATE ${_frost_workbench_definitions}

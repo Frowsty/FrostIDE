@@ -13,6 +13,7 @@
 // own, and a revocation during a long build, which restricts clangd at once (R0 follow-up 15).
 
 #include "frost/build/cmake_service.hpp"
+#include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/lang/clangd.hpp"
@@ -28,8 +29,11 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <filesystem>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -70,6 +74,96 @@ private:
     std::atomic<int> m_clangd{0};
     mutable std::mutex m_mutex;
     std::vector<std::string> m_lastArguments;
+};
+
+/*
+ * The real file system, holding every read of a CMake File API reply (a path below
+ * .cmake/api/v1/reply) on a thread other than the GUI thread while hold() is on, as a slow read of
+ * a large reply does on the service thread. Never holds the GUI thread (the test runs there and
+ * would deadlock); it records whether that thread read a reply at all. A held read goes on after
+ * release() or after 120 s, so a failing test cannot hang.
+ */
+class HeldReplyReads final : public frost::io::IFileSystem {
+public:
+    explicit HeldReplyReads(std::thread::id gui) : m_gui(gui) {}
+
+    frost::Result<std::string> readFile(std::string_view path) override {
+        wait(path);
+        return m_inner.readFile(path);
+    }
+    frost::Result<void> writeFileAtomic(std::string_view path, std::string_view data) override {
+        return m_inner.writeFileAtomic(path, data);
+    }
+    frost::Result<void> writeFileAtomicWithMtime(std::string_view path, std::string_view data,
+                                                 std::filesystem::file_time_type mtime) override {
+        return m_inner.writeFileAtomicWithMtime(path, data, mtime);
+    }
+    frost::Result<frost::io::SafeWriteResult> safeWrite(std::string_view path, std::string_view data,
+                                                        const frost::io::SafeWriteOptions& options) override {
+        return m_inner.safeWrite(path, data, options);
+    }
+    frost::Result<frost::io::FileStatus> status(std::string_view path) override { return m_inner.status(path); }
+    frost::Result<std::vector<frost::io::DirEntry>> listDirectory(std::string_view path) override {
+        wait(path);
+        return m_inner.listDirectory(path);
+    }
+    frost::Result<frost::io::DirListing> listDirectoryWithDiagnostics(std::string_view path) override {
+        wait(path);
+        return m_inner.listDirectoryWithDiagnostics(path);
+    }
+    frost::Result<void> createDirectories(std::string_view path) override { return m_inner.createDirectories(path); }
+    frost::Result<void> removeFile(std::string_view path) override { return m_inner.removeFile(path); }
+    frost::Result<void> removeDirectory(std::string_view path) override { return m_inner.removeDirectory(path); }
+    frost::Result<void> rename(std::string_view from, std::string_view to) override { return m_inner.rename(from, to); }
+    frost::Result<void> remove(std::string_view path) override { return m_inner.remove(path); }
+    frost::Result<void> removeAll(std::string_view path) override { return m_inner.removeAll(path); }
+    frost::Result<bool> exists(std::string_view path) override { return m_inner.exists(path); }
+    frost::Result<std::string> canonicalPath(std::string_view path) override { return m_inner.canonicalPath(path); }
+
+    void hold() {
+        const std::scoped_lock lock(m_mutex);
+        m_holding = true;
+    }
+    void release() {
+        {
+            const std::scoped_lock lock(m_mutex);
+            m_holding = false;
+        }
+        m_changed.notify_all();
+    }
+    [[nodiscard]] int held() const {
+        const std::scoped_lock lock(m_mutex);
+        return m_held;
+    }
+    [[nodiscard]] bool guiThreadReadAReply() const {
+        const std::scoped_lock lock(m_mutex);
+        return m_guiRead;
+    }
+
+private:
+    void wait(std::string_view path) {
+        if (path.find(frost::io::kNativePathStyle == frost::io::PathStyle::Windows ? "\\v1\\reply" : "/v1/reply") ==
+            std::string_view::npos)
+            return;
+        std::unique_lock lock(m_mutex);
+        if (std::this_thread::get_id() == m_gui) {
+            m_guiRead = true;
+            return;
+        }
+        if (!m_holding)
+            return;
+        ++m_held;
+        (void)m_changed.wait_for(lock, 120s, [this] { return !m_holding; });
+        --m_held;
+    }
+
+    frost::io::IFileSystem& m_inner = frost::io::realFileSystem();
+    const std::thread::id m_gui;
+    mutable std::mutex m_mutex;
+    std::condition_variable m_changed;
+    bool m_holding = false;
+    bool m_guiRead = false;
+    int m_held = 0;
 };
 
 bool restricted(const std::vector<std::string>& arguments) {
@@ -149,6 +243,49 @@ TEST(WorkbenchClangdSpawn, OpeningACMakeProjectStartsOneClangd) {
         EXPECT_EQ(launcher.clangdStarts(), 2) << "the profile switch restarted clangd more than once";
         EXPECT_FALSE(restricted(launcher.lastClangdArguments()));
     }
+}
+
+/*
+ * R0 follow-up 10, with a busy service thread: the switch's reply read is held (as a large reply
+ * read, or the view model built for a large project just before, holds the service thread). The
+ * Release profile was never configured, so the switch must not look idle with a database-less
+ * build directory while the read waits: the 1 s trust watch restarted clangd without a database
+ * in that window and the configure's publication restarted it again (three clangd starts). The
+ * hold lasts more than two watch ticks; afterwards the configure writes Release's database and
+ * clangd restarts on it exactly once. No reply is ever read on the GUI thread (R0 stall criterion).
+ */
+TEST(WorkbenchClangdSpawn, AProfileSwitchWithABusyServiceThreadRestartsClangdOnce) {
+    auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
+    ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
+    WorkDir dir("cmake-clangd-held-switch");
+    writeProject(dir);
+    const std::string debugDir = dir.join("cmake-build-debug");
+    HeldReplyReads fs(std::this_thread::get_id());
+    const auto releaseReads = qScopeGuard([&] { fs.release(); });
+    CountingLauncher launcher;
+    RigOptions options = clangdOptions(launcher);
+    options.fileSystem = &fs;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "clangd never ran on the configured database";
+    ASSERT_EQ(launcher.clangdStarts(), 1);
+
+    auto* service = rig.workbench->cmakeService();
+    ASSERT_NE(service, nullptr);
+    fs.hold();
+    ASSERT_TRUE(service->setActiveProfile(std::string_view("Release")).has_value());
+    ASSERT_TRUE(waitFor([&] { return fs.held() > 0; }, 60s)) << "the switch never read Release's reply";
+    (void)waitFor([] { return false; }, 2500ms); // At least two trust-watch ticks with the read held.
+    EXPECT_EQ(launcher.clangdStarts(), 1) << "clangd restarted while the switch's reply read was pending";
+    fs.release();
+
+    ASSERT_TRUE(clangdSettledOn(rig, dir.join("cmake-build-release")))
+        << "clangd did not follow the Release profile's database";
+    (void)waitFor([] { return false; }, 2s); // The configure's end and two watch ticks: no late restart.
+    EXPECT_EQ(launcher.clangdStarts(), 2) << "the profile switch did not restart clangd exactly once";
+    EXPECT_FALSE(restricted(launcher.lastClangdArguments()));
+    EXPECT_FALSE(fs.guiThreadReadAReply()) << "a File API reply was read on the GUI thread";
 }
 
 TEST(WorkbenchClangdSpawn, TrustingAConfiguredFolderRestartsTheRestrictedClangdOnceInFullModeAndRevokingRestrictsIt) {

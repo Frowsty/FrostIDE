@@ -628,9 +628,14 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
          * follow-up 15); a configure that then writes a first database restarts it once more.
          * Once the service is idle, the watch also restarts a clangd whose compile commands moved
          * without a publication saying so (a profile's configure that failed, R0 follow-up 10). A
-         * job held in NeedsTrust runs nothing until the user answers, so it does not count as busy. */
+         * job held in NeedsTrust runs nothing until the user answers, so it does not count as busy.
+         * A queued reply read (open, profile switch) does: it publishes the model, which runs the
+         * same check, and it may start a configure (R0 follow-up 10). Read before the state, since
+         * the read may start that configure as it ends. */
+        const bool cmakeLoading = m_cmake && m_cmake->service().modelLoading();
         const build::BuildState cmakeState = m_cmake ? m_cmake->service().state() : build::BuildState::Idle;
-        const bool cmakeBusy = cmakeState != build::BuildState::Idle && cmakeState != build::BuildState::NeedsTrust;
+        const bool cmakeBusy =
+            cmakeLoading || (cmakeState != build::BuildState::Idle && cmakeState != build::BuildState::NeedsTrust);
         if (!m_solution && m_clangd) {
             if (trusted != m_clangdTrusted && (!trusted || !cmakeBusy)) {
                 if (m_cmake)
