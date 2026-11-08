@@ -77,6 +77,9 @@ void Workbench::createRunService() {
     hooks.alternateStop = [this] { m_cmake->stop(); };
     hooks.alternateInput = [this](const QString& line) { m_cmake->input(line); };
     m_runController = std::make_unique<ui::RunController>(console, std::move(hooks));
+    // RUN-1: run configurations start through the RunManager (the CMake target run does today; the
+    // MSBuild startup project still runs through RunService until RUN-2 moves it).
+    m_runManager = run::RunManager::create(m_services.launcher);
     m_runBuilder = build::makeRunBuilder(*m_buildService);
     const auto snapshot = m_services.settings.snapshot();
     build::RunServiceOptions options;

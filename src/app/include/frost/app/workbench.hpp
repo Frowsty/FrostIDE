@@ -88,6 +88,7 @@
 #include "frost/project/directory_roles.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/trust_store.hpp"
+#include "frost/run/run_manager.hpp"
 #include "frost/sched/latest_wins.hpp"
 #include "frost/sched/thread_pool.hpp"
 #include "frost/settings/store.hpp"
@@ -538,6 +539,8 @@ public:
     // Whether the CMake target view has received the service's current immutable model.
     [[nodiscard]] bool cmakeTargetsCurrent() const;
     [[nodiscard]] build::RunService* runService() noexcept { return m_runService.get(); }
+    // The RunManager (RUN-1) that runs run configurations; CMake target runs go through it.
+    [[nodiscard]] run::RunManager* runManager() noexcept { return m_runManager.get(); }
     [[nodiscard]] ui::DebugController* debugController() noexcept { return m_debug.get(); }
     [[nodiscard]] ui::AppearanceManager* appearance() noexcept { return m_appearance.get(); }
     [[nodiscard]] lang::LuaService* lua() noexcept { return m_lua.get(); }
@@ -790,6 +793,8 @@ private:
     std::unique_ptr<UnityControlIntegration> m_unity;
     std::unique_ptr<GitIntegration> m_git;
     std::unique_ptr<ui::BuildServiceBackend> m_buildBackend;
+    // Declared before m_cmake, which runs through it, so it is destroyed after it (RUN-1).
+    std::unique_ptr<run::RunManager> m_runManager;
     std::unique_ptr<CMakeIntegration> m_cmake;
     ui::BuildActions* m_buildActions = nullptr; // Child of this.
     std::unique_ptr<build::IRunBuilder> m_runBuilder;

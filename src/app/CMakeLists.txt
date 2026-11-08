@@ -116,7 +116,7 @@ frost_add_library(app LAYER app
         src/workbench_find.cpp
         ${frost_startup_core_sources}
     DEPS frost::ui_vcs frost::vcs frost::ui_find frost::ui_debug frost::debug frost::ui_cmake frost::ui_terminal frost::term frost::ui_workbench frost::ui_nav frost::ui_lang frost::ui_run frost::ui_toolwindows frost::ui_editor
-         frost::ui_shell frost::ui frost::lang frost::build frost::document frost::project frost::settings
+         frost::ui_shell frost::ui frost::lang frost::run frost::build frost::document frost::project frost::settings
          frost::update frost::syntax frost::storage frost::text frost::input frost::rpc frost::io frost::sched frost::diag frost::core
     THIRD_PARTY Qt6::Widgets Qt6::Network)
 target_compile_definitions(frost_app PRIVATE

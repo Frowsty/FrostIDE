@@ -46,6 +46,19 @@ namespace frost::app {
 namespace {
 constexpr std::string_view kTargets = "cmakeTargets";
 constexpr std::string_view kCMake = "cmake";
+
+// The run configuration id of a CMake target: "cmake." and the name, characters outside the id's set
+// (run_configuration.hpp) as '_', at most 128 characters.
+std::string runConfigurationId(std::string_view targetName) {
+    std::string id = "cmake.";
+    for (const char c : targetName) {
+        const bool allowed = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
+                             c == '_' || c == '-';
+        id += allowed ? c : '_';
+    }
+    id.resize(std::min<std::size_t>(id.size(), 128));
+    return id;
+}
 } // namespace
 
 struct CMakeIntegration::RunRelay {
@@ -64,11 +77,11 @@ struct CMakeIntegration::RunRelay {
 CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& launcher, project::TrustStore& trust,
                                    settings::SettingsStore& settingsStore, ui::BuildController& buildController,
                                    build::BuildService& sharedAdmission, ui::ShellWindow& window,
-                                   ui::RunConsole& console, std::string statePath,
+                                   ui::RunConsole& console, run::RunManager& runs, std::string statePath,
                                    std::function<void()> runStateChanged,
                                    std::function<void(const std::string&)> openFile, std::function<void()> modelChanged)
-    : m_build(buildController), m_sharedAdmission(sharedAdmission), m_window(window), m_launcher(launcher),
-      m_trust(trust), m_settings(settingsStore), m_console(console), m_runStateChanged(std::move(runStateChanged)),
+    : m_build(buildController), m_sharedAdmission(sharedAdmission), m_window(window), m_trust(trust),
+      m_settings(settingsStore), m_console(console), m_runs(runs), m_runStateChanged(std::move(runStateChanged)),
       m_controller(std::make_unique<ui::cmake::CMakeController>()), m_runRelay(std::make_shared<RunRelay>()) {
     {
         LockGuard lock(m_runRelay->mutex);
@@ -300,7 +313,10 @@ CMakeIntegration::~CMakeIntegration() {
         LockGuard lock(m_runRelay->mutex);
         m_runRelay->target = nullptr;
     }
-    m_session.reset();
+    // The RunManager ends the program's tree; its later events are dropped by the relay.
+    if (m_runId)
+        m_runs.stop(*m_runId);
+    m_runId.reset();
     m_runAdmission.reset();
     m_configureStop.reset();
     if (m_configureTask)
@@ -803,45 +819,60 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         done(std::move(debugTarget));
         return;
     }
-    spec.stdinMode = io::Stdio::Pipe;
-    spec.arguments = m_runArguments;
+    /*
+     * The target is built, so the program starts through the RunManager (RUN-1) as a cmake-target
+     * configuration whose program is the built artifact and which has no before-launch step left.
+     * TODO(M4): RUN-2 moves the build itself into the RunManager's before-launch step.
+     */
+    run::RunConfiguration configuration;
+    configuration.id = runConfigurationId(target->name);
+    configuration.name = target->name;
+    configuration.type = run::RunType::CMakeTarget;
+    configuration.target = target->name;
+    configuration.program = spec.executable;
+    configuration.arguments = m_runArguments;
+    configuration.workingDirectory = spec.workingDirectory;
     auto relay = m_runRelay;
-    build::RunSessionCallbacks callbacks;
-    callbacks.onOutput = [relay](build::RunStream stream, std::string_view text) {
+    run::RunHandlers handlers;
+    handlers.onOutput = [relay](run::OutputStream stream, std::string_view text) {
         relay->post([stream, text = std::string(text)](CMakeIntegration& self) {
             if (self.m_shutdown)
                 return;
-            self.m_console.appendOutput(
-                stream == build::RunStream::Stdout ? build::RunOutputKind::Stdout : build::RunOutputKind::Stderr, text);
+            self.m_console.appendOutput(stream == run::OutputStream::Stdout ? build::RunOutputKind::Stdout
+                                                                            : build::RunOutputKind::Stderr,
+                                        text);
         });
     };
-    callbacks.onExited = [relay](const build::RunExit& exit) {
-        relay->post([exit](CMakeIntegration& self) {
-            if (self.m_shutdown)
-                return;
-            self.m_running = false;
-            self.m_session.reset();
-            self.m_runAdmission.reset();
-            build::RunOutcome finished;
-            finished.exitCode = exit.exitCode;
-            finished.stopped = exit.stopped;
-            finished.duration = exit.duration;
-            self.m_console.finish(finished);
-            self.m_runStateChanged();
-            self.maybeRerun();
-        });
+    handlers.onFinished = [relay](const run::RunResult& result) {
+        relay->post([result](CMakeIntegration& self) { self.runFinished(result); });
     };
-    auto started = build::RunSession::start(m_launcher, spec, std::move(callbacks));
+    auto started = m_runs.start(configuration, std::move(handlers));
     if (!started) {
         failed.error = started.error();
         m_console.finish(failed);
     } else {
-        m_session = std::move(*started);
+        m_runId = *started;
         m_runAdmission = std::move(admission);
         m_running = true;
-        m_console.setRunning(true, m_session->acceptsInput());
+        m_console.setRunning(true, true); // stdin is a pipe (RunManager); input before the launch is dropped.
     }
     m_runStateChanged();
+}
+
+void CMakeIntegration::runFinished(const run::RunResult& result) {
+    if (m_shutdown || m_runId != result.id)
+        return;
+    m_running = false;
+    m_runId.reset();
+    m_runAdmission.reset();
+    build::RunOutcome finished;
+    finished.error = result.error;
+    finished.exitCode = result.exitCode;
+    finished.stopped = result.stopped;
+    finished.duration = result.duration;
+    m_console.finish(finished);
+    m_runStateChanged();
+    maybeRerun();
 }
 
 void CMakeIntegration::stop() {
@@ -849,8 +880,8 @@ void CMakeIntegration::stop() {
     m_stopRequested = true;
     if (m_pending)
         m_service->cancel();
-    if (m_running && m_session)
-        m_session->stop();
+    if (m_running && m_runId)
+        m_runs.stop(*m_runId);
 }
 
 void CMakeIntegration::shutdown() {
@@ -862,9 +893,9 @@ void CMakeIntegration::shutdown() {
     m_pending = false;
     ++m_runGeneration;
     m_service->cancel();
-    if (m_session) {
-        m_session->stop();
-        m_session.reset();
+    if (m_runId) {
+        m_runs.stop(*m_runId); // Ends the whole tree; the RunManager collects the exit.
+        m_runId.reset();
     }
     m_running = false;
     m_runAdmission.reset();
@@ -891,8 +922,8 @@ void CMakeIntegration::maybeRerun() {
 }
 
 void CMakeIntegration::input(const QString& line) {
-    if (m_running && m_session)
-        (void)m_session->writeInput(line.toStdString() + "\n");
+    if (m_running && m_runId)
+        (void)m_runs.sendInput(*m_runId, line.toStdString() + "\n");
 }
 
 Result<void> CMakeIntegration::open(const std::string& folder) {

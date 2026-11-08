@@ -59,6 +59,9 @@ set(FROST_LAYER_RANK_vcs 7)
 set(FROST_LAYER_RANK_term 7)
 set(FROST_LAYER_RANK_search 7)
 set(FROST_LAYER_RANK_test_runner 7)
+# run (src/run, frost::run; RUN-1, PLAN.md Appendix C R2): run configurations and the RunManager.
+# It runs programs through build's RunSession, so it sits above build (rank 7).
+set(FROST_LAYER_RANK_run 8)
 set(FROST_LAYER_RANK_agent 8)
 set(FROST_LAYER_RANK_diag 8)
 set(FROST_LAYER_RANK_update 8)

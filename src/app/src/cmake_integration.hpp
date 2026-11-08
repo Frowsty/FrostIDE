@@ -4,9 +4,9 @@
 
 #include "frost/build/cmake_service.hpp"
 #include "frost/build/run_service.hpp"
-#include "frost/build/run_session.hpp"
 #include "frost/core/error.hpp"
 #include "frost/debug/lldb_dap.hpp"
+#include "frost/run/run_manager.hpp"
 #include "frost/ui/cmake/cmake_controller.hpp"
 #include "frost/ui/nav/session.hpp"
 
@@ -44,10 +44,11 @@ class CMakeBuildBackend;
 
 class CMakeIntegration final : public QObject {
 public:
+    // `runs` (the workbench's RunManager, RUN-1) starts the built target's program; it must outlive this.
     CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& launcher, project::TrustStore& trust,
                      settings::SettingsStore& settings, ui::BuildController& buildController,
                      build::BuildService& sharedAdmission, ui::ShellWindow& window, ui::RunConsole& console,
-                     std::string statePath, std::function<void()> runStateChanged,
+                     run::RunManager& runs, std::string statePath, std::function<void()> runStateChanged,
                      std::function<void(const std::string&)> openFile, std::function<void()> modelChanged);
     ~CMakeIntegration() override;
     Result<void> open(const std::string& folder);
@@ -74,10 +75,10 @@ private:
     build::BuildService& m_sharedAdmission;
     std::shared_ptr<void> m_runAdmission;
     ui::ShellWindow& m_window;
-    io::IProcessLauncher& m_launcher;
     project::TrustStore& m_trust;
     settings::SettingsStore& m_settings;
     ui::RunConsole& m_console;
+    run::RunManager& m_runs;
     std::function<void()> m_runStateChanged;
     std::unique_ptr<ui::cmake::CMakeController> m_controller;
     std::shared_ptr<build::CMakeService> m_service;
@@ -109,7 +110,9 @@ private:
     std::optional<std::stop_callback<std::function<void()>>> m_configureStop;
     struct RunRelay;
     std::shared_ptr<RunRelay> m_runRelay;
-    std::unique_ptr<build::RunSession> m_session;
+    // The target's program while it runs (RunManager's id).
+    std::optional<run::RunId> m_runId;
+    void runFinished(const run::RunResult& result);
     std::string m_runTarget;
     std::vector<std::string> m_runArguments;
     std::string m_runRoot;

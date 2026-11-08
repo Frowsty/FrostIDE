@@ -27,6 +27,8 @@ if(NOT FROST_FUZZ)
     add_subdirectory(project)
     add_subdirectory(document)
     add_subdirectory(build)
+    # frost::run (RUN-1): run configurations and the RunManager, above build (its RunSession).
+    add_subdirectory(run)
     add_subdirectory(lang)
     add_subdirectory(debug)
     add_subdirectory(search)

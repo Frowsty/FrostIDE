@@ -816,6 +816,9 @@ void Workbench::shutdown() {
     if (m_runService) {
         m_runService->stopAll();
     }
+    if (m_runManager) {
+        m_runManager->stopAll(); // RUN-1: every run configuration's process tree ends.
+    }
     // Rider saves on exit; what cannot be saved stays in the hot-exit journal.
     if (m_documents->policies().autosave.onFrameDeactivation) {
         const document::SaveAllResult saved = m_documents->saveAll(document::SaveReason::Autosave);

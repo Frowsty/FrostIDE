@@ -655,8 +655,19 @@ TEST(WorkbenchCMake, ShutdownStopsARunningTarget) {
         << " build=" << rig.workbench->buildOutput()->editor()->toPlainText().toStdString();
     EXPECT_FALSE(rig.workbench->buildService().reserveExternalLaunch()); // Live target process.
     ASSERT_TRUE(rig.workbench->runController()->running());
+    // RUN-1: the target's program runs through the workbench's RunManager.
+    auto* runs = rig.workbench->runManager();
+    ASSERT_NE(runs, nullptr);
+    const auto active = runs->activeRuns();
+    ASSERT_EQ(active.size(), 1U);
+    EXPECT_EQ(active.front().configuration.name, "stop");
+    EXPECT_EQ(active.front().configuration.type, frost::run::RunType::CMakeTarget);
+    EXPECT_EQ(active.front().phase, frost::run::RunPhase::Running);
+    EXPECT_NE(active.front().processId, 0U);
     rig.workbench->shutdown();
     EXPECT_FALSE(rig.workbench->runController()->running());
+    EXPECT_TRUE(runs->waitForIdle(60s)) << "Stop ended the target's process tree";
+    EXPECT_TRUE(runs->activeRuns().empty());
     auto admission = rig.workbench->buildService().reserveExternalLaunch();
     ASSERT_TRUE(admission);
     rig.workbench->buildService().releaseExternalLaunch(*admission);
