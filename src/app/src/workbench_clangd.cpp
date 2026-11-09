@@ -9,12 +9,14 @@
 #include "frost/build/msbuild_locator.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
+#include "frost/lang/cl_command_lines_provider.hpp"
 #include "frost/lang/cmake_compile_commands.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/cmake_compile_database.hpp"
+#include "frost/project/project_model_cache.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
@@ -162,10 +164,19 @@ void Workbench::startProjectEvaluation(const std::string& root) {
         evaluation.locateMsBuild = locateMsBuild;
         evaluation.configuration = configuration;
         evaluation.trusted = trustedNow;
+        // SLN-4: MSBuild's model of each project configuration kept between sessions, per solution.
+        if (!m_options.compileCommandsCache.empty())
+            if (auto directory = io::joinPath(m_options.compileCommandsCache, cacheNameFor(root) + "/project-model"))
+                evaluation.cache = std::make_shared<project::ProjectModelCache>(m_services.fs, std::move(*directory));
+        // SLN-5: clangd's commands from MSBuild's own GetClCommandLines (startClangd's provider).
+        evaluation.clCommandLines = m_options.clangd;
         m_solutionEvaluation = std::make_shared<project::SolutionEvaluation>(m_services.launcher, m_services.fs,
                                                                              m_solution, std::move(evaluation));
     }
-    if (!m_solution || !admission.trusted || m_options.compileCommandsCache.empty())
+    /* The independent MSBuild.exe evaluation feeds clangd and the explorer only without ProjectHost's:
+     * with it, clangd takes GetClCommandLines (SLN-5) and, should ProjectHost fail, the chain's own
+     * MSBuild provider, so the solution's projects are not evaluated twice at once. */
+    if (!m_solution || !admission.trusted || m_options.compileCommandsCache.empty() || m_solutionEvaluation)
         return;
     auto cache = io::joinPath(m_options.compileCommandsCache, cacheNameFor(root));
     if (!cache)
@@ -319,8 +330,20 @@ void Workbench::startClangd(const std::string& root) {
                 return lang::findMsvcEnvironment(*launcher, *fs);
             };
         }
-        m_compileCommands = lang::solutionCompileCommandsChain(m_services.launcher, m_services.fs, m_solution, root,
-                                                               *cache, std::move(options), m_projectEvaluation);
+        // SLN-5: one owned database per solution configuration from GetClCommandLines, ahead of
+        // the evaluated and synthesized ones (which still answer when ProjectHost is unavailable).
+        std::shared_ptr<lang::ICompileCommandsProvider> clCommandLines;
+        const std::string configurationName = options.configuration.empty() && !m_solution->configurations().empty()
+                                                  ? m_solution->configurations().front().name()
+                                                  : options.configuration;
+        if (m_solutionEvaluation)
+            if (auto directory =
+                    io::joinPath(*cache, "clcommandlines/" + lang::configurationDirectoryName(configurationName)))
+                clCommandLines = std::make_shared<lang::ClCommandLinesCompileCommandsProvider>(
+                    m_services.fs, m_solutionEvaluation, std::move(*directory));
+        m_compileCommands =
+            lang::solutionCompileCommandsChain(m_services.launcher, m_services.fs, m_solution, root, *cache,
+                                               std::move(options), m_projectEvaluation, std::move(clCommandLines));
     } else {
         m_compileCommands = std::make_shared<lang::ExistingCompileCommandsProvider>(m_services.fs, root);
     }

@@ -1107,15 +1107,18 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # and app_workbench_git_tests (tag "git"; ADR 0048 and 0067), sdk_lldb_tests,
         # debug_lldb_tests, debug_dap_real_tests and debug_corpus_tests (Windows only; also tag
         # "corpus") (tag "lldb"; ADR 0049, DBG-1), and in trees with the UI app_workbench_clangd_tests and
-        # ui_screenshot_tests.
+        # ui_screenshot_tests; app_workbench_configuration_tests (Windows only; tags "msbuild" and
+        # "clangd"; SLN-7).
         kinds = {"unit", "integration", "stress", "perf"}
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.", "MsBuildRun.",
                                               "MsBuildEvaluationE2E.", "WorkbenchMsBuild.", "WorkbenchR2a.",
                                               "WorkbenchProjectEdit.", "ProjectHostReal.",
-                                              "WorkbenchProjectHost.", "R2aCorpus.")),
+                                              "WorkbenchProjectHost.", "R2aCorpus.", "ClCommandLinesReal.",
+                                              "ClCommandLinesClangd.", "WorkbenchConfigurationManager.")),
                   "clangd": ("integration", ("ClangdE2E.", "ClangdEncoding.", "MsBuildEvaluationE2E.",
                                               "WorkbenchClangd.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
-                                              "CMakeCompileCommands.")),
+                                              "CMakeCompileCommands.", "ClCommandLinesClangd.",
+                                              "WorkbenchConfigurationManager.")),
                   "cmake": ("integration", ("CMakeRealBuild.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
                                             "CMakeCompileCommands.", "AutomationEndpoint.", "WorkbenchRun.",
                                             "CMakePresetsOracle.", "Fixtures/CMakePresetsOracle.",

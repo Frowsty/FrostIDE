@@ -135,6 +135,17 @@ if(WIN32)
     target_compile_definitions(app_workbench_msbuild_tests PRIVATE
         FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
     add_dependencies(app_workbench_msbuild_tests frost_project_host)
+    # SLN-7: the Configuration Manager switches and remaps configurations; clangd follows on
+    # GetClCommandLines (SLN-5) from the shipped ProjectHost. Tags "msbuild" and "clangd".
+    frost_add_test(app_workbench_configuration_tests QT
+        SOURCES workbench_configuration_manager_test.cpp
+        DEPS frost::app frost::build frost::lang frost::io
+        LABELS integration msbuild clangd)
+    target_include_directories(app_workbench_configuration_tests PRIVATE ${FROST_SOURCE_DIR}/tests
+                               ${FROST_SOURCE_DIR}/src/project/src)
+    target_compile_definitions(app_workbench_configuration_tests PRIVATE ${_frost_workbench_definitions}
+        FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
+    add_dependencies(app_workbench_configuration_tests frost_project_host)
 endif()
 frost_add_test(app_workbench_clangd_tests QT
     SOURCES workbench_clangd_test.cpp

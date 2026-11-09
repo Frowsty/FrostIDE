@@ -7,5 +7,11 @@
       <PreprocessorDefinitions>GEN_COMMON=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
+  <!-- Release builds define NDEBUG, as Visual Studio's generated projects do (SLN-7's switch test). -->
+  <ItemDefinitionGroup Condition="'$(Configuration)' == 'Release'">
+    <ClCompile>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <Import Project="$(MSBuildThisFileDirectory)Toolchain.props" />
 </Project>

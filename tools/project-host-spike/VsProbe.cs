@@ -84,6 +84,8 @@ static class VsProbe
                         Console.WriteLine(json.Serialize(ProjectEvaluator.Hello(msbuildDirectory)));
                     else if (op == "Evaluate")
                         Console.WriteLine(json.Serialize(ProjectEvaluator.Evaluate(request)));
+                    else if (op == "ClCommandLines")
+                        Console.WriteLine(json.Serialize(ProjectEvaluator.ClCommandLines(request)));
                     else
                         throw new InvalidOperationException("Unknown operation " + op);
                     continue;

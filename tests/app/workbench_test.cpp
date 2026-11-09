@@ -2701,7 +2701,10 @@ TEST(Workbench, ProjectDialogsAreReadOnlyAndWriteNoProjectFile) {
     bool written = false;
     const auto onWrite = [&] { written = true; };
 
-    // Configuration Manager: the mappings as loaded, not editable; "Set Active" only selects.
+    /* Configuration Manager (editable since SLN-7; its writes are tested in
+     * solution_configuration_edit_test.cpp and workbench_configuration_manager_test.cpp): the
+     * mappings as loaded, edited only through the row's editors, never typed into the cells; OK
+     * without an edit applies the active configuration and writes nothing. */
     std::optional<int> activeChosen;
     inspectModal(rig.window.get(), QStringLiteral("configurationManagerDialog"), [](QDialog& dlg) {
         auto* table = dlg.findChild<QTableWidget*>(QStringLiteral("cfgManagerProjectTable"));
@@ -2712,19 +2715,11 @@ TEST(Workbench, ProjectDialogsAreReadOnlyAndWriteNoProjectFile) {
                 ASSERT_NE(table->item(row, column), nullptr);
                 EXPECT_FALSE(table->item(row, column)->flags().testFlag(Qt::ItemIsEditable));
             }
-            EXPECT_FALSE(table->item(row, 3)->flags().testFlag(Qt::ItemIsEnabled));
             EXPECT_EQ(table->item(row, 1)->text(), QStringLiteral("Debug"));
             EXPECT_EQ(table->item(row, 2)->text(), QStringLiteral("x64"));
         }
-        auto* note = dlg.findChild<QLabel*>(QStringLiteral("cfgManagerReadOnlyNote"));
-        ASSERT_NE(note, nullptr);
-        EXPECT_TRUE(note->text().contains(QStringLiteral("SLN-6")));
-        auto* buttons = dlg.findChild<QDialogButtonBox*>();
-        ASSERT_NE(buttons, nullptr);
-        EXPECT_EQ(buttons->button(QDialogButtonBox::Ok), nullptr);
-        auto* setActive = dlg.findChild<QPushButton*>(QStringLiteral("cfgManagerSetActiveButton"));
-        ASSERT_NE(setActive, nullptr);
-        setActive->click();
+        EXPECT_EQ(dlg.findChild<QLabel*>(QStringLiteral("cfgManagerReadOnlyNote")), nullptr);
+        clickOk(dlg);
     });
     frost::app::showConfigurationManagerDialog(
         rig.window.get(), fs, *solution, 0, [&](int index) { activeChosen = index; }, onWrite);

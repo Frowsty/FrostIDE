@@ -19,7 +19,20 @@
  * request, unloaded afterwards, so an edited project or import is always read again. Items are
  * those of the requested types, in evaluation order: type, evaluated include, FullPath, the
  * project file that defines the item (the project itself or an import) and the requested
- * metadata values. Imports are the evaluation's imports in order, each path once.
+ * metadata values. Imports are the evaluation's imports in order, each path once. Globs are the
+ * evaluated include globs of every item element ("src\*.cpp"), relative to the project directory
+ * or absolute, so ProjectModelCache (SLN-4) can tell when a directory a glob reads changes.
+ *
+ * ClCommandLines (SLN-5). Loads the project like Evaluate (the caller adds DesignTimeBuild=true
+ * and BuildProjectReferences=false, as Visual Studio's design-time builds do) and builds the
+ * Visual C++ target GetClCommandLines on a ProjectInstance, in process, with no other target:
+ * the IntelliSense command lines MSBuild itself computes, one ClCommandLines item per batch of
+ * sources that share their options. Each answer item is the command line (the item spec), the
+ * sources it applies to (the Files metadata, ';'-separated), WorkingDirectory and
+ * ConfigurationOptions. The target writes nothing into the project tree (design-time). Properties
+ * are the requested property values of the built instance (IncludePath, ExternalIncludePath:
+ * the directories cl.exe reads from INCLUDE and EXTERNAL_INCLUDE, which are not on the command
+ * line). A failed build answers its first errors.
  */
 using System;
 using System.Collections.Generic;
@@ -27,6 +40,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Microsoft.Build.Evaluation;
+using Microsoft.Build.Execution;
+using Microsoft.Build.Framework;
 
 static class ProjectEvaluator
 {
@@ -89,10 +104,12 @@ static class ProjectEvaluator
                 foreach (string name in properties)
                     values2[name] = project.GetPropertyValue(name);
                 var configurations = project.GetItems("ProjectConfiguration").Select(i => i.EvaluatedInclude).ToArray();
+                var globSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var globs = project.GetAllGlobs().SelectMany(g => g.IncludeGlobs).Where(globSeen.Add).ToArray();
                 return new {
                     Op = "Evaluate", Id = id, Error = (string)null, Project = project.FullPath,
                     Configuration = globals["Configuration"], Platform = globals["Platform"], Items = items,
-                    Imports = imports, Properties = values2, ProjectConfigurations = configurations
+                    Imports = imports, Properties = values2, ProjectConfigurations = configurations, Globs = globs
                 };
             }
             finally
@@ -100,6 +117,70 @@ static class ProjectEvaluator
                 collection.UnloadAllProjects();
             }
         }
+    }
+
+    public static object ClCommandLines(Dictionary<string, string> request)
+    {
+        string trusted;
+        if (!request.TryGetValue("Trusted", out trusted) || trusted != "true")
+            throw new InvalidOperationException("Trusted root required before evaluation");
+        string path = Required(request, "Project");
+        if (!Path.IsPathRooted(path)) throw new ArgumentException("Project path must be absolute");
+        var globals = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in request)
+            if (entry.Key.StartsWith("Property:", StringComparison.Ordinal))
+                globals[entry.Key.Substring("Property:".Length)] = entry.Value ?? "";
+        if (!globals.ContainsKey("Configuration") || !globals.ContainsKey("Platform"))
+            throw new ArgumentException("A design-time build needs the Configuration and Platform properties");
+        string propertyList;
+        string[] properties = request.TryGetValue("Properties", out propertyList) ? Split(propertyList) : new string[0];
+        string id;
+        request.TryGetValue("Id", out id);
+        using (var collection = new ProjectCollection(globals))
+        {
+            try
+            {
+                var project = collection.LoadProject(path);
+                var instance = project.CreateProjectInstance();
+                var errors = new ErrorCollector();
+                IDictionary<string, TargetResult> outputs;
+                if (!instance.Build(new[] { "GetClCommandLines" }, new ILogger[] { errors }, out outputs))
+                    throw new InvalidOperationException("GetClCommandLines failed: " +
+                                                        (errors.Messages.Count == 0 ? "no error was logged"
+                                                                                    : String.Join(" | ", errors.Messages.Take(3))));
+                TargetResult result;
+                var lines = new List<object>();
+                if (outputs.TryGetValue("GetClCommandLines", out result))
+                    foreach (ITaskItem item in result.Items)
+                        lines.Add(new {
+                            CommandLine = item.ItemSpec, Files = item.GetMetadata("Files"),
+                            WorkingDirectory = item.GetMetadata("WorkingDirectory"),
+                            ConfigurationOptions = item.GetMetadata("ConfigurationOptions")
+                        });
+                var values = new Dictionary<string, string>();
+                foreach (string name in properties)
+                    values[name] = instance.GetPropertyValue(name);
+                return new {
+                    Op = "ClCommandLines", Id = id, Error = (string)null, Project = project.FullPath,
+                    Configuration = globals["Configuration"], Platform = globals["Platform"], CommandLines = lines,
+                    Properties = values
+                };
+            }
+            finally
+            {
+                collection.UnloadAllProjects();
+            }
+        }
+    }
+
+    // Collects the build's error messages for the answer (nothing else is logged).
+    sealed class ErrorCollector : ILogger
+    {
+        public readonly List<string> Messages = new List<string>();
+        public LoggerVerbosity Verbosity { get; set; }
+        public string Parameters { get; set; }
+        public void Initialize(IEventSource source) { source.ErrorRaised += (_, e) => Messages.Add(e.Message); }
+        public void Shutdown() { }
     }
 
     static string Required(Dictionary<string, string> request, string name)

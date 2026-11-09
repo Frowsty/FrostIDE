@@ -13,12 +13,15 @@ frost_add_test(project_unit_tests
         cmake_compile_database_test.cpp
         cmake_file_api_test.cpp
         cmake_presets_test.cpp
+        cl_command_lines_test.cpp
         cmake_profile_test.cpp
         directory_roles_test.cpp
         paths_test.cpp
         project_host_protocol_test.cpp
+        project_model_cache_test.cpp
         sln_reader_test.cpp
         slnx_reader_test.cpp
+        solution_configuration_edit_test.cpp
         solution_model_test.cpp
         trust_store_test.cpp
         vcxproj_reader_test.cpp
@@ -42,11 +45,13 @@ target_compile_definitions(project_cmake_tests PRIVATE
 # SLN-0, SLN-2 and SLN-3 against this machine's real MSBuild (Visual Studio or its Build Tools,
 # found with vswhere): the oracle (msbuild_oracle.hpp, MSBuild.exe run by the test), the shipped
 # ProjectHost helper and SolutionEvaluation on fixtures/msvc_generated, the synthetic generated
-# solution (.sln and .slnx). Windows only; label "integration" with the tag "msbuild". A machine
-# without Visual Studio skips the tests. PROCESSORS 2: each test runs MSBuild next to the helper.
+# solution (.sln and .slnx). SLN-4, SLN-5 and SLN-7 (cl_command_lines_real_test.cpp): the
+# GetClCommandLines oracle, the ProjectModelCache's warm open and an edited mapping built by
+# MSBuild.exe. Windows only; label "integration" with the tag "msbuild". A machine without Visual
+# Studio skips the tests. PROCESSORS 2: each test runs MSBuild next to the helper.
 if(WIN32)
     frost_add_test(project_msbuild_tests
-        SOURCES project_host_test.cpp
+        SOURCES project_host_test.cpp cl_command_lines_real_test.cpp
         DEPS frost::project frost::build frost::io
         LABELS integration msbuild
         PROCESSORS 2)

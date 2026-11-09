@@ -19,7 +19,11 @@
  *    "Metadata":"A;B","Properties":"C;D","Property:Configuration":"Debug","Property:Platform":"x64",...}
  *     -> {"Op":"Evaluate","Id":...,"Error":null,"Project":...,"Items":[{"Type","Include","FullPath",
  *         "DefiningProject","Metadata":{...}}],"Imports":[...],"Properties":{...},
- *         "ProjectConfigurations":[...]}
+ *         "ProjectConfigurations":[...],"Globs":["src\\*.cpp",...]}
+ *   {"Op":"ClCommandLines","Id":...,"Trusted":"true","Project":<abs>,"Properties":"IncludePath;...",
+ *    "Property:Configuration":"Debug",...,"Property:DesignTimeBuild":"true",...}
+ *     -> {"Op":"ClCommandLines","Id":...,"Error":null,"Project":...,"CommandLines":[{"CommandLine",
+ *         "Files","WorkingDirectory","ConfigurationOptions"}],"Properties":{...}}   (SLN-5)
  *   A failed request answers {"Op":...,"Id":...,"Error":"<message>"}.
  *
  * Evaluation runs project logic (conditions, property functions, imports), so it needs a trusted
@@ -38,6 +42,7 @@
 #include "frost/core/error.hpp"
 #include "frost/core/mutex.hpp"
 #include "frost/io/process.hpp"
+#include "frost/project/cl_command_lines.hpp"
 #include "frost/project/solution_model.hpp"
 
 #include <chrono>
@@ -61,6 +66,8 @@ class IFileSystem;
 } // namespace frost::io
 
 namespace frost::project {
+
+class ProjectModelCache;
 
 // The protocol version ProjectEvaluator.cs speaks; a helper answering another one is refused.
 inline constexpr int kProjectHostProtocol = 1;
@@ -114,6 +121,9 @@ struct HostEvaluation {
     std::vector<std::string> imports; // Evaluation order, each once; empty for the MSBuild.exe fallback.
     std::map<std::string, std::string, std::less<>> properties;
     std::vector<std::string> projectConfigurations; // "Debug|x64", ...; empty for the fallback.
+    // The evaluated include globs of every item element (SLN-4), relative to the project directory
+    // or absolute, each once; empty for the fallback.
+    std::vector<std::string> globs = {};
 };
 
 // The request lines (no trailing newline). Errors: InvalidArgument (a path that is not absolute,
@@ -126,6 +136,21 @@ struct HostEvaluation {
 // (the helper's Error message).
 [[nodiscard]] Result<ProjectHostHello> parseProjectHostHello(std::string_view line);
 [[nodiscard]] Result<HostEvaluation> parseProjectHostEvaluation(std::string_view line);
+
+/*
+ * SLN-5: the global properties of a GetClCommandLines design-time build: evaluationGlobalProperties
+ * plus DesignTimeBuild=true and BuildProjectReferences=false, as Visual Studio's design-time builds
+ * set them (referenced projects are asked for their outputs, never built). Pure.
+ */
+[[nodiscard]] std::vector<std::pair<std::string, std::string>>
+clCommandLinesGlobalProperties(const ProjectEvaluationRequest& request);
+// The properties a ClCommandLines request asks for: IncludePath and ExternalIncludePath.
+[[nodiscard]] std::vector<std::string> clCommandLinesPropertyNames();
+// The request line and its answer (cl_command_lines.hpp). Errors: as the Evaluate ones; Corrupt
+// also for an answer without a CommandLines array.
+[[nodiscard]] Result<std::string> projectHostClCommandLinesRequest(const ProjectEvaluationRequest& request,
+                                                                   std::string_view id);
+[[nodiscard]] Result<ProjectClCommandLines> parseProjectHostClCommandLines(std::string_view line);
 
 /*
  * Path (c), the fallback: MSBuild.exe <project> -nologo -nodeReuse:false -getItem:<types>
@@ -176,6 +201,10 @@ public:
 
     // Errors: see the header comment; Cancelled when `stop` is requested (the helper keeps running).
     [[nodiscard]] Result<HostEvaluation> evaluate(const ProjectEvaluationRequest& request, std::stop_token stop = {});
+    // SLN-5: GetClCommandLines of the request's project configuration (request.properties and
+    // metadata are ignored). Errors: as evaluate(); IoError also when the target fails.
+    [[nodiscard]] Result<ProjectClCommandLines> clCommandLines(const ProjectEvaluationRequest& request,
+                                                               std::stop_token stop = {});
 
     [[nodiscard]] const ProjectHostHello& hello() const noexcept { return m_hello; }
     [[nodiscard]] io::ProcessId pid() const noexcept { return m_pid; }
@@ -191,6 +220,8 @@ private:
     ProjectHostClient() = default;
     // The next stdout line, waiting until the deadline. Errors: IoError (ended), Timeout, Cancelled.
     [[nodiscard]] Result<std::string> nextLine(IClock::Duration timeout, std::stop_token stop);
+    // Sends one request line and returns its answer line. Errors: as nextLine; IoError (ended).
+    [[nodiscard]] Result<std::string> exchange(const std::string& line, std::stop_token stop);
 
     std::unique_ptr<io::IProcess> m_process;
     std::shared_ptr<Shared> m_shared;
@@ -223,6 +254,14 @@ struct SolutionEvaluationStatus {
     std::size_t total = 0;             // Projects to evaluate.
     std::vector<std::string> warnings; // One per project whose evaluation failed (it stays static).
     std::uint64_t generation = 0;      // Increases with every change of results().
+    // SLN-4: projects served from the ProjectModelCache, and how many of those a fresh evaluation
+    // has confirmed or replaced since (revalidation runs after Ready, through ProjectHost).
+    std::size_t cached = 0;
+    std::size_t revalidated = 0;
+    bool revalidating = false; // True from Ready until every cached project was revalidated.
+    // SLN-5: why GetClCommandLines is missing for some or all projects ("" when every evaluated
+    // project has its command lines, or none were asked for).
+    std::string clCommandLinesProblem;
 };
 
 struct SolutionEvaluationOptions {
@@ -240,6 +279,13 @@ struct SolutionEvaluationOptions {
     // projects done and the running helper's process id (tests end the helper at a known point
     // with it); may be empty.
     std::function<void(std::size_t evaluated, std::optional<io::ProcessId> hostPid)> afterProject = {};
+    // SLN-4: the persistent cache (project_model_cache.hpp); empty evaluates every project.
+    std::shared_ptr<ProjectModelCache> cache = {};
+    // SLN-4: re-evaluate the projects served from the cache after Ready, replacing any that changed
+    // in a way the cache's checks cannot see (an Exists() condition on a file that was not imported).
+    bool revalidateCached = true;
+    // SLN-5: also run GetClCommandLines for each project through ProjectHost (clCommandLines()).
+    bool clCommandLines = false;
 };
 
 /*
@@ -269,12 +315,16 @@ public:
 
     [[nodiscard]] SolutionEvaluationStatus status() const;
     [[nodiscard]] std::vector<EvaluatedProjectItems> results() const;
+    // SLN-5: GetClCommandLines per project that has them (options.clCommandLines), like results().
+    [[nodiscard]] std::vector<ProjectClCommandLines> clCommandLines() const;
     // The running helper's process id, if one runs.
     [[nodiscard]] std::optional<io::ProcessId> hostPid() const;
 
 private:
     void run(std::stop_token stop);
     void publish(std::function<void(SolutionEvaluationStatus&)> change);
+    // Adds or replaces (by project path) one project's result; returns whether anything changed.
+    bool storeResult(EvaluatedProjectItems items, std::optional<ProjectClCommandLines> lines) FROST_REQUIRES(m_mutex);
 
     io::IProcessLauncher& m_launcher;
     io::IFileSystem& m_fs;
@@ -283,6 +333,7 @@ private:
     mutable Mutex m_mutex;
     SolutionEvaluationStatus m_status FROST_GUARDED_BY(m_mutex);
     std::vector<EvaluatedProjectItems> m_results FROST_GUARDED_BY(m_mutex);
+    std::vector<ProjectClCommandLines> m_clCommandLines FROST_GUARDED_BY(m_mutex);
     std::optional<io::ProcessId> m_hostPid FROST_GUARDED_BY(m_mutex);
     std::jthread m_worker; // Its stop token also ends a running MSBuild.exe of the fallback.
 };

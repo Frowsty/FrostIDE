@@ -361,6 +361,7 @@ std::string_view toString(CompileCommandsSource source) noexcept {
     case CompileCommandsSource::Evaluated: return "evaluated";
     case CompileCommandsSource::CMakeCopy: return "cmake copy";
     case CompileCommandsSource::CMakeCodeModel: return "cmake codemodel";
+    case CompileCommandsSource::ClCommandLines: return "msbuild getclcommandlines";
     }
     return "existing";
 }

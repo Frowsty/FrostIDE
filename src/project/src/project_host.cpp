@@ -299,6 +299,92 @@ Result<HostEvaluation> parseProjectHostEvaluation(std::string_view line) {
     out.imports = stringArray(json->find("Imports"));
     readStringMap(json->find("Properties"), out.properties);
     out.projectConfigurations = stringArray(json->find("ProjectConfigurations"));
+    out.globs = stringArray(json->find("Globs"));
+    return out;
+}
+
+std::vector<std::pair<std::string, std::string>>
+clCommandLinesGlobalProperties(const ProjectEvaluationRequest& request) {
+    auto out = evaluationGlobalProperties(request);
+    out.emplace_back("DesignTimeBuild", "true");
+    out.emplace_back("BuildProjectReferences", "false");
+    return out;
+}
+
+std::vector<std::string> clCommandLinesPropertyNames() { return {"IncludePath", "ExternalIncludePath"}; }
+
+Result<std::string> projectHostClCommandLinesRequest(const ProjectEvaluationRequest& request, std::string_view id) {
+    if (auto checked = checkRequest(request); !checked) {
+        return std::unexpected(std::move(checked.error()));
+    }
+    std::string out = "{";
+    appendMember(out, "Op", "ClCommandLines");
+    appendMember(out, "Id", id);
+    appendMember(out, "Trusted", "true");
+    appendMember(out, "Project", request.projectPath);
+    appendMember(out, "Properties", joinList(clCommandLinesPropertyNames()));
+    for (const auto& [name, value] : clCommandLinesGlobalProperties(request)) {
+        appendMember(out, "Property:" + name, value);
+    }
+    out += '}';
+    return out;
+}
+
+Result<ProjectClCommandLines> parseProjectHostClCommandLines(std::string_view line) {
+    auto json = answerObject(line, "ClCommandLines");
+    if (!json) {
+        return std::unexpected(std::move(json.error()));
+    }
+    ProjectClCommandLines out;
+    out.projectPath = detail::normalizeAbsolute(json->stringAt("Project")).value_or(json->stringAt("Project"));
+    out.configuration = json->stringAt("Configuration");
+    out.platform = json->stringAt("Platform");
+    const JsonNode* lines = json->find("CommandLines");
+    if (lines == nullptr || !lines->isArray()) {
+        return fail(ErrorCode::Corrupt, "ProjectHost's GetClCommandLines answer has no CommandLines array");
+    }
+    for (const JsonNode& entry : lines->items) {
+        if (!entry.isObject()) {
+            return fail(ErrorCode::Corrupt, "a ProjectHost command line is not an object");
+        }
+        ClCommandLine parsed;
+        parsed.commandLine = entry.stringAt("CommandLine");
+        parsed.workingDirectory =
+            entry.stringAt("WorkingDirectory").empty()
+                ? std::string()
+                : detail::normalizeAbsolute(entry.stringAt("WorkingDirectory")).value_or(std::string());
+        parsed.configurationOptions = detail::iequals(entry.stringAt("ConfigurationOptions"), "true");
+        for (std::string_view file : detail::splitTrimmed(entry.stringAt("Files"), ';')) {
+            // The target's own placeholder for the project-wide options is not a source.
+            if (detail::iequals(io::fileName(file), "__temporary.cpp")) {
+                continue;
+            }
+            if (auto normalized = detail::normalizeAbsolute(file)) {
+                parsed.files.push_back(std::move(*normalized));
+            }
+        }
+        out.commandLines.push_back(std::move(parsed));
+    }
+    if (const JsonNode* properties = json->find("Properties"); properties != nullptr && properties->isObject()) {
+        // A relative directory (Notepad++ lists "..\src\json") is relative to the project's
+        // directory, where MSBuild's CL task runs cl.exe with INCLUDE and EXTERNAL_INCLUDE set.
+        const std::string projectDirectory =
+            io::isAbsolutePath(out.projectPath) ? std::string(io::parentPath(out.projectPath)) : std::string();
+        const auto directories = [&projectDirectory](std::string_view list) {
+            std::vector<std::string> dirs;
+            for (std::string_view entry : detail::splitTrimmed(list, ';')) {
+                auto resolved = io::isAbsolutePath(entry) || projectDirectory.empty()
+                                    ? detail::normalizeAbsolute(entry)
+                                    : detail::resolvePath(projectDirectory, entry);
+                if (resolved) {
+                    dirs.push_back(std::move(*resolved));
+                }
+            }
+            return dirs;
+        };
+        out.includePath = directories(properties->stringAt("IncludePath"));
+        out.externalIncludePath = directories(properties->stringAt("ExternalIncludePath"));
+    }
     return out;
 }
 
@@ -595,16 +681,11 @@ Result<std::string> ProjectHostClient::nextLine(IClock::Duration timeout, std::s
     return std::unexpected(endedError());
 }
 
-Result<HostEvaluation> ProjectHostClient::evaluate(const ProjectEvaluationRequest& request, std::stop_token stop) {
-    const std::string id = std::to_string(m_nextId++);
-    auto line = projectHostEvaluateRequest(request, id);
-    if (!line) {
-        return std::unexpected(std::move(line.error()));
-    }
+Result<std::string> ProjectHostClient::exchange(const std::string& line, std::stop_token stop) {
     if (!running()) {
         return std::unexpected(endedError());
     }
-    if (auto written = m_process->writeStdin(*line + "\n"); !written) {
+    if (auto written = m_process->writeStdin(line + "\n"); !written) {
         // A closed stdin means the helper is going away; let the reader see its stdout end, so
         // running() is false when the caller asks why the request failed.
         std::unique_lock lock(m_shared->mutex);
@@ -612,7 +693,33 @@ Result<HostEvaluation> ProjectHostClient::evaluate(const ProjectEvaluationReques
         lock.unlock();
         return std::unexpected(endedError());
     }
-    auto answer = nextLine(m_requestTimeout, stop);
+    return nextLine(m_requestTimeout, stop);
+}
+
+Result<ProjectClCommandLines> ProjectHostClient::clCommandLines(const ProjectEvaluationRequest& request,
+                                                                std::stop_token stop) {
+    auto line = projectHostClCommandLinesRequest(request, std::to_string(m_nextId++));
+    if (!line) {
+        return std::unexpected(std::move(line.error()));
+    }
+    auto answer = exchange(*line, stop);
+    if (!answer) {
+        return std::unexpected(std::move(answer.error()));
+    }
+    auto parsed = parseProjectHostClCommandLines(*answer);
+    if (parsed && parsed->projectPath.empty()) {
+        parsed->projectPath = request.projectPath;
+    }
+    return parsed;
+}
+
+Result<HostEvaluation> ProjectHostClient::evaluate(const ProjectEvaluationRequest& request, std::stop_token stop) {
+    const std::string id = std::to_string(m_nextId++);
+    auto line = projectHostEvaluateRequest(request, id);
+    if (!line) {
+        return std::unexpected(std::move(line.error()));
+    }
+    auto answer = exchange(*line, stop);
     if (!answer) {
         return std::unexpected(std::move(answer.error()));
     }
