@@ -1096,8 +1096,9 @@ class BuildTreeLabelsTest(unittest.TestCase):
     def test_one_kind_label_and_tags_after_it(self):
         # frost_add_test (cmake/FrostLayers.cmake): LABELS starts with the kind, and the labels after it
         # are tags that ctest -L selects by and that keep the kind's scheduling default. Every test has
-        # exactly one kind label; the tagged suites are build_msbuild_tests and
-        # app_workbench_msbuild_tests (Windows only), lang_clangd_tests, lang_msbuild_tests (Windows
+        # exactly one kind label; the tagged suites are build_msbuild_tests,
+        # app_workbench_msbuild_tests, project_msbuild_tests and project_corpus_tests (Windows only;
+        # tag "msbuild"; SLN-2), lang_clangd_tests, lang_msbuild_tests (Windows
         # only; both tags), lang_cmake_tests (both tags; CMK-4), build_cmake_tests,
         # project_cmake_tests, app_automation_endpoint_tests and app_workbench_run_tests (tag "cmake"),
         # run_test_runner_tests and app_unit_tests_window_tests (tag "cmake"; RUN-7),
@@ -1106,14 +1107,18 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # and app_workbench_git_tests (tag "git"; ADR 0048 and 0067), sdk_lldb_tests,
         # debug_lldb_tests, debug_dap_real_tests and debug_corpus_tests (Windows only; also tag
         # "corpus") (tag "lldb"; ADR 0049, DBG-1), and in trees with the UI app_workbench_clangd_tests and
-        # ui_screenshot_tests.
+        # ui_screenshot_tests; app_workbench_configuration_tests (Windows only; tags "msbuild" and
+        # "clangd"; SLN-7).
         kinds = {"unit", "integration", "stress", "perf"}
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.", "MsBuildRun.",
                                               "MsBuildEvaluationE2E.", "WorkbenchMsBuild.", "WorkbenchR2a.",
-                                              "WorkbenchProjectEdit.")),
+                                              "WorkbenchProjectEdit.", "ProjectHostReal.",
+                                              "WorkbenchProjectHost.", "R2aCorpus.", "ClCommandLinesReal.",
+                                              "ClCommandLinesClangd.", "WorkbenchConfigurationManager.")),
                   "clangd": ("integration", ("ClangdE2E.", "ClangdEncoding.", "MsBuildEvaluationE2E.",
                                               "WorkbenchClangd.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
-                                              "CMakeCompileCommands.")),
+                                              "CMakeCompileCommands.", "ClCommandLinesClangd.",
+                                              "WorkbenchConfigurationManager.")),
                   "cmake": ("integration", ("CMakeRealBuild.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
                                             "CMakeCompileCommands.", "AutomationEndpoint.", "WorkbenchRun.",
                                             "CMakePresetsOracle.", "Fixtures/CMakePresetsOracle.",

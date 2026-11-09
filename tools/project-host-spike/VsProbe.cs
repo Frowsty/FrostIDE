@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// Experimental .NET Framework ownership probe; an installed VS MSBuild supplies its assemblies.
+// The Windows ProjectHost (net472): MSBuild evaluation for the Solution Explorer (ProjectEvaluator.cs,
+// SLN-2) and the guarded project-file edits; an installed VS MSBuild supplies its assemblies.
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -30,23 +32,64 @@ static class VsProbe
         if (args.Length != 1 || !Path.IsPathRooted(args[0]))
             throw new ArgumentException("Pass the absolute VS MSBuild assembly directory");
         string directory = args[0];
+        RegisterInstance(directory);
         AppDomain.CurrentDomain.AssemblyResolve += (_, e) => {
             string path = Path.Combine(directory, new AssemblyName(e.Name).Name + ".dll");
             return File.Exists(path) ? Assembly.LoadFrom(path) : null;
         };
-        Run();
+        Run(directory);
+    }
+
+    /* What MSBuildLocator's RegisterMSBuildPath does for a Visual Studio instance on .NET Framework
+     * (microsoft/MSBuildLocator, MIT; ProjectEvaluator.cs explains why the host does it itself):
+     * MSBUILD_EXE_PATH names the instance's MSBuild.exe, VSINSTALLDIR its root and
+     * VisualStudioVersion its major version, so Microsoft.Build resolves that instance's toolset.
+     * `directory` is <root>\MSBuild\Current\Bin\amd64 (or Bin). Nothing of Microsoft.Build is
+     * loaded yet: FileVersionInfo reads the version resource only. */
+    static void RegisterInstance(string directory)
+    {
+        string msbuild = Path.Combine(directory, "MSBuild.exe");
+        string assembly = Path.Combine(directory, "Microsoft.Build.dll");
+        if (!File.Exists(msbuild) || !File.Exists(assembly))
+            throw new ArgumentException("The MSBuild directory has no MSBuild.exe or Microsoft.Build.dll");
+        var bin = new DirectoryInfo(directory);
+        if (!bin.Name.Equals("Bin", StringComparison.OrdinalIgnoreCase)) bin = bin.Parent;
+        var msbuildRoot = bin?.Parent?.Parent;
+        var root = msbuildRoot?.Parent;
+        if (bin == null || !bin.Name.Equals("Bin", StringComparison.OrdinalIgnoreCase) || root == null ||
+            !msbuildRoot.Name.Equals("MSBuild", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The MSBuild directory is not inside a Visual Studio instance");
+        int major = FileVersionInfo.GetVersionInfo(assembly).FileMajorPart;
+        Environment.SetEnvironmentVariable("MSBUILD_EXE_PATH", msbuild);
+        Environment.SetEnvironmentVariable("VSINSTALLDIR", root.FullName.TrimEnd('\\') + "\\");
+        Environment.SetEnvironmentVariable("VisualStudioVersion", major + ".0");
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static void Run()
+    static void Run(string msbuildDirectory)
     {
-        var json = new JavaScriptSerializer();
+        var json = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
         string line;
         while ((line = Console.ReadLine()) != null)
         {
+            // The evaluation protocol (ProjectEvaluator.cs): one response line per request line.
+            string op = null, opId = null;
             try
             {
                 var request = json.Deserialize<Dictionary<string, string>>(line);
+                if (request != null && request.TryGetValue("Op", out op))
+                {
+                    request.TryGetValue("Id", out opId);
+                    if (op == "Hello")
+                        Console.WriteLine(json.Serialize(ProjectEvaluator.Hello(msbuildDirectory)));
+                    else if (op == "Evaluate")
+                        Console.WriteLine(json.Serialize(ProjectEvaluator.Evaluate(request)));
+                    else if (op == "ClCommandLines")
+                        Console.WriteLine(json.Serialize(ProjectEvaluator.ClCommandLines(request)));
+                    else
+                        throw new InvalidOperationException("Unknown operation " + op);
+                    continue;
+                }
                 string trustedRoot;
                 if (!request.TryGetValue("Trusted", out trustedRoot) || trustedRoot != "true")
                     throw new InvalidOperationException("Trusted root required before evaluation");
@@ -213,7 +256,10 @@ static class VsProbe
             }
             catch (Exception e)
             {
-                Console.WriteLine(json.Serialize(new { Items = (object)null, Error = e.Message }));
+                if (op != null)
+                    Console.WriteLine(json.Serialize(new { Op = op, Id = opId, Error = e.Message }));
+                else
+                    Console.WriteLine(json.Serialize(new { Items = (object)null, Error = e.Message }));
             }
         }
     }

@@ -110,11 +110,10 @@ void showSolutionPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const pr
                                   std::function<void(project::ProjectId)> onSetStartup,
                                   std::function<void()> onDependenciesChanged);
 
-// Read-only Configuration Manager: the solution's project configuration mappings exactly as
-// loaded ("not mapped" where the solution has none), with a note that editing arrives with SLN-6.
-// The only action is choosing the active solution configuration, applied through
-// `onActiveConfigurationChanged`; nothing is written, so `fs` and `onSolutionFileModified` are
-// unused until SLN-6/SLN-7.
+// The Configuration Manager (SLN-7, ui::ConfigurationManagerDialog): on OK the edited project
+// configuration mappings are written to the solution file (project::writeSolutionConfigurationEdits,
+// verified by reading them back), then `onSolutionFileModified` runs when something was written,
+// and `onActiveConfigurationChanged` gets the chosen active configuration. Cancel writes nothing.
 void showConfigurationManagerDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
                                     int activeConfigurationIndex, std::function<void(int)> onActiveConfigurationChanged,
                                     std::function<void()> onSolutionFileModified);

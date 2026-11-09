@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "The pinned FrostEngine corpora of the -Corpus verify tier (ADR 0077 decision 7, ADR 0078; PLAN.md section 7, Roadmap v2). tools/corpora.py fetch makes each one a full `git clone --no-hardlinks` of 'url' (or, only when that fails, of a local path given with --fallback-source) checked out detached at 'sha', in <root>/<id>-<sha[:12]>; <root> is $FROST_CORPORA_ROOT, else E:\\FrostBuilds\\corpora on Windows and ~/FrostBuilds/corpora (ext4) on Linux. tools/corpora.py pin re-resolves 'sha' from the tip of 'branch' with git ls-remote. The tests and the verify scripts never read a developer's live engine tree, only these clones. 'presets' names the configure preset each platform's corpus tests use.",
+  "description": "The pinned corpora of the -Corpus verify tier (FrostEngine; R2a, the Notepad++ MSVC solution) (ADR 0077 decision 7, ADR 0078; PLAN.md section 7, Roadmap v2). tools/corpora.py fetch makes each one a full `git clone --no-hardlinks` of 'url' (or, only when that fails, of a local path given with --fallback-source) checked out detached at 'sha', in <root>/<id>-<sha[:12]>; <root> is $FROST_CORPORA_ROOT, else E:\\FrostBuilds\\corpora on Windows and ~/FrostBuilds/corpora (ext4) on Linux. tools/corpora.py pin re-resolves 'sha' from the tip of 'branch' with git ls-remote. The tests and the verify scripts never read a developer's live engine tree, only these clones. 'presets' names the configure preset each platform's corpus tests use. 'platforms' (default both) limits a corpus to Windows or Linux; the others skip it.",
   "corpora": [
     {
       "id": "frostengine",
@@ -20,6 +20,21 @@
         }
       },
       "cacheVariablesReason": "linux: the pin does not compile with the pinned clang 23 under -Werror (-Wunused-lambda-capture in Frost/src/Frost/Renderer/RHI/GraphicsDevice.cpp), so j2_run could not build FrostEditor; the engine's own switch keeps its warnings as warnings (2026-11-08)."
+    },
+    {
+      "id": "r2a",
+      "name": "Notepad++ (R2a)",
+      "url": "https://github.com/notepad-plus-plus/notepad-plus-plus.git",
+      "branch": "master",
+      "sha": "dd40fe45598791e9aa38f3aeb200e10fb3d6338a",
+      "pinned": "2026-11-09",
+      "platforms": [
+        "windows"
+      ],
+      "solutions": [
+        "PowerEditor/visual.net/notepadPlus.sln"
+      ],
+      "purpose": "R2a (SLN-0): the real Visual Studio solution of the MSVC track (Desktop C++, v143; tag v8.9.8.1). SLN-2/SLN-3: ProjectHost evaluates its three projects and the Solution Explorer's item counts equal MSBuild.exe's per project (tests/project/project_corpus_test.cpp)."
     }
   ]
 }

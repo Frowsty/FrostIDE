@@ -293,7 +293,7 @@ std::string Workbench::defaultTargetPathForModify() const {
     const bool projectVisible = m_window && m_window->toolWindows().isVisible(ui::tool_windows::kProject);
     if (m_solution && m_explorer && (projectVisible || !filesVisible)) {
         if (const auto nodeId = m_explorer->currentNode()) {
-            const auto& node = m_solution->node(*nodeId);
+            const auto& node = m_explorer->solution()->node(*nodeId); // The shown model's ids.
             if ((node.kind == project::NodeKind::File || node.kind == project::NodeKind::Filter) &&
                 !node.path.empty()) {
                 return node.path;
@@ -308,7 +308,7 @@ std::string Workbench::defaultTargetPathForModify() const {
     }
     if (m_solution && m_explorer) {
         if (const auto nodeId = m_explorer->currentNode()) {
-            const auto& node = m_solution->node(*nodeId);
+            const auto& node = m_explorer->solution()->node(*nodeId); // The shown model's ids.
             if ((node.kind == project::NodeKind::File || node.kind == project::NodeKind::Filter) &&
                 !node.path.empty()) {
                 return node.path;
