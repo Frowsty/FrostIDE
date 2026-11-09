@@ -148,7 +148,7 @@ if(WIN32)
 endif()
 
 frost_add_test(app_workbench_lua_tests QT
-    SOURCES workbench_lua_test.cpp
+    SOURCES workbench_lua_test.cpp workbench_lua_workspace_test.cpp
     DEPS frost::app frost::lang frost::io
     LABELS integration)
 target_include_directories(app_workbench_lua_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

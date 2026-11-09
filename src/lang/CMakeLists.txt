@@ -36,11 +36,14 @@ frost_add_library(lang LAYER lang
         src/document_sync.cpp
         src/engine_automation.cpp
         src/engine_discovery_process.cpp
+        src/frost_engine_lua.cpp
         src/fuzzy.cpp
         src/jsonrpc_connection.cpp
         src/jsonrpc_framing.cpp
         src/lsp_client.cpp
         src/lua_config.cpp
+        src/lua_host.cpp
+        src/lua_rc.cpp
         src/lua_service.cpp
         src/managed_service.cpp
         src/lsp_types.cpp

@@ -5,6 +5,7 @@
 #include "frost/io/path.hpp"
 #include "frost/io/reactor.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
+#include "frost/lang/frost_engine_lua.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/lang/managed_service.hpp"
 #include "frost/sched/sim_executor.hpp"
@@ -156,7 +157,11 @@ TEST(ManagedService, RequiresTrustAndConfiguresCSharpProcess) {
 }
 
 TEST(LuaService, ConfigurationMatchesEngineAndSupportsSections) {
-    auto config = frost::lang::luaDefaults("Lua 5.4", true);
+    auto config = frost::lang::frostEngineLuaDefaults("Lua 5.4", [] {
+        frost::lang::FrostEngineLuaProfile unreferenced;
+        unreferenced.frostEngine = true; // A FrostEngine workspace whose reference was not found.
+        return unreferenced;
+    }());
     EXPECT_EQ(frost::lang::luaConfigurationSection(config, "Lua.runtime.version").asString()->compare("Lua 5.4"), 0);
     EXPECT_EQ(frost::lang::luaConfigurationSection(config, "Lua.workspace.library")
                   .items()[0]

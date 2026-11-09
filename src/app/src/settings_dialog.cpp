@@ -10,6 +10,7 @@
 #include "frost/ui/tr.hpp"
 
 #include "settings_keymap_page.hpp"
+#include "settings_lua_page.hpp"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -205,8 +206,8 @@ struct SettingsDialog::Row {
 };
 
 SettingsDialog::SettingsDialog(settings::SettingsStore& store, const input::ActionRegistry& registry,
-                               input::KeymapService& keymap, QWidget* parent)
-    : QDialog(parent), m_store(store), m_registry(registry), m_keymap(keymap) {
+                               input::KeymapService& keymap, QWidget* parent, SettingsLuaContext lua)
+    : QDialog(parent), m_store(store), m_registry(registry), m_keymap(keymap), m_luaContext(std::move(lua)) {
     setObjectName(QStringLiteral("settingsDialog"));
     setWindowTitle(text("Settings"));
     resize(920, 680);
@@ -294,13 +295,27 @@ void SettingsDialog::build() {
         scroll->setWidget(page);
         m_pages->addWidget(scroll);
     }
-    m_keymapPage = new SettingsKeymapPage(
-        m_registry, m_keymap,
-        [this] {
-            m_apply->setEnabled(m_keymapPage->dirty() ||
-                                std::ranges::any_of(m_rows, [](const auto& row) { return row->dirty; }));
-        },
-        this);
+    m_keymapPage = new SettingsKeymapPage(m_registry, m_keymap, [this] { refreshApply(); }, this);
+    // LUA-4: the project's .luarc.json, after the registry pages (row and page kPages.size()).
+    if (m_luaContext.fs != nullptr) {
+        m_categories->addItem(text("Lua"));
+        auto* scroll = new QScrollArea(m_pages);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setWidgetResizable(true);
+        auto* page = new QWidget(scroll);
+        auto* layout = new QVBoxLayout(page);
+        layout->setAlignment(Qt::AlignTop);
+        auto* heading = new QLabel(text("Lua"), page);
+        QFont font = heading->font();
+        font.setBold(true);
+        heading->setFont(font);
+        layout->addWidget(heading);
+        m_luaPage = new SettingsLuaPage(
+            *m_luaContext.fs, m_luaContext.projectRoot, [this] { refreshApply(); }, m_luaContext.applied, page);
+        layout->addWidget(m_luaPage);
+        scroll->setWidget(page);
+        m_pages->addWidget(scroll);
+    }
     auto* noResults = new QLabel(text("No settings found"), m_pages);
     noResults->setObjectName(QStringLiteral("settingsNoResults"));
     noResults->setAlignment(Qt::AlignCenter);
@@ -453,6 +468,8 @@ void SettingsDialog::reload() {
         row->source->setVisible(!note.isEmpty());
     }
     m_keymapPage->load(*document, m_store.registry());
+    if (m_luaPage != nullptr)
+        m_luaPage->load();
     m_loading = false;
     m_loaded = true;
     m_pages->setEnabled(true);
@@ -471,7 +488,10 @@ void SettingsDialog::changed(std::size_t index) {
     if (row.spec->key == settings::key::keymapId.name) {
         m_keymapPage->setKeymapId(std::get<std::string>(current));
     }
-    m_apply->setEnabled(m_keymapPage->dirty() ||
+    refreshApply();
+}
+void SettingsDialog::refreshApply() {
+    m_apply->setEnabled(m_keymapPage->dirty() || (m_luaPage != nullptr && m_luaPage->dirty()) ||
                         std::ranges::any_of(m_rows, [](const auto& item) { return item->dirty; }));
 }
 void SettingsDialog::resetRow(std::size_t index) {
@@ -485,8 +505,7 @@ void SettingsDialog::resetRow(std::size_t index) {
     if (row.spec->key == settings::key::keymapId.name) {
         m_keymapPage->setKeymapId(std::get<std::string>(row.spec->defaultValue));
     }
-    m_apply->setEnabled(m_keymapPage->dirty() ||
-                        std::ranges::any_of(m_rows, [](const auto& item) { return item->dirty; }));
+    refreshApply();
 }
 void SettingsDialog::refreshSearch() {
     const QString query = m_search->text().trimmed();
@@ -506,8 +525,14 @@ void SettingsDialog::refreshSearch() {
         if (first < 0 && matches[i])
             first = static_cast<int>(i);
     }
+    if (m_luaPage != nullptr) {
+        const bool lua = m_luaPage->matches(query);
+        m_categories->item(static_cast<int>(kPages.size()))->setHidden(!lua);
+        if (first < 0 && lua)
+            first = static_cast<int>(kPages.size());
+    }
     if (first < 0) {
-        m_pages->setCurrentIndex(static_cast<int>(kPages.size()));
+        m_pages->setCurrentIndex(m_pages->count() - 1); // "No settings found", the last page.
     } else if (m_categories->currentRow() < 0 || m_categories->currentItem()->isHidden()) {
         m_categories->setCurrentRow(first);
     } else {
@@ -534,6 +559,14 @@ bool SettingsDialog::apply() {
     }
     if (auto keymapEdit = m_keymapPage->edit())
         edits.push_back(std::move(*keymapEdit));
+    // The project's .luarc.json first: a file changed on disk refuses the whole Apply.
+    if (m_luaPage != nullptr) {
+        if (auto luaWritten = m_luaPage->apply(); !luaWritten) {
+            m_status->setText(
+                text("Cannot write the project's .luarc.json: %1").arg(str(luaWritten.error().describe())));
+            return false;
+        }
+    }
     if (auto written = m_store.applyConditional(settings::Scope::Application, edits); !written) {
         m_status->setText(text("Cannot apply settings: %1. Reload to discard your changes and read the current file.")
                               .arg(str(written.error().describe())));

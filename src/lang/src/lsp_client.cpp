@@ -9,6 +9,7 @@
 #include "frost/io/path.hpp"
 #include "frost/lang/semantic_tokens.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/settings/editorconfig.hpp"
 
 #include "timeout.hpp"
 
@@ -61,7 +62,84 @@ namespace {
     return separator == std::string_view::npos ? path : path.substr(separator + 1);
 }
 
+// `path` with '/' separators and no leading '/' (the form globs are matched on).
+[[nodiscard]] std::string globSubject(std::string_view path) {
+    std::string out(path);
+    std::ranges::replace(out, '\\', '/');
+    while (out.starts_with('/'))
+        out.erase(0, 1);
+    return out;
+}
+
+// The watchers of one registration's registerOptions (LSP 3.17 DidChangeWatchedFilesRegistrationOptions).
+[[nodiscard]] std::vector<FileSystemWatcher> decodeWatchers(const Json& options) {
+    std::vector<FileSystemWatcher> out;
+    const Json* watchers = options.find("watchers");
+    if (watchers == nullptr || !watchers->isArray())
+        return out;
+    for (const Json& item : watchers->items()) {
+        FileSystemWatcher watcher;
+        watcher.kind = static_cast<int>(item.integerAt("kind").value_or(7));
+        const Json* pattern = item.find("globPattern");
+        if (pattern == nullptr)
+            continue;
+        if (const std::string* glob = pattern->asString()) {
+            watcher.glob = *glob;
+        } else if (pattern->isObject()) {
+            // RelativePattern: baseUri is a URI or a WorkspaceFolder {uri, name}.
+            const Json* base = pattern->find("baseUri");
+            std::string_view baseUri;
+            if (base != nullptr && base->asString() != nullptr)
+                baseUri = *base->asString();
+            else if (base != nullptr && base->isObject())
+                baseUri = base->stringAt("uri");
+            auto basePath = uriToPath(baseUri);
+            if (!basePath)
+                continue;
+            watcher.basePath = std::move(*basePath);
+            watcher.glob = std::string(pattern->stringAt("pattern"));
+        }
+        if (!watcher.glob.empty())
+            out.push_back(std::move(watcher));
+    }
+    return out;
+}
+
 } // namespace
+
+bool fileWatcherMatches(const FileSystemWatcher& watcher, std::string_view path, FileChangeType type) {
+    const int bit = type == FileChangeType::Created ? 1 : type == FileChangeType::Changed ? 2 : 4;
+    if ((watcher.kind & bit) == 0 || watcher.glob.empty())
+        return false;
+    // The editorconfig matcher implements the same glob syntax; a pattern without '/' matches the
+    // file name in any folder, as LSP's "*.lua" does.
+    const std::string subject = globSubject(path);
+    if (watcher.basePath.empty())
+        return settings::editorConfigGlobMatches(globSubject(watcher.glob), subject);
+    const std::string base = globSubject(watcher.basePath);
+    if (subject.size() <= base.size() + 1 || !subject.starts_with(base) || subject[base.size()] != '/')
+        return false;
+    return settings::editorConfigGlobMatches(globSubject(watcher.glob),
+                                             std::string_view(subject).substr(base.size() + 1));
+}
+
+Result<Json> workspaceFoldersJson(const InitializeOptions& options) {
+    Json folders = Json::array();
+    if (options.workspaceFolders.empty()) {
+        auto uri = pathToUri(options.rootPath);
+        if (!uri)
+            return std::unexpected(std::move(uri.error().withContext("the workspace root")));
+        folders.push(Json::object().set("uri", *uri).set("name", lastPathComponent(options.rootPath)));
+        return folders;
+    }
+    for (const std::string& folder : options.workspaceFolders) {
+        auto uri = pathToUri(folder);
+        if (!uri)
+            return std::unexpected(std::move(uri.error().withContext("a workspace folder")));
+        folders.push(Json::object().set("uri", *uri).set("name", lastPathComponent(folder)));
+    }
+    return folders;
+}
 
 ServerCapabilities parseInitializeResult(const Json& result) {
     ServerCapabilities out;
@@ -255,13 +333,24 @@ Result<Json> initializeParams(const InitializeOptions& options) {
         // Every LSP server must support UTF-16, so offering only it is always a valid offer.
         capabilities.set("general", Json::object().set("positionEncodings", Json::array({Json("utf-16")})));
     }
+    if (options.workspaceCapabilities.isObject()) {
+        if (Json* workspace = capabilities.find("workspace")) {
+            const auto& keys = options.workspaceCapabilities.keys();
+            const auto& values = options.workspaceCapabilities.items();
+            for (std::size_t i = 0; i < keys.size() && i < values.size(); ++i)
+                workspace->set(keys[i], values[i]);
+        }
+    }
     params.set("capabilities", std::move(capabilities));
     if (!options.initializationOptions.isNull()) {
         params.set("initializationOptions", options.initializationOptions);
     }
     params.set("trace", "off");
-    params.set("workspaceFolders",
-               Json::array({Json::object().set("uri", *rootUri).set("name", lastPathComponent(options.rootPath))}));
+    auto folders = workspaceFoldersJson(options);
+    if (!folders) {
+        return std::unexpected(std::move(folders.error()));
+    }
+    params.set("workspaceFolders", std::move(*folders));
     return params;
 }
 
@@ -274,21 +363,69 @@ struct LspClient::Shared {
     bool ready FROST_GUARDED_BY(mutex) = false;
     bool everReady FROST_GUARDED_BY(mutex) = false;
     ApplyEditHandler applyEditHandler FROST_GUARDED_BY(mutex);
+    // workspace/didChangeWatchedFiles registrations: (registration id, its watchers), in order.
+    std::vector<std::pair<std::string, std::vector<FileSystemWatcher>>> watchers FROST_GUARDED_BY(mutex);
     ServerCapabilities capabilities; // Written once before `ready` is set, read-only afterwards.
 
-    std::expected<Json, ResponseError> answer(std::string_view method, const Json& params) const {
+    // client/registerCapability and client/unregisterCapability: keeps the watched-files
+    // registrations. Unregistrations are read under the specification's own spelling
+    // ("unregisterations") and the corrected one, from either request.
+    void registrations(std::string_view method, const Json& params) {
+        LockGuard lock(mutex);
+        if (method == "client/registerCapability") {
+            if (const Json* list = params.find("registrations"); list != nullptr && list->isArray()) {
+                for (const Json& item : list->items()) {
+                    if (item.stringAt("method") != "workspace/didChangeWatchedFiles") {
+                        continue;
+                    }
+                    std::string id(item.stringAt("id"));
+                    std::erase_if(watchers, [&](const auto& entry) { return entry.first == id; });
+                    const Json* registerOptions = item.find("registerOptions");
+                    watchers.emplace_back(std::move(id), registerOptions ? decodeWatchers(*registerOptions)
+                                                                         : std::vector<FileSystemWatcher>{});
+                }
+            }
+        }
+        for (const std::string_view key : {std::string_view("unregisterations"), std::string_view("unregistrations")}) {
+            if (const Json* list = params.find(key); list != nullptr && list->isArray()) {
+                for (const Json& item : list->items()) {
+                    const std::string_view id = item.stringAt("id");
+                    std::erase_if(watchers, [&](const auto& entry) { return entry.first == id; });
+                }
+            }
+        }
+    }
+
+    std::expected<Json, ResponseError> answer(std::string_view method, const Json& params) {
         if (method == "workspace/configuration") {
             Json results = Json::array();
             if (const Json* items = params.find("items"); items != nullptr && items->isArray()) {
                 for (const Json& item : items->items()) {
-                    results.push(options.configuration ? options.configuration(item.stringAt("section")) : Json());
+                    if (options.scopedConfiguration) {
+                        results.push(options.scopedConfiguration(item.stringAt("scopeUri"), item.stringAt("section")));
+                    } else {
+                        results.push(options.configuration ? options.configuration(item.stringAt("section")) : Json());
+                    }
                 }
             }
             return results;
         }
-        if (method == "window/workDoneProgress/create" || method == "client/registerCapability" ||
-            method == "client/unregisterCapability" || method == "window/showMessageRequest" ||
-            (method.starts_with("workspace/") && method.ends_with("/refresh"))) {
+        if (method == "workspace/workspaceFolders") {
+            auto folders = workspaceFoldersJson(options);
+            return folders ? std::move(*folders) : Json();
+        }
+        if (method == "client/registerCapability" || method == "client/unregisterCapability") {
+            registrations(method, params);
+            return Json();
+        }
+        if (method.starts_with("workspace/") && method.ends_with("/refresh")) {
+            // The owner re-requests on its own threads, after this answer went out.
+            if (handlers.onRefresh) {
+                handlers.onRefresh(method);
+            }
+            return Json();
+        }
+        if (method == "window/workDoneProgress/create" || method == "window/showMessageRequest") {
             return Json();
         }
         if (method == "workspace/applyEdit") {
@@ -409,6 +546,15 @@ sched::Task<Result<ServerCapabilities>> LspClient::initialize(std::stop_token to
 }
 
 bool LspClient::ready() const noexcept { return m_shared->isReady(); }
+
+std::vector<FileSystemWatcher> LspClient::fileWatchers() const {
+    LockGuard lock(m_shared->mutex);
+    std::vector<FileSystemWatcher> out;
+    for (const auto& [id, list] : m_shared->watchers) {
+        out.insert(out.end(), list.begin(), list.end());
+    }
+    return out;
+}
 
 const ServerCapabilities& LspClient::capabilities() const noexcept {
     {

@@ -1,8 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 // LuaLS discovery, configuration and supervised LSP document service.
+/*
+ * The workspace side of the protocol (LUA-3): LuaService announces multi-root workspace folders
+ * (the root plus LuaServiceOptions::folders, each answered its own configuration by scopeUri),
+ * sends workspace/didChangeConfiguration when changeConfiguration() replaces the configuration
+ * (LuaLS then asks for it again through workspace/configuration, so the change takes effect without
+ * a restart), forwards file changes to the watchers the server registered for
+ * workspace/didChangeWatchedFiles (dynamic registration, LSP 3.17), passes $/progress and the
+ * workspace refresh requests (semantic tokens, inlay hints, code lens, diagnostics) to its owner.
+ * LuaLS 3.19.1 registers no file watcher (it watches the workspace itself), so for it
+ * notifyFileChanges() sends nothing; another server that registers gets the changes.
+ */
 #pragma once
 
 #include "frost/lang/clangd.hpp" // RestartPolicy and the shared backoff calculation.
+
+#include <span>
 
 namespace frost::lang {
 
@@ -33,30 +46,39 @@ struct LuaSearch {
  * them. Errors: InvalidArgument (relative directory).
  */
 [[nodiscard]] Result<std::vector<std::string>> luaLanguageServerArguments(std::string_view stateDirectory);
-/*
- * FrostEngine project detection, the one rule every feature uses (the FrostEngine tool window and
- * the LuaLS defaults): a project file is named <stem>.frostproj or <stem>.feproject with a
- * non-empty stem, ASCII case ignored on every platform. isFrostEngineProjectRoot is true when
- * `root` directly holds such a regular file (symlinks and directories do not count); one directory
- * listing, false when `root` is empty or cannot be read. Thread-safe as `fs` is.
- */
-[[nodiscard]] bool isFrostEngineProjectFileName(std::string_view name) noexcept;
-[[nodiscard]] bool isFrostEngineProjectRoot(io::IFileSystem& fs, std::string_view root);
-// A FrostEngine project root (isFrostEngineProjectRoot), whose Lua gets luaDefaults(..., true).
-[[nodiscard]] bool isFrostEngineLuaWorkspace(io::IFileSystem& fs, std::string_view root);
-
-// Client defaults; .luarc.json has priority in LuaLS. FrostEngine generates and owns its API files:
-// `frostEngine` adds the engine's script path (Assets/Scripts/?.lua) and library (.frost/lua-api)
-// and disables the io, os, package and debug builtins. frostEngineLuaDefaults (frost_engine_lua.hpp,
-// FEC-10a) adds what the engine's own files declare: its globals, Lua version and generated folders.
-[[nodiscard]] Json luaDefaults(std::string runtimeVersion = "Lua 5.4", bool frostEngine = false);
+// The client's own defaults for LuaLS (the "Lua" section; .luarc.json has priority in LuaLS, key
+// by key): runtime.version and workspace.checkThirdParty false. Host providers (lua_host.hpp,
+// LUA-13) add their libraries, globals and paths on top through composeLuaConfiguration.
+[[nodiscard]] Json luaDefaults(std::string runtimeVersion = "Lua 5.4");
 // Returns a copy of the requested Lua section, or null for an unknown section, O(size).
 [[nodiscard]] Json luaConfigurationSection(const Json& configuration, std::string_view section);
+
+// One more LuaLS workspace folder beside the root (multi-root).
+struct LuaWorkspaceFolder {
+    std::string path;   // Absolute.
+    Json configuration; // Its "Lua" section, answered to workspace/configuration with its scopeUri.
+    friend bool operator==(const LuaWorkspaceFolder&, const LuaWorkspaceFolder&) = default;
+};
+
+// A $/progress notification of LuaLS (the LSP work-done progress value, as clangd's).
+using LuaProgress = ClangdProgress;
+// One file change for workspace/didChangeWatchedFiles: an absolute path and its LSP change type.
+struct LuaFileChange {
+    std::string path;
+    FileChangeType type = FileChangeType::Changed;
+};
 
 enum class LuaState : std::uint8_t { Stopped, Starting, Running, Restarting, Failed };
 struct LuaServiceOptions {
     std::string serverPath;    // Absolute executable, discovered by findLuaLanguageServer.
     std::string workspaceRoot; // Absolute.
+    /*
+     * More workspace folders (absolute, distinct from the root), announced before the root:
+     * LuaLS assigns a file to the first folder that contains it, so a folder nested in the root
+     * (a FrostEngine project inside an engine checkout) keeps its own files, runtime.path and
+     * .luarc.json. Changing the set of folders needs a restart; their configurations can change live.
+     */
+    std::vector<LuaWorkspaceFolder> folders;
     // Defaults preserve LuaLS; another supervised LSP may supply its own argv and language id.
     std::vector<std::string> arguments;
     std::vector<std::pair<std::string, std::optional<std::string>>> environment;
@@ -71,6 +93,12 @@ struct LuaServiceOptions {
     std::size_t historyPerDocument = 32;
     // Called on a worker after a server becomes ready or its connection ends.
     std::function<void()> onLifecycle;
+    // Called on the reader thread for each decoded $/progress of the current server (marshal to
+    // the GUI yourself); must be quick and stay callable until stop() finished. Null: ignored.
+    std::function<void(const LuaProgress&)> onProgress;
+    // Called on the reader thread after the current server's workspace refresh request (e.g.
+    // "workspace/semanticTokens/refresh") was answered; the owner re-requests what it shows.
+    std::function<void(std::string_view method)> onRefresh;
 };
 
 // Thread-safe; launcher, reactor and scheduler outlive stop(). Call stop before shutting them down.
@@ -113,6 +141,29 @@ public:
     [[nodiscard]] PositionEncoding encoding() const override;
     [[nodiscard]] std::optional<ServerCapabilities> serverCapabilities() const override { return capabilities(); }
     void setApplyEditHandler(ApplyEditHandler handler) override;
+
+    // The root's configuration in effect: the options' at first, then the last changeConfiguration's.
+    [[nodiscard]] Json configuration() const;
+    [[nodiscard]] std::vector<LuaWorkspaceFolder> folders() const;
+    /*
+     * Replaces the root's configuration and the folders' (matched by path; the folder paths must
+     * be the ones the service started with) and sends workspace/didChangeConfiguration to a running
+     * server, which then reads the new values through workspace/configuration. A server starting
+     * later gets the new values at once. Errors: InvalidArgument (another set of folder paths:
+     * restart the service instead). O(configuration size).
+     */
+    [[nodiscard]] Result<void> changeConfiguration(Json configuration, std::vector<LuaWorkspaceFolder> folders);
+    // How many didChangeConfiguration notifications were sent to a server so far.
+    [[nodiscard]] std::uint64_t configurationChangesSent() const;
+    /*
+     * Forwards the changes the server's registered watchers cover as one
+     * workspace/didChangeWatchedFiles notification and returns how many it carried (0 when none is
+     * covered or no server runs). Errors: those of the notification. O(changes * watchers).
+     */
+    [[nodiscard]] Result<std::size_t> notifyFileChanges(std::span<const LuaFileChange> changes);
+    // The running server's registered workspace/didChangeWatchedFiles watchers (none when stopped).
+    [[nodiscard]] std::vector<FileSystemWatcher> fileWatchers() const;
+
     // Forces a supervised crash. Errors: NotFound when no child exists.
     [[nodiscard]] Result<void> killServerForTesting();
     struct Shared;

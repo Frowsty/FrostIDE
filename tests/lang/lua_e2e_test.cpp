@@ -12,6 +12,7 @@
 #include "frost/io/reactor.hpp"
 #include "frost/io/utf.hpp"
 #include "frost/lang/completion.hpp"
+#include "frost/lang/frost_engine_lua.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/sched/sim_executor.hpp"
@@ -252,7 +253,11 @@ TEST(LuaLsE2E, CompletesGeneratedFrostEngineApi) {
     ASSERT_TRUE(reactor.has_value());
     frost::sched::ThreadPool pool(frost::sched::ThreadPoolOptions{.workerCount = 2});
     frost::lang::LuaServiceOptions options = serviceOptions(server, scratch);
-    options.configuration = frost::lang::luaDefaults("Lua 5.4", true);
+    options.configuration = frost::lang::frostEngineLuaDefaults("Lua 5.4", [] {
+        frost::lang::FrostEngineLuaProfile unreferenced;
+        unreferenced.frostEngine = true; // A FrostEngine workspace whose reference was not found.
+        return unreferenced;
+    }());
     frost::lang::LuaService service(frost::io::realProcessLauncher(), {**reactor, pool}, options);
     auto document = frost::text::Document::fromUtf8("local x = AI.Wa\nAI.DoesNotExist()\n");
     ASSERT_TRUE(document.has_value());

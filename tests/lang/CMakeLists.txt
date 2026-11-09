@@ -42,7 +42,10 @@ frost_add_test(lang_unit_tests
         json_test.cpp
         jsonrpc_test.cpp
         lsp_client_test.cpp
+        lsp_workspace_test.cpp
         frost_engine_lua_test.cpp
+        lua_host_test.cpp
+        lua_rc_test.cpp
         lua_service_test.cpp
         msbuild_provider_test.cpp
         semantic_tokens_test.cpp
@@ -50,7 +53,8 @@ frost_add_test(lang_unit_tests
         workspace_edit_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched)
 target_include_directories(lang_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
-target_compile_definitions(lang_unit_tests PRIVATE FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+target_compile_definitions(lang_unit_tests PRIVATE FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+    FROST_LANG_SOURCE_DIR="${FROST_SOURCE_DIR}/src/lang")
 add_executable(engine_discovery_stall_child engine_discovery_stall_child.cpp)
 frost_apply_compile_options(engine_discovery_stall_child TEST)
 target_compile_definitions(lang_unit_tests PRIVATE FROST_DISCOVERY_STALL_CHILD="$<TARGET_FILE:engine_discovery_stall_child>")
@@ -91,7 +95,7 @@ target_compile_definitions(lang_cmake_tests PRIVATE
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 
 frost_add_test(lang_lua_tests
-    SOURCES lua_e2e_test.cpp
+    SOURCES lua_e2e_test.cpp lua_workspace_e2e_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched
     LABELS integration)
 target_include_directories(lang_lua_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

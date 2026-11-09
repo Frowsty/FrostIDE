@@ -14,6 +14,9 @@
 //     of the clone's MiniMMO sample reports no undefined-global for them, while a misspelled global
 //     is still flagged, both in the clone (the script's text plus one misspelled line, opened in
 //     the editor buffer only, the disk untouched) and in a temp copy of the sample on disk.
+//   - LUA-3/LUA-13 (R4): in a temp copy of the sample, configured through the host registry with
+//     FrostEngine's provider, a module created after LuaLS started resolves in require without a
+//     restart, and a runtime change reaches the same LuaLS process.
 //
 // A missing corpus fails the test (the tier never skips). The clone is only read, apart from two
 // probe files written below its git-ignored build/ and .cache/ folders and removed again, and one
@@ -26,7 +29,9 @@
 #include "frost/io/process.hpp"
 #include "frost/io/reactor.hpp"
 #include "frost/lang/frost_engine_lua.hpp"
+#include "frost/lang/lua_host.hpp"
 #include "frost/lang/lua_service.hpp"
+#include "frost/lang/uri.hpp"
 #include "frost/project/directory_roles.hpp"
 #include "frost/sched/task.hpp"
 #include "frost/sched/thread_pool.hpp"
@@ -42,6 +47,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -464,8 +470,16 @@ TEST(CorpusFrostEngine, LuaLsReportsNoUndefinedGlobalForEngineGlobalsAndStillFla
         ASSERT_TRUE(text.has_value()) << text.error().describe();
         // Without the engine's globals LuaLS flags engine names (the check below is not vacuous):
         // every name it flags, apart from the probe, is one the engine's reference declares.
-        const auto baseline = diagnoseWithProbe(server, sample, frost::lang::luaDefaults("Lua 5.4", true), file,
-                                                *text + kProbeLine, state);
+        const auto baseline = diagnoseWithProbe(
+            server, sample,
+            frost::lang::frostEngineLuaDefaults("Lua 5.4",
+                                                [] {
+                                                    frost::lang::FrostEngineLuaProfile unreferenced;
+                                                    unreferenced.frostEngine =
+                                                        true; // A FrostEngine workspace whose reference was not found.
+                                                    return unreferenced;
+                                                }()),
+            file, *text + kProbeLine, state);
         std::set<std::string> engineNames = baseline;
         engineNames.erase(std::string(kMisspelled));
         EXPECT_FALSE(engineNames.empty()) << "LuaLS flagged no engine global without the defaults";
@@ -505,6 +519,119 @@ TEST(CorpusFrostEngine, LuaLsReportsNoUndefinedGlobalForEngineGlobalsAndStillFla
     const auto copyNames = diagnoseWithProbe(
         server, copied, frost::lang::frostEngineLuaDefaults("Lua 5.4", copyProfile), copiedScript, *onDisk, state);
     EXPECT_EQ(copyNames, std::set<std::string>{std::string(kMisspelled)});
+}
+
+// --- LUA-3 and LUA-13 ---
+
+/*
+ * LUA-3's exit criterion on the clone's scripts: in a temp copy of the MiniMMO sample (with the
+ * engine's reference beside it), configured through the LUA-13 host registry with FrostEngine's
+ * provider, a module created after LuaLS started resolves in a script's require without a restart,
+ * and a runtime change is re-sent as didChangeConfiguration to the same process. The clone itself
+ * stays untouched (the module is created in the copy only).
+ */
+TEST(CorpusFrostEngine, ANewModuleInTheSampleResolvesWithoutARestartThroughTheHostApi) {
+    frost::test::disableCrashDialogs();
+    const std::string corpus = checkedCorpus();
+    ASSERT_FALSE(corpus.empty());
+    const std::string server = pinnedLuaLs();
+    ASSERT_FALSE(server.empty());
+    auto& fs = frost::io::realFileSystem();
+    const std::string sample = join(corpus, "Samples/MiniMMO");
+    frost::test::ScratchDir copy("corpus-lua-new-module");
+    const std::string copied = join(copy.path(), "Samples/MiniMMO");
+    std::error_code error;
+    std::filesystem::create_directories(*frost::io::toStdPath(copied), error);
+    ASSERT_FALSE(error) << error.message();
+    std::filesystem::copy(*frost::io::toStdPath(sample), *frost::io::toStdPath(copied),
+                          std::filesystem::copy_options::recursive, error);
+    ASSERT_FALSE(error) << error.message();
+    auto reference = fs.readFile(join(corpus, "Docs/ScriptingAPI.md"));
+    ASSERT_TRUE(reference.has_value());
+    ASSERT_TRUE(fs.createDirectories(copy.join("Docs")).has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(join(copy.path(), "Docs/ScriptingAPI.md"), *reference).has_value());
+
+    frost::lang::LuaHostRegistry hosts;
+    hosts.add(std::make_shared<frost::lang::FrostEngineLuaProvider>());
+    const auto contributions = hosts.contributions(fs, copied);
+    ASSERT_EQ(contributions.size(), 1U);
+    EXPECT_EQ(contributions[0].provider, "FrostEngine");
+    EXPECT_GT(contributions[0].globals.size(), 50U);
+
+    auto reactor = frost::io::Reactor::create();
+    ASSERT_TRUE(reactor.has_value());
+    frost::sched::ThreadPool pool(frost::sched::ThreadPoolOptions{.workerCount = 2});
+    frost::lang::LuaServiceOptions options;
+    options.serverPath = server;
+    options.workspaceRoot = copied;
+    options.trusted = true;
+    options.configuration = frost::lang::composeLuaConfiguration("Lua 5.4", contributions);
+    auto arguments = frost::lang::luaLanguageServerArguments(copy.join("state"));
+    ASSERT_TRUE(arguments.has_value());
+    options.arguments = std::move(*arguments);
+    frost::lang::LuaService service(frost::io::realProcessLauncher(), {**reactor, pool}, std::move(options));
+    const std::string hud = join(copied, "Assets/Scripts/Hud.lua");
+    auto text = fs.readFile(hud);
+    ASSERT_TRUE(text.has_value());
+    // The probe lines exist in the editor buffer only; the misspelled global makes LuaLS publish.
+    const std::string probe = "local frostIdeProbeModule = require(\"FrostIdeProbeModule\")\n";
+    // kProbeLine adds two line breaks, so the require line is the text's line count + 2 (0-based).
+    const auto line = static_cast<std::int64_t>(std::ranges::count(*text, '\n')) + 2;
+    auto document = frost::text::Document::fromUtf8(*text + kProbeLine + probe);
+    ASSERT_TRUE(document.has_value());
+    ASSERT_TRUE(service.openDocument(hud, document->text()).has_value());
+    ASSERT_TRUE(service.start().has_value());
+    const auto until = [](auto ready, std::chrono::seconds limit) {
+        const auto deadline = std::chrono::steady_clock::now() + limit;
+        for (;;) {
+            if (ready())
+                return true;
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+            std::this_thread::sleep_for(50ms);
+        }
+    };
+    ASSERT_TRUE(until([&] { return service.diagnostics().forFile(hud).has_value(); }, 180s))
+        << "LuaLS never diagnosed Hud.lua";
+    const auto pid = service.serverPid();
+    const auto definition = [&] {
+        const frost::lang::Json params =
+            frost::lang::Json::object()
+                .set("textDocument", frost::lang::Json::object().set("uri", frost::lang::pathToUri(hud).value()))
+                .set("position", frost::lang::Json::object().set("line", line).set("character", 40));
+        auto result =
+            pool.spawn(frost::sched::Lane::UserVisible, service.request("textDocument/definition", params)).join();
+        return result ? result->dump() : "error: " + result.error().describe();
+    };
+    EXPECT_EQ(definition().find("FrostIdeProbeModule.lua"), std::string::npos) << "no such module yet";
+
+    const std::string module = join(copied, "Assets/Scripts/FrostIdeProbeModule.lua");
+    ASSERT_TRUE(fs.writeFileAtomic(module, "local M = {}\nfunction M.Ping() return 1 end\nreturn M\n").has_value());
+    const std::array changes{frost::lang::LuaFileChange{module, frost::lang::FileChangeType::Created}};
+    ASSERT_TRUE(service.notifyFileChanges(changes).has_value());
+    std::string last;
+    EXPECT_TRUE(until(
+        [&] {
+            last = definition();
+            return last.find("FrostIdeProbeModule.lua") != std::string::npos;
+        },
+        120s))
+        << last;
+
+    ASSERT_TRUE(
+        service.changeConfiguration(frost::lang::composeLuaConfiguration("Lua 5.1", contributions), {}).has_value());
+    EXPECT_EQ(service.configurationChangesSent(), 1U);
+    // The engine's reference names its runtime (Lua 5.4), which outranks the user's (FEC-10a).
+    EXPECT_EQ(*frost::lang::luaConfigurationSection(service.configuration(), "Lua.runtime.version").asString(),
+              "Lua 5.4");
+    EXPECT_EQ(service.restarts(), 0U);
+    EXPECT_EQ(service.serverPid(), pid);
+    EXPECT_EQ(service.state(), frost::lang::LuaState::Running);
+    if (auto failure = service.lastError())
+        ADD_FAILURE() << failure->describe();
+    pool.spawn(frost::sched::Lane::UserVisible, service.stop()).join();
+    (*reactor)->shutdown();
+    pool.shutdown();
 }
 
 } // namespace
