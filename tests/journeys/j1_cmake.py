@@ -847,17 +847,33 @@ class Journey:
         def activate() -> tuple[bool, Any, Any, str]:
             if getattr(self, "seeded_index", None) is None:
                 return False, None, None, "no problem at the seeded line to activate"
-            ep.call("problems.activate", index=self.seeded_index)
-            deadline = time.monotonic() + 60
+            # Problems is a live list: clangd's diagnostics for files opened earlier can arrive between
+            # reading it and activating an entry, and shift the indices. So the seeded problem's index
+            # is read again right before each activation, and an activation that opened another
+            # location (the list moved in between) is retried. Every attempt is in the evidence.
+            attempts: list[dict] = []
             editor: dict = {}
-            while time.monotonic() < deadline:
-                editor = ep.call("editor")
-                if editor.get("available") and same_path(editor["path"], self.seed_path):
+            for _ in range(3):
+                problems = ep.call("problems")["problems"]
+                index = next((i for i, p in enumerate(problems) if p["severity"] == "error" and p.get("file")
+                              and same_path(p["file"], self.seed_path) and p["line"] == seeded_line), None)
+                if index is None:
+                    attempts.append({"index": None, "note": "the seeded problem is no longer listed"})
                     break
-                time.sleep(POLL_SECONDS)
+                ep.call("problems.activate", index=index)
+                deadline = time.monotonic() + 60
+                while time.monotonic() < deadline:
+                    editor = ep.call("editor")
+                    if editor.get("available") and same_path(editor["path"], self.seed_path):
+                        break
+                    time.sleep(POLL_SECONDS)
+                attempts.append({"index": index, "editor": editor})
+                if editor.get("available") and same_path(editor.get("path", ""), self.seed_path):
+                    break
             ok = editor.get("available") and same_path(editor.get("path", ""), self.seed_path) and \
                 editor.get("line") == seeded_line
-            return bool(ok), {"path": str(self.seed_path), "line": seeded_line}, editor, ""
+            return bool(ok), {"path": str(self.seed_path), "line": seeded_line}, {"editor": editor,
+                                                                                    "attempts": attempts}, ""
 
         if built:
             self.run_step("activating the problem opens the seeded line", activate)
