@@ -7,7 +7,8 @@
 // (PING.EXE in System32 on Windows, the system python3 on Linux); the waiting build is a real CMake
 // configure of an untrusted folder held in NeedsTrust (no cmake runs before trust). RUN-5: an
 // attach configuration attaches to the one running process it names (a uniquely named copy of
-// io_test_child), and Debug runs a native configuration's before-launch tasks first.
+// io_test_child), and Debug runs a native configuration's before-launch tasks first, only in a
+// trusted workspace (an untrusted one asks first and starts nothing).
 
 #include "frost/build/cmake_service.hpp"
 #include "frost/debug/lldb_dap.hpp"
@@ -420,6 +421,80 @@ TEST(WorkbenchAttach, DebugRunsTheBeforeLaunchTasksFirst) {
     ASSERT_TRUE(debug->debug().has_value());
     // lldb-dap launched the program (the session leaves Starting only on the adapter's reply); the
     // task had finished before: its file is there.
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return debug->state() == frost::debug::DebugState::Running ||
+                   debug->state() == frost::debug::DebugState::Stopped;
+        },
+        60s))
+        << "state " << frost::debug::toString(debug->state()) << ", " << lastNotification(rig);
+    EXPECT_TRUE(frost::io::realFileSystem().exists(marker).value_or(false)) << "the debugger started before the task";
+    debug->stop();
+    ASSERT_TRUE(waitFor([&] { return !debug->debugging(); }, 60s));
+}
+
+/*
+ * RUN-5 trust: a workspace that ships a native configuration with a before-launch task (as a
+ * freshly cloned repository may) starts nothing on Debug until the user trusts it. The task is a
+ * real io_test_child that would leave a file behind; the OS file system is the oracle. Declining
+ * the prompt starts nothing; trusting the workspace in it starts that Debug: the task runs first,
+ * then the pinned lldb-dap launches the program.
+ */
+TEST(WorkbenchAttach, DebugInAnUntrustedWorkspaceRunsNoBeforeLaunchTaskUntilTrusted) {
+    auto lldb = frost::debug::findLldbDap(frost::io::realFileSystem(), frost::debug::defaultLldbDapSearch());
+    ASSERT_TRUE(lldb.has_value()) << "the pinned lldb-dap is required: " << lldb.error().describe();
+    WorkDir dir("debug-tasks-untrusted");
+    dir.write("readme.txt", "an untrusted workspace that ships a run configuration\n");
+    const std::string marker = dir.join("task-ran");
+    frost::run::RunConfiguration shipped;
+    shipped.id = "native.shipped";
+    shipped.name = "Shipped";
+    shipped.type = frost::run::RunType::Native;
+    shipped.program = frost::test::childPath();
+    shipped.arguments = {"sleep", "60000"};
+    shipped.beforeLaunchTasks = {
+        {.program = frost::test::childPath(), .arguments = {"traceable-sleep", "0", marker}, .workingDirectory = {}}};
+    const std::vector<frost::run::RunConfiguration> stored{shipped};
+    ASSERT_TRUE(
+        frost::run::saveWorkspaceRunConfigurations(frost::io::realFileSystem(), dir.path(), stored).has_value());
+    RigOptions options;
+    options.workbench.debugAdapterFactory =
+        frost::debug::lldbDapAdapterFactory(frost::io::realProcessLauncher(), *lldb);
+    WorkbenchRig rig(dir, std::move(options));
+    rig.show();
+    ASSERT_FALSE(rig.trust->isTrusted(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    auto* controller = rig.workbench->runController();
+    ASSERT_NE(controller->configurations().find(shipped.id), nullptr) << "the shipped configuration was not loaded";
+    ASSERT_TRUE(controller->selectConfiguration(shipped.id).has_value());
+    auto* debug = rig.workbench->debugController();
+
+    // Debug is refused before anything starts, and the workspace trust prompt asks.
+    auto refused = debug->debug();
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code(), frost::ErrorCode::Untrusted) << refused.error().describe();
+    EXPECT_TRUE(rig.workbench->runManager()->activeRuns().empty());
+    EXPECT_FALSE(debug->debugging());
+    frost::ui::TrustDialog* prompt = nullptr;
+    ASSERT_TRUE(waitFor([&] { return (prompt = trustPrompt(rig, frost::ui::TrustPurpose::Build)) != nullptr; }))
+        << lastNotification(rig);
+    EXPECT_EQ(prompt->roots(), QStringList{QString::fromStdString(dir.path())});
+    prompt->cancelButton()->click();
+    QApplication::processEvents();
+    EXPECT_FALSE(rig.trust->isTrusted(dir.path()));
+    EXPECT_TRUE(rig.workbench->runManager()->waitForIdle(30s));
+    EXPECT_FALSE(debug->debugging());
+    EXPECT_FALSE(frost::io::realFileSystem().exists(marker).value_or(true)) << "a before-launch task ran untrusted";
+
+    // Trusting the workspace in the prompt starts this Debug: the task first, then the program.
+    refused = debug->debug();
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code(), frost::ErrorCode::Untrusted) << refused.error().describe();
+    ASSERT_TRUE(waitFor([&] { return (prompt = trustPrompt(rig, frost::ui::TrustPurpose::Build)) != nullptr; }))
+        << lastNotification(rig);
+    EXPECT_FALSE(frost::io::realFileSystem().exists(marker).value_or(true));
+    prompt->trustButton()->click();
+    EXPECT_TRUE(rig.trust->isTrusted(dir.path()));
     ASSERT_TRUE(waitFor(
         [&] {
             return debug->state() == frost::debug::DebugState::Running ||

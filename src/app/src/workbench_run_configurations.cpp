@@ -113,7 +113,7 @@ run::RunConfiguration Workbench::configureCMakeLaunch(run::RunConfiguration laun
     return launch;
 }
 
-Result<void> Workbench::mayRunConfiguration(const run::RunConfiguration& configuration) {
+Result<void> Workbench::mayRunConfiguration(const run::RunConfiguration& configuration, std::function<void()> retry) {
     // A run configuration belongs to the open workspace, whose trust it needs (like a build).
     if (!hasProject() || m_services.trust.isTrusted(m_projectRoot))
         return {};
@@ -122,11 +122,16 @@ Result<void> Workbench::mayRunConfiguration(const run::RunConfiguration& configu
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         const std::string id = configuration.id;
         const std::string root = m_projectRoot;
-        connect(dialog, &QDialog::accepted, this, [this, id, root] {
+        connect(dialog, &QDialog::accepted, this, [this, id, root, retry = std::move(retry)] {
             // Retry only when the user trusted the workspace and it is still the open one.
-            if (!m_shutDown && m_runController && root == m_projectRoot && m_services.trust.isTrusted(root))
-                if (auto started = m_runController->runConfiguration(id); !started)
-                    notify(text("Run"), qs(started.error().message()), ui::NotificationKind::Error);
+            if (m_shutDown || !m_runController || root != m_projectRoot || !m_services.trust.isTrusted(root))
+                return;
+            if (retry) {
+                retry();
+                return;
+            }
+            if (auto started = m_runController->runConfiguration(id); !started)
+                notify(text("Run"), qs(started.error().message()), ui::NotificationKind::Error);
         });
         dialog->open();
     }

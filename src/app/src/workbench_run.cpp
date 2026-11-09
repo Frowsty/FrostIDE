@@ -206,6 +206,11 @@ void Workbench::createRunService() {
      * RUN-5: a configuration's before-launch tasks run before the debugger starts its program, in
      * the RunManager's Prepare mode (the same tasks Run runs); a failing task ends the Debug with
      * its error. Without tasks the target goes to the debugger at once.
+     *
+     * The tasks are the workspace's programs, so they need its trust first, as Run's do
+     * (mayRunConfiguration; the debugger's own trust gate only runs after them). In an untrusted
+     * workspace nothing starts: the trust prompt asks, and once the user trusts the workspace it
+     * starts this Debug again if the configuration is still the selected one.
      */
     const auto prepareThenDebug = [this](run::RunConfiguration prepared, debug::DebugTarget target,
                                          std::function<void(Result<debug::DebugTarget>)> done) -> Result<void> {
@@ -213,6 +218,15 @@ void Workbench::createRunService() {
             done(std::move(target));
             return {};
         }
+        const auto retryDebug = [this, id = prepared.id] {
+            const run::RunConfiguration* selected = m_runController->selectedConfiguration();
+            if (!m_debug || selected == nullptr || selected->id != id)
+                return;
+            if (auto started = m_debug->debug(); !started)
+                notify(text("Debug"), qs(started.error().message()), ui::NotificationKind::Error);
+        };
+        if (auto trusted = mayRunConfiguration(prepared, retryDebug); !trusted)
+            return std::unexpected(std::move(trusted.error()));
         prepared.type = run::RunType::Native;
         prepared.target.clear();
         prepared.beforeLaunch = run::BeforeLaunch::None;
