@@ -1872,6 +1872,10 @@ Result<void> CMakeService::build(BuildAction action, std::optional<std::size_t> 
     LockGuard lock(s.mutex);
     if (expectedModel && expectedModel != s.model)
         return fail(ErrorCode::Busy, "CMake targets changed; wait for the project view to refresh");
+    if (action == BuildAction::Compile) {
+        // SLN-9's single-file compile is MSBuild's ClCompile target; CMake has no equivalent here yet.
+        return fail(ErrorCode::Unsupported, "Compile (Ctrl+F7) is available for MSBuild solutions only (SLN-9)");
+    }
     CMakeBuildRequest request{.action = action, .target = target, .targetName = {}, .profile = {}};
     if (target) {
         if (!s.model || *target >= s.model->targets.size()) {

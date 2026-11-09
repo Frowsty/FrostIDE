@@ -407,6 +407,11 @@ void Workbench::createBuildService() {
     if (auto registered = m_buildActions->registerActions(m_registry); !registered) {
         log::warn(kLog, "build actions: {}", registered.error().describe());
     }
+    // Compile (Ctrl+F7, SLN-9) compiles the active editor's file.
+    m_buildActions->setCurrentFileProvider([this] {
+        const DocumentEditorView* view = currentView();
+        return view != nullptr ? std::string(view->path()) : std::string();
+    });
     // A new configuration builds other files with other flags: clangd follows (ADR 0041).
     connect(m_build.get(), &ui::BuildController::activeConfigurationChanged, this, [this](int) {
         if (m_solution && !m_closingSolution) {

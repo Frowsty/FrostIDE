@@ -12,6 +12,7 @@
 
 #include "frost/app/welcome_screen.hpp"
 #include "frost/build/build_session.hpp"
+#include "frost/build/vcxproj_user.hpp"
 #include "frost/core/build_info.hpp"
 #include "frost/core/mutex.hpp"
 #include "frost/io/async_process.hpp"
@@ -2300,8 +2301,6 @@ void clickOk(QDialog& dlg) {
     ok->click();
 }
 
-// The Debugging page shows the per-user LocalDebugger* settings read-only (RUN-1): the values come
-// from App.vcxproj.user, the fields cannot be edited, and OK writes neither project file.
 // A FrostEngine asset's metadata sidecar (<asset>.fmeta) moves with it on rename and on move; when
 // the target's sidecar name is taken, neither file moves.
 TEST(Workbench, RenamingOrMovingAnAssetMovesItsFmetaSidecar) {
@@ -2441,7 +2440,11 @@ TEST(Workbench, ProcParsingNamesProcessesFromTheExecutableAndSkipsKernelThreads)
     EXPECT_TRUE(frost::app::readProcProcesses(dir.join("no-proc"), 0, readLink).empty());
 }
 
-TEST(Workbench, ProjectPropertiesDebuggingPageIsReadOnlyAndWritesNothing) {
+// SLN-11: the Debugging page shows the per-user LocalDebugger* settings as MSBuild sees them (the
+// values of App.vcxproj.user) and saves edits to App.vcxproj.user only, in Visual Studio's format:
+// the project file stays byte for byte, the rest of the .user file too, and other configurations'
+// settings are untouched. (Replaces the read-only page of RUN-1, which this epic makes editable.)
+TEST(Workbench, ProjectPropertiesDebuggingPageSavesToTheUserFileOnly) {
     WorkDir dir("project-properties-debugging", "tiny_sln");
     WorkbenchRig rig(dir);
     rig.show();
@@ -2461,26 +2464,28 @@ TEST(Workbench, ProjectPropertiesDebuggingPageIsReadOnlyAndWritesNothing) {
         auto* args = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerCommandArguments"));
         auto* cwd = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerWorkingDirectory"));
         auto* command = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerCommand"));
+        auto* environment = dlg->findChild<QPlainTextEdit*>(QStringLiteral("prop_Prop.LocalDebuggerEnvironment"));
         ASSERT_NE(args, nullptr);
         ASSERT_NE(cwd, nullptr);
         ASSERT_NE(command, nullptr);
+        ASSERT_NE(environment, nullptr);
         EXPECT_EQ(args->text(), QStringLiteral("--print \"two words\" --echo --exit 3"));
         EXPECT_EQ(cwd->text(), QStringLiteral("$(SolutionDir)Lib"));
-        for (QLineEdit* edit : {args, cwd, command}) {
-            EXPECT_TRUE(edit->isReadOnly()) << edit->objectName().toStdString();
-            EXPECT_TRUE(edit->toolTip().contains(QStringLiteral("RUN-1"))) << edit->objectName().toStdString();
-        }
+        EXPECT_EQ(environment->toPlainText(),
+                  QStringLiteral("FROST_TINY_VALUE=hello from $(Configuration)\nFROST_TINY_OTHER=1"));
+        for (QLineEdit* edit : {args, cwd, command})
+            EXPECT_FALSE(edit->isReadOnly()) << edit->objectName().toStdString();
+        EXPECT_FALSE(environment->isReadOnly());
         bool noteFound = false;
-        for (auto* note : dlg->findChildren<QLabel*>(QStringLiteral("projectPropertiesReadOnlyNote")))
-            noteFound = noteFound || note->text().contains(QStringLiteral("RUN-1"));
+        for (auto* note : dlg->findChildren<QLabel*>(QStringLiteral("projectPropertiesNote")))
+            noteFound = noteFound || note->text().contains(QStringLiteral(".vcxproj.user"));
         EXPECT_TRUE(noteFound);
-        // An editable page next to it still saves; here nothing else changes.
-        auto* deps = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Link.AdditionalDependencies"));
-        ASSERT_NE(deps, nullptr);
-        EXPECT_FALSE(deps->isReadOnly());
-        // Text set programmatically past the read-only flag is still never saved.
-        args->setText(QStringLiteral("--changed"));
-        command->setText(QStringLiteral("C:/evil.exe"));
+        EXPECT_TRUE(dlg->findChildren<QLabel*>(QStringLiteral("projectPropertiesReadOnlyNote")).isEmpty() ||
+                    std::ranges::none_of(dlg->findChildren<QLabel*>(QStringLiteral("projectPropertiesReadOnlyNote")),
+                                         [](QLabel* note) { return note->text().contains(QStringLiteral("RUN-1")); }));
+        args->setText(QStringLiteral("--print <changed> & more"));
+        cwd->setText(QString());
+        environment->setPlainText(QStringLiteral("FROST_TINY_VALUE=edited\nFROST_TINY_OTHER=2"));
         auto* buttons = dlg->findChild<QDialogButtonBox*>();
         QPushButton* ok = buttons != nullptr ? buttons->button(QDialogButtonBox::Ok) : nullptr;
         ASSERT_NE(ok, nullptr);
@@ -2490,9 +2495,23 @@ TEST(Workbench, ProjectPropertiesDebuggingPageIsReadOnlyAndWritesNothing) {
     frost::app::showProjectPropertiesDialog(rig.window.get(), frost::io::realFileSystem(), dir.join("App/App.vcxproj"),
                                             "Debug|x64", [&] { savedCalled = true; });
     EXPECT_TRUE(inspected);
-    EXPECT_EQ(dir.read("App/App.vcxproj"), vcxproj);
-    EXPECT_EQ(dir.read("App/App.vcxproj.user"), user);
-    (void)savedCalled; // Whether OK reports a save of unchanged values is not what this test pins.
+    EXPECT_TRUE(savedCalled);
+    EXPECT_EQ(dir.read("App/App.vcxproj"), vcxproj) << "debugger settings never go into the shared project file";
+    // The writer's own output for the same edit (the writer is checked against MSBuild in
+    // build_msbuild_tests): the Debug|x64 group changes, everything else of the file stays.
+    auto expected = frost::build::updateUserFileProperties(
+        user, "Debug", "x64",
+        {{"LocalDebuggerCommandArguments", "--print <changed> & more"},
+         {"LocalDebuggerWorkingDirectory", ""},
+         {"LocalDebuggerEnvironment", "FROST_TINY_VALUE=edited\nFROST_TINY_OTHER=2"}});
+    ASSERT_TRUE(expected.has_value()) << expected.error().describe();
+    const std::string written = dir.read("App/App.vcxproj.user");
+    EXPECT_EQ(written, *expected);
+    EXPECT_TRUE(written.contains("<LocalDebuggerCommandArguments>--print &lt;changed&gt; &amp; more"
+                                 "</LocalDebuggerCommandArguments>"))
+        << written;
+    EXPECT_FALSE(written.contains("LocalDebuggerWorkingDirectory")) << "a cleared field removes the value";
+    EXPECT_TRUE(written.contains("<!-- SPDX-License-Identifier: Apache-2.0 -->")) << written;
 }
 
 TEST(Workbench, ProjectMembershipEditsAreRefusedAndLeaveSolutionFilesUnchanged) {

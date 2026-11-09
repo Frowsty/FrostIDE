@@ -35,6 +35,14 @@
  *     build order apply.
  *   - Running: output lines, diagnostics and progress arrive; cancel() ends the build's process
  *     tree (Cancelling until MSBuild is gone).
+ * Compile (compile(), Visual Studio's Ctrl+F7, SLN-9) runs the same pipeline for one source file:
+ * the project that compiles it is the first of SolutionModel::projectsContaining whose item at that
+ * path is a ClCompile item and that the active configuration builds (compileProjectFor). In
+ * Starting, MSBuild is first asked for that project's ClCompile items in the mapped project
+ * configuration (msbuild_compile.hpp; BuildServiceOptions::compileItems) and the file's evaluated
+ * Identity becomes SelectedFiles of a Compile request on the project file, with the solution's
+ * Solution* properties; a file MSBuild does not list ends the build with NotFound before anything
+ * compiles (never a whole-project compile). Nothing else is built (no project references).
  * One build at a time: build() while a build is anywhere in that pipeline fails with Busy, and
  * nothing is queued; the UI greys the commands out while state() is not Idle. Switching the
  * configuration or the solution is refused with Busy during a build too.
@@ -67,6 +75,7 @@
 
 #include "frost/build/build_diagnostics.hpp"
 #include "frost/build/build_session.hpp"
+#include "frost/build/msbuild_compile.hpp"
 #include "frost/build/msbuild_driver.hpp"
 #include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
@@ -112,6 +121,7 @@ struct BuildTarget {
     project::SolutionConfiguration configuration{}; // The solution configuration MSBuild gets.
     // What `project` builds as in `configuration` (the solution's mapping); empty for the solution.
     std::optional<project::ProjectConfigurationMapping> projectConfiguration{};
+    std::string file{}; // Compile: the source file (absolute); "" for the other actions.
 };
 
 struct BuildProgress {
@@ -147,6 +157,9 @@ using SaveAllHook = std::function<void(SaveAllCompletion done)>;
 // other drivers substitute their own.
 using BuildStarter =
     std::function<Result<std::unique_ptr<BuildSession>>(const MsBuildRequest& request, BuildCallbacks callbacks)>;
+// Lists a project configuration's ClCompile items for Compile; the default is queryCompileItems with
+// the service's launcher (a two-minute limit). Tests substitute their own.
+using CompileItemSource = std::function<Result<std::vector<CompileItem>>(const RunPropertyRequest& request)>;
 
 // Every callback is optional and runs on the service's thread (header comment).
 struct BuildServiceCallbacks {
@@ -166,11 +179,12 @@ struct BuildServiceCallbacks {
 };
 
 struct BuildServiceOptions {
-    std::string stateFilePath{}; // The persisted active configurations (absolute); "" persists nothing.
-    std::string msbuildPath{};   // Absolute MSBuild.exe; "" finds one with vswhere at the first build.
-    std::string vsInstanceId{};  // The Visual Studio instance vswhere picks (MsBuildDiscoveryOptions).
-    unsigned maxCpuCount = 0;    // MsBuildRequest::maxCpuCount.
-    BuildStarter startBuild{};   // "" uses startMsBuild.
+    std::string stateFilePath{};      // The persisted active configurations (absolute); "" persists nothing.
+    std::string msbuildPath{};        // Absolute MSBuild.exe; "" finds one with vswhere at the first build.
+    std::string vsInstanceId{};       // The Visual Studio instance vswhere picks (MsBuildDiscoveryOptions).
+    unsigned maxCpuCount = 0;         // MsBuildRequest::maxCpuCount.
+    BuildStarter startBuild{};        // "" uses startMsBuild.
+    CompileItemSource compileItems{}; // "" uses queryCompileItems.
 };
 
 // MSBuild's name for project `id` of `solution`: the names of its solution folders and its own,
@@ -234,6 +248,24 @@ public:
      */
     [[nodiscard]] Result<void> build(BuildAction action, std::optional<project::ProjectId> project = std::nullopt,
                                      BuildCompletion onDone = {});
+
+    /*
+     * The project a Compile of `filePath` (absolute) uses in the active configuration (header
+     * comment, "Compile"), or nullopt: no solution or configuration, or no project the active
+     * configuration builds has a ClCompile item at that path. For the command's enablement. O(1)
+     * plus the projects containing the file.
+     */
+    [[nodiscard]] std::optional<project::ProjectId> compileProjectFor(std::string_view filePath) const;
+
+    /*
+     * Starts a Compile of the source file `filePath` (absolute) in the active configuration
+     * (header comment, "Compile"); `onDone` as for build(). Returns once the request is accepted.
+     * Errors: InvalidArgument (no solution open, no configuration, a relative path), NotFound
+     * (no project the active configuration builds compiles the file), Busy (a build or project
+     * edit is in progress). Later failures (MSBuild does not list the file) end the build with the
+     * outcome's error.
+     */
+    [[nodiscard]] Result<void> compile(std::string_view filePath, BuildCompletion onDone = {});
 
     // Reserves the open solution against builds and configuration/project changes while its
     // definition files are edited. finishProjectEdit publishes a replacement before releasing it.
