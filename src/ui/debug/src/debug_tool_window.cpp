@@ -6,6 +6,7 @@
 #include "frost/ui/debug_tool_window.hpp"
 
 #include "frost/core/log.hpp"
+#include "frost/debug/msvc_throw.hpp"
 #include "frost/io/path.hpp"
 #include "frost/ui/debug_controller.hpp"
 #include "frost/ui/debug_models.hpp"
@@ -568,6 +569,14 @@ void DebugToolWindow::updateBreakpointsList() {
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
             item->setCheckState(0, filter.enabled ? Qt::Checked : Qt::Unchecked);
             item->setToolTip(1, qs(filter.filter));
+            if (!filter.types.empty()) {
+                // DBG-2b: the throw types it stops for, in the Condition column.
+                QStringList types;
+                for (const std::string& type : filter.types) {
+                    types << qs(type);
+                }
+                item->setText(2, QStringLiteral("Types: %1").arg(types.join(QStringLiteral(", "))));
+            }
         } else {
             // Unavailable for this session's programs: shown with the reason, and not checkable.
             item->setFlags(item->flags() & ~(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled));
@@ -700,8 +709,17 @@ void DebugToolWindow::openEditBreakpoint(debug::BreakpointId id) {
         m_tabs->setCurrentIndex(2);
     }
     if (id == 0 && m_breakpointsTree != nullptr && m_breakpointsTree->currentItem() != nullptr) {
-        id = static_cast<debug::BreakpointId>(
-            m_breakpointsTree->currentItem()->data(0, kRoleBreakpointId).toULongLong());
+        QTreeWidgetItem* current = m_breakpointsTree->currentItem();
+        if (static_cast<BreakpointRow>(current->data(0, kRoleBreakpointKind).toInt()) == BreakpointRow::Exception) {
+            const std::string filter = current->data(0, kRoleExceptionFilter).toString().toStdString();
+            for (const debug::ExceptionFilterEntry& entry : m_controller.breakpoints().exceptionFilters()) {
+                if (entry.filter == filter && filter == "cpp_throw" && entry.unavailable.empty()) {
+                    openEditThrowTypes(entry);
+                }
+            }
+            return;
+        }
+        id = static_cast<debug::BreakpointId>(current->data(0, kRoleBreakpointId).toULongLong());
     }
     if (const auto function = m_controller.breakpoints().findFunction(id)) {
         openEditFunctionBreakpoint(*function);
@@ -760,6 +778,38 @@ void DebugToolWindow::openEditFunctionBreakpoint(const debug::FunctionBreakpoint
     if (dialog.exec() == QDialog::Accepted) {
         m_controller.breakpoints().setProperties(bp.id, conditionEdit->text().trimmed().toStdString(),
                                                  hitCountEdit->text().trimmed().toStdString(), {});
+        updateBreakpointsList();
+    }
+}
+
+void DebugToolWindow::openEditThrowTypes(const debug::ExceptionFilterEntry& filter) {
+    QDialog dialog(window());
+    dialog.setWindowTitle(QStringLiteral("Edit Exception Breakpoint (%1)").arg(qs(filter.label)));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout();
+    QStringList current;
+    for (const std::string& type : filter.types) {
+        current << qs(type);
+    }
+    auto* typesEdit = new QLineEdit(current.join(QStringLiteral(", ")), &dialog);
+    typesEdit->setObjectName(QStringLiteral("debugThrowTypes"));
+    typesEdit->setPlaceholderText(QStringLiteral("e.g. std::runtime_error, MyError (empty: every type)"));
+    form->addRow(QStringLiteral("Only these types:"), typesEdit);
+    layout->addLayout(form);
+    // The type list works through the MSVC runtime's ThrowInfo (debug::DebugSession, "Thrown types").
+    layout->addWidget(
+        new QLabel(QStringLiteral("Stops only for a throw of exactly these types (not their base or derived classes). "
+                                  "Programs built for the MSVC ABI (Windows) only."),
+                   &dialog));
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    installDialogChrome(&dialog, false);
+    typesEdit->setFocus();
+    if (dialog.exec() == QDialog::Accepted) {
+        m_controller.breakpoints().setExceptionFilterTypes(filter.filter,
+                                                           debug::msvc::splitTypeList(typesEdit->text().toStdString()));
         updateBreakpointsList();
     }
 }

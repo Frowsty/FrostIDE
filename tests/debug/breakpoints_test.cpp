@@ -318,5 +318,28 @@ TEST_F(BreakpointPersistence, FunctionBreakpointsAndExceptionFiltersRoundTrip) {
     EXPECT_EQ(cleared.find("exceptionBreakpoints"), std::string::npos) << cleared;
 }
 
+TEST_F(BreakpointPersistence, CppThrowTypesAreKeptAcrossSessionsAndRoundTrip) {
+    BreakpointManager manager;
+    manager.setAvailableExceptionFilters(lldbFilters());
+    EXPECT_FALSE(manager.setExceptionFilterTypes("cpp_catch", {"std::runtime_error"})) << "only cpp_throw has types";
+    ASSERT_TRUE(manager.setExceptionFilterTypes("cpp_throw", {"std::runtime_error", "MyError"}));
+    EXPECT_TRUE(manager.sessionThrowTypes().empty()) << "cpp_throw is off";
+    ASSERT_TRUE(manager.setExceptionFilterEnabled("cpp_throw", true));
+    EXPECT_EQ(manager.sessionThrowTypes(), (std::vector<std::string>{"std::runtime_error", "MyError"}));
+    manager.setMuted(true);
+    EXPECT_TRUE(manager.sessionThrowTypes().empty());
+    manager.setMuted(false);
+    manager.setAvailableExceptionFilters(lldbFilters());
+    EXPECT_EQ(manager.sessionThrowTypes().size(), 2U) << "kept when a new session lists the filters";
+    ASSERT_TRUE(manager.save(fs, root).has_value());
+    const std::string bytes = read();
+    EXPECT_NE(bytes.find("\"types\": [\"std::runtime_error\", \"MyError\"]"), std::string::npos) << bytes;
+
+    BreakpointManager loaded;
+    ASSERT_TRUE(loaded.load(fs, root).has_value());
+    EXPECT_EQ(loaded.exceptionFilters(), manager.exceptionFilters());
+    EXPECT_EQ(loaded.sessionThrowTypes(), (std::vector<std::string>{"std::runtime_error", "MyError"}));
+}
+
 } // namespace
 } // namespace frost::debug

@@ -1105,7 +1105,8 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # build_msvc_env_tests (Windows only; tag "msvc"; ADR 0046), vcs_git_tests, ui_vcs_git_tests
         # and app_workbench_git_tests (tag "git"; ADR 0048 and 0067), sdk_lldb_tests,
         # debug_lldb_tests, debug_dap_real_tests and debug_corpus_tests (Windows only; also tag
-        # "corpus") (tag "lldb"; ADR 0049, DBG-1), and in trees with the UI app_workbench_clangd_tests and
+        # "corpus") (tag "lldb"; ADR 0049, DBG-1), debug_msvc_tests (Windows only; tags "lldb" and
+        # "msvc"; DBG-2b, DBG-4a), and in trees with the UI app_workbench_clangd_tests and
         # ui_screenshot_tests.
         kinds = {"unit", "integration", "stress", "perf"}
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.", "MsBuildRun.",
@@ -1120,9 +1121,11 @@ class BuildTreeLabelsTest(unittest.TestCase):
                                             "Fixtures/CMakePresetsRefusedOracle.", "TestRunnerCTest.",
                                             "TestRunnerCancel.", "TestRunnerStub.", "UnitTestsWindow.",
                                             "DoctestRunner.")),
-                  "msvc": ("integration", ("MsvcEnvironmentCapture.",)),
+                  "msvc": ("integration", ("MsvcEnvironmentCapture.", "MsvcDebug.", "Runtimes/MsvcThrowFilter.",
+                                           "Builds/MsvcStepInto.")),
                   "git": ("integration", ("GitE2E.", "GitUiE2E.", "WorkbenchGit.")),
-                  "lldb": ("integration", ("LldbDapE2E.", "LldbDebugSession.", "DapReal.", "CorpusFrostEditor.")),
+                  "lldb": ("integration", ("LldbDapE2E.", "LldbDebugSession.", "DapReal.", "CorpusFrostEditor.", "MsvcDebug.",
+                                           "Runtimes/MsvcThrowFilter.", "Builds/MsvcStepInto.")),
                   "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",
                                           "GoldenComparator."))}
         wrong, seen = [], dict.fromkeys(tagged, 0)

@@ -210,6 +210,7 @@ DebugSessionOptions lldbDapSessionOptions(DebugTargetMode mode) {
 #ifdef _WIN32
     options.breakOnAbort = mode == DebugTargetMode::Launch;
     options.msvcExceptions = true;
+    options.stepOutOfNoDebug = true;
 #elif defined(__linux__)
     if (mode == DebugTargetMode::Attach) {
         options.attachHint = ptraceAttachHint(io::realFileSystem());
@@ -220,13 +221,19 @@ DebugSessionOptions lldbDapSessionOptions(DebugTargetMode mode) {
 
 rpc::Json lldbDapLaunchArguments(const DebugTarget& target) {
 #ifdef __linux__
-    return lldbDapLaunchArguments(target, true);
+    return lldbDapLaunchArguments(target, true, false);
+#elif defined(_WIN32)
+    return lldbDapLaunchArguments(target, false, true);
 #else
-    return lldbDapLaunchArguments(target, false);
+    return lldbDapLaunchArguments(target, false, false);
 #endif
 }
 
 rpc::Json lldbDapLaunchArguments(const DebugTarget& target, bool libstdcxx) {
+    return lldbDapLaunchArguments(target, libstdcxx, false);
+}
+
+rpc::Json lldbDapLaunchArguments(const DebugTarget& target, bool libstdcxx, bool windowsStepping) {
     rpc::Json args = rpc::Json::array();
     for (const std::string& argument : target.arguments) {
         args.push(argument);
@@ -260,6 +267,9 @@ rpc::Json lldbDapLaunchArguments(const DebugTarget& target, bool libstdcxx) {
         for (std::string& command : lldbDapLibstdcxxCommands()) {
             initCommands.push(rpc::Json(std::move(command)));
         }
+    }
+    if (windowsStepping) {
+        initCommands.push(rpc::Json(lldbDapWindowsStepCommand));
     }
     if (initCommands.size() > 0) {
         launch.set("initCommands", std::move(initCommands));
@@ -313,12 +323,14 @@ Result<std::unique_ptr<DebugSession>> startDebugSession(const project::TrustStor
 Result<std::unique_ptr<DebugSession>>
 startDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
                   std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
-                  std::vector<FunctionBreakpointLine> functionBreakpoints, std::vector<std::string> exceptionFilters) {
+                  std::vector<FunctionBreakpointLine> functionBreakpoints, std::vector<std::string> exceptionFilters,
+                  std::vector<std::string> throwTypes) {
     if (auto allowed = checkDebugTrust(trust, target); !allowed)
         return std::unexpected(std::move(allowed.error()));
     DebugSessionOptions options = lldbDapSessionOptions(DebugTargetMode::Launch);
     options.functionBreakpoints = std::move(functionBreakpoints);
     options.exceptionFilters = std::move(exceptionFilters);
+    options.throwTypes = std::move(throwTypes);
     return DebugSession::start(std::move(factory), lldbDapLaunchArguments(target), std::move(breakpoints),
                                std::move(callbacks), std::move(options));
 }
