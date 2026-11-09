@@ -658,6 +658,41 @@ class LuaLsSdkPinTest(TempDirTestCase):
         self.assertEqual(len(report.packages), 2)
 
 
+class ProjectHostReferenceTest(TempDirTestCase):
+    """SLN-6 (ADR 0082): the ProjectHost helper references only allowlisted, installed assemblies."""
+
+    def _check(self, references: str) -> list[str]:
+        _write(self.tmp / licensecheck.PROJECT_HOST_CSPROJ,
+               f'<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>{references}</ItemGroup></Project>')
+        for _, adr in licensecheck.PROJECT_HOST_REFERENCES.values():
+            _write(self.tmp / adr, "accepted")
+        report = licensecheck.Report()
+        licensecheck.check_project_host(self.tmp, report)
+        return [violation.message for violation in report.violations]
+
+    def test_installed_allowlisted_references_pass_and_others_are_refused(self) -> None:
+        good = ('<Reference Include="System.Xml" />'
+                '<Reference Include="Microsoft.VisualStudio.SolutionPersistence" '
+                'HintPath="$(VisualStudioMSBuildDir)/../Microsoft.VisualStudio.SolutionPersistence.dll" Private="false" />')
+        self.assertEqual(self._check(good), [])
+        for bad, expected in (
+                ('<Reference Include="Newtonsoft.Json" HintPath="$(VisualStudioMSBuildDir)/Newtonsoft.Json.dll" '
+                 'Private="false" />', "not on the ProjectHost allowlist"),
+                ('<Reference Include="Microsoft.Build" HintPath="$(VisualStudioMSBuildDir)/Microsoft.Build.dll" />',
+                 "Private=\"false\""),
+                ('<Reference Include="Microsoft.Build" HintPath="lib/Microsoft.Build.dll" Private="false" />',
+                 "installed Visual Studio"),
+                ('<PackageReference Include="Microsoft.Build" Version="17.0.0" />', "package reference")):
+            messages = self._check(bad)
+            self.assertEqual(len(messages), 1, bad)
+            self.assertIn(expected, messages[0])
+
+    def test_the_repository_helper_passes(self) -> None:
+        report = licensecheck.Report()
+        licensecheck.check_project_host(REPO, report)
+        self.assertEqual(report.violations, [])
+
+
 class ManagedSdkPinTest(TempDirTestCase):
     def test_transitive_licences_and_notices_are_checked(self) -> None:
         for relative in ("sdk/sdk.lock.json", "sdk/managed-dependencies.json", "NOTICE", "docs/adr/0064-managed-language.md"):

@@ -86,6 +86,7 @@
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/project/directory_roles.hpp"
+#include "frost/project/project_edit.hpp"
 #include "frost/project/project_host.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/trust_store.hpp"
@@ -125,6 +126,7 @@
 #include <QTimer>
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -473,21 +475,24 @@ public:
      * Renames a file or folder on disk and updates open tabs and LSP. A FrostEngine asset's .fmeta
      * sidecar (<name>.fmeta beside it) is renamed with it, both or neither. CMakeLists.txt is
      * edited only after the user confirms a preview (IWorkbenchPrompts::confirmCMakeListsEdit).
-     * .vcxproj, .vcxproj.filters and .csproj files are never edited (SLN-6): a notification names
-     * the projects that still list the old path.
+     * A loaded C++ project that lists the old path as an item written without a wildcard gets
+     * the item renamed in its .vcxproj and .vcxproj.filters through ProjectHost (SLN-6, ADR 0082),
+     * after the move and asynchronously; when that edit cannot run, a notification names the
+     * projects that still list the old path. .csproj files are never edited.
      */
     [[nodiscard]] Result<std::string> renameItem(std::string_view oldPath, std::string_view newRelativeName);
     // Deletes a file or folder on disk, closes open tabs under it and updates LSP; project files as
-    // renameItem (CMakeLists.txt after a confirmed preview; MSBuild project files never, SLN-6).
+    // renameItem (CMakeLists.txt after a confirmed preview; .vcxproj items removed through ProjectHost).
     [[nodiscard]] Result<void> deleteItem(std::string_view path);
     // Prompts for a new name and renames `path` (empty: active tree selection or editor path).
     void promptAndRenameItem(std::string_view path = {});
     // Prompts for confirmation and deletes `path` (empty: active tree selection or editor path).
     void promptAndDeleteItem(std::string_view path = {});
     // Creates a new C/C++ source file inside `projectPath`'s directory, opens it, and asks the
-    // ProjectHost helper to add it to the .vcxproj (asynchronous; a refusal is a notification).
-    [[nodiscard]] Result<std::string> createNewProjectSource(std::string_view projectPath,
-                                                             std::string_view relativeName);
+    // ProjectHost helper to add it to the .vcxproj, filed under `filter` in .vcxproj.filters when
+    // not empty (asynchronous; a refusal is a notification).
+    [[nodiscard]] Result<std::string>
+    createNewProjectSource(std::string_view projectPath, std::string_view relativeName, std::string_view filter = {});
     // Adds an existing project file to a simple top-level CMake target in CMakeLists.txt, once the
     // user confirmed the preview (Cancelled, nothing written, when declined).
     [[nodiscard]] Result<void> addSourceToCMakeLists(std::string_view sourcePath, std::string_view targetName = {});
@@ -663,7 +668,35 @@ private:
 
     // Projects.
     Result<void> openSolution(const std::string& path);
-    void removeProjectFile(const QString& project, const QString& source, bool adding = false);
+    /*
+     * Adds (`adding`) or removes `source` in the C++ project `project` through ProjectHost (SLN-6):
+     * an add files the item under `filter` in .vcxproj.filters ("" for none). An empty `source`, or
+     * any request while the solution root holds an edit journal, recovers the interrupted edit
+     * instead. Refusals are notifications; the edit itself completes asynchronously.
+     */
+    void removeProjectFile(const QString& project, const QString& source, bool adding = false,
+                           const QString& filter = {});
+    // Adds several existing files to `project` in one edit (see removeProjectFile).
+    void addProjectFiles(const QString& project, const std::vector<std::string>& sources, const QString& filter);
+    /*
+     * Starts `edit` (a file edit of a loaded C++ project; root, configuration, platform and
+     * transaction id are filled in here) through ProjectHost, or queues it behind the running
+     * edit. Returns the reason when it can neither start nor queue; nothing is written then.
+     * `title` names the completion's notifications.
+     */
+    [[nodiscard]] std::optional<QString> submitProjectEdit(project::ProjectEdit edit, const QString& title);
+    void recoverProjectEdit(const QString& project);
+    // Why no project edit may start now (no trusted solution, a build, a debug session or a managed
+    // launch is running), or nullopt.
+    [[nodiscard]] std::optional<QString> projectEditBlocked(const std::string& project);
+    // The ProjectHost helper and MSBuild.exe a project edit runs with, or the reason they are missing.
+    [[nodiscard]] Result<std::pair<std::string, std::string>> projectEditTools();
+    // Whether the solution root holds a project edit journal (an interrupted edit); errors read as true.
+    [[nodiscard]] bool projectEditJournalPresent();
+    // Reloads the solution after a committed edit and publishes it to the build, run and explorer.
+    void publishProjectEdit(const std::shared_ptr<const project::SolutionModel>& solution, const QString& title);
+    // Starts the next queued edit, if any (after the running one completed).
+    void startQueuedProjectEdit();
     Result<void> openFolder(const std::string& path, bool discoverSolution = true, std::string recentPath = {});
     void setProject(std::string root, QString name, std::string recentPath);
     // Closes the open project before another opens; false when a tab refused (nothing changed).
@@ -771,7 +804,7 @@ private:
     // describes it in the declined notice); Cancelled when declined.
     [[nodiscard]] Result<void> writeCMakeListsWithPreview(const std::string& canonicalLists, const std::string& before,
                                                           const std::string& after, const QString& change);
-    // Never writes: tells the user which loaded projects still list `oldPath` (SLN-6).
+    // Keeps loaded C++ projects in step with a rename, move or delete on disk (see renameItem).
     void updatePathInVcxproj(const std::string& oldPath, const std::string& newPath, bool directory, bool deleted);
     // Renames `from` to `to` with its .fmeta sidecar move (from, to) if any, both or neither.
     [[nodiscard]] Result<void> moveWithSidecar(const std::string& from, const std::string& to,
@@ -959,6 +992,8 @@ private:
 
     std::shared_ptr<const project::SolutionModel> m_solution;
     std::unique_ptr<ProjectEditProcess> m_projectEdit;
+    // Edits waiting for the running one (a move that touches several projects); FIFO.
+    std::deque<std::pair<project::ProjectEdit, QString>> m_projectEditQueue;
     std::string m_projectRoot;
     // Why the workspace's run-configuration store could not be read when the folder opened (Corrupt,
     // a newer version, a read error); "" when it loaded or does not exist. saveRunConfigurations()
