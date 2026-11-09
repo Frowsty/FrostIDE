@@ -73,39 +73,34 @@ what is next, blockers and open questions for the user.
   - FND-6b: the doctest corpus test injects into the clone in place under a restoring guard, not on a scratch
     branch. Also, `engine_problem` does not notice a cacheVariables entry that was removed from the lock.
 
-### Blocker
-- **The pinned FrostEngine does not compile on Linux with clang 23.** The pin is 8237e1e, which is also
-  upstream `main`. `Frost/src/Frost/Social/Internal/SocialHost.h:114` gives "exception specification of overriding
-  function is more lax than base version" (`~SocialHost() override`). MSVC accepts it, clang and GCC reject
-  it. As a result, Linux `journeys.j2_run` (builds FrostEditor) and the doctest corpus test (builds FrostTests)
-  fail; FrostIDE correctly reports "Build failed; the program was not started". **User decision (2026-11-08):**
-  the user fixes the engine on `main`. Then the agent re-pins (`corpora.py pin`, `wsl-fetch --configure`),
-  re-runs both corpus tiers, and merges R2 only when Linux is green. The cacheVariables workaround can be
-  dropped if the fixed engine builds clean under -Werror.
-
-### UAT-1 (the user runs this; record pass/fail per step here)
-Use `build\win-clangcl\src\app\Debug\frost.exe` of the r2 tree (or the staged build) on your own FrostEngine
-checkout. Only pass/fail is recorded.
-1. Open the FrostEngine folder, trust it, and pick the `windows-debug` preset. The configure finishes, and the
-   CMake model shows the targets (j1).
-2. The Run configuration combo on the toolbar lists one configuration per executable target. Edit
-   Configurations... opens Run/Debug Configurations. Change FrostEditor's arguments; they are still there after
-   restarting frost.
-3. Select FrostEditor and press Run. It builds, starts, and its output streams into the Run tool window.
-   Stop (Ctrl+F2) ends it, and Task Manager shows no FrostEditor process left.
-4. Open the Unit Tests window. The list matches `ctest -N --preset windows-debug`, and the FrostTests suites
-   show their doctest cases. Run a suite: pass/fail and durations appear. A failed case's location opens the
-   source line.
-5. Set a line breakpoint in a FrostEditor .cpp on its startup path and Debug FrostEditor. It stops there.
-   Step Over (F8), Step Into (F7) and Step Out (Shift+F8) work, and Locals and the call stack are shown.
-6. Edit a breakpoint: a condition stops only when it is true, and a Log Message (tracepoint) prints without
-   stopping. Enable the C++ throw exception row in the Breakpoints tab: the debugger stops at a `throw`.
+- **Launcher-first startup restored** (a fix on this branch). R0's "apply shown settings" commit wired
+  `general.reopenLastProject` into startup with a default of on, so every start skipped the user's stripped-down
+  launcher. The setting is now off by default (opt-in). Test: `Workbench.StartupShowsTheLauncherUnlessReopenLastProjectIsOn`.
+- **FrostEngine on Linux (the former blocker), fixed upstream by us.** The pin did not compile with clang 23
+  (an override destructor with a laxer exception specification, which MSVC accepts) and had 12 `-Werror` warning
+  sites in the engine. FrostTests then hit doctest's `__LINE__` naming on clang 22+ (several TEST_CASEs from one
+  macro line). Two commits on FrostEngine `main` (8fd4628, 499e734) fix both; the whole engine, FrostTests
+  included, builds on Linux with `-Werror` (0 warnings), and FrostTests registers 8484 cases. The pin is now
+  499e734, and the Linux `FROST_WARNINGS_AS_ERRORS=OFF` workaround (cacheVariables) is removed from the lock.
+- **History rewrite (user order, 2026-11-09).** Every Co-Authored-By and Claude-Session line was removed from
+  FrostIDE (358 commits) and FrostEngine (1334 commits) with git filter-repo. Trees, authors and dates are
+  unchanged (checked per commit); backups are in `E:\FrostBuildsackup`. Commits carry no attribution line
+  from now on (ADR 0078 amended).
+- **UAT-1 passed 6/6**, run non-elevated (Medium IL) through automated checks against the real tools on the
+  pinned corpus (the user asked the orchestrator to perform it). New checks: `CorpusFrostEngine.DebuggingFrostEditor...`
+  (steps 5 and 6 on the real FrostEditor, oracles from the pinned lldb CLI) and j2_run's restart step (step 2).
+  Observed: 5 presets equal cmake's; 12 run configurations equal cmake's 12 executables; FrostEditor's edited
+  arguments survive a FrostIDE restart; Run streams output and Stop leaves no process; the Unit Tests list equals
+  ctest's 699 tests with doctest cases; the debugger stops at EditorApp.cpp:55 and steps, stack and Locals match
+  lldb; a false condition does not stop, a true one does, the logpoint prints, and C++ throw stops in
+  EditorPreferences::Load. Limits: steps 4-6 ran in the in-process workbench rig, and shortcuts were run as their
+  bound commands.
 
 ### Next
-- Act on the cross review (one review, at most one fix pass).
-- After the engine fix: re-pin, re-run both corpus tiers, then the user's UAT-1, then merge `r2/integration`
-  into `main` with `--no-ff` and the Verified footer.
-- Cleanup: the worktrees wf_7eb18537-89e-1/5/6/7/9 and r2-int (remove the `build\vcpkg_installed` junction first).
+- R2 follow-ups above (RUN-10, RUN-2, RUN-3, DBG-2b, FND-6b); the Step Into comment in
+  `src/debug/include/frost/debug/debug_session.hpp` (MSVC Debug builds stop on the callee's `{` line), owned by
+  R3's debugger slice.
+- R3 (DD-2, the MSVC solution daily driver) runs on `r3/integration`, based on this branch.
 
 ## 2026-11-08: R1 integration (DD-1a: FrostEngine C++ on CMake presets and Lua basics)
 
