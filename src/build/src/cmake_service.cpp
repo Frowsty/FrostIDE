@@ -1092,7 +1092,9 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
                 const std::string architecture = profile.architectureExternal && !profile.architecture.empty()
                                                      ? profile.architecture
                                                      : options.msvcArchitecture;
-                auto environment = msvcCache.get(*chosen, architecture);
+                const VcvarsSelection selection{.toolsetVersion = options.msvcToolsetVersion,
+                                                .sdkVersion = options.windowsSdkVersion};
+                auto environment = msvcCache.get(*chosen, architecture, selection);
                 if (!environment) {
                     LockGuard lock(mutex);
                     if (isCurrentLocked(id)) {
@@ -1102,8 +1104,12 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
                     return;
                 }
                 msvc = std::move(environment->changes);
-                std::string note = std::format("Using the MSVC environment of {} {} ({})", chosen->displayName,
-                                               chosen->installationVersion, architecture);
+                // The toolset and SDK vcvarsall actually set up (SLN-14), not the ones asked for.
+                std::string note =
+                    std::format("Using the MSVC environment of {} {} ({}, MSVC toolset {}, Windows SDK {})",
+                                chosen->displayName, chosen->installationVersion, architecture,
+                                environment->toolsetVersion.empty() ? "unknown" : environment->toolsetVersion,
+                                environment->sdkVersion.empty() ? "unknown" : environment->sdkVersion);
                 if (note != announced) { // Once, and again when it changes.
                     announced = note;
                     notes.push_back(std::move(note));

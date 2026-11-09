@@ -3099,9 +3099,10 @@ TEST(Workbench, CompoundRunIsUnavailableUntilRunFiveAndStartsNothing) {
     EXPECT_TRUE(launcher.launches().empty());
 }
 
-// The Run/Debug Configurations dialog's compound section (RUN-3's dialog) reaches the same
-// refusal: the RUN-5 notice and no launch.
-TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAndStartsNothing) {
+// RUN-5: the Run/Debug Configurations dialog's compound section is the feature now (it replaced
+// R2's disabled RUN-5 notice, D32): in an open workspace Add Compound... adds an unnamed compound
+// configuration to the dialog's list and starts nothing; Cancel stores nothing.
+TEST(Workbench, CompoundRunInTheRunConfigurationsDialogAddsAConfigurationAndStartsNothing) {
     WorkDir dir("compound-run-dialog", "tiny_sln");
     frost::io::ScriptedProcessLauncher launcher;
     RigOptions options;
@@ -3112,19 +3113,26 @@ TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAn
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
     auto id = rig.workbench->registry().find("run.editConfigurations");
     ASSERT_TRUE(id);
+    const std::size_t before = rig.workbench->runController()->configurations().all().size();
     bool clicked = false;
-    bool disabled = false;
-    QString tooltip;
+    bool enabled = false;
+    int rowsBefore = -1;
+    int rowsAfter = -1;
+    QString added;
     QTimer::singleShot(0, rig.window.get(), [&] {
         auto* group = rig.window->findChild<QWidget*>(QStringLiteral("compoundRunGroup"));
         auto* launch = rig.window->findChild<QPushButton*>(QStringLiteral("compoundLaunchButton"));
-        if (group != nullptr && launch != nullptr) {
-            disabled = !launch->isEnabled() && !group->isEnabled();
-            tooltip = launch->toolTip();
-            launch->click(); // A disabled button ignores the click.
+        auto* list = rig.window->findChild<QListWidget*>(QStringLiteral("runConfigurationList"));
+        if (group != nullptr && launch != nullptr && list != nullptr) {
+            enabled = launch->isEnabled() && group->isEnabled();
+            rowsBefore = list->count();
+            launch->click();
+            rowsAfter = list->count();
+            if (list->currentItem() != nullptr)
+                added = list->currentItem()->text();
             clicked = true;
         }
-        // Whatever happened, no dialog stays open.
+        // Cancel: no dialog stays open.
         for (QDialog* dialog : rig.window->findChildren<QDialog*>())
             if (dialog->isVisible())
                 dialog->reject();
@@ -3133,8 +3141,10 @@ TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAn
     context.trusted = true;
     EXPECT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
     ASSERT_TRUE(clicked);
-    EXPECT_TRUE(disabled) << "the compound launch controls must not be offered before RUN-5";
-    EXPECT_TRUE(tooltip.contains(QStringLiteral("RUN-5"))) << tooltip.toStdString();
+    EXPECT_TRUE(enabled) << "an open workspace can store a compound configuration";
+    EXPECT_EQ(rowsAfter, rowsBefore + 1);
+    EXPECT_TRUE(added.contains(QStringLiteral("compound"))) << added.toStdString();
+    EXPECT_EQ(rig.workbench->runController()->configurations().all().size(), before) << "Cancel stored it";
     EXPECT_TRUE(launcher.launches().empty());
 }
 

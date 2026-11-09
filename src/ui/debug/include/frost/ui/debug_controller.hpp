@@ -80,6 +80,9 @@ struct DebugControllerHooks {
     std::function<bool()> mayStart{};
     std::function<Result<void>(std::function<void(Result<debug::DebugTarget>)>)> startAlternate{};
     std::function<void()> stopAlternate{};
+    // RUN-5: Debug starts some other way than a launch (an attach configuration attaches; a compound
+    // one is refused) when this returns a value, which debug() returns; nullopt or empty: as usual.
+    std::function<std::optional<Result<void>>()> startOverride{};
 };
 
 // Where the controller gets its adapter and services; every pointer must outlive the controller.

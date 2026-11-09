@@ -5,21 +5,29 @@
 // it confirms one attach through a session grant, so the program's (system) folder is never saved
 // as a trusted root. The attach itself runs the pinned lldb-dap against a real child process
 // (PING.EXE in System32 on Windows, the system python3 on Linux); the waiting build is a real CMake
-// configure of an untrusted folder held in NeedsTrust (no cmake runs before trust).
+// configure of an untrusted folder held in NeedsTrust (no cmake runs before trust). RUN-5: an
+// attach configuration attaches to the one running process it names (a uniquely named copy of
+// io_test_child), and Debug runs a native configuration's before-launch tasks first.
 
 #include "frost/build/cmake_service.hpp"
 #include "frost/debug/lldb_dap.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/run/run_configuration.hpp"
+#include "frost/run/run_manager.hpp"
+#include "frost/run/run_types.hpp"
 #include "frost/ui/debug_controller.hpp"
+#include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/toolwindows/build_controller.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
 #include "../../src/app/src/project_properties_dialog.hpp"
+#include "io/process_env.hpp"
 #include "workbench_rig.hpp"
 #include <QApplication>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDir>
 #include <QLineEdit>
@@ -31,6 +39,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -237,6 +246,190 @@ TEST(WorkbenchAttach, CancellingTheAttachPromptLeavesAWaitingBuildUntouched) {
     QApplication::processEvents();
     EXPECT_EQ(service->state(), frost::build::BuildState::NeedsTrust);
     EXPECT_FALSE(rig.workbench->debugController()->debugging());
+}
+
+/*
+ * RUN-5 helpers. A copy of io_test_child under a name no other process has (the test's own pid in
+ * it), so "the one running process this attach configuration names" is decidable even while other
+ * suites run io_test_child in parallel.
+ */
+std::string uniqueChildCopy(const WorkDir& dir, std::string_view tag) {
+#ifdef _WIN32
+    constexpr std::string_view kSuffix = ".exe";
+#else
+    constexpr std::string_view kSuffix = "";
+#endif
+    const std::string copy = dir.join(std::format("frost-{}-{}{}", tag, QCoreApplication::applicationPid(), kSuffix));
+    std::error_code error;
+    std::filesystem::copy_file(std::filesystem::path(frost::test::childPath()), std::filesystem::path(copy),
+                               std::filesystem::copy_options::overwrite_existing, error);
+    EXPECT_FALSE(error) << copy << ": " << error.message();
+    return copy;
+}
+
+// Starts `executable` (an io_test_child) as "traceable-sleep": a debugger may attach once it returns.
+std::unique_ptr<frost::io::IProcess> startTraceable(const std::string& executable, const std::string& readyMarker) {
+    frost::io::ProcessSpec spec;
+    spec.executable = executable;
+    spec.arguments = {"traceable-sleep", "120000", readyMarker};
+    spec.stdoutMode = frost::io::Stdio::Null;
+    spec.stderrMode = frost::io::Stdio::Null;
+    auto child = frost::io::realProcessLauncher().launch(spec);
+    EXPECT_TRUE(child) << child.error().describe();
+    if (!child)
+        return nullptr;
+    EXPECT_TRUE(waitFor([&] { return frost::io::realFileSystem().exists(readyMarker).value_or(false); }, 30s))
+        << "the traceable sleeper did not start";
+    return std::move(*child);
+}
+
+bool notified(WorkbenchRig& rig, const QString& fragment) {
+    for (const auto& entry : rig.window->notifications().log())
+        if (entry.notification.text.contains(fragment))
+            return true;
+    return false;
+}
+
+// Opens `dir` as a trusted workspace and stores `configurations` as its run configurations.
+void openWithConfigurations(WorkbenchRig& rig, const WorkDir& dir, std::vector<frost::run::RunConfiguration> added) {
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    auto* controller = rig.workbench->runController();
+    ASSERT_NE(controller, nullptr);
+    std::vector<frost::run::RunConfiguration> edited = controller->configurations().all();
+    edited.insert(edited.end(), added.begin(), added.end());
+    auto replaced = controller->replaceConfigurations(edited);
+    ASSERT_TRUE(replaced.has_value()) << replaced.error().describe();
+}
+
+/*
+ * RUN-5: Debug on an attach configuration attaches the pinned lldb-dap to the one running process
+ * whose executable it names. The running processes are the OS's (enumerateRunningProcesses); none
+ * or two matching refuse with a notification naming them, and nothing attaches.
+ */
+TEST(WorkbenchAttach, AnAttachConfigurationAttachesToTheOneProcessItNames) {
+    auto lldb = frost::debug::findLldbDap(frost::io::realFileSystem(), frost::debug::defaultLldbDapSearch());
+    ASSERT_TRUE(lldb.has_value()) << "the pinned lldb-dap is required: " << lldb.error().describe();
+    WorkDir dir("attach-configuration");
+    dir.write("readme.txt", "a workspace with an attach configuration\n");
+    RigOptions options;
+    options.workbench.debugAdapterFactory =
+        frost::debug::lldbDapAdapterFactory(frost::io::realProcessLauncher(), *lldb);
+    WorkbenchRig rig(dir, std::move(options));
+    rig.show();
+    const std::string executable = uniqueChildCopy(dir, "attachee");
+    frost::run::RunConfiguration attach;
+    attach.id = "attach.attachee";
+    attach.name = "Attach to the attachee";
+    attach.type = frost::run::RunType::Attach;
+    attach.target = std::string(frost::io::fileName(executable));
+    openWithConfigurations(rig, dir, {attach});
+    auto* controller = rig.workbench->runController();
+    ASSERT_TRUE(controller->selectConfiguration(attach.id).has_value());
+    auto* debug = rig.workbench->debugController();
+
+    // Nothing runs under that name yet.
+    auto refused = debug->debug();
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code(), frost::ErrorCode::NotFound) << refused.error().describe();
+    EXPECT_TRUE(notified(rig, QStringLiteral("No running process matches"))) << lastNotification(rig);
+    EXPECT_FALSE(debug->debugging());
+
+    // Two of them: which one is the user's choice (Attach to Process...).
+    auto first = startTraceable(executable, dir.join("first-ready"));
+    ASSERT_NE(first, nullptr);
+    const auto killFirst = qScopeGuard([&] { static_cast<void>(first->terminate()); });
+    auto second = startTraceable(executable, dir.join("second-ready"));
+    ASSERT_NE(second, nullptr);
+    {
+        const auto killSecond = qScopeGuard([&] { static_cast<void>(second->terminate()); });
+        refused = debug->debug();
+        ASSERT_FALSE(refused.has_value());
+        EXPECT_NE(refused.error().message().find(std::to_string(second->pid())), std::string::npos)
+            << refused.error().message();
+        EXPECT_FALSE(debug->debugging());
+    }
+    ASSERT_TRUE(second->wait(30s).has_value()) << "the second sleeper did not end";
+
+    // One: lldb-dap attaches to it (the session leaves Starting only on the adapter's reply).
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return std::ranges::count_if(frost::app::enumerateRunningProcesses(), [&](const auto& process) {
+                       return frost::run::attachTargetMatches(attach.target, process.executablePath);
+                   }) == 1;
+        },
+        30s));
+    auto started = debug->debug();
+    ASSERT_TRUE(started.has_value()) << started.error().describe();
+    ASSERT_TRUE(waitFor([&] { return debug->debugging(); }, 60s)) << lastNotification(rig);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return debug->state() == frost::debug::DebugState::Running ||
+                   debug->state() == frost::debug::DebugState::Stopped;
+        },
+        60s))
+        << "state " << frost::debug::toString(debug->state()) << ", " << debug->statusText().toStdString() << ", "
+        << lastNotification(rig);
+    debug->stop();
+    ASSERT_TRUE(waitFor([&] { return !debug->debugging(); }, 60s));
+    EXPECT_FALSE(first->wait(std::chrono::milliseconds(0)).has_value()) << "detaching ended the attached process";
+}
+
+/*
+ * RUN-5: Debug runs a native configuration's before-launch tasks before lldb-dap launches its
+ * program (the task, a real process, leaves a file behind before the session starts); a failing
+ * task ends the Debug with the task's exit code, and no session starts.
+ */
+TEST(WorkbenchAttach, DebugRunsTheBeforeLaunchTasksFirst) {
+    auto lldb = frost::debug::findLldbDap(frost::io::realFileSystem(), frost::debug::defaultLldbDapSearch());
+    ASSERT_TRUE(lldb.has_value()) << "the pinned lldb-dap is required: " << lldb.error().describe();
+    WorkDir dir("debug-tasks");
+    dir.write("readme.txt", "a workspace with before-launch tasks\n");
+    RigOptions options;
+    options.workbench.debugAdapterFactory =
+        frost::debug::lldbDapAdapterFactory(frost::io::realProcessLauncher(), *lldb);
+    WorkbenchRig rig(dir, std::move(options));
+    rig.show();
+    const std::string marker = dir.join("task-ran");
+    frost::run::RunConfiguration program;
+    program.id = "native.sleeper";
+    program.name = "Sleeper";
+    program.type = frost::run::RunType::Native;
+    program.program = frost::test::childPath();
+    program.arguments = {"sleep", "60000"};
+    program.beforeLaunchTasks = {
+        {.program = frost::test::childPath(), .arguments = {"traceable-sleep", "0", marker}, .workingDirectory = {}}};
+    frost::run::RunConfiguration failing = program;
+    failing.id = "native.failing";
+    failing.name = "Failing";
+    failing.beforeLaunchTasks = {
+        {.program = frost::test::childPath(), .arguments = {"exit", "3"}, .workingDirectory = {}}};
+    openWithConfigurations(rig, dir, {program, failing});
+    auto* controller = rig.workbench->runController();
+    auto* debug = rig.workbench->debugController();
+
+    ASSERT_TRUE(controller->selectConfiguration(failing.id).has_value());
+    ASSERT_TRUE(debug->debug().has_value());
+    ASSERT_TRUE(waitFor([&] { return notified(rig, QStringLiteral("exited with code 3")); }, 60s))
+        << lastNotification(rig);
+    EXPECT_FALSE(debug->debugging());
+    EXPECT_TRUE(rig.workbench->runManager()->waitForIdle(30s));
+
+    ASSERT_FALSE(frost::io::realFileSystem().exists(marker).value_or(true));
+    ASSERT_TRUE(controller->selectConfiguration(program.id).has_value());
+    ASSERT_TRUE(debug->debug().has_value());
+    // lldb-dap launched the program (the session leaves Starting only on the adapter's reply); the
+    // task had finished before: its file is there.
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return debug->state() == frost::debug::DebugState::Running ||
+                   debug->state() == frost::debug::DebugState::Stopped;
+        },
+        60s))
+        << "state " << frost::debug::toString(debug->state()) << ", " << lastNotification(rig);
+    EXPECT_TRUE(frost::io::realFileSystem().exists(marker).value_or(false)) << "the debugger started before the task";
+    debug->stop();
+    ASSERT_TRUE(waitFor([&] { return !debug->debugging(); }, 60s));
 }
 
 } // namespace

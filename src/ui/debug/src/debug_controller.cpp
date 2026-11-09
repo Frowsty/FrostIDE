@@ -178,6 +178,12 @@ Result<void> DebugController::debug(std::optional<project::ProjectId> project) {
     if ((m_hooks.mayStart && !m_hooks.mayStart()) || m_session || m_pendingRun || m_alternatePending) {
         return fail(ErrorCode::Busy, "a debug session is running already; stop it first");
     }
+    if (m_hooks.startOverride) {
+        if (std::optional<Result<void>> handled = m_hooks.startOverride()) {
+            emit stateChanged();
+            return std::move(*handled);
+        }
+    }
     if (m_hooks.alternateAvailable && m_hooks.alternateAvailable() && m_hooks.startAlternate) {
         const QPointer<DebugController> self(this);
         const std::uint64_t generation = ++m_generation;

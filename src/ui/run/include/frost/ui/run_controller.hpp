@@ -16,6 +16,15 @@
  *   - msbuild: the RunService (build::RunService) runs the project the configuration names: it
  *     builds it, asks MSBuild for TargetPath and the .vcxproj.user debugger settings, and runs it
  *     in a tab (or an external console window).
+ *   - compound (RUN-5): each member configuration, in its order, as above, each in its own tab.
+ *     Checked first, so nothing starts when a member is missing, is itself a compound or an attach
+ *     configuration, or when more than one member is a CMake target (the CMake integration builds
+ *     and runs one target at a time). A member that then fails to start is reported; the others
+ *     run. Compound debugging is DBG-10's.
+ *   - attach (RUN-5): nothing; Run refuses it (Unsupported) and canRun() is false. Debug attaches
+ *     (the workbench's debugger hooks).
+ * A native or CMake run's before-launch tasks run in the RunManager (run_manager.hpp); their command
+ * lines show in the tab as "Before launch: ..." lines.
  * With no configurations (a solution opened before RUN-2's generator ran, the unit tests' service
  * alone) the combo lists the RunService's startup candidates as before and Run runs the startup
  * project, or hooks.alternateRun when hooks.alternateAvailable says an alternate runner is there.
@@ -182,6 +191,7 @@ private:
     void applySelection(const run::RunConfiguration& configuration);
     [[nodiscard]] Result<build::RunId> runService(std::optional<project::ProjectId> project);
     [[nodiscard]] Result<build::RunId> runNative(const run::RunConfiguration& configuration);
+    [[nodiscard]] Result<build::RunId> runCompound(const run::RunConfiguration& configuration);
     void nativeFinished(const std::string& id, const run::RunResult& result);
     [[nodiscard]] std::optional<project::ProjectId> projectOf(const run::RunConfiguration& configuration) const;
     [[nodiscard]] RunConsole* openServiceTab(const build::RunInfo& info);

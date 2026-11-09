@@ -108,6 +108,8 @@ run::RunConfiguration Workbench::configureCMakeLaunch(run::RunConfiguration laun
     if (!edited->workingDirectory.empty())
         launch.workingDirectory = edited->workingDirectory;
     launch.environment = edited->environment;
+    // RUN-5: the RunManager runs the configuration's before-launch tasks before the built program.
+    launch.beforeLaunchTasks = edited->beforeLaunchTasks;
     return launch;
 }
 

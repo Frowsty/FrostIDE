@@ -26,6 +26,13 @@
  *
  *     cmd.exe /d /u /c set && echo <marker> && call "<vcvarsall.bat>" <arch> >nul && set
  *
+ * With a VcvarsSelection (SLN-14) the call names the Windows SDK and the MSVC toolset too, in
+ * vcvarsall's own order: `call "<vcvarsall.bat>" <arch> [<sdk version>] [-vcvars_ver=<toolset>]`.
+ * Both are version text (digits and dots) or the call is refused. vcvarsall exits non-zero when
+ * either is not installed; the capture then fails, and a capture whose VCToolsVersion or
+ * WindowsSDKVersion is not the requested one is refused too (IoError), so the environment is
+ * always the one asked for.
+ *
  * Each word is its own argument and only the vcvarsall path is quoted (by the launcher's CRT
  * rules); because the command after /c does not start with a quote, cmd.exe keeps that quoting,
  * so the path needs no cmd-specific escaping. Paths containing '"', '%', '^' or '!' are refused,
@@ -35,8 +42,8 @@
  * (variables vcvarsall set or changed, ASCII case ignored in names). VSCMD_SKIP_SENDTELEMETRY=1
  * is set for the child. Off Windows it fails with Unsupported.
  *
- * Cache (MsvcEnvironmentCache): in memory per (instance, architecture) and on disk as
- * <cacheDirectory>/msvc-env-<instanceId>-<arch>.txt, which records the instance's
+ * Cache (MsvcEnvironmentCache): in memory per (instance, architecture, selection) and on disk as
+ * <cacheDirectory>/msvc-env-<instanceId>-<arch>[-t<toolset>][-s<sdk>].txt, which records the instance's
  * installationVersion. An entry whose version differs from the instance's (Visual Studio was
  * updated) is captured again; so is one that does not parse. File format: a header line
  * "# FrostIDE MSVC environment v1", "version\t<installationVersion>", then "set\tNAME=VALUE" and
@@ -140,6 +147,30 @@ struct CMakeTools {
 [[nodiscard]] Result<io::ProcessSpec> vcvarsProcessSpec(std::string_view cmdPath, std::string_view vcvarsall,
                                                         std::string_view architecture);
 
+/*
+ * Which toolset and Windows SDK vcvarsall sets up (SLN-14, toolchain.hpp lists what is installed).
+ * Empty members leave vcvarsall's defaults: the toolset Microsoft.VCToolsVersion.default.txt
+ * names and the newest SDK. A toolset may be a prefix ("14.44") that vcvarsall completes.
+ */
+struct VcvarsSelection {
+    std::string toolsetVersion{}; // "14.44.35207", "14.44" or "".
+    std::string sdkVersion{};     // "10.0.26100.0" or "".
+
+    [[nodiscard]] bool empty() const noexcept { return toolsetVersion.empty() && sdkVersion.empty(); }
+    friend bool operator==(const VcvarsSelection&, const VcvarsSelection&) = default;
+};
+
+// Whether `text` is version text vcvarsall may get: 1 to 32 of digits and dots, starting with a digit.
+[[nodiscard]] bool isVcvarsVersionText(std::string_view text) noexcept;
+
+/*
+ * As above, with `selection`'s SDK and toolset after the architecture (header comment). Errors:
+ * InvalidArgument (those above, or a selection member that is not version text).
+ */
+[[nodiscard]] Result<io::ProcessSpec> vcvarsProcessSpec(std::string_view cmdPath, std::string_view vcvarsall,
+                                                        std::string_view architecture,
+                                                        const VcvarsSelection& selection);
+
 // The marker line between the two `set` listings of the capture.
 inline constexpr std::string_view kVcvarsMarker = "FROST-VCVARS-AFTER";
 
@@ -158,8 +189,15 @@ struct MsvcDevEnvironment {
     std::string instanceId{};
     std::string installationVersion{};
     std::string architecture{};
+    VcvarsSelection selection{};         // What was asked for (empty: vcvarsall's defaults).
+    std::string toolsetVersion{};        // The captured VCToolsVersion ("14.44.35207"); "" when unset.
+    std::string sdkVersion{};            // The captured WindowsSDKVersion without its ''; "" when unset.
     project::CMakeEnvironment changes{}; // What vcvarsall set (header comment).
 };
+
+// The value of `name` (ASCII case ignored) in `environment`, or nullopt (absent or unset).
+[[nodiscard]] std::optional<std::string> environmentValue(const project::CMakeEnvironment& environment,
+                                                          std::string_view name);
 
 /*
  * Runs vcvarsall.bat of `instance` for `architecture` (header comment). Blocking (1-5 s); call it
@@ -168,7 +206,8 @@ struct MsvcDevEnvironment {
  */
 [[nodiscard]] Result<MsvcDevEnvironment> captureMsvcEnvironment(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                                                 const VsInstance& instance,
-                                                                std::string_view architecture);
+                                                                std::string_view architecture,
+                                                                const VcvarsSelection& selection = {});
 
 // The cached captures (header comment). `fs` and `launcher` must outlive the cache.
 class MsvcEnvironmentCache {
@@ -179,10 +218,12 @@ public:
     // The environment of `instance` and `architecture`: from memory, else from the cache file when it
     // records the instance's current version, else captured and written. A failed write is ignored.
     // Errors: those of captureMsvcEnvironment.
-    [[nodiscard]] Result<MsvcDevEnvironment> get(const VsInstance& instance, std::string_view architecture);
+    [[nodiscard]] Result<MsvcDevEnvironment> get(const VsInstance& instance, std::string_view architecture,
+                                                 const VcvarsSelection& selection = {});
 
-    // The cache file of `instanceId` and `architecture`; "" without a cache directory.
-    [[nodiscard]] std::string cacheFile(std::string_view instanceId, std::string_view architecture) const;
+    // The cache file of `instanceId`, `architecture` and `selection`; "" without a cache directory.
+    [[nodiscard]] std::string cacheFile(std::string_view instanceId, std::string_view architecture,
+                                        const VcvarsSelection& selection = {}) const;
 
     // How many captures ran (vcvarsall started), for tests.
     [[nodiscard]] std::size_t captures() const;

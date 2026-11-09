@@ -1102,7 +1102,8 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # project_cmake_tests, app_automation_endpoint_tests and app_workbench_run_tests (tag "cmake"),
         # run_test_runner_tests and app_unit_tests_window_tests (tag "cmake"; RUN-7),
         # run_doctest_runner_tests (tag "cmake"; RUN-8),
-        # build_msvc_env_tests (Windows only; tag "msvc"; ADR 0046), vcs_git_tests, ui_vcs_git_tests
+        # build_msvc_env_tests and build_toolchain_tests (Windows only; tag "msvc"; ADR 0046, SLN-14),
+        # vcs_git_tests, ui_vcs_git_tests
         # and app_workbench_git_tests (tag "git"; ADR 0048 and 0067), sdk_lldb_tests,
         # debug_lldb_tests, debug_dap_real_tests and debug_corpus_tests (Windows only; also tag
         # "corpus") (tag "lldb"; ADR 0049, DBG-1), and in trees with the UI app_workbench_clangd_tests and
@@ -1120,7 +1121,7 @@ class BuildTreeLabelsTest(unittest.TestCase):
                                             "Fixtures/CMakePresetsRefusedOracle.", "TestRunnerCTest.",
                                             "TestRunnerCancel.", "TestRunnerStub.", "UnitTestsWindow.",
                                             "DoctestRunner.")),
-                  "msvc": ("integration", ("MsvcEnvironmentCapture.",)),
+                  "msvc": ("integration", ("MsvcEnvironmentCapture.", "RealToolchain.")),
                   "git": ("integration", ("GitE2E.", "GitUiE2E.", "WorkbenchGit.")),
                   "lldb": ("integration", ("LldbDapE2E.", "LldbDebugSession.", "DapReal.", "CorpusFrostEditor.")),
                   "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",

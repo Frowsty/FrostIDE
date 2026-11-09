@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // RunManager (see frost/run/run_manager.hpp): the dispatcher thread and its event queue, the run
-// table, the before-launch hand-off, the launch through build::RunSession and the end of a run.
+// table, the before-launch hand-off, the before-launch tasks (RUN-5), the launch through
+// build::RunSession and the end of a run.
 
 #include "frost/run/run_manager.hpp"
 
@@ -80,6 +81,25 @@ io::ProcessSpec specFor(const LaunchPlan& plan) {
     return spec;
 }
 
+// A before-launch task's spec: its program and arguments in its working directory (else the plan's),
+// FrostIDE's environment, no input, output piped, the tree contained.
+io::ProcessSpec taskSpecFor(const BeforeLaunchTask& task, const LaunchPlan& plan) {
+    io::ProcessSpec spec;
+    spec.executable = io::normalizePath(task.program).value_or(task.program);
+    spec.arguments = task.arguments;
+    spec.workingDirectory =
+        task.workingDirectory.empty() ? plan.workingDirectory : io::normalizePath(task.workingDirectory).value_or("");
+    spec.stdinMode = io::Stdio::Null;
+    spec.stdoutMode = io::Stdio::Pipe;
+    spec.stderrMode = io::Stdio::Pipe;
+    spec.killOnClose = true;
+    return spec;
+}
+
+std::string taskCommandLine(const BeforeLaunchTask& task) {
+    return displayCommandLine(LaunchPlan{.program = task.program, .arguments = task.arguments});
+}
+
 bool needsBeforeLaunch(const RunConfiguration& configuration) noexcept {
     return configuration.beforeLaunch == BeforeLaunch::Build || configuration.program.empty();
 }
@@ -141,6 +161,9 @@ struct RunManager::State : std::enable_shared_from_this<RunManager::State> {
         std::optional<LaunchPlan> plan;
         bool stopRequested = false;
         bool usedBeforeLaunch = false;
+        // RUN-5: the before-launch task running now (index into the configuration's tasks).
+        std::unique_ptr<build::RunSession> taskSession;
+        std::size_t taskIndex = 0;
     };
 
     io::IProcessLauncher& launcher;
@@ -285,7 +308,6 @@ struct RunManager::State : std::enable_shared_from_this<RunManager::State> {
 
     void planReady(RunId id, Result<LaunchPlan> plan) {
         bool stopRequested = false;
-        RunMode mode = RunMode::Run;
         bool before = false;
         {
             LockGuard lock(mutex);
@@ -294,7 +316,6 @@ struct RunManager::State : std::enable_shared_from_this<RunManager::State> {
                 return; // Past BeforeLaunch already: a second `done` call is ignored.
             }
             stopRequested = it->second.stopRequested;
-            mode = it->second.status.mode;
             before = it->second.usedBeforeLaunch;
             if (plan) {
                 if (auto normalized = normalizePlan(std::move(*plan))) {
@@ -304,7 +325,7 @@ struct RunManager::State : std::enable_shared_from_this<RunManager::State> {
                 }
             }
         }
-        if (stopRequested || !plan || mode == RunMode::Prepare) {
+        if (stopRequested || !plan) {
             auto run = extract(id);
             if (!run) {
                 return;
@@ -316,7 +337,137 @@ struct RunManager::State : std::enable_shared_from_this<RunManager::State> {
             finishWithout(std::move(*run), std::move(error), before && !plan.has_value());
             return;
         }
-        launch(id);
+        runTask(id, 0);
+    }
+
+    // RUN-5: runs task `index` of the run's configuration, or, past the last one, goes on: Prepare
+    // finishes with the plan, Run launches the program.
+    void runTask(RunId id, std::size_t index) {
+        BeforeLaunchTask task;
+        LaunchPlan plan;
+        bool done = false;
+        bool prepare = false;
+        bool stopped = false;
+        {
+            LockGuard lock(mutex);
+            const auto it = runs.find(id);
+            if (it == runs.end() || !it->second.plan) {
+                return;
+            }
+            const auto& steps = it->second.status.configuration.beforeLaunchTasks;
+            prepare = it->second.status.mode == RunMode::Prepare;
+            stopped = it->second.stopRequested && !steps.empty();
+            done = index >= steps.size();
+            if (!done) {
+                task = steps[index];
+                plan = *it->second.plan;
+            }
+        }
+        if (stopped) {
+            // stop() came between two tasks (or before the first): nothing more starts.
+            if (auto run = extract(id)) {
+                finishWithout(std::move(*run), std::nullopt, false);
+            }
+            return;
+        }
+        if (done) {
+            if (prepare) {
+                if (auto run = extract(id)) {
+                    finishWithout(std::move(*run), std::nullopt, false);
+                }
+                return;
+            }
+            launch(id);
+            return;
+        }
+        const std::weak_ptr<State> weak = weak_from_this();
+        build::RunSessionCallbacks callbacks;
+        callbacks.onOutput = [weak, id](build::RunStream stream, std::string_view text) {
+            if (const auto self = weak.lock()) {
+                State* raw = self.get();
+                raw->post([raw, id, stream, text = std::string(text)] { raw->output(id, stream, text); });
+            }
+        };
+        callbacks.onExited = [weak, id, index](const build::RunExit& exit) {
+            if (const auto self = weak.lock()) {
+                State* raw = self.get();
+                raw->post([raw, id, index, exit] { raw->taskExited(id, index, exit); });
+            }
+        };
+        const std::string commandLine = taskCommandLine(task);
+        auto started =
+            build::RunSession::start(launcher, taskSpecFor(task, plan), std::move(callbacks), clock, options.session);
+        if (!started) {
+            if (auto run = extract(id)) {
+                Error error = std::move(started.error());
+                static_cast<void>(
+                    error.withContext(std::format("starting the before-launch task {}; '{}' was not started",
+                                                  commandLine, run->status.configuration.name)));
+                finishWithout(std::move(*run), std::move(error), true);
+            }
+            return;
+        }
+        RunStatus status;
+        std::shared_ptr<const RunHandlers> handlers;
+        {
+            LockGuard lock(mutex);
+            const auto it = runs.find(id);
+            if (it == runs.end()) {
+                return; // Not reachable: only this thread removes runs without a program session.
+            }
+            Run& run = it->second;
+            run.taskSession = std::move(*started);
+            run.taskIndex = index;
+            run.status.beforeLaunchTask = commandLine;
+            if (run.stopRequested) {
+                run.taskSession->stop(); // stop() came while the task was being launched.
+            }
+            status = snapshot(run);
+            handlers = run.handlers;
+        }
+        deliverPhase(status, handlers);
+    }
+
+    void taskExited(RunId id, std::size_t index, const build::RunExit& exit) {
+        std::unique_ptr<build::RunSession> finished;
+        bool stopRequested = false;
+        std::string commandLine;
+        std::string name;
+        {
+            LockGuard lock(mutex);
+            const auto it = runs.find(id);
+            if (it == runs.end() || it->second.taskIndex != index || !it->second.taskSession) {
+                return;
+            }
+            finished = std::move(it->second.taskSession);
+            stopRequested = it->second.stopRequested;
+            commandLine = it->second.status.beforeLaunchTask;
+            name = it->second.status.configuration.name;
+            it->second.status.beforeLaunchTask.clear();
+        }
+        finished.reset(); // Joins the task session's threads; its last callback was delivered.
+        if (stopRequested || exit.stopped) {
+            if (auto run = extract(id)) {
+                finishWithout(std::move(*run), std::nullopt, false);
+            }
+            return;
+        }
+        if (exit.waitFailed || exit.exitCode != 0) {
+            if (auto run = extract(id)) {
+                Error error = exit.waitFailed
+                                  ? Error(ErrorCode::IoError,
+                                          std::format("the before-launch task {} ended with an unreadable exit status; "
+                                                      "'{}' was not started",
+                                                      commandLine, name))
+                                  : Error(ErrorCode::IoError,
+                                          std::format("the before-launch task {} exited with code {}; '{}' was not "
+                                                      "started",
+                                                      commandLine, exit.exitCode, name));
+                finishWithout(std::move(*run), std::move(error), true);
+            }
+            return;
+        }
+        runTask(id, index + 1);
     }
 
     void launch(RunId id) {
@@ -439,6 +590,10 @@ RunManager::~RunManager() {
                 run.session->stop();
                 sessions.push_back(std::move(run.session));
             }
+            if (run.taskSession) {
+                run.taskSession->stop();
+                sessions.push_back(std::move(run.taskSession));
+            }
         }
     }
     for (std::stop_source& source : sources) {
@@ -461,6 +616,9 @@ RunManager::~RunManager() {
             if (run.session) {
                 sessions.push_back(std::move(run.session));
             }
+            if (run.taskSession) {
+                sessions.push_back(std::move(run.taskSession));
+            }
         }
     }
     sessions.clear();
@@ -469,6 +627,13 @@ RunManager::~RunManager() {
 Result<RunId> RunManager::start(const RunConfiguration& configuration, RunHandlers handlers, RunMode mode) {
     if (auto valid = validateRunConfiguration(configuration); !valid) {
         return std::unexpected(std::move(valid.error()));
+    }
+    if (configuration.type == RunType::Compound || configuration.type == RunType::Attach) {
+        // Neither starts a program of its own: the Run toolbar starts a compound's members one by one,
+        // and an attach configuration is the debugger's (RUN-5).
+        return fail(ErrorCode::InvalidArgument,
+                    std::format("run configuration '{}' is a {} configuration, which has no program to start",
+                                configuration.name, toString(configuration.type)));
     }
     State& state = *m_state;
     const bool before = needsBeforeLaunch(configuration);
@@ -530,6 +695,8 @@ void RunManager::stop(RunId run) {
             entry.status.phase = RunPhase::Stopping;
             status = State::snapshot(entry);
             handlers = entry.handlers;
+        } else if (entry.taskSession) {
+            entry.taskSession->stop(); // Its exit finishes the run as stopped (taskExited).
         } else if (entry.status.phase == RunPhase::BeforeLaunch && entry.usedBeforeLaunch) {
             source = entry.stop;
         }
