@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Level 2: picks the platform sheet by $(Platform), a global property only the evaluation knows. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <GenToolchain>msvc-$(Platform)</GenToolchain>
+  </PropertyGroup>
+  <Import Project="$(MSBuildThisFileDirectory)Platform.$(Platform).props"
+          Condition="Exists('$(MSBuildThisFileDirectory)Platform.$(Platform).props')" />
+</Project>

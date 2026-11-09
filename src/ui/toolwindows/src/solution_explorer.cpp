@@ -129,10 +129,26 @@ SolutionExplorer::SolutionExplorer(QWidget* parent)
     m_view->installEventFilter(this);
     m_view->viewport()->installEventFilter(this);
 
+    // The evaluation banner (SLN-2): hidden unless the owner reports a fallback.
+    m_banner = new QLabel(this);
+    m_banner->setObjectName(QStringLiteral("solutionEvaluationBanner"));
+    m_banner->setWordWrap(true);
+    m_banner->setTextFormat(Qt::PlainText);
+    m_banner->setContentsMargins(6, 4, 6, 4);
+    m_banner->setAutoFillBackground(true);
+    {
+        QPalette palette = m_banner->palette();
+        palette.setColor(QPalette::Window, palette.color(QPalette::ToolTipBase));
+        palette.setColor(QPalette::WindowText, palette.color(QPalette::ToolTipText));
+        m_banner->setPalette(palette);
+    }
+    m_banner->hide();
+
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     layout->addWidget(headerBar);
+    layout->addWidget(m_banner);
     layout->addWidget(m_searchField);
     layout->addWidget(m_view);
 
@@ -171,6 +187,17 @@ SolutionExplorer::SolutionExplorer(QWidget* parent)
 }
 
 SolutionExplorer::~SolutionExplorer() = default;
+
+void SolutionExplorer::setEvaluationBanner(const QString& text) {
+    if (m_banner->text() == text && m_banner->isHidden() == text.isEmpty()) {
+        return;
+    }
+    m_banner->setText(text);
+    m_banner->setToolTip(text);
+    m_banner->setVisible(!text.isEmpty());
+}
+
+QString SolutionExplorer::evaluationBanner() const { return m_banner->isHidden() ? QString() : m_banner->text(); }
 
 void SolutionExplorer::setController(BuildController* controller) {
     if (m_solutionConnection) {

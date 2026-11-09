@@ -285,15 +285,9 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             }
         }
         if (m_solution && m_explorer) {
-            auto model = m_solution;
-            if (trust.trusted && trust.revision == m_projectTrustRevision && m_streamedProjects) {
-                if (auto evaluated = m_streamedProjects->modelSnapshot())
-                    model = std::move(evaluated);
-            }
-            const auto current = m_services.trust.snapshot(m_projectRoot);
-            if (!current.trusted || current.revision != m_projectTrustRevision)
-                model = m_solution;
-            m_explorer->setSolution(std::move(model), true);
+            // ProjectHost's items (SLN-3), else the compile-commands snapshot, else the static model.
+            m_explorer->setSolution(explorerSolutionModel(), true);
+            m_explorer->setEvaluationBanner(solutionEvaluationBanner());
         }
         if (trusted != m_luaObservedTrust) {
             m_luaObservedTrust = trusted;

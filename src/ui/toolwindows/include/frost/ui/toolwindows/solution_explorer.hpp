@@ -48,6 +48,7 @@
 
 class QComboBox;
 class QKeyEvent;
+class QLabel;
 class QLineEdit;
 class QMenu;
 class QModelIndex;
@@ -112,6 +113,16 @@ public:
 
     // Shows `solution` (nullptr: nothing); see the header comment for reloads.
     void setSolution(std::shared_ptr<const project::SolutionModel> solution, bool preserveSearch = false);
+
+    /*
+     * The evaluation banner above the tree (SLN-2): a warning line saying why the projects' items
+     * are not ProjectHost's evaluation (ProjectHost unavailable, so MSBuild.exe evaluates; or MSBuild
+     * unavailable, so the items are shown as written). Empty `text` hides it, which is also the
+     * default; the owner never shows it while ProjectHost works.
+     */
+    void setEvaluationBanner(const QString& text);
+    [[nodiscard]] QString evaluationBanner() const;
+    [[nodiscard]] QLabel* evaluationBannerLabel() const noexcept { return m_banner; }
     [[nodiscard]] std::shared_ptr<const project::SolutionModel> solution() const;
 
     void setCppHierarchyMode(project::CppHierarchyMode mode);
@@ -205,6 +216,7 @@ private:
     void openContainingFolder(const QString& path);
 
     QString m_unsupportedEditsReason;
+    QLabel* m_banner = nullptr;
     QComboBox* m_hierarchyCombo = nullptr;
     QTreeView* m_view = nullptr;
     QLineEdit* m_searchField = nullptr;

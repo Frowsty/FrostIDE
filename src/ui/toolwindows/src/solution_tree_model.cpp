@@ -263,6 +263,25 @@ QVariant SolutionTreeModel::data(const QModelIndex& index, int role) const {
             const project::ProjectInfo& info = m_solution->project(*node.project);
             tip += (tip.isEmpty() ? QString() : QStringLiteral("\n")) +
                    tr("%1 projects are not supported yet").arg(qs(project::toString(info.kind)));
+        } else if (node.kind == NodeKind::Project && node.project) {
+            // Where the items came from (SLN-3): MSBuild's evaluation, or the project file as written.
+            const project::ProjectInfo& info = m_solution->project(*node.project);
+            if (info.kind == project::ProjectKind::Cpp) {
+                QString line;
+                if (const auto& evaluation = info.evaluation) {
+                    line = tr("Items evaluated by %1 for %2|%3: %4 files")
+                               .arg(qs(project::toString(evaluation->source)), qs(evaluation->configuration),
+                                    qs(evaluation->platform))
+                               .arg(evaluation->itemCount);
+                    // MSBuild.exe's -getItem cannot list the imports, so only ProjectHost's count is shown.
+                    if (evaluation->source == project::EvaluationSource::ProjectHost) {
+                        line += tr(", %1 imports").arg(evaluation->imports.size());
+                    }
+                } else {
+                    line = tr("Items as written in the project file (not evaluated by MSBuild)");
+                }
+                tip += (tip.isEmpty() ? QString() : QStringLiteral("\n")) + line;
+            }
         }
         return tip.isEmpty() ? QVariant() : QVariant(tip);
     }

@@ -16,6 +16,7 @@ frost_add_test(project_unit_tests
         cmake_profile_test.cpp
         directory_roles_test.cpp
         paths_test.cpp
+        project_host_protocol_test.cpp
         sln_reader_test.cpp
         slnx_reader_test.cpp
         solution_model_test.cpp
@@ -37,3 +38,51 @@ target_compile_definitions(project_cmake_tests PRIVATE
     FROST_PROJECT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
     FROST_TEST_CMAKE="${CMAKE_COMMAND}"
     FROST_TEST_NINJA="${CMAKE_MAKE_PROGRAM}")
+
+# SLN-0, SLN-2 and SLN-3 against this machine's real MSBuild (Visual Studio or its Build Tools,
+# found with vswhere): the oracle (msbuild_oracle.hpp, MSBuild.exe run by the test), the shipped
+# ProjectHost helper and SolutionEvaluation on fixtures/msvc_generated, the synthetic generated
+# solution (.sln and .slnx). Windows only; label "integration" with the tag "msbuild". A machine
+# without Visual Studio skips the tests. PROCESSORS 2: each test runs MSBuild next to the helper.
+if(WIN32)
+    frost_add_test(project_msbuild_tests
+        SOURCES project_host_test.cpp
+        DEPS frost::project frost::build frost::io
+        LABELS integration msbuild
+        PROCESSORS 2)
+    target_include_directories(project_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/project/src)
+    target_compile_definitions(project_msbuild_tests PRIVATE
+        FROST_PROJECT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
+    add_dependencies(project_msbuild_tests frost_project_host)
+endif()
+
+# SLN-2 and SLN-3 on R2a, the pinned Notepad++ clone (tests/corpus/corpora.lock.json; its sha
+# names the clone <corpora root>/r2a-<sha12>): label "corpus", so only verify -Corpus runs it.
+if(WIN32)
+    set(_frost_project_corpora_lock_file "${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_frost_project_corpora_lock_file}")
+    file(READ "${_frost_project_corpora_lock_file}" _frost_project_corpora_lock)
+    string(JSON _frost_project_corpora_count LENGTH "${_frost_project_corpora_lock}" corpora)
+    math(EXPR _frost_project_corpora_last "${_frost_project_corpora_count} - 1")
+    set(_frost_r2a_sha "")
+    foreach(_frost_project_index RANGE ${_frost_project_corpora_last})
+        string(JSON _frost_project_id GET "${_frost_project_corpora_lock}" corpora ${_frost_project_index} id)
+        if(_frost_project_id STREQUAL "r2a")
+            string(JSON _frost_r2a_sha GET "${_frost_project_corpora_lock}" corpora ${_frost_project_index} sha)
+        endif()
+    endforeach()
+    if(NOT _frost_r2a_sha MATCHES "^[0-9a-f]+$")
+        message(FATAL_ERROR "${_frost_project_corpora_lock_file} pins no r2a corpus")
+    endif()
+    frost_add_test(project_corpus_tests
+        SOURCES project_corpus_test.cpp
+        DEPS frost::project frost::build frost::io
+        LABELS integration corpus msbuild
+        PROCESSORS 2)
+    target_include_directories(project_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/project/src)
+    target_compile_definitions(project_corpus_tests PRIVATE
+        FROST_CORPUS_R2A_SHA="${_frost_r2a_sha}"
+        FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
+    add_dependencies(project_corpus_tests frost_project_host)
+endif()

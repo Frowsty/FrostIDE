@@ -32,6 +32,8 @@
 #include "language_bridge.hpp"
 #include "unity_control.hpp"
 #include "workbench_project_helpers.hpp"
+#include <QCoreApplication>
+#include <QDir>
 #include <QStatusBar>
 #include <QTimer>
 
@@ -67,6 +69,12 @@ sched::Task<void> stopOwnedProjectEvaluation(std::shared_ptr<lang::IndependentPr
     co_return;
 }
 
+// Ends the explorer's evaluation (and its ProjectHost) off the GUI thread.
+sched::Task<void> stopOwnedSolutionEvaluation(std::shared_ptr<project::SolutionEvaluation> evaluation) {
+    evaluation->stopAndJoin();
+    co_return;
+}
+
 QString text(const char* source) { return ui::qtr("frost::app::Workbench", source); }
 
 QString qs(std::string_view utf8) { return QString::fromUtf8(utf8.data(), static_cast<qsizetype>(utf8.size())); }
@@ -95,6 +103,17 @@ void Workbench::stopProjectEvaluation() {
         stopped.join();
         return true;
     });
+    m_evaluatedSolution.reset();
+    m_evaluatedFrom.reset();
+    m_evaluatedGeneration = 0;
+    if (m_explorer)
+        m_explorer->setEvaluationBanner({});
+    if (m_solutionEvaluation) {
+        auto evaluation = std::move(m_solutionEvaluation);
+        evaluation->requestStop();
+        m_retiredProjectEvaluations.push_back(
+            m_pool->spawn(sched::Lane::Background, stopOwnedSolutionEvaluation(std::move(evaluation))));
+    }
     if (!m_projectEvaluation)
         return;
     auto old = std::move(m_projectEvaluation);
@@ -112,6 +131,40 @@ void Workbench::startProjectEvaluation(const std::string& root) {
     stopProjectEvaluation();
     const auto admission = m_services.trust.snapshot(root);
     m_projectTrustRevision = admission.revision;
+    std::string configuration;
+    if (const auto active = m_build->activeConfigurationIndex(); active && *active < m_build->configurations().size())
+        configuration = m_build->configurations()[*active].name();
+    const auto locateMsBuild = [launcher = &m_services.launcher, fs = &m_services.fs]() -> Result<std::string> {
+        auto instance = build::findMsBuild(*launcher, *fs);
+        if (!instance)
+            return std::unexpected(std::move(instance.error()));
+        if (instance->msbuildPath.empty())
+            return fail(ErrorCode::NotFound, instance->displayName + " has no MSBuild.exe");
+        return instance->msbuildPath;
+    };
+    const auto trustedNow = [trust = &m_services.trust, root, revision = admission.revision] {
+        const auto current = trust->snapshot(root);
+        return current.trusted && current.revision == revision;
+    };
+    // SLN-2: the Solution Explorer's items from ProjectHost (MSBuild.exe when it is unavailable).
+    if (m_solution && admission.trusted && m_options.projectHost) {
+        project::SolutionEvaluationOptions evaluation;
+        evaluation.hostPath = m_options.projectEditHostPath;
+        if (evaluation.hostPath.empty())
+            evaluation.hostPath = QDir(QCoreApplication::applicationDirPath())
+                                      .filePath(QStringLiteral("project-host/ProjectHostVsProbe.exe"))
+                                      .toStdString();
+        if (auto normalized = io::normalizePath(evaluation.hostPath))
+            evaluation.hostPath = std::move(*normalized);
+        const auto settings = m_services.settings.snapshot();
+        evaluation.msbuildPath =
+            !m_options.msbuildPath.empty() ? m_options.msbuildPath : settings->get(settings::key::toolsMsbuildPath);
+        evaluation.locateMsBuild = locateMsBuild;
+        evaluation.configuration = configuration;
+        evaluation.trusted = trustedNow;
+        m_solutionEvaluation = std::make_shared<project::SolutionEvaluation>(m_services.launcher, m_services.fs,
+                                                                             m_solution, std::move(evaluation));
+    }
     if (!m_solution || !admission.trusted || m_options.compileCommandsCache.empty())
         return;
     auto cache = io::joinPath(m_options.compileCommandsCache, cacheNameFor(root));
@@ -121,26 +174,63 @@ void Workbench::startProjectEvaluation(const std::string& root) {
     lang::MsBuildProviderOptions options;
     options.retirement = m_commandsRetirement;
     options.streamedProjects = m_streamedProjects;
-    if (const auto active = m_build->activeConfigurationIndex(); active && *active < m_build->configurations().size())
-        options.configuration = m_build->configurations()[*active].name();
+    options.configuration = configuration;
     const auto settings = m_services.settings.snapshot();
     options.msbuildPath =
         !m_options.msbuildPath.empty() ? m_options.msbuildPath : settings->get(settings::key::toolsMsbuildPath);
-    options.locateMsBuild = [launcher = &m_services.launcher, fs = &m_services.fs]() -> Result<std::string> {
-        auto instance = build::findMsBuild(*launcher, *fs);
-        if (!instance)
-            return std::unexpected(std::move(instance.error()));
-        if (instance->msbuildPath.empty())
-            return fail(ErrorCode::NotFound, instance->displayName + " has no MSBuild.exe");
-        return instance->msbuildPath;
-    };
-    options.trusted = [trust = &m_services.trust, root, revision = admission.revision] {
-        const auto current = trust->snapshot(root);
-        return current.trusted && current.revision == revision;
-    };
+    options.locateMsBuild = locateMsBuild;
+    options.trusted = trustedNow;
     options.fallback.configuration = options.configuration;
     m_projectEvaluation = std::make_shared<lang::IndependentProjectEvaluation>(m_services.launcher, m_services.fs,
                                                                                m_solution, *cache, std::move(options));
+}
+
+std::shared_ptr<const project::SolutionModel> Workbench::explorerSolutionModel() {
+    const auto trust = m_services.trust.snapshot(m_projectRoot);
+    if (!m_solution || !trust.trusted || trust.revision != m_projectTrustRevision)
+        return m_solution;
+    if (m_solutionEvaluation) {
+        // Re-composed only when the evaluation published something new or the static model was
+        // reloaded (an edit, a file-system change); otherwise the explorer keeps its model.
+        const auto status = m_solutionEvaluation->status();
+        if (m_evaluatedFrom != m_solution || m_evaluatedGeneration != status.generation) {
+            m_evaluatedFrom = m_solution;
+            m_evaluatedGeneration = status.generation;
+            m_evaluatedSolution.reset();
+            if (auto results = m_solutionEvaluation->results(); !results.empty()) {
+                auto loaded = project::SolutionModel::load(m_services.fs, m_solution->path(),
+                                                           {.cppHierarchy = m_cppHierarchyMode,
+                                                            .unloadedProjectPaths = m_unloadedProjectPaths,
+                                                            .evaluated = std::move(results)});
+                if (loaded)
+                    m_evaluatedSolution = std::make_shared<const project::SolutionModel>(std::move(*loaded));
+                else
+                    log::warn(kLog, "solution evaluation: {}", loaded.error().describe());
+            }
+        }
+        if (m_evaluatedSolution)
+            return m_evaluatedSolution;
+    }
+    if (m_streamedProjects) {
+        if (auto evaluated = m_streamedProjects->modelSnapshot())
+            return evaluated;
+    }
+    return m_solution;
+}
+
+QString Workbench::solutionEvaluationBanner() const {
+    if (!m_solutionEvaluation)
+        return {};
+    const auto status = m_solutionEvaluation->status();
+    // The truth rule: say which evaluator the items come from when it is not ProjectHost.
+    if (!status.msbuildProblem.empty())
+        return text("The projects are not evaluated (%1). The Solution Explorer shows the project files as written; "
+                    "items that property sheets or conditions add are missing.")
+            .arg(qs(status.msbuildProblem));
+    if (!status.projectHostProblem.empty())
+        return text("ProjectHost is unavailable (%1). MSBuild.exe evaluates the projects instead.")
+            .arg(qs(status.projectHostProblem));
+    return {};
 }
 
 void Workbench::startClangd(const std::string& root) {

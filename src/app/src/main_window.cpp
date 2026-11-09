@@ -34,6 +34,7 @@ struct MainWindow::Owned {
         trust = std::move(*trusted);
         WorkbenchOptions options;
         options.clangd = false;
+        options.projectHost = false; // Like clangd: no helper for the default window.
         workbench = std::make_unique<Workbench>(WorkbenchServices{io::realFileSystem(), io::realProcessLauncher(),
                                                                   systemClock(), *settings, *trust, prompts},
                                                 std::move(options));

@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="VsProbe.cs" />
+    <Compile Include="ProjectEvaluator.cs" />
     <Compile Include="EnvironmentFingerprint.cs" />
     <Compile Include="TransactionProbe.cs" />
     <Reference Include="System.Web.Extensions" />

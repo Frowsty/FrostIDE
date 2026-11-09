@@ -86,6 +86,7 @@
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/project/directory_roles.hpp"
+#include "frost/project/project_host.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/run/run_manager.hpp"
@@ -380,6 +381,11 @@ struct WorkbenchOptions {
     build::BuildStarter startBuild;
     // Starts clangd for an opened project when it is found (tools.clangd.path, then the SDK, PATH).
     bool clangd = true;
+    // Evaluates a trusted solution's Visual C++ projects for the Solution Explorer (SLN-2, SLN-3):
+    // through ProjectHost (projectEditHostPath, else project-host beside the application), with
+    // MSBuild.exe as the fallback and the explorer's banner saying why. Off: the explorer shows the
+    // project files as written (the test rigs' default, like clangd).
+    bool projectHost = true;
     // Test seam: disable Git discovery when a fixture must not start child processes.
     bool git = true;
     // clangd's parallel jobs (0: its default).
@@ -550,6 +556,11 @@ public:
     // CPP-3: the owned compile-commands directories of a CMake folder's configurations and its
     // resolve-context choices; null without a CMake folder, a compile-commands cache or clangd.
     [[nodiscard]] lang::CMakeCompileCommandsProvider* cmakeCompileCommands() noexcept { return m_cmakeCommands.get(); }
+    // The Solution Explorer's evaluation (SLN-2): status and results of the open solution's
+    // ProjectHost/MSBuild.exe evaluation; null without one (no solution, untrusted, or off).
+    [[nodiscard]] std::shared_ptr<const project::SolutionEvaluation> solutionEvaluation() const noexcept {
+        return m_solutionEvaluation;
+    }
     // Current generation's completed MSBuild contexts, copied safely from the evaluator thread.
     [[nodiscard]] std::vector<std::shared_ptr<const lang::StreamedProjectContext>> streamedProjectContexts() const {
         const auto trust = m_services.trust.snapshot(m_projectRoot);
@@ -694,6 +705,10 @@ private:
     void startClangd(const std::string& root);
     void startProjectEvaluation(const std::string& root);
     void stopProjectEvaluation();
+    // The explorer's model: m_solution with the evaluation's items (SLN-3), or the streamed
+    // compile-commands snapshot, or m_solution; and the banner text for the evaluation's state.
+    [[nodiscard]] std::shared_ptr<const project::SolutionModel> explorerSolutionModel();
+    [[nodiscard]] QString solutionEvaluationBanner() const;
     void stopClangd();
     void restartClangd();
     // A CMake model change, or a trust change, restarts clangd only when the compile-commands
@@ -839,6 +854,12 @@ private:
     QPointer<QWidget> m_resolveContext;                                  // ui::lang::ResolveContextButton.
     std::shared_ptr<lang::StreamedProjectContexts> m_streamedProjects;
     std::shared_ptr<lang::IndependentProjectEvaluation> m_projectEvaluation;
+    // SLN-2/SLN-3: the explorer's evaluation, and the model composed from its results on the GUI
+    // thread (for m_evaluatedFrom at m_evaluatedGeneration; m_solution stays the static model).
+    std::shared_ptr<project::SolutionEvaluation> m_solutionEvaluation;
+    std::shared_ptr<const project::SolutionModel> m_evaluatedSolution;
+    std::shared_ptr<const project::SolutionModel> m_evaluatedFrom;
+    std::uint64_t m_evaluatedGeneration = 0;
     bool m_closingSolution = false;
     std::vector<sched::JoinHandle<void>> m_retiredProjectEvaluations;
     std::shared_ptr<lang::ManagedService> m_managed;
