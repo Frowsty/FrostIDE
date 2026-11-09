@@ -1108,7 +1108,8 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # vcs_git_tests, ui_vcs_git_tests
         # and app_workbench_git_tests (tag "git"; ADR 0048 and 0067), sdk_lldb_tests,
         # debug_lldb_tests, debug_dap_real_tests and debug_corpus_tests (Windows only; also tag
-        # "corpus") (tag "lldb"; ADR 0049, DBG-1), and in trees with the UI app_workbench_clangd_tests and
+        # "corpus") (tag "lldb"; ADR 0049, DBG-1), debug_msvc_tests (Windows only; tags "lldb" and
+        # "msvc"; DBG-2b, DBG-4a), and in trees with the UI app_workbench_clangd_tests and
         # ui_screenshot_tests; app_workbench_configuration_tests (Windows only; tags "msbuild" and
         # "clangd"; SLN-7).
         kinds = {"unit", "integration", "stress", "perf"}
@@ -1129,9 +1130,11 @@ class BuildTreeLabelsTest(unittest.TestCase):
                                             "Fixtures/CMakePresetsRefusedOracle.", "TestRunnerCTest.",
                                             "TestRunnerCancel.", "TestRunnerStub.", "UnitTestsWindow.",
                                             "DoctestRunner.")),
-                  "msvc": ("integration", ("MsvcEnvironmentCapture.", "RealToolchain.")),
+                  "msvc": ("integration", ("MsvcEnvironmentCapture.", "RealToolchain.", "MsvcDebug.",
+                                           "Runtimes/MsvcThrowFilter.", "Builds/MsvcStepInto.")),
                   "git": ("integration", ("GitE2E.", "GitUiE2E.", "WorkbenchGit.")),
-                  "lldb": ("integration", ("LldbDapE2E.", "LldbDebugSession.", "DapReal.", "CorpusFrostEditor.")),
+                  "lldb": ("integration", ("LldbDapE2E.", "LldbDebugSession.", "DapReal.", "CorpusFrostEditor.",
+                                           "MsvcDebug.", "Runtimes/MsvcThrowFilter.", "Builds/MsvcStepInto.")),
                   "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",
                                           "GoldenComparator."))}
         wrong, seen = [], dict.fromkeys(tagged, 0)

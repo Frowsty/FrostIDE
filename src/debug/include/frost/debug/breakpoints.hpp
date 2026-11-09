@@ -19,7 +19,8 @@
  * session's capabilities report (lldb-dap: cpp_throw, cpp_catch, ...) with each filter's
  * availability, keeping what the user enabled; until a session has reported them the list holds only
  * what was persisted (the labels came from an earlier session's capabilities), never a filter
- * FrostIDE made up.
+ * FrostIDE made up. The C++ throw filter (cpp_throw) can carry a list of exception types (DBG-2b):
+ * an MSVC session then stops only for throws of those types (DebugSession, "Thrown types").
  *
  * Persistence. The personal scope file's "breakpoints", "functionBreakpoints" and
  * "exceptionBreakpoints" members:
@@ -28,7 +29,8 @@
  *        "logMessage": "i={i}", "enabled": false}
  *     ],
  *     "functionBreakpoints": [{"name": "frost_function_target", "condition": "value > 1"}],
- *     "exceptionBreakpoints": [{"filter": "cpp_throw", "label": "C++ Throw", "enabled": true}]
+ *     "exceptionBreakpoints": [{"filter": "cpp_throw", "label": "C++ Throw", "enabled": true,
+                              "types": ["std::runtime_error"]}]
  * (optional members only when set). Paths under the root are stored relative to it with '/', others
  * absolute. Every other byte of the file is kept (SettingsDocument); an empty list removes its
  * member.
@@ -99,7 +101,8 @@ struct ExceptionFilterEntry {
     std::string filter; // "cpp_throw".
     std::string label;  // "C++ Throw", the adapter's.
     bool enabled = false;
-    std::string unavailable{}; // Why it cannot stop in this session's programs; "" when it can.
+    std::string unavailable{};        // Why it cannot stop in this session's programs; "" when it can.
+    std::vector<std::string> types{}; // cpp_throw only: the thrown types it stops for; empty: all.
 
     friend bool operator==(const ExceptionFilterEntry&, const ExceptionFilterEntry&) = default;
 };
@@ -151,6 +154,12 @@ public:
     [[nodiscard]] std::vector<ExceptionFilterEntry> exceptionFilters() const { return m_exceptionFilters; }
     // The enabled, available filter ids for a session; none while muted.
     [[nodiscard]] std::vector<std::string> sessionExceptionFilters() const;
+    // Sets the thrown types cpp_throw stops for (header comment; msvc::splitTypeList's list); false
+    // when `filter` is unknown or is not cpp_throw.
+    bool setExceptionFilterTypes(std::string_view filter, std::vector<std::string> types);
+    // The types of the enabled, available cpp_throw filter for a session (DebugSession::setThrowTypes);
+    // empty when it has none, is off, or while muted.
+    [[nodiscard]] std::vector<std::string> sessionThrowTypes() const;
     [[nodiscard]] bool muted() const noexcept { return m_muted; }
     void setMuted(bool muted);
 

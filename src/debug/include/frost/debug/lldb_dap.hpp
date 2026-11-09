@@ -28,8 +28,17 @@
  * 23.1.4 and libstdc++ 14): a wrong value, not a missing one. On Linux the launch therefore adds
  * lldbDapLibstdcxxCommands: a category above lldb's own that gives those types a summary saying
  * their contents cannot be shown, so FrostIDE never shows lldb's wrong size. Members, std::string,
- * smart pointers and Evaluate (numbers[5]) still work. MSVC STL formatters are C++ and unaffected.
+ * smart pointers and Evaluate (numbers[5]) still work. MSVC STL formatters are C++ and unaffected:
+ * they are on by default and show vector, string, map, unique_ptr, optional and more on cl.exe
+ * builds (DBG-4a; msvc_debug_test.cpp lists the gaps).
  * TODO(M6): (DBG-4a, R3) remove once the Linux lldb-dap has Python or C++ libstdc++ providers.
+ *
+ * Stepping on Windows. A Visual Studio Debug build (/ZI, Edit and Continue) calls functions through
+ * incremental-link thunks that lldb can step out of, so lldb's own step-in, which steps out of any
+ * function without debug information (target.process.thread.step-in-avoid-nodebug), returns from the
+ * thunk and Step Into acts as Step Over. The Windows launch therefore sets lldbDapWindowsStepCommand
+ * (avoid-nodebug off), and DebugSession steps out of such functions itself after following a thunk
+ * (DebugSessionOptions::stepOutOfNoDebug; debug_session.hpp, "Step into a thunk").
  *
  * Attach on Linux. Under the Yama policy ptrace_scope 1 (Ubuntu's default) lldb may attach only to its
  * descendants, and lldb-dap reports only "Trying to resume but the async thread is dead". An attach
@@ -123,14 +132,19 @@ struct DebugTarget {
 
 // The lldb commands of the header comment ("Values on Linux"), for a libstdc++ program. Pure.
 [[nodiscard]] std::vector<std::string> lldbDapLibstdcxxCommands();
+// The lldb command of the header comment ("Stepping on Windows").
+inline constexpr std::string_view lldbDapWindowsStepCommand =
+    "settings set target.process.thread.step-in-avoid-nodebug false";
 
 /*
  * lldb-dap's launch request arguments for `target`: program, args, cwd, env ("NAME=VALUE"),
  * stopOnEntry, and initCommands: "settings set target.inherit-env false" for inheritEnvironment
- * false and, when `libstdcxx` (default: on Linux), lldbDapLibstdcxxCommands.
+ * false, when `libstdcxx` (default: on Linux) lldbDapLibstdcxxCommands, and when `windowsStepping`
+ * (default: on Windows; the two-argument form leaves it out) lldbDapWindowsStepCommand.
  */
 [[nodiscard]] rpc::Json lldbDapLaunchArguments(const DebugTarget& target);
 [[nodiscard]] rpc::Json lldbDapLaunchArguments(const DebugTarget& target, bool libstdcxx);
+[[nodiscard]] rpc::Json lldbDapLaunchArguments(const DebugTarget& target, bool libstdcxx, bool windowsStepping);
 
 /*
  * The hint an attach failure carries on Linux (header comment), for the content of
@@ -142,8 +156,9 @@ struct DebugTarget {
 // The same for this machine: reads the file through `fs`; "" on Windows or when it cannot be read.
 [[nodiscard]] std::string ptraceAttachHint(io::IFileSystem& fs);
 
-// The session options lldb-dap needs here: on Windows breakOnAbort and msvcExceptions (debug_session.hpp,
-// "Exception filters"), on Linux an attach's ptraceAttachHint from the real file system.
+// The session options lldb-dap needs here: on Windows breakOnAbort (launch only), msvcExceptions
+// (debug_session.hpp, "Exception filters") and stepOutOfNoDebug (header comment, "Stepping on
+// Windows"), on Linux an attach's ptraceAttachHint from the real file system.
 [[nodiscard]] DebugSessionOptions lldbDapSessionOptions(DebugTargetMode mode);
 
 // Starts lldb-dap at `executable` through `launcher` for each session and connects a DAP client.
@@ -158,11 +173,13 @@ struct DebugTarget {
 [[nodiscard]] Result<std::unique_ptr<DebugSession>>
 startDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
                   std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks);
-// The same with function breakpoints and the exception filters to stop on (DBG-2a).
+// The same with function breakpoints, the exception filters to stop on (DBG-2a) and the thrown types
+// cpp_throw stops for (DBG-2b; DebugSessionOptions::throwTypes).
 [[nodiscard]] Result<std::unique_ptr<DebugSession>>
 startDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
                   std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
-                  std::vector<FunctionBreakpointLine> functionBreakpoints, std::vector<std::string> exceptionFilters);
+                  std::vector<FunctionBreakpointLine> functionBreakpoints, std::vector<std::string> exceptionFilters,
+                  std::vector<std::string> throwTypes = {});
 
 // Starts an already-running target using an explicitly supplied adapter and attach arguments.
 // The same trusted-root and absolute target checks apply; disconnect never terminates the host.

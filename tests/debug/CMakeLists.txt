@@ -11,6 +11,9 @@
 #                      It fails while lldb-dap is not installed (FND-6);
 #   debug_dap_real_tests  the dap-real scenario suite (dap_real_test.cpp, DBG-1 and DBG-2a) against
 #                      fixtures/dap_scenarios.cpp, label "integration" with the tag "lldb";
+#   debug_msvc_tests   (Windows) cl.exe-built fixtures/msvc_debuggee.cpp under the pinned lldb-dap:
+#                      type-filtered C++ throws (DBG-2b), STL display (DBG-4a) and Step Into through
+#                      an incremental-link thunk, label "integration" with the tags "lldb" and "msvc";
 #   debug_corpus_tests (Windows) FrostEditor of the pinned FrostEngine clone under lldb-dap
 #                      (corpus_debug_test.cpp), label "integration" with the tags "corpus" and "lldb".
 
@@ -23,6 +26,7 @@ frost_add_test(debug_unit_tests
         debug_session_breakpoints_test.cpp
         lldb_dap_test.cpp
         mono_dap_test.cpp
+        msvc_throw_test.cpp
         mono_wire_test.cpp
         mono_session_test.cpp
         mono_responses_test.cpp
@@ -82,6 +86,22 @@ target_compile_definitions(debug_dap_real_tests PRIVATE
     FROST_SCENARIOS_PATH="$<TARGET_FILE:debug_test_scenarios>"
     FROST_SCENARIOS_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/dap_scenarios.cpp")
 add_dependencies(debug_dap_real_tests debug_test_scenarios)
+
+# The MSVC debuggee tests (msvc_debug_test.cpp; DBG-2b, DBG-4a): fixtures/msvc_debuggee.cpp built at
+# test time by cl.exe of the pinned MSVC toolset (sdk/sdk.lock.json, msvc.vcToolsVersion) and debugged
+# with the pinned lldb-dap. Windows only: the MSVC ABI's throws and STL exist only there.
+if(WIN32)
+    file(READ "${FROST_SOURCE_DIR}/sdk/sdk.lock.json" _frost_debug_msvc_lock)
+    string(JSON _frost_debug_msvc_tools GET "${_frost_debug_msvc_lock}" msvc vcToolsVersion)
+    frost_add_test(debug_msvc_tests
+        SOURCES msvc_debug_test.cpp
+        DEPS frost::debug frost::build frost::io
+        LABELS integration lldb msvc)
+    target_include_directories(debug_msvc_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(debug_msvc_tests PRIVATE
+        FROST_MSVC_DEBUGGEE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/msvc_debuggee.cpp"
+        FROST_PINNED_VC_TOOLS="${_frost_debug_msvc_tools}")
+endif()
 
 # The corpus debug test (corpus_debug_test.cpp; DBG-1/DBG-2a acceptance): FrostEditor of the pinned
 # FrostEngine clone, built under the corpus build lock and debugged with lldb-dap. Label corpus, so

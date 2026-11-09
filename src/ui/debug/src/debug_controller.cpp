@@ -323,7 +323,8 @@ Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
         [this, resolvedTarget, factory = std::move(*factory)](debug::DebugSessionCallbacks callbacks) mutable {
             return debug::startDebugSession(*m_options.trust, resolvedTarget, std::move(factory),
                                             m_breakpoints.sessionLines(), std::move(callbacks),
-                                            m_breakpoints.sessionFunctions(), m_breakpoints.sessionExceptionFilters());
+                                            m_breakpoints.sessionFunctions(), m_breakpoints.sessionExceptionFilters(),
+                                            m_breakpoints.sessionThrowTypes());
         });
     if (started) {
         m_lastCoreClrSession = false;
@@ -352,6 +353,7 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
                 // Recorded now and sent when the adapter is configured (DebugSession).
                 (*session)->setFunctionBreakpoints(m_breakpoints.sessionFunctions());
                 (*session)->setExceptionFilters(m_breakpoints.sessionExceptionFilters());
+                (*session)->setThrowTypes(m_breakpoints.sessionThrowTypes());
             }
             return session;
         },
@@ -1258,6 +1260,7 @@ void DebugController::onBreakpointsChanged(std::string_view path, debug::Breakpo
     } else if (change == debug::BreakpointManager::Change::Exceptions) {
         if (m_session && m_nativeSession) {
             m_session->setExceptionFilters(m_breakpoints.sessionExceptionFilters());
+            m_session->setThrowTypes(m_breakpoints.sessionThrowTypes());
         }
         save();
     }

@@ -4,7 +4,8 @@
 // fake-dap double: function breakpoints sharing one request with the session's own, exception
 // filters before configurationDone, the MSVC throw translation and its import-thunk skip, the
 // filter a stop names, pause stops and the thread a pause selects, the capabilities event, restart,
-// the process id and the attach failure hint. The real adapter's side is dap_real_test.cpp.
+// the process id and the attach failure hint; DBG-2b's thrown types, read through readMemory from a
+// fake image, and the type list. The real adapter's side is dap_real_test.cpp and msvc_debug_test.cpp.
 
 #include "frost/debug/debug_session.hpp"
 #include "frost/debug/fake_debug_adapter.hpp"
@@ -14,6 +15,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
+#include <format>
 #include <map>
 #include <memory>
 #include <string>
@@ -475,6 +478,273 @@ TEST_F(SessionBreakpointsTest, AnAttachThatFailsAtConfigurationDoneSaysItIsAnAtt
         << outcome->error->message();
     EXPECT_NE(outcome->error->message().find("Expected process to be stopped."), std::string::npos);
     EXPECT_TRUE(outcome->error->message().ends_with("\nhint"));
+}
+
+TEST_F(SessionBreakpointsTest, WithStepOutOfNoDebugAStepInLeavesAFunctionWithoutDebugInformation) {
+    script();
+    adapter.on("initialize", [](const rpc::Json&) {
+        return Reply{
+            .body =
+                lldbCapabilities().set("supportsSteppingGranularity", true).set("supportsDisassembleRequest", true)};
+    });
+    // The top frame at each stop: the line the step begins on, a function without debug information
+    // (not a jmp), the line again (after the call), the callee.
+    auto stage = std::make_shared<std::atomic<int>>(0);
+    adapter.on("stackTrace", [stage](const rpc::Json&) {
+        rpc::Json frame =
+            rpc::Json::object().set("id", 1000 + stage->load()).set("instructionPointerReference", "0x1000");
+        const auto sourced = [&](const char* name, std::int64_t line) {
+            frame.set("name", name).set("line", line).set("source", rpc::Json::object().set("path", kSource));
+        };
+        switch (stage->load()) {
+        case 0:
+        case 2: sourced("main", 10); break;
+        case 1: // lldb-dap's disassembly listing of a function without debug information.
+            frame.set("name", "KERNELBASE.dll`Sleep")
+                .set("line", 130)
+                .set("source", rpc::Json::object()
+                                   .set("path", "KERNELBASE.dll`Sleep")
+                                   .set("sourceReference", 9)
+                                   .set("presentationHint", "deemphasize"));
+            break;
+        default: sourced("callee(int)", 20); break;
+        }
+        return Reply{
+            .body = rpc::Json::object().set("stackFrames", rpc::Json::array({std::move(frame)})).set("totalFrames", 1)};
+    });
+    adapter.on("disassemble", [](const rpc::Json&) {
+        return Reply{
+            .body = rpc::Json::object().set(
+                "instructions",
+                rpc::Json::array({rpc::Json::object().set("address", "0x1000").set("instruction", "push rbp")}))};
+    });
+    adapter.on("stepIn", [](const rpc::Json&) { return Reply{}; });
+    adapter.on("stepOut", [](const rpc::Json&) { return Reply{}; });
+    start(DebugSessionOptions{.stepOutOfNoDebug = true});
+    ASSERT_TRUE(waitUntil([&] { return session->state() == DebugState::Running; }));
+    const auto step = rpc::Json::object().set("reason", "step").set("threadId", 1);
+    adapter.sendEvent("stopped", rpc::Json::object().set("reason", "breakpoint").set("threadId", 1));
+    ASSERT_TRUE(waitUntil([&] { return recorder.stopCount() == 1 && session->selectedFrame().has_value(); }));
+
+    ASSERT_TRUE(session->stepIn());
+    ASSERT_TRUE(waitUntil([&] { return adapter.argumentsOf("stepIn").size() == 1; }));
+    stage->store(1);
+    adapter.sendEvent("stopped", step);
+    ASSERT_TRUE(waitUntil([&] { return adapter.argumentsOf("stepOut").size() == 1; })) << "out of Sleep";
+    stage->store(2);
+    adapter.sendEvent("stopped", step);
+    ASSERT_TRUE(waitUntil([&] { return adapter.argumentsOf("stepIn").size() == 2; })) << "on to the line's next call";
+    EXPECT_EQ(recorder.stopCount(), 1U) << "nothing between was reported";
+    stage->store(3);
+    adapter.sendEvent("stopped", step);
+    ASSERT_TRUE(waitUntil([&] { return recorder.stopCount() == 2 && session->selectedFrame().has_value(); }));
+    EXPECT_EQ(session->selectedFrame()->name, "callee(int)");
+}
+
+// --- DBG-2b: thrown types ---
+
+// Base64 of `bytes` (DAP readMemory's data).
+std::string base64(std::string_view bytes) {
+    static constexpr std::string_view kAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    for (std::size_t i = 0; i < bytes.size(); i += 3) {
+        std::uint32_t chunk = static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[i])) << 16;
+        if (i + 1 < bytes.size())
+            chunk |= static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[i + 1])) << 8;
+        if (i + 2 < bytes.size())
+            chunk |= static_cast<unsigned char>(bytes[i + 2]);
+        out.push_back(kAlphabet[(chunk >> 18) & 63]);
+        out.push_back(kAlphabet[(chunk >> 12) & 63]);
+        out.push_back(i + 1 < bytes.size() ? kAlphabet[(chunk >> 6) & 63] : '=');
+        out.push_back(i + 2 < bytes.size() ? kAlphabet[chunk & 63] : '=');
+    }
+    return out;
+}
+
+/*
+ * A fake x64 image at kImageBase holding two throws' structures (msvc_throw.hpp): ThrowInfo kRange
+ * of std::range_error (two catchable types: itself and its base std::runtime_error) and kRuntime
+ * of std::runtime_error.
+ */
+class FakeImage {
+public:
+    static constexpr std::uint64_t kImageBase = 0x140000000;
+    static constexpr std::uint64_t kRange = kImageBase + 0x1000;
+    static constexpr std::uint64_t kRuntime = kImageBase + 0x1100;
+
+    FakeImage() : m_bytes(0x8000, '\0') {
+        m_bytes[0] = 'M';
+        m_bytes[1] = 'Z';
+        put(0x3C, 0x80);
+        m_bytes.replace(0x80, 4, std::string("PE\0\0", 4));
+        m_bytes[0x84] = static_cast<char>(0x64);
+        m_bytes[0x85] = static_cast<char>(0x86);
+        put(0x80 + 4 + 20 + 56, static_cast<std::uint32_t>(m_bytes.size()));
+        // ThrowInfo -> CatchableTypeArray -> CatchableType -> TypeDescriptor (+16: the name).
+        put(0x1000 + 12, 0x2000);
+        put(0x2000, 2);
+        put(0x2004, 0x3000);
+        put(0x2008, 0x3100);
+        put(0x3000 + 4, 0x4000);
+        name(0x4000, ".?AVrange_error@std@@");
+        put(0x1100 + 12, 0x2100);
+        put(0x2100, 1);
+        put(0x2104, 0x3100);
+        put(0x3100 + 4, 0x4100);
+        name(0x4100, ".?AVruntime_error@std@@");
+    }
+
+    // readMemory's answer for `arguments`.
+    [[nodiscard]] Reply read(const rpc::Json& arguments) const {
+        const std::string reference(arguments.stringAt("memoryReference"));
+        const std::uint64_t address = std::stoull(reference, nullptr, 16);
+        const auto count = static_cast<std::size_t>(arguments.integerAt("count").value_or(0));
+        if (address < kImageBase || address - kImageBase >= m_bytes.size()) {
+            return Reply{.success = false, .message = "memory read failed"};
+        }
+        const std::string bytes = m_bytes.substr(address - kImageBase, count);
+        return Reply{.body = rpc::Json::object().set("address", reference).set("data", base64(bytes))};
+    }
+
+private:
+    void put(std::size_t offset, std::uint32_t value) {
+        for (std::size_t i = 0; i < 4; ++i)
+            m_bytes[offset + i] = static_cast<char>((value >> (8 * i)) & 0xFF);
+    }
+    void name(std::size_t descriptor, std::string_view decorated) {
+        m_bytes.replace(descriptor + 16, decorated.size(), decorated);
+    }
+
+    std::string m_bytes;
+};
+
+class ThrowTypesTest : public SessionBreakpointsTest {
+protected:
+    // A session whose throws stop in the DLL runtime's _CxxThrowException (no source, not a jmp)
+    // with rdx = the ThrowInfo next() picks.
+    void startThrowing(std::vector<std::string> types) {
+        script();
+        adapter.on("stackTrace", [](const rpc::Json&) {
+            return Reply{.body =
+                             rpc::Json::object()
+                                 .set("stackFrames",
+                                      rpc::Json::array({rpc::Json::object()
+                                                            .set("id", 1000)
+                                                            .set("name", "_CxxThrowException")
+                                                            .set("line", 0)
+                                                            .set("instructionPointerReference", "0x7ff800001000"),
+                                                        rpc::Json::object()
+                                                            .set("id", 1001)
+                                                            .set("name", "thrower")
+                                                            .set("line", 10)
+                                                            .set("instructionPointerReference", "0x140001234")
+                                                            .set("source", rpc::Json::object().set("path", kSource))}))
+                                 .set("totalFrames", 2)};
+        });
+        adapter.on("disassemble", [](const rpc::Json&) {
+            return Reply{.body = rpc::Json::object().set(
+                             "instructions", rpc::Json::array({rpc::Json::object()
+                                                                   .set("address", "0x7ff800001000")
+                                                                   .set("instruction", "movq %rdx, 0x10(%rsp)")}))};
+        });
+        adapter.on("evaluate", [this](const rpc::Json& arguments) {
+            evaluated->push_back(std::string(arguments.stringAt("expression")));
+            return Reply{.body = rpc::Json::object().set("result", std::format("0x{:016X}", next->load()))};
+        });
+        adapter.on("modules", [](const rpc::Json&) {
+            return Reply{
+                .body = rpc::Json::object().set(
+                    "modules",
+                    rpc::Json::array(
+                        {rpc::Json::object().set("name", "App.exe").set("addressRange", "0x140000000"),
+                         rpc::Json::object().set("name", "vcruntime140d.dll").set("addressRange", "0x7ff800000000")}))};
+        });
+        adapter.on("readMemory", [this](const rpc::Json& arguments) { return image.read(arguments); });
+        start(DebugSessionOptions{.msvcExceptions = true, .exceptionFilters = {"cpp_throw"}, .throwTypes = types});
+        ASSERT_TRUE(waitUntil([&] { return session->state() == DebugState::Running; }));
+    }
+
+    void throwAt(std::uint64_t throwInfo) {
+        next->store(throwInfo);
+        adapter.sendEvent("stopped", rpc::Json::object()
+                                         .set("reason", "breakpoint")
+                                         .set("threadId", 1)
+                                         .set("hitBreakpointIds", rpc::Json::array({rpc::Json(100)})));
+    }
+
+    FakeImage image;
+    std::shared_ptr<std::atomic<std::uint64_t>> next = std::make_shared<std::atomic<std::uint64_t>>(0);
+    std::shared_ptr<std::vector<std::string>> evaluated = std::make_shared<std::vector<std::string>>();
+};
+
+TEST_F(ThrowTypesTest, ATypeListResumesOtherThrowsAndStopsForItsType) {
+    startThrowing({"std::runtime_error"});
+    throwAt(FakeImage::kRange);
+    ASSERT_TRUE(adapter.waitForRequest("continue")) << "std::range_error is not in the list";
+    EXPECT_EQ(recorder.stopCount(), 0U);
+    EXPECT_EQ(adapter.argumentsOf("evaluate").front().stringAt("expression"), "$rdx")
+        << "the runtime has no symbols: the argument register";
+    throwAt(FakeImage::kRuntime);
+    ASSERT_TRUE(waitUntil([&] { return recorder.stopCount() == 1 && recorder.selectedCount() == 1; }));
+    const StopInfo stop = *session->stopInfo();
+    EXPECT_EQ(stop.exceptionFilter, "cpp_throw");
+    EXPECT_EQ(stop.exceptionType, "std::runtime_error");
+    EXPECT_EQ(stop.description, "C++ exception thrown: std::runtime_error");
+    EXPECT_EQ(stop.summary(), "Paused on exception (C++ Throw)");
+    EXPECT_EQ(session->selectedFrame()->name, "thrower");
+    EXPECT_EQ(adapter.argumentsOf("modules").size(), 1U);
+
+    // A second std::range_error: the cached type, one evaluate and no memory read.
+    const std::size_t reads = adapter.argumentsOf("readMemory").size();
+    ASSERT_TRUE(session->continueRun().has_value());
+    ASSERT_TRUE(adapter.waitForRequest("continue", 2));
+    throwAt(FakeImage::kRange);
+    ASSERT_TRUE(adapter.waitForRequest("continue", 3));
+    EXPECT_EQ(adapter.argumentsOf("readMemory").size(), reads);
+    EXPECT_EQ(adapter.argumentsOf("modules").size(), 1U);
+    EXPECT_EQ(recorder.stopCount(), 1U);
+}
+
+TEST_F(ThrowTypesTest, WithoutATypeListEveryThrowStopsNamingItsType) {
+    startThrowing({});
+    throwAt(FakeImage::kRange);
+    ASSERT_TRUE(waitUntil([&] { return recorder.stopCount() == 1 && recorder.selectedCount() == 1; }));
+    EXPECT_EQ(session->stopInfo()->exceptionType, "std::range_error");
+    EXPECT_TRUE(adapter.argumentsOf("continue").empty());
+}
+
+TEST_F(ThrowTypesTest, AThrowWhoseTypeCannotBeReadStopsAndSaysWhy) {
+    startThrowing({"std::runtime_error"});
+    // Above the runtime's base, whose memory the fake cannot read: the PE header check fails.
+    throwAt(0x7ff900000000);
+    ASSERT_TRUE(waitUntil([&] { return recorder.stopCount() == 1; }));
+    EXPECT_EQ(session->stopInfo()->exceptionType, "");
+    EXPECT_EQ(session->stopInfo()->exceptionFilter, "cpp_throw");
+    LockGuard lock(recorder.mutex);
+    EXPECT_NE(recorder.output.find("The thrown type could not be read"), std::string::npos) << recorder.output;
+}
+
+TEST_F(ThrowTypesTest, TypeListsChangeDuringTheSession) {
+    startThrowing({"std::logic_error"});
+    EXPECT_EQ(session->throwTypes(), std::vector<std::string>{"std::logic_error"});
+    session->setThrowTypes({"std::range_error"});
+    throwAt(FakeImage::kRange);
+    ASSERT_TRUE(waitUntil([&] { return recorder.stopCount() == 1; }));
+    EXPECT_EQ(session->stopInfo()->exceptionType, "std::range_error");
+}
+
+TEST_F(SessionBreakpointsTest, AnItaniumSessionSaysItIgnoresThrowTypes) {
+    script();
+    start(DebugSessionOptions{.exceptionFilters = {"cpp_throw"}, .throwTypes = {"std::runtime_error"}});
+    ASSERT_TRUE(waitUntil([&] {
+        LockGuard lock(recorder.mutex);
+        return recorder.output.find("Exception type filters work only") != std::string::npos;
+    }));
+    session->setThrowTypes({"other"});
+    LockGuard lock(recorder.mutex);
+    const std::string& output = recorder.output;
+    EXPECT_EQ(output.find("Exception type filters work only"), output.rfind("Exception type filters work only"))
+        << "said once";
 }
 
 } // namespace

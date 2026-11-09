@@ -257,6 +257,7 @@ void BreakpointManager::setAvailableExceptionFilters(const std::vector<dap::Exce
         for (const ExceptionFilterEntry& known : m_exceptionFilters) {
             if (known.filter == filter.filter) {
                 entry.enabled = known.enabled;
+                entry.types = known.types;
             }
         }
         next.push_back(std::move(entry));
@@ -282,6 +283,35 @@ bool BreakpointManager::setExceptionFilterEnabled(std::string_view filter, bool 
         return true;
     }
     return false;
+}
+
+bool BreakpointManager::setExceptionFilterTypes(std::string_view filter, std::vector<std::string> types) {
+    if (filter != "cpp_throw") {
+        return false;
+    }
+    for (ExceptionFilterEntry& entry : m_exceptionFilters) {
+        if (entry.filter != filter) {
+            continue;
+        }
+        if (entry.types != types) {
+            entry.types = std::move(types);
+            notify({}, Change::Exceptions);
+        }
+        return true;
+    }
+    return false;
+}
+
+std::vector<std::string> BreakpointManager::sessionThrowTypes() const {
+    if (m_muted) {
+        return {};
+    }
+    for (const ExceptionFilterEntry& entry : m_exceptionFilters) {
+        if (entry.filter == "cpp_throw" && entry.enabled && entry.unavailable.empty()) {
+            return entry.types;
+        }
+    }
+    return {};
 }
 
 std::vector<std::string> BreakpointManager::sessionExceptionFilters() const {
@@ -555,9 +585,18 @@ Result<void> BreakpointManager::load(io::IFileSystem& fs, std::string_view root)
                         continue;
                     }
                     const std::string_view label = entry.stringAt("label");
+                    std::vector<std::string> types;
+                    if (const rpc::Json* stored = entry.find("types"); stored != nullptr && stored->isArray()) {
+                        for (const rpc::Json& type : stored->items()) {
+                            if (const std::string* text = type.asString(); text != nullptr && !text->empty()) {
+                                types.push_back(*text);
+                            }
+                        }
+                    }
                     filters.push_back(ExceptionFilterEntry{.filter = std::string(filter),
                                                            .label = std::string(label.empty() ? filter : label),
-                                                           .enabled = entry.boolAt("enabled").value_or(false)});
+                                                           .enabled = entry.boolAt("enabled").value_or(false),
+                                                           .types = std::move(types)});
                 }
             }
         }
@@ -663,8 +702,13 @@ Result<void> BreakpointManager::save(io::IFileSystem& fs, std::string_view root)
     std::string filterJson;
     for (std::size_t i = 0; i < m_exceptionFilters.size(); ++i) {
         const ExceptionFilterEntry& filter = m_exceptionFilters[i];
-        filterJson += std::format("{}\n    {{\"filter\": {}, \"label\": {}, \"enabled\": {}}}", i == 0 ? "[" : ",",
-                                  jsonString(filter.filter), jsonString(filter.label), filter.enabled);
+        std::string types;
+        for (std::size_t t = 0; t < filter.types.size(); ++t) {
+            types += (t == 0 ? "" : ", ") + jsonString(filter.types[t]);
+        }
+        filterJson += std::format("{}\n    {{\"filter\": {}, \"label\": {}, \"enabled\": {}{}}}", i == 0 ? "[" : ",",
+                                  jsonString(filter.filter), jsonString(filter.label), filter.enabled,
+                                  types.empty() ? std::string() : ", \"types\": [" + types + "]");
     }
     if (!filterJson.empty()) {
         filterJson += "\n  ]";
