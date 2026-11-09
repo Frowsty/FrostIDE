@@ -248,7 +248,8 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
     if (m_window && lists && m_services.fs.exists(*lists).value_or(false)) {
         m_cmake = std::make_unique<CMakeIntegration>(
             m_services.fs, m_services.launcher, m_services.trust, m_services.settings, *m_build, *m_buildService,
-            *m_window, *m_runConsole, m_options.cmakeStatePath, [this] { m_runController->alternateStateChanged(); },
+            *m_window, *m_runWindow, *m_runManager, m_options.cmakeStatePath,
+            [this] { m_runController->alternateStateChanged(); },
             [this](const std::string& file) { (void)openPath(file); },
             [this] {
                 // FND-9a: the open's own model publication (and a configure that leaves the
@@ -258,6 +259,7 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
                 else if (m_cmake && m_clangd)
                     restartClangdIfCMakeStateChanged();
             });
+        connectCMakeRunConfigurations(); // RUN-2/RUN-3: the targets' run configurations.
         if (auto opened = m_cmake->open(path); !opened) {
             m_cmake.reset();
             return std::unexpected(std::move(opened.error()));

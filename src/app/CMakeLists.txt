@@ -66,6 +66,8 @@ frost_add_library(app LAYER app
         src/project_run_dialogs.cpp
         src/project_tool_dialogs.cpp
         src/project_unit_tests.cpp
+        src/unit_tests_window.cpp
+        src/unit_tests_window.hpp
         src/project_properties_xml.cpp
         src/diagnostics_qt.cpp
         src/document_editor.cpp
@@ -85,6 +87,7 @@ frost_add_library(app LAYER app
         src/workbench_clone.cpp
         src/workbench_prompts.cpp
         src/workbench_run.cpp
+        src/workbench_run_configurations.cpp
         src/workbench_tool_windows.cpp
         src/workbench_update.cpp
         src/language_bridge.hpp
@@ -116,7 +119,7 @@ frost_add_library(app LAYER app
         src/workbench_find.cpp
         ${frost_startup_core_sources}
     DEPS frost::ui_vcs frost::vcs frost::ui_find frost::ui_debug frost::debug frost::ui_cmake frost::ui_terminal frost::term frost::ui_workbench frost::ui_nav frost::ui_lang frost::ui_run frost::ui_toolwindows frost::ui_editor
-         frost::ui_shell frost::ui frost::lang frost::build frost::document frost::project frost::settings
+         frost::ui_shell frost::ui frost::lang frost::run frost::build frost::document frost::project frost::settings
          frost::update frost::syntax frost::storage frost::text frost::input frost::rpc frost::io frost::sched frost::diag frost::core
     THIRD_PARTY Qt6::Widgets Qt6::Network)
 target_compile_definitions(frost_app PRIVATE

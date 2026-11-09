@@ -32,6 +32,7 @@
 #include "project_edit_process.hpp"
 #include "project_properties_dialog.hpp"
 #include "settings_dialog.hpp"
+#include "unit_tests_window.hpp"
 #include "unity_control.hpp"
 #include <QDir>
 #include <QFile>
@@ -175,19 +176,13 @@ void Workbench::attachToolWindows() {
             });
     });
     connect(explorer, &ui::SolutionExplorer::editRunConfigurationsRequested, this, [this](const QString& projectPath) {
-        if (!m_window || !m_solution || !m_runService)
-            return;
-        std::string activeCfg = "Debug|x64";
-        if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
-            activeCfg = m_build->configurations()[*idx].name();
-        showEditRunConfigurationsDialog(
-            m_window, m_services.fs, m_solution.get(), projectPath.toStdString(), activeCfg,
-            m_runService->useExternalConsole(),
-            [this](bool ext) {
-                if (m_runService)
-                    (void)m_runService->setUseExternalConsole(ext);
-            },
-            [this] { refreshSolutionExplorerForFsChange(); });
+        // RUN-3: the dialog opens on the project's msbuild configuration, if it has one.
+        if (m_runController) {
+            for (const run::RunConfiguration& configuration : m_runController->configurations().all())
+                if (configuration.type == run::RunType::MSBuild && configuration.target == projectPath.toStdString())
+                    (void)m_runController->selectConfiguration(configuration.id, false);
+        }
+        editRunConfigurations();
     });
     /*
      * Solution and project edits other than the single-file add and remove ProjectHost makes are
@@ -407,12 +402,15 @@ void Workbench::attachToolWindows() {
     unitTestsSpec.side = ui::ToolWindowSide::Bottom;
     unitTestsSpec.iconId = std::string(ui::icons::kRunRun);
     unitTestsSpec.createContent = [this]() -> QWidget* {
-        return createUnitTestsToolWindowWidget(
-            m_window, m_services.fs, [this]() -> const project::SolutionModel* { return m_solution.get(); },
-            [this]() -> std::string { return m_projectRoot; },
-            [this](const std::string& path, int line) { openLocation(qs(path), line, 1); });
-        // No "Debug Selected Test" callback: it started the whole program under the debugger, not
-        // the test. Debugging one test is RUN-10's.
+        // ctest's tests of the open CMake folder (RUN-7); debugging one test is RUN-10's.
+        UnitTestsWindowContext context;
+        context.launcher = &m_services.launcher;
+        context.fs = &m_services.fs;
+        context.trust = &m_services.trust;
+        context.cmake = [this]() -> build::CMakeService* { return m_cmake ? &m_cmake->service() : nullptr; };
+        context.solutionOpen = [this] { return m_solution != nullptr; };
+        context.openLocation = [this](const std::string& path, int line) { openLocation(qs(path), line, 1); };
+        return createUnitTestsToolWindowWidget(m_window, std::move(context));
     };
     if (auto added = windows.add(std::move(unitTestsSpec)); !added) {
         log::warn(kLog, "unit tests tool window: {}", added.error().describe());

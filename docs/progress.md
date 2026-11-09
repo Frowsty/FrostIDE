@@ -3,14 +3,113 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-08: R2 integration (DD-1: FrostEngine run, test and debug)
+
+- **Merged into `r2/integration`** (d224431) with `--no-ff` on top of RUN-1 (`r2/run-1-model`):
+  `r2/run-2-3-ui` (RUN-2, RUN-3), `r2/run-7-ctest` and `r2/run-8-doctest` (RUN-7, RUN-8), and `r2/dbg-1-2a`
+  (DBG-1, DBG-2a). Each slice had its own independent review, plus a fix pass where the review found blockers.
+- **Integration fixes** (c5c3994; all of them Linux or corpus problems that the slices' Windows runs could not show):
+  - RUN-7/RUN-8 cancel tests (`TestRunnerCancel.CancelEndsCTestAndEveryProcessItStarted`,
+    `DoctestRunner.StopEndsTheRunningProgram`) never saw their process trees on Linux. The process-table oracle
+    read `/proc/<pid>/stat`'s comm, which the kernel truncates to 15 bytes. It now uses the `/proc/<pid>/exe`
+    basename when comm is a prefix of it (`tests/run/process_table.hpp`).
+  - `RunLaunchPlan.UsesTheProgramsFolderWithoutAWorkingDirectory` expected `tools/..` to fold lexically on
+    Linux. POSIX normalisation keeps `..` on purpose (symlinks), so the expectation is now per platform.
+  - `CorpusFrostEngine.TheUnitTestsWindowListsRunsAndLocatesTheEnginesDoctestCases` passed only where an
+    earlier run had left FrostTests built (`corpora.py` never builds). On a fresh tree it waited out its
+    30 min limit. It now builds FrostTests first, and fails as soon as ctest lists no doctest suite.
+  - The TSan quick leg failed to compile `tests/diff/perf_test.cpp` (-Wunused-variable on the allocation counter
+    under sanitizers). The counter now exists only in unsanitized builds.
+  - `corpora.lock.json` gained per-platform `cacheVariables`, passed at engine configure and checked by
+    `engine_problem`. Linux sets `FROST_WARNINGS_AS_ERRORS=OFF`, because the pinned engine trips
+    `-Wunused-lambda-capture` under clang 23. Test: `EngineTest.test_engine_problem_names_a_cache_variable_the_lock_sets_otherwise`.
+- **Verification** (Windows gate run non-elevated through a RunLevel=Limited scheduled task):
+  `Verified: win debug 3500/3528 (28 skipped, 1 disabled), win corpus 12/12, format ok, frost_lint ok,
+  licensecheck ok, featurecheck ok, ratchet ok`. WSL: `debug 3312/3369 (57 skipped), tsan-quick 818/823
+  (5 skipped), corpus 9/11`. The run's format failure (2 files of these fixes) has been fixed since.
+  - **Run gates non-elevated.** Elevated, 25 crash-handler and FrostProcess restart tests fail by design
+    ("frost runs elevated; no crash handler is started"; the short-link restart is refused).
+- **Input-lag investigation** (the drag freeze reported 2026-11-08). The meter used before the reboot was broken:
+  - its 48-byte INPUT (x64 needs 40) made SendInput inject nothing, so its readings showed only real hand movement;
+  - relative moves under "Enhance pointer precision" could land on 0 px.
+  
+  `E:\FrostBuilds\diag-input-lag\cursor_latency_abs.ps1` (v3.1) uses absolute moves and an own WH_MOUSE_LL
+  hook, and drops samples that real mouse events disturbed. With it, every test group was measured one at a time,
+  and also mid-run: build, unit, Qt UI, real-tool integration, lldb, corpus with the journeys, and WSL. None of
+  them degraded the input path: hook median about 0.08 ms, cursor about 0.3 ms, maximum under 1.2 ms, 0 lost
+  moves. The next step needs a live freeze: run the probe and `lagmeter.ps1` while it happens.
+
+- **Cross review** (one independent agent; it re-ran `-L '^(mod\.run|mod\.debug|lldb)$'`, 299/299, which includes
+  104 DapReal scenarios against the exit criterion's 60). Two blockers, fixed in one pass, each with a
+  regression test that fails without its fix:
+  - **B1, a use-after-free and a stale "(running)" tab.** CMake target tabs in the Run tool window (which
+    outlives the CMake integration) held the integration's raw `this`. A finished tab's Rerun, Stop or input
+    after closing and reopening the folder called into freed memory. After `shutdown()` stopped a running
+    target, its tab still said "(running)". The handlers now hold a QPointer. On destruction and shutdown,
+    `CMakeIntegration::detachTab()` finishes an active tab as stopped and `RunToolWindow::detach()` clears its
+    handlers. A detached tab's Rerun no longer falls back to the owner's Rerun. Tests:
+    `WorkbenchCMake.TheTargetsTabOutlivesItsIntegrationInertAndNeverStillRunning` (checked to fail with the
+    fix removed) and `RunToolWindow.ADetachedTabCallsNoHandlerAndDoesNotAskTheOwner`.
+  - **B2, data loss.** A run-configuration store that could not be read (damaged, a newer version, a read
+    error) was overwritten by the next Run/Debug Configurations OK or `run.edit`. Saving is now refused
+    (Corrupt, with the reason) until a reopen reads the store. Test:
+    `WorkbenchRun.AStoreThatCouldNotBeReadIsNeverOverwritten`.
+- **Review of the fix diff** (a second independent agent; Windows mod.run, mod.ui and mod.app 962/974 in its
+  elevated session, where the 12 failures are the by-design FrostProcess restart and self-test refusals). One
+  truth-rule blocker, fixed: a target that `shutdown()` stopped after it had started ended with "Stopped before
+  the program started". The tab now says "Stopped: FrostIDE ended the program when the project closed (its
+  exit code was not collected)". The lifetime test checks that line.
+- **Review follow-ups** (deferred under the review budget):
+  - RUN-3: after a refused save, the edit stays in memory and differs from disk until the folder is reopened.
+    RunController's tab handlers capture a raw `this`, which is safe only while it outlives the Run window.
+  - RUN-10: pending tests keep the previous run's verdict after an errored or stopped run, with no "stale" mark
+    (`test_results_tree.cpp:259`).
+  - RUN-10: the Unit Tests summary counts NotRun as failed (`unit_tests_window.cpp:458`).
+  - RUN-2 hardening: CMake launch ids skip `uniqueRunConfigurationId`, so targets whose names clean to one id
+    share their edits (`cmake_integration.cpp`, the launch id).
+  - RUN-3: console input is enabled without asking the session whether it takes input.
+  - DBG-2b: exception filters exist only for lldb-dap sessions; CoreCLR and Mono have no filter UI (the old
+    combo's ids did not come from the adapter).
+  - FND-6b: the doctest corpus test injects into the clone in place under a restoring guard, not on a scratch
+    branch. Also, `engine_problem` does not notice a cacheVariables entry that was removed from the lock.
+
+- **Launcher-first startup restored** (a fix on this branch). R0's "apply shown settings" commit wired
+  `general.reopenLastProject` into startup with a default of on, so every start skipped the user's stripped-down
+  launcher. The setting is now off by default (opt-in). Test: `Workbench.StartupShowsTheLauncherUnlessReopenLastProjectIsOn`.
+- **FrostEngine on Linux (the former blocker), fixed upstream by us.** The pin did not compile with clang 23
+  (an override destructor with a laxer exception specification, which MSVC accepts) and had 12 `-Werror` warning
+  sites in the engine. FrostTests then hit doctest's `__LINE__` naming on clang 22+ (several TEST_CASEs from one
+  macro line). Two commits on FrostEngine `main` (8fd4628, 499e734) fix both; the whole engine, FrostTests
+  included, builds on Linux with `-Werror` (0 warnings), and FrostTests registers 8484 cases. The pin is now
+  499e734, and the Linux `FROST_WARNINGS_AS_ERRORS=OFF` workaround (cacheVariables) is removed from the lock.
+- **History rewrite (user order, 2026-11-09).** Every Co-Authored-By and Claude-Session line was removed from
+  FrostIDE (358 commits) and FrostEngine (1334 commits) with git filter-repo. Trees, authors and dates are
+  unchanged (checked per commit); backups are in `E:\FrostBuilds\backup`. Commits carry no attribution line
+  from now on (ADR 0078 amended).
+- **UAT-1 passed 6/6**, run non-elevated (Medium IL) through automated checks against the real tools on the
+  pinned corpus (the user asked the orchestrator to perform it). New checks: `CorpusFrostEngine.DebuggingFrostEditor...`
+  (steps 5 and 6 on the real FrostEditor, oracles from the pinned lldb CLI) and j2_run's restart step (step 2).
+  Observed: 5 presets equal cmake's; 12 run configurations equal cmake's 12 executables; FrostEditor's edited
+  arguments survive a FrostIDE restart; Run streams output and Stop leaves no process; the Unit Tests list equals
+  ctest's 699 tests with doctest cases; the debugger stops at EditorApp.cpp:55 and steps, stack and Locals match
+  lldb; a false condition does not stop, a true one does, the logpoint prints, and C++ throw stops in
+  EditorPreferences::Load. Limits: steps 4-6 ran in the in-process workbench rig, and shortcuts were run as their
+  bound commands.
+
+### Next
+- R2 follow-ups above (RUN-10, RUN-2, RUN-3, DBG-2b, FND-6b); the Step Into comment in
+  `src/debug/include/frost/debug/debug_session.hpp` (MSVC Debug builds stop on the callee's `{` line), owned by
+  R3's debugger slice.
+- R3 (DD-2, the MSVC solution daily driver) runs on `r3/integration`, based on this branch.
+
 ## 2026-11-08: R1 integration (DD-1a: FrostEngine C++ on CMake presets and Lua basics)
 
-- **Merged into `r1/integration`** with `--no-ff`, in this order, on top of FND-12a (f767505, the god-file
+- **Merged into `r1/integration`** with `--no-ff`, in this order, on top of FND-12a (270f796, the god-file
   split, already on the branch): `r1/fnd-6-7a-harness` (FND-6, FND-6b, FND-7a), `r1/cmk-4-cpp-3` (which carries
   `r1/cmk-1-2-15`: CMK-1, CMK-2, CMK-15, then CMK-4 and CPP-3) and `r1/ux-23-fec-10a` (UX-23, FEC-10a). Each slice
   was implemented in its own worktree and reviewed by an independent agent that re-ran its tests; the two
   review blockers (harness: two tests that failed on Linux; directory roles: node_modules and Unity's folders
-  walked again) were fixed on their branches (5318184, 03dcccc) before the merge. Two textual conflicts, both
+  walked again) were fixed on their branches (1ebafe1, 40be3cb) before the merge. Two textual conflicts, both
   registrations (the app corpus/endpoint test definitions in `tests/app/CMakeLists.txt` and the label registry
   in `tests/tools/test_verify_support.py`), resolved by keeping both sides.
 - **Integration fixes** (cross-slice; each with a test):
@@ -348,9 +447,9 @@ what is next, blockers and open questions for the user.
   follow-up 13), the staged LuaLS test on both legs (`tools.staged_luals`) and the stage failure tests.
   - **Stall criterion: met on the Windows leg (Debug).** The corpus tier on Windows (`ctest -L corpus`, Debug, the
     slower build): opening the FrostEngine clone recorded one stall over 50 ms (destroying the previous CMake tree
-    on the GUI thread): 59 ms on the first fixed tree and 50 ms on the committed tree c4f2c52, against 552 ms and
+    on the GUI thread): 59 ms on the first fixed tree and 50 ms on the committed tree a73427a, against 552 ms and
     529 ms before; on the final tree (after the second cross review) none over 50 ms. It still starts exactly one
-    clangd and negotiates `positionEncoding` utf-8. Cloning it recorded no stall over 50 ms on c4f2c52 and two on
+    clangd and negotiates `positionEncoding` utf-8. Cloning it recorded no stall over 50 ms on a73427a and two on
     the final tree, the longest 91 ms (under the 250 ms limit; the number varies from run to run with the
     machine's load). Not measured: the WSL leg
     (no WSL corpus clone yet, owner FND-6b) and a Release build (Debug is the slower configuration; owner CMK-15).
@@ -500,7 +599,7 @@ what is next, blockers and open questions for the user.
   on a synthetic fixture: without `FROST_TEST_LUA_API`, `LuaLsE2E.CompletesGeneratedFrostEngineApi` and
   `WorkbenchLua.TrustGateAndGeneratedApiReachEditor` use a hand-written stand-in API, so the engine-generated
   API is only exercised when that variable is set (FEC-10a covers it with the pinned corpus).
-- **Verification.** Merged to `main` as d4a07f4 (pushed) after four combined runs; the last one:
+- **Verification.** Merged to `main` as 03c3733 (pushed) after four combined runs; the last one:
   `Verified: win debug 3167/3195 (28 skipped, 1 disabled), wsl debug 2981/3038 (57 skipped), format ok,
   frost_lint ok, licensecheck ok, featurecheck ok, ratchet ok`. Skips are environment-gated: the real
   FrostEngine/Unity/managed end-to-end tests, symlink tests, the RHI device, MSBuild and the Windows-only

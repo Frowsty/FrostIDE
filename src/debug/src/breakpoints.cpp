@@ -21,6 +21,8 @@ namespace {
 
 // The workspace.json member (header comment, "Persistence").
 constexpr std::string_view kMember = "breakpoints";
+constexpr std::string_view kFunctionMember = "functionBreakpoints";
+constexpr std::string_view kExceptionMember = "exceptionBreakpoints";
 
 char lowerAscii(char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
 
@@ -102,6 +104,10 @@ Result<BreakpointId> BreakpointManager::add(std::string_view path, std::int64_t 
 }
 
 bool BreakpointManager::remove(BreakpointId id) {
+    if (m_functions.erase(id) > 0) {
+        notify({}, Change::Functions);
+        return true;
+    }
     const auto it = m_byId.find(id);
     if (it == m_byId.end()) {
         return false;
@@ -118,9 +124,24 @@ void BreakpointManager::clear() {
     for (const std::string& path : paths) {
         notify(path, Change::Lines);
     }
+    if (!m_functions.empty()) {
+        m_functions.clear();
+        notify({}, Change::Functions);
+    }
 }
 
 bool BreakpointManager::setEnabled(BreakpointId id, bool enabled) {
+    if (const auto function = m_functions.find(id); function != m_functions.end()) {
+        if (function->second.enabled != enabled) {
+            function->second.enabled = enabled;
+            if (!enabled) {
+                function->second.status = BreakpointStatus::Unknown;
+                function->second.message.clear();
+            }
+            notify({}, Change::Functions);
+        }
+        return true;
+    }
     const auto it = m_byId.find(id);
     if (it == m_byId.end()) {
         return false;
@@ -139,6 +160,17 @@ bool BreakpointManager::setEnabled(BreakpointId id, bool enabled) {
 
 bool BreakpointManager::setProperties(BreakpointId id, std::string condition, std::string hitCondition,
                                       std::string logMessage) {
+    if (const auto function = m_functions.find(id); function != m_functions.end()) {
+        if (!logMessage.empty()) {
+            return false; // DAP function breakpoints have no log message.
+        }
+        if (function->second.condition != condition || function->second.hitCondition != hitCondition) {
+            function->second.condition = std::move(condition);
+            function->second.hitCondition = std::move(hitCondition);
+            notify({}, Change::Functions);
+        }
+        return true;
+    }
     const auto it = m_byId.find(id);
     if (it == m_byId.end()) {
         return false;
@@ -162,6 +194,107 @@ void BreakpointManager::setMuted(bool muted) {
     for (const std::string& path : files()) {
         notify(path, Change::Lines);
     }
+    notify({}, Change::Functions);
+    notify({}, Change::Exceptions);
+}
+
+Result<BreakpointId> BreakpointManager::addFunction(std::string name) {
+    while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
+        name.pop_back();
+    }
+    while (!name.empty() && (name.front() == ' ' || name.front() == '\t')) {
+        name.erase(name.begin());
+    }
+    if (name.empty() || name.find_first_of("\r\n") != std::string::npos) {
+        return fail(ErrorCode::InvalidArgument, "a function breakpoint needs a function name on one line");
+    }
+    for (const auto& [id, entry] : m_functions) {
+        if (entry.name == name) {
+            return id;
+        }
+    }
+    const BreakpointId id = m_nextId++;
+    m_functions.emplace(id, FunctionBreakpointEntry{.id = id, .name = std::move(name), .message = {}});
+    notify({}, Change::Functions);
+    return id;
+}
+
+std::optional<FunctionBreakpointEntry> BreakpointManager::findFunction(BreakpointId id) const {
+    const auto it = m_functions.find(id);
+    return it == m_functions.end() ? std::nullopt : std::optional<FunctionBreakpointEntry>(it->second);
+}
+
+std::vector<FunctionBreakpointEntry> BreakpointManager::functionBreakpoints() const {
+    std::vector<FunctionBreakpointEntry> out;
+    for (const auto& [id, entry] : m_functions) {
+        out.push_back(entry);
+    }
+    return out;
+}
+
+std::vector<FunctionBreakpointLine> BreakpointManager::sessionFunctions() const {
+    std::vector<FunctionBreakpointLine> out;
+    if (m_muted) {
+        return out;
+    }
+    for (const auto& [id, entry] : m_functions) {
+        if (entry.enabled) {
+            out.push_back(FunctionBreakpointLine{
+                .id = id, .name = entry.name, .condition = entry.condition, .hitCondition = entry.hitCondition});
+        }
+    }
+    return out;
+}
+
+void BreakpointManager::setAvailableExceptionFilters(const std::vector<dap::ExceptionFilter>& filters,
+                                                     const std::function<std::string(std::string_view)>& unavailable) {
+    std::vector<ExceptionFilterEntry> next;
+    for (const dap::ExceptionFilter& filter : filters) {
+        ExceptionFilterEntry entry{.filter = filter.filter,
+                                   .label = filter.label.empty() ? filter.filter : filter.label,
+                                   .enabled = filter.defaultOn,
+                                   .unavailable = unavailable ? unavailable(filter.filter) : std::string()};
+        for (const ExceptionFilterEntry& known : m_exceptionFilters) {
+            if (known.filter == filter.filter) {
+                entry.enabled = known.enabled;
+            }
+        }
+        next.push_back(std::move(entry));
+    }
+    if (next != m_exceptionFilters) {
+        m_exceptionFilters = std::move(next);
+        notify({}, Change::Exceptions);
+    }
+}
+
+bool BreakpointManager::setExceptionFilterEnabled(std::string_view filter, bool enabled) {
+    for (ExceptionFilterEntry& entry : m_exceptionFilters) {
+        if (entry.filter != filter) {
+            continue;
+        }
+        if (enabled && !entry.unavailable.empty()) {
+            return false;
+        }
+        if (entry.enabled != enabled) {
+            entry.enabled = enabled;
+            notify({}, Change::Exceptions);
+        }
+        return true;
+    }
+    return false;
+}
+
+std::vector<std::string> BreakpointManager::sessionExceptionFilters() const {
+    std::vector<std::string> out;
+    if (m_muted) {
+        return out;
+    }
+    for (const ExceptionFilterEntry& entry : m_exceptionFilters) {
+        if (entry.enabled && entry.unavailable.empty()) {
+            out.push_back(entry.filter);
+        }
+    }
+    return out;
 }
 
 std::optional<LineBreakpoint> BreakpointManager::find(BreakpointId id) const {
@@ -273,13 +406,21 @@ void BreakpointManager::move(std::string_view path, const std::vector<std::pair<
 }
 
 void BreakpointManager::setStatus(BreakpointId id, bool verified, std::string message) {
-    const auto it = m_byId.find(id);
-    if (it == m_byId.end()) {
-        return;
-    }
     const BreakpointStatus status = verified ? BreakpointStatus::Verified : BreakpointStatus::Unverified;
     if (verified) {
         message.clear();
+    }
+    if (const auto function = m_functions.find(id); function != m_functions.end()) {
+        if (function->second.status != status || function->second.message != message) {
+            function->second.status = status;
+            function->second.message = std::move(message);
+            notify({}, Change::Status); // Not Functions: a session resends those.
+        }
+        return;
+    }
+    const auto it = m_byId.find(id);
+    if (it == m_byId.end()) {
+        return;
     }
     if (it->second.status == status && it->second.message == message) {
         return;
@@ -300,6 +441,17 @@ void BreakpointManager::resetStatus(BreakpointStatus status) {
     }
     for (const std::string& path : changed) {
         notify(path, Change::Status);
+    }
+    bool functionsChanged = false;
+    for (auto& [id, entry] : m_functions) {
+        if (entry.status != status || !entry.message.empty()) {
+            entry.status = status;
+            entry.message.clear();
+            functionsChanged = true;
+        }
+    }
+    if (functionsChanged) {
+        notify({}, Change::Status);
     }
 }
 
@@ -324,7 +476,15 @@ Result<void> BreakpointManager::load(io::IFileSystem& fs, std::string_view root)
         std::string hitCondition;
         std::string logMessage;
     };
+    struct StoredFunction {
+        std::string name;
+        bool enabled = true;
+        std::string condition;
+        std::string hitCondition;
+    };
     std::vector<StoredEntry> entries;
+    std::vector<StoredFunction> functions;
+    std::vector<ExceptionFilterEntry> filters;
     auto exists = fs.exists(layout->personalSettings);
     if (!exists) {
         return std::unexpected(std::move(exists.error()));
@@ -368,6 +528,39 @@ Result<void> BreakpointManager::load(io::IFileSystem& fs, std::string_view root)
                 }
             }
         }
+        if (const settings::SettingsDocument::Member* member = document->find(kFunctionMember); member != nullptr) {
+            auto list = rpc::parseJson(document->rawValue(*member));
+            if (!list || !list->isArray()) {
+                log::warn("debug", "{}: \"functionBreakpoints\" is not an array; ignored", layout->personalSettings);
+            } else {
+                for (const rpc::Json& entry : list->items()) {
+                    if (entry.stringAt("name").empty()) {
+                        continue;
+                    }
+                    functions.push_back(StoredFunction{.name = std::string(entry.stringAt("name")),
+                                                       .enabled = entry.boolAt("enabled").value_or(true),
+                                                       .condition = std::string(entry.stringAt("condition")),
+                                                       .hitCondition = std::string(entry.stringAt("hitCondition"))});
+                }
+            }
+        }
+        if (const settings::SettingsDocument::Member* member = document->find(kExceptionMember); member != nullptr) {
+            auto list = rpc::parseJson(document->rawValue(*member));
+            if (!list || !list->isArray()) {
+                log::warn("debug", "{}: \"exceptionBreakpoints\" is not an array; ignored", layout->personalSettings);
+            } else {
+                for (const rpc::Json& entry : list->items()) {
+                    const std::string_view filter = entry.stringAt("filter");
+                    if (filter.empty()) {
+                        continue;
+                    }
+                    const std::string_view label = entry.stringAt("label");
+                    filters.push_back(ExceptionFilterEntry{.filter = std::string(filter),
+                                                           .label = std::string(label.empty() ? filter : label),
+                                                           .enabled = entry.boolAt("enabled").value_or(false)});
+                }
+            }
+        }
     }
     clear();
     for (const StoredEntry& item : entries) {
@@ -383,6 +576,23 @@ Result<void> BreakpointManager::load(io::IFileSystem& fs, std::string_view root)
         if (!item.condition.empty() || !item.hitCondition.empty() || !item.logMessage.empty()) {
             setProperties(*added, item.condition, item.hitCondition, item.logMessage);
         }
+    }
+    for (const StoredFunction& item : functions) {
+        auto added = addFunction(item.name);
+        if (!added) {
+            log::warn("debug", "a stored function breakpoint {} was skipped: {}", item.name, added.error().message());
+            continue;
+        }
+        if (!item.enabled) {
+            setEnabled(*added, false);
+        }
+        if (!item.condition.empty() || !item.hitCondition.empty()) {
+            setProperties(*added, item.condition, item.hitCondition, {});
+        }
+    }
+    if (filters != m_exceptionFilters) {
+        m_exceptionFilters = std::move(filters);
+        notify({}, Change::Exceptions);
     }
     return {};
 }
@@ -407,8 +617,60 @@ Result<void> BreakpointManager::save(io::IFileSystem& fs, std::string_view root)
             return std::unexpected(std::move(parsed.error()).withContext(layout->personalSettings));
         }
         document = std::move(*parsed);
-    } else if (m_byId.empty()) {
+    } else if (m_byId.empty() && m_functions.empty() && m_exceptionFilters.empty()) {
         return {}; // Nothing to remember and no file to touch.
+    }
+
+    bool touched = false;
+    // Sets `member` to `json`, or removes it for "".
+    const auto store = [&](std::string_view member, const std::string& json) -> Result<void> {
+        if (json.empty()) {
+            auto removed = document.remove(member);
+            if (!removed) {
+                return std::unexpected(std::move(removed.error()));
+            }
+            touched = touched || *removed;
+            return {};
+        }
+        if (auto set = document.setRaw(member, json); !set) {
+            return std::unexpected(std::move(set.error()));
+        }
+        touched = true;
+        return {};
+    };
+    std::string functionJson;
+    std::size_t index = 0;
+    for (const auto& [id, fn] : m_functions) {
+        std::string extras;
+        if (!fn.enabled) {
+            extras += ", \"enabled\": false";
+        }
+        if (!fn.condition.empty()) {
+            extras += std::format(", \"condition\": {}", jsonString(fn.condition));
+        }
+        if (!fn.hitCondition.empty()) {
+            extras += std::format(", \"hitCondition\": {}", jsonString(fn.hitCondition));
+        }
+        functionJson +=
+            std::format("{}\n    {{\"name\": {}{}}}", index++ == 0 ? "[" : ",", jsonString(fn.name), extras);
+    }
+    if (!functionJson.empty()) {
+        functionJson += "\n  ]";
+    }
+    if (auto stored = store(kFunctionMember, functionJson); !stored) {
+        return stored;
+    }
+    std::string filterJson;
+    for (std::size_t i = 0; i < m_exceptionFilters.size(); ++i) {
+        const ExceptionFilterEntry& filter = m_exceptionFilters[i];
+        filterJson += std::format("{}\n    {{\"filter\": {}, \"label\": {}, \"enabled\": {}}}", i == 0 ? "[" : ",",
+                                  jsonString(filter.filter), jsonString(filter.label), filter.enabled);
+    }
+    if (!filterJson.empty()) {
+        filterJson += "\n  ]";
+    }
+    if (auto stored = store(kExceptionMember, filterJson); !stored) {
+        return stored;
     }
 
     const std::vector<LineBreakpoint> allBreakpoints = all();
@@ -417,7 +679,7 @@ Result<void> BreakpointManager::save(io::IFileSystem& fs, std::string_view root)
         if (!removed) {
             return std::unexpected(std::move(removed.error()));
         }
-        if (!*removed) {
+        if (!*removed && !touched) {
             return {};
         }
     } else {

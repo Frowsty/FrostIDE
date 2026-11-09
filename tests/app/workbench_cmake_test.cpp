@@ -7,6 +7,7 @@
 #include "frost/ui/debug_tool_window.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/run_controller.hpp"
+#include "frost/ui/run_tool_window.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/build_output.hpp"
@@ -21,6 +22,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QPointer>
+#include <QTabWidget>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
@@ -265,7 +268,18 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     ASSERT_NE(toolbarTargets, nullptr);
     ASSERT_NE(toolbarProfiles, nullptr);
     ASSERT_TRUE(waitFor([&] { return toolbarTargets->count() == 2 && toolbarProfiles->count() == 2; }, 30s));
-    EXPECT_TRUE(rig.window->mainToolbar().runConfigurations()->isHidden());
+    // RUN-3: the toolbar's run configuration combo (one per executable target) replaces the
+    // CMake target combo, which stays hidden and in step.
+    // (The toolbar's own actions say it: its layout may still fold a widget that does not fit.)
+    const auto onToolbar = [&](QWidget* widget) {
+        auto& toolbar = rig.window->mainToolbar();
+        for (QAction* action : toolbar.actions())
+            if (toolbar.widgetForAction(action) == widget)
+                return action->isVisible();
+        return false;
+    };
+    EXPECT_TRUE(onToolbar(rig.window->mainToolbar().runConfigurations()));
+    EXPECT_FALSE(onToolbar(toolbarTargets));
     const auto findTarget = [&](auto&& self, const QModelIndex& parent, const QString& name) -> QModelIndex {
         for (int row = 0; row < tree->model()->rowCount(parent); ++row) {
             const QModelIndex index = tree->model()->index(row, 0, parent);
@@ -655,13 +669,103 @@ TEST(WorkbenchCMake, ShutdownStopsARunningTarget) {
         << " build=" << rig.workbench->buildOutput()->editor()->toPlainText().toStdString();
     EXPECT_FALSE(rig.workbench->buildService().reserveExternalLaunch()); // Live target process.
     ASSERT_TRUE(rig.workbench->runController()->running());
+    // RUN-1: the target's program runs through the workbench's RunManager.
+    auto* runs = rig.workbench->runManager();
+    ASSERT_NE(runs, nullptr);
+    const auto active = runs->activeRuns();
+    ASSERT_EQ(active.size(), 1U);
+    EXPECT_EQ(active.front().configuration.name, "stop");
+    EXPECT_EQ(active.front().configuration.type, frost::run::RunType::CMakeTarget);
+    EXPECT_EQ(active.front().phase, frost::run::RunPhase::Running);
+    EXPECT_NE(active.front().processId, 0U);
     rig.workbench->shutdown();
     EXPECT_FALSE(rig.workbench->runController()->running());
+    EXPECT_TRUE(runs->waitForIdle(60s)) << "Stop ended the target's process tree";
+    EXPECT_TRUE(runs->activeRuns().empty());
     auto admission = rig.workbench->buildService().reserveExternalLaunch();
     ASSERT_TRUE(admission);
     rig.workbench->buildService().releaseExternalLaunch(*admission);
     auto refused = rig.workbench->runController()->run();
     ASSERT_FALSE(refused.has_value());
     EXPECT_EQ(refused.error().code(), frost::ErrorCode::Cancelled);
+}
+
+TEST(WorkbenchCMake, TheTargetsTabOutlivesItsIntegrationInertAndNeverStillRunning) {
+    /* The Run tool window outlives the CMake integration: closing the folder (refused while a target
+       runs) and shutdown() destroy or end it. Before the fix, (1) a finished target tab's Rerun,
+       Stop and input handlers held the destroyed integration's raw `this` (a use-after-free on a
+       click after close and reopen), and (2) after shutdown() stopped a running target, its tab
+       still said "(running)". */
+    WorkDir dir("cmake-tab-lifetime");
+    std::string compiler = FROST_TEST_C_COMPILER;
+    std::ranges::replace(compiler, '\\', '/');
+    dir.write("CMakeLists.txt",
+              "cmake_minimum_required(VERSION 3.21)\nset(CMAKE_C_COMPILER \"" + compiler +
+                  "\" CACHE FILEPATH \"\" FORCE)\nproject(Lifetime C)\nadd_executable(waiter main.c)\n");
+    dir.write("main.c", "#include <stdio.h>\nint main(void) { puts(\"lifetime-target-ready\"); fflush(stdout); "
+                        "getchar(); return 0; }\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    const auto openAndConfigure = [&] {
+        ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+        auto* service = rig.workbench->cmakeService();
+        ASSERT_NE(service, nullptr);
+        ASSERT_TRUE(
+            waitFor([&] { return service->model() && service->state() == frost::build::BuildState::Idle; }, 240s));
+        ASSERT_TRUE(displayedTarget(rig, QStringLiteral("waiter")));
+    };
+    auto* window = rig.workbench->runToolWindow();
+    ASSERT_NE(window, nullptr);
+    auto* runs = rig.workbench->runManager();
+    ASSERT_NE(runs, nullptr);
+    const QString key = QStringLiteral("cmake:waiter");
+    const auto startAndWaitReady = [&]() -> QPointer<frost::ui::RunConsole> {
+        EXPECT_TRUE(rig.workbench->runController()->run().has_value());
+        QPointer<frost::ui::RunConsole> tab = window->consoleFor(key);
+        EXPECT_NE(tab, nullptr);
+        if (!tab)
+            return tab;
+        EXPECT_TRUE(waitFor(
+            [&] { return tab->text().contains(QStringLiteral("lifetime-target-ready")) || !tab->active(); }, 240s));
+        EXPECT_TRUE(tab->text().contains(QStringLiteral("lifetime-target-ready"))) << tab->text().toStdString();
+        return tab;
+    };
+    const auto runningInTitle = [&](frost::ui::RunConsole* tab) {
+        return window->tabs()->tabText(window->tabs()->indexOf(tab)).contains(QStringLiteral("(running)"));
+    };
+
+    // (1) A finished tab of a closed folder's integration is inert.
+    openAndConfigure();
+    QPointer<frost::ui::RunConsole> tab = startAndWaitReady();
+    ASSERT_NE(tab, nullptr);
+    emit tab->inputSubmitted(QStringLiteral("go")); // getchar() returns: the program exits 0.
+    ASSERT_TRUE(waitFor([&] { return !tab->active() && runs->activeRuns().empty(); }, 60s))
+        << tab->text().toStdString();
+    ASSERT_TRUE(rig.workbench->closeProject());
+    openAndConfigure(); // A new integration; the old tab stays in the Run window.
+    ASSERT_NE(tab, nullptr);
+    emit tab->rerunRequested();
+    emit tab->stopRequested();
+    emit tab->inputSubmitted(QStringLiteral("x"));
+    EXPECT_FALSE(waitFor([&] { return !runs->activeRuns().empty(); }, 3s)) << "a Rerun of the stale tab started a run";
+
+    // (2) shutdown() stops a running target, and its tab says it ended.
+    tab = startAndWaitReady();
+    ASSERT_NE(tab, nullptr);
+    ASSERT_TRUE(tab->active());
+    ASSERT_TRUE(runningInTitle(tab));
+    rig.workbench->shutdown();
+    EXPECT_TRUE(runs->waitForIdle(60s)) << "shutdown ended the target's process tree";
+    EXPECT_FALSE(tab->active()) << "the tab must not claim a run that was stopped";
+    EXPECT_FALSE(runningInTitle(tab));
+    // Truth rule: the program ran (its output is in the tab), so the last line must not say otherwise.
+    EXPECT_FALSE(tab->text().contains(QStringLiteral("before the program started"))) << tab->text().toStdString();
+    EXPECT_TRUE(tab->text().contains(QStringLiteral("FrostIDE ended the program"))) << tab->text().toStdString();
+    emit tab->rerunRequested();
+    emit tab->stopRequested();
+    EXPECT_FALSE(window->stopCurrent());
+    window->closeTab(window->tabs()->indexOf(tab));
+    QApplication::processEvents();
+    EXPECT_TRUE(runs->activeRuns().empty());
 }
 } // namespace

@@ -44,6 +44,9 @@ class LockTest(unittest.TestCase):
             {"corpora": [good | {"sha": "A" * 40}]},
             {"corpora": [good | {"id": "Bad Id"}]},
             {"corpora": [good, good]},
+            {"corpora": [good | {"cacheVariables": ["FROST_X"]}]},
+            {"corpora": [good | {"cacheVariables": {"linux": {"BAD NAME": "OFF"}}}]},
+            {"corpora": [good | {"cacheVariables": {"linux": {"FROST_X": False}}}]},
             [],
         ]
         for index, document in enumerate(bad):
@@ -278,6 +281,24 @@ class EngineTest(TempDirTestCase):
         self.assertIn("no compile_commands.json", corpora.engine_problem(self.corpus, self.entry, "win-dbg"))
         (other / corpora.ENGINE_STAMP).unlink()
         self.assertIn("configured outside", corpora.engine_problem(self.corpus, self.entry, "old"))
+
+    def test_engine_problem_names_a_cache_variable_the_lock_sets_otherwise(self) -> None:
+        # The lock's cacheVariables of this platform must be in the cache, with the lock's value, so a
+        # tree configured before they were added is reconfigured, not reused.
+        entry = self.entry | {"cacheVariables": {corpora.PLATFORM: {"FROST_WARNINGS_AS_ERRORS": "OFF"},
+                                                 "elsewhere": {"OTHER": "1"}}}
+        self.assertEqual(corpora.engine_cache_variables(entry), {"FROST_WARNINGS_AS_ERRORS": "OFF"})
+        self.assertEqual(corpora.engine_cache_variables(self.entry), {})
+        build = self._configured("win-dbg")
+        cache = build / "CMakeCache.txt"
+        home = cache.read_text(encoding="utf-8")
+        self.assertIn("FROST_WARNINGS_AS_ERRORS=(none)", corpora.engine_problem(self.corpus, entry, "win-dbg"))
+        cache.write_text(home + "FROST_WARNINGS_AS_ERRORS:BOOL=ON\n", encoding="utf-8")
+        self.assertIn("FROST_WARNINGS_AS_ERRORS=ON, not the lock's OFF",
+                      corpora.engine_problem(self.corpus, entry, "win-dbg"))
+        cache.write_text(home + "FROST_WARNINGS_AS_ERRORS:BOOL=OFF\n", encoding="utf-8")
+        self.assertIsNone(corpora.engine_problem(self.corpus, entry, "win-dbg"))
+        self.assertIsNone(corpora.engine_problem(self.corpus, self.entry, "win-dbg"))
 
     def test_engine_problem_names_a_cache_of_other_tools_when_given_the_pinned_ones(self) -> None:
         # A tree configured with another cmake or Ninja (Visual Studio's bundled ones) is not the

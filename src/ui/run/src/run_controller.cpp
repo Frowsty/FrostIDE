@@ -1,24 +1,45 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// RunController (see frost/ui/run_controller.hpp): the relay that moves the service's events
-// to the GUI thread, the startup combo and the Busy prompt.
+// RunController (see frost/ui/run_controller.hpp): the relay that moves the RunService's and the
+// RunManager's events to the GUI thread, the configuration combo, the run of each configuration
+// type into its Run tool window tab, and the Busy prompt.
 
 #include "frost/ui/run_controller.hpp"
 
 #include "frost/core/mutex.hpp"
 #include "frost/ui/run_console.hpp"
+#include "frost/ui/run_tool_window.hpp"
 
 #include <QComboBox>
 #include <QMetaObject>
 #include <QSignalBlocker>
 
+#include <algorithm>
 #include <format>
 #include <string>
 #include <utility>
 
 namespace frost::ui {
 
-// Shared with the service's callbacks: posts to the controller while it lives.
+namespace {
+
+// The combo's item data (Qt::UserRole): what an entry stands for. "edit" opens Run/Debug
+// Configurations.
+QString editEntry() { return QStringLiteral("edit"); }
+QString configurationEntry(std::string_view id) {
+    return QStringLiteral("config:") + QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size()));
+}
+QString projectEntry(project::ProjectId id) { return QStringLiteral("project:%1").arg(id.value()); }
+
+// The Run tool window keys (run_tool_window.hpp) of each runner.
+QString configurationKey(std::string_view id) { return configurationEntry(id); }
+QString projectKey(project::ProjectId id) { return projectEntry(id); }
+
+QString qs(std::string_view text) { return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())); }
+
+} // namespace
+
+// Shared with the service's and the RunManager's callbacks: posts to the controller while it lives.
 struct RunController::Relay {
     Mutex mutex;
     RunController* target FROST_GUARDED_BY(mutex) = nullptr;
@@ -36,38 +57,30 @@ struct RunController::Relay {
     }
 };
 
-RunController::RunController(RunConsole* console, RunControllerHooks hooks, QObject* parent)
-    : QObject(parent), m_console(console), m_hooks(std::move(hooks)), m_relay(std::make_shared<Relay>()) {
-    {
-        LockGuard lock(m_relay->mutex);
-        m_relay->target = this;
-    }
-    if (m_console) {
-        connect(m_console, &RunConsole::stopRequested, this, [this] { stop(); });
-        connect(m_console, &RunConsole::rerunRequested, this, [this] {
-            if (auto rerun = this->rerun(); !rerun) {
-                report(rerun.error());
-            }
-        });
-        connect(m_console, &RunConsole::inputSubmitted, this, [this](const QString& line) {
-            if (m_hooks.alternateRunning && m_hooks.alternateRunning()) {
-                if (m_hooks.alternateInput)
-                    m_hooks.alternateInput(line);
-                return;
-            }
-            if (m_service == nullptr || m_current == 0) {
-                return;
-            }
-            if (auto sent = m_service->sendInput(m_current, line.toStdString() + "\n"); !sent) {
-                report(sent.error());
-            }
+RunController::RunController(RunToolWindow* window, RunControllerHooks hooks, QObject* parent)
+    : QObject(parent), m_window(window), m_hooks(std::move(hooks)), m_relay(std::make_shared<Relay>()) {
+    if (m_window) {
+        // Rerun in the empty first tab runs the selected configuration, as Run does.
+        connect(m_window, &RunToolWindow::rerunWithoutRunRequested, this, [this] {
+            if (auto started = rerun(); !started)
+                report(started.error());
         });
     }
+    LockGuard lock(m_relay->mutex);
+    m_relay->target = this;
 }
 
 RunController::~RunController() {
-    LockGuard lock(m_relay->mutex);
-    m_relay->target = nullptr;
+    {
+        LockGuard lock(m_relay->mutex);
+        m_relay->target = nullptr;
+    }
+    // A native run's tree must not outlive the controller that shows it.
+    if (m_runs != nullptr) {
+        for (const auto& [id, entry] : m_native) {
+            m_runs->stop(entry.id);
+        }
+    }
 }
 
 build::RunServiceCallbacks RunController::callbacks() {
@@ -103,6 +116,7 @@ void RunController::setService(build::RunService* service) {
     m_current = 0;
     m_currentProject.reset();
     m_currentActive = false;
+    m_serviceConsoles.clear();
     refreshStartupCombo();
     emit runStateChanged();
 }
@@ -114,23 +128,31 @@ void RunController::bindStartupCombo(QComboBox* combo) {
     m_combo = combo;
     if (m_combo) {
         connect(m_combo, &QComboBox::currentIndexChanged, this, [this](int index) {
-            if (m_fillingCombo || m_service == nullptr || index < 0) {
+            if (m_fillingCombo || index < 0) {
                 return;
             }
-            const QVariant data = m_combo->itemData(index);
-            if (!data.isValid()) {
-                return;
-            }
-            if (data.toInt() == -1) {
-                onStartupChanged(m_service->startupProject());
+            const QString entry = m_combo->itemData(index).toString();
+            if (entry == editEntry()) {
+                fillCombo(); // Back to the selection the user had.
                 if (m_hooks.editConfigurations) {
                     m_hooks.editConfigurations();
                 }
                 return;
             }
-            const project::ProjectId project{data.toUInt()};
-            if (auto set = m_service->setStartupProject(project); !set) {
-                report(set.error());
+            if (entry.startsWith(QStringLiteral("config:"))) {
+                const std::string id = entry.mid(7).toStdString();
+                if (const run::RunConfiguration* configuration = m_set.find(id)) {
+                    m_selectedId = id;
+                    applySelection(*configuration);
+                    emit runStateChanged(); // What Run and Debug would start changed (canRun).
+                }
+                return;
+            }
+            if (entry.startsWith(QStringLiteral("project:")) && m_service != nullptr) {
+                const project::ProjectId project{entry.mid(8).toUInt()};
+                if (auto set = m_service->setStartupProject(project); !set) {
+                    report(set.error());
+                }
             }
         });
     }
@@ -142,39 +164,224 @@ void RunController::setEditConfigurationsHandler(std::function<void()> handler) 
     refreshStartupCombo();
 }
 
+void RunController::setStoredConfigurations(std::vector<run::RunConfiguration> stored) {
+    m_set.setStored(std::move(stored));
+    refreshStartupCombo();
+}
+
+Result<void> RunController::replaceConfigurations(const std::vector<run::RunConfiguration>& edited) {
+    m_set.replace(edited);
+    Result<void> saved;
+    if (m_hooks.saveConfigurations) {
+        saved = m_hooks.saveConfigurations(m_set.stored());
+    }
+    refreshStartupCombo();
+    return saved;
+}
+
+const run::RunConfiguration* RunController::selectedConfiguration() const noexcept {
+    return m_selectedId.empty() ? nullptr : m_set.find(m_selectedId);
+}
+
+Result<void> RunController::selectConfiguration(const std::string& id, bool apply) {
+    const run::RunConfiguration* configuration = m_set.find(id);
+    if (configuration == nullptr) {
+        return fail(ErrorCode::NotFound, std::format("no run configuration '{}'", id));
+    }
+    m_selectedId = id;
+    if (apply) {
+        applySelection(*configuration);
+    }
+    fillCombo();
+    emit runStateChanged(); // What Run and Debug would start changed (canRun).
+    return {};
+}
+
+void RunController::followCMakeTarget(const std::string& target) {
+    // A native configuration the user chose stays selected; otherwise the combo follows the target.
+    if (const run::RunConfiguration* selected = selectedConfiguration();
+        selected != nullptr && selected->type == run::RunType::Native) {
+        return;
+    }
+    for (const run::RunConfiguration& configuration : m_set.all()) {
+        if (configuration.type == run::RunType::CMakeTarget && configuration.target == target) {
+            m_selectedId = configuration.id;
+            break;
+        }
+    }
+    fillCombo();
+    emit runStateChanged();
+}
+
+void RunController::applySelection(const run::RunConfiguration& configuration) {
+    switch (configuration.type) {
+    case run::RunType::MSBuild:
+        if (const auto project = projectOf(configuration); project && m_service != nullptr) {
+            if (auto set = m_service->setStartupProject(*project); !set) {
+                report(set.error());
+            }
+        }
+        break;
+    case run::RunType::CMakeTarget:
+        if (m_hooks.selectCMakeTarget) {
+            m_hooks.selectCMakeTarget(configuration.target);
+        }
+        break;
+    case run::RunType::Native: break;
+    }
+    emit runStateChanged();
+}
+
+std::optional<project::ProjectId> RunController::projectOf(const run::RunConfiguration& configuration) const {
+    const auto solution = m_service != nullptr ? m_service->solution() : nullptr;
+    if (!solution || configuration.type != run::RunType::MSBuild) {
+        return std::nullopt;
+    }
+    return solution->findProjectByPath(configuration.target);
+}
+
 void RunController::refreshStartupCombo() {
+    m_set.setGenerated(m_hooks.generatedConfigurations ? m_hooks.generatedConfigurations()
+                                                       : std::vector<run::RunConfiguration>{});
+    if (!m_selectedId.empty() && m_set.find(m_selectedId) == nullptr) {
+        m_selectedId.clear();
+    }
+    if (m_selectedId.empty()) {
+        // The startup project's configuration, else the first one.
+        const auto startup = m_service != nullptr ? m_service->startupProject() : std::nullopt;
+        for (const run::RunConfiguration& configuration : m_set.all()) {
+            if (startup && projectOf(configuration) == startup) {
+                m_selectedId = configuration.id;
+                break;
+            }
+        }
+        if (m_selectedId.empty() && !m_set.all().empty()) {
+            m_selectedId = m_set.all().front().id;
+        }
+    }
+    fillCombo();
+    emit configurationsChanged();
+}
+
+void RunController::fillCombo() {
     if (!m_combo) {
         return;
     }
     m_fillingCombo = true;
     m_combo->clear();
     const auto solution = m_service != nullptr ? m_service->solution() : nullptr;
-    if (solution) {
-        for (const project::ProjectId id : m_service->startupCandidates()) {
-            m_combo->addItem(QString::fromStdString(solution->project(id).name), QVariant(id.value()));
+    if (!m_set.all().empty()) {
+        for (const run::RunConfiguration& configuration : m_set.all()) {
+            m_combo->addItem(qs(configuration.name), configurationEntry(configuration.id));
+            m_combo->setItemData(
+                m_combo->count() - 1,
+                QStringLiteral("%1 (%2)").arg(qs(configuration.name), qs(run::toString(configuration.type))),
+                Qt::ToolTipRole);
         }
-        if (m_combo->count() > 0 && m_hooks.editConfigurations) {
-            m_combo->addItem(tr("Edit Configurations..."), QVariant(-1));
+        m_combo->setCurrentIndex(m_combo->findData(configurationEntry(m_selectedId)));
+    } else if (solution) {
+        // No configurations: the startup candidates (header comment, "What runs").
+        for (const project::ProjectId id : m_service->startupCandidates()) {
+            m_combo->addItem(qs(solution->project(id).name), projectEntry(id));
         }
         if (const auto startup = m_service->startupProject()) {
-            m_combo->setCurrentIndex(m_combo->findData(QVariant(startup->value())));
+            m_combo->setCurrentIndex(m_combo->findData(projectEntry(*startup)));
         }
     }
-    m_combo->setEnabled(solution != nullptr && m_combo->count() > 0);
+    if (m_combo->count() > 0 && m_hooks.editConfigurations) {
+        m_combo->addItem(tr("Edit Configurations..."), editEntry());
+    }
+    m_combo->setEnabled(m_combo->count() > 0);
     m_fillingCombo = false;
+}
+
+bool RunController::running() const {
+    if (m_hooks.alternateRunning && m_hooks.alternateRunning()) {
+        return true;
+    }
+    if (!m_serviceConsoles.empty()) {
+        return true;
+    }
+    return std::ranges::any_of(m_native, [](const auto& entry) { return entry.second.id != 0; });
+}
+
+bool RunController::configurationRunning(const std::string& id) const { return configurationRun(id).has_value(); }
+
+std::optional<run::RunId> RunController::configurationRun(const std::string& id) const {
+    const auto it = m_native.find(id);
+    if (it == m_native.end() || it->second.id == 0) {
+        return std::nullopt;
+    }
+    return it->second.id;
+}
+
+bool RunController::canRun() const {
+    if (const run::RunConfiguration* selected = selectedConfiguration()) {
+        return selected->type != run::RunType::Native || m_runs != nullptr;
+    }
+    return (m_hooks.alternateAvailable && m_hooks.alternateAvailable()) ||
+           (m_service != nullptr && m_service->solution() != nullptr);
 }
 
 Result<build::RunId> RunController::run(std::optional<project::ProjectId> project) {
     if (m_hooks.mayRun && !m_hooks.mayRun())
         return fail(ErrorCode::Busy, "stop debugging first");
+    if (project) {
+        return runService(project);
+    }
+    if (const run::RunConfiguration* selected = selectedConfiguration()) {
+        return runConfiguration(selected->id);
+    }
     if (m_hooks.alternateAvailable && m_hooks.alternateAvailable() && m_hooks.alternateRun) {
         return m_hooks.alternateRun();
     }
+    return runService(std::nullopt);
+}
+
+Result<build::RunId> RunController::runConfiguration(const std::string& id) {
+    if (m_hooks.mayRun && !m_hooks.mayRun())
+        return fail(ErrorCode::Busy, "stop debugging first");
+    const run::RunConfiguration* found = m_set.find(id);
+    if (found == nullptr) {
+        return fail(ErrorCode::NotFound, std::format("no run configuration '{}'", id));
+    }
+    const run::RunConfiguration configuration = *found;
+    switch (configuration.type) {
+    case run::RunType::Native: return runNative(configuration);
+    case run::RunType::CMakeTarget:
+        if (!m_hooks.alternateRun) {
+            return fail(ErrorCode::Unsupported, "no CMake project is open");
+        }
+        if (m_hooks.selectCMakeTarget) {
+            m_hooks.selectCMakeTarget(configuration.target);
+        }
+        return m_hooks.alternateRun();
+    case run::RunType::MSBuild: {
+        const auto project = projectOf(configuration);
+        if (!project) {
+            return fail(ErrorCode::NotFound,
+                        std::format("the project '{}' is not in the open solution", configuration.target));
+        }
+        return runService(project);
+    }
+    }
+    return fail(ErrorCode::Unsupported, "unknown run configuration type");
+}
+
+Result<build::RunId> RunController::runService(std::optional<project::ProjectId> project) {
     if (m_service == nullptr) {
         return fail(ErrorCode::InvalidArgument, "no solution is open");
     }
     auto started = m_service->run(project);
-    if (started || started.error().code() != ErrorCode::Busy) {
+    if (started) {
+        // The tab opens now, so the Run tool window shows the run from its build on.
+        if (const auto info = m_service->runInfo(*started)) {
+            (void)openServiceTab(*info);
+        }
+        emit runStateChanged();
+        return started;
+    }
+    if (started.error().code() != ErrorCode::Busy) {
         return started;
     }
     // Busy: the project's own run asks to stop and rerun; a build in progress just says so.
@@ -183,33 +390,171 @@ Result<build::RunId> RunController::run(std::optional<project::ProjectId> projec
         return started;
     }
     const auto solution = m_service->solution();
-    const QString name = solution ? QString::fromStdString(solution->project(*id).name) : QString();
+    const QString name = solution ? qs(solution->project(*id).name) : QString();
     if (m_hooks.confirmRerun && !m_hooks.confirmRerun(name)) {
         return fail(ErrorCode::Cancelled, std::format("{} is still running", name.toStdString()));
     }
     return m_service->rerun(id);
 }
 
+Result<build::RunId> RunController::runNative(const run::RunConfiguration& configuration) {
+    if (m_runs == nullptr) {
+        return fail(ErrorCode::Unsupported, "native run configurations need the RunManager");
+    }
+    if (auto valid = run::validateRunConfiguration(configuration); !valid) {
+        return std::unexpected(std::move(valid.error()));
+    }
+    if (const auto active = configurationRun(configuration.id)) {
+        if (m_hooks.confirmRerun && !m_hooks.confirmRerun(qs(configuration.name))) {
+            return fail(ErrorCode::Cancelled, std::format("{} is still running", configuration.name));
+        }
+        // Rerun: the run ends (its whole tree), then nativeFinished starts it again.
+        m_native[configuration.id].rerunPending = true;
+        m_runs->stop(*active);
+        return build::RunId{*active};
+    }
+    if (m_hooks.mayRunConfiguration) {
+        if (auto allowed = m_hooks.mayRunConfiguration(configuration); !allowed) {
+            return std::unexpected(std::move(allowed.error()));
+        }
+    }
+    const std::string id = configuration.id;
+    RunConsole* console = nullptr;
+    if (m_window) {
+        RunTabHandlers handlers;
+        handlers.stop = [this, id] {
+            if (const auto active = configurationRun(id); active && m_runs != nullptr) {
+                m_runs->stop(*active);
+            }
+        };
+        handlers.rerun = [this, id] {
+            if (const auto active = configurationRun(id); active && m_runs != nullptr) {
+                m_native[id].rerunPending = true;
+                m_runs->stop(*active);
+                return;
+            }
+            if (auto again = runConfiguration(id); !again && again.error().code() != ErrorCode::Cancelled) {
+                report(again.error());
+            }
+        };
+        handlers.input = [this, id](const QString& line) {
+            if (const auto active = configurationRun(id); active && m_runs != nullptr) {
+                if (auto sent = m_runs->sendInput(*active, line.toStdString() + "\n"); !sent) {
+                    report(sent.error());
+                }
+            }
+        };
+        console = m_window->openRun(configurationKey(id), qs(configuration.name), std::move(handlers));
+    }
+    const QPointer<RunConsole> target(console);
+    const std::shared_ptr<Relay> relay = m_relay;
+    run::RunHandlers handlers;
+    handlers.onPhaseChanged = [relay, target](const run::RunStatus& status) {
+        relay->post([target, status](RunController* self) {
+            if (target) {
+                if (status.phase == run::RunPhase::Running && !status.commandLine.empty()) {
+                    target->appendOutput(build::RunOutputKind::System, status.commandLine + "\n");
+                }
+                target->setRunning(status.phase == run::RunPhase::Running, status.acceptsInput);
+            }
+            emit self->runStateChanged();
+        });
+    };
+    handlers.onOutput = [relay, target](run::OutputStream stream, std::string_view text) {
+        relay->post([target, stream, text = std::string(text)](RunController*) {
+            if (target) {
+                target->appendOutput(stream == run::OutputStream::Stdout ? build::RunOutputKind::Stdout
+                                                                         : build::RunOutputKind::Stderr,
+                                     text);
+            }
+        });
+    };
+    handlers.onFinished = [relay, id](const run::RunResult& result) {
+        relay->post([id, result](RunController* self) { self->nativeFinished(id, result); });
+    };
+    auto started = m_runs->start(configuration, std::move(handlers));
+    if (!started) {
+        if (console) {
+            build::RunOutcome failed;
+            failed.error = started.error();
+            console->finish(failed);
+        }
+        return std::unexpected(std::move(started.error()));
+    }
+    NativeRun& entry = m_native[id];
+    entry.id = *started;
+    entry.console = console;
+    entry.rerunPending = false;
+    emit runStateChanged();
+    return build::RunId{*started};
+}
+
+void RunController::nativeFinished(const std::string& id, const run::RunResult& result) {
+    const auto it = m_native.find(id);
+    if (it == m_native.end() || it->second.id != result.id) {
+        return;
+    }
+    const bool rerun = it->second.rerunPending;
+    if (it->second.console) {
+        it->second.console->finish(runOutcomeFor(result));
+    }
+    m_native.erase(it);
+    emit runStateChanged();
+    if (rerun) {
+        if (auto again = runConfiguration(id); !again && again.error().code() != ErrorCode::Cancelled) {
+            report(again.error());
+        }
+    }
+}
+
 Result<build::RunId> RunController::rerun() {
     if (m_hooks.mayRun && !m_hooks.mayRun())
         return fail(ErrorCode::Busy, "stop debugging first");
-    if (m_hooks.alternateAvailable && m_hooks.alternateAvailable() && m_hooks.alternateRerun) {
+    // The current tab's run: its configuration, its project, or the CMake target.
+    const QString key = m_window ? m_window->keyOf(m_window->currentConsole()) : QString();
+    if (key.startsWith(QStringLiteral("config:"))) {
+        const std::string id = key.mid(7).toStdString();
+        if (const auto active = configurationRun(id); active && m_runs != nullptr) {
+            m_native[id].rerunPending = true;
+            m_runs->stop(*active);
+            return build::RunId{*active};
+        }
+        return runConfiguration(id);
+    }
+    if (key.startsWith(QStringLiteral("project:")) && m_service != nullptr) {
+        return m_service->rerun(project::ProjectId{key.mid(8).toUInt()});
+    }
+    const run::RunConfiguration* selected = selectedConfiguration();
+    const bool selectedIsTarget = selected == nullptr || selected->type == run::RunType::CMakeTarget;
+    if (m_hooks.alternateAvailable && m_hooks.alternateAvailable() && m_hooks.alternateRerun &&
+        (key.startsWith(QStringLiteral("cmake:")) || (key.isEmpty() && selectedIsTarget))) {
         return m_hooks.alternateRerun();
     }
-    if (m_service == nullptr) {
-        return fail(ErrorCode::InvalidArgument, "no solution is open");
+    if (m_service != nullptr && m_service->solution() != nullptr && selectedConfiguration() == nullptr) {
+        return m_service->rerun(m_currentProject);
     }
-    return m_service->rerun(m_currentProject);
+    return run();
 }
 
 void RunController::stop() {
-    if (m_hooks.alternateRunning && m_hooks.alternateRunning()) {
-        if (m_hooks.alternateStop)
-            m_hooks.alternateStop();
+    if (m_window && m_window->stopCurrent()) {
         return;
     }
-    if (m_service != nullptr && m_current != 0 && m_currentActive) {
-        m_service->stop(m_current);
+    // Nothing runs in the current tab: Stop ends every run (Rider offers a list; all is the honest default).
+    if (m_hooks.alternateRunning && m_hooks.alternateRunning() && m_hooks.alternateStop) {
+        m_hooks.alternateStop();
+    }
+    if (m_service != nullptr) {
+        for (const auto& [run, console] : m_serviceConsoles) {
+            m_service->stop(run);
+        }
+    }
+    if (m_runs != nullptr) {
+        for (const auto& [id, entry] : m_native) {
+            if (entry.id != 0) {
+                m_runs->stop(entry.id);
+            }
+        }
     }
 }
 
@@ -220,57 +565,110 @@ Result<void> RunController::setStartupProject(project::ProjectId project) {
     return m_service->setStartupProject(project);
 }
 
-void RunController::onStarted(const build::RunInfo& info) {
-    if (info.debug) {
-        return; // The Debug tool window shows Debug runs (frost/ui/debug_controller.hpp).
+RunConsole* RunController::openServiceTab(const build::RunInfo& info) {
+    if (const auto it = m_serviceConsoles.find(info.id); it != m_serviceConsoles.end()) {
+        return it->second.data();
     }
     m_current = info.id;
     m_currentProject = info.project;
     m_currentActive = true;
-    if (m_console) {
-        m_console->beginRun(QStringLiteral("%1 [%2]").arg(QString::fromStdString(info.projectName),
-                                                          QString::fromStdString(info.configuration.name())));
+    RunConsole* console = nullptr;
+    if (m_window) {
+        const project::ProjectId project = info.project;
+        RunTabHandlers handlers;
+        handlers.stop = [this, run = info.id] {
+            if (m_service != nullptr) {
+                m_service->stop(run);
+            }
+        };
+        handlers.rerun = [this, project] {
+            if (m_service == nullptr) {
+                return;
+            }
+            if (auto again = m_service->rerun(project); !again) {
+                report(again.error());
+            }
+        };
+        handlers.input = [this, run = info.id](const QString& line) {
+            if (m_service == nullptr) {
+                return;
+            }
+            if (auto sent = m_service->sendInput(run, line.toStdString() + "\n"); !sent) {
+                report(sent.error());
+            }
+        };
+        const QString title = info.configuration.name().empty()
+                                  ? qs(info.projectName)
+                                  : QStringLiteral("%1 [%2]").arg(qs(info.projectName), qs(info.configuration.name()));
+        console = m_window->openRun(projectKey(project), title, std::move(handlers));
     }
+    m_serviceConsoles[info.id] = console;
+    return console;
+}
+
+void RunController::onStarted(const build::RunInfo& info) {
+    if (info.debug) {
+        return; // The Debug tool window shows Debug runs (frost/ui/debug_controller.hpp).
+    }
+    (void)openServiceTab(info);
     emit runStateChanged();
 }
 
 void RunController::onStateChanged(const build::RunInfo& info) {
-    if (info.id != m_current) {
+    const auto it = m_serviceConsoles.find(info.id);
+    if (it == m_serviceConsoles.end()) {
         return;
     }
     const bool live = info.state == build::RunState::Running || info.state == build::RunState::Stopping;
-    if (m_console && live) {
-        m_console->setRunning(info.state == build::RunState::Running, info.acceptsInput);
+    if (it->second && live) {
+        it->second->setRunning(info.state == build::RunState::Running, info.acceptsInput);
     }
     emit runStateChanged();
 }
 
 void RunController::onOutput(build::RunId run, build::RunOutputKind kind, const std::string& text) {
-    if (run == m_current && m_console) {
-        m_console->appendOutput(kind, text);
+    if (const auto it = m_serviceConsoles.find(run); it != m_serviceConsoles.end() && it->second) {
+        it->second->appendOutput(kind, text);
     }
 }
 
 void RunController::onFinished(const build::RunOutcome& outcome) {
-    if (outcome.run.id != m_current) {
+    const auto it = m_serviceConsoles.find(outcome.run.id);
+    if (it == m_serviceConsoles.end()) {
         return;
     }
-    m_currentActive = false;
-    if (m_console) {
-        m_console->finish(outcome);
+    if (it->second) {
+        it->second->finish(outcome);
+    }
+    m_serviceConsoles.erase(it);
+    if (outcome.run.id == m_current) {
+        m_currentActive = false;
     }
     emit runStateChanged();
 }
 
 void RunController::onStartupChanged(std::optional<project::ProjectId> project) {
+    if (project) {
+        // The msbuild configuration of the new startup project, if it has one.
+        for (const run::RunConfiguration& configuration : m_set.all()) {
+            if (projectOf(configuration) == project) {
+                m_selectedId = configuration.id;
+                break;
+            }
+        }
+    }
     if (!m_combo) {
+        return;
+    }
+    if (!m_set.all().empty()) {
+        fillCombo();
         return;
     }
     if (!project) {
         refreshStartupCombo();
         return;
     }
-    const int index = m_combo->findData(QVariant(project->value()));
+    const int index = m_combo->findData(projectEntry(*project));
     if (index < 0) {
         refreshStartupCombo(); // A solution was opened since the combo was filled.
         return;

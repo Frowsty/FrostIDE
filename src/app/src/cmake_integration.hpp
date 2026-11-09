@@ -4,9 +4,9 @@
 
 #include "frost/build/cmake_service.hpp"
 #include "frost/build/run_service.hpp"
-#include "frost/build/run_session.hpp"
 #include "frost/core/error.hpp"
 #include "frost/debug/lldb_dap.hpp"
+#include "frost/run/run_manager.hpp"
 #include "frost/ui/cmake/cmake_controller.hpp"
 #include "frost/ui/nav/session.hpp"
 
@@ -31,6 +31,7 @@ namespace frost::ui {
 class BuildController;
 class ShellWindow;
 class RunConsole;
+class RunToolWindow;
 class BackgroundTask;
 } // namespace frost::ui
 namespace frost::build {
@@ -44,10 +45,12 @@ class CMakeBuildBackend;
 
 class CMakeIntegration final : public QObject {
 public:
+    // `runs` (the workbench's RunManager, RUN-1) starts the built target's program; it must outlive this.
+    // `runWindow` (the Run tool window v2, RUN-3) gets one tab per target run; it must outlive this.
     CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& launcher, project::TrustStore& trust,
                      settings::SettingsStore& settings, ui::BuildController& buildController,
-                     build::BuildService& sharedAdmission, ui::ShellWindow& window, ui::RunConsole& console,
-                     std::string statePath, std::function<void()> runStateChanged,
+                     build::BuildService& sharedAdmission, ui::ShellWindow& window, ui::RunToolWindow& runWindow,
+                     run::RunManager& runs, std::string statePath, std::function<void()> runStateChanged,
                      std::function<void(const std::string&)> openFile, std::function<void()> modelChanged);
     ~CMakeIntegration() override;
     Result<void> open(const std::string& folder);
@@ -60,6 +63,9 @@ public:
     [[nodiscard]] bool targetsCurrent() const {
         return m_controller->model() && m_controller->model() == m_service->model();
     }
+    // The model the CMake Targets window and the target combo show (null before the first one):
+    // what Run builds, so the run configurations are generated from it (RUN-2).
+    [[nodiscard]] std::shared_ptr<const project::CMakeProject> shownModel() const { return m_controller->model(); }
     void filesChanged(const io::FileChangeBatch& batch) { m_service->filesChanged(batch); }
     [[nodiscard]] Result<build::RunId> run();
     [[nodiscard]] Result<void> debug(std::function<void(Result<debug::DebugTarget>)> done);
@@ -69,15 +75,46 @@ public:
     void shutdown();
     void input(const QString& line);
 
+    /*
+     * RUN-2/RUN-3: the run configuration of a target run. Before the built program starts (or is
+     * handed to the debugger), `configurator` gets the target's generated configuration (program,
+     * arguments of the CMake Targets window, the source directory as working directory) and returns
+     * what to start: the workbench lays the user's edits from Run/Debug Configurations over it.
+     */
+    void setLaunchConfigurator(std::function<run::RunConfiguration(run::RunConfiguration)> configurator) {
+        m_launchConfigurator = std::move(configurator);
+    }
+    // Called with the Run/Debug target's name ("" for none) whenever the target list or choice is
+    // refreshed, so the toolbar's configuration combo follows it.
+    void setRunTargetObserver(std::function<void(const std::string& target)> observer) {
+        m_runTargetObserver = std::move(observer);
+    }
+    // Makes the executable target `name` the Run/Debug target, as choosing it in the target combo
+    // does; nothing when the model has no such executable target.
+    void selectRunTarget(const std::string& name);
+    // The Run/Debug target's name, or "" (no model, no executable target).
+    [[nodiscard]] std::string runTargetName() const;
+
 private:
     ui::BuildController& m_build;
     build::BuildService& m_sharedAdmission;
     std::shared_ptr<void> m_runAdmission;
     ui::ShellWindow& m_window;
-    io::IProcessLauncher& m_launcher;
     project::TrustStore& m_trust;
     settings::SettingsStore& m_settings;
-    ui::RunConsole& m_console;
+    ui::RunToolWindow& m_runWindow;
+    // The tab of the target run in progress (or the last one); null before the first run.
+    QPointer<ui::RunConsole> m_console;
+    // The console messages go to: the run's tab, else the Run tool window's current one.
+    [[nodiscard]] ui::RunConsole& console();
+    void finishConsole(const build::RunOutcome& outcome);
+    // Ends the run's tab as stopped when it is still active and clears its handlers (destructor and
+    // shutdown(): the tab outlives this object). `launched`: the program had started (its last line
+    // then says it was ended, not that it never started).
+    void detachTab(bool launched);
+    run::RunManager& m_runs;
+    std::function<run::RunConfiguration(run::RunConfiguration)> m_launchConfigurator;
+    std::function<void(const std::string&)> m_runTargetObserver;
     std::function<void()> m_runStateChanged;
     std::unique_ptr<ui::cmake::CMakeController> m_controller;
     std::shared_ptr<build::CMakeService> m_service;
@@ -109,7 +146,9 @@ private:
     std::optional<std::stop_callback<std::function<void()>>> m_configureStop;
     struct RunRelay;
     std::shared_ptr<RunRelay> m_runRelay;
-    std::unique_ptr<build::RunSession> m_session;
+    // The target's program while it runs (RunManager's id).
+    std::optional<run::RunId> m_runId;
+    void runFinished(const run::RunResult& result);
     std::string m_runTarget;
     std::vector<std::string> m_runArguments;
     std::string m_runRoot;

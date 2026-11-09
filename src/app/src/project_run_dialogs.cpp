@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The run dialogs of project_properties_dialog.hpp: the running-process enumeration (Windows
-// toolhelp, Linux /proc), Attach to Process and Run/Debug Configurations, whose debugger settings
-// stay read-only until RUN-1 (split from project_properties_dialog.cpp, FND-12a).
+// toolhelp, Linux /proc) and Attach to Process (split from project_properties_dialog.cpp, FND-12a).
+// Run/Debug Configurations is RUN-3's RunConfigurationsDialog (frost/ui/run_configurations_dialog.hpp).
 
 #include "frost/ui/dialog_chrome.hpp"
 
 #include "project_properties_dialog.hpp"
 #include <QAbstractItemView>
-#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
@@ -16,13 +15,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QFormLayout>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
-#include <QListWidget>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QVBoxLayout>
@@ -43,8 +39,6 @@ namespace frost::app {
 namespace {
 
 QString toQs(std::string_view sv) { return QString::fromUtf8(sv.data(), static_cast<qsizetype>(sv.size())); }
-
-QString runConfigurationsUnavailable() { return QStringLiteral("Requires run configurations (RUN-1)."); }
 
 /*
  * A .NET process: the dotnet host itself, or an apphost with its <name>.runtimeconfig.json beside
@@ -327,157 +321,6 @@ void showAttachToProcessDialog(QWidget* parent,
     const bool attachAsDotNet = (dbgMode == 2) || (dbgMode == 0 && chosen.isDotNet);
     if (onAttach)
         onAttach(chosen, attachAsDotNet);
-}
-
-void showEditRunConfigurationsDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
-                                     const std::string& preferredProjectPath, const std::string& activeConfigPlatform,
-                                     bool externalConsole, std::function<void(bool)> onExternalConsoleChanged,
-                                     std::function<void()> onSaved,
-                                     std::function<void(const std::vector<project::ProjectId>&)> onLaunchCompound) {
-    QDialog dialog(parent);
-    dialog.setObjectName(QStringLiteral("editRunConfigurationsDialog"));
-    dialog.setWindowTitle(QStringLiteral("Edit Run/Debug Configurations"));
-    dialog.setModal(true);
-    dialog.resize(660, 520);
-
-    auto* outer = new QVBoxLayout(&dialog);
-    auto* form = new QFormLayout();
-    auto* projCombo = new QComboBox(&dialog);
-    projCombo->setObjectName(QStringLiteral("runConfigProjectCombo"));
-    if (solution) {
-        for (const auto& p : solution->projects()) {
-            if (p.nodeKind == project::NodeKind::Project) {
-                projCombo->addItem(toQs(p.name), toQs(p.path));
-                if (p.path == preferredProjectPath)
-                    projCombo->setCurrentIndex(projCombo->count() - 1);
-            }
-        }
-    } else if (!preferredProjectPath.empty()) {
-        projCombo->addItem(QFileInfo(toQs(preferredProjectPath)).completeBaseName(), toQs(preferredProjectPath));
-    }
-    // Debugger settings are shown read-only: writing them belongs to run configurations (RUN-1),
-    // and the shared .vcxproj is never the place for per-user launch settings.
-    const auto readOnlyEdit = [&dialog](const char* objectName) {
-        auto* edit = new QLineEdit(&dialog);
-        edit->setObjectName(QLatin1String(objectName));
-        edit->setReadOnly(true);
-        edit->setToolTip(runConfigurationsUnavailable());
-        return edit;
-    };
-    auto* cmdEdit = readOnlyEdit("runConfigCommandEdit");
-    auto* argsEdit = readOnlyEdit("runConfigArgumentsEdit");
-    auto* cwdEdit = readOnlyEdit("runConfigWorkingDirEdit");
-    auto* envEdit = readOnlyEdit("runConfigEnvironmentEdit");
-    auto* sourceLabel = new QLabel(&dialog);
-    sourceLabel->setObjectName(QStringLiteral("runConfigSourceLabel"));
-    sourceLabel->setWordWrap(true);
-    auto* extConsoleCheck = new QCheckBox(QStringLiteral("Run in external console window"), &dialog);
-    extConsoleCheck->setChecked(externalConsole);
-
-    form->addRow(QStringLiteral("Target project:"), projCombo);
-    form->addRow(QStringLiteral("Debugger command:"), cmdEdit);
-    form->addRow(QStringLiteral("Program arguments:"), argsEdit);
-    form->addRow(QStringLiteral("Working directory:"), cwdEdit);
-    form->addRow(QStringLiteral("Environment variables:"), envEdit);
-    form->addRow(QString(), sourceLabel);
-    form->addRow(QString(), extConsoleCheck);
-    outer->addLayout(form);
-
-    // Compound Run Configuration section (launch multiple targets simultaneously).
-    auto* compoundGroup = new QGroupBox(QStringLiteral("Compound Run Configuration (Multi-Target Launch)"), &dialog);
-    compoundGroup->setObjectName(QStringLiteral("compoundRunGroup"));
-    auto* compoundLayout = new QVBoxLayout(compoundGroup);
-    auto* compoundTop = new QHBoxLayout();
-    auto* compoundNameEdit = new QLineEdit(QStringLiteral("Server + Client (Compound)"), compoundGroup);
-    compoundNameEdit->setObjectName(QStringLiteral("compoundConfigNameEdit"));
-    auto* launchCompoundBtn = new QPushButton(QStringLiteral("Run Selected Targets Together"), compoundGroup);
-    launchCompoundBtn->setObjectName(QStringLiteral("compoundLaunchButton"));
-    compoundTop->addWidget(new QLabel(QStringLiteral("Compound Name:"), compoundGroup));
-    compoundTop->addWidget(compoundNameEdit, 1);
-    compoundTop->addWidget(launchCompoundBtn);
-    compoundLayout->addLayout(compoundTop);
-
-    auto* compoundList = new QListWidget(compoundGroup);
-    compoundList->setObjectName(QStringLiteral("compoundProjectsList"));
-    if (solution) {
-        const auto projects = solution->projects();
-        for (std::uint32_t i = 0; i < projects.size(); ++i) {
-            if (projects[i].nodeKind != project::NodeKind::Project)
-                continue;
-            auto* item = new QListWidgetItem(toQs(projects[i].name), compoundList);
-            item->setData(Qt::UserRole, static_cast<int>(i));
-            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-            item->setCheckState(projects[i].path == preferredProjectPath ? Qt::Checked : Qt::Unchecked);
-        }
-    }
-    compoundLayout->addWidget(compoundList, 1);
-    outer->addWidget(compoundGroup, 1);
-    // Compound launches need real run configurations (RUN-5); the group is shown, but nothing in
-    // it can be used, so no control advertises a launch that cannot happen.
-    const QString compoundReason = QStringLiteral("Compound runs require run configurations (RUN-5).");
-    compoundGroup->setEnabled(false);
-    compoundGroup->setToolTip(compoundReason);
-    launchCompoundBtn->setToolTip(compoundReason);
-
-    QObject::connect(launchCompoundBtn, &QPushButton::clicked, &dialog, [&] {
-        std::vector<project::ProjectId> selectedIds;
-        for (int r = 0; r < compoundList->count(); ++r) {
-            if (auto* item = compoundList->item(r); item && item->checkState() == Qt::Checked) {
-                selectedIds.push_back(project::ProjectId{static_cast<std::uint32_t>(item->data(Qt::UserRole).toInt())});
-            }
-        }
-        if (selectedIds.empty())
-            return;
-        dialog.accept();
-        if (onLaunchCompound)
-            onLaunchCompound(selectedIds);
-    });
-
-    // MSBuild imports <project>.user after the project, so its values win; the project file is
-    // the fallback. A file that cannot be read leaves the fields empty and says so.
-    const auto loadProj = [&] {
-        for (QLineEdit* edit : {cmdEdit, argsEdit, cwdEdit, envEdit})
-            edit->clear();
-        const std::string path = projCombo->currentData().toString().toStdString();
-        if (path.empty()) {
-            sourceLabel->setText(runConfigurationsUnavailable());
-            return;
-        }
-        ProjectPropertyMap props;
-        QStringList readFrom;
-        for (const std::string& file : {path, path + ".user"}) {
-            if (!fs.exists(file).value_or(false))
-                continue;
-            if (auto content = fs.readFile(file)) {
-                for (auto& [key, value] : parseVcxprojPropertiesForConfig(*content, activeConfigPlatform))
-                    props[key] = std::move(value);
-                readFrom.push_back(QFileInfo(toQs(file)).fileName());
-            }
-        }
-        cmdEdit->setText(toQs(props["Prop.LocalDebuggerCommand"]));
-        argsEdit->setText(toQs(props["Prop.LocalDebuggerCommandArguments"]));
-        cwdEdit->setText(toQs(props["Prop.LocalDebuggerWorkingDirectory"]));
-        envEdit->setText(toQs(props["Prop.LocalDebuggerEnvironment"]));
-        sourceLabel->setText(
-            QStringLiteral("Read-only (%1). Editing debugger settings requires run configurations (RUN-1).")
-                .arg(readFrom.isEmpty() ? QStringLiteral("project file could not be read")
-                                        : QStringLiteral("read from %1").arg(readFrom.join(QStringLiteral(", ")))));
-    };
-    loadProj();
-    QObject::connect(projCombo, &QComboBox::currentIndexChanged, &dialog, [&](int) { loadProj(); });
-
-    // OK applies the external-console choice only; no project file is written (RUN-1).
-    static_cast<void>(onSaved);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-        if (onExternalConsoleChanged && extConsoleCheck->isChecked() != externalConsole)
-            onExternalConsoleChanged(extConsoleCheck->isChecked());
-        dialog.accept();
-    });
-    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    outer->addWidget(buttons);
-    ui::installDialogChrome(&dialog, true);
-    dialog.exec();
 }
 
 } // namespace frost::app

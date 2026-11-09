@@ -255,6 +255,8 @@ TEST(WorkbenchLua, FrostProjectIdentitySurvivesRecentAndSessionReopen) {
         WorkbenchRig second(dir);
         // Another window may update recents while the last session still names the .frostproj.
         ASSERT_TRUE(frost::app::addRecentProject(*second.settings, dir.join("Tiny.sln")));
+        ASSERT_TRUE(second.settings->set(frost::settings::Scope::Application,
+                                         frost::settings::key::generalReopenLastProject, true)); // Opt-in.
         ASSERT_TRUE(second.workbench->restoreLastProject());
         EXPECT_TRUE(second.workbench->hasProject());
         EXPECT_EQ(second.workbench->solution(), nullptr);

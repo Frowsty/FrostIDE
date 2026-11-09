@@ -23,7 +23,44 @@
  * configured, sends them (DAP replaces a source's breakpoints as a whole). The adapter's answers come
  * back through onBreakpoints, keyed by the caller's ids; later breakpoint events ("changed", for a
  * breakpoint that bound when its module loaded) too. runToLine adds a temporary breakpoint, continues
- * and removes it at the next stop.
+ * and removes it at the next stop. Function breakpoints (setFunctionBreakpoints) work the same way;
+ * they share one setFunctionBreakpoints request with the session's own function breakpoints (abort,
+ * and _CxxThrowException below), because DAP replaces all function breakpoints at once.
+ *
+ * Exception filters (DBG-2a). setExceptionFilters(ids) records the filters to stop on (lldb-dap 23:
+ * cpp_throw, cpp_catch, objc_throw, objc_catch, from its exceptionBreakpointFilters capability) and
+ * sends them before configurationDone, so a throw early in main stops too. lldb's C++ filters hook the
+ * Itanium runtime (__cxa_throw, __cxa_begin_catch), which programs built for the MSVC ABI never call
+ * (checked against lldb-dap 23.1.4 on Windows: the filters bind and never fire). With
+ * DebugSessionOptions::msvcExceptions (lldb-dap on Windows), cpp_throw therefore becomes a function
+ * breakpoint on the MSVC runtime's _CxxThrowException, which every throw calls, and a stop there is
+ * reported as an exception stop of filter cpp_throw. lldb binds that name twice when the CRT is a DLL:
+ * the program's import thunk (one indirect jmp) and the runtime's function; a stop on the thunk is
+ * resumed without being reported (the disassemble request says whether the stop's instruction is a
+ * jmp), so one throw stops once. cpp_catch has no exported entry point in the MSVC runtime that lldb
+ * can bind without the runtime's symbols, so it is unavailable there (msvcUnsupportedFilter; DBG-2b
+ * owns MSVC exception breakpoints).
+ *
+ * Step into a thunk. MSVC's incremental linking (the default for Debug builds) calls every function
+ * through a one-jmp thunk of the incremental link table, which has no symbol, line or unwind data;
+ * lldb's step-in stops there (seen with lldb-dap 23.1.4 on FrostEditor). When a step-in ends in a
+ * frame without a source whose instruction is a jmp (the disassemble request says), the session steps
+ * one more instruction (stepIn, granularity "instruction") instead of reporting the stop. That
+ * bypasses lldb's step-avoid list, so when the jmp leads into a std:: function (lldb's default
+ * target.process.thread.step-avoid-regexp) the session steps out of it and, back on the line the
+ * step began on, steps in again towards the line's next call. The step thus ends in the first
+ * non-std callee, as lldb's step-in does without thunks; at most kThunkHops extra requests are sent
+ * per step. Any other stop is reported as it came.
+ *
+ * Pause. lldb-dap reports a pause as an exception stop ("signal SIGSTOP" on Linux, "Exception
+ * 0x80000003" on Windows, where it lands on a thread the system injected for the break-in). After
+ * pause() such a stop is reported with reason "pause", and when the stopped thread has no frame with
+ * a source the first other thread that has one is selected (the injected thread only runs
+ * DbgBreakPoint).
+ *
+ * Restart. restart() sends DAP restart with the launch arguments (lldb-dap announces the
+ * supportsRestartRequest capability in a capabilities event after configurationDone); the adapter
+ * ends the debuggee, launches it again with the same breakpoints and the session continues.
  *
  * The end. stop() sends disconnect, terminating launched debuggees and detaching from attached ones;
  * the terminated event also leads to
@@ -73,12 +110,25 @@ struct StopInfo {
     std::optional<std::int64_t> threadId;
     bool allThreadsStopped = false;
     std::vector<std::int64_t> hitBreakpointIds;
+    // The exception filter that stopped ("cpp_throw", "cpp_catch"); "" for any other stop.
+    std::string exceptionFilter{};
 
-    // A crash or an unhandled exception: reason "exception" or "signal".
+    // A crash or an unhandled exception: reason "exception" or "signal", not an exception filter's stop.
     [[nodiscard]] bool isCrash() const noexcept;
     // What the Debug window shows: "Paused on breakpoint", "Paused after a step", "Paused",
-    // "Exception: <description>", "Signal: <description>", else "Paused (<reason>)".
+    // "Paused on exception (<filter label>)", "Exception: <description>", "Signal: <description>",
+    // else "Paused (<reason>)".
     [[nodiscard]] std::string summary() const;
+};
+
+// A function breakpoint sent with setFunctionBreakpoints, identified by the caller.
+struct FunctionBreakpointLine {
+    std::uint64_t id = 0;
+    std::string name;
+    std::string condition{};
+    std::string hitCondition{};
+
+    friend bool operator==(const FunctionBreakpointLine&, const FunctionBreakpointLine&) = default;
 };
 
 struct DebugThread {
@@ -156,7 +206,27 @@ struct DebugSessionCallbacks {
     std::function<void(int exitCode)> onExited{};
     std::function<void(const DebugOutcome& outcome)> onEnded{};
     std::function<void()> onTerminated{};
+    // The adapter's capabilities: after initialize and after each capabilities event.
+    std::function<void(const dap::Capabilities& capabilities)> onCapabilities{};
 };
+
+// How a session starts (DebugSession::start).
+struct DebugSessionOptions {
+    bool breakOnAbort = false; // A function breakpoint on abort (Windows: stop before the CRT ends it).
+    std::string adapterId = "lldb-dap";
+    DebugTargetMode targetMode = DebugTargetMode::Launch;
+    bool msvcExceptions = false; // Header comment, "Exception filters".
+    std::string attachHint{};    // Appended to an attach failure's message (ptraceAttachHint).
+    std::vector<FunctionBreakpointLine> functionBreakpoints{};
+    std::vector<std::string> exceptionFilters{}; // Filter ids to stop on from the start.
+};
+
+/*
+ * Why `filter` cannot work for a session with msvcExceptions (header comment, "Exception filters"),
+ * or nullopt when it can: cpp_catch (no bindable MSVC runtime entry point; DBG-2b) and the
+ * Objective-C filters. Pure.
+ */
+[[nodiscard]] std::optional<std::string> msvcUnsupportedFilter(std::string_view filter);
 
 class DebugSession {
 public:
@@ -179,6 +249,10 @@ public:
     start(AdapterFactory factory, rpc::Json launchArguments,
           std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
           bool breakOnAbort, DebugTargetMode targetMode);
+    [[nodiscard]] static std::unique_ptr<DebugSession>
+    start(AdapterFactory factory, rpc::Json launchArguments,
+          std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
+          DebugSessionOptions options);
 
     // Closes the client (kill()) without running callbacks; joins the client's threads.
     ~DebugSession();
@@ -194,9 +268,23 @@ public:
     [[nodiscard]] FrameList frames(std::int64_t threadId) const;
     [[nodiscard]] std::optional<DebugFrame> selectedFrame() const;
     [[nodiscard]] std::optional<DebugOutcome> outcome() const;
+    // The debuggee's process id from the adapter's process event; nullopt before it (or when 0).
+    [[nodiscard]] std::optional<std::int64_t> processId() const;
 
     // Replaces the breakpoint lines of `path` and sends them when configured (header comment).
     void setBreakpoints(std::string path, std::vector<BreakpointLine> lines);
+    // Replaces the function breakpoints and sends them when configured (header comment).
+    void setFunctionBreakpoints(std::vector<FunctionBreakpointLine> breakpoints);
+    // Replaces the exception filters to stop on and sends them when configured (header comment).
+    void setExceptionFilters(std::vector<std::string> filters);
+    // The exception filters set last.
+    [[nodiscard]] std::vector<std::string> exceptionFilters() const;
+    // Whether this session translates C++ exception filters for the MSVC ABI (DebugSessionOptions).
+    [[nodiscard]] bool msvcExceptions() const noexcept;
+
+    // Restarts the debuggee (header comment). Errors: Unsupported (the adapter does not take restart,
+    // or the session is attached), Busy (still starting or ended), IoError (closed).
+    [[nodiscard]] Result<void> restart();
 
     // Stepping (header comment). Errors: Busy (not Stopped; pause: not Running), IoError (closed).
     [[nodiscard]] Result<void> continueRun();
@@ -236,7 +324,8 @@ public:
     // Modifies variable `name` inside `variablesReference` via DAP `setVariable`.
     std::int64_t setVariable(std::int64_t variablesReference, std::string_view name, std::string_view value,
                              SetVariableDone done = {});
-    // Configures exception breakpoint filters ("all", "uncaught", etc.) via DAP `setExceptionBreakpoints`.
+    // Sends DAP setExceptionBreakpoints with the adapter's filter ids as they are, without the MSVC
+    // translation of setExceptionFilters (which the IDE uses; this one is for other adapters' callers).
     std::int64_t setExceptionBreakpoints(const std::vector<std::string>& filters, ExceptionBreakpointsDone done = {});
     // Disassembles `instructionCount` instructions starting at `memoryReference`.
     std::int64_t disassemble(std::string_view memoryReference, std::int64_t instructionCount, DisassembleDone done,

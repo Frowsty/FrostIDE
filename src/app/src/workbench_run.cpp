@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Workbench (frost/app/workbench.hpp): Run and Debug, the run service and its controller, attaching
-// Run to the window, Lua debugging's availability, Attach to Process and the compound-launch
-// refusal (split from workbench.cpp, FND-12a).
+// Workbench (frost/app/workbench.hpp): Run and Debug, the run service, the RunManager and their
+// controller, attaching Run to the window (the Run tool window v2 and the configuration combo,
+// RUN-3), Lua debugging's availability, Attach to Process and the compound-launch refusal (split
+// from workbench.cpp, FND-12a). The run configurations are workbench_run_configurations.cpp's.
 
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/debug_actions.hpp"
+#include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/find/find_feature.hpp"
 #include "frost/ui/run_actions.hpp"
+#include "frost/ui/run_configurations_dialog.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/run_controller.hpp"
+#include "frost/ui/run_tool_window.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
@@ -59,10 +63,9 @@ QString qs(std::string_view utf8) { return QString::fromUtf8(utf8.data(), static
 } // namespace
 
 void Workbench::createRunService() {
-    // The Run console exists before the window (the actions drive it); attachRun() docks it.
-    auto* console = new ui::RunConsole();
-    console->setObjectName(QStringLiteral("runConsole"));
-    m_runConsole = console;
+    // The Run tool window exists before the window (the actions drive it); attachRun() docks it.
+    auto* runWindow = new ui::RunToolWindow();
+    m_runWindow = runWindow;
     ui::RunControllerHooks hooks;
     hooks.confirmRerun = [this](const QString& project) { return m_services.prompts.confirmRerun(m_window, project); };
     hooks.reportError = [this](const QString& message) { notify(text("Run"), message, ui::NotificationKind::Error); };
@@ -75,8 +78,30 @@ void Workbench::createRunService() {
     hooks.alternateRun = [this] { return m_cmake->run(); };
     hooks.alternateRerun = [this] { return m_cmake->rerun(); };
     hooks.alternateStop = [this] { m_cmake->stop(); };
-    hooks.alternateInput = [this](const QString& line) { m_cmake->input(line); };
-    m_runController = std::make_unique<ui::RunController>(console, std::move(hooks));
+    // RUN-2/RUN-3: the run configurations of the open workspace (workbench_run_configurations.cpp).
+    hooks.selectCMakeTarget = [this](const std::string& target) {
+        if (!m_cmake)
+            return;
+        m_cmake->selectRunTarget(target);
+        // Not applied while the targets window shows an older model: the observer applies it later.
+        m_pendingCMakeTarget = m_cmake && m_cmake->runTargetName() != target ? target : std::string();
+    };
+    hooks.mayRunConfiguration = [this](const run::RunConfiguration& configuration) {
+        return mayRunConfiguration(configuration);
+    };
+    hooks.generatedConfigurations = [this] { return generatedRunConfigurations(); };
+    hooks.saveConfigurations = [this](const std::vector<run::RunConfiguration>& stored) {
+        return saveRunConfigurations(stored);
+    };
+    m_runController = std::make_unique<ui::RunController>(runWindow, std::move(hooks));
+    /*
+     * RUN-1: run configurations start through the RunManager: native ones from the controller, CMake
+     * targets from the CMake integration once built. MSBuild projects run through RunService, which
+     * builds them and asks MSBuild for TargetPath and the .vcxproj.user debugger settings.
+     */
+    m_runManager = run::RunManager::create(m_services.launcher);
+    m_runController->setRunManager(m_runManager.get());
+    connect(this, &Workbench::projectChanged, this, [this] { loadRunConfigurations(); });
     m_runBuilder = build::makeRunBuilder(*m_buildService);
     const auto snapshot = m_services.settings.snapshot();
     build::RunServiceOptions options;
@@ -118,13 +143,41 @@ void Workbench::createRunService() {
         if (m_window)
             m_window->toolWindows().show(ui::kDebugToolWindowId, false);
     };
-    debugHooks.alternateAvailable = [this] { return m_cmake != nullptr; };
+    // A native configuration debugs its program as configured; CMake targets are built first.
+    const auto nativeSelected = [this] {
+        const run::RunConfiguration* selected = m_runController ? m_runController->selectedConfiguration() : nullptr;
+        return selected != nullptr && selected->type == run::RunType::Native;
+    };
+    debugHooks.alternateAvailable = [this, nativeSelected] { return m_cmake != nullptr || nativeSelected(); };
     debugHooks.mayStart = [this] {
         return !m_buildService->projectEditInProgress() && !m_runController->running() &&
-               m_runService->activeRuns().empty() &&
+               (!m_runManager || m_runManager->activeRuns().empty()) && m_runService->activeRuns().empty() &&
                (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
-    debugHooks.startAlternate = [this](auto done) { return m_cmake->debug(std::move(done)); };
+    debugHooks.startAlternate = [this, nativeSelected](auto done) -> Result<void> {
+        if (nativeSelected()) {
+            const run::RunConfiguration configuration = *m_runController->selectedConfiguration();
+            auto plan = run::launchPlanFor(configuration);
+            if (!plan)
+                return std::unexpected(std::move(plan.error()));
+            debug::DebugTarget target;
+            target.name = configuration.name;
+            target.program = plan->program;
+            target.arguments = plan->arguments;
+            target.workingDirectory = plan->workingDirectory;
+            // lldb-dap sets variables over the inherited environment; a removal cannot be passed on.
+            for (const run::EnvironmentEntry& entry : plan->environment)
+                if (entry.value)
+                    target.environment.emplace_back(entry.name, *entry.value);
+            // The debugger's own trust gate: the workspace the configuration belongs to.
+            target.trustRoots = {m_projectRoot};
+            done(std::move(target));
+            return {};
+        }
+        if (!m_cmake)
+            return fail(ErrorCode::InvalidArgument, "no CMake project is open");
+        return m_cmake->debug(std::move(done));
+    };
     debugHooks.stopAlternate = [this] {
         if (m_cmake)
             m_cmake->stop();
@@ -187,11 +240,18 @@ void Workbench::createRunService() {
     if (auto registered = ui::registerRunActions(m_registry, *m_runController, std::move(actionHooks)); !registered) {
         log::warn(kLog, "run actions: {}", registered.error().describe());
     }
-    // Rider shows the Run tool window when a run starts.
+    // Rider shows the Run tool window when a run starts. The toolbar's Run, Debug and Stop follow
+    // the run state and the selected configuration at once (not only on the window's timer).
     connect(m_runController.get(), &ui::RunController::runStateChanged, this, [this] {
         if (m_window && m_runController->running()) {
             m_window->toolWindows().show(ui::tool_windows::kRun, false);
         }
+        if (m_window)
+            m_window->refreshActions();
+    });
+    connect(m_runController.get(), &ui::RunController::configurationsChanged, this, [this] {
+        if (m_window)
+            m_window->refreshActions();
     });
 }
 
@@ -200,37 +260,33 @@ bool Workbench::canStartLuaDebug() const {
            m_buildService->state() == build::BuildState::Idle &&
            (!m_cmake || (!m_cmake->running() && m_cmake->service().state() == build::BuildState::Idle)) &&
            m_runController && !m_runController->running() && m_runService && m_runService->activeRuns().empty() &&
-           m_debug && !m_debug->debugging() && !m_debug->rerunPending() &&
-           (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
+           (!m_runManager || m_runManager->activeRuns().empty()) && m_debug && !m_debug->debugging() &&
+           !m_debug->rerunPending() && (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) &&
+           !m_managedSnapshotJob;
 }
 
 void Workbench::attachRun() {
-    // The Run tool window (Alt+4) is the shell's "run" window; its content is the Run console.
-    m_window->toolWindows().setContent(ui::tool_windows::kRun, m_runConsole);
-    m_runController->setEditConfigurationsHandler([this] {
-        if (!m_window || !m_solution || !m_runService)
-            return;
-        std::string projPath;
-        if (const auto startupId = m_runService->startupProject();
-            startupId && startupId->value() < m_solution->projects().size()) {
-            projPath = m_solution->project(*startupId).path;
-        }
-        if (projPath.empty() && !m_solution->projects().empty()) {
-            projPath = m_solution->projects().front().path;
-        }
-        std::string activeCfg = "Debug|x64";
-        if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
-            activeCfg = m_build->configurations()[*idx].name();
-        showEditRunConfigurationsDialog(
-            m_window, m_services.fs, m_solution.get(), projPath, activeCfg, m_runService->useExternalConsole(),
-            [this](bool ext) {
-                if (m_runService)
-                    (void)m_runService->setUseExternalConsole(ext);
-            },
-            [this] { refreshSolutionExplorerForFsChange(); },
-            [this](const std::vector<project::ProjectId>& targets) { launchCompoundConfiguration(targets); });
-    });
+    // The Run tool window (Alt+4) is the shell's "run" window; its content is the Run tool window v2
+    // (RUN-3: one tab per run).
+    m_window->toolWindows().setContent(ui::tool_windows::kRun, m_runWindow);
+    m_runController->setEditConfigurationsHandler([this] { editRunConfigurations(); });
     m_runController->bindStartupCombo(m_window->mainToolbar().runConfigurations());
+}
+
+void Workbench::editRunConfigurations() {
+    if (!m_window || !m_runController)
+        return;
+    // Run/Debug Configurations (RUN-3) over RUN-1's model; it replaces the R0 dialog.
+    const run::RunConfiguration* selected = m_runController->selectedConfiguration();
+    ui::RunConfigurationsDialog dialog(m_runController->configurations(), selected ? selected->id : std::string(),
+                                       hasProject(), m_window);
+    ui::installDialogChrome(&dialog, true);
+    if (dialog.exec() != QDialog::Accepted || !m_runController)
+        return;
+    if (auto saved = m_runController->replaceConfigurations(dialog.edited()); !saved)
+        notify(text("Run/Debug Configurations"), qs(saved.error().message()), ui::NotificationKind::Error);
+    if (const std::string id = dialog.selectedId(); !id.empty())
+        (void)m_runController->selectConfiguration(id);
 }
 
 void Workbench::showAttachToProcess() {

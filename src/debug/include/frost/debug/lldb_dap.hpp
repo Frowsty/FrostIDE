@@ -20,6 +20,20 @@
  *
  * Trust. startDebugSession refuses (Untrusted) before any adapter starts when a folder the program
  * runs project code from is not trusted, exactly like Build and Run.
+ *
+ * Values on Linux. lldb's libstdc++ formatters for vector, list, forward_list, deque, map, set, the
+ * unordered containers and variant are Python classes (lldb.formatters.cpp.gnu_libstdcpp; lldb's
+ * CPlusPlusLanguage.cpp), and the pinned Linux lldb-dap is built without Python (tools/build-lldb.sh).
+ * lldb then reports a six-element std::vector as "size=0" with no children (checked against lldb-dap
+ * 23.1.4 and libstdc++ 14): a wrong value, not a missing one. On Linux the launch therefore adds
+ * lldbDapLibstdcxxCommands: a category above lldb's own that gives those types a summary saying
+ * their contents cannot be shown, so FrostIDE never shows lldb's wrong size. Members, std::string,
+ * smart pointers and Evaluate (numbers[5]) still work. MSVC STL formatters are C++ and unaffected.
+ * TODO(M6): (DBG-4a, R3) remove once the Linux lldb-dap has Python or C++ libstdc++ providers.
+ *
+ * Attach on Linux. Under the Yama policy ptrace_scope 1 (Ubuntu's default) lldb may attach only to its
+ * descendants, and lldb-dap reports only "Trying to resume but the async thread is dead". An attach
+ * failure therefore carries ptraceAttachHint: why, and the three ways out.
  */
 #pragma once
 
@@ -104,11 +118,33 @@ struct DebugTarget {
     bool inheritEnvironment = true;                                 // false: the program sees `environment` only.
     std::vector<std::string> trustRoots{}; // Folders that must be trusted; empty: the program's folder.
     std::optional<SourceMap> sourceMap{};
+    bool stopOnEntry = false; // Stop before the program's first instruction runs (reason "entry").
 };
 
-// lldb-dap's launch request arguments for `target`: program, args, cwd, env ("NAME=VALUE"),
-// stopOnEntry false, and initCommands for inheritEnvironment false.
+// The lldb commands of the header comment ("Values on Linux"), for a libstdc++ program. Pure.
+[[nodiscard]] std::vector<std::string> lldbDapLibstdcxxCommands();
+
+/*
+ * lldb-dap's launch request arguments for `target`: program, args, cwd, env ("NAME=VALUE"),
+ * stopOnEntry, and initCommands: "settings set target.inherit-env false" for inheritEnvironment
+ * false and, when `libstdcxx` (default: on Linux), lldbDapLibstdcxxCommands.
+ */
 [[nodiscard]] rpc::Json lldbDapLaunchArguments(const DebugTarget& target);
+[[nodiscard]] rpc::Json lldbDapLaunchArguments(const DebugTarget& target, bool libstdcxx);
+
+/*
+ * The hint an attach failure carries on Linux (header comment), for the content of
+ * /proc/sys/kernel/yama/ptrace_scope: "" for 0 or an unreadable value, else why lldb was refused
+ * and the fixes (the program calls prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY), `sudo sysctl
+ * kernel.yama.ptrace_scope=0`, or a debugger with CAP_SYS_PTRACE; scope 3 allows none). Pure.
+ */
+[[nodiscard]] std::string ptraceAttachHint(std::string_view ptraceScope);
+// The same for this machine: reads the file through `fs`; "" on Windows or when it cannot be read.
+[[nodiscard]] std::string ptraceAttachHint(io::IFileSystem& fs);
+
+// The session options lldb-dap needs here: on Windows breakOnAbort and msvcExceptions (debug_session.hpp,
+// "Exception filters"), on Linux an attach's ptraceAttachHint from the real file system.
+[[nodiscard]] DebugSessionOptions lldbDapSessionOptions(DebugTargetMode mode);
 
 // Starts lldb-dap at `executable` through `launcher` for each session and connects a DAP client.
 // The launcher must outlive the sessions.
@@ -122,6 +158,11 @@ struct DebugTarget {
 [[nodiscard]] Result<std::unique_ptr<DebugSession>>
 startDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
                   std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks);
+// The same with function breakpoints and the exception filters to stop on (DBG-2a).
+[[nodiscard]] Result<std::unique_ptr<DebugSession>>
+startDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
+                  std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
+                  std::vector<FunctionBreakpointLine> functionBreakpoints, std::vector<std::string> exceptionFilters);
 
 // Starts an already-running target using an explicitly supplied adapter and attach arguments.
 // The same trusted-root and absolute target checks apply; disconnect never terminates the host.

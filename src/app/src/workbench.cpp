@@ -360,8 +360,8 @@ Workbench::~Workbench() {
     m_managedDebugPreparation.reset();
     m_runService.reset(); // Stops every run and joins its thread before the builder goes.
     m_runBuilder.reset();
-    if (m_runConsole != nullptr && m_runConsole->parent() == nullptr) {
-        delete m_runConsole.data(); // Never docked (no window was attached).
+    if (m_runWindow != nullptr && m_runWindow->parent() == nullptr) {
+        delete m_runWindow.data(); // Never docked (no window was attached).
     }
     m_runController.reset();
     if (m_build) {
@@ -815,6 +815,9 @@ void Workbench::shutdown() {
     }
     if (m_runService) {
         m_runService->stopAll();
+    }
+    if (m_runManager) {
+        m_runManager->stopAll(); // RUN-1: every run configuration's process tree ends.
     }
     // Rider saves on exit; what cannot be saved stays in the hot-exit journal.
     if (m_documents->policies().autosave.onFrameDeactivation) {

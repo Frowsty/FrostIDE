@@ -328,7 +328,9 @@ TEST(Workbench, SwitchingFromCMakeRestoresSolutionToolbar) {
     ASSERT_NE(rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarProfiles")), nullptr);
     ASSERT_NE(rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets")), nullptr);
     EXPECT_TRUE(rig.workbench->configurationCombo()->isHidden());
-    EXPECT_TRUE(rig.window->mainToolbar().runConfigurations()->isHidden());
+    // RUN-3: the run configuration combo replaces the CMake target combo on the toolbar.
+    EXPECT_FALSE(rig.window->mainToolbar().runConfigurations()->isHidden());
+    EXPECT_TRUE(rig.window->findChild<QComboBox*>(QStringLiteral("cmakeToolbarTargets"))->isHidden());
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
     rig.window->resize(1200, 750);
     QApplication::processEvents();
@@ -363,6 +365,8 @@ TEST(Workbench, ExplicitCMakeIdentitySurvivesRestoreAndRecent) {
     }
     {
         WorkbenchRig second(dir);
+        ASSERT_TRUE(second.settings->set(frost::settings::Scope::Application,
+                                         frost::settings::key::generalReopenLastProject, true)); // Opt-in.
         ASSERT_TRUE(second.workbench->restoreLastProject());
         EXPECT_EQ(second.workbench->solution(), nullptr);
         EXPECT_EQ(second.workbench->projectRoot(), dir.path());
@@ -1355,6 +1359,8 @@ TEST(Workbench, TheLastProjectComesBackWithItsTabsAndAClosedOneShowsWelcome) {
     }
     {
         WorkbenchRig second(dir, options);
+        ASSERT_TRUE(second.settings->set(frost::settings::Scope::Application,
+                                         frost::settings::key::generalReopenLastProject, true)); // Opt-in.
         EXPECT_TRUE(second.workbench->restoreLastProject());
         EXPECT_TRUE(second.workbench->hasProject());
         ASSERT_EQ(second.window->tabs().count(), 1);
@@ -1379,14 +1385,17 @@ TEST(Workbench, TheLastProjectComesBackWithItsTabsAndAClosedOneShowsWelcome) {
     EXPECT_EQ(frost::app::recentProjects(*third.settings->snapshot()).front(), project);
 }
 
-TEST(Workbench, TheRunToolWindowIsTheRunConsole) {
+// RUN-3: the Run tool window holds one tab per run; runConsole() is the current tab's console.
+TEST(Workbench, TheRunToolWindowHoldsTheRunConsoles) {
     WorkDir dir("run", "tiny_sln");
     WorkbenchRig rig(dir);
     rig.show();
     ASSERT_NE(rig.workbench->runConsole(), nullptr);
+    ASSERT_NE(rig.workbench->runToolWindow(), nullptr);
     rig.window->toolWindows().show(tool_windows::kRun, false);
     EXPECT_EQ(rig.window->toolWindows().content(tool_windows::kRun),
-              static_cast<QWidget*>(rig.workbench->runConsole()));
+              static_cast<QWidget*>(rig.workbench->runToolWindow()));
+    EXPECT_TRUE(rig.workbench->runToolWindow()->isAncestorOf(rig.workbench->runConsole()));
     // The solution's projects fill the startup project combo; Run is an action with Shift+F10.
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
     EXPECT_GT(rig.window->mainToolbar().runConfigurations()->count(), 0);
@@ -2196,26 +2205,20 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
     refreshBtn->click();
     auto* tree = unitTestsWidget->findChild<QTreeWidget*>(QStringLiteral("unitTestsTreeWidget"));
     ASSERT_NE(tree, nullptr);
-    EXPECT_GE(tree->topLevelItemCount(), 1);
-
-    // There is no test runner yet (RUN-7): Run All is disabled, clicking it does nothing, and the
-    // window shows discoveries without any outcome or pass/fail count.
+    // Tests are ctest's (RUN-7): a Visual Studio solution has no CTest directory, so the window lists
+    // nothing (the TEST() in math_tests.cpp is not a ctest test), says why and runs nothing.
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
     auto* runAllBtn = unitTestsWidget->findChild<QPushButton*>(QStringLiteral("unitTestsRunAllButton"));
     ASSERT_NE(runAllBtn, nullptr);
     EXPECT_FALSE(runAllBtn->isEnabled());
-    EXPECT_TRUE(runAllBtn->toolTip().contains(QStringLiteral("RUN-7")));
+    EXPECT_TRUE(runAllBtn->toolTip().contains(QStringLiteral("ctest"))) << runAllBtn->toolTip().toStdString();
     runAllBtn->click();
-
     auto* summaryLbl = unitTestsWidget->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
     ASSERT_NE(summaryLbl, nullptr);
+    EXPECT_TRUE(summaryLbl->text().contains(QStringLiteral("solution"))) << summaryLbl->text().toStdString();
     EXPECT_FALSE(summaryLbl->text().contains(QStringLiteral("Passed")));
     EXPECT_FALSE(summaryLbl->text().contains(QStringLiteral("Failed")));
-    EXPECT_TRUE(summaryLbl->text().contains(QStringLiteral("RUN-7")));
-
-    // The location list holds the declaration, not a stack trace.
-    auto* stackLinks = unitTestsWidget->findChild<QListWidget*>(QStringLiteral("unitTestsStackTraceLinks"));
-    ASSERT_NE(stackLinks, nullptr);
-    EXPECT_GT(stackLinks->count(), 0);
+    EXPECT_FALSE(rig.workbench->runController()->running());
 
     // 7. Search Everywhere (Classes / Symbols / All) exercises Workbench::queryWorkspaceSymbols
     // asynchronously on the worker thread pool without use-after-free.
@@ -2626,13 +2629,16 @@ TEST(Workbench, SolutionExplorerProjectEditsNotifyRefusalAndChangeNothing) {
     EXPECT_EQ(tinySolutionFiles(dir), before);
 }
 
-TEST(Workbench, UnitTestsWindowListsDiscoveredTestsAndStartsNothing) {
-    WorkDir dir("unit-tests-discovery");
+/*
+ * A folder that is not a CMake folder lists no test and starts nothing (RUN-7: tests are ctest's).
+ * It replaces UnitTestsWindowListsDiscoveredTestsAndStartsNothing (harm register, D32), which
+ * asserted the R0 source-text scan's "Discovered, not run" rows; the window over the real ctest is
+ * tests/app/unit_tests_window_test.cpp.
+ */
+TEST(Workbench, UnitTestsWindowWithoutACMakeFolderListsNothingAndStartsNothing) {
+    WorkDir dir("unit-tests-no-cmake");
     dir.write("Tests/math_tests.cpp", "TEST(MathSuite, AddsNumbers) {\n"
                                       "    EXPECT_EQ(2 + 2, 4);\n"
-                                      "}\n"
-                                      "TEST_F(MathFixture, FailsIntentionally) {\n"
-                                      "    EXPECT_TRUE(false);\n"
                                       "}\n");
     CountingLauncher launcher;
     RigOptions options;
@@ -2646,49 +2652,31 @@ TEST(Workbench, UnitTestsWindowListsDiscoveredTestsAndStartsNothing) {
     rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow, false);
     QWidget* window = rig.window->toolWindows().content(frost::app::kUnitTestsToolWindow);
     ASSERT_NE(window, nullptr);
+    const int launchesBefore = launcher.launches.load();
     auto* refresh = window->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"));
     ASSERT_NE(refresh, nullptr);
     refresh->click();
     auto* tree = window->findChild<QTreeWidget*>(QStringLiteral("unitTestsTreeWidget"));
     ASSERT_NE(tree, nullptr);
-    EXPECT_EQ(tree->columnCount(), 2); // Name and status; no duration column.
-
-    const auto leaves = [tree] {
-        std::vector<QTreeWidgetItem*> found;
-        for (QTreeWidgetItemIterator it(tree); *it; ++it) {
-            if ((*it)->data(0, Qt::UserRole).toInt() >= 0)
-                found.push_back(*it);
-        }
-        return found;
-    };
-    ASSERT_EQ(leaves().size(), 2U);
+    EXPECT_EQ(tree->columnCount(), 3); // Name, status, duration.
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
     auto* summary = window->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
     ASSERT_NE(summary, nullptr);
-    EXPECT_TRUE(summary->text().contains(QStringLiteral("2 test(s) discovered"))) << summary->text().toStdString();
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("Open a CMake folder"))) << summary->text().toStdString();
 
-    const int launchesBefore = launcher.launches.load();
-    for (const char* name :
-         {"unitTestsRunAllButton", "unitTestsRunSelectedButton", "unitTestsRunFailedButton",
-          "unitTestsRepeatUntilFailureButton", "unitTestsDebugSelectedButton", "unitTestsStopButton"}) {
+    for (const char* name : {"unitTestsRunAllButton", "unitTestsRunSelectedButton", "unitTestsRunFailedButton",
+                             "unitTestsDebugSelectedButton", "unitTestsStopButton"}) {
         auto* button = window->findChild<QPushButton*>(QLatin1String(name));
         ASSERT_NE(button, nullptr) << name;
         EXPECT_FALSE(button->isEnabled()) << name;
-        EXPECT_TRUE(button->toolTip().contains(QStringLiteral("RUN-7"))) << name;
         button->click();
     }
     QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
     EXPECT_EQ(launcher.launches.load(), launchesBefore);
-
-    // Nothing ran, so no test shows an outcome, even the one whose body fails.
-    for (QTreeWidgetItem* leaf : leaves())
-        EXPECT_EQ(leaf->text(1), QStringLiteral("Discovered, not run")) << leaf->text(0).toStdString();
-    EXPECT_FALSE(summary->text().contains(QStringLiteral("Passed")));
-    EXPECT_FALSE(summary->text().contains(QStringLiteral("Failed")));
     auto* details = window->findChild<QPlainTextEdit*>(QStringLiteral("unitTestsOutputView"));
     ASSERT_NE(details, nullptr);
-    EXPECT_TRUE(details->toPlainText().contains(QStringLiteral("not run")));
     EXPECT_FALSE(details->toPlainText().contains(QStringLiteral("[       OK ]")));
-    EXPECT_FALSE(details->toPlainText().contains(QStringLiteral("FAILED")));
+    EXPECT_FALSE(details->toPlainText().contains(QStringLiteral("Passed")));
 }
 
 TEST(Workbench, ProjectDialogsAreReadOnlyAndWriteNoProjectFile) {
@@ -2741,34 +2729,6 @@ TEST(Workbench, ProjectDialogsAreReadOnlyAndWriteNoProjectFile) {
     frost::app::showConfigurationManagerDialog(
         rig.window.get(), fs, *solution, 0, [&](int index) { activeChosen = index; }, onWrite);
     EXPECT_EQ(activeChosen, 0);
-
-    // Run/Debug Configurations: the debugger settings as App.vcxproj.user declares them, read-only.
-    bool externalConsole = false;
-    inspectModal(rig.window.get(), QStringLiteral("editRunConfigurationsDialog"), [](QDialog& dlg) {
-        auto* project = dlg.findChild<QComboBox*>(QStringLiteral("runConfigProjectCombo"));
-        ASSERT_NE(project, nullptr);
-        ASSERT_GE(project->findText(QStringLiteral("App")), 0);
-        project->setCurrentIndex(project->findText(QStringLiteral("App")));
-        auto* args = dlg.findChild<QLineEdit*>(QStringLiteral("runConfigArgumentsEdit"));
-        auto* cwd = dlg.findChild<QLineEdit*>(QStringLiteral("runConfigWorkingDirEdit"));
-        auto* source = dlg.findChild<QLabel*>(QStringLiteral("runConfigSourceLabel"));
-        ASSERT_NE(args, nullptr);
-        ASSERT_NE(cwd, nullptr);
-        ASSERT_NE(source, nullptr);
-        EXPECT_TRUE(args->isReadOnly());
-        EXPECT_TRUE(cwd->isReadOnly());
-        EXPECT_EQ(args->text(), QStringLiteral("--print \"two words\" --echo --exit 3"));
-        EXPECT_EQ(cwd->text(), QStringLiteral("$(SolutionDir)Lib"));
-        EXPECT_TRUE(source->text().contains(QStringLiteral("App.vcxproj.user"))) << source->text().toStdString();
-        EXPECT_TRUE(source->text().contains(QStringLiteral("RUN-1")));
-        if (auto* check = dlg.findChild<QCheckBox*>())
-            check->setChecked(true);
-        clickOk(dlg);
-    });
-    frost::app::showEditRunConfigurationsDialog(
-        rig.window.get(), fs, solution.get(), app, "Debug|x64", false,
-        [&](bool external) { externalConsole = external; }, onWrite);
-    EXPECT_TRUE(externalConsole);
 
     // Add Project Reference and Solution Properties: references as loaded, not editable.
     const auto expectReadOnlyList = [](QDialog& dlg, const char* listName, const char* noteName) {
@@ -3010,7 +2970,10 @@ TEST(Workbench, ConfirmExitAsksBeforeTheIdeWindowClosesOnlyWhenEnabled) {
     EXPECT_FALSE(rig.window->isVisible());
 }
 
-TEST(Workbench, ReopenLastProjectOffStartsInTheLauncher) {
+TEST(Workbench, StartupShowsTheLauncherUnlessReopenLastProjectIsOn) {
+    /* The user's design: FrostIDE starts in the stripped-down launcher (open, recent and new project),
+       even when a project was open last time. general.reopenLastProject is an opt-in, off by default
+       (it once defaulted on, and then every start skipped the launcher). */
     WorkDir dir("reopen-off");
     dir.write("proj/main.cpp", "int main() { return 0; }\n");
     {
@@ -3018,8 +2981,18 @@ TEST(Workbench, ReopenLastProjectOffStartsInTheLauncher) {
         ASSERT_TRUE(first.workbench->openPath(dir.join("proj")));
     }
     {
+        WorkbenchRig fresh(dir); // Default settings: the launcher, not the last project.
+        EXPECT_FALSE(fresh.settings->snapshot()->get(frost::settings::key::generalReopenLastProject));
+        EXPECT_FALSE(fresh.workbench->showStartupWindow());
+        EXPECT_FALSE(fresh.workbench->hasProject());
+        ASSERT_NE(fresh.workbench->launcherWindow(), nullptr);
+        EXPECT_TRUE(fresh.workbench->launcherWindow()->isVisible());
+        EXPECT_FALSE(fresh.window->isVisible());
+    }
+    {
         WorkbenchRig second(dir);
-        ASSERT_TRUE(second.settings->snapshot()->get(frost::settings::key::generalReopenLastProject));
+        ASSERT_TRUE(second.settings->set(frost::settings::Scope::Application,
+                                         frost::settings::key::generalReopenLastProject, true)); // Opt-in.
         EXPECT_TRUE(second.workbench->showStartupWindow()); // On: startup reopens it in the IDE window.
         EXPECT_EQ(second.workbench->projectRoot(), dir.join("proj"));
         EXPECT_TRUE(second.window->isVisible());
@@ -3126,8 +3099,8 @@ TEST(Workbench, CompoundRunIsUnavailableUntilRunFiveAndStartsNothing) {
     EXPECT_TRUE(launcher.launches().empty());
 }
 
-// The Edit Run Configurations dialog's compound section reaches the same refusal: the RUN-5 notice
-// and no launch.
+// The Run/Debug Configurations dialog's compound section (RUN-3's dialog) reaches the same
+// refusal: the RUN-5 notice and no launch.
 TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAndStartsNothing) {
     WorkDir dir("compound-run-dialog", "tiny_sln");
     frost::io::ScriptedProcessLauncher launcher;
@@ -3139,20 +3112,15 @@ TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAn
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
     auto id = rig.workbench->registry().find("run.editConfigurations");
     ASSERT_TRUE(id);
-    int checked = 0;
     bool clicked = false;
     bool disabled = false;
     QString tooltip;
     QTimer::singleShot(0, rig.window.get(), [&] {
-        auto* list = rig.window->findChild<QListWidget*>(QStringLiteral("compoundProjectsList"));
+        auto* group = rig.window->findChild<QWidget*>(QStringLiteral("compoundRunGroup"));
         auto* launch = rig.window->findChild<QPushButton*>(QStringLiteral("compoundLaunchButton"));
-        if (list != nullptr && launch != nullptr) {
-            disabled = !launch->isEnabled() && !list->isEnabled();
+        if (group != nullptr && launch != nullptr) {
+            disabled = !launch->isEnabled() && !group->isEnabled();
             tooltip = launch->toolTip();
-            for (int row = 0; row < list->count(); ++row) {
-                list->item(row)->setCheckState(Qt::Checked);
-                ++checked;
-            }
             launch->click(); // A disabled button ignores the click.
             clicked = true;
         }
@@ -3165,7 +3133,6 @@ TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAn
     context.trusted = true;
     EXPECT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
     ASSERT_TRUE(clicked);
-    EXPECT_EQ(checked, 2); // App and Lib.
     EXPECT_TRUE(disabled) << "the compound launch controls must not be offered before RUN-5";
     EXPECT_TRUE(tooltip.contains(QStringLiteral("RUN-5"))) << tooltip.toStdString();
     EXPECT_TRUE(launcher.launches().empty());

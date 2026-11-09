@@ -5,6 +5,7 @@
 
 #include "frost/ui/debug_tool_window.hpp"
 
+#include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/ui/debug_controller.hpp"
 #include "frost/ui/debug_models.hpp"
@@ -49,6 +50,10 @@ namespace frost::ui {
 namespace {
 
 constexpr int kRoleBreakpointId = Qt::UserRole;
+// The Breakpoints tab's rows: what a row is, and an exception row's filter id.
+constexpr int kRoleBreakpointKind = Qt::UserRole + 1;
+constexpr int kRoleExceptionFilter = Qt::UserRole + 2;
+enum class BreakpointRow : int { Line = 0, Function = 1, Exception = 2, Note = 3 };
 
 QString qs(std::string_view text) { return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())); }
 
@@ -298,10 +303,8 @@ void DebugToolWindow::buildBreakpointsTab() {
     m_muteBreakpointsButton->setCheckable(true);
     m_muteBreakpointsButton->setChecked(m_controller.breakpointsMuted());
 
-    m_breakOnExceptionsCheck = new QCheckBox(QStringLiteral("Break on Exceptions"), bpPane);
-    m_exceptionFilterCombo = new QComboBox(bpPane);
-    m_exceptionFilterCombo->addItem(QStringLiteral("Uncaught Exceptions"), QStringLiteral("uncaught"));
-    m_exceptionFilterCombo->addItem(QStringLiteral("All Exceptions"), QStringLiteral("all"));
+    m_addFunctionBreakpointButton = new QPushButton(QStringLiteral("Add Function Breakpoint..."), bpPane);
+    m_addFunctionBreakpointButton->setObjectName(QStringLiteral("debugAddFunctionBreakpointButton"));
 
     m_editBreakpointButton = new QPushButton(QStringLiteral("Edit Breakpoint..."), bpPane);
     m_editBreakpointButton->setObjectName(QStringLiteral("debugEditBreakpointButton"));
@@ -309,8 +312,7 @@ void DebugToolWindow::buildBreakpointsTab() {
     m_removeBreakpointButton->setObjectName(QStringLiteral("debugRemoveBreakpointButton"));
 
     bpControls->addWidget(m_muteBreakpointsButton);
-    bpControls->addWidget(m_breakOnExceptionsCheck);
-    bpControls->addWidget(m_exceptionFilterCombo);
+    bpControls->addWidget(m_addFunctionBreakpointButton);
     bpControls->addStretch(1);
     bpControls->addWidget(m_editBreakpointButton);
     bpControls->addWidget(m_removeBreakpointButton);
@@ -335,8 +337,7 @@ void DebugToolWindow::buildBreakpointsTab() {
 
     connect(m_muteBreakpointsButton, &QPushButton::toggled, this,
             [this](bool checked) { m_controller.setMutedBreakpoints(checked); });
-    connect(m_breakOnExceptionsCheck, &QCheckBox::toggled, this, [this] { updateExceptionBreakpoints(); });
-    connect(m_exceptionFilterCombo, &QComboBox::currentIndexChanged, this, [this] { updateExceptionBreakpoints(); });
+    connect(m_addFunctionBreakpointButton, &QPushButton::clicked, this, [this] { openAddFunctionBreakpoint(); });
     connect(m_editBreakpointButton, &QPushButton::clicked, this, [this] { openEditBreakpoint(0); });
     connect(m_removeBreakpointButton, &QPushButton::clicked, this, [this] {
         if (QTreeWidgetItem* current = m_breakpointsTree->currentItem()) {
@@ -348,8 +349,18 @@ void DebugToolWindow::buildBreakpointsTab() {
         if (m_fillingBreakpoints || item == nullptr || column != 0) {
             return;
         }
-        const auto id = static_cast<debug::BreakpointId>(item->data(0, kRoleBreakpointId).toULongLong());
-        m_controller.breakpoints().setEnabled(id, item->checkState(0) == Qt::Checked);
+        const auto kind = static_cast<BreakpointRow>(item->data(0, kRoleBreakpointKind).toInt());
+        const bool checked = item->checkState(0) == Qt::Checked;
+        // The change rebuilds the list; inside this signal that would delete `item` under Qt.
+        m_editingBreakpoint = true;
+        if (kind == BreakpointRow::Exception) {
+            m_controller.setExceptionFilterEnabled(item->data(0, kRoleExceptionFilter).toString().toStdString(),
+                                                   checked);
+        } else if (kind != BreakpointRow::Note) {
+            const auto id = static_cast<debug::BreakpointId>(item->data(0, kRoleBreakpointId).toULongLong());
+            m_controller.breakpoints().setEnabled(id, checked);
+        }
+        m_editingBreakpoint = false;
     });
     connect(m_breakpointsTree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
         if (item != nullptr) {
@@ -509,17 +520,23 @@ void DebugToolWindow::updateBreakpointsList() {
     if (m_breakpointsTree == nullptr) {
         return;
     }
+    if (m_editingBreakpoint) {
+        QMetaObject::invokeMethod(this, &DebugToolWindow::updateBreakpointsList, Qt::QueuedConnection);
+        return;
+    }
     m_fillingBreakpoints = true;
     if (m_muteBreakpointsButton != nullptr) {
         const QSignalBlocker blocker(m_muteBreakpointsButton);
         m_muteBreakpointsButton->setChecked(m_controller.breakpointsMuted());
     }
     m_breakpointsTree->clear();
-    for (const debug::LineBreakpoint& bp : m_controller.breakpoints().all()) {
+    const debug::BreakpointManager& manager = m_controller.breakpoints();
+    for (const debug::LineBreakpoint& bp : manager.all()) {
         auto* item = new QTreeWidgetItem(m_breakpointsTree);
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(0, bp.enabled ? Qt::Checked : Qt::Unchecked);
         item->setData(0, kRoleBreakpointId, QVariant::fromValue<qulonglong>(bp.id));
+        item->setData(0, kRoleBreakpointKind, static_cast<int>(BreakpointRow::Line));
         const std::string_view fileName = io::fileName(bp.path);
         const QString displayPath = fileName.empty() ? qs(bp.path) : qs(fileName);
         item->setText(1, QStringLiteral("%1:%2").arg(displayPath).arg(bp.line));
@@ -528,19 +545,67 @@ void DebugToolWindow::updateBreakpointsList() {
         item->setText(3, qs(bp.hitCondition));
         item->setText(4, qs(bp.logMessage));
     }
+    for (const debug::FunctionBreakpointEntry& bp : manager.functionBreakpoints()) {
+        auto* item = new QTreeWidgetItem(m_breakpointsTree);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(0, bp.enabled ? Qt::Checked : Qt::Unchecked);
+        item->setData(0, kRoleBreakpointId, QVariant::fromValue<qulonglong>(bp.id));
+        item->setData(0, kRoleBreakpointKind, static_cast<int>(BreakpointRow::Function));
+        item->setText(1, QStringLiteral("Function: %1").arg(qs(bp.name)));
+        // The adapter's verdict (an unknown name stays unverified), never a guess.
+        item->setToolTip(1, bp.status == debug::BreakpointStatus::Unverified && !bp.message.empty() ? qs(bp.message)
+                                                                                                    : qs(bp.name));
+        item->setText(2, qs(bp.condition));
+        item->setText(3, qs(bp.hitCondition));
+    }
+    const std::vector<debug::ExceptionFilterEntry> filters = manager.exceptionFilters();
+    for (const debug::ExceptionFilterEntry& filter : filters) {
+        auto* item = new QTreeWidgetItem(m_breakpointsTree);
+        item->setData(0, kRoleBreakpointKind, static_cast<int>(BreakpointRow::Exception));
+        item->setData(0, kRoleExceptionFilter, qs(filter.filter));
+        item->setText(1, QStringLiteral("Exception: %1").arg(qs(filter.label)));
+        if (filter.unavailable.empty()) {
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setCheckState(0, filter.enabled ? Qt::Checked : Qt::Unchecked);
+            item->setToolTip(1, qs(filter.filter));
+        } else {
+            // Unavailable for this session's programs: shown with the reason, and not checkable.
+            item->setFlags(item->flags() & ~(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled));
+            item->setText(4, QStringLiteral("Unavailable: %1").arg(qs(filter.unavailable)));
+            item->setToolTip(1, qs(filter.unavailable));
+        }
+    }
+    if (filters.empty()) {
+        // No adapter has listed its exception filters yet: say so rather than offer made-up ones.
+        auto* item = new QTreeWidgetItem(m_breakpointsTree);
+        item->setData(0, kRoleBreakpointKind, static_cast<int>(BreakpointRow::Note));
+        item->setFlags(item->flags() & ~(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable));
+        item->setText(1, QStringLiteral("Exception breakpoints: start a debug session to list the debugger's filters"));
+    }
     m_fillingBreakpoints = false;
 }
 
-void DebugToolWindow::updateExceptionBreakpoints() {
-    std::vector<std::string> filters;
-    if (m_breakOnExceptionsCheck != nullptr && m_breakOnExceptionsCheck->isChecked() &&
-        m_exceptionFilterCombo != nullptr) {
-        filters.push_back(m_exceptionFilterCombo->currentData().toString().toStdString());
-        if (filters.front() == "all") {
-            filters.emplace_back("uncaught");
+void DebugToolWindow::openAddFunctionBreakpoint() {
+    QDialog dialog(window());
+    dialog.setWindowTitle(QStringLiteral("Add Function Breakpoint"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout();
+    auto* nameEdit = new QLineEdit(&dialog);
+    nameEdit->setObjectName(QStringLiteral("debugFunctionBreakpointName"));
+    nameEdit->setPlaceholderText(QStringLiteral("e.g. MyClass::update or main"));
+    form->addRow(QStringLiteral("Function:"), nameEdit);
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    installDialogChrome(&dialog, false);
+    nameEdit->setFocus();
+    if (dialog.exec() == QDialog::Accepted) {
+        if (auto added = m_controller.addFunctionBreakpoint(nameEdit->text()); !added) {
+            log::warn("debug", "the function breakpoint was not added: {}", added.error().message());
         }
     }
-    m_controller.setExceptionBreakpoints(filters);
 }
 
 void DebugToolWindow::requestDisassembly() {
@@ -638,6 +703,10 @@ void DebugToolWindow::openEditBreakpoint(debug::BreakpointId id) {
         id = static_cast<debug::BreakpointId>(
             m_breakpointsTree->currentItem()->data(0, kRoleBreakpointId).toULongLong());
     }
+    if (const auto function = m_controller.breakpoints().findFunction(id)) {
+        openEditFunctionBreakpoint(*function);
+        return;
+    }
     const auto bp = m_controller.breakpoints().find(id);
     if (!bp) {
         return;
@@ -666,6 +735,31 @@ void DebugToolWindow::openEditBreakpoint(debug::BreakpointId id) {
         m_controller.breakpoints().setProperties(id, conditionEdit->text().trimmed().toStdString(),
                                                  hitCountEdit->text().trimmed().toStdString(),
                                                  logMessageEdit->text().trimmed().toStdString());
+        updateBreakpointsList();
+    }
+}
+
+void DebugToolWindow::openEditFunctionBreakpoint(const debug::FunctionBreakpointEntry& bp) {
+    QDialog dialog(window());
+    dialog.setWindowTitle(QStringLiteral("Edit Function Breakpoint (%1)").arg(qs(bp.name)));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout();
+    auto* conditionEdit = new QLineEdit(qs(bp.condition), &dialog);
+    conditionEdit->setPlaceholderText(QStringLiteral("e.g. value > 1"));
+    auto* hitCountEdit = new QLineEdit(qs(bp.hitCondition), &dialog);
+    hitCountEdit->setPlaceholderText(QStringLiteral("e.g. 10"));
+    form->addRow(QStringLiteral("Condition:"), conditionEdit);
+    form->addRow(QStringLiteral("Hit Count:"), hitCountEdit);
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    installDialogChrome(&dialog, false);
+    conditionEdit->setFocus();
+    if (dialog.exec() == QDialog::Accepted) {
+        m_controller.breakpoints().setProperties(bp.id, conditionEdit->text().trimmed().toStdString(),
+                                                 hitCountEdit->text().trimmed().toStdString(), {});
         updateBreakpointsList();
     }
 }

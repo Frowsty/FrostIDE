@@ -38,7 +38,9 @@
 #           --configure a missing one is configured first with `cmake --preset <preset>` (the pinned
 #           cmake and ninja from PATH, checked against sdk/sdk.lock.json; on Windows inside the
 #           pinned MSVC toolset's vcvarsall environment, on Linux with CC/CXX the pinned clang of
-#           FROST_LLVM_ROOT), logged to <root>/<id>-<sha12>.<preset>.configure.log. Nothing is ever
+#           FROST_LLVM_ROOT), logged to <root>/<id>-<sha12>.<preset>.configure.log. The lock's optional
+#           cacheVariables.<platform> ({"NAME": "value"}) are passed as -DNAME=value, and a tree whose
+#           cache holds another value is not the pin's engine (so --configure reconfigures it). Nothing is ever
 #           built (a full engine build is about 49 GB): the corpus tests build single small targets.
 #           Configure and the corpus tests that configure or build in place hold the build lock
 #           <root>/<id>-<sha12>.build.lock (an exclusive lock on that file; frost::test's
@@ -89,6 +91,7 @@ PLATFORM = "windows" if WINDOWS else "linux"
 REQUIRED_FIELDS = ("id", "name", "url", "branch", "sha", "purpose")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_CACHE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")  # A CMake cache variable name of cacheVariables.
 
 
 class LockError(ValueError):
@@ -126,6 +129,12 @@ def load_lock(path: Path) -> dict:
         seen.add(entry["id"])
         if not _SHA.match(str(entry["sha"])):
             raise LockError(f"{path}: {entry['id']}: sha must be 40 lower-case hex digits")
+        variables = entry.get("cacheVariables", {})
+        if not isinstance(variables, dict) or not all(
+                isinstance(by_name, dict) and all(isinstance(k, str) and _CACHE_NAME.match(k) and isinstance(v, str)
+                                                  for k, v in by_name.items())
+                for by_name in variables.values()):
+            raise LockError(f"{path}: {entry['id']}: cacheVariables must map a platform to {{NAME: string}}")
     return document
 
 
@@ -363,6 +372,11 @@ def engine_preset(entry: dict, preset: str | None) -> str | None:
     return presets.get(PLATFORM) if isinstance(presets, dict) else None
 
 
+def engine_cache_variables(entry: dict) -> dict[str, str]:
+    """The lock's cacheVariables of this platform (header comment, engine); {} when it has none."""
+    return dict(entry.get("cacheVariables", {}).get(PLATFORM, {}))
+
+
 def _same_dir(a: str, b: Path) -> bool:
     left = os.path.normpath(a.replace("/", os.sep))
     right = os.path.normpath(str(b))
@@ -399,6 +413,11 @@ def engine_problem(directory: Path, entry: dict, preset: str, tools: dict[str, s
         if not value or not _same_file(value, tools[name]):
             return (f"{cache} names {variable}={value or '(none)'}, not the pinned {name} {tools[name]} "
                     f"(run: python tools/corpora.py engine --configure)")
+    for variable, wanted in engine_cache_variables(entry).items():
+        cached = re.search(rf"^{re.escape(variable)}:[A-Z]+=(.*)$", text, re.M)
+        if not cached or cached.group(1).strip() != wanted:
+            return (f"{cache} names {variable}={cached.group(1).strip() if cached else '(none)'}, not the lock's "
+                    f"{wanted} (run: python tools/corpora.py engine --configure)")
     commands = build / "compile_commands.json"
     if not commands.is_file() or commands.stat().st_size < 3:
         return f"{build} has no compile_commands.json"
@@ -477,7 +496,9 @@ def configure_engine(repo: Path, root: Path, entry: dict, preset: str) -> str:
         with open(log, "wb") as out:
             # CMAKE_MAKE_PROGRAM is a cache entry, so a tree configured with another Ninja keeps it
             # unless the pinned one is named.
-            result = subprocess.run([cmake, "--preset", preset, f"-DCMAKE_MAKE_PROGRAM={ninja}"], cwd=directory,
+            defines = [f"-D{name}={value}" for name, value in engine_cache_variables(entry).items()]
+            result = subprocess.run([cmake, "--preset", preset, f"-DCMAKE_MAKE_PROGRAM={ninja}", *defines],
+                                    cwd=directory,
                                     env=env, stdout=out,
                                     stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=3600, check=False)
         if result.returncode != 0:

@@ -281,8 +281,10 @@ struct Entry {
          Value(true), kApplicationOnly, false, true},
 
         // General.
+        // Off by default: FrostIDE starts in the stripped-down launcher (open, recent and new project),
+        // the user's design (2026-11-08). Reopening the last project straight into the IDE is opt-in.
         {"general.reopenLastProject", "Reopen projects on startup", "Opens the last project when FrostIDE starts.",
-         "Appearance & Behavior/System Settings", boolSchema(), Value(true), kApplicationOnly},
+         "Appearance & Behavior/System Settings", boolSchema(), Value(false), kApplicationOnly},
         {"general.confirmExit", "Confirm before exiting the IDE", "Asks before closing the last window.",
          "Appearance & Behavior/System Settings", boolSchema(), Value(false), kApplicationOnly},
         {"general.recentProjects", "Recent projects",

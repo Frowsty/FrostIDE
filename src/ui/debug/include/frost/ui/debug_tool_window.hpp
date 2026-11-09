@@ -92,7 +92,9 @@ private:
     void updateActions();
     void updateThreads();
     void updateBreakpointsList();
-    void updateExceptionBreakpoints();
+    // Add Function Breakpoint: asks for a name (BreakpointManager::addFunction).
+    void openAddFunctionBreakpoint();
+    void openEditFunctionBreakpoint(const debug::FunctionBreakpointEntry& breakpoint);
     void requestDisassembly();
     void requestMemoryDump();
     void onFrameActivated(int row);
@@ -122,8 +124,7 @@ private:
     RunConsole* m_console = nullptr;
     QTreeWidget* m_breakpointsTree = nullptr;
     QPushButton* m_muteBreakpointsButton = nullptr;
-    QCheckBox* m_breakOnExceptionsCheck = nullptr;
-    QComboBox* m_exceptionFilterCombo = nullptr;
+    QPushButton* m_addFunctionBreakpointButton = nullptr;
     QPushButton* m_editBreakpointButton = nullptr;
     QPushButton* m_removeBreakpointButton = nullptr;
     QLineEdit* m_memoryAddressInput = nullptr;
@@ -133,6 +134,7 @@ private:
     QPlainTextEdit* m_memoryView = nullptr;
     bool m_fillingThreads = false;
     bool m_fillingBreakpoints = false;
+    bool m_editingBreakpoint = false; // Inside the list's itemChanged: rebuild it later.
 };
 
 // Evaluate Expression (Alt+F8): an expression line and the result as an expandable tree.

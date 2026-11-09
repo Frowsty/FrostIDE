@@ -598,10 +598,16 @@ class Journey:
             git.run("checkout", "--", SEED_FILE, cwd=corpus)
             print(f"{JOURNEY}: restored {SEED_FILE} from the clone's HEAD (an earlier run left it changed)")
 
-    def _launch(self, corpus: Path) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="frost-j1-"))
+    def _launch(self, corpus: Path, *, again: bool = False) -> None:
+        """Starts frost on a fresh temporary profile; with `again`, on the profile of the last start
+        (which must have exited), as a restart of FrostIDE by its user would (j2_run's restart step)."""
+        if not again:
+            self.tmp = Path(tempfile.mkdtemp(prefix="frost-j1-"))
         profile, self.spawn_dir = self.tmp / "profile", self.tmp / "spawn-log"
         connection = self.tmp / "automation.json"
+        if again:
+            self.watchdog.cancel()
+            connection.unlink(missing_ok=True)  # The last start's; the new frost writes its own.
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen", FROST_LOG_LEVEL="debug",
                    FROST_SPAWN_LOG_DIR=str(self.spawn_dir), FROST_AUTOMATION_CONNECTION=str(connection))
         if WINDOWS:
@@ -643,7 +649,7 @@ class Journey:
                 time.sleep(POLL_SECONDS)
             return False, None, None, "no connection file within 120 s (a build without the endpoint?)"
 
-        if not self.run_step("connect", connected):
+        if not self.run_step("connect again (the same profile)" if again else "connect", connected):
             raise SystemExit(self._fail_out())
 
     def _fail_out(self) -> int:
@@ -841,17 +847,33 @@ class Journey:
         def activate() -> tuple[bool, Any, Any, str]:
             if getattr(self, "seeded_index", None) is None:
                 return False, None, None, "no problem at the seeded line to activate"
-            ep.call("problems.activate", index=self.seeded_index)
-            deadline = time.monotonic() + 60
+            # Problems is a live list: clangd's diagnostics for files opened earlier can arrive between
+            # reading it and activating an entry, and shift the indices. So the seeded problem's index
+            # is read again right before each activation, and an activation that opened another
+            # location (the list moved in between) is retried. Every attempt is in the evidence.
+            attempts: list[dict] = []
             editor: dict = {}
-            while time.monotonic() < deadline:
-                editor = ep.call("editor")
-                if editor.get("available") and same_path(editor["path"], self.seed_path):
+            for _ in range(3):
+                problems = ep.call("problems")["problems"]
+                index = next((i for i, p in enumerate(problems) if p["severity"] == "error" and p.get("file")
+                              and same_path(p["file"], self.seed_path) and p["line"] == seeded_line), None)
+                if index is None:
+                    attempts.append({"index": None, "note": "the seeded problem is no longer listed"})
                     break
-                time.sleep(POLL_SECONDS)
+                ep.call("problems.activate", index=index)
+                deadline = time.monotonic() + 60
+                while time.monotonic() < deadline:
+                    editor = ep.call("editor")
+                    if editor.get("available") and same_path(editor["path"], self.seed_path):
+                        break
+                    time.sleep(POLL_SECONDS)
+                attempts.append({"index": index, "editor": editor})
+                if editor.get("available") and same_path(editor.get("path", ""), self.seed_path):
+                    break
             ok = editor.get("available") and same_path(editor.get("path", ""), self.seed_path) and \
                 editor.get("line") == seeded_line
-            return bool(ok), {"path": str(self.seed_path), "line": seeded_line}, editor, ""
+            return bool(ok), {"path": str(self.seed_path), "line": seeded_line}, {"editor": editor,
+                                                                                    "attempts": attempts}, ""
 
         if built:
             self.run_step("activating the problem opens the seeded line", activate)

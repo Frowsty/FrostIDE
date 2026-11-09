@@ -226,15 +226,25 @@ class ResultType:
 # that change goes through the independent review (ADR 0078 decision 4). Types are matched by
 # name in C, C++ and C# code outside tests/** (test doubles are welcome there, decision 2).
 # Names declared in several modules (Diagnostic) list every module's own parser.
+_RUN7_TEST_PARSERS = ("src/run/src/ctest_parsers.cpp", "src/run/src/gtest_parsers.cpp",
+                      # RUN-8: doctest's XML case list and run report and its console failure blocks.
+                      "src/run/src/doctest_parsers.cpp")
+
 RESULT_TYPES: tuple[ResultType, ...] = (
     # Test outcomes and test discovery. RUN-7 (gtest, CTest), RUN-8 (doctest), RUN-10 (the Unit
     # Tests window) and LTR-8 (dotnet test) add the parsers of ctest -N, --gtest_list_tests and
     # the test processes' own output.
     ResultType("UnitTestRunState", "test outcome", (), ("Passed", "Failed", "Skipped")),
     ResultType("DiscoveredTestEntry", "test discovery"),
-    # Reserved for RUN-7's result model, so it starts behind the rule (R0 exit criterion).
-    ResultType("TestResult", "test outcome"),
-    ResultType("TestOutcome", "test outcome", (), ("Passed", "Failed", "Skipped")),
+    # RUN-7's model (src/run/include/frost/run/test_model.hpp): ctest's -N --show-only=json-v1,
+    # --output-junit and console progress (ctest_parsers.cpp), and Google Test's
+    # --gtest_list_tests and JSON report (gtest_parsers.cpp).
+    ResultType("TestResult", "test outcome", _RUN7_TEST_PARSERS),
+    ResultType("TestOutcome", "test outcome", _RUN7_TEST_PARSERS, ("Passed", "Failed", "Skipped", "Disabled")),
+    ResultType("TestFailure", "test outcome", _RUN7_TEST_PARSERS),
+    ResultType("DiscoveredTest", "test discovery", _RUN7_TEST_PARSERS),
+    ResultType("GTestCase", "test discovery", _RUN7_TEST_PARSERS),
+    ResultType("DoctestCase", "test discovery", _RUN7_TEST_PARSERS),
     # Packages: PackageReference items read from the user's own .csproj are file contents, not
     # invented; a package catalogue needs a real feed (LTR-7).
     ResultType("NuGetPackageEntry", "package", ("src/app/src/project_properties_xml.cpp",)),
@@ -295,12 +305,12 @@ SITE_CONTEXT_LINES = 8
 # Every entry is a reviewed site in a file that the fabricated-result or tool-output rule scans.
 # The temporary FND-3 entries were deleted at the R0 integration together with their harms.
 SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
-    # Reviewed, labelled heuristic: the Unit Tests window lists tests found by regular expressions
-    # over the source text and labels every one "Discovered, not run"; no outcome is shown. RUN-7
-    # replaces it with ctest -N / --gtest_list_tests. Five sites, one per recogniser: C# test
-    # attributes and Main, C++ gtest, Catch2 and main.
+    # Reviewed, labelled heuristic: regular expressions over the source text find tests and entry
+    # points; only the entry points (main, Main) become the editor gutter's run markers, and no
+    # outcome is shown. Since RUN-7 the Unit Tests window lists ctest's tests instead. Five sites,
+    # one per recogniser: C# test attributes and Main, C++ gtest, Catch2 and main.
     SiteAllowance("src/app/src/project_unit_tests.cpp", "DiscoveredTestEntry", "DiscoveredTestEntry entry;",
-                  "source-text discovery shown as 'Discovered, not run' until RUN-7", count=5),
+                  "source-text recognisers behind the gutter's entry-point run markers", count=5),
     # Reviewed real site: the Problems window's live rows adapt LSP LiveDiagnostics (clangd, LuaLS,
     # the managed server) into BuildDiagnostic rows field by field.
     SiteAllowance("src/app/src/workbench_clangd.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",

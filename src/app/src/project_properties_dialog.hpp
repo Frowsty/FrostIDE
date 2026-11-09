@@ -151,19 +151,6 @@ using ReadProcLink = std::function<std::string(const std::string& linkPath)>;
 void showAttachToProcessDialog(QWidget* parent,
                                std::function<void(const RunningProcessInfo& proc, bool attachAsDotNet)> onAttach);
 
-/*
- * Run/Debug Configurations. The external-console choice is applied through
- * `onExternalConsoleChanged` and the compound launch through `onLaunchCompound`. The debugger
- * command, arguments, working directory and environment are shown read-only, as read from the
- * project's .vcxproj.user (else its .vcxproj) for `activeConfigPlatform`; editing them requires
- * run configurations (RUN-1), so the dialog never writes a project file and `onSaved` is unused.
- */
-void showEditRunConfigurationsDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel* solution,
-                                     const std::string& preferredProjectPath, const std::string& activeConfigPlatform,
-                                     bool externalConsole, std::function<void(bool)> onExternalConsoleChanged,
-                                     std::function<void()> onSaved,
-                                     std::function<void(const std::vector<project::ProjectId>&)> onLaunchCompound = {});
-
 // Read-only list of the projects `projectPath` references as loaded in `solution`. Adding or
 // removing references requires SLN-6, so nothing is written and `fs` and `onSaved` are unused.
 void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
@@ -195,7 +182,8 @@ createAsmViewerToolWindowWidget(QWidget* parent,
                                 std::function<std::pair<std::string, int>()> activeFileAndLineProvider);
 
 // A test or entry point found by scanning source text (not by running a test binary). It says
-// where a test is declared, never how it ran.
+// where a test is declared, never how it ran. Only the editor gutter's entry-point run markers use
+// it; the Unit Tests window (unit_tests_window.hpp, RUN-7) lists ctest's tests.
 struct DiscoveredTestEntry {
     std::string solutionName;
     std::string projectName;
@@ -213,24 +201,6 @@ struct DiscoveredTestEntry {
                                                                                  std::string_view projectName = {},
                                                                                  std::string_view projectPath = {},
                                                                                  std::string_view solutionName = {});
-
-[[nodiscard]] std::vector<DiscoveredTestEntry>
-discoverWorkspaceUnitTests(io::IFileSystem& fs, const project::SolutionModel* solution, std::string_view workspaceRoot);
-
-/*
- * Unit Tests tool window, discovery only: the tree lists the tests discoverWorkspaceUnitTests
- * finds in source text, each marked "Discovered, not run", and double-click navigates to the
- * declaration. Run All, Run Selected, Run Failed, Repeat Until Failure, Debug Selected and Stop
- * are disabled with "Requires the test runner (RUN-7)": the window starts no process and shows no
- * outcome, duration or count of passed/failed tests. `onDebugTest` is unused until RUN-10. `fs`
- * must outlive the widget; discovery runs on the GUI thread on Refresh and on filter changes.
- */
-[[nodiscard]] QWidget*
-createUnitTestsToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
-                                std::function<const project::SolutionModel*()> solutionProvider,
-                                std::function<std::string()> workspaceRootProvider,
-                                std::function<void(const std::string& path, int line)> onNavigateToSource,
-                                std::function<void(const DiscoveredTestEntry& test)> onDebugTest = {});
 
 void showLocalHistoryDialog(QWidget* parent, storage::LocalHistory& history, const std::string& filePath,
                             const std::string& currentContent,

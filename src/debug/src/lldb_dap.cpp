@@ -153,7 +153,80 @@ io::ProcessSpec lldbDapProcessSpec(std::string executable) {
     return spec;
 }
 
+std::vector<std::string> lldbDapLibstdcxxCommands() {
+    // The regular expressions are those lldb 23 registers the Python-backed providers under
+    // (CPlusPlusLanguage.cpp, LoadLibStdcppFormatters and the generic MSVC/libstdc++ entries).
+    static constexpr std::array<std::string_view, 7> kTypes{
+        "^std::vector<.+>(( )?&)?$",
+        "^std::list<.+>(( )?&)?$",
+        "^std::forward_list<.+>(( )?&)?$",
+        "^std::deque<.+>(( )?&)?$",
+        "^std::(multi)?(map|set)<.+>(( )?&)?$",
+        "^std::unordered_(multi)?(map|set)<.+> ?>$",
+        "^std::variant<.*>$",
+    };
+    // lldb-dap's "?" command prefix keeps a command's echo out of the Debug console unless it fails.
+    std::vector<std::string> commands{"?type category define -e frost-libstdcxx -l c++"};
+    for (const std::string_view type : kTypes) {
+        commands.push_back(std::format("?type summary add -w frost-libstdcxx -x \"{}\" --summary-string \"(contents "
+                                       "not shown: lldb-dap has no Python for libstdc++, DBG-4a)\"",
+                                       type));
+    }
+    return commands;
+}
+
+std::string ptraceAttachHint(std::string_view ptraceScope) {
+    while (!ptraceScope.empty() && (ptraceScope.back() == '\n' || ptraceScope.back() == ' ')) {
+        ptraceScope.remove_suffix(1);
+    }
+    if (ptraceScope == "1" || ptraceScope == "2") {
+        return std::format(
+            "Linux refused the attach: kernel.yama.ptrace_scope is {} (/proc/sys/kernel/yama/ptrace_scope), so a "
+            "debugger may attach only to {}. Let the program allow it (prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)), "
+            "lower the policy for this boot (sudo sysctl kernel.yama.ptrace_scope=0), or run the debugger with "
+            "CAP_SYS_PTRACE.",
+            ptraceScope, ptraceScope == "1" ? "its own descendants" : "processes as an administrator");
+    }
+    if (ptraceScope == "3") {
+        return "Linux refused the attach: kernel.yama.ptrace_scope is 3, which forbids attaching to any process until "
+               "the next boot.";
+    }
+    return {};
+}
+
+std::string ptraceAttachHint([[maybe_unused]] io::IFileSystem& fs) {
+#ifdef __linux__
+    auto scope = fs.readFile("/proc/sys/kernel/yama/ptrace_scope");
+    return scope ? ptraceAttachHint(*scope) : std::string();
+#else
+    return {};
+#endif
+}
+
+DebugSessionOptions lldbDapSessionOptions(DebugTargetMode mode) {
+    DebugSessionOptions options;
+    options.adapterId = "lldb-dap";
+    options.targetMode = mode;
+#ifdef _WIN32
+    options.breakOnAbort = mode == DebugTargetMode::Launch;
+    options.msvcExceptions = true;
+#elif defined(__linux__)
+    if (mode == DebugTargetMode::Attach) {
+        options.attachHint = ptraceAttachHint(io::realFileSystem());
+    }
+#endif
+    return options;
+}
+
 rpc::Json lldbDapLaunchArguments(const DebugTarget& target) {
+#ifdef __linux__
+    return lldbDapLaunchArguments(target, true);
+#else
+    return lldbDapLaunchArguments(target, false);
+#endif
+}
+
+rpc::Json lldbDapLaunchArguments(const DebugTarget& target, bool libstdcxx) {
     rpc::Json args = rpc::Json::array();
     for (const std::string& argument : target.arguments) {
         args.push(argument);
@@ -169,7 +242,7 @@ rpc::Json lldbDapLaunchArguments(const DebugTarget& target) {
                            .set("program", target.program)
                            .set("args", std::move(args))
                            .set("env", std::move(env))
-                           .set("stopOnEntry", false);
+                           .set("stopOnEntry", target.stopOnEntry);
     const std::string cwd =
         target.workingDirectory.empty() ? std::string(io::parentPath(target.program)) : target.workingDirectory;
     if (!cwd.empty()) {
@@ -179,8 +252,17 @@ rpc::Json lldbDapLaunchArguments(const DebugTarget& target) {
         launch.set("sourceMap", rpc::Json::array({rpc::Json::array(
                                     {rpc::Json(target.sourceMap->from()), rpc::Json(target.sourceMap->to())})}));
     }
+    rpc::Json initCommands = rpc::Json::array();
     if (!target.inheritEnvironment) {
-        launch.set("initCommands", rpc::Json::array({rpc::Json("settings set target.inherit-env false")}));
+        initCommands.push(rpc::Json("settings set target.inherit-env false"));
+    }
+    if (libstdcxx) {
+        for (std::string& command : lldbDapLibstdcxxCommands()) {
+            initCommands.push(rpc::Json(std::move(command)));
+        }
+    }
+    if (initCommands.size() > 0) {
+        launch.set("initCommands", std::move(initCommands));
     }
     return launch;
 }
@@ -225,10 +307,20 @@ Result<std::unique_ptr<DebugSession>> startDebugSession(const project::TrustStor
                                                         AdapterFactory factory,
                                                         std::map<std::string, std::vector<BreakpointLine>> breakpoints,
                                                         DebugSessionCallbacks callbacks) {
+    return startDebugSession(trust, target, std::move(factory), std::move(breakpoints), std::move(callbacks), {}, {});
+}
+
+Result<std::unique_ptr<DebugSession>>
+startDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
+                  std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
+                  std::vector<FunctionBreakpointLine> functionBreakpoints, std::vector<std::string> exceptionFilters) {
     if (auto allowed = checkDebugTrust(trust, target); !allowed)
         return std::unexpected(std::move(allowed.error()));
+    DebugSessionOptions options = lldbDapSessionOptions(DebugTargetMode::Launch);
+    options.functionBreakpoints = std::move(functionBreakpoints);
+    options.exceptionFilters = std::move(exceptionFilters);
     return DebugSession::start(std::move(factory), lldbDapLaunchArguments(target), std::move(breakpoints),
-                               std::move(callbacks), io::kWindowsProcessRules);
+                               std::move(callbacks), std::move(options));
 }
 
 Result<std::unique_ptr<DebugSession>> attachDebugSession(const project::TrustStore& trust, const DebugTarget& target,
@@ -237,8 +329,14 @@ Result<std::unique_ptr<DebugSession>> attachDebugSession(const project::TrustSto
                                                          DebugSessionCallbacks callbacks, std::string adapterId) {
     if (auto allowed = checkDebugTrust(trust, target); !allowed)
         return std::unexpected(std::move(allowed.error()));
+    DebugSessionOptions options;
+    if (adapterId == "lldb-dap") {
+        options = lldbDapSessionOptions(DebugTargetMode::Attach);
+    }
+    options.adapterId = std::move(adapterId);
+    options.targetMode = DebugTargetMode::Attach;
     return DebugSession::start(std::move(factory), std::move(attachArguments), std::move(breakpoints),
-                               std::move(callbacks), false, std::move(adapterId), DebugTargetMode::Attach);
+                               std::move(callbacks), std::move(options));
 }
 
 } // namespace frost::debug

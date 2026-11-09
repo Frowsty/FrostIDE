@@ -46,7 +46,8 @@ The user ended the phase on 2026-11-07 by accepting the roadmap's recommendation
      list.
    - Blockers are fixed before merge, and the combined tree is verified before it reaches `main`.
 5. **The verification footer is mandatory.** Every commit on `main` ends with the real summary line of `verify.ps1`
-   and `verify.sh` (`Verified: win ..., wsl ..., lint ok`), followed by the co-author line. FND-2 adds a local
+   and `verify.sh` (`Verified: win ..., wsl ..., lint ok`). Amended 2026-11-09 (user decision): no Co-Authored-By
+   or other attribution line follows it, and the history was rewritten to remove the earlier ones. FND-2 adds a local
    `commit-msg` hook that rejects a footer whose verify-stamp does not match the committed tree hash. There is still
    no CI (D24).
    - After a passing run, `verify.ps1` and a standalone `verify.sh` record their summary line under the verified

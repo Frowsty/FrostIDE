@@ -13,6 +13,7 @@
 #include "frost/ui/run_actions.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/run_controller.hpp"
+#include "frost/ui/run_tool_window.hpp"
 
 #include "build/build_test_util.hpp"
 #include <QComboBox>
@@ -209,12 +210,12 @@ protected:
         solution = std::make_shared<const project::SolutionModel>(std::move(*loaded));
 
         controller = std::make_unique<RunController>(
-            &console, RunControllerHooks{.confirmRerun =
-                                             [this](const QString& name) {
-                                                 prompts.push_back(name);
-                                                 return acceptRerun;
-                                             },
-                                         .reportError = [this](const QString& message) { errors.push_back(message); }});
+            &window, RunControllerHooks{.confirmRerun =
+                                            [this](const QString& name) {
+                                                prompts.push_back(name);
+                                                return acceptRerun;
+                                            },
+                                        .reportError = [this](const QString& message) { errors.push_back(message); }});
         build::RunServiceOptions options{
             .stateFilePath = MemTree::path("data/run-settings.txt"),
             .properties = [](const build::RunPropertyRequest& request) -> Result<build::RunProperties> {
@@ -250,7 +251,9 @@ protected:
     std::unique_ptr<project::TrustStore> trustStore;
     std::shared_ptr<const project::SolutionModel> solution;
     FakeBuilder builder;
-    RunConsole console;
+    // RUN-3: the controller runs into the Run tool window's tabs; console() is the current one.
+    RunToolWindow window;
+    [[nodiscard]] RunConsole& console() { return *window.currentConsole(); }
     std::vector<QString> prompts;
     std::vector<QString> errors;
     bool acceptRerun = false;
@@ -282,9 +285,9 @@ TEST_F(RunControllerTest, RunsIntoTheConsoleAndPromptsBeforeARerun) {
     auto first = controller->run();
     ASSERT_TRUE(first.has_value()) << first.error().describe();
     ASSERT_TRUE(builder.finish());
-    ASSERT_TRUE(spinUntil([&] { return console.input()->isEnabled(); })) << console.text().toStdString();
+    ASSERT_TRUE(spinUntil([&] { return console().input()->isEnabled(); })) << console().text().toStdString();
     EXPECT_TRUE(controller->running());
-    EXPECT_EQ(console.title()->text(), QStringLiteral("App [Debug|x64]"));
+    EXPECT_EQ(console().title()->text(), QStringLiteral("App [Debug|x64]"));
 
     // Busy: declining the prompt leaves it running.
     auto declined = controller->run();
@@ -299,10 +302,11 @@ TEST_F(RunControllerTest, RunsIntoTheConsoleAndPromptsBeforeARerun) {
     ASSERT_TRUE(builder.finish());
     ASSERT_TRUE(service->waitForIdle(30s)); // Every event is queued for the GUI thread now.
     EXPECT_TRUE(spinUntil([&] {
-        return !controller->running() && console.text().endsWith(QStringLiteral("Process finished with exit code 0\n"));
-    })) << console.text().toStdString();
-    EXPECT_TRUE(console.text().contains(QStringLiteral("second run\n"))) << console.text().toStdString();
-    EXPECT_FALSE(console.text().contains(QStringLiteral("(stopped)"))) << "the console shows the new run only";
+        return !controller->running() &&
+               console().text().endsWith(QStringLiteral("Process finished with exit code 0\n"));
+    })) << console().text().toStdString();
+    EXPECT_TRUE(console().text().contains(QStringLiteral("second run\n"))) << console().text().toStdString();
+    EXPECT_FALSE(console().text().contains(QStringLiteral("(stopped)"))) << "the console shows the new run only";
     EXPECT_TRUE(launcher.launches()[0].terminated);
 }
 
@@ -339,11 +343,11 @@ TEST_F(RunControllerTest, TheRunActionsDriveTheController) {
     launcher.expect({.expectExecutable = programPath("Tool"), .neverExits = true});
     EXPECT_EQ(invoke(kRunWithoutDebuggingActionId), input::InvokeResult::Ran);
     ASSERT_TRUE(builder.finish());
-    ASSERT_TRUE(spinUntil([&] { return console.input()->isEnabled(); }));
+    ASSERT_TRUE(spinUntil([&] { return console().input()->isEnabled(); }));
     EXPECT_TRUE(registry.isEnabled(*registry.find(kStopActionId), context));
     EXPECT_EQ(invoke(kStopActionId), input::InvokeResult::Ran);
     ASSERT_TRUE(spinUntil([&] { return !controller->running(); }));
-    EXPECT_TRUE(console.text().contains(QStringLiteral("(stopped)"))) << console.text().toStdString();
+    EXPECT_TRUE(console().text().contains(QStringLiteral("(stopped)"))) << console().text().toStdString();
     EXPECT_TRUE(reported.empty());
 }
 
@@ -379,7 +383,7 @@ TEST_F(RunControllerTest, ADebugRunIsLeftToTheDebugger) {
     ASSERT_TRUE(handed.has_value());
     EXPECT_EQ(handed->command.executable, programPath("App"));
     EXPECT_FALSE(controller->running());
-    EXPECT_TRUE(console.text().isEmpty()) << console.text().toStdString();
+    EXPECT_TRUE(console().text().isEmpty()) << console().text().toStdString();
     EXPECT_TRUE(launcher.launches().empty());
 }
 
