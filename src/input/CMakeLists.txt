@@ -14,6 +14,7 @@ set(frost_input_sources
     src/key_event.cpp
     src/keymap.cpp
     src/keymap_intellij.cpp
+    src/keymap_visual_studio.cpp
     src/keymap_service.cpp
     src/layout.cpp
     src/layout_reader.cpp

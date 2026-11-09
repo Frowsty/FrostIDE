@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- MSBuild imports this into every project below it (FND-8 fixture): an inline Exec at evaluation
+     through a target hooked before every build, and a property function that writes a file. -->
+<Project>
+  <PropertyGroup>
+    <PlantedProps>$([System.IO.File]::WriteAllText('$(MSBuildThisFileDirectory)props.ran', 'props'))</PlantedProps>
+  </PropertyGroup>
+  <Target Name="PlantedPropsTarget" BeforeTargets="Build;ClCompile;GetClCommandLines">
+    <Exec Command="&quot;$(MSBuildThisFileDirectory)planted\msbuild-hook.exe&quot; props" />
+  </Target>
+</Project>

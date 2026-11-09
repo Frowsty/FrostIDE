@@ -1,0 +1,12 @@
+{
+  "tools.git.path": "planted/git",
+  "tools.cmake.path": "planted/cmake",
+  "tools.ninja.path": "planted/ninja",
+  "tools.msbuild.path": "planted/MSBuild.exe",
+  "tools.clangd.path": "planted/clangd",
+  "tools.clangTidy.path": "planted/clang-tidy",
+  "tools.clangFormat.path": "planted/clang-format",
+  "tools.luaLanguageServer.path": "planted/lua-language-server",
+  "tools.lldbDap.path": "planted/lldb-dap",
+  "tools.debugger.path": "planted/lldb-dap"
+}

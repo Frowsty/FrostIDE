@@ -14,6 +14,7 @@
 #include "frost/build/build_session.hpp"
 #include "frost/core/build_info.hpp"
 #include "frost/core/mutex.hpp"
+#include "frost/input/keymap.hpp"
 #include "frost/io/async_process.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
@@ -70,8 +71,11 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -1671,6 +1675,65 @@ TEST(Workbench, KeymapSettingsSwitchesBetweenIntelliJAndVisualStudioModes) {
     EXPECT_EQ(frost::input::formatSequence(saveAllShortcuts.front()), "Ctrl+Shift+S");
 
     buttons->button(QDialogButtonBox::Cancel)->click();
+}
+
+/*
+ * UX-21's keymap picker is Settings > Keymap (never the launcher, never a first-run step): it lists
+ * every built-in keymap, the default stays IntelliJ, and choosing the ReSharper or Visual Studio 2022
+ * keymap there applies it live, with their documented shortcuts on the workbench's real actions.
+ */
+TEST(Workbench, TheKeymapPickerOffersEveryBuiltinKeymapAndAppliesReSharperAndVisualStudio2022) {
+    WorkDir dir("settings-keymap-picker");
+    WorkbenchRig rig(dir);
+    rig.show();
+    EXPECT_EQ(rig.workbench->keymap().keymap().id(), "intellij") << "the default keymap is unchanged";
+    const auto primary = [&](std::string_view action) -> std::string {
+        const auto id = rig.workbench->registry().find(action);
+        if (!id)
+            return "(no action " + std::string(action) + ")";
+        const auto list = rig.workbench->keymap().shortcutsFor(*id);
+        return list.empty() ? std::string("(unbound)") : frost::input::formatSequence(list.front());
+    };
+    const struct {
+        const char* keymap;
+        std::vector<std::pair<std::string_view, std::string_view>> shortcuts;
+    } choices[] = {
+        {"resharper",
+         {{"refactor.this", "Ctrl+Shift+R"},
+          {"code.showIntentions", "Alt+Enter"},
+          {"navigate.gotoFile", "Ctrl+Shift+T"},
+          {"build.buildSolution", "Ctrl+Shift+B"}}},
+        {"visual-studio-2022",
+         {{"navigate.declaration", "F12"},
+          {"refactor.rename", "Ctrl+R, Ctrl+R"},
+          {"file.saveDocument", "Ctrl+S"},
+          {"build.buildSolution", "Ctrl+Shift+B"}}},
+    };
+    for (const auto& choice : choices) {
+        rig.window->refreshActions();
+        rig.window->mainToolbar().button(frost::ui::MainToolbar::kSettings)->click();
+        auto* dialog = rig.window->findChild<QDialog*>(QStringLiteral("settingsDialog"));
+        ASSERT_NE(dialog, nullptr);
+        auto* keymapCombo = dialog->findChild<QComboBox*>(QStringLiteral("setting.keymap.id"));
+        auto* buttons = dialog->findChild<QDialogButtonBox*>();
+        ASSERT_NE(keymapCombo, nullptr);
+        ASSERT_NE(buttons, nullptr);
+        std::set<std::string> listed;
+        for (int i = 0; i < keymapCombo->count(); ++i)
+            listed.insert(keymapCombo->itemData(i).toString().toStdString());
+        for (const std::string_view id : frost::input::builtinKeymapIds())
+            EXPECT_TRUE(listed.contains(std::string(id))) << "the picker does not offer " << id;
+        EXPECT_EQ(listed.size(), frost::input::builtinKeymapIds().size());
+
+        const int index = keymapCombo->findData(QString::fromLatin1(choice.keymap));
+        ASSERT_GE(index, 0) << choice.keymap;
+        keymapCombo->setCurrentIndex(index);
+        buttons->button(QDialogButtonBox::Ok)->click();
+        EXPECT_EQ(rig.settings->snapshot()->get(frost::settings::key::keymapId), choice.keymap);
+        ASSERT_TRUE(waitFor([&] { return rig.workbench->keymap().keymap().id() == choice.keymap; })) << choice.keymap;
+        for (const auto& [action, shortcut] : choice.shortcuts)
+            EXPECT_EQ(primary(action), shortcut) << choice.keymap << " " << action;
+    }
 }
 
 TEST(Workbench, NewProjectSupportsVisualStudioCppLibrariesAndDotNetTemplates) {

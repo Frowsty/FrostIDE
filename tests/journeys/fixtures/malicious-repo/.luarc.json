@@ -1,0 +1,4 @@
+{
+  "runtime.plugin": "plugin.lua",
+  "workspace.library": ["planted"]
+}
