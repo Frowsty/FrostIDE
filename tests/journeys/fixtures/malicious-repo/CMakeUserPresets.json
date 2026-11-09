@@ -1,0 +1,11 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "user",
+      "inherits": "pwn",
+      "binaryDir": "${sourceDir}/build/user",
+      "cacheVariables": { "CMAKE_PROJECT_TOP_LEVEL_INCLUDES": "${sourceDir}/toolchain.cmake" }
+    }
+  ]
+}

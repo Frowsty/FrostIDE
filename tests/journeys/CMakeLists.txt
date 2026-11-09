@@ -40,6 +40,39 @@ set_tests_properties(journeys.j2_run PROPERTIES
     RESOURCE_LOCK frost_desktop
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
+# FND-8, the malicious-repository test (trust_malicious_repo.py's header): the real frost opens a
+# copy of fixtures/malicious-repo before trust and only restricted mode may start anything.
+# trust_canary is the planted binary (it marks every run of a copy). Static CRT on Windows, so a
+# copy runs anywhere.
+add_executable(trust_canary trust_canary.cpp)
+frost_apply_compile_options(trust_canary TEST NO_SANITIZE)
+if(WIN32)
+    set_target_properties(trust_canary PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreaded)
+endif()
+# Only Debug frost has the endpoint and the spawn log, so the test exists in Debug only (the Release
+# and sanitizer legs, which have neither, do not list it).
+if(FROST_ENABLE_AUTOMATION_ENDPOINT AND FROST_ENABLE_SPAWN_LOG)
+    if(CMAKE_CONFIGURATION_TYPES)
+        set(_frost_trust_configurations CONFIGURATIONS Debug)
+    elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(_frost_trust_configurations "")
+    else()
+        set(_frost_trust_configurations SKIP)
+    endif()
+    if(NOT _frost_trust_configurations STREQUAL "SKIP")
+        add_test(NAME journeys.trust_malicious_repo ${_frost_trust_configurations}
+            COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/trust_malicious_repo.py
+                    --frost $<TARGET_FILE:frost> --config $<CONFIG> --canary $<TARGET_FILE:trust_canary>
+                    --evidence ${CMAKE_BINARY_DIR}/journey-evidence)
+        set_tests_properties(journeys.trust_malicious_repo PROPERTIES
+            LABELS integration
+            TIMEOUT 900
+            # It runs frost (offscreen) and real tools after the grant: alone, like every frost run.
+            RESOURCE_LOCK frost_desktop
+            ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    endif()
+endif()
+
 # The journey helpers that need no frost, corpus or tool (evidence, spawn-log reading, oracle parsers).
 add_test(NAME journeys.support
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_journey_support.py -v)

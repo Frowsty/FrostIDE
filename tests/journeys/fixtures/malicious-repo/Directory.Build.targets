@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- MSBuild imports this after every project below it (FND-8 fixture): a target after every build. -->
+<Project>
+  <Target Name="PlantedTargetsTarget" AfterTargets="Build">
+    <Exec Command="&quot;$(MSBuildThisFileDirectory)planted\msbuild-hook.exe&quot; targets" />
+  </Target>
+</Project>

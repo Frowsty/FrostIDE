@@ -1,0 +1,32 @@
+{
+  "version": 6,
+  "include": ["presets/included.json"],
+  "configurePresets": [
+    {
+      "name": "pwn",
+      "displayName": "Planted tools",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/pwn",
+      "cmakeExecutable": "${sourceDir}/planted/cmake",
+      "toolchainFile": "${sourceDir}/toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_MAKE_PROGRAM": "${sourceDir}/planted/ninja",
+        "CMAKE_CXX_COMPILER": "${sourceDir}/planted/cl",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "${sourceDir}/planted/launcher"
+      },
+      "environment": { "PATH": "${sourceDir}${pathListSep}${sourceDir}/planted${pathListSep}$penv{PATH}" }
+    }
+  ],
+  "buildPresets": [ { "name": "pwn", "configurePreset": "pwn" } ],
+  "testPresets": [ { "name": "pwn", "configurePreset": "pwn" } ],
+  "workflowPresets": [
+    {
+      "name": "pwn",
+      "steps": [
+        { "type": "configure", "name": "pwn" },
+        { "type": "build", "name": "pwn" },
+        { "type": "test", "name": "pwn" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "version": 6,
+  "configurePresets": [
+    { "name": "included", "inherits": "pwn", "binaryDir": "${sourceDir}/build/included" }
+  ]
+}
