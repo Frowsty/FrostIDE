@@ -255,6 +255,10 @@ struct CMakeServiceOptions {
     bool captureMsvcEnvironment = true; // Windows: vcvarsall for non-Visual Studio generators.
     std::string vsInstanceId{};         // The instance for vcvarsall; "" takes the newest with C++ tools.
     std::string msvcArchitecture = "x64";
+    // SLN-14: the MSVC toolset and Windows SDK vcvarsall sets up (VcvarsSelection, toolchain.hpp);
+    // "" keeps vcvarsall's defaults (the default toolset, the newest SDK).
+    std::string msvcToolsetVersion{};
+    std::string windowsSdkVersion{};
     std::string msvcCacheDirectory{}; // MsvcEnvironmentCache's directory; "" caches in memory only.
     std::string stateFilePath{};      // The persisted active profiles (absolute); "" persists nothing.
     // The `cmake.profiles` setting's records (cmakeProfileRecords) and the scope they came from.

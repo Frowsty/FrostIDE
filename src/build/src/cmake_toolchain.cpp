@@ -323,8 +323,34 @@ Result<std::string> systemCmdPath() {
 #endif
 }
 
+bool isVcvarsVersionText(std::string_view text) noexcept {
+    return !text.empty() && text.size() <= 32 && text.front() >= '0' && text.front() <= '9' &&
+           std::ranges::all_of(text, [](char c) { return (c >= '0' && c <= '9') || c == '.'; });
+}
+
+std::optional<std::string> environmentValue(const project::CMakeEnvironment& environment, std::string_view name) {
+    const std::string wanted = lowered(name);
+    std::optional<std::string> found;
+    for (const auto& [key, value] : environment) {
+        if (lowered(key) == wanted) {
+            found = value; // The last change wins, as it does when the environment is applied.
+        }
+    }
+    return found;
+}
+
 Result<io::ProcessSpec> vcvarsProcessSpec(std::string_view cmdPath, std::string_view vcvarsall,
                                           std::string_view architecture) {
+    return vcvarsProcessSpec(cmdPath, vcvarsall, architecture, VcvarsSelection{});
+}
+
+Result<io::ProcessSpec> vcvarsProcessSpec(std::string_view cmdPath, std::string_view vcvarsall,
+                                          std::string_view architecture, const VcvarsSelection& selection) {
+    if ((!selection.sdkVersion.empty() && !isVcvarsVersionText(selection.sdkVersion)) ||
+        (!selection.toolsetVersion.empty() && !isVcvarsVersionText(selection.toolsetVersion))) {
+        return fail(ErrorCode::InvalidArgument, std::format("'{}' / '{}' is not a Windows SDK / MSVC toolset version",
+                                                            selection.sdkVersion, selection.toolsetVersion));
+    }
     if (!io::isAbsolutePath(cmdPath, io::PathStyle::Windows) ||
         !io::isAbsolutePath(vcvarsall, io::PathStyle::Windows)) {
         return fail(ErrorCode::InvalidArgument, "cmd.exe and vcvarsall.bat must be absolute paths");
@@ -348,10 +374,17 @@ Result<io::ProcessSpec> vcvarsProcessSpec(std::string_view cmdPath, std::string_
                       "&&",
                       "call",
                       std::string(vcvarsall),
-                      lowered(architecture),
-                      ">nul",
-                      "&&",
-                      "set"};
+                      lowered(architecture)};
+    // vcvarsall's order: architecture, platform type (not used), SDK version, then the options.
+    if (!selection.sdkVersion.empty()) {
+        spec.arguments.push_back(selection.sdkVersion);
+    }
+    if (!selection.toolsetVersion.empty()) {
+        spec.arguments.push_back("-vcvars_ver=" + selection.toolsetVersion);
+    }
+    for (std::string_view word : {">nul", "&&", "set"}) {
+        spec.arguments.emplace_back(word);
+    }
     spec.workingDirectory = std::string(io::parentPath(vcvarsall, io::PathStyle::Windows));
     spec.environment = {{"VSCMD_SKIP_SENDTELEMETRY", std::string("1")}};
     spec.stdinMode = io::Stdio::Null;
@@ -421,13 +454,49 @@ std::string decodeUtf16Le(std::string_view bytes) {
     return out;
 }
 
+namespace {
+
+// toolsetVersion and sdkVersion from the captured VCToolsVersion and WindowsSDKVersion.
+void fillCapturedVersions(MsvcDevEnvironment& environment) {
+    environment.toolsetVersion = environmentValue(environment.changes, "VCToolsVersion").value_or(std::string());
+    std::string sdk = environmentValue(environment.changes, "WindowsSDKVersion").value_or(std::string());
+    while (!sdk.empty() && (sdk.back() == '\\' || sdk.back() == ' ')) {
+        sdk.pop_back();
+    }
+    environment.sdkVersion = std::move(sdk);
+}
+
+// A toolset request matches the captured version exactly or as a prefix ending at a dot ("14.44").
+bool versionMatches(std::string_view requested, std::string_view captured) noexcept {
+    return captured == requested ||
+           (captured.size() > requested.size() && captured.starts_with(requested) && captured[requested.size()] == '.');
+}
+
+// Whether the capture is the environment the selection asked for (header comment).
+Result<void> matchesSelection(const MsvcDevEnvironment& environment) {
+    const VcvarsSelection& selection = environment.selection;
+    if (!selection.toolsetVersion.empty() && !versionMatches(selection.toolsetVersion, environment.toolsetVersion)) {
+        return fail(ErrorCode::IoError, std::format("vcvarsall.bat set up MSVC toolset '{}', not the requested '{}'",
+                                                    environment.toolsetVersion, selection.toolsetVersion));
+    }
+    if (!selection.sdkVersion.empty() && environment.sdkVersion != selection.sdkVersion) {
+        return fail(ErrorCode::IoError, std::format("vcvarsall.bat set up Windows SDK '{}', not the requested '{}'",
+                                                    environment.sdkVersion, selection.sdkVersion));
+    }
+    return {};
+}
+
+} // namespace
+
 Result<MsvcDevEnvironment> captureMsvcEnvironment(io::IProcessLauncher& launcher, io::IFileSystem& fs,
-                                                  const VsInstance& instance, std::string_view architecture) {
+                                                  const VsInstance& instance, std::string_view architecture,
+                                                  const VcvarsSelection& selection) {
     if constexpr (!kWindows) {
         static_cast<void>(launcher);
         static_cast<void>(fs);
         static_cast<void>(instance);
         static_cast<void>(architecture);
+        static_cast<void>(selection);
         return fail(ErrorCode::Unsupported, "the MSVC environment exists on Windows only");
     } else {
         auto vcvarsall = vcvarsallPath(instance.installationPath);
@@ -442,7 +511,7 @@ Result<MsvcDevEnvironment> captureMsvcEnvironment(io::IProcessLauncher& launcher
         if (!cmd) {
             return std::unexpected(std::move(cmd.error()));
         }
-        auto spec = vcvarsProcessSpec(*cmd, *vcvarsall, architecture);
+        auto spec = vcvarsProcessSpec(*cmd, *vcvarsall, architecture, selection);
         if (!spec) {
             return std::unexpected(std::move(spec.error()));
         }
@@ -451,17 +520,35 @@ Result<MsvcDevEnvironment> captureMsvcEnvironment(io::IProcessLauncher& launcher
             return std::unexpected(std::move(result.error()).withContext("while running vcvarsall.bat"));
         }
         if (result->exitCode != 0) {
+            // vcvarsall's own reason goes to its stdout, which the capture discards (>nul); a selection
+            // it cannot satisfy (a toolset or SDK that is not installed) is the usual cause.
+            if (selection.empty()) {
+                return fail(ErrorCode::IoError,
+                            std::format("vcvarsall.bat {} failed with exit code {}", architecture, result->exitCode));
+            }
             return fail(ErrorCode::IoError,
-                        std::format("vcvarsall.bat {} failed with exit code {}", architecture, result->exitCode));
+                        std::format("vcvarsall.bat {} (Windows SDK '{}', MSVC toolset '{}') failed with exit code {}: "
+                                    "is that SDK and toolset installed in {}?",
+                                    architecture, selection.sdkVersion.empty() ? "default" : selection.sdkVersion,
+                                    selection.toolsetVersion.empty() ? "default" : selection.toolsetVersion,
+                                    result->exitCode, instance.displayName));
         }
         auto changes = parseVcvarsCapture(decodeUtf16Le(result->stdoutBytes));
         if (!changes) {
             return std::unexpected(std::move(changes.error()));
         }
-        return MsvcDevEnvironment{.instanceId = instance.instanceId,
-                                  .installationVersion = instance.installationVersion,
-                                  .architecture = lowered(architecture),
-                                  .changes = std::move(*changes)};
+        MsvcDevEnvironment environment{.instanceId = instance.instanceId,
+                                       .installationVersion = instance.installationVersion,
+                                       .architecture = lowered(architecture),
+                                       .selection = selection,
+                                       .toolsetVersion = {},
+                                       .sdkVersion = {},
+                                       .changes = std::move(*changes)};
+        fillCapturedVersions(environment);
+        if (auto matches = matchesSelection(environment); !matches) {
+            return std::unexpected(std::move(matches.error()));
+        }
+        return environment;
     }
 }
 
@@ -521,11 +608,19 @@ MsvcEnvironmentCache::MsvcEnvironmentCache(io::IFileSystem& fs, io::IProcessLaun
                                            std::string cacheDirectory)
     : m_fs(fs), m_launcher(launcher), m_directory(std::move(cacheDirectory)) {}
 
-std::string MsvcEnvironmentCache::cacheFile(std::string_view instanceId, std::string_view architecture) const {
+std::string MsvcEnvironmentCache::cacheFile(std::string_view instanceId, std::string_view architecture,
+                                            const VcvarsSelection& selection) const {
     if (m_directory.empty()) {
         return {};
     }
-    std::string name = std::format("msvc-env-{}-{}.txt", instanceId, lowered(architecture));
+    std::string name = std::format("msvc-env-{}-{}", instanceId, lowered(architecture));
+    if (!selection.toolsetVersion.empty()) {
+        name += "-t" + selection.toolsetVersion;
+    }
+    if (!selection.sdkVersion.empty()) {
+        name += "-s" + selection.sdkVersion;
+    }
+    name += ".txt";
     std::ranges::replace_if(name, [](char c) { return c == '\\' || c == '/' || c == ':'; }, '_');
     return io::joinPath(m_directory, name).value_or(std::string());
 }
@@ -535,8 +630,10 @@ std::size_t MsvcEnvironmentCache::captures() const {
     return m_captures;
 }
 
-Result<MsvcDevEnvironment> MsvcEnvironmentCache::get(const VsInstance& instance, std::string_view architecture) {
-    const std::string key = instance.instanceId + '\t' + lowered(architecture);
+Result<MsvcDevEnvironment> MsvcEnvironmentCache::get(const VsInstance& instance, std::string_view architecture,
+                                                     const VcvarsSelection& selection) {
+    const std::string key = std::format("{}\t{}\t{}\t{}", instance.instanceId, lowered(architecture),
+                                        selection.toolsetVersion, selection.sdkVersion);
     {
         LockGuard lock(m_mutex);
         if (const auto found = m_memory.find(key);
@@ -544,13 +641,15 @@ Result<MsvcDevEnvironment> MsvcEnvironmentCache::get(const VsInstance& instance,
             return found->second;
         }
     }
-    const std::string file = cacheFile(instance.instanceId, architecture);
+    const std::string file = cacheFile(instance.instanceId, architecture, selection);
     if (!file.empty()) {
         if (auto text = m_fs.readFile(file)) {
             if (auto cached = parseMsvcEnvironmentFile(*text);
                 cached && cached->installationVersion == instance.installationVersion) {
                 cached->instanceId = instance.instanceId;
                 cached->architecture = lowered(architecture);
+                cached->selection = selection;
+                fillCapturedVersions(*cached);
                 LockGuard lock(m_mutex);
                 m_memory[key] = *cached;
                 return *cached;
@@ -561,7 +660,7 @@ Result<MsvcDevEnvironment> MsvcEnvironmentCache::get(const VsInstance& instance,
         LockGuard lock(m_mutex);
         ++m_captures;
     }
-    auto captured = captureMsvcEnvironment(m_launcher, m_fs, instance, architecture);
+    auto captured = captureMsvcEnvironment(m_launcher, m_fs, instance, architecture, selection);
     if (!captured) {
         return captured;
     }

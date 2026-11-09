@@ -43,6 +43,7 @@ frost_add_test(build_unit_tests
         output_parsers_test.cpp
         run_service_test.cpp
         run_target_test.cpp
+        toolchain_test.cpp
         vcxproj_user_test.cpp
     DEPS frost::build)
 # src/build/src: json_test.cpp tests the private JSON reader.
@@ -114,4 +115,17 @@ if(WIN32)
         DEPS frost::build
         LABELS integration msvc)
     target_include_directories(build_msvc_env_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+endif()
+
+# SLN-14: the toolchain discovery core against the real vswhere, reg.exe, vcvarsall.bat, cl.exe and
+# the pinned cmake/ninja (toolchain_real_test.cpp), labels "integration" and "msvc", Windows only.
+if(WIN32)
+    frost_add_test(build_toolchain_tests
+        SOURCES toolchain_real_test.cpp
+        DEPS frost::build
+        LABELS integration msvc)
+    target_include_directories(build_toolchain_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(build_toolchain_tests PRIVATE
+        FROST_TEST_CMAKE="${CMAKE_COMMAND}"
+        FROST_TEST_NINJA="${CMAKE_MAKE_PROGRAM}")
 endif()

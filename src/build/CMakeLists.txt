@@ -15,6 +15,8 @@
 # the GNU/Clang and CMake message parsers, and the CMakeService (profiles, background configure,
 # File API model, reconfigure on change, cmake --build). It also depends on settings (the
 # cmake.profiles records).
+# SLN-14 (R3): the toolchain discovery core (toolchain.hpp): MSVC toolsets, platform toolsets and
+# Windows SDKs, shared by the CMake and MSBuild paths.
 # TODO(M4): FrostIDE.MSBuildLogger, the dotnet driver, full run configurations and localized
 # output decoding (I12).
 
@@ -35,6 +37,7 @@ set(frost_build_sources
     src/run_session.cpp
     src/run_target.cpp
     src/session.cpp
+    src/toolchain.cpp
     src/vcxproj_user.cpp)
 
 frost_add_library(build LAYER build
@@ -57,6 +60,7 @@ target_compile_definitions(frost_build PRIVATE FROST_PINNED_CMAKE_VERSION="${_fr
 # per-user file's XML; no header above build sees it.
 target_link_libraries(frost_build PRIVATE pugixml::pugixml)
 if(WIN32)
-    # shell32: SHGetFolderPathW (the Program Files (x86) folder that holds vswhere.exe).
-    target_link_libraries(frost_build PRIVATE shell32)
+    # shell32: SHGetFolderPathW (the Program Files (x86) folder that holds vswhere.exe); advapi32:
+    # RegGetValueW (the Windows SDK root, toolchain.hpp).
+    target_link_libraries(frost_build PRIVATE shell32 advapi32)
 endif()

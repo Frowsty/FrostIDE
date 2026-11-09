@@ -648,12 +648,14 @@ private:
     void createRunService();
     // Run configurations (RUN-2/RUN-3, workbench_run_configurations.cpp): the generated ones of the
     // open CMake model and solution, the workspace store, a CMake launch with the user's edits, and
-    // the trust gate of a native configuration.
+    // the trust gate of a native configuration. The gate's prompt, once the user trusts the
+    // workspace, calls `retry` (Debug's retry, RUN-5), or else runs the configuration again.
     [[nodiscard]] std::vector<run::RunConfiguration> generatedRunConfigurations() const;
     void loadRunConfigurations();
     [[nodiscard]] Result<void> saveRunConfigurations(const std::vector<run::RunConfiguration>& stored);
     [[nodiscard]] run::RunConfiguration configureCMakeLaunch(run::RunConfiguration launch) const;
-    [[nodiscard]] Result<void> mayRunConfiguration(const run::RunConfiguration& configuration);
+    [[nodiscard]] Result<void> mayRunConfiguration(const run::RunConfiguration& configuration,
+                                                   std::function<void()> retry = {});
     void connectCMakeRunConfigurations();
     void attachToolWindows();
     void attachNavigationBar();

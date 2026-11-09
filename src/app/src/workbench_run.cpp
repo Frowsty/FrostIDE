@@ -4,10 +4,15 @@
 // controller, attaching Run to the window (the Run tool window v2 and the configuration combo,
 // RUN-3), Lua debugging's availability, Attach to Process and the compound-launch refusal (split
 // from workbench.cpp, FND-12a). The run configurations are workbench_run_configurations.cpp's.
+// RUN-5: Debug runs a configuration's before-launch tasks first, attaches for an attach
+// configuration and refuses a compound one (DBG-10).
 
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
+#include "frost/run/run_configuration.hpp"
+#include "frost/run/run_manager.hpp"
+#include "frost/run/run_types.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/debug_actions.hpp"
 #include "frost/ui/dialog_chrome.hpp"
@@ -42,6 +47,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMetaObject>
+#include <QPointer>
 #include <QScopeGuard>
 
 #include <algorithm>
@@ -144,17 +151,117 @@ void Workbench::createRunService() {
             m_window->toolWindows().show(ui::kDebugToolWindowId, false);
     };
     // A native configuration debugs its program as configured; CMake targets are built first.
-    const auto nativeSelected = [this] {
+    const auto selectedType = [this]() -> std::optional<run::RunType> {
         const run::RunConfiguration* selected = m_runController ? m_runController->selectedConfiguration() : nullptr;
-        return selected != nullptr && selected->type == run::RunType::Native;
+        return selected != nullptr ? std::optional<run::RunType>(selected->type) : std::nullopt;
     };
-    debugHooks.alternateAvailable = [this, nativeSelected] { return m_cmake != nullptr || nativeSelected(); };
+    const auto nativeSelected = [selectedType] { return selectedType() == run::RunType::Native; };
+    debugHooks.alternateAvailable = [this, selectedType] {
+        const auto type = selectedType();
+        return m_cmake != nullptr || type == run::RunType::Native || type == run::RunType::Attach ||
+               type == run::RunType::Compound;
+    };
+    /*
+     * RUN-5: an attach configuration attaches to the one running process whose executable it names
+     * (as Attach to Process does for a picked PID, with the same trust prompt); a compound one is
+     * refused, as compound debugging is DBG-10's. Debug only logs its errors, so they are notified.
+     */
+    debugHooks.startOverride = [this, selectedType]() -> std::optional<Result<void>> {
+        const auto type = selectedType();
+        if (type == run::RunType::Compound) {
+            const QString message = text("Debugging a compound configuration is not available yet (DBG-10). Run "
+                                         "starts its configurations; debug them one at a time.");
+            notify(text("Debug"), message, ui::NotificationKind::Warning);
+            return Result<void>(fail(ErrorCode::Unsupported, message.toStdString()));
+        }
+        if (type != run::RunType::Attach) {
+            return std::nullopt;
+        }
+        const run::RunConfiguration configuration = *m_runController->selectedConfiguration();
+        std::vector<RunningProcessInfo> matches;
+        for (RunningProcessInfo& process : enumerateRunningProcesses()) {
+            if (run::attachTargetMatches(configuration.target, process.executablePath))
+                matches.push_back(std::move(process));
+        }
+        if (matches.size() != 1) {
+            QString pids;
+            for (const RunningProcessInfo& process : matches)
+                pids += (pids.isEmpty() ? QString() : QStringLiteral(", ")) + QString::number(process.pid);
+            const QString message =
+                matches.empty()
+                    ? text("No running process matches %1. Start it first, or use Attach to Process...")
+                          .arg(qs(configuration.target))
+                    : text("%1 running processes match %2 (PIDs %3); use Attach to Process... to choose one.")
+                          .arg(matches.size())
+                          .arg(qs(configuration.target), pids);
+            notify(text("Debug"), message, ui::NotificationKind::Warning);
+            return Result<void>(
+                fail(matches.empty() ? ErrorCode::NotFound : ErrorCode::InvalidArgument, message.toStdString()));
+        }
+        attachToProcess(matches.front().pid, matches.front().executablePath, matches.front().name,
+                        matches.front().isDotNet);
+        return Result<void>{};
+    };
+    /*
+     * RUN-5: a configuration's before-launch tasks run before the debugger starts its program, in
+     * the RunManager's Prepare mode (the same tasks Run runs); a failing task ends the Debug with
+     * its error. Without tasks the target goes to the debugger at once.
+     *
+     * The tasks are the workspace's programs, so they need its trust first, as Run's do
+     * (mayRunConfiguration; the debugger's own trust gate only runs after them). In an untrusted
+     * workspace nothing starts: the trust prompt asks, and once the user trusts the workspace it
+     * starts this Debug again if the configuration is still the selected one.
+     */
+    const auto prepareThenDebug = [this](run::RunConfiguration prepared, debug::DebugTarget target,
+                                         std::function<void(Result<debug::DebugTarget>)> done) -> Result<void> {
+        if (prepared.beforeLaunchTasks.empty() || !m_runManager) {
+            done(std::move(target));
+            return {};
+        }
+        const auto retryDebug = [this, id = prepared.id] {
+            const run::RunConfiguration* selected = m_runController->selectedConfiguration();
+            if (!m_debug || selected == nullptr || selected->id != id)
+                return;
+            if (auto started = m_debug->debug(); !started)
+                notify(text("Debug"), qs(started.error().message()), ui::NotificationKind::Error);
+        };
+        if (auto trusted = mayRunConfiguration(prepared, retryDebug); !trusted)
+            return std::unexpected(std::move(trusted.error()));
+        prepared.type = run::RunType::Native;
+        prepared.target.clear();
+        prepared.beforeLaunch = run::BeforeLaunch::None;
+        prepared.program = target.program;
+        prepared.workingDirectory = target.workingDirectory;
+        const QPointer<Workbench> self(this);
+        run::RunHandlers handlers;
+        handlers.onFinished = [self, target, done](const run::RunResult& result) {
+            if (!self)
+                return;
+            QMetaObject::invokeMethod(
+                self.data(),
+                [self, target, done, result] {
+                    if (!self)
+                        return;
+                    if (result.error)
+                        done(std::unexpected(*result.error));
+                    else if (result.stopped)
+                        done(fail(ErrorCode::Cancelled, "the before-launch tasks were stopped"));
+                    else
+                        done(target);
+                },
+                Qt::QueuedConnection);
+        };
+        auto started = m_runManager->start(prepared, std::move(handlers), run::RunMode::Prepare);
+        if (!started)
+            return std::unexpected(std::move(started.error()));
+        return {};
+    };
     debugHooks.mayStart = [this] {
         return !m_buildService->projectEditInProgress() && !m_runController->running() &&
                (!m_runManager || m_runManager->activeRuns().empty()) && m_runService->activeRuns().empty() &&
                (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
-    debugHooks.startAlternate = [this, nativeSelected](auto done) -> Result<void> {
+    debugHooks.startAlternate = [this, nativeSelected, prepareThenDebug](auto done) -> Result<void> {
         if (nativeSelected()) {
             const run::RunConfiguration configuration = *m_runController->selectedConfiguration();
             auto plan = run::launchPlanFor(configuration);
@@ -171,16 +278,32 @@ void Workbench::createRunService() {
                     target.environment.emplace_back(entry.name, *entry.value);
             // The debugger's own trust gate: the workspace the configuration belongs to.
             target.trustRoots = {m_projectRoot};
-            done(std::move(target));
-            return {};
+            return prepareThenDebug(configuration, std::move(target), std::move(done));
         }
         if (!m_cmake)
             return fail(ErrorCode::InvalidArgument, "no CMake project is open");
-        return m_cmake->debug(std::move(done));
+        // The target's configuration (with the user's edits) names its before-launch tasks (RUN-5).
+        return m_cmake->debug([this, prepareThenDebug, done = std::move(done)](Result<debug::DebugTarget> target) {
+            const std::string id =
+                run::runConfigurationIdFor(run::kCMakeIdPrefix, m_cmake ? m_cmake->runTargetName() : std::string());
+            const run::RunConfiguration* edited =
+                m_runController ? m_runController->configurations().find(id) : nullptr;
+            if (!target || edited == nullptr || edited->beforeLaunchTasks.empty()) {
+                done(std::move(target));
+                return;
+            }
+            if (auto prepared = prepareThenDebug(*edited, std::move(*target), done); !prepared)
+                done(std::unexpected(std::move(prepared.error())));
+        });
     };
     debugHooks.stopAlternate = [this] {
         if (m_cmake)
             m_cmake->stop();
+        // RUN-5: Stop while Debug's before-launch tasks run ends them (the only Prepare runs).
+        if (m_runManager)
+            for (const run::RunStatus& status : m_runManager->activeRuns())
+                if (status.mode == run::RunMode::Prepare)
+                    m_runManager->stop(status.id);
     };
     m_debug = std::make_unique<ui::DebugController>(m_breakpoints, std::move(debugOptions), std::move(debugHooks));
     connect(m_debug.get(), &ui::DebugController::stateChanged, this, [this] {

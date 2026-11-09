@@ -199,8 +199,9 @@ Result<void> RunController::selectConfiguration(const std::string& id, bool appl
 
 void RunController::followCMakeTarget(const std::string& target) {
     // A native configuration the user chose stays selected; otherwise the combo follows the target.
+    // So do compound and attach configurations: they belong to no target (RUN-5).
     if (const run::RunConfiguration* selected = selectedConfiguration();
-        selected != nullptr && selected->type == run::RunType::Native) {
+        selected != nullptr && selected->type != run::RunType::CMakeTarget && selected->type != run::RunType::MSBuild) {
         return;
     }
     for (const run::RunConfiguration& configuration : m_set.all()) {
@@ -227,7 +228,9 @@ void RunController::applySelection(const run::RunConfiguration& configuration) {
             m_hooks.selectCMakeTarget(configuration.target);
         }
         break;
-    case run::RunType::Native: break;
+    case run::RunType::Native:
+    case run::RunType::Compound:
+    case run::RunType::Attach: break;
     }
     emit runStateChanged();
 }
@@ -317,7 +320,14 @@ std::optional<run::RunId> RunController::configurationRun(const std::string& id)
 
 bool RunController::canRun() const {
     if (const run::RunConfiguration* selected = selectedConfiguration()) {
-        return selected->type != run::RunType::Native || m_runs != nullptr;
+        switch (selected->type) {
+        case run::RunType::Native: return m_runs != nullptr;
+        case run::RunType::Attach: return false; // Debug-only (RUN-5).
+        case run::RunType::Compound:
+        case run::RunType::CMakeTarget:
+        case run::RunType::MSBuild: return true;
+        }
+        return true;
     }
     return (m_hooks.alternateAvailable && m_hooks.alternateAvailable()) ||
            (m_service != nullptr && m_service->solution() != nullptr);
@@ -364,8 +374,75 @@ Result<build::RunId> RunController::runConfiguration(const std::string& id) {
         }
         return runService(project);
     }
+    case run::RunType::Compound: return runCompound(configuration);
+    case run::RunType::Attach:
+        return fail(ErrorCode::Unsupported,
+                    std::format("'{}' attaches the debugger to a running process; use Debug to attach (an attach "
+                                "configuration has nothing to run)",
+                                configuration.name));
     }
     return fail(ErrorCode::Unsupported, "unknown run configuration type");
+}
+
+Result<build::RunId> RunController::runCompound(const run::RunConfiguration& configuration) {
+    if (auto valid = run::validateRunConfiguration(configuration); !valid) {
+        return std::unexpected(std::move(valid.error()));
+    }
+    // Every member is checked before anything starts (header comment, "What runs").
+    std::vector<std::string> members;
+    std::size_t cmakeTargets = 0;
+    for (const std::string& id : configuration.configurations) {
+        const run::RunConfiguration* member = m_set.find(id);
+        if (member == nullptr) {
+            return fail(ErrorCode::NotFound,
+                        std::format("'{}' starts the run configuration '{}', which does not exist (any more)",
+                                    configuration.name, id));
+        }
+        if (member->type == run::RunType::Compound || member->type == run::RunType::Attach) {
+            return fail(ErrorCode::Unsupported,
+                        std::format("'{}' cannot start '{}': a compound run starts native, CMake and MSBuild "
+                                    "configurations, not {} ones",
+                                    configuration.name, member->name, run::toString(member->type)));
+        }
+        if (member->type == run::RunType::CMakeTarget && ++cmakeTargets > 1) {
+            return fail(ErrorCode::Unsupported,
+                        std::format("'{}' starts more than one CMake target; the CMake integration builds and runs "
+                                    "one target at a time, so a compound run can hold one of them",
+                                    configuration.name));
+        }
+        members.push_back(id);
+    }
+    // The workspace's trust gate once for the whole compound (one prompt, whose retry reruns it).
+    if (m_hooks.mayRunConfiguration) {
+        if (auto allowed = m_hooks.mayRunConfiguration(configuration); !allowed) {
+            return std::unexpected(std::move(allowed.error()));
+        }
+    }
+    std::optional<build::RunId> first;
+    std::vector<Error> errors;
+    for (const std::string& id : members) {
+        auto started = runConfiguration(id);
+        if (started) {
+            first = first.value_or(*started);
+            continue;
+        }
+        if (started.error().code() == ErrorCode::Cancelled) {
+            continue; // The user declined to rerun a member that is still running.
+        }
+        Error error = started.error();
+        static_cast<void>(error.withContext(std::format("starting '{}' of '{}'", id, configuration.name)));
+        errors.push_back(std::move(error));
+    }
+    if (!first) {
+        if (!errors.empty()) {
+            return std::unexpected(std::move(errors.front()));
+        }
+        return fail(ErrorCode::Cancelled, std::format("no member of '{}' was started", configuration.name));
+    }
+    for (const Error& error : errors) {
+        report(error); // Some members run: say which ones did not.
+    }
+    return *first;
 }
 
 Result<build::RunId> RunController::runService(std::optional<project::ProjectId> project) {
@@ -454,6 +531,11 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
             if (target) {
                 if (status.phase == run::RunPhase::Running && !status.commandLine.empty()) {
                     target->appendOutput(build::RunOutputKind::System, status.commandLine + "\n");
+                }
+                if (status.phase == run::RunPhase::BeforeLaunch && !status.beforeLaunchTask.empty()) {
+                    // RUN-5: which before-launch task runs now; its own output follows.
+                    target->appendOutput(build::RunOutputKind::System,
+                                         "Before launch: " + status.beforeLaunchTask + "\n");
                 }
                 target->setRunning(status.phase == run::RunPhase::Running, status.acceptsInput);
             }
