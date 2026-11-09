@@ -12,6 +12,10 @@
 #   3. FrostEditor's configuration is selected and edited as the Run/Debug Configurations dialog's
 #      OK does (arguments --offscreen --no-automation --config-dir <a scratch folder>), and the edit
 #      is in the workspace store;
+#   3b. FrostIDE restarts (UAT-1 step 2): frost quits through the endpoint, exits with 0 and leaves
+#      no process of its tree; the real frost starts again on the same profile, opens the corpus as
+#      the first start did, and lists FrostEditor's configuration with the edited arguments (the
+#      oracle: the arguments the journey wrote, read back from the store file on disk);
 #   4. Run on the toolbar builds FrostEditor (once, under the corpus build lock) and starts it: the
 #      spawn log has a start record of the artifact the reply names, the RunManager reports its
 #      process, and the OS process table shows that process running that image;
@@ -53,6 +57,7 @@ CONFIGURE_SECONDS = 3600
 BUILD_AND_START_SECONDS = 4 * 3600  # The first run builds FrostEditor and the engine it links.
 OUTPUT_SECONDS = 300
 STOP_SECONDS = 120
+QUIT_SECONDS = 120  # The restart step: frost's own exit after the endpoint's quit.
 POLL_SECONDS = 0.25
 
 
@@ -203,18 +208,20 @@ class Journey(j1.Journey):
             pass
 
     def _run_journey(self, corpus: Path, preset: str) -> None:
-        ep = self.endpoint
         build_dir = corpus / "build" / preset
         editor_config = Path(tempfile.mkdtemp(prefix="frost-j2-editor-"))
         self.editor_config = editor_config
         facts: dict[str, Any] = {}
 
         def open_and_configure() -> tuple[bool, Any, Any, str]:
-            ep.call("open", path=str(corpus))
-            if not ep.call("state")["cmake"]["available"]:
+            self.endpoint.call("open", path=str(corpus))
+            opened = self.endpoint.call("state")["cmake"]
+            if not opened["available"]:
                 return False, None, None, "the folder did not open as a CMake project"
-            ep.call("cmake.select", name=preset)
-            ep.call("trust", root=str(corpus))
+            # After a restart the profile already has the preset and may be configuring with it.
+            if opened.get("activeProfile") != preset:
+                self.endpoint.call("cmake.select", name=preset)
+            self.endpoint.call("trust", root=str(corpus))
 
             def configured(state: dict) -> bool:
                 last = state["cmake"].get("lastConfigure")
@@ -223,13 +230,13 @@ class Journey(j1.Journey):
 
             state = self.wait_cmake(120, configured)
             if not configured(state):
-                ep.call("cmake.configure")
+                self.endpoint.call("cmake.configure")
                 state = self.wait_cmake(CONFIGURE_SECONDS, configured)
             # The CMake Targets window shows the model Run builds (it follows on the UI queue).
             deadline = time.monotonic() + 120
             while configured(state) and not state["cmake"].get("targetsCurrent") and time.monotonic() < deadline:
                 time.sleep(POLL_SECONDS)
-                state = ep.call("state")
+                state = self.endpoint.call("state")
             last = state.get("cmake", {}).get("lastConfigure") or {}
             ok = configured(state) and state["cmake"].get("targetsCurrent") is True and last.get("exitCode") == 0 and same_path(
                 state["cmake"].get("buildDirectory", ""), build_dir)
@@ -244,7 +251,7 @@ class Journey(j1.Journey):
             deadline = time.monotonic() + 120
             observed: list[str] = []
             while time.monotonic() < deadline:
-                listed = ep.call("run.configurations")["configurations"]
+                listed = self.endpoint.call("run.configurations")["configurations"]
                 observed = sorted(c["target"] for c in listed if c["type"] == "cmake-target" and c["generated"])
                 if len(observed) == len(oracle):
                     break
@@ -263,12 +270,12 @@ class Journey(j1.Journey):
         arguments = ["--offscreen", "--no-automation", "--config-dir", str(editor_config)]
 
         def select_and_edit() -> tuple[bool, Any, Any, str]:
-            listed = ep.call("run.configurations")["configurations"]
+            listed = self.endpoint.call("run.configurations")["configurations"]
             config = next(c for c in listed if c["type"] == "cmake-target" and c["target"] == TARGET)
             facts["id"] = config["id"]
-            ep.call("run.select", id=config["id"])
-            ep.call("run.edit", id=config["id"], arguments=arguments)
-            after = ep.call("run.configurations")
+            self.endpoint.call("run.select", id=config["id"])
+            self.endpoint.call("run.edit", id=config["id"], arguments=arguments)
+            after = self.endpoint.call("run.configurations")
             edited = next(c for c in after["configurations"] if c["id"] == config["id"])
             store = corpus / ".frost" / "runConfigurations" / "configurations.json"
             stored = json.loads(store.read_text(encoding="utf-8")) if store.is_file() else {}
@@ -280,18 +287,82 @@ class Journey(j1.Journey):
 
         if not self.run_step(f"select {TARGET} and edit its arguments (persisted)", select_and_edit):
             return
+
+        def stored_arguments() -> list[str] | None:
+            # The workspace store on disk: what a new FrostIDE reads back.
+            stored = json.loads(self.store.read_text(encoding="utf-8")) if self.store.is_file() else {}
+            return next((c.get("arguments") for c in stored.get("configurations", []) if c.get("id") == facts["id"]),
+                        None)
+
+        def restart_keeps_the_edit() -> tuple[bool, Any, Any, str]:
+            """UAT-1 step 2's restart: frost quits as File > Exit would (the endpoint's quit), every
+            process of its tree ends, the real frost starts again on the same profile, opens the corpus
+            as the first start did, and lists FrostEditor's configuration with the edited arguments.
+            The oracle is the arguments this journey wrote, as the store file on disk has them."""
+            on_disk = stored_arguments()
+            tree = tree_below(self.frost_process.pid, process_table())
+            identity = {pid: row["created"] for pid, row in tree.items()}
+            self.endpoint.call("quit")
+            try:
+                exit_code = self.frost_process.wait(timeout=QUIT_SECONDS)
+            except subprocess.TimeoutExpired:
+                return False, {"exited": True}, {"exited": False}, f"frost did not exit {QUIT_SECONDS} s after quit"
+            self.endpoint.close()
+            self.endpoint = None
+            deadline = time.monotonic() + STOP_SECONDS
+            survivors: list[dict] = []
+            while True:  # Its children (clangd, cmake) end after it: wait for them, never kill them.
+                after = process_table()
+                survivors = [{"pid": pid, "name": tree[pid]["name"]} for pid, created in identity.items()
+                             if pid in after and after[pid]["created"] == created]
+                if not survivors or time.monotonic() > deadline:
+                    break
+                time.sleep(POLL_SECONDS)
+            for survivor in survivors:  # Recorded as a failure above; the journey leaves no process behind.
+                if WINDOWS:
+                    subprocess.run([j1.system_tool("taskkill.exe"), "/T", "/F", "/PID", str(survivor["pid"])],
+                                   capture_output=True, check=False)
+                else:
+                    try:
+                        os.kill(survivor["pid"], 9)
+                    except OSError:
+                        pass
+            self._launch(corpus, again=True)  # Records "connect again"; a failure ends the journey there.
+            reopened, _, _, note = open_and_configure()
+            listed: dict | None = None
+            deadline = time.monotonic() + 120
+            while reopened and time.monotonic() < deadline:
+                after_restart = self.endpoint.call("run.configurations")
+                listed = next((c for c in after_restart["configurations"] if c["id"] == facts["id"]), None)
+                if listed is not None:
+                    break
+                time.sleep(POLL_SECONDS)  # The configuration list follows the published model.
+            selected = self.endpoint.call("run.configurations")["selected"]
+            if listed is not None and selected != facts["id"]:
+                self.endpoint.call("run.select", id=facts["id"])  # The Run below starts FrostEditor again.
+            observed = {"exitCode": exit_code, "survivors": survivors, "treeSize": len(identity),
+                        "reopened": reopened, "arguments": listed["arguments"] if listed else None,
+                        "stored": stored_arguments(), "selectedAfterRestart": selected}
+            ok = (exit_code == 0 and not survivors and reopened and listed is not None
+                  and listed["arguments"] == arguments and on_disk == arguments and observed["stored"] == arguments)
+            return ok, {"exitCode": 0, "survivors": [], "reopened": True, "arguments": arguments,
+                        "stored": arguments}, observed, note or ("" if ok else "the edit did not survive the restart")
+
+        if not self.run_step(f"{TARGET}'s edited arguments survive a FrostIDE restart (same profile)",
+                             restart_keeps_the_edit):
+            return
         key = "cmake:" + TARGET
 
         def tab_of(state: dict) -> dict | None:
             return next((t for t in state.get("tabs", []) if t["key"] == key), None)
 
         def run_from_toolbar() -> tuple[bool, Any, Any, str]:
-            ep.call("run.start")
+            self.endpoint.call("run.start")
             deadline = time.monotonic() + BUILD_AND_START_SECONDS
             state: dict = {}
             run: dict | None = None
             while time.monotonic() < deadline:
-                state = ep.call("run.state")
+                state = self.endpoint.call("run.state")
                 run = next((r for r in state.get("runs", []) if r["configuration"] == facts["id"]
                             and r["processId"]), None)
                 tab = tab_of(state)
@@ -325,7 +396,7 @@ class Journey(j1.Journey):
             deadline = time.monotonic() + OUTPUT_SECONDS
             text = ""
             while time.monotonic() < deadline:
-                tab = tab_of(ep.call("run.state")) or {}
+                tab = tab_of(self.endpoint.call("run.state")) or {}
                 text = tab.get("text", "")
                 if program_lines(text) or not tab.get("active"):
                     break
@@ -344,11 +415,11 @@ class Journey(j1.Journey):
             before = process_table()
             tree = tree_below(facts["pid"], before)
             identity = {pid: row["created"] for pid, row in tree.items()}
-            ep.call("run.stop")
+            self.endpoint.call("run.stop")
             deadline = time.monotonic() + STOP_SECONDS
             state: dict = {}
             while time.monotonic() < deadline:
-                state = ep.call("run.state")
+                state = self.endpoint.call("run.state")
                 tab = tab_of(state) or {}
                 if not tab.get("active") and not state.get("runs"):
                     break

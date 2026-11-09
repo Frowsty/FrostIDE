@@ -598,10 +598,16 @@ class Journey:
             git.run("checkout", "--", SEED_FILE, cwd=corpus)
             print(f"{JOURNEY}: restored {SEED_FILE} from the clone's HEAD (an earlier run left it changed)")
 
-    def _launch(self, corpus: Path) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="frost-j1-"))
+    def _launch(self, corpus: Path, *, again: bool = False) -> None:
+        """Starts frost on a fresh temporary profile; with `again`, on the profile of the last start
+        (which must have exited), as a restart of FrostIDE by its user would (j2_run's restart step)."""
+        if not again:
+            self.tmp = Path(tempfile.mkdtemp(prefix="frost-j1-"))
         profile, self.spawn_dir = self.tmp / "profile", self.tmp / "spawn-log"
         connection = self.tmp / "automation.json"
+        if again:
+            self.watchdog.cancel()
+            connection.unlink(missing_ok=True)  # The last start's; the new frost writes its own.
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen", FROST_LOG_LEVEL="debug",
                    FROST_SPAWN_LOG_DIR=str(self.spawn_dir), FROST_AUTOMATION_CONNECTION=str(connection))
         if WINDOWS:
@@ -643,7 +649,7 @@ class Journey:
                 time.sleep(POLL_SECONDS)
             return False, None, None, "no connection file within 120 s (a build without the endpoint?)"
 
-        if not self.run_step("connect", connected):
+        if not self.run_step("connect again (the same profile)" if again else "connect", connected):
             raise SystemExit(self._fail_out())
 
     def _fail_out(self) -> int:
