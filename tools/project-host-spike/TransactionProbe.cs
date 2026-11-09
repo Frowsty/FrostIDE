@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Experimental Windows-only, recoverable scratch project-file transaction.
+// Windows-only recoverable transaction for project and solution definition files (SLN-6): a
+// journal, exclusive handles, a two-phase approval and in-place writes that keep each file's identity.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -272,8 +273,9 @@ static class TransactionProbe
                     throw new InvalidOperationException("Journal does not match the trusted root");
             }
             else record = new Journal { Version = 2, Root = root, Entries = request.Entries, TransactionId = request.TransactionId };
-            if (record.Entries == null || record.Entries.Length != 2)
-                throw new InvalidOperationException("Exactly two definition files are required");
+            // SLN-6: a project with or without its .filters file, or one solution file.
+            if (record.Entries == null || record.Entries.Length < 1 || record.Entries.Length > 2)
+                throw new InvalidOperationException("One or two definition files are required");
             byte[] encodedJournal = Encoding.UTF8.GetBytes(Json.Serialize(record));
             if (encodedJournal.Length > 16 * 1024 * 1024)
                 throw new InvalidOperationException("Journal exceeds the recovery read limit");
@@ -282,10 +284,13 @@ static class TransactionProbe
                     Convert.FromBase64String(entry.After).Length > 16 * 1024 * 1024)
                     throw new InvalidOperationException("Definition exceeds the recovery read limit");
             string projectPath = Path.GetFullPath(record.Entries[0].Path);
-            if (!projectPath.EndsWith(".vcxproj", StringComparison.OrdinalIgnoreCase) ||
-                !String.Equals(Path.GetFullPath(record.Entries[1].Path), projectPath + ".filters",
-                               StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Expected a project and its filters file");
+            bool solutionEdit = projectPath.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
+                                projectPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase);
+            if (solutionEdit ? record.Entries.Length != 1 :
+                (!projectPath.EndsWith(".vcxproj", StringComparison.OrdinalIgnoreCase) ||
+                 (record.Entries.Length == 2 && !String.Equals(Path.GetFullPath(record.Entries[1].Path), projectPath + ".filters",
+                                                               StringComparison.OrdinalIgnoreCase))))
+                throw new InvalidOperationException("Expected a project and its filters file, or one solution file");
             if (request.Recover && (String.IsNullOrEmpty(request.ExpectedProject) ||
                 !String.Equals(Path.GetFullPath(request.ExpectedProject), projectPath, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("Journal project does not match owned recovery");
@@ -306,7 +311,8 @@ static class TransactionProbe
                 entry.IndexHigh = info.IndexHigh;
                 entry.IndexLow = info.IndexLow;
             }
-            if (!request.Recover)
+            // A solution file imports nothing; a project's evaluation inputs must still be unchanged.
+            if (!request.Recover && !solutionEdit)
             {
                 if (request.Environment != EnvironmentFingerprint.Current() || request.ImportedInputs == null || request.ImportedInputs.Count == 0)
                     throw new InvalidOperationException("Evaluation environment or imports are missing or changed");

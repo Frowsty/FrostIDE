@@ -11,7 +11,8 @@
 # $<LINK_ONLY:...> entries a static library propagates.
 # The MSBuild evaluation of SLN-2/SLN-3 (project_host.hpp): the ProjectHost client, its MSBuild.exe
 # fallback and the solution-wide evaluation the Solution Explorer shows; it launches processes
-# only through io's IProcessLauncher. TODO(M16): ProjectModelCache (SLN-4, R3) joins here.
+# only through io's IProcessLauncher. The safe solution and project edits of SLN-6 (project_edit.hpp)
+# speak the helper's edit protocol. TODO(M16): ProjectModelCache (SLN-4, R3) joins here.
 
 frost_add_library(project LAYER project
     SOURCES
@@ -26,6 +27,7 @@ frost_add_library(project LAYER project
         src/json.cpp
         src/paths.cpp
         src/process_environment.cpp
+        src/project_edit.cpp
         src/project_host.cpp
         src/sln_reader.cpp
         src/slnx_reader.cpp

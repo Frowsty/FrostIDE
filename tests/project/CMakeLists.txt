@@ -16,6 +16,7 @@ frost_add_test(project_unit_tests
         cmake_profile_test.cpp
         directory_roles_test.cpp
         paths_test.cpp
+        project_edit_test.cpp
         project_host_protocol_test.cpp
         sln_reader_test.cpp
         slnx_reader_test.cpp
@@ -55,9 +56,22 @@ if(WIN32)
         FROST_PROJECT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
         FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
     add_dependencies(project_msbuild_tests frost_project_host)
+
+    # SLN-6 (project_edit.hpp): the shipped ProjectHost edits a scratch git copy of
+    # fixtures/msvc_generated; git diff, MSBuild's evaluation and MSBuild's build are the oracles.
+    frost_add_test(project_edit_msbuild_tests
+        SOURCES project_edit_real_test.cpp
+        DEPS frost::project frost::build frost::io frost::vcs
+        LABELS integration msbuild
+        PROCESSORS 2)
+    target_include_directories(project_edit_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/project/src)
+    target_compile_definitions(project_edit_msbuild_tests PRIVATE
+        FROST_PROJECT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
+    add_dependencies(project_edit_msbuild_tests frost_project_host)
 endif()
 
-# SLN-2 and SLN-3 on R2a, the pinned Notepad++ clone (tests/corpus/corpora.lock.json; its sha
+# SLN-2, SLN-3 and SLN-6 (edits in a scratch clone) on R2a, the pinned Notepad++ clone (tests/corpus/corpora.lock.json; its sha
 # names the clone <corpora root>/r2a-<sha12>): label "corpus", so only verify -Corpus runs it.
 if(WIN32)
     set(_frost_project_corpora_lock_file "${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json")
@@ -76,8 +90,8 @@ if(WIN32)
         message(FATAL_ERROR "${_frost_project_corpora_lock_file} pins no r2a corpus")
     endif()
     frost_add_test(project_corpus_tests
-        SOURCES project_corpus_test.cpp
-        DEPS frost::project frost::build frost::io
+        SOURCES project_corpus_test.cpp project_edit_corpus_test.cpp
+        DEPS frost::project frost::build frost::io frost::vcs
         LABELS integration corpus msbuild
         PROCESSORS 2)
     target_include_directories(project_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/project/src)

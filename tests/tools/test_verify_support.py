@@ -1097,7 +1097,8 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # frost_add_test (cmake/FrostLayers.cmake): LABELS starts with the kind, and the labels after it
         # are tags that ctest -L selects by and that keep the kind's scheduling default. Every test has
         # exactly one kind label; the tagged suites are build_msbuild_tests,
-        # app_workbench_msbuild_tests, project_msbuild_tests and project_corpus_tests (Windows only;
+        # app_workbench_msbuild_tests, project_msbuild_tests, project_edit_msbuild_tests (SLN-6) and
+        # project_corpus_tests (Windows only;
         # tag "msbuild"; SLN-2), lang_clangd_tests, lang_msbuild_tests (Windows
         # only; both tags), lang_cmake_tests (both tags; CMK-4), build_cmake_tests,
         # project_cmake_tests, app_automation_endpoint_tests and app_workbench_run_tests (tag "cmake"),
@@ -1112,7 +1113,7 @@ class BuildTreeLabelsTest(unittest.TestCase):
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.", "MsBuildRun.",
                                               "MsBuildEvaluationE2E.", "WorkbenchMsBuild.", "WorkbenchR2a.",
                                               "WorkbenchProjectEdit.", "ProjectHostReal.",
-                                              "WorkbenchProjectHost.", "R2aCorpus.")),
+                                              "WorkbenchProjectHost.", "R2aCorpus.", "ProjectEditReal.")),
                   "clangd": ("integration", ("ClangdE2E.", "ClangdEncoding.", "MsBuildEvaluationE2E.",
                                               "WorkbenchClangd.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
                                               "CMakeCompileCommands.")),

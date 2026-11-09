@@ -1888,8 +1888,13 @@ TEST(Workbench, RenameMoveAndDeleteEditCMakeListsOnlyAfterAPreviewAndNeverMsBuil
         ASSERT_TRUE(rig.workbench->documents().save(rig.workbench->currentView()->document()).has_value());
     }
 
-    // 2. Visual Studio C++ project (.sln + .vcxproj): rename, move and delete happen on disk, the
-    // .vcxproj and .vcxproj.filters keep every byte (SLN-6), and the user is told which still list the file.
+    /*
+     * 2. Visual Studio C++ project (.sln + .vcxproj): rename, move and delete happen on disk. This
+     * rig has no ProjectHost helper, so the project edit that would follow (SLN-6; with the real
+     * helper in WorkbenchProjectEdit.RenameAndDeleteUpdateTheProjectThroughProjectHost) cannot
+     * start: .vcxproj and .vcxproj.filters keep every byte and the user is told which still list
+     * the file, and why.
+     */
     {
         auto created = rig.workbench->createNewProject({
             .name = "VsRenameDemo",
@@ -1904,7 +1909,7 @@ TEST(Workbench, RenameMoveAndDeleteEditCMakeListsOnlyAfterAPreviewAndNeverMsBuil
             EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters"), filtersBefore) << what;
             EXPECT_EQ(lastNotice().title, QStringLiteral("Project files not updated")) << what;
             EXPECT_EQ(lastNotice().kind, frost::ui::NotificationKind::Warning) << what;
-            EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("SLN-6"))) << what;
+            EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("No project file was changed"))) << what;
             EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("VsRenameDemo.vcxproj"))) << what;
         };
         const std::string mainCpp = dir.join("VsRenameDemo/main.cpp");
