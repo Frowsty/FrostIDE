@@ -84,7 +84,7 @@ what is next, blockers and open questions for the user.
   499e734, and the Linux `FROST_WARNINGS_AS_ERRORS=OFF` workaround (cacheVariables) is removed from the lock.
 - **History rewrite (user order, 2026-11-09).** Every Co-Authored-By and Claude-Session line was removed from
   FrostIDE (358 commits) and FrostEngine (1334 commits) with git filter-repo. Trees, authors and dates are
-  unchanged (checked per commit); backups are in `E:\FrostBuildsackup`. Commits carry no attribution line
+  unchanged (checked per commit); backups are in `E:\FrostBuilds\backup`. Commits carry no attribution line
   from now on (ADR 0078 amended).
 - **UAT-1 passed 6/6**, run non-elevated (Medium IL) through automated checks against the real tools on the
   pinned corpus (the user asked the orchestrator to perform it). New checks: `CorpusFrostEngine.DebuggingFrostEditor...`
