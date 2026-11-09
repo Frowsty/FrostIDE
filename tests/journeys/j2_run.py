@@ -371,7 +371,13 @@ class Journey(j1.Journey):
                 time.sleep(1.0)  # A build of the engine: poll the endpoint, no fixed wait.
             if not run:
                 tab = tab_of(state)
-                return False, {"program": program}, {"tab": tab["text"][-4000:] if tab else None}, \
+                # The Run tab only says the build failed; the build's own result and the errors MSBuild or
+                # the compiler printed (Problems, source "build") say why.
+                last = (self.endpoint.call("state").get("cmake") or {}).get("lastBuild")
+                errors = [p for p in self.endpoint.call("problems")["problems"]
+                          if p.get("source") == "build" and p["severity"] == "error"][:20]
+                return False, {"program": program}, {"tab": tab["text"][-4000:] if tab else None,
+                                                     "lastBuild": last, "buildErrors": errors}, \
                     f"{TARGET} did not start (the build failed or the run ended)"
             facts["pid"] = int(run["processId"])
             table = process_table()

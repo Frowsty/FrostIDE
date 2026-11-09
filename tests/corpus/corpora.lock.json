@@ -7,19 +7,13 @@
       "name": "FrostEngine",
       "url": "https://github.com/Frowsty/FrostEngine-AI-Claude",
       "branch": "main",
-      "sha": "8237e1ecfeb9456c231ea30e41c23c75cd426a2d",
-      "pinned": "2026-11-07",
+      "sha": "499e734e005540f129a7d8fcd04798a544699836",
+      "pinned": "2026-11-09",
       "presets": {
         "windows": "windows-debug",
         "linux": "linux-debug"
       },
-      "purpose": "R0 exit (FND-9a): opening the engine folder records no GUI stall above 250 ms, starts exactly one clangd and negotiates positionEncodings; later the R1/R2 journeys (j1_cmake) and FEC-10a's generated Lua API.",
-      "cacheVariables": {
-        "linux": {
-          "FROST_WARNINGS_AS_ERRORS": "OFF"
-        }
-      },
-      "cacheVariablesReason": "linux: the pin does not compile with the pinned clang 23 under -Werror (-Wunused-lambda-capture in Frost/src/Frost/Renderer/RHI/GraphicsDevice.cpp), so j2_run could not build FrostEditor; the engine's own switch keeps its warnings as warnings (2026-11-08)."
+      "purpose": "R0 exit (FND-9a): opening the engine folder records no GUI stall above 250 ms, starts exactly one clangd and negotiates positionEncodings; later the R1/R2 journeys (j1_cmake) and FEC-10a's generated Lua API."
     },
     {
       "id": "r2a",
