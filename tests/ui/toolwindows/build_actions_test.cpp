@@ -52,11 +52,55 @@ TEST(BuildShortcuts, TheTableHasOneBuildSolutionEntryAndParses) {
         std::ranges::count(kBuildShortcutDefaults, build_actions::kBuildSolution, &BuildShortcutDefault::actionId), 1);
     auto bindings = buildShortcutBindings();
     ASSERT_TRUE(bindings.has_value()) << bindings.error().message();
-    ASSERT_EQ(bindings->size(), 2U); // Rebuild and Clean have no default.
+    ASSERT_EQ(bindings->size(), 3U); // Rebuild and Clean have no default.
     EXPECT_EQ((*bindings)[0].actionId, build_actions::kBuildSolution);
     EXPECT_EQ((*bindings)[0].sequences, std::vector<input::Sequence>{sequence("Ctrl+Shift+B")});
     EXPECT_EQ((*bindings)[1].actionId, build_actions::kCancelBuild);
     EXPECT_EQ((*bindings)[1].sequences, std::vector<input::Sequence>{sequence("Ctrl+Pause")});
+    // Visual Studio's Compile (SLN-9).
+    EXPECT_EQ((*bindings)[2].actionId, build_actions::kCompileFile);
+    EXPECT_EQ((*bindings)[2].sequences, std::vector<input::Sequence>{sequence("Ctrl+F7")});
+}
+
+// Compile (Ctrl+F7) is enabled for the current file only when a project of the solution compiles
+// it, and compiles that file; a refusal is reported.
+TEST(BuildActions, CompileTheCurrentFileWhenAProjectCompilesIt) {
+    FakeBuildBackend backend;
+    BuildController controller;
+    controller.setBackend(&backend);
+    BuildActions actions(controller);
+    std::string current;
+    actions.setCurrentFileProvider([&current] { return current; });
+    EXPECT_FALSE(actions.compileFile()->isEnabled()); // No solution.
+
+    ASSERT_TRUE(controller.openSolution(loadSdk()).has_value());
+    backend.compilable = {"C:\\src\\Engine\\core.cpp"};
+    actions.updateEnabled();
+    EXPECT_FALSE(actions.compileFile()->isEnabled()); // No current file.
+    EXPECT_FALSE(actions.run(build_actions::kCompileFile));
+    current = "C:\\src\\Engine\\core.h";
+    actions.updateEnabled();
+    EXPECT_FALSE(actions.compileFile()->isEnabled()); // A header: no project compiles it.
+
+    current = "C:\\src\\Engine\\core.cpp";
+    actions.updateEnabled();
+    EXPECT_TRUE(actions.compileFile()->isEnabled());
+    actions.compileFile()->trigger();
+    EXPECT_EQ(backend.compiles, std::vector<std::string>{"C:\\src\\Engine\\core.cpp"});
+    EXPECT_TRUE(backend.builds.empty());
+
+    // While a build runs nothing else compiles.
+    setState(controller, backend, BuildState::Running);
+    EXPECT_FALSE(actions.compileFile()->isEnabled());
+    setState(controller, backend, BuildState::Idle);
+    EXPECT_TRUE(actions.compileFile()->isEnabled());
+
+    test::SignalLog failures(&controller, &BuildController::requestFailed);
+    backend.buildError = Error(ErrorCode::NotFound, "core.cpp is not a C/C++ source the project compiles");
+    actions.compileFile()->trigger();
+    ASSERT_EQ(failures.count(), 1);
+    EXPECT_TRUE(failures.at(0).at(0).toString().contains(QStringLiteral("not a C/C++ source")));
+    EXPECT_EQ(backend.compiles.size(), 1U);
 }
 
 TEST(BuildActions, EnableAndDisableWithTheBuildState) {
@@ -123,8 +167,9 @@ TEST(BuildActions, RegisterUnderBuildAndFireFromTheirShortcuts) {
     ASSERT_TRUE(actions.registerActions(registry).has_value());
     EXPECT_FALSE(actions.registerActions(registry).has_value()); // Ids are taken now.
 
-    for (const std::string_view id : {build_actions::kBuildSolution, build_actions::kRebuildSolution,
-                                      build_actions::kCleanSolution, build_actions::kCancelBuild}) {
+    for (const std::string_view id :
+         {build_actions::kBuildSolution, build_actions::kRebuildSolution, build_actions::kCleanSolution,
+          build_actions::kCancelBuild, build_actions::kCompileFile}) {
         const auto action = registry.find(id);
         ASSERT_TRUE(action.has_value()) << id;
         EXPECT_EQ(registry.info(*action).group, "Build");

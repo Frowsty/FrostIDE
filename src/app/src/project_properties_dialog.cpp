@@ -4,8 +4,10 @@
  * ProjectPropertiesDialog, SolutionPropertiesDialog and ConfigurationManagerDialog, with the
  * property page specifications they share (project_properties_dialog.hpp). Under the truth rule
  * (ADR 0078, FND-3) a view without a real tool behind it is read-only or disabled and names the
- * epic that will provide it: project reference and configuration edits (SLN-6) and debugger
- * settings (RUN-1). The other dialogs of project_properties_dialog.hpp live beside it (FND-12a):
+ * epic that will provide it: project reference and configuration edits (SLN-6). The Debugging
+ * page's per-user debugger settings are saved to <project>.vcxproj.user (SLN-11,
+ * frost/build/vcxproj_user.hpp), where Visual Studio keeps them. The other dialogs of
+ * project_properties_dialog.hpp live beside it (FND-12a):
  * Attach to Process and Run/Debug Configurations in project_run_dialogs.cpp; project references,
  * NuGet (LTR-7), the ASM/IL viewer (CPP-3, LTR-3) and Local History in project_tool_dialogs.cpp;
  * the source-text test and entry-point recognisers in project_unit_tests.cpp; the Unit Tests
@@ -14,6 +16,7 @@
 
 #include "project_properties_dialog.hpp"
 
+#include "frost/build/vcxproj_user.hpp"
 #include "frost/ui/dialog_chrome.hpp"
 
 #include <QAbstractItemView>
@@ -29,6 +32,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
@@ -56,10 +60,13 @@ QString referenceEditsUnavailable() {
                           "edits (SLN-6).");
 }
 
+// FieldSpec::options for a multi-line value (a QPlainTextEdit), such as the debugger's NAME=VALUE lines.
+constexpr const char* kMultiLineField = "\n";
+
 struct FieldSpec {
     const char* key;
     const char* label;
-    const char* options; // nullptr or ';'-separated combo options
+    const char* options; // nullptr, kMultiLineField, or ';'-separated combo options
 };
 
 struct PageSpec {
@@ -68,18 +75,23 @@ struct PageSpec {
     std::vector<FieldSpec> fields;
     // Non-null: the page is shown read-only with this reason and its fields are never written.
     const char* readOnlyReason = nullptr;
+    // Non-null: an editable page's note (the Debugging page says where its values are saved).
+    const char* note = nullptr;
 };
 
 /*
- * The Debugging page's LocalDebugger* properties are per-user settings (Visual Studio keeps them in
- * <project>.vcxproj.user); writing them into the shared project file would put one user's command
- * line into every checkout. Editing them requires run configurations (RUN-1), so the page shows
- * them read-only, as MSBuild sees them: the .vcxproj.user values over the project file's.
+ * The Debugging page's LocalDebugger* properties are per-user settings: Visual Studio keeps them in
+ * <project>.vcxproj.user, and writing them into the shared project file would put one user's command
+ * line into every checkout. The page shows them as MSBuild sees them (the .vcxproj.user values over
+ * the project file's) and saves a changed value to the .vcxproj.user file only, in Visual Studio's
+ * format (frost/build/vcxproj_user.hpp, SLN-11); Run and Debug ask MSBuild for them, so F5 uses
+ * what was saved. A cleared field removes the .user value, so the project file's applies again.
  */
-constexpr const char* kDebuggingReadOnlyReason =
-    "Read-only: editing debugger settings requires run configurations (RUN-1). The values are read from "
-    "the project's .vcxproj.user file, else from the project file; nothing on this page is saved.";
+constexpr const char* kDebuggingNote =
+    "Debugger settings are per user: they are saved to the project's .vcxproj.user file, as Visual Studio "
+    "does, and override the project file's. Run and Debug (F5) use them.";
 constexpr std::string_view kLocalDebuggerPrefix = "Prop.LocalDebugger";
+constexpr std::string_view kPropPrefix = "Prop.";
 
 std::vector<PageSpec> cppPropertyPages() {
     return {
@@ -116,9 +128,10 @@ std::vector<PageSpec> cppPropertyPages() {
              {"Prop.LocalDebuggerCommand", "Command", nullptr},
              {"Prop.LocalDebuggerCommandArguments", "Command Arguments", nullptr},
              {"Prop.LocalDebuggerWorkingDirectory", "Working Directory", nullptr},
-             {"Prop.LocalDebuggerEnvironment", "Environment", nullptr},
+             {"Prop.LocalDebuggerEnvironment", "Environment", kMultiLineField},
          },
-         kDebuggingReadOnlyReason},
+         nullptr,
+         kDebuggingNote},
         {"C/C++",
          "General",
          {
@@ -365,11 +378,25 @@ void buildPropertyPagesUi(const std::vector<PageSpec>& specs, QTreeWidget* tree,
             note->setObjectName(QStringLiteral("projectPropertiesReadOnlyNote"));
             note->setWordWrap(true);
             form->addRow(note);
+        } else if (page.note != nullptr) {
+            auto* note = new QLabel(QString::fromUtf8(page.note), container);
+            note->setObjectName(QStringLiteral("projectPropertiesNote"));
+            note->setWordWrap(true);
+            form->addRow(note);
         }
 
         for (const FieldSpec& f : page.fields) {
             const std::string keyStr(f.key);
-            if (f.options != nullptr) {
+            if (f.options == kMultiLineField) {
+                auto* edit = new QPlainTextEdit(container);
+                edit->setObjectName(QString::fromStdString("prop_" + keyStr));
+                edit->setMaximumHeight(edit->fontMetrics().lineSpacing() * 5);
+                edit->setReadOnly(readOnly);
+                form->addRow(QString::fromUtf8(f.label) + QLatin1Char(':'), edit);
+                // Lines stay as typed; only the whitespace around the whole value is dropped.
+                bindings.push_back({keyStr, [edit] { return edit->toPlainText().trimmed().toStdString(); },
+                                    [edit](const std::string& val) { edit->setPlainText(toQs(val)); }, readOnly});
+            } else if (f.options != nullptr) {
                 auto* combo = new QComboBox(container);
                 combo->setEditable(true);
                 combo->setObjectName(QString::fromStdString("prop_" + keyStr));
@@ -459,8 +486,8 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
     const auto loadCurrentConfig = [&] {
         const std::string cfg = cfgCombo ? cfgCombo->currentText().toStdString() : std::string();
         loadedProps = isCpp ? parseVcxprojPropertiesForConfig(currentXml, cfg) : parseCsprojProperties(currentXml);
-        // MSBuild imports <project>.user after the project, so its debugger settings win; they are
-        // shown read-only (kDebuggingReadOnlyReason) and the .user file is never written here.
+        // MSBuild imports <project>.user after the project, so its debugger settings win; a changed
+        // one is saved back to the .user file (kDebuggingNote).
         if (isCpp) {
             const std::string userPath = projectPath + ".user";
             if (fs.exists(userPath).value_or(false)) {
@@ -493,11 +520,53 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
         if (updates.empty())
             return true;
         const std::string cfg = cfgCombo ? cfgCombo->currentText().toStdString() : std::string();
-        currentXml = isCpp ? applyVcxprojPropertiesForConfig(currentXml, cfg, updates)
-                           : applyCsprojProperties(currentXml, updates);
-        if (auto written = fs.writeFileAtomic(projectPath, currentXml); !written) {
-            QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"), toQs(written.error().message()));
-            return false;
+        // The debugger settings go to <project>.vcxproj.user (kDebuggingNote), in each configuration
+        // the combo names ("All Configurations": every one it lists), never into the project file.
+        std::vector<build::UserFileProperty> userUpdates;
+        if (isCpp) {
+            for (auto it = updates.begin(); it != updates.end();) {
+                if (std::string_view(it->first).starts_with(kLocalDebuggerPrefix)) {
+                    userUpdates.push_back({it->first.substr(kPropPrefix.size()), it->second});
+                    it = updates.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        if (!userUpdates.empty()) {
+            std::vector<std::string> configurations;
+            if (cfgCombo != nullptr && cfgCombo->currentIndex() == cfgCombo->count() - 1) {
+                for (int i = 0; i + 1 < cfgCombo->count(); ++i)
+                    configurations.push_back(cfgCombo->itemText(i).toStdString());
+            } else {
+                configurations.push_back(cfg);
+            }
+            for (const std::string& configuration : configurations) {
+                const std::size_t bar = configuration.find('|');
+                if (bar == std::string::npos) {
+                    QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"),
+                                         QStringLiteral("'%1' is not a Configuration|Platform pair; the debugger "
+                                                        "settings were not saved.")
+                                             .arg(toQs(configuration)));
+                    return false;
+                }
+                if (auto written = build::writeUserFileProperties(fs, projectPath, configuration.substr(0, bar),
+                                                                  configuration.substr(bar + 1), userUpdates);
+                    !written) {
+                    QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"),
+                                         toQs(written.error().message()));
+                    return false;
+                }
+            }
+        }
+        if (!updates.empty()) {
+            currentXml = isCpp ? applyVcxprojPropertiesForConfig(currentXml, cfg, updates)
+                               : applyCsprojProperties(currentXml, updates);
+            if (auto written = fs.writeFileAtomic(projectPath, currentXml); !written) {
+                QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"),
+                                     toQs(written.error().message()));
+                return false;
+            }
         }
         loadCurrentConfig();
         if (onSaved)

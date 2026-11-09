@@ -5,6 +5,7 @@
 #                        instance selection, the MSBuild command line, BuildSession against the
 #                        scripted launcher, diagnostic resolution and BuildService over a MemFs
 #                        solution, what Run starts (run_target) and RunService over a fake builder,
+#                        the single-file compile's item query and the .vcxproj.user writer,
 #                        label "unit" (every platform);
 #   build_run_tests      RunSession with real processes (io_test_child): output, exit code, input, Stop
 #                        of the whole tree, and on Windows the external console's cmd wrapper (with
@@ -36,11 +37,13 @@ frost_add_test(build_unit_tests
         json_test.cpp
         line_splitter_test.cpp
         managed_project_test.cpp
+        msbuild_compile_test.cpp
         msbuild_driver_test.cpp
         msbuild_locator_test.cpp
         output_parsers_test.cpp
         run_service_test.cpp
         run_target_test.cpp
+        vcxproj_user_test.cpp
     DEPS frost::build)
 # src/build/src: json_test.cpp tests the private JSON reader.
 target_include_directories(build_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/build/src)
@@ -64,7 +67,33 @@ if(WIN32)
     target_include_directories(build_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
     target_compile_definitions(build_msbuild_tests PRIVATE
         FROST_BUILD_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        FROST_PROJECT_FIXTURES="${FROST_SOURCE_DIR}/tests/project/fixtures"
         FROST_BUILD_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/msbuild-work")
+
+    # SLN-9 and SLN-11 on R2a, the pinned Notepad++ clone (tests/corpus/corpora.lock.json; its sha
+    # names the clone <corpora root>/r2a-<sha12>): label "corpus", so only verify -Corpus runs it.
+    set(_frost_build_corpora_lock_file "${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_frost_build_corpora_lock_file}")
+    file(READ "${_frost_build_corpora_lock_file}" _frost_build_corpora_lock)
+    string(JSON _frost_build_corpora_count LENGTH "${_frost_build_corpora_lock}" corpora)
+    math(EXPR _frost_build_corpora_last "${_frost_build_corpora_count} - 1")
+    set(_frost_build_r2a_sha "")
+    foreach(_frost_build_index RANGE ${_frost_build_corpora_last})
+        string(JSON _frost_build_id GET "${_frost_build_corpora_lock}" corpora ${_frost_build_index} id)
+        if(_frost_build_id STREQUAL "r2a")
+            string(JSON _frost_build_r2a_sha GET "${_frost_build_corpora_lock}" corpora ${_frost_build_index} sha)
+        endif()
+    endforeach()
+    if(NOT _frost_build_r2a_sha MATCHES "^[0-9a-f]+$")
+        message(FATAL_ERROR "${_frost_build_corpora_lock_file} pins no r2a corpus")
+    endif()
+    frost_add_test(build_corpus_tests
+        SOURCES build_corpus_test.cpp
+        DEPS frost::build
+        LABELS integration corpus msbuild
+        PROCESSORS 2)
+    target_include_directories(build_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(build_corpus_tests PRIVATE FROST_CORPUS_R2A_SHA="${_frost_build_r2a_sha}")
 endif()
 
 frost_add_test(build_cmake_tests

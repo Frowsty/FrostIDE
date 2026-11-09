@@ -417,6 +417,99 @@ TEST_F(ServiceTest, SolutionAndProjectBuildsAskMsBuildForTheRightTarget) {
     EXPECT_EQ(service->state(), BuildState::Idle);
 }
 
+// SLN-9 (Ctrl+F7): Compile asks MSBuild for the project's ClCompile items in the mapped project
+// configuration and compiles the file's evaluated Identity with the project file itself.
+TEST_F(ServiceTest, CompileCompilesTheFilesEvaluatedIdentityWithItsProject) {
+    trustAll();
+    Mutex queryMutex;
+    std::vector<RunPropertyRequest> queries;
+    BuildServiceOptions withItems = options();
+    withItems.compileItems = [&](const RunPropertyRequest& request) -> Result<std::vector<CompileItem>> {
+        LockGuard lock(queryMutex);
+        queries.push_back(request);
+        return std::vector<CompileItem>{{"other.cpp", MemTree::path("Game/App/other.cpp")},
+                                        {"main.cpp", MemTree::path("Game/App/main.cpp")}};
+    };
+    service = BuildService::create(tree.fs, launcher, *trustStore, withItems, recorder.callbacks());
+    ASSERT_TRUE(service->openSolution(solution).has_value());
+
+    const std::string main = MemTree::path("Game/App/main.cpp");
+    EXPECT_EQ(service->compileProjectFor(main), projectNamed("App"));
+    EXPECT_FALSE(service->compileProjectFor(MemTree::path("Game/App/App.vcxproj")).has_value());
+    EXPECT_FALSE(service->compileProjectFor(MemTree::path("Game/nowhere.cpp")).has_value());
+    EXPECT_FALSE(service->compileProjectFor("main.cpp").has_value());
+
+    launcher.expect({.stdoutBytes = "  main.cpp\n"});
+    ASSERT_TRUE(service->compile(main).has_value());
+    const BuildOutcome outcome = finishedOutcome();
+    EXPECT_TRUE(outcome.succeeded()) << why(outcome);
+    EXPECT_EQ(outcome.target.action, BuildAction::Compile);
+    EXPECT_EQ(outcome.target.file, main);
+    EXPECT_EQ(outcome.target.project, projectNamed("App"));
+
+    const std::vector<MsBuildRequest> seen = requests();
+    ASSERT_EQ(seen.size(), 1U);
+    EXPECT_EQ(seen[0].action, BuildAction::Compile);
+    EXPECT_EQ(seen[0].projectPath, MemTree::path("Game/App/App.vcxproj"));
+    EXPECT_TRUE(seen[0].projectName.empty());
+    EXPECT_EQ(seen[0].solutionPath, MemTree::path("Game/Game.sln"));
+    EXPECT_EQ(seen[0].configuration, "Debug");
+    EXPECT_EQ(seen[0].platform, "x64");
+    EXPECT_EQ(seen[0].selectedFiles, std::vector<std::string>{"main.cpp"});
+    {
+        LockGuard lock(queryMutex);
+        ASSERT_EQ(queries.size(), 1U);
+        EXPECT_EQ(queries[0].msbuildPath, kMsBuild);
+        EXPECT_EQ(queries[0].projectPath, MemTree::path("Game/App/App.vcxproj"));
+        EXPECT_EQ(queries[0].solutionPath, MemTree::path("Game/Game.sln"));
+        EXPECT_EQ(queries[0].configuration, "Debug");
+        EXPECT_EQ(queries[0].platform, "x64");
+    }
+    {
+        LockGuard lock(recorder.mutex);
+        EXPECT_TRUE(std::ranges::any_of(recorder.output, [](const std::string& line) {
+            return line.starts_with("status: Compile started: main.cpp in project App of solution Game");
+        }));
+    }
+
+    // build() takes no Compile, and files no built project compiles are refused before anything starts.
+    EXPECT_EQ(service->build(BuildAction::Compile).error().code(), ErrorCode::InvalidArgument);
+    EXPECT_EQ(service->compile(MemTree::path("Game/nowhere.cpp")).error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(service->compile("main.cpp").error().code(), ErrorCode::InvalidArgument);
+    EXPECT_EQ(requests().size(), 1U);
+}
+
+// A file MSBuild does not list (or an evaluation that fails) ends the compile with the reason and
+// starts no MSBuild build: a guessed SelectedFiles would compile the whole project.
+TEST_F(ServiceTest, ACompileOfAFileMsBuildDoesNotListStartsNothing) {
+    trustAll();
+    bool evaluationFails = false;
+    BuildServiceOptions withItems = options();
+    withItems.compileItems = [&](const RunPropertyRequest&) -> Result<std::vector<CompileItem>> {
+        if (evaluationFails) {
+            return fail(ErrorCode::IoError, "MSBuild could not evaluate App.vcxproj");
+        }
+        return std::vector<CompileItem>{{"other.cpp", MemTree::path("Game/App/other.cpp")}};
+    };
+    service = BuildService::create(tree.fs, launcher, *trustStore, withItems, recorder.callbacks());
+    ASSERT_TRUE(service->openSolution(solution).has_value());
+
+    ASSERT_TRUE(service->compile(MemTree::path("Game/App/main.cpp")).has_value());
+    BuildOutcome outcome = finishedOutcome();
+    EXPECT_FALSE(outcome.succeeded());
+    ASSERT_TRUE(outcome.error.has_value());
+    EXPECT_EQ(outcome.error->code(), ErrorCode::NotFound);
+    EXPECT_TRUE(outcome.error->message().contains("1 ClCompile item")) << outcome.error->message();
+
+    evaluationFails = true;
+    ASSERT_TRUE(service->compile(MemTree::path("Game/App/main.cpp")).has_value());
+    outcome = finishedOutcome();
+    ASSERT_TRUE(outcome.error.has_value());
+    EXPECT_EQ(outcome.error->code(), ErrorCode::IoError);
+    EXPECT_TRUE(requests().empty());
+    EXPECT_TRUE(launcher.launches().empty());
+}
+
 TEST_F(ServiceTest, OneBuildAtATime) {
     trustAll();
     createService();

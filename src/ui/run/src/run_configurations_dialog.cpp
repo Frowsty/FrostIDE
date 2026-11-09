@@ -264,8 +264,9 @@ void RunConfigurationsDialog::showConfiguration(int row) {
             : tr("Nothing"));
     if (msbuild) {
         m_note->setText(tr("MSBuild projects run with the debugger settings MSBuild evaluates for them (the .vcxproj "
-                           "and .vcxproj.user LocalDebugger* properties). Editing them here requires the "
-                           ".vcxproj.user writer (SLN-11)."));
+                           "and .vcxproj.user LocalDebugger* properties). Edit them on the project's Properties, "
+                           "Debugging page, which saves them to its .vcxproj.user file as Visual Studio does "
+                           "(SLN-11)."));
     } else if (configuration.type == run::RunType::CMakeTarget) {
         m_note->setText(tr("The target is built first, then its executable runs. When the arguments here are empty, "
                            "the CMake Targets window's Run/Debug arguments for the active profile apply."));

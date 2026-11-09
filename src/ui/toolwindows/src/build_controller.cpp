@@ -44,6 +44,12 @@ Result<void> BuildServiceBackend::build(build::BuildAction action, std::optional
     return m_service.build(action, project);
 }
 
+Result<void> BuildServiceBackend::compileFile(std::string_view path) { return m_service.compile(path); }
+
+bool BuildServiceBackend::canCompile(std::string_view path) const {
+    return m_service.compileProjectFor(path).has_value();
+}
+
 void BuildServiceBackend::cancel() { m_service.cancel(); }
 
 Result<void> BuildServiceBackend::trust(std::string_view root) { return m_service.trust(root); }
@@ -259,6 +265,26 @@ Result<void> BuildController::build(build::BuildAction action, std::optional<pro
         reportFailure(started.error());
     }
     return started;
+}
+
+Result<void> BuildController::compileFile(std::string_view path) {
+    if (!buildAdmitted()) {
+        auto blocked = fail(ErrorCode::Busy, "a Lua debug launch is pending");
+        reportFailure(blocked.error());
+        return blocked;
+    }
+    if (m_backend == nullptr) {
+        return fail(ErrorCode::InvalidArgument, "no build service is bound");
+    }
+    auto started = m_backend->compileFile(path);
+    if (!started) {
+        reportFailure(started.error());
+    }
+    return started;
+}
+
+bool BuildController::canCompile(std::string_view path) const {
+    return canBuild() && m_backend != nullptr && !path.empty() && m_backend->canCompile(path);
 }
 
 void BuildController::cancel() {
