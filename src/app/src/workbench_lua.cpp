@@ -112,7 +112,12 @@ lang::Json composeFolder(io::IFileSystem& fs, const lang::LuaHostRegistry& hosts
         if (outMetaLibraries.empty())
             outMetaLibraries.push_back(*directory);
     }
-    return lang::composeLuaConfiguration(runtime, contributions, metaLibraries);
+    lang::Json composed = lang::composeLuaConfiguration(runtime, contributions, metaLibraries);
+    if (!runtime.empty() && runtime != "Lua 5.4") {
+        if (lang::Json* rt = composed.find("runtime"))
+            rt->set("version", runtime);
+    }
+    return composed;
 }
 
 LuaPlan planLua(io::IFileSystem& fs, const lang::LuaHostRegistry& hosts, const std::string& runtime,
@@ -201,6 +206,36 @@ bool touches(std::string_view key, std::string_view input) {
                (inner[outer.size()] == '/' || inner[outer.size()] == '\\');
     };
     return key == input || below(key, input) || below(input, key);
+}
+
+sched::Task<void> prepareLuaPlanTask(io::IFileSystem* fs, std::shared_ptr<WorkbenchLuaState> luaStatePtr,
+                                     std::string runtime, std::string stateDirectory, std::string root,
+                                     QPointer<Workbench> self,
+                                     std::function<void(LuaPlan, std::optional<std::string>)> onReady) {
+    LuaPlan plan = planLua(*fs, luaStatePtr->hosts, runtime, stateDirectory, root);
+    std::optional<std::string> overridePath = writeHostLibraryOverrideIfNeeded(*fs, stateDirectory, root, plan);
+    if (self) {
+        QMetaObject::invokeMethod(
+            self.data(),
+            [onReady = std::move(onReady), plan = std::move(plan), overridePath = std::move(overridePath)]() mutable {
+                onReady(std::move(plan), std::move(overridePath));
+            },
+            Qt::QueuedConnection);
+    }
+    co_return;
+}
+
+sched::Task<void> runLuaInspectTask(io::IProcessLauncher* launcher, io::IFileSystem* fs,
+                                    lang::LuaInspectOptions options, QPointer<Workbench> self,
+                                    std::function<void(Result<std::vector<lang::FileDiagnostics>>)> onDone) {
+    auto result = lang::inspectLuaDirectory(*launcher, *fs, options);
+    if (self) {
+        QMetaObject::invokeMethod(
+            self.data(),
+            [onDone = std::move(onDone), result = std::move(result)]() mutable { onDone(std::move(result)); },
+            Qt::QueuedConnection);
+    }
+    co_return;
 }
 } // namespace
 
@@ -319,86 +354,110 @@ void Workbench::startLua(const std::string& root) {
         }
         m_reactor = std::move(*reactor);
     }
-    // The hosts' contributions: for FrostEngine the globals and Lua version its generated scripting
-    // reference declares and its generated definitions folders, and an engine checkout's projects as
-    // their own folders. A project's .luarc.json still has priority in LuaLS, key by key.
-    LuaPlan plan = planLua(m_services.fs, state.hosts, m_luaRuntimeVersion, stateDirectory, root);
-    if (auto overridePath = writeHostLibraryOverrideIfNeeded(m_services.fs, stateDirectory, root, plan)) {
-        arguments->push_back("--configpath=" + *overridePath);
-    }
-    lang::LuaServiceOptions options;
-    options.serverPath = *found;
-    options.workspaceRoot = root;
-    options.arguments = std::move(*arguments);
-    options.trusted = true;
-    options.configuration = std::move(plan.configuration);
-    options.folders = plan.folders;
-    state.folderKeys = sortedFolderKeys(plan.folders);
-    state.inputKeys = std::move(plan.inputKeys);
     const std::uint64_t generation = ++state.generation;
-    options.onLifecycle = [self = QPointer<Workbench>(this), generation] {
-        if (self)
-            QMetaObject::invokeMethod(
-                self.data(),
-                [self, generation] {
-                    if (!self)
-                        return;
-                    // A server that ended mid-progress never sends its end: its tasks end here.
-                    if (self->m_luaState && self->m_luaState->generation == generation &&
-                        (!self->m_lua || self->m_lua->state() != lang::LuaState::Running))
-                        self->m_luaState->finishTasks();
-                    // Only the LuaLS's own documents: a lifecycle change must not cancel a
-                    // Structure request another server (clangd) is answering for the current file.
-                    if (self->m_language && self->currentView() && isLuaSource(self->currentView()->path())) {
-                        self->m_language->structureChanged();
-                        if (self->m_lua && self->m_lua->state() == lang::LuaState::Running) {
-                            if (auto* binding =
-                                    self->currentView()->editor().findChild<ui::lang::EditorInsightBinding*>())
-                                binding->refreshSemanticTokens();
+    auto launchWithPlan = [this, generation, root, serverPath = *found](std::vector<std::string> args, LuaPlan plan,
+                                                                        std::optional<std::string> overridePath) {
+        if (m_shutDown || !m_luaState || m_luaState->generation != generation)
+            return;
+        WorkbenchLuaState& st = *m_luaState;
+        if (overridePath)
+            args.push_back("--configpath=" + *overridePath);
+        lang::LuaServiceOptions options;
+        options.serverPath = serverPath;
+        options.workspaceRoot = root;
+        options.arguments = std::move(args);
+        options.trusted = true;
+        options.configuration = std::move(plan.configuration);
+        options.folders = plan.folders;
+        st.folderKeys = sortedFolderKeys(plan.folders);
+        st.inputKeys = std::move(plan.inputKeys);
+        options.onLifecycle = [self = QPointer<Workbench>(this), generation] {
+            if (self)
+                QMetaObject::invokeMethod(
+                    self.data(),
+                    [self, generation] {
+                        if (!self)
+                            return;
+                        // A server that ended mid-progress never sends its end: its tasks end here.
+                        if (self->m_luaState && self->m_luaState->generation == generation &&
+                            (!self->m_lua || self->m_lua->state() != lang::LuaState::Running))
+                            self->m_luaState->finishTasks();
+                        // Only the LuaLS's own documents: a lifecycle change must not cancel a
+                        // Structure request another server (clangd) is answering for the current file.
+                        if (self->m_language && self->currentView() && isLuaSource(self->currentView()->path())) {
+                            self->m_language->structureChanged();
+                            if (self->m_lua && self->m_lua->state() == lang::LuaState::Running) {
+                                if (auto* binding =
+                                        self->currentView()->editor().findChild<ui::lang::EditorInsightBinding*>())
+                                    binding->refreshSemanticTokens();
+                            }
                         }
-                    }
-                },
-                Qt::QueuedConnection);
+                    },
+                    Qt::QueuedConnection);
+        };
+        // Both run on the reader thread; the queued calls die with this object.
+        options.onProgress = [self = QPointer<Workbench>(this), generation](const lang::LuaProgress& progress) {
+            if (self)
+                QMetaObject::invokeMethod(
+                    self.data(),
+                    [self, generation, progress] {
+                        if (self)
+                            self->onLuaProgress(generation, progress);
+                    },
+                    Qt::QueuedConnection);
+        };
+        options.onRefresh = [self = QPointer<Workbench>(this), generation](std::string_view method) {
+            if (self)
+                QMetaObject::invokeMethod(
+                    self.data(),
+                    [self, generation, method = std::string(method)] {
+                        if (self)
+                            self->onLuaRefresh(generation, method);
+                    },
+                    Qt::QueuedConnection);
+        };
+        m_lua = std::make_shared<lang::LuaService>(m_services.launcher, io::AsyncContext{*m_reactor, *m_pool},
+                                                   std::move(options));
+        m_luaListener = m_lua->diagnostics().addListener([this](const lang::FileDiagnostics& data) {
+            QMetaObject::invokeMethod(this, [this, file = data.file] { onLuaDiagnostics(file); }, Qt::QueuedConnection);
+        });
+        if (auto started = m_lua->start(); !started) {
+            log::warn("workbench", "LuaLS startup: {}", started.error().describe());
+            stopLua();
+            m_luaUnavailable = started.error().message();
+            notifyLuaUnavailable();
+            return;
+        }
+        m_luaUnavailable.clear();
+        m_bridge->setLuaServer(m_lua);
+        for (auto* view : m_editors->uniqueDocumentViews())
+            syncLuaDocument(*view);
+        updateLanguageTarget();
+        m_language->structureChanged();
     };
-    // Both run on the reader thread; the queued calls die with this object.
-    options.onProgress = [self = QPointer<Workbench>(this), generation](const lang::LuaProgress& progress) {
-        if (self)
-            QMetaObject::invokeMethod(
-                self.data(),
-                [self, generation, progress] {
-                    if (self)
-                        self->onLuaProgress(generation, progress);
-                },
-                Qt::QueuedConnection);
-    };
-    options.onRefresh = [self = QPointer<Workbench>(this), generation](std::string_view method) {
-        if (self)
-            QMetaObject::invokeMethod(
-                self.data(),
-                [self, generation, method = std::string(method)] {
-                    if (self)
-                        self->onLuaRefresh(generation, method);
-                },
-                Qt::QueuedConnection);
-    };
-    m_lua = std::make_shared<lang::LuaService>(m_services.launcher, io::AsyncContext{*m_reactor, *m_pool},
-                                               std::move(options));
-    m_luaListener = m_lua->diagnostics().addListener([this](const lang::FileDiagnostics& data) {
-        QMetaObject::invokeMethod(this, [this, file = data.file] { onLuaDiagnostics(file); }, Qt::QueuedConnection);
-    });
-    if (auto started = m_lua->start(); !started) {
-        log::warn("workbench", "LuaLS startup: {}", started.error().describe());
-        stopLua();
-        m_luaUnavailable = started.error().message();
-        notifyLuaUnavailable();
+    // When a built FrostEditor binary's schema.export is not yet cached, warm it and write the
+    // generated meta files on a background worker so the GUI thread never stalls waiting for a
+    // child process (FND-9b).
+    if (state.engineHost && state.engineHost->needsSchemaWarmup(m_services.fs, root)) {
+        QPointer<Workbench> self(this);
+        std::vector<std::string> args = std::move(*arguments);
+        m_retiredLua.push_back(m_pool->spawn(
+            sched::Lane::UserVisible,
+            prepareLuaPlanTask(&m_services.fs, m_luaState, m_luaRuntimeVersion, stateDirectory, root, self,
+                               [self, args = std::move(args), launchWithPlan = std::move(launchWithPlan)](
+                                   LuaPlan plan, std::optional<std::string> overridePath) mutable {
+                                   if (!self)
+                                       return;
+                                   launchWithPlan(std::move(args), std::move(plan), std::move(overridePath));
+                               })));
         return;
     }
-    m_luaUnavailable.clear();
-    m_bridge->setLuaServer(m_lua);
-    for (auto* view : m_editors->uniqueDocumentViews())
-        syncLuaDocument(*view);
-    updateLanguageTarget();
-    m_language->structureChanged();
+    // The hosts' contributions: for FrostEngine the globals and Lua version its generated scripting
+    // reference or schema.export declares, and an engine checkout's projects as their own folders.
+    LuaPlan plan = planLua(m_services.fs, state.hosts, m_luaRuntimeVersion, stateDirectory, root);
+    std::optional<std::string> overridePath =
+        writeHostLibraryOverrideIfNeeded(m_services.fs, stateDirectory, root, plan);
+    launchWithPlan(std::move(*arguments), std::move(plan), std::move(overridePath));
 }
 void Workbench::refreshLuaConfiguration() {
     if (!m_lua || m_projectRoot.empty())
@@ -411,6 +470,31 @@ void Workbench::refreshLuaConfiguration() {
             if (auto under = io::joinPath(io::parentPath(*trustFile), "luals"))
                 stateDirectory = std::move(*under);
         }
+    }
+    if (state.engineHost && state.engineHost->needsSchemaWarmup(m_services.fs, m_projectRoot)) {
+        const std::uint64_t generation = state.generation;
+        const std::string root = m_projectRoot;
+        QPointer<Workbench> self(this);
+        m_retiredLua.push_back(m_pool->spawn(
+            sched::Lane::UserVisible,
+            prepareLuaPlanTask(&m_services.fs, m_luaState, m_luaRuntimeVersion, stateDirectory, root, self,
+                               [self, generation](LuaPlan plan, std::optional<std::string>) {
+                                   if (!self || self->m_shutDown || !self->m_lua || !self->m_luaState ||
+                                       self->m_luaState->generation != generation)
+                                       return;
+                                   if (sortedFolderKeys(plan.folders) != self->m_luaState->folderKeys) {
+                                       log::info("workbench", "LuaLS workspace folders changed; restarting it");
+                                       self->startLua(self->m_projectRoot);
+                                       return;
+                                   }
+                                   self->m_luaState->inputKeys = std::move(plan.inputKeys);
+                                   if (auto sent = self->m_lua->changeConfiguration(std::move(plan.configuration),
+                                                                                    std::move(plan.folders));
+                                       !sent)
+                                       log::warn("workbench", "LuaLS didChangeConfiguration: {}",
+                                                 sent.error().describe());
+                               })));
+        return;
     }
     LuaPlan plan = planLua(m_services.fs, state.hosts, m_luaRuntimeVersion, stateDirectory, m_projectRoot);
     (void)writeHostLibraryOverrideIfNeeded(m_services.fs, stateDirectory, m_projectRoot, plan);
@@ -706,6 +790,114 @@ Result<std::vector<lang::FileDiagnostics>> Workbench::inspectLuaCode(std::string
     if (m_window)
         m_window->toolWindows().show(ui::tool_windows::kProblems, false);
     return result;
+}
+void Workbench::inspectLuaCodeAsync(std::string_view scopeDirectory,
+                                    std::function<void(Result<std::vector<lang::FileDiagnostics>>)> done) {
+    const std::string target = !scopeDirectory.empty() ? std::string(scopeDirectory) : m_projectRoot;
+    if (target.empty()) {
+        done(fail(ErrorCode::InvalidArgument, "no Lua workspace or directory is open to inspect"));
+        return;
+    }
+    const std::string trustRoot = !m_projectRoot.empty() ? m_projectRoot : target;
+    if (!m_services.trust.isTrusted(trustRoot)) {
+        offerLuaTrust();
+        done(fail(ErrorCode::Untrusted, "refusing to inspect an untrusted Lua workspace"));
+        return;
+    }
+    const auto snapshot = m_services.settings.snapshot();
+    lang::LuaSearch search = m_options.luaSearch ? *m_options.luaSearch : lang::defaultLuaSearch();
+    search.configuredPath = snapshot->get(settings::key::toolsLuaLanguageServerPath);
+    std::string stateDirectory = m_options.luaStateDirectory;
+    if (stateDirectory.empty()) {
+        if (auto trustFile = project::TrustStore::defaultStorePath()) {
+            if (auto under = io::joinPath(io::parentPath(*trustFile), "luals"))
+                stateDirectory = std::move(*under);
+        }
+    }
+    lang::LuaInspectOptions options;
+    options.directory = target;
+    options.stateDirectory = stateDirectory;
+    options.search = std::move(search);
+    options.trusted = true;
+    QPointer<Workbench> self(this);
+    m_retiredLua.push_back(m_pool->spawn(
+        sched::Lane::UserVisible,
+        runLuaInspectTask(&m_services.launcher, &m_services.fs, options, self,
+                          [self, target, configuredPath = options.search.configuredPath, search = options.search,
+                           done = std::move(done)](Result<std::vector<lang::FileDiagnostics>> result) mutable {
+                              if (!self || self->m_shutDown) {
+                                  done(fail(ErrorCode::Cancelled, "workbench shut down"));
+                                  return;
+                              }
+                              if (!result) {
+                                  if (auto found = lang::findLuaLanguageServer(self->m_services.fs, search); !found) {
+                                      self->m_luaUnavailable = found.error().message();
+                                      if (!configuredPath.empty())
+                                          self->m_luaUnavailableNotifiedRoot.clear();
+                                      self->notifyLuaUnavailable();
+                                  }
+                                  done(std::move(result));
+                                  return;
+                              }
+                              WorkbenchLuaState& state = luaState(self->m_luaState, self->m_services.launcher);
+                              const std::string scopeKey = lang::documentKey(target);
+                              const auto applyFileToViews = [self](const std::string& file,
+                                                                   const std::optional<lang::FileDiagnostics>& set) {
+                                  if (self->m_lua && self->m_lua->diagnostics().forFile(file))
+                                      return;
+                                  std::vector<ui::LineMarker> markers;
+                                  if (set) {
+                                      for (const auto& d : set->diagnostics) {
+                                          if (d.line <= 0 || (d.severity != lang::DiagnosticSeverity::Error &&
+                                                              d.severity != lang::DiagnosticSeverity::Warning))
+                                              continue;
+                                          markers.push_back({LineIndex{static_cast<std::uint32_t>(d.line - 1)},
+                                                             d.severity == lang::DiagnosticSeverity::Error
+                                                                 ? ui::MarkerSeverity::Error
+                                                                 : ui::MarkerSeverity::Warning,
+                                                             d.message});
+                                      }
+                                  }
+                                  const std::string key = lang::documentKey(file);
+                                  if (markers.empty())
+                                      self->m_liveMarkers.erase(key);
+                                  else
+                                      self->m_liveMarkers[key] = std::move(markers);
+                                  for (DocumentEditorView* view : self->m_editors->views()) {
+                                      if (lang::documentKey(view->path()) != key)
+                                          continue;
+                                      if (auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>())
+                                          binding->setLiveDiagnostics(set.value_or(emptyFileDiagnostics(file)));
+                                      else
+                                          view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live,
+                                                                        set ? ui::lang::toEditorDiagnostics(*set)
+                                                                            : std::vector<ui::EditorDiagnostic>{});
+                                      self->refreshMarkers(*view);
+                                  }
+                              };
+                              for (const lang::FileDiagnostics& previous : state.inspected.files()) {
+                                  if (touches(lang::documentKey(previous.file), scopeKey)) {
+                                      state.inspected.publish(emptyFileDiagnostics(previous.file));
+                                      applyFileToViews(previous.file, std::nullopt);
+                                  }
+                              }
+                              for (const lang::FileDiagnostics& file : *result) {
+                                  state.inspected.publish(file);
+                                  applyFileToViews(file.file, file);
+                              }
+                              self->refreshLiveProblems();
+                              if (self->m_window)
+                                  self->m_window->toolWindows().show(ui::tool_windows::kProblems, false);
+                              done(std::move(result));
+                          })));
+}
+Result<void> Workbench::setLuaRuntimeVersion(std::string_view version) {
+    if (auto set = m_services.settings.set(settings::Scope::Application, settings::key::luaRuntimeVersion,
+                                           std::string(version));
+        !set)
+        return set;
+    onLuaSettingsChanged();
+    return {};
 }
 Result<void> Workbench::gotoCppBinding() {
     DocumentEditorView* view = currentView();

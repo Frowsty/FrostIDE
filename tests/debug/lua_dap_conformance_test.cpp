@@ -776,7 +776,7 @@ TEST(LuaDapConformance, RunsAllScenariosWithZeroSkippedAndMatchesBaseline) {
 }
 
 TEST(LuaDapConformance, IndividualScenariosAreExecutableThroughDebugSession) {
-    WinsockScope winsock;
+    [[maybe_unused]] WinsockScope winsock;
     LoopbackLuaEngineServer server;
     test::SessionRecorder recorder;
 

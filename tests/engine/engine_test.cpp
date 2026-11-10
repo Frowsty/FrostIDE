@@ -15,6 +15,7 @@
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <functional>
 #include <string>
 

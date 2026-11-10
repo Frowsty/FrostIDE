@@ -580,7 +580,12 @@ public:
     // empty), publishes the results to the Problems tool window and open Lua editors, and returns
     // the decoded file diagnostics. Refuses untrusted workspaces and reports missing LuaLS.
     [[nodiscard]] Result<std::vector<lang::FileDiagnostics>> inspectLuaCode(std::string_view scopeDirectory = {});
+    void inspectLuaCodeAsync(std::string_view scopeDirectory,
+                             std::function<void(Result<std::vector<lang::FileDiagnostics>>)> done);
     [[nodiscard]] std::vector<lang::FileDiagnostics> luaInspectedDiagnostics() const;
+    // LUA-3/LUA-4: changes the application Lua runtime version setting (triggering a live
+    // didChangeConfiguration on a running LuaLS without restarting it).
+    [[nodiscard]] Result<void> setLuaRuntimeVersion(std::string_view version);
     // FEC-10b: resolves the Lua symbol at the active editor's caret against the FrostEngine
     // schema.export document and opens the C++ source_location file and line.
     [[nodiscard]] Result<void> gotoCppBinding();

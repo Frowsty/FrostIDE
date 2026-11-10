@@ -1274,7 +1274,8 @@ EngineLuaHostProvider::EngineLuaHostProvider(io::IProcessLauncher& launcher, std
     : m_launcher(&launcher), m_preset(std::move(preset)) {}
 
 EngineLuaHostProvider::EngineLuaHostProvider(SchemaDocument fixedSchema, std::string fixedEngineRoot)
-    : m_fixedSchema(std::move(fixedSchema)), m_fixedEngineRoot(std::move(fixedEngineRoot)) {}
+    : m_fixedSchema(std::move(fixedSchema)), m_fixedGlobals(schemaLuaGlobals(*m_fixedSchema)),
+      m_fixedMetaFiles(generateEngineLuaMetaFiles(*m_fixedSchema)), m_fixedEngineRoot(std::move(fixedEngineRoot)) {}
 
 std::string_view EngineLuaHostProvider::name() const noexcept { return "FrostEngine"; }
 
@@ -1299,6 +1300,27 @@ std::optional<std::string> EngineLuaHostProvider::engineRootForWorkspace(io::IFi
         current = parent;
     }
     return std::nullopt;
+}
+
+bool EngineLuaHostProvider::needsSchemaWarmup(io::IFileSystem& fs, std::string_view folder) const {
+    if (m_fixedSchema || m_launcher == nullptr) {
+        return false;
+    }
+    const auto engineRoot = engineRootForWorkspace(fs, folder);
+    if (!engineRoot) {
+        return false;
+    }
+    const auto program = findBuiltEditorBinary(fs, *engineRoot, m_preset);
+    if (!program) {
+        return false;
+    }
+    IClock::SystemTime mtime{};
+    if (auto st = fs.status(*program)) {
+        mtime = st->mtime;
+    }
+    LockGuard lock(m_mutex);
+    const auto it = m_cache.find(*program);
+    return it == m_cache.end() || it->second.mtime != mtime;
 }
 
 std::optional<SchemaDocument> EngineLuaHostProvider::schemaForWorkspace(io::IFileSystem& fs,
@@ -1331,18 +1353,21 @@ std::optional<SchemaDocument> EngineLuaHostProvider::schemaForWorkspace(io::IFil
     request.command = "schema.export";
     request.workingDirectory = *engineRoot;
     auto response = runEngineCliResult(*m_launcher, *program, request);
-    if (!response) {
-        return std::nullopt;
+    CachedSchema entry;
+    entry.mtime = mtime;
+    if (response) {
+        if (auto parsed = parseSchemaDocument(*response)) {
+            entry.globals = schemaLuaGlobals(*parsed);
+            entry.metaFiles = generateEngineLuaMetaFiles(*parsed);
+            entry.document = std::move(*parsed);
+        }
     }
-    auto parsed = parseSchemaDocument(*response);
-    if (!parsed) {
-        return std::nullopt;
-    }
+    std::optional<SchemaDocument> out = entry.document;
     {
         LockGuard lock(m_mutex);
-        m_cache[*program] = CachedSchema{.mtime = mtime, .document = *parsed};
+        m_cache[*program] = std::move(entry);
     }
-    return *parsed;
+    return out;
 }
 
 std::optional<lang::LuaHostContribution> EngineLuaHostProvider::contribute(io::IFileSystem& fs,
@@ -1365,8 +1390,26 @@ std::optional<lang::LuaHostContribution> EngineLuaHostProvider::contribute(io::I
     lang::LuaHostContribution out;
     out.provider = std::string(name());
     out.runtimeVersion = schema->luaVersion;
-    out.globals = schemaLuaGlobals(*schema);
-    out.metaFiles = generateEngineLuaMetaFiles(*schema);
+    if (m_fixedSchema) {
+        out.globals = m_fixedGlobals;
+        out.metaFiles = m_fixedMetaFiles;
+    } else {
+        const auto engineRoot = engineRootForWorkspace(fs, *normalized);
+        const auto program = engineRoot ? findBuiltEditorBinary(fs, *engineRoot, m_preset) : std::nullopt;
+        bool populatedFromCache = false;
+        if (program) {
+            LockGuard lock(m_mutex);
+            if (const auto it = m_cache.find(*program); it != m_cache.end() && it->second.document) {
+                out.globals = it->second.globals;
+                out.metaFiles = it->second.metaFiles;
+                populatedFromCache = true;
+            }
+        }
+        if (!populatedFromCache) {
+            out.globals = schemaLuaGlobals(*schema);
+            out.metaFiles = generateEngineLuaMetaFiles(*schema);
+        }
+    }
     addFolderScriptRuntimePaths(fs, *normalized, schema->scriptsRoot, out.runtimePath);
 
     if (fallback) {

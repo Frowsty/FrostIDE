@@ -238,6 +238,10 @@ struct AutomationEndpoint::Impl {
             luaComplete(client, id, params);
             return;
         }
+        if (method == "lua.inspect") {
+            luaInspect(client, id, params);
+            return;
+        }
         reply(client, id, dispatch(method, params));
         if (method == "quit")
             QTimer::singleShot(0, QCoreApplication::instance(), [] { QCoreApplication::quit(); });
@@ -248,7 +252,7 @@ struct AutomationEndpoint::Impl {
     /*
      * kMethods (params -> result):
      *   hello {token} -> {protocol, pid}            the first request (header comment)
-     *   state {} -> {project, cmake, clangd, editor} what the workbench shows now (stateJson)
+     *   state {} -> {project, cmake, clangd, lua, editor} what the workbench shows now (stateJson)
      *   open {path, line?, column?} -> {}           Workbench::openPath (a folder opens as the project)
      *   trust {root} -> {}                          the trust dialog's Trust button: the build
      *                                               controller's trust(root), which the CMake service
@@ -258,15 +262,20 @@ struct AutomationEndpoint::Impl {
      *   cmake.configure {} -> {}                    CMakeService::configure (Reload CMake Project)
      *   cmake.targets {} -> {targets: [{name, type, sources}]}   the File API model
      *   cmake.build {action: build|rebuild|clean, target?} -> {} CMakeService::build
-     *   wait {for: cmake|clangd, timeoutMs} -> state   replies when the CMake service is idle (no
-     *                                               job, no reply read) or clangd runs, or at the
-     *                                               timeout with {"timedOut": true}
+     *   wait {for: cmake|clangd|lua, timeoutMs} -> state   replies when the CMake service is idle (no
+     *                                               job, no reply read), clangd runs, or LuaLS runs,
+     *                                               or at the timeout with {"timedOut": true}
      *   problems {} -> {problems: [...]}            the Problems model's rows, in its order: severity,
      *                                               code, message, file (resolved), origin (as
      *                                               printed), line, column, jumpable, source
      *   problems.activate {index} -> {}             Problems' own activation (opens the location)
      *   editor {} -> {path, line, column} | {}      the current editor and its caret
      *   navigate.definition {} -> {}                Go to Declaration or Definition at the caret
+     *   navigate.cppBinding {} -> {}                Go to C++ Binding at the caret (FEC-10b)
+     *   lua.state {} -> {available, state, pid, restarts, configurationChangesSent, runtimeVersion}
+     *   lua.complete {line?, column?, timeoutMs?} -> {items, labels, timedOut}
+     *   lua.inspect {directory?} -> {files: [{file, diagnostics: [{line, column, code, message}]}]}
+     *   lua.setRuntime {version} -> {}              changes lua.runtimeVersion (live didChangeConfiguration)
      *   run.configurations {} -> {configurations: [{id, name, type, target, program, arguments,
      *                               workingDirectory, environment, generated}], selected}
      *                                               the toolbar combo's run configurations (RUN-2)
@@ -350,23 +359,10 @@ struct AutomationEndpoint::Impl {
         }
         if (method == "lua.state")
             return luaStateJson();
-        if (method == "lua.inspect") {
-            auto inspected = workbench.inspectLuaCode(params.stringAt("directory"));
-            if (!inspected)
-                return std::unexpected(inspected.error());
-            Json files = Json::array();
-            for (const lang::FileDiagnostics& file : *inspected) {
-                Json diags = Json::array();
-                for (const lang::LiveDiagnostic& d : file.diagnostics) {
-                    diags.push(Json::object()
-                                   .set("line", d.line)
-                                   .set("column", d.column)
-                                   .set("code", d.code)
-                                   .set("message", d.message));
-                }
-                files.push(Json::object().set("file", file.file).set("diagnostics", std::move(diags)));
-            }
-            return Json::object().set("files", std::move(files));
+        if (method == "lua.setRuntime") {
+            if (auto updated = workbench.setLuaRuntimeVersion(params.stringAt("version")); !updated)
+                return std::unexpected(updated.error());
+            return Json::object();
         }
         if (method == "problems")
             return problemsJson();
@@ -1029,11 +1025,45 @@ struct AutomationEndpoint::Impl {
                                           : lua->state() == lang::LuaState::Restarting ? "Restarting"
                                           : lua->state() == lang::LuaState::Failed     ? "Failed"
                                                                                        : "Stopped";
+        std::string runtimeVersion;
+        const Json cfg = lua->configuration();
+        if (const Json* runtime = cfg.find("runtime"))
+            runtimeVersion = std::string(runtime->stringAt("version"));
         return Json::object()
             .set("available", true)
             .set("state", std::string(stateStr))
             .set("pid", pid ? Json(static_cast<std::int64_t>(*pid)) : Json())
-            .set("restarts", static_cast<std::int64_t>(lua->restarts()));
+            .set("restarts", static_cast<std::int64_t>(lua->restarts()))
+            .set("configurationChangesSent", static_cast<std::int64_t>(lua->configurationChangesSent()))
+            .set("runtimeVersion", std::move(runtimeVersion));
+    }
+
+    void luaInspect(Client& client, const Json& id, const Json& params) {
+        QPointer<QLocalSocket> socket = client.socket;
+        Client* raw = &client;
+        workbench.inspectLuaCodeAsync(
+            params.stringAt("directory"),
+            [this, socket, raw, id](Result<std::vector<lang::FileDiagnostics>> inspected) {
+                if (socket.isNull())
+                    return;
+                if (!inspected) {
+                    reply(*raw, id, std::unexpected(inspected.error()));
+                    return;
+                }
+                Json files = Json::array();
+                for (const lang::FileDiagnostics& file : *inspected) {
+                    Json diags = Json::array();
+                    for (const lang::LiveDiagnostic& d : file.diagnostics) {
+                        diags.push(Json::object()
+                                       .set("line", d.line)
+                                       .set("column", d.column)
+                                       .set("code", d.code)
+                                       .set("message", d.message));
+                    }
+                    files.push(Json::object().set("file", file.file).set("diagnostics", std::move(diags)));
+                }
+                reply(*raw, id, Json::object().set("files", std::move(files)));
+            });
     }
 
     void luaComplete(Client& client, const Json& id, const Json& params) {

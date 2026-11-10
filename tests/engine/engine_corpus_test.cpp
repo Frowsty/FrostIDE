@@ -305,8 +305,9 @@ TEST_F(CorpusEngineContract, SchemaExportValidatesAndEverySourceIsALineOfTheClon
               << " sources resolved in " << m_corpus << "\n";
 
     // Physics.Raycast and RaycastAll point at their registrations, whose declared costs the source states.
-    auto physics =
-        io::realFileSystem().readFile(m_corpus + "\\Frost\\src\\Frost\\Scripting\\Modules\\PhysicsScriptModule.cpp");
+    auto physicsPath = io::joinPath(m_corpus, "Frost/src/Frost/Scripting/Modules/PhysicsScriptModule.cpp");
+    ASSERT_TRUE(physicsPath.has_value()) << physicsPath.error().describe();
+    auto physics = io::realFileSystem().readFile(*physicsPath);
     ASSERT_TRUE(physics.has_value()) << physics.error().describe();
     const std::uint32_t raycastName = lineOf(*physics, "\"Raycast\"");
     const std::uint32_t raycastAllName = lineOf(*physics, "\"RaycastAll\"");

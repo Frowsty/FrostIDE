@@ -85,15 +85,23 @@ public:
     // Returns the cached or freshly exported `SchemaDocument` for `folder`, if available.
     [[nodiscard]] std::optional<SchemaDocument> schemaForWorkspace(io::IFileSystem& fs, std::string_view folder) const;
 
+    // Returns true when `folder` belongs to a FrostEngine workspace with a built FrostEditor binary
+    // whose schema.export has not yet been cached for its current mtime.
+    [[nodiscard]] bool needsSchemaWarmup(io::IFileSystem& fs, std::string_view folder) const;
+
 private:
     struct CachedSchema {
         IClock::SystemTime mtime{};
-        SchemaDocument document;
+        std::optional<SchemaDocument> document;
+        std::vector<std::string> globals;
+        std::vector<lang::LuaMetaFile> metaFiles;
     };
 
     io::IProcessLauncher* m_launcher = nullptr;
     std::string m_preset;
     std::optional<SchemaDocument> m_fixedSchema;
+    std::vector<std::string> m_fixedGlobals;
+    std::vector<lang::LuaMetaFile> m_fixedMetaFiles;
     std::string m_fixedEngineRoot;
     mutable Mutex m_mutex;
     mutable std::map<std::string, CachedSchema, std::less<>> m_cache FROST_GUARDED_BY(m_mutex);

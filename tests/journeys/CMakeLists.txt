@@ -42,6 +42,20 @@ set_tests_properties(journeys.j2_run PROPERTIES
     RESOURCE_LOCK frost_desktop
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
+# j3_frostengine_lua (FND-7c, FEC-10b): schema.export completion and Go to Definition / Go to C++
+# Binding on the pinned FrostEngine clone, live module require() and runtime didChangeConfiguration,
+# and Inspect Code against the lua-language-server --check oracle (j3_frostengine_lua.py's header).
+add_test(NAME journeys.j3_frostengine_lua
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/j3_frostengine_lua.py
+            --frost $<TARGET_FILE:frost> --config $<CONFIG>
+            --evidence ${CMAKE_BINARY_DIR}/journey-evidence)
+set_tests_properties(journeys.j3_frostengine_lua PROPERTIES
+    LABELS "corpus;integration"
+    TIMEOUT 7200
+    COST 500
+    RESOURCE_LOCK frost_desktop
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
 # j2_msvc (FND-7b): open, edit, build and debug an MSVC solution with the real MSBuild and lldb-dap
 # (j2_msvc.py's header). Windows only (Visual Studio's MSBuild) and Debug only (the endpoint and the
 # spawn log). On the synthetic solution (a scratch copy of tests/project/fixtures/msvc_generated) it
