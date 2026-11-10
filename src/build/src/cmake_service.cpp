@@ -328,6 +328,7 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     std::optional<std::vector<VsInstance>> instances FROST_GUARDED_BY(mutex);
     std::string announcedEnvironment FROST_GUARDED_BY(mutex); // The MSVC environment last named in the output.
     SaveAllHook saveAll FROST_GUARDED_BY(mutex);
+    // `state`'s copy, stored with it under the lock and read without it (CMakeService::state, waitForIdle).
     std::atomic<BuildState> publishedState{BuildState::Idle};
 
     Mutex persistMutex;
@@ -1963,8 +1964,8 @@ void CMakeService::trustChanged() {
 }
 
 BuildState CMakeService::state() const {
-    LockGuard lock(m_state->mutex);
-    return m_state->state;
+    // Stored together with `state` under the lock (setStateLocked, the close path), read without it.
+    return m_state->publishedState.load();
 }
 
 bool CMakeService::modelLoading() const {

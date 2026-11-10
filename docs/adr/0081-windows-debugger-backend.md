@@ -14,7 +14,9 @@ backend for natvis and large PDBs open until a spike measured DbgEng against lld
 redistribution terms were reviewed. The measure is FrostEngine's Debug build in the pinned clone
 `E:\FrostBuilds\corpora\frostengine-8237e1ecfeb9\build\windows-debug\bin`: FrostTests.pdb
 (3,624 MB on disk; PLAN.md says 3.01 GB, which was an earlier build) and FrostEditor.pdb (2,350 MB).
-FrostRuntime is not built in the clone, and the spike did not build it (the full engine is ~49 GB).
+FrostRuntime was not built in that clone. The R3 integration then built FrostTests and FrostRuntime in
+the current pin's clone (`frostengine-499e734e0055` under `D:\FrostWork\corpora`) and measured all three
+programs there (second table below).
 
 ## The spike
 
@@ -46,6 +48,27 @@ Results (2026-11-09, this machine; `E:\FrostBuilds\r3-scratch\dbg0\dbg0-results.
 | FrostEditor 1 | lldb-dap | 45.0 s | 36.7 s | 1,670 MB | 989 MB |
 | FrostEditor 2 | DbgEng | 0.6 s | 0.5 s | 278 MB | 265 MB |
 | FrostEditor 2 | lldb-dap | 22.7 s | 17.7 s | 1,670 MB | 988 MB |
+
+Second run on the R3 pin (2026-11-09 18:54, this machine, the clone on the NVMe disk D:, after the
+programs had just been built so every run is warm; `tools/dbg0/run-dbg0.ps1 -ProgramDir
+D:\FrostWork\corpora\frostengine-499e734e0055\build\windows-debug\bin`, results in
+`E:\FrostBuilds\r3-scratch\dbg0-499e734\dbg0-results.txt`). FrostTests.pdb is 3,229 MB, FrostEditor.pdb
+1,755 MB and FrostRuntime.pdb 929 MB:
+
+| Program, run | Backend | First breakpoint | Breakpoint bound | Peak working set | Peak private |
+|---|---|---|---|---|---|
+| FrostTests 1 | DbgEng | 1.5 s | 1.4 s | 463 MB | 452 MB |
+| FrostTests 1 | lldb-dap | 46.7 s | 38.2 s | 2,591 MB | 1,715 MB |
+| FrostTests 2 | DbgEng | 1.6 s | 1.4 s | 463 MB | 452 MB |
+| FrostTests 2 | lldb-dap | 48.0 s | 38.6 s | 2,593 MB | 1,716 MB |
+| FrostEditor 1 | DbgEng | 0.9 s | 0.8 s | 278 MB | 265 MB |
+| FrostEditor 1 | lldb-dap | 29.5 s | 22.7 s | 1,670 MB | 989 MB |
+| FrostEditor 2 | DbgEng | 0.8 s | 0.7 s | 277 MB | 265 MB |
+| FrostEditor 2 | lldb-dap | 34.2 s | 28.4 s | 1,669 MB | 988 MB |
+| FrostRuntime 1 | DbgEng | 0.8 s | 0.6 s | 221 MB | 209 MB |
+| FrostRuntime 1 | lldb-dap | 27.7 s | 20.6 s | 1,330 MB | 912 MB |
+| FrostRuntime 2 | DbgEng | 0.6 s | 0.5 s | 221 MB | 209 MB |
+| FrostRuntime 2 | lldb-dap | 26.4 s | 19.3 s | 1,331 MB | 912 MB |
 
 Every run stopped on the breakpoint. Warm, DbgEng reaches the first breakpoint 20 to 40 times faster
 than lldb and uses about a sixth of the memory. Most of lldb's time goes into binding the breakpoint,
@@ -116,6 +139,19 @@ and string_view (`MsvcDebug.StlContainersShowTheirElements`). The gaps are:
    (/ZI /JMC), where lldb's own step-in stepped over the call. It also reaches the callee in CMake's
    /Zi build. In both builds it stops on the callee's opening line, as Visual Studio does
    (`MsvcStepInto`; debug_session.hpp, "Step into a thunk").
+8. **lldb cannot read a PDB that an incremental link rewrote (R3 integration, j2_msvc).** When link.exe
+   relinks a Debug program in place (LinkIncremental, on by default for Debug), it leaves a PDB whose
+   file size is not a whole number of MSF blocks: SLN-0's App.pdb was 1,677,312 bytes for 271 blocks of
+   4096. lldb 23.1.4's PDB reader refuses such a file (llvm-pdbutil: "The PDB file is corrupt. File
+   size is not a multiple of block size"), so lldb-dap reports "Symbols not found." for the program and
+   every line breakpoint stays unverified. The same file padded with zeros to a block boundary reads
+   fine, and the first, full link of the same project always reads fine. FrostIDE does not change the
+   user's link settings or files to work around it. Instead, DebugSession prints a console note when
+   the launched program loads without symbols, naming the incremental relink and the full link
+   (LinkIncremental=false, or a Rebuild) that avoids it (`DebugSession.AProgramWithoutSymbolsIsNamedOnce`).
+   j2_msvc's scratch copy links App with LinkIncremental=false (and /Od) so that its F5 steps exercise
+   FrostIDE rather than this lldb limit. A fix (a reader that accepts the trailing bytes, or DbgEng
+   under DBG-14) is a follow-up, and so is the user's choice of a workaround.
 
 ## Consequences
 

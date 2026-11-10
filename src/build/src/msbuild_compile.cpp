@@ -19,10 +19,12 @@ constexpr io::PathStyle kWindows = io::PathStyle::Windows;
 
 constexpr char lowerAscii(char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
 
-// `path` normalised with Windows rules and lower-cased, for comparing two spellings of one file;
-// "" when it does not normalise.
+// `path` normalised with Windows rules (or, for a path those reject such as "/work/a.cpp", the
+// platform's) and lower-cased, for comparing two spellings of one file; "" when it does not normalise.
 std::string pathKey(std::string_view path) {
-    std::string key = io::normalizePath(path, kWindows).value_or(std::string());
+    std::string key = io::normalizePath(path, kWindows)
+                          .or_else([&](const Error&) { return io::normalizePath(path, io::kNativePathStyle); })
+                          .value_or(std::string());
     std::ranges::replace(key, '/', '\\');
     for (char& c : key) {
         c = lowerAscii(c);
@@ -30,7 +32,8 @@ std::string pathKey(std::string_view path) {
     return key;
 }
 
-std::string_view trimmedOutput(std::string_view text) noexcept {
+// Only the Windows build path calls it.
+[[maybe_unused]] std::string_view trimmedOutput(std::string_view text) noexcept {
     while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) {
         text.remove_suffix(1);
     }

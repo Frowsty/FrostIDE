@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Unit tests for file URIs (uri.hpp): Windows drive and UNC paths, POSIX paths, percent-encoding
-// both ways, VS Code's encoded drive colon, and the document keys.
+// both ways, VS Code's encoded drive colon, the document keys and their file-name prefilter.
 
 #include "frost/lang/uri.hpp"
 
@@ -11,6 +11,7 @@ namespace {
 
 using frost::io::PathStyle;
 using frost::lang::documentKey;
+using frost::lang::mayHaveDocumentKey;
 using frost::lang::pathToUri;
 using frost::lang::uriToPath;
 
@@ -48,6 +49,36 @@ TEST(Uri, DocumentKeysFoldCaseOnWindowsOnly) {
     EXPECT_EQ(documentKey("C:\\Src\\Main.CPP", PathStyle::Windows), documentKey("c:/src/main.cpp", PathStyle::Windows));
     EXPECT_NE(documentKey("/src/Main.cpp", PathStyle::Posix), documentKey("/src/main.cpp", PathStyle::Posix));
     EXPECT_EQ(documentKey("/src/./main.cpp", PathStyle::Posix), documentKey("/src//main.cpp", PathStyle::Posix));
+}
+
+/*
+ * The prefilter never rejects a path whose key is the document's (every pair below with equal keys
+ * passes), and rejects paths whose file names differ, so callers skip normalising them.
+ */
+TEST(Uri, TheFileNamePrefilterKeepsEveryPathWithTheKeyAndRejectsOtherNames) {
+    struct Case {
+        const char* path;
+        const char* document;
+        PathStyle style;
+    };
+    const Case same[] = {
+        {R"(C:\Src\Main.CPP)", "c:/src/main.cpp", PathStyle::Windows},
+        {"C:/src/sub/../main.cpp", R"(C:\src\main.cpp)", PathStyle::Windows},
+        {"/src/./main.cpp", "/src//main.cpp", PathStyle::Posix},
+        {"/src/main.cpp", "/src/main.cpp", PathStyle::Posix},
+        {"C:/src/dir/x/..", R"(C:\src\dir)", PathStyle::Windows}, // POSIX keeps "..": a link may follow.
+        {"/src/dir/.", "/src/dir", PathStyle::Posix},
+    };
+    for (const Case& c : same) {
+        const std::string key = documentKey(c.document, c.style);
+        ASSERT_EQ(documentKey(c.path, c.style), key) << c.path;
+        EXPECT_TRUE(mayHaveDocumentKey(c.path, key)) << c.path;
+    }
+    EXPECT_FALSE(mayHaveDocumentKey("C:/src/other.cpp", documentKey("C:/src/main.cpp", PathStyle::Windows)));
+    EXPECT_FALSE(mayHaveDocumentKey("/src/main.cc", documentKey("/src/main.cpp", PathStyle::Posix)));
+    EXPECT_FALSE(mayHaveDocumentKey("/a/main.cpp.in", documentKey("/b/main.cpp", PathStyle::Posix)));
+    // Other directories with the same file name pass: only documentKey can tell them apart.
+    EXPECT_TRUE(mayHaveDocumentKey("/a/main.cpp", documentKey("/b/main.cpp", PathStyle::Posix)));
 }
 
 } // namespace

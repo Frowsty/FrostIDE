@@ -196,7 +196,17 @@ def spawn_records(directory: Path) -> list[dict]:
     """Every record of every spawn-log session in `directory`, in file and line order."""
     records: list[dict] = []
     for log in sorted(directory.glob("spawn-*.jsonl")):
-        for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+        # FrostIDE rewrites the log atomically after each record; on Windows a read that meets the
+        # replace fails with a sharing violation (PermissionError) for a moment, so it is retried.
+        for attempt in range(100):
+            try:
+                text = log.read_text(encoding="utf-8", errors="replace")
+                break
+            except PermissionError:
+                if attempt == 99:
+                    raise
+                time.sleep(0.02)
+        for line in text.splitlines():
             if line.strip():
                 try:
                     records.append(json.loads(line))

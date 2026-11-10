@@ -179,6 +179,10 @@ void SolutionEvaluation::run(std::stop_token stop) {
     }
 
 #ifndef _WIN32
+    // The evaluation below needs MSBuild; here the launcher, file system and stop token go unused.
+    static_cast<void>(stop);
+    static_cast<void>(&m_launcher);
+    static_cast<void>(&m_fs);
     giveUp("MSBuild evaluation needs Windows with Visual Studio or its Build Tools");
     return;
 #else

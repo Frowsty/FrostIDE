@@ -132,6 +132,8 @@ void DebugController::setConsole(RunConsole* console) {
     }
 }
 
+RunConsole* DebugController::console() const noexcept { return m_console.data(); }
+
 Result<void> DebugController::setWorkspaceRoot(std::string root) {
     m_root.clear(); // Suppress persistence while the old set is cleared and the new set loaded.
     if (root.empty()) {
@@ -246,6 +248,7 @@ void DebugController::onRunFinished(const build::RunOutcome& outcome, const std:
     }
     m_pendingRun.reset();
     if (!launch) {
+        m_lastOutcome = outcome;
         if (m_console) {
             m_console->finish(outcome);
         }
@@ -256,6 +259,7 @@ void DebugController::onRunFinished(const build::RunOutcome& outcome, const std:
         return;
     }
     if (auto started = startTarget(debugTargetFor(outcome, *launch)); !started) {
+        m_lastOutcome = build::RunOutcome{.run = outcome.run, .error = started.error()};
         if (m_console) {
             m_console->appendOutput(build::RunOutputKind::System,
                                     std::format("The debugger could not start: {}\n", started.error().message()));
@@ -677,6 +681,8 @@ void DebugController::onEnded(std::uint64_t endingGeneration, const debug::Debug
     if (!finished.exitCode && !finished.error && !finished.stopped) {
         finished.error = Error(ErrorCode::IoError, "the debug session ended");
     }
+    if (m_generation == endingGeneration)
+        m_lastOutcome = finished;
     const QString summary = outcome.error ? QStringLiteral("Debug session ended with an error")
                             : finished.stopped && !finished.exitCode ? QStringLiteral("Process stopped")
                                                                      : runFinishedLine(finished);

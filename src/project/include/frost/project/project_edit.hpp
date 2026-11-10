@@ -83,9 +83,9 @@ struct ProjectEdit {
 
 // One answer line of the helper.
 struct ProjectEditAnswer {
-    bool ready = false;          // A Ready line (the journal is durable; a decision is awaited).
-    std::string transactionId;   // Ready: the transaction it names.
-    std::string journalDigest;   // Ready: SHA-256 of the journal, 64 upper-case hex digits.
+    bool ready = false;               // A Ready line (the journal is durable; a decision is awaited).
+    std::string transactionId;        // Ready: the transaction it names.
+    std::string journalDigest;        // Ready: SHA-256 of the journal, 64 upper-case hex digits.
     std::optional<std::string> error; // The final line: nullopt on success, else the helper's reason.
 };
 
@@ -94,8 +94,8 @@ struct ProjectEditAnswer {
 
 // The file edits of one project that a rename, move or delete on disk implies.
 struct ProjectPathChange {
-    std::string project;               // The .vcxproj.
-    std::vector<std::string> files;    // The items' current (old) paths, in document order.
+    std::string project;                // The .vcxproj.
+    std::vector<std::string> files;     // The items' current (old) paths, in document order.
     std::vector<std::string> renamedTo; // Their new paths; empty for a delete.
 };
 

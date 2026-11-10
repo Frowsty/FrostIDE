@@ -193,6 +193,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     std::vector<std::string> exceptionFilters FROST_GUARDED_BY(mutex);
     std::vector<std::string> throwTypes FROST_GUARDED_BY(mutex); // Header comment, "Exception filters".
     bool throwTypesWarned FROST_GUARDED_BY(mutex) = false;       // The non-MSVC note was printed.
+    bool symbolsWarned FROST_GUARDED_BY(mutex) = false;          // The program's "no symbols" note was printed.
     // ThrowInfo address -> {decorated, undecorated} type names read for it (DBG-2b).
     std::map<std::uint64_t, std::pair<std::string, std::string>> thrownTypes FROST_GUARDED_BY(mutex);
     // Module base -> SizeOfImage of the modules whose PE headers were read.
@@ -1538,6 +1539,63 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
 
     // --- Events ---
 
+    /*
+     * A module event (DAP "module"): when the program itself loads without symbols (lldb-dap's
+     * symbolStatus "Symbols not found."), says so once in the console, since none of its line
+     * breakpoints can bind and the program would otherwise run past them without a word. The
+     * status is lldb's; the hint names the cause j2_msvc found: lldb 23.1.4 refuses a PDB whose
+     * size is not a whole number of MSF blocks, which an incremental MSVC link (LinkIncremental,
+     * on for Debug by default) writes when it relinks in place (ADR 0081 item 8, DBG-0).
+     */
+    void moduleEvent(const rpc::Json& body) {
+        const rpc::Json* module = body.find("module");
+        if (module == nullptr || !module->isObject())
+            return;
+        if (module->stringAt("symbolStatus") != "Symbols not found.")
+            return;
+        const std::string path(module->stringAt("path"));
+        if (path.empty() || !sameProgram(path, launchArguments.stringAt("program")))
+            return;
+        {
+            LockGuard lock(mutex);
+            if (symbolsWarned)
+                return;
+            symbolsWarned = true;
+        }
+        std::string note = std::format("The debugger could not read the symbols of {} (lldb: \"Symbols not "
+                                       "found.\"), so its breakpoints cannot bind.",
+                                       path);
+#ifdef _WIN32
+        note += " lldb cannot read a PDB that an incremental MSVC link (LinkIncremental, on for Debug by "
+                "default) rewrote in place; a full link (LinkIncremental=false, or a Rebuild) writes one it can read.";
+#endif
+        note += "\n";
+        emit([&] {
+            if (callbacks.onOutput)
+                callbacks.onOutput("important", note);
+        });
+    }
+
+    // Whether the module at `path` is the launched `program` (case-insensitive and either slash on Windows).
+    static bool sameProgram(std::string_view path, std::string_view program) {
+#ifdef _WIN32
+        if (path.size() != program.size())
+            return false;
+        for (std::size_t i = 0; i < path.size(); ++i) {
+            auto fold = [](char c) {
+                if (c == '/')
+                    return '\\';
+                return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+            };
+            if (fold(path[i]) != fold(program[i]))
+                return false;
+        }
+        return true;
+#else
+        return path == program;
+#endif
+    }
+
     void event(std::string_view name, const rpc::Json& body) {
         if (name == "initialized") {
             configure();
@@ -1579,6 +1637,8 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
             breakpointEvent(body);
         } else if (name == "capabilities") {
             capabilitiesChanged(body);
+        } else if (name == "module") {
+            moduleEvent(body);
         } else if (name == "process") {
             const dap::ProcessEvent process = dap::parseProcessEvent(body);
             LockGuard lock(mutex);

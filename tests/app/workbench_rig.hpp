@@ -110,6 +110,8 @@ public:
         }
     }
     ~WorkDir() {
+        // A clone of a TempRepo on the same volume hard-links git's read-only objects.
+        frost::test::makeTreeWritable(m_path);
         if (!m_path.empty() && !frost::test::removeTree(io::realFileSystem(), m_path)) {
             ADD_FAILURE() << "could not remove " << m_path;
         }

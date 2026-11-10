@@ -472,8 +472,9 @@ bool versionMatches(std::string_view requested, std::string_view captured) noexc
            (captured.size() > requested.size() && captured.starts_with(requested) && captured[requested.size()] == '.');
 }
 
-// Whether the capture is the environment the selection asked for (header comment).
-Result<void> matchesSelection(const MsvcDevEnvironment& environment) {
+// Whether the capture is the environment the selection asked for (header comment). Only the Windows
+// capture path calls it.
+[[maybe_unused]] Result<void> matchesSelection(const MsvcDevEnvironment& environment) {
     const VcvarsSelection& selection = environment.selection;
     if (!selection.toolsetVersion.empty() && !versionMatches(selection.toolsetVersion, environment.toolsetVersion)) {
         return fail(ErrorCode::IoError, std::format("vcvarsall.bat set up MSVC toolset '{}', not the requested '{}'",

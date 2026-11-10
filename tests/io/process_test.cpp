@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -47,6 +48,7 @@
 // ConvertSidToStringSidW; sddl.h needs windows.h first.
 #include <sddl.h>
 #else
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -1049,6 +1051,61 @@ TEST(RealProcessLauncher, DestroyingTheProcessEndsTheWholeTree) {
     process->reset();
     EXPECT_TRUE(grandchild.exitsWithin(30s)) << "the destructor left the grandchild running";
     grandchild.kill();
+}
+
+/*
+ * belowNormalPriority starts the child below normal priority and, on Windows, every process it
+ * starts (a build's compilers); without it the child has this process's priority. POSIX checks the
+ * child only: a descendant forked before the launcher's setpriority keeps the normal niceness
+ * (process.hpp), and this child forks its grandchild at once.
+ */
+TEST(RealProcessLauncher, BelowNormalPriorityLowersTheChildAndOnWindowsItsDescendants) {
+    ProcessSpec low = childSpec({"grandchild", "wait"});
+    low.belowNormalPriority = true;
+    auto lowered = frost::io::realProcessLauncher().launch(low);
+    ASSERT_TRUE(lowered.has_value()) << lowered.error().describe();
+    auto plain = frost::io::realProcessLauncher().launch(childSpec({"grandchild", "wait"}));
+    ASSERT_TRUE(plain.has_value()) << plain.error().describe();
+    const frost::io::ProcessId loweredGrandchild = readGrandchildPid(**lowered);
+    const frost::io::ProcessId plainGrandchild = readGrandchildPid(**plain);
+    ASSERT_NE(loweredGrandchild, 0u);
+    ASSERT_NE(plainGrandchild, 0u);
+    const ProcessWatch watchLowered(loweredGrandchild), watchPlain(plainGrandchild);
+#ifdef _WIN32
+    const auto classOf = [](frost::io::ProcessId pid) -> DWORD {
+        HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (handle == nullptr) {
+            return 0;
+        }
+        const DWORD priority = GetPriorityClass(handle);
+        CloseHandle(handle);
+        return priority;
+    };
+    const DWORD own = GetPriorityClass(GetCurrentProcess());
+    EXPECT_EQ(classOf((*lowered)->pid()), DWORD{BELOW_NORMAL_PRIORITY_CLASS});
+    EXPECT_EQ(classOf(loweredGrandchild), DWORD{BELOW_NORMAL_PRIORITY_CLASS});
+    // CreateProcessW gives a child without a class flag NORMAL, or an IDLE or BELOW_NORMAL parent's class.
+    const DWORD inherited =
+        own == IDLE_PRIORITY_CLASS || own == BELOW_NORMAL_PRIORITY_CLASS ? own : DWORD{NORMAL_PRIORITY_CLASS};
+    EXPECT_EQ(classOf((*plain)->pid()), inherited);
+    EXPECT_EQ(classOf(plainGrandchild), inherited);
+#else
+    const auto niceOf = [](frost::io::ProcessId pid) {
+        errno = 0;
+        const int nice = getpriority(PRIO_PROCESS, static_cast<id_t>(pid));
+        return errno == 0 ? nice : -100;
+    };
+    const int own = niceOf(static_cast<frost::io::ProcessId>(getpid()));
+    EXPECT_EQ(niceOf((*lowered)->pid()), std::min(own + frost::io::kBelowNormalNiceness, 19));
+    EXPECT_EQ(niceOf((*plain)->pid()), own);
+    EXPECT_EQ(niceOf(plainGrandchild), own);
+#endif
+    ASSERT_TRUE((*lowered)->terminate().has_value());
+    ASSERT_TRUE((*plain)->terminate().has_value());
+    EXPECT_TRUE(watchLowered.exitsWithin(30s));
+    EXPECT_TRUE(watchPlain.exitsWithin(30s));
+    watchLowered.kill();
+    watchPlain.kill();
 }
 
 /* A descendant that left the child's process group, as ninja starts every build command

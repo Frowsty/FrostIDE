@@ -340,6 +340,11 @@ Workbench::~Workbench() {
         if (stopped.valid())
             stopped.join();
     m_retiredProjectEvaluations.clear();
+    m_git.reset(); // Its retirer pushes onto m_retiredGit, which is joined next.
+    for (auto& stopped : m_retiredGit)
+        if (stopped.valid())
+            stopped.join();
+    m_retiredGit.clear();
     m_searchSymbolsSlot.cancel();
     m_language.reset();
     // The prompter and the actions refer to the controller; the services' threads post to them.

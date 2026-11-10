@@ -5,10 +5,11 @@
 # pinned FrostEngine clone's large-PDB programs and prints one line per run.
 #
 #   powershell -ExecutionPolicy Bypass -File tools\dbg0\run-dbg0.ps1 [-Runs 2] [-OutDir <dir>]
-#              [-ProgramDir <corpus bin>] [-Fixture <exe>]
+#              [-ProgramDir <corpus bin>] [-Programs FrostTests,FrostEditor,FrostRuntime] [-Fixture <exe>]
 #
 # -ProgramDir is the clone's build\windows-debug\bin (FrostTests.exe, FrostEditor.exe, FrostRuntime.exe when
 # it is built; a program that is missing is reported, never built here: the engine is ~49 GB).
+# -Programs limits the run to some of the three (for example FrostRuntime once it is built).
 # -Fixture is a small cl.exe Debug build (msvc_debug_test.cpp's fixture) for DbgEng's natvis check:
 # `.nvload` of the installed Visual Studio stl.natvis and `dx` of a std::vector, std::map and
 # std::string in the caller's frame. Every run ends its debuggee at the breakpoint (no window opens).
@@ -19,6 +20,7 @@ param(
     [int]$Runs = 2,
     [string]$OutDir = 'E:\FrostBuilds\r3-scratch\dbg0',
     [string]$ProgramDir = 'E:\FrostBuilds\corpora\frostengine-8237e1ecfeb9\build\windows-debug\bin',
+    [string[]]$Programs = @('FrostTests', 'FrostEditor', 'FrostRuntime'),
     [string]$Fixture = ''
 )
 
@@ -64,7 +66,7 @@ function Invoke-Spike([string[]]$Arguments, [string]$Label) {
     if ($process.ExitCode -ne 0) { Get-Content "$log.err" | ForEach-Object { Add-Content -Encoding utf8 $results "  $_" } }
 }
 
-foreach ($name in 'FrostTests', 'FrostEditor', 'FrostRuntime') {
+foreach ($name in $Programs) {
     $program = Join-Path $ProgramDir "$name.exe"
     if (-not (Test-Path $program)) {
         $row = "{0,-28} not built in {1} (not built by this spike)" -f $name, $ProgramDir

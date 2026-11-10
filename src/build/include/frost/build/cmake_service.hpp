@@ -379,6 +379,9 @@ public:
      */
     void trustChanged();
 
+    // The current state. Any thread, lock-free: it reads the copy published with each change, so a
+    // GUI-thread caller never waits for a step the service thread starts under its lock (process
+    // creation and the spawn log's first digest of cmake.exe held it 0.32 s in j2_run).
     [[nodiscard]] BuildState state() const;
     /*
      * Whether a reply read that openFolder or setActiveProfile queued has not run yet: model() and

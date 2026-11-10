@@ -40,10 +40,9 @@ std::vector<std::string> sorted(std::vector<std::string> lines) {
 // MSBuild's evaluated item paths (keys) of one project configuration.
 std::set<std::string> oracleKeys(const std::string& msbuild, const std::string& project, const char* configuration,
                                  const char* platform) {
-    auto oracle = test::runOracle(msbuild, ProjectEvaluationRequest{.projectPath = project,
-                                                                    .configuration = configuration,
-                                                                    .platform = platform,
-                                                                    .solutionPath = {}});
+    auto oracle = test::runOracle(
+        msbuild, ProjectEvaluationRequest{
+                     .projectPath = project, .configuration = configuration, .platform = platform, .solutionPath = {}});
     EXPECT_TRUE(oracle.has_value());
     const auto keys = oracle ? test::oraclePathKeys(*oracle) : std::vector<std::string>{};
     return {keys.begin(), keys.end()};
@@ -71,8 +70,8 @@ protected:
 
     // Builds `solution` (relative) in Debug|x64 with MSBuild.exe; the build must pass.
     void expectBuilds(const EditScratch& scratch, std::string_view solution) {
-        const auto built = test::msbuild(m_msbuild, {scratch.join(solution), "-p:Configuration=Debug", "-p:Platform=x64"},
-                                         scratch.root());
+        const auto built = test::msbuild(
+            m_msbuild, {scratch.join(solution), "-p:Configuration=Debug", "-p:Platform=x64"}, scratch.root());
         EXPECT_EQ(built.exitCode, 0) << built.stdoutBytes << built.stderrBytes;
     }
 
@@ -141,10 +140,11 @@ TEST_F(ProjectEditReal, AddRenameAndRemoveChangeOnlyTheirElementsAndTheSolutionS
     remove.files = {zeta, scratch.join("App/notes.txt")};
     auto removed = test::runEdit(hostPath(), m_msbuild, remove);
     ASSERT_TRUE(removed) << removed.error().describe();
-    EXPECT_EQ(sorted(scratch.changedLines(definitions)),
-              sorted({"-    <ClCompile Include=\"zeta.cpp\" />", "-  <ItemGroup>", "-    <Text Include=\"notes.txt\" />",
-                      "-  </ItemGroup>", "-    <ClCompile Include=\"zeta.cpp\">", "-      <Filter>Source Files</Filter>",
-                      "-    </ClCompile>", "-  <ItemGroup>", "-    <Text Include=\"notes.txt\" />", "-  </ItemGroup>"}));
+    EXPECT_EQ(
+        sorted(scratch.changedLines(definitions)),
+        sorted({"-    <ClCompile Include=\"zeta.cpp\" />", "-  <ItemGroup>", "-    <Text Include=\"notes.txt\" />",
+                "-  </ItemGroup>", "-    <ClCompile Include=\"zeta.cpp\">", "-      <Filter>Source Files</Filter>",
+                "-    </ClCompile>", "-  <ItemGroup>", "-    <Text Include=\"notes.txt\" />", "-  </ItemGroup>"}));
     expected = before;
     expected.erase(key(zeta));
     expected.erase(key(scratch.join("App/notes.txt")));
@@ -303,11 +303,12 @@ TEST_F(ProjectEditReal, SolutionPersistenceAddsAndRemovesProjectsAndRefusesToRew
     expectBuilds(scratch, "Generated.slnx");
     ASSERT_NO_FATAL_FAILURE(scratch.commit());
 
-    auto added =
-        test::runEdit(hostPath(), m_msbuild, edit(ProjectEditKind::AddProject, "Generated.slnx", "Extra/Extra.vcxproj"));
+    auto added = test::runEdit(hostPath(), m_msbuild,
+                               edit(ProjectEditKind::AddProject, "Generated.slnx", "Extra/Extra.vcxproj"));
     ASSERT_TRUE(added) << added.error().describe();
     EXPECT_EQ(scratch.changedLines({"Generated.slnx"}),
-              (std::vector<std::string>{"+  <Project Path=\"Extra/Extra.vcxproj\" Id=\"6a1d0c1e-0b0e-4c1b-9e51-0000000c0e09\" />"}));
+              (std::vector<std::string>{
+                  "+  <Project Path=\"Extra/Extra.vcxproj\" Id=\"6a1d0c1e-0b0e-4c1b-9e51-0000000c0e09\" />"}));
     expectedProjects.push_back(extra);
     std::ranges::sort(expectedProjects);
     EXPECT_EQ(projectKeys(scratch.join("Generated.slnx")), expectedProjects);
@@ -328,8 +329,8 @@ TEST_F(ProjectEditReal, SolutionPersistenceAddsAndRemovesProjectsAndRefusesToRew
 
     // Full.sln: removing and adding change only the project's own lines.
     beforeProjects = projectKeys(scratch.join("Full.sln"));
-    removed =
-        test::runEdit(hostPath(), m_msbuild, edit(ProjectEditKind::RemoveProject, "Full.sln", "Renderer/Renderer.vcxproj"));
+    removed = test::runEdit(hostPath(), m_msbuild,
+                            edit(ProjectEditKind::RemoveProject, "Full.sln", "Renderer/Renderer.vcxproj"));
     ASSERT_TRUE(removed) << removed.error().describe();
     expectOnlyProjectLines(scratch.changedLines({"Full.sln"}), kRendererGuid, '-');
     expectedProjects = beforeProjects;
@@ -346,7 +347,8 @@ TEST_F(ProjectEditReal, SolutionPersistenceAddsAndRemovesProjectsAndRefusesToRew
     expectBuilds(scratch, "Full.sln");
     EXPECT_TRUE(exists(scratch.join("x64/Debug/Extra.lib")));
     // Adding a project the solution already lists is refused.
-    auto again = test::runEdit(hostPath(), m_msbuild, edit(ProjectEditKind::AddProject, "Full.sln", "Extra/Extra.vcxproj"));
+    auto again =
+        test::runEdit(hostPath(), m_msbuild, edit(ProjectEditKind::AddProject, "Full.sln", "Extra/Extra.vcxproj"));
     ASSERT_FALSE(again);
     EXPECT_NE(again.error().message().find("already contains"), std::string::npos) << again.error().describe();
 }

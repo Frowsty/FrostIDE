@@ -210,6 +210,30 @@ TEST_F(DebugUiTest, AttachingUsesTheSuppliedAdapterAndKeepsTheHostAlive) {
     EXPECT_EQ(disconnects.front().boolAt("terminateDebuggee"), false);
 }
 
+// lastOutcome (FND-7b's journey reads it through the automation endpoint) keeps the exited event's
+// code after the session ends; a stopped session records that it was stopped.
+TEST_F(DebugUiTest, LastOutcomeKeepsTheExitCodeAfterTheSessionEnds) {
+    EXPECT_FALSE(controller->lastOutcome().has_value());
+    controller->toggleBreakpoint(source, 9);
+    startAndStop(debug::FakeProgram{.codeLines = {10}, .exitCode = 7});
+    EXPECT_FALSE(controller->lastOutcome().has_value()) << "a live session has no outcome yet";
+    ASSERT_TRUE(controller->resume());
+    ASSERT_TRUE(spinUntil([&] { return !controller->debugging(); }));
+    ASSERT_TRUE(controller->lastOutcome().has_value());
+    EXPECT_EQ(controller->lastOutcome()->exitCode, 7);
+    EXPECT_FALSE(controller->lastOutcome()->stopped);
+    EXPECT_FALSE(controller->lastOutcome()->error.has_value());
+}
+
+TEST_F(DebugUiTest, LastOutcomeRecordsAStoppedSession) {
+    controller->toggleBreakpoint(source, 9);
+    startAndStop(debug::FakeProgram{.codeLines = {10}, .runsForever = true});
+    EXPECT_FALSE(controller->lastOutcome().has_value());
+    stopSession();
+    ASSERT_TRUE(controller->lastOutcome().has_value());
+    EXPECT_TRUE(controller->lastOutcome()->stopped);
+}
+
 TEST_F(DebugUiTest, FailedAttachStopSurfacesUnconfirmedDisconnect) {
     debug::scriptProgram(adapter, debug::FakeProgram{.runsForever = true});
     adapter.on("attach", [](const rpc::Json&) {

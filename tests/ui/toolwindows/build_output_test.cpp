@@ -2,7 +2,8 @@
 //
 // Tests for the Build output pane (frost/ui/toolwindows/build_output.hpp): BuildOutputLog's line
 // styles, diagnostic links and summary lines, and the pane streaming a build from the controller's
-// marshalled callbacks, clickable diagnostic lines, tail following and Clear. Offscreen.
+// marshalled callbacks, clickable diagnostic lines, tail following, a burst of lines in one edit and
+// Clear. Offscreen.
 #include "frost/ui/toolwindows/build_controller.hpp"
 #include "frost/ui/toolwindows/build_output.hpp"
 
@@ -11,6 +12,7 @@
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QTextBlock>
+#include <QTextDocument>
 #include <QToolButton>
 #include <gtest/gtest.h>
 
@@ -230,17 +232,71 @@ TEST(BuildOutputPane, FollowsTheTailUnlessScrolledUpAndClears) {
 
     bar->setValue(0); // The user scrolls up to read.
     EXPECT_FALSE(pane.followsTail());
+    const int before = bar->maximum();
     pane.appendLine(BuildOutputKind::Stdout, QStringLiteral("more"));
+    QCoreApplication::processEvents(); // The view takes the line on the next event-loop turn.
+    EXPECT_GT(bar->maximum(), before);
     EXPECT_EQ(bar->value(), 0);
 
     bar->setValue(bar->maximum()); // Back at the bottom: follow again.
     EXPECT_TRUE(pane.followsTail());
+    const int bottom = bar->maximum();
     pane.appendLine(BuildOutputKind::Stdout, QStringLiteral("and more"));
+    QCoreApplication::processEvents();
+    EXPECT_GT(bar->maximum(), bottom);
     EXPECT_EQ(bar->value(), bar->maximum());
 
     pane.clearButton()->click();
     EXPECT_EQ(pane.log().size(), 0U);
     EXPECT_TRUE(pane.editor()->toPlainText().isEmpty());
+    pane.hide();
+}
+
+/*
+ * A burst of output lines (a translation unit's warnings arrive as one posted event per line)
+ * reaches the view in one edit and one scroll on the next event-loop turn, in order and styled,
+ * instead of an insert and a scroll per line, which held the UI thread for 3 s in a FrostEditor
+ * build (j2_run's freeze report). A diagnostic reported while its line waits still underlines it.
+ */
+TEST(BuildOutputPane, ABurstOfLinesReachesTheViewInOneEditAndOneScroll) {
+    BuildOutputPane pane;
+    pane.resize(600, 200);
+    pane.show();
+    QPlainTextEdit* view = pane.editor();
+    QScrollBar* bar = view->verticalScrollBar();
+    int edits = 0;
+    int scrolls = 0;
+    QObject::connect(view->document(), &QTextDocument::contentsChange, &pane, [&edits](int, int, int) { ++edits; });
+    QObject::connect(bar, &QScrollBar::valueChanged, &pane, [&scrolls](int) { ++scrolls; });
+
+    constexpr int kLines = 2'000;
+    for (int i = 0; i < kLines; ++i) {
+        pane.appendLine(BuildOutputKind::Stdout, QStringLiteral("warning line %1").arg(i));
+    }
+    pane.appendLine(BuildOutputKind::Stdout, QString::fromStdString(errorLine()));
+    pane.addDiagnostic(errorDiagnostic());
+    EXPECT_EQ(pane.log().size(), static_cast<std::size_t>(kLines + 1)); // The log has them at once.
+    EXPECT_EQ(edits, 0);
+    EXPECT_EQ(view->document()->blockCount(), 1); // The view takes them on the next turn.
+
+    QCoreApplication::processEvents();
+    EXPECT_EQ(edits, 1);
+    EXPECT_EQ(scrolls, 1);
+    ASSERT_EQ(view->document()->blockCount(), kLines + 1);
+    EXPECT_EQ(view->document()->findBlockByNumber(0).text(), QStringLiteral("warning line 0"));
+    EXPECT_EQ(view->document()->findBlockByNumber(kLines - 1).text(), QStringLiteral("warning line 1999"));
+    EXPECT_EQ(bar->value(), bar->maximum());
+    EXPECT_TRUE(pane.followsTail());
+    const QTextBlock error = view->document()->findBlockByNumber(kLines);
+    EXPECT_EQ(error.text().toStdString(), errorLine());
+    EXPECT_TRUE(error.begin().fragment().charFormat().fontUnderline()); // Linked while it waited.
+    EXPECT_TRUE(pane.activateLine(kLines));
+
+    // editor() never lags the log: a line appended now is in the view it returns.
+    pane.appendLine(BuildOutputKind::Stdout, QStringLiteral("last"));
+    EXPECT_EQ(pane.editor()->document()->blockCount(), kLines + 2);
+    QCoreApplication::processEvents(); // The queued flush finds nothing left to insert.
+    EXPECT_EQ(view->document()->blockCount(), kLines + 2);
     pane.hide();
 }
 

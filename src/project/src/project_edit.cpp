@@ -216,7 +216,8 @@ std::vector<ProjectPathChange> projectEditsForPathChange(const SolutionModel& so
             change.files.push_back(item.path);
             if (!newPath.empty()) {
                 // The key keeps the spelling's length (ASCII lower-casing), so the suffix index is the item's.
-                change.renamedTo.push_back(std::string(newPath) + item.path.substr(std::min(oldPath.size(), item.path.size())));
+                change.renamedTo.push_back(std::string(newPath) +
+                                           item.path.substr(std::min(oldPath.size(), item.path.size())));
             }
         }
         if (!change.files.empty()) {

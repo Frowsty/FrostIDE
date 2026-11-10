@@ -37,7 +37,8 @@ inline io::ProcessResult runTool(const std::string& program, std::vector<std::st
     spec.executable = program;
     spec.arguments = std::move(arguments);
     spec.workingDirectory = directory;
-    spec.environment = {{"MSBUILDDISABLENODEREUSE", "1"}, {"MSBUILDTERMINALLOGGER", "off"}, {"GIT_TERMINAL_PROMPT", "0"}};
+    spec.environment = {
+        {"MSBUILDDISABLENODEREUSE", "1"}, {"MSBUILDTERMINALLOGGER", "off"}, {"GIT_TERMINAL_PROMPT", "0"}};
     auto result = io::runToCompletion(io::realProcessLauncher(), spec, {}, timeout);
     EXPECT_TRUE(result.has_value()) << program << ": " << (result ? "" : result.error().describe());
     return result ? std::move(*result) : io::ProcessResult{.exitCode = -1};
@@ -68,8 +69,8 @@ public:
                                          std::filesystem::perm_options::add, ignored);
         }
     }
-    EditScratch(const EditScratch&) = delete("one scratch tree per test");
-    EditScratch& operator=(const EditScratch&) = delete("one scratch tree per test");
+    EditScratch(const EditScratch&) = delete ("one scratch tree per test");
+    EditScratch& operator=(const EditScratch&) = delete ("one scratch tree per test");
 
     [[nodiscard]] const std::string& root() const noexcept { return m_dir.path(); }
     [[nodiscard]] std::string join(std::string_view relative) const {
@@ -81,9 +82,9 @@ public:
     }
 
     io::ProcessResult git(std::vector<std::string> arguments) const {
-        std::vector<std::string> all = {"-c", "core.autocrlf=false", "-c", "core.safecrlf=false",
-                                        "-c", "safe.directory=*",    "-c", "user.name=frost-test",
-                                        "-c", "user.email=frost-test@invalid"};
+        std::vector<std::string> all = {
+            "-c", "core.autocrlf=false",  "-c", "core.safecrlf=false",          "-c", "safe.directory=*",
+            "-c", "user.name=frost-test", "-c", "user.email=frost-test@invalid"};
         all.insert(all.end(), arguments.begin(), arguments.end());
         return runTool(m_git, std::move(all), root(), std::chrono::seconds(300));
     }
@@ -122,7 +123,8 @@ public:
             if (!line.empty() && line.back() == '\r') {
                 line.pop_back();
             }
-            if ((line.starts_with('+') && !line.starts_with("+++")) || (line.starts_with('-') && !line.starts_with("---"))) {
+            if ((line.starts_with('+') && !line.starts_with("+++")) ||
+                (line.starts_with('-') && !line.starts_with("---"))) {
                 out.push_back(std::move(line));
             }
         }
@@ -140,7 +142,8 @@ private:
 // A fresh GUID for a transaction (the helper's journal record is named by it).
 inline std::string newTransactionId() {
     static std::atomic<unsigned> counter{0};
-    return std::format("{:08x}-5106-4e5d-9a6b-{:012x}", ++counter, static_cast<unsigned long long>(::GetCurrentProcessId()));
+    return std::format("{:08x}-5106-4e5d-9a6b-{:012x}", ++counter,
+                       static_cast<unsigned long long>(::GetCurrentProcessId()));
 }
 
 // Runs `edit` through the shipped helper, accepting its Ready announcement.

@@ -119,6 +119,8 @@ public:
     // The console the program's output goes to (optional; it must outlive the controller or be
     // destroyed with it).
     void setConsole(RunConsole* console);
+    // That console, or null when none was set or it was destroyed (UI thread).
+    [[nodiscard]] RunConsole* console() const noexcept;
     // Loads the breakpoints of `root` (absolute) and saves there from now on; "" stops saving.
     [[nodiscard]] Result<void> setWorkspaceRoot(std::string root);
 
@@ -168,6 +170,13 @@ public:
     [[nodiscard]] std::uint64_t sessionGeneration() const noexcept { return m_generation; }
     [[nodiscard]] bool paused() const noexcept { return m_state == debug::DebugState::Stopped; }
     [[nodiscard]] const std::optional<debug::StopInfo>& stopInfo() const noexcept { return m_stop; }
+    /*
+     * How the last Debug run ended, as its console's closing line says: the debuggee's exit code
+     * (lldb-dap's exited event), stopped, or the error (a failed build, a launch that failed, an
+     * adapter that vanished). Empty before the first Debug run ends; a new run keeps the previous
+     * outcome until it ends itself.
+     */
+    [[nodiscard]] const std::optional<build::RunOutcome>& lastOutcome() const noexcept { return m_lastOutcome; }
     // "Paused on breakpoint", "Exception: ..." while paused; "Running"; "" without a session.
     [[nodiscard]] QString statusText() const;
     [[nodiscard]] const std::vector<debug::DebugThread>& threads() const noexcept { return m_threads; }
@@ -318,6 +327,7 @@ private:
     QString m_title;
     debug::DebugState m_state = debug::DebugState::Ended;
     std::optional<debug::StopInfo> m_stop;
+    std::optional<build::RunOutcome> m_lastOutcome;
     std::vector<debug::DebugThread> m_threads;
     std::optional<std::int64_t> m_thread;
     debug::FrameList m_frames;

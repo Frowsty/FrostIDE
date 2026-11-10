@@ -1682,6 +1682,7 @@ TEST(Workbench, KeymapSettingsSwitchesBetweenIntelliJAndVisualStudioModes) {
  * UX-21's keymap picker is Settings > Keymap (never the launcher, never a first-run step): it lists
  * every built-in keymap, the default stays IntelliJ, and choosing the ReSharper or Visual Studio 2022
  * keymap there applies it live, with their documented shortcuts on the workbench's real actions.
+ * Compile (Ctrl+F7, SLN-9) comes from the build module's defaults, which neither keymap overrides.
  */
 TEST(Workbench, TheKeymapPickerOffersEveryBuiltinKeymapAndAppliesReSharperAndVisualStudio2022) {
     WorkDir dir("settings-keymap-picker");
@@ -1703,12 +1704,14 @@ TEST(Workbench, TheKeymapPickerOffersEveryBuiltinKeymapAndAppliesReSharperAndVis
          {{"refactor.this", "Ctrl+Shift+R"},
           {"code.showIntentions", "Alt+Enter"},
           {"navigate.gotoFile", "Ctrl+Shift+T"},
-          {"build.buildSolution", "Ctrl+Shift+B"}}},
+          {"build.buildSolution", "Ctrl+Shift+B"},
+          {"build.compileFile", "Ctrl+F7"}}},
         {"visual-studio-2022",
          {{"navigate.declaration", "F12"},
           {"refactor.rename", "Ctrl+R, Ctrl+R"},
           {"file.saveDocument", "Ctrl+S"},
-          {"build.buildSolution", "Ctrl+Shift+B"}}},
+          {"build.buildSolution", "Ctrl+Shift+B"},
+          {"build.compileFile", "Ctrl+F7"}}},
     };
     for (const auto& choice : choices) {
         rig.window->refreshActions();

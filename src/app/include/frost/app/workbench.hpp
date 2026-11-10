@@ -561,6 +561,8 @@ public:
     // CPP-3: the owned compile-commands directories of a CMake folder's configurations and its
     // resolve-context choices; null without a CMake folder, a compile-commands cache or clangd.
     [[nodiscard]] lang::CMakeCompileCommandsProvider* cmakeCompileCommands() noexcept { return m_cmakeCommands.get(); }
+    // The trust store the workbench's gates ask (thread-safe; WorkbenchServices::trust).
+    [[nodiscard]] const project::TrustStore& trustStore() const noexcept { return m_services.trust; }
     // The Solution Explorer's evaluation (SLN-2): status and results of the open solution's
     // ProjectHost/MSBuild.exe evaluation; null without one (no solution, untrusted, or off).
     [[nodiscard]] std::shared_ptr<const project::SolutionEvaluation> solutionEvaluation() const noexcept {
@@ -926,6 +928,9 @@ private:
     // The root already told that clangd was not found (the notice appears once per project; ADR 0078).
     std::string m_clangdUnavailableNotifiedRoot;
     std::vector<sched::JoinHandle<void>> m_retiredClangd;
+    // Git services of closed projects being destroyed off the GUI thread (GitController's retirer,
+    // FND-9b); joined by ~Workbench before the pool goes.
+    std::vector<sched::JoinHandle<void>> m_retiredGit;
     std::uint64_t m_clangdGeneration = 0;
     // FND-9a, one clangd per project open: the CMake compile-commands state the running clangd was
     // started with (cmakeClangdState), and the root whose start waits for the open's configure.

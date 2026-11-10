@@ -276,6 +276,11 @@ void GitLogToolWindow::buildUi() {
     m_commitTree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     m_commitTree->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     m_commitTree->header()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    /* The ResizeToContents columns measure the rows in view, not all of them (Qt's default reads up to
+       1000): measuring the 300 rows refresh() reads cost the UI thread 0.4 s in a Debug build on
+       FrostEngine's history (j2_run's freeze reports). Date and hash have a fixed width; a longer
+       author further down is elided until it scrolls into view and the next layout widens the column. */
+    m_commitTree->header()->setResizeContentsPrecision(0);
     m_commitTree->setColumnWidth(0, 72);
 
     auto* rightPane = new QWidget(m_splitter);
@@ -403,10 +408,17 @@ void GitLogToolWindow::populateCommitTable() {
     }
 
     const std::vector<GraphRowLayout> graphRows = computeGraphLayout(filtered);
+    /* The rows are built detached and inserted in one call: one rowsInserted, so the three
+       ResizeToContents columns measure the rows once. Inserting each row into the tree made the header
+       re-measure the rows after every insertion: the 300 commits refresh() reads held the UI thread
+       for 0.4 to 0.6 s (j2_run's freeze reports on FrostEngine's history). */
+    QList<QTreeWidgetItem*> items;
+    items.reserve(static_cast<qsizetype>(filtered.size()));
     for (std::size_t i = 0; i < filtered.size(); ++i) {
         const vcs::GitCommitEntry& commit = filtered[i];
         const GraphRowLayout& row = graphRows[i];
-        auto* item = new QTreeWidgetItem(m_commitTree);
+        auto* item = new QTreeWidgetItem();
+        items.push_back(item);
         const QString shortDate = qs(commit.dateIso).left(19).replace(QLatin1Char('T'), QLatin1Char(' '));
         item->setText(1, qs(commit.subject));
         item->setText(2, qs(commit.author));
@@ -423,6 +435,7 @@ void GitLogToolWindow::populateCommitTable() {
         }
         item->setData(1, kRoleRefsList, refs);
     }
+    m_commitTree->addTopLevelItems(items);
     if (m_commitTree->topLevelItemCount() > 0) {
         m_commitTree->setCurrentItem(m_commitTree->topLevelItem(0));
     }

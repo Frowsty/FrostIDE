@@ -42,8 +42,8 @@ std::string pinnedR2a() {
 std::string key(const std::string& path) { return detail::pathKey(io::normalizePath(path).value_or(path)); }
 
 std::set<std::string> oracleKeys(const std::string& msbuild, const std::string& project) {
-    auto oracle = test::runOracle(msbuild, {.projectPath = project, .configuration = "Release", .platform = "x64",
-                                            .solutionPath = {}});
+    auto oracle = test::runOracle(
+        msbuild, {.projectPath = project, .configuration = "Release", .platform = "x64", .solutionPath = {}});
     EXPECT_TRUE(oracle.has_value());
     const auto keys = oracle ? test::oraclePathKeys(*oracle) : std::vector<std::string>{};
     return {keys.begin(), keys.end()};
@@ -85,18 +85,21 @@ TEST(R2aCorpus, NotepadPlusPlusEditsChangeOnlyTheirLinesAndTheEditedFilesCompile
         ProjectEdit out;
         out.kind = kind;
         out.root = visual; // The solution's folder, the root the IDE trusts when it opens the .sln.
-        out.definition = kind == ProjectEditKind::AddProject || kind == ProjectEditKind::RemoveProject ? solution : project;
+        out.definition =
+            kind == ProjectEditKind::AddProject || kind == ProjectEditKind::RemoveProject ? solution : project;
         out.configuration = "Release";
         out.platform = "x64";
         return out;
     };
     const auto compiles = [&](std::string_view include) {
-        const auto built = test::msbuild(msbuild, {project, "-t:ClCompile", "-p:SelectedFiles=" + std::string(include),
-                                                   "-p:Configuration=Release", "-p:Platform=x64"},
+        const auto built = test::msbuild(msbuild,
+                                         {project, "-t:ClCompile", "-p:SelectedFiles=" + std::string(include),
+                                          "-p:Configuration=Release", "-p:Platform=x64"},
                                          visual);
         EXPECT_EQ(built.exitCode, 0) << built.stdoutBytes << built.stderrBytes;
         const std::string name(include.substr(include.find_last_of('\\') + 1));
-        EXPECT_NE(built.stdoutBytes.find(name), std::string::npos) << "MSBuild compiled " << name << ": " << built.stdoutBytes;
+        EXPECT_NE(built.stdoutBytes.find(name), std::string::npos)
+            << "MSBuild compiled " << name << ": " << built.stdoutBytes;
     };
 
     // Rename a source the project lists beside the solution folder.
@@ -110,9 +113,10 @@ TEST(R2aCorpus, NotepadPlusPlusEditsChangeOnlyTheirLinesAndTheEditedFilesCompile
     rename.renamedTo = {newSource};
     auto renamed = test::runEdit(host, msbuild, rename);
     ASSERT_TRUE(renamed) << renamed.error().describe();
-    EXPECT_EQ(scratch.changedLines({"PowerEditor/visual.net"}),
-              (std::vector<std::string>{"-    <ClCompile Include=\"..\\src\\MISC\\Process\\Processus.cpp\" />",
-                                        "+    <ClCompile Include=\"..\\src\\MISC\\Process\\ProcessusRenamed.cpp\" />"}));
+    EXPECT_EQ(
+        scratch.changedLines({"PowerEditor/visual.net"}),
+        (std::vector<std::string>{"-    <ClCompile Include=\"..\\src\\MISC\\Process\\Processus.cpp\" />",
+                                  "+    <ClCompile Include=\"..\\src\\MISC\\Process\\ProcessusRenamed.cpp\" />"}));
     auto expected = before;
     expected.erase(key(oldSource));
     expected.insert(key(newSource));

@@ -164,11 +164,10 @@ TEST(ProjectEditPathChange, RenamesAndRemovesOnlyLiteralItemsUnderThePath) {
                "\"{6A1D0C1E-0B0E-4C1B-9E51-0000000C0E03}\"\nEndProject\n"
                "Global\n\tGlobalSection(SolutionConfigurationPlatforms) = preSolution\n\t\tDebug|x64 = Debug|x64\n"
                "\tEndGlobalSection\nEndGlobal\n");
-    tree.write("App/App.vcxproj",
-               "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\"><ItemGroup>"
-               "<ClCompile Include=\"src\\a.cpp\" /><ClCompile Include=\"src\\deep\\b.cpp\" />"
-               "<ClCompile Include=\"glob\\*.cpp\" /><ClInclude Include=\"..\\shared\\s.h\" />"
-               "<ClCompile Include=\"srcx.cpp\" /></ItemGroup></Project>");
+    tree.write("App/App.vcxproj", "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\"><ItemGroup>"
+                                  "<ClCompile Include=\"src\\a.cpp\" /><ClCompile Include=\"src\\deep\\b.cpp\" />"
+                                  "<ClCompile Include=\"glob\\*.cpp\" /><ClInclude Include=\"..\\shared\\s.h\" />"
+                                  "<ClCompile Include=\"srcx.cpp\" /></ItemGroup></Project>");
     tree.write("App/glob/g.cpp", "");
     auto model = SolutionModel::load(tree.fs, MemTree::path("Demo.sln"));
     ASSERT_TRUE(model) << model.error().describe();
@@ -183,7 +182,8 @@ TEST(ProjectEditPathChange, RenamesAndRemovesOnlyLiteralItemsUnderThePath) {
 
     // A sibling whose name starts like the folder ("srcx.cpp") is not under it.
     const bool windows = io::kNativePathStyle == io::PathStyle::Windows; // NTFS compares names case-insensitively.
-    auto file = projectEditsForPathChange(*model, MemTree::path(windows ? "App/SRC/A.CPP" : "App/src/a.cpp"), {}, false);
+    auto file =
+        projectEditsForPathChange(*model, MemTree::path(windows ? "App/SRC/A.CPP" : "App/src/a.cpp"), {}, false);
     ASSERT_EQ(file.size(), 1U);
     EXPECT_EQ(file[0].files, (std::vector<std::string>{MemTree::path("App/src/a.cpp")}));
     EXPECT_TRUE(file[0].renamedTo.empty());

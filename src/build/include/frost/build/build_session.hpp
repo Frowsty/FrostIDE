@@ -91,8 +91,9 @@ public:
      * Launches `spec` (stdout and stderr must be Stdio::Pipe; killOnClose must be set, so the
      * process tree can be ended) and starts the session's threads. `trusted` says the user trusts
      * the folder whose code the build runs (PLAN.md section 3.5); without it nothing starts. The
-     * clock must outlive the session. Errors: Untrusted; InvalidArgument (the spec breaks the
-     * rules above); the launcher's errors.
+     * process starts below normal priority (ProcessSpec::belowNormalPriority, whatever `spec`
+     * says), so the build leaves the CPU to the UI. The clock must outlive the session. Errors: Untrusted;
+     * InvalidArgument (the spec breaks the rules above); the launcher's errors.
      */
     [[nodiscard]] static Result<std::unique_ptr<BuildSession>>
     start(io::IProcessLauncher& launcher, const io::ProcessSpec& spec, bool trusted, BuildCallbacks callbacks,
