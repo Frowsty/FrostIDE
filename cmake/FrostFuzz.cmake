@@ -6,12 +6,60 @@
 #     libFuzzer executable, run by CTest fuzz.<name> (label fuzz) for FROST_FUZZ_SECONDS;
 #   - in a normal tree with tests on, a corpus replay, run by CTest fuzz_replay.<name> (label
 #     unit), so the committed corpus is a regression test in every -Quick on both OSes.
-# TODO(M2): add the x64-windows-clangcl-fuzz triplet (PLAN.md) when a fuzz target first links a
-# port such as pugixml; until then fuzz targets link only FrostIDE code and vcpkg is not installed
-# in fuzz trees (VCPKG_MANIFEST_INSTALL=OFF).
+# On Windows, libFuzzer's runtime (clang_rt.fuzzer-x86_64.lib) is compiled with the static
+# release CRT (/MT, _ITERATOR_DEBUG_LEVEL=0), so win-clangcl-fuzz uses
+# triplets/x64-windows-clangcl-fuzz.cmake and forces MultiThreaded across all targets in the
+# fuzz build tree. When FROST_FUZZ is ON (where VCPKG_MANIFEST_INSTALL=OFF), yyjson and pugixml
+# are built from the pinned vcpkg sources with fuzzer + ASan instrumentation so that the parser
+# fuzz targets (json_parser, sln_parser, presets_parser, natvis_parser; FND-14) link with /MT
+# and full coverage feedback.
 
 include_guard(GLOBAL)
 include(FrostLayers)
+
+if(FROST_FUZZ)
+    if(NOT TARGET yyjson::yyjson)
+        find_path(_frost_fuzz_yyjson_inc NAMES yyjson.h
+            PATHS
+                "${VCPKG_INSTALLED_DIR}/x64-windows-clangcl/include"
+                "${VCPKG_INSTALLED_DIR}/x64-linux-clang/include"
+                "${PROJECT_SOURCE_DIR}/build/vcpkg_installed/x64-windows-clangcl/include"
+                "${PROJECT_SOURCE_DIR}/build/vcpkg_installed/x64-linux-clang/include"
+                "$ENV{FROST_SDK}/vcpkg/packages/yyjson_x64-windows-clangcl/include"
+                "$ENV{FROST_SDK}/vcpkg/packages/yyjson_x64-linux-clang/include"
+            NO_DEFAULT_PATH REQUIRED)
+        file(GLOB _frost_fuzz_yyjson_src "$ENV{FROST_SDK}/vcpkg/buildtrees/yyjson/src/*/src/yyjson.c")
+        if(NOT _frost_fuzz_yyjson_src)
+            message(FATAL_ERROR "FrostFuzz: yyjson.c not found under FROST_SDK/vcpkg/buildtrees")
+        endif()
+        list(GET _frost_fuzz_yyjson_src 0 _frost_fuzz_yyjson_c)
+        add_library(frost_fuzz_yyjson STATIC "${_frost_fuzz_yyjson_c}")
+        target_include_directories(frost_fuzz_yyjson SYSTEM PUBLIC "${_frost_fuzz_yyjson_inc}")
+        target_compile_options(frost_fuzz_yyjson PRIVATE -w ${FROST_SANITIZE_COMPILE_OPTIONS})
+        add_library(yyjson::yyjson ALIAS frost_fuzz_yyjson)
+    endif()
+
+    if(NOT TARGET pugixml::pugixml)
+        find_path(_frost_fuzz_pugixml_inc NAMES pugixml.hpp
+            PATHS
+                "${VCPKG_INSTALLED_DIR}/x64-windows-clangcl/include"
+                "${VCPKG_INSTALLED_DIR}/x64-linux-clang/include"
+                "${PROJECT_SOURCE_DIR}/build/vcpkg_installed/x64-windows-clangcl/include"
+                "${PROJECT_SOURCE_DIR}/build/vcpkg_installed/x64-linux-clang/include"
+                "$ENV{FROST_SDK}/vcpkg/packages/pugixml_x64-windows-clangcl/include"
+                "$ENV{FROST_SDK}/vcpkg/packages/pugixml_x64-linux-clang/include"
+            NO_DEFAULT_PATH REQUIRED)
+        file(GLOB _frost_fuzz_pugixml_src "$ENV{FROST_SDK}/vcpkg/buildtrees/pugixml/src/*/src/pugixml.cpp")
+        if(NOT _frost_fuzz_pugixml_src)
+            message(FATAL_ERROR "FrostFuzz: pugixml.cpp not found under FROST_SDK/vcpkg/buildtrees")
+        endif()
+        list(GET _frost_fuzz_pugixml_src 0 _frost_fuzz_pugixml_cpp)
+        add_library(frost_fuzz_pugixml STATIC "${_frost_fuzz_pugixml_cpp}")
+        target_include_directories(frost_fuzz_pugixml SYSTEM PUBLIC "${_frost_fuzz_pugixml_inc}")
+        target_compile_options(frost_fuzz_pugixml PRIVATE -w ${FROST_SANITIZE_COMPILE_OPTIONS})
+        add_library(pugixml::pugixml ALIAS frost_fuzz_pugixml)
+    endif()
+endif()
 
 # frost_add_fuzz_target(<name> SOURCES <name>_harness.cpp <name>_fuzzer.cpp [more...]
 #                       DEPS <libraries...> CORPUS <directory>)
