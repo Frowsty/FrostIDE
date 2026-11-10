@@ -111,6 +111,7 @@ void Workbench::attach(ui::ShellWindow& window) {
             m_cmake->filesChanged(batch);
         if (m_git)
             m_git->filesChanged(batch);
+        onLuaFilesChanged(batch); // LUA-3: registered LuaLS watchers and host inputs.
     };
     m_nav = std::make_unique<ui::Workbench>(window, std::move(nav));
     if (ui::FileSystemView* fsView = m_nav->fileSystemView()) {

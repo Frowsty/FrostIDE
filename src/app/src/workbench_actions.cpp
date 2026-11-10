@@ -79,6 +79,9 @@ void Workbench::registerActions() {
             m_window->toolWindows().activate("structure");
     });
     add(
+        "code.inspectLua", "Inspect Lua Code...", [this] { (void)inspectLuaCode(); },
+        [this] { return !m_projectRoot.empty(); });
+    add(
         wa::kOpenRecent, "Open Recent...", [this] { showOpenRecent(); },
         [this] { return !recentProjects(*m_services.settings.snapshot()).empty(); });
     add(

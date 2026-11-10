@@ -407,10 +407,8 @@ void EditorInsightBinding::refreshSemanticTokens() {
     }
     const std::optional<fl::ServerCapabilities> capabilities = m_services.server.serverCapabilities();
     if (!capabilities) {
-        // clangd initializes asynchronously; retry until its capabilities are available.
-        if (m_clangd != nullptr) {
-            m_debounce.start();
-        }
+        // The language server initializes asynchronously; retry until its capabilities are available.
+        m_debounce.start();
         return;
     }
     if (capabilities->inlayHint) {
@@ -448,10 +446,12 @@ void EditorInsightBinding::refreshSemanticTokens() {
                 target.m_debounce.start(); // Too many edits since: ask again.
                 return;
             }
-            std::vector<text::ByteRange> inactive = inactiveRangesFromTokens(outcome.tokens);
-            if (!target.m_haveInactiveRegions && (!inactive.empty() || target.m_inactiveFromTokens)) {
-                target.m_inactiveFromTokens = !inactive.empty();
-                (void)target.m_view->setInactiveRanges(textVersion, std::move(inactive));
+            if (languageIdForPath(target.m_path) == "cpp") {
+                std::vector<text::ByteRange> inactive = inactiveRangesFromTokens(outcome.tokens);
+                if (!target.m_haveInactiveRegions && (!inactive.empty() || target.m_inactiveFromTokens)) {
+                    target.m_inactiveFromTokens = !inactive.empty();
+                    (void)target.m_view->setInactiveRanges(textVersion, std::move(inactive));
+                }
             }
             emit target.semanticTokensApplied();
         });

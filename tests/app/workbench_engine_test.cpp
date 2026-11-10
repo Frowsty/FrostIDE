@@ -3,6 +3,7 @@
 #include "frost/build/cmake_service.hpp"
 #include "frost/debug/fake_debug_adapter.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
+#include "frost/lang/frost_engine_lua.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/rpc/framing.hpp"
 #include "frost/rpc/json.hpp"

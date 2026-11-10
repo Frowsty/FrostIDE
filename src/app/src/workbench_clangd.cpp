@@ -691,6 +691,11 @@ void Workbench::refreshLiveProblems() {
         auto lua = m_lua->diagnostics().problems();
         live.insert(live.end(), lua.begin(), lua.end());
     }
+    for (const lang::FileDiagnostics& set : luaInspectedDiagnostics()) {
+        if (m_lua && m_lua->diagnostics().forFile(set.file))
+            continue;
+        live.insert(live.end(), set.diagnostics.begin(), set.diagnostics.end());
+    }
     if (m_managed) {
         auto managed = m_managed->diagnostics().problems();
         live.insert(live.end(), managed.begin(), managed.end());

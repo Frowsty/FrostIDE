@@ -166,12 +166,12 @@ TEST(FrostEngineLua, TheConfigurationCarriesTheEnginesGlobalsVersionAndLibrary) 
     ASSERT_TRUE(library.isArray());
     ASSERT_EQ(library.size(), 1U);
     EXPECT_EQ(*library.items()[0].asString(), "Samples/Game/.frost/lua-api");
-    // The sandbox's builtins stay as luaDefaults(…, true) sets them.
+    // The sandbox's builtins are disabled (ScriptEngine::InstallSandbox).
     EXPECT_EQ(*frost::lang::luaConfigurationSection(configuration, "Lua.runtime.builtin.os").asString(), "disable");
 
     // Not a FrostEngine workspace: plain defaults.
     const frost::lang::Json plain = frost::lang::frostEngineLuaDefaults("Lua 5.1", {});
-    EXPECT_EQ(plain.dump(), frost::lang::luaDefaults("Lua 5.1", false).dump());
+    EXPECT_EQ(plain.dump(), frost::lang::luaDefaults("Lua 5.1").dump());
 }
 
 } // namespace

@@ -77,6 +77,8 @@ frost_add_library(app LAYER app
         src/settings_dialog.hpp
         src/settings_keymap_page.cpp
         src/settings_keymap_page.hpp
+        src/settings_lua_page.cpp
+        src/settings_lua_page.hpp
         src/settings_adapters.cpp
         src/startup.cpp
         src/welcome_screen.cpp

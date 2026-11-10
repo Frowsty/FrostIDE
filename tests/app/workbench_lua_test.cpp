@@ -611,4 +611,149 @@ TEST(WorkbenchLua, TrustGateAndGeneratedApiReachEditor) {
     ASSERT_TRUE(rig.trust->untrust(dir.path()));
     EXPECT_TRUE(waitFor([&] { return rig.workbench->lua() == nullptr; }, 5s));
 }
+
+// LUA-5 & LUA-7 Workbench acceptance: semantic tokens, inlay hints, Find Usages, Structure,
+// hover and signature help in the active Lua editor match LuaLS's own responses.
+TEST(WorkbenchLua, CodeInsightSemanticTokensAndInlayHintsMatchLuaLs) {
+    auto server = pinnedLuaLs();
+    ASSERT_TRUE(server.has_value()) << server.error().describe();
+    WorkDir dir("lua-insight-workbench");
+    const std::string source = "---Adds two numbers.\n"
+                               "---@param left number\n"
+                               "---@param right number\n"
+                               "---@return number\n"
+                               "local function addValues(left, right)\n"
+                               "    return left + right\n"
+                               "end\n"
+                               "local total = addValues(10, 20)\n"
+                               "local again = addValues(total, 5)\n"
+                               "return again\n";
+    dir.write("main.lua", source);
+    frost::app::test::RigOptions options;
+    options.workbench.clangd = false;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  *server));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("main.lua")));
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->lua() && rig.workbench->lua()->state() == frost::lang::LuaState::Running; }, 20s));
+    auto& editor = rig.workbench->currentView()->editor();
+
+    // Semantic tokens and inlay hints arrive on the active Lua editor, and Lua comments are not
+    // misclassified as inactive preprocessor regions.
+    ASSERT_TRUE(waitFor([&] { return !editor.semanticTokens().empty() && !editor.inlayHints().empty(); }, 20s));
+    EXPECT_TRUE(editor.inactiveRanges().empty());
+
+    // Structure tool window shows `addValues` from textDocument/documentSymbol.
+    rig.window->toolWindows().show("structure");
+    auto* tree = rig.window->findChild<QTreeWidget*>(QStringLiteral("structureTree"));
+    ASSERT_NE(tree, nullptr);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                if (tree->topLevelItem(i)->text(0).contains(QStringLiteral("addValues")))
+                    return true;
+            }
+            return false;
+        },
+        20s));
+
+    // Find Usages (`textDocument/references`) on `addValues` finds the declaration + 2 calls.
+    const auto fnOffset = source.find("addValues");
+    ASSERT_NE(fnOffset, std::string::npos);
+    editor.setState(frost::text::EditorState::caretAt(frost::ByteOffset{fnOffset + 2}));
+    rig.workbench->language()->findUsages();
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->language()->usagesPanel().usageCount() >= 3U; }, 20s));
+    EXPECT_EQ(rig.workbench->language()->usagesPanel().usageCount(), 3U);
+
+    // Parameter info (`textDocument/signatureHelp`) inside `addValues(10, 20)`.
+    const auto callArgOffset = source.find("addValues(10") + 10;
+    editor.setState(frost::text::EditorState::caretAt(frost::ByteOffset{callArgOffset}));
+    rig.workbench->language()->showParameterInfo();
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->language()->parameterInfoPopup().isVisible(); }, 20s));
+    EXPECT_TRUE(rig.workbench->language()->parameterInfoPopup().html().contains(QStringLiteral("left")));
+}
+
+// LUA-6 Workbench acceptance: inspectLuaCode runs `lua-language-server --check`, populates the
+// Problems tool window with the exact oracle results, refuses untrusted workspaces, and reports
+// missing LuaLS visibly without inventing diagnostics.
+TEST(WorkbenchLua, InspectLuaCodePopulatesProblemsAndMatchesCheckOracle) {
+    auto server = pinnedLuaLs();
+    ASSERT_TRUE(server.has_value()) << server.error().describe();
+    WorkDir dir("lua-inspect-workbench");
+    dir.write("scripts/one.lua", "local a = 1\nprint(a + missingGlobalOne)\n");
+    dir.write("scripts/two.lua", "print(missingGlobalTwo)\n");
+
+    // 1. Untrusted workspace refuses to launch LuaLS --check and offers the trust dialog.
+    {
+        frost::io::ScriptedProcessLauncher scripted;
+        frost::app::test::RigOptions untrustedOpts;
+        untrustedOpts.launcher = &scripted;
+        untrustedOpts.workbench.clangd = false;
+        WorkbenchRig untrustedRig(dir, untrustedOpts);
+        untrustedRig.show();
+        ASSERT_TRUE(untrustedRig.workbench->openPath(dir.path()));
+        const auto res = untrustedRig.workbench->inspectLuaCode();
+        ASSERT_FALSE(res.has_value());
+        EXPECT_EQ(res.error().code(), frost::ErrorCode::Untrusted);
+        EXPECT_TRUE(scripted.launches().empty());
+        EXPECT_NE(untrustedRig.window->findChild<frost::ui::TrustDialog*>(QStringLiteral("trustDialog")), nullptr);
+    }
+
+    // 2. Missing LuaLS reports NotFound and posts the visible unavailable notice.
+    {
+        frost::io::ScriptedProcessLauncher scripted;
+        frost::app::test::RigOptions missingOpts;
+        missingOpts.launcher = &scripted;
+        missingOpts.workbench.clangd = false;
+        missingOpts.workbench.luaSearch = frost::lang::LuaSearch{};
+        WorkbenchRig missingRig(dir, missingOpts);
+        ASSERT_TRUE(missingRig.trust->trust(dir.path()));
+        ASSERT_TRUE(missingRig.workbench->openPath(dir.path()));
+        const auto res = missingRig.workbench->inspectLuaCode();
+        ASSERT_FALSE(res.has_value());
+        EXPECT_EQ(res.error().code(), frost::ErrorCode::NotFound);
+        EXPECT_EQ(luaUnavailableNotices(missingRig), 1U);
+        EXPECT_TRUE(missingRig.workbench->problems()->model()->problems().empty());
+    }
+
+    // 3. Real pinned LuaLS: inspectLuaCode matches direct `lua-language-server --check` and
+    // populates ProblemsView for unopened and open Lua scripts alike.
+    frost::app::test::RigOptions options;
+    options.workbench.clangd = false;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  *server));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    const std::string scriptsScope = dir.join("scripts");
+    const auto inspected = rig.workbench->inspectLuaCode(scriptsScope);
+    ASSERT_TRUE(inspected.has_value()) << inspected.error().describe();
+    EXPECT_GE(inspected->size(), 2U);
+    EXPECT_TRUE(rig.window->toolWindows().isVisible("problems"));
+
+    frost::lang::LuaInspectOptions oracleOpts;
+    oracleOpts.directory = scriptsScope;
+    oracleOpts.stateDirectory = dir.join("oracle-state");
+    oracleOpts.search.configuredPath = *server;
+    oracleOpts.trusted = true;
+    const auto oracle =
+        frost::lang::inspectLuaDirectory(frost::io::realProcessLauncher(), frost::io::realFileSystem(), oracleOpts);
+    ASSERT_TRUE(oracle.has_value()) << oracle.error().describe();
+    ASSERT_EQ(inspected->size(), oracle->size());
+
+    const auto& problems = rig.workbench->problems()->model()->problems();
+    EXPECT_TRUE(std::ranges::any_of(problems, [](const frost::ui::Problem& p) {
+        return p.diagnostic.diagnostic.code == "undefined-global" &&
+               p.diagnostic.diagnostic.message.find("missingGlobalOne") != std::string::npos;
+    }));
+    EXPECT_TRUE(std::ranges::any_of(problems, [](const frost::ui::Problem& p) {
+        return p.diagnostic.diagnostic.code == "undefined-global" &&
+               p.diagnostic.diagnostic.message.find("missingGlobalTwo") != std::string::npos;
+    }));
+}
 } // namespace

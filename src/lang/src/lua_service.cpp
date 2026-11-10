@@ -14,6 +14,7 @@
 
 #include "timeout.hpp"
 
+#include <algorithm>
 #include <deque>
 #include <format>
 #include <map>
@@ -62,11 +63,53 @@ struct OpenDocument {
     std::deque<std::pair<std::int64_t, text::Snapshot>> history;
 };
 
+// Decodes a $/progress notification ({token, value: {kind, title?, message?, percentage?}}).
+[[nodiscard]] std::optional<LuaProgress> decodeProgress(const Json& params) {
+    const Json* value = params.find("value");
+    const Json* token = params.find("token");
+    if (value == nullptr || !value->isObject() || token == nullptr) {
+        return std::nullopt;
+    }
+    LuaProgress progress;
+    if (const std::string* text = token->asString()) {
+        progress.token = *text;
+    } else if (const auto number = token->asInteger()) {
+        progress.token = std::to_string(*number);
+    } else {
+        return std::nullopt;
+    }
+    const std::string_view kind = value->stringAt("kind");
+    if (kind != "begin" && kind != "report" && kind != "end") {
+        return std::nullopt;
+    }
+    progress.kind = kind == "begin" ? LuaProgress::Kind::Begin
+                    : kind == "end" ? LuaProgress::Kind::End
+                                    : LuaProgress::Kind::Report;
+    progress.title = std::string(value->stringAt("title"));
+    progress.message = std::string(value->stringAt("message"));
+    if (const auto percentage = value->integerAt("percentage")) {
+        progress.percentage = static_cast<int>(std::clamp<std::int64_t>(*percentage, 0, 100));
+    }
+    return progress;
+}
+
+// The paths of `folders`, by documentKey, sorted (folder-set comparisons).
+[[nodiscard]] std::vector<std::string> folderKeys(const std::vector<LuaWorkspaceFolder>& folders) {
+    std::vector<std::string> keys;
+    keys.reserve(folders.size());
+    for (const LuaWorkspaceFolder& folder : folders) {
+        keys.push_back(documentKey(folder.path));
+    }
+    std::ranges::sort(keys);
+    return keys;
+}
+
 } // namespace
 
 struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
     Shared(io::IProcessLauncher& l, io::AsyncContext c, LuaServiceOptions o)
-        : launcher(l), context(c), options(std::move(o)) {}
+        : launcher(l), context(c), options(std::move(o)), configuration(options.configuration),
+          folders(options.folders) {}
 
     io::IProcessLauncher& launcher;
     io::AsyncContext context;
@@ -86,6 +129,26 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
     std::deque<std::string> stderrLines FROST_GUARDED_BY(mutex);
     std::map<std::string, OpenDocument> documents FROST_GUARDED_BY(mutex); // documentKey -> document.
     ApplyEditHandler applyEditHandler FROST_GUARDED_BY(mutex);
+    Json configuration FROST_GUARDED_BY(mutex);                      // The root's "Lua" section in effect.
+    std::vector<LuaWorkspaceFolder> folders FROST_GUARDED_BY(mutex); // Same paths as options.folders.
+    std::uint64_t configurationChanges FROST_GUARDED_BY(mutex) = 0;
+
+    // The "Lua" configuration for a workspace/configuration item's scopeUri: a folder's own, else
+    // the root's (the root, the fallback scope without a URI and unknown URIs).
+    [[nodiscard]] Json configurationFor(std::string_view scopeUri, std::string_view section) const {
+        LockGuard lock(mutex);
+        if (!scopeUri.empty()) {
+            if (auto path = uriToPath(scopeUri)) {
+                const std::string key = documentKey(*path);
+                for (const LuaWorkspaceFolder& folder : folders) {
+                    if (documentKey(folder.path) == key) {
+                        return luaConfigurationSection(folder.configuration, section);
+                    }
+                }
+            }
+        }
+        return luaConfigurationSection(configuration, section);
+    }
     void setState(LuaState next) {
         LockGuard lock(mutex);
         state = next;
@@ -181,9 +244,28 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
         // LuaLS 3.19.1 corrupts incremental line positions when its legacy UTF-8
         // offsetEncoding is offered. Keep the standard UTF-16 wire encoding.
         init.utf16Only = options.languageId == "lua";
-        init.configuration = [configuration = options.configuration](std::string_view section) {
-            return luaConfigurationSection(configuration, section);
+        // The folders before the root (LuaServiceOptions::folders), each answered its own section.
+        if (!options.folders.empty()) {
+            for (const LuaWorkspaceFolder& folder : options.folders) {
+                init.workspaceFolders.push_back(folder.path);
+            }
+            init.workspaceFolders.push_back(options.workspaceRoot);
+        }
+        std::weak_ptr<const Shared> weak = weak_from_this();
+        init.scopedConfiguration = [weak](std::string_view scopeUri, std::string_view section) {
+            const auto self = weak.lock();
+            return self ? self->configurationFor(scopeUri, section) : Json();
         };
+        // LuaLS: refresh requests are handled (onRefresh re-requests what the editor shows), and
+        // file watchers it registers get FrostIDE's watcher's changes (notifyFileChanges). The
+        // managed server (which shares this service) keeps the common capabilities.
+        if (options.languageId == "lua")
+            init.workspaceCapabilities =
+                Json::object()
+                    .set("semanticTokens", Json::object().set("refreshSupport", true))
+                    .set("inlayHint", Json::object().set("refreshSupport", true))
+                    .set("didChangeWatchedFiles",
+                         Json::object().set("dynamicRegistration", true).set("relativePatternSupport", true));
         return init;
     }
 
@@ -213,7 +295,32 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
             }
             return false;
         };
+        out.onNotification = [weak, forRound](std::string_view method, const Json& params) {
+            if (method != "$/progress") {
+                return;
+            }
+            auto self = weak.lock();
+            if (!self || !self->options.onProgress || !self->isRound(forRound)) {
+                return;
+            }
+            if (auto progress = decodeProgress(params)) {
+                self->options.onProgress(*progress);
+            } else {
+                log::debug(kLogCategory, "dropped a malformed $/progress: {}", params.dump());
+            }
+        };
+        out.onRefresh = [weak, forRound](std::string_view method) {
+            auto self = weak.lock();
+            if (self && self->options.onRefresh && self->isRound(forRound)) {
+                self->options.onRefresh(method);
+            }
+        };
         return out;
+    }
+
+    [[nodiscard]] bool isRound(std::uint64_t forRound) const {
+        LockGuard lock(mutex);
+        return forRound == round;
     }
 
     static sched::Task<void> pumpStderr(std::shared_ptr<Shared> self, std::shared_ptr<io::IAsyncProcess> process) {
@@ -378,6 +485,12 @@ Result<void> LuaService::start() {
     }
     if (!io::isAbsolutePath(options.serverPath) || !io::isAbsolutePath(options.workspaceRoot)) {
         return fail(ErrorCode::InvalidArgument, options.displayName + " and the workspace root need absolute paths");
+    }
+    for (const LuaWorkspaceFolder& folder : options.folders) {
+        if (!io::isAbsolutePath(folder.path) || documentKey(folder.path) == documentKey(options.workspaceRoot)) {
+            return fail(ErrorCode::InvalidArgument,
+                        options.displayName + " workspace folders must be absolute and differ from the root");
+        }
     }
     if (options.firstArgumentIsAbsolutePath &&
         (options.arguments.empty() || !io::isAbsolutePath(options.arguments.front()))) {
@@ -606,6 +719,90 @@ PositionEncoding LuaService::encoding() const {
 void LuaService::setApplyEditHandler(ApplyEditHandler handler) {
     LockGuard lock(m_shared->mutex);
     m_shared->applyEditHandler = std::move(handler);
+}
+
+Json LuaService::configuration() const {
+    LockGuard lock(m_shared->mutex);
+    return m_shared->configuration;
+}
+
+std::vector<LuaWorkspaceFolder> LuaService::folders() const {
+    LockGuard lock(m_shared->mutex);
+    return m_shared->folders;
+}
+
+Result<void> LuaService::changeConfiguration(Json configuration, std::vector<LuaWorkspaceFolder> folders) {
+    if (folderKeys(folders) != folderKeys(m_shared->options.folders)) {
+        return fail(ErrorCode::InvalidArgument,
+                    m_shared->options.displayName + ": the workspace folders changed; restart the server");
+    }
+    LockGuard lock(m_shared->mutex);
+    m_shared->configuration = std::move(configuration);
+    m_shared->folders = std::move(folders);
+    const std::shared_ptr<LspClient> client = m_shared->runningClient();
+    if (!client) {
+        return {}; // The next server reads the new values in its first workspace/configuration.
+    }
+    // LuaLS ignores the settings value and asks again through workspace/configuration (LSP's
+    // pull model), which configurationFor answers with the values just stored.
+    if (auto sent = client->notify("workspace/didChangeConfiguration", Json::object().set("settings", Json())); !sent) {
+        return std::unexpected(std::move(sent.error()));
+    }
+    ++m_shared->configurationChanges;
+    return {};
+}
+
+std::uint64_t LuaService::configurationChangesSent() const {
+    LockGuard lock(m_shared->mutex);
+    return m_shared->configurationChanges;
+}
+
+Result<std::size_t> LuaService::notifyFileChanges(std::span<const LuaFileChange> changes) {
+    std::shared_ptr<LspClient> client;
+    {
+        LockGuard lock(m_shared->mutex);
+        client = m_shared->runningClient();
+    }
+    if (!client) {
+        return std::size_t{0};
+    }
+    const std::vector<FileSystemWatcher> watchers = client->fileWatchers();
+    if (watchers.empty()) {
+        return std::size_t{0};
+    }
+    Json events = Json::array();
+    std::size_t count = 0;
+    for (const LuaFileChange& change : changes) {
+        const bool covered = std::ranges::any_of(watchers, [&](const FileSystemWatcher& watcher) {
+            return fileWatcherMatches(watcher, change.path, change.type);
+        });
+        if (!covered) {
+            continue;
+        }
+        auto uri = pathToUri(change.path);
+        if (!uri) {
+            continue;
+        }
+        events.push(Json::object().set("uri", std::move(*uri)).set("type", static_cast<std::int64_t>(change.type)));
+        ++count;
+    }
+    if (count == 0) {
+        return std::size_t{0};
+    }
+    if (auto sent = client->notify("workspace/didChangeWatchedFiles", Json::object().set("changes", std::move(events)));
+        !sent) {
+        return std::unexpected(std::move(sent.error()));
+    }
+    return count;
+}
+
+std::vector<FileSystemWatcher> LuaService::fileWatchers() const {
+    std::shared_ptr<LspClient> client;
+    {
+        LockGuard lock(m_shared->mutex);
+        client = m_shared->runningClient();
+    }
+    return client ? client->fileWatchers() : std::vector<FileSystemWatcher>{};
 }
 
 Result<void> LuaService::killServerForTesting() {

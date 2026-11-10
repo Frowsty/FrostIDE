@@ -80,7 +80,9 @@
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/cmake_compile_commands.hpp"
 #include "frost/lang/diagnostics.hpp"
+#include "frost/lang/frost_engine_assets.hpp"
 #include "frost/lang/json.hpp"
+#include "frost/lang/lua_host.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/lang/managed_service.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
@@ -172,6 +174,7 @@ class UnityControlIntegration;
 class GitIntegration;
 struct GitClone;
 struct CompileDatabaseState; // workbench_language.cpp
+struct WorkbenchLuaState;    // workbench_lua.cpp
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
 // file.reloadFromDisk and file.closeProject; the shell, editor, build, run and language slices the
@@ -371,6 +374,9 @@ struct WorkbenchOptions {
     // Test seam: the FrostIDE executable that provides the isolated discovery helper.
     // Empty uses this application's own executable.
     std::string engineDiscoveryHelperPath;
+    // FrostEditor CLI executable (absolute); "" discovers <engine>/build/<preset>/bin/FrostEditor(.exe)
+    // when the project sits inside a FrostEngine checkout.
+    std::string frostEditorPath;
     // Console programs run in an external console window unless the solution chose the Run console.
     bool runExternalConsole = true;
     // MSBuild.exe (absolute); "" uses tools.msbuild.path, else vswhere at the first build.
@@ -516,6 +522,11 @@ public:
     [[nodiscard]] bool hasProject() const noexcept { return !m_projectRoot.empty(); }
     // Canonical directory of the current project, empty when none is open.
     [[nodiscard]] const std::string& projectRoot() const noexcept { return m_projectRoot; }
+    // The most recent FrostEngine `assets.find-references` report produced before a file rename,
+    // move or delete in a trusted FrostEngine project; nullopt when none has run.
+    [[nodiscard]] const std::optional<lang::AssetReferenceReport>& lastAssetReferenceReport() const noexcept {
+        return m_lastAssetReferenceReport;
+    }
     // Accept an authenticated broker announcement only for this trusted project.
     [[nodiscard]] Result<void> announceUnity(const lang::Json& message);
     // The open solution, or nullptr (no project, or a folder project).
@@ -556,6 +567,20 @@ public:
     [[nodiscard]] ui::DebugController* debugController() noexcept { return m_debug.get(); }
     [[nodiscard]] ui::AppearanceManager* appearance() noexcept { return m_appearance.get(); }
     [[nodiscard]] lang::LuaService* lua() noexcept { return m_lua.get(); }
+    // LUA-3/LUA-13 (workbench_lua.cpp): the Lua host providers (FrostEngine's is registered at
+    // construction), the LuaLS refresh requests handled so far (their methods, in order) and the
+    // $/progress titles LuaLS reported for the current project. GUI thread.
+    [[nodiscard]] lang::LuaHostRegistry& luaHosts();
+    [[nodiscard]] std::vector<std::string> luaRefreshesHandled() const;
+    [[nodiscard]] std::vector<std::string> luaProgressTitles() const;
+    // Recomputes LuaLS's configuration (settings, host providers) and sends it live
+    // (didChangeConfiguration); restarts LuaLS only when its workspace folders changed.
+    void refreshLuaConfiguration();
+    // LUA-6: runs `lua-language-server --check` on `scopeDirectory` (or the open project root when
+    // empty), publishes the results to the Problems tool window and open Lua editors, and returns
+    // the decoded file diagnostics. Refuses untrusted workspaces and reports missing LuaLS.
+    [[nodiscard]] Result<std::vector<lang::FileDiagnostics>> inspectLuaCode(std::string_view scopeDirectory = {});
+    [[nodiscard]] std::vector<lang::FileDiagnostics> luaInspectedDiagnostics() const;
     [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
     [[nodiscard]] lang::ClangdService* clangd() noexcept { return m_clangd.get(); }
     // CPP-3: the owned compile-commands directories of a CMake folder's configurations and its
@@ -729,6 +754,10 @@ private:
     void stopLua();
     void syncLuaDocument(DocumentEditorView& view);
     void onLuaDiagnostics(const std::string& file);
+    void onLuaFilesChanged(const io::FileChangeBatch& batch);
+    void onLuaSettingsChanged();
+    void onLuaProgress(std::uint64_t generation, const lang::LuaProgress& progress);
+    void onLuaRefresh(std::uint64_t generation, const std::string& method);
     void updateLanguageTarget();
     void offerProjectTrust();
     void offerLuaTrust();
@@ -810,9 +839,11 @@ private:
                                                           const std::string& after, const QString& change);
     // Keeps loaded C++ projects in step with a rename, move or delete on disk (see renameItem).
     void updatePathInVcxproj(const std::string& oldPath, const std::string& newPath, bool directory, bool deleted);
-    // Renames `from` to `to` with its .fmeta sidecar move (from, to) if any, both or neither.
-    [[nodiscard]] Result<void> moveWithSidecar(const std::string& from, const std::string& to,
-                                               const std::optional<std::pair<std::string, std::string>>& sidecar);
+    // Runs `FrostEditor assets.find-references` before renaming, moving or deleting an asset in a
+    // trusted FrostEngine project and surfaces referencing assets as a warning notification (FEC-9a).
+    void checkFrostEngineAssetReferences(std::string_view path, std::string_view operation);
+    // Executes `plan` on disk and rebinds open tabs for the `.fmeta` sidecar when present.
+    [[nodiscard]] Result<void> moveWithSidecar(const lang::FmetaMovePlan& plan);
     void queryWorkspaceSymbols(std::string_view query, bool classesOnly,
                                std::function<void(std::vector<ui::WorkbenchSymbol>)> done);
     void openLocation(const QString& path, int line, int column);
@@ -924,6 +955,8 @@ private:
     // root that was already told so: the notification appears once per project (LUA-1).
     std::string m_luaUnavailable;
     std::string m_luaUnavailableNotifiedRoot;
+    // The Lua host registry, the composed configuration and the progress tasks (workbench_lua.cpp).
+    std::shared_ptr<WorkbenchLuaState> m_luaState;
     std::shared_ptr<lang::ClangdService> m_clangd;
     // The root already told that clangd was not found (the notice appears once per project; ADR 0078).
     std::string m_clangdUnavailableNotifiedRoot;
@@ -1012,6 +1045,7 @@ private:
     std::map<std::string, std::vector<ui::LineMarker>> m_liveMarkers;
     // Paths whose close the user confirmed after a failed save: the document closes unsaved.
     std::vector<std::string> m_discarded;
+    std::optional<lang::AssetReferenceReport> m_lastAssetReferenceReport;
     bool m_suppressNewFileNotice = false;
     bool m_shutDown = false;
 };

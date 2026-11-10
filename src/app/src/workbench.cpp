@@ -645,10 +645,7 @@ void Workbench::notify(const QString& title, const QString& body, ui::Notificati
 void Workbench::onSettingsChanged() {
     const auto snapshot = m_services.settings.snapshot();
     m_documents->applySettings(*snapshot);
-    const auto luaPath = snapshot->get(settings::key::toolsLuaLanguageServerPath);
-    const auto luaRuntime = snapshot->get(settings::key::luaRuntimeVersion);
-    if (!m_projectRoot.empty() && (luaPath != m_luaConfiguredPath || luaRuntime != m_luaRuntimeVersion))
-        startLua(m_projectRoot);
+    onLuaSettingsChanged(); // workbench_lua.cpp: a restart or a live didChangeConfiguration (LUA-3).
     if (!m_projectRoot.empty() && (snapshot->get(settings::key::toolsManagedDotnetPath) != m_managedDotnetPath ||
                                    snapshot->get(settings::key::toolsManagedServerPath) != m_managedServerPath))
         startManaged(m_projectRoot);
@@ -727,7 +724,12 @@ void Workbench::showSettings() {
         m_settingsDialog->activateWindow();
         return;
     }
-    auto* dialog = new SettingsDialog(m_services.settings, m_registry, *m_keymap, parentWin);
+    // LUA-4: the Lua page edits the open project's .luarc.json; LuaLS then reads it again.
+    SettingsLuaContext lua{&m_services.fs, m_projectRoot, [self = QPointer<Workbench>(this)] {
+                               if (self)
+                                   self->refreshLuaConfiguration();
+                           }};
+    auto* dialog = new SettingsDialog(m_services.settings, m_registry, *m_keymap, parentWin, std::move(lua));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     m_settingsDialog = dialog;
     dialog->open();
