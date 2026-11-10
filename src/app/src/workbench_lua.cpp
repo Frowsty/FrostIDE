@@ -19,6 +19,8 @@
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/shell/background_tasks.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
+#include "frost/ui/shell/shell_actions.hpp"
+#include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
 #include "language_bridge.hpp"
@@ -39,6 +41,7 @@ struct WorkbenchLuaState {
     std::map<std::string, std::shared_ptr<ui::BackgroundTask>> tasks; // $/progress token -> its task.
     std::vector<std::string> titles;    // Every progress title LuaLS began for this project, in order.
     std::vector<std::string> refreshes; // Every refresh request handled for this project, in order.
+    lang::DiagnosticsStore inspected;   // Batch `lua-language-server --check` results (LUA-6).
     void finishTasks() {
         for (auto& [token, task] : tasks)
             task->finish();
@@ -50,6 +53,12 @@ namespace {
 sched::Task<void> stopOwnedLua(std::shared_ptr<lang::LuaService> server) { co_await server->stop(); }
 
 QString qs(std::string_view text) { return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())); }
+
+lang::FileDiagnostics emptyFileDiagnostics(std::string file) {
+    lang::FileDiagnostics empty;
+    empty.file = std::move(file);
+    return empty;
+}
 
 WorkbenchLuaState& luaState(std::shared_ptr<WorkbenchLuaState>& slot) {
     if (!slot) {
@@ -153,6 +162,9 @@ std::vector<std::string> Workbench::luaRefreshesHandled() const {
 std::vector<std::string> Workbench::luaProgressTitles() const {
     return m_luaState ? m_luaState->titles : std::vector<std::string>{};
 }
+std::vector<lang::FileDiagnostics> Workbench::luaInspectedDiagnostics() const {
+    return m_luaState ? m_luaState->inspected.files() : std::vector<lang::FileDiagnostics>{};
+}
 void Workbench::updateLanguageTarget() {
     DocumentEditorView* active = currentView();
     m_bridge->setActivePath(active ? std::string_view(active->path()) : std::string_view{});
@@ -173,6 +185,17 @@ void Workbench::updateLanguageTarget() {
                 binding->attach(*m_clangd);
             } else if ((isCs && m_managed) || (isLua && m_lua)) {
                 binding = new ui::lang::EditorInsightBinding(view->editor(), {*m_bridge, *m_pool});
+                binding->setCodeVisionEnabled(true);
+                if (isLua) {
+                    if (auto set = m_lua->diagnostics().forFile(view->path()); set && !set->stale)
+                        binding->setLiveDiagnostics(*set);
+                    else if (m_luaState) {
+                        if (auto inspected = m_luaState->inspected.forFile(view->path()))
+                            binding->setLiveDiagnostics(*inspected);
+                    }
+                } else if (auto set = m_managed->diagnostics().forFile(view->path()); set && !set->stale) {
+                    binding->setLiveDiagnostics(*set);
+                }
                 binding->refreshSemanticTokens();
             }
         }
@@ -267,8 +290,14 @@ void Workbench::startLua(const std::string& root) {
                         self->m_luaState->finishTasks();
                     // Only the LuaLS's own documents: a lifecycle change must not cancel a
                     // Structure request another server (clangd) is answering for the current file.
-                    if (self->m_language && self->currentView() && isLuaSource(self->currentView()->path()))
+                    if (self->m_language && self->currentView() && isLuaSource(self->currentView()->path())) {
                         self->m_language->structureChanged();
+                        if (self->m_lua && self->m_lua->state() == lang::LuaState::Running) {
+                            if (auto* binding =
+                                    self->currentView()->editor().findChild<ui::lang::EditorInsightBinding*>())
+                                binding->refreshSemanticTokens();
+                        }
+                    }
                 },
                 Qt::QueuedConnection);
     };
@@ -443,6 +472,7 @@ void Workbench::stopLua() {
     if (m_luaState) {
         ++m_luaState->generation;
         m_luaState->finishTasks();
+        m_luaState->inspected.clear();
     }
     if (!m_lua)
         return;
@@ -499,6 +529,8 @@ void Workbench::onLuaDiagnostics(const std::string& file) {
     auto set = m_lua->diagnostics().forFile(file);
     if (set && set->stale)
         return;
+    if (m_luaState)
+        m_luaState->inspected.publish(emptyFileDiagnostics(file));
     std::vector<ui::LineMarker> markers;
     if (set)
         for (const auto& d : set->diagnostics) {
@@ -518,8 +550,11 @@ void Workbench::onLuaDiagnostics(const std::string& file) {
     for (DocumentEditorView* view : m_editors->views()) {
         if (lang::documentKey(view->path()) != key)
             continue;
-        view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live,
-                                      set ? ui::lang::toEditorDiagnostics(*set) : std::vector<ui::EditorDiagnostic>{});
+        if (auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>())
+            binding->setLiveDiagnostics(set.value_or(emptyFileDiagnostics(file)));
+        else
+            view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live, set ? ui::lang::toEditorDiagnostics(*set)
+                                                                                : std::vector<ui::EditorDiagnostic>{});
         refreshMarkers(*view);
         // What the editor now shows, for the staged-build exit test (tests/tools/test_staged_luals.py,
         // run with FROST_LOG_LEVEL=debug). Every value is LuaLS's own.
@@ -528,5 +563,88 @@ void Workbench::onLuaDiagnostics(const std::string& file) {
                 log::debug("workbench", "Lua diagnostic shown: {}:{} [{}] {}", file, d.line, d.code, d.message);
     }
     refreshLiveProblems();
+}
+Result<std::vector<lang::FileDiagnostics>> Workbench::inspectLuaCode(std::string_view scopeDirectory) {
+    const std::string target = !scopeDirectory.empty() ? std::string(scopeDirectory) : m_projectRoot;
+    if (target.empty())
+        return fail(ErrorCode::InvalidArgument, "no Lua workspace or directory is open to inspect");
+    const std::string trustRoot = !m_projectRoot.empty() ? m_projectRoot : target;
+    if (!m_services.trust.isTrusted(trustRoot)) {
+        offerLuaTrust();
+        return fail(ErrorCode::Untrusted, "refusing to inspect an untrusted Lua workspace");
+    }
+    const auto snapshot = m_services.settings.snapshot();
+    lang::LuaSearch search = m_options.luaSearch ? *m_options.luaSearch : lang::defaultLuaSearch();
+    search.configuredPath = snapshot->get(settings::key::toolsLuaLanguageServerPath);
+    std::string stateDirectory = m_options.luaStateDirectory;
+    if (stateDirectory.empty()) {
+        if (auto trustFile = project::TrustStore::defaultStorePath()) {
+            if (auto under = io::joinPath(io::parentPath(*trustFile), "luals"))
+                stateDirectory = std::move(*under);
+        }
+    }
+    lang::LuaInspectOptions options;
+    options.directory = target;
+    options.stateDirectory = stateDirectory;
+    options.search = std::move(search);
+    options.trusted = true;
+    auto result = lang::inspectLuaDirectory(m_services.launcher, m_services.fs, options);
+    if (!result) {
+        if (auto found = lang::findLuaLanguageServer(m_services.fs, options.search); !found) {
+            m_luaUnavailable = found.error().message();
+            if (!options.search.configuredPath.empty())
+                m_luaUnavailableNotifiedRoot.clear();
+            notifyLuaUnavailable();
+        }
+        return result;
+    }
+    WorkbenchLuaState& state = luaState(m_luaState);
+    const std::string scopeKey = lang::documentKey(target);
+    const auto applyFileToViews = [this](const std::string& file, const std::optional<lang::FileDiagnostics>& set) {
+        if (m_lua && m_lua->diagnostics().forFile(file))
+            return;
+        std::vector<ui::LineMarker> markers;
+        if (set) {
+            for (const auto& d : set->diagnostics) {
+                if (d.line <= 0 ||
+                    (d.severity != lang::DiagnosticSeverity::Error && d.severity != lang::DiagnosticSeverity::Warning))
+                    continue;
+                markers.push_back({LineIndex{static_cast<std::uint32_t>(d.line - 1)},
+                                   d.severity == lang::DiagnosticSeverity::Error ? ui::MarkerSeverity::Error
+                                                                                 : ui::MarkerSeverity::Warning,
+                                   d.message});
+            }
+        }
+        const std::string key = lang::documentKey(file);
+        if (markers.empty())
+            m_liveMarkers.erase(key);
+        else
+            m_liveMarkers[key] = std::move(markers);
+        for (DocumentEditorView* view : m_editors->views()) {
+            if (lang::documentKey(view->path()) != key)
+                continue;
+            if (auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>())
+                binding->setLiveDiagnostics(set.value_or(emptyFileDiagnostics(file)));
+            else
+                view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live,
+                                              set ? ui::lang::toEditorDiagnostics(*set)
+                                                  : std::vector<ui::EditorDiagnostic>{});
+            refreshMarkers(*view);
+        }
+    };
+    for (const lang::FileDiagnostics& previous : state.inspected.files()) {
+        if (touches(lang::documentKey(previous.file), scopeKey)) {
+            state.inspected.publish(emptyFileDiagnostics(previous.file));
+            applyFileToViews(previous.file, std::nullopt);
+        }
+    }
+    for (const lang::FileDiagnostics& file : *result) {
+        state.inspected.publish(file);
+        applyFileToViews(file.file, file);
+    }
+    refreshLiveProblems();
+    if (m_window)
+        m_window->toolWindows().show(ui::tool_windows::kProblems, false);
+    return result;
 }
 } // namespace frost::app

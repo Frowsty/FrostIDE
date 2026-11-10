@@ -47,11 +47,31 @@ struct LuaSearch {
  */
 [[nodiscard]] Result<std::vector<std::string>> luaLanguageServerArguments(std::string_view stateDirectory);
 // The client's own defaults for LuaLS (the "Lua" section; .luarc.json has priority in LuaLS, key
-// by key): runtime.version and workspace.checkThirdParty false. Host providers (lua_host.hpp,
-// LUA-13) add their libraries, globals and paths on top through composeLuaConfiguration.
+// by key): runtime.version, workspace.checkThirdParty false and hint.enable true. Host providers
+// (lua_host.hpp, LUA-13) add their libraries, globals and paths on top through composeLuaConfiguration.
 [[nodiscard]] Json luaDefaults(std::string runtimeVersion = "Lua 5.4");
 // Returns a copy of the requested Lua section, or null for an unknown section, O(size).
 [[nodiscard]] Json luaConfigurationSection(const Json& configuration, std::string_view section);
+
+// Options for batch Lua code inspection (`lua-language-server --check`, LUA-6).
+struct LuaInspectOptions {
+    std::string directory;      // Absolute directory or file path passed to --check.
+    std::string stateDirectory; // Absolute per-user directory for --logpath, --metapath and the check output.
+    LuaSearch search = defaultLuaSearch();
+    std::string configPath; // Optional path passed to --configpath.
+    DiagnosticSeverity minimumSeverity = DiagnosticSeverity::Hint;
+    bool trusted = false; // Must be true before any process is launched.
+    IClock::Duration timeout = std::chrono::minutes(3);
+};
+
+// Decodes the JSON report written by `lua-language-server --check --check_format=json` (`{uri: [Diagnostic, ...]}`
+// or `[]` when clean). When `fs` is non-null, maps diagnostic ranges to byte ranges of the files on disk.
+[[nodiscard]] Result<std::vector<FileDiagnostics>> parseLuaCheckReport(std::string_view jsonText,
+                                                                       io::IFileSystem* fs = nullptr);
+// Runs `lua-language-server --check` through `launcher` and returns its decoded diagnostics.
+// Errors: Untrusted, InvalidArgument, NotFound (missing directory or LuaLS binary), Timeout, Internal.
+[[nodiscard]] Result<std::vector<FileDiagnostics>>
+inspectLuaDirectory(io::IProcessLauncher& launcher, io::IFileSystem& fs, const LuaInspectOptions& options);
 
 // One more LuaLS workspace folder beside the root (multi-root).
 struct LuaWorkspaceFolder {

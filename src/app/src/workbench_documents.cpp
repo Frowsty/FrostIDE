@@ -169,6 +169,21 @@ void Workbench::editorOpened(DocumentEditorView& view) {
                currentView() == &view) {
         auto* binding = new ui::lang::EditorInsightBinding(view.editor(), {*m_bridge, *m_pool});
         binding->setCodeVisionEnabled(true);
+        if (m_lua && isLuaSource(view.path())) {
+            if (auto set = m_lua->diagnostics().forFile(view.path()); set && !set->stale)
+                binding->setLiveDiagnostics(*set);
+            else {
+                for (const lang::FileDiagnostics& inspected : luaInspectedDiagnostics()) {
+                    if (lang::documentKey(inspected.file) == lang::documentKey(view.path())) {
+                        binding->setLiveDiagnostics(inspected);
+                        break;
+                    }
+                }
+            }
+        } else if (m_managed && isManagedSource(view.path())) {
+            if (auto set = m_managed->diagnostics().forFile(view.path()); set && !set->stale)
+                binding->setLiveDiagnostics(*set);
+        }
         binding->refreshSemanticTokens();
         refreshMarkers(view);
     }

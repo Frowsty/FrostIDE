@@ -314,4 +314,22 @@ TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDispl
     EXPECT_NE(list.findText(QStringLiteral("value = 42")), nullptr);
 }
 
+TEST(EditorInsightBinding, LuaCommentTokensDoNotBecomeInactivePreprocessorRanges) {
+    FROST_REQUIRE_OFFSCREEN();
+    FeatureServer server(capabilities());
+    const std::string path = workPath("main.lua");
+    constexpr std::string_view text = "---Doc comment\nlocal value = 1\n";
+    // Line 0 comment token (0..14), line 1 variable token (6..11).
+    const std::vector<int> data{0, 0, 14, 2, 0, 1, 6, 5, 0, 2};
+    server.on("textDocument/semanticTokens/full",
+              [&](const Json&) { return Json::object().set("resultId", "1").set("data", integers(data)); });
+
+    frost::ui::test::EditorHarness h(text, at(path));
+    auto* binding = new EditorInsightBinding(*h.view, {server.client(), server.scheduler()});
+    binding->refreshSemanticTokens();
+    ASSERT_TRUE(pumpUntil([&] { return !h.view->semanticTokens().empty(); }));
+    EXPECT_EQ(h.view->semanticTokens().size(), 1U);
+    EXPECT_TRUE(h.view->inactiveRanges().empty());
+}
+
 } // namespace

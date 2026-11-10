@@ -567,6 +567,11 @@ public:
     // Recomputes LuaLS's configuration (settings, host providers) and sends it live
     // (didChangeConfiguration); restarts LuaLS only when its workspace folders changed.
     void refreshLuaConfiguration();
+    // LUA-6: runs `lua-language-server --check` on `scopeDirectory` (or the open project root when
+    // empty), publishes the results to the Problems tool window and open Lua editors, and returns
+    // the decoded file diagnostics. Refuses untrusted workspaces and reports missing LuaLS.
+    [[nodiscard]] Result<std::vector<lang::FileDiagnostics>> inspectLuaCode(std::string_view scopeDirectory = {});
+    [[nodiscard]] std::vector<lang::FileDiagnostics> luaInspectedDiagnostics() const;
     [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
     [[nodiscard]] lang::ClangdService* clangd() noexcept { return m_clangd.get(); }
     // CPP-3: the owned compile-commands directories of a CMake folder's configurations and its
