@@ -37,6 +37,7 @@ frost_add_library(lang LAYER lang
         src/document_sync.cpp
         src/engine_automation.cpp
         src/engine_discovery_process.cpp
+        src/frost_engine_assets.cpp
         src/fuzzy.cpp
         src/jsonrpc_connection.cpp
         src/jsonrpc_framing.cpp

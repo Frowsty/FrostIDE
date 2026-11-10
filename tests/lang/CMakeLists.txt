@@ -43,6 +43,7 @@ frost_add_test(lang_unit_tests
         json_test.cpp
         jsonrpc_test.cpp
         lsp_client_test.cpp
+        frost_engine_assets_test.cpp
         frost_engine_lua_test.cpp
         lua_service_test.cpp
         msbuild_provider_test.cpp
