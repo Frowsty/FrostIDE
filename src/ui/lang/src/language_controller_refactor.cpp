@@ -277,4 +277,10 @@ void LanguageController::safeDelete() {
 
 void LanguageController::moveSymbol() { unavailable(QStringLiteral("Move requires the move refactoring (REF-8)")); }
 
+void LanguageController::copySymbol() { unavailable(QStringLiteral("Copy requires the copy refactoring (REF-8)")); }
+
+void LanguageController::smartCompleteCode() {
+    unavailable(QStringLiteral("Smart Completion requires type-matching completion (CPP-14)"));
+}
+
 } // namespace frost::ui::lang

@@ -3,6 +3,58 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-10: R4c integration (C++ stock clangd sweep, format on save and editor essentials)
+
+- **What changed for you.**
+  - **C++ stock clangd feature sweep (`CPP-5`)**: `LspClient` and `EditorInsightBinding` request LSP 3.17 document
+    links (`textDocument/documentLink`), folding ranges (`textDocument/foldingRange`) and clangd's AST tree
+    (`textDocument/ast`, bounded at `kMaxAstDepth = 256` with a `(deeper nodes omitted)` truncation indicator).
+    `EditorView` underlines document links, shows their target in the tooltip, opens them on `Ctrl+click` without
+    firing ordinary go-to-declaration, and merges language-server folding ranges into `foldCandidates()` for the
+    active document version. `LanguageController::showAst` (`code.showAst` / `Show AST (clangd)`) opens `AstViewPopup`
+    and selects a node's source range on activation.
+  - **Formatting and actions on save (`REF-12`)**: `editor.formatOnSave` and `editor.optimizeImportsOnSave` (both
+    `false` by default, configurable per project) run `formatEditsForSave` and `includeCleanerEditsForSave` before
+    saving C/C++ buffers, applying edits as single undo steps or notifying why an action was skipped (server not
+    running, version not yet diagnosed, or timeout) without blocking the save.
+  - **Editor essentials and the 52 unregistered keymap actions (`UX-3`)**:
+    - Pure editor commands (`frost::text::editor::essentials`) and `EditorView` integration (`editor_view_essentials.cpp`):
+      Split Line, Start New Line Before, Toggle Overwrite mode, Paste Without Formatting, Paste from History (ring of
+      recent clipboard entries), Find Word at Caret, Move to Page Top / Page Bottom (with and without selection),
+      Jump to Matching Brace, Move to Code Block Start / End (with and without selection), Move Statement Up / Down
+      over real tree-sitter syntax nodes, and Auto-Indent Lines.
+    - All remaining unregistered keymap actions across `default`, `visual-studio`, `visual-studio-2022` and
+      `resharper` are now registered (`kKnownGaps` reduced to `0` with `static_assert(kKnownGaps.empty())`),
+      including numbered bookmarks (`bookmarks.toggle1..9`, `bookmarks.goto1..9`, `bookmarks.toggleMnemonic`,
+      `window.bookmarks`), `navigate.selectIn`, `window.maximizeToolWindow`, `build.project`, `code.reformatFile`,
+      `run.runContext`, `run.debugContext`, `debug.viewBreakpoints`, `vcs.quickPopup`, `window.git`, and
+      `tools.runAnything`. Future-epic actions (`code.smartCompletion` -> `CPP-14`, `refactor.copy` -> `REF-8`,
+      `debug.smartStepInto` -> `DBG-3`, `agent.atMention` -> `UX-17`) are registered and explicitly disabled naming
+      their owning epics per ADR 0078.
+- **Merged into `r4c/integration`**:
+  - `r4/cpp-5-ref-12` (`a0ce925`: `CPP-5`, `REF-12`),
+  - `r4/ux-3` (`b5dcb9a`: `UX-3`).
+- **Exit criteria (R4c subset of R4):**
+  - C++ format on save equals the `clang-format` CLI output on 5 FrostEngine files: **met**
+    (`CorpusCppEditor.FormatOnSaveEqualsTheClangFormatCliOnFiveEngineFiles`,
+    `ClangdE2E.FormattingAndTheSaveActionsEqualTheClangFormatCliAndRemoveTheUnusedInclude`,
+    `WorkbenchClangd.CppEditorFormatOnSaveIsOffByDefaultAndWhenOnEqualsTheClangFormatCli`).
+  - clangd semantic tokens, inlay hints, signature help, document links, folding ranges and AST work in the clone:
+    **met** (`CorpusCppEditor.SemanticTokensInlayHintsSignatureHelpLinksFoldsAndAstMatchClangdOnTheClone`,
+    `ClangdE2E.LinksFoldingAstInlayHintsAndSignatureHelpMatchClangdsAnswers`,
+    `WorkbenchClangd.CppEditorLinksFoldsInlayHintsAndTheAstViewComeFromClangd`).
+  - The keymap coverage test shows every bound action registered (`0` unregistered actions across all 4 shipped
+    keymaps): **met** (`KeymapCoverageTest.*` in `tests/input/keymap_coverage_test.cpp`).
+- **Follow-ups** (owning epic):
+  - `CPP-5`: `EditorView::reloadFromDocument()` clamps existing insight ranges when reloading the underlying
+    document; `m_documentLinks` could similarly be clamped or cleared there for completeness (`m_languageFolds` is
+    already gated by `m_languageFoldsVersion`).
+  - `UX-3`: `ToolWindowManager::maximizeActive` and `LanguageController::reformatFile` are wired over tested
+    primitives (`setSize` and `requestFormatting` with `std::nullopt` range); dedicated unit test cases for those
+    two entry points can be added alongside future shell/formatting tests.
+- **Next:** complete `R4b` (`FEC-1`, `FER-1a`, `FEC-10b`, `LUA-11a`, `FND-7c`) to close Milestone R4, then proceed
+  to R5.
+
 ## 2026-11-10: R4a integration (Lua in the IDE and .fmeta-safe file operations)
 
 - **What changed for you.**

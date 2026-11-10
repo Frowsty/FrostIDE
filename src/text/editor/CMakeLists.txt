@@ -12,6 +12,7 @@ frost_add_library(text_editor LAYER text
     SOURCES
         src/command_support.cpp
         src/commands_edit.cpp
+        src/commands_essentials.cpp
         src/commands_lines.cpp
         src/commands_move.cpp
         src/editor.cpp

@@ -50,6 +50,25 @@ Result<void> registerRunActions(input::ActionRegistry& registry, RunController& 
                      .context = {},
                      .enabled = hasSolution,
                      .handler = runAction});
+    specs.push_back({.id = std::string(kRunContextActionId),
+                     .name = "Run Context Configuration",
+                     .description = "Build and run the active or startup project",
+                     .group = "Run",
+                     .synonyms = {"Run Current", "Run Context"},
+                     .context = {},
+                     .enabled = hasSolution,
+                     .handler = [c, shared, report](const input::ActionContext&, const input::InvokeInfo&) {
+                         std::optional<project::ProjectId> proj;
+                         if (c->service() != nullptr && shared->selectedProject) {
+                             if (const auto selected = shared->selectedProject();
+                                 selected && isCandidate(*c->service(), *selected)) {
+                                 proj = selected;
+                             }
+                         }
+                         if (auto started = c->run(proj); !started && started.error().code() != ErrorCode::Cancelled) {
+                             report(started.error());
+                         }
+                     }});
     specs.push_back({.id = std::string(kRunWithoutDebuggingActionId),
                      .name = "Start Without Debugging",
                      .description = "Build and run the startup project (Visual Studio's Ctrl+F5)",

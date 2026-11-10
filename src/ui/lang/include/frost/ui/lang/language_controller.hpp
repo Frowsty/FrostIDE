@@ -109,6 +109,7 @@ public:
 
     // --- The features (the action handlers) ---
     void completeCode();
+    void smartCompleteCode();
     void showParameterInfo();
     void showQuickDocumentation();
     void gotoDeclaration();
@@ -124,6 +125,7 @@ public:
     void rename();
     void showIntentions();
     void reformat();
+    void reformatFile();
     // CPP-5: clangd's AST for the selection, else the caret (C and C++ only; the server must offer
     // textDocument/ast). "No AST node here" or the reason it is unavailable goes to the status bar.
     void showAst();
@@ -153,6 +155,7 @@ public:
     void changeSignature();
     void safeDelete();
     void moveSymbol();
+    void copySymbol();
 
     // --- Code generation and editing assistance ---
     void generateCode();

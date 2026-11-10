@@ -1163,6 +1163,13 @@ void DebugController::requestEditBreakpoint() {
     emit editBreakpointRequested(targetId);
 }
 
+void DebugController::requestViewBreakpoints() {
+    if (m_hooks.showToolWindow) {
+        m_hooks.showToolWindow();
+    }
+    emit viewBreakpointsRequested();
+}
+
 void DebugController::requestEvaluate() {
     QString expression;
     if (EditorView* view = m_hooks.currentEditor ? m_hooks.currentEditor() : nullptr) {

@@ -52,12 +52,13 @@ class BuildController;
 
 namespace build_actions {
 inline constexpr std::string_view kBuildSolution = "build.buildSolution";
+inline constexpr std::string_view kBuildProject = "build.project";
 inline constexpr std::string_view kRebuildSolution = "build.rebuildSolution";
 inline constexpr std::string_view kCleanSolution = "build.cleanSolution";
 inline constexpr std::string_view kCancelBuild = "build.cancelBuild";
 // Compile the current file (Visual Studio's Ctrl+F7, SLN-9).
 inline constexpr std::string_view kCompileFile = "build.compileFile";
-// The Find Action category of all five.
+// The Find Action category of all six.
 inline constexpr std::string_view kGroup = "Build";
 } // namespace build_actions
 

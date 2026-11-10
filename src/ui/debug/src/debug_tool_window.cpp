@@ -450,6 +450,12 @@ void DebugToolWindow::wireControllerSignals() {
     connect(&m_controller, &DebugController::breakpointsChanged, this, &DebugToolWindow::updateBreakpointsList);
     connect(&m_controller, &DebugController::editBreakpointRequested, this,
             [this](debug::BreakpointId id) { openEditBreakpoint(id); });
+    connect(&m_controller, &DebugController::viewBreakpointsRequested, this, [this] {
+        if (m_tabs != nullptr && m_breakpointsTree != nullptr) {
+            m_tabs->setCurrentIndex(2);
+            m_breakpointsTree->setFocus();
+        }
+    });
     connect(&m_controller, &DebugController::frameSelected, this, [this] {
         const int row = m_frames->selectedRow();
         if (row >= 0) {

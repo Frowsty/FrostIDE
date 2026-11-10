@@ -9,6 +9,7 @@
 
 #include "frost/sched/task.hpp"
 #include "frost/syntax/syntax_tree.hpp"
+#include "frost/text/editor/essentials.hpp"
 #include "frost/text/editor/unicode.hpp"
 #include "frost/ui/appearance_manager.hpp"
 #include "frost/ui/editor/find_bar.hpp"
@@ -815,6 +816,9 @@ bool EditorView::typeText(std::string_view text) {
     if (text.empty() || isReadOnly() || m_composing) {
         return false;
     }
+    if (m_overwrite) {
+        return apply(commands::overtype(commandInput(), text));
+    }
     return apply(commands::type(commandInput(), text));
 }
 
@@ -1020,6 +1024,24 @@ bool EditorView::perform(EditorAction action) {
     case A::SelectAllOccurrences: return apply(commands::selectAllOccurrences(commandInput()));
     case A::ToggleCase: return apply(commands::toggleCase(commandInput()));
     case A::ToggleColumnMode: setColumnMode(!m_columnMode); return true;
+    case A::PageTop:
+    case A::PageBottom:
+    case A::PageTopWithSelection:
+    case A::PageBottomWithSelection:
+    case A::SplitLine:
+    case A::StartNewLineBefore:
+    case A::ToggleOverwrite:
+    case A::PasteWithoutFormatting:
+    case A::PasteFromHistory:
+    case A::FindWordAtCaret:
+    case A::MatchingBrace:
+    case A::CodeBlockStart:
+    case A::CodeBlockEnd:
+    case A::CodeBlockStartWithSelection:
+    case A::CodeBlockEndWithSelection:
+    case A::MoveStatementUp:
+    case A::MoveStatementDown:
+    case A::AutoIndentLines: return performEssential(action);
     }
     return false;
 }
@@ -1093,6 +1115,7 @@ void EditorView::copySelection() {
             firstPart = false;
         }
     }
+    clipboardHistory().record(out);
     auto* mime = new QMimeData();
     mime->setText(QString::fromStdString(out));
     if (lineCopy) {
@@ -1474,6 +1497,7 @@ EditorViewStatus EditorView::status() const {
     out.readOnly = m_fileInfo.readOnly;
     out.dirty = m_document->undoState().stateId != m_savedStateId;
     out.columnMode = m_columnMode;
+    out.overwrite = m_overwrite;
     return out;
 }
 

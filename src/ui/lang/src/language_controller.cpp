@@ -317,6 +317,8 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
     using A = Availability;
     const Entry entries[] = {
         {"code.completion", "Basic Completion", "Code", &LanguageController::completeCode, true},
+        {"code.smartCompletion", "Smart Type-Matching Completion", "Code", &LanguageController::smartCompleteCode, true,
+         A::Never, "Requires type-matching completion (CPP-14)"},
         {"code.parameterInfo", "Parameter Info", "Code", &LanguageController::showParameterInfo, true},
         {"code.quickDocumentation", "Quick Documentation", "Code", &LanguageController::showQuickDocumentation, true},
         {"navigate.declaration", "Go to Declaration or Usages", "Navigate", &LanguageController::gotoDeclaration, true},
@@ -358,8 +360,11 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
          "Requires the safe delete refactoring (REF-8)"},
         {"refactor.move", "Move...", "Refactor", &LanguageController::moveSymbol, true, A::Never,
          "Requires the move refactoring (REF-8)"},
+        {"refactor.copy", "Copy...", "Refactor", &LanguageController::copySymbol, true, A::Never,
+         "Requires the copy refactoring (REF-8)"},
         {"code.showIntentions", "Show Context Actions", "Code", &LanguageController::showIntentions, true},
         {"code.reformat", "Reformat Code", "Code", &LanguageController::reformat, true},
+        {"code.reformatFile", "Reformat File", "Code", &LanguageController::reformatFile, true},
         {"code.showAst", "Show AST (clangd)", "Code", &LanguageController::showAst, true, A::ClangdTweaks,
          "C and C++: clangd's AST node for the caret or the selection"},
         {"code.generate", "Generate...", "Code", &LanguageController::generateCode, true, A::ClangdTweaks,

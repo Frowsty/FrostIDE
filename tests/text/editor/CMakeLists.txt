@@ -17,3 +17,13 @@ frost_add_test(text_editor_tests
     DEPS frost::text_editor frost::text
     LABELS unit)
 target_include_directories(text_editor_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+
+# The UX-3 editor essentials (frost/text/editor/essentials.hpp): Split Line, Start New Line Before,
+# overwrite typing, line-block swaps, Move Statement, brackets, code blocks and Auto-Indent Lines.
+# Move Statement and the bracket queries run over the real tree-sitter grammars of frost::syntax.
+frost_add_test(text_editor_essentials_tests
+    SOURCES
+        essentials_test.cpp
+    DEPS frost::text_editor frost::text frost::syntax frost::sched
+    LABELS unit)
+target_include_directories(text_editor_essentials_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
