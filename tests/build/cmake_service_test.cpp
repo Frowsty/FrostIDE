@@ -14,6 +14,7 @@
 #include "frost/project/trust_store.hpp"
 #include "frost/settings/value.hpp"
 
+#include "../../src/build/src/cmake_service_internal.hpp"
 #include "build_test_util.hpp"
 #include "project/cmake_reply_fixture.hpp"
 #include <gtest/gtest.h>
@@ -1350,6 +1351,85 @@ TEST_F(CMakeServiceTest, AConfigureReportsItsPhases) {
     ASSERT_NE(configuring, seen.end());
     EXPECT_TRUE(configuring->cancellable);
     EXPECT_EQ(configuring->profile, "Debug");
+}
+
+TEST(CMakeServiceInternal, StringAndCommandLineHelpersFormatAndQuoteArguments) {
+    EXPECT_EQ(joinStrings({}), "");
+    EXPECT_EQ(joinStrings({"only"}), "only");
+    EXPECT_EQ(joinStrings({"a", "b", "c"}), "a, b, c");
+
+    EXPECT_EQ(seconds(std::chrono::nanoseconds(1'500'000'000)), "1.5 s");
+    EXPECT_EQ(plural(1, "error"), "1 error");
+    EXPECT_EQ(plural(0, "error"), "0 errors");
+    EXPECT_EQ(plural(3, "warning"), "3 warnings");
+
+    EXPECT_EQ(commandLine(MemTree::path("bin/cmake"), {"--build", "/tmp/my build", "-G", "Ninja"}),
+              R"(cmake --build "/tmp/my build" -G Ninja)");
+    EXPECT_EQ(commandLine(MemTree::path("Tools/cmake.exe"), {"-S", "src", "-B", "build dir"}),
+              R"(cmake.exe -S src -B "build dir")");
+}
+
+TEST(CMakeServiceInternal, StateFileAndSettingsHelpersExtractPersistedFields) {
+    MemTree mem;
+    mem.write("state/profiles.txt",
+              std::string(kStateHeader) + "\n/proj/a\tDebug\r\n/proj/b\tRelease\nextra_without_tab\n");
+    const std::string stateFile = mem.path("state/profiles.txt");
+    const auto entries = readStateFile(mem.fs, stateFile);
+    ASSERT_EQ(entries.size(), 2U);
+    EXPECT_EQ(entries[0], (std::pair<std::string, std::string>{"/proj/a", "Debug"}));
+    EXPECT_EQ(entries[1], (std::pair<std::string, std::string>{"/proj/b", "Release"}));
+
+    mem.write("state/bad.txt", "wrong header\n/proj/a\tDebug\n");
+    EXPECT_TRUE(readStateFile(mem.fs, mem.path("state/bad.txt")).empty());
+    EXPECT_TRUE(readStateFile(mem.fs, "").empty());
+    EXPECT_TRUE(readStateFile(mem.fs, mem.path("state/missing.txt")).empty());
+
+    // Fields sorted alphabetically by name, matching settings::Record's invariant.
+    const settings::Record record = {
+        settings::RecordField{.name = "args", .value = settings::StringList{"-DFOO=1", "-DBAR=2"}},
+        settings::RecordField{.name = "count", .value = std::int64_t{3}},
+        settings::RecordField{.name = "name", .value = std::string("Debug")},
+    };
+    EXPECT_EQ(fieldString(record, "name"), "Debug");
+    EXPECT_EQ(fieldString(record, "count"), "");
+    EXPECT_EQ(fieldString(record, "missing"), "");
+    EXPECT_EQ(fieldList(record, "args"), (std::vector<std::string>{"-DFOO=1", "-DBAR=2"}));
+    EXPECT_TRUE(fieldList(record, "name").empty());
+    EXPECT_TRUE(fieldList(record, "missing").empty());
+}
+
+TEST(CMakeServiceInternal, WatchedPathTouchAndPresetFileHelpersMatchCMakeFiles) {
+    const std::string root = kWindows ? R"(C:\work\proj)" : "/work/proj";
+    const std::string subFile = kWindows ? R"(C:\work\proj\src\CMakeLists.txt)" : "/work/proj/src/CMakeLists.txt";
+    const std::string other = kWindows ? R"(C:\work\other\CMakeLists.txt)" : "/work/other/CMakeLists.txt";
+    const std::vector<std::string> watched = {documentKey(subFile)};
+
+    EXPECT_TRUE(touches(io::FileChange{io::FileChangeKind::Modified, subFile, {}}, watched));
+    EXPECT_TRUE(touches(io::FileChange{io::FileChangeKind::Created, root, {}}, watched));
+    EXPECT_FALSE(touches(io::FileChange{io::FileChangeKind::Modified, root, {}}, watched));
+    EXPECT_FALSE(touches(io::FileChange{io::FileChangeKind::Modified, other, {}}, watched));
+
+    EXPECT_TRUE(isPresetsFileName(MemTree::path("proj/CMakePresets.json")));
+    EXPECT_TRUE(isPresetsFileName(MemTree::path("proj/CMakeUserPresets.json")));
+    EXPECT_FALSE(isPresetsFileName(MemTree::path("proj/CMakeLists.txt")));
+
+    const Diagnostic relDiag = withCMakePath(Diagnostic{.file = "sub/CMakeLists.txt"}, MemTree::path("proj"));
+    EXPECT_EQ(relDiag.file, MemTree::path("proj/sub/CMakeLists.txt"));
+    const Diagnostic bareDiag = withCMakePath(Diagnostic{.file = "CMakeLists.txt"}, MemTree::path("proj"));
+    EXPECT_EQ(bareDiag.file, "CMakeLists.txt");
+
+    project::CMakeProfile a;
+    a.buildDirectory = "/build";
+    a.generator = "Ninja";
+    a.buildType = "Debug";
+    project::CMakeProfile b = a;
+    EXPECT_TRUE(sameReply(a, b));
+    b.generator = "Ninja Multi-Config";
+    EXPECT_FALSE(sameReply(a, b));
+    a.generator = "Ninja Multi-Config";
+    EXPECT_TRUE(sameReply(a, b));
+    b.buildType = "Release";
+    EXPECT_FALSE(sameReply(a, b));
 }
 
 } // namespace

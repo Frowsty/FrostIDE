@@ -19,6 +19,7 @@
 #include "frost/io/utf.hpp"
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/clangd_actions.hpp"
+#include "frost/lang/clangd_service.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/refactoring.hpp"
@@ -1056,6 +1057,87 @@ TEST(ClangdE2E, TweaksAndIncludeCleanerProduceCompilingEdits) {
 
     ASSERT_TRUE(service->closeDocument(source).has_value());
     stopAndCheck(env, *service);
+}
+
+TEST(ClangdE2E, GovernedLaunchFlagsUsePchStorageDiskAndBackgroundIndexPriority) {
+    constexpr std::uint64_t kGiB = 1024ULL * 1024ULL * 1024ULL;
+    frost::sched::ResourceGovernorOptions govOptions;
+    govOptions.maxClangdJobs = 8;
+    govOptions.throttledClangdJobs = 2;
+    govOptions.hostOverride = frost::sched::HostResources{
+        .logicalCores = 24,
+        .totalPhysicalBytes = 32ULL * kGiB,
+        .availablePhysicalBytes = 16ULL * kGiB,
+        .totalCommitBytes = 32ULL * kGiB,
+        .availableCommitBytes = 16ULL * kGiB,
+    };
+    auto governor = std::make_shared<frost::sched::ResourceGovernor>(govOptions);
+
+    // Hold a Build leg so clangd is throttled to -j=2.
+    auto buildLease = governor->tryAcquireHeavyLeg(frost::sched::HeavyLegKind::Build);
+    ASSERT_TRUE(buildLease.has_value()) << buildLease.error().describe();
+
+    frost::io::ScriptedProcessLauncher launcher;
+    Env env;
+    ASSERT_TRUE(env.ok());
+    ClangdServiceOptions options;
+    options.clangdPath = fixture("dummy-clangd");
+    options.workspaceRoot = fixture(".");
+    options.launch.jobs = 0;
+    ClangdService service(launcher, env.context(), std::move(options));
+    frost::lang::setResourceGovernor(service, governor);
+    ASSERT_TRUE(service.start());
+    ASSERT_TRUE(waitFor([&] { return !launcher.launches().empty() || service.state() == ClangdState::Failed; }));
+    env.run(service.stop());
+
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1u);
+    const std::vector<std::string>& args = launches.front().spec.arguments;
+    EXPECT_NE(std::ranges::find(args, "--background-index"), args.end());
+    EXPECT_NE(std::ranges::find(args, "--background-index-priority=background"), args.end());
+    EXPECT_NE(std::ranges::find(args, "--pch-storage=disk"), args.end());
+    EXPECT_EQ(std::ranges::find(args, "--pch-storage=memory"), args.end());
+    EXPECT_NE(std::ranges::find(args, "-j=2"), args.end());
+}
+
+TEST(ClangdE2E, BackgroundIndexProgressAndMetricsTrackedWithRealClangd) {
+    frost::test::ScratchDir scratch("lang-clangd-index-metrics");
+    writeCmakeDatabase(scratch);
+    Env env;
+    ASSERT_TRUE(env.ok());
+    auto governor = std::make_shared<frost::sched::ResourceGovernor>();
+    auto provider =
+        std::make_shared<frost::lang::ExistingCompileCommandsProvider>(frost::io::realFileSystem(), scratch.path());
+    ClangdServiceOptions options;
+    options.clangdPath = clangdPath();
+    options.workspaceRoot = scratch.path();
+    options.compileCommands = provider;
+    ClangdService service(frost::io::realProcessLauncher(), env.context(), std::move(options));
+    frost::lang::setResourceGovernor(service, governor);
+    ASSERT_TRUE(service.start());
+    ASSERT_TRUE(waitFor([&] { return running(service) || service.state() == ClangdState::Failed; }));
+    ASSERT_TRUE(running(service)) << describe(service);
+
+    const std::string path = fixture("cmake_project/src/main.cpp");
+    frost::text::Document document = load(path);
+    ASSERT_TRUE(service.openDocument(path, document.text()).has_value());
+
+    ASSERT_TRUE(waitFor([&] {
+        const auto m = frost::lang::indexMetrics(service);
+        return m.completed && m.shardCount > 0;
+    })) << describe(service);
+
+    const frost::lang::IndexMetrics metrics = frost::lang::indexMetrics(service);
+    EXPECT_TRUE(metrics.completed);
+    EXPECT_GE(metrics.elapsedMs, 1ULL);
+    EXPECT_GE(metrics.shardCount, 1U);
+    EXPECT_GT(metrics.peakRssBytes, 0ULL);
+    EXPECT_LT(metrics.peakRssBytes, metrics.governorRssCapBytes);
+    EXPECT_EQ(metrics.governorRssCapBytes, governor->clangdRssCapBytes());
+    EXPECT_FALSE(governor->isLegActive(frost::sched::HeavyLegKind::BackgroundIndex));
+
+    ASSERT_TRUE(service.closeDocument(path).has_value());
+    stopAndCheck(env, service);
 }
 
 } // namespace

@@ -1,0 +1,69 @@
+{
+  "version": 6,
+  "include": ["common.json"],
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SDK_PATH": "$env{FROST_SDK}/llvm"
+      },
+      "environment": {
+        "CCACHE_DIR": "${sourceDir}/.cache",
+        "EXTRA": "$penv{BUILD_ROOT}/bin"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "inherits": ["base", "common-base"],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-linux",
+      "configurePreset": "linux-debug",
+      "jobs": 6,
+      "targets": ["all"]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-linux",
+      "configurePreset": "linux-debug"
+    }
+  ]
+}
+---USER---
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "user-dev",
+      "inherits": "linux-debug",
+      "cacheVariables": {
+        "USER_FLAG": "ON"
+      }
+    }
+  ]
+}
+---INC---
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "common-base",
+      "hidden": true,
+      "cacheVariables": {
+        "COMMON_VAR": "1"
+      }
+    }
+  ]
+}

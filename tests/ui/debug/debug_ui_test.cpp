@@ -20,6 +20,7 @@
 #include "frost/ui/shell/shell_settings.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 
+#include "../../../src/ui/debug/src/debug_controller_internal.hpp"
 #include "debug/debug_test_util.hpp"
 #include "editor/editor_harness.hpp"
 #include <QAction>
@@ -1201,6 +1202,40 @@ TEST(DebugTargetFor, CarriesTheResolvedRun) {
     EXPECT_EQ(target.environment, launch.command.environment);
     EXPECT_FALSE(target.inheritEnvironment);
     EXPECT_EQ(target.trustRoots, launch.trustRoots);
+}
+
+TEST(DebugControllerInternal, IdentByteClassifiesIdentifierCharacters) {
+    EXPECT_TRUE(isDebugIdentByte('a'));
+    EXPECT_TRUE(isDebugIdentByte('z'));
+    EXPECT_TRUE(isDebugIdentByte('A'));
+    EXPECT_TRUE(isDebugIdentByte('Z'));
+    EXPECT_TRUE(isDebugIdentByte('0'));
+    EXPECT_TRUE(isDebugIdentByte('9'));
+    EXPECT_TRUE(isDebugIdentByte('_'));
+    EXPECT_FALSE(isDebugIdentByte(' '));
+    EXPECT_FALSE(isDebugIdentByte('.'));
+    EXPECT_FALSE(isDebugIdentByte('-'));
+    EXPECT_FALSE(isDebugIdentByte('>'));
+    EXPECT_FALSE(isDebugIdentByte(':'));
+    EXPECT_FALSE(isDebugIdentByte('\0'));
+}
+
+TEST(DebugControllerInternal, LineContainsVariableMatchesWholeIdentifierTokens) {
+    EXPECT_FALSE(lineContainsVariable("int x = 1;", ""));
+    EXPECT_FALSE(lineContainsVariable("x", "longerName"));
+
+    EXPECT_TRUE(lineContainsVariable("int count = 42;", "count"));
+    EXPECT_TRUE(lineContainsVariable("count = count + 1;", "count"));
+    EXPECT_TRUE(lineContainsVariable("return (count);", "count"));
+    EXPECT_TRUE(lineContainsVariable("arr[count] = 0;", "count"));
+    EXPECT_TRUE(lineContainsVariable("int a = counter + count;", "count"));
+
+    // Prefixes and suffixes of larger identifiers do not match.
+    EXPECT_FALSE(lineContainsVariable("int counter = 42;", "count"));
+    EXPECT_FALSE(lineContainsVariable("int discount = 42;", "count"));
+    EXPECT_FALSE(lineContainsVariable("int _count = 42;", "count"));
+    EXPECT_FALSE(lineContainsVariable("int count_1 = 42;", "count"));
+    EXPECT_FALSE(lineContainsVariable("int count9 = 42;", "count"));
 }
 
 } // namespace

@@ -1,0 +1,28 @@
+{
+  "version": 4,
+  "configurePresets": [
+    {
+      "name": "cond-preset",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/out/${generator}",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          {
+            "type": "inList",
+            "string": "${hostSystemName}",
+            "list": ["Windows", "Linux"]
+          },
+          {
+            "type": "not",
+            "condition": {
+              "type": "matches",
+              "string": "${presetName}",
+              "regex": "^disabled-"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

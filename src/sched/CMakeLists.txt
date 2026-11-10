@@ -9,6 +9,7 @@ frost_add_library(sched LAYER sched
     SOURCES
         src/lane.cpp
         src/latest_wins.cpp
+        src/resource_governor.cpp
         src/sim_executor.cpp
         src/task.cpp
         src/thread_pool.cpp

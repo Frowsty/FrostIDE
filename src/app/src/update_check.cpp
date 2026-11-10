@@ -13,9 +13,17 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
+#include <optional>
+#include <thread>
 
 namespace frost::app {
 namespace {
+struct AsyncFetchState {
+    std::mutex mutex;
+    std::optional<Result<update::HttpResponse>> response;
+    bool done = false;
+};
 constexpr auto kApi = "https://api.github.com/repos/Frowsty/FrostIDE/releases?per_page=100";
 bool allowed(const QUrl& url) {
     const auto host = url.host().toLower();
@@ -48,8 +56,22 @@ bool releaseAsset(const QUrl& url, const QString& name) {
 UpdateCheck::UpdateCheck(QNetworkAccessManager& manager, update::PublicKey key, update::ReleasePolicy policy,
                          std::function<bool()> ready, std::function<std::uint64_t()> clock, Completion completion,
                          QObject* parent)
-    : QObject(parent), m_manager(manager), m_key(key), m_channel(policy.channel), m_platform(policy.platform),
+    : QObject(parent), m_manager(&manager), m_key(key), m_channel(policy.channel), m_platform(policy.platform),
       m_architecture(policy.architecture), m_installedVersion(policy.installedVersion),
+      m_acceptedVersion(policy.acceptedVersion), m_acceptedDigest(policy.acceptedDigest), m_policy(policy),
+      m_ready(std::move(ready)), m_clock(std::move(clock)), m_completion(std::move(completion)) {
+    m_policy.channel = m_channel;
+    m_policy.platform = m_platform;
+    m_policy.architecture = m_architecture;
+    m_policy.installedVersion = m_installedVersion;
+    m_policy.acceptedVersion = m_acceptedVersion;
+    m_policy.acceptedDigest = m_acceptedDigest;
+}
+UpdateCheck::UpdateCheck(std::shared_ptr<update::IHttpClient> httpClient, update::PublicKey key,
+                         update::ReleasePolicy policy, std::function<bool()> ready,
+                         std::function<std::uint64_t()> clock, Completion completion, QObject* parent)
+    : QObject(parent), m_httpClient(std::move(httpClient)), m_key(key), m_channel(policy.channel),
+      m_platform(policy.platform), m_architecture(policy.architecture), m_installedVersion(policy.installedVersion),
       m_acceptedVersion(policy.acceptedVersion), m_acceptedDigest(policy.acceptedDigest), m_policy(policy),
       m_ready(std::move(ready)), m_clock(std::move(clock)), m_completion(std::move(completion)) {
     m_policy.channel = m_channel;
@@ -61,10 +83,15 @@ UpdateCheck::UpdateCheck(QNetworkAccessManager& manager, update::PublicKey key, 
 }
 UpdateCheck::~UpdateCheck() {
     m_finished = true;
+    m_cancelled->store(true, std::memory_order_relaxed);
     if (m_reply) {
         disconnect(m_reply, nullptr, this, nullptr);
         m_reply->abort();
         m_reply->deleteLater();
+    }
+    for (auto& worker : m_workers) {
+        if (worker.joinable())
+            worker.join();
     }
 }
 void UpdateCheck::start() {
@@ -93,6 +120,7 @@ void UpdateCheck::finish(Result<update::AuthenticatedRelease> result) {
     if (m_finished)
         return;
     m_finished = true;
+    m_cancelled->store(true, std::memory_order_relaxed);
     if (m_reply) {
         disconnect(m_reply, nullptr, this, nullptr);
         m_reply->abort();
@@ -119,11 +147,83 @@ void UpdateCheck::fetch(QUrl url, qsizetype limit, int redirects, Received recei
         received(fail(ErrorCode::PermissionDenied, "Update URL or redirect rejected"));
         return;
     }
+    if (m_httpClient) {
+        update::HttpRequest req;
+        req.method = update::HttpMethod::Get;
+        req.url = url.toString(QUrl::FullyEncoded).toStdString();
+        req.headers = {{"Accept", "application/vnd.github+json"}};
+        req.userAgent = "FrostIDE-Updater";
+        req.timeout = std::chrono::milliseconds{30000};
+        req.maxResponseBytes = static_cast<std::size_t>(limit);
+        req.maxRedirects = static_cast<unsigned>(std::max(0, 5 - redirects));
+        req.redirectValidator = [](std::string_view nextUrl) {
+            return allowed(QUrl(QString::fromUtf8(nextUrl.data(), static_cast<qsizetype>(nextUrl.size()))));
+        };
+        auto cancelled = m_cancelled;
+        req.isCancelled = [cancelled]() { return cancelled->load(std::memory_order_relaxed); };
+
+        auto state = std::make_shared<AsyncFetchState>();
+        m_workers.emplace_back([client = m_httpClient, req = std::move(req), state]() {
+            auto resp = client->request(req);
+            std::lock_guard lock(state->mutex);
+            state->response = std::move(resp);
+            state->done = true;
+        });
+
+        auto* pollTimer = new QTimer(this);
+        pollTimer->setInterval(15);
+        connect(pollTimer, &QTimer::timeout, this,
+                [this, pollTimer, state, limit, received = std::move(received)]() mutable {
+                    if (m_finished) {
+                        pollTimer->stop();
+                        pollTimer->deleteLater();
+                        return;
+                    }
+                    if (!m_ready || !m_ready())
+                        m_cancelled->store(true, std::memory_order_relaxed);
+                    std::optional<Result<update::HttpResponse>> resp;
+                    {
+                        std::lock_guard lock(state->mutex);
+                        if (!state->done)
+                            return;
+                        resp = std::move(state->response);
+                    }
+                    pollTimer->stop();
+                    pollTimer->deleteLater();
+                    if (m_cancelled->load(std::memory_order_relaxed) || !m_ready || !m_ready()) {
+                        received(fail(ErrorCode::Cancelled, "Interactive readiness changed"));
+                        return;
+                    }
+                    if (!resp || !*resp) {
+                        if (resp && (resp->error().code() == ErrorCode::Cancelled ||
+                                     resp->error().code() == ErrorCode::PermissionDenied)) {
+                            received(std::unexpected(resp->error()));
+                        } else {
+                            received(fail(ErrorCode::IoError, "Update request failed or exceeded its limit"));
+                        }
+                        return;
+                    }
+                    if ((*resp)->statusCode == 403 || (*resp)->statusCode == 404) {
+                        received(fail(ErrorCode::PermissionDenied,
+                                      "GitHub release access is unavailable (repository access or rate limit)."));
+                        return;
+                    }
+                    if ((*resp)->statusCode != 200 || (*resp)->body.size() > static_cast<std::size_t>(limit)) {
+                        received(fail(ErrorCode::IoError, "Update request failed or exceeded its limit"));
+                        return;
+                    }
+                    QByteArray bytes(reinterpret_cast<const char*>((*resp)->body.data()),
+                                     static_cast<qsizetype>((*resp)->body.size()));
+                    received(std::move(bytes));
+                });
+        pollTimer->start();
+        return;
+    }
     QNetworkRequest request(url);
     request.setRawHeader("Accept", "application/vnd.github+json");
     request.setRawHeader("User-Agent", "FrostIDE-Updater");
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
-    auto* reply = m_manager.get(request);
+    auto* reply = m_manager->get(request);
     m_reply = reply;
     reply->setReadBufferSize(64 * 1024);
     auto bytes = std::make_shared<QByteArray>();

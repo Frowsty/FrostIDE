@@ -32,6 +32,9 @@ frost_add_library(debug LAYER debug
         src/dap_client.cpp
         src/dap_types.cpp
         src/debug_session.cpp
+        src/debug_session_breakpoints.cpp
+        src/debug_session_requests.cpp
+        src/debug_session_stops.cpp
         src/fake_debug_adapter.cpp
         src/lldb_dap.cpp
         src/msvc_throw.cpp

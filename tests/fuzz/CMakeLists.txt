@@ -10,6 +10,10 @@
 #                    oracles and the load/save pipeline over platform and fake codecs (ADR 0018)
 #   diff_merge       frost::diff line diffs, refinement and three-way merges against the support
 #                    library's independent appliers and invariants (ADR 0019)
+#   json_parser      frost::rpc::parseJson and Json::dump round-trip, including u64/i64 (FND-14)
+#   sln_parser       frost::project .sln, .slnx, .vcxproj and SolutionModel::load (FND-14)
+#   presets_parser   frost::project::loadCMakePresets inheritance, macros and conditions (FND-14)
+#   natvis_parser    .natvis XML, C++ template patterns and DisplayString/Expand expressions (FND-14)
 
 # The text test support libraries (frost_text_test_support and frost_text_encoding_test_support):
 # already targets in normal trees (tests/text), added here in fuzz trees. Their source is not a
@@ -51,3 +55,31 @@ frost_add_fuzz_target(diff_merge
         diff_merge_fuzzer.cpp
     DEPS frost_diff_test_support
     CORPUS ${CMAKE_CURRENT_SOURCE_DIR}/corpus/diff_merge)
+
+frost_add_fuzz_target(json_parser
+    SOURCES
+        json_parser_harness.cpp
+        json_parser_fuzzer.cpp
+    DEPS frost::rpc frost::core
+    CORPUS ${CMAKE_CURRENT_SOURCE_DIR}/corpus/json_parser)
+
+frost_add_fuzz_target(sln_parser
+    SOURCES
+        sln_parser_harness.cpp
+        sln_parser_fuzzer.cpp
+    DEPS frost::project frost::io frost::core
+    CORPUS ${CMAKE_CURRENT_SOURCE_DIR}/corpus/sln_parser)
+
+frost_add_fuzz_target(presets_parser
+    SOURCES
+        presets_parser_harness.cpp
+        presets_parser_fuzzer.cpp
+    DEPS frost::project frost::io frost::core
+    CORPUS ${CMAKE_CURRENT_SOURCE_DIR}/corpus/presets_parser)
+
+frost_add_fuzz_target(natvis_parser
+    SOURCES
+        natvis_parser_harness.cpp
+        natvis_parser_fuzzer.cpp
+    DEPS frost::core pugixml::pugixml
+    CORPUS ${CMAKE_CURRENT_SOURCE_DIR}/corpus/natvis_parser)

@@ -11,10 +11,22 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <cstddef>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <thread>
+#include <vector>
 
 namespace frost::app {
 namespace {
+struct AsyncDownloadState {
+    std::mutex mutex;
+    std::vector<std::byte> pendingBytes;
+    std::optional<Result<update::HttpResponse>> response;
+    bool sizeExceeded = false;
+    bool done = false;
+};
 bool allowed(const QUrl& url) {
     const auto host = url.host().toLower();
     return url.isValid() && url.scheme() == QStringLiteral("https") && (url.port() == -1 || url.port() == 443) &&
@@ -25,14 +37,23 @@ bool allowed(const QUrl& url) {
 } // namespace
 UpdateDownload::UpdateDownload(QNetworkAccessManager& manager, update::Release release, std::function<bool()> ready,
                                Completion completion, QObject* parent)
-    : QObject(parent), m_manager(manager), m_release(std::move(release)), m_ready(std::move(ready)),
+    : QObject(parent), m_manager(&manager), m_release(std::move(release)), m_ready(std::move(ready)),
+      m_completion(std::move(completion)) {}
+UpdateDownload::UpdateDownload(std::shared_ptr<update::IHttpClient> httpClient, update::Release release,
+                               std::function<bool()> ready, Completion completion, QObject* parent)
+    : QObject(parent), m_httpClient(std::move(httpClient)), m_release(std::move(release)), m_ready(std::move(ready)),
       m_completion(std::move(completion)) {}
 UpdateDownload::~UpdateDownload() {
     m_finished = true;
+    m_cancelled->store(true, std::memory_order_relaxed);
     if (m_reply) {
         disconnect(m_reply, nullptr, this, nullptr);
         m_reply->abort();
         m_reply->deleteLater();
+    }
+    for (auto& worker : m_workers) {
+        if (worker.joinable())
+            worker.join();
     }
 }
 void UpdateDownload::start() {
@@ -60,6 +81,7 @@ void UpdateDownload::finish(Result<std::unique_ptr<QTemporaryFile>> result) {
     if (m_finished)
         return;
     m_finished = true;
+    m_cancelled->store(true, std::memory_order_relaxed);
     auto completion = std::move(m_completion);
     // Completion can destroy the manager; never deliver it on a reply signal stack.
     QTimer::singleShot(0, this, [this, completion = std::move(completion), result = std::move(result)]() mutable {
@@ -77,10 +99,118 @@ void UpdateDownload::fetch(const QUrl& url, int redirects) {
         finish(fail(ErrorCode::PermissionDenied, "Update URL rejected"));
         return;
     }
+    if (m_httpClient) {
+        update::HttpRequest req;
+        req.method = update::HttpMethod::Get;
+        req.url = url.toString(QUrl::FullyEncoded).toStdString();
+        req.userAgent = "FrostIDE-Updater";
+        req.timeout = std::chrono::minutes{10};
+        req.maxResponseBytes = static_cast<std::size_t>(m_release.size);
+        req.maxRedirects = static_cast<unsigned>(std::max(0, 5 - redirects));
+        req.redirectValidator = [](std::string_view nextUrl) {
+            return allowed(QUrl(QString::fromUtf8(nextUrl.data(), static_cast<qsizetype>(nextUrl.size()))));
+        };
+        auto cancelled = m_cancelled;
+        req.isCancelled = [cancelled]() { return cancelled->load(std::memory_order_relaxed); };
+
+        auto state = std::make_shared<AsyncDownloadState>();
+        const std::uint64_t maxBytes = m_release.size;
+        m_workers.emplace_back([client = m_httpClient, req = std::move(req), state, maxBytes]() {
+            std::uint64_t workerReceived = 0;
+            auto resp = client->download(req, [&](std::span<const std::byte> chunk) -> Result<void> {
+                if (chunk.empty())
+                    return {};
+                const auto len = static_cast<std::uint64_t>(chunk.size());
+                if (len > maxBytes - workerReceived) {
+                    std::lock_guard lock(state->mutex);
+                    state->sizeExceeded = true;
+                    return fail(ErrorCode::Corrupt, "Update download exceeded expected size");
+                }
+                workerReceived += len;
+                std::lock_guard lock(state->mutex);
+                state->pendingBytes.insert(state->pendingBytes.end(), chunk.begin(), chunk.end());
+                return {};
+            });
+            std::lock_guard lock(state->mutex);
+            state->response = std::move(resp);
+            state->done = true;
+        });
+
+        auto hash = std::make_shared<QCryptographicHash>(QCryptographicHash::Sha256);
+        auto sinkFailed = std::make_shared<bool>(false);
+        auto* pollTimer = new QTimer(this);
+        pollTimer->setInterval(15);
+        connect(pollTimer, &QTimer::timeout, this, [this, pollTimer, state, hash, sinkFailed]() {
+            if (m_finished) {
+                pollTimer->stop();
+                pollTimer->deleteLater();
+                return;
+            }
+            if (!m_ready || !m_ready())
+                m_cancelled->store(true, std::memory_order_relaxed);
+            std::vector<std::byte> chunk;
+            std::optional<Result<update::HttpResponse>> resp;
+            bool sizeExceeded = false;
+            bool done = false;
+            {
+                std::lock_guard lock(state->mutex);
+                chunk.swap(state->pendingBytes);
+                sizeExceeded = state->sizeExceeded;
+                done = state->done;
+                if (done)
+                    resp = std::move(state->response);
+            }
+            if (!chunk.empty() && !*sinkFailed) {
+                const auto len = static_cast<std::uint64_t>(chunk.size());
+                if (len > m_release.size - m_received || !m_file ||
+                    m_file->write(reinterpret_cast<const char*>(chunk.data()), static_cast<qint64>(chunk.size())) !=
+                        static_cast<qint64>(chunk.size())) {
+                    *sinkFailed = true;
+                    m_cancelled->store(true, std::memory_order_relaxed);
+                } else {
+                    m_received += len;
+                    hash->addData(QByteArrayView(reinterpret_cast<const char*>(chunk.data()),
+                                                 static_cast<qsizetype>(chunk.size())));
+                }
+            }
+            if (!done)
+                return;
+            pollTimer->stop();
+            pollTimer->deleteLater();
+            if ((m_cancelled->load(std::memory_order_relaxed) || !m_ready || !m_ready()) && !*sinkFailed &&
+                !sizeExceeded) {
+                finish(fail(ErrorCode::Cancelled, "Interactive readiness changed"));
+                return;
+            }
+            if (!resp || !*resp) {
+                if (resp &&
+                    (resp->error().code() == ErrorCode::Cancelled ||
+                     resp->error().code() == ErrorCode::PermissionDenied) &&
+                    !*sinkFailed && !sizeExceeded) {
+                    finish(std::unexpected(resp->error()));
+                } else {
+                    finish(fail(ErrorCode::Corrupt, "Update download failed verification"));
+                }
+                return;
+            }
+            const bool flushed = m_file && m_file->flush();
+            const QByteArray expectedDigest(reinterpret_cast<const char*>(m_release.digest.data()),
+                                            static_cast<qsizetype>(m_release.digest.size()));
+            const bool ok = !*sinkFailed && !sizeExceeded && flushed && (*resp)->statusCode == 200 &&
+                            m_received == m_release.size && hash->result() == expectedDigest;
+            if (!ok) {
+                finish(fail(ErrorCode::Corrupt, "Update download failed verification"));
+                return;
+            }
+            finish(std::move(m_file));
+        });
+        pollTimer->start();
+        return;
+    }
     QNetworkRequest request(url);
     request.setRawHeader("User-Agent", "FrostIDE-Updater");
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
-    auto* reply = m_manager.get(request);
+    auto* reply = m_manager->get(request);
     m_reply = reply;
     reply->setReadBufferSize(64 * 1024);
     auto hash = std::make_shared<QCryptographicHash>(QCryptographicHash::Sha256);

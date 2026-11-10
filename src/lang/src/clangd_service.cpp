@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// ClangdService (clangd.hpp): the supervisor coroutine, the stderr pump, document
-// synchronisation across restarts and the mapping of published diagnostics to snapshots.
+// ClangdService (clangd.hpp, clangd_service.hpp): the supervisor coroutine, the stderr pump,
+// ResourceGovernor integration (FND-18, CPP-4), background index progress and metrics tracking,
+// document synchronisation across restarts and mapping of published diagnostics to snapshots.
+
+#include "frost/lang/clangd_service.hpp"
 
 #include "frost/core/log.hpp"
 #include "frost/core/mutex.hpp"
+#include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/document_sync.hpp"
@@ -14,9 +18,11 @@
 #include "timeout.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <deque>
 #include <format>
 #include <map>
+#include <set>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -52,6 +58,57 @@ constexpr std::size_t kStderrLines = 64;
     return log::Level::Warn; // Crash dumps and other unprefixed output.
 }
 
+[[nodiscard]] bool containsIgnoreCase(std::string_view haystack, std::string_view needle) noexcept {
+    if (needle.empty() || haystack.size() < needle.size()) {
+        return false;
+    }
+    const auto it = std::ranges::search(haystack, needle, [](char a, char b) {
+        return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+    });
+    return !it.empty();
+}
+
+[[nodiscard]] std::size_t countShardsInDirectory(std::string_view baseDir, std::set<std::string>& visited) noexcept {
+    if (baseDir.empty()) {
+        return 0;
+    }
+    const auto cacheJoined = io::joinPath(baseDir, ".cache/clangd/index");
+    if (!cacheJoined) {
+        return 0;
+    }
+    const std::string normalized = io::normalizePath(*cacheJoined).value_or(*cacheJoined);
+    const std::string key = documentKey(normalized);
+    if (!visited.insert(key).second) {
+        return 0;
+    }
+    const auto entries = io::realFileSystem().listDirectory(normalized);
+    if (!entries) {
+        return 0;
+    }
+    std::size_t count = 0;
+    for (const io::DirEntry& entry : *entries) {
+        if (entry.type == io::FileType::Regular && entry.name.ends_with(".idx")) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+[[nodiscard]] std::size_t
+countWorkspaceIndexShards(std::string_view workspaceRoot,
+                          const std::optional<CompileCommandsLocation>& compileCommands) noexcept {
+    std::set<std::string> visited;
+    std::size_t total = 0;
+    if (compileCommands && !compileCommands->directory.empty()) {
+        total += countShardsInDirectory(compileCommands->directory, visited);
+    }
+    total += countShardsInDirectory(workspaceRoot, visited);
+    if (const auto buildDir = io::joinPath(workspaceRoot, "build")) {
+        total += countShardsInDirectory(*buildDir, visited);
+    }
+    return total;
+}
+
 struct OpenDocument {
     std::string path;
     std::string uri;
@@ -68,7 +125,9 @@ struct OpenDocument {
 
 struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Shared> {
     Shared(io::IProcessLauncher& l, io::AsyncContext c, ClangdServiceOptions o)
-        : launcher(l), context(c), options(std::move(o)) {}
+        : launcher(l), context(c), options(std::move(o)), governorRef(std::make_shared<sched::ResourceGovernor>()) {
+        indexMetricsState.governorRssCapBytes = governorRef->clangdRssCapBytes();
+    }
 
     io::IProcessLauncher& launcher;
     io::AsyncContext context;
@@ -77,6 +136,7 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
     std::stop_source stop;
 
     mutable Mutex mutex;
+    std::shared_ptr<sched::ResourceGovernor> governorRef FROST_GUARDED_BY(mutex);
     bool started FROST_GUARDED_BY(mutex) = false;
     ClangdState state FROST_GUARDED_BY(mutex) = ClangdState::Stopped;
     unsigned restarts FROST_GUARDED_BY(mutex) = 0;
@@ -94,6 +154,24 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
     std::uint64_t nextInactiveListener FROST_GUARDED_BY(mutex) = 1;
     ApplyEditHandler applyEditHandler FROST_GUARDED_BY(mutex);
 
+    IndexMetrics indexMetricsState FROST_GUARDED_BY(mutex);
+    std::optional<IClock::SteadyTime> indexStartedAt FROST_GUARDED_BY(mutex);
+    std::string indexProgressToken FROST_GUARDED_BY(mutex);
+
+    [[nodiscard]] std::shared_ptr<sched::ResourceGovernor> governor() const {
+        LockGuard lock(mutex);
+        return governorRef;
+    }
+
+    void setGovernor(std::shared_ptr<sched::ResourceGovernor> next) {
+        if (!next) {
+            next = std::make_shared<sched::ResourceGovernor>();
+        }
+        LockGuard lock(mutex);
+        governorRef = std::move(next);
+        indexMetricsState.governorRssCapBytes = governorRef->clangdRssCapBytes();
+    }
+
     void setState(ClangdState next) {
         LockGuard lock(mutex);
         state = next;
@@ -104,6 +182,31 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
         LockGuard lock(mutex);
         lastError = std::move(error);
         state = next;
+    }
+
+    // Samples the running clangd process's RSS via the ResourceGovernor and updates peakRssBytes.
+    void sampleServerRss() {
+        io::ProcessId pid = 0;
+        std::shared_ptr<sched::ResourceGovernor> gov;
+        {
+            LockGuard lock(mutex);
+            gov = governorRef;
+            if (process) {
+                pid = process->pid();
+            }
+        }
+        std::uint64_t sampledBytes = 0;
+        if (pid > 0) {
+            if (auto sampled =
+                    gov->sampleProcessRss(static_cast<std::int64_t>(pid), sched::HeavyLegKind::BackgroundIndex)) {
+                sampledBytes = *sampled;
+            }
+            sampledBytes = std::max(sampledBytes, gov->peakProcessRssBytes(static_cast<std::int64_t>(pid)));
+        }
+        sampledBytes = std::max(sampledBytes, gov->peakLegRssBytes(sched::HeavyLegKind::BackgroundIndex));
+        LockGuard lock(mutex);
+        indexMetricsState.peakRssBytes = std::max(indexMetricsState.peakRssBytes, sampledBytes);
+        indexMetricsState.governorRssCapBytes = gov->clangdRssCapBytes();
     }
 
     // The client of round `forRound` if it is still the current one and Running.
@@ -136,6 +239,7 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
     }
 
     void onDiagnostics(std::uint64_t fromRound, const Json& params) {
+        sampleServerRss();
         auto decoded = decodePublishDiagnostics(params);
         if (!decoded) {
             log::warn(kLogCategory, "dropped a publishDiagnostics: {}", decoded.error().describe());
@@ -213,12 +317,10 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
         notifyInactive(*decoded);
     }
 
-    // Decodes a $/progress notification ({token, value: {kind, title?, message?, percentage?}}) and
-    // passes it to options.onProgress; malformed ones and other rounds' are dropped.
+    // Decodes a $/progress notification ({token, value: {kind, title?, message?, percentage?}}),
+    // updates background-index metrics & ResourceGovernor RSS tracking, and passes it to
+    // options.onProgress; malformed ones and other rounds' are dropped.
     void onProgress(std::uint64_t fromRound, const Json& params) {
-        if (!options.onProgress) {
-            return;
-        }
         {
             LockGuard lock(mutex);
             if (fromRound != round) {
@@ -245,7 +347,63 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
         if (const auto percentage = value->integerAt("percentage")) {
             progress.percentage = static_cast<int>(std::clamp<std::int64_t>(*percentage, 0, 100));
         }
-        options.onProgress(progress);
+
+        sampleServerRss();
+
+        bool isIndexingProgress = false;
+        std::optional<CompileCommandsLocation> currentLocation;
+        const IClock::SteadyTime now = context.scheduler.clock().steadyNow();
+        {
+            LockGuard lock(mutex);
+            if (progress.token == "backgroundIndexProgress" ||
+                (!indexProgressToken.empty() && progress.token == indexProgressToken) ||
+                (progress.kind == ClangdProgress::Kind::Begin && containsIgnoreCase(progress.title, "index"))) {
+                isIndexingProgress = true;
+                indexProgressToken = progress.token;
+                currentLocation = compileCommands;
+            }
+        }
+
+        if (isIndexingProgress) {
+            switch (progress.kind) {
+            case ClangdProgress::Kind::Begin: {
+                governor()->setLegActive(sched::HeavyLegKind::BackgroundIndex, true);
+                LockGuard lock(mutex);
+                if (!indexStartedAt.has_value() || indexMetricsState.completed) {
+                    indexStartedAt = now;
+                }
+                indexMetricsState.completed = false;
+                break;
+            }
+            case ClangdProgress::Kind::Report: {
+                LockGuard lock(mutex);
+                if (!indexStartedAt.has_value()) {
+                    indexStartedAt = now;
+                }
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - *indexStartedAt).count();
+                indexMetricsState.elapsedMs = static_cast<std::uint64_t>(std::max<std::int64_t>(0, elapsed));
+                break;
+            }
+            case ClangdProgress::Kind::End: {
+                governor()->setLegActive(sched::HeavyLegKind::BackgroundIndex, false);
+                const std::size_t shards = countWorkspaceIndexShards(options.workspaceRoot, currentLocation);
+                LockGuard lock(mutex);
+                if (indexStartedAt.has_value()) {
+                    const auto elapsed =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(now - *indexStartedAt).count();
+                    indexMetricsState.elapsedMs = static_cast<std::uint64_t>(std::max<std::int64_t>(1, elapsed));
+                }
+                indexMetricsState.shardCount = std::max(indexMetricsState.shardCount, shards);
+                indexMetricsState.completed = true;
+                break;
+            }
+            }
+        }
+
+        if (options.onProgress) {
+            options.onProgress(progress);
+        }
     }
 
     // Re-opens every document on a freshly initialized client. Caller holds the lock.
@@ -334,9 +492,44 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
     }
 
     [[nodiscard]] io::ProcessSpec processSpec(const std::optional<CompileCommandsLocation>& location) const {
+        const std::shared_ptr<sched::ResourceGovernor> gov = governor();
+        ClangdLaunchOptions governedLaunch = options.launch;
+        const unsigned governedJobs = gov->clangdJobs();
+        if (governedLaunch.jobs == 0) {
+            governedLaunch.jobs = governedJobs;
+        } else if (gov->isLegActive(sched::HeavyLegKind::Build) || gov->isLegActive(sched::HeavyLegKind::Inspection) ||
+                   gov->isCombinedOverRssCap()) {
+            governedLaunch.jobs = std::min(governedLaunch.jobs, governedJobs);
+        }
+
         io::ProcessSpec spec;
         spec.executable = options.clangdPath;
-        spec.arguments = clangdArguments(options.launch, location);
+        spec.arguments = clangdArguments(governedLaunch, location);
+
+        // Apply ResourceGovernor (FND-18, CPP-4) flags: --pch-storage=disk and
+        // --background-index-priority=background.
+        if (gov->pchStorageDisk()) {
+            for (std::string& arg : spec.arguments) {
+                if (arg == "--pch-storage=memory") {
+                    arg = "--pch-storage=disk";
+                }
+            }
+        }
+        if (governedLaunch.backgroundIndex) {
+            const std::string priorityFlag =
+                std::format("--background-index-priority={}", gov->backgroundIndexPriority());
+            const bool alreadyHasPriority = std::ranges::any_of(
+                spec.arguments, [](const std::string& arg) { return arg.starts_with("--background-index-priority="); });
+            if (!alreadyHasPriority) {
+                auto it = std::ranges::find(spec.arguments, "--background-index");
+                if (it != spec.arguments.end()) {
+                    spec.arguments.insert(it + 1, priorityFlag);
+                } else {
+                    spec.arguments.insert(spec.arguments.begin(), priorityFlag);
+                }
+            }
+        }
+
         spec.workingDirectory = options.workspaceRoot;
         spec.stdinMode = io::Stdio::Pipe;
         spec.stdoutMode = io::Stdio::Pipe;
@@ -408,6 +601,9 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                     self->replayDocuments(*client);
                 }
             }
+            if (!roundError) {
+                self->sampleServerRss();
+            }
             if (!roundError && self->options.onLifecycle)
                 self->options.onLifecycle();
             if (stop.stop_requested()) {
@@ -438,6 +634,8 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                     co_return;
                 }
             }
+            self->governor()->setLegActive(sched::HeavyLegKind::BackgroundIndex, false);
+            self->governor()->unregisterProcess(static_cast<std::int64_t>(process->pid()));
             client->close();
             {
                 LockGuard lock(self->mutex);
@@ -470,11 +668,49 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
     }
 };
 
+namespace {
+
+struct ServiceRegistry {
+    Mutex mutex;
+    std::map<const ClangdService*, std::weak_ptr<ClangdService::Shared>> map FROST_GUARDED_BY(mutex);
+};
+
+[[nodiscard]] ServiceRegistry& serviceRegistry() noexcept {
+    static auto* const instance = new ServiceRegistry();
+    return *instance;
+}
+
+void registerServiceShared(const ClangdService* self, const std::shared_ptr<ClangdService::Shared>& shared) noexcept {
+    auto& reg = serviceRegistry();
+    LockGuard lock(reg.mutex);
+    reg.map[self] = shared;
+}
+
+void unregisterServiceShared(const ClangdService* self) noexcept {
+    auto& reg = serviceRegistry();
+    LockGuard lock(reg.mutex);
+    reg.map.erase(self);
+}
+
+[[nodiscard]] std::shared_ptr<ClangdService::Shared> lookupServiceShared(const ClangdService& self) noexcept {
+    auto& reg = serviceRegistry();
+    LockGuard lock(reg.mutex);
+    auto it = reg.map.find(&self);
+    return it != reg.map.end() ? it->second.lock() : nullptr;
+}
+
+} // namespace
+
 ClangdService::ClangdService(io::IProcessLauncher& launcher, io::AsyncContext context, ClangdServiceOptions options)
-    : m_shared(std::make_shared<Shared>(launcher, context, std::move(options))) {}
+    : m_shared(std::make_shared<Shared>(launcher, context, std::move(options))) {
+    registerServiceShared(this, m_shared);
+}
 
 ClangdService::~ClangdService() {
+    unregisterServiceShared(this);
     m_shared->stop.request_stop();
+    const std::shared_ptr<sched::ResourceGovernor> gov = m_shared->governor();
+    gov->setLegActive(sched::HeavyLegKind::BackgroundIndex, false);
     std::shared_ptr<LspClient> client;
     std::shared_ptr<io::IAsyncProcess> process;
     std::shared_ptr<GeneratedCommandsLease> processLease;
@@ -489,6 +725,7 @@ ClangdService::~ClangdService() {
         client->close();
     }
     if (process) {
+        gov->unregisterProcess(static_cast<std::int64_t>(process->pid()));
         static_cast<void>(process->terminate());
     }
     if (processLease)
@@ -524,6 +761,9 @@ sched::Task<void> ClangdService::finishStop() {
         sched::JoinHandle<void> supervisor = std::move(m_supervisor);
         co_await std::move(supervisor);
     }
+    self->sampleServerRss();
+    const std::shared_ptr<sched::ResourceGovernor> gov = self->governor();
+    gov->setLegActive(sched::HeavyLegKind::BackgroundIndex, false);
     std::shared_ptr<LspClient> client;
     std::shared_ptr<io::IAsyncProcess> process;
     std::shared_ptr<GeneratedCommandsLease> processLease;
@@ -547,6 +787,7 @@ sched::Task<void> ClangdService::finishStop() {
         client->close();
     }
     if (process) {
+        const io::ProcessId pid = process->pid();
         const IClock::Duration spent = scheduler.clock().steadyNow() - begin;
         const IClock::Duration left =
             self->options.shutdownTimeout > spent ? self->options.shutdownTimeout - spent : IClock::Duration::zero();
@@ -560,6 +801,7 @@ sched::Task<void> ClangdService::finishStop() {
         } else {
             log::info(kLogCategory, "clangd exited with {}", exited->exitCode);
         }
+        gov->unregisterProcess(static_cast<std::int64_t>(pid));
         if (processLease) {
             if (exited)
                 processLease->confirmExit();
@@ -602,6 +844,44 @@ std::optional<Error> ClangdService::lastError() const {
 std::vector<std::string> ClangdService::recentStderr() const {
     LockGuard lock(m_shared->mutex);
     return {m_shared->stderrLines.begin(), m_shared->stderrLines.end()};
+}
+
+void setResourceGovernor(ClangdService& service, std::shared_ptr<sched::ResourceGovernor> governor) noexcept {
+    if (auto shared = lookupServiceShared(service)) {
+        shared->setGovernor(std::move(governor));
+    }
+}
+
+std::shared_ptr<sched::ResourceGovernor> resourceGovernor(const ClangdService& service) noexcept {
+    if (auto shared = lookupServiceShared(service)) {
+        return shared->governor();
+    }
+    return nullptr;
+}
+
+IndexMetrics indexMetrics(const ClangdService& service) noexcept {
+    auto shared = lookupServiceShared(service);
+    if (!shared) {
+        return {};
+    }
+    shared->sampleServerRss();
+    std::optional<CompileCommandsLocation> location;
+    std::shared_ptr<sched::ResourceGovernor> gov;
+    IndexMetrics out;
+    {
+        LockGuard lock(shared->mutex);
+        out = shared->indexMetricsState;
+        location = shared->compileCommands;
+        gov = shared->governorRef;
+    }
+    if (out.completed && out.shardCount == 0) {
+        const std::size_t diskShards = countWorkspaceIndexShards(shared->options.workspaceRoot, location);
+        LockGuard lock(shared->mutex);
+        shared->indexMetricsState.shardCount = std::max(shared->indexMetricsState.shardCount, diskShards);
+        out = shared->indexMetricsState;
+    }
+    out.governorRssCapBytes = gov->clangdRssCapBytes();
+    return out;
 }
 
 DiagnosticsStore& ClangdService::diagnostics() noexcept { return m_shared->diagnostics; }
@@ -762,6 +1042,7 @@ Result<void> ClangdService::notify(std::string method, Json params) {
 }
 
 sched::Task<Result<Json>> ClangdService::request(std::string method, Json params, std::stop_token token) {
+    m_shared->sampleServerRss();
     std::shared_ptr<LspClient> client;
     {
         LockGuard lock(m_shared->mutex);

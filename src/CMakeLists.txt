@@ -16,15 +16,18 @@ endif()
 add_subdirectory(input)
 # frost::syntax builds in fuzz trees too: it needs no vcpkg port (tree-sitter is vendored, ADR 0023).
 add_subdirectory(syntax)
-# Fuzz trees install no vcpkg ports, so storage (SQLite, xxHash), settings (yyjson), project
-# (pugixml), document (it links storage and settings, ADR 0028), build (it depends on project),
-# lang (on project, settings and yyjson) and search (the fuzzy path matcher of Go to File, ADR 0042,
-# and Find in Files, which links document, project and RE2, ADR 0045) are left out of them.
+# frost::rpc and frost::project build in fuzz trees as well (FND-14: json_parser, sln_parser and
+# presets_parser fuzz targets; FrostFuzz.cmake builds yyjson and pugixml with fuzzer instrumentation).
+add_subdirectory(rpc)
+add_subdirectory(project)
+# frost-clang (CLANG-0, ADR 0083): Qt-free helper engine linked against the /MT LLVM 23.1.4 SDK.
+add_subdirectory(clang)
+# Fuzz trees install no vcpkg ports, so storage (SQLite, xxHash), settings, document (it links
+# storage and settings, ADR 0028), build, lang and search (the fuzzy path matcher of Go to File,
+# ADR 0042, and Find in Files, which links document, project and RE2, ADR 0045) are left out of them.
 if(NOT FROST_FUZZ)
     add_subdirectory(storage)
-    add_subdirectory(rpc)
     add_subdirectory(settings)
-    add_subdirectory(project)
     add_subdirectory(document)
     add_subdirectory(build)
     # frost::run (RUN-1): run configurations and the RunManager, above build (its RunSession).

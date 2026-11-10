@@ -31,6 +31,7 @@
 #include "frost/ui/workbench/workbench.hpp"
 
 #include "../../../src/ui/workbench/src/file_tree_filter.hpp"
+#include "../../../src/ui/workbench/src/workbench_internal.hpp"
 #include "shell/shell_rig.hpp"
 #include "support/scratch_dir.hpp"
 #include <QApplication>
@@ -1374,6 +1375,135 @@ TEST(WorkbenchWindows, CaseVariantsOpenOneDocument) {
     EXPECT_TRUE(app.activePath().ends_with("Foo.cpp")) << app.activePath();
 }
 #endif
+
+TEST(WorkbenchInternal, PathExtensionUnderAndReservedDeviceValidation) {
+    EXPECT_EQ(lowerExtension("/proj/App.SLNX"), QStringLiteral(".slnx"));
+    EXPECT_EQ(lowerExtension("/proj/CMakeLists.txt"), QStringLiteral(".txt"));
+    EXPECT_TRUE(lowerExtension("/proj/Makefile").isEmpty());
+
+    EXPECT_TRUE(isUnder("/proj", "/proj/src/main.cpp"));
+    EXPECT_TRUE(isUnder("/proj/", "/proj/src/main.cpp"));
+    EXPECT_TRUE(isUnder(R"(C:\proj)", R"(C:\proj\src\main.cpp)"));
+    EXPECT_FALSE(isUnder("", "/proj/a"));
+    EXPECT_FALSE(isUnder("/proj", "/proj"));
+    EXPECT_FALSE(isUnder("/proj", "/project/a"));
+
+    EXPECT_TRUE(isReservedWindowsDeviceStem("CON"));
+    EXPECT_TRUE(isReservedWindowsDeviceStem("prn"));
+    EXPECT_TRUE(isReservedWindowsDeviceStem("Aux"));
+    EXPECT_TRUE(isReservedWindowsDeviceStem("nul"));
+    EXPECT_TRUE(isReservedWindowsDeviceStem("COM1"));
+    EXPECT_TRUE(isReservedWindowsDeviceStem("lpt9"));
+    EXPECT_FALSE(isReservedWindowsDeviceStem("COM10"));
+    EXPECT_FALSE(isReservedWindowsDeviceStem("console"));
+    EXPECT_FALSE(isReservedWindowsDeviceStem("main"));
+
+    const QVariantMap withoutLine = fileData("/proj/src/main.cpp").toMap();
+    EXPECT_EQ(withoutLine.value(QStringLiteral("kind")).toString(), QStringLiteral("file"));
+    EXPECT_EQ(withoutLine.value(QStringLiteral("path")).toString(), QStringLiteral("/proj/src/main.cpp"));
+    EXPECT_FALSE(withoutLine.contains(QStringLiteral("line")));
+
+    const QVariantMap withLine = fileData("/proj/src/main.cpp", 12, 4).toMap();
+    EXPECT_EQ(withLine.value(QStringLiteral("line")).toInt(), 12);
+    EXPECT_EQ(withLine.value(QStringLiteral("column")).toInt(), 4);
+
+    const QVariantMap defaultColumn = fileData("/proj/src/main.cpp", 7).toMap();
+    EXPECT_EQ(defaultColumn.value(QStringLiteral("line")).toInt(), 7);
+    EXPECT_EQ(defaultColumn.value(QStringLiteral("column")).toInt(), 1);
+}
+
+TEST_F(WorkbenchTest, ValidateNewItemTargetRejectsInvalidAndExistingNames) {
+    Ide& app = ide();
+    const nav::DocumentRegistry& docs = *app.documents;
+
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "", "file.cpp").has_value());
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "/proj/src", "").has_value());
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "/proj/src", " leading.cpp").has_value());
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "/proj/src", "trailing.cpp ").has_value());
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "/proj/src", "/abs.cpp").has_value());
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "/proj/src", "../escape.cpp").has_value());
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "/proj/src", "./dot.cpp").has_value());
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "/proj/src", "sub//file.cpp").has_value());
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "/proj/src", "badend.").has_value());
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "/proj/src", "bad<char>.cpp").has_value());
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "/proj/src", "CON.cpp").has_value());
+    EXPECT_FALSE(validateNewItemTarget(memFs, docs, "/proj/src/main.cpp", "child.cpp").has_value());
+
+    const auto existing = validateNewItemTarget(memFs, docs, "/proj/src", "main.cpp");
+    ASSERT_FALSE(existing.has_value());
+    EXPECT_EQ(existing.error().code(), ErrorCode::AlreadyExists);
+
+    const auto valid = validateNewItemTarget(memFs, docs, "/proj/src", "sub/new_file.cpp");
+    ASSERT_TRUE(valid.has_value()) << valid.error().describe();
+    EXPECT_EQ(*valid, "/proj/src/sub/new_file.cpp");
+}
+
+TEST(WorkbenchInternal, ScannablePathsAndCommentTagsAreClassified) {
+    EXPECT_FALSE(isTodoScannablePath(""));
+    EXPECT_TRUE(isTodoScannablePath("/proj/CMakeLists.txt"));
+    EXPECT_TRUE(isTodoScannablePath("/proj/Makefile"));
+    EXPECT_TRUE(isTodoScannablePath("/proj/Dockerfile"));
+    EXPECT_TRUE(isTodoScannablePath("/proj/src/main.cpp"));
+    EXPECT_TRUE(isTodoScannablePath("/proj/src/header.HPP"));
+    EXPECT_TRUE(isTodoScannablePath("/proj/scripts/run.ps1"));
+    EXPECT_FALSE(isTodoScannablePath("/proj/build/main.cpp"));
+    EXPECT_FALSE(isTodoScannablePath("/proj/node_modules/pkg/index.js"));
+    EXPECT_FALSE(isTodoScannablePath("/proj/.git/config.txt"));
+    EXPECT_FALSE(isTodoScannablePath("/proj/assets/icon.png"));
+    EXPECT_FALSE(isTodoScannablePath("/proj/src/no_ext"));
+
+    EXPECT_TRUE(hasCommentPrefixBefore("  // comment", 5));
+    EXPECT_TRUE(hasCommentPrefixBefore("  /* block", 5));
+    EXPECT_TRUE(hasCommentPrefixBefore("  # script", 4));
+    EXPECT_TRUE(hasCommentPrefixBefore("  -- lua", 5));
+    EXPECT_TRUE(hasCommentPrefixBefore("  <!-- html", 7));
+    EXPECT_TRUE(hasCommentPrefixBefore("   * doc line", 5));
+    EXPECT_TRUE(hasCommentPrefixBefore("   ; ini line", 5));
+    EXPECT_FALSE(hasCommentPrefixBefore("int x = 1;", 4));
+
+    const std::string tagTodo = std::string("TO") + "DO";
+    const std::string tagFixme = std::string("FIX") + "ME";
+    const std::string tagHack = std::string("HA") + "CK";
+    const std::string tagBug = std::string("B") + "UG";
+    const std::string tagUndone = std::string("UND") + "ONE";
+
+    EXPECT_TRUE(mayContainTodoTag("// " + tagTodo + ": wire up"));
+    EXPECT_TRUE(mayContainTodoTag("// " + tagFixme + " later"));
+    EXPECT_TRUE(mayContainTodoTag("// " + tagHack + " around driver"));
+    EXPECT_TRUE(mayContainTodoTag("// " + tagBug + ": off by one"));
+    EXPECT_TRUE(mayContainTodoTag("// " + tagUndone + ": restore"));
+    EXPECT_FALSE(mayContainTodoTag("int normalCode = 42;"));
+
+    const auto hit1 = findTodoTag("  // " + tagTodo + "(M1): implement");
+    ASSERT_TRUE(hit1.has_value());
+    EXPECT_EQ(hit1->first, 5U);
+    EXPECT_EQ(hit1->second, tagTodo);
+
+    const auto hit2 = findTodoTag("  /* " + tagFixme + ": handle edge case */");
+    ASSERT_TRUE(hit2.has_value());
+    EXPECT_EQ(hit2->second, tagFixme);
+
+    // Embedded inside an identifier is ignored.
+    EXPECT_FALSE(findTodoTag("int MY_" + tagTodo + "_VALUE = 1;").has_value());
+    // Secondary tag without comment prefix or colon is ignored.
+    EXPECT_FALSE(findTodoTag("int x = 0; " + tagBug + " in name").has_value());
+    // Secondary tag with colon or inside comment is matched.
+    const auto hit3 = findTodoTag("int x = 0; // " + tagBug + " in branch");
+    ASSERT_TRUE(hit3.has_value());
+    EXPECT_EQ(hit3->second, tagBug);
+    const auto hit4 = findTodoTag(tagHack + ": temporary workaround");
+    ASSERT_TRUE(hit4.has_value());
+    EXPECT_EQ(hit4->second, tagHack);
+
+    sched::SimExecutor sim;
+    auto snapshot = std::make_shared<const nav::ProjectFiles>("/proj");
+    auto solSnapshot = std::make_shared<const std::vector<std::string>>(std::vector<std::string>{"/proj/a.cpp"});
+    retireSnapshot(nullptr, snapshot);
+    retireSolutionSnapshot(nullptr, solSnapshot);
+    retireSnapshot(&sim, std::move(snapshot));
+    retireSolutionSnapshot(&sim, std::move(solSnapshot));
+    sim.runUntilIdle();
+}
 
 } // namespace
 } // namespace frost::ui::test

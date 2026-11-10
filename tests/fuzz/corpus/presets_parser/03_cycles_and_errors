@@ -1,0 +1,19 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "cycle-a",
+      "inherits": ["cycle-b"],
+      "environment": {
+        "LOOP_A": "$env{LOOP_B}"
+      }
+    },
+    {
+      "name": "cycle-b",
+      "inherits": ["cycle-a"],
+      "environment": {
+        "LOOP_B": "$env{LOOP_A}"
+      }
+    }
+  ]
+}

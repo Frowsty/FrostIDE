@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"method":"frost/clangInfo","params":{"handle":18446744073709551615,"signed":-9223372036854775808,"nested":[true,false,null,3.14159,"escaped\n\t\"\\"]}}

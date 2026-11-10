@@ -29,6 +29,7 @@ frost_add_library(ui_editor LAYER ui
         src/editor_key_routing.cpp
         src/editor_settings.cpp
         src/editor_view.cpp
+        src/editor_view_commands.cpp
         src/editor_view_essentials.cpp
         src/editor_view_input.cpp
         src/editor_view_insight.cpp
