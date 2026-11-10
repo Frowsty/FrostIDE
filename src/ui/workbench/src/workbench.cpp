@@ -683,10 +683,36 @@ void Workbench::registerActions() {
         [this] { return m_lastEditPlace.has_value(); }, {"last edit", "previous edit"});
     addAction(a::kBack, "Back", "Navigate", [this] { goBack(); }, [this] { return m_history.canGoBack(); });
     addAction(a::kForward, "Forward", "Navigate", [this] { goForward(); }, [this] { return m_history.canGoForward(); });
+    addAction(
+        a::kSelectIn, "Select In...", "Navigate", [this] { static_cast<void>(selectInProjectView()); },
+        [hasEditor, hasProject] { return hasEditor() && hasProject(); }, {"locate in project", "reveal in tree"});
     addAction(a::kToggleBookmark, "Toggle Bookmark", "Navigate", [this] { static_cast<void>(toggleBookmark()); },
               hasEditor, {"bookmark"});
+    addAction(a::kToggleMnemonicBookmark, "Toggle Bookmark with Mnemonic", "Navigate",
+              [this] { static_cast<void>(showMnemonicBookmarkPopup()); }, hasEditor, {"numbered bookmark", "mnemonic"});
+    static constexpr std::array<std::string_view, 9> kToggleNumberedIds = {
+        a::kToggleBookmark1, a::kToggleBookmark2, a::kToggleBookmark3, a::kToggleBookmark4, a::kToggleBookmark5,
+        a::kToggleBookmark6, a::kToggleBookmark7, a::kToggleBookmark8, a::kToggleBookmark9,
+    };
+    static constexpr std::array<std::string_view, 9> kGotoNumberedIds = {
+        a::kGotoBookmark1, a::kGotoBookmark2, a::kGotoBookmark3, a::kGotoBookmark4, a::kGotoBookmark5,
+        a::kGotoBookmark6, a::kGotoBookmark7, a::kGotoBookmark8, a::kGotoBookmark9,
+    };
+    for (int d = 1; d <= 9; ++d) {
+        const std::string toggleName = "Toggle Bookmark " + std::to_string(d);
+        addAction(
+            kToggleNumberedIds[static_cast<std::size_t>(d - 1)], toggleName, "Navigate",
+            [this, d] { static_cast<void>(toggleNumberedBookmark(d)); }, hasEditor);
+        const std::string gotoName = "Go to Bookmark " + std::to_string(d);
+        addAction(
+            kGotoNumberedIds[static_cast<std::size_t>(d - 1)], gotoName, "Navigate",
+            [this, d] { static_cast<void>(goToNumberedBookmark(d)); },
+            [this, d] { return numberedBookmark(d).has_value(); });
+    }
     addAction(a::kShowBookmarks, "Show Bookmarks", "Navigate", [this] { static_cast<void>(showBookmarksPopup()); }, {},
               {"bookmarks", "list bookmarks"});
+    addAction(a::kBookmarksWindow, "Bookmarks", "Tool Windows", [this] { static_cast<void>(showBookmarksPopup()); }, {},
+              {"bookmarks window"});
     addAction(
         a::kNextBookmark, "Next Bookmark", "Navigate", [this] { static_cast<void>(goToNextBookmark()); },
         [this] { return !m_bookmarks.empty(); }, {"next bookmark"});
@@ -938,6 +964,7 @@ void Workbench::setRoot(std::string root, std::vector<std::string> solutionFiles
     m_recentLocations.clear();
     m_lastEditPlace.reset();
     m_bookmarks.clear();
+    m_numberedBookmarks.fill(std::nullopt);
     m_cmakeTargets.clear();
     m_cmakeArguments.clear();
     if (m_fileSystem != nullptr) {
@@ -973,6 +1000,7 @@ bool Workbench::closeProject() {
     m_solution.clear();
     m_lastEditPlace.reset();
     m_bookmarks.clear();
+    m_numberedBookmarks.fill(std::nullopt);
     auto oldSolutionFiles = std::move(m_solutionFiles);
     m_solutionFiles = std::make_shared<const std::vector<std::string>>();
     auto oldFiles = std::move(m_files);
@@ -1386,6 +1414,13 @@ void Workbench::acceptItem(const QVariant& data, const input::ActionContext& cap
         static_cast<void>(openFile(place.path, LinePosition{place.line, place.column}, true));
         return;
     }
+    if (kind == QStringLiteral("mnemonicBookmark")) {
+        const int digit = map.value(QStringLiteral("digit")).toInt();
+        const std::string path = toUtf8(map.value(QStringLiteral("path")).toString());
+        const int line = map.value(QStringLiteral("line")).toInt();
+        static_cast<void>(toggleNumberedBookmarkAt(digit, path, line));
+        return;
+    }
     if (kind == QStringLiteral("action")) {
         input::ActionRegistry& registry = m_shell.environment().registry;
         const std::optional<input::ActionId> id = registry.find(toUtf8(map.value(QStringLiteral("id")).toString()));
@@ -1696,11 +1731,132 @@ bool Workbench::toggleBookmarkAt(const std::string& path, int line) {
         if (lines.empty()) {
             m_bookmarks.erase(canonical);
         }
+        for (auto& slot : m_numberedBookmarks) {
+            if (slot && slot->path == canonical && slot->line == line) {
+                slot.reset();
+            }
+        }
     } else {
         lines.insert(line);
     }
     syncEditorBookmarks(canonical);
     m_shell.refreshActions();
+    return true;
+}
+
+bool Workbench::toggleNumberedBookmark(int digit) {
+    const IEditorView* editor = m_shell.tabs().currentEditor();
+    if (editor == nullptr || editor->path().empty()) {
+        return false;
+    }
+    return toggleNumberedBookmarkAt(digit, editor->path(), editor->status().line);
+}
+
+bool Workbench::toggleNumberedBookmarkAt(int digit, const std::string& path, int line) {
+    if (digit < 1 || digit > 9 || path.empty() || line < 1) {
+        return false;
+    }
+    const std::string canonical = m_services.documents.canonicalize(path);
+    auto& slot = m_numberedBookmarks[static_cast<std::size_t>(digit - 1)];
+    if (slot && slot->path == canonical && slot->line == line) {
+        slot.reset();
+        if (const auto it = m_bookmarks.find(canonical); it != m_bookmarks.end()) {
+            it->second.erase(line);
+            if (it->second.empty()) {
+                m_bookmarks.erase(it);
+            }
+        }
+        syncEditorBookmarks(canonical);
+        m_shell.refreshActions();
+        return true;
+    }
+
+    if (slot) {
+        const std::string oldPath = slot->path;
+        const int oldLine = slot->line;
+        slot.reset();
+        if (const auto it = m_bookmarks.find(oldPath); it != m_bookmarks.end()) {
+            it->second.erase(oldLine);
+            if (it->second.empty()) {
+                m_bookmarks.erase(it);
+            }
+        }
+        if (oldPath != canonical) {
+            syncEditorBookmarks(oldPath);
+        }
+    }
+
+    for (auto& other : m_numberedBookmarks) {
+        if (other && other->path == canonical && other->line == line) {
+            other.reset();
+        }
+    }
+
+    slot = nav::Place{canonical, line, 1};
+    m_bookmarks[canonical].insert(line);
+    syncEditorBookmarks(canonical);
+    m_shell.refreshActions();
+    return true;
+}
+
+bool Workbench::goToNumberedBookmark(int digit) {
+    const std::optional<nav::Place> place = numberedBookmark(digit);
+    if (!place || place->path.empty()) {
+        return false;
+    }
+    return openFile(place->path, LinePosition{place->line, place->column}, true).has_value();
+}
+
+std::optional<nav::Place> Workbench::numberedBookmark(int digit) const noexcept {
+    if (digit < 1 || digit > 9) {
+        return std::nullopt;
+    }
+    return m_numberedBookmarks[static_cast<std::size_t>(digit - 1)];
+}
+
+ListPopup* Workbench::showMnemonicBookmarkPopup() {
+    const IEditorView* editor = m_shell.tabs().currentEditor();
+    if (editor == nullptr || editor->path().empty()) {
+        return nullptr;
+    }
+    closeOpenPopup();
+    const std::string path = m_services.documents.canonicalize(editor->path());
+    const int line = editor->status().line;
+    const input::ActionContext captured = m_shell.actionContext();
+    auto* popup = new ListPopup(&m_shell, text("Bookmark Mnemonic"), true);
+    popup->setObjectName(QStringLiteral("mnemonicBookmarkPopup"));
+    std::vector<ListPopupItem> items;
+    items.reserve(9);
+    for (int d = 1; d <= 9; ++d) {
+        ListPopupItem item;
+        item.text = QString::number(d);
+        if (const auto& existing = m_numberedBookmarks[static_cast<std::size_t>(d - 1)]; existing) {
+            item.detail = QStringLiteral("%1:%2").arg(fromUtf8(nav::baseName(existing->path))).arg(existing->line);
+        }
+        QVariantMap data;
+        data.insert(QStringLiteral("kind"), QStringLiteral("mnemonicBookmark"));
+        data.insert(QStringLiteral("digit"), d);
+        data.insert(QStringLiteral("path"), fromUtf8(path));
+        data.insert(QStringLiteral("line"), line);
+        item.data = data;
+        items.push_back(std::move(item));
+    }
+    popup->setItems(std::move(items));
+    connect(popup, &ListPopup::itemAccepted, this,
+            [this, captured](int, const QVariant& data) { acceptItem(data, captured); });
+    m_shell.openPopup(popup);
+    return popup;
+}
+
+bool Workbench::selectInProjectView() {
+    const IEditorView* editor = m_shell.tabs().currentEditor();
+    if (editor == nullptr || editor->path().empty() || m_root.empty()) {
+        return false;
+    }
+    m_shell.toolWindows().show(kFileSystemToolWindow);
+    if (m_fileSystem != nullptr) {
+        m_fileSystem->selectWhenAvailable(editor->path());
+    }
     return true;
 }
 
@@ -2531,6 +2687,11 @@ void Workbench::notifyPathRenamed(const std::string& oldPath, const std::string&
             m_bookmarks[toPath] = std::move(lines);
             syncEditorBookmarks(toPath);
         }
+        for (auto& slot : m_numberedBookmarks) {
+            if (slot && slot->path == fromPath) {
+                slot->path = toPath;
+            }
+        }
         m_history.renamePath(fromPath, toPath);
         m_recentFiles.renamePath(fromPath, toPath);
         m_recentLocations.renamePath(fromPath, toPath);
@@ -2581,6 +2742,11 @@ void Workbench::notifyPathDeleted(const std::string& deletedPath, bool directory
     for (const std::string& p : affected) {
         m_lastPlaces.erase(p);
         m_bookmarks.erase(p);
+        for (auto& slot : m_numberedBookmarks) {
+            if (slot && slot->path == p) {
+                slot.reset();
+            }
+        }
         m_history.forget(p);
         m_recentFiles.remove(p);
         m_recentLocations.forget(p);

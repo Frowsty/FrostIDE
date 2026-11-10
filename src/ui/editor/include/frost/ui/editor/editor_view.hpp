@@ -31,6 +31,7 @@
 #include "frost/ui/model/theme.hpp"
 
 #include <QAbstractScrollArea>
+#include <QMenu>
 #include <QPoint>
 #include <QPointF>
 #include <QPointer>
@@ -131,6 +132,7 @@ struct EditorViewStatus {
     bool readOnly = false;
     bool dirty = false;
     bool columnMode = false;
+    bool overwrite = false; // Insert toggled overwrite mode (UX-3).
 
     friend bool operator==(const EditorViewStatus&, const EditorViewStatus&) = default;
 };
@@ -285,6 +287,22 @@ public:
     [[nodiscard]] bool hasSelection() const noexcept;
     [[nodiscard]] bool columnMode() const noexcept { return m_columnMode; }
     void setColumnMode(bool enabled);
+    /*
+     * Overwrite mode (Insert, editor.toggleOverwrite; UX-3): typed text replaces the character after
+     * each caret (never a line break; commands::overtype) and the caret is drawn as a bar under that
+     * character. Off by default; per view, not persisted. Emits statusChanged.
+     */
+    [[nodiscard]] bool overwriteMode() const noexcept { return m_overwrite; }
+    void setOverwriteMode(bool enabled);
+    // Pastes `utf8` at every caret as plain text, one Paste undo step (Paste from History). False
+    // when read-only or nothing changed.
+    bool pasteText(std::string_view utf8);
+    // The clipboard history copies and cuts are recorded in: the action host's (shared by its
+    // views), or the view's own without a host.
+    [[nodiscard]] ClipboardHistory& clipboardHistory() noexcept;
+    // The Paste from History menu while it is open (editor.pasteFromHistory), else null. Each entry
+    // is one history text (newest first); triggering it pastes that text. Tests drive it.
+    [[nodiscard]] QMenu* pasteHistoryMenu() const noexcept { return m_pasteMenu.data(); }
     // Records the current undo state as the saved one (the dirty flag clears).
     void markSaved();
     [[nodiscard]] EditorViewStatus status() const;
@@ -576,6 +594,15 @@ private:
     bool extendSelection();
     bool shrinkSelection();
 
+    // UX-3's editor essentials (editor_view_essentials.cpp): the EditorAction rows from PageTop on.
+    bool performEssential(EditorAction action);
+    bool moveToPageEdge(bool bottom, bool extend);
+    bool moveToCodeBlockEdge(bool end, bool extend);
+    bool moveToMatchingBrace();
+    bool findWordAtCaret();
+    bool showPasteHistory();
+    bool pasteWithoutFormatting();
+
     // IME.
     void finishComposition(const std::string& commit);
     [[nodiscard]] bool finishCompositionBeforeFold();
@@ -704,6 +731,9 @@ private:
     std::vector<LineChangeMarker> m_lineChanges;
     std::optional<double> m_zoomedFontSize;
     bool m_columnMode = false;
+    bool m_overwrite = false;
+    ClipboardHistory m_ownClipboard; // Without an action host.
+    QPointer<QMenu> m_pasteMenu;
     bool m_boxDragging = false;
     QPointF m_boxAnchorPos;
     std::vector<text::SelectionSet> m_selectionHistory;

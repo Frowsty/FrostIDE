@@ -175,6 +175,14 @@ void appendViewAndHistorySpecs(std::vector<GitActionSpec>& specs, const std::fun
                      false,
                      [shared] { return static_cast<bool>(shared->showBranches); },
                      [shared] { shared->showBranches(); }});
+    specs.push_back({git_actions::kQuickPopup,
+                     "VCS Operations Popup...",
+                     "Show the Git branches and operations popup",
+                     {"vcs popup", "git operations"},
+                     kAnywhere,
+                     false,
+                     [shared] { return static_cast<bool>(shared->showBranches); },
+                     [shared] { shared->showBranches(); }});
     specs.push_back({git_actions::kLog,
                      "Show Git Log",
                      "Open the Git commit history log",

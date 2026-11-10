@@ -10,8 +10,11 @@
 
 #include <QPointer>
 
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace frost::ui {
@@ -89,6 +92,25 @@ enum class EditorAction : std::uint8_t {
     SelectAllOccurrences,
     ToggleCase,
     ToggleColumnMode,
+    // UX-3's editor essentials (frost/text/editor/essentials.hpp).
+    PageTop,
+    PageBottom,
+    PageTopWithSelection,
+    PageBottomWithSelection,
+    SplitLine,
+    StartNewLineBefore,
+    ToggleOverwrite,
+    PasteWithoutFormatting,
+    PasteFromHistory,
+    FindWordAtCaret,
+    MatchingBrace,
+    CodeBlockStart,
+    CodeBlockEnd,
+    CodeBlockStartWithSelection,
+    CodeBlockEndWithSelection,
+    MoveStatementUp,
+    MoveStatementDown,
+    AutoIndentLines,
 };
 
 // One row of the action table.
@@ -105,6 +127,27 @@ struct EditorActionInfo {
 [[nodiscard]] const EditorActionInfo& editorActionInfo(EditorAction action) noexcept;
 
 /*
+ * The clipboard history of Paste from History (Ctrl+Shift+V; feature row 254): the texts copied or
+ * cut in the editors, and the system clipboard's text whenever the history is shown, newest first,
+ * without duplicates (recording a text again moves it to the front), at most kCapacity entries of
+ * at most kMaxBytes each (longer texts are not recorded). In memory only: it does not survive a
+ * restart. GUI thread only.
+ */
+class ClipboardHistory {
+public:
+    static constexpr std::size_t kCapacity = 32;
+    static constexpr std::size_t kMaxBytes = 1u << 20;
+
+    // Records `text` as the newest entry; empty and over-long texts are ignored. O(kCapacity).
+    void record(std::string text);
+    [[nodiscard]] const std::deque<std::string>& entries() const noexcept { return m_entries; }
+    void clear() noexcept { m_entries.clear(); }
+
+private:
+    std::deque<std::string> m_entries;
+};
+
+/*
  * The editor the editor actions run on: the one the keyboard is in. Views set themselves active on
  * focus-in and on every routed key; a destroyed view is dropped automatically (QPointer). GUI thread
  * only. The shell keeps one host per registry and outlives its views' registrations.
@@ -113,9 +156,12 @@ class EditorActionHost {
 public:
     [[nodiscard]] EditorView* active() const noexcept;
     void setActive(EditorView* view) noexcept;
+    // The clipboard history the host's views share.
+    [[nodiscard]] ClipboardHistory& clipboardHistory() noexcept { return m_clipboard; }
 
 private:
     QPointer<EditorView> m_active;
+    ClipboardHistory m_clipboard;
 };
 
 /*

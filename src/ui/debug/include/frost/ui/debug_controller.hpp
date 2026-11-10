@@ -216,6 +216,8 @@ public:
     [[nodiscard]] bool breakpointsMuted() const noexcept { return m_breakpoints.muted(); }
     // Edits the breakpoint on the current editor's caret line, or opens the Breakpoints tab.
     void requestEditBreakpoint();
+    // Opens the Breakpoints tab in the Debug tool window (Ctrl+Shift+F8).
+    void requestViewBreakpoints();
     // Asks for Evaluate Expression (evaluateRequested) with the current editor's selection.
     void requestEvaluate();
     // Connects `view` (header comment); it detaches itself when destroyed.
@@ -263,6 +265,7 @@ signals:
     void evaluateRequested(const QString& expression);
     void breakpointsChanged();
     void editBreakpointRequested(debug::BreakpointId id);
+    void viewBreakpointsRequested();
 
 private:
     struct Relay;

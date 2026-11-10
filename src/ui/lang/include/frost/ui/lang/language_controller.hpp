@@ -107,6 +107,7 @@ public:
 
     // --- The features (the action handlers) ---
     void completeCode();
+    void smartCompleteCode();
     void showParameterInfo();
     void showQuickDocumentation();
     void gotoDeclaration();
@@ -122,6 +123,7 @@ public:
     void rename();
     void showIntentions();
     void reformat();
+    void reformatFile();
 
     /*
      * Refactorings and code generation (FND-3, ADR 0078: every edit comes from the language server).
@@ -148,6 +150,7 @@ public:
     void changeSignature();
     void safeDelete();
     void moveSymbol();
+    void copySymbol();
 
     // --- Code generation and editing assistance ---
     void generateCode();

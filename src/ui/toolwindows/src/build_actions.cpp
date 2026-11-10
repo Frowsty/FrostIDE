@@ -22,7 +22,7 @@ namespace {
 
 // The build action an action id runs; nullopt for Cancel Build.
 std::optional<build::BuildAction> buildActionOf(std::string_view id) {
-    if (id == build_actions::kBuildSolution) {
+    if (id == build_actions::kBuildSolution || id == build_actions::kBuildProject) {
         return build::BuildAction::Build;
     }
     if (id == build_actions::kRebuildSolution) {
@@ -126,6 +126,10 @@ Result<void> BuildActions::registerActions(input::ActionRegistry& registry) {
          "Build Solution",
          "Build the projects of the solution that are out of date",
          {"compile", "make"}},
+        {build_actions::kBuildProject,
+         "Build Project",
+         "Build the active or startup project of the solution",
+         {"build project", "make project"}},
         {build_actions::kRebuildSolution,
          "Rebuild Solution",
          "Clean and build every project of the solution",

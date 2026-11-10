@@ -1283,6 +1283,39 @@ TEST_F(WorkbenchTest, LastEditLocationBookmarksAndTodoToolWindow) {
     EXPECT_EQ(app.window->tabs().currentEditor()->status().line, 3);
 }
 
+TEST_F(WorkbenchTest, NumberedBookmarksMnemonicPopupAndSelectInProjectView) {
+    Ide& app = ide();
+    openProject(app);
+
+    ASSERT_TRUE(app.workbench->openFile("/proj/src/main.cpp", LinePosition{3, 1}).has_value());
+    EXPECT_FALSE(app.workbench->numberedBookmark(1).has_value());
+    EXPECT_TRUE(app.workbench->toggleNumberedBookmark(1));
+    ASSERT_TRUE(app.workbench->numberedBookmark(1).has_value());
+    EXPECT_EQ(app.workbench->numberedBookmark(1)->path, "/proj/src/main.cpp");
+    EXPECT_EQ(app.workbench->numberedBookmark(1)->line, 3);
+
+    // Move to another file, toggle bookmark 2 via the mnemonic popup, then jump back to bookmark 1.
+    ASSERT_TRUE(app.workbench->openFile("/proj/src/util.cpp", LinePosition{2, 1}).has_value());
+    ListPopup* mnemonic = app.workbench->showMnemonicBookmarkPopup();
+    ASSERT_NE(mnemonic, nullptr);
+    ASSERT_EQ(mnemonic->items().size(), 9U);
+    mnemonic->setCurrentItem(1); // digit 2
+    mnemonic->acceptCurrent();
+    ASSERT_TRUE(app.workbench->numberedBookmark(2).has_value());
+    EXPECT_EQ(app.workbench->numberedBookmark(2)->path, "/proj/src/util.cpp");
+    EXPECT_EQ(app.workbench->numberedBookmark(2)->line, 2);
+
+    EXPECT_TRUE(app.workbench->goToNumberedBookmark(1));
+    EXPECT_EQ(app.activePath(), "/proj/src/main.cpp");
+    EXPECT_EQ(app.window->tabs().currentEditor()->status().line, 3);
+
+    // Select In reveals the active editor file in the File System tool window.
+    ASSERT_TRUE(app.workbench->openFile("/proj/src/util.cpp").has_value());
+    EXPECT_TRUE(app.workbench->selectInProjectView());
+    EXPECT_TRUE(app.window->toolWindows().isVisible(kFileSystemToolWindow));
+    EXPECT_EQ(app.workbench->fileSystemView()->selectedPath(), "/proj/src/util.cpp");
+}
+
 TEST_F(WorkbenchTest, RenameAndDeletePathRebindTabsDirtyDocumentsAndRecentFiles) {
     Ide& app = ide();
     openProject(app);

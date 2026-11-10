@@ -36,6 +36,7 @@
 #include <QPointer>
 #include <QString>
 
+#include <array>
 #include <cstddef>
 #include <functional>
 #include <map>
@@ -65,8 +66,29 @@ inline constexpr std::string_view kRecentLocations = "navigate.recentLocations";
 inline constexpr std::string_view kLastEditLocation = "navigate.lastEditLocation";
 inline constexpr std::string_view kBack = "navigate.back";
 inline constexpr std::string_view kForward = "navigate.forward";
+inline constexpr std::string_view kSelectIn = "navigate.selectIn";
 inline constexpr std::string_view kToggleBookmark = "bookmarks.toggle";
+inline constexpr std::string_view kToggleMnemonicBookmark = "bookmarks.toggleMnemonic";
+inline constexpr std::string_view kToggleBookmark1 = "bookmarks.toggle1";
+inline constexpr std::string_view kToggleBookmark2 = "bookmarks.toggle2";
+inline constexpr std::string_view kToggleBookmark3 = "bookmarks.toggle3";
+inline constexpr std::string_view kToggleBookmark4 = "bookmarks.toggle4";
+inline constexpr std::string_view kToggleBookmark5 = "bookmarks.toggle5";
+inline constexpr std::string_view kToggleBookmark6 = "bookmarks.toggle6";
+inline constexpr std::string_view kToggleBookmark7 = "bookmarks.toggle7";
+inline constexpr std::string_view kToggleBookmark8 = "bookmarks.toggle8";
+inline constexpr std::string_view kToggleBookmark9 = "bookmarks.toggle9";
+inline constexpr std::string_view kGotoBookmark1 = "bookmarks.goto1";
+inline constexpr std::string_view kGotoBookmark2 = "bookmarks.goto2";
+inline constexpr std::string_view kGotoBookmark3 = "bookmarks.goto3";
+inline constexpr std::string_view kGotoBookmark4 = "bookmarks.goto4";
+inline constexpr std::string_view kGotoBookmark5 = "bookmarks.goto5";
+inline constexpr std::string_view kGotoBookmark6 = "bookmarks.goto6";
+inline constexpr std::string_view kGotoBookmark7 = "bookmarks.goto7";
+inline constexpr std::string_view kGotoBookmark8 = "bookmarks.goto8";
+inline constexpr std::string_view kGotoBookmark9 = "bookmarks.goto9";
 inline constexpr std::string_view kShowBookmarks = "bookmarks.show";
+inline constexpr std::string_view kBookmarksWindow = "window.bookmarks";
 inline constexpr std::string_view kNextBookmark = "bookmarks.next";
 inline constexpr std::string_view kPreviousBookmark = "bookmarks.previous";
 inline constexpr std::string_view kSaveAll = "file.saveAll";
@@ -246,13 +268,21 @@ public:
     bool goToLastEditLocation();
     [[nodiscard]] std::optional<nav::Place> lastEditLocation() const noexcept { return m_lastEditPlace; }
 
-    // Bookmarks (F11 / Shift+F11).
+    // Bookmarks (F11 / Shift+F11 / Ctrl+Shift+1..9 / Ctrl+1..9).
     bool toggleBookmark();
     bool toggleBookmarkAt(const std::string& path, int line);
+    bool toggleNumberedBookmark(int digit);
+    bool toggleNumberedBookmarkAt(int digit, const std::string& path, int line);
+    bool goToNumberedBookmark(int digit);
+    [[nodiscard]] std::optional<nav::Place> numberedBookmark(int digit) const noexcept;
+    ListPopup* showMnemonicBookmarkPopup();
     bool goToNextBookmark();
     bool goToPreviousBookmark();
     ListPopup* showBookmarksPopup();
     [[nodiscard]] std::vector<nav::Place> bookmarks() const;
+
+    // Select active file in project tree (Alt+F1).
+    bool selectInProjectView();
 
     // Task comment list tool window.
     void refreshTodoItems();
@@ -417,6 +447,7 @@ private:
     nav::RecentLocations m_recentLocations;
     std::optional<nav::Place> m_lastEditPlace;
     std::map<std::string, std::set<int>, std::less<>> m_bookmarks;
+    std::array<std::optional<nav::Place>, 9> m_numberedBookmarks{};
     QPointer<FileSystemView> m_fileSystem;
     QPointer<QListWidget> m_todoList;
     std::map<std::string, QPointer<MergeView>, std::less<>> m_merges;

@@ -37,17 +37,22 @@ struct DebugActionInfo {
 // The table registerDebugActions registers, in menu order. No shortcuts here: the keymap binds them.
 inline constexpr std::array kDebugActions{
     DebugActionInfo{"run.debug", "Debug", "Build the startup project and debug it"},
+    DebugActionInfo{"run.debugContext", "Debug Context Configuration",
+                    "Build and debug the active or startup configuration"},
     DebugActionInfo{"debug.toggleBreakpoint", "Toggle Line Breakpoint", "Add or remove a breakpoint on the caret line"},
     DebugActionInfo{"debug.resume", "Resume Program", "Continue until the next breakpoint"},
     DebugActionInfo{"debug.pause", "Pause Program", "Suspend the program where it runs"},
     DebugActionInfo{"debug.stepOver", "Step Over", "Run to the next line in this function"},
     DebugActionInfo{"debug.stepInto", "Step Into", "Step into the function called on this line"},
+    DebugActionInfo{"debug.smartStepInto", "Smart Step Into", "Requires step-into target selection (DBG-3)"},
     DebugActionInfo{"debug.stepOut", "Step Out", "Run until the current function returns"},
     DebugActionInfo{"debug.runToCursor", "Run to Cursor", "Continue to the caret line"},
     DebugActionInfo{"debug.setNextStatement", "Set Next Statement", "Move the execution point to the caret line"},
     DebugActionInfo{"debug.evaluate", "Evaluate Expression...", "Evaluate an expression in the selected frame"},
     DebugActionInfo{"debug.muteBreakpoints", "Mute Breakpoints", "Temporarily mute or unmute all breakpoints"},
     DebugActionInfo{"debug.editBreakpoint", "Edit Breakpoint...", "Edit the condition or properties of a breakpoint"},
+    DebugActionInfo{"debug.viewBreakpoints", "View Breakpoints...",
+                    "Open the Breakpoints tab in the Debug tool window"},
 };
 
 /*
