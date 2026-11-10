@@ -29,6 +29,7 @@ class RunController;
 
 // The ids registerRunActions adds.
 inline constexpr std::string_view kRunActionId = "run.run";
+inline constexpr std::string_view kRunContextActionId = "run.runContext";
 inline constexpr std::string_view kRunWithoutDebuggingActionId = "run.runWithoutDebugging";
 inline constexpr std::string_view kStopActionId = "run.stop";
 inline constexpr std::string_view kRerunActionId = "run.rerun";

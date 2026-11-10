@@ -160,6 +160,15 @@ if(WIN32)
     add_dependencies(app_workbench_clangd_tests held_msbuild_fixture)
 endif()
 
+# CPP-5 and REF-12 with the real clangd and clang-format (label integration, tag clangd): clangd's
+# links, folds, inlay hints and AST in the active editor, and the actions on save.
+frost_add_test(app_workbench_cpp_editor_tests QT
+    SOURCES workbench_cpp_editor_test.cpp
+    DEPS frost::app frost::lang frost::io frost::sched
+    LABELS integration clangd)
+target_include_directories(app_workbench_cpp_editor_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_workbench_cpp_editor_tests PRIVATE ${_frost_workbench_definitions})
+
 frost_add_test(app_workbench_lua_tests QT
     SOURCES workbench_lua_test.cpp workbench_lua_workspace_test.cpp
     DEPS frost::app frost::lang frost::io
@@ -272,7 +281,7 @@ if(NOT _frost_engine_sha MATCHES "^[0-9a-f]+$")
 endif()
 frost_add_test(app_corpus_tests QT
     SOURCES corpus_test.cpp corpus_dirs_lua_test.cpp corpus_unit_tests_test.cpp corpus_doctest_test.cpp
-            corpus_debug_test.cpp
+            corpus_debug_test.cpp corpus_cpp_editor_test.cpp
     DEPS frost::app frost::build frost::diag frost::lang frost::io frost::vcs frost::search frost::ui_nav
          frost::project frost::document frost::ui_run frost::debug
     LABELS integration corpus)

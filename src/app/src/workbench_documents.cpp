@@ -199,6 +199,9 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             m_language->gotoDeclarationAt(offset);
         }
     });
+    // CPP-5: Ctrl+click on a document link (an #include clangd resolved) opens its target.
+    connect(editor, &ui::EditorView::documentLinkActivated, this,
+            [this](const QString& target) { openLocation(target, 1, 1); });
     connect(editor, &ui::EditorView::contextActionRequested, this, [this, editor](const QString& actionId) {
         editor->setFocus();
         if (DocumentEditorView* current = currentView(); current != nullptr && &current->editor() == editor) {
@@ -441,6 +444,7 @@ document::SaveTransform Workbench::saveTransformFor(const document::FileDocument
 }
 
 Result<void> Workbench::saveQuietly(document::FileDocument& document) {
+    runActionsOnSave(document); // REF-12; off by default.
     Result<document::SaveOutcome> outcome = m_documents->save(document);
     if (!outcome) {
         return std::unexpected(std::move(outcome.error()));

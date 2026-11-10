@@ -9,6 +9,7 @@
 
 #include "frost/sched/task.hpp"
 #include "frost/syntax/syntax_tree.hpp"
+#include "frost/text/editor/essentials.hpp"
 #include "frost/text/editor/unicode.hpp"
 #include "frost/ui/appearance_manager.hpp"
 #include "frost/ui/editor/find_bar.hpp"
@@ -24,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <mutex>
 #include <utility>
 
@@ -814,6 +816,9 @@ bool EditorView::typeText(std::string_view text) {
     if (text.empty() || isReadOnly() || m_composing) {
         return false;
     }
+    if (m_overwrite) {
+        return apply(commands::overtype(commandInput(), text));
+    }
     return apply(commands::type(commandInput(), text));
 }
 
@@ -1019,6 +1024,24 @@ bool EditorView::perform(EditorAction action) {
     case A::SelectAllOccurrences: return apply(commands::selectAllOccurrences(commandInput()));
     case A::ToggleCase: return apply(commands::toggleCase(commandInput()));
     case A::ToggleColumnMode: setColumnMode(!m_columnMode); return true;
+    case A::PageTop:
+    case A::PageBottom:
+    case A::PageTopWithSelection:
+    case A::PageBottomWithSelection:
+    case A::SplitLine:
+    case A::StartNewLineBefore:
+    case A::ToggleOverwrite:
+    case A::PasteWithoutFormatting:
+    case A::PasteFromHistory:
+    case A::FindWordAtCaret:
+    case A::MatchingBrace:
+    case A::CodeBlockStart:
+    case A::CodeBlockEnd:
+    case A::CodeBlockStartWithSelection:
+    case A::CodeBlockEndWithSelection:
+    case A::MoveStatementUp:
+    case A::MoveStatementDown:
+    case A::AutoIndentLines: return performEssential(action);
     }
     return false;
 }
@@ -1092,6 +1115,7 @@ void EditorView::copySelection() {
             firstPart = false;
         }
     }
+    clipboardHistory().record(out);
     auto* mime = new QMimeData();
     mime->setText(QString::fromStdString(out));
     if (lineCopy) {
@@ -1473,6 +1497,7 @@ EditorViewStatus EditorView::status() const {
     out.readOnly = m_fileInfo.readOnly;
     out.dirty = m_document->undoState().stateId != m_savedStateId;
     out.columnMode = m_columnMode;
+    out.overwrite = m_overwrite;
     return out;
 }
 
@@ -1551,8 +1576,37 @@ void EditorView::collectFoldQuery() {
         job->tree.text().sharesStorageWith(m_editor->text())) {
         m_foldCandidates = std::move(*ranges);
         m_foldCandidateMaxEnd = std::move(job->maxEnd);
+        mergeLanguageFolds();
         viewport()->update();
     }
+}
+
+bool EditorView::setLanguageFoldRanges(std::uint64_t textVersion, std::vector<text::ByteRange> ranges) {
+    if (textVersion != m_editor->text().version()) {
+        return false;
+    }
+    const ByteOffset size = m_editor->text().size();
+    std::erase_if(ranges, [size](const text::ByteRange& range) { return range.empty() || range.end > size; });
+    std::ranges::sort(ranges, candidateLess);
+    ranges.erase(std::unique(ranges.begin(), ranges.end()), ranges.end());
+    m_languageFolds = std::move(ranges);
+    m_languageFoldsVersion = textVersion;
+    mergeLanguageFolds();
+    viewport()->update();
+    return true;
+}
+
+void EditorView::mergeLanguageFolds() {
+    if (m_languageFolds.empty() || m_languageFoldsVersion != m_editor->text().version()) {
+        return;
+    }
+    std::vector<text::ByteRange> merged;
+    merged.reserve(m_foldCandidates.size() + m_languageFolds.size());
+    std::ranges::merge(m_foldCandidates, m_languageFolds, std::back_inserter(merged), candidateLess);
+    merged.erase(std::unique(merged.begin(), merged.end()), merged.end());
+    m_foldCandidates = std::move(merged);
+    m_foldCandidateMaxEnd.assign(m_foldCandidates.size() * 4, 0);
+    (void)buildCandidateMax(m_foldCandidates, m_foldCandidateMaxEnd, 1, 0, m_foldCandidates.size(), {});
 }
 
 std::vector<syntax::HighlightSpan> EditorView::highlightsFor(text::ByteRange range) {

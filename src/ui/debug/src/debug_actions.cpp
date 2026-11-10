@@ -25,7 +25,7 @@ Result<void> registerDebugActions(input::ActionRegistry& registry, DebugControll
     using Run = std::function<void(DebugController&)>;
     const auto behaviour = [](std::string_view id) -> std::pair<Enabled, Run> {
         const auto paused = [](const DebugController& d) { return d.paused(); };
-        if (id == "run.debug") {
+        if (id == "run.debug" || id == "run.debugContext") {
             return {[](const DebugController& d) { return !d.debugging() && d.canDebug(); },
                     [](DebugController& d) {
                         if (auto started = d.debug(); !started) {
@@ -49,6 +49,9 @@ Result<void> registerDebugActions(input::ActionRegistry& registry, DebugControll
         if (id == "debug.stepInto") {
             return {paused, [](DebugController& d) { d.stepInto(); }};
         }
+        if (id == "debug.smartStepInto") {
+            return {[](const DebugController&) { return false; }, [](DebugController&) {}};
+        }
         if (id == "debug.stepOut") {
             return {paused, [](DebugController& d) { d.stepOut(); }};
         }
@@ -63,6 +66,9 @@ Result<void> registerDebugActions(input::ActionRegistry& registry, DebugControll
         }
         if (id == "debug.editBreakpoint") {
             return {{}, [](DebugController& d) { d.requestEditBreakpoint(); }};
+        }
+        if (id == "debug.viewBreakpoints") {
+            return {{}, [](DebugController& d) { d.requestViewBreakpoints(); }};
         }
         return {paused, [](DebugController& d) { d.requestEvaluate(); }};
     };

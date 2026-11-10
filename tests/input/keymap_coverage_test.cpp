@@ -28,62 +28,9 @@ namespace {
  * Bound ids with no registered action yet, sorted. Owner: UX-3 (implement the action or drop the
  * binding). Never add to this list: a new binding needs its action in the same change.
  */
-constexpr auto kKnownGaps = std::to_array<std::string_view>({
-    "agent.atMention",
-    "bookmarks.goto1",
-    "bookmarks.goto2",
-    "bookmarks.goto3",
-    "bookmarks.goto4",
-    "bookmarks.goto5",
-    "bookmarks.goto6",
-    "bookmarks.goto7",
-    "bookmarks.goto8",
-    "bookmarks.goto9",
-    "bookmarks.toggle1",
-    "bookmarks.toggle2",
-    "bookmarks.toggle3",
-    "bookmarks.toggle4",
-    "bookmarks.toggle5",
-    "bookmarks.toggle6",
-    "bookmarks.toggle7",
-    "bookmarks.toggle8",
-    "bookmarks.toggle9",
-    "bookmarks.toggleMnemonic",
-    "build.project",
-    "code.reformatFile",
-    "code.smartCompletion",
-    "debug.smartStepInto",
-    "debug.viewBreakpoints",
-    "editor.autoIndentLines",
-    "editor.codeBlockEnd",
-    "editor.codeBlockEndWithSelection",
-    "editor.codeBlockStart",
-    "editor.codeBlockStartWithSelection",
-    "editor.findWordAtCaret",
-    "editor.moveStatementDown",
-    "editor.moveStatementUp",
-    "editor.pageBottom",
-    "editor.pageBottomWithSelection",
-    "editor.pageTop",
-    "editor.pageTopWithSelection",
-    "editor.pasteFromHistory",
-    "editor.pasteWithoutFormatting",
-    "editor.splitLine",
-    "editor.startNewLineBefore",
-    "editor.toggleOverwrite",
-    "navigate.matchingBrace",
-    "navigate.selectIn",
-    "refactor.copy",
-    "run.debugContext",
-    "run.runContext",
-    "tools.runAnything",
-    "vcs.quickPopup",
-    "window.bookmarks",
-    "window.git",
-    "window.maximizeToolWindow",
-});
-// The UX-1 baseline: the list never grows past it.
-static_assert(kKnownGaps.size() <= 52, "kKnownGaps only shrinks: register the action instead");
+constexpr std::array<std::string_view, 0> kKnownGaps{};
+// UX-3 closed all 52 gaps: no built-in keymap binding may lack a registered action.
+static_assert(kKnownGaps.empty(), "kKnownGaps must stay empty: register the action in the same change");
 
 // The supported platforms (macOS is unsupported until a test leg exists).
 constexpr std::array kPlatforms{frost::input::KeymapPlatform::Windows, frost::input::KeymapPlatform::Linux};

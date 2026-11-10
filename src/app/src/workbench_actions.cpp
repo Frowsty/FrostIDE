@@ -244,6 +244,33 @@ void Workbench::registerActions() {
                 m_window->toolWindows().toggle(kUnitTestsToolWindow);
         },
         [this] { return m_window != nullptr; });
+    add(
+        "window.git", "Git",
+        [this] {
+            if (m_window)
+                m_window->toolWindows().activate("gitLog");
+        },
+        [this] { return m_window != nullptr && m_window->toolWindows().contains("gitLog"); });
+    add(
+        "tools.runAnything", "Run Anything...",
+        [this] {
+            if (m_nav)
+                static_cast<void>(m_nav->showFindAction());
+        },
+        [this] { return m_nav != nullptr; });
+    {
+        input::ActionSpec atMention;
+        atMention.id = "agent.atMention";
+        atMention.name = "Mention Selection in AI Agent";
+        atMention.description = "Requires the AI agent panel (UX-17)";
+        atMention.group = "Agent";
+        atMention.context.none = input::ContextKeys{input::ContextKey::DialogFocus};
+        atMention.enabled = [](const input::ActionContext&) { return false; };
+        atMention.handler = [](const input::ActionContext&, const input::InvokeInfo&) {};
+        if (auto added = m_registry.add(std::move(atMention)); !added) {
+            log::warn(kLog, "action agent.atMention: {}", added.error().describe());
+        }
+    }
     // No "window.services" alias for the Unit Tests window: the Services window is UX-9's, and
     // Alt+8 is bound to window.unitTests in the module defaults.
     add(

@@ -44,7 +44,7 @@ LanguageController::LanguageController(LanguageServices services, QObject* paren
       m_usages(std::make_unique<FindUsagesPanel>()), m_symbols(std::make_unique<SymbolPopup>()),
       m_structure(std::make_unique<StructurePanel>()), m_rename(std::make_unique<RenameInput>()),
       m_choice(std::make_unique<ChoicePopup>()), m_quickDef(std::make_unique<QuickDefinitionPopup>()),
-      m_hierarchy(std::make_unique<HierarchyPopup>()) {
+      m_hierarchy(std::make_unique<HierarchyPopup>()), m_ast(std::make_unique<AstViewPopup>()) {
     m_highlightTimer.setSingleShot(true);
     m_highlightTimer.setInterval(300);
     connect(&m_highlightTimer, &QTimer::timeout, this, &LanguageController::highlightUsages);
@@ -72,6 +72,17 @@ LanguageController::LanguageController(LanguageServices services, QObject* paren
             [this](const QString& path, fl::LspPosition position) {
                 m_services.host.openLocation(path.toStdString(), position);
             });
+    connect(m_ast.get(), &AstViewPopup::rangeActivated, this, [this](fl::LspRange range) {
+        const std::optional<text::Snapshot> snapshot = m_services.host.snapshot();
+        if (!snapshot) {
+            return;
+        }
+        const Result<ByteOffset> begin = fl::fromLspPosition(*snapshot, range.start, m_services.server.encoding());
+        const Result<ByteOffset> end = fl::fromLspPosition(*snapshot, range.end, m_services.server.encoding());
+        if (begin && end && *begin <= *end) {
+            m_services.host.select(text::ByteRange{*begin, *end});
+        }
+    });
     connect(m_hierarchy.get(), &HierarchyPopup::activated, this, [this](const QString& path, fl::LspPosition position) {
         m_services.host.openLocation(path.toStdString(), position);
     });
@@ -158,7 +169,7 @@ LanguageController::~LanguageController() {
     m_structureSlot.cancel();
     for (sched::LatestWins* slot :
          {&m_completionSlot, &m_resolveSlot, &m_signatureSlot, &m_hoverSlot, &m_navigationSlot, &m_usagesSlot,
-          &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot, &m_hierarchySlot}) {
+          &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot, &m_hierarchySlot, &m_astSlot}) {
         slot->cancel();
     }
 }
@@ -175,7 +186,7 @@ void LanguageController::editorChanged() {
     }
     for (sched::LatestWins* slot :
          {&m_completionSlot, &m_resolveSlot, &m_signatureSlot, &m_hoverSlot, &m_navigationSlot, &m_usagesSlot,
-          &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot, &m_hierarchySlot}) {
+          &m_highlightSlot, &m_symbolSlot, &m_renameSlot, &m_actionSlot, &m_formatSlot, &m_hierarchySlot, &m_astSlot}) {
         slot->cancel();
     }
     m_highlightTimer.stop();
@@ -187,6 +198,7 @@ void LanguageController::editorChanged() {
     m_choice->hide();
     m_quickDef->hide();
     m_hierarchy->hide();
+    m_ast->hide();
     m_tabStops.clear();
     m_renamePath.clear();
     m_renameOldName.clear();
@@ -305,6 +317,8 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
     using A = Availability;
     const Entry entries[] = {
         {"code.completion", "Basic Completion", "Code", &LanguageController::completeCode, true},
+        {"code.smartCompletion", "Smart Type-Matching Completion", "Code", &LanguageController::smartCompleteCode, true,
+         A::Never, "Requires type-matching completion (CPP-14)"},
         {"code.parameterInfo", "Parameter Info", "Code", &LanguageController::showParameterInfo, true},
         {"code.quickDocumentation", "Quick Documentation", "Code", &LanguageController::showQuickDocumentation, true},
         {"navigate.declaration", "Go to Declaration or Usages", "Navigate", &LanguageController::gotoDeclaration, true},
@@ -346,8 +360,13 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
          "Requires the safe delete refactoring (REF-8)"},
         {"refactor.move", "Move...", "Refactor", &LanguageController::moveSymbol, true, A::Never,
          "Requires the move refactoring (REF-8)"},
+        {"refactor.copy", "Copy...", "Refactor", &LanguageController::copySymbol, true, A::Never,
+         "Requires the copy refactoring (REF-8)"},
         {"code.showIntentions", "Show Context Actions", "Code", &LanguageController::showIntentions, true},
         {"code.reformat", "Reformat Code", "Code", &LanguageController::reformat, true},
+        {"code.reformatFile", "Reformat File", "Code", &LanguageController::reformatFile, true},
+        {"code.showAst", "Show AST (clangd)", "Code", &LanguageController::showAst, true, A::ClangdTweaks,
+         "C and C++: clangd's AST node for the caret or the selection"},
         {"code.generate", "Generate...", "Code", &LanguageController::generateCode, true, A::ClangdTweaks,
          "C++: clangd's constructor, special members and pure virtual overrides; the rest requires REF-9"},
         {"code.overrideMethods", "Override Methods...", "Code", &LanguageController::overrideMethods, true, A::Never,
@@ -516,5 +535,6 @@ RenameInput& LanguageController::renameInput() { return *m_rename; }
 ChoicePopup& LanguageController::choicePopup() { return *m_choice; }
 QuickDefinitionPopup& LanguageController::quickDefinitionPopup() { return *m_quickDef; }
 HierarchyPopup& LanguageController::hierarchyPopup() { return *m_hierarchy; }
+AstViewPopup& LanguageController::astPopup() { return *m_ast; }
 
 } // namespace frost::ui::lang
