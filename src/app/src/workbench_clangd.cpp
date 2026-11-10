@@ -10,6 +10,7 @@
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/cl_command_lines_provider.hpp"
+#include "frost/lang/clangd_service.hpp"
 #include "frost/lang/cmake_compile_commands.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
@@ -348,6 +349,13 @@ void Workbench::startClangd(const std::string& root) {
         m_compileCommands = std::make_shared<lang::ExistingCompileCommandsProvider>(m_services.fs, root);
     }
 
+    if (!m_resourceGovernor) {
+        m_resourceGovernor = std::make_shared<sched::ResourceGovernor>();
+    }
+    const bool buildActive = (m_buildService && m_buildService->state() == build::BuildState::Running) ||
+                             (m_cmake && m_cmake->service().state() == build::BuildState::Running);
+    m_resourceGovernor->setLegActive(sched::HeavyLegKind::Build, buildActive);
+
     lang::ClangdServiceOptions options;
     options.clangdPath = found->path;
     options.workspaceRoot = root;
@@ -394,6 +402,7 @@ void Workbench::startClangd(const std::string& root) {
     };
     m_clangd = std::make_shared<lang::ClangdService>(m_services.launcher, io::AsyncContext{*m_reactor, *m_pool},
                                                      std::move(options));
+    lang::setResourceGovernor(*m_clangd, m_resourceGovernor);
     m_clangdListener =
         m_clangd->diagnostics().addListener([this, generation](const lang::FileDiagnostics& diagnostics) {
             QMetaObject::invokeMethod(
@@ -607,6 +616,8 @@ void Workbench::stopClangd() {
     }
     m_indexToken.clear();
     m_clangdIndexing = false;
+    if (m_resourceGovernor)
+        m_resourceGovernor->setLegActive(sched::HeavyLegKind::BackgroundIndex, false);
     for (DocumentEditorView* view : m_editors->views()) {
         if (!isCFamilySource(view->path()))
             continue;

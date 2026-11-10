@@ -14,6 +14,7 @@ frost_add_test(sched_tests
         deque_test.cpp
         lane_policy_test.cpp
         latest_wins_test.cpp
+        resource_governor_test.cpp
         sim_executor_test.cpp
         task_test.cpp
         thread_pool_test.cpp
