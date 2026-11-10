@@ -1696,8 +1696,8 @@ TEST(FrostProcess, AppDllEmbedsNoManifest) {
 
 // Whether `name` (lower case) is a DLL frost_app.dll may import (see the test below).
 bool allowedAppImport(std::string_view name) {
-    static constexpr std::string_view kSystem[] = {"kernel32.dll", "user32.dll", "advapi32.dll", "shell32.dll",
-                                                   "bcrypt.dll"};
+    static constexpr std::string_view kSystem[] = {"kernel32.dll", "user32.dll", "advapi32.dll",
+                                                   "shell32.dll",  "bcrypt.dll", "winhttp.dll"};
     if (std::ranges::find(kSystem, name) != std::end(kSystem)) {
         return true;
     }

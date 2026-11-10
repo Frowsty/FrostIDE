@@ -191,20 +191,20 @@ HostResources probeHostResources() noexcept {
     std::optional<std::uint64_t> swapTotal;
     std::optional<std::uint64_t> swapFree;
     while (std::getline(meminfo, line)) {
-        if (const auto v = parseProcKbLine(line, "MemTotal:")) {
-            out.totalPhysicalBytes = *v;
-        } else if (const auto v = parseProcKbLine(line, "MemAvailable:")) {
-            out.availablePhysicalBytes = *v;
-        } else if (const auto v = parseProcKbLine(line, "MemFree:")) {
-            memFree = v;
-        } else if (const auto v = parseProcKbLine(line, "Buffers:")) {
-            buffers = v;
-        } else if (const auto v = parseProcKbLine(line, "Cached:")) {
-            cached = v;
-        } else if (const auto v = parseProcKbLine(line, "SwapTotal:")) {
-            swapTotal = v;
-        } else if (const auto v = parseProcKbLine(line, "SwapFree:")) {
-            swapFree = v;
+        if (const auto memTotalVal = parseProcKbLine(line, "MemTotal:")) {
+            out.totalPhysicalBytes = *memTotalVal;
+        } else if (const auto memAvailVal = parseProcKbLine(line, "MemAvailable:")) {
+            out.availablePhysicalBytes = *memAvailVal;
+        } else if (const auto memFreeVal = parseProcKbLine(line, "MemFree:")) {
+            memFree = memFreeVal;
+        } else if (const auto buffersVal = parseProcKbLine(line, "Buffers:")) {
+            buffers = buffersVal;
+        } else if (const auto cachedVal = parseProcKbLine(line, "Cached:")) {
+            cached = cachedVal;
+        } else if (const auto swapTotalVal = parseProcKbLine(line, "SwapTotal:")) {
+            swapTotal = swapTotalVal;
+        } else if (const auto swapFreeVal = parseProcKbLine(line, "SwapFree:")) {
+            swapFree = swapFreeVal;
         }
     }
     if (out.availablePhysicalBytes == 0 && memFree) {
