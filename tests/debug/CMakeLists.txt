@@ -37,6 +37,18 @@ frost_add_test(debug_unit_tests
     DEPS frost::debug frost::project frost::text frost::io)
 target_include_directories(debug_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# The Lua DAP conformance suite (lua_dap_conformance_test.cpp, LUA-11a): runs all 30 scenarios
+# against the FrostEngine Lua debug endpoint and luaDebugAdapterFactory with zero skipped cases
+# and checks the live outcomes against lua_dap_conformance_baseline.json.
+frost_add_test(lua_dap_conformance_tests
+    SOURCES lua_dap_conformance_test.cpp
+    DEPS frost::debug frost::io frost::rpc frost::core
+    LABELS unit)
+target_include_directories(lua_dap_conformance_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(lua_dap_conformance_tests PRIVATE
+    FROST_LUA_DAP_CONFORMANCE_BASELINE="${CMAKE_CURRENT_SOURCE_DIR}/lua_dap_conformance_baseline.json"
+    FROST_CORPORA_LOCK_PATH="${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json")
+
 # The debuggee: a plain C++ program without frost code, built without optimisation and with full
 # debug information so lldb sees its lines and locals.
 add_executable(debug_test_debuggee fixtures/debuggee.cpp)
