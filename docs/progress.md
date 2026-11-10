@@ -3,6 +3,51 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-10: R4b integration (FrostEngine Contract v2 A, engine-aware Lua, Lua DAP conformance and j3_frostengine_lua)
+
+- **What changed for you.**
+  - **Exact 64-bit handles and the `frost::engine` layer (`FEC-1`, `FER-1a`)**: `frost::engine::EngineHandle` and
+    the Qt-free `frost::engine` library preserve full 64-bit entity/asset handles above $2^{53}$ across JSON
+    serialization (`json.cpp` stores exact `int64_t` and `uint64_t` values without `double` conversion). On the
+    engine side (`12b8c6de4c3805a9d1e84b86ddbb70b6999bb2dc`), `FrostEditor schema.export` exports Contract v2
+    component types, fields, Lua API entries, `ComponentName` aliases, cost tags and `std::source_location` C++
+    binding locations, validated by `frost::engine::parseSchemaDocument` and `SourceResolver`.
+  - **Engine-aware Lua (`FEC-10b`)**: `EngineLuaHostProvider` implements `ILuaHostProvider` (`LUA-13`), warming and
+    caching `FrostEditor schema.export` off the GUI thread (`prepareLuaPlanTask` on `sched::Lane::Background`),
+    generating `frost_schema.lua` EmmyLua/LuaLS `@meta` stubs under the per-user state directory (never inside the
+    workspace), and writing a merged `--configpath` override when `.luarc.json` is present in the workspace so
+    `workspace.library` includes the generated stubs alongside the project's `.luarc.json`. `Go to C++ Binding`
+    (`navigate.cppBinding` / `Workbench::gotoCppBinding`) resolves the Lua symbol at the caret against
+    `schema.export` and opens the exact C++ `file:line` from `source_location`.
+  - **Lua DAP conformance suite (`LUA-11a`)**: `tests/debug/lua_dap_conformance_test.cpp` runs 30 deterministic
+    scenarios across 11 categories against the current FrostEngine Lua debug endpoint (`luaDebugAdapterFactory`)
+    with zero skipped cases and verifies the live pass/fail outcomes (`10` passing, `20` failing baseline) and the
+    pinned `corpora.lock.json` SHA against `tests/debug/lua_dap_conformance_baseline.json` ahead of `FER-8`/`FER-9`.
+  - **`j3_frostengine_lua` automated journey (`FND-7c`)**: `tests/journeys/j3_frostengine_lua.py` drives the real
+    Debug `frost` binary over the automation endpoint against the pinned FrostEngine corpus (`12b8c6de4c38`),
+    verifying component completion (`Transform` and `Rigidbody2D`) against the live `FrostEditor schema.export`
+    oracle, `Go to Definition` into the generated `frost_schema.lua` stub, `Go to C++ Binding` into
+    `PhysicsScriptModule.cpp` at the `source_location` line, live module creation (`require`) and runtime version
+    `didChangeConfiguration` without a LuaLS restart, `Inspect Code` (`lua.inspect`, run off the GUI thread) against
+    the `lua-language-server --check` oracle, and zero UI stalls over 250 ms (`FND-9b`).
+- **Merged into `r4b/integration`**:
+  - `r4/fec-1-fer-1a` (`a5d3bb6`: `FEC-1`, `FER-1a`),
+  - `r4/fec-10b` (`c116358`: `FEC-10b`),
+  - `r4/lua-11a` (`ea31afc`: `LUA-11a`),
+  - `FND-7c` (`tests/journeys/j3_frostengine_lua.py` and async Lua warmup/inspect on `r4b/integration`).
+- **Exit criteria (R4b subset, completing all of Milestone R4 with R4a and R4c):**
+  - `j3_frostengine_lua` on the pinned clone: engine-API completion items for a component equal the entries
+    `schema.export` lists for it; Go to Definition on an engine call opens the generated stub, and Go to C++ Binding
+    opens the `file:line` from `source_location`: **met** (`journeys.j3_frostengine_lua`,
+    `CorpusEngineContract.LuaCompletionAndNavigationMatchSchemaExportOnPinnedClone`,
+    `WorkbenchLua.SchemaExportMetaStubsCompleteAndNavigateToStubAndCppBinding`).
+  - `FEC-1`: a FrostEngine handle above $2^{53}$ survives the IDE<->engine round trip: **met**
+    (`CorpusEngineContract.EntityIdsAbove2To53RoundTripExactlyThroughTheEngine`, `EngineHandle.*`).
+  - `LUA-11a` conformance suite runs against the existing engine Lua endpoint and records a baseline list of
+    failures, with no skipped cases: **met** (`LuaDapConformance.*` in `lua_dap_conformance_tests`).
+- **Next:** start Milestone R5 (`CLANG-0`, `FND-12b`, `FND-18`, `CPP-4`, `CPP-6`, `UX-4`, `CPP-9`, `CPP-10`,
+  `RUN-10`, `REF-3`, `REF-11`, `FND-11`, `FND-16`, `FND-14`).
+
 ## 2026-11-10: R4c integration (C++ stock clangd sweep, format on save and editor essentials)
 
 - **What changed for you.**

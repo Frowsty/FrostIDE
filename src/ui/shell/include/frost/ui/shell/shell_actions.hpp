@@ -47,6 +47,7 @@ inline constexpr std::string_view kQuickSwitchTheme = "view.quickSwitchScheme";
 // Navigate.
 inline constexpr std::string_view kGoToLine = "editor.gotoLine";
 inline constexpr std::string_view kFocusNavigationBar = "navigate.navigationBar";
+inline constexpr std::string_view kGoToCppBinding = "navigate.cppBinding";
 // Help.
 inline constexpr std::string_view kAbout = "help.about";
 

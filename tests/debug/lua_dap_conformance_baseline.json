@@ -1,0 +1,221 @@
+{
+  "schema": "frost.lua-dap-conformance-baseline/1",
+  "adapter": "frost.lua-debug-adapter",
+  "endpoint": "frostengine.lua-debug-endpoint/experimental",
+  "totalCount": 30,
+  "skippedCount": 0,
+  "passedCount": 10,
+  "failedCount": 20,
+  "scenarios": [
+    {
+      "id": "handshake.initialize",
+      "category": "handshake",
+      "command": "initialize",
+      "passed": true,
+      "failureReason": ""
+    },
+    {
+      "id": "handshake.attach_and_configuration_done",
+      "category": "handshake",
+      "command": "configurationDone",
+      "passed": true,
+      "failureReason": ""
+    },
+    {
+      "id": "threads.single_lua_thread",
+      "category": "threads",
+      "command": "threads",
+      "passed": true,
+      "failureReason": ""
+    },
+    {
+      "id": "execution.pause_and_stopped_event",
+      "category": "execution",
+      "command": "pause",
+      "passed": true,
+      "failureReason": ""
+    },
+    {
+      "id": "stack.stack_trace_while_stopped",
+      "category": "stack",
+      "command": "stackTrace",
+      "passed": true,
+      "failureReason": ""
+    },
+    {
+      "id": "stack.stack_trace_paging",
+      "category": "stack",
+      "command": "stackTrace",
+      "passed": true,
+      "failureReason": ""
+    },
+    {
+      "id": "source.loaded_source_retrieval",
+      "category": "source",
+      "command": "source",
+      "passed": true,
+      "failureReason": ""
+    },
+    {
+      "id": "execution.continue_and_continued_event",
+      "category": "execution",
+      "command": "continue",
+      "passed": true,
+      "failureReason": ""
+    },
+    {
+      "id": "lifecycle.owned_play_stop",
+      "category": "lifecycle",
+      "command": "frost.stopPlay",
+      "passed": true,
+      "failureReason": ""
+    },
+    {
+      "id": "lifecycle.disconnect",
+      "category": "lifecycle",
+      "command": "disconnect",
+      "passed": true,
+      "failureReason": ""
+    },
+    {
+      "id": "breakpoints.line",
+      "category": "breakpoints",
+      "command": "setBreakpoints",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "breakpoints.multiple_lines",
+      "category": "breakpoints",
+      "command": "setBreakpoints",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "breakpoints.conditional",
+      "category": "breakpoints",
+      "command": "setBreakpoints",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "breakpoints.hit_condition",
+      "category": "breakpoints",
+      "command": "setBreakpoints",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "breakpoints.logpoint",
+      "category": "breakpoints",
+      "command": "setBreakpoints",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "breakpoints.pausepoint",
+      "category": "breakpoints",
+      "command": "setBreakpoints",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "breakpoints.function",
+      "category": "breakpoints",
+      "command": "setFunctionBreakpoints",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "breakpoints.exception",
+      "category": "breakpoints",
+      "command": "setExceptionBreakpoints",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "stepping.step_over",
+      "category": "stepping",
+      "command": "next",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "stepping.step_in",
+      "category": "stepping",
+      "command": "stepIn",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "stepping.step_out",
+      "category": "stepping",
+      "command": "stepOut",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "variables.scopes",
+      "category": "variables",
+      "command": "scopes",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "variables.locals",
+      "category": "variables",
+      "command": "variables",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "variables.upvalues",
+      "category": "variables",
+      "command": "variables",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "variables.tables",
+      "category": "variables",
+      "command": "variables",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "variables.set_variable",
+      "category": "variables",
+      "command": "setVariable",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "evaluate.watch",
+      "category": "evaluate",
+      "command": "evaluate",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "evaluate.repl",
+      "category": "evaluate",
+      "command": "evaluate",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "coroutines.multi_coroutine_threads",
+      "category": "coroutines",
+      "command": "threads",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    },
+    {
+      "id": "lifecycle.terminate",
+      "category": "lifecycle",
+      "command": "terminate",
+      "passed": false,
+      "failureReason": "operation is not implemented by the Lua debugger"
+    }
+  ]
+}

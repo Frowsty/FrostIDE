@@ -51,8 +51,9 @@ TEST(Json, NumbersKeepTheirKinds) {
     ASSERT_TRUE(parsed.has_value());
     const auto& items = parsed->items();
     EXPECT_EQ(items[0].kind(), Json::Kind::Integer);
-    EXPECT_EQ(items[1].kind(), Json::Kind::Double); // Beyond int64.
-    EXPECT_EQ(items[2].asInteger(), 1000);          // An exact double reads as an integer.
+    EXPECT_EQ(items[1].kind(), Json::Kind::Integer); // Beyond int64, kept exactly (FEC-1).
+    EXPECT_EQ(items[1].asUnsigned(), 18446744073709551615ULL);
+    EXPECT_EQ(items[2].asInteger(), 1000); // An exact double reads as an integer.
     EXPECT_EQ(items[3].asInteger(), 2);
     EXPECT_EQ(Json(1), Json(1.0));
     EXPECT_NE(Json(1), Json("1"));

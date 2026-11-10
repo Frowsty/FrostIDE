@@ -17,6 +17,8 @@
 #include "frost/io/path.hpp"
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/compile_commands.hpp"
+#include "frost/lang/completion.hpp"
+#include "frost/lang/lua_service.hpp"
 #include "frost/project/cmake_file_api.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/trust_store.hpp"
@@ -54,6 +56,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -231,6 +234,14 @@ struct AutomationEndpoint::Impl {
             debugVariables(client, id, params);
             return;
         }
+        if (method == "lua.complete" || method == "lua.completions" || method == "editor.complete") {
+            luaComplete(client, id, params);
+            return;
+        }
+        if (method == "lua.inspect") {
+            luaInspect(client, id, params);
+            return;
+        }
         reply(client, id, dispatch(method, params));
         if (method == "quit")
             QTimer::singleShot(0, QCoreApplication::instance(), [] { QCoreApplication::quit(); });
@@ -241,7 +252,7 @@ struct AutomationEndpoint::Impl {
     /*
      * kMethods (params -> result):
      *   hello {token} -> {protocol, pid}            the first request (header comment)
-     *   state {} -> {project, cmake, clangd, editor} what the workbench shows now (stateJson)
+     *   state {} -> {project, cmake, clangd, lua, editor} what the workbench shows now (stateJson)
      *   open {path, line?, column?} -> {}           Workbench::openPath (a folder opens as the project)
      *   trust {root} -> {}                          the trust dialog's Trust button: the build
      *                                               controller's trust(root), which the CMake service
@@ -251,15 +262,20 @@ struct AutomationEndpoint::Impl {
      *   cmake.configure {} -> {}                    CMakeService::configure (Reload CMake Project)
      *   cmake.targets {} -> {targets: [{name, type, sources}]}   the File API model
      *   cmake.build {action: build|rebuild|clean, target?} -> {} CMakeService::build
-     *   wait {for: cmake|clangd, timeoutMs} -> state   replies when the CMake service is idle (no
-     *                                               job, no reply read) or clangd runs, or at the
-     *                                               timeout with {"timedOut": true}
+     *   wait {for: cmake|clangd|lua, timeoutMs} -> state   replies when the CMake service is idle (no
+     *                                               job, no reply read), clangd runs, or LuaLS runs,
+     *                                               or at the timeout with {"timedOut": true}
      *   problems {} -> {problems: [...]}            the Problems model's rows, in its order: severity,
      *                                               code, message, file (resolved), origin (as
      *                                               printed), line, column, jumpable, source
      *   problems.activate {index} -> {}             Problems' own activation (opens the location)
      *   editor {} -> {path, line, column} | {}      the current editor and its caret
      *   navigate.definition {} -> {}                Go to Declaration or Definition at the caret
+     *   navigate.cppBinding {} -> {}                Go to C++ Binding at the caret (FEC-10b)
+     *   lua.state {} -> {available, state, pid, restarts, configurationChangesSent, runtimeVersion}
+     *   lua.complete {line?, column?, timeoutMs?} -> {items, labels, timedOut}
+     *   lua.inspect {directory?} -> {files: [{file, diagnostics: [{line, column, code, message}]}]}
+     *   lua.setRuntime {version} -> {}              changes lua.runtimeVersion (live didChangeConfiguration)
      *   run.configurations {} -> {configurations: [{id, name, type, target, program, arguments,
      *                               workingDirectory, environment, generated}], selected}
      *                                               the toolbar combo's run configurations (RUN-2)
@@ -334,6 +350,18 @@ struct AutomationEndpoint::Impl {
             if (workbench.language() == nullptr || workbench.currentView() == nullptr)
                 return fail(ErrorCode::InvalidArgument, "no editor to navigate from");
             workbench.language()->gotoDeclaration();
+            return Json::object();
+        }
+        if (method == "navigate.cppBinding") {
+            if (auto bound = workbench.gotoCppBinding(); !bound)
+                return std::unexpected(bound.error());
+            return Json::object();
+        }
+        if (method == "lua.state")
+            return luaStateJson();
+        if (method == "lua.setRuntime") {
+            if (auto updated = workbench.setLuaRuntimeVersion(params.stringAt("version")); !updated)
+                return std::unexpected(updated.error());
             return Json::object();
         }
         if (method == "problems")
@@ -982,11 +1010,151 @@ struct AutomationEndpoint::Impl {
         return clangd != nullptr && clangd->state() == lang::ClangdState::Running;
     }
 
+    [[nodiscard]] bool luaRunning() {
+        lang::LuaService* lua = workbench.lua();
+        return lua != nullptr && lua->state() == lang::LuaState::Running;
+    }
+
+    Json luaStateJson() {
+        lang::LuaService* lua = workbench.lua();
+        if (lua == nullptr)
+            return Json::object().set("available", false);
+        const auto pid = lua->serverPid();
+        const std::string_view stateStr = lua->state() == lang::LuaState::Running      ? "Running"
+                                          : lua->state() == lang::LuaState::Starting   ? "Starting"
+                                          : lua->state() == lang::LuaState::Restarting ? "Restarting"
+                                          : lua->state() == lang::LuaState::Failed     ? "Failed"
+                                                                                       : "Stopped";
+        std::string runtimeVersion;
+        const Json cfg = lua->configuration();
+        if (const Json* runtime = cfg.find("runtime"))
+            runtimeVersion = std::string(runtime->stringAt("version"));
+        return Json::object()
+            .set("available", true)
+            .set("state", std::string(stateStr))
+            .set("pid", pid ? Json(static_cast<std::int64_t>(*pid)) : Json())
+            .set("restarts", static_cast<std::int64_t>(lua->restarts()))
+            .set("configurationChangesSent", static_cast<std::int64_t>(lua->configurationChangesSent()))
+            .set("runtimeVersion", std::move(runtimeVersion));
+    }
+
+    void luaInspect(Client& client, const Json& id, const Json& params) {
+        QPointer<QLocalSocket> socket = client.socket;
+        Client* raw = &client;
+        workbench.inspectLuaCodeAsync(
+            params.stringAt("directory"),
+            [this, socket, raw, id](Result<std::vector<lang::FileDiagnostics>> inspected) {
+                if (socket.isNull())
+                    return;
+                if (!inspected) {
+                    reply(*raw, id, std::unexpected(inspected.error()));
+                    return;
+                }
+                Json files = Json::array();
+                for (const lang::FileDiagnostics& file : *inspected) {
+                    Json diags = Json::array();
+                    for (const lang::LiveDiagnostic& d : file.diagnostics) {
+                        diags.push(Json::object()
+                                       .set("line", d.line)
+                                       .set("column", d.column)
+                                       .set("code", d.code)
+                                       .set("message", d.message));
+                    }
+                    files.push(Json::object().set("file", file.file).set("diagnostics", std::move(diags)));
+                }
+                reply(*raw, id, Json::object().set("files", std::move(files)));
+            });
+    }
+
+    void luaComplete(Client& client, const Json& id, const Json& params) {
+        DocumentEditorView* view = workbench.currentView();
+        ui::lang::LanguageController* language = workbench.language();
+        if (view == nullptr || language == nullptr) {
+            reply(client, id, fail(ErrorCode::InvalidArgument, "no active editor for completion"));
+            return;
+        }
+        if (const auto line = params.integerAt("line"); line && *line > 0) {
+            const int col = static_cast<int>(params.integerAt("column").value_or(1));
+            view->editor().goToLine(static_cast<int>(*line), std::max(col, 1));
+        }
+        const std::int64_t timeoutMs =
+            std::clamp<std::int64_t>(params.integerAt("timeoutMs").value_or(30000), 100, kMaxWaitMs);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        language->completionPopup().setList({});
+        language->completeCode();
+
+        auto* timer = new QTimer(client.socket.data());
+        timer->setInterval(50);
+        QPointer<QLocalSocket> socket = client.socket;
+        Client* raw = &client;
+        auto ticks = std::make_shared<int>(0);
+        const auto check = [this, timer, socket, raw, id, deadline, ticks] {
+            if (socket.isNull()) {
+                timer->deleteLater();
+                return;
+            }
+            ui::lang::LanguageController* langCtrl = workbench.language();
+            if (langCtrl == nullptr) {
+                timer->stop();
+                timer->deleteLater();
+                reply(*raw, id, fail(ErrorCode::Cancelled, "language controller detached"));
+                return;
+            }
+            const auto& model = langCtrl->completionPopup().model();
+            const bool hasItems = !model.items().empty();
+            const bool timedOut = std::chrono::steady_clock::now() >= deadline;
+            if (!hasItems && !timedOut) {
+                if (++(*ticks) % 6 == 0)
+                    langCtrl->completeCode();
+                return;
+            }
+            timer->stop();
+            timer->deleteLater();
+            Json items = Json::array();
+            Json labels = Json::array();
+            std::set<std::string, std::less<>> seenLabels;
+            const auto& allItems = model.items();
+            const auto& entries = model.entries();
+            const auto pushItem = [&](const lang::CompletionItem& item) {
+                std::string bareLabel(item.raw.stringAt("label"));
+                if (bareLabel.empty())
+                    bareLabel = item.label;
+                if (const auto paren = bareLabel.find('('); paren != std::string::npos)
+                    bareLabel.resize(paren);
+                if (bareLabel.empty() || !seenLabels.insert(bareLabel).second)
+                    return;
+                items.push(Json::object()
+                               .set("label", bareLabel)
+                               .set("name", bareLabel)
+                               .set("displayLabel", item.label)
+                               .set("detail", item.detail)
+                               .set("insertText", item.insertText));
+                labels.push(Json(bareLabel));
+            };
+            if (!entries.empty()) {
+                for (const auto& entry : entries) {
+                    if (entry.item < allItems.size())
+                        pushItem(allItems[entry.item]);
+                }
+            } else {
+                for (const lang::CompletionItem& item : allItems)
+                    pushItem(item);
+            }
+            reply(*raw, id,
+                  Json::object()
+                      .set("items", std::move(items))
+                      .set("labels", std::move(labels))
+                      .set("timedOut", !hasItems));
+        };
+        QObject::connect(timer, &QTimer::timeout, timer, check);
+        timer->start();
+    }
+
     // Replies once the condition holds, checked on a 50 ms timer on the GUI thread (the event loop
     // keeps running meanwhile), or at the timeout.
     void wait(Client& client, const Json& id, const Json& params) {
         const std::string what(params.stringAt("for", "cmake"));
-        if (what != "cmake" && what != "clangd") {
+        if (what != "cmake" && what != "clangd" && what != "lua" && what != "luals") {
             reply(client, id, fail(ErrorCode::InvalidArgument, std::format("cannot wait for '{}'", what)));
             return;
         }
@@ -1002,7 +1170,7 @@ struct AutomationEndpoint::Impl {
                 timer->deleteLater();
                 return;
             }
-            const bool reached = what == "cmake" ? cmakeIdle() : clangdRunning();
+            const bool reached = what == "cmake" ? cmakeIdle() : what == "clangd" ? clangdRunning() : luaRunning();
             const bool timedOut = std::chrono::steady_clock::now() >= deadline;
             if (!reached && !timedOut)
                 return;
@@ -1105,6 +1273,7 @@ struct AutomationEndpoint::Impl {
             .set("project", workbench.projectRoot())
             .set("cmake", std::move(cmakeState))
             .set("clangd", std::move(clangdState))
+            .set("lua", luaStateJson())
             .set("editor", editorJson());
     }
 };

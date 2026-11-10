@@ -77,8 +77,8 @@ public:
     [[nodiscard]] virtual std::string_view name() const noexcept = 0;
     /*
      * What the host adds for the workspace folder `folder` (absolute, normalised), or nullopt when
-     * the folder is not the host's. May read files through `fs`; must not start processes. Called
-     * on the GUI thread or a worker.
+     * the folder is not the host's. May read files through `fs` or consult a provider cache warmed
+     * off the GUI thread. Called on the GUI thread or a worker.
      */
     [[nodiscard]] virtual std::optional<LuaHostContribution> contribute(io::IFileSystem& fs,
                                                                         std::string_view folder) = 0;
