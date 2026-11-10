@@ -94,6 +94,7 @@
 #include "frost/project/trust_store.hpp"
 #include "frost/run/run_manager.hpp"
 #include "frost/sched/latest_wins.hpp"
+#include "frost/sched/resource_governor.hpp"
 #include "frost/sched/thread_pool.hpp"
 #include "frost/settings/store.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
@@ -591,6 +592,7 @@ public:
     [[nodiscard]] Result<void> gotoCppBinding();
     [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
     [[nodiscard]] lang::ClangdService* clangd() noexcept { return m_clangd.get(); }
+    [[nodiscard]] sched::ResourceGovernor* resourceGovernor() const noexcept { return m_resourceGovernor.get(); }
     // CPP-3: the owned compile-commands directories of a CMake folder's configurations and its
     // resolve-context choices; null without a CMake folder, a compile-commands cache or clangd.
     [[nodiscard]] lang::CMakeCompileCommandsProvider* cmakeCompileCommands() noexcept { return m_cmakeCommands.get(); }
@@ -969,6 +971,7 @@ private:
     std::string m_luaUnavailableNotifiedRoot;
     // The Lua host registry, the composed configuration and the progress tasks (workbench_lua.cpp).
     std::shared_ptr<WorkbenchLuaState> m_luaState;
+    std::shared_ptr<sched::ResourceGovernor> m_resourceGovernor;
     std::shared_ptr<lang::ClangdService> m_clangd;
     // The root already told that clangd was not found (the notice appears once per project; ADR 0078).
     std::string m_clangdUnavailableNotifiedRoot;

@@ -119,3 +119,36 @@ target_include_directories(lang_managed_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 if(WIN32)
     target_link_libraries(lang_managed_tests PRIVATE shell32 ole32 uuid)
 endif()
+
+# CPP-4 and FND-18 corpus tier (docs/adr/0084-cpp4-indexing-at-scale-baseline.md): full clangd
+# background index on the pinned FrostEngine clone alongside a concurrent cmake --build under the
+# ResourceGovernor build lock and RSS caps.
+set(_frost_lang_corpora_lock_file "${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_frost_lang_corpora_lock_file}")
+file(READ "${_frost_lang_corpora_lock_file}" _frost_lang_corpora_lock)
+string(JSON _frost_lang_corpora_count LENGTH "${_frost_lang_corpora_lock}" corpora)
+set(_frost_lang_engine_sha "")
+math(EXPR _frost_lang_corpora_last "${_frost_lang_corpora_count} - 1")
+foreach(_frost_lang_index RANGE ${_frost_lang_corpora_last})
+    string(JSON _frost_lang_corpus_id GET "${_frost_lang_corpora_lock}" corpora ${_frost_lang_index} id)
+    if(_frost_lang_corpus_id STREQUAL "frostengine")
+        string(JSON _frost_lang_engine_sha GET "${_frost_lang_corpora_lock}" corpora ${_frost_lang_index} sha)
+        if(WIN32)
+            string(JSON _frost_lang_engine_preset GET "${_frost_lang_corpora_lock}" corpora ${_frost_lang_index} presets windows)
+        else()
+            string(JSON _frost_lang_engine_preset GET "${_frost_lang_corpora_lock}" corpora ${_frost_lang_index} presets linux)
+        endif()
+    endif()
+endforeach()
+if(NOT _frost_lang_engine_sha MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR "${_frost_lang_corpora_lock_file} pins no frostengine corpus")
+endif()
+frost_add_test(lang_index_corpus_tests
+    SOURCES clangd_index_corpus_test.cpp
+    DEPS frost::lang frost::project frost::text frost::io frost::sched
+    LABELS integration corpus)
+target_include_directories(lang_index_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(lang_index_corpus_tests PRIVATE
+    FROST_CORPUS_FROSTENGINE_SHA="${_frost_lang_engine_sha}"
+    FROST_CORPUS_FROSTENGINE_PRESET="${_frost_lang_engine_preset}"
+    FROST_TEST_CMAKE="${CMAKE_COMMAND}")
