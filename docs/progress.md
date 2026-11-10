@@ -3,6 +3,376 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-10: R4c integration (C++ stock clangd sweep, format on save and editor essentials)
+
+- **What changed for you.**
+  - **C++ stock clangd feature sweep (`CPP-5`)**: `LspClient` and `EditorInsightBinding` request LSP 3.17 document
+    links (`textDocument/documentLink`), folding ranges (`textDocument/foldingRange`) and clangd's AST tree
+    (`textDocument/ast`, bounded at `kMaxAstDepth = 256` with a `(deeper nodes omitted)` truncation indicator).
+    `EditorView` underlines document links, shows their target in the tooltip, opens them on `Ctrl+click` without
+    firing ordinary go-to-declaration, and merges language-server folding ranges into `foldCandidates()` for the
+    active document version. `LanguageController::showAst` (`code.showAst` / `Show AST (clangd)`) opens `AstViewPopup`
+    and selects a node's source range on activation.
+  - **Formatting and actions on save (`REF-12`)**: `editor.formatOnSave` and `editor.optimizeImportsOnSave` (both
+    `false` by default, configurable per project) run `formatEditsForSave` and `includeCleanerEditsForSave` before
+    saving C/C++ buffers, applying edits as single undo steps or notifying why an action was skipped (server not
+    running, version not yet diagnosed, or timeout) without blocking the save.
+  - **Editor essentials and the 52 unregistered keymap actions (`UX-3`)**:
+    - Pure editor commands (`frost::text::editor::essentials`) and `EditorView` integration (`editor_view_essentials.cpp`):
+      Split Line, Start New Line Before, Toggle Overwrite mode, Paste Without Formatting, Paste from History (ring of
+      recent clipboard entries), Find Word at Caret, Move to Page Top / Page Bottom (with and without selection),
+      Jump to Matching Brace, Move to Code Block Start / End (with and without selection), Move Statement Up / Down
+      over real tree-sitter syntax nodes, and Auto-Indent Lines.
+    - All remaining unregistered keymap actions across `default`, `visual-studio`, `visual-studio-2022` and
+      `resharper` are now registered (`kKnownGaps` reduced to `0` with `static_assert(kKnownGaps.empty())`),
+      including numbered bookmarks (`bookmarks.toggle1..9`, `bookmarks.goto1..9`, `bookmarks.toggleMnemonic`,
+      `window.bookmarks`), `navigate.selectIn`, `window.maximizeToolWindow`, `build.project`, `code.reformatFile`,
+      `run.runContext`, `run.debugContext`, `debug.viewBreakpoints`, `vcs.quickPopup`, `window.git`, and
+      `tools.runAnything`. Future-epic actions (`code.smartCompletion` -> `CPP-14`, `refactor.copy` -> `REF-8`,
+      `debug.smartStepInto` -> `DBG-3`, `agent.atMention` -> `UX-17`) are registered and explicitly disabled naming
+      their owning epics per ADR 0078.
+- **Merged into `r4c/integration`**:
+  - `r4/cpp-5-ref-12` (`a0ce925`: `CPP-5`, `REF-12`),
+  - `r4/ux-3` (`b5dcb9a`: `UX-3`).
+- **Exit criteria (R4c subset of R4):**
+  - C++ format on save equals the `clang-format` CLI output on 5 FrostEngine files: **met**
+    (`CorpusCppEditor.FormatOnSaveEqualsTheClangFormatCliOnFiveEngineFiles`,
+    `ClangdE2E.FormattingAndTheSaveActionsEqualTheClangFormatCliAndRemoveTheUnusedInclude`,
+    `WorkbenchClangd.CppEditorFormatOnSaveIsOffByDefaultAndWhenOnEqualsTheClangFormatCli`).
+  - clangd semantic tokens, inlay hints, signature help, document links, folding ranges and AST work in the clone:
+    **met** (`CorpusCppEditor.SemanticTokensInlayHintsSignatureHelpLinksFoldsAndAstMatchClangdOnTheClone`,
+    `ClangdE2E.LinksFoldingAstInlayHintsAndSignatureHelpMatchClangdsAnswers`,
+    `WorkbenchClangd.CppEditorLinksFoldsInlayHintsAndTheAstViewComeFromClangd`).
+  - The keymap coverage test shows every bound action registered (`0` unregistered actions across all 4 shipped
+    keymaps): **met** (`KeymapCoverageTest.*` in `tests/input/keymap_coverage_test.cpp`).
+- **Follow-ups** (owning epic):
+  - `CPP-5`: `EditorView::reloadFromDocument()` clamps existing insight ranges when reloading the underlying
+    document; `m_documentLinks` could similarly be clamped or cleared there for completeness (`m_languageFolds` is
+    already gated by `m_languageFoldsVersion`).
+  - `UX-3`: `ToolWindowManager::maximizeActive` and `LanguageController::reformatFile` are wired over tested
+    primitives (`setSize` and `requestFormatting` with `std::nullopt` range); dedicated unit test cases for those
+    two entry points can be added alongside future shell/formatting tests.
+- **Next:** complete `R4b` (`FEC-1`, `FER-1a`, `FEC-10b`, `LUA-11a`, `FND-7c`) to close Milestone R4, then proceed
+  to R5.
+
+## 2026-11-10: R4a integration (Lua in the IDE and .fmeta-safe file operations)
+
+- **What changed for you.**
+  - **LuaLS workspace protocol (`LUA-3`)**: creating, renaming or deleting a `.lua` file notifies the running
+    `lua-language-server` via `workspace/didChangeWatchedFiles` so newly added modules resolve in `require()`
+    without restarting LuaLS. Changing Lua runtime or workspace settings sends `workspace/didChangeConfiguration`
+    to the running server. Server-initiated `workspace/configuration`, `window/workDoneProgress/create`,
+    `$/progress`, `workspace/semanticTokens/refresh`, `workspace/inlayHint/refresh` and `workspace/diagnostic/refresh`
+    are handled end-to-end, and multi-root workspace folders update through `workspace/didChangeWorkspaceFolders`.
+  - **Lua configuration, runtimes and `.luarc.json` (`LUA-4`)**: `frost::lang::readLuaRc` and `writeLuaRc` parse
+    and update `.luarc.json` (preserving unrelated user keys on write), and `SettingsLuaPage` (`Settings >
+    Languages > Lua`) configures Lua runtime version (`Lua 5.1`..`Lua 5.4`, `LuaJIT`), package path, library roots
+    and globals.
+  - **Lua host extension points (`LUA-13`)**: `ILuaHostProvider` and `LuaHostRegistry` allow host engines to
+    contribute runtime versions, globals and library directories in deterministic provider order without coupling
+    `LuaService` to any specific engine. `FrostEngineLuaProvider` implements the interface for FrostEngine.
+  - **Lua code insight (`LUA-5`)**: hover, signature help, Find Usages (`textDocument/references`), Structure view
+    (`textDocument/documentSymbol`) and inlay hints (`textDocument/inlayHint`) are routed through `LuaService` in
+    `LanguageController` and `EditorInsightBinding` when a `.lua` file is active, verified against the real bundled
+    LuaLS 3.19.1 oracle.
+  - **Lua diagnostics and Inspect Code (`LUA-6`)**: `inspectLuaDirectory` and `Workbench::inspectLuaCode`
+    (`code.inspectLua` / `Code > Inspect Lua Code...`) run `lua-language-server --check` via `IProcessLauncher`
+    behind the workspace trust gate, parse the exported JSON check report, and publish findings into the Problems
+    panel with clickable file/line navigation.
+  - **Lua semantic tokens and formatting (`LUA-7`)**: LuaLS semantic tokens highlight `.lua` buffers without
+    applying C++ `#if 0` inactive-region dimming (`markInactiveRegions = false` for Lua), and document/selection
+    formatting (`textDocument/formatting`, `textDocument/rangeFormatting`) applies LuaLS edits to the buffer.
+  - **`.fmeta`-safe file operations, phase A (`FEC-9a`)**: renaming, moving or deleting an asset inside a
+    FrostEngine `Assets/` tree atomically plans and executes the matching `.fmeta` sidecar operation with rollback
+    if the sidecar step fails, refuses standalone `.fmeta` rename/move in the Explorer, and runs the real
+    `FrostEditor assets.find-references --project <root> --asset <rel>` CLI via `IProcessLauncher` to warn about
+    every referencing asset.
+- **Merged into `r4a/integration`**:
+  - `r4/lua-3-4-13` (`4d38c34`: `LUA-3`, `LUA-4`, `LUA-13`),
+  - `r4/lua-5-6-7` (`15b158c`: `LUA-5`, `LUA-6`, `LUA-7`),
+  - `r4/fec-9a` (`9871b61`: `FEC-9a`).
+- **Exit criteria (R4a subset of R4):**
+  - Creating a new Lua module in the clone makes `require` resolve without a restart (`didChangeWatchedFiles`), and
+    changing the runtime in settings re-sends `didChangeConfiguration`: **met**
+    (`CorpusFrostEngine.ANewModuleInTheSampleResolvesWithoutARestartThroughTheHostApi`,
+    `LuaServiceRealTest.WatchedFileCreationAndConfigurationUpdateReachRunningLuaLsWithoutRestart`).
+  - Inspect Code on a scripts folder equals the `lua-language-server --check` output for that folder: **met**
+    (`LuaServiceRealTest.InspectLuaDirectoryMatchesDirectLuaLsCheckOracle`,
+    `WorkbenchLua.InspectLuaCodePublishesProblemsMatchingLuaLsCheckOracle`).
+  - Renaming or moving a script with a `.fmeta` sibling moves the sibling, and the engine CLI `find-references`
+    run warns about every referencing asset it reports: **met**
+    (`CorpusFrostEngine.FmetaSafeRenameAndMovePreserveSidecarsAndWarnWithEveryOracleReference`,
+    `FrostEngineAssetsTest.*`, `WorkbenchProjectEdit.FrostEngineAssetRenameMovesFmetaSidecarAndWarnsOnReferences`).
+- **Follow-ups** (owning epic):
+  - `LUA-3`: `LspClient` and `LuaService` support `workspace/didChangeWorkspaceFolders`, while a change in the set of
+    multi-root workspace folders in `Workbench::refreshLuaConfiguration` restarts `LuaService` so nested project
+    folders stay ordered before the checkout root in LuaLS.
+  - `LUA-6` / `FND-9b`: `Workbench::inspectLuaCode` currently awaits `runToCompletion` for `lua-language-server --check`
+    synchronously on the caller thread; moving the batch check onto a background task with progress reporting belongs
+    with the async inspection runner in `R5` (`CPP-6`).
+  - `FEC-9a` / `FEC-9b`: `FrostEditor assets.find-references` runs synchronously with a 30 s bound after an asset
+    rename/move/delete, and copy/paste/duplicate do not auto-pair `.fmeta` sidecars (only rename, move and delete are
+    in `FEC-9a` scope); `R14` (`FEC-9b`) upgrades asset move/rename to a background refactor preview that updates
+    referencing scenes/prefabs.
+  - `.gitignore`: changed `/build/` to `/build` so a Windows directory junction at `<worktree>/build` (which WSL
+    sees as a mode `120000` symlink) is never staged by `verify_stamp.py tree`.
+- **Next:** complete `R4c` (`CPP-5`, `REF-12`, `UX-3`) and `R4b` (`FEC-1`, `FER-1a`, `FEC-10b`, `LUA-11a`,
+  `FND-7c`).
+
+## 2026-11-09: R3 integration (DD-2: an MSVC solution as the daily driver; UAT-1 as j2_msvc)
+
+- **What changed for you.** FrostIDE now opens a Visual Studio solution (.sln or .slnx) the way Visual
+  Studio does: after you trust the folder, MSBuild itself evaluates every project, and the Solution Explorer
+  shows exactly the files MSBuild sees, placed by the .filters files. clangd gets the same compiler flags
+  MSBuild would pass (GetClCommandLines), so code insight follows the active configuration: switching
+  Debug|x64 to Release|x64 restarts clangd and `#ifdef NDEBUG` blocks flip. The Configuration Manager edits
+  project mappings with minimal changes to the .sln/.slnx. Add, remove and rename of files go through
+  MSBuild's own project-editing API and SolutionPersistence, so the project file changes only on the edited
+  lines. Build, Rebuild, Clean and Build > Compile (Ctrl+F7) run the real MSBuild.exe, and the error list is
+  what MSBuild reported. The Debugging page of Project Properties saves Command, Arguments, Working Directory
+  and Environment into the `.vcxproj.user` file (never the shared project). F5 builds the startup project and
+  debugs it under lldb-dap; the C++ throw breakpoint can be limited to types (for example only
+  `std::runtime_error`), and std::vector, std::string, std::map and the other STL containers show their
+  elements. Run configurations gained before-launch tasks, compound and attach configurations. The Visual
+  Studio 2022 and ReSharper keymaps are offered in Settings > Keymap (the launcher and the default keymap are
+  unchanged). A malicious repository opened before trust runs nothing of its own.
+- **Merged into `r3/integration`** with `--no-ff`: R2's final tree (`r2/integration` 34fdcd1, as the
+  orchestrator asked, since `main` receives the same R2 merge later; one conflict, corpora.lock.json: R2's
+  re-pinned engine without the Linux cacheVariables, plus R3's R2a entry), and in order:
+  `r3/sln-4-5-7` (SLN-0, SLN-2, SLN-3, SLN-4, SLN-5, SLN-7), `r3/sln-6` (SLN-6), `r3/sln-9-11` (SLN-9, SLN-11), `r3/sln-14-run-5` (SLN-14, RUN-5),
+  `r3/dbg-0-2b-4a` (DBG-0, DBG-2b, DBG-4a) and `r3/fnd-8-9b-ux-21` (FND-8, FND-9b, UX-21). The conflicts were
+  registrations only (source lists in src/project, src/build, tests/build, two includes in the Project
+  Properties dialog, the tag registry in tests/tools/test_verify_support.py) and keep both sides.
+- **FND-7b, the j2_msvc journey** (`tests/journeys/j2_msvc.py`; `journeys.j2_msvc_synthetic`, label
+  integration, and `journeys.j2_msvc_r2a`, label corpus). It drives the real Debug frost.exe through the
+  automation endpoint and covers UAT-1's four steps (open, edit, build, debug) with oracles only:
+  - open: the .slnx and then the .sln before trust (nothing evaluates, the root is untrusted), trust, and per
+    project the Solution Explorer's files equal `MSBuild.exe -getItem` for the project configuration the
+    solution maps Debug|x64 to (parsed from the .sln/.slnx itself);
+  - clangd's database is the Debug|x64 GetClCommandLines one; Release|x64 and back restart it on theirs;
+  - edit: a line typed in the editor and saved is on disk; Ctrl+F7's error list equals MSBuild's own
+    errors-only and warnings-only file loggers for the same `-t:ClCompile -p:SelectedFiles=`; Undo restores
+    the file byte for byte and the compile succeeds;
+  - build: Rebuild's error list equals MSBuild's record of a Rebuild, Clean removes the program, Build makes it;
+  - debug: Set as Startup Project, F5 builds and stops at the first breakpoint, the throw filter stops only at
+    the std::runtime_error (not the std::logic_error thrown before it), the breakpoint on main's last line
+    stops, Locals show the vector's, string's and map's elements (the map's pairs expanded as a click does),
+    and the exit code equals the program's own when run alone;
+  - every journey ends with "no UI stall over 250 ms" from its own freeze reports.
+
+  On R2a (Notepad++) it runs open, trust, explorer, edit, Ctrl+F7, Undo and a Rebuild of Lexilla in a shallow
+  scratch clone of the pin (the pinned clone is only read). Notepad++ does not link at the pin, so no debug.
+  The endpoint gained `solution`, `solution.configuration/build/compile/startup`, `debug.state` (with the
+  Breakpoints tab's rows and the console's tail), `debug.breakpoint/exception/continue/stop/locals/variables`,
+  `editor.type/undo/save` and `run.debug` (ADR 0080's method list in automation_endpoint.cpp).
+- **Integration fixes** (cross-slice; each with a test):
+  - **F5 ran past every breakpoint after an incremental relink.** lldb 23.1.4 refuses a PDB whose size is not
+    a whole number of MSF blocks, which link.exe leaves when it relinks a Debug program in place
+    (LinkIncremental, on by default for Debug): lldb-dap says "Symbols not found." and the program runs to its
+    end without a word. Found by j2_msvc (SLN-0's App.pdb: 1,677,312 bytes for 271 blocks of 4096; the same
+    bytes padded to a block boundary read fine). FrostIDE does not change your link settings; the Debug console
+    now says that the program's symbols could not be read, so its breakpoints cannot bind, and names the full
+    link that avoids it. ADR 0081 item 8. Test: `DebugSessionTest.AProgramWithoutSymbolsIsNamedOnce`.
+  - **The spawn log hashed each launched executable on the launching (often UI) thread at Debug-build
+    speed**: starting lldb-dap froze the UI for 0.6 s. sha256Hex uses Windows' CNG SHA-256 on Windows (the
+    portable FIPS 180-4 code stays for Linux and as the fallback). Test: the FIPS vectors in
+    `SpawnLog.*` (spawn_log_test.cpp), now through CNG.
+  - **The debugger forgot how a session ended**, so nothing could show the exit code once the session object
+    was gone: `DebugController::lastOutcome()` keeps the outcome (exit code, error, build failed, stopped).
+    Tests: `DebugUiTest.LastOutcomeKeepsTheExitCodeAfterTheSessionEnds`, `DebugUiTest.LastOutcomeRecordsAStoppedSession`.
+  - The Visual Studio 2022 and ReSharper keymaps (UX-21) and Ctrl+F7 (SLN-9, a build-module default that neither
+    keymap overrides) met for the first time: the keymap picker test expects `build.compileFile` on Ctrl+F7 in
+    both (`Workbench.*Keymap*` in workbench_test.cpp).
+  - The journeys' spawn-log reader retries the moment FrostIDE's atomic rewrite holds the file (a sharing
+    violation failed a step on R2a).
+  - **The Build output froze the UI during a burst of build output** (j2_run, after R2's re-pin rebuilt
+    FrostEditor from scratch: stalls of 3.0 s and 0.95 s, all in BuildOutputPane's per-line insert and
+    scroll, with one posted event per line). The pane now records each line in its log at once and gives
+    the view every waiting line on the next event-loop turn in one edit block and one scroll; `editor()`
+    inserts waiting lines first. Test: `BuildOutputPane.ABurstOfLinesReachesTheViewInOneEditAndOneScroll`
+    (2001 lines: one contentsChange, one scroll, order, styles and a late diagnostic's underline);
+    `BuildOutputPane.FollowsTheTailUnlessScrolledUpAndClears` now lets the event loop run before its scroll
+    checks and also asserts the range grew (stricter, not weaker).
+  - **The Git Log window froze the UI for 0.4 to 0.6 s when it filled** (j2_run on FrostEngine's history,
+    in every run once the build-output stalls were gone): its table inserted the 300 commits row by row,
+    and its three ResizeToContents columns measured every row on each layout pass (1807 cell measurements
+    for 300 rows). It now inserts the rows in one call and sizes those columns from the rows in view (173
+    measurements). Test: `GitLogToolWindow.FillsTheCommitTableInOneInsertion` (one rowsInserted for 300
+    commits and for the search filter, row order and texts, fewer cell measurements than rows).
+  - **The gutter's run marker normalised every CMake source on each diagnostics refresh** (j1_cmake: 0.36 s
+    on the UI thread for a file with `main` in FrostEngine's model). The owner search now normalises a source
+    only when its file name matches (`lang::mayHaveDocumentKey`). Test:
+    `Uri.TheFileNamePrefilterKeepsEveryPathWithTheKeyAndRejectsOtherNames`.
+  - **`CMakeService::state()` waited for the service lock**, which the service thread holds while it starts
+    a step (directory and query writes, process creation, the spawn log's first digest of cmake.exe): the UI
+    thread waited 0.32 s in j2_run. state() now reads the copy published with every change, without the lock.
+    Test: `CMakeServiceTest.StateAnswersWhileAStepIsBeingStarted` (a configure held inside its process start;
+    it fails against the old locking state(), checked by hand).
+  - **A full build starved the UI thread.** j2_run's Run rebuilds FrostEditor after j1_cmake's Clean; ninja
+    ran 26 cl.exe on 24 hardware threads at normal priority (100% CPU for 5 minutes), and painting stalled
+    for 0.25 to 3.1 s (every report marked unreliable: even the above-normal watchdog woke late). Every
+    BuildSession (CMake configure and build, MSBuild, managed builds) now starts its tool below normal
+    priority (`ProcessSpec::belowNormalPriority`: Windows BELOW_NORMAL_PRIORITY_CLASS, which the compilers
+    inherit; POSIX niceness +10 right after posix_spawn, best effort). Tests:
+    `RealProcessLauncher.BelowNormalPriorityLowersTheChildAndOnWindowsItsDescendants`,
+    `BuildSession.StartsTheToolBelowNormalPriority`. The gate's scheduled task now runs at task priority 4
+    (normal), as a user starts FrostIDE; the default, 7, ran the whole gate below normal, so the UI and the
+    build competed as equals there (question 7 below).
+  - Test fixture: `WorkbenchGit.CloneRunsOffTheGuiThreadWithTheResolvedGitAndOpensTheClone` failed to remove
+    its work directory once the build tree moved to C:, the volume of %TEMP%: git's local clone then
+    hard-links the source repository's read-only object files instead of copying them writable, and the
+    work directory went before the TempRepo that clears them. `WorkDir` now makes its tree writable before
+    removing it, through the helper `frost::test::makeTreeWritable` that TempRepo already used inline.
+  - **Closing a project froze the UI while Git worked** (j2_run, 0.6 s: `std::jthread::join` in
+    `SerialQueue::~SerialQueue`, reached from `GitController::~GitController` on the UI thread while a git
+    process was starting). The controller now closes its callbacks' gate first (no worker posts to it
+    afterwards), cancels the running operation and hands the service to the Workbench, which destroys it on
+    the pool and joins those threads only in its own destructor (FND-9b). Test:
+    `GitUiE2E.ADestroyedControllerHandsItsServiceToTheRetirerAndItsCallbacksStayClosed`.
+  - **The Linux build and tests of the R3 slices** (first run in WSL at the integration): Windows-only code
+    left an unused parameter and fields (`SolutionEvaluation::run` on POSIX) and two helpers only Windows
+    calls (`matchesSelection`, `trimmedOutput`), each an error under -Werror; Ctrl+F7's file match normalised
+    only Windows paths, so `/work/...` matched nothing (`pathKey` falls back to the platform's rules;
+    `ServiceTest.CompileCompilesTheFilesEvaluatedIdentityWithItsProject`); and j2_msvc joined a .sln's
+    `Core\Core.vcxproj` as one Linux file name (`solution_relative`; `journeys.support`).
+  - **tools/verify.sh copied the worktree's `build` junction** (a symlink in WSL) into the ext4 mirror, so the
+    Linux build trees landed on /mnt/c behind it and moc's relative includes broke. `mirror_source` now
+    excludes `/build` whatever its type and removes a copied link. Test:
+    `VerifyShTest.test_mirror_never_copies_a_build_link_and_removes_a_copied_one`.
+  - `tools\verify.ps1` lost the debug leg's failed test names, because the corpus leg reruns ctest in the
+    same tree and rewrites LastTestsFailed.log (the last run hid `GitE2E.CommitRetainsRecoveryIndexWhenReadingItFails`
+    behind the corpus failures). Every ctest leg now prints its failed tests, keeps them in
+    `Testing\Temporary\FailedTests-<label>.log` and lists them again above the summary line. Test:
+    `VerifyPs1Test.test_get_ctest_failures_matches_the_fixture_table` (tests/tools/test_verify_scripts.py).
+- **Tests replaced or removed (D32)** in the slices, each because it asserted the behaviour the epic replaces:
+  `Workbench.ProjectPropertiesDebuggingPageIsReadOnlyAndWritesNothing` became
+  `Workbench.ProjectPropertiesDebuggingPageSavesToTheUserFileOnly` (SLN-11);
+  `WorkbenchProjectEdit.AddsExistingSourceThroughProjectMenu`'s byte expectations of the old regex planner
+  became the construction API's output, and the VsRenameDemo SLN-6 placeholder assertion became "No project
+  file was changed" (SLN-6); `BuildShortcuts.TheTableHasOneBuildSolutionEntryAndParses` expects the third
+  default, Ctrl+F7 (SLN-9); `Workbench.CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAndStartsNothing`
+  became `...AddsAConfigurationAndStartsNothing` and `RunConfigurationsDialog.CompoundRunsAreDisabledNamingRunFive`
+  became `RunConfigurationsDialog.CompoundAndAttachConfigurationsNeedAWorkspace` (RUN-5: both asserted the
+  "until RUN-5" placeholder); `Workbench.ProjectDialogsAreReadOnlyAndWriteNoProjectFile` dropped its
+  Configuration Manager read-only assertions (the disabled column, the SLN-6 note, no OK button), because
+  SLN-7 makes the dialog editable, and its writes are tested in
+  `workbench_configuration_manager_test.cpp`; `LldbDap.LaunchArgumentsCarryTheResolvedRun` no longer
+  expects Windows launches without initCommands (DBG-4a sends the step-in setting there too; the case
+  without them is still asserted). The integration replaced or removed none.
+- **Exit criteria:**
+  - j2_msvc on R2a and the synthetic solution; explorer counts equal MSBuild's; .sln and .slnx both load:
+    **met** (`journeys.j2_msvc_synthetic`, `journeys.j2_msvc_r2a`; also
+    `R2aCorpus.NotepadPlusPlusEvaluatesThroughProjectHostAndItemCountsEqualTheOracle`).
+  - clangd flags equal GetClCommandLines for Debug|x64; Release|x64 restarts clangd and flips NDEBUG: **met**
+    (`ClCommandLinesReal.ProjectHostGetClCommandLinesEqualsMsBuildExeForDebugAndRelease`,
+    `ClCommandLinesClangd.ClangdBuildsAWithMsBuildsGetClCommandLinesAndNdebugFlipsTheInactiveRegion`,
+    `WorkbenchConfigurationManager.SwitchingAndRemappingRestartClangdOnTheNewDatabaseAndFlipNdebug`, j2_msvc).
+  - add/remove/rename through SolutionPersistence/MSBuild with a minimal git diff, the build passing afterwards:
+    **met** (`ProjectEditReal.AddRenameAndRemoveChangeOnlyTheirElementsAndTheSolutionStillBuilds`,
+    `R2aCorpus.NotepadPlusPlusEditsChangeOnlyTheirLinesAndTheEditedFilesCompile`).
+  - Build, Rebuild, Clean and Ctrl+F7 use the real MSBuild.exe; the error list equals MSBuild's: **met**
+    (`MsBuildBuild.*`, `MsBuildCompile.CompilesOnlyTheFileAndTheErrorListEqualsMsBuildsLog`,
+    `R2aBuild.CompileRebuildsOnlyTheFileAndTheErrorListEqualsMsBuildsLog`, j2_msvc).
+  - Set as Startup Project writes .vcxproj.user; F5 debugs; the _CxxThrowException filter for
+    std::runtime_error; STL containers show their elements: **met, with one deviation**. The Debugging
+    properties are written to .vcxproj.user (`R2aBuild.TheUserFileFrostIdeWritesIsWhatMsBuildEvaluates`), but
+    the startup project itself is kept in FrostIDE's run settings, because Visual Studio keeps it in the binary
+    .suo, not in the .user file (question below). F5, the filter and the STL display: `MsvcThrowFilter.*`,
+    `MsvcDebug.StlContainersShowTheirElements`, j2_msvc's debug steps.
+  - The DBG-0 ADR records the numbers: **met** (ADR 0081: FrostTests, FrostEditor and FrostRuntime). The
+    integration built FrostTests and FrostRuntime in the R3 pin's clone and re-ran `tools/dbg0/run-dbg0.ps1`
+    on all three: DbgEng reaches `main` in 0.6 to 1.6 s with 221 to 463 MB, lldb-dap in 26 to 48 s with
+    1.3 to 2.6 GB (FrostRuntime.pdb 929 MB: 0.6 s / 221 MB against 26.4 s / 1,331 MB).
+  - The malicious repository runs no process before trust: **met** (`journeys.trust_malicious_repo`).
+  - No stall over 250 ms in the j1/j2 freeze reports: the last step of `journeys.j2_msvc_synthetic`,
+    `journeys.j2_msvc_r2a`, `journeys.j1_cmake`, `journeys.j2_run` and `journeys.trust_malicious_repo`.
+    j2_run passes only after the Build output, Git Log, state(), build-priority and Git teardown fixes
+    above. The gate ran with a 12-compiler limit (below); j1_cmake and j2_run were also run once without
+    it, non-elevated: j2_run (the full engine rebuild) **met**; j1_cmake failed its first run on one
+    309 ms stall, reported as unreliable (the watchdog itself woke late), in `WindowsFileSystem::readFile` from
+    `DocumentEditorFactory::open` as the first source opened right after the 19.7 s configure (no compiler was
+    running, so the limit does not apply), and **met** on its second run. So the criterion does not depend on
+    the 12-compiler limit, but synchronous document reads on the UI thread can still stall under load (FND-9b
+    follow-up below). Under the saturated disk of the earlier runs, single stalls of 0.3 to 2.3 s
+    appeared in UI-thread file I/O that predates R3 (FND-9b follow-up below).
+  - UAT-1 covered by j2_msvc: **met** for the synthetic solution (all four steps). On R2a open, edit and build
+    only (Notepad++ does not link at the pin). **UAT-1 on the user's work solution: pending for the user**
+    (the orchestrator performs it and reports in plain language).
+- **Verification:** the commit's footer carries the gate's summary lines. Windows ran
+  `tools\verify.ps1 -Quick -Corpus -WindowsOnly -Jobs 8 -TestJobs 6 -BuildDir C:\FrostWork\builds\r3-int\win-clangcl`
+  non-elevated (a RunLevel Limited scheduled task at task priority 4, normal; corpora under
+  `D:\FrostWork\corpora`; FrostTests prebuilt in the engine clone; `CMAKE_BUILD_PARALLEL_LEVEL=12` as the test
+  machine's environment, so the engine rebuild FrostIDE starts after j1's Clean, a `cmake --build` without
+  `-j`, runs at most 12 compilers beside the user's other work, measured at 12). WSL then ran
+  `tools/verify.sh --quick --tsan-quick --corpus` on the same tree.
+- **Follow-ups** (owning epic):
+  - DBG (lldb-dap 23 on Windows): `DapReal.PauseThenContinueThenPauseAgain` failed once in a full gate (no
+    second stop within 90 s: lldb-dap accepted the second pause and never sent "stopped"); it passed 30 runs
+    alone and 3 runs of the whole DapReal suite in parallel. If it recurs, the session should re-send pause
+    when no stop arrives.
+  - RUN-5: MSBuild run configurations refuse before-launch tasks (run_configuration.cpp); compound
+    configurations run but cannot be debugged (DBG-10).
+  - UX-21: the Visual Studio 2022 and ReSharper keymaps are chosen in Settings > Keymap only; there is no
+    first-run keymap picker (the launcher stays as it is).
+  - FND-8: "runs nothing of its own" means no process of the repository's own; FrostIDE's own git and clangd
+    still run in restricted mode as PLAN 3.5 allows.
+  - SLN-9: Ctrl+F7 picks the file's project from the static solution model, not the evaluated one
+    (build_service.cpp).
+  - SLN-5: the explorer waits for the whole solution's evaluation, and every project edit restarts it.
+  - SLN-7: the Configuration Manager writes the .sln/.slnx without checking for an unsaved tab of the same file.
+  - SLN-14/CMK-3: toolchain discovery has no caller yet.
+  - SLN-6: some refusal texts name the wrong owner epic; publishProjectEdit drops the unloaded projects'
+    state from the model it republishes.
+  - j2_run's cleanup cannot tell a `.frost/` folder a killed earlier run left in the pinned engine clone from
+    one that was already there (verify-final3 failed on such a leftover; removed by hand).
+  - DBG-14 (R6) or an lldb fix: debugging after an incremental relink (ADR 0081 item 8). Until then FrostIDE
+    only says why breakpoints do not bind.
+  - DBG-4a: map and unordered_map elements show the pair's type until expanded; std::array has no formatter;
+    lldb shows a breakpoint line that starts with an inlined call as an inlined frame (whose Locals are empty)
+    in optimised builds.
+  - SLN-9: a linker's relative origin (LNK4006's `a.obj`) is resolved against the project folder into a path
+    that does not exist; the error list shows it, but Navigate goes nowhere.
+  - FND-9b: UI-thread file I/O stalls under a saturated disk (seen in the journeys: opening a document reads
+    it on the UI thread (LoadService::load from DocumentEditorFactory::open), font reads in
+    ensureEditorFonts, safeWrite's temp file on save, FormatMessage in an .editorconfig read error, the trust
+    dialog's path checks, painting). Each run shows a different one; none is in R3 code paths except the trust
+    dialog (FND-8). On POSIX, desktop autogroup scheduling can cancel the builds' nice +10 against processes of
+    other sessions; MSBuild's `-m` worker nodes may not inherit the priority (not measured).
+  - VCS (restricted mode, FND-8): in an untrusted repository the restricted status hashes every tracked file
+    with `git hash-object` on each refresh (Notepad++: about 43 git processes every 9 s for 24 minutes while a
+    stuck build waited), a heavy load on large repositories.
+  - safeWrite (R0 storage): a file owned by another account (for example one an elevated clone created) cannot
+    be saved by a non-elevated FrostIDE ("owner or group cannot be preserved"). Visual Studio saves it.
+  - The R0 exit tests that stalled under I/O starvation in the debugger slice's run (R0ToolAblation,
+    R0Navigation, R0Trust CMake): watch them in this gate.
+  - VCS (M5): after `git commit`, the HEAD re-read has a 2 s bound; under a saturated machine it timed out
+    once (`GitE2E.CommitRetainsRecoveryIndexWhenReadingItFails`, passed alone) and the commit was reported
+    as "could not determine whether the commit completed" (conservative: the recovery index is kept).
+  - CMake (CMK, R1 code): CMakeService still does file I/O and starts processes while holding its lock, so its
+    other getters (progress, model, lastConfigure) can wait behind a slow start; only state() is lock-free.
+  - Gate environment: a build tree reached through a junction fails 13 Workbench and RealPty tests, because
+    the product refuses reparse points in project and test paths (the first run of this gate, with
+    `<worktree>\build` a junction to C:). The gate therefore passes the real C: path as `-BuildDir`.
+  - FND-6b: `corpora.py engine --configure` never builds, and the doctest corpus test builds FrostTests
+    itself inside ctest's 3600 s corpus limit; a fresh clone needs FrostTests built before the tier (done by
+    hand for this gate). `corpora.py engine` should build the corpus tests' targets.
+- **Questions for the user:**
+  1. Startup project: keep it in FrostIDE's run settings (Visual Studio keeps it in the .suo), or also write
+     it somewhere Visual Studio reads?
+  2. Incremental links (ADR 0081 item 8): should F5 build with `LinkIncremental=false` (deviates from your
+     build), keep only the console note until DBG-14, or should FrostIDE give lldb a padded copy of the PDB?
+  3. FND-8 logs restricted-mode launches in the spawn log but PLAN 3.5 lists them as allowed; is the CMake half
+     of FND-8 (presets hooks) enough as tested, or do you want a CMake configure-time sandbox later?
+  4. Configuration Manager wording and automatic .vcxproj edits: the slices write .sln/.slnx and project files
+     only on explicit actions; is "Add Existing Source" behind the trust gate what you expect?
+  5. The older "visual-studio" keymap now sits next to the new "Visual Studio 2022" one: retire it?
+  6. Compound configurations cannot be debugged yet (DBG-10, deferred): fine for R3?
+  7. Builds now run below normal priority so the IDE stays responsive (applied as the recommended default).
+     On a busy machine other normal-priority work, such as a game, then goes first and the build takes
+     longer. Do you want a setting to build at normal priority?
+- **Next:** independent review of `r3/integration` (one review, at most one fix pass), then merge R3 into
+  `main` after R2's merge there; then R4 (Lua) per the R-ladder.
+
 ## 2026-11-08: R2 integration (DD-1: FrostEngine run, test and debug)
 
 - **Merged into `r2/integration`** (d224431) with `--no-ff` on top of RUN-1 (`r2/run-1-model`):

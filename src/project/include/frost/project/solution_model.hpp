@@ -7,8 +7,17 @@
 /*
  * Loading (SolutionModel::load) reads the solution with the static readers of solution_file.hpp,
  * then every .vcxproj and its .vcxproj.filters with those of vcxproj.hpp. Nothing is evaluated
- * or launched: imported .props/.targets are not read (path (c)'s MSBuild evaluation is M2), so
- * the model is safe to build before the folder is trusted (PLAN.md section 3.5).
+ * or launched: imported .props/.targets are not read, so the model is safe to build before the
+ * folder is trusted (PLAN.md section 3.5).
+ *
+ * Evaluated items (SLN-3). SolutionLoadOptions::evaluated carries MSBuild's own evaluation of
+ * projects (ProjectHost, or MSBuild.exe as its fallback; project_host.hpp). A loaded C++ project
+ * with an entry there gets its file nodes from the evaluated items instead of the static ones:
+ * items that property sheets, Directory.Build.props and conditions add or remove are then shown
+ * exactly as MSBuild sees them. The .filters file still places them (an evaluated item the
+ * .filters file does not name goes to the project root, or to its folder in the folder modes),
+ * and ProjectInfo::evaluation records the source, configuration and imports. Loading itself
+ * still launches nothing: the caller ran the evaluation after trust.
  *
  * Only a problem with the solution file itself fails the load. A project file that is missing
  * or unreadable becomes an UnavailableProject node carrying the error; .vbproj, .fsproj,
@@ -88,9 +97,39 @@ enum class CppHierarchyMode : unsigned char {
     PhysicalFolders,   // Physical folder structure relative to the .vcxproj directory.
 };
 
+// Who evaluated a project's items (SLN-2): the ProjectHost helper, or MSBuild.exe as its fallback.
+enum class EvaluationSource : unsigned char { ProjectHost, MsBuildCli };
+
+// "ProjectHost", "MSBuild.exe".
+[[nodiscard]] std::string_view toString(EvaluationSource source) noexcept;
+
+// MSBuild's evaluated file items of one project in one project configuration (see above).
+struct EvaluatedProjectItems {
+    std::string projectPath;   // Absolute.
+    std::string configuration; // The project configuration evaluated, "Debug".
+    std::string platform;      // The project platform evaluated, "x64".
+    EvaluationSource source = EvaluationSource::ProjectHost;
+    std::string msbuildVersion = {};        // The evaluating Microsoft.Build's file version, or "".
+    std::vector<ProjectItem> items = {};    // Evaluation order, each path once, absolute and normalised.
+    std::vector<std::string> imports = {};  // The imports in evaluation order; empty for MsBuildCli.
+    std::vector<std::string> warnings = {}; // Non-fatal problems of the evaluation, for the log.
+};
+
+// What a project's node was built from when it was evaluated (ProjectInfo::evaluation).
+struct ProjectEvaluationSummary {
+    EvaluationSource source = EvaluationSource::ProjectHost;
+    std::string configuration;
+    std::string platform;
+    std::string msbuildVersion;
+    std::vector<std::string> imports;
+    std::size_t itemCount = 0; // Distinct item paths.
+};
+
 struct SolutionLoadOptions {
     CppHierarchyMode cppHierarchy = CppHierarchyMode::Filters;
     std::vector<std::string> unloadedProjectPaths = {};
+    // Evaluated items per project (see the header comment); projects not listed stay static.
+    std::vector<EvaluatedProjectItems> evaluated = {};
 };
 
 // "C++", "C#", "Visual Basic", "F#", "shared items", "unknown".
@@ -122,6 +161,8 @@ struct ProjectInfo {
     std::vector<std::string> externalReferences; // ProjectReference paths naming no project in the solution.
     // Index = solution configuration index; empty when the project is not part of that configuration.
     std::vector<std::optional<ProjectConfigurationMapping>> configurationMap;
+    // Set when the project's items came from MSBuild's evaluation (SolutionLoadOptions::evaluated).
+    std::optional<ProjectEvaluationSummary> evaluation = std::nullopt;
 };
 
 class SolutionModel {
@@ -178,6 +219,11 @@ public:
     [[nodiscard]] std::optional<NodeId> findFileNode(std::string_view filePath) const;
 
     [[nodiscard]] std::span<const std::string> warnings() const noexcept { return m_warnings; }
+
+    // The distinct paths of the file nodes reachable below `project`'s node: the item count the
+    // Solution Explorer shows for it (SLN-3's oracle comparison). O(nodes below the project).
+    // Precondition (FROST_PRE): project < projects().size().
+    [[nodiscard]] std::vector<std::string> projectFilePaths(ProjectId project) const;
 
 private:
     friend class SolutionModelBuilder;

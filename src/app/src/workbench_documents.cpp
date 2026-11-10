@@ -52,7 +52,9 @@ QString displayName(std::string_view path) { return QFileInfo(qs(path)).fileName
  * CMake project: the executable target of the configured model that builds the file, run as its run
  * configuration (RUN-2); none or several such targets give no run and say why.
  * Nothing is guessed: `unavailable` says why when neither `project` nor `cmakeTarget` is set.
- * O(solution nodes) or O(CMake sources).
+ * O(solution nodes) or O(CMake sources), with a path normalised only when its file name matches
+ * (mayHaveDocumentKey): normalising every source of FrostEngine's model on each diagnostics refresh
+ * held the UI thread for 0.36 s (j1_cmake's freeze report).
  */
 struct EntryPointRun {
     std::optional<project::ProjectId> project;
@@ -69,7 +71,8 @@ EntryPointRun entryPointRun(const project::SolutionModel* solution, const projec
         std::vector<project::ProjectId> owners;
         for (std::size_t i = 0; i < solution->nodeCount(); ++i) {
             const project::Node& node = solution->node(project::NodeId{static_cast<std::uint32_t>(i)});
-            if (node.kind != project::NodeKind::File || !node.project || lang::documentKey(node.path) != key)
+            if (node.kind != project::NodeKind::File || !node.project || !lang::mayHaveDocumentKey(node.path, key) ||
+                lang::documentKey(node.path) != key)
                 continue;
             const project::ProjectInfo& info = solution->project(*node.project);
             if (info.kind == project::ProjectKind::Cpp && info.nodeKind == project::NodeKind::Project &&
@@ -96,7 +99,7 @@ EntryPointRun entryPointRun(const project::SolutionModel* solution, const projec
         }
         const auto builds = [&key](const project::CMakeTarget& target) {
             return std::ranges::any_of(target.sources, [&key](const project::CMakeSource& source) {
-                return lang::documentKey(source.path) == key;
+                return lang::mayHaveDocumentKey(source.path, key) && lang::documentKey(source.path) == key;
             });
         };
         std::vector<const project::CMakeTarget*> owners;
@@ -166,6 +169,21 @@ void Workbench::editorOpened(DocumentEditorView& view) {
                currentView() == &view) {
         auto* binding = new ui::lang::EditorInsightBinding(view.editor(), {*m_bridge, *m_pool});
         binding->setCodeVisionEnabled(true);
+        if (m_lua && isLuaSource(view.path())) {
+            if (auto set = m_lua->diagnostics().forFile(view.path()); set && !set->stale)
+                binding->setLiveDiagnostics(*set);
+            else {
+                for (const lang::FileDiagnostics& inspected : luaInspectedDiagnostics()) {
+                    if (lang::documentKey(inspected.file) == lang::documentKey(view.path())) {
+                        binding->setLiveDiagnostics(inspected);
+                        break;
+                    }
+                }
+            }
+        } else if (m_managed && isManagedSource(view.path())) {
+            if (auto set = m_managed->diagnostics().forFile(view.path()); set && !set->stale)
+                binding->setLiveDiagnostics(*set);
+        }
         binding->refreshSemanticTokens();
         refreshMarkers(view);
     }
@@ -181,6 +199,9 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             m_language->gotoDeclarationAt(offset);
         }
     });
+    // CPP-5: Ctrl+click on a document link (an #include clangd resolved) opens its target.
+    connect(editor, &ui::EditorView::documentLinkActivated, this,
+            [this](const QString& target) { openLocation(target, 1, 1); });
     connect(editor, &ui::EditorView::contextActionRequested, this, [this, editor](const QString& actionId) {
         editor->setFocus();
         if (DocumentEditorView* current = currentView(); current != nullptr && &current->editor() == editor) {
@@ -423,6 +444,7 @@ document::SaveTransform Workbench::saveTransformFor(const document::FileDocument
 }
 
 Result<void> Workbench::saveQuietly(document::FileDocument& document) {
+    runActionsOnSave(document); // REF-12; off by default.
     Result<document::SaveOutcome> outcome = m_documents->save(document);
     if (!outcome) {
         return std::unexpected(std::move(outcome.error()));

@@ -24,6 +24,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <format>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -812,6 +813,66 @@ TEST_F(CMakeServiceTest, WrapperOutputFenceSurvivesCompletionButNotSupersession)
     ASSERT_TRUE(service->closeFolder());
     ASSERT_TRUE(service->openFolder(folder()));
     EXPECT_FALSE(second()); // Reopening the same root is a new profile generation.
+}
+
+/*
+ * state() answers while the service thread is starting a step under its lock: a configure whose
+ * process creation is held (as a slow CreateProcess and the spawn log's first digest of cmake.exe
+ * held it for 0.32 s in j2_run, with the GUI thread waiting in state()) still reports its state at
+ * once from another thread.
+ */
+TEST_F(CMakeServiceTest, StateAnswersWhileAStepIsBeingStarted) {
+    class HeldStartLauncher final : public io::IProcessLauncher {
+    public:
+        explicit HeldStartLauncher(io::IProcessLauncher& inner) : m_inner(inner) {}
+        std::atomic<bool> entered{false}, release{false};
+        // BuildSession starts a step with launch(); only the configure step ("-S ...") is held.
+        Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& spec) override {
+            if (!spec.arguments.empty() && spec.arguments.front() == "-S") {
+                entered = true;
+                while (!release.load())
+                    std::this_thread::sleep_for(5ms);
+            }
+            return m_inner.launch(spec);
+        }
+        Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
+                                                               const io::AsyncContext& context) override {
+            return m_inner.launchAsync(spec, context);
+        }
+
+    private:
+        io::IProcessLauncher& m_inner;
+    } held(cmakeLauncher);
+    // A failed assertion returns with the start held: release it and stop the service before
+    // `held`, which it launches through, goes.
+    struct StopFirst {
+        HeldStartLauncher& held;
+        std::unique_ptr<CMakeService>& service;
+        ~StopFirst() {
+            held.release = true;
+            service.reset();
+        }
+    } stopFirst{held, service};
+    service = CMakeService::create(tree.fs, held, *trustStore, options(), events.callbacks());
+    ASSERT_TRUE(service->openFolder(folder()).has_value());
+    installReply();
+    ASSERT_TRUE(service->configure().has_value()); // Waits for trust, as in ConfiguresOnceTrusted.
+    expectFirstConfigure({.stdoutBytes = "-- Configuring done (0.1s)\n"});
+    ASSERT_TRUE(service->trust(folder()).has_value()); // Starts the configure.
+    const auto deadline = std::chrono::steady_clock::now() + kWait;
+    while (!held.entered.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(5ms);
+    ASSERT_TRUE(held.entered.load()) << "the configure step never started its process";
+    // The service thread is inside the step's start now; state() must not wait for it.
+    auto answer = std::async(std::launch::async, [this] { return service->state(); });
+    const bool answered = answer.wait_for(2s) == std::future_status::ready;
+    held.release = true;
+    EXPECT_TRUE(answered) << "state() waited for the step's process start";
+    EXPECT_NE(answer.get(), BuildState::Idle);
+    EXPECT_TRUE(service->waitForIdle(kWait));
+    EXPECT_EQ(service->state(), BuildState::Idle);
+    const auto outcome = service->lastConfigure();
+    EXPECT_TRUE(outcome.has_value() && outcome->succeeded());
 }
 
 TEST_F(CMakeServiceTest, ConfiguresOnceTrusted) {

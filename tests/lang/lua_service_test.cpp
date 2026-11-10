@@ -5,8 +5,10 @@
 #include "frost/io/path.hpp"
 #include "frost/io/reactor.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
+#include "frost/lang/frost_engine_lua.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/lang/managed_service.hpp"
+#include "frost/lang/uri.hpp"
 #include "frost/sched/sim_executor.hpp"
 #include "frost/text/document.hpp"
 
@@ -156,7 +158,11 @@ TEST(ManagedService, RequiresTrustAndConfiguresCSharpProcess) {
 }
 
 TEST(LuaService, ConfigurationMatchesEngineAndSupportsSections) {
-    auto config = frost::lang::luaDefaults("Lua 5.4", true);
+    auto config = frost::lang::frostEngineLuaDefaults("Lua 5.4", [] {
+        frost::lang::FrostEngineLuaProfile unreferenced;
+        unreferenced.frostEngine = true; // A FrostEngine workspace whose reference was not found.
+        return unreferenced;
+    }());
     EXPECT_EQ(frost::lang::luaConfigurationSection(config, "Lua.runtime.version").asString()->compare("Lua 5.4"), 0);
     EXPECT_EQ(frost::lang::luaConfigurationSection(config, "Lua.workspace.library")
                   .items()[0]
@@ -168,6 +174,81 @@ TEST(LuaService, ConfigurationMatchesEngineAndSupportsSections) {
     EXPECT_EQ(
         *frost::lang::luaConfigurationSection(frost::lang::luaDefaults("Lua 5.1"), "Lua.runtime.version").asString(),
         "Lua 5.1");
+    EXPECT_EQ(frost::lang::luaConfigurationSection(frost::lang::luaDefaults("Lua 5.4"), "Lua.hint.enable").asBool(),
+              true);
+}
+TEST(LuaService, ParseCheckReportAndInspectGateValidateInputs) {
+    frost::io::MemFs fs(frost::systemClock());
+    const std::string fileA = frost::io::joinPath(root, "scripts/a.lua").value();
+    const std::string fileB = frost::io::joinPath(root, "scripts/b.lua").value();
+    ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(fileA)).has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(fileA, "local x = 1\nprint(missingGlobal)\n").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(fileB, "local unused = 2\n").has_value());
+
+    const auto emptyReport = frost::lang::parseLuaCheckReport("[]", &fs);
+    ASSERT_TRUE(emptyReport.has_value()) << emptyReport.error().describe();
+    EXPECT_TRUE(emptyReport->empty());
+    EXPECT_TRUE(frost::lang::parseLuaCheckReport("  \n ", &fs).value().empty());
+    EXPECT_FALSE(frost::lang::parseLuaCheckReport("{not json", &fs).has_value());
+    EXPECT_FALSE(frost::lang::parseLuaCheckReport("[1]", &fs).has_value());
+
+    const std::string uriA = frost::lang::pathToUri(fileA).value();
+    const std::string uriB = frost::lang::pathToUri(fileB).value();
+    const frost::lang::Json reportJson =
+        frost::lang::Json::object()
+            .set(uriB,
+                 frost::lang::Json::array(
+                     {frost::lang::Json::object()
+                          .set("code", "unused-local")
+                          .set("message", "Unused local `unused`.")
+                          .set("severity", 4)
+                          .set("range",
+                               frost::lang::Json::object()
+                                   .set("start", frost::lang::Json::object().set("line", 0).set("character", 6))
+                                   .set("end", frost::lang::Json::object().set("line", 0).set("character", 12)))}))
+            .set(uriA,
+                 frost::lang::Json::array(
+                     {frost::lang::Json::object()
+                          .set("code", "undefined-global")
+                          .set("message", "Undefined global `missingGlobal`.")
+                          .set("severity", 2)
+                          .set("range",
+                               frost::lang::Json::object()
+                                   .set("start", frost::lang::Json::object().set("line", 1).set("character", 6))
+                                   .set("end", frost::lang::Json::object().set("line", 1).set("character", 19)))}));
+    const auto parsed = frost::lang::parseLuaCheckReport(reportJson.dump(), &fs);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error().describe();
+    ASSERT_EQ(parsed->size(), 2U);
+    EXPECT_EQ((*parsed)[0].file, fileA);
+    ASSERT_EQ((*parsed)[0].diagnostics.size(), 1U);
+    EXPECT_EQ((*parsed)[0].diagnostics[0].code, "undefined-global");
+    EXPECT_EQ((*parsed)[0].diagnostics[0].severity, frost::lang::DiagnosticSeverity::Warning);
+    EXPECT_EQ((*parsed)[0].diagnostics[0].line, 2);
+    EXPECT_EQ((*parsed)[0].diagnostics[0].column, 7);
+    ASSERT_TRUE((*parsed)[0].diagnostics[0].range.has_value());
+    EXPECT_EQ((*parsed)[0].diagnostics[0].range->begin, frost::ByteOffset{18});
+    EXPECT_EQ((*parsed)[0].diagnostics[0].range->end, frost::ByteOffset{31});
+    EXPECT_EQ((*parsed)[1].file, fileB);
+    ASSERT_EQ((*parsed)[1].diagnostics.size(), 1U);
+    EXPECT_EQ((*parsed)[1].diagnostics[0].code, "unused-local");
+    EXPECT_EQ((*parsed)[1].diagnostics[0].severity, frost::lang::DiagnosticSeverity::Hint);
+
+    frost::io::ScriptedProcessLauncher launcher;
+    frost::lang::LuaInspectOptions inspectOpts;
+    inspectOpts.directory = frost::io::joinPath(root, "scripts").value();
+    inspectOpts.stateDirectory = frost::io::joinPath(root, "state").value();
+    inspectOpts.search = frost::lang::LuaSearch{};
+    inspectOpts.trusted = false;
+    EXPECT_EQ(frost::lang::inspectLuaDirectory(launcher, fs, inspectOpts).error().code(), frost::ErrorCode::Untrusted);
+    EXPECT_TRUE(launcher.launches().empty());
+
+    inspectOpts.trusted = true;
+    EXPECT_EQ(frost::lang::inspectLuaDirectory(launcher, fs, inspectOpts).error().code(), frost::ErrorCode::NotFound);
+    EXPECT_TRUE(launcher.launches().empty());
+
+    inspectOpts.directory = "relative/scripts";
+    EXPECT_EQ(frost::lang::inspectLuaDirectory(launcher, fs, inspectOpts).error().code(),
+              frost::ErrorCode::InvalidArgument);
 }
 TEST(LuaService, DelayedRequestSurvivesServiceDestruction) {
     auto reactor = frost::io::Reactor::create();

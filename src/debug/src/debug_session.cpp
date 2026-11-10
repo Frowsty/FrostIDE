@@ -7,6 +7,7 @@
 
 #include "frost/core/log.hpp"
 #include "frost/core/mutex.hpp"
+#include "frost/debug/msvc_throw.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -155,8 +156,9 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
         : callbacks(std::move(sessionCallbacks)), launchArguments(std::move(arguments)),
           adapterId(std::move(options.adapterId)), attachHint(std::move(options.attachHint)),
           breakpoints(std::move(lines)), functionBreakpoints(std::move(options.functionBreakpoints)),
-          exceptionFilters(std::move(options.exceptionFilters)), breakOnAbort(options.breakOnAbort),
-          msvcExceptions(options.msvcExceptions), targetMode(options.targetMode) {}
+          exceptionFilters(std::move(options.exceptionFilters)), throwTypes(std::move(options.throwTypes)),
+          breakOnAbort(options.breakOnAbort), msvcExceptions(options.msvcExceptions),
+          stepOutOfNoDebug(options.stepOutOfNoDebug), targetMode(options.targetMode) {}
 
     const DebugSessionCallbacks callbacks;
     const rpc::Json launchArguments;
@@ -189,10 +191,18 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     std::map<std::string, std::vector<BreakpointLine>> breakpoints FROST_GUARDED_BY(mutex);
     std::vector<FunctionBreakpointLine> functionBreakpoints FROST_GUARDED_BY(mutex);
     std::vector<std::string> exceptionFilters FROST_GUARDED_BY(mutex);
+    std::vector<std::string> throwTypes FROST_GUARDED_BY(mutex); // Header comment, "Exception filters".
+    bool throwTypesWarned FROST_GUARDED_BY(mutex) = false;       // The non-MSVC note was printed.
+    bool symbolsWarned FROST_GUARDED_BY(mutex) = false;          // The program's "no symbols" note was printed.
+    // ThrowInfo address -> {decorated, undecorated} type names read for it (DBG-2b).
+    std::map<std::uint64_t, std::pair<std::string, std::string>> thrownTypes FROST_GUARDED_BY(mutex);
+    // Module base -> SizeOfImage of the modules whose PE headers were read.
+    std::map<std::uint64_t, std::uint32_t> imageSizes FROST_GUARDED_BY(mutex);
     std::map<std::int64_t, std::uint64_t> adapterIds FROST_GUARDED_BY(mutex); // Adapter id -> caller id.
     std::optional<std::pair<std::string, std::int64_t>> runTo FROST_GUARDED_BY(mutex);
     const bool breakOnAbort;
     const bool msvcExceptions;
+    const bool stepOutOfNoDebug;
     const DebugTargetMode targetMode;
     std::optional<std::int64_t> abortBreakpointId FROST_GUARDED_BY(mutex);
     std::optional<std::int64_t> throwBreakpointId FROST_GUARDED_BY(mutex); // _CxxThrowException's adapter id.
@@ -641,8 +651,26 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
         }
     }
 
+    // Says once that a session without msvcExceptions ignores throw types (header comment).
+    void noteIgnoredThrowTypes() {
+        {
+            LockGuard lock(mutex);
+            if (msvcExceptions || !configured || throwTypes.empty() || throwTypesWarned ||
+                std::ranges::find(exceptionFilters, std::string("cpp_throw")) == exceptionFilters.end()) {
+                return;
+            }
+            throwTypesWarned = true;
+        }
+        emit([&] {
+            if (callbacks.onOutput)
+                callbacks.onOutput("important", "Exception type filters work only for programs built for the MSVC "
+                                                "ABI; this debugger stops at every C++ throw.\n");
+        });
+    }
+
     // setExceptionBreakpoints with the filters the adapter handles itself (header comment).
     void sendExceptionFilters(bool initial) {
+        noteIgnoredThrowTypes();
         std::vector<std::string> filters;
         bool offered = false;
         {
@@ -767,8 +795,19 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
              });
     }
 
+    /*
+     * Whether `frame` has debug information: a source on disk, or a loaded one that is not lldb-dap's
+     * disassembly of a function without it (a sourceReference marked "deemphasize", whose line is a
+     * line of the listing; /ZI's thunks come that way, under the __enc$textbss$end symbol).
+     */
     static bool hasSource(const dap::StackFrame& frame) {
-        return frame.source && (!frame.source->path.empty() || frame.source->sourceReference > 0) && frame.line > 0;
+        if (!frame.source || frame.line <= 0) {
+            return false;
+        }
+        if (frame.source->sourceReference > 0) {
+            return frame.source->presentationHint != "deemphasize";
+        }
+        return !frame.source->path.empty();
     }
 
     // A step-in's stop: follows a thunk, or reports the stop (header comment, "Step into a thunk").
@@ -796,6 +835,10 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
                            top->name.starts_with(kStepAvoidPrefix)) {
                     command = "stepOut"; // A function lldb's own step-in would not stop in.
                     self->stepInPhase = StepInPhase::LeftAvoided;
+                } else if (top && !hasSource(*top) && self->stepOutOfNoDebug &&
+                           (phase == StepInPhase::Stepping || phase == StepInPhase::FollowedThunk)) {
+                    command = "stepOut"; // No debug information: lldb's step-in-avoid-nodebug, done here.
+                    self->stepInPhase = StepInPhase::LeftAvoided;
                 } else if (top && phase == StepInPhase::LeftAvoided && self->stepInOrigin &&
                            top->name == self->stepInOrigin->first && top->line == self->stepInOrigin->second) {
                     command = "stepIn"; // Back on the line the step began on: on to its next call.
@@ -818,7 +861,8 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
         });
     }
 
-    // A _CxxThrowException stop: resumes it when it is the import thunk (header comment).
+    // A _CxxThrowException stop: resumes it when it is the import thunk, else reads the thrown type
+    // (header comment, "Exception filters").
     void checkThrowThunk(StopInfo info) {
         const std::int64_t thread = *info.threadId;
         send("stackTrace", rpc::Json::object().set("threadId", thread).set("startFrame", 0).set("levels", 1),
@@ -827,18 +871,20 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
                  if (!self) {
                      return;
                  }
-                 std::string address;
+                 std::optional<dap::StackFrame> top;
                  if (body) {
                      if (const rpc::Json* stack = body->find("stackFrames"); stack != nullptr && stack->size() > 0) {
-                         address = dap::parseStackFrame(stack->items().front()).instructionPointerReference;
+                         top = dap::parseStackFrame(stack->items().front());
                      }
                  }
-                 if (address.empty()) {
+                 if (!top || top->instructionPointerReference.empty()) {
                      self->announceStop(std::move(info));
                      return;
                  }
+                 const std::string address = top->instructionPointerReference;
                  self->send("disassemble", dap::disassembleArguments(address, 1, 0),
-                            [weak = self->weak(), info = std::move(info), thread](Result<rpc::Json> answer) mutable {
+                            [weak = self->weak(), info = std::move(info), thread,
+                             top = std::move(*top)](Result<rpc::Json> answer) mutable {
                                 const auto state = weak.lock();
                                 if (!state) {
                                     return;
@@ -846,20 +892,276 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
                                 const auto instructions = answer ? dap::parseDisassembleResponse(*answer)
                                                                  : std::vector<dap::DisassembledInstruction>{};
                                 if (instructions.empty() || !isJump(instructions.front().instruction)) {
-                                    state->announceStop(std::move(info));
+                                    state->readThrownType(std::move(info), thread, top);
                                     return;
                                 }
-                                {
-                                    LockGuard lock(state->mutex);
-                                    if (state->state == DebugState::Ended || state->stopRequested) {
-                                        return;
-                                    }
-                                }
                                 // The import thunk: the runtime's location of the same breakpoint stops next.
-                                state->send("continue", rpc::Json::object().set("threadId", thread),
-                                            [](Result<rpc::Json>) {});
+                                state->resumeThrow(thread);
                             });
              });
+    }
+
+    // Continues a throw stop that is not reported (a thunk, a type the filter leaves out).
+    void resumeThrow(std::int64_t thread) {
+        {
+            LockGuard lock(mutex);
+            if (state == DebugState::Ended || stopRequested) {
+                return;
+            }
+        }
+        send("continue", rpc::Json::object().set("threadId", thread), [](Result<rpc::Json>) {});
+    }
+
+    // --- MSVC thrown types (DBG-2b; msvc_throw.hpp for the structures) ---
+
+    // One throw stop's type read: the stop, its thread and runtime frame, and what was read so far.
+    struct ThrowRead {
+        StopInfo info;
+        std::int64_t thread = 0;
+        std::int64_t frameId = 0;
+        std::uint64_t throwInfo = 0;
+        std::uint64_t base = 0;
+        std::uint32_t imageSize = 0;
+    };
+    using ThrowReadPtr = std::shared_ptr<ThrowRead>;
+
+    /*
+     * Reads the thrown type of a _CxxThrowException stop and reports or resumes it (header comment,
+     * "Exception filters"): the ThrowInfo pointer is the runtime frame's pThrowInfo argument when the
+     * runtime has symbols, else rdx (the stop is then at the function's first instruction, so the
+     * argument register still holds it). Cached per ThrowInfo address for the session.
+     */
+    void readThrownType(StopInfo info, std::int64_t thread, const dap::StackFrame& top) {
+        auto read =
+            std::make_shared<ThrowRead>(ThrowRead{.info = std::move(info), .thread = thread, .frameId = top.id});
+        evaluateThrowInfo(read, hasSource(top) ? "pThrowInfo" : "$rdx");
+    }
+
+    void evaluateThrowInfo(const ThrowReadPtr& read, std::string expression) {
+        rpc::Json arguments =
+            rpc::Json::object().set("expression", expression).set("frameId", read->frameId).set("context", "watch");
+        send("evaluate", std::move(arguments), [weak = weak(), read, expression](Result<rpc::Json> body) {
+            const auto self = weak.lock();
+            if (!self) {
+                return;
+            }
+            std::optional<std::uint64_t> address;
+            if (body) {
+                address = msvc::parseAddress(body->stringAt("result"));
+            }
+            if (!address || *address == 0) {
+                if (expression != "$rdx") {
+                    self->evaluateThrowInfo(read, "$rdx"); // The argument has no location here.
+                    return;
+                }
+                self->throwTypeRead(read, fail(ErrorCode::NotFound, "the debugger did not show the ThrowInfo "
+                                                                    "argument of _CxxThrowException"));
+                return;
+            }
+            read->throwInfo = *address;
+            std::optional<std::pair<std::string, std::string>> known;
+            {
+                LockGuard lock(self->mutex);
+                if (const auto found = self->thrownTypes.find(*address); found != self->thrownTypes.end()) {
+                    known = found->second;
+                }
+                for (const auto& [base, size] : self->imageSizes) {
+                    if (*address >= base && *address - base < size) {
+                        read->base = base;
+                        read->imageSize = size;
+                    }
+                }
+            }
+            if (known) {
+                self->throwTypeRead(read, std::move(*known));
+            } else if (read->base != 0) {
+                self->readThrowInfo(read);
+            } else {
+                self->findThrowModule(read);
+            }
+        });
+    }
+
+    // The module holding the ThrowInfo: the highest module base below it, confirmed by its PE header.
+    void findThrowModule(const ThrowReadPtr& read) {
+        send("modules", rpc::Json::object(), [weak = weak(), read](Result<rpc::Json> body) {
+            const auto self = weak.lock();
+            if (!self) {
+                return;
+            }
+            if (!body) {
+                self->throwTypeRead(read, std::unexpected(std::move(body.error())));
+                return;
+            }
+            std::uint64_t best = 0;
+            if (const rpc::Json* modules = body->find("modules"); modules != nullptr && modules->isArray()) {
+                for (const rpc::Json& module : modules->items()) {
+                    const auto base = msvc::parseAddress(module.stringAt("addressRange"));
+                    if (base && *base <= read->throwInfo && *base > best) {
+                        best = *base;
+                    }
+                }
+            }
+            if (best == 0) {
+                self->throwTypeRead(read, fail(ErrorCode::NotFound, "no loaded module holds the ThrowInfo"));
+                return;
+            }
+            read->base = best;
+            self->readBytes(best, msvc::kImageHeaderBytes, [weak = self->weak(), read](Result<std::string> bytes) {
+                const auto state = weak.lock();
+                if (!state) {
+                    return;
+                }
+                if (!bytes) {
+                    state->throwTypeRead(read, std::unexpected(std::move(bytes.error())));
+                    return;
+                }
+                auto header = msvc::parseImageHeader(*bytes);
+                if (!header) {
+                    state->throwTypeRead(read, std::unexpected(std::move(header.error())));
+                    return;
+                }
+                if (header->machine != msvc::kMachineAmd64) {
+                    state->throwTypeRead(read,
+                                         fail(ErrorCode::Unsupported, "exception type filters need an x64 program"));
+                    return;
+                }
+                if (read->throwInfo - read->base >= header->sizeOfImage) {
+                    state->throwTypeRead(read, fail(ErrorCode::NotFound, "no loaded module holds the ThrowInfo"));
+                    return;
+                }
+                read->imageSize = header->sizeOfImage;
+                {
+                    LockGuard lock(state->mutex);
+                    state->imageSizes[read->base] = header->sizeOfImage;
+                }
+                state->readThrowInfo(read);
+            });
+        });
+    }
+
+    // ThrowInfo -> CatchableTypeArray[0] -> CatchableType -> TypeDescriptor name.
+    void readThrowInfo(const ThrowReadPtr& read) {
+        // An image-relative offset inside the module, or an error.
+        const auto at = [read](std::optional<std::uint32_t> rva) -> Result<std::uint64_t> {
+            if (!rva || *rva == 0 || *rva >= read->imageSize) {
+                return fail(ErrorCode::Corrupt, "the ThrowInfo points outside its module");
+            }
+            return read->base + *rva;
+        };
+        readBytes(read->throwInfo, msvc::kThrowInfoSize, [weak = weak(), read, at](Result<std::string> info) {
+            const auto self = weak.lock();
+            if (!self) {
+                return;
+            }
+            auto array = info ? at(msvc::readU32(*info, msvc::kThrowInfoCatchableTypeArray))
+                              : Result<std::uint64_t>(std::unexpected(std::move(info.error())));
+            if (!array) {
+                self->throwTypeRead(read, std::unexpected(std::move(array.error())));
+                return;
+            }
+            self->readBytes(*array, 8, [weak = self->weak(), read, at](Result<std::string> types) {
+                const auto state = weak.lock();
+                if (!state) {
+                    return;
+                }
+                const auto count = types ? msvc::readU32(*types, 0) : std::nullopt;
+                auto first = types && count && *count > 0
+                                 ? at(msvc::readU32(*types, 4))
+                                 : Result<std::uint64_t>(fail(ErrorCode::Corrupt, "the ThrowInfo lists no type"));
+                if (!first) {
+                    state->throwTypeRead(read, std::unexpected(std::move(first.error())));
+                    return;
+                }
+                state->readBytes(*first, 8, [weak = state->weak(), read, at](Result<std::string> catchable) {
+                    const auto again = weak.lock();
+                    if (!again) {
+                        return;
+                    }
+                    auto descriptor = catchable ? at(msvc::readU32(*catchable, msvc::kCatchableTypeTypeDescriptor))
+                                                : Result<std::uint64_t>(std::unexpected(std::move(catchable.error())));
+                    if (!descriptor) {
+                        again->throwTypeRead(read, std::unexpected(std::move(descriptor.error())));
+                        return;
+                    }
+                    again->readBytes(
+                        *descriptor + msvc::kTypeDescriptorName64, msvc::kMaxTypeNameBytes,
+                        [weak = again->weak(), read](Result<std::string> name) {
+                            const auto last = weak.lock();
+                            if (!last) {
+                                return;
+                            }
+                            if (!name) {
+                                last->throwTypeRead(read, std::unexpected(std::move(name.error())));
+                                return;
+                            }
+                            std::string decorated(msvc::cString(*name));
+                            if (!decorated.starts_with('.')) {
+                                last->throwTypeRead(read, fail(ErrorCode::Corrupt, "the thrown type has no RTTI name"));
+                                return;
+                            }
+                            std::string undecorated = msvc::undecorateTypeName(decorated).value_or(decorated);
+                            std::pair names{std::move(decorated), std::move(undecorated)};
+                            {
+                                LockGuard lock(last->mutex);
+                                last->thrownTypes[read->throwInfo] = names;
+                            }
+                            last->throwTypeRead(read, std::move(names));
+                        });
+                });
+            });
+        });
+    }
+
+    // readMemory of `count` bytes at `address`; an error when the adapter read none.
+    void readBytes(std::uint64_t address, std::uint64_t count, std::function<void(Result<std::string>)> then) {
+        send("readMemory",
+             dap::readMemoryArguments(std::format("0x{:X}", address), static_cast<std::int64_t>(count), 0),
+             [then = std::move(then), address](Result<rpc::Json> body) {
+                 if (!body) {
+                     then(std::unexpected(std::move(body.error())));
+                     return;
+                 }
+                 dap::ReadMemoryResult result = dap::parseReadMemoryResponse(*body);
+                 if (result.decodedBytes.empty()) {
+                     then(fail(ErrorCode::IoError,
+                               std::format("the debugger could not read memory at 0x{:X}", address)));
+                     return;
+                 }
+                 then(std::move(result.decodedBytes));
+             });
+    }
+
+    /*
+     * The read's end: the type ({decorated, undecorated}) or why it could not be read. A type the
+     * filter leaves out resumes the program; anything else is reported, an unread type with a
+     * filter set with a note saying why the filter could not decide.
+     */
+    void throwTypeRead(const ThrowReadPtr& read, Result<std::pair<std::string, std::string>> names) {
+        std::vector<std::string> filter;
+        {
+            LockGuard lock(mutex);
+            filter = throwTypes;
+        }
+        StopInfo info = std::move(read->info);
+        if (names) {
+            info.exceptionType = names->second;
+            info.description = "C++ exception thrown: " + names->second;
+            if (!msvc::throwTypeMatches(filter, names->second, names->first)) {
+                resumeThrow(read->thread);
+                return;
+            }
+        } else if (!filter.empty()) {
+            const std::string note =
+                std::format("The thrown type could not be read ({}), so the debugger stopped at this throw "
+                            "although the exception type filter may not include it.\n",
+                            names.error().message());
+            emit([&] {
+                if (callbacks.onOutput)
+                    callbacks.onOutput("important", note);
+            });
+        }
+        announceStop(std::move(info));
     }
 
     void announceStop(StopInfo info) {
@@ -1237,6 +1539,63 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
 
     // --- Events ---
 
+    /*
+     * A module event (DAP "module"): when the program itself loads without symbols (lldb-dap's
+     * symbolStatus "Symbols not found."), says so once in the console, since none of its line
+     * breakpoints can bind and the program would otherwise run past them without a word. The
+     * status is lldb's; the hint names the cause j2_msvc found: lldb 23.1.4 refuses a PDB whose
+     * size is not a whole number of MSF blocks, which an incremental MSVC link (LinkIncremental,
+     * on for Debug by default) writes when it relinks in place (ADR 0081 item 8, DBG-0).
+     */
+    void moduleEvent(const rpc::Json& body) {
+        const rpc::Json* module = body.find("module");
+        if (module == nullptr || !module->isObject())
+            return;
+        if (module->stringAt("symbolStatus") != "Symbols not found.")
+            return;
+        const std::string path(module->stringAt("path"));
+        if (path.empty() || !sameProgram(path, launchArguments.stringAt("program")))
+            return;
+        {
+            LockGuard lock(mutex);
+            if (symbolsWarned)
+                return;
+            symbolsWarned = true;
+        }
+        std::string note = std::format("The debugger could not read the symbols of {} (lldb: \"Symbols not "
+                                       "found.\"), so its breakpoints cannot bind.",
+                                       path);
+#ifdef _WIN32
+        note += " lldb cannot read a PDB that an incremental MSVC link (LinkIncremental, on for Debug by "
+                "default) rewrote in place; a full link (LinkIncremental=false, or a Rebuild) writes one it can read.";
+#endif
+        note += "\n";
+        emit([&] {
+            if (callbacks.onOutput)
+                callbacks.onOutput("important", note);
+        });
+    }
+
+    // Whether the module at `path` is the launched `program` (case-insensitive and either slash on Windows).
+    static bool sameProgram(std::string_view path, std::string_view program) {
+#ifdef _WIN32
+        if (path.size() != program.size())
+            return false;
+        for (std::size_t i = 0; i < path.size(); ++i) {
+            auto fold = [](char c) {
+                if (c == '/')
+                    return '\\';
+                return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+            };
+            if (fold(path[i]) != fold(program[i]))
+                return false;
+        }
+        return true;
+#else
+        return path == program;
+#endif
+    }
+
     void event(std::string_view name, const rpc::Json& body) {
         if (name == "initialized") {
             configure();
@@ -1278,6 +1637,8 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
             breakpointEvent(body);
         } else if (name == "capabilities") {
             capabilitiesChanged(body);
+        } else if (name == "module") {
+            moduleEvent(body);
         } else if (name == "process") {
             const dap::ProcessEvent process = dap::parseProcessEvent(body);
             LockGuard lock(mutex);
@@ -1438,6 +1799,19 @@ std::vector<std::string> DebugSession::exceptionFilters() const {
 }
 
 bool DebugSession::msvcExceptions() const noexcept { return m_state->msvcExceptions; }
+
+void DebugSession::setThrowTypes(std::vector<std::string> types) {
+    {
+        LockGuard lock(m_state->mutex);
+        m_state->throwTypes = std::move(types);
+    }
+    m_state->noteIgnoredThrowTypes();
+}
+
+std::vector<std::string> DebugSession::throwTypes() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->throwTypes;
+}
 
 Result<void> DebugSession::restart() {
     {

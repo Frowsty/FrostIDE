@@ -764,7 +764,7 @@ Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
     const bool pinnedByDefault = !isSecondaryToolWindow(spec.id);
     button->setVisible(pinnedByDefault);
     Window& window =
-        m_windows.emplace_back(Window{std::move(spec), button, nullptr, defaultSize, false, pinnedByDefault});
+        m_windows.emplace_back(Window{std::move(spec), button, nullptr, defaultSize, 0, false, pinnedByDefault});
     updateSidebarVisibility();
     if (const Result<ShellLayout> layout = m_settings.load(); layout) {
         if (const ToolWindowLayout* remembered = layout->find(id); remembered != nullptr) {
@@ -862,6 +862,30 @@ void ToolWindowManager::jumpToLast() {
     if (!last.empty()) {
         show(last, true);
     }
+}
+
+void ToolWindowManager::maximizeActive() {
+    std::string target = focusedWindow();
+    if (target.empty() && isVisible(m_lastActive)) {
+        target = m_lastActive;
+    }
+    if (target.empty()) {
+        return;
+    }
+    Window* window = find(target);
+    if (window == nullptr || !window->visible) {
+        return;
+    }
+    if (window->unmaximizedSize > 0) {
+        const int restored = window->unmaximizedSize;
+        window->unmaximizedSize = 0;
+        setSize(target, restored);
+        return;
+    }
+    window->unmaximizedSize = window->size;
+    const int span = window->spec.side == ToolWindowSide::Bottom ? std::max(m_vertical->height(), 500) - kMinimumSize
+                                                                 : std::max(m_horizontal->width(), 800) - kMinimumSize;
+    setSize(target, std::max(span, kMinimumSize));
 }
 
 bool ToolWindowManager::isVisible(std::string_view id) const {

@@ -122,6 +122,8 @@ public:
     void hideAll();
     // Shows and focuses the last activated window (F12).
     void jumpToLast();
+    // Toggles maximizing the focused (or last active visible) tool window (Ctrl+Shift+Quote).
+    void maximizeActive();
 
     [[nodiscard]] bool isVisible(std::string_view id) const;
     // The window whose content has keyboard focus, or "".
@@ -163,6 +165,7 @@ private:
         StripeButton* button = nullptr;
         QWidget* content = nullptr;
         int size = 0;
+        int unmaximizedSize = 0;
         bool visible = false;
         bool pinned = true;
     };

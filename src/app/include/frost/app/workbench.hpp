@@ -80,12 +80,16 @@
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/cmake_compile_commands.hpp"
 #include "frost/lang/diagnostics.hpp"
+#include "frost/lang/frost_engine_assets.hpp"
 #include "frost/lang/json.hpp"
+#include "frost/lang/lua_host.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/lang/managed_service.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/project/directory_roles.hpp"
+#include "frost/project/project_edit.hpp"
+#include "frost/project/project_host.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/run/run_manager.hpp"
@@ -124,6 +128,7 @@
 #include <QTimer>
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -169,6 +174,7 @@ class UnityControlIntegration;
 class GitIntegration;
 struct GitClone;
 struct CompileDatabaseState; // workbench_language.cpp
+struct WorkbenchLuaState;    // workbench_lua.cpp
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
 // file.reloadFromDisk and file.closeProject; the shell, editor, build, run and language slices the
@@ -368,6 +374,9 @@ struct WorkbenchOptions {
     // Test seam: the FrostIDE executable that provides the isolated discovery helper.
     // Empty uses this application's own executable.
     std::string engineDiscoveryHelperPath;
+    // FrostEditor CLI executable (absolute); "" discovers <engine>/build/<preset>/bin/FrostEditor(.exe)
+    // when the project sits inside a FrostEngine checkout.
+    std::string frostEditorPath;
     // Console programs run in an external console window unless the solution chose the Run console.
     bool runExternalConsole = true;
     // MSBuild.exe (absolute); "" uses tools.msbuild.path, else vswhere at the first build.
@@ -380,6 +389,11 @@ struct WorkbenchOptions {
     build::BuildStarter startBuild;
     // Starts clangd for an opened project when it is found (tools.clangd.path, then the SDK, PATH).
     bool clangd = true;
+    // Evaluates a trusted solution's Visual C++ projects for the Solution Explorer (SLN-2, SLN-3):
+    // through ProjectHost (projectEditHostPath, else project-host beside the application), with
+    // MSBuild.exe as the fallback and the explorer's banner saying why. Off: the explorer shows the
+    // project files as written (the test rigs' default, like clangd).
+    bool projectHost = true;
     // Test seam: disable Git discovery when a fixture must not start child processes.
     bool git = true;
     // clangd's parallel jobs (0: its default).
@@ -467,21 +481,24 @@ public:
      * Renames a file or folder on disk and updates open tabs and LSP. A FrostEngine asset's .fmeta
      * sidecar (<name>.fmeta beside it) is renamed with it, both or neither. CMakeLists.txt is
      * edited only after the user confirms a preview (IWorkbenchPrompts::confirmCMakeListsEdit).
-     * .vcxproj, .vcxproj.filters and .csproj files are never edited (SLN-6): a notification names
-     * the projects that still list the old path.
+     * A loaded C++ project that lists the old path as an item written without a wildcard gets
+     * the item renamed in its .vcxproj and .vcxproj.filters through ProjectHost (SLN-6, ADR 0082),
+     * after the move and asynchronously; when that edit cannot run, a notification names the
+     * projects that still list the old path. .csproj files are never edited.
      */
     [[nodiscard]] Result<std::string> renameItem(std::string_view oldPath, std::string_view newRelativeName);
     // Deletes a file or folder on disk, closes open tabs under it and updates LSP; project files as
-    // renameItem (CMakeLists.txt after a confirmed preview; MSBuild project files never, SLN-6).
+    // renameItem (CMakeLists.txt after a confirmed preview; .vcxproj items removed through ProjectHost).
     [[nodiscard]] Result<void> deleteItem(std::string_view path);
     // Prompts for a new name and renames `path` (empty: active tree selection or editor path).
     void promptAndRenameItem(std::string_view path = {});
     // Prompts for confirmation and deletes `path` (empty: active tree selection or editor path).
     void promptAndDeleteItem(std::string_view path = {});
     // Creates a new C/C++ source file inside `projectPath`'s directory, opens it, and asks the
-    // ProjectHost helper to add it to the .vcxproj (asynchronous; a refusal is a notification).
-    [[nodiscard]] Result<std::string> createNewProjectSource(std::string_view projectPath,
-                                                             std::string_view relativeName);
+    // ProjectHost helper to add it to the .vcxproj, filed under `filter` in .vcxproj.filters when
+    // not empty (asynchronous; a refusal is a notification).
+    [[nodiscard]] Result<std::string>
+    createNewProjectSource(std::string_view projectPath, std::string_view relativeName, std::string_view filter = {});
     // Adds an existing project file to a simple top-level CMake target in CMakeLists.txt, once the
     // user confirmed the preview (Cancelled, nothing written, when declined).
     [[nodiscard]] Result<void> addSourceToCMakeLists(std::string_view sourcePath, std::string_view targetName = {});
@@ -505,6 +522,11 @@ public:
     [[nodiscard]] bool hasProject() const noexcept { return !m_projectRoot.empty(); }
     // Canonical directory of the current project, empty when none is open.
     [[nodiscard]] const std::string& projectRoot() const noexcept { return m_projectRoot; }
+    // The most recent FrostEngine `assets.find-references` report produced before a file rename,
+    // move or delete in a trusted FrostEngine project; nullopt when none has run.
+    [[nodiscard]] const std::optional<lang::AssetReferenceReport>& lastAssetReferenceReport() const noexcept {
+        return m_lastAssetReferenceReport;
+    }
     // Accept an authenticated broker announcement only for this trusted project.
     [[nodiscard]] Result<void> announceUnity(const lang::Json& message);
     // The open solution, or nullptr (no project, or a folder project).
@@ -545,11 +567,32 @@ public:
     [[nodiscard]] ui::DebugController* debugController() noexcept { return m_debug.get(); }
     [[nodiscard]] ui::AppearanceManager* appearance() noexcept { return m_appearance.get(); }
     [[nodiscard]] lang::LuaService* lua() noexcept { return m_lua.get(); }
+    // LUA-3/LUA-13 (workbench_lua.cpp): the Lua host providers (FrostEngine's is registered at
+    // construction), the LuaLS refresh requests handled so far (their methods, in order) and the
+    // $/progress titles LuaLS reported for the current project. GUI thread.
+    [[nodiscard]] lang::LuaHostRegistry& luaHosts();
+    [[nodiscard]] std::vector<std::string> luaRefreshesHandled() const;
+    [[nodiscard]] std::vector<std::string> luaProgressTitles() const;
+    // Recomputes LuaLS's configuration (settings, host providers) and sends it live
+    // (didChangeConfiguration); restarts LuaLS only when its workspace folders changed.
+    void refreshLuaConfiguration();
+    // LUA-6: runs `lua-language-server --check` on `scopeDirectory` (or the open project root when
+    // empty), publishes the results to the Problems tool window and open Lua editors, and returns
+    // the decoded file diagnostics. Refuses untrusted workspaces and reports missing LuaLS.
+    [[nodiscard]] Result<std::vector<lang::FileDiagnostics>> inspectLuaCode(std::string_view scopeDirectory = {});
+    [[nodiscard]] std::vector<lang::FileDiagnostics> luaInspectedDiagnostics() const;
     [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
     [[nodiscard]] lang::ClangdService* clangd() noexcept { return m_clangd.get(); }
     // CPP-3: the owned compile-commands directories of a CMake folder's configurations and its
     // resolve-context choices; null without a CMake folder, a compile-commands cache or clangd.
     [[nodiscard]] lang::CMakeCompileCommandsProvider* cmakeCompileCommands() noexcept { return m_cmakeCommands.get(); }
+    // The trust store the workbench's gates ask (thread-safe; WorkbenchServices::trust).
+    [[nodiscard]] const project::TrustStore& trustStore() const noexcept { return m_services.trust; }
+    // The Solution Explorer's evaluation (SLN-2): status and results of the open solution's
+    // ProjectHost/MSBuild.exe evaluation; null without one (no solution, untrusted, or off).
+    [[nodiscard]] std::shared_ptr<const project::SolutionEvaluation> solutionEvaluation() const noexcept {
+        return m_solutionEvaluation;
+    }
     // Current generation's completed MSBuild contexts, copied safely from the evaluator thread.
     [[nodiscard]] std::vector<std::shared_ptr<const lang::StreamedProjectContext>> streamedProjectContexts() const {
         const auto trust = m_services.trust.snapshot(m_projectRoot);
@@ -632,12 +675,14 @@ private:
     void createRunService();
     // Run configurations (RUN-2/RUN-3, workbench_run_configurations.cpp): the generated ones of the
     // open CMake model and solution, the workspace store, a CMake launch with the user's edits, and
-    // the trust gate of a native configuration.
+    // the trust gate of a native configuration. The gate's prompt, once the user trusts the
+    // workspace, calls `retry` (Debug's retry, RUN-5), or else runs the configuration again.
     [[nodiscard]] std::vector<run::RunConfiguration> generatedRunConfigurations() const;
     void loadRunConfigurations();
     [[nodiscard]] Result<void> saveRunConfigurations(const std::vector<run::RunConfiguration>& stored);
     [[nodiscard]] run::RunConfiguration configureCMakeLaunch(run::RunConfiguration launch) const;
-    [[nodiscard]] Result<void> mayRunConfiguration(const run::RunConfiguration& configuration);
+    [[nodiscard]] Result<void> mayRunConfiguration(const run::RunConfiguration& configuration,
+                                                   std::function<void()> retry = {});
     void connectCMakeRunConfigurations();
     void attachToolWindows();
     void attachNavigationBar();
@@ -652,7 +697,35 @@ private:
 
     // Projects.
     Result<void> openSolution(const std::string& path);
-    void removeProjectFile(const QString& project, const QString& source, bool adding = false);
+    /*
+     * Adds (`adding`) or removes `source` in the C++ project `project` through ProjectHost (SLN-6):
+     * an add files the item under `filter` in .vcxproj.filters ("" for none). An empty `source`, or
+     * any request while the solution root holds an edit journal, recovers the interrupted edit
+     * instead. Refusals are notifications; the edit itself completes asynchronously.
+     */
+    void removeProjectFile(const QString& project, const QString& source, bool adding = false,
+                           const QString& filter = {});
+    // Adds several existing files to `project` in one edit (see removeProjectFile).
+    void addProjectFiles(const QString& project, const std::vector<std::string>& sources, const QString& filter);
+    /*
+     * Starts `edit` (a file edit of a loaded C++ project; root, configuration, platform and
+     * transaction id are filled in here) through ProjectHost, or queues it behind the running
+     * edit. Returns the reason when it can neither start nor queue; nothing is written then.
+     * `title` names the completion's notifications.
+     */
+    [[nodiscard]] std::optional<QString> submitProjectEdit(project::ProjectEdit edit, const QString& title);
+    void recoverProjectEdit(const QString& project);
+    // Why no project edit may start now (no trusted solution, a build, a debug session or a managed
+    // launch is running), or nullopt.
+    [[nodiscard]] std::optional<QString> projectEditBlocked(const std::string& project);
+    // The ProjectHost helper and MSBuild.exe a project edit runs with, or the reason they are missing.
+    [[nodiscard]] Result<std::pair<std::string, std::string>> projectEditTools();
+    // Whether the solution root holds a project edit journal (an interrupted edit); errors read as true.
+    [[nodiscard]] bool projectEditJournalPresent();
+    // Reloads the solution after a committed edit and publishes it to the build, run and explorer.
+    void publishProjectEdit(const std::shared_ptr<const project::SolutionModel>& solution, const QString& title);
+    // Starts the next queued edit, if any (after the running one completed).
+    void startQueuedProjectEdit();
     Result<void> openFolder(const std::string& path, bool discoverSolution = true, std::string recentPath = {});
     void setProject(std::string root, QString name, std::string recentPath);
     // Closes the open project before another opens; false when a tab refused (nothing changed).
@@ -681,6 +754,10 @@ private:
     void stopLua();
     void syncLuaDocument(DocumentEditorView& view);
     void onLuaDiagnostics(const std::string& file);
+    void onLuaFilesChanged(const io::FileChangeBatch& batch);
+    void onLuaSettingsChanged();
+    void onLuaProgress(std::uint64_t generation, const lang::LuaProgress& progress);
+    void onLuaRefresh(std::uint64_t generation, const std::string& method);
     void updateLanguageTarget();
     void offerProjectTrust();
     void offerLuaTrust();
@@ -694,6 +771,10 @@ private:
     void startClangd(const std::string& root);
     void startProjectEvaluation(const std::string& root);
     void stopProjectEvaluation();
+    // The explorer's model: m_solution with the evaluation's items (SLN-3), or the streamed
+    // compile-commands snapshot, or m_solution; and the banner text for the evaluation's state.
+    [[nodiscard]] std::shared_ptr<const project::SolutionModel> explorerSolutionModel();
+    [[nodiscard]] QString solutionEvaluationBanner() const;
     void stopClangd();
     void restartClangd();
     // A CMake model change, or a trust change, restarts clangd only when the compile-commands
@@ -756,17 +837,23 @@ private:
     // describes it in the declined notice); Cancelled when declined.
     [[nodiscard]] Result<void> writeCMakeListsWithPreview(const std::string& canonicalLists, const std::string& before,
                                                           const std::string& after, const QString& change);
-    // Never writes: tells the user which loaded projects still list `oldPath` (SLN-6).
+    // Keeps loaded C++ projects in step with a rename, move or delete on disk (see renameItem).
     void updatePathInVcxproj(const std::string& oldPath, const std::string& newPath, bool directory, bool deleted);
-    // Renames `from` to `to` with its .fmeta sidecar move (from, to) if any, both or neither.
-    [[nodiscard]] Result<void> moveWithSidecar(const std::string& from, const std::string& to,
-                                               const std::optional<std::pair<std::string, std::string>>& sidecar);
+    // Runs `FrostEditor assets.find-references` before renaming, moving or deleting an asset in a
+    // trusted FrostEngine project and surfaces referencing assets as a warning notification (FEC-9a).
+    void checkFrostEngineAssetReferences(std::string_view path, std::string_view operation);
+    // Executes `plan` on disk and rebinds open tabs for the `.fmeta` sidecar when present.
+    [[nodiscard]] Result<void> moveWithSidecar(const lang::FmetaMovePlan& plan);
     void queryWorkspaceSymbols(std::string_view query, bool classesOnly,
                                std::function<void(std::vector<ui::WorkbenchSymbol>)> done);
     void openLocation(const QString& path, int line, int column);
     void notify(const QString& title, const QString& text, ui::NotificationKind kind);
-    // Saves without notifying (the close path shows the error in its prompt).
+    // Saves without notifying (the close path shows the error in its prompt). The actions on save
+    // (runActionsOnSave) run first.
     [[nodiscard]] Result<void> saveQuietly(document::FileDocument& document);
+    // REF-12: editor.optimizeImportsOnSave and editor.formatOnSave for a C or C++ document, through
+    // clangd (workbench_save_actions.cpp); a skipped action notifies why. GUI thread only.
+    void runActionsOnSave(document::FileDocument& document);
     // The pre-save transform for `document`: editor.trimTrailingWhitespace and
     // editor.insertFinalNewline resolved for its file (settings plus .editorconfig), keeping the
     // line each of its views' primary caret is on.
@@ -839,6 +926,12 @@ private:
     QPointer<QWidget> m_resolveContext;                                  // ui::lang::ResolveContextButton.
     std::shared_ptr<lang::StreamedProjectContexts> m_streamedProjects;
     std::shared_ptr<lang::IndependentProjectEvaluation> m_projectEvaluation;
+    // SLN-2/SLN-3: the explorer's evaluation, and the model composed from its results on the GUI
+    // thread (for m_evaluatedFrom at m_evaluatedGeneration; m_solution stays the static model).
+    std::shared_ptr<project::SolutionEvaluation> m_solutionEvaluation;
+    std::shared_ptr<const project::SolutionModel> m_evaluatedSolution;
+    std::shared_ptr<const project::SolutionModel> m_evaluatedFrom;
+    std::uint64_t m_evaluatedGeneration = 0;
     bool m_closingSolution = false;
     std::vector<sched::JoinHandle<void>> m_retiredProjectEvaluations;
     std::shared_ptr<lang::ManagedService> m_managed;
@@ -866,10 +959,15 @@ private:
     // root that was already told so: the notification appears once per project (LUA-1).
     std::string m_luaUnavailable;
     std::string m_luaUnavailableNotifiedRoot;
+    // The Lua host registry, the composed configuration and the progress tasks (workbench_lua.cpp).
+    std::shared_ptr<WorkbenchLuaState> m_luaState;
     std::shared_ptr<lang::ClangdService> m_clangd;
     // The root already told that clangd was not found (the notice appears once per project; ADR 0078).
     std::string m_clangdUnavailableNotifiedRoot;
     std::vector<sched::JoinHandle<void>> m_retiredClangd;
+    // Git services of closed projects being destroyed off the GUI thread (GitController's retirer,
+    // FND-9b); joined by ~Workbench before the pool goes.
+    std::vector<sched::JoinHandle<void>> m_retiredGit;
     std::uint64_t m_clangdGeneration = 0;
     // FND-9a, one clangd per project open: the CMake compile-commands state the running clangd was
     // started with (cmakeClangdState), and the root whose start waits for the open's configure.
@@ -938,6 +1036,8 @@ private:
 
     std::shared_ptr<const project::SolutionModel> m_solution;
     std::unique_ptr<ProjectEditProcess> m_projectEdit;
+    // Edits waiting for the running one (a move that touches several projects); FIFO.
+    std::deque<std::pair<project::ProjectEdit, QString>> m_projectEditQueue;
     std::string m_projectRoot;
     // Why the workspace's run-configuration store could not be read when the folder opened (Corrupt,
     // a newer version, a read error); "" when it loaded or does not exist. saveRunConfigurations()
@@ -949,6 +1049,7 @@ private:
     std::map<std::string, std::vector<ui::LineMarker>> m_liveMarkers;
     // Paths whose close the user confirmed after a failed save: the document closes unsaved.
     std::vector<std::string> m_discarded;
+    std::optional<lang::AssetReferenceReport> m_lastAssetReferenceReport;
     bool m_suppressNewFileNotice = false;
     bool m_shutDown = false;
 };

@@ -38,8 +38,21 @@
  * the program's import thunk (one indirect jmp) and the runtime's function; a stop on the thunk is
  * resumed without being reported (the disassemble request says whether the stop's instruction is a
  * jmp), so one throw stops once. cpp_catch has no exported entry point in the MSVC runtime that lldb
- * can bind without the runtime's symbols, so it is unavailable there (msvcUnsupportedFilter; DBG-2b
- * owns MSVC exception breakpoints).
+ * can bind without the runtime's symbols, so it is unavailable there (msvcUnsupportedFilter).
+ *
+ * Thrown types (DBG-2b). At a _CxxThrowException stop that is not the thunk, the session reads which
+ * type is thrown from the ThrowInfo the runtime got (msvc_throw.hpp): the frame's pThrowInfo argument
+ * when the runtime has symbols (a static CRT), else rdx (the DLL runtime without symbols, where the
+ * stop is at its first instruction), then the module that holds it (the modules request and its PE
+ * header) and, with readMemory, the first CatchableType's TypeDescriptor name. The stop then carries
+ * StopInfo::exceptionType ("std::runtime_error") and the description "C++ exception thrown: <type>".
+ * With throw types set (setThrowTypes, DebugSessionOptions::throwTypes), a throw of a type not in the
+ * list is resumed without being reported: the list matches the thrown type exactly, never a base or
+ * derived class (msvc::throwTypeMatches). A throw whose type cannot be read (an x86 program, memory
+ * that cannot be read) is reported, with an "important" output line saying why the filter could
+ * not decide. Types read are cached per ThrowInfo address, so a later throw of the same type costs
+ * one evaluate request. Sessions without msvcExceptions ignore throw types: lldb's Itanium filter has
+ * no type matching, and an "important" output line says so once.
  *
  * Step into a thunk. MSVC's incremental linking (the default for Debug builds) calls every function
  * through a one-jmp thunk of the incremental link table, which has no symbol, line or unwind data;
@@ -48,9 +61,23 @@
  * one more instruction (stepIn, granularity "instruction") instead of reporting the stop. That
  * bypasses lldb's step-avoid list, so when the jmp leads into a std:: function (lldb's default
  * target.process.thread.step-avoid-regexp) the session steps out of it and, back on the line the
- * step began on, steps in again towards the line's next call. The step thus ends in the first
- * non-std callee, as lldb's step-in does without thunks; at most kThunkHops extra requests are sent
- * per step. Any other stop is reported as it came.
+ * step began on, steps in again towards the line's next call. With stepOutOfNoDebug (lldb-dap on
+ * Windows, which launches with lldb's step-in-avoid-nodebug off so that it stops in a thunk it could
+ * step out of, as with /ZI; lldb_dap.hpp, "Stepping on Windows") a step-in that stops in a frame
+ * without a source whose instruction is not a jmp (a function without debug information, reached
+ * directly or through a thunk) is treated the same way: the session steps out of it and, back on the
+ * line the step began on, steps in again. The step thus ends in the first non-std callee with debug
+ * information; at most kThunkHops extra requests are sent per step. Any other stop is reported as it
+ * came.
+ *     Where it ends in the callee: the instruction step lands on the callee's first instruction, so
+ * the stop is on the callee's opening line (the line of its '{', or of its signature when the brace
+ * shares it), before its prologue has run: its arguments and locals are not set up yet, and the
+ * next Step Over goes to the first statement. That is where Visual Studio's Step Into stops in a
+ * Debug build too. Without a thunk (/INCREMENTAL:NO, clang-cl, Linux) lldb's own step-in runs past
+ * the prologue and stops on the first statement, with the arguments set (checked with lldb 23.1.4
+ * on cl.exe /Zi /MDd and /ZI /JMC /MDd builds: msvc_debug_test.cpp, MsvcStepInto). A frame "without
+ * a source" here includes lldb-dap's disassembly listing of a function (a sourceReference marked
+ * "deemphasize").
  *
  * Pause. lldb-dap reports a pause as an exception stop ("signal SIGSTOP" on Linux, "Exception
  * 0x80000003" on Windows, where it lands on a thread the system injected for the break-in). After
@@ -112,6 +139,9 @@ struct StopInfo {
     std::vector<std::int64_t> hitBreakpointIds;
     // The exception filter that stopped ("cpp_throw", "cpp_catch"); "" for any other stop.
     std::string exceptionFilter{};
+    // The thrown C++ type of an MSVC cpp_throw stop ("std::runtime_error"; header comment, "Thrown
+    // types"); "" when it was not read.
+    std::string exceptionType{};
 
     // A crash or an unhandled exception: reason "exception" or "signal", not an exception filter's stop.
     [[nodiscard]] bool isCrash() const noexcept;
@@ -215,10 +245,12 @@ struct DebugSessionOptions {
     bool breakOnAbort = false; // A function breakpoint on abort (Windows: stop before the CRT ends it).
     std::string adapterId = "lldb-dap";
     DebugTargetMode targetMode = DebugTargetMode::Launch;
-    bool msvcExceptions = false; // Header comment, "Exception filters".
-    std::string attachHint{};    // Appended to an attach failure's message (ptraceAttachHint).
+    bool msvcExceptions = false;   // Header comment, "Exception filters".
+    bool stepOutOfNoDebug = false; // Header comment, "Step into a thunk" (lldb-dap on Windows).
+    std::string attachHint{};      // Appended to an attach failure's message (ptraceAttachHint).
     std::vector<FunctionBreakpointLine> functionBreakpoints{};
     std::vector<std::string> exceptionFilters{}; // Filter ids to stop on from the start.
+    std::vector<std::string> throwTypes{};       // Header comment, "Thrown types"; empty: every type.
 };
 
 /*
@@ -281,6 +313,10 @@ public:
     [[nodiscard]] std::vector<std::string> exceptionFilters() const;
     // Whether this session translates C++ exception filters for the MSVC ABI (DebugSessionOptions).
     [[nodiscard]] bool msvcExceptions() const noexcept;
+    // Replaces the C++ types cpp_throw stops for (header comment, "Thrown types"); empty: every type.
+    // Takes effect at the next throw.
+    void setThrowTypes(std::vector<std::string> types);
+    [[nodiscard]] std::vector<std::string> throwTypes() const;
 
     // Restarts the debuggee (header comment). Errors: Unsupported (the adapter does not take restart,
     // or the session is attached), Busy (still starting or ended), IoError (closed).

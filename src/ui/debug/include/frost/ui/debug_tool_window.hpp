@@ -95,6 +95,8 @@ private:
     // Add Function Breakpoint: asks for a name (BreakpointManager::addFunction).
     void openAddFunctionBreakpoint();
     void openEditFunctionBreakpoint(const debug::FunctionBreakpointEntry& breakpoint);
+    // The C++ throw row's types (DBG-2b): stop only for throws of the listed types.
+    void openEditThrowTypes(const debug::ExceptionFilterEntry& filter);
     void requestDisassembly();
     void requestMemoryDump();
     void onFrameActivated(int row);

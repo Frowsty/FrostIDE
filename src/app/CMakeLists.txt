@@ -77,6 +77,8 @@ frost_add_library(app LAYER app
         src/settings_dialog.hpp
         src/settings_keymap_page.cpp
         src/settings_keymap_page.hpp
+        src/settings_lua_page.cpp
+        src/settings_lua_page.hpp
         src/settings_adapters.cpp
         src/startup.cpp
         src/welcome_screen.cpp
@@ -94,6 +96,7 @@ frost_add_library(app LAYER app
         src/stable_lsp_requester.hpp
         src/workbench_documents.cpp
         src/workbench_language.cpp
+        src/workbench_save_actions.cpp
         src/workbench_lua.cpp
         src/workbench_managed.cpp
         src/managed_debug_preparation.cpp

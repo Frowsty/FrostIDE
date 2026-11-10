@@ -25,6 +25,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FROST_SOURCE_D
 
 frost_add_library(lang LAYER lang
     SOURCES
+        src/cl_command_lines_provider.cpp
         src/clangd_actions.cpp
         src/clangd_locator.cpp
         src/clangd_service.cpp
@@ -33,14 +34,19 @@ frost_add_library(lang LAYER lang
         src/compile_commands.cpp
         src/completion.cpp
         src/diagnostics.cpp
+        src/document_features.cpp
         src/document_sync.cpp
         src/engine_automation.cpp
         src/engine_discovery_process.cpp
+        src/frost_engine_assets.cpp
+        src/frost_engine_lua.cpp
         src/fuzzy.cpp
         src/jsonrpc_connection.cpp
         src/jsonrpc_framing.cpp
         src/lsp_client.cpp
         src/lua_config.cpp
+        src/lua_host.cpp
+        src/lua_rc.cpp
         src/lua_service.cpp
         src/managed_service.cpp
         src/lsp_types.cpp
@@ -48,6 +54,7 @@ frost_add_library(lang LAYER lang
         src/msvc_environment.cpp
         src/navigation.cpp
         src/refactoring.cpp
+        src/save_actions.cpp
         src/semantic_tokens.cpp
         src/snippet.cpp
         src/symbols.cpp

@@ -31,6 +31,7 @@ inline constexpr std::string_view kNotificationsWindow = "window.notifications";
 inline constexpr std::string_view kHideActiveWindow = "window.hideActive";
 inline constexpr std::string_view kHideAllWindows = "window.hideAll";
 inline constexpr std::string_view kJumpToLastWindow = "window.jumpToLast";
+inline constexpr std::string_view kMaximizeToolWindow = "window.maximizeToolWindow";
 inline constexpr std::string_view kFocusEditor = "window.focusEditor";
 // Keyboard navigation (PLAN.md section 2.2 "Accessibility").
 inline constexpr std::string_view kFocusToolbar = "window.focusToolbar";

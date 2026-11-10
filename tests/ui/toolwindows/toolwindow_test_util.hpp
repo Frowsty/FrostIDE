@@ -19,6 +19,7 @@
 #include <QWidget>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -101,6 +102,19 @@ public:
     build::BuildState state() const override { return currentState; }
     std::vector<std::string> untrustedRoots() const override { return untrusted; }
     std::vector<build::BuildDiagnostic> diagnostics() const override { return diagnosticList; }
+    // Compile (Ctrl+F7, SLN-9): the files compileFile() was asked for, and the ones canCompile() accepts.
+    std::vector<std::string> compiles;
+    std::vector<std::string> compilable;
+    Result<void> compileFile(std::string_view path) override {
+        if (buildError) {
+            Error error = *buildError;
+            buildError.reset();
+            return std::unexpected(std::move(error));
+        }
+        compiles.emplace_back(path);
+        return {};
+    }
+    bool canCompile(std::string_view path) const override { return std::ranges::contains(compilable, path); }
 };
 
 // Records each emission of a Qt signal as a list of its arguments (QSignalSpy without QtTest).

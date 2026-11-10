@@ -80,6 +80,9 @@ struct DebugControllerHooks {
     std::function<bool()> mayStart{};
     std::function<Result<void>(std::function<void(Result<debug::DebugTarget>)>)> startAlternate{};
     std::function<void()> stopAlternate{};
+    // RUN-5: Debug starts some other way than a launch (an attach configuration attaches; a compound
+    // one is refused) when this returns a value, which debug() returns; nullopt or empty: as usual.
+    std::function<std::optional<Result<void>>()> startOverride{};
 };
 
 // Where the controller gets its adapter and services; every pointer must outlive the controller.
@@ -116,6 +119,8 @@ public:
     // The console the program's output goes to (optional; it must outlive the controller or be
     // destroyed with it).
     void setConsole(RunConsole* console);
+    // That console, or null when none was set or it was destroyed (UI thread).
+    [[nodiscard]] RunConsole* console() const noexcept;
     // Loads the breakpoints of `root` (absolute) and saves there from now on; "" stops saving.
     [[nodiscard]] Result<void> setWorkspaceRoot(std::string root);
 
@@ -165,6 +170,13 @@ public:
     [[nodiscard]] std::uint64_t sessionGeneration() const noexcept { return m_generation; }
     [[nodiscard]] bool paused() const noexcept { return m_state == debug::DebugState::Stopped; }
     [[nodiscard]] const std::optional<debug::StopInfo>& stopInfo() const noexcept { return m_stop; }
+    /*
+     * How the last Debug run ended, as its console's closing line says: the debuggee's exit code
+     * (lldb-dap's exited event), stopped, or the error (a failed build, a launch that failed, an
+     * adapter that vanished). Empty before the first Debug run ends; a new run keeps the previous
+     * outcome until it ends itself.
+     */
+    [[nodiscard]] const std::optional<build::RunOutcome>& lastOutcome() const noexcept { return m_lastOutcome; }
     // "Paused on breakpoint", "Exception: ..." while paused; "Running"; "" without a session.
     [[nodiscard]] QString statusText() const;
     [[nodiscard]] const std::vector<debug::DebugThread>& threads() const noexcept { return m_threads; }
@@ -204,6 +216,8 @@ public:
     [[nodiscard]] bool breakpointsMuted() const noexcept { return m_breakpoints.muted(); }
     // Edits the breakpoint on the current editor's caret line, or opens the Breakpoints tab.
     void requestEditBreakpoint();
+    // Opens the Breakpoints tab in the Debug tool window (Ctrl+Shift+F8).
+    void requestViewBreakpoints();
     // Asks for Evaluate Expression (evaluateRequested) with the current editor's selection.
     void requestEvaluate();
     // Connects `view` (header comment); it detaches itself when destroyed.
@@ -251,6 +265,7 @@ signals:
     void evaluateRequested(const QString& expression);
     void breakpointsChanged();
     void editBreakpointRequested(debug::BreakpointId id);
+    void viewBreakpointsRequested();
 
 private:
     struct Relay;
@@ -315,6 +330,7 @@ private:
     QString m_title;
     debug::DebugState m_state = debug::DebugState::Ended;
     std::optional<debug::StopInfo> m_stop;
+    std::optional<build::RunOutcome> m_lastOutcome;
     std::vector<debug::DebugThread> m_threads;
     std::optional<std::int64_t> m_thread;
     debug::FrameList m_frames;

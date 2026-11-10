@@ -662,5 +662,129 @@ TEST(EditorViewFeatures, CtrlWheelZoomIndentGuidesWhitespaceAndBookmarks) {
     EXPECT_EQ(withBookmarks.markers[0].color, h.view->colors().markerBookmark);
 }
 
+TEST(EditorEssentials, SplitLineAndStartNewLineBefore) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("    int x = 1;\n", cpp());
+    h.view->setState(text::EditorState::caretAt(ByteOffset{8})); // before 'x'
+    EXPECT_TRUE(h.view->perform(EditorAction::SplitLine));
+    // Split line inserts newline + indent, keeping caret at ByteOffset{8}.
+    EXPECT_EQ(h.text(), "    int \n    x = 1;\n");
+    EXPECT_EQ(h.caret(), 8U);
+
+    // Start New Line Before on line 1 inserts an indented blank line above and moves the caret there.
+    h.view->setState(text::EditorState::caretAt(ByteOffset{15}));
+    EXPECT_TRUE(h.view->perform(EditorAction::StartNewLineBefore));
+    EXPECT_EQ(h.text(), "    int \n    \n    x = 1;\n");
+    EXPECT_EQ(h.view->status().line, 2);
+    EXPECT_EQ(h.view->status().column, 5);
+}
+
+TEST(EditorEssentials, OverwriteModeReplacesGraphemesAndPaintsBlockCaret) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("abcd\n");
+    EXPECT_FALSE(h.view->overwriteMode());
+    EXPECT_FALSE(h.view->status().overwrite);
+    const double thinCaretWidth = h.view->buildDisplayList().carets.front().width();
+
+    // Insert key toggles overwrite mode.
+    h.press(Qt::Key_Insert);
+    EXPECT_TRUE(h.view->overwriteMode());
+    EXPECT_TRUE(h.view->status().overwrite);
+    const double blockCaretWidth = h.view->buildDisplayList().carets.front().width();
+    EXPECT_GT(blockCaretWidth, thinCaretWidth);
+
+    // Typing in overwrite mode replaces 'a' and 'b' without shifting line length.
+    h.press(Qt::Key_X, Qt::NoModifier, QStringLiteral("X"));
+    h.press(Qt::Key_Y, Qt::NoModifier, QStringLiteral("Y"));
+    EXPECT_EQ(h.text(), "XYcd\n");
+
+    // Toggle back to insert mode.
+    h.press(Qt::Key_Insert);
+    EXPECT_FALSE(h.view->overwriteMode());
+    h.press(Qt::Key_Z, Qt::NoModifier, QStringLiteral("Z"));
+    EXPECT_EQ(h.text(), "XYZcd\n");
+}
+
+TEST(EditorEssentials, MatchingBraceAndCodeBlockNavigation) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("void f() {\n    if (a) {\n        work();\n    }\n}\n", cpp());
+    h.settle();
+    const std::string doc = h.text();
+    const std::size_t openOuter = doc.find('{');
+    const std::size_t closeOuter = doc.rfind('}');
+    const std::size_t workPos = doc.find("work");
+    const std::size_t openInner = doc.find('{', openOuter + 1);
+    const std::size_t closeInner = doc.find('}', workPos);
+
+    h.view->setState(text::EditorState::caretAt(ByteOffset{openOuter}));
+    EXPECT_TRUE(h.view->perform(EditorAction::MatchingBrace));
+    EXPECT_EQ(h.caret(), closeOuter);
+    EXPECT_TRUE(h.view->perform(EditorAction::MatchingBrace));
+    EXPECT_EQ(h.caret(), openOuter);
+
+    // Code block start/end from inside inner block, and repeating walks outwards.
+    h.view->setState(text::EditorState::caretAt(ByteOffset{workPos}));
+    EXPECT_TRUE(h.view->perform(EditorAction::CodeBlockStart));
+    EXPECT_EQ(h.caret(), openInner);
+    EXPECT_TRUE(h.view->perform(EditorAction::CodeBlockStart));
+    EXPECT_EQ(h.caret(), openOuter);
+    h.view->setState(text::EditorState::caretAt(ByteOffset{workPos}));
+    EXPECT_TRUE(h.view->perform(EditorAction::CodeBlockEndWithSelection));
+    EXPECT_EQ(h.view->editor().state().primary().anchor, ByteOffset{workPos});
+    EXPECT_EQ(h.view->editor().state().primary().head, ByteOffset{closeInner + 1});
+    EXPECT_TRUE(h.view->perform(EditorAction::CodeBlockEnd));
+    EXPECT_EQ(h.caret(), closeOuter + 1);
+}
+
+TEST(EditorEssentials, MoveStatementAndAutoIndentLines) {
+    FROST_REQUIRE_OFFSCREEN();
+    {
+        EditorHarness h("void f() {\n    if (a) {\n        one();\n    }\n    two();\n}\n", cpp());
+        h.settle();
+        const std::size_t ifPos = h.text().find("if (a)");
+        h.view->setState(text::EditorState::caretAt(ByteOffset{ifPos}));
+        // Moving the multi-line `if` statement down swaps it past `two();`.
+        EXPECT_TRUE(h.view->perform(EditorAction::MoveStatementDown));
+        EXPECT_EQ(h.text(), "void f() {\n    two();\n    if (a) {\n        one();\n    }\n}\n");
+        EXPECT_TRUE(h.view->perform(EditorAction::MoveStatementUp));
+        EXPECT_EQ(h.text(), "void f() {\n    if (a) {\n        one();\n    }\n    two();\n}\n");
+    }
+    {
+        EditorHarness h("int f() {\nint a = 1;\n  int b = 2;\n}\n", cpp());
+        h.press(Qt::Key_A, Qt::ControlModifier); // Select all
+        EXPECT_TRUE(h.view->perform(EditorAction::AutoIndentLines));
+        EXPECT_EQ(h.text(), "int f() {\n    int a = 1;\n    int b = 2;\n}\n");
+    }
+}
+
+TEST(EditorEssentials, PageEdgesFindWordAtCaretAndClipboardHistory) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("alpha beta\ngamma alpha\ndelta alpha\n");
+    h.view->setState(text::EditorState::caretAt(ByteOffset{2})); // inside first "alpha"
+
+    // Find Word at Caret populates find query and steps to next match without stealing editor focus.
+    EXPECT_TRUE(h.view->perform(EditorAction::FindWordAtCaret));
+    EXPECT_TRUE(h.view->findBarVisible());
+    EXPECT_EQ(h.view->findBar()->findField()->text(), QStringLiteral("alpha"));
+    EXPECT_EQ(h.view->editor().state().primary().range(), (text::ByteRange{ByteOffset{17}, ByteOffset{22}}));
+
+    // Page top / bottom navigation with and without selection.
+    EXPECT_TRUE(h.view->perform(EditorAction::PageBottom));
+    EXPECT_EQ(h.view->status().line, 4);
+    EXPECT_TRUE(h.view->perform(EditorAction::PageTopWithSelection));
+    EXPECT_EQ(h.view->status().line, 1);
+    EXPECT_FALSE(h.view->editor().state().primary().empty());
+
+    // Clipboard history and pasteText.
+    h.view->setState(text::EditorState::caretAt(ByteOffset{0}));
+    h.view->clipboardHistory().record("first_clip");
+    h.view->clipboardHistory().record("second_clip");
+    ASSERT_EQ(h.view->clipboardHistory().entries().size(), 2U);
+    EXPECT_EQ(h.view->clipboardHistory().entries()[0], "second_clip");
+    EXPECT_EQ(h.view->clipboardHistory().entries()[1], "first_clip");
+    h.view->pasteText(h.view->clipboardHistory().entries()[1]);
+    EXPECT_TRUE(h.text().starts_with("first_clip"));
+}
+
 } // namespace
 } // namespace frost::ui

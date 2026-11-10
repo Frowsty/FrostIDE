@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Tests for frost::run (RUN-1, RUN-2):
+# Tests for frost::run (RUN-1, RUN-2, RUN-5):
 #   run_unit_tests         RunConfiguration validation, the JSON store over a MemFs workspace,
 #                          launchPlanFor and displayCommandLine, the RunManager rules that start no
 #                          process (refusals, Busy, Prepare, a failed or cancelled before-launch step),
@@ -11,7 +11,9 @@
 #                          environment, working directory, input, Busy, Stop, a resolving before-launch
 #                          handler, a launch failure) and the RUN-1 acceptance: Stop leaves no descendant
 #                          of a real seven-process tree (run_tree_child), checked by enumerating the
-#                          OS process table, label "integration" (every platform);
+#                          OS process table, label "integration" (every platform); RUN-5's
+#                          before-launch tasks (order, output, a failing task, Stop during a task,
+#                          Prepare) with io_test_child as tasks and program;
 #   run_tree_child         the helper program that builds that tree (not a test itself).
 
 frost_add_test(run_unit_tests
@@ -26,7 +28,7 @@ frost_apply_compile_options(run_tree_child TEST)
 frost_copy_runtime_dlls(run_tree_child)
 
 frost_add_test(run_process_tests
-    SOURCES run_manager_test.cpp run_manager_tree_test.cpp
+    SOURCES run_before_launch_test.cpp run_manager_test.cpp run_manager_tree_test.cpp
     DEPS frost::run frost::io frost::core
     LABELS integration)
 # tests/io/process_env.hpp (io_test_child and ProcessWatch), tests/support/scratch_dir.hpp.

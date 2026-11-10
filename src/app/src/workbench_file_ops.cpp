@@ -42,56 +42,53 @@ QString text(const char* source) { return ui::qtr("frost::app::Workbench", sourc
 
 QString qs(std::string_view utf8) { return QString::fromUtf8(utf8.data(), static_cast<qsizetype>(utf8.size())); }
 
-/*
- * A FrostEngine asset's metadata sidecar is <asset file name>.fmeta beside it (the engine's own
- * layout: Click.wav and Click.wav.fmeta); it carries the asset's handle, so a rename or move that
- * left it behind would orphan the metadata and break every reference to the handle (FEC-9a). This
- * plans the sidecar's move with its asset: nullopt when `asset` has none (folders and .fmeta files
- * themselves have none); AlreadyExists when `target`.fmeta exists, so neither file moves.
- */
-using SidecarMove = std::pair<std::string, std::string>; // The .fmeta now, and where it goes.
-Result<std::optional<SidecarMove>> planFmetaSidecarMove(io::IFileSystem& fs, const std::string& asset,
-                                                        const std::string& target) {
-    if (extensionOf(asset) == ".fmeta")
-        return std::nullopt;
-    SidecarMove move{asset + ".fmeta", target + ".fmeta"};
-    const auto status = fs.status(move.first);
-    if (!status || status->type != io::FileType::Regular)
-        return std::nullopt;
-    if (fs.exists(move.second).value_or(true)) {
-        return fail(ErrorCode::AlreadyExists, "'" + std::string(io::fileName(move.second)) +
-                                                  "' already exists; an asset and its .fmeta file move together, "
-                                                  "so neither was moved");
-    }
-    return move;
-}
-
 } // namespace
 
+void Workbench::checkFrostEngineAssetReferences(std::string_view path, std::string_view operation) {
+    m_lastAssetReferenceReport.reset();
+    const auto assetLoc = lang::locateFrostEngineAsset(m_services.fs, path);
+    if (!assetLoc) {
+        return;
+    }
+    const bool trusted = m_services.trust.isTrusted(assetLoc->projectRoot) &&
+                         (m_projectRoot.empty() || m_services.trust.isTrusted(m_projectRoot));
+    if (!trusted) {
+        return;
+    }
+    const auto editorExe =
+        lang::findFrostEditorExecutable(m_services.fs, assetLoc->projectRoot, m_options.frostEditorPath);
+    if (!editorExe) {
+        return;
+    }
+    lang::AssetFindReferencesRequest request;
+    request.executablePath = *editorExe;
+    request.projectPath = assetLoc->projectRoot;
+    request.assetPath = assetLoc->assetPath;
+    request.trusted = trusted;
+    auto report = lang::runAssetFindReferences(m_services.launcher, request);
+    if (!report) {
+        return;
+    }
+    if (report->hasWarnings()) {
+        notify(text("Asset references for %1").arg(qs(io::fileName(path))), qs(report->formatWarningSummary(operation)),
+               ui::NotificationKind::Warning);
+    }
+    m_lastAssetReferenceReport = std::move(*report);
+}
+
 /*
- * Renames `from` to `to` and, when `sidecar` is set, the asset's .fmeta with it: both or neither.
- * If the sidecar cannot follow, the asset is moved back; the error says what happened (and that the
- * asset stayed at `to` when even that failed). Open tabs of the sidecar follow it.
+ * Executes `plan` on disk and, when a `.fmeta` sidecar moved with the asset, rebinds open tabs of
+ * the sidecar to its new path.
  */
-Result<void> Workbench::moveWithSidecar(const std::string& from, const std::string& to,
-                                        const std::optional<std::pair<std::string, std::string>>& sidecar) {
-    if (auto renamed = m_services.fs.rename(from, to); !renamed) {
-        return renamed;
+Result<void> Workbench::moveWithSidecar(const lang::FmetaMovePlan& plan) {
+    auto moved = lang::executeFmetaMove(m_services.fs, plan);
+    if (!moved) {
+        return std::unexpected(std::move(moved.error()));
     }
-    if (!sidecar) {
-        return {};
+    if (moved->hasSidecar()) {
+        rebindRenamedDocument(m_documentRegistry->canonicalize(*moved->sourceSidecarPath),
+                              m_documentRegistry->canonicalize(*moved->targetSidecarPath));
     }
-    if (auto metaMoved = m_services.fs.rename(sidecar->first, sidecar->second); !metaMoved) {
-        if (auto back = m_services.fs.rename(to, from); !back) {
-            return fail(ErrorCode::IoError, std::format("its .fmeta file could not follow ({}), and moving the asset "
-                                                        "back failed too ({}); the asset is now {}",
-                                                        metaMoved.error().message(), back.error().message(), to));
-        }
-        return fail(metaMoved.error().code(), "its .fmeta file could not follow (" + metaMoved.error().message() +
-                                                  "), so the asset was moved back");
-    }
-    rebindRenamedDocument(m_documentRegistry->canonicalize(sidecar->first),
-                          m_documentRegistry->canonicalize(sidecar->second));
     return {};
 }
 
@@ -116,6 +113,13 @@ Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_
         return std::unexpected(std::move(status.error()));
     }
     const bool isDir = status->type == io::FileType::Directory;
+    if (lang::isFmetaPath(canonicalOld)) {
+        Error err(ErrorCode::InvalidArgument,
+                  "cannot rename or move a .fmeta file directly; rename or move the asset itself");
+        notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(err.message()),
+               ui::NotificationKind::Error);
+        return std::unexpected(std::move(err));
+    }
     if (io::fileName(canonicalOld) == newRelativeName) {
         return canonicalOld;
     }
@@ -132,14 +136,16 @@ Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_
                ui::NotificationKind::Error);
         return std::unexpected(std::move(err));
     }
-    auto sidecar = isDir ? Result<std::optional<SidecarMove>>(std::nullopt)
-                         : planFmetaSidecarMove(m_services.fs, canonicalOld, *targetJoined);
-    if (!sidecar) {
-        notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(sidecar.error().message()),
+    auto movePlan = lang::planFmetaMove(m_services.fs, canonicalOld, *targetJoined);
+    if (!movePlan) {
+        notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(movePlan.error().message()),
                ui::NotificationKind::Error);
-        return std::unexpected(std::move(sidecar.error()));
+        return std::unexpected(std::move(movePlan.error()));
     }
-    if (auto renamed = moveWithSidecar(canonicalOld, *targetJoined, *sidecar); !renamed) {
+    if (!isDir) {
+        checkFrostEngineAssetReferences(canonicalOld, "Renaming");
+    }
+    if (auto renamed = moveWithSidecar(*movePlan); !renamed) {
         notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(renamed.error().message()),
                ui::NotificationKind::Error);
         return std::unexpected(std::move(renamed.error()));
@@ -200,21 +206,25 @@ Result<void> Workbench::deleteItem(std::string_view path) {
         return std::unexpected(std::move(status.error()));
     }
     const bool isDir = status->type == io::FileType::Directory;
-    if (isDir) {
-        if (auto removed = m_services.fs.removeAll(canonical); !removed) {
-            notify(text("Cannot delete %1").arg(qs(io::fileName(canonical))), qs(removed.error().message()),
-                   ui::NotificationKind::Error);
-            return std::unexpected(std::move(removed.error()));
-        }
-    } else {
-        if (auto removed = m_services.fs.remove(canonical); !removed) {
-            notify(text("Cannot delete %1").arg(qs(io::fileName(canonical))), qs(removed.error().message()),
-                   ui::NotificationKind::Error);
-            return std::unexpected(std::move(removed.error()));
-        }
+    auto deletePlan = lang::planFmetaDelete(m_services.fs, canonical);
+    if (!deletePlan) {
+        notify(text("Cannot delete %1").arg(qs(io::fileName(canonical))), qs(deletePlan.error().message()),
+               ui::NotificationKind::Error);
+        return std::unexpected(std::move(deletePlan.error()));
+    }
+    if (!isDir) {
+        checkFrostEngineAssetReferences(canonical, "Deleting");
+    }
+    if (auto deleted = lang::executeFmetaDelete(m_services.fs, *deletePlan); !deleted) {
+        notify(text("Cannot delete %1").arg(qs(io::fileName(canonical))), qs(deleted.error().message()),
+               ui::NotificationKind::Error);
+        return std::unexpected(std::move(deleted.error()));
     }
 
     closeDeletedDocuments(canonical, isDir);
+    if (deletePlan->hasSidecar()) {
+        closeDeletedDocuments(m_documentRegistry->canonicalize(*deletePlan->sidecarPath), false);
+    }
     removeSourceFromCMakeLists(canonical, isDir);
     updatePathInVcxproj(canonical, {}, isDir, true);
     refreshSolutionExplorerForFsChange();
@@ -230,6 +240,12 @@ void Workbench::promptAndRenameItem(std::string_view path) {
     auto status = m_services.fs.status(canonical);
     if (!status) {
         notify(text("Cannot rename %1").arg(qs(io::fileName(canonical))), qs(status.error().message()),
+               ui::NotificationKind::Error);
+        return;
+    }
+    if (lang::isFmetaPath(canonical)) {
+        notify(text("Cannot rename %1").arg(qs(io::fileName(canonical))),
+               text("Cannot rename or move a .fmeta file directly; rename or move the asset itself."),
                ui::NotificationKind::Error);
         return;
     }
@@ -378,6 +394,12 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
             continue;
         }
         const bool isDir = st->type == io::FileType::Directory;
+        if (lang::isFmetaPath(canonicalOld)) {
+            notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))),
+                   text("Cannot rename or move a .fmeta file directly; rename or move the asset itself."),
+                   ui::NotificationKind::Warning);
+            continue;
+        }
         const std::string oldParent(io::parentPath(canonicalOld));
         if (lang::documentKey(oldParent) == lang::documentKey(canonicalTargetDir)) {
             continue;
@@ -403,14 +425,16 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
                    ui::NotificationKind::Warning);
             continue;
         }
-        auto sidecar = isDir ? Result<std::optional<SidecarMove>>(std::nullopt)
-                             : planFmetaSidecarMove(m_services.fs, canonicalOld, *targetJoined);
-        if (!sidecar) {
-            notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))), qs(sidecar.error().message()),
+        auto movePlan = lang::planFmetaMove(m_services.fs, canonicalOld, *targetJoined);
+        if (!movePlan) {
+            notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))), qs(movePlan.error().message()),
                    ui::NotificationKind::Warning);
             continue;
         }
-        if (auto renamed = moveWithSidecar(canonicalOld, *targetJoined, *sidecar); !renamed) {
+        if (!isDir) {
+            checkFrostEngineAssetReferences(canonicalOld, "Moving");
+        }
+        if (auto renamed = moveWithSidecar(*movePlan); !renamed) {
             notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))), qs(renamed.error().message()),
                    ui::NotificationKind::Error);
             continue;

@@ -1,0 +1,5 @@
+{
+  "name": "Malicious",
+  "engine": { "executable": "planted/FrostEditor", "arguments": ["--run-planted"] },
+  "scripts": "Assets/Scripts"
+}

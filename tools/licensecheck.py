@@ -58,6 +58,7 @@ import stat
 import struct
 import sys
 import uuid
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1208,6 +1209,55 @@ def check_sdk_managed(repo: Path, report: Report) -> None:
         report.violations.append(Violation("sdk/managed-dependencies.json", 1, f"managed server pin: {error}"))
 
 
+# The assemblies the ProjectHost helper (tools/project-host-spike) may reference from the installed
+# Visual Studio or Build Tools: name -> (SPDX licence, the ADR that admitted it). They are resolved
+# from that installation at build and run time and never copied (Private="false"), so they are not
+# redistributed and are not SBOM packages. .NET Framework assemblies (System.*) need no entry.
+PROJECT_HOST_CSPROJ = "tools/project-host-spike/ProjectHostVsProbe.csproj"
+PROJECT_HOST_REFERENCES = {
+    "Microsoft.Build": ("MIT", "docs/adr/0006-spike-s6-projecthost-cold-start.md"),
+    "Microsoft.Build.Framework": ("MIT", "docs/adr/0006-spike-s6-projecthost-cold-start.md"),
+    "Microsoft.VisualStudio.SolutionPersistence": ("MIT", "docs/adr/0082-safe-solution-and-project-edits.md"),
+}
+
+
+def check_project_host(repo: Path, report: Report) -> None:
+    """Check every Reference of the ProjectHost helper (SLN-6, ADR 0082): a .NET Framework
+    assembly, or an allowlisted Visual Studio assembly with an allowed licence, its ADR and
+    Private="false". Package references are refused: the helper downloads nothing."""
+    path = repo / PROJECT_HOST_CSPROJ
+    if not path.is_file():
+        return
+    try:
+        root = ET.fromstring(path.read_bytes())
+    except (OSError, ET.ParseError) as error:
+        report.violations.append(Violation(PROJECT_HOST_CSPROJ, 1, f"ProjectHost project: {error}"))
+        return
+    for element in root.iter():
+        tag = element.tag.rsplit("}", 1)[-1]
+        name = element.get("Include", "")
+        if tag == "PackageReference":
+            report.violations.append(Violation(PROJECT_HOST_CSPROJ, 1, f"ProjectHost package reference {name}: "
+                                               "the helper references installed assemblies only"))
+        if tag != "Reference":
+            continue
+        hint = element.get("HintPath")
+        if hint is None and (name == "System" or name.startswith("System.")):
+            continue
+        entry = PROJECT_HOST_REFERENCES.get(name)
+        if entry is None:
+            report.violations.append(Violation(PROJECT_HOST_CSPROJ, 1, f"ProjectHost reference {name} is not on "
+                                               "the ProjectHost allowlist (tools/licensecheck.py)"))
+            continue
+        licence, adr = entry
+        if not expression_allowed(licence, ALLOWLIST) or not (repo / adr).is_file():
+            report.violations.append(Violation(PROJECT_HOST_CSPROJ, 1, f"ProjectHost reference {name}: licence "
+                                               f"{licence} or {adr} is invalid"))
+        if (element.get("Private") or "").lower() != "false" or not hint or "$(VisualStudioMSBuildDir)" not in hint:
+            report.violations.append(Violation(PROJECT_HOST_CSPROJ, 1, f"ProjectHost reference {name} must come "
+                                               "from the installed Visual Studio with Private=\"false\""))
+
+
 def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Path | None) -> Report:
     """Runs every check and returns the violations and SBOM packages."""
     report = Report()
@@ -1220,6 +1270,7 @@ def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Pa
     check_sdk_conpty(repo, report)
     check_sdk_luals(repo, report)
     check_sdk_managed(repo, report)
+    check_project_host(repo, report)
     report.violations = sorted(set(report.violations))
     return report
 

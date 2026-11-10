@@ -199,8 +199,13 @@ fi
 # "gitdir: E:/..." names a directory git cannot open here, so every git run inside the mirror (a
 # test's `git ls-remote`, say) failed with "not a git repository". Runs before this fix copied
 # that file, and --delete spares excluded names, so a stale one is removed.
+# '/build' (not '/build/') also excludes a `build` link: a worktree whose build directory is a
+# Windows junction to another drive appears here as a symlink, which '/build/' copied, so the Linux
+# build trees landed on /mnt/c behind it and moc's relative includes no longer resolved (R3). A
+# copied link is removed, so the mirror builds in its own ext4 tree again.
 mirror_source() {
-    rsync -a --checksum --no-times --delete --exclude '/build/' --exclude '/.git' --exclude '/.claude/' "$1/" "$2/"
+    if [[ -h "$2/build" ]]; then rm -f "$2/build"; fi
+    rsync -a --checksum --no-times --delete --exclude '/build' --exclude '/.git' --exclude '/.claude/' "$1/" "$2/"
     if [[ -f "$2/.git" ]]; then rm -f "$2/.git"; fi
 }
 # The tree hash of the source tree, taken before the copy (FND-2; tools/hooks/verify_stamp.py), for a

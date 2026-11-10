@@ -87,6 +87,8 @@ FREEZE_TOP_FRAMES = 3
 FREEZE_LINE_SLACK = 3
 FREEZE_MIN_SAMPLES = 5
 FREEZE_MIN_DURATION_MS = 250
+# Addresses per llvm-symbolizer call: well inside the Windows command-line limit with the paths.
+SYMBOLIZER_BATCH = 256
 
 
 @dataclass(frozen=True)
@@ -655,11 +657,20 @@ class Symbolizer:
         else:
             shift = image.file_start_vaddr if module.origin == "minidump" else 0
             addresses = [offset + shift for offset in offsets]
-        command += [f"0x{address:x}" for address in addresses]
+        # Each distinct address once, at most SYMBOLIZER_BATCH per call: a freeze report's thousands
+        # of frames in one module overflowed the Windows command line (32767 characters; WinError
+        # 206, FND-9b), and its samples repeat the same return addresses.
+        unique = list(dict.fromkeys(addresses))
+        answers: dict[int, list[Symbol] | str] = {}
         try:
-            results = parse_symbolizer_output(self.run(command), len(offsets))
+            for start in range(0, len(unique), SYMBOLIZER_BATCH):
+                batch = unique[start : start + SYMBOLIZER_BATCH]
+                parsed = parse_symbolizer_output(self.run(command + [f"0x{address:x}" for address in batch]),
+                                                 len(batch))
+                answers.update(zip(batch, parsed))
         except (OSError, subprocess.TimeoutExpired) as error:
             return [Frame(name, offset, note=f"llvm-symbolizer failed: {error}") for offset in offsets]
+        results = [answers[address] for address in addresses]
         return [Frame(name, offset, symbols=result) if isinstance(result, list) else Frame(name, offset, note=result)
                 for offset, result in zip(offsets, results)]
 

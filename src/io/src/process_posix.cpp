@@ -26,6 +26,7 @@
 
 #include "internal.hpp"
 #include "process_internal.hpp"
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 
@@ -815,6 +816,16 @@ Result<detail::SpawnedChild> spawnPosixChild(const ProcessSpec& spec) {
             }
         }
         return std::unexpected(errnoError(rc, "launch", spec.executable));
+    }
+    if (spec.belowNormalPriority) {
+        // glibc's posix_spawn returns once the child has executed, so the child's own image runs
+        // already; raising a child's niceness needs no privilege. Best effort (process.hpp).
+        errno = 0;
+        const int current = ::getpriority(PRIO_PROCESS, 0);
+        if (errno == 0) {
+            static_cast<void>(
+                ::setpriority(PRIO_PROCESS, static_cast<id_t>(pid), std::min(current + kBelowNormalNiceness, 19)));
+        }
     }
     // The child ends close when this function returns, so EOF arrives as soon as the child
     // and its descendants close theirs.

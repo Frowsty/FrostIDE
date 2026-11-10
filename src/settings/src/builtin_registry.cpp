@@ -127,6 +127,15 @@ struct Entry {
         {"editor.insertFinalNewline", "Ensure every saved file ends with a line break",
          "Adds a final line break when saving a file that lacks one (EditorConfig's insert_final_newline).",
          "Editor/General/On Save", boolSchema(), Value(false), editorConfig},
+        // REF-12: actions on save, computed by clangd for C and C++ files; off by default.
+        {"editor.formatOnSave", "Reformat code on save",
+         "Reformats C and C++ files before saving with clangd's formatting (clang-format with the .clang-format "
+         "above the file). Skipped, with a notification, when clangd is not running or does not answer in time.",
+         "Editor/General/On Save", boolSchema(), Value(false), projectToo},
+        {"editor.optimizeImportsOnSave", "Optimize includes on save",
+         "Applies clangd's include-cleaner fix (unused and missing includes) to C and C++ files before saving, "
+         "when clangd's diagnostics describe the text being saved.",
+         "Editor/General/On Save", boolSchema(), Value(false), projectToo},
         {"editor.editorConfig", "Enable EditorConfig support",
          "Applies the .editorconfig files above each file on top of these settings.", "Editor/Code Style", boolSchema(),
          Value(true), projectToo},
@@ -238,7 +247,10 @@ struct Entry {
 
         // Keymap.
         {"keymap.id", "Keymap", "The keyboard shortcut scheme.", "Keymap",
-         enumSchema(options({{"intellij", "IntelliJ IDEA (Windows and Linux)"}, {"visual-studio", "Visual Studio"}})),
+         enumSchema(options({{"intellij", "IntelliJ IDEA (Windows and Linux)"},
+                             {"visual-studio", "Visual Studio"},
+                             {"visual-studio-2022", "Visual Studio 2022"},
+                             {"resharper", "ReSharper (Visual Studio scheme)"}})),
          text("intellij"), kApplicationOnly},
         {"keymap.doubleTapIntervalMs", "Double modifier interval",
          "How quickly a modifier must be pressed twice (Double Shift) in milliseconds; 0 uses the system's "

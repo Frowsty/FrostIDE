@@ -3,9 +3,11 @@
  * Tests for RUN-3's widgets in frost::ui_run, offscreen (no window is shown): the Run tool window
  * v2's tabs (reuse by key, the empty first tab, the running title, closing stops the run), the
  * argument and environment text of Run/Debug Configurations, the dialog itself (editing a native
- * configuration, what a generated cmake-target and msbuild configuration allow, the RUN-5 compound
- * section, validation on OK), and RunController running a native configuration through a
- * RunManager over the scripted launcher into its own tab, with the configuration combo.
+ * configuration, what a generated cmake-target and msbuild configuration allow, validation on OK),
+ * RUN-5's before-launch tasks, compound members and attach process in the dialog, and RunController
+ * running a native configuration, and a compound one's members, through a RunManager over the
+ * scripted launcher into their own tabs, with the configuration combo and the compound and attach
+ * refusals.
  */
 
 #include "frost/io/scripted_process_launcher.hpp"
@@ -28,6 +30,7 @@
 #include <QTabWidget>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <string>
@@ -243,17 +246,194 @@ TEST(RunConfigurationsDialog, EditsANativeConfigurationAndKeepsGeneratedOnes) {
     EXPECT_NE(set.find(id), nullptr);
 }
 
-TEST(RunConfigurationsDialog, CompoundRunsAreDisabledNamingRunFive) {
+// RUN-5: without a workspace nothing can be stored, so compound and attach configurations cannot be
+// added either; the compound button says that compound debugging is DBG-10's. (Replaces R2's test of
+// the disabled RUN-5 placeholder, which is now the feature.)
+TEST(RunConfigurationsDialog, CompoundAndAttachConfigurationsNeedAWorkspace) {
     run::RunConfigurationSet set;
     RunConfigurationsDialog dialog(set, "", false);
     auto* group = child<QWidget>(dialog, "compoundRunGroup");
-    auto* launch = child<QPushButton>(dialog, "compoundLaunchButton");
-    ASSERT_TRUE(group && launch);
-    EXPECT_FALSE(group->isEnabled());
-    EXPECT_FALSE(launch->isEnabled());
-    EXPECT_TRUE(launch->toolTip().contains(QStringLiteral("RUN-5")));
+    auto* compound = child<QPushButton>(dialog, "compoundLaunchButton");
+    auto* attach = child<QPushButton>(dialog, "attachConfigurationButton");
+    ASSERT_TRUE(group && compound && attach);
+    EXPECT_FALSE(compound->isEnabled());
+    EXPECT_FALSE(attach->isEnabled());
+    EXPECT_TRUE(compound->toolTip().contains(QStringLiteral("DBG-10")));
+    EXPECT_EQ(dialog.addCompound(), "");
+    EXPECT_EQ(dialog.addAttach(), "");
     // No workspace: nowhere to store a native configuration.
     EXPECT_FALSE(child<QPushButton>(dialog, "runConfigurationAdd")->isEnabled());
+}
+
+// RUN-5 in the dialog: a native configuration's before-launch tasks, a compound configuration's
+// members and an attach configuration's process, each validated on OK.
+TEST(RunConfigurationsDialog, EditsTasksCompoundMembersAndTheAttachProcess) {
+    run::RunConfigurationSet set;
+    run::RunConfiguration msbuild;
+    msbuild.id = "msbuild.App";
+    msbuild.name = "App";
+    msbuild.type = run::RunType::MSBuild;
+    msbuild.target = MemTree::path("Run/App/App.vcxproj");
+    run::RunConfiguration server =
+        run::nativeRunConfiguration("Server", MemTree::path("bin/server.exe"), std::vector<run::RunConfiguration>{});
+    server.beforeLaunchTasks = {
+        {.program = MemTree::path("tools/gen.exe"), .arguments = {"--out"}, .workingDirectory = MemTree::path("gen")}};
+    set.setGenerated({cmakeTarget("editor"), msbuild});
+    set.setStored({server});
+    RunConfigurationsDialog dialog(set, server.id);
+    auto* tasks = child<QPlainTextEdit>(dialog, "runConfigurationTasks");
+    auto* members = child<QListWidget>(dialog, "runConfigurationMembers");
+    auto* process = child<QLineEdit>(dialog, "runConfigurationProcess");
+    auto* name = child<QLineEdit>(dialog, "runConfigurationName");
+    auto* list = child<QListWidget>(dialog, "runConfigurationList");
+    auto* error = child<QLabel>(dialog, "runConfigurationError");
+    ASSERT_TRUE(tasks && members && process && name && list && error);
+
+    // The native one's task is one line; an unchanged line keeps its working directory.
+    EXPECT_EQ(tasks->toPlainText(), QString::fromStdString(MemTree::path("tools/gen.exe")) + QStringLiteral(" --out"));
+    EXPECT_FALSE(tasks->isReadOnly());
+    tasks->setPlainText(tasks->toPlainText() + QStringLiteral("\n\"") +
+                        QString::fromStdString(MemTree::path("tools/check tool.exe")) + QStringLiteral("\" -q\n"));
+    // msbuild configurations take no tasks.
+    list->setCurrentRow(1);
+    EXPECT_TRUE(tasks->isReadOnly());
+
+    // A compound of the CMake target and the native server; the list offers the three others.
+    const std::string compoundId = dialog.addCompound();
+    ASSERT_FALSE(compoundId.empty());
+    EXPECT_EQ(dialog.selectedId(), compoundId);
+    ASSERT_EQ(members->count(), 3);
+    name->setText(QStringLiteral("Editor and server"));
+    dialog.accept();
+    EXPECT_EQ(dialog.result(), QDialog::Rejected) << "a compound with no member is refused";
+    EXPECT_TRUE(error->text().contains(QStringLiteral("at least one"))) << error->text().toStdString();
+    for (int i = 0; i < members->count(); ++i) {
+        const QString id = members->item(i)->data(Qt::UserRole).toString();
+        if (id == QStringLiteral("cmake.editor") || id == QString::fromStdString(server.id))
+            members->item(i)->setCheckState(Qt::Checked);
+    }
+
+    // An attach configuration naming the process by its executable.
+    const std::string attachId = dialog.addAttach();
+    ASSERT_FALSE(attachId.empty());
+    EXPECT_TRUE(members->count() == 0) << "the member list belongs to compound configurations";
+    process->setText(QStringLiteral("FrostEditor.exe"));
+    dialog.accept();
+    EXPECT_EQ(dialog.result(), QDialog::Accepted) << error->text().toStdString();
+
+    const std::vector<run::RunConfiguration> edited = dialog.edited();
+    ASSERT_EQ(edited.size(), 5U);
+    const auto find = [&](const std::string& id) { return std::ranges::find(edited, id, &run::RunConfiguration::id); };
+    ASSERT_NE(find(server.id), edited.end());
+    const auto& serverTasks = find(server.id)->beforeLaunchTasks;
+    ASSERT_EQ(serverTasks.size(), 2U);
+    EXPECT_EQ(serverTasks[0], server.beforeLaunchTasks[0]) << "the unchanged task kept its working directory";
+    EXPECT_EQ(serverTasks[1].program, MemTree::path("tools/check tool.exe"));
+    EXPECT_EQ(serverTasks[1].arguments, std::vector<std::string>{"-q"});
+    ASSERT_NE(find(compoundId), edited.end());
+    EXPECT_EQ(find(compoundId)->type, run::RunType::Compound);
+    EXPECT_EQ(find(compoundId)->name, "Editor and server");
+    EXPECT_EQ(find(compoundId)->configurations, (std::vector<std::string>{"cmake.editor", server.id}));
+    ASSERT_NE(find(attachId), edited.end());
+    EXPECT_EQ(find(attachId)->type, run::RunType::Attach);
+    EXPECT_EQ(find(attachId)->target, "FrostEditor.exe");
+    // Stored and merged again, both are the user's configurations.
+    set.replace(edited);
+    EXPECT_NE(set.find(compoundId), nullptr);
+    EXPECT_NE(set.find(attachId), nullptr);
+    EXPECT_FALSE(set.isGenerated(compoundId));
+}
+
+// RUN-5: a compound runs its native members, each in its own tab through the RunManager; it is
+// checked before anything starts; an attach configuration does not run.
+TEST(RunControllerConfigurations, ACompoundRunsItsMembersAndAttachConfigurationsDoNotRun) {
+    io::ScriptedProcessLauncher launcher;
+    auto manager = run::RunManager::create(launcher);
+    RunToolWindow window;
+    RunControllerHooks hooks;
+    int cmakeRuns = 0;
+    hooks.generatedConfigurations = [] {
+        return std::vector<run::RunConfiguration>{cmakeTarget("editor"), cmakeTarget("runtime")};
+    };
+    hooks.saveConfigurations = [](const std::vector<run::RunConfiguration>&) -> Result<void> { return {}; };
+    hooks.alternateRun = [&]() -> Result<build::RunId> {
+        ++cmakeRuns;
+        return build::RunId{1000};
+    };
+    std::vector<QString> errors;
+    hooks.reportError = [&](const QString& message) { errors.push_back(message); };
+    RunController controller(&window, std::move(hooks));
+    controller.setRunManager(manager.get());
+    controller.refreshStartupCombo();
+
+    std::vector<run::RunConfiguration> edited = controller.configurations().all();
+    run::RunConfiguration server = run::nativeRunConfiguration("Server", MemTree::path("bin/server.exe"), edited);
+    edited.push_back(server);
+    run::RunConfiguration client = run::nativeRunConfiguration("Client", MemTree::path("bin/client.exe"), edited);
+    client.arguments = {"--connect"};
+    edited.push_back(client);
+    run::RunConfiguration both;
+    both.id = "compound.both";
+    both.name = "Both";
+    both.type = run::RunType::Compound;
+    both.configurations = {server.id, client.id, "cmake.editor"};
+    edited.push_back(both);
+    run::RunConfiguration twoTargets = both;
+    twoTargets.id = "compound.targets";
+    twoTargets.name = "Two targets";
+    twoTargets.configurations = {"cmake.editor", "cmake.runtime"};
+    edited.push_back(twoTargets);
+    run::RunConfiguration dangling = both;
+    dangling.id = "compound.dangling";
+    dangling.name = "Dangling";
+    dangling.configurations = {server.id, "native.gone"};
+    edited.push_back(dangling);
+    run::RunConfiguration attach;
+    attach.id = "attach.editor";
+    attach.name = "Attach to the editor";
+    attach.type = run::RunType::Attach;
+    attach.target = "FrostEditor.exe";
+    edited.push_back(attach);
+    ASSERT_TRUE(controller.replaceConfigurations(edited).has_value());
+
+    // Refused before anything starts: two CMake targets, a missing member, an attach configuration.
+    auto refused = controller.runConfiguration(twoTargets.id);
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_NE(refused.error().message().find("one target at a time"), std::string::npos) << refused.error().message();
+    refused = controller.runConfiguration(dangling.id);
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_NE(refused.error().message().find("native.gone"), std::string::npos) << refused.error().message();
+    ASSERT_TRUE(controller.selectConfiguration(attach.id).has_value());
+    EXPECT_FALSE(controller.canRun());
+    refused = controller.run();
+    ASSERT_FALSE(refused.has_value());
+    EXPECT_EQ(refused.error().code(), ErrorCode::Unsupported);
+    EXPECT_NE(refused.error().message().find("Debug"), std::string::npos);
+    EXPECT_TRUE(launcher.launches().empty());
+    EXPECT_EQ(cmakeRuns, 0);
+
+    // The compound: both native programs start (each in its tab) and the CMake target's runner runs.
+    launcher.expect({.expectExecutable = server.program, .exitCode = 0, .stdoutBytes = "server up\n"});
+    launcher.expect({.expectExecutable = client.program, .exitCode = 0, .stdoutBytes = "client done\n"});
+    ASSERT_TRUE(controller.selectConfiguration(both.id).has_value());
+    EXPECT_TRUE(controller.canRun());
+    ASSERT_TRUE(controller.run().has_value());
+    EXPECT_EQ(cmakeRuns, 1);
+    RunConsole* serverTab = nullptr;
+    RunConsole* clientTab = nullptr;
+    ASSERT_TRUE(spinUntil([&] {
+        serverTab = window.consoleFor(QStringLiteral("config:") + QString::fromStdString(server.id));
+        clientTab = window.consoleFor(QStringLiteral("config:") + QString::fromStdString(client.id));
+        return serverTab && clientTab && serverTab->text().contains(QStringLiteral("exit code 0")) &&
+               clientTab->text().contains(QStringLiteral("exit code 0"));
+    }));
+    EXPECT_NE(serverTab, clientTab);
+    EXPECT_TRUE(serverTab->text().contains(QStringLiteral("server up"))) << serverTab->text().toStdString();
+    EXPECT_TRUE(clientTab->text().contains(QStringLiteral("client done"))) << clientTab->text().toStdString();
+    ASSERT_EQ(launcher.launches().size(), 2U);
+    EXPECT_EQ(launcher.launches()[1].spec.arguments, std::vector<std::string>{"--connect"});
+    EXPECT_TRUE(errors.empty());
+    EXPECT_TRUE(manager->waitForIdle(30s));
 }
 
 // A native configuration through the RunManager into its own tab; the combo lists the configurations.

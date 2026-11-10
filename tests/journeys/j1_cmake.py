@@ -27,6 +27,9 @@
 #      tree is cleaned again and the build's own command line (spawn log) builds it; both must run
 #      the same Ninja edges. (A dry run cannot show them: the engine's CONFIGURE_DEPENDS globs make
 #      Ninja's dry run stop at the regeneration edge.) The tree is left clean.
+#   8. after frost quits, no freeze report its own stall watchdog wrote in the run's profile is over
+#      STALL_LIMIT_MS (FND-9b, ADR 0078 decision 7); every journey built on this machinery (j2_run,
+#      trust_malicious_repo) ends with the same step, and keeps the reports beside its evidence.
 # Steps marked [needs ...] test the intended behaviour of a parallel R1 epic and fail until it lands.
 #
 # The evidence (one JSON file per run, under --evidence): the corpus (id, sha, path, preset), the
@@ -93,6 +96,8 @@ BUILD_SECONDS = 1800
 CLANGD_SECONDS = 600
 NAVIGATE_SECONDS = 600
 POLL_SECONDS = 0.25
+# The interim stall gate of the milestone journeys (ADR 0078 decision 7; FND-9b for R3).
+STALL_LIMIT_MS = 250
 
 
 def now_utc() -> str:
@@ -191,7 +196,17 @@ def spawn_records(directory: Path) -> list[dict]:
     """Every record of every spawn-log session in `directory`, in file and line order."""
     records: list[dict] = []
     for log in sorted(directory.glob("spawn-*.jsonl")):
-        for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+        # FrostIDE rewrites the log atomically after each record; on Windows a read that meets the
+        # replace fails with a sharing violation (PermissionError) for a moment, so it is retried.
+        for attempt in range(100):
+            try:
+                text = log.read_text(encoding="utf-8", errors="replace")
+                break
+            except PermissionError:
+                if attempt == 99:
+                    raise
+                time.sleep(0.02)
+        for line in text.splitlines():
             if line.strip():
                 try:
                     records.append(json.loads(line))
@@ -945,6 +960,41 @@ class Journey:
             self.frost_process.wait(timeout=120)
         except subprocess.TimeoutExpired:
             pass
+        self._stall_step()
+
+    def freezes_directory(self) -> Path:
+        """Where frost's own stall watchdog wrote this run's freeze reports: the profile's cache
+        (frost/diag/paths.hpp: %LOCALAPPDATA%\\FrostIDE\\caches, $XDG_CACHE_HOME/FrostIDE)."""
+        profile = self.tmp / "profile"
+        cache = profile / "local" / "FrostIDE" / "caches" if WINDOWS else profile / "cache" / "FrostIDE"
+        return cache / "crashes" / "freezes"
+
+    def _stall_step(self) -> None:
+        """FND-9b (ADR 0078 decision 7): no UI-thread stall over STALL_LIMIT_MS in the whole run. The
+        oracle is the freeze reports frost's StallWatchdog wrote (one per stall of 50 ms or more,
+        ongoing ones included); they are kept beside the evidence for tools/freeze_triage.py."""
+        def no_stall() -> tuple[bool, Any, Any, str]:
+            reports = []
+            directory = self.freezes_directory()
+            kept = self.evidence.path.with_suffix(".freezes")
+            for path in sorted(directory.glob("freeze-*.json")) if directory.is_dir() else []:
+                try:
+                    report = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as error:
+                    report = {"duration_ms": None, "error": str(error)}
+                reports.append({"file": path.name, "durationMs": report.get("duration_ms"),
+                                "ongoing": bool(report.get("ongoing"))})
+                kept.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, kept / path.name)
+            over = [r for r in reports if r["durationMs"] is None or r["durationMs"] > STALL_LIMIT_MS]
+            longest = max((r["durationMs"] or 0 for r in reports), default=0)
+            return (not over, {"overLimitMs": STALL_LIMIT_MS, "reportsOver": []},
+                    {"reports": len(reports), "longestMs": longest, "reportsOver": over,
+                     "kept": str(kept) if reports else None},
+                    "" if not over else f"{len(over)} stalls over {STALL_LIMIT_MS} ms (tools/freeze_triage.py "
+                                        f"triage {kept})")
+
+        self.run_step(f"no UI stall over {STALL_LIMIT_MS} ms", no_stall)
 
     def _cleanup(self) -> None:
         if self.oracle is not None:

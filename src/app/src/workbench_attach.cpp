@@ -111,6 +111,7 @@ void Workbench::attach(ui::ShellWindow& window) {
             m_cmake->filesChanged(batch);
         if (m_git)
             m_git->filesChanged(batch);
+        onLuaFilesChanged(batch); // LUA-3: registered LuaLS watchers and host inputs.
     };
     m_nav = std::make_unique<ui::Workbench>(window, std::move(nav));
     if (ui::FileSystemView* fsView = m_nav->fileSystemView()) {
@@ -400,6 +401,8 @@ void Workbench::attachToolbar() {
             menu.addAction(m_buildActions->buildSolution());
             menu.addAction(m_buildActions->rebuildSolution());
             menu.addAction(m_buildActions->cleanSolution());
+            m_buildActions->updateEnabled(); // Compile follows the active editor's file.
+            menu.addAction(m_buildActions->compileFile());
             menu.addSeparator();
             menu.addAction(m_buildActions->cancelBuild());
         }

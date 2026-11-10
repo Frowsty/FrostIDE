@@ -500,6 +500,8 @@ void ShellWindow::registerActions() {
     addShellAction(a::kHideActiveWindow, "Hide Active Tool Window", "Window", [this] { m_toolWindows->hideActive(); });
     addShellAction(a::kHideAllWindows, "Hide All Tool Windows", "Window", [this] { m_toolWindows->hideAll(); });
     addShellAction(a::kJumpToLastWindow, "Jump to Last Tool Window", "Window", [this] { m_toolWindows->jumpToLast(); });
+    addShellAction(a::kMaximizeToolWindow, "Maximize Tool Window", "Window",
+                   [this] { m_toolWindows->maximizeActive(); });
     addShellAction(a::kFocusEditor, "Focus Editor", "Window", [this] { focusEditor(); }, {}, kToolWindowRule);
     addShellAction(a::kFocusToolbar, "Focus Main Toolbar", "Window", [this] { focusFirst(m_toolbar->focusOrder()); });
     addShellAction(

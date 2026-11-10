@@ -255,7 +255,12 @@ Result<std::unique_ptr<BuildSession>> BuildSession::start(io::IProcessLauncher& 
     state->callbacks = std::move(callbacks);
     state->options = std::move(options);
     state->started = clock.steadyNow();
-    auto process = launcher.launch(spec);
+    // A parallel build saturates every CPU: below normal priority, it and the compilers it starts
+    // leave the CPU to FrostIDE's UI thread (j2_run's full FrostEditor build stalled painting for
+    // up to 3 s at normal priority, with ninja running 26 cl.exe on 24 hardware threads).
+    io::ProcessSpec started = spec;
+    started.belowNormalPriority = true;
+    auto process = launcher.launch(started);
     if (!process) {
         return std::unexpected(std::move(process.error()));
     }

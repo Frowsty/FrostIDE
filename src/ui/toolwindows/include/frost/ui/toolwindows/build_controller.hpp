@@ -73,6 +73,17 @@ public:
     [[nodiscard]] virtual Result<void> setActiveConfiguration(std::size_t index) = 0;
     virtual void setSaveAllHook(build::SaveAllHook hook) = 0;
     [[nodiscard]] virtual Result<void> build(build::BuildAction action, std::optional<project::ProjectId> project) = 0;
+    // Single-file compile (BuildService::compile, SLN-9). The default: backends without one (the
+    // CMake integration) refuse with Unsupported, and canCompile is false.
+    [[nodiscard]] virtual Result<void> compileFile(std::string_view path) {
+        static_cast<void>(path);
+        return fail(ErrorCode::Unsupported, "Compile (Ctrl+F7) is available for MSBuild solutions only (SLN-9)");
+    }
+    // Whether compileFile(path) has a project to compile `path` with (BuildService::compileProjectFor).
+    [[nodiscard]] virtual bool canCompile(std::string_view path) const {
+        static_cast<void>(path);
+        return false;
+    }
     virtual void cancel() = 0;
     [[nodiscard]] virtual Result<void> trust(std::string_view root) = 0;
     [[nodiscard]] virtual build::BuildState state() const = 0;
@@ -99,6 +110,8 @@ public:
     [[nodiscard]] Result<void> setActiveConfiguration(std::size_t index) override;
     void setSaveAllHook(build::SaveAllHook hook) override;
     [[nodiscard]] Result<void> build(build::BuildAction action, std::optional<project::ProjectId> project) override;
+    [[nodiscard]] Result<void> compileFile(std::string_view path) override;
+    [[nodiscard]] bool canCompile(std::string_view path) const override;
     void cancel() override;
     [[nodiscard]] Result<void> trust(std::string_view root) override;
     [[nodiscard]] build::BuildState state() const override;
@@ -170,6 +183,13 @@ public:
      * emits requestFailed() with the reason, so callers that only fire a command may ignore the result.
      */
     [[nodiscard]] Result<void> build(build::BuildAction action, std::optional<project::ProjectId> project = {});
+    /*
+     * Compiles one source file (absolute) with its project in the active configuration
+     * (BuildService::compile, Visual Studio's Ctrl+F7). A refusal also emits requestFailed().
+     */
+    [[nodiscard]] Result<void> compileFile(std::string_view path);
+    // Whether Compile may start for `path`: canBuild() and the backend has a project for it.
+    [[nodiscard]] bool canCompile(std::string_view path) const;
     void cancel();
     // Trusts one folder (BuildService::trust); a failure also emits requestFailed().
     [[nodiscard]] Result<void> trust(std::string_view root);

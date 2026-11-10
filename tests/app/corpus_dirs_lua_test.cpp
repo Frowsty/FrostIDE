@@ -14,26 +14,36 @@
 //     of the clone's MiniMMO sample reports no undefined-global for them, while a misspelled global
 //     is still flagged, both in the clone (the script's text plus one misspelled line, opened in
 //     the editor buffer only, the disk untouched) and in a temp copy of the sample on disk.
+//   - LUA-3/LUA-13 (R4): in a temp copy of the sample, configured through the host registry with
+//     FrostEngine's provider, a module created after LuaLS started resolves in require without a
+//     restart, and a runtime change reaches the same LuaLS process.
 //
 // A missing corpus fails the test (the tier never skips). The clone is only read, apart from two
 // probe files written below its git-ignored build/ and .cache/ folders and removed again, and one
 // tracked file's modification time, set back afterwards (its content never changes).
 
+#include "frost/app/workbench.hpp"
 #include "frost/document/load_service.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/file_watcher.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/io/reactor.hpp"
+#include "frost/lang/frost_engine_assets.hpp"
 #include "frost/lang/frost_engine_lua.hpp"
+#include "frost/lang/lua_host.hpp"
 #include "frost/lang/lua_service.hpp"
+#include "frost/lang/uri.hpp"
 #include "frost/project/directory_roles.hpp"
+#include "frost/project/trust_store.hpp"
 #include "frost/sched/task.hpp"
 #include "frost/sched/thread_pool.hpp"
 #include "frost/search/find_in_files.hpp"
 #include "frost/search/search_scope.hpp"
+#include "frost/settings/store.hpp"
 #include "frost/text/document.hpp"
 #include "frost/ui/nav/project_files.hpp"
+#include "frost/ui/workbench/file_system_view.hpp"
 #include "frost/vcs/git_locator.hpp"
 
 #include "support/crash_dialogs.hpp"
@@ -42,6 +52,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -464,8 +475,16 @@ TEST(CorpusFrostEngine, LuaLsReportsNoUndefinedGlobalForEngineGlobalsAndStillFla
         ASSERT_TRUE(text.has_value()) << text.error().describe();
         // Without the engine's globals LuaLS flags engine names (the check below is not vacuous):
         // every name it flags, apart from the probe, is one the engine's reference declares.
-        const auto baseline = diagnoseWithProbe(server, sample, frost::lang::luaDefaults("Lua 5.4", true), file,
-                                                *text + kProbeLine, state);
+        const auto baseline = diagnoseWithProbe(
+            server, sample,
+            frost::lang::frostEngineLuaDefaults("Lua 5.4",
+                                                [] {
+                                                    frost::lang::FrostEngineLuaProfile unreferenced;
+                                                    unreferenced.frostEngine =
+                                                        true; // A FrostEngine workspace whose reference was not found.
+                                                    return unreferenced;
+                                                }()),
+            file, *text + kProbeLine, state);
         std::set<std::string> engineNames = baseline;
         engineNames.erase(std::string(kMisspelled));
         EXPECT_FALSE(engineNames.empty()) << "LuaLS flagged no engine global without the defaults";
@@ -505,6 +524,287 @@ TEST(CorpusFrostEngine, LuaLsReportsNoUndefinedGlobalForEngineGlobalsAndStillFla
     const auto copyNames = diagnoseWithProbe(
         server, copied, frost::lang::frostEngineLuaDefaults("Lua 5.4", copyProfile), copiedScript, *onDisk, state);
     EXPECT_EQ(copyNames, std::set<std::string>{std::string(kMisspelled)});
+}
+
+// --- LUA-3 and LUA-13 ---
+
+/*
+ * LUA-3's exit criterion on the clone's scripts: in a temp copy of the MiniMMO sample (with the
+ * engine's reference beside it), configured through the LUA-13 host registry with FrostEngine's
+ * provider, a module created after LuaLS started resolves in a script's require without a restart,
+ * and a runtime change is re-sent as didChangeConfiguration to the same process. The clone itself
+ * stays untouched (the module is created in the copy only).
+ */
+TEST(CorpusFrostEngine, ANewModuleInTheSampleResolvesWithoutARestartThroughTheHostApi) {
+    frost::test::disableCrashDialogs();
+    const std::string corpus = checkedCorpus();
+    ASSERT_FALSE(corpus.empty());
+    const std::string server = pinnedLuaLs();
+    ASSERT_FALSE(server.empty());
+    auto& fs = frost::io::realFileSystem();
+    const std::string sample = join(corpus, "Samples/MiniMMO");
+    frost::test::ScratchDir copy("corpus-lua-new-module");
+    const std::string copied = join(copy.path(), "Samples/MiniMMO");
+    std::error_code error;
+    std::filesystem::create_directories(*frost::io::toStdPath(copied), error);
+    ASSERT_FALSE(error) << error.message();
+    std::filesystem::copy(*frost::io::toStdPath(sample), *frost::io::toStdPath(copied),
+                          std::filesystem::copy_options::recursive, error);
+    ASSERT_FALSE(error) << error.message();
+    auto reference = fs.readFile(join(corpus, "Docs/ScriptingAPI.md"));
+    ASSERT_TRUE(reference.has_value());
+    ASSERT_TRUE(fs.createDirectories(copy.join("Docs")).has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(join(copy.path(), "Docs/ScriptingAPI.md"), *reference).has_value());
+
+    frost::lang::LuaHostRegistry hosts;
+    hosts.add(std::make_shared<frost::lang::FrostEngineLuaProvider>());
+    const auto contributions = hosts.contributions(fs, copied);
+    ASSERT_EQ(contributions.size(), 1U);
+    EXPECT_EQ(contributions[0].provider, "FrostEngine");
+    EXPECT_GT(contributions[0].globals.size(), 50U);
+
+    auto reactor = frost::io::Reactor::create();
+    ASSERT_TRUE(reactor.has_value());
+    frost::sched::ThreadPool pool(frost::sched::ThreadPoolOptions{.workerCount = 2});
+    frost::lang::LuaServiceOptions options;
+    options.serverPath = server;
+    options.workspaceRoot = copied;
+    options.trusted = true;
+    options.configuration = frost::lang::composeLuaConfiguration("Lua 5.4", contributions);
+    auto arguments = frost::lang::luaLanguageServerArguments(copy.join("state"));
+    ASSERT_TRUE(arguments.has_value());
+    options.arguments = std::move(*arguments);
+    frost::lang::LuaService service(frost::io::realProcessLauncher(), {**reactor, pool}, std::move(options));
+    const std::string hud = join(copied, "Assets/Scripts/Hud.lua");
+    auto text = fs.readFile(hud);
+    ASSERT_TRUE(text.has_value());
+    // The probe lines exist in the editor buffer only; the misspelled global makes LuaLS publish.
+    const std::string probe = "local frostIdeProbeModule = require(\"FrostIdeProbeModule\")\n";
+    // kProbeLine adds two line breaks, so the require line is the text's line count + 2 (0-based).
+    const auto line = static_cast<std::int64_t>(std::ranges::count(*text, '\n')) + 2;
+    auto document = frost::text::Document::fromUtf8(*text + kProbeLine + probe);
+    ASSERT_TRUE(document.has_value());
+    ASSERT_TRUE(service.openDocument(hud, document->text()).has_value());
+    ASSERT_TRUE(service.start().has_value());
+    const auto until = [](auto ready, std::chrono::seconds limit) {
+        const auto deadline = std::chrono::steady_clock::now() + limit;
+        for (;;) {
+            if (ready())
+                return true;
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+            std::this_thread::sleep_for(50ms);
+        }
+    };
+    ASSERT_TRUE(until([&] { return service.diagnostics().forFile(hud).has_value(); }, 180s))
+        << "LuaLS never diagnosed Hud.lua";
+    const auto pid = service.serverPid();
+    const auto definition = [&] {
+        const frost::lang::Json params =
+            frost::lang::Json::object()
+                .set("textDocument", frost::lang::Json::object().set("uri", frost::lang::pathToUri(hud).value()))
+                .set("position", frost::lang::Json::object().set("line", line).set("character", 40));
+        auto result =
+            pool.spawn(frost::sched::Lane::UserVisible, service.request("textDocument/definition", params)).join();
+        return result ? result->dump() : "error: " + result.error().describe();
+    };
+    EXPECT_EQ(definition().find("FrostIdeProbeModule.lua"), std::string::npos) << "no such module yet";
+
+    const std::string module = join(copied, "Assets/Scripts/FrostIdeProbeModule.lua");
+    ASSERT_TRUE(fs.writeFileAtomic(module, "local M = {}\nfunction M.Ping() return 1 end\nreturn M\n").has_value());
+    const std::array changes{frost::lang::LuaFileChange{module, frost::lang::FileChangeType::Created}};
+    ASSERT_TRUE(service.notifyFileChanges(changes).has_value());
+    std::string last;
+    EXPECT_TRUE(until(
+        [&] {
+            last = definition();
+            return last.find("FrostIdeProbeModule.lua") != std::string::npos;
+        },
+        120s))
+        << last;
+
+    ASSERT_TRUE(
+        service.changeConfiguration(frost::lang::composeLuaConfiguration("Lua 5.1", contributions), {}).has_value());
+    EXPECT_EQ(service.configurationChangesSent(), 1U);
+    // The engine's reference names its runtime (Lua 5.4), which outranks the user's (FEC-10a).
+    EXPECT_EQ(*frost::lang::luaConfigurationSection(service.configuration(), "Lua.runtime.version").asString(),
+              "Lua 5.4");
+    EXPECT_EQ(service.restarts(), 0U);
+    EXPECT_EQ(service.serverPid(), pid);
+    EXPECT_EQ(service.state(), frost::lang::LuaState::Running);
+    if (auto failure = service.lastError())
+        ADD_FAILURE() << failure->describe();
+    pool.spawn(frost::sched::Lane::UserVisible, service.stop()).join();
+    (*reactor)->shutdown();
+    pool.shutdown();
+}
+
+// --- FEC-9a ---
+
+class RecordingRealLauncher final : public frost::io::IProcessLauncher {
+public:
+    frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+        {
+            const std::scoped_lock lock(m_mutex);
+            m_specs.push_back(spec);
+        }
+        return m_inner.launch(spec);
+    }
+
+    frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+    launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+        {
+            const std::scoped_lock lock(m_mutex);
+            m_specs.push_back(spec);
+        }
+        return m_inner.launchAsync(spec, context);
+    }
+
+    [[nodiscard]] std::vector<frost::io::ProcessSpec> specs() const {
+        const std::scoped_lock lock(m_mutex);
+        return m_specs;
+    }
+
+private:
+    frost::io::IProcessLauncher& m_inner = frost::io::realProcessLauncher();
+    mutable std::mutex m_mutex;
+    std::vector<frost::io::ProcessSpec> m_specs;
+};
+
+class SilentCorpusPrompts final : public frost::app::IWorkbenchPrompts {
+public:
+    std::string chooseOpenPath(QWidget*, OpenKind) override { return {}; }
+    bool confirmDiscard(QWidget*, const QString&, const QString&) override { return true; }
+    bool confirmRerun(QWidget*, const QString&) override { return true; }
+    bool confirmProjectRecovery(QWidget*, const QString&) override { return false; }
+};
+
+void copyTreeRecursive(frost::io::IFileSystem& fs, const std::string& src, const std::string& dst) {
+    auto st = fs.status(src);
+    ASSERT_TRUE(st.has_value()) << src << ": " << st.error().describe();
+    if (st->type == frost::io::FileType::Regular) {
+        auto bytes = fs.readFile(src);
+        ASSERT_TRUE(bytes.has_value()) << src << ": " << bytes.error().describe();
+        ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(dst)).has_value());
+        ASSERT_TRUE(fs.writeFileAtomic(dst, *bytes).has_value());
+        return;
+    }
+    if (st->type == frost::io::FileType::Directory) {
+        ASSERT_TRUE(fs.createDirectories(dst).has_value());
+        auto entries = fs.listDirectory(src);
+        ASSERT_TRUE(entries.has_value()) << src << ": " << entries.error().describe();
+        for (const frost::io::DirEntry& entry : *entries) {
+            copyTreeRecursive(fs, join(src, entry.name), join(dst, entry.name));
+        }
+    }
+}
+
+TEST(CorpusFrostEngine, FmetaSafeRenameAndMovePreserveSidecarsAndWarnWithEveryOracleReference) {
+    frost::test::disableCrashDialogs();
+    const std::string corpus = checkedCorpus();
+    ASSERT_FALSE(corpus.empty());
+    auto& fs = frost::io::realFileSystem();
+
+    const std::string sampleInCorpus = join(corpus, "Samples/MiniMMO");
+    auto editorExe = frost::lang::findFrostEditorExecutable(fs, sampleInCorpus);
+    ASSERT_TRUE(editorExe.has_value()) << "FrostEditor CLI binary not found in pinned corpus: "
+                                       << editorExe.error().describe();
+
+    // Copy Samples/MiniMMO to a scratch directory so file rename/move operations never dirty the
+    // pinned corpus checkout.
+    frost::test::ScratchDir scratch("corpus-fmeta-refs");
+    const std::string sampleCopy = join(scratch.path(), "MiniMMO");
+    copyTreeRecursive(fs, sampleInCorpus, sampleCopy);
+
+    // Run the real FrostEditor CLI directly as the oracle for `Scripts/Hud.lua`.
+    frost::io::ProcessSpec oracleSpec;
+    oracleSpec.executable = *editorExe;
+    oracleSpec.arguments = {"assets.find-references", "--project", sampleCopy, "--asset", "Scripts/Hud.lua"};
+    oracleSpec.workingDirectory = sampleCopy;
+    auto oracleRun = frost::io::runToCompletion(frost::io::realProcessLauncher(), oracleSpec, {}, 60s);
+    ASSERT_TRUE(oracleRun.has_value()) << oracleRun.error().describe();
+    ASSERT_EQ(oracleRun->exitCode, 0) << oracleRun->stderrBytes;
+    auto oracleReport = frost::lang::parseAssetReferenceReport(oracleRun->stdoutBytes);
+    ASSERT_TRUE(oracleReport.has_value()) << oracleReport.error().describe();
+    ASSERT_FALSE(oracleReport->references.empty()) << "Expected MiniMMO Hud.lua to have referencing assets";
+
+    const std::string originalFmetaBytes =
+        fs.readFile(join(sampleCopy, "Assets/Scripts/Hud.lua.fmeta")).value_or(std::string{});
+    ASSERT_FALSE(originalFmetaBytes.empty());
+
+    // Open the scratch MiniMMO project in Workbench, trust it, and rename `Assets/Scripts/Hud.lua`.
+    RecordingRealLauncher launcher;
+    SilentCorpusPrompts prompts;
+    auto settings = frost::settings::SettingsStore::open(frost::settings::builtinRegistry(), fs,
+                                                         {join(scratch.path(), "settings.json"), std::nullopt});
+    ASSERT_TRUE(settings.has_value()) << settings.error().describe();
+    auto trust = frost::project::TrustStore::open(fs, join(scratch.path(), "trusted-roots.txt"));
+    ASSERT_TRUE(trust.has_value()) << trust.error().describe();
+    ASSERT_TRUE((*trust)->trust(sampleCopy).has_value());
+
+    frost::app::WorkbenchOptions options;
+    options.frostEditorPath = *editorExe;
+    options.clangd = false;
+    options.projectHost = false;
+    options.git = false;
+    options.watchFiles = false;
+    options.followActiveLayout = false;
+    options.luaSearch = frost::lang::LuaSearch{};
+    options.workers = 2;
+
+    frost::app::Workbench workbench(
+        frost::app::WorkbenchServices{fs, launcher, frost::systemClock(), **settings, **trust, prompts},
+        std::move(options));
+    frost::ui::ShellWindow window(workbench.environment());
+    workbench.attach(window);
+    window.show();
+    ASSERT_TRUE(workbench.openPath(sampleCopy).has_value());
+
+    const auto noticesBeforeRename = window.notifications().log().size();
+    auto renamed = workbench.renameItem(join(sampleCopy, "Assets/Scripts/Hud.lua"), "HudRenamed.lua");
+    ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
+
+    // Verify that the .fmeta sidecar moved alongside the script with its handle intact.
+    EXPECT_TRUE(fs.exists(join(sampleCopy, "Assets/Scripts/HudRenamed.lua")).value_or(false));
+    EXPECT_TRUE(fs.exists(join(sampleCopy, "Assets/Scripts/HudRenamed.lua.fmeta")).value_or(false));
+    EXPECT_FALSE(fs.exists(join(sampleCopy, "Assets/Scripts/Hud.lua")).value_or(true));
+    EXPECT_FALSE(fs.exists(join(sampleCopy, "Assets/Scripts/Hud.lua.fmeta")).value_or(true));
+    EXPECT_EQ(fs.readFile(join(sampleCopy, "Assets/Scripts/HudRenamed.lua.fmeta")).value_or(""), originalFmetaBytes);
+
+    // Verify that `FrostEditor assets.find-references` ran via IProcessLauncher and the warning
+    // lists every referencing asset reported by the oracle.
+    const auto recordedSpecs = launcher.specs();
+    const bool ranFindRefs = std::ranges::any_of(recordedSpecs, [&](const frost::io::ProcessSpec& s) {
+        return s.executable == *editorExe && !s.arguments.empty() && s.arguments[0] == "assets.find-references";
+    });
+    EXPECT_TRUE(ranFindRefs);
+    ASSERT_TRUE(workbench.lastAssetReferenceReport().has_value());
+    EXPECT_EQ(workbench.lastAssetReferenceReport()->references, oracleReport->references);
+
+    ASSERT_GT(window.notifications().log().size(), noticesBeforeRename);
+    const auto& warning = window.notifications().log().back().notification;
+    EXPECT_EQ(warning.kind, frost::ui::NotificationKind::Warning);
+    for (const frost::lang::AssetReferenceEntry& ref : oracleReport->references) {
+        EXPECT_TRUE(warning.text.contains(QString::fromStdString(ref.path)))
+            << "Warning is missing referencing asset " << ref.path << ":\n"
+            << warning.text.toStdString();
+    }
+
+    // Moving the renamed script into a subdirectory also moves its .fmeta sibling alongside it.
+    const std::string subDir = join(sampleCopy, "Assets/Scripts/UI");
+    ASSERT_TRUE(fs.createDirectories(subDir).has_value());
+    auto* fsView = workbench.navigation()->fileSystemView();
+    ASSERT_NE(fsView, nullptr);
+    emit fsView->movePathsToDirectoryRequested(
+        {QString::fromStdString(join(sampleCopy, "Assets/Scripts/HudRenamed.lua"))}, QString::fromStdString(subDir));
+
+    EXPECT_TRUE(fs.exists(join(sampleCopy, "Assets/Scripts/UI/HudRenamed.lua")).value_or(false));
+    EXPECT_TRUE(fs.exists(join(sampleCopy, "Assets/Scripts/UI/HudRenamed.lua.fmeta")).value_or(false));
+    EXPECT_FALSE(fs.exists(join(sampleCopy, "Assets/Scripts/HudRenamed.lua")).value_or(true));
+    EXPECT_FALSE(fs.exists(join(sampleCopy, "Assets/Scripts/HudRenamed.lua.fmeta")).value_or(true));
+    EXPECT_EQ(fs.readFile(join(sampleCopy, "Assets/Scripts/UI/HudRenamed.lua.fmeta")).value_or(""), originalFmetaBytes);
+
+    workbench.shutdown();
 }
 
 } // namespace

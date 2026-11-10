@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// The build pieces of the shell's main toolbar and menus (W1, ADR 0039): the Build, Rebuild, Clean
-// and Cancel Build actions in frost::input's registry and as QActions, the table of their default
-// shortcuts, and the solution configuration combo.
+// The build pieces of the shell's main toolbar and menus (W1, ADR 0039): the Build, Rebuild, Clean,
+// Compile (SLN-9) and Cancel Build actions in frost::input's registry and as QActions, the table of
+// their default shortcuts, and the solution configuration combo.
 //
 /*
  * Default shortcuts. kBuildShortcutDefaults decides them, one entry per action, in frost::input's
@@ -12,10 +12,14 @@
  * Ctrl+Shift+B (Visual Studio's) rather than IntelliJ's Ctrl+F9 until the user decides (one entry).
  * IntelliJ binds Ctrl+Shift+B to Go to Type Declaration, so the build actions register with
  * priority 1 and win that shared shortcut wherever both apply. Cancel Build is Ctrl+Break, which
- * frost::input names Ctrl+Pause.
+ * frost::input names Ctrl+Pause. Compile is Ctrl+F7 (Visual Studio's), which the IntelliJ keymap
+ * leaves free.
  *
  * Enablement. Build, Rebuild and Clean need an open solution and no build in progress; Cancel
- * needs a build in progress (a running build may be cancelled from any of its states). The
+ * needs a build in progress (a running build may be cancelled from any of its states). Compile
+ * compiles the current file (setCurrentFileProvider: the active editor's document) and also needs
+ * a project that compiles it (BuildController::canCompile); its QAction's enablement is refreshed
+ * by updateEnabled(), which the shell calls when the active editor changes. The
  * actions are not marked executesProjectCode: the build service's own trust prompt (NeedsTrust)
  * asks before a build runs project code, instead of the commands being greyed out in an untrusted
  * folder. The registry's enabled callbacks and the QActions read the same BuildController state.
@@ -35,6 +39,8 @@
 
 #include <array>
 #include <functional>
+#include <memory>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -46,10 +52,13 @@ class BuildController;
 
 namespace build_actions {
 inline constexpr std::string_view kBuildSolution = "build.buildSolution";
+inline constexpr std::string_view kBuildProject = "build.project";
 inline constexpr std::string_view kRebuildSolution = "build.rebuildSolution";
 inline constexpr std::string_view kCleanSolution = "build.cleanSolution";
 inline constexpr std::string_view kCancelBuild = "build.cancelBuild";
-// The Find Action category of all four.
+// Compile the current file (Visual Studio's Ctrl+F7, SLN-9).
+inline constexpr std::string_view kCompileFile = "build.compileFile";
+// The Find Action category of all six.
 inline constexpr std::string_view kGroup = "Build";
 } // namespace build_actions
 
@@ -60,11 +69,12 @@ struct BuildShortcutDefault {
 };
 
 // The defaults table (header comment). Edit here to change a default.
-inline constexpr std::array<BuildShortcutDefault, 4> kBuildShortcutDefaults{{
+inline constexpr std::array<BuildShortcutDefault, 5> kBuildShortcutDefaults{{
     {build_actions::kBuildSolution, "Ctrl+Shift+B"}, // Visual Studio; IntelliJ's would be Ctrl+F9.
     {build_actions::kRebuildSolution, ""},
     {build_actions::kCleanSolution, ""},
     {build_actions::kCancelBuild, "Ctrl+Pause"}, // Ctrl+Break.
+    {build_actions::kCompileFile, "Ctrl+F7"},    // Visual Studio's Compile.
 }};
 
 // kBuildShortcutDefaults as keymap bindings, unbound entries left out, for
@@ -80,7 +90,7 @@ public:
     ~BuildActions() override;
 
     /*
-     * Registers the four actions (group "Build", priority 1, global context) with handlers and
+     * Registers the five actions (group "Build", priority 1, global context) with handlers and
      * enabled callbacks over the controller. The callbacks hold the controller through a QPointer,
      * not this object, so they stay safe (and inert) once either is gone. Errors: those of
      * ActionRegistry::add (AlreadyExists when called twice for one registry).
@@ -92,20 +102,28 @@ public:
     [[nodiscard]] QAction* rebuildSolution() const noexcept { return m_rebuild; }
     [[nodiscard]] QAction* cleanSolution() const noexcept { return m_clean; }
     [[nodiscard]] QAction* cancelBuild() const noexcept { return m_cancel; }
+    [[nodiscard]] QAction* compileFile() const noexcept { return m_compile; }
+
+    // Where Compile finds the file to compile (absolute; "" for none). Empty: Compile stays disabled.
+    void setCurrentFileProvider(std::function<std::string()> provider);
 
     // Whether the command with this action id may run now (header comment, "Enablement").
     [[nodiscard]] bool isEnabled(std::string_view actionId) const;
     // Runs the command with this action id if it is enabled; returns whether it ran.
     bool run(std::string_view actionId);
 
-private:
+    // Re-reads the enablement of the QActions (header comment, "Enablement").
     void updateEnabled();
 
+private:
     QPointer<BuildController> m_controller;
     QAction* m_build = nullptr;
     QAction* m_rebuild = nullptr;
     QAction* m_clean = nullptr;
     QAction* m_cancel = nullptr;
+    QAction* m_compile = nullptr;
+    // Shared with the registry's callbacks, which may outlive this object.
+    std::shared_ptr<std::function<std::string()>> m_currentFile;
 };
 
 /*

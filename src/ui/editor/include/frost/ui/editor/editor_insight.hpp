@@ -151,6 +151,15 @@ struct EditorInlayHint {
     friend bool operator==(const EditorInlayHint&, const EditorInlayHint&) = default;
 };
 
+// A link the language server found in the text (CPP-5: an #include's file name and the header it
+// resolves to). Ctrl+click on it opens `target`; hovering shows `tooltip` or the target.
+struct EditorDocumentLink {
+    text::ByteRange range;
+    std::string target; // An absolute path.
+    std::string tooltip;
+    friend bool operator==(const EditorDocumentLink&, const EditorDocumentLink&) = default;
+};
+
 // A clickable Code Vision lens on a class, struct, or method declaration ("3 usages",
 // "2 implementations", "last author").
 struct EditorCodeVisionLens {

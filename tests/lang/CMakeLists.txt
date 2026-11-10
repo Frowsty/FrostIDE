@@ -23,7 +23,8 @@
 #                      (include directory and define only from a .props sheet and an environment
 #                      variable), its cache, and a real clangd on the evaluated commands; label
 #                      "integration" with the tags "msbuild" and "clangd", Windows only. A few seconds
-#                      per test.
+#                      per test. With them SLN-5: clangd on GetClCommandLines from the shipped
+#                      ProjectHost (tests/project/fixtures/msvc_generated) against MSBuild.exe.
 # The fixtures under fixtures/ are byte-exact inputs (REUSE.toml covers them).
 
 frost_add_test(lang_unit_tests
@@ -34,6 +35,7 @@ frost_add_test(lang_unit_tests
         completion_test.cpp
         clangd_locator_test.cpp
         diagnostics_test.cpp
+        document_features_test.cpp
         document_sync_test.cpp
         engine_automation_test.cpp
         engine_discovery_process_test.cpp
@@ -42,7 +44,11 @@ frost_add_test(lang_unit_tests
         json_test.cpp
         jsonrpc_test.cpp
         lsp_client_test.cpp
+        lsp_workspace_test.cpp
+        frost_engine_assets_test.cpp
         frost_engine_lua_test.cpp
+        lua_host_test.cpp
+        lua_rc_test.cpp
         lua_service_test.cpp
         msbuild_provider_test.cpp
         semantic_tokens_test.cpp
@@ -50,7 +56,8 @@ frost_add_test(lang_unit_tests
         workspace_edit_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched)
 target_include_directories(lang_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
-target_compile_definitions(lang_unit_tests PRIVATE FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+target_compile_definitions(lang_unit_tests PRIVATE FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+    FROST_LANG_SOURCE_DIR="${FROST_SOURCE_DIR}/src/lang")
 add_executable(engine_discovery_stall_child engine_discovery_stall_child.cpp)
 frost_apply_compile_options(engine_discovery_stall_child TEST)
 target_compile_definitions(lang_unit_tests PRIVATE FROST_DISCOVERY_STALL_CHILD="$<TARGET_FILE:engine_discovery_stall_child>")
@@ -60,6 +67,7 @@ frost_add_test(lang_clangd_tests
     SOURCES
         clangd_test.cpp
         clangd_encoding_test.cpp
+        clangd_features_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched
     LABELS integration clangd)
 target_include_directories(lang_clangd_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
@@ -68,11 +76,16 @@ target_compile_definitions(lang_clangd_tests PRIVATE FROST_LANG_FIXTURE_DIR="${C
 if(WIN32)
     frost_add_test(lang_msbuild_tests
         SOURCES
+            cl_command_lines_clangd_test.cpp
             msbuild_eval_test.cpp
         DEPS frost::lang frost::build frost::project frost::text frost::io frost::sched
         LABELS integration msbuild clangd)
     target_include_directories(lang_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
-    target_compile_definitions(lang_msbuild_tests PRIVATE FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+    target_compile_definitions(lang_msbuild_tests PRIVATE
+        FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        FROST_PROJECT_FIXTURE_DIR="${FROST_SOURCE_DIR}/tests/project/fixtures"
+        FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
+    add_dependencies(lang_msbuild_tests frost_project_host)
 endif()
 
 # CMK-4 and CPP-3 with the real cmake, Ninja (and on Windows the Visual Studio 2022 generator) on
@@ -91,7 +104,7 @@ target_compile_definitions(lang_cmake_tests PRIVATE
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 
 frost_add_test(lang_lua_tests
-    SOURCES lua_e2e_test.cpp
+    SOURCES lua_e2e_test.cpp lua_workspace_e2e_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched
     LABELS integration)
 target_include_directories(lang_lua_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

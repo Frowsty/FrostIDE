@@ -56,6 +56,7 @@ inline constexpr std::string_view kFetch = "vcs.fetch";
 inline constexpr std::string_view kPull = "vcs.pull";
 inline constexpr std::string_view kPullRebase = "vcs.pullRebase";
 inline constexpr std::string_view kBranches = "vcs.branches";
+inline constexpr std::string_view kQuickPopup = "vcs.quickPopup";
 inline constexpr std::string_view kLog = "vcs.log";
 inline constexpr std::string_view kStash = "vcs.stash";
 inline constexpr std::string_view kUnstash = "vcs.unstash";

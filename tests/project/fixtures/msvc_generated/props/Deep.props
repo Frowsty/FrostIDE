@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Level 4, the deepest sheet: a define and an include directory, and a shared source file that
+     projects opt into with GenSharedSources (set in the project after this sheet is read, so the
+     item's condition is evaluated in MSBuild's item pass, after every property). -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>GEN_DEEP=4;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(GenRoot)shared;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup Condition="'$(GenSharedSources)' == 'true'">
+    <ClCompile Include="$(GenRoot)shared\deep_shared.cpp" />
+  </ItemGroup>
+</Project>

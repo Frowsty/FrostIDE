@@ -45,6 +45,9 @@ inline constexpr Key<bool> editorInsertSpaces{"editor.insertSpaces"};
 inline constexpr Key<bool> editorDetectIndentation{"editor.detectIndentation"};
 inline constexpr Key<std::string> editorTrimTrailingWhitespace{"editor.trimTrailingWhitespace"};
 inline constexpr Key<bool> editorInsertFinalNewline{"editor.insertFinalNewline"};
+// Actions on save (REF-12): clangd formatting and its include cleaner, both off by default.
+inline constexpr Key<bool> editorFormatOnSave{"editor.formatOnSave"};
+inline constexpr Key<bool> editorOptimizeImportsOnSave{"editor.optimizeImportsOnSave"};
 inline constexpr Key<bool> editorEditorConfig{"editor.editorConfig"};
 
 // Files and encodings.

@@ -679,6 +679,15 @@ std::optional<std::int64_t> ClangdService::documentVersion(std::string_view path
     return it->second.version;
 }
 
+std::optional<std::int64_t> ClangdService::diagnosedVersion(std::string_view path) const {
+    LockGuard lock(m_shared->mutex);
+    const auto it = m_shared->documents.find(documentKey(path));
+    if (it == m_shared->documents.end()) {
+        return std::nullopt;
+    }
+    return it->second.diagnosedVersion;
+}
+
 Result<void> ClangdService::saveDocument(std::string_view path) {
     LockGuard lock(m_shared->mutex);
     auto it = m_shared->documents.find(documentKey(path));

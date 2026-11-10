@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 #
-# corpora.py: the pinned FrostEngine corpora of the -Corpus verify tier, listed in
-# tests/corpus/corpora.lock.json (ADR 0077 decision 7; ADR 0078; PLAN.md section 7, Roadmap v2).
+# corpora.py: the pinned corpora of the -Corpus verify tier (FrostEngine, and R2a, the Notepad++
+# MSVC solution of SLN-0), listed in tests/corpus/corpora.lock.json (ADR 0077 decision 7; ADR 0078;
+# PLAN.md section 7, Roadmap v2).
 #
 #   python tools/corpora.py [--lock <file>] [--root <dir>] list
 #   python tools/corpora.py ... fetch [--only <id>] [--fallback-source <path>] [--cpm-source <dir>] [--replace]
@@ -55,6 +56,10 @@
 #           clone (/mnt/<drive>/...) as the fallback source, with that clone's .cache/cpm as
 #           --cpm-source; with --configure then `engine --configure` there (linux-debug).
 #   path    prints the directory of corpus <id>.
+#   platforms  a corpus may name the platforms it belongs to ("platforms": ["windows"]; default
+#           both). fetch, verify and engine skip, and say so, a corpus of another platform, and
+#           wsl-fetch one that is not for linux; list marks it. R2a is a Visual Studio solution, so
+#           it is a Windows corpus only.
 #   root    prints the corpora root. The verify scripts' corpus tier exports it as FROST_CORPORA_ROOT,
 #           so the corpus tests (tests/app/corpus_test.cpp) name no developer machine path (FND-10).
 #   pin     re-pins 'sha' (and 'pinned', today's date) to the tip of 'branch' (git ls-remote), or to
@@ -92,6 +97,7 @@ REQUIRED_FIELDS = ("id", "name", "url", "branch", "sha", "purpose")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _CACHE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")  # A CMake cache variable name of cacheVariables.
+PLATFORMS = ("windows", "linux")  # The values of a corpus's optional 'platforms' (header comment).
 
 
 class LockError(ValueError):
@@ -135,7 +141,16 @@ def load_lock(path: Path) -> dict:
                                                   for k, v in by_name.items())
                 for by_name in variables.values()):
             raise LockError(f"{path}: {entry['id']}: cacheVariables must map a platform to {{NAME: string}}")
+        platforms = entry.get("platforms", list(PLATFORMS))
+        if (not isinstance(platforms, list) or not platforms or
+                not all(isinstance(name, str) and name in PLATFORMS for name in platforms)):
+            raise LockError(f"{path}: {entry['id']}: platforms must be a non-empty list of {', '.join(PLATFORMS)}")
     return document
+
+
+def on_platform(entry: dict, platform: str = PLATFORM) -> bool:
+    """Whether the corpus of `entry` belongs to `platform` (its 'platforms', default every one)."""
+    return platform in entry.get("platforms", PLATFORMS)
 
 
 def corpus_dir(root: Path, entry: dict) -> Path:
@@ -660,6 +675,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "path":
         print(corpus_dir(root, by_id[args.id]))
         return 0
+    if args.command in ("fetch", "verify", "engine", "wsl-fetch"):
+        # A corpus of another platform is skipped, never fetched or failed (header comment).
+        target = "linux" if args.command == "wsl-fetch" else PLATFORM
+        for corpus_id in wanted:
+            if not on_platform(by_id[corpus_id], target):
+                print(f"{corpus_id}: skipped, not a {target} corpus (platforms: "
+                      f"{', '.join(by_id[corpus_id]['platforms'])})")
+        wanted = [corpus_id for corpus_id in wanted if on_platform(by_id[corpus_id], target)]
     if args.command == "engine":
         status = 0
         for corpus_id in wanted:
@@ -700,7 +723,10 @@ def main(argv: list[str] | None = None) -> int:
     status = 0
     if args.command == "list":
         for entry in corpora:
-            why = problem(git, corpus_dir(root, entry), entry["sha"])
+            if on_platform(entry):
+                why = problem(git, corpus_dir(root, entry), entry["sha"])
+            else:
+                why = f"not a {PLATFORM} corpus"
             print(f"{entry['id']:12} {entry['sha']}  {why or 'ok'}  {corpus_dir(root, entry)}")
             print(f"             {entry['name']} ({entry['url']}, {entry['branch']}): {entry['purpose']}")
     elif args.command == "verify":

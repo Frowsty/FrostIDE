@@ -821,7 +821,12 @@ EditorDisplayList EditorView::buildDisplayList() {
     if (m_caretOn && m_focused) {
         const std::span<const text::Selection> all = state.selections.all();
         for (std::size_t i = 0; i < all.size(); ++i) {
-            const QRectF rect = caretRect(all[i].head, state.caret(i).bias);
+            QRectF rect = caretRect(all[i].head, state.caret(i).bias);
+            if (m_overwrite) {
+                // Overwrite mode (UX-3): a bar under the character typing replaces.
+                const double bar = std::max(2.0, kCaretWidth * zoomFactor());
+                rect = QRectF(rect.left(), rect.bottom() - bar, std::max(bar, toPixels(m_shaper->cellWidth())), bar);
+            }
             if (rect.bottom() > 0.0 && rect.top() < area.height()) {
                 list.carets.push_back(rect);
             }

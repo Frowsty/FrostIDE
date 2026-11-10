@@ -10,7 +10,7 @@
 #include "frost/io/reactor.hpp"
 #include "frost/lang/engine_automation.hpp"
 #include "frost/lang/engine_discovery_process.hpp"
-#include "frost/lang/lua_service.hpp"
+#include "frost/lang/frost_engine_lua.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/sched/scheduler.hpp"

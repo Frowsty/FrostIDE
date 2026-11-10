@@ -10,9 +10,11 @@
  * with Busy. shutdown() sends `shutdown`, then `exit`, then closes the connection.
  *
  * Server requests answered here: workspace/configuration (one answer per item through
- * InitializeOptions::configuration, null for unknown sections), window/workDoneProgress/create,
- * client/registerCapability, client/unregisterCapability and the workspace refresh requests
- * ("workspace/codeLens/refresh" and the like; null results),
+ * InitializeOptions::scopedConfiguration or ::configuration, null for unknown sections),
+ * workspace/workspaceFolders (the folders initialize sent), window/workDoneProgress/create,
+ * client/registerCapability and client/unregisterCapability (registrations of
+ * workspace/didChangeWatchedFiles are kept: fileWatchers()), the workspace refresh requests
+ * ("workspace/codeLens/refresh" and the like; null results, then Handlers::onRefresh),
  * window/showMessageRequest (null: no action chosen) and workspace/applyEdit ({applied: false}
  * until the editor integration exists). Everything else gets MethodNotFound.
  *
@@ -79,6 +81,10 @@ struct ServerCapabilities {
     bool callHierarchy = false;
     bool typeHierarchy = false;
     bool inlayHint = false;
+    // CPP-5 (document_features.hpp): documentLinkProvider, foldingRangeProvider and clangd's astProvider.
+    bool documentLink = false;
+    bool foldingRange = false;
+    bool ast = false;
     std::string serverName;    // serverInfo.name, e.g. "clangd".
     std::string serverVersion; // serverInfo.version.
     Json raw;
@@ -119,8 +125,26 @@ using LspRequestSender = ILspRequester;
 // the LSP default. Unknown or "utf-32" encodings fall back to UTF-16 (initialize() rejects them).
 [[nodiscard]] ServerCapabilities parseInitializeResult(const Json& result);
 
+/*
+ * One watcher a server registered for workspace/didChangeWatchedFiles (LSP 3.17
+ * FileSystemWatcher). `glob` uses the LSP glob syntax ('*', '**', '?', "[a-z]", "{a,b}"); a plain
+ * pattern is matched against the whole path ('/'-separated), a RelativePattern's against the path
+ * below `basePath`.
+ */
+struct FileSystemWatcher {
+    std::string glob;
+    std::string basePath; // A RelativePattern's base folder (absolute, normalised); "" for a plain glob.
+    int kind = 7;         // WatchKind bits: 1 Create, 2 Change, 4 Delete (LSP's default: all).
+    friend bool operator==(const FileSystemWatcher&, const FileSystemWatcher&) = default;
+};
+// FileChangeType of workspace/didChangeWatchedFiles.
+enum class FileChangeType : std::uint8_t { Created = 1, Changed = 2, Deleted = 3 };
+// Whether `watcher` covers a `type` change of `path` (absolute). Case-sensitive, as LSP globs are;
+// O(pattern * path) for typical patterns.
+[[nodiscard]] bool fileWatcherMatches(const FileSystemWatcher& watcher, std::string_view path, FileChangeType type);
+
 struct InitializeOptions {
-    std::string rootPath;                  // Absolute; sent as rootUri and the one workspace folder.
+    std::string rootPath;                  // Absolute; sent as rootUri (and the one folder without workspaceFolders).
     std::optional<std::int64_t> processId; // This process's id, so the server can exit if we die.
     std::string clientName = "FrostIDE";
     std::string clientVersion;
@@ -128,6 +152,16 @@ struct InitializeOptions {
     Json initializationOptions; // Server-specific (clangd: fallbackFlags, clangdFileStatus).
     // Answers workspace/configuration items by section; may be empty (every answer is null).
     std::function<Json(std::string_view section)> configuration;
+    // Absolute folders sent as workspaceFolders (and answered to workspace/workspaceFolders), in
+    // this order; empty: rootPath alone. Multi-root servers (LuaLS) give each its own configuration.
+    std::vector<std::string> workspaceFolders;
+    // When set, answers workspace/configuration items instead of `configuration`, with the item's
+    // scopeUri ("" when the server sent none). Called on the reader thread; must be quick.
+    std::function<Json(std::string_view scopeUri, std::string_view section)> scopedConfiguration;
+    // Members set over the announced workspace client capabilities (an object, or null for none),
+    // e.g. {"semanticTokens": {"refreshSupport": true}} for a server whose refresh requests the
+    // owner handles (Handlers::onRefresh).
+    Json workspaceCapabilities;
 };
 
 // The capabilities FrostIDE announces: synchronization with didSave, publishDiagnostics with
@@ -139,6 +173,9 @@ struct InitializeOptions {
 
 // The initialize params for `options`. Errors: InvalidArgument (rootPath not absolute).
 [[nodiscard]] Result<Json> initializeParams(const InitializeOptions& options);
+// The WorkspaceFolder array of `options` (workspaceFolders, else rootPath alone). Errors:
+// InvalidArgument (a folder that is not absolute).
+[[nodiscard]] Result<Json> workspaceFoldersJson(const InitializeOptions& options);
 
 class LspClient final : public ILspRequester {
 public:
@@ -153,6 +190,9 @@ public:
         ApplyEditHandler onApplyEdit;
         std::function<void(const Error& problem)> onProtocolError;
         std::function<void(const Error& why)> onClosed;
+        // A workspace refresh request ("workspace/semanticTokens/refresh", "workspace/inlayHint/refresh",
+        // "workspace/codeLens/refresh", "workspace/diagnostic/refresh"), after it was answered.
+        std::function<void(std::string_view method)> onRefresh;
     };
 
     // Starts the connection over `stream` on `scheduler` (see jsonrpc.hpp for the threads).
@@ -203,6 +243,10 @@ public:
     // `text` is sent only when the server asked for it (save.includeText).
     [[nodiscard]] Result<void> didSave(std::string_view uri, std::optional<std::string_view> text = std::nullopt);
     [[nodiscard]] Result<void> didClose(std::string_view uri);
+
+    // The workspace/didChangeWatchedFiles watchers the server registered and has not
+    // unregistered, in registration order. O(watchers).
+    [[nodiscard]] std::vector<FileSystemWatcher> fileWatchers() const;
 
     // Closes the connection without the shutdown handshake (the server sees EOF on stdin).
     void close() noexcept;

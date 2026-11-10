@@ -83,6 +83,8 @@ enum class CompileCommandsSource : std::uint8_t {
     CMakeCopy,
     // CMK-4: written by FrostIDE from the CMake File API codemodel (generators that write none).
     CMakeCodeModel,
+    // SLN-5: written by FrostIDE from MSBuild's GetClCommandLines (cl_command_lines_provider.hpp).
+    ClCommandLines,
 };
 
 [[nodiscard]] std::string_view toString(CompileCommandsSource source) noexcept;

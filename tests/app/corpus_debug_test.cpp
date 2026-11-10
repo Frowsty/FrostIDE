@@ -608,15 +608,30 @@ TEST(CorpusFrostEngine, DebuggingFrostEditorStopsStepsInspectsAndHonoursConditio
     const std::vector<frost::debug::DebugFrame> stack = debug->frames().frames;
     std::size_t compared = 0;
     for (const OracleFrame& expected : oracleStack) {
-        if (expected.path.empty() || expected.index >= static_cast<int>(stack.size()) || compared == 5)
+        if (expected.path.empty() || compared == 5)
             break;
+        // Every frame lldb printed with a source must be in the session's call stack too.
+        ASSERT_LT(expected.index, static_cast<int>(stack.size()))
+            << "lldb printed frame " << expected.index << " with a source; the session has " << stack.size();
         const auto& frame = stack[static_cast<std::size_t>(expected.index)];
         EXPECT_EQ(frame.name, expected.function) << "frame " << expected.index;
         EXPECT_TRUE(samePath(frame.path, expected.path)) << frame.path << " vs " << expected.path;
         EXPECT_EQ(frame.line, expected.line) << "frame " << expected.index;
         ++compared;
     }
-    EXPECT_GE(compared, 2u) << "lldb printed " << oracleStack.size() << " frames, the session has " << stack.size();
+    /*
+     * lldb prints a frame in the oracle's frame-format only when the frame has line information. On
+     * Windows, main()'s caller is the CRT's invoke_main, which has a source, so at least two frames are
+     * compared. On Linux main() is called by the C library, which has no debug information, so main()
+     * is the only frame lldb prints (seen in the R2 WSL corpus run: lldb 1 frame, the session 4).
+     */
+#ifdef _WIN32
+    constexpr std::size_t kSourceFramesAtLeast = 2;
+#else
+    constexpr std::size_t kSourceFramesAtLeast = 1;
+#endif
+    EXPECT_GE(compared, kSourceFramesAtLeast)
+        << "lldb printed " << oracleStack.size() << " frames, the session has " << stack.size();
     // The Locals: the names lldb's `frame variable` printed, and lldb's argc (the edited arguments arrived).
     {
         auto scopes = std::make_shared<std::optional<frost::Result<frost::debug::ScopeList>>>();

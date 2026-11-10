@@ -1,11 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
-// Workbench admission and lifecycle for bounded MSBuild source removal.
+/*
+ * Workbench admission and lifecycle of project-definition edits (SLN-6, ADR 0082): adding,
+ * removing and renaming items of a loaded C++ project's .vcxproj and .vcxproj.filters through the
+ * shipped ProjectHost helper (the MSBuild construction API; frost/project/project_edit.hpp builds
+ * the request), and recovering an interrupted edit from its journal. One edit runs at a time
+ * (ProjectEditProcess); further ones queue behind it. Each edit reserves the build service, writes a
+ * private recovery record before ProjectHost commits, and reloads the solution afterwards.
+ */
 #include "frost/app/workbench.hpp"
 #include "frost/build/msbuild_locator.hpp"
 #include "frost/build/run_service.hpp"
 #include "frost/document/file_document.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/project/project_edit.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/nav/document_registry.hpp"
 #include "frost/ui/toolwindows/build_controller.hpp"
@@ -30,260 +38,221 @@ std::string utf8(const QString& text) {
     const auto bytes = text.toUtf8();
     return {bytes.constData(), static_cast<std::size_t>(bytes.size())};
 }
+
+// QFileDialog returns forward slashes on Windows, while the filesystem's canonical spelling uses
+// backslashes. Change separators only: dot components stay, so the canonical comparison still
+// refuses aliases and parent traversal.
+std::string nativeSeparators(std::string path) {
+#ifdef _WIN32
+    std::ranges::replace(path, '/', '\\');
+#endif
+    return path;
+}
+
+// At most this many edits wait behind the running one (a move touching many projects).
+constexpr std::size_t kMaxQueuedProjectEdits = 64;
 } // namespace
 
-void Workbench::removeProjectFile(const QString& projectName, const QString& sourceName, bool adding) {
+void Workbench::removeProjectFile(const QString& projectName, const QString& sourceName, bool adding,
+                                  const QString& filter) {
     const QString title = adding ? QStringLiteral("Add Existing Source") : QStringLiteral("Remove from Project");
-    const auto failEdit = [this, title](const QString& reason) { notify(title, reason, ui::NotificationKind::Error); };
+    // A pending journal is recovered first, whichever edit was asked for (nothing else may run).
+    if (sourceName.isEmpty() || (m_solution && !m_projectRoot.empty() && projectEditJournalPresent())) {
+        recoverProjectEdit(projectName);
+        return;
+    }
+    project::ProjectEdit edit;
+    edit.kind = adding ? project::ProjectEditKind::AddFiles : project::ProjectEditKind::RemoveFiles;
+    edit.definition = utf8(projectName);
+    edit.files = {nativeSeparators(utf8(sourceName))};
+    edit.filter = adding ? utf8(filter) : std::string();
+    if (auto refused = submitProjectEdit(std::move(edit), title))
+        notify(title, *refused, ui::NotificationKind::Error);
+}
+
+void Workbench::addProjectFiles(const QString& projectName, const std::vector<std::string>& sources,
+                                const QString& filter) {
+    const QString title = QStringLiteral("Add to Project");
+    project::ProjectEdit edit;
+    edit.kind = project::ProjectEditKind::AddFiles;
+    edit.definition = utf8(projectName);
+    for (const std::string& source : sources)
+        edit.files.push_back(nativeSeparators(source));
+    edit.filter = utf8(filter);
+    if (auto refused = submitProjectEdit(std::move(edit), title))
+        notify(title, *refused, ui::NotificationKind::Error);
+}
+
+std::optional<QString> Workbench::projectEditBlocked(const std::string& projectPath) {
 #ifndef _WIN32
-    failEdit(QStringLiteral("Project-definition removal is currently available on Windows only."));
-    return;
-#endif
-    const std::string projectPath = utf8(projectName);
-    std::string sourcePath = utf8(sourceName);
-#ifdef _WIN32
-    // QFileDialog returns forward slashes on Windows, while the filesystem's canonical
-    // spelling uses backslashes. Change separators only: preserve dot components so
-    // the canonical comparison still refuses aliases and parent traversal.
-    std::ranges::replace(sourcePath, '/', '\\');
-#endif
-    const auto solution = m_solution;
-    const std::string root = m_projectRoot;
-    const auto managedIdle = [this] {
-        return (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
-    };
-    if (!solution || !m_projectEdit || m_projectEdit->busy() || root.empty() || !m_services.trust.isTrusted(root) ||
+    static_cast<void>(projectPath);
+    return QStringLiteral("Project-definition edits are currently available on Windows only.");
+#else
+    const bool managedIdle =
+        (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
+    if (!m_solution || !m_projectEdit || m_projectRoot.empty() || !m_services.trust.isTrusted(m_projectRoot) ||
         !m_services.trust.isTrusted(projectPath) || m_buildService->state() != build::BuildState::Idle ||
-        (m_debug && m_debug->debugging()) || !managedIdle()) {
-        failEdit(QStringLiteral("Open a trusted solution and wait for any build or project edit to finish."));
-        return;
-    }
-    const auto projectIt = std::ranges::find_if(solution->projects(), [&](const auto& item) {
-        return lang::documentKey(item.path) == lang::documentKey(projectPath);
-    });
-    if (projectIt == solution->projects().end() || !projectIt->vcxproj) {
-        failEdit(QStringLiteral("The source does not belong to a loaded C++ project."));
-        return;
-    }
-    const auto item = std::ranges::find_if(projectIt->vcxproj->items, [&](const auto& entry) {
-        return lang::documentKey(entry.path) == lang::documentKey(sourcePath);
-    });
-    if (!adding && !sourceName.isEmpty() &&
-        (item == projectIt->vcxproj->items.end() || item->type != project::ItemType::ClCompile || item->fromWildcard)) {
-        failEdit(QStringLiteral("Only directly included C++ source items are supported."));
-        return;
-    }
-    if (adding) {
-        const auto canonicalSource = m_services.fs.canonicalPath(sourcePath);
-        const auto canonicalProject = m_services.fs.canonicalPath(projectPath);
-        const auto sourceStatus = m_services.fs.status(sourcePath);
-        const auto projectDirectory = std::string(io::parentPath(projectPath));
-        if (!canonicalSource || !canonicalProject || !sourceStatus || sourceStatus->type != io::FileType::Regular ||
-            *canonicalSource != sourcePath || *canonicalProject != projectPath ||
-            !sourcePath.starts_with(projectDirectory) || sourcePath.size() <= projectDirectory.size() ||
-            (sourcePath[projectDirectory.size()] != '/' && sourcePath[projectDirectory.size()] != '\\') ||
-            !m_services.trust.isTrusted(sourcePath)) {
-            failEdit(QStringLiteral("Choose an existing file inside the trusted project directory without aliases."));
-            return;
-        }
-    }
-    const auto active = m_build->activeConfigurationIndex();
-    if (!sourceName.isEmpty() &&
-        (!active || *active >= projectIt->configurationMap.size() || !projectIt->configurationMap[*active])) {
-        failEdit(QStringLiteral("The project has no active configuration."));
-        return;
-    }
-    const auto configuration =
-        sourceName.isEmpty() ? project::ProjectConfigurationMapping{} : *projectIt->configurationMap[*active];
-    const std::string filters = projectPath + ".filters";
-    const auto definitionsClosed = [this, projectPath, filters] {
-        return !m_documentRegistry->find(projectPath) && !m_documentRegistry->find(filters);
-    };
-    if (!definitionsClosed()) {
-        failEdit(QStringLiteral("Close the project and filters definition tabs before editing the project."));
-        return;
-    }
+        (m_debug && m_debug->debugging()) || !managedIdle)
+        return QStringLiteral("Open a trusted solution and wait for any build or project edit to finish.");
+    return std::nullopt;
+#endif
+}
+
+Result<std::pair<std::string, std::string>> Workbench::projectEditTools() {
     std::string executable = m_options.projectEditHostPath;
     if (executable.empty())
         executable = utf8(QDir(QCoreApplication::applicationDirPath())
                               .filePath(QStringLiteral("project-host/ProjectHostVsProbe.exe")));
-    if (!io::isAbsolutePath(executable) || !m_services.fs.status(executable)) {
-        failEdit(QStringLiteral("The ProjectHost helper is not installed."));
-        return;
-    }
+    if (!io::isAbsolutePath(executable) || !m_services.fs.status(executable))
+        return fail(ErrorCode::NotFound, "The ProjectHost helper is not installed.");
     std::string msbuild = m_options.msbuildPath.empty()
                               ? m_services.settings.snapshot()->get(settings::key::toolsMsbuildPath)
                               : m_options.msbuildPath;
     if (msbuild.empty()) {
         auto found = build::findMsBuild(m_services.launcher, m_services.fs);
-        if (!found) {
-            failEdit(q(found.error().message()));
-            return;
-        }
+        if (!found)
+            return std::unexpected(std::move(found.error()));
         msbuild = found->msbuildPath;
     }
-    if (!io::isAbsolutePath(msbuild) || m_options.projectEditStateDirectory.empty()) {
-        failEdit(QStringLiteral("ProjectHost or private recovery storage is unavailable."));
+    if (!io::isAbsolutePath(msbuild) || m_options.projectEditStateDirectory.empty())
+        return fail(ErrorCode::NotFound, "ProjectHost or private recovery storage is unavailable.");
+    if (auto made = m_services.fs.createDirectories(m_options.projectEditStateDirectory); !made)
+        return std::unexpected(std::move(made.error()));
+    return std::pair{std::move(executable), std::move(msbuild)};
+}
+
+bool Workbench::projectEditJournalPresent() {
+    const auto journal = io::joinPath(m_projectRoot, ".frost-project-edit-journal");
+    if (!journal)
+        return true;
+    const auto exists = m_services.fs.exists(*journal);
+    return !exists || *exists;
+}
+
+void Workbench::publishProjectEdit(const std::shared_ptr<const project::SolutionModel>& solution,
+                                   const QString& title) {
+    auto loaded = project::SolutionModel::load(m_services.fs, solution->path(), {.cppHierarchy = m_cppHierarchyMode});
+    if (!loaded) {
+        notify(title, q(loaded.error().message()), ui::NotificationKind::Error);
         return;
     }
-    if (auto made = m_services.fs.createDirectories(m_options.projectEditStateDirectory); !made) {
-        failEdit(q(made.error().message()));
+    auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
+    if (m_solution != solution)
+        return;
+    if (auto updated = m_buildService->finishProjectEdit(refreshed); !updated) {
+        notify(title, q(updated.error().message()), ui::NotificationKind::Error);
         return;
     }
-    const auto journal = io::joinPath(root, ".frost-project-edit-journal");
-    if (!journal) {
-        failEdit(q(journal.error().message()));
-        return;
+    m_solution = refreshed;
+    m_build->projectEditPublished();
+    if (auto updated = m_runService->openSolution(refreshed); !updated)
+        notify(title, q(updated.error().message()), ui::NotificationKind::Warning);
+    if (m_nav)
+        static_cast<void>(m_nav->refreshSolution(*refreshed));
+}
+
+void Workbench::startQueuedProjectEdit() {
+    while (!m_projectEditQueue.empty() && !m_shutDown && m_projectEdit && !m_projectEdit->busy()) {
+        auto [edit, title] = std::move(m_projectEditQueue.front());
+        m_projectEditQueue.pop_front();
+        if (auto refused = submitProjectEdit(std::move(edit), title))
+            notify(title, *refused + QStringLiteral(" No project file was changed."), ui::NotificationKind::Warning);
     }
-    const auto journalExists = m_services.fs.exists(*journal);
-    if (!journalExists) {
-        failEdit(q(journalExists.error().message()));
-        return;
+}
+
+std::optional<QString> Workbench::submitProjectEdit(project::ProjectEdit edit, const QString& title) {
+    if (m_projectEdit && m_projectEdit->busy() && m_solution) {
+        if (m_projectEditQueue.size() >= kMaxQueuedProjectEdits)
+            return QStringLiteral("Too many project edits are waiting.");
+        m_projectEditQueue.emplace_back(std::move(edit), title);
+        return std::nullopt;
     }
-    if (*journalExists) {
-        const auto entries = m_services.fs.listDirectory(m_options.projectEditStateDirectory);
-        if (!entries) {
-            failEdit(q(entries.error().message()));
-            return;
-        }
-        std::string ownedMarker, ownedBytes, ownedId, ownedDigest;
-        for (const auto& entry : *entries) {
-            if (entry.type != io::FileType::Regular || !entry.name.ends_with(".json"))
-                continue;
-            const auto marker = io::joinPath(m_options.projectEditStateDirectory, entry.name);
-            if (!marker)
-                continue;
-            const auto status = m_services.fs.status(*marker);
-            if (!status || status->size > 16384)
-                continue;
-            const auto bytes = m_services.fs.readFile(*marker);
-            if (!bytes)
-                continue;
-            const auto json = QJsonDocument::fromJson(QByteArray(bytes->data(), static_cast<qsizetype>(bytes->size())));
-            if (!json.isObject())
-                continue;
-            const auto object = json.object();
-            const std::string markerRoot = utf8(object.value("Root").toString());
-            const std::string markerProject = utf8(object.value("Project").toString());
-            const std::string id = utf8(object.value("TransactionId").toString());
-            const std::string digest = utf8(object.value("JournalDigest").toString());
-            if (lang::documentKey(markerRoot) != lang::documentKey(root) ||
-                lang::documentKey(markerProject) != lang::documentKey(projectPath) || entry.name != id + ".json" ||
-                QUuid(q(id)).isNull() || digest.size() != 64 ||
-                digest.find_first_not_of("0123456789ABCDEF") != std::string::npos)
-                continue;
-            if (!ownedMarker.empty()) {
-                failEdit(QStringLiteral("Multiple recovery records match this project."));
-                return;
-            }
-            ownedMarker = *marker;
-            ownedBytes = *bytes;
-            ownedId = id;
-            ownedDigest = digest;
-        }
-        if (ownedMarker.empty()) {
-            failEdit(QStringLiteral(
-                "The project has a journal without a matching private recovery record. No recovery was attempted."));
-            return;
-        }
-        if (!m_services.prompts.confirmProjectRecovery(m_window, projectName))
-            return;
-        if (!managedIdle()) {
-            failEdit(QStringLiteral("Wait for the pending debug launch to finish."));
-            return;
-        }
-        if (!m_buildService->projectEditInProgress()) {
-            if (auto reserved = m_buildService->beginProjectEdit(); !reserved) {
-                failEdit(q(reserved.error().message()));
-                return;
-            }
-        }
-        QJsonObject request{{"Project", projectName},      {"Root", q(root)},
-                            {"Trusted", "true"},           {"Recover", "true"},
-                            {"TransactionId", q(ownedId)}, {"JournalDigest", q(ownedDigest)}};
-        io::ProcessSpec spec;
-        spec.executable = executable;
-        spec.arguments = {std::string(io::parentPath(msbuild))};
-        const auto admit = [this, solution, root, projectPath, definitionsClosed, managedIdle, ownedMarker, ownedBytes,
-                            ownedDigest](const std::string& digest) {
-            if (m_shutDown || m_solution != solution || m_projectRoot != root || !m_services.trust.isTrusted(root) ||
-                !m_services.trust.isTrusted(projectPath) || !definitionsClosed() || digest != ownedDigest ||
-                (m_debug && m_debug->debugging()) || !managedIdle())
-                return false;
-            const auto bytes = m_services.fs.readFile(ownedMarker);
-            return bytes && *bytes == ownedBytes;
-        };
-        const auto complete = [this, solution, root, ownedMarker](bool success, bool, const std::string& error) {
-            if (!success) {
-                notify(QStringLiteral("Project recovery"), q(error), ui::NotificationKind::Error);
-                return;
-            }
-            static_cast<void>(m_services.fs.removeFile(ownedMarker));
-            auto loaded =
-                project::SolutionModel::load(m_services.fs, solution->path(), {.cppHierarchy = m_cppHierarchyMode});
-            if (!loaded) {
-                notify(QStringLiteral("Project recovery"), q(loaded.error().message()), ui::NotificationKind::Error);
-                return;
-            }
-            auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
-            if (m_solution != solution || m_projectRoot != root)
-                return;
-            if (auto updated = m_buildService->finishProjectEdit(refreshed); !updated) {
-                notify(QStringLiteral("Project recovery"), q(updated.error().message()), ui::NotificationKind::Error);
-                return;
-            }
-            m_solution = refreshed;
-            m_build->projectEditPublished();
-            if (auto updated = m_runService->openSolution(refreshed); !updated)
-                notify(QStringLiteral("Project recovery"), q(updated.error().message()), ui::NotificationKind::Warning);
-            if (m_nav)
-                static_cast<void>(m_nav->refreshSolution(*refreshed));
-        };
-        auto started =
-            m_projectEdit->start(std::move(spec), QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString(),
-                                 ownedId, admit, complete);
-        if (!started)
-            failEdit(q(started.error().message()));
-        return;
+    const std::string projectPath = edit.definition;
+    if (auto blocked = projectEditBlocked(projectPath))
+        return blocked;
+    const auto solution = m_solution;
+    const std::string root = m_projectRoot;
+    const auto projectIt = std::ranges::find_if(solution->projects(), [&](const auto& item) {
+        return lang::documentKey(item.path) == lang::documentKey(projectPath);
+    });
+    if (projectIt == solution->projects().end() || !projectIt->vcxproj || edit.files.empty())
+        return QStringLiteral("The file does not belong to a loaded C++ project.");
+    const auto listed = [&](const std::string& path) {
+        return std::ranges::any_of(projectIt->vcxproj->items, [&](const project::ProjectItem& item) {
+            return !item.fromWildcard && lang::documentKey(item.path) == lang::documentKey(path);
+        });
+    };
+    const std::string projectDirectory(io::parentPath(projectPath));
+    // A file the edit brings in: an existing regular file inside the project directory, spelled
+    // canonically (no aliases), and trusted.
+    const auto incomingOk = [&](const std::string& path) {
+        const auto canonical = m_services.fs.canonicalPath(path);
+        const auto status = m_services.fs.status(path);
+        return canonical && status && status->type == io::FileType::Regular && *canonical == path &&
+               path.starts_with(projectDirectory) && path.size() > projectDirectory.size() &&
+               (path[projectDirectory.size()] == '/' || path[projectDirectory.size()] == '\\') &&
+               m_services.trust.isTrusted(path);
+    };
+    if (edit.kind == project::ProjectEditKind::AddFiles) {
+        const auto canonicalProject = m_services.fs.canonicalPath(projectPath);
+        if (!canonicalProject || *canonicalProject != projectPath || !std::ranges::all_of(edit.files, incomingOk))
+            return QStringLiteral("Choose an existing file inside the trusted project directory without aliases.");
+    } else if (edit.kind == project::ProjectEditKind::RemoveFiles ||
+               edit.kind == project::ProjectEditKind::RenameFiles) {
+        if (!std::ranges::all_of(edit.files, listed))
+            return QStringLiteral("Only items the project lists directly, not through a wildcard, can be removed or "
+                                  "renamed.");
+        if (edit.kind == project::ProjectEditKind::RenameFiles &&
+            (edit.renamedTo.size() != edit.files.size() ||
+             !std::ranges::all_of(edit.renamedTo, [&](const auto& path) { return m_services.trust.isTrusted(path); })))
+            return QStringLiteral("The renamed files are not inside the trusted solution.");
+    } else {
+        return QStringLiteral("Only file edits of a C++ project are available here.");
     }
-    if (sourceName.isEmpty()) {
-        failEdit(QStringLiteral("There is no pending project edit journal."));
-        return;
-    }
+    const auto active = m_build->activeConfigurationIndex();
+    if (!active || *active >= projectIt->configurationMap.size() || !projectIt->configurationMap[*active])
+        return QStringLiteral("The project has no active configuration.");
+    edit.configuration = projectIt->configurationMap[*active]->configuration;
+    edit.platform = projectIt->configurationMap[*active]->platform;
+    const std::string filters = projectPath + ".filters";
+    const auto definitionsClosed = [this, projectPath, filters] {
+        return !m_documentRegistry->find(projectPath) && !m_documentRegistry->find(filters);
+    };
+    if (!definitionsClosed())
+        return QStringLiteral("Close the project and filters definition tabs before editing the project.");
+    auto tools = projectEditTools();
+    if (!tools)
+        return q(tools.error().message());
+    if (projectEditJournalPresent())
+        return QStringLiteral("An interrupted project edit must be recovered first (Recover in the project's menu).");
     const std::string id = utf8(QUuid::createUuid().toString(QUuid::WithoutBraces));
     auto marker = io::joinPath(m_options.projectEditStateDirectory, id + ".json");
-    if (!marker) {
-        failEdit(q(marker.error().message()));
-        return;
-    }
-    QJsonObject request{{"Project", projectName},
-                        {"Root", q(root)},
-                        {"Trusted", "true"},
-                        {"Configuration", q(configuration.configuration)},
-                        {"Platform", q(configuration.platform)},
-                        {"Commit", "true"},
-                        {"TransactionId", q(id)}};
-    request.insert(adding ? "Add" : "Remove",
-                   adding ? QDir(QFileInfo(projectName).absolutePath()).relativeFilePath(sourceName).replace('/', '\\')
-                          : q(item->include));
-    QJsonObject lineage{{"Root", q(root)}, {"Project", projectName}, {"TransactionId", q(id)}};
+    if (!marker)
+        return q(marker.error().message());
+    edit.root = root;
+    edit.transactionId = id;
+    edit.commit = true;
+    auto request = project::projectEditRequest(edit);
+    if (!request)
+        return q(request.error().message());
+    QJsonObject lineage{{"Root", q(root)}, {"Project", q(projectPath)}, {"TransactionId", q(id)}};
     io::ProcessSpec spec;
-    spec.executable = executable;
-    spec.arguments = {std::string(io::parentPath(msbuild))};
-    if (!managedIdle()) {
-        failEdit(QStringLiteral("Wait for the pending debug launch to finish."));
-        return;
-    }
-    if (auto reserved = m_buildService->beginProjectEdit(); !reserved) {
-        failEdit(q(reserved.error().message()));
-        return;
-    }
+    spec.executable = tools->first;
+    spec.arguments = {std::string(io::parentPath(tools->second))};
+    if (auto reserved = m_buildService->beginProjectEdit(); !reserved)
+        return q(reserved.error().message());
+    const auto managedIdle = [this] {
+        return (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
+    };
     const std::string markerPath = *marker;
     const auto admit = [this, solution, root, projectPath, definitionsClosed, managedIdle, markerPath,
                         lineage](const std::string& digest) mutable {
-        if (m_shutDown || m_solution != solution || m_projectRoot != root || !m_services.trust.isTrusted(root) ||
-            !m_services.trust.isTrusted(projectPath) || m_buildService->state() != build::BuildState::Idle ||
-            !definitionsClosed() || (m_debug && m_debug->debugging()) || !managedIdle())
+        const auto admissible = [&] {
+            return !m_shutDown && m_solution == solution && m_projectRoot == root && m_services.trust.isTrusted(root) &&
+                   m_services.trust.isTrusted(projectPath) && m_buildService->state() == build::BuildState::Idle &&
+                   definitionsClosed() && !(m_debug && m_debug->debugging()) && managedIdle();
+        };
+        if (!admissible())
             return false;
         const auto exists = m_services.fs.exists(markerPath);
         if (!exists || *exists)
@@ -296,9 +265,7 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
                                .has_value();
         if (!saved)
             return false;
-        if (m_shutDown || m_solution != solution || m_projectRoot != root || !m_services.trust.isTrusted(root) ||
-            !m_services.trust.isTrusted(projectPath) || m_buildService->state() != build::BuildState::Idle ||
-            !definitionsClosed() || (m_debug && m_debug->debugging()) || !managedIdle()) {
+        if (!admissible()) {
             static_cast<void>(m_services.fs.removeFile(markerPath));
             return false;
         }
@@ -311,36 +278,159 @@ void Workbench::removeProjectFile(const QString& projectName, const QString& sou
         if (!success) {
             if (!accepted)
                 m_buildService->cancelProjectEdit();
+            // Queued edits were planned against the state this one failed to change.
+            m_projectEditQueue.clear();
             notify(title, q(error + (accepted ? " Recovery information was retained at " + markerPath : "")),
                    ui::NotificationKind::Error);
             return;
         }
         if (m_solution != solution || m_projectRoot != root) {
+            m_projectEditQueue.clear();
             return;
         }
-        auto loaded =
-            project::SolutionModel::load(m_services.fs, solution->path(), {.cppHierarchy = m_cppHierarchyMode});
-        if (!loaded) {
-            notify(title, q(loaded.error().message()), ui::NotificationKind::Error);
-            return;
-        }
-        auto refreshed = std::make_shared<const project::SolutionModel>(std::move(*loaded));
-        if (auto updated = m_buildService->finishProjectEdit(refreshed); !updated) {
-            notify(title, q(updated.error().message()), ui::NotificationKind::Error);
-            return;
-        }
-        m_solution = refreshed;
-        m_build->projectEditPublished();
-        if (auto updated = m_runService->openSolution(refreshed); !updated)
-            notify(title, q(updated.error().message()), ui::NotificationKind::Warning);
-        if (m_nav)
-            static_cast<void>(m_nav->refreshSolution(*refreshed));
+        publishProjectEdit(solution, title);
+        startQueuedProjectEdit();
     };
-    auto started = m_projectEdit->start(
-        std::move(spec), QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString(), id, admit, complete);
+    auto started = m_projectEdit->start(std::move(spec), std::move(*request), id, admit, complete);
     if (!started) {
         m_buildService->cancelProjectEdit();
-        failEdit(q(started.error().message()));
+        return q(started.error().message());
     }
+    return std::nullopt;
+}
+
+void Workbench::recoverProjectEdit(const QString& projectName) {
+    const QString title = QStringLiteral("Project recovery");
+    const auto failEdit = [this, title](const QString& reason) { notify(title, reason, ui::NotificationKind::Error); };
+    const std::string projectPath = utf8(projectName);
+    if (auto blocked = projectEditBlocked(projectPath); blocked || m_projectEdit->busy()) {
+        failEdit(blocked.value_or(QStringLiteral("Wait for the running project edit to finish.")));
+        return;
+    }
+    const auto solution = m_solution;
+    const std::string root = m_projectRoot;
+    const auto managedIdle = [this] {
+        return (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
+    };
+    const auto projectIt = std::ranges::find_if(solution->projects(), [&](const auto& item) {
+        return lang::documentKey(item.path) == lang::documentKey(projectPath);
+    });
+    if (projectIt == solution->projects().end() || !projectIt->vcxproj) {
+        failEdit(QStringLiteral("The source does not belong to a loaded C++ project."));
+        return;
+    }
+    const std::string filters = projectPath + ".filters";
+    const auto definitionsClosed = [this, projectPath, filters] {
+        return !m_documentRegistry->find(projectPath) && !m_documentRegistry->find(filters);
+    };
+    if (!definitionsClosed()) {
+        failEdit(QStringLiteral("Close the project and filters definition tabs before editing the project."));
+        return;
+    }
+    auto tools = projectEditTools();
+    if (!tools) {
+        failEdit(q(tools.error().message()));
+        return;
+    }
+    const auto journal = io::joinPath(root, ".frost-project-edit-journal");
+    if (!journal) {
+        failEdit(q(journal.error().message()));
+        return;
+    }
+    const auto journalExists = m_services.fs.exists(*journal);
+    if (!journalExists) {
+        failEdit(q(journalExists.error().message()));
+        return;
+    }
+    if (!*journalExists) {
+        failEdit(QStringLiteral("There is no pending project edit journal."));
+        return;
+    }
+    const auto entries = m_services.fs.listDirectory(m_options.projectEditStateDirectory);
+    if (!entries) {
+        failEdit(q(entries.error().message()));
+        return;
+    }
+    std::string ownedMarker, ownedBytes, ownedId, ownedDigest;
+    for (const auto& entry : *entries) {
+        if (entry.type != io::FileType::Regular || !entry.name.ends_with(".json"))
+            continue;
+        const auto marker = io::joinPath(m_options.projectEditStateDirectory, entry.name);
+        if (!marker)
+            continue;
+        const auto status = m_services.fs.status(*marker);
+        if (!status || status->size > 16384)
+            continue;
+        const auto bytes = m_services.fs.readFile(*marker);
+        if (!bytes)
+            continue;
+        const auto json = QJsonDocument::fromJson(QByteArray(bytes->data(), static_cast<qsizetype>(bytes->size())));
+        if (!json.isObject())
+            continue;
+        const auto object = json.object();
+        const std::string markerRoot = utf8(object.value("Root").toString());
+        const std::string markerProject = utf8(object.value("Project").toString());
+        const std::string id = utf8(object.value("TransactionId").toString());
+        const std::string digest = utf8(object.value("JournalDigest").toString());
+        if (lang::documentKey(markerRoot) != lang::documentKey(root) ||
+            lang::documentKey(markerProject) != lang::documentKey(projectPath) || entry.name != id + ".json" ||
+            QUuid(q(id)).isNull() || digest.size() != 64 ||
+            digest.find_first_not_of("0123456789ABCDEF") != std::string::npos)
+            continue;
+        if (!ownedMarker.empty()) {
+            failEdit(QStringLiteral("Multiple recovery records match this project."));
+            return;
+        }
+        ownedMarker = *marker;
+        ownedBytes = *bytes;
+        ownedId = id;
+        ownedDigest = digest;
+    }
+    if (ownedMarker.empty()) {
+        failEdit(QStringLiteral(
+            "The project has a journal without a matching private recovery record. No recovery was attempted."));
+        return;
+    }
+    if (!m_services.prompts.confirmProjectRecovery(m_window, projectName))
+        return;
+    if (!managedIdle()) {
+        failEdit(QStringLiteral("Wait for the pending debug launch to finish."));
+        return;
+    }
+    if (!m_buildService->projectEditInProgress()) {
+        if (auto reserved = m_buildService->beginProjectEdit(); !reserved) {
+            failEdit(q(reserved.error().message()));
+            return;
+        }
+    }
+    QJsonObject request{{"Project", projectName},      {"Root", q(root)},
+                        {"Trusted", "true"},           {"Recover", "true"},
+                        {"TransactionId", q(ownedId)}, {"JournalDigest", q(ownedDigest)}};
+    io::ProcessSpec spec;
+    spec.executable = tools->first;
+    spec.arguments = {std::string(io::parentPath(tools->second))};
+    const auto admit = [this, solution, root, projectPath, definitionsClosed, managedIdle, ownedMarker, ownedBytes,
+                        ownedDigest](const std::string& digest) {
+        if (m_shutDown || m_solution != solution || m_projectRoot != root || !m_services.trust.isTrusted(root) ||
+            !m_services.trust.isTrusted(projectPath) || !definitionsClosed() || digest != ownedDigest ||
+            (m_debug && m_debug->debugging()) || !managedIdle())
+            return false;
+        const auto bytes = m_services.fs.readFile(ownedMarker);
+        return bytes && *bytes == ownedBytes;
+    };
+    const auto complete = [this, solution, root, ownedMarker, title](bool success, bool, const std::string& error) {
+        if (!success) {
+            notify(title, q(error), ui::NotificationKind::Error);
+            return;
+        }
+        static_cast<void>(m_services.fs.removeFile(ownedMarker));
+        if (m_solution != solution || m_projectRoot != root)
+            return;
+        publishProjectEdit(solution, title);
+    };
+    auto started = m_projectEdit->start(
+        std::move(spec), QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString(), ownedId, admit, complete);
+    if (!started)
+        failEdit(q(started.error().message()));
 }
 } // namespace frost::app

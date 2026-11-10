@@ -132,6 +132,8 @@ void DebugController::setConsole(RunConsole* console) {
     }
 }
 
+RunConsole* DebugController::console() const noexcept { return m_console.data(); }
+
 Result<void> DebugController::setWorkspaceRoot(std::string root) {
     m_root.clear(); // Suppress persistence while the old set is cleared and the new set loaded.
     if (root.empty()) {
@@ -177,6 +179,12 @@ Result<void> DebugController::debug(std::optional<project::ProjectId> project) {
     }
     if ((m_hooks.mayStart && !m_hooks.mayStart()) || m_session || m_pendingRun || m_alternatePending) {
         return fail(ErrorCode::Busy, "a debug session is running already; stop it first");
+    }
+    if (m_hooks.startOverride) {
+        if (std::optional<Result<void>> handled = m_hooks.startOverride()) {
+            emit stateChanged();
+            return std::move(*handled);
+        }
     }
     if (m_hooks.alternateAvailable && m_hooks.alternateAvailable() && m_hooks.startAlternate) {
         const QPointer<DebugController> self(this);
@@ -240,6 +248,7 @@ void DebugController::onRunFinished(const build::RunOutcome& outcome, const std:
     }
     m_pendingRun.reset();
     if (!launch) {
+        m_lastOutcome = outcome;
         if (m_console) {
             m_console->finish(outcome);
         }
@@ -250,6 +259,7 @@ void DebugController::onRunFinished(const build::RunOutcome& outcome, const std:
         return;
     }
     if (auto started = startTarget(debugTargetFor(outcome, *launch)); !started) {
+        m_lastOutcome = build::RunOutcome{.run = outcome.run, .error = started.error()};
         if (m_console) {
             m_console->appendOutput(build::RunOutputKind::System,
                                     std::format("The debugger could not start: {}\n", started.error().message()));
@@ -317,7 +327,8 @@ Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
         [this, resolvedTarget, factory = std::move(*factory)](debug::DebugSessionCallbacks callbacks) mutable {
             return debug::startDebugSession(*m_options.trust, resolvedTarget, std::move(factory),
                                             m_breakpoints.sessionLines(), std::move(callbacks),
-                                            m_breakpoints.sessionFunctions(), m_breakpoints.sessionExceptionFilters());
+                                            m_breakpoints.sessionFunctions(), m_breakpoints.sessionExceptionFilters(),
+                                            m_breakpoints.sessionThrowTypes());
         });
     if (started) {
         m_lastCoreClrSession = false;
@@ -346,6 +357,7 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
                 // Recorded now and sent when the adapter is configured (DebugSession).
                 (*session)->setFunctionBreakpoints(m_breakpoints.sessionFunctions());
                 (*session)->setExceptionFilters(m_breakpoints.sessionExceptionFilters());
+                (*session)->setThrowTypes(m_breakpoints.sessionThrowTypes());
             }
             return session;
         },
@@ -669,6 +681,8 @@ void DebugController::onEnded(std::uint64_t endingGeneration, const debug::Debug
     if (!finished.exitCode && !finished.error && !finished.stopped) {
         finished.error = Error(ErrorCode::IoError, "the debug session ended");
     }
+    if (m_generation == endingGeneration)
+        m_lastOutcome = finished;
     const QString summary = outcome.error ? QStringLiteral("Debug session ended with an error")
                             : finished.stopped && !finished.exitCode ? QStringLiteral("Process stopped")
                                                                      : runFinishedLine(finished);
@@ -1149,6 +1163,13 @@ void DebugController::requestEditBreakpoint() {
     emit editBreakpointRequested(targetId);
 }
 
+void DebugController::requestViewBreakpoints() {
+    if (m_hooks.showToolWindow) {
+        m_hooks.showToolWindow();
+    }
+    emit viewBreakpointsRequested();
+}
+
 void DebugController::requestEvaluate() {
     QString expression;
     if (EditorView* view = m_hooks.currentEditor ? m_hooks.currentEditor() : nullptr) {
@@ -1252,6 +1273,7 @@ void DebugController::onBreakpointsChanged(std::string_view path, debug::Breakpo
     } else if (change == debug::BreakpointManager::Change::Exceptions) {
         if (m_session && m_nativeSession) {
             m_session->setExceptionFilters(m_breakpoints.sessionExceptionFilters());
+            m_session->setThrowTypes(m_breakpoints.sessionThrowTypes());
         }
         save();
     }

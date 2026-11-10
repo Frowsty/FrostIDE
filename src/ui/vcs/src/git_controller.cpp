@@ -44,39 +44,51 @@ QString taskTitle(vcs::GitOperationKind kind) {
     return QCoreApplication::translate("GitController", "Running git");
 }
 
+// The worker side of every queued call to a controller: posts `call` unless the controller's
+// destructor has closed `gate`. Holding the gate's mutex while posting orders the post before the
+// destructor, which closes the gate under the same mutex before anything of the controller goes.
+template<class Call>
+void postTo(GitController* controller, const std::shared_ptr<detail::GitCallbackGate>& gate, Call&& call,
+            Qt::ConnectionType type) {
+    LockGuard lock(gate->mutex);
+    if (gate->open)
+        QMetaObject::invokeMethod(controller, std::forward<Call>(call), type);
+}
+
 } // namespace
 
 GitController::GitController(vcs::GitRunner runner, io::IFileSystem& fs, vcs::RepositoryInfo info,
                              vcs::GitServiceOptions options, QObject* parent)
     : QObject(parent) {
-    // The callbacks run on the service's workers; each posts to this object, and Qt drops the
-    // posts once it is gone (the destructor ends the workers first, so `this` is valid when they run).
+    // The callbacks run on the service's workers; each posts to this object through postTo, which
+    // posts only while the gate is open (the destructor closes it first), and Qt drops posts that
+    // are still queued when the object goes.
+    const auto gate = m_gate;
     vcs::GitServiceCallbacks callbacks;
-    callbacks.onStatusChanged = [this](std::shared_ptr<const vcs::GitStatusSnapshot> snapshot) {
-        QMetaObject::invokeMethod(this, [this, snapshot] { onStatus(snapshot); }, Qt::QueuedConnection);
+    callbacks.onStatusChanged = [this, gate](std::shared_ptr<const vcs::GitStatusSnapshot> snapshot) {
+        postTo(this, gate, [this, snapshot] { onStatus(snapshot); }, Qt::QueuedConnection);
     };
-    callbacks.onStatusFailed = [this](const Error& error) {
-        QMetaObject::invokeMethod(
-            this, [this, message = qs(error.message())] { emit statusFailed(message); }, Qt::QueuedConnection);
+    callbacks.onStatusFailed = [this, gate](const Error& error) {
+        postTo(this, gate, [this, message = qs(error.message())] { emit statusFailed(message); }, Qt::QueuedConnection);
     };
-    callbacks.onOutput = [this](vcs::GitStream stream, std::string_view line) {
-        QMetaObject::invokeMethod(
-            this, [this, stream, text = qs(line)] { emit outputLine(static_cast<int>(stream), text); },
+    callbacks.onOutput = [this, gate](vcs::GitStream stream, std::string_view line) {
+        postTo(
+            this, gate, [this, stream, text = qs(line)] { emit outputLine(static_cast<int>(stream), text); },
             Qt::QueuedConnection);
     };
-    callbacks.onOperationStarted = [this](vcs::GitOperationKind kind) {
-        QMetaObject::invokeMethod(this, [this, kind] { onStarted(kind); }, Qt::QueuedConnection);
+    callbacks.onOperationStarted = [this, gate](vcs::GitOperationKind kind) {
+        postTo(this, gate, [this, kind] { onStarted(kind); }, Qt::QueuedConnection);
     };
-    callbacks.onOperationFinished = [this](const vcs::GitOperationResult& result) {
-        QMetaObject::invokeMethod(this, [this, result] { onFinished(result); }, Qt::QueuedConnection);
+    callbacks.onOperationFinished = [this, gate](const vcs::GitOperationResult& result) {
+        postTo(this, gate, [this, result] { onFinished(result); }, Qt::QueuedConnection);
     };
     m_service = vcs::GitService::create(std::move(runner), fs, std::move(info), options, std::move(callbacks));
-    m_service->readRecentCommitMessages(kMessageHistory, [this](Result<std::vector<std::string>> messages) {
+    m_service->readRecentCommitMessages(kMessageHistory, [this, gate](Result<std::vector<std::string>> messages) {
         if (!messages) {
             return;
         }
-        QMetaObject::invokeMethod(
-            this,
+        postTo(
+            this, gate,
             [this, list = std::move(*messages)] {
                 for (const std::string& message : list) {
                     const QString text = qs(message);
@@ -91,7 +103,15 @@ GitController::GitController(vcs::GitRunner runner, io::IFileSystem& fs, vcs::Re
 }
 
 GitController::~GitController() {
-    // Cancels the running operation, drops queued work and joins the workers before the QObject goes.
+    {
+        LockGuard lock(m_gate->mutex);
+        m_gate->open = false; // From here no worker posts to this object.
+    }
+    if (m_service && m_retire) {
+        m_service->cancelOperation();
+        m_retire(std::move(m_service)); // Joined off the GUI thread (FND-9b).
+    }
+    // Otherwise: cancels the running operation, drops queued work and joins the workers here.
     m_service.reset();
     for (const std::shared_ptr<BackgroundTask>& task : m_running) {
         task->finish();
@@ -234,31 +254,31 @@ void GitController::refreshStatus() { m_service->refreshStatus(); }
 
 void GitController::readHeadContent(const std::string& absolutePath, ContentCallback done) {
     m_service->readHeadContent(
-        absolutePath, [this, done = std::move(done)](Result<std::optional<std::string>> content) {
-            QMetaObject::invokeMethod(this, [done, content] { done(content); }, Qt::QueuedConnection);
+        absolutePath, [this, gate = m_gate, done = std::move(done)](Result<std::optional<std::string>> content) {
+            postTo(this, gate, [done, content] { done(content); }, Qt::QueuedConnection);
         });
 }
 
 void GitController::readIndexContent(const std::string& absolutePath, ContentCallback done) {
     m_service->readIndexContent(
-        absolutePath, [this, done = std::move(done)](Result<std::optional<std::string>> content) {
-            QMetaObject::invokeMethod(this, [done, content] { done(content); }, Qt::QueuedConnection);
+        absolutePath, [this, gate = m_gate, done = std::move(done)](Result<std::optional<std::string>> content) {
+            postTo(this, gate, [done, content] { done(content); }, Qt::QueuedConnection);
         });
 }
 
 void GitController::readLastCommitMessage(std::function<void(Result<std::string>)> done) {
-    m_service->readLastCommitMessage([this, done = std::move(done)](Result<std::string> message) {
-        QMetaObject::invokeMethod(this, [done, message] { done(message); }, Qt::QueuedConnection);
+    m_service->readLastCommitMessage([this, gate = m_gate, done = std::move(done)](Result<std::string> message) {
+        postTo(this, gate, [done, message] { done(message); }, Qt::QueuedConnection);
     });
 }
 
 void GitController::readBranches() {
-    m_service->readBranches([this](Result<std::vector<vcs::GitBranch>> branches) {
+    m_service->readBranches([this, gate = m_gate](Result<std::vector<vcs::GitBranch>> branches) {
         if (!branches) {
             return;
         }
-        QMetaObject::invokeMethod(
-            this,
+        postTo(
+            this, gate,
             [this, list = std::move(*branches)] {
                 m_branches = list;
                 emit branchesChanged();
@@ -270,36 +290,39 @@ void GitController::readBranches() {
 void GitController::readLog(std::size_t maxCount, const QString& branchFilter, const QString& searchFilter,
                             std::function<void(Result<std::vector<vcs::GitCommitEntry>>)> done) {
     m_service->readLog(maxCount, branchFilter.trimmed().toStdString(), searchFilter.trimmed().toStdString(),
-                       [this, done = std::move(done)](Result<std::vector<vcs::GitCommitEntry>> commits) {
-                           QMetaObject::invokeMethod(
-                               this, [done, result = std::move(commits)]() mutable { done(std::move(result)); },
+                       [this, gate = m_gate, done = std::move(done)](Result<std::vector<vcs::GitCommitEntry>> commits) {
+                           postTo(
+                               this, gate, [done, result = std::move(commits)]() mutable { done(std::move(result)); },
                                Qt::QueuedConnection);
                        });
 }
 
 void GitController::readCommitFiles(const QString& commitHash,
                                     std::function<void(Result<std::vector<vcs::GitCommitFileChange>>)> done) {
-    m_service->readCommitFiles(commitHash.trimmed().toStdString(),
-                               [this, done = std::move(done)](Result<std::vector<vcs::GitCommitFileChange>> files) {
-                                   QMetaObject::invokeMethod(
-                                       this, [done, result = std::move(files)]() mutable { done(std::move(result)); },
-                                       Qt::QueuedConnection);
-                               });
+    m_service->readCommitFiles(
+        commitHash.trimmed().toStdString(),
+        [this, gate = m_gate, done = std::move(done)](Result<std::vector<vcs::GitCommitFileChange>> files) {
+            postTo(
+                this, gate, [done, result = std::move(files)]() mutable { done(std::move(result)); },
+                Qt::QueuedConnection);
+        });
 }
 
 void GitController::readStashes(std::function<void(Result<std::vector<vcs::GitStashEntry>>)> done) {
-    m_service->readStashes([this, done = std::move(done)](Result<std::vector<vcs::GitStashEntry>> stashes) {
-        QMetaObject::invokeMethod(
-            this, [done, result = std::move(stashes)]() mutable { done(std::move(result)); }, Qt::QueuedConnection);
-    });
+    m_service->readStashes(
+        [this, gate = m_gate, done = std::move(done)](Result<std::vector<vcs::GitStashEntry>> stashes) {
+            postTo(
+                this, gate, [done, result = std::move(stashes)]() mutable { done(std::move(result)); },
+                Qt::QueuedConnection);
+        });
 }
 
 void GitController::readBlame(const QString& relativeOrAbsolutePath,
                               std::function<void(Result<std::vector<vcs::GitBlameLine>>)> done) {
-    m_service->readBlame(relativeOrAbsolutePath.toStdString(), [this, done = std::move(done)](
+    m_service->readBlame(relativeOrAbsolutePath.toStdString(), [this, gate = m_gate, done = std::move(done)](
                                                                    Result<std::vector<vcs::GitBlameLine>> lines) {
-        QMetaObject::invokeMethod(
-            this, [done, result = std::move(lines)]() mutable { done(std::move(result)); }, Qt::QueuedConnection);
+        postTo(
+            this, gate, [done, result = std::move(lines)]() mutable { done(std::move(result)); }, Qt::QueuedConnection);
     });
 }
 

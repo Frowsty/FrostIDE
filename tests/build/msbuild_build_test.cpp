@@ -5,22 +5,28 @@
 // into a work directory whose name has a space and a non-ASCII character, directly and through
 // BuildService (trust, diagnostics with absolute paths), and the run service's part: MSBuild
 // -getProperty for the program and the debugger settings of App.vcxproj.user, then a build and a
-// run in the Run console (output, input, exit code). Each build takes about a second. A machine
-// without Visual Studio skips these tests.
+// run in the Run console (output, input, exit code). Each build takes about a second. SLN-9 and
+// SLN-11 on the synthetic generated solution (tests/project/fixtures/msvc_generated) and the tiny
+// one: Compile (Ctrl+F7) of single files and a Rebuild whose error lists must equal what MSBuild's
+// own file loggers recorded (msbuild_diagnostic_oracle.hpp), and the .vcxproj.user FrostIDE writes
+// as MSBuild and Run read it back. A machine without Visual Studio skips these tests.
 
 #include "frost/build/build_service.hpp"
 #include "frost/build/msbuild_driver.hpp"
 #include "frost/build/msbuild_locator.hpp"
 #include "frost/build/run_service.hpp"
 #include "frost/build/run_target.hpp"
+#include "frost/build/vcxproj_user.hpp"
 #include "frost/core/mutex.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/io/utf.hpp"
+#include "frost/project/project_host.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/project/trust_store.hpp"
 
+#include "build/msbuild_diagnostic_oracle.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -32,6 +38,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -93,10 +100,10 @@ bool copyTree(frost::io::IFileSystem& fs, const std::string& from, const std::st
 // removed afterwards. The name holds a space and "é" so paths with both reach every tool.
 class WorkDir {
 public:
-    WorkDir(std::string_view tag, std::string_view fixture) {
+    WorkDir(std::string_view tag, std::string_view fixture, std::string_view fixtures = FROST_BUILD_FIXTURES) {
         static std::atomic<unsigned> counter{0};
         auto root = frost::io::normalizePath(FROST_BUILD_WORK_ROOT);
-        auto source = frost::io::normalizePath(std::format("{}/{}", FROST_BUILD_FIXTURES, fixture));
+        auto source = frost::io::normalizePath(std::format("{}/{}", fixtures, fixture));
         if (!root || !source) {
             ADD_FAILURE() << "bad fixture or work directory";
             return;
@@ -117,6 +124,7 @@ public:
     [[nodiscard]] std::string join(std::string_view name) const {
         return frost::io::joinPath(m_path, name).value_or("");
     }
+    [[nodiscard]] const std::string& path() const noexcept { return m_path; }
     [[nodiscard]] bool exists(std::string_view name) const {
         return frost::io::realFileSystem().exists(join(name)).value_or(false);
     }
@@ -633,6 +641,309 @@ TEST(MsBuildRun, RunServiceBuildsAndRunsTheStartupProject) {
     EXPECT_TRUE(out.contains("echo: hi there\n")) << out;
     EXPECT_TRUE(err.contains("tiny stderr line")) << err;
     EXPECT_TRUE(system.contains("App.exe")) << system;
+    service.reset();
+    EXPECT_TRUE(buildService->waitForIdle(kBuildTimeout));
+}
+
+// ---- SLN-9: Ctrl+F7 and the error list against MSBuild's own log; SLN-11: the .vcxproj.user writer.
+
+// The first file named `name` (ASCII case ignored) below `directory`, or "".
+std::string findFileBelow(const std::string& directory, std::string_view name) {
+    auto entries = frost::io::realFileSystem().listDirectory(directory);
+    if (!entries) {
+        return {};
+    }
+    for (const frost::io::DirEntry& entry : *entries) {
+        const std::string path = frost::io::joinPath(directory, entry.name).value_or("");
+        if (entry.type == frost::io::FileType::Directory) {
+            if (std::string found = findFileBelow(path, name); !found.empty()) {
+                return found;
+            }
+        } else if (_stricmp(entry.name.c_str(), std::string(name).c_str()) == 0) {
+            return path;
+        }
+    }
+    return {};
+}
+
+// The Solution* properties Visual Studio passes when it builds one project of `solution`, spelled
+// out here (not taken from frost::build) for the oracle's own command line.
+std::vector<std::string> solutionProperties(const WorkDir& work, std::string_view solutionFile) {
+    const std::string name(solutionFile.substr(0, solutionFile.rfind('.')));
+    return {"-p:SolutionDir=" + work.path() + "\\", "-p:SolutionPath=" + work.join(solutionFile),
+            "-p:SolutionName=" + name, "-p:SolutionFileName=" + std::string(solutionFile),
+            "-p:SolutionExt=" + std::string(solutionFile.substr(solutionFile.rfind('.')))};
+}
+
+// MSBuild's own evaluation of `project` (MSBuild.exe -getItem, the workbench's fallback path of
+// SLN-2) as the solution model takes it, so items from property sheets are files of the project.
+std::optional<frost::project::EvaluatedProjectItems> evaluateProject(const VsInstance& msbuild, std::string project,
+                                                                     std::string solution) {
+    const frost::project::ProjectEvaluationRequest request{.projectPath = std::move(project),
+                                                           .configuration = "Debug",
+                                                           .platform = "x64",
+                                                           .solutionPath = std::move(solution)};
+    auto spec = frost::project::msbuildCliEvaluationSpec(msbuild.msbuildPath, request);
+    EXPECT_TRUE(spec.has_value()) << spec.error().describe();
+    if (!spec) {
+        return std::nullopt;
+    }
+    auto ran = frost::io::runToCompletion(frost::io::realProcessLauncher(), *spec, {}, kBuildTimeout);
+    EXPECT_TRUE(ran.has_value() && ran->exitCode == 0) << (ran ? ran->stdoutBytes : ran.error().describe());
+    if (!ran || ran->exitCode != 0) {
+        return std::nullopt;
+    }
+    auto evaluation = frost::project::parseMsBuildCliEvaluation(ran->stdoutBytes, request);
+    EXPECT_TRUE(evaluation.has_value()) << evaluation.error().describe();
+    if (!evaluation) {
+        return std::nullopt;
+    }
+    return frost::project::toEvaluatedProjectItems(*evaluation, frost::project::EvaluationSource::MsBuildCli,
+                                                   msbuild.installationVersion);
+}
+
+// A BuildService over a solution of `work`, with this machine's MSBuild; the work directory is
+// trusted. `evaluated` replaces those projects' static items, as the workbench does after SLN-2.
+struct ServiceRig {
+    ServiceRig(const WorkDir& work, std::string_view solutionFile, const VsInstance& msbuild,
+               std::vector<frost::project::EvaluatedProjectItems> evaluated = {}) {
+        frost::io::IFileSystem& fs = frost::io::realFileSystem();
+        auto loaded =
+            frost::project::SolutionModel::load(fs, work.join(solutionFile), {.evaluated = std::move(evaluated)});
+        EXPECT_TRUE(loaded.has_value()) << loaded.error().describe();
+        if (!loaded) {
+            return;
+        }
+        solution = std::make_shared<const frost::project::SolutionModel>(std::move(*loaded));
+        auto opened = frost::project::TrustStore::open(fs, work.join("data\\trusted-roots.txt"));
+        EXPECT_TRUE(opened.has_value());
+        store = std::move(*opened);
+        EXPECT_TRUE(store->trust(solution->directory()).has_value());
+        service = frost::build::BuildService::create(
+            fs, frost::io::realProcessLauncher(), *store,
+            {.stateFilePath = work.join("data\\active-configurations.txt"), .msbuildPath = msbuild.msbuildPath});
+        EXPECT_TRUE(service->openSolution(solution).has_value());
+    }
+    ~ServiceRig() { service.reset(); }
+    ServiceRig(const ServiceRig&) = delete ("owns the service");
+    ServiceRig& operator=(const ServiceRig&) = delete ("owns the service");
+
+    // Waits for the build to end and returns its outcome.
+    frost::build::BuildOutcome finished() const {
+        EXPECT_TRUE(service->waitForIdle(kBuildTimeout)) << "the build did not finish in time";
+        return service->lastOutcome().value_or(frost::build::BuildOutcome{});
+    }
+
+    std::shared_ptr<const frost::project::SolutionModel> solution;
+    std::unique_ptr<frost::project::TrustStore> store;
+    std::unique_ptr<frost::build::BuildService> service;
+};
+
+// The synthetic generated solution (tests/project/fixtures/msvc_generated) with one planted error
+// and warning in App and a warning in Core's nested src\b.cpp: Ctrl+F7 compiles exactly the file
+// (its Identity from MSBuild's evaluation), builds no referenced project, and the error list equals
+// what MSBuild's own file loggers record for the same compile.
+TEST(MsBuildCompile, CompilesOnlyTheFileAndTheErrorListEqualsMsBuildsLog) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild) {
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    }
+    WorkDir work("compile", "msvc_generated", FROST_PROJECT_FIXTURES);
+    frost::io::IFileSystem& fs = frost::io::realFileSystem();
+    const std::string app = work.join("App\\app.cpp");
+    const std::string b = work.join("Core\\src\\b.cpp");
+    // C4005 is a level-1 warning: the fixture keeps MSBuild's default warning level.
+    ASSERT_TRUE(fs.writeFileAtomic(app, "#define GEN_PLANTED 1\n#define GEN_PLANTED 2\n"
+                                        "int app() { return GEN_PLANTED + missing_symbol; }\n")
+                    .has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(b, "#define GEN_PLANTED 1\n#define GEN_PLANTED 2\n"
+                                      "int coreB() { return GEN_PLANTED; }\n")
+                    .has_value());
+    const auto core = evaluateProject(*msbuild, work.join("Core\\Core.vcxproj"), work.join("Generated.sln"));
+    ASSERT_TRUE(core.has_value());
+    ServiceRig rig(work, "Generated.sln", *msbuild, {*core});
+    ASSERT_NE(rig.service, nullptr);
+    ASSERT_EQ(rig.service->activeConfiguration()->name(), "Debug|x64");
+
+    struct Case {
+        std::string file;
+        std::string project;
+        std::string identity; // As the fixture's project file writes it: the oracle's own SelectedFiles.
+        std::string object;   // Produced unless the file has an error.
+        bool compiles = true;
+    };
+    const std::vector<Case> cases = {
+        {app, "App\\App.vcxproj", "app.cpp", "app.obj", false},
+        {b, "Core\\Core.vcxproj", "src\\b.cpp", "b.obj", true},
+    };
+    for (const Case& c : cases) {
+        SCOPED_TRACE(c.file);
+        const auto project = rig.service->compileProjectFor(c.file);
+        ASSERT_TRUE(project.has_value());
+        EXPECT_TRUE(sameFile(rig.solution->project(*project).path, work.join(c.project)));
+        ASSERT_TRUE(rig.service->compile(c.file).has_value());
+        const frost::build::BuildOutcome outcome = rig.finished();
+        EXPECT_FALSE(outcome.error.has_value()) << outcome.error->describe();
+        EXPECT_EQ(outcome.target.action, BuildAction::Compile);
+
+        // The oracle compiles the same file again: rewriting it makes MSBuild's up-to-date check
+        // compile it (and log its diagnostics) rather than skip it.
+        const std::string source = fs.readFile(c.file).value_or("");
+        ASSERT_TRUE(fs.writeFileAtomic(c.file, source).has_value());
+        std::vector<std::string> arguments = {work.join(c.project), "-t:ClCompile", "-p:SelectedFiles=" + c.identity,
+                                              "-p:Configuration=Debug", "-p:Platform=x64"};
+        for (std::string& property : solutionProperties(work, "Generated.sln")) {
+            arguments.push_back(std::move(property));
+        }
+        const auto oracle = frost::test::runMsBuildOracle(
+            msbuild->msbuildPath, arguments, std::string(frost::io::parentPath(work.join(c.project))), work.path());
+        ASSERT_TRUE(oracle.has_value());
+        EXPECT_FALSE(oracle->diagnostics.empty());
+        EXPECT_EQ(outcome.result.success, oracle->exitCode == 0);
+        const std::vector<frost::build::BuildDiagnostic> shown = rig.service->diagnostics();
+        EXPECT_EQ(frost::test::errorListRows(shown), oracle->diagnostics)
+            << "error list:" << frost::test::describe(frost::test::errorListRows(shown))
+            << "\nMSBuild logged:" << frost::test::describe(oracle->diagnostics);
+        EXPECT_EQ(outcome.counts.errors + outcome.counts.warnings, oracle->diagnostics.size());
+        EXPECT_EQ(findFileBelow(work.path(), c.object).empty(), !c.compiles) << c.object;
+    }
+    // Only the selected files were compiled, and no referenced project was built.
+    for (const std::string_view other : {"main.obj", "a.obj", "c.obj", "renderer.obj", "Core.lib", "Renderer.lib"}) {
+        EXPECT_TRUE(findFileBelow(work.path(), other).empty()) << other << " should not exist";
+    }
+
+    // A property sheet's item (Identity = its full path) compiles too; a header compiles nothing.
+    const std::string shared = work.join("shared\\deep_shared.cpp");
+    ASSERT_TRUE(rig.service->compileProjectFor(shared).has_value());
+    ASSERT_TRUE(rig.service->compile(shared).has_value());
+    const frost::build::BuildOutcome sharedOutcome = rig.finished();
+    EXPECT_TRUE(sharedOutcome.succeeded())
+        << describe(sharedOutcome.result) << (sharedOutcome.error ? sharedOutcome.error->describe() : "");
+    EXPECT_FALSE(findFileBelow(work.path(), "deep_shared.obj").empty());
+    EXPECT_TRUE(findFileBelow(work.path(), "a.obj").empty());
+    EXPECT_FALSE(rig.service->compileProjectFor(work.join("App\\app.h")).has_value());
+    EXPECT_EQ(rig.service->compile(work.join("App\\app.h")).error().code(), ErrorCode::NotFound);
+}
+
+// Rebuild of the whole synthetic solution with diagnostics in three projects and MSBuild's own
+// MSB8065 (the shader's custom build step): the error list equals MSBuild's file-logger record.
+TEST(MsBuildBuild, RebuildErrorListEqualsMsBuildsLog) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild) {
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    }
+    WorkDir work("error-list", "msvc_generated", FROST_PROJECT_FIXTURES);
+    frost::io::IFileSystem& fs = frost::io::realFileSystem();
+    // C4005 is a level-1 warning: the fixture keeps MSBuild's default warning level.
+    ASSERT_TRUE(fs.writeFileAtomic(work.join("Core\\src\\b.cpp"), "#define GEN_PLANTED 1\n#define GEN_PLANTED 2\n"
+                                                                  "int coreB() { return GEN_PLANTED; }\n")
+                    .has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(work.join("Renderer\\renderer.cpp"), "#define GEN_RENDER 1\n#define GEN_RENDER 2\n"
+                                                                        "int renderer() { return GEN_RENDER; }\n")
+                    .has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(work.join("App\\app.cpp"), "int app() { return missing_symbol + also_missing; }\n")
+                    .has_value());
+    ServiceRig rig(work, "Generated.sln", *msbuild);
+    ASSERT_NE(rig.service, nullptr);
+    ASSERT_TRUE(rig.service->build(BuildAction::Rebuild).has_value());
+    const frost::build::BuildOutcome outcome = rig.finished();
+    EXPECT_FALSE(outcome.error.has_value());
+
+    const auto oracle = frost::test::runMsBuildOracle(
+        msbuild->msbuildPath, {work.join("Generated.sln"), "-t:Rebuild", "-p:Configuration=Debug", "-p:Platform=x64"},
+        work.path(), work.path());
+    ASSERT_TRUE(oracle.has_value());
+    EXPECT_NE(oracle->exitCode, 0);
+    EXPECT_FALSE(outcome.succeeded());
+    const std::set<frost::test::LoggedDiagnostic> shown = frost::test::errorListRows(rig.service->diagnostics());
+    EXPECT_EQ(shown, oracle->diagnostics) << "error list:" << frost::test::describe(shown)
+                                          << "\nMSBuild logged:" << frost::test::describe(oracle->diagnostics);
+    // The record has more than cl's lines: MSBuild's own warning for the shader step is in it too.
+    EXPECT_TRUE(std::ranges::any_of(oracle->diagnostics, [](const frost::test::LoggedDiagnostic& d) {
+        return d.code == "C4005";
+    })) << frost::test::describe(oracle->diagnostics);
+    EXPECT_TRUE(std::ranges::any_of(oracle->diagnostics, [](const frost::test::LoggedDiagnostic& d) {
+        return d.code.starts_with("MSB");
+    })) << frost::test::describe(oracle->diagnostics);
+}
+
+// SLN-11: the .vcxproj.user FrostIDE writes is what MSBuild evaluates (-getProperty, the oracle) for
+// each configuration, and Run starts the program with it: arguments, working directory, environment.
+TEST(MsBuildRun, TheUserFileFrostIdeWritesIsWhatMsBuildAndRunUse) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild) {
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    }
+    WorkDir work("user-file", "tiny_sln");
+    frost::io::IFileSystem& fs = frost::io::realFileSystem();
+    const std::string project = work.join("App\\App.vcxproj");
+    ASSERT_TRUE(frost::build::writeUserFileProperties(
+                    fs, project, "Debug", "x64",
+                    {{"LocalDebuggerCommandArguments", "--print \"from frost\" --exit 5"},
+                     {"LocalDebuggerWorkingDirectory", "$(SolutionDir)x64"},
+                     {"LocalDebuggerEnvironment", "FROST_TINY_VALUE=written by $(ProjectName)"}})
+                    .has_value());
+    ASSERT_TRUE(frost::build::writeUserFileProperties(fs, project, "Release", "x64",
+                                                      {{"LocalDebuggerCommandArguments", "--release"}})
+                    .has_value());
+    const std::string user = fs.readFile(project + ".user").value_or("");
+    EXPECT_TRUE(user.contains("<!-- SPDX-License-Identifier: Apache-2.0 -->")) << "the rest of the file stays";
+    EXPECT_FALSE(user.contains("two words")) << user;
+
+    frost::build::RunPropertyRequest request{.msbuildPath = msbuild->msbuildPath,
+                                             .projectPath = project,
+                                             .solutionPath = work.join("Tiny.sln"),
+                                             .configuration = "Debug",
+                                             .platform = "x64"};
+    auto debug = frost::build::queryRunProperties(frost::io::realProcessLauncher(), request, kBuildTimeout);
+    ASSERT_TRUE(debug.has_value()) << debug.error().describe();
+    EXPECT_EQ(debug->commandArguments, "--print \"from frost\" --exit 5");
+    EXPECT_TRUE(sameFile(debug->workingDirectory, work.join("x64"))) << debug->workingDirectory;
+    EXPECT_EQ(debug->environment, "FROST_TINY_VALUE=written by App");
+    request.configuration = "Release";
+    auto release = frost::build::queryRunProperties(frost::io::realProcessLauncher(), request, kBuildTimeout);
+    ASSERT_TRUE(release.has_value()) << release.error().describe();
+    EXPECT_EQ(release->commandArguments, "--release");
+    EXPECT_TRUE(sameFile(release->workingDirectory, work.join("App\\"))) << "MSBuild's default, $(ProjectDir)";
+
+    // Run (the path F5 shares up to the launch) starts the program with what MSBuild reported.
+    auto loaded = frost::project::SolutionModel::load(fs, work.join("Tiny.sln"));
+    ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
+    auto solution = std::make_shared<const frost::project::SolutionModel>(std::move(*loaded));
+    auto store = frost::project::TrustStore::open(fs, work.join("data\\trusted-roots.txt"));
+    ASSERT_TRUE(store.has_value());
+    ASSERT_TRUE((*store)->trust(solution->directory()).has_value());
+    auto buildService = frost::build::BuildService::create(
+        fs, frost::io::realProcessLauncher(), **store,
+        {.stateFilePath = work.join("data\\active-configurations.txt"), .msbuildPath = msbuild->msbuildPath});
+    ASSERT_TRUE(buildService->openSolution(solution).has_value());
+    const auto builder = frost::build::makeRunBuilder(*buildService);
+    frost::Mutex mutex;
+    std::string out;
+    auto service = frost::build::RunService::create(
+        fs, frost::io::realProcessLauncher(), **store, *builder,
+        {.stateFilePath = work.join("data\\run-settings.txt"),
+         .msbuildPath = msbuild->msbuildPath,
+         .externalConsoleByDefault = false},
+        {.onOutput = [&](frost::build::RunId, frost::build::RunOutputKind kind, std::string_view text) {
+            if (kind == frost::build::RunOutputKind::Stdout) {
+                frost::LockGuard lock(mutex);
+                out += text;
+            }
+        }});
+    ASSERT_TRUE(service->openSolution(solution).has_value());
+    auto run = service->run();
+    ASSERT_TRUE(run.has_value()) << run.error().describe();
+    ASSERT_TRUE(service->waitForIdle(kBuildTimeout)) << "the run did not finish in time";
+    const auto outcome = service->lastOutcome();
+    ASSERT_TRUE(outcome.has_value());
+    ASSERT_TRUE(outcome->ran()) << (outcome->error ? outcome->error->describe() : "");
+    EXPECT_EQ(outcome->exitCode, 5);
+    frost::LockGuard lock(mutex);
+    std::erase(out, '\r');
+    EXPECT_TRUE(out.contains("arg 1: --print\narg 2: from frost\n")) << out;
+    EXPECT_TRUE(out.contains("FROST_TINY_VALUE=written by App\n")) << out;
+    EXPECT_TRUE(out.contains("\\x64\n")) << "the working directory is the user file's: " << out;
     service.reset();
     EXPECT_TRUE(buildService->waitForIdle(kBuildTimeout));
 }

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // SpawnLogLauncher (frost/io/spawn_log.hpp): the session file, the SHA-256 of each executable
-// (FIPS 180-4, implemented from the standard's text), and the IProcess and IAsyncProcess wrappers
-// that add the exit records.
+// (FIPS 180-4: Windows' CNG provider on Windows, else implemented from the standard's text), and the
+// IProcess and IAsyncProcess wrappers that add the exit records.
 
 #include "frost/io/spawn_log.hpp"
 
@@ -14,11 +14,13 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <format>
 #include <map>
 #include <mutex> // std::call_once
+#include <optional>
 #include <span>
 #include <tuple>
 #include <utility>
@@ -26,6 +28,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+// After windows.h, which bcrypt.h needs.
+#include <bcrypt.h>
 #else
 #include <unistd.h>
 #endif
@@ -138,7 +142,40 @@ std::uint32_t currentProcessId() noexcept {
 
 } // namespace
 
+#ifdef _WIN32
+namespace {
+/*
+ * The digest from Windows' CNG SHA-256 provider (BCRYPT_SHA256_ALG_HANDLE, Windows 10 and later),
+ * or nullopt when CNG refuses (the caller then uses the portable code below). The spawn log hashes
+ * each executable it launches on the launching thread, often the UI thread: the portable code runs
+ * at about 2.5 MB/s in an unoptimised Debug build, so lldb-dap.exe (1.5 MB) stalled the UI for
+ * 0.6 s (j2_msvc's freeze report, FND-9b); CNG's optimised code takes a few milliseconds.
+ */
+std::optional<std::array<unsigned char, 32>> cngSha256(std::string_view bytes) {
+    if (bytes.size() > static_cast<std::size_t>(ULONG_MAX))
+        return std::nullopt;
+    std::array<unsigned char, 32> digest{};
+    // BCryptHash takes a non-const input pointer but only reads it.
+    auto* input = reinterpret_cast<PUCHAR>(const_cast<char*>(bytes.data()));
+    const NTSTATUS status = BCryptHash(BCRYPT_SHA256_ALG_HANDLE, nullptr, 0, input, static_cast<ULONG>(bytes.size()),
+                                       digest.data(), static_cast<ULONG>(digest.size()));
+    if (!BCRYPT_SUCCESS(status))
+        return std::nullopt;
+    return digest;
+}
+} // namespace
+#endif
+
 std::string sha256Hex(std::string_view bytes) {
+#ifdef _WIN32
+    if (const auto digest = cngSha256(bytes)) {
+        std::string hex;
+        hex.reserve(64);
+        for (const unsigned char byte : *digest)
+            hex += std::format("{:02x}", byte);
+        return hex;
+    }
+#endif
     std::array<std::uint32_t, 8> h = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
                                       0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
     const auto* data = reinterpret_cast<const unsigned char*>(bytes.data());

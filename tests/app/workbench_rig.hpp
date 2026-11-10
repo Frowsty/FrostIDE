@@ -110,6 +110,8 @@ public:
         }
     }
     ~WorkDir() {
+        // A clone of a TempRepo on the same volume hard-links git's read-only objects.
+        frost::test::makeTreeWritable(m_path);
         if (!m_path.empty() && !frost::test::removeTree(io::realFileSystem(), m_path)) {
             ADD_FAILURE() << "could not remove " << m_path;
         }
@@ -246,6 +248,7 @@ struct RigOptions {
         WorkbenchOptions defaults;
         defaults.clangd = false;
         defaults.git = false;
+        defaults.projectHost = false; // SLN-2's evaluation runs only where a test opts in.
         return defaults;
     }();
     // Autosave on frame deactivation and on idle; off by default so the tests decide when saves run.
@@ -260,7 +263,8 @@ struct RigOptions {
  * A Workbench and its MainWindow over files in `dir`: data/settings.json, data/trusted-roots.txt,
  * data/hot-exit, data/local-history.db, data/sessions, data/run-settings.txt, data/luals,
  * data/caches/metadata. Several rigs over one
- * directory share them, as two runs of FrostIDE would. clangd is off unless the options turn it on;
+ * directory share them, as two runs of FrostIDE would. clangd and the Solution Explorer's
+ * ProjectHost evaluation are off unless the options turn them on;
  * runs write to the Run console (no external console).
  */
 class WorkbenchRig {

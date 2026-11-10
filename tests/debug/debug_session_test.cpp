@@ -12,6 +12,8 @@
 #include "debug_test_util.hpp"
 #include <gtest/gtest.h>
 
+#include <cctype>
+#include <format>
 #include <future>
 #include <map>
 #include <memory>
@@ -661,6 +663,44 @@ TEST_F(DebugSessionTest, AFailedLaunchOrFactoryEndsTheSession) {
     ASSERT_TRUE(failed->outcome().has_value());
     EXPECT_EQ(failed->outcome()->error->code(), ErrorCode::NotFound);
     EXPECT_TRUE(other.hasEnded());
+}
+
+// The program loading without symbols (lldb-dap's module event, "Symbols not found.") is named once in
+// the console: its breakpoints cannot bind (ADR 0081 item 8). Other modules without symbols are not.
+TEST_F(DebugSessionTest, AProgramWithoutSymbolsIsNamedOnce) {
+    start(FakeProgram{.codeLines = {10}}, {{kSource, {{1, 10}}}});
+    waitForStop(1);
+    std::string program = workPath("App/App.exe");
+#ifdef _WIN32
+    // lldb-dap prints the path its own way; the comparison folds case and slashes on Windows.
+    for (char& c : program)
+        c = c == '/' ? '\\' : static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+#endif
+    auto module = [](const std::string& path, const char* status) {
+        return rpc::Json::object()
+            .set("reason", "new")
+            .set("module",
+                 rpc::Json::object().set("id", path).set("name", "m").set("path", path).set("symbolStatus", status));
+    };
+    adapter.sendEvent("module", module(workPath("App/other.dll"), "Symbols not found."));
+    adapter.sendEvent("module", module(program, "Symbols loaded."));
+    adapter.sendEvent("module", module(program, "Symbols not found."));
+    adapter.sendEvent("module", module(program, "Symbols not found."));
+    adapter.sendEvent("output", rpc::Json::object().set("category", "console").set("output", "marker\n"));
+    ASSERT_TRUE(waitUntil([&] {
+        LockGuard lock(recorder.mutex);
+        return recorder.output.find("marker") != std::string::npos;
+    }));
+    LockGuard lock(recorder.mutex);
+    const std::string& output = recorder.output;
+    const std::string note = std::format("The debugger could not read the symbols of {}", program);
+    const auto first = output.find(note);
+    ASSERT_NE(first, std::string::npos) << output;
+    EXPECT_EQ(output.find(note, first + 1), std::string::npos) << "named once: " << output;
+    EXPECT_EQ(output.find("other.dll"), std::string::npos) << output;
+#ifdef _WIN32
+    EXPECT_NE(output.find("LinkIncremental=false"), std::string::npos) << output;
+#endif
 }
 
 } // namespace

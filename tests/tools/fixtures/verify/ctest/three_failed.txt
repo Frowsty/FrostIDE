@@ -1,0 +1,22 @@
+Test project E:/x/build/win-clangcl
+      Start 7: Corpus.Open
+1/4 Test #7: Corpus.Open ........................***Failed   56.67 sec
+      Start 8: Corpus.Doctest
+2/4 Test #8: Corpus.Doctest .....................***Timeout 3600.13 sec
+      Start 9: journeys.j2_run
+3/4 Test #9: journeys.j2_run ....................***Failed  756.35 sec
+      Start 10: journeys.j2_msvc_r2a
+4/4 Test #10: journeys.j2_msvc_r2a ...............   Passed   75.21 sec
+
+25% tests passed, 3 tests failed out of 4
+
+Label Time Summary:
+corpus          = 5174.48 sec*proc (4 tests)
+
+Total Test time (real) = 5087.88 sec
+
+The following tests FAILED:
+	  7 - Corpus.Open (Failed)                           corpus integration mod.app
+	  8 - Corpus.Doctest (Timeout)                       corpus integration mod.app
+	  9 - journeys.j2_run (Failed)                       corpus integration mod.journeys
+Errors while running CTest

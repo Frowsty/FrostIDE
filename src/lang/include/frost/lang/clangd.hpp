@@ -253,6 +253,11 @@ public:
     // The LSP version of `path`'s latest text (1 when opened, one more per change sent), or nullopt
     // when it is not open; what an editor host reports as IEditorLanguageHost::documentVersion.
     [[nodiscard]] std::optional<std::int64_t> documentVersion(std::string_view path) const;
+    // The LSP version of `path` that clangd last published diagnostics for (an empty publish
+    // counts, although a file without problems has no entry in diagnostics()), or nullopt when
+    // clangd has published none for it or named no version, or the document is not open. Equal to
+    // documentVersion once clangd has analysed the latest text (REF-12's include cleaner).
+    [[nodiscard]] std::optional<std::int64_t> diagnosedVersion(std::string_view path) const;
 
     // A notification to the running clangd (CPP-3: workspace/didChangeConfiguration with
     // compilationDatabaseChanges). Never waits on clangd. Errors: Busy (not Running), and those of

@@ -88,6 +88,24 @@ constexpr std::array kActions{
     EditorActionInfo{"editor.selectAllOccurrences", "Select All Occurrences", A::SelectAllOccurrences, false},
     EditorActionInfo{"editor.toggleCase", "Toggle Case", A::ToggleCase, true},
     EditorActionInfo{"editor.toggleColumnMode", "Column Selection Mode", A::ToggleColumnMode, false},
+    EditorActionInfo{"editor.pageTop", "Move Caret to Page Top", A::PageTop, false},
+    EditorActionInfo{"editor.pageBottom", "Move Caret to Page Bottom", A::PageBottom, false},
+    EditorActionInfo{"editor.pageTopWithSelection", "Move Caret to Page Top with Selection", A::PageTopWithSelection, false},
+    EditorActionInfo{"editor.pageBottomWithSelection", "Move Caret to Page Bottom with Selection", A::PageBottomWithSelection, false},
+    EditorActionInfo{"editor.splitLine", "Split Line", A::SplitLine, true},
+    EditorActionInfo{"editor.startNewLineBefore", "Start New Line Before Current", A::StartNewLineBefore, true},
+    EditorActionInfo{"editor.toggleOverwrite", "Toggle Insert/Overwrite", A::ToggleOverwrite, false},
+    EditorActionInfo{"editor.pasteWithoutFormatting", "Paste as Plain Text", A::PasteWithoutFormatting, true},
+    EditorActionInfo{"editor.pasteFromHistory", "Paste from History...", A::PasteFromHistory, true},
+    EditorActionInfo{"editor.findWordAtCaret", "Find Word at Caret", A::FindWordAtCaret, false},
+    EditorActionInfo{"navigate.matchingBrace", "Move Caret to Matching Brace", A::MatchingBrace, false},
+    EditorActionInfo{"editor.codeBlockStart", "Move Caret to Code Block Start", A::CodeBlockStart, false},
+    EditorActionInfo{"editor.codeBlockEnd", "Move Caret to Code Block End", A::CodeBlockEnd, false},
+    EditorActionInfo{"editor.codeBlockStartWithSelection", "Move Caret to Code Block Start with Selection", A::CodeBlockStartWithSelection, false},
+    EditorActionInfo{"editor.codeBlockEndWithSelection", "Move Caret to Code Block End with Selection", A::CodeBlockEndWithSelection, false},
+    EditorActionInfo{"editor.moveStatementUp", "Move Statement Up", A::MoveStatementUp, true},
+    EditorActionInfo{"editor.moveStatementDown", "Move Statement Down", A::MoveStatementDown, true},
+    EditorActionInfo{"editor.autoIndentLines", "Auto-Indent Lines", A::AutoIndentLines, true},
 };
 // clang-format on
 
@@ -107,6 +125,19 @@ std::span<const EditorActionInfo> editorActions() noexcept { return kActions; }
 
 const EditorActionInfo& editorActionInfo(EditorAction action) noexcept {
     return kActions[static_cast<std::size_t>(action)];
+}
+
+void ClipboardHistory::record(std::string text) {
+    if (text.empty() || text.size() > kMaxBytes) {
+        return;
+    }
+    if (const auto it = std::ranges::find(m_entries, text); it != m_entries.end()) {
+        m_entries.erase(it);
+    }
+    m_entries.push_front(std::move(text));
+    while (m_entries.size() > kCapacity) {
+        m_entries.pop_back();
+    }
 }
 
 EditorView* EditorActionHost::active() const noexcept { return m_active.data(); }

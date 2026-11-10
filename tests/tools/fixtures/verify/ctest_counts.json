@@ -4,5 +4,6 @@
   "all_skipped.txt": "0/2 (2 skipped)",
   "no_tests.txt": null,
   "two_summaries.txt": "1/2",
-  "disabled_only.txt": "2/2 (1 disabled)"
+  "disabled_only.txt": "2/2 (1 disabled)",
+  "three_failed.txt": "1/4"
 }
