@@ -13,6 +13,7 @@
 frost_add_library(engine LAYER engine
     SOURCES
         src/engine_cli.cpp
+        src/engine_lua.cpp
         src/handle.cpp
         src/schema.cpp
-    DEPS frost::rpc frost::io frost::core)
+    DEPS frost::lang frost::text frost::rpc frost::io frost::core)

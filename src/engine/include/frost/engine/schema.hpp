@@ -47,13 +47,29 @@ struct SchemaComponent {
     SchemaSource source;
 };
 
+struct SchemaParameter {
+    std::string name;
+    std::string type;
+    std::string description;
+    bool optional = false;
+    std::string defaultValue;
+};
+
 // One entry of the Lua API (a namespace, function, method, property, component proxy, ...).
 struct SchemaLuaEntry {
     std::string kind;          // The engine's ScriptApiKind name ("Function", "Method", "Component", ...).
+    std::string scope;         // "Global", "Static", "Instance", "Component", "Member", "Callback".
+    std::string owner;         // "Physics", "Entity", "Transform", ... ("" for top-level globals/types).
     std::string name;          // "Raycast".
+    std::string fullName;      // "Physics.Raycast", "Transform.Translation".
     std::string qualifiedName; // "Physics.Raycast", "Entity:GetComponent".
     std::string signature;
+    std::string description;
+    std::vector<SchemaParameter> parameters;
+    std::string returnType;
+    std::string returnDescription;
     std::string module;
+    bool readOnly = false;
     std::string binding;                // One of SchemaDocument::bindingKinds ("Wrapped", "Raw", ...).
     std::vector<std::string> cost;      // Declared cost tags, each one of SchemaDocument::costTags.
     std::optional<SchemaSource> source; // nullopt for Lua's own libraries (no engine C++ behind them).
@@ -69,6 +85,8 @@ struct SchemaLuaAlias {
 struct SchemaEvent {
     std::string name; // "OnUpdate".
     std::string signature;
+    std::string description;
+    std::vector<SchemaParameter> parameters;
     SchemaSource source;
 };
 

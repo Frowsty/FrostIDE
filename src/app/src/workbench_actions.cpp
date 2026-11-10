@@ -81,6 +81,20 @@ void Workbench::registerActions() {
     add(
         "code.inspectLua", "Inspect Lua Code...", [this] { (void)inspectLuaCode(); },
         [this] { return !m_projectRoot.empty(); });
+    {
+        input::ActionSpec cppBinding;
+        cppBinding.id = std::string(ui::actions::kGoToCppBinding);
+        cppBinding.name = "Go to C++ Binding";
+        cppBinding.group = "Navigate";
+        cppBinding.context.none = input::ContextKeys{input::ContextKey::DialogFocus};
+        cppBinding.enabled = [this](const input::ActionContext&) {
+            return currentView() != nullptr && isLuaSource(currentView()->path());
+        };
+        cppBinding.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { (void)gotoCppBinding(); };
+        if (auto added = m_registry.add(std::move(cppBinding)); !added) {
+            log::warn(kLog, "action {}: {}", ui::actions::kGoToCppBinding, added.error().describe());
+        }
+    }
     add(
         wa::kOpenRecent, "Open Recent...", [this] { showOpenRecent(); },
         [this] { return !recentProjects(*m_services.settings.snapshot()).empty(); });

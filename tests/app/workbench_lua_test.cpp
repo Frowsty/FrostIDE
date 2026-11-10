@@ -756,4 +756,280 @@ TEST(WorkbenchLua, InspectLuaCodePopulatesProblemsAndMatchesCheckOracle) {
                p.diagnostic.diagnostic.message.find("missingGlobalTwo") != std::string::npos;
     }));
 }
+
+// FEC-10b Workbench acceptance: EngineLuaHostProvider generates frost_schema.lua from
+// `FrostEditor schema.export`, overrides `.luarc.json`'s `workspace.library`, completes component
+// entries, navigates to the generated stub on Go to Definition, and opens the C++ `file:line`
+// from `source_location` on `navigate.cppBinding` (`gotoCppBinding`).
+TEST(WorkbenchLua, SchemaExportMetaStubsCompleteAndNavigateToStubAndCppBinding) {
+    auto server = pinnedLuaLs();
+    ASSERT_TRUE(server.has_value()) << server.error().describe();
+
+    class SchemaAndRealLuaLauncher final : public frost::io::IProcessLauncher {
+    public:
+        explicit SchemaAndRealLuaLauncher(std::string schemaJson) : m_schemaJson(std::move(schemaJson)) {}
+        frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+            if (spec.executable.find("FrostEditor") != std::string::npos) {
+                frost::io::ScriptedProcessLauncher scripted;
+                scripted.expect(frost::io::ScriptedProcess{.exitCode = 0, .stdoutBytes = m_schemaJson});
+                return scripted.launch(spec);
+            }
+            return frost::io::realProcessLauncher().launch(spec);
+        }
+        frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+        launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+            return frost::io::realProcessLauncher().launchAsync(spec, context);
+        }
+
+    private:
+        std::string m_schemaJson;
+    };
+
+    const std::string schemaEnvelope = R"JSON({
+        "command": "schema.export",
+        "ok": true,
+        "result": {
+            "schema": "frostengine.schema-export",
+            "schemaVersion": 1,
+            "engine": { "version": "0.1.0" },
+            "costTags": ["O(1)", "PhysicsQuery"],
+            "bindingKinds": ["Wrapped", "Raw", "LuaLibrary"],
+            "components": [
+                {
+                    "name": "Transform",
+                    "source": { "file": "Frost/src/Frost/Scene/Components/TransformComponent.h", "line": 4 },
+                    "fields": [
+                        {
+                            "name": "Position",
+                            "type": "Vec3",
+                            "source": { "file": "Frost/src/Frost/Scene/Components/TransformComponent.h", "line": 5 }
+                        },
+                        {
+                            "name": "Scale",
+                            "type": "Vec3",
+                            "source": { "file": "Frost/src/Frost/Scene/Components/TransformComponent.h", "line": 6 }
+                        }
+                    ]
+                }
+            ],
+            "lua": {
+                "version": "Lua 5.4",
+                "scriptsRoot": "Assets/Scripts",
+                "modulePathPattern": "Assets/Scripts/?.lua",
+                "entries": [
+                    {
+                        "kind": "Component",
+                        "scope": "Component",
+                        "owner": "",
+                        "name": "Transform",
+                        "fullName": "Transform",
+                        "qualifiedName": "Components/Transform",
+                        "signature": "Transform",
+                        "description": "Transform component proxy",
+                        "parameters": [],
+                        "returns": { "type": "", "description": "" },
+                        "module": "Scene",
+                        "readOnly": false,
+                        "testModeOnly": false,
+                        "binding": "Wrapped",
+                        "cost": ["O(1)"],
+                        "source": { "file": "Frost/src/Frost/Scripting/Bindings/ComponentBindings.cpp", "line": 2 }
+                    },
+                    {
+                        "kind": "Type",
+                        "scope": "Global",
+                        "owner": "",
+                        "name": "Entity",
+                        "fullName": "Entity",
+                        "qualifiedName": "Entity",
+                        "signature": "Entity",
+                        "description": "Entity handle",
+                        "parameters": [],
+                        "returns": { "type": "", "description": "" },
+                        "module": "Scene",
+                        "readOnly": false,
+                        "testModeOnly": false,
+                        "binding": "Wrapped",
+                        "cost": ["O(1)"],
+                        "source": { "file": "Frost/src/Frost/Scripting/Bindings/EntityBindings.cpp", "line": 2 }
+                    },
+                    {
+                        "kind": "Method",
+                        "scope": "Global",
+                        "owner": "Entity",
+                        "name": "GetComponent",
+                        "fullName": "Entity:GetComponent",
+                        "qualifiedName": "Entity:GetComponent",
+                        "signature": "GetComponent(name: ComponentName): Component?",
+                        "description": "Look up a component",
+                        "parameters": [
+                            { "name": "name", "type": "ComponentName", "optional": false, "default": "", "description": "Component name" }
+                        ],
+                        "returns": { "type": "Component?", "description": "Component proxy" },
+                        "module": "Scene",
+                        "readOnly": false,
+                        "testModeOnly": false,
+                        "binding": "Wrapped",
+                        "cost": ["O(1)"],
+                        "source": { "file": "Frost/src/Frost/Scripting/Bindings/EntityBindings.cpp", "line": 3 }
+                    },
+                    {
+                        "kind": "Namespace",
+                        "scope": "Global",
+                        "owner": "",
+                        "name": "Physics",
+                        "fullName": "Physics",
+                        "qualifiedName": "Physics",
+                        "signature": "Physics",
+                        "description": "Physics namespace",
+                        "parameters": [],
+                        "returns": { "type": "", "description": "" },
+                        "module": "Physics",
+                        "readOnly": false,
+                        "testModeOnly": false,
+                        "binding": "Wrapped",
+                        "cost": ["O(1)"],
+                        "source": { "file": "Frost/src/Frost/Scripting/Bindings/PhysicsBindings.cpp", "line": 2 }
+                    },
+                    {
+                        "kind": "Function",
+                        "scope": "Global",
+                        "owner": "Physics",
+                        "name": "Raycast",
+                        "fullName": "Physics.Raycast",
+                        "qualifiedName": "Physics.Raycast",
+                        "signature": "Raycast(origin: Vec3, dir: Vec3): boolean",
+                        "description": "Cast a ray",
+                        "parameters": [
+                            { "name": "origin", "type": "Vec3", "optional": false, "default": "", "description": "Origin" },
+                            { "name": "dir", "type": "Vec3", "optional": false, "default": "", "description": "Direction" }
+                        ],
+                        "returns": { "type": "boolean", "description": "Hit" },
+                        "module": "Physics",
+                        "readOnly": false,
+                        "testModeOnly": false,
+                        "binding": "Wrapped",
+                        "cost": ["PhysicsQuery"],
+                        "source": { "file": "Frost/src/Frost/Scripting/Bindings/PhysicsBindings.cpp", "line": 4 }
+                    }
+                ],
+                "aliases": [
+                    { "name": "ComponentName", "description": "", "values": [{ "value": "Transform", "description": "" }] }
+                ]
+            },
+            "events": [
+                {
+                    "name": "OnUpdate",
+                    "signature": "OnUpdate(dt: number)",
+                    "description": "Called every frame",
+                    "parameters": [
+                        { "name": "dt", "type": "number", "optional": false, "default": "", "description": "Delta time" }
+                    ],
+                    "module": "Core",
+                    "source": { "file": "Frost/src/Frost/Scripting/ScriptEngine.cpp", "line": 3 }
+                }
+            ],
+            "commands": []
+        }
+    })JSON";
+
+    WorkDir dir("lua-fec10b-workbench");
+    dir.write("Game.frostproj", "{}");
+    // Even if .luarc.json points workspace.library to an empty .frost/lua-api, FrostIDE's
+    // host-library-override.json routes LuaLS to the generated frost_schema.lua stub.
+    dir.write(".luarc.json", R"({"runtime":{"version":"Lua 5.4"},"workspace":{"library":[".frost/lua-api"]}})");
+#ifdef _WIN32
+    dir.write("build/windows-debug/bin/FrostEditor.com", "binary");
+#else
+    dir.write("build/linux-debug/bin/FrostEditor", "binary");
+#endif
+    dir.write("Frost/src/Frost/Scene/Components/TransformComponent.h",
+              "// 1\n// 2\n// 3\nstruct TransformComponent {\n    Vec3 Position;\n    Vec3 Scale;\n};\n");
+    dir.write("Frost/src/Frost/Scripting/Bindings/ComponentBindings.cpp", "// 1\nvoid BindTransform() {}\n");
+    dir.write("Frost/src/Frost/Scripting/Bindings/EntityBindings.cpp",
+              "// 1\nvoid BindEntity() {}\nvoid EntityGetComponent() {}\n");
+    dir.write("Frost/src/Frost/Scripting/Bindings/PhysicsBindings.cpp",
+              "// 1\nvoid BindPhysics() {}\n// 3\nbool PhysicsRaycast() { return true; }\n");
+    dir.write("Frost/src/Frost/Scripting/ScriptEngine.cpp", "// 1\n// 2\nvoid DispatchOnUpdate() {}\n");
+
+    const std::string scriptText = "---@class PlayerScript : FrostScript\n"
+                                   "local PlayerScript = {}\n"
+                                   "function PlayerScript:OnUpdate(dt)\n"
+                                   "    local t = self.Entity:GetComponent(\"Transform\")\n"
+                                   "    local pos = t.\n"
+                                   "    local hit = Physics.Raycast(t.Position, t.Position)\n"
+                                   "end\n";
+    dir.write("Assets/Scripts/Player.lua", scriptText);
+
+    SchemaAndRealLuaLauncher launcher(schemaEnvelope);
+    frost::app::test::RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.clangd = false;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                  *server));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Game.frostproj")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Assets/Scripts/Player.lua")));
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->lua() && rig.workbench->lua()->state() == frost::lang::LuaState::Running; }, 20s));
+
+    // 1. Completion on `t.` returns the exact Transform fields (`Position`, `Scale`).
+    auto& editor = rig.workbench->currentView()->editor();
+    const auto dotOffset = scriptText.find("local pos = t.") + 14;
+    editor.setState(frost::text::EditorState::caretAt(frost::ByteOffset{dotOffset}));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            rig.workbench->language()->completeCode();
+            return waitFor(
+                [&] {
+                    const auto items = rig.workbench->language()->completionPopup().model().items();
+                    return items.size() == 2U;
+                },
+                2s);
+        },
+        20s));
+    std::vector<std::string> actualFields;
+    for (const auto& item : rig.workbench->language()->completionPopup().model().items())
+        actualFields.push_back(item.label);
+    std::ranges::sort(actualFields);
+    const std::vector<std::string> expectedFields{"Position", "Scale"};
+    EXPECT_EQ(actualFields, expectedFields);
+
+    // 2. Go to Definition on `Physics.Raycast` opens the generated `frost_schema.lua` stub.
+    const auto raycastOffset = scriptText.find("Physics.Raycast") + 10;
+    editor.setState(frost::text::EditorState::caretAt(frost::ByteOffset{raycastOffset}));
+    rig.workbench->language()->gotoDeclaration();
+    ASSERT_TRUE(waitFor(
+        [&] {
+            auto* view = rig.workbench->currentView();
+            return view && view->path().find("frost_schema.lua") != std::string::npos;
+        },
+        20s));
+
+    // 3. Go to C++ Binding (`navigate.cppBinding`) from the generated stub itself AND from Player.lua
+    // opens `PhysicsBindings.cpp` at line 4 (`source_location`).
+    const auto cppBoundFromStub = rig.workbench->gotoCppBinding();
+    ASSERT_TRUE(cppBoundFromStub.has_value()) << cppBoundFromStub.error().describe();
+    EXPECT_EQ(rig.workbench->currentView()->path(), dir.join("Frost/src/Frost/Scripting/Bindings/PhysicsBindings.cpp"));
+    EXPECT_EQ(rig.workbench->currentView()->status().line, 4);
+
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Assets/Scripts/Player.lua")));
+    rig.workbench->currentView()->editor().setState(
+        frost::text::EditorState::caretAt(frost::ByteOffset{raycastOffset}));
+    const auto cppBound = rig.workbench->gotoCppBinding();
+    ASSERT_TRUE(cppBound.has_value()) << cppBound.error().describe();
+    EXPECT_EQ(rig.workbench->currentView()->path(), dir.join("Frost/src/Frost/Scripting/Bindings/PhysicsBindings.cpp"));
+    EXPECT_EQ(rig.workbench->currentView()->status().line, 4);
+
+    // 4. Go to C++ Binding on `t.Position` opens `TransformComponent.h` at line 5.
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Assets/Scripts/Player.lua")));
+    const auto positionOffset = scriptText.find("t.Position") + 4;
+    rig.workbench->currentView()->editor().setState(
+        frost::text::EditorState::caretAt(frost::ByteOffset{positionOffset}));
+    ASSERT_TRUE(rig.workbench->gotoCppBinding().has_value());
+    EXPECT_EQ(rig.workbench->currentView()->path(), dir.join("Frost/src/Frost/Scene/Components/TransformComponent.h"));
+    EXPECT_EQ(rig.workbench->currentView()->status().line, 5);
+}
 } // namespace

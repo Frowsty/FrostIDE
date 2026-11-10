@@ -22,11 +22,20 @@
 #include "frost/build/cmake_toolchain.hpp"
 #include "frost/build/msbuild_locator.hpp"
 #include "frost/engine/engine_cli.hpp"
+#include "frost/engine/engine_lua.hpp"
 #include "frost/engine/handle.hpp"
 #include "frost/engine/schema.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
+#include "frost/io/reactor.hpp"
+#include "frost/lang/completion.hpp"
+#include "frost/lang/lua_host.hpp"
+#include "frost/lang/lua_service.hpp"
+#include "frost/lang/navigation.hpp"
+#include "frost/lang/uri.hpp"
+#include "frost/sched/thread_pool.hpp"
+#include "frost/text/document.hpp"
 
 #include "support/crash_dialogs.hpp"
 #include "support/engine_lock.hpp"
@@ -440,6 +449,193 @@ TEST_F(CorpusEngineContract, EntityIdsAbove2To53RoundTripExactlyThroughTheEngine
         EXPECT_EQ(missing->error->code, -32001) << missing->error->message; // NotFound.
     }
     EXPECT_GT(neighboursChecked, 0U) << "no large id had a neighbour that is the same double";
+}
+
+TEST_F(CorpusEngineContract, LuaCompletionAndNavigationMatchSchemaExportOnPinnedClone) {
+    const std::string program = builtEditor();
+    ASSERT_FALSE(program.empty());
+    auto& fs = io::realFileSystem();
+    auto& launcher = io::realProcessLauncher();
+
+    auto luaLs = lang::findLuaLanguageServer(fs, lang::defaultLuaSearch());
+    ASSERT_TRUE(luaLs.has_value()) << "Pinned LuaLS is required: " << luaLs.error().describe();
+
+    test::ScratchDir work("engine-lua-corpus");
+    EngineCliRequest request;
+    request.command = "schema.export";
+    request.workingDirectory = work.path();
+    auto exported = runEngineCliResult(launcher, program, request);
+    ASSERT_TRUE(exported.has_value()) << exported.error().describe();
+    auto schema = parseSchemaDocument(*exported);
+    ASSERT_TRUE(schema.has_value()) << schema.error().describe();
+
+    // 1. Supply `schema.export` meta stubs through LUA-13's `LuaHostRegistry` & `EngineLuaHostProvider`.
+    lang::LuaHostRegistry hosts;
+    hosts.add(std::make_shared<EngineLuaHostProvider>(*schema, m_corpus));
+    const std::string workspaceDir = work.join("workspace");
+    ASSERT_TRUE(fs.createDirectories(workspaceDir).has_value());
+    const auto contributions = hosts.contributions(fs, workspaceDir);
+    ASSERT_EQ(contributions.size(), 1U);
+    ASSERT_EQ(contributions[0].metaFiles.size(), 1U);
+
+    const std::string stateDir = work.join("state");
+    auto metaDir = lang::luaHostMetaDirectory(stateDir, contributions[0].provider, workspaceDir);
+    ASSERT_TRUE(metaDir.has_value()) << metaDir.error().describe();
+    ASSERT_TRUE(lang::writeLuaMetaFiles(fs, *metaDir, contributions[0].metaFiles).has_value());
+    const std::string stubPath = *io::joinPath(*metaDir, kEngineLuaStubFileName);
+    ASSERT_TRUE(fs.exists(stubPath).value_or(false));
+
+    const std::array<std::string, 1> metaLibs{*metaDir};
+    lang::LuaServiceOptions luaOpts;
+    luaOpts.serverPath = *luaLs;
+    luaOpts.workspaceRoot = workspaceDir;
+    auto args = lang::luaLanguageServerArguments(stateDir);
+    ASSERT_TRUE(args.has_value());
+    luaOpts.arguments = std::move(*args);
+    luaOpts.trusted = true;
+    luaOpts.configuration = lang::composeLuaConfiguration("Lua 5.4", contributions, metaLibs);
+
+    auto reactor = io::Reactor::create();
+    ASSERT_TRUE(reactor.has_value());
+    sched::ThreadPool pool(sched::ThreadPoolOptions{.workerCount = 2});
+
+    const std::string scriptPath = *io::joinPath(workspaceDir, "Probe.lua");
+    const std::string scriptText = "---@class ProbeScript : FrostScript\n"
+                                   "local ProbeScript = {}\n"
+                                   "function ProbeScript:OnUpdate(dt)\n"
+                                   "    local t = self.Entity:GetComponent(\"Transform\")\n"
+                                   "    local p = t.\n"
+                                   "    local rb = self.Entity:GetComponent(\"Rigidbody2D\")\n"
+                                   "    local v = rb.\n"
+                                   "    local hit = Physics.Raycast(t.Translation, t.Rotation)\n"
+                                   "    local comp = self.Entity:GetComponent(\"\")\n"
+                                   "end\n"
+                                   "function ProbeScript:On\n";
+
+    {
+        lang::LuaService service(launcher, {**reactor, pool}, std::move(luaOpts));
+        struct StopGuard {
+            sched::ThreadPool& pool;
+            lang::LuaService& service;
+            ~StopGuard() { pool.spawn(sched::Lane::UserVisible, service.stop()).join(); }
+        } stopGuard{pool, service};
+        auto doc = text::Document::fromUtf8(scriptText);
+        ASSERT_TRUE(doc.has_value());
+        ASSERT_TRUE(service.openDocument(scriptPath, doc->text()).has_value());
+        ASSERT_TRUE(service.start().has_value());
+
+        const auto waitUntil = [](auto pred, std::chrono::seconds timeout) {
+            const auto deadline = std::chrono::steady_clock::now() + timeout;
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (pred()) {
+                    return true;
+                }
+                std::this_thread::sleep_for(50ms);
+            }
+            return false;
+        };
+        ASSERT_TRUE(waitUntil([&] { return service.state() == lang::LuaState::Running; }, 30s));
+
+        const auto queryCompletionLabels = [&](ByteOffset caret) {
+            std::vector<std::string> labels;
+            waitUntil(
+                [&] {
+                    const lang::LspPosition pos = lang::toLspPosition(doc->text(), caret, service.encoding());
+                    auto res =
+                        pool.spawn(sched::Lane::UserVisible, lang::requestCompletion(service, scriptPath, pos, {}))
+                            .join();
+                    if (!res || res->items.empty()) {
+                        return false;
+                    }
+                    labels.clear();
+                    std::set<std::string, std::less<>> seen;
+                    for (const lang::CompletionItem& item : res->items) {
+                        std::string bare(item.raw.stringAt("label"));
+                        if (bare.empty()) {
+                            bare = item.label;
+                        }
+                        if (const auto paren = bare.find('('); paren != std::string::npos) {
+                            bare.resize(paren);
+                        }
+                        if (!bare.empty() && seen.insert(bare).second) {
+                            labels.push_back(std::move(bare));
+                        }
+                    }
+                    return !labels.empty();
+                },
+                60s);
+            return labels;
+        };
+
+        // 2. Component completion items equal the entries `schema.export` lists for that component.
+        const auto transformDotOffset = ByteOffset{scriptText.find("local p = t.") + 12};
+        std::vector<std::string> transformActual = queryCompletionLabels(transformDotOffset);
+        std::vector<std::string> transformExpected = schemaComponentEntryNames(*schema, "Transform");
+        std::ranges::sort(transformActual);
+        std::ranges::sort(transformExpected);
+        EXPECT_FALSE(transformExpected.empty());
+        EXPECT_EQ(transformActual, transformExpected);
+
+        // Also check a component that has both properties and methods in `schema.export` (`Rigidbody2D`).
+        const auto rbDotOffset = ByteOffset{scriptText.find("local v = rb.") + 13};
+        std::vector<std::string> rbActual = queryCompletionLabels(rbDotOffset);
+        std::vector<std::string> rbExpected = schemaComponentEntryNames(*schema, "Rigidbody2D");
+        std::ranges::sort(rbActual);
+        std::ranges::sort(rbExpected);
+        EXPECT_FALSE(rbExpected.empty());
+        EXPECT_EQ(rbActual, rbExpected);
+
+        // 3. Completion for component names (`GetComponent("")`) and event names (`ProbeScript:On`).
+        const auto compQuoteOffset = ByteOffset{scriptText.find("GetComponent(\"\")") + 14};
+        const std::vector<std::string> compCompletions = queryCompletionLabels(compQuoteOffset);
+        EXPECT_TRUE(std::ranges::any_of(compCompletions, [](const std::string& s) {
+            return s.find("Transform") != std::string::npos;
+        })) << testing::PrintToString(compCompletions);
+
+        const auto eventPrefixOffset = ByteOffset{scriptText.find("function ProbeScript:On") + 23};
+        const std::vector<std::string> eventCompletions = queryCompletionLabels(eventPrefixOffset);
+        EXPECT_TRUE(std::ranges::any_of(eventCompletions, [](const std::string& s) {
+            return s.find("OnCreate") != std::string::npos;
+        })) << testing::PrintToString(eventCompletions);
+        EXPECT_TRUE(std::ranges::any_of(eventCompletions, [](const std::string& s) {
+            return s.find("OnDestroy") != std::string::npos;
+        })) << testing::PrintToString(eventCompletions);
+
+        // 4. Go to Definition on `Physics.Raycast` opens the generated stub (`frost_schema.lua`).
+        const auto raycastOffset = ByteOffset{scriptText.find("Physics.Raycast") + 10};
+        const lang::LspPosition raycastPos = lang::toLspPosition(doc->text(), raycastOffset, service.encoding());
+        auto nav =
+            pool.spawn(sched::Lane::UserVisible,
+                       lang::requestLocations(service, lang::NavigationTarget::Definition, scriptPath, raycastPos))
+                .join();
+        ASSERT_TRUE(nav.has_value()) << nav.error().describe();
+        ASSERT_FALSE(nav->empty());
+        EXPECT_EQ(lang::documentKey((*nav)[0].path), lang::documentKey(stubPath));
+
+        // 5. Go to C++ Binding opens the exact C++ `file:line` from `source_location` in the clone.
+        auto raycastCpp = resolveLuaCppBindingSource(fs, m_corpus, *schema, scriptText, raycastOffset);
+        ASSERT_TRUE(raycastCpp.has_value()) << raycastCpp.error().describe();
+        const SchemaLuaEntry* raycastSchema = schema->findLuaEntry("Physics.Raycast");
+        ASSERT_NE(raycastSchema, nullptr);
+        ASSERT_TRUE(raycastSchema->source.has_value());
+        EXPECT_EQ(raycastCpp->line, raycastSchema->source->line);
+        EXPECT_NE(raycastCpp->path.find("PhysicsScriptModule.cpp"), std::string::npos);
+
+        const auto translationOffset = ByteOffset{scriptText.find("t.Translation") + 4};
+        auto translationCpp = resolveLuaCppBindingSource(fs, m_corpus, *schema, scriptText, translationOffset);
+        ASSERT_TRUE(translationCpp.has_value()) << translationCpp.error().describe();
+        const SchemaComponent* transformSchema = schema->findComponent("Transform");
+        ASSERT_NE(transformSchema, nullptr);
+        ASSERT_FALSE(transformSchema->fields.empty());
+        EXPECT_EQ(translationCpp->line, transformSchema->fields[0].source.line);
+
+        const auto onUpdateOffset = ByteOffset{scriptText.find("OnUpdate") + 3};
+        auto onUpdateCpp = resolveLuaCppBindingSource(fs, m_corpus, *schema, scriptText, onUpdateOffset);
+        ASSERT_TRUE(onUpdateCpp.has_value()) << onUpdateCpp.error().describe();
+        EXPECT_GT(onUpdateCpp->line, 0U);
+    }
+    (*reactor)->shutdown();
+    pool.shutdown();
 }
 
 } // namespace

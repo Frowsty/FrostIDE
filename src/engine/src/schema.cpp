@@ -297,14 +297,39 @@ Result<SchemaDocument> parseSchemaDocument(const rpc::Json& document) {
                 }
                 SchemaLuaEntry parsed;
                 parsed.kind = read.string(entry, at, "kind", true);
+                if (const Json* scope = entry.find("scope"); scope != nullptr && scope->isString()) {
+                    parsed.scope = *scope->asString();
+                }
+                if (const Json* owner = entry.find("owner"); owner != nullptr && owner->isString()) {
+                    parsed.owner = *owner->asString();
+                }
                 parsed.qualifiedName = read.string(entry, at, "qualifiedName", true);
                 parsed.name = read.string(entry, at, "name", true);
+                if (const Json* fullName = entry.find("fullName"); fullName != nullptr && fullName->isString()) {
+                    parsed.fullName = *fullName->asString();
+                }
                 parsed.signature = read.string(entry, at, "signature");
                 parsed.module = read.string(entry, at, "module");
-                (void)read.string(entry, at, "description");
-                (void)read.array(entry, at, "parameters");
-                (void)read.member(entry, at, "returns", Json::Kind::Object);
-                (void)read.boolean(entry, at, "readOnly");
+                parsed.description = read.string(entry, at, "description");
+                if (const Json* params = read.array(entry, at, "parameters")) {
+                    for (const Json& param : params->items()) {
+                        if (!param.isObject()) {
+                            continue;
+                        }
+                        SchemaParameter p;
+                        p.name = std::string(param.stringAt("name"));
+                        p.type = std::string(param.stringAt("type"));
+                        p.description = std::string(param.stringAt("description"));
+                        p.optional = param.boolAt("optional").value_or(false);
+                        p.defaultValue = std::string(param.stringAt("defaultValue"));
+                        parsed.parameters.push_back(std::move(p));
+                    }
+                }
+                if (const Json* returns = read.member(entry, at, "returns", Json::Kind::Object)) {
+                    parsed.returnType = std::string(returns->stringAt("type"));
+                    parsed.returnDescription = std::string(returns->stringAt("description"));
+                }
+                parsed.readOnly = read.boolean(entry, at, "readOnly");
                 parsed.testModeOnly = read.boolean(entry, at, "testModeOnly");
                 if (const Json* binding = read.member(entry, at, "binding", Json::Kind::String)) {
                     parsed.binding = *binding->asString();
@@ -348,6 +373,23 @@ Result<SchemaDocument> parseSchemaDocument(const rpc::Json& document) {
             SchemaEvent parsed;
             parsed.name = read.string(event, at, "name", true);
             parsed.signature = read.string(event, at, "signature");
+            if (const Json* desc = event.find("description"); desc != nullptr && desc->isString()) {
+                parsed.description = *desc->asString();
+            }
+            if (const Json* params = event.find("parameters"); params != nullptr && params->isArray()) {
+                for (const Json& param : params->items()) {
+                    if (!param.isObject()) {
+                        continue;
+                    }
+                    SchemaParameter p;
+                    p.name = std::string(param.stringAt("name"));
+                    p.type = std::string(param.stringAt("type"));
+                    p.description = std::string(param.stringAt("description"));
+                    p.optional = param.boolAt("optional").value_or(false);
+                    p.defaultValue = std::string(param.stringAt("defaultValue"));
+                    parsed.parameters.push_back(std::move(p));
+                }
+            }
             if (auto source = read.source(event, at, false)) {
                 parsed.source = std::move(*source);
             }

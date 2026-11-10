@@ -8,9 +8,11 @@
 // multi-root folders) and a visible notice when LuaLS is missing.
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
+#include "frost/engine/engine_lua.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/reactor.hpp"
 #include "frost/lang/frost_engine_lua.hpp"
+#include "frost/lang/lua_rc.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/sched/lane.hpp"
@@ -35,6 +37,7 @@ namespace frost::app {
 // The Lua state the workbench keeps across LuaLS starts. GUI thread only.
 struct WorkbenchLuaState {
     lang::LuaHostRegistry hosts;
+    std::shared_ptr<engine::EngineLuaHostProvider> engineHost;
     std::uint64_t generation = 0;        // Increments per LuaLS start and stop; older callbacks are dropped.
     std::vector<std::string> folderKeys; // documentKeys of the running LuaLS's extra folders, sorted.
     std::vector<std::string> inputKeys;  // documentKeys of the host providers' inputs.
@@ -60,11 +63,12 @@ lang::FileDiagnostics emptyFileDiagnostics(std::string file) {
     return empty;
 }
 
-WorkbenchLuaState& luaState(std::shared_ptr<WorkbenchLuaState>& slot) {
+WorkbenchLuaState& luaState(std::shared_ptr<WorkbenchLuaState>& slot, io::IProcessLauncher& launcher) {
     if (!slot) {
         slot = std::make_shared<WorkbenchLuaState>();
-        // The composition root's hosts: FrostEngine (FEC-10a) on the host API (LUA-13).
-        slot->hosts.add(std::make_shared<lang::FrostEngineLuaProvider>());
+        // The composition root's hosts: FrostEngine (FEC-10a/FEC-10b) on the host API (LUA-13).
+        slot->engineHost = std::make_shared<engine::EngineLuaHostProvider>(launcher);
+        slot->hosts.add(slot->engineHost);
     }
     return *slot;
 }
@@ -75,6 +79,7 @@ struct LuaPlan {
     lang::Json configuration;
     std::vector<lang::LuaWorkspaceFolder> folders;
     std::vector<std::string> inputKeys;
+    std::vector<std::string> metaLibraries;
     bool hosted = false; // A host provider claimed the root.
 };
 
@@ -82,7 +87,8 @@ struct LuaPlan {
 // `stateDirectory` (never into the workspace), composed over the user's runtime version.
 lang::Json composeFolder(io::IFileSystem& fs, const lang::LuaHostRegistry& hosts, const std::string& runtime,
                          const std::string& stateDirectory, const std::string& folder,
-                         std::vector<lang::LuaHostContribution>& contributions, std::vector<std::string>& inputKeys) {
+                         std::vector<lang::LuaHostContribution>& contributions, std::vector<std::string>& inputKeys,
+                         std::vector<std::string>& outMetaLibraries) {
     contributions = hosts.contributions(fs, folder);
     std::vector<std::string> metaLibraries;
     for (const lang::LuaHostContribution& contribution : contributions) {
@@ -103,6 +109,8 @@ lang::Json composeFolder(io::IFileSystem& fs, const lang::LuaHostRegistry& hosts
             continue;
         }
         metaLibraries.push_back(*directory);
+        if (outMetaLibraries.empty())
+            outMetaLibraries.push_back(*directory);
     }
     return lang::composeLuaConfiguration(runtime, contributions, metaLibraries);
 }
@@ -111,7 +119,8 @@ LuaPlan planLua(io::IFileSystem& fs, const lang::LuaHostRegistry& hosts, const s
                 const std::string& stateDirectory, const std::string& root) {
     LuaPlan plan;
     std::vector<lang::LuaHostContribution> contributions;
-    plan.configuration = composeFolder(fs, hosts, runtime, stateDirectory, root, contributions, plan.inputKeys);
+    plan.configuration =
+        composeFolder(fs, hosts, runtime, stateDirectory, root, contributions, plan.inputKeys, plan.metaLibraries);
     plan.hosted = !contributions.empty();
     std::vector<std::string> seen{lang::documentKey(root)};
     for (const lang::LuaHostContribution& contribution : contributions) {
@@ -122,12 +131,59 @@ LuaPlan planLua(io::IFileSystem& fs, const lang::LuaHostRegistry& hosts, const s
                 continue;
             seen.push_back(lang::documentKey(*normalized));
             std::vector<lang::LuaHostContribution> inner;
-            lang::Json configuration =
-                composeFolder(fs, hosts, runtime, stateDirectory, *normalized, inner, plan.inputKeys);
+            lang::Json configuration = composeFolder(fs, hosts, runtime, stateDirectory, *normalized, inner,
+                                                     plan.inputKeys, plan.metaLibraries);
             plan.folders.push_back({*normalized, std::move(configuration)});
         }
     }
     return plan;
+}
+
+// When a host provider supplies generated `metaFiles` (`plan.metaLibraries`) and a workspace
+// folder's `.luarc.json` also sets `workspace.library` (e.g. `[".frost/lua-api"]` in FrostEngine
+// samples where `.frost/lua-api` is not generated on disk), LuaLS 3.19.1 replaces the client
+// configuration's `Lua.workspace.library` with `.luarc.json`'s list. Writing a single-key override
+// (`Lua.workspace.library`) under `stateDirectory` and passing `--configpath` keeps every other
+// `.luarc.json` key authoritative while ensuring LuaLS loads the generated host meta library.
+std::optional<std::string> writeHostLibraryOverrideIfNeeded(io::IFileSystem& fs, const std::string& stateDirectory,
+                                                            const std::string& root, const LuaPlan& plan) {
+    if (plan.metaLibraries.empty())
+        return std::nullopt;
+    std::vector<std::string> foldersToCheck{root};
+    for (const lang::LuaWorkspaceFolder& f : plan.folders)
+        foldersToCheck.push_back(f.path);
+    bool rcHasLibraries = false;
+    std::vector<std::string> mergedLibraries;
+    for (const std::string& folder : foldersToCheck) {
+        auto rc = lang::readLuaRc(fs, folder);
+        if (!rc || !rc->exists || rc->settings.libraries.empty())
+            continue;
+        rcHasLibraries = true;
+        for (const std::string& lib : rc->settings.libraries) {
+            if (lib == ".frost/lua-api" || lib == ".frost\\lua-api")
+                continue;
+            if (!std::ranges::contains(mergedLibraries, lib))
+                mergedLibraries.push_back(lib);
+        }
+    }
+    if (!rcHasLibraries)
+        return std::nullopt;
+    for (const std::string& metaLib : plan.metaLibraries) {
+        if (!std::ranges::contains(mergedLibraries, metaLib))
+            mergedLibraries.push_back(metaLib);
+    }
+    lang::Json libArray = lang::Json::array();
+    for (const std::string& item : mergedLibraries)
+        libArray.push(item);
+    const lang::Json overrideJson = lang::Json::object().set("Lua.workspace.library", std::move(libArray));
+    auto overridePath = io::joinPath(stateDirectory, "host-library-override.json");
+    if (!overridePath)
+        return std::nullopt;
+    if (auto made = fs.createDirectories(stateDirectory); !made)
+        return std::nullopt;
+    if (auto written = fs.writeFileAtomic(*overridePath, overrideJson.dump() + "\n"); !written)
+        return std::nullopt;
+    return *overridePath;
 }
 
 std::vector<std::string> sortedFolderKeys(const std::vector<lang::LuaWorkspaceFolder>& folders) {
@@ -155,7 +211,7 @@ bool isLuaSource(std::string_view path) noexcept {
     return ext[0] == '.' && (ext[1] == 'l' || ext[1] == 'L') && (ext[2] == 'u' || ext[2] == 'U') &&
            (ext[3] == 'a' || ext[3] == 'A');
 }
-lang::LuaHostRegistry& Workbench::luaHosts() { return luaState(m_luaState).hosts; }
+lang::LuaHostRegistry& Workbench::luaHosts() { return luaState(m_luaState, m_services.launcher).hosts; }
 std::vector<std::string> Workbench::luaRefreshesHandled() const {
     return m_luaState ? m_luaState->refreshes : std::vector<std::string>{};
 }
@@ -206,7 +262,7 @@ void Workbench::startLua(const std::string& root) {
     if (m_shutDown)
         return;
     stopLua();
-    WorkbenchLuaState& state = luaState(m_luaState);
+    WorkbenchLuaState& state = luaState(m_luaState, m_services.launcher);
     state.titles.clear();
     state.refreshes.clear();
     m_luaUnavailable.clear();
@@ -242,7 +298,7 @@ void Workbench::startLua(const std::string& root) {
         // (syncLuaDocument). Asking the hosts reads their files, never starts a process.
         const bool luaOpen =
             std::ranges::any_of(m_editors->views(), [](auto* view) { return isLuaSource(view->path()); });
-        const bool hosted = !state.hosts.contributions(m_services.fs, root).empty();
+        const bool hosted = lang::discoverFrostEngineLua(m_services.fs, root).frostEngine;
         if (!m_luaConfiguredPath.empty())
             m_luaUnavailableNotifiedRoot.clear(); // Each wrong setting is reported, as before.
         if (!m_luaConfiguredPath.empty() || hosted || luaOpen)
@@ -267,6 +323,9 @@ void Workbench::startLua(const std::string& root) {
     // reference declares and its generated definitions folders, and an engine checkout's projects as
     // their own folders. A project's .luarc.json still has priority in LuaLS, key by key.
     LuaPlan plan = planLua(m_services.fs, state.hosts, m_luaRuntimeVersion, stateDirectory, root);
+    if (auto overridePath = writeHostLibraryOverrideIfNeeded(m_services.fs, stateDirectory, root, plan)) {
+        arguments->push_back("--configpath=" + *overridePath);
+    }
     lang::LuaServiceOptions options;
     options.serverPath = *found;
     options.workspaceRoot = root;
@@ -344,7 +403,7 @@ void Workbench::startLua(const std::string& root) {
 void Workbench::refreshLuaConfiguration() {
     if (!m_lua || m_projectRoot.empty())
         return;
-    WorkbenchLuaState& state = luaState(m_luaState);
+    WorkbenchLuaState& state = luaState(m_luaState, m_services.launcher);
     m_luaRuntimeVersion = m_services.settings.snapshot()->get(settings::key::luaRuntimeVersion);
     std::string stateDirectory = m_options.luaStateDirectory;
     if (stateDirectory.empty()) {
@@ -354,6 +413,7 @@ void Workbench::refreshLuaConfiguration() {
         }
     }
     LuaPlan plan = planLua(m_services.fs, state.hosts, m_luaRuntimeVersion, stateDirectory, m_projectRoot);
+    (void)writeHostLibraryOverrideIfNeeded(m_services.fs, stateDirectory, m_projectRoot, plan);
     if (sortedFolderKeys(plan.folders) != state.folderKeys) {
         // LuaLS appends folders that arrive later (didChangeWorkspaceFolders) after the root, where
         // a nested folder would lose its files; a new set of folders starts LuaLS again.
@@ -598,7 +658,7 @@ Result<std::vector<lang::FileDiagnostics>> Workbench::inspectLuaCode(std::string
         }
         return result;
     }
-    WorkbenchLuaState& state = luaState(m_luaState);
+    WorkbenchLuaState& state = luaState(m_luaState, m_services.launcher);
     const std::string scopeKey = lang::documentKey(target);
     const auto applyFileToViews = [this](const std::string& file, const std::optional<lang::FileDiagnostics>& set) {
         if (m_lua && m_lua->diagnostics().forFile(file))
@@ -646,5 +706,34 @@ Result<std::vector<lang::FileDiagnostics>> Workbench::inspectLuaCode(std::string
     if (m_window)
         m_window->toolWindows().show(ui::tool_windows::kProblems, false);
     return result;
+}
+Result<void> Workbench::gotoCppBinding() {
+    DocumentEditorView* view = currentView();
+    if (view == nullptr || !isLuaSource(view->path()))
+        return fail(ErrorCode::InvalidArgument, "no active Lua editor to resolve a C++ binding from");
+    const std::string folder = !m_projectRoot.empty() ? m_projectRoot : std::string(io::parentPath(view->path()));
+    if (!m_services.trust.isTrusted(folder)) {
+        offerLuaTrust();
+        return fail(ErrorCode::Untrusted, "refusing to resolve C++ bindings in an untrusted workspace");
+    }
+    WorkbenchLuaState& state = luaState(m_luaState, m_services.launcher);
+    if (!state.engineHost)
+        state.engineHost = std::make_shared<engine::EngineLuaHostProvider>(m_services.launcher);
+    std::optional<std::string> engineRoot = state.engineHost->engineRootForWorkspace(m_services.fs, folder);
+    if (!engineRoot)
+        engineRoot = state.engineHost->engineRootForWorkspace(m_services.fs, io::parentPath(view->path()));
+    if (!engineRoot)
+        return fail(ErrorCode::NotFound, "workspace is not a FrostEngine checkout or project");
+    std::optional<engine::SchemaDocument> schema = state.engineHost->schemaForWorkspace(m_services.fs, *engineRoot);
+    if (!schema)
+        return fail(ErrorCode::NotFound, "no FrostEngine schema.export is available (build FrostEditor first)");
+    const std::string text = view->editor().editor().text().text();
+    const ByteOffset caret = view->editor().editor().state().primary().head;
+    auto resolved = engine::resolveLuaCppBindingSource(m_services.fs, *engineRoot, *schema, text, caret);
+    if (!resolved) {
+        notify(QStringLiteral("Go to C++ Binding"), qs(resolved.error().message()), ui::NotificationKind::Info);
+        return std::unexpected(resolved.error());
+    }
+    return openPath(resolved->path, FileLocation{static_cast<int>(resolved->line), 1});
 }
 } // namespace frost::app
