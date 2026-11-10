@@ -172,6 +172,7 @@ void EditorView::followInsight(const text::ChangeSet& change) {
     for (EditorInlayHint& hint : m_inlayHints) {
         hint.offset = text::mapOffset(hint.offset, text::Bias::Right, edits);
     }
+    mapItems(m_documentLinks, edits, true);
     const text::Snapshot& snapshot = m_editor->text();
     for (EditorCodeVisionLens& lens : m_codeVisionLenses) {
         lens.symbolOffset = text::mapOffset(lens.symbolOffset, text::Bias::Right, edits);
@@ -340,6 +341,36 @@ bool EditorView::setInlayHints(std::uint64_t textVersion, std::vector<EditorInla
     m_inlayHints = std::move(hints);
     viewport()->update();
     return true;
+}
+
+bool EditorView::setDocumentLinks(std::uint64_t textVersion, std::vector<EditorDocumentLink> links) {
+    const std::optional<std::vector<const EditRecord*>> chain = editsSince(textVersion);
+    if (!chain) {
+        return false;
+    }
+    std::erase_if(links, [](const EditorDocumentLink& link) { return link.target.empty(); });
+    std::ranges::stable_sort(links, {}, [](const EditorDocumentLink& link) { return link.range.begin; });
+    for (const EditRecord* record : *chain) {
+        mapItems(links, record->edits, true);
+    }
+    std::erase_if(links, [](const EditorDocumentLink& link) { return link.range.empty(); });
+    m_documentLinks = std::move(links);
+    return true;
+}
+
+std::optional<EditorDocumentLink> EditorView::documentLinkAt(ByteOffset offset) const {
+    // Links never overlap (one per #include line), so the last one starting at or before `offset`
+    // is the only candidate.
+    const auto after = std::ranges::upper_bound(m_documentLinks, offset, {},
+                                                [](const EditorDocumentLink& link) { return link.range.begin; });
+    if (after == m_documentLinks.begin()) {
+        return std::nullopt;
+    }
+    const EditorDocumentLink& link = *std::prev(after);
+    if (offset < link.range.end) {
+        return link;
+    }
+    return std::nullopt;
 }
 
 void EditorView::setCodeVisionLenses(std::vector<EditorCodeVisionLens> lenses) {
@@ -651,6 +682,10 @@ QString EditorView::toolTipAt(QPointF at) const {
                 }
             }
         }
+    }
+    if (const std::optional<EditorDocumentLink> link = documentLinkAt(offset)) {
+        messages.push_back(QString::fromStdString(link->tooltip.empty() ? link->target : link->tooltip) +
+                           QStringLiteral(" (Ctrl+Click to open)"));
     }
     for (const EditorInlayHint& hint : m_inlayHints) {
         if (!hint.tooltip.empty() && hint.offset == offset) {

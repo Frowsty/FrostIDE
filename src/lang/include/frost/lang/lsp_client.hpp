@@ -81,6 +81,10 @@ struct ServerCapabilities {
     bool callHierarchy = false;
     bool typeHierarchy = false;
     bool inlayHint = false;
+    // CPP-5 (document_features.hpp): documentLinkProvider, foldingRangeProvider and clangd's astProvider.
+    bool documentLink = false;
+    bool foldingRange = false;
+    bool ast = false;
     std::string serverName;    // serverInfo.name, e.g. "clangd".
     std::string serverVersion; // serverInfo.version.
     Json raw;

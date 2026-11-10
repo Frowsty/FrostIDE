@@ -9,6 +9,7 @@
 
 frost_add_library(ui_lang LAYER ui
     SOURCES
+        src/ast_view.cpp
         src/editor_insight_binding.cpp
         src/lang_widgets.cpp
         src/lang_widgets_internal.hpp
@@ -26,6 +27,7 @@ frost_add_library(ui_lang LAYER ui
     THIRD_PARTY Qt6::Widgets)
 # The Q_OBJECT classes live in public headers; moc runs on them through AUTOMOC.
 target_sources(frost_ui_lang PRIVATE
+    include/frost/ui/lang/ast_view.hpp
     include/frost/ui/lang/editor_insight_binding.hpp
     include/frost/ui/lang/language_controller.hpp
     include/frost/ui/lang/lang_widgets.hpp

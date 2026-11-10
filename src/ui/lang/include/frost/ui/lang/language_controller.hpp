@@ -12,7 +12,8 @@
  * navigate.highlightUsages = Ctrl+Shift+F7, navigate.fileStructure = Ctrl+F12,
  * navigate.gotoSymbol = Ctrl+Alt+Shift+N, refactor.rename = Shift+F6, code.showIntentions =
  * Alt+Enter (clangd fix-its) and code.reformat = Ctrl+Alt+L. Every one but go to symbol needs
- * EditorFocus.
+ * EditorFocus. code.showAst (CPP-5, no default shortcut) shows clangd's AST node for the caret or
+ * the selection (textDocument/ast) in AstViewPopup; activating a node selects its source range.
  *
  * Typing (textTyped) opens completion on an identifier start, '.', "->" and "::" (and
  * include-path characters), refilters an open lookup locally, re-requests only when the server
@@ -38,6 +39,7 @@
 #include "frost/sched/scheduler.hpp"
 #include "frost/sched/task.hpp"
 #include "frost/text/positions.hpp"
+#include "frost/ui/lang/ast_view.hpp"
 #include "frost/ui/lang/editor_language_host.hpp"
 #include "frost/ui/lang/lang_widgets.hpp"
 #include "frost/ui/lang/language_capabilities.hpp"
@@ -122,6 +124,9 @@ public:
     void rename();
     void showIntentions();
     void reformat();
+    // CPP-5: clangd's AST for the selection, else the caret (C and C++ only; the server must offer
+    // textDocument/ast). "No AST node here" or the reason it is unavailable goes to the status bar.
+    void showAst();
 
     /*
      * Refactorings and code generation (FND-3, ADR 0078: every edit comes from the language server).
@@ -213,6 +218,7 @@ public:
     [[nodiscard]] ChoicePopup& choicePopup();
     [[nodiscard]] QuickDefinitionPopup& quickDefinitionPopup();
     [[nodiscard]] HierarchyPopup& hierarchyPopup();
+    [[nodiscard]] AstViewPopup& astPopup();
 
 signals:
     // A message for the status bar ("No implementations found", a rename refusal, ...).
@@ -283,6 +289,7 @@ private:
     std::unique_ptr<ChoicePopup> m_choice;
     std::unique_ptr<QuickDefinitionPopup> m_quickDef;
     std::unique_ptr<HierarchyPopup> m_hierarchy;
+    std::unique_ptr<AstViewPopup> m_ast;
     QTimer m_highlightTimer;
     QTimer m_symbolQueryTimer;
     QTimer m_structureTimer;
@@ -307,6 +314,7 @@ private:
     sched::LatestWins m_actionSlot;
     sched::LatestWins m_formatSlot;
     sched::LatestWins m_hierarchySlot;
+    sched::LatestWins m_astSlot;
 
     // The open lookup: the document and where its identifier starts.
     std::string m_lookupPath;

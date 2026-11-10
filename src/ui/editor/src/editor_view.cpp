@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <mutex>
 #include <utility>
 
@@ -1551,8 +1552,37 @@ void EditorView::collectFoldQuery() {
         job->tree.text().sharesStorageWith(m_editor->text())) {
         m_foldCandidates = std::move(*ranges);
         m_foldCandidateMaxEnd = std::move(job->maxEnd);
+        mergeLanguageFolds();
         viewport()->update();
     }
+}
+
+bool EditorView::setLanguageFoldRanges(std::uint64_t textVersion, std::vector<text::ByteRange> ranges) {
+    if (textVersion != m_editor->text().version()) {
+        return false;
+    }
+    const ByteOffset size = m_editor->text().size();
+    std::erase_if(ranges, [size](const text::ByteRange& range) { return range.empty() || range.end > size; });
+    std::ranges::sort(ranges, candidateLess);
+    ranges.erase(std::unique(ranges.begin(), ranges.end()), ranges.end());
+    m_languageFolds = std::move(ranges);
+    m_languageFoldsVersion = textVersion;
+    mergeLanguageFolds();
+    viewport()->update();
+    return true;
+}
+
+void EditorView::mergeLanguageFolds() {
+    if (m_languageFolds.empty() || m_languageFoldsVersion != m_editor->text().version()) {
+        return;
+    }
+    std::vector<text::ByteRange> merged;
+    merged.reserve(m_foldCandidates.size() + m_languageFolds.size());
+    std::ranges::merge(m_foldCandidates, m_languageFolds, std::back_inserter(merged), candidateLess);
+    merged.erase(std::unique(merged.begin(), merged.end()), merged.end());
+    m_foldCandidates = std::move(merged);
+    m_foldCandidateMaxEnd.assign(m_foldCandidates.size() * 4, 0);
+    (void)buildCandidateMax(m_foldCandidates, m_foldCandidateMaxEnd, 1, 0, m_foldCandidates.size(), {});
 }
 
 std::vector<syntax::HighlightSpan> EditorView::highlightsFor(text::ByteRange range) {

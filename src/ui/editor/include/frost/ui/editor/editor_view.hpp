@@ -344,6 +344,26 @@ public:
     // Replaces the LSP inlay hints (parameter names and deduced types), mapped from `textVersion`.
     bool setInlayHints(std::uint64_t textVersion, std::vector<EditorInlayHint> hints);
     [[nodiscard]] const std::vector<EditorInlayHint>& inlayHints() const noexcept { return m_inlayHints; }
+    /*
+     * CPP-5. Replaces the language server's document links, mapped from `textVersion` like the
+     * semantic tokens; false when too many edits came since (the caller asks again). Links whose
+     * range became empty or that have no target are dropped. Ctrl+click on a link emits
+     * documentLinkActivated instead of ctrlClicked. UI thread only; O(links x edits).
+     */
+    bool setDocumentLinks(std::uint64_t textVersion, std::vector<EditorDocumentLink> links);
+    [[nodiscard]] const std::vector<EditorDocumentLink>& documentLinks() const noexcept { return m_documentLinks; }
+    // The link whose range contains `offset` (its end excluded), if any. O(log links).
+    [[nodiscard]] std::optional<EditorDocumentLink> documentLinkAt(ByteOffset offset) const;
+    /*
+     * CPP-5. The language server's folding ranges for the text of `textVersion` (in that text's
+     * offsets, each from the end of its first line to the start of its last), offered as fold
+     * candidates beside the syntax tree's until the next edit. Refused (false) for any other
+     * version. UI thread only; O(n log n) over all candidates.
+     */
+    bool setLanguageFoldRanges(std::uint64_t textVersion, std::vector<text::ByteRange> ranges);
+    [[nodiscard]] const std::vector<text::ByteRange>& languageFoldRanges() const noexcept { return m_languageFolds; }
+    // Every range a fold command can collapse now (syntax and language server), sorted by start.
+    [[nodiscard]] const std::vector<text::ByteRange>& foldCandidates() const noexcept { return m_foldCandidates; }
     // Replaces the clickable Code Vision lenses shown on declarations.
     void setCodeVisionLenses(std::vector<EditorCodeVisionLens> lenses);
     [[nodiscard]] const std::vector<EditorCodeVisionLens>& codeVisionLenses() const noexcept {
@@ -481,6 +501,8 @@ signals:
     void lineChangeClicked(int index, QPoint globalPos);
     // A Ctrl+click (Cmd+click on macOS) put the caret at `offset`: Rider's go to declaration.
     void ctrlClicked(frost::ByteOffset offset);
+    // A Ctrl+click on a document link (setDocumentLinks): open `target`, an absolute path.
+    void documentLinkActivated(const QString& target);
     // A context-menu action routed to the workbench's language/navigation controller.
     void contextActionRequested(const QString& actionId);
     // A click on a Code Vision lens badge.
@@ -519,6 +541,8 @@ private:
     bool removeCollapsedFold(text::FoldId id);
     [[nodiscard]] std::optional<LineIndex> foldLineAt(QPointF at) const;
     void collectFoldQuery();
+    // Adds the language server's fold ranges to m_foldCandidates when they describe the current text.
+    void mergeLanguageFolds();
     [[nodiscard]] std::optional<text::ByteRange> foldCandidateAt(ByteOffset offset) const noexcept;
     // How a mouse drag extends: by character, word or line (single, double, triple click).
     enum class Granularity : std::uint8_t { Character, Word, Line };
@@ -718,6 +742,9 @@ private:
     std::map<std::string, std::vector<EditorDecoration>, std::less<>> m_decorations;
     std::vector<UsageHighlight> m_usages;
     std::vector<EditorInlayHint> m_inlayHints;
+    std::vector<EditorDocumentLink> m_documentLinks; // Sorted by start.
+    std::vector<text::ByteRange> m_languageFolds;    // In the text of m_languageFoldsVersion.
+    std::uint64_t m_languageFoldsVersion = 0;
     std::vector<EditorCodeVisionLens> m_codeVisionLenses;
     std::vector<EditorInlineValue> m_inlineDebuggerValues;
     DebugHoverProvider m_debugHoverProvider;

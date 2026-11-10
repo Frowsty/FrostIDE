@@ -96,6 +96,7 @@ frost_add_library(app LAYER app
         src/stable_lsp_requester.hpp
         src/workbench_documents.cpp
         src/workbench_language.cpp
+        src/workbench_save_actions.cpp
         src/workbench_lua.cpp
         src/workbench_managed.cpp
         src/managed_debug_preparation.cpp
