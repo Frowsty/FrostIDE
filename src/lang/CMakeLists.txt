@@ -34,6 +34,7 @@ frost_add_library(lang LAYER lang
         src/compile_commands.cpp
         src/completion.cpp
         src/diagnostics.cpp
+        src/document_features.cpp
         src/document_sync.cpp
         src/engine_automation.cpp
         src/engine_discovery_process.cpp
@@ -49,6 +50,7 @@ frost_add_library(lang LAYER lang
         src/msvc_environment.cpp
         src/navigation.cpp
         src/refactoring.cpp
+        src/save_actions.cpp
         src/semantic_tokens.cpp
         src/snippet.cpp
         src/symbols.cpp

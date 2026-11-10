@@ -7,6 +7,7 @@
 
 #include "frost/core/assert.hpp"
 #include "frost/io/path.hpp"
+#include "frost/lang/document_features.hpp"
 #include "frost/lang/semantic_tokens.hpp"
 #include "frost/lang/uri.hpp"
 
@@ -129,6 +130,9 @@ ServerCapabilities parseInitializeResult(const Json& result) {
     out.typeHierarchy = hasProvider(*capabilities, "typeHierarchyProvider");
     out.inlayHint =
         hasProvider(*capabilities, "inlayHintProvider") || hasProvider(*capabilities, "clangdInlayHintsProvider");
+    out.documentLink = hasProvider(*capabilities, "documentLinkProvider");
+    out.foldingRange = hasProvider(*capabilities, "foldingRangeProvider");
+    out.ast = hasProvider(*capabilities, "astProvider");
     if (const Json* info = result.find("serverInfo"); info != nullptr) {
         out.serverName = std::string(info->stringAt("name"));
         out.serverVersion = std::string(info->stringAt("version"));
@@ -212,6 +216,9 @@ Json clientCapabilities() {
             .set("callHierarchy", Json::object().set("dynamicRegistration", false))
             .set("typeHierarchy", Json::object().set("dynamicRegistration", false))
             .set("inlayHint", Json::object().set("dynamicRegistration", false))
+            // Document links and folding ranges (CPP-5, document_features.hpp).
+            .set("documentLink", documentLinkClientCapabilities())
+            .set("foldingRange", foldingRangeClientCapabilities())
             // Semantic highlighting and clangd's inactive regions (M3, ADR 0047).
             .set("semanticTokens", semanticTokensClientCapabilities())
             .set("inactiveRegionsCapabilities", inactiveRegionsClientCapabilities());

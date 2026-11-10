@@ -18,6 +18,13 @@
  *     shows "analysing" from an edit until diagnostics of the current text arrive.
  *   - Build diagnostics: setBuildDiagnostics with the build's diagnostics for the file
  *     (BuildService::diagnosticsForDocument), resolved by line and column.
+ *   - CPP-5: with the semantic tokens (on attach and after each edit's debounce), the inlay hints
+ *     (textDocument/inlayHint), document links (textDocument/documentLink: Ctrl+click on an
+ *     #include opens the header clangd resolved) and folding ranges (textDocument/foldingRange,
+ *     offered as fold candidates beside the syntax tree's) of the whole document, each only when
+ *     the server offers it and each in its own LatestWins slot. Results are mapped off the UI
+ *     thread against the snapshot the request saw; links follow later edits, folding ranges are
+ *     dropped by any edit until the next answer.
  *
  * Threads and lifetime: UI thread only. Listener callbacks arrive on the server's threads and are
  * posted to the UI thread, where they are dropped once the binding is gone. The requester,
@@ -29,6 +36,7 @@
 #include "frost/build/build_diagnostics.hpp"
 #include "frost/core/error.hpp"
 #include "frost/lang/diagnostics.hpp"
+#include "frost/lang/document_features.hpp"
 #include "frost/lang/lsp_client.hpp"
 #include "frost/lang/navigation.hpp"
 #include "frost/lang/semantic_tokens.hpp"
@@ -91,6 +99,18 @@ toUsageHighlights(std::span<const ::frost::lang::DocumentHighlight> highlights, 
 [[nodiscard]] std::vector<EditorInlayHint> toEditorInlayHints(std::span<const ::frost::lang::LspInlayHint> hints,
                                                               const text::Snapshot& snapshot,
                                                               ::frost::lang::PositionEncoding encoding);
+// Document links with a file target, mapped to byte ranges of `snapshot`; others are dropped.
+// O(links x log n).
+[[nodiscard]] std::vector<EditorDocumentLink> toEditorDocumentLinks(std::span<const ::frost::lang::DocumentLink> links,
+                                                                    const text::Snapshot& snapshot,
+                                                                    ::frost::lang::PositionEncoding encoding);
+/*
+ * Folding ranges as fold candidates of `snapshot`, the convention of the syntax tree's folds: from
+ * the end of the start line's content to the start of the end line, so the first and last lines
+ * stay visible. Ranges within one line, or with a line past the end, are dropped. O(ranges x log n).
+ */
+[[nodiscard]] std::vector<text::ByteRange> toFoldCandidates(std::span<const ::frost::lang::FoldingRange> ranges,
+                                                            const text::Snapshot& snapshot);
 // Code Vision lenses for top-level classes, structs and functions: the Git author of the
 // declaration line (authorForLine; none without it). Counts arrive with CPP-9 (see the .cpp).
 [[nodiscard]] std::vector<EditorCodeVisionLens>
@@ -134,6 +154,10 @@ public:
     void refreshSemanticTokens();
     // Requests LSP inlay hints now for the document.
     void refreshInlayHints();
+    // Requests the document links now (CPP-5). No-op when the server offers none.
+    void refreshDocumentLinks();
+    // Requests the folding ranges now (CPP-5). No-op when the server offers none.
+    void refreshFoldingRanges();
     // Requests document symbols and refreshes Code Vision lenses.
     void refreshCodeVision();
     void setCodeVisionEnabled(bool enabled);
@@ -151,6 +175,9 @@ signals:
     // A token request failed (the old tokens stay).
     void semanticTokensFailed(QString message);
     void inlayHintsApplied();
+    // Document links / folding ranges reached the view (tests wait on them).
+    void documentLinksApplied();
+    void foldingRangesApplied();
     void codeVisionApplied();
 
 private:
@@ -163,6 +190,8 @@ private:
     QTimer m_debounce;
     sched::LatestWins m_tokensSlot;
     sched::LatestWins m_inlaySlot;
+    sched::LatestWins m_linksSlot;
+    sched::LatestWins m_foldSlot;
     sched::LatestWins m_codeVisionSlot;
     std::optional<::frost::lang::SemanticTokensData> m_previous;
     bool m_serverAvailable = true;

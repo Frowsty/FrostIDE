@@ -4,6 +4,7 @@
 // commands, snippet insertion, intentions (quick fixes) and reformat (split from
 // language_controller.cpp, FND-12a).
 
+#include "frost/lang/document_features.hpp"
 #include "frost/lang/snippet.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 
@@ -175,6 +176,49 @@ void LanguageController::showIntentions() {
             addContextAction(QStringLiteral("Reformat Code"), [this] { reformat(); });
             m_choice->start(QStringLiteral("Context Actions"), titles, m_services.host.caretScreenRect(),
                             std::move(preferred));
+        });
+}
+
+void LanguageController::showAst() {
+    if (!hasDocument()) {
+        return;
+    }
+    if (!capabilities().clangdTweaks) {
+        unavailable(QStringLiteral("Show AST is available for C and C++ files (clangd)"));
+        return;
+    }
+    const std::optional<fl::ServerCapabilities> server = m_services.server.serverCapabilities();
+    if (!server) {
+        emit statusMessage(emptyResultMessage(QStringLiteral("No AST")));
+        return;
+    }
+    if (!server->ast) {
+        emit statusMessage(QStringLiteral("Show AST: the language server does not offer textDocument/ast"));
+        return;
+    }
+    const std::string path = m_services.host.documentPath();
+    fl::LspRange range{caretPosition(), caretPosition()};
+    if (const auto selection = m_services.host.selection()) {
+        range = fl::LspRange{positionAt(selection->begin), positionAt(selection->end)};
+    }
+    start<std::optional<fl::AstNode>>(
+        m_astSlot,
+        [&server = m_services.server, path, range](std::stop_token token) {
+            return fl::requestAst(server, path, range, std::move(token));
+        },
+        [this, path, range](Result<std::optional<fl::AstNode>> node) {
+            if (!node) {
+                report(node.error(), "Show AST");
+                return;
+            }
+            if (!node->has_value()) {
+                emit statusMessage(
+                    QStringLiteral("Show AST: clangd found no AST node at line %1").arg(range.start.line + 1));
+                return;
+            }
+            m_ast->setAst(QStringLiteral("AST at %1:%2 (clangd)").arg(qs(fileName(path))).arg(range.start.line + 1),
+                          **node);
+            m_ast->popup(m_services.host.editorWidget());
         });
 }
 

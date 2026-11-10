@@ -580,7 +580,11 @@ void EditorView::mousePressEvent(QMouseEvent* event) {
         select(text::Selection::caret(hit.offset), hit.bias);
         if (modifiers == Qt::ControlModifier) {
             m_dragging = false; // A navigation click, not the start of a selection.
-            emit ctrlClicked(hit.offset);
+            if (const std::optional<EditorDocumentLink> link = documentLinkAt(hit.offset)) {
+                emit documentLinkActivated(QString::fromStdString(link->target));
+            } else {
+                emit ctrlClicked(hit.offset);
+            }
         }
     }
     m_inputStart.reset();

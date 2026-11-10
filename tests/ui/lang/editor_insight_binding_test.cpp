@@ -12,9 +12,11 @@
 
 #include "editor/editor_harness.hpp"
 #include "lang/feature_server.hpp"
+#include <QMouseEvent>
 #include <QThread>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <string>
@@ -312,6 +314,107 @@ TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDispl
     EXPECT_EQ(list.findText(QStringLiteral("implementations")), nullptr);
     EXPECT_NE(list.findText(QStringLiteral("Alice")), nullptr);
     EXPECT_NE(list.findText(QStringLiteral("value = 42")), nullptr);
+}
+
+/*
+ * CPP-5 over the scripted server: document links and folding ranges are requested with the tokens
+ * when the server offers them; the link reaches the view as a byte range with its file target
+ * (Ctrl+click on it emits documentLinkActivated, not ctrlClicked), and a folding range becomes a
+ * fold candidate beside the syntax tree's, until the next edit.
+ */
+TEST(EditorInsightBinding, DocumentLinksAndFoldingRangesReachTheView) {
+    FROST_REQUIRE_OFFSCREEN();
+    Json caps = capabilities()
+                    .set("documentLinkProvider", Json::object().set("resolveProvider", false))
+                    .set("foldingRangeProvider", true);
+    FeatureServer server(std::move(caps));
+    const std::string path = workPath("links.cpp");
+    const std::string header = workPath("links.h");
+    constexpr std::string_view text = "#include \"links.h\"\n"
+                                      "/* one\n"
+                                      "   two\n"
+                                      "   three */\n"
+                                      "int f() {\n"
+                                      "  return 1;\n"
+                                      "}\n";
+    server.on("textDocument/semanticTokens/full",
+              [&](const Json&) { return Json::object().set("resultId", "1").set("data", Json::array()); });
+    const auto position = [](int line, int character) {
+        return Json::object().set("line", line).set("character", character);
+    };
+    server.on("textDocument/documentLink", [&](const Json&) {
+        return Json::array({Json::object()
+                                .set("range", Json::object().set("start", position(0, 9)).set("end", position(0, 18)))
+                                .set("target", fl::pathToUri(header).value())});
+    });
+    // The comment (lines 1-3) and f's body (lines 4-6), as clangd answers them.
+    server.on("textDocument/foldingRange", [&](const Json&) {
+        return Json::array(
+            {Json::object().set("startLine", 1).set("endLine", 3).set("kind", "comment"), Json::object()
+                                                                                              .set("startLine", 4)
+                                                                                              .set("startCharacter", 9)
+                                                                                              .set("endLine", 6)
+                                                                                              .set("endCharacter", 0)
+                                                                                              .set("kind", "region")});
+    });
+
+    frost::ui::test::EditorHarness h(text, at(path));
+    auto* binding = new EditorInsightBinding(*h.view, {server.client(), server.scheduler()});
+    bool linksApplied = false;
+    bool foldsApplied = false;
+    QObject::connect(binding, &EditorInsightBinding::documentLinksApplied, [&] { linksApplied = true; });
+    QObject::connect(binding, &EditorInsightBinding::foldingRangesApplied, [&] { foldsApplied = true; });
+    binding->refreshSemanticTokens();
+    ASSERT_TRUE(pumpUntil([&] { return linksApplied && foldsApplied; }));
+
+    ASSERT_EQ(h.view->documentLinks().size(), 1U);
+    const frost::ui::EditorDocumentLink link = h.view->documentLinks().front();
+    EXPECT_EQ(link.range, find(text, "\"links.h\""));
+    EXPECT_EQ(fl::documentKey(link.target), fl::documentKey(header));
+    EXPECT_EQ(h.view->documentLinkAt(link.range.begin), link);
+    EXPECT_FALSE(h.view->documentLinkAt(link.range.end).has_value());
+
+    // Each folding range spans from the end of its first line to the start of its last.
+    const frost::text::Snapshot snapshot = h.view->editor().text();
+    const auto lineEnd = [&](std::uint32_t line) { return snapshot.lineInfo(frost::LineIndex{line})->content.end; };
+    const auto lineStart = [&](std::uint32_t line) { return snapshot.lineInfo(frost::LineIndex{line})->content.begin; };
+    const std::vector<frost::text::ByteRange> expected{{lineEnd(1), lineStart(3)}, {lineEnd(4), lineStart(6)}};
+    EXPECT_EQ(h.view->languageFoldRanges(), expected);
+    for (const frost::text::ByteRange& range : expected) {
+        EXPECT_NE(std::ranges::find(h.view->foldCandidates(), range), h.view->foldCandidates().end());
+    }
+
+    // Ctrl+click on the link opens it; the ordinary navigation click is not sent.
+    QStringList opened;
+    int ctrlClicks = 0;
+    QObject::connect(h.view.get(), &frost::ui::EditorView::documentLinkActivated,
+                     [&](const QString& target) { opened.push_back(target); });
+    QObject::connect(h.view.get(), &frost::ui::EditorView::ctrlClicked, [&](frost::ByteOffset) { ++ctrlClicks; });
+    const auto clickAt = [&](frost::ByteOffset offset) {
+        const QRect caret = h.view->globalCaretRect(offset);
+        const QPoint local = h.view->viewport()->mapFromGlobal(caret.center() + QPoint(2, 0));
+        const QPointF global(h.view->viewport()->mapToGlobal(local));
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(local), global, Qt::LeftButton, Qt::LeftButton,
+                          Qt::ControlModifier);
+        QCoreApplication::sendEvent(h.view->viewport(), &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, QPointF(local), global, Qt::LeftButton, Qt::NoButton,
+                            Qt::ControlModifier);
+        QCoreApplication::sendEvent(h.view->viewport(), &release);
+    };
+    clickAt(ByteOffset{link.range.begin.value() + 3});
+    ASSERT_EQ(opened.size(), 1);
+    EXPECT_EQ(fl::documentKey(opened.front().toStdString()), fl::documentKey(header));
+    EXPECT_EQ(ctrlClicks, 0);
+    clickAt(find(text, "return").begin);
+    EXPECT_EQ(opened.size(), 1);
+    EXPECT_EQ(ctrlClicks, 1);
+
+    // An edit keeps the link on its text and refuses folds computed for the old text.
+    h.view->setState(frost::text::EditorState::caretAt(ByteOffset{0}));
+    ASSERT_TRUE(h.view->typeText("// x\n"));
+    ASSERT_EQ(h.view->documentLinks().size(), 1U);
+    EXPECT_EQ(h.view->editor().text().text(h.view->documentLinks().front().range), "\"links.h\"");
+    EXPECT_FALSE(h.view->setLanguageFoldRanges(snapshot.version(), expected)) << "folds of an older text";
 }
 
 } // namespace

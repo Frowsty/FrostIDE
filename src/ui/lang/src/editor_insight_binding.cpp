@@ -233,6 +233,41 @@ std::vector<EditorInlayHint> toEditorInlayHints(std::span<const fl::LspInlayHint
     return out;
 }
 
+std::vector<EditorDocumentLink> toEditorDocumentLinks(std::span<const fl::DocumentLink> links,
+                                                      const text::Snapshot& snapshot, fl::PositionEncoding encoding) {
+    std::vector<EditorDocumentLink> out;
+    out.reserve(links.size());
+    for (const fl::DocumentLink& link : links) {
+        if (link.path.empty()) {
+            continue;
+        }
+        const Result<ByteOffset> begin = fl::fromLspPosition(snapshot, link.range.start, encoding);
+        const Result<ByteOffset> end = fl::fromLspPosition(snapshot, link.range.end, encoding);
+        if (!begin || !end || *end <= *begin) {
+            continue;
+        }
+        out.push_back(EditorDocumentLink{text::ByteRange{*begin, *end}, link.path, link.tooltip});
+    }
+    return out;
+}
+
+std::vector<text::ByteRange> toFoldCandidates(std::span<const fl::FoldingRange> ranges,
+                                              const text::Snapshot& snapshot) {
+    std::vector<text::ByteRange> out;
+    out.reserve(ranges.size());
+    for (const fl::FoldingRange& range : ranges) {
+        if (range.endLine <= range.startLine) {
+            continue;
+        }
+        const auto first = snapshot.lineInfo(LineIndex{range.startLine});
+        const auto last = snapshot.lineInfo(LineIndex{range.endLine});
+        if (first && last && first->content.end < last->content.begin) {
+            out.push_back(text::ByteRange{first->content.end, last->content.begin});
+        }
+    }
+    return out;
+}
+
 /*
  * Code Vision (FND-3, ADR 0078): only lenses from real data. The Git author of the declaration line
  * (authorForLine, from git blame) is shown; usage, override and implementation counts need the
@@ -327,6 +362,8 @@ void EditorInsightBinding::detach() {
     m_debounce.stop();
     m_tokensSlot.cancel(); // Cancel in-flight work even if no clangd was attached.
     m_inlaySlot.cancel();
+    m_linksSlot.cancel();
+    m_foldSlot.cancel();
     m_codeVisionSlot.cancel();
     m_previous.reset();
     m_haveInactiveRegions = false;
@@ -373,6 +410,8 @@ void EditorInsightBinding::setServerAvailable(bool available) {
         m_debounce.stop();
         (void)m_tokensSlot.next(); // Drops the result of a request in flight.
         (void)m_inlaySlot.next();
+        (void)m_linksSlot.next();
+        (void)m_foldSlot.next();
         (void)m_codeVisionSlot.next();
         if (m_view) {
             m_view->setAnalyzing(false);
@@ -415,6 +454,12 @@ void EditorInsightBinding::refreshSemanticTokens() {
     }
     if (capabilities->inlayHint) {
         refreshInlayHints();
+    }
+    if (capabilities->documentLink) {
+        refreshDocumentLinks();
+    }
+    if (capabilities->foldingRange) {
+        refreshFoldingRanges();
     }
     if (m_codeVisionEnabled && capabilities->documentSymbol) {
         refreshCodeVision();
@@ -492,6 +537,71 @@ void EditorInsightBinding::refreshInlayHints() {
     m_services.scheduler
         .spawn(sched::Lane::Interactive,
                deliver(std::move(work), self, &m_inlaySlot, ticket, snapshot, encoding, version))
+        .detach();
+}
+
+void EditorInsightBinding::refreshDocumentLinks() {
+    if (!m_view || !m_serverAvailable) {
+        return;
+    }
+    const text::Snapshot snapshot = m_view->editor().text();
+    const std::uint64_t version = snapshot.version();
+    const sched::LatestWins::Ticket ticket = m_linksSlot.next();
+    const fl::PositionEncoding encoding = m_services.server.encoding();
+    auto work = fl::requestDocumentLinks(m_services.server, m_path, ticket.token);
+    const QPointer<EditorInsightBinding> self(this);
+    auto deliver = [](sched::Task<Result<std::vector<fl::DocumentLink>>> task, QPointer<EditorInsightBinding> binding,
+                      sched::LatestWins* slot, sched::LatestWins::Ticket current, text::Snapshot snap,
+                      fl::PositionEncoding enc, std::uint64_t textVersion) -> sched::Task<void> {
+        auto result = co_await std::move(task);
+        if (!result) {
+            co_return; // The old links stay; the next edit asks again.
+        }
+        auto mapped = std::make_shared<std::vector<EditorDocumentLink>>(toEditorDocumentLinks(*result, snap, enc));
+        post(binding, [slot, current, textVersion, mapped](EditorInsightBinding& target) {
+            if (!slot->isCurrent(current) || !target.m_view) {
+                return;
+            }
+            if (target.m_view->setDocumentLinks(textVersion, std::move(*mapped))) {
+                emit target.documentLinksApplied();
+            }
+        });
+    };
+    m_services.scheduler
+        .spawn(sched::Lane::Interactive,
+               deliver(std::move(work), self, &m_linksSlot, ticket, snapshot, encoding, version))
+        .detach();
+}
+
+void EditorInsightBinding::refreshFoldingRanges() {
+    if (!m_view || !m_serverAvailable) {
+        return;
+    }
+    const text::Snapshot snapshot = m_view->editor().text();
+    const std::uint64_t version = snapshot.version();
+    const sched::LatestWins::Ticket ticket = m_foldSlot.next();
+    auto work = fl::requestFoldingRanges(m_services.server, m_path, ticket.token);
+    const QPointer<EditorInsightBinding> self(this);
+    auto deliver = [](sched::Task<Result<std::vector<fl::FoldingRange>>> task, QPointer<EditorInsightBinding> binding,
+                      sched::LatestWins* slot, sched::LatestWins::Ticket current, text::Snapshot snap,
+                      std::uint64_t textVersion) -> sched::Task<void> {
+        auto result = co_await std::move(task);
+        if (!result) {
+            co_return;
+        }
+        auto mapped = std::make_shared<std::vector<text::ByteRange>>(toFoldCandidates(*result, snap));
+        post(binding, [slot, current, textVersion, mapped](EditorInsightBinding& target) {
+            if (!slot->isCurrent(current) || !target.m_view) {
+                return;
+            }
+            // Refused after an edit: the debounced refresh that edit started asks again.
+            if (target.m_view->setLanguageFoldRanges(textVersion, std::move(*mapped))) {
+                emit target.foldingRangesApplied();
+            }
+        });
+    };
+    m_services.scheduler
+        .spawn(sched::Lane::Interactive, deliver(std::move(work), self, &m_foldSlot, ticket, snapshot, version))
         .detach();
 }
 

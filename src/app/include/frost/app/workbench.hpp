@@ -817,8 +817,12 @@ private:
                                std::function<void(std::vector<ui::WorkbenchSymbol>)> done);
     void openLocation(const QString& path, int line, int column);
     void notify(const QString& title, const QString& text, ui::NotificationKind kind);
-    // Saves without notifying (the close path shows the error in its prompt).
+    // Saves without notifying (the close path shows the error in its prompt). The actions on save
+    // (runActionsOnSave) run first.
     [[nodiscard]] Result<void> saveQuietly(document::FileDocument& document);
+    // REF-12: editor.optimizeImportsOnSave and editor.formatOnSave for a C or C++ document, through
+    // clangd (workbench_save_actions.cpp); a skipped action notifies why. GUI thread only.
+    void runActionsOnSave(document::FileDocument& document);
     // The pre-save transform for `document`: editor.trimTrailingWhitespace and
     // editor.insertFinalNewline resolved for its file (settings plus .editorconfig), keeping the
     // line each of its views' primary caret is on.

@@ -35,6 +35,7 @@ frost_add_test(lang_unit_tests
         completion_test.cpp
         clangd_locator_test.cpp
         diagnostics_test.cpp
+        document_features_test.cpp
         document_sync_test.cpp
         engine_automation_test.cpp
         engine_discovery_process_test.cpp
@@ -61,6 +62,7 @@ frost_add_test(lang_clangd_tests
     SOURCES
         clangd_test.cpp
         clangd_encoding_test.cpp
+        clangd_features_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched
     LABELS integration clangd)
 target_include_directories(lang_clangd_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
