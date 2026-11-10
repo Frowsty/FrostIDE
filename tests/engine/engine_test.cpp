@@ -7,6 +7,7 @@
 // engine prints is checked by engine_corpus_tests against the pinned FrostEngine.
 
 #include "frost/engine/engine_cli.hpp"
+#include "frost/engine/engine_lua.hpp"
 #include "frost/engine/handle.hpp"
 #include "frost/engine/schema.hpp"
 #include "frost/io/file_system.hpp"
@@ -206,6 +207,108 @@ TEST(EngineCli, AnUnbuiltTreeHasNoProgramAndSaysWhere) {
     request.command = "";
     EXPECT_EQ(runEngineCliCommand(io::realProcessLauncher(), root.join("FrostEditor"), request).error().code(),
               ErrorCode::InvalidArgument);
+}
+
+TEST(EngineLua, GeneratesMetaStubsGlobalsAndComponentEntryNamesFromSchema) {
+    auto doc = parseSchemaDocument(minimalDocument());
+    ASSERT_TRUE(doc.has_value()) << doc.error().message();
+
+    const std::string stubs = generateEngineLuaStubs(*doc);
+    EXPECT_NE(stubs.find("---@meta frost_schema"), std::string::npos);
+    EXPECT_NE(stubs.find("---@alias ComponentName"), std::string::npos);
+    EXPECT_NE(stubs.find("---| '\"Transform\"'"), std::string::npos);
+    EXPECT_NE(stubs.find("---@class Transform"), std::string::npos);
+    EXPECT_NE(stubs.find("---@field Translation Vec3"), std::string::npos);
+    EXPECT_NE(stubs.find("---@overload fun(self: Entity, name: \"Transform\"): Transform"), std::string::npos);
+    EXPECT_NE(stubs.find("function Physics.Raycast("), std::string::npos);
+    EXPECT_NE(stubs.find("--- Cost: PhysicsQuery"), std::string::npos);
+    EXPECT_NE(stubs.find("--- Source: Frost/src/Frost/Scripting/Modules/PhysicsScriptModule.cpp:40"),
+              std::string::npos);
+    EXPECT_NE(stubs.find("---@class FrostScript"), std::string::npos);
+    EXPECT_NE(stubs.find("function FrostScript:OnUpdate("), std::string::npos);
+    EXPECT_NE(stubs.find("function OnUpdate("), std::string::npos);
+    // Lua's own standard library entries (`binding == "LuaLibrary"`) are not re-emitted as engine globals.
+    EXPECT_EQ(stubs.find("function string.format"), std::string::npos);
+
+    EXPECT_EQ(schemaComponentEntryNames(*doc, "Transform"), std::vector<std::string>{"Translation"});
+    const std::vector<std::string> globals = schemaLuaGlobals(*doc);
+    EXPECT_TRUE(std::ranges::contains(globals, "Physics"));
+    EXPECT_TRUE(std::ranges::contains(globals, "FrostScript"));
+    EXPECT_TRUE(std::ranges::contains(globals, "OnUpdate"));
+    EXPECT_FALSE(std::ranges::contains(globals, "string"));
+}
+
+TEST(EngineLua, ResolvesLuaSymbolsToSchemaCppBindingSources) {
+    auto doc = parseSchemaDocument(minimalDocument());
+    ASSERT_TRUE(doc.has_value()) << doc.error().message();
+
+    const std::string script = "local t = entity:GetComponent(\"Transform\")\n"
+                               "local pos = t.Translation\n"
+                               "local hit = Physics.Raycast(pos, pos)\n"
+                               "local cast = Physics.Cast(pos, pos)\n"
+                               "function Player:OnUpdate(dt)\n"
+                               "    local direct = Transform.Translation\n"
+                               "end\n";
+
+    // Component name literal inside `GetComponent("Transform")`.
+    const auto compLiteralPos = script.find("\"Transform\"") + 3;
+    EXPECT_EQ(resolveLuaCppBinding(*doc, script, ByteOffset{compLiteralPos}),
+              (SchemaSource{"Frost/src/Frost/Scene/Components.cpp", 12}));
+
+    // Component field via inferred variable `t.Translation`.
+    const auto inferredFieldPos = script.find("t.Translation") + 4;
+    EXPECT_EQ(resolveLuaCppBinding(*doc, script, ByteOffset{inferredFieldPos}),
+              (SchemaSource{"Frost/src/Frost/Scene/Components.cpp", 13}));
+
+    // Direct `Transform.Translation` with caret on `Translation`.
+    const auto directFieldPos = script.find("Transform.Translation") + 12;
+    EXPECT_EQ(resolveLuaCppBinding(*doc, script, ByteOffset{directFieldPos}),
+              (SchemaSource{"Frost/src/Frost/Scene/Components.cpp", 13}));
+
+    // `Physics.Raycast` with caret on `Raycast` and with caret on `Physics`.
+    const auto raycastPos = script.find("Physics.Raycast") + 10;
+    EXPECT_EQ(resolveLuaCppBinding(*doc, script, ByteOffset{raycastPos}),
+              (SchemaSource{"Frost/src/Frost/Scripting/Modules/PhysicsScriptModule.cpp", 40}));
+    const auto physicsPrefixPos = script.find("Physics.Raycast") + 2;
+    EXPECT_EQ(resolveLuaCppBinding(*doc, script, ByteOffset{physicsPrefixPos}),
+              (SchemaSource{"Frost/src/Frost/Scripting/Modules/PhysicsScriptModule.cpp", 40}));
+
+    // `Physics.Cast` (`sameAs: Physics.Raycast`, with its own registration line 44).
+    const auto castPos = script.find("Physics.Cast") + 9;
+    EXPECT_EQ(resolveLuaCppBinding(*doc, script, ByteOffset{castPos}),
+              (SchemaSource{"Frost/src/Frost/Scripting/Modules/PhysicsScriptModule.cpp", 44}));
+
+    // Event callback `Player:OnUpdate`.
+    const auto eventPos = script.find("OnUpdate") + 3;
+    EXPECT_EQ(resolveLuaCppBinding(*doc, script, ByteOffset{eventPos}),
+              (SchemaSource{"Frost/src/Frost/Scripting/ScriptCallbacks.cpp", 7}));
+
+    // Caret inside the generated meta stub itself (`frost_schema.lua`) resolves via `Source: <file>:<line>`.
+    const std::string stubs = generateEngineLuaStubs(*doc);
+    const auto stubFnPos = stubs.find("function Physics.Raycast") + 10;
+    EXPECT_EQ(resolveLuaCppBinding(*doc, stubs, ByteOffset{stubFnPos}),
+              (SchemaSource{"Frost/src/Frost/Scripting/Modules/PhysicsScriptModule.cpp", 40}));
+}
+
+TEST(EngineLua, HostProviderContributesSchemaMetaFilesThroughLuaHostApi) {
+    auto doc = parseSchemaDocument(minimalDocument());
+    ASSERT_TRUE(doc.has_value());
+    test::ScratchDir dir("engine-lua-host");
+    auto& fs = io::realFileSystem();
+
+    lang::LuaHostRegistry hosts;
+    hosts.add(std::make_shared<EngineLuaHostProvider>(*doc, dir.path()));
+    const auto contributions = hosts.contributions(fs, dir.path());
+    ASSERT_EQ(contributions.size(), 1U);
+    EXPECT_EQ(contributions[0].provider, "FrostEngine");
+    EXPECT_EQ(contributions[0].runtimeVersion, "Lua 5.4");
+    ASSERT_EQ(contributions[0].metaFiles.size(), 1U);
+    EXPECT_EQ(contributions[0].metaFiles[0].name, kEngineLuaStubFileName);
+
+    const auto metaDir = lang::luaHostMetaDirectory(dir.join("state"), contributions[0].provider, dir.path());
+    ASSERT_TRUE(metaDir.has_value());
+    ASSERT_TRUE(lang::writeLuaMetaFiles(fs, *metaDir, contributions[0].metaFiles).has_value());
+    EXPECT_TRUE(fs.exists(*metaDir + "/" + std::string(kEngineLuaStubFileName)).value_or(false));
 }
 
 } // namespace

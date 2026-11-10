@@ -581,6 +581,9 @@ public:
     // the decoded file diagnostics. Refuses untrusted workspaces and reports missing LuaLS.
     [[nodiscard]] Result<std::vector<lang::FileDiagnostics>> inspectLuaCode(std::string_view scopeDirectory = {});
     [[nodiscard]] std::vector<lang::FileDiagnostics> luaInspectedDiagnostics() const;
+    // FEC-10b: resolves the Lua symbol at the active editor's caret against the FrostEngine
+    // schema.export document and opens the C++ source_location file and line.
+    [[nodiscard]] Result<void> gotoCppBinding();
     [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
     [[nodiscard]] lang::ClangdService* clangd() noexcept { return m_clangd.get(); }
     // CPP-3: the owned compile-commands directories of a CMake folder's configurations and its
