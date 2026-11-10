@@ -24,6 +24,8 @@ set(frost_build_sources
     src/build_diagnostics.cpp
     src/build_service.cpp
     src/cmake_service.cpp
+    src/cmake_service_jobs.cpp
+    src/cmake_service_profiles.cpp
     src/cmake_toolchain.cpp
     src/diagnostic.cpp
     src/json.cpp

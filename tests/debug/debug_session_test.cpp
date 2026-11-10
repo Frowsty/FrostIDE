@@ -9,6 +9,7 @@
 #include "frost/debug/fake_debug_adapter.hpp"
 #include "frost/rpc/framing.hpp"
 
+#include "../../src/debug/src/debug_session_internal.hpp"
 #include "debug_test_util.hpp"
 #include <gtest/gtest.h>
 
@@ -700,6 +701,107 @@ TEST_F(DebugSessionTest, AProgramWithoutSymbolsIsNamedOnce) {
     EXPECT_EQ(output.find("other.dll"), std::string::npos) << output;
 #ifdef _WIN32
     EXPECT_NE(output.find("LinkIncremental=false"), std::string::npos) << output;
+#endif
+}
+
+TEST(DebugSessionInternal, PauseExceptionAndJumpMnemonicClassification) {
+    StopInfo pause1;
+    pause1.reason = "exception";
+    pause1.description = "exception 0x80000003 encountered";
+    EXPECT_TRUE(isPauseException(pause1));
+
+    StopInfo pause2;
+    pause2.reason = "exception";
+    pause2.text = "signal SIGSTOP";
+    EXPECT_TRUE(isPauseException(pause2));
+
+    StopInfo withBp = pause1;
+    withBp.hitBreakpointIds = {1};
+    EXPECT_FALSE(isPauseException(withBp));
+
+    StopInfo bpReason = pause1;
+    bpReason.reason = "breakpoint";
+    EXPECT_FALSE(isPauseException(bpReason));
+
+    StopInfo crashStop;
+    crashStop.reason = "exception";
+    crashStop.description = "Access violation 0xC0000005";
+    EXPECT_FALSE(isPauseException(crashStop));
+
+    EXPECT_TRUE(isJump("jmp 0x140001000"));
+    EXPECT_TRUE(isJump("  jmpq *%rax"));
+    EXPECT_TRUE(isJump("\tjmp\t0x401000"));
+    EXPECT_FALSE(isJump(""));
+    EXPECT_FALSE(isJump("call 0x140001000"));
+    EXPECT_FALSE(isJump("jne 0x140001000"));
+}
+
+TEST(DebugSessionInternal, StackFrameParsingAndSourceSelection) {
+    dap::StackFrame rawWithSource;
+    rawWithSource.id = 7;
+    rawWithSource.name = "main";
+    rawWithSource.line = 42;
+    rawWithSource.column = 5;
+    rawWithSource.moduleName = "app.exe";
+    rawWithSource.source.emplace();
+    rawWithSource.source->name = "main.cpp";
+    rawWithSource.source->path = "/app/main.cpp";
+    EXPECT_TRUE(hasSource(rawWithSource));
+
+    const DebugFrame withSource = toFrame(rawWithSource);
+    EXPECT_EQ(withSource.id, 7);
+    EXPECT_EQ(withSource.name, "main");
+    EXPECT_EQ(withSource.path, "/app/main.cpp");
+    EXPECT_EQ(withSource.sourceName, "main.cpp");
+    EXPECT_EQ(withSource.line, 42);
+    EXPECT_EQ(withSource.column, 5);
+    EXPECT_EQ(withSource.module, "app.exe");
+    EXPECT_FALSE(withSource.subtle);
+    EXPECT_TRUE(withSource.hasSource());
+
+    dap::StackFrame rawNoLine;
+    rawNoLine.id = 8;
+    rawNoLine.name = "ntdll!RtlUserThreadStart";
+    rawNoLine.line = 0;
+    rawNoLine.presentationHint = "subtle";
+    rawNoLine.source.emplace();
+    rawNoLine.source->name = "ntdll.dll";
+    rawNoLine.source->path = "/sys/ntdll.dll";
+    EXPECT_FALSE(hasSource(rawNoLine));
+    const DebugFrame noLine = toFrame(rawNoLine);
+    EXPECT_TRUE(noLine.subtle);
+
+    dap::StackFrame rawDeemphasizedRef;
+    rawDeemphasizedRef.id = 9;
+    rawDeemphasizedRef.line = 10;
+    rawDeemphasizedRef.source.emplace();
+    rawDeemphasizedRef.source->sourceReference = 3;
+    rawDeemphasizedRef.source->presentationHint = "deemphasize";
+    EXPECT_FALSE(hasSource(rawDeemphasizedRef));
+
+    EXPECT_FALSE(pickFrame({}, true).has_value());
+    const std::vector<DebugFrame> frames = {noLine, withSource};
+    const auto picked = pickFrame(frames, true);
+    ASSERT_TRUE(picked.has_value());
+    EXPECT_EQ(picked->id, 7);
+
+    const auto topWithoutSkip = pickFrame(frames, false);
+    ASSERT_TRUE(topWithoutSkip.has_value());
+    EXPECT_EQ(topWithoutSkip->id, 8);
+
+    const std::vector<DebugFrame> onlyUnsourced = {noLine};
+    const auto fallback = pickFrame(onlyUnsourced, true);
+    ASSERT_TRUE(fallback.has_value());
+    EXPECT_EQ(fallback->id, 8);
+}
+
+TEST(DebugSessionInternal, SameProgramComparesPathsPerPlatformRules) {
+    EXPECT_FALSE(sameProgram("", "/app/bin"));
+    EXPECT_FALSE(sameProgram("/app/bin", ""));
+    EXPECT_TRUE(sameProgram("/app/bin", "/app/bin"));
+    EXPECT_FALSE(sameProgram("/app/bin", "/app/other"));
+#ifdef _WIN32
+    EXPECT_TRUE(sameProgram(R"(C:\Work\App.exe)", "c:/work/app.EXE"));
 #endif
 }
 
