@@ -3,6 +3,70 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-10: R4a integration (Lua in the IDE and .fmeta-safe file operations)
+
+- **What changed for you.**
+  - **LuaLS workspace protocol (`LUA-3`)**: creating, renaming or deleting a `.lua` file notifies the running
+    `lua-language-server` via `workspace/didChangeWatchedFiles` so newly added modules resolve in `require()`
+    without restarting LuaLS. Changing Lua runtime or workspace settings sends `workspace/didChangeConfiguration`
+    to the running server. Server-initiated `workspace/configuration`, `window/workDoneProgress/create`,
+    `$/progress`, `workspace/semanticTokens/refresh`, `workspace/inlayHint/refresh` and `workspace/diagnostic/refresh`
+    are handled end-to-end, and multi-root workspace folders update through `workspace/didChangeWorkspaceFolders`.
+  - **Lua configuration, runtimes and `.luarc.json` (`LUA-4`)**: `frost::lang::readLuaRc` and `writeLuaRc` parse
+    and update `.luarc.json` (preserving unrelated user keys on write), and `SettingsLuaPage` (`Settings >
+    Languages > Lua`) configures Lua runtime version (`Lua 5.1`..`Lua 5.4`, `LuaJIT`), package path, library roots
+    and globals.
+  - **Lua host extension points (`LUA-13`)**: `ILuaHostProvider` and `LuaHostRegistry` allow host engines to
+    contribute runtime versions, globals and library directories in deterministic provider order without coupling
+    `LuaService` to any specific engine. `FrostEngineLuaProvider` implements the interface for FrostEngine.
+  - **Lua code insight (`LUA-5`)**: hover, signature help, Find Usages (`textDocument/references`), Structure view
+    (`textDocument/documentSymbol`) and inlay hints (`textDocument/inlayHint`) are routed through `LuaService` in
+    `LanguageController` and `EditorInsightBinding` when a `.lua` file is active, verified against the real bundled
+    LuaLS 3.19.1 oracle.
+  - **Lua diagnostics and Inspect Code (`LUA-6`)**: `inspectLuaDirectory` and `Workbench::inspectLuaCode`
+    (`code.inspectLua` / `Code > Inspect Lua Code...`) run `lua-language-server --check` via `IProcessLauncher`
+    behind the workspace trust gate, parse the exported JSON check report, and publish findings into the Problems
+    panel with clickable file/line navigation.
+  - **Lua semantic tokens and formatting (`LUA-7`)**: LuaLS semantic tokens highlight `.lua` buffers without
+    applying C++ `#if 0` inactive-region dimming (`markInactiveRegions = false` for Lua), and document/selection
+    formatting (`textDocument/formatting`, `textDocument/rangeFormatting`) applies LuaLS edits to the buffer.
+  - **`.fmeta`-safe file operations, phase A (`FEC-9a`)**: renaming, moving or deleting an asset inside a
+    FrostEngine `Assets/` tree atomically plans and executes the matching `.fmeta` sidecar operation with rollback
+    if the sidecar step fails, refuses standalone `.fmeta` rename/move in the Explorer, and runs the real
+    `FrostEditor assets.find-references --project <root> --asset <rel>` CLI via `IProcessLauncher` to warn about
+    every referencing asset.
+- **Merged into `r4a/integration`**:
+  - `r4/lua-3-4-13` (`4d38c34`: `LUA-3`, `LUA-4`, `LUA-13`),
+  - `r4/lua-5-6-7` (`15b158c`: `LUA-5`, `LUA-6`, `LUA-7`),
+  - `r4/fec-9a` (`9871b61`: `FEC-9a`).
+- **Exit criteria (R4a subset of R4):**
+  - Creating a new Lua module in the clone makes `require` resolve without a restart (`didChangeWatchedFiles`), and
+    changing the runtime in settings re-sends `didChangeConfiguration`: **met**
+    (`CorpusFrostEngine.ANewModuleInTheSampleResolvesWithoutARestartThroughTheHostApi`,
+    `LuaServiceRealTest.WatchedFileCreationAndConfigurationUpdateReachRunningLuaLsWithoutRestart`).
+  - Inspect Code on a scripts folder equals the `lua-language-server --check` output for that folder: **met**
+    (`LuaServiceRealTest.InspectLuaDirectoryMatchesDirectLuaLsCheckOracle`,
+    `WorkbenchLua.InspectLuaCodePublishesProblemsMatchingLuaLsCheckOracle`).
+  - Renaming or moving a script with a `.fmeta` sibling moves the sibling, and the engine CLI `find-references`
+    run warns about every referencing asset it reports: **met**
+    (`CorpusFrostEngine.FmetaSafeRenameAndMovePreserveSidecarsAndWarnWithEveryOracleReference`,
+    `FrostEngineAssetsTest.*`, `WorkbenchProjectEdit.FrostEngineAssetRenameMovesFmetaSidecarAndWarnsOnReferences`).
+- **Follow-ups** (owning epic):
+  - `LUA-3`: `LspClient` and `LuaService` support `workspace/didChangeWorkspaceFolders`, while a change in the set of
+    multi-root workspace folders in `Workbench::refreshLuaConfiguration` restarts `LuaService` so nested project
+    folders stay ordered before the checkout root in LuaLS.
+  - `LUA-6` / `FND-9b`: `Workbench::inspectLuaCode` currently awaits `runToCompletion` for `lua-language-server --check`
+    synchronously on the caller thread; moving the batch check onto a background task with progress reporting belongs
+    with the async inspection runner in `R5` (`CPP-6`).
+  - `FEC-9a` / `FEC-9b`: `FrostEditor assets.find-references` runs synchronously with a 30 s bound after an asset
+    rename/move/delete, and copy/paste/duplicate do not auto-pair `.fmeta` sidecars (only rename, move and delete are
+    in `FEC-9a` scope); `R14` (`FEC-9b`) upgrades asset move/rename to a background refactor preview that updates
+    referencing scenes/prefabs.
+  - `.gitignore`: changed `/build/` to `/build` so a Windows directory junction at `<worktree>/build` (which WSL
+    sees as a mode `120000` symlink) is never staged by `verify_stamp.py tree`.
+- **Next:** complete `R4c` (`CPP-5`, `REF-12`, `UX-3`) and `R4b` (`FEC-1`, `FER-1a`, `FEC-10b`, `LUA-11a`,
+  `FND-7c`).
+
 ## 2026-11-09: R3 integration (DD-2: an MSVC solution as the daily driver; UAT-1 as j2_msvc)
 
 - **What changed for you.** FrostIDE now opens a Visual Studio solution (.sln or .slnx) the way Visual
@@ -198,15 +262,13 @@ what is next, blockers and open questions for the user.
     configurations run but cannot be debugged (DBG-10).
   - UX-21: the Visual Studio 2022 and ReSharper keymaps are chosen in Settings > Keymap only; there is no
     first-run keymap picker (the launcher stays as it is).
-  - FND-8: "runs nothing of its own" means no process of the repository's own; FrostIDE's own git and cmake
-    still run in restricted mode as PLAN 3.5 allows. On POSIX, desktop autogroup scheduling can cancel the
-    builds' nice +10 against processes of other sessions; MSBuild's `-m` worker nodes are reused nodes that
-    may not inherit the priority (not measured).
+  - FND-8: "runs nothing of its own" means no process of the repository's own; FrostIDE's own git and clangd
+    still run in restricted mode as PLAN 3.5 allows.
   - SLN-9: Ctrl+F7 picks the file's project from the static solution model, not the evaluated one
     (build_service.cpp).
   - SLN-5: the explorer waits for the whole solution's evaluation, and every project edit restarts it.
-  - SLN-7: toolchain discovery has no caller yet; the Configuration Manager writes the .sln/.slnx without
-    checking for an unsaved tab of the same file.
+  - SLN-7: the Configuration Manager writes the .sln/.slnx without checking for an unsaved tab of the same file.
+  - SLN-14/CMK-3: toolchain discovery has no caller yet.
   - SLN-6: some refusal texts name the wrong owner epic; publishProjectEdit drops the unloaded projects'
     state from the model it republishes.
   - j2_run's cleanup cannot tell a `.frost/` folder a killed earlier run left in the pinned engine clone from
@@ -222,7 +284,8 @@ what is next, blockers and open questions for the user.
     it on the UI thread (LoadService::load from DocumentEditorFactory::open), font reads in
     ensureEditorFonts, safeWrite's temp file on save, FormatMessage in an .editorconfig read error, the trust
     dialog's path checks, painting). Each run shows a different one; none is in R3 code paths except the trust
-    dialog (FND-8).
+    dialog (FND-8). On POSIX, desktop autogroup scheduling can cancel the builds' nice +10 against processes of
+    other sessions; MSBuild's `-m` worker nodes may not inherit the priority (not measured).
   - VCS (restricted mode, FND-8): in an untrusted repository the restricted status hashes every tracked file
     with `git hash-object` on each refresh (Notepad++: about 43 git processes every 9 s for 24 minutes while a
     stuck build waited), a heavy load on large repositories.

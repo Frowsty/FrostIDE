@@ -44,6 +44,7 @@ frost_add_test(lang_unit_tests
         jsonrpc_test.cpp
         lsp_client_test.cpp
         lsp_workspace_test.cpp
+        frost_engine_assets_test.cpp
         frost_engine_lua_test.cpp
         lua_host_test.cpp
         lua_rc_test.cpp

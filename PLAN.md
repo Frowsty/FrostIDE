@@ -584,7 +584,7 @@ Code is documented with ordinary comments in every language in the repository. C
 | R1 | DD-1a: FrostEngine C++ on CMake presets (edit, navigate, build) and Lua basics | 19 | 32.25 |
 | R2 | DD-1: FrostEngine run, test and debug | 15 | 47.25 |
 | R3 | DD-2: MSVC .sln/.slnx daily driver (the work solution) | 32.5 | 79.75 |
-| R4 | Lua daily driver with FrostEngine API awareness, plus C++ editor completeness | 28 | 107.75 |
+| R4 | Lua daily driver with FrostEngine API awareness, plus C++ editor completeness (integrated on `main` as R4a, R4b, R4c) | 28 | 107.75 |
 | R5 | C++ insight at FrostEngine scale (CLion essentials I) | 27 | 134.75 |
 | R6 | FrostEngine live session | 20.75 | 155.5 |
 | R7 | FrostEngine Lua debugging, mixed C++/Lua and binding navigation | 22.5 | 178 |
@@ -681,7 +681,7 @@ Code is documented with ordinary comments in every language in the repository. C
 
 **Epics** (Appendix C): LUA-3 LuaLS LSP completeness; LUA-4 Lua configuration, runtimes and libraries; LUA-5 Lua code insight; LUA-6 Lua diagnostics and Inspect Code; LUA-7 Lua highlighting, formatting and editing; LUA-11a Lua DAP conformance suite; LUA-13 Lua host extension points; FEC-1 u64 handles and the frost::engine layer; FER-1a Contract v2 A: schema.export, project.lua aliases, source_location, cost tags; FEC-10b Engine-aware Lua; FEC-9a .fmeta-safe file operations, phase A; FND-7c j3_frostengine_lua journey; CPP-5 Stock clangd feature sweep; REF-12 Formatting and actions on save; UX-3 Editor essentials and the 52 unregistered actions.
 
-**Parallel tracks.** (A) Lua LSP track: LUA-3, then LUA-4 and LUA-13, then LUA-5, LUA-6 and LUA-7. (B) Engine track in the FrostEngine repo: FEC-1, then FER-1a, joining A at FEC-10b. (C) FEC-9a. (D) C++ track: CPP-5 and REF-12. (E) UX-3. LUA-11a runs independently. FND-7c closes the milestone.
+**Parallel tracks.** (A) Lua LSP track: LUA-3, then LUA-4 and LUA-13, then LUA-5, LUA-6 and LUA-7. (B) Engine track in the FrostEngine repo: FEC-1, then FER-1a, joining A at FEC-10b. (C) FEC-9a. (D) C++ track: CPP-5 and REF-12. (E) UX-3. LUA-11a runs independently. FND-7c closes the milestone. Integrated onto `main` in three verified sub-rounds: **R4a** (tracks A + C: LUA-3, LUA-4, LUA-5, LUA-6, LUA-7, LUA-13, FEC-9a), **R4b** (track B + LUA-11a + FND-7c: FEC-1, FER-1a, FEC-10b, LUA-11a, FND-7c), and **R4c** (tracks D + E: CPP-5, REF-12, UX-3).
 
 #### R5: C++ insight at FrostEngine scale (CLion essentials I) (27 units)
 **Goal.** Background indexing of the whole FrostEngine within a recorded budget, real Find Usages and hierarchies, an inspection framework with clang-tidy and SARIF, Code Vision and gutter marks from the index, a Unit Tests window with gutter run/debug, include management, Alt+Enter fixes, a sanitizer leg and a safe updater.
