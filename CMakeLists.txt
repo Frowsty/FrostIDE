@@ -196,7 +196,23 @@ endif()
 # asio::asio (header-only, BSL-1.0; frost::io's reactor, ADR 0020), found here for the same reason.
 # Fuzz trees install no vcpkg ports (VCPKG_MANIFEST_INSTALL=OFF) but share the normal tree's
 # installed directory and triplet, so they find the headers the normal configure installed.
-find_package(asio CONFIG)
+find_package(asio CONFIG QUIET)
+if(NOT TARGET asio::asio AND FROST_FUZZ)
+    find_path(_frost_asio_include NAMES asio.hpp
+        PATHS
+            "${VCPKG_INSTALLED_DIR}/x64-windows-clangcl/include"
+            "${VCPKG_INSTALLED_DIR}/x64-linux-clang/include"
+            "${PROJECT_SOURCE_DIR}/build/vcpkg_installed/x64-windows-clangcl/include"
+            "${PROJECT_SOURCE_DIR}/build/vcpkg_installed/x64-linux-clang/include"
+            "$ENV{FROST_SDK}/vcpkg/packages/asio_x64-windows-clangcl/include"
+            "$ENV{FROST_SDK}/vcpkg/packages/asio_x64-linux-clang/include"
+        NO_DEFAULT_PATH)
+    if(_frost_asio_include)
+        add_library(asio::asio INTERFACE IMPORTED)
+        target_include_directories(asio::asio SYSTEM INTERFACE "${_frost_asio_include}")
+        set(asio_FOUND TRUE)
+    endif()
+endif()
 if(NOT asio_FOUND)
     if(FROST_FUZZ)
         message(FATAL_ERROR "asio not found: fuzz trees use the headers the normal preset installs "

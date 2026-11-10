@@ -1,0 +1,15 @@
+<Solution Version="1.0">
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Release" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/Engine/Core/">
+    <File Path="README.md" />
+    <Project Path="App/App.vcxproj" Type="C++" Id="{22222222-2222-2222-2222-222222222222}">
+      <BuildType Solution="Debug|*" Project="Debug" />
+      <Platform Solution="*|x64" Project="x64" />
+      <Deploy Solution="Release|x64" Project="true" />
+    </Project>
+  </Folder>
+</Solution>

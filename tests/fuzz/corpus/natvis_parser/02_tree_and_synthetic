@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+  <Type Name="frost::TreeMap&lt;*,*&gt;">
+    <DisplayString Condition="m_size == 0">empty</DisplayString>
+    <DisplayString>[{m_size}] {{ root={m_root,na} }}</DisplayString>
+    <StringView>m_debugName,s8</StringView>
+    <Expand HideRawView="true">
+      <TreeItems>
+        <Size>m_size</Size>
+        <HeadPointer>m_root</HeadPointer>
+        <LeftPointer>left</LeftPointer>
+        <RightPointer>right</RightPointer>
+        <ValueNode>value</ValueNode>
+      </TreeItems>
+      <Synthetic Name="[stats]">
+        <DisplayString>height={m_height,x}</DisplayString>
+        <Expand>
+          <Item Name="height">m_height</Item>
+        </Expand>
+      </Synthetic>
+    </Expand>
+  </Type>
+</AutoVisualizer>

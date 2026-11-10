@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AutoVisualizer>
+  <Type Name="frost::IndexList&lt;*&gt;">
+    <Expand>
+      <IndexListItems>
+        <Size>m_count</Size>
+        <ValueNode>m_blocks[$i / 64][$i % 64],view(simple)na</ValueNode>
+      </IndexListItems>
+      <LinkedListItems>
+        <Size>m_count</Size>
+        <HeadPointer>m_head</HeadPointer>
+        <NextPointer>next</NextPointer>
+        <ValueNode>*this</ValueNode>
+      </LinkedListItems>
+    </Expand>
+  </Type>
+</AutoVisualizer>
