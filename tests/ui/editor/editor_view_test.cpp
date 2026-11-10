@@ -7,6 +7,7 @@
 
 #include "frost/ui/editor/display_list.hpp"
 
+#include "../../../src/ui/editor/src/editor_view_internal.hpp"
 #include "editor/editor_harness.hpp"
 #include <QAction>
 #include <QClipboard>
@@ -825,6 +826,83 @@ TEST(EditorView, RiderContextMenuExposesIntentionsNavigationAndEditActions) {
 
     duplicateAction->trigger();
     EXPECT_EQ(h.text(), "int value = 1;\nint value = 1;\n");
+}
+
+TEST(EditorViewInternal, CandidateIntervalTreeOrdersAndQueriesOverlappingFolds) {
+    const text::ByteRange outer{ByteOffset{10}, ByteOffset{100}};
+    const text::ByteRange inner{ByteOffset{20}, ByteOffset{50}};
+    const text::ByteRange widerSameStart{ByteOffset{10}, ByteOffset{120}};
+    const text::ByteRange later{ByteOffset{140}, ByteOffset{180}};
+
+    EXPECT_TRUE(candidateLess(widerSameStart, outer));
+    EXPECT_FALSE(candidateLess(outer, widerSameStart));
+    EXPECT_TRUE(candidateLess(outer, inner));
+    EXPECT_TRUE(candidateLess(inner, later));
+
+    std::vector<text::ByteRange> list = {later, inner, outer, inner, widerSameStart};
+    ASSERT_TRUE(orderCandidates(list, {}));
+    ASSERT_EQ(list.size(), 4U);
+    EXPECT_EQ(list[0], widerSameStart);
+    EXPECT_EQ(list[1], outer);
+    EXPECT_EQ(list[2], inner);
+    EXPECT_EQ(list[3], later);
+
+    std::vector<std::uint64_t> tree(list.size() * 4, 0);
+    EXPECT_EQ(buildCandidateMax(list, tree, 1, 0, list.size(), {}), 180U);
+
+    // Offset 200 is beyond all candidates.
+    EXPECT_FALSE(findCandidate(tree, 1, 0, list.size(), list.size(), 200).has_value());
+
+    // With limit = 3 (excluding `later`), offset 30 finds the rightmost covering candidate `inner` (index 2).
+    const auto atOffset30 = findCandidate(tree, 1, 0, list.size(), 3, 30);
+    ASSERT_TRUE(atOffset30.has_value());
+    EXPECT_EQ(*atOffset30, 2U);
+
+    // Offset 80 is past `inner` (end 50), so within limit = 3 it finds `outer` (index 1).
+    const auto atOffset80 = findCandidate(tree, 1, 0, list.size(), 3, 80);
+    ASSERT_TRUE(atOffset80.has_value());
+    EXPECT_EQ(*atOffset80, 1U);
+
+    // Offset 110 is past `outer` (end 100), so within limit = 3 it finds `widerSameStart` (index 0).
+    const auto atOffset110 = findCandidate(tree, 1, 0, list.size(), 3, 110);
+    ASSERT_TRUE(atOffset110.has_value());
+    EXPECT_EQ(*atOffset110, 0U);
+}
+
+TEST(EditorViewInternal, LineBreakAndNormaliseBreaksRespectPreferenceAndModelSettings) {
+    EXPECT_EQ(lineBreakFor("lf"), text::LineBreak::Lf);
+    EXPECT_EQ(lineBreakFor("crlf"), text::LineBreak::CrLf);
+    EXPECT_EQ(lineBreakFor("cr"), text::LineBreak::Cr);
+#ifdef _WIN32
+    EXPECT_EQ(lineBreakFor("system"), text::LineBreak::CrLf);
+#else
+    EXPECT_EQ(lineBreakFor("system"), text::LineBreak::Lf);
+#endif
+
+    EXPECT_EQ(breakText(text::LineBreak::Lf), "\n");
+    EXPECT_EQ(breakText(text::LineBreak::CrLf), "\r\n");
+    EXPECT_EQ(breakText(text::LineBreak::Cr), "\r");
+
+    EXPECT_EQ(breakToken(text::LineBreak::Lf), "LF");
+    EXPECT_EQ(breakToken(text::LineBreak::CrLf), "CRLF");
+    EXPECT_EQ(breakToken(text::LineBreak::Cr), "CR");
+
+    EditorViewSettings raw;
+    raw.tabSize = 0;
+    raw.indentSize = 0;
+    raw.insertSpaces = false;
+    raw.lineSeparator = "lf";
+    const text::EditorSettings clamped = modelSettings(raw);
+    EXPECT_EQ(clamped.tabSize, 1U);
+    EXPECT_EQ(clamped.indentSize, 1U);
+    EXPECT_FALSE(clamped.insertSpaces);
+    EXPECT_EQ(clamped.defaultLineBreak, text::LineBreak::Lf);
+
+    EXPECT_EQ(utf8(QStringLiteral("frost")), "frost");
+    EXPECT_EQ(normaliseBreaks("a\r\nb\rc\n", "\n"), "a\nb\nc\n");
+    EXPECT_EQ(normaliseBreaks("a\nb\rc\r\n", "\r\n"), "a\r\nb\r\nc\r\n");
+    EXPECT_EQ(normaliseBreaks("a\r\nb\nc", "\r"), "a\rb\rc");
+    EXPECT_EQ(normaliseBreaks("plain text", "\r\n"), "plain text");
 }
 
 } // namespace

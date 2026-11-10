@@ -12,6 +12,10 @@ frost_add_library(ui_workbench LAYER ui
         src/file_system_view.cpp
         src/merge_view.cpp
         src/workbench.cpp
+        src/workbench_actions.cpp
+        src/workbench_file_ops.cpp
+        src/workbench_persistence.cpp
+        src/workbench_popups.cpp
     DEPS frost::ui_shell frost::ui_nav frost::ui frost::search frost::document frost::project frost::settings
          frost::storage frost::diff frost::text frost::input frost::io frost::sched frost::core
     THIRD_PARTY Qt6::Widgets)
