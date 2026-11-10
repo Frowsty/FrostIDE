@@ -38,6 +38,8 @@ std::string expectedInitCommands(std::vector<std::string> first) {
     for (std::string& command : lldbDapLibstdcxxCommands()) {
         first.push_back(std::move(command));
     }
+#elif defined(_WIN32)
+    first.emplace_back(lldbDapWindowsStepCommand);
 #endif
     rpc::Json list = rpc::Json::array();
     for (std::string& command : first) {
@@ -141,12 +143,9 @@ TEST(LldbDap, LaunchArgumentsCarryTheResolvedRun) {
     const rpc::Json defaults = lldbDapLaunchArguments(target);
     EXPECT_EQ(defaults.stringAt("cwd"), workPath("App/x64/Debug")) << "the program's folder";
     EXPECT_EQ(defaults.stringAt("name"), "App.exe");
-    if constexpr (kWindows) {
-        EXPECT_EQ(defaults.find("initCommands"), nullptr);
-    } else {
-        ASSERT_NE(defaults.find("initCommands"), nullptr);
-        EXPECT_EQ(defaults.find("initCommands")->dump(), expectedInitCommands({}));
-    }
+    ASSERT_NE(defaults.find("initCommands"), nullptr);
+    EXPECT_EQ(defaults.find("initCommands")->dump(), expectedInitCommands({}));
+    EXPECT_EQ(lldbDapLaunchArguments(target, false, false).find("initCommands"), nullptr);
 }
 
 TEST(LldbDap, StopOnEntryReachesTheLaunchRequest) {
@@ -213,6 +212,7 @@ TEST(LldbDap, SessionOptionsFitThePlatform) {
     EXPECT_EQ(attach.targetMode, DebugTargetMode::Attach);
     EXPECT_EQ(launch.msvcExceptions, kWindows);
     EXPECT_EQ(attach.msvcExceptions, kWindows);
+    EXPECT_EQ(launch.stepOutOfNoDebug, kWindows);
     EXPECT_EQ(launch.breakOnAbort, kWindows);
     EXPECT_FALSE(attach.breakOnAbort);
     EXPECT_TRUE(launch.attachHint.empty());

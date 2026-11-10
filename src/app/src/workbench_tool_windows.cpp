@@ -92,15 +92,8 @@ void Workbench::attachToolWindows() {
         if (name.empty()) {
             return;
         }
-        auto created = createNewProjectSource(project.toStdString(), name);
-        if (created && !targetFilter.empty()) {
-            // ProjectHost files the new item itself; choosing the filter needs SLN-6.
-            notify(text("Add New File"),
-                   text("The file was not placed in filter '%1': moving files to a filter requires safe solution "
-                        "and project edits (SLN-6).")
-                       .arg(qs(targetFilter)),
-                   ui::NotificationKind::Warning);
-        }
+        // ProjectHost files the new item under the filter the menu was opened on (SLN-6).
+        static_cast<void>(createNewProjectSource(project.toStdString(), name, targetFilter));
     });
     explorer->setNewItemHandlers(
         [this](const QString& dir) {

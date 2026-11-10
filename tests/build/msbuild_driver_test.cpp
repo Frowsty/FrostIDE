@@ -111,6 +111,54 @@ TEST(MsBuildCommandLine, ProjectFileWithSolutionProperties) {
     EXPECT_TRUE(std::ranges::none_of(alone->arguments, [](const std::string& a) { return a.starts_with("-p:Sol"); }));
 }
 
+// SLN-9's Ctrl+F7: the ClCompile target of the project file with SelectedFiles (the evaluated
+// Identities, each escaped on its own and joined into one list) and the Solution* properties.
+TEST(MsBuildCommandLine, CompileRunsClCompileWithTheSelectedFiles) {
+    MsBuildRequest request = solutionRequest();
+    request.projectPath = "C:\\src\\Engine\\Engine.vcxproj";
+    request.action = BuildAction::Compile;
+    request.selectedFiles = {"src\\a.cpp"};
+    auto spec = frost::build::msbuildProcessSpec(request);
+    ASSERT_TRUE(spec.has_value()) << spec.error().describe();
+    EXPECT_EQ(spec->arguments,
+              (std::vector<std::string>{"C:\\src\\Engine\\Engine.vcxproj", "-t:ClCompile", "-p:Configuration=Debug",
+                                        "-p:Platform=x64", "-p:SolutionDir=C:\\src\\My Game\\",
+                                        "-p:SolutionPath=C:\\src\\My Game\\Game.sln", "-p:SolutionName=Game",
+                                        "-p:SolutionFileName=Game.sln", "-p:SolutionExt=.sln",
+                                        "-p:SelectedFiles=src\\a.cpp", "-m", "-nologo", "-nodeReuse:false",
+                                        "-v:minimal", "-clp:NoSummary;ForceNoAlign;DisableConsoleColor"}));
+    EXPECT_EQ(spec->workingDirectory, "C:\\src\\Engine");
+    EXPECT_EQ(frost::build::toString(BuildAction::Compile), "Compile");
+    EXPECT_EQ(frost::build::msbuildTargetName(BuildAction::Compile), "ClCompile");
+    EXPECT_EQ(frost::build::msbuildTargetName(BuildAction::Rebuild), "Rebuild");
+
+    request.selectedFiles = {"odd;name 50%.cpp", "..\\shared\\b.cpp"};
+    spec = frost::build::msbuildProcessSpec(request);
+    ASSERT_TRUE(spec.has_value()) << spec.error().describe();
+    EXPECT_TRUE(std::ranges::contains(spec->arguments, "-p:SelectedFiles=odd%3Bname 50%25.cpp;..\\shared\\b.cpp"));
+}
+
+// A compile that could compile the whole project (no file, an empty one) or that names no project
+// file is refused, and the other actions take no selected files.
+TEST(MsBuildCommandLine, CompileRefusesWhatWouldCompileMoreThanTheFile) {
+    MsBuildRequest base = solutionRequest();
+    base.action = BuildAction::Compile;
+    base.projectPath = "C:\\src\\Engine\\Engine.vcxproj";
+    std::vector<MsBuildRequest> bad(4, base);
+    bad[0].selectedFiles.clear();
+    bad[1].selectedFiles = {""};
+    bad[2].projectPath.clear();
+    bad[2].projectName = "Engine";
+    bad[2].selectedFiles = {"a.cpp"};
+    bad[3].action = BuildAction::Build;
+    bad[3].selectedFiles = {"a.cpp"};
+    for (std::size_t i = 0; i < bad.size(); ++i) {
+        auto spec = frost::build::msbuildProcessSpec(bad[i]);
+        ASSERT_FALSE(spec.has_value()) << i;
+        EXPECT_EQ(spec.error().code(), ErrorCode::InvalidArgument) << i;
+    }
+}
+
 TEST(MsBuildCommandLine, PropertiesAreEscaped) {
     MsBuildRequest request = solutionRequest();
     request.platform = "Any CPU";

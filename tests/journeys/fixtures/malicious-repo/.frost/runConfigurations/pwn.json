@@ -1,0 +1,6 @@
+{
+  "name": "Planted",
+  "type": "native",
+  "program": "planted/run-hook",
+  "beforeLaunch": [ { "type": "command", "command": "planted/before-launch-hook" } ]
+}

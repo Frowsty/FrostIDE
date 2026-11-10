@@ -293,7 +293,7 @@ std::string Workbench::defaultTargetPathForModify() const {
     const bool projectVisible = m_window && m_window->toolWindows().isVisible(ui::tool_windows::kProject);
     if (m_solution && m_explorer && (projectVisible || !filesVisible)) {
         if (const auto nodeId = m_explorer->currentNode()) {
-            const auto& node = m_solution->node(*nodeId);
+            const auto& node = m_explorer->solution()->node(*nodeId); // The shown model's ids.
             if ((node.kind == project::NodeKind::File || node.kind == project::NodeKind::Filter) &&
                 !node.path.empty()) {
                 return node.path;
@@ -308,7 +308,7 @@ std::string Workbench::defaultTargetPathForModify() const {
     }
     if (m_solution && m_explorer) {
         if (const auto nodeId = m_explorer->currentNode()) {
-            const auto& node = m_solution->node(*nodeId);
+            const auto& node = m_explorer->solution()->node(*nodeId); // The shown model's ids.
             if ((node.kind == project::NodeKind::File || node.kind == project::NodeKind::Filter) &&
                 !node.path.empty()) {
                 return node.path;
@@ -379,13 +379,15 @@ void Workbench::addPathsToActiveProject(const std::vector<std::string>& paths, s
                    ui::NotificationKind::Info);
             return;
         }
-        // One regular file is the edit ProjectHost supports; several files, a folder or a filter
-        // are refused (SLN-6) before the user is asked anything.
-        const auto single = m_services.fs.status(paths.front());
-        if (paths.size() != 1 || !targetFilterPath.empty() || !single || single->type != io::FileType::Regular) {
+        // Regular files go to the project in one ProjectHost edit (SLN-6), filed under the drop's
+        // filter; a folder is refused before the user is asked anything.
+        const bool regularFiles = std::ranges::all_of(paths, [&](const std::string& path) {
+            const auto status = m_services.fs.status(path);
+            return status && status->type == io::FileType::Regular;
+        });
+        if (!regularFiles) {
             notify(text("Add to Project"),
-                   text("Adding several files, a folder or a filter to a project requires safe solution and project "
-                        "edits (SLN-6). No file was changed."),
+                   text("Adding a folder to a project is not supported; add its files instead. No file was changed."),
                    ui::NotificationKind::Error);
             return;
         }
@@ -417,7 +419,7 @@ void Workbench::addPathsToActiveProject(const std::vector<std::string>& paths, s
         if (targetVcxproj.empty()) {
             return;
         }
-        removeProjectFile(qs(targetVcxproj), qs(paths.front()), true);
+        addProjectFiles(qs(targetVcxproj), paths, qs(targetFilterPath));
         return;
     }
 
@@ -600,12 +602,13 @@ void Workbench::removeSourceFromCMakeLists(const std::string& deletedPath, bool 
 }
 
 /*
- * Project files are not edited on a rename, move or delete (SLN-1, FND-3): the text rewrites of
- * .vcxproj, .vcxproj.filters and .csproj that used to run here could corrupt them, and safe project
- * edits arrive with SLN-6. The file-system operation has already happened; this only finds the
- * loaded projects that still list `oldPath` (a C++ item written without a wildcard, or a C#
- * Include attribute naming it or, for a folder, a path under it) and tells the user which project
- * files to update. Nothing is written. Reads each listed .csproj once; O(project items).
+ * Keeps the loaded projects in step with a rename, move or delete that has already happened on
+ * disk. A C++ project that lists `oldPath` (or, for a folder, files under it) as items written
+ * without a wildcard gets them renamed or removed in its .vcxproj and .vcxproj.filters through
+ * ProjectHost (SLN-6, ADR 0082; one queued edit per project, asynchronous). When such an edit
+ * cannot start, and for a C# project whose Include attribute names the path (.csproj files are not
+ * edited), a warning names the projects that still list the old path. Reads each listed .csproj
+ * once; O(project items).
  */
 void Workbench::updatePathInVcxproj(const std::string& oldPath, const std::string& newPath, bool directory,
                                     bool deleted) {
@@ -613,26 +616,40 @@ void Workbench::updatePathInVcxproj(const std::string& oldPath, const std::strin
         return;
     }
     const std::string oldKey = lang::documentKey(oldPath);
-    const auto names = [&](std::string_view path) {
-        const std::string key = lang::documentKey(path);
-        if (!directory)
-            return key == oldKey;
-        // The separator after the folder's key, read from the key itself (documentKey may not keep
-        // the spelling's length, so an index into `path` could land elsewhere).
-        return key.size() > oldKey.size() && key.starts_with(oldKey) &&
-               (key[oldKey.size()] == '/' || key[oldKey.size()] == '\\');
-    };
+    const QString name = qs(io::fileName(oldPath));
+    const QString what =
+        deleted ? text("%1 was deleted").arg(name)
+                : text("%1 was %2 to %3")
+                      .arg(name, io::parentPath(oldPath) == io::parentPath(newPath) ? text("renamed") : text("moved"),
+                           QDir::toNativeSeparators(qs(newPath)));
     QStringList stale;
+    QString reason;
+    for (project::ProjectPathChange& change :
+         project::projectEditsForPathChange(*m_solution, oldPath, deleted ? std::string_view{} : newPath, directory)) {
+        project::ProjectEdit edit;
+        edit.kind = deleted ? project::ProjectEditKind::RemoveFiles : project::ProjectEditKind::RenameFiles;
+        edit.definition = change.project;
+        edit.files = std::move(change.files);
+        edit.renamedTo = std::move(change.renamedTo);
+        if (auto refused = submitProjectEdit(std::move(edit), text("Update project files"))) {
+            stale.push_back(qs(io::fileName(change.project)));
+            reason = *refused;
+        }
+    }
+    if (!stale.isEmpty()) {
+        notify(text("Project files not updated"),
+               text("%1, but %2 still list its old path: %3 No project file was changed. Update the project "
+                    "manually.")
+                   .arg(what, stale.join(QStringLiteral(", ")), reason),
+               ui::NotificationKind::Warning);
+        stale.clear();
+    }
     for (const project::ProjectInfo& proj : m_solution->projects()) {
         if (proj.nodeKind != project::NodeKind::Project || proj.path.empty()) {
             continue;
         }
         bool listed = false;
-        if (proj.kind == project::ProjectKind::Cpp && proj.vcxproj) {
-            listed = std::ranges::any_of(proj.vcxproj->items, [&](const project::ProjectItem& item) {
-                return !item.fromWildcard && names(item.path);
-            });
-        } else if (proj.kind == project::ProjectKind::CSharp) {
+        if (proj.kind == project::ProjectKind::CSharp) {
             // SDK-style projects include their folder's files implicitly; only an explicit Include needs an edit.
             const std::string projDir(io::parentPath(proj.path));
             const std::string projKey = lang::documentKey(projDir);
@@ -657,15 +674,9 @@ void Workbench::updatePathInVcxproj(const std::string& oldPath, const std::strin
     if (stale.isEmpty()) {
         return;
     }
-    const QString name = qs(io::fileName(oldPath));
-    const QString what =
-        deleted ? text("%1 was deleted").arg(name)
-                : text("%1 was %2 to %3")
-                      .arg(name, io::parentPath(oldPath) == io::parentPath(newPath) ? text("renamed") : text("moved"),
-                           QDir::toNativeSeparators(qs(newPath)));
     notify(text("Project files not updated"),
-           text("%1, but %2 still list its old path. Updating project files on rename, move or delete requires "
-                "safe solution and project edits (SLN-6); no project file was changed. Update the project manually.")
+           text("%1, but %2 still list its old path. FrostIDE does not edit C# project files; no project file was "
+                "changed. Update the project manually.")
                .arg(what, stale.join(QStringLiteral(", "))),
            ui::NotificationKind::Warning);
 }

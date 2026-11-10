@@ -215,11 +215,17 @@ TEST(WorkbenchProjectEdit, AddsExistingSourceThroughProjectMenu) {
         const auto& last = rig.window->notifications().log().back().notification;
         FAIL() << last.title.toStdString() << ": " << last.text.toStdString();
     }
+    /*
+     * SLN-6 (ADR 0082): MSBuild's construction API places the item among the group's items of its
+     * type in order (after main.cpp) and indents it as the document does; the one-line filters
+     * file gets it inline.
+     */
     const std::string insertion = "<ClCompile Include=\"nested å 😀\\extra source.cpp\" />";
+    const std::string mainItem = "<ClCompile Include=\"main.cpp\" />";
     auto expectedProject = beforeProject;
-    expectedProject.insert(expectedProject.find("<ClCompile Include=\"main.cpp\""), insertion);
+    expectedProject.insert(expectedProject.find(mainItem) + mainItem.size(), "\n    " + insertion);
     auto expectedFilters = beforeFilters;
-    expectedFilters.insert(expectedFilters.find("<ClCompile Include=\"main.cpp\""), insertion);
+    expectedFilters.insert(expectedFilters.find(mainItem) + mainItem.size(), insertion);
     EXPECT_EQ(dir.read("App/App.vcxproj"), expectedProject);
     EXPECT_EQ(dir.read("App/App.vcxproj.filters"), expectedFilters);
     EXPECT_EQ(dir.read("App/nested å 😀/extra source.cpp"), "int extra() { return 1; }\n");
@@ -247,9 +253,11 @@ TEST(WorkbenchProjectEdit, AddsExistingSourceThroughProjectMenu) {
         const auto& last = rig.window->notifications().log().back().notification;
         FAIL() << last.title.toStdString() << ": " << last.text.toStdString();
     }
-    const std::string headerGroup = "<ItemGroup><ClInclude Include=\"nested å 😀\\first header.hpp\" /></ItemGroup>";
-    expectedProject.insert(expectedProject.rfind("</Project>"), headerGroup);
-    expectedFilters.insert(expectedFilters.rfind("</Project>"), headerGroup);
+    // A ClInclude has no group of its type yet: a new group follows the last item group.
+    const std::string headerItem = "<ClInclude Include=\"nested å 😀\\first header.hpp\" />";
+    expectedProject.insert(expectedProject.find("  <Import Project=\"$(VCTargetsPath)\\Microsoft.Cpp.targets\""),
+                           "  <ItemGroup>\n    " + headerItem + "\n  </ItemGroup>\n");
+    expectedFilters.insert(expectedFilters.rfind("</Project>"), "<ItemGroup>\n  " + headerItem + "\n</ItemGroup>");
     EXPECT_EQ(dir.read("App/App.vcxproj"), expectedProject);
     EXPECT_EQ(dir.read("App/App.vcxproj.filters"), expectedFilters);
     EXPECT_EQ(dir.read("App/nested å 😀/first header.hpp"), "#pragma once\n");
@@ -551,6 +559,96 @@ TEST(WorkbenchProjectEdit, RemovesSourceFromBothSolutionFormatsWithoutSavingDirt
         ASSERT_TRUE(built) << built.error().describe();
         EXPECT_EQ(built->exitCode, 0) << built->stdoutBytes << built->stderrBytes;
     }
+}
+
+/*
+ * SLN-6: a rename and a delete through the workbench update the .vcxproj and .vcxproj.filters
+ * through the real ProjectHost: the rename changes only the Include attributes, the delete removes
+ * the elements again (the project is byte-for-byte the fixture's), and MSBuild builds the result.
+ */
+TEST(WorkbenchProjectEdit, RenameAndDeleteUpdateTheProjectThroughProjectHost) {
+    auto& fs = frost::io::realFileSystem();
+    auto& launcher = frost::io::realProcessLauncher();
+    auto found = frost::build::findMsBuild(launcher, fs);
+    if (!found)
+        GTEST_SKIP() << found.error().describe();
+    WorkDir dir("rename edit", "tiny_sln");
+    WorkDir privateData("rename edit state");
+    const std::string fixtureProject = dir.read("App/App.vcxproj");
+    dir.write("App/extra.cpp", "int extra() { return 1; }\n");
+    std::string project = fixtureProject;
+    const std::string item = "<ClCompile Include=\"main.cpp\" />";
+    ASSERT_NE(project.find(item), std::string::npos);
+    project.insert(project.find(item) + item.size(), "\n    <ClCompile Include=\"extra.cpp\" />");
+    dir.write("App/App.vcxproj", project);
+    const std::string filters = "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\r\n"
+                                "  <ItemGroup>\r\n    <ClCompile Include=\"extra.cpp\">\r\n"
+                                "      <Filter>Source Files</Filter>\r\n    </ClCompile>\r\n  </ItemGroup>\r\n"
+                                "  <ItemGroup>\r\n    <ClCompile Include=\"main.cpp\" />\r\n  </ItemGroup>\r\n"
+                                "</Project>\r\n";
+    dir.write("App/App.vcxproj.filters", filters);
+    RigOptions options;
+    options.workbench.msbuildPath = found->msbuildPath;
+    options.workbench.projectEditHostPath = FROST_PROJECT_HOST;
+    options.workbench.projectEditStateDirectory = privateData.join("project-edits");
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    const auto failures = [&](std::size_t from) {
+        std::string out;
+        const auto& log = rig.window->notifications().log();
+        for (std::size_t i = from; i < log.size(); ++i)
+            if (log[i].notification.kind != frost::ui::NotificationKind::Info)
+                out += log[i].notification.title.toStdString() + ": " + log[i].notification.text.toStdString() + "\n";
+        return out;
+    };
+
+    // An edit has completed when ProjectHost removed its journal and the workbench its recovery record.
+    const auto settled = [&] {
+        const auto markers = fs.listDirectory(privateData.join("project-edits"));
+        return !fs.exists(dir.join(".frost-project-edit-journal")).value_or(true) && markers && markers->empty();
+    };
+
+    // Rename extra.cpp to "renamed å.cpp": only the two Include attributes change.
+    auto notices = rig.window->notifications().log().size();
+    auto renamed = rig.workbench->renameItem(dir.join("App/extra.cpp"), "renamed å.cpp");
+    ASSERT_TRUE(renamed) << renamed.error().describe();
+    std::string expectedProject = project;
+    expectedProject.replace(expectedProject.find("extra.cpp"), 9, "renamed å.cpp");
+    std::string expectedFilters = filters;
+    expectedFilters.replace(expectedFilters.find("extra.cpp"), 9, "renamed å.cpp");
+    ASSERT_TRUE(waitFor(
+        [&] { return (dir.read("App/App.vcxproj") != project && settled()) || !failures(notices).empty(); }, 120s));
+    ASSERT_EQ(failures(notices), "");
+    EXPECT_EQ(dir.read("App/App.vcxproj"), expectedProject);
+    EXPECT_EQ(dir.read("App/App.vcxproj.filters"), expectedFilters);
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->solution()->findFileNode(dir.join("App/renamed å.cpp")).has_value(); }, 60s));
+
+    // Delete it: the elements go; the project is the fixture's again, byte for byte.
+    notices = rig.window->notifications().log().size();
+    ASSERT_TRUE(rig.workbench->deleteItem(dir.join("App/renamed å.cpp")));
+    ASSERT_TRUE(waitFor(
+        [&] { return (dir.read("App/App.vcxproj") != expectedProject && settled()) || !failures(notices).empty(); },
+        120s));
+    ASSERT_EQ(failures(notices), "");
+    EXPECT_EQ(dir.read("App/App.vcxproj"), fixtureProject);
+    EXPECT_EQ(dir.read("App/App.vcxproj.filters"),
+              "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\r\n"
+              "  <ItemGroup>\r\n    <ClCompile Include=\"main.cpp\" />\r\n  </ItemGroup>\r\n</Project>\r\n");
+    const auto markers = fs.listDirectory(privateData.join("project-edits"));
+    ASSERT_TRUE(markers);
+    EXPECT_TRUE(markers->empty());
+    EXPECT_FALSE(fs.exists(dir.join(".frost-project-edit-journal")).value_or(true));
+    frost::io::ProcessSpec spec;
+    spec.executable = found->msbuildPath;
+    spec.arguments = {dir.join("Tiny.sln"), "-m:1",    "-p:Configuration=Debug",
+                      "-p:Platform=x64",    "-nologo", "-v:minimal",
+                      "-nodeReuse:false"};
+    spec.workingDirectory = dir.path();
+    const auto built = frost::io::runToCompletion(launcher, spec, {}, 120s);
+    ASSERT_TRUE(built) << built.error().describe();
+    EXPECT_EQ(built->exitCode, 0) << built->stdoutBytes << built->stderrBytes;
 }
 
 TEST(WorkbenchProjectEdit, ExistingJournalBlocksBuildButDoesNotTrapProjectOrReplayIt) {

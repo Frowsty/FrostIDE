@@ -774,7 +774,8 @@ Result<std::string> Workbench::createNewFolder(std::string_view directory, std::
     return created;
 }
 
-Result<std::string> Workbench::createNewProjectSource(std::string_view projectPath, std::string_view relativeName) {
+Result<std::string> Workbench::createNewProjectSource(std::string_view projectPath, std::string_view relativeName,
+                                                      std::string_view filter) {
     if (!m_nav) {
         return fail(ErrorCode::InvalidArgument, "the workbench has no window");
     }
@@ -788,7 +789,7 @@ Result<std::string> Workbench::createNewProjectSource(std::string_view projectPa
     }
     // Membership goes through the ProjectHost helper only (SLN-1, FND-3); its failures, including a
     // missing helper, arrive as notifications while the new file stays on disk.
-    removeProjectFile(qs(canonicalProject), qs(*created), true);
+    removeProjectFile(qs(canonicalProject), qs(*created), true, qs(filter));
     return created;
 }
 

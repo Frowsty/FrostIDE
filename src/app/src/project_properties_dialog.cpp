@@ -4,8 +4,10 @@
  * ProjectPropertiesDialog, SolutionPropertiesDialog and ConfigurationManagerDialog, with the
  * property page specifications they share (project_properties_dialog.hpp). Under the truth rule
  * (ADR 0078, FND-3) a view without a real tool behind it is read-only or disabled and names the
- * epic that will provide it: project reference and configuration edits (SLN-6) and debugger
- * settings (RUN-1). The other dialogs of project_properties_dialog.hpp live beside it (FND-12a):
+ * epic that will provide it: project reference and configuration edits (SLN-6). The Debugging
+ * page's per-user debugger settings are saved to <project>.vcxproj.user (SLN-11,
+ * frost/build/vcxproj_user.hpp), where Visual Studio keeps them. The other dialogs of
+ * project_properties_dialog.hpp live beside it (FND-12a):
  * Attach to Process and Run/Debug Configurations in project_run_dialogs.cpp; project references,
  * NuGet (LTR-7), the ASM/IL viewer (CPP-3, LTR-3) and Local History in project_tool_dialogs.cpp;
  * the source-text test and entry-point recognisers in project_unit_tests.cpp; the Unit Tests
@@ -14,7 +16,10 @@
 
 #include "project_properties_dialog.hpp"
 
+#include "frost/build/vcxproj_user.hpp"
+#include "frost/project/solution_configuration_edit.hpp"
 #include "frost/ui/dialog_chrome.hpp"
+#include "frost/ui/toolwindows/configuration_manager_dialog.hpp"
 
 #include <QAbstractItemView>
 #include <QComboBox>
@@ -29,6 +34,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
@@ -56,10 +62,13 @@ QString referenceEditsUnavailable() {
                           "edits (SLN-6).");
 }
 
+// FieldSpec::options for a multi-line value (a QPlainTextEdit), such as the debugger's NAME=VALUE lines.
+constexpr const char* kMultiLineField = "\n";
+
 struct FieldSpec {
     const char* key;
     const char* label;
-    const char* options; // nullptr or ';'-separated combo options
+    const char* options; // nullptr, kMultiLineField, or ';'-separated combo options
 };
 
 struct PageSpec {
@@ -68,18 +77,23 @@ struct PageSpec {
     std::vector<FieldSpec> fields;
     // Non-null: the page is shown read-only with this reason and its fields are never written.
     const char* readOnlyReason = nullptr;
+    // Non-null: an editable page's note (the Debugging page says where its values are saved).
+    const char* note = nullptr;
 };
 
 /*
- * The Debugging page's LocalDebugger* properties are per-user settings (Visual Studio keeps them in
- * <project>.vcxproj.user); writing them into the shared project file would put one user's command
- * line into every checkout. Editing them requires run configurations (RUN-1), so the page shows
- * them read-only, as MSBuild sees them: the .vcxproj.user values over the project file's.
+ * The Debugging page's LocalDebugger* properties are per-user settings: Visual Studio keeps them in
+ * <project>.vcxproj.user, and writing them into the shared project file would put one user's command
+ * line into every checkout. The page shows them as MSBuild sees them (the .vcxproj.user values over
+ * the project file's) and saves a changed value to the .vcxproj.user file only, in Visual Studio's
+ * format (frost/build/vcxproj_user.hpp, SLN-11); Run and Debug ask MSBuild for them, so F5 uses
+ * what was saved. A cleared field removes the .user value, so the project file's applies again.
  */
-constexpr const char* kDebuggingReadOnlyReason =
-    "Read-only: editing debugger settings requires run configurations (RUN-1). The values are read from "
-    "the project's .vcxproj.user file, else from the project file; nothing on this page is saved.";
+constexpr const char* kDebuggingNote =
+    "Debugger settings are per user: they are saved to the project's .vcxproj.user file, as Visual Studio "
+    "does, and override the project file's. Run and Debug (F5) use them.";
 constexpr std::string_view kLocalDebuggerPrefix = "Prop.LocalDebugger";
+constexpr std::string_view kPropPrefix = "Prop.";
 
 std::vector<PageSpec> cppPropertyPages() {
     return {
@@ -116,9 +130,10 @@ std::vector<PageSpec> cppPropertyPages() {
              {"Prop.LocalDebuggerCommand", "Command", nullptr},
              {"Prop.LocalDebuggerCommandArguments", "Command Arguments", nullptr},
              {"Prop.LocalDebuggerWorkingDirectory", "Working Directory", nullptr},
-             {"Prop.LocalDebuggerEnvironment", "Environment", nullptr},
+             {"Prop.LocalDebuggerEnvironment", "Environment", kMultiLineField},
          },
-         kDebuggingReadOnlyReason},
+         nullptr,
+         kDebuggingNote},
         {"C/C++",
          "General",
          {
@@ -365,11 +380,25 @@ void buildPropertyPagesUi(const std::vector<PageSpec>& specs, QTreeWidget* tree,
             note->setObjectName(QStringLiteral("projectPropertiesReadOnlyNote"));
             note->setWordWrap(true);
             form->addRow(note);
+        } else if (page.note != nullptr) {
+            auto* note = new QLabel(QString::fromUtf8(page.note), container);
+            note->setObjectName(QStringLiteral("projectPropertiesNote"));
+            note->setWordWrap(true);
+            form->addRow(note);
         }
 
         for (const FieldSpec& f : page.fields) {
             const std::string keyStr(f.key);
-            if (f.options != nullptr) {
+            if (f.options == kMultiLineField) {
+                auto* edit = new QPlainTextEdit(container);
+                edit->setObjectName(QString::fromStdString("prop_" + keyStr));
+                edit->setMaximumHeight(edit->fontMetrics().lineSpacing() * 5);
+                edit->setReadOnly(readOnly);
+                form->addRow(QString::fromUtf8(f.label) + QLatin1Char(':'), edit);
+                // Lines stay as typed; only the whitespace around the whole value is dropped.
+                bindings.push_back({keyStr, [edit] { return edit->toPlainText().trimmed().toStdString(); },
+                                    [edit](const std::string& val) { edit->setPlainText(toQs(val)); }, readOnly});
+            } else if (f.options != nullptr) {
                 auto* combo = new QComboBox(container);
                 combo->setEditable(true);
                 combo->setObjectName(QString::fromStdString("prop_" + keyStr));
@@ -459,8 +488,8 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
     const auto loadCurrentConfig = [&] {
         const std::string cfg = cfgCombo ? cfgCombo->currentText().toStdString() : std::string();
         loadedProps = isCpp ? parseVcxprojPropertiesForConfig(currentXml, cfg) : parseCsprojProperties(currentXml);
-        // MSBuild imports <project>.user after the project, so its debugger settings win; they are
-        // shown read-only (kDebuggingReadOnlyReason) and the .user file is never written here.
+        // MSBuild imports <project>.user after the project, so its debugger settings win; a changed
+        // one is saved back to the .user file (kDebuggingNote).
         if (isCpp) {
             const std::string userPath = projectPath + ".user";
             if (fs.exists(userPath).value_or(false)) {
@@ -493,11 +522,53 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
         if (updates.empty())
             return true;
         const std::string cfg = cfgCombo ? cfgCombo->currentText().toStdString() : std::string();
-        currentXml = isCpp ? applyVcxprojPropertiesForConfig(currentXml, cfg, updates)
-                           : applyCsprojProperties(currentXml, updates);
-        if (auto written = fs.writeFileAtomic(projectPath, currentXml); !written) {
-            QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"), toQs(written.error().message()));
-            return false;
+        // The debugger settings go to <project>.vcxproj.user (kDebuggingNote), in each configuration
+        // the combo names ("All Configurations": every one it lists), never into the project file.
+        std::vector<build::UserFileProperty> userUpdates;
+        if (isCpp) {
+            for (auto it = updates.begin(); it != updates.end();) {
+                if (std::string_view(it->first).starts_with(kLocalDebuggerPrefix)) {
+                    userUpdates.push_back({it->first.substr(kPropPrefix.size()), it->second});
+                    it = updates.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        if (!userUpdates.empty()) {
+            std::vector<std::string> configurations;
+            if (cfgCombo != nullptr && cfgCombo->currentIndex() == cfgCombo->count() - 1) {
+                for (int i = 0; i + 1 < cfgCombo->count(); ++i)
+                    configurations.push_back(cfgCombo->itemText(i).toStdString());
+            } else {
+                configurations.push_back(cfg);
+            }
+            for (const std::string& configuration : configurations) {
+                const std::size_t bar = configuration.find('|');
+                if (bar == std::string::npos) {
+                    QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"),
+                                         QStringLiteral("'%1' is not a Configuration|Platform pair; the debugger "
+                                                        "settings were not saved.")
+                                             .arg(toQs(configuration)));
+                    return false;
+                }
+                if (auto written = build::writeUserFileProperties(fs, projectPath, configuration.substr(0, bar),
+                                                                  configuration.substr(bar + 1), userUpdates);
+                    !written) {
+                    QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"),
+                                         toQs(written.error().message()));
+                    return false;
+                }
+            }
+        }
+        if (!updates.empty()) {
+            currentXml = isCpp ? applyVcxprojPropertiesForConfig(currentXml, cfg, updates)
+                               : applyCsprojProperties(currentXml, updates);
+            if (auto written = fs.writeFileAtomic(projectPath, currentXml); !written) {
+                QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"),
+                                     toQs(written.error().message()));
+                return false;
+            }
         }
         loadCurrentConfig();
         if (onSaved)
@@ -621,92 +692,23 @@ void showSolutionPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const pr
 void showConfigurationManagerDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
                                     int activeConfigurationIndex, std::function<void(int)> onActiveConfigurationChanged,
                                     std::function<void()> onSolutionFileModified) {
-    // Read-only until SLN-6/SLN-7: nothing here writes the solution or a project file.
-    static_cast<void>(fs);
-    static_cast<void>(onSolutionFileModified);
-    QDialog dialog(parent);
-    dialog.setObjectName(QStringLiteral("configurationManagerDialog"));
-    dialog.setWindowTitle(QStringLiteral("Configuration Manager"));
-    dialog.setModal(true);
-    dialog.resize(680, 420);
-
-    auto* outer = new QVBoxLayout(&dialog);
-    auto* topRow = new QHBoxLayout();
-    topRow->addWidget(new QLabel(QStringLiteral("Active solution configuration:"), &dialog));
-    auto* activeCombo = new QComboBox(&dialog);
-    activeCombo->setObjectName(QStringLiteral("cfgManagerActiveCombo"));
-    const auto configs = solution.configurations();
-    for (std::size_t i = 0; i < configs.size(); ++i)
-        activeCombo->addItem(toQs(configs[i].name()));
-    if (activeConfigurationIndex >= 0 && activeConfigurationIndex < activeCombo->count())
-        activeCombo->setCurrentIndex(activeConfigurationIndex);
-    topRow->addWidget(activeCombo, 1);
-    outer->addLayout(topRow);
-
-    auto* table = new QTableWidget(&dialog);
-    table->setObjectName(QStringLiteral("cfgManagerProjectTable"));
-    table->setColumnCount(4);
-    table->setHorizontalHeaderLabels({QStringLiteral("Project"), QStringLiteral("Configuration"),
-                                      QStringLiteral("Platform"), QStringLiteral("Build")});
-    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-
-    // Shows each mapping exactly as the solution file declares it; a project without one says so
-    // instead of showing an invented Debug|x64.
-    const auto populateTable = [&](int cfgIdx) {
-        const auto projects = solution.projects();
-        table->setRowCount(static_cast<int>(projects.size()));
-        for (std::size_t p = 0; p < projects.size(); ++p) {
-            const auto readOnly = [](QTableWidgetItem* item) {
-                item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-                return item;
-            };
-            table->setItem(static_cast<int>(p), 0, readOnly(new QTableWidgetItem(toQs(projects[p].name))));
-            const project::ProjectConfigurationMapping* mapping = nullptr;
-            if (cfgIdx >= 0 && static_cast<std::size_t>(cfgIdx) < configs.size()) {
-                const auto& found = solution.projectConfiguration(project::ProjectId{static_cast<std::uint32_t>(p)},
-                                                                  static_cast<std::size_t>(cfgIdx));
-                if (found)
-                    mapping = &*found;
-            }
-            const QString notMapped = QStringLiteral("(not mapped)");
-            table->setItem(static_cast<int>(p), 1,
-                           readOnly(new QTableWidgetItem(mapping ? toQs(mapping->configuration) : notMapped)));
-            table->setItem(static_cast<int>(p), 2,
-                           readOnly(new QTableWidgetItem(mapping ? toQs(mapping->platform) : notMapped)));
-            auto* buildItem = new QTableWidgetItem(mapping ? QString() : notMapped);
-            // Checkable for display only: without Qt::ItemIsEnabled the user cannot toggle it.
-            buildItem->setFlags(Qt::ItemIsUserCheckable);
-            buildItem->setCheckState(mapping && mapping->build ? Qt::Checked : Qt::Unchecked);
-            table->setItem(static_cast<int>(p), 3, buildItem);
-        }
-    };
-    populateTable(activeCombo->currentIndex());
-    QObject::connect(activeCombo, &QComboBox::currentIndexChanged, &dialog, populateTable);
-    outer->addWidget(table, 1);
-
-    auto* readOnlyNote = new QLabel(
-        QStringLiteral("Read-only: editing project configuration mappings arrives with SLN-6 (safe solution and "
-                       "project edits). Choosing the active solution configuration is applied; nothing is saved to "
-                       "the solution."),
-        &dialog);
-    readOnlyNote->setObjectName(QStringLiteral("cfgManagerReadOnlyNote"));
-    readOnlyNote->setWordWrap(true);
-    outer->addWidget(readOnlyNote);
-
-    // "Set Active" applies the selection to the IDE only; there is no OK that implies a save.
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-    auto* setActive = buttons->addButton(QStringLiteral("Set Active"), QDialogButtonBox::AcceptRole);
-    setActive->setObjectName(QStringLiteral("cfgManagerSetActiveButton"));
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-        if (activeCombo->currentIndex() >= 0 && onActiveConfigurationChanged)
-            onActiveConfigurationChanged(activeCombo->currentIndex());
-        dialog.accept();
-    });
-    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    outer->addWidget(buttons);
-    ui::installDialogChrome(&dialog, true);
-    dialog.exec();
+    bool written = false;
+    ui::ConfigurationManagerDialog dialog(
+        solution, activeConfigurationIndex,
+        [&](std::span<const project::ConfigurationMappingEdit> edits) -> Result<void> {
+            auto result = project::writeSolutionConfigurationEdits(fs, solution, edits);
+            written = written || result.has_value();
+            return result;
+        },
+        parent);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const int active = dialog.activeConfiguration();
+    // The solution is reloaded first, so the new active configuration reads the written mappings.
+    if (written && onSolutionFileModified)
+        onSolutionFileModified();
+    if (active >= 0 && onActiveConfigurationChanged)
+        onActiveConfigurationChanged(active);
 }
 
 } // namespace frost::app

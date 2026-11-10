@@ -124,6 +124,31 @@ Result<std::string> uriToPath(std::string_view uri, io::PathStyle style) {
     return io::normalizePath(path, style);
 }
 
+namespace {
+
+std::string_view fileNameOf(std::string_view path) noexcept {
+    const std::size_t slash = path.find_last_of("/\\");
+    return slash == std::string_view::npos ? path : path.substr(slash + 1);
+}
+
+char asciiLower(char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
+
+} // namespace
+
+bool mayHaveDocumentKey(std::string_view path, std::string_view key) noexcept {
+    const std::string_view name = fileNameOf(path);
+    // normalizePath may drop or rewrite these, so only the full comparison can tell.
+    if (name.empty() || name == "." || name == ".." || name.back() == '.' || name.back() == ' ')
+        return true;
+    const std::string_view keyName = fileNameOf(key);
+    if (name.size() != keyName.size())
+        return false;
+    for (std::size_t i = 0; i < name.size(); ++i)
+        if (asciiLower(name[i]) != asciiLower(keyName[i]))
+            return false;
+    return true;
+}
+
 std::string documentKey(std::string_view path, io::PathStyle style) {
     auto normalized = io::normalizePath(path, style);
     std::string key = normalized ? std::move(*normalized) : std::string(path);

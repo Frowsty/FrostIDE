@@ -998,6 +998,9 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
         // A console parent shares its console, so inherited console handles stay valid.
         flags |= CREATE_NO_WINDOW;
     }
+    if (spec.belowNormalPriority) {
+        flags |= BELOW_NORMAL_PRIORITY_CLASS; // The child's descendants inherit it.
+    }
     // TODO(M1): log applicationName, the working directory and the command line (PLAN.md 3.5) once
     // frost::core has logging (the crash and logging slice, PLAN.md I3; see process.hpp).
     PROCESS_INFORMATION info{};

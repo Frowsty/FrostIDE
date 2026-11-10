@@ -2,7 +2,9 @@
 //
 // frost::run unit tests (label unit): RunConfiguration validation, the JSON store's reader and
 // writer, load and save over a MemFs workspace, launchPlanFor and displayCommandLine, and the
-// RunManager rules that start no process (refusals, Busy, Prepare, a failing before-launch step).
+// RunManager rules that start no process (refusals, Busy, Prepare, a failing before-launch step), and
+// RUN-5's model: before-launch tasks, compound and attach configurations, their validation, the
+// version-2 store members and attach target matching.
 
 #include "frost/core/clock.hpp"
 #include "frost/io/mem_fs.hpp"
@@ -191,7 +193,8 @@ TEST(RunConfigurationStore, RefusesDamagedFilesWhole) {
     refused("[]", ErrorCode::Corrupt, "not a JSON object");
     refused("{\"configurations\": []}", ErrorCode::Corrupt, "'version'");
     refused("{\"version\": 0}", ErrorCode::Corrupt, "version 0");
-    refused("{\"version\": 2, \"configurations\": []}", ErrorCode::Unsupported, "version 2 is newer");
+    // Version 2 is RUN-5's (before-launch tasks, compound and attach); the next one is refused.
+    refused("{\"version\": 3, \"configurations\": []}", ErrorCode::Unsupported, "version 3 is newer");
     refused("{\"version\": 1, \"configurations\": {}}", ErrorCode::Corrupt, "not an array");
     refused(head + good + "}, " + good + "}]}", ErrorCode::Corrupt, "#2: the id 'a' is used twice");
     refused(head + good + "}, 3]}", ErrorCode::Corrupt, "#2: not an object");
@@ -245,6 +248,146 @@ TEST(RunConfigurationStore, SavesUnderTheWorkspacesFrostFolderAndLoadsBack) {
     ASSERT_FALSE(damaged.has_value());
     EXPECT_EQ(damaged.error().code(), ErrorCode::Corrupt);
     EXPECT_NE(damaged.error().describe().find("configurations.json"), std::string::npos) << damaged.error().describe();
+}
+
+// ---- RUN-5: before-launch tasks, compound and attach configurations.
+
+RunConfiguration compoundConfiguration(std::vector<std::string> members) {
+    RunConfiguration configuration;
+    configuration.id = "compound.both";
+    configuration.name = "Both";
+    configuration.type = RunType::Compound;
+    configuration.configurations = std::move(members);
+    return configuration;
+}
+
+RunConfiguration attachConfiguration(std::string target) {
+    RunConfiguration configuration;
+    configuration.id = "attach.editor";
+    configuration.name = "Attach to FrostEditor";
+    configuration.type = RunType::Attach;
+    configuration.target = std::move(target);
+    return configuration;
+}
+
+TEST(RunConfigurationRun5, CompoundAndAttachSpellingsRoundTrip) {
+    for (const RunType type : {RunType::Compound, RunType::Attach}) {
+        EXPECT_EQ(parseRunType(toString(type)), type);
+    }
+    EXPECT_EQ(toString(RunType::Compound), "compound");
+    EXPECT_EQ(toString(RunType::Attach), "attach");
+}
+
+TEST(RunConfigurationRun5, ValidationOfTasksMembersAndProcesses) {
+    const auto refused = [](RunConfiguration configuration, std::string_view fragment) {
+        auto checked = validateRunConfiguration(configuration);
+        ASSERT_FALSE(checked.has_value()) << fragment;
+        EXPECT_EQ(checked.error().code(), ErrorCode::InvalidArgument);
+        EXPECT_NE(checked.error().message().find(fragment), std::string::npos) << checked.error().message();
+    };
+    RunConfiguration withTask = nativeConfiguration();
+    withTask.beforeLaunchTasks = {
+        {.program = native("tools/gen.exe"), .arguments = {"--out", "gen"}, .workingDirectory = {}}};
+    EXPECT_TRUE(validateRunConfiguration(withTask).has_value());
+    RunConfiguration c = withTask;
+    c.beforeLaunchTasks[0].program = "gen.exe";
+    refused(c, "not an absolute program path");
+    c = withTask;
+    c.beforeLaunchTasks[0].workingDirectory = "relative";
+    refused(c, "working directory");
+    c = withTask;
+    c.beforeLaunchTasks[0].arguments = {std::string("a\0b", 3)};
+    refused(c, "task argument contains NUL");
+    RunConfiguration msbuild;
+    msbuild.id = "m";
+    msbuild.name = "M";
+    msbuild.type = RunType::MSBuild;
+    msbuild.target = native("Game/Game.vcxproj");
+    msbuild.beforeLaunchTasks = withTask.beforeLaunchTasks;
+    refused(msbuild, "cannot have before-launch tasks");
+    c = nativeConfiguration();
+    c.configurations = {"other"};
+    refused(c, "only a compound configuration");
+
+    EXPECT_TRUE(validateRunConfiguration(compoundConfiguration({"cmake.FrostEditor", "native.server"})).has_value());
+    refused(compoundConfiguration({}), "at least one configuration");
+    refused(compoundConfiguration({"a", "a"}), "listed twice");
+    refused(compoundConfiguration({"compound.both"}), "cannot start itself");
+    refused(compoundConfiguration({"bad id"}), "not a run configuration id");
+    c = compoundConfiguration({"a"});
+    c.program = native("a.exe");
+    refused(c, "only lists the configurations");
+    c = compoundConfiguration({"a"});
+    c.beforeLaunchTasks = withTask.beforeLaunchTasks;
+    refused(c, "only lists the configurations");
+
+    EXPECT_TRUE(validateRunConfiguration(attachConfiguration("FrostEditor.exe")).has_value());
+    EXPECT_TRUE(validateRunConfiguration(attachConfiguration(native("bin/FrostEditor.exe"))).has_value());
+    refused(attachConfiguration(""), "executable name or absolute path");
+    refused(attachConfiguration("bin/FrostEditor.exe"), "executable name or absolute path");
+    c = attachConfiguration("FrostEditor.exe");
+    c.arguments = {"-x"};
+    refused(c, "starts nothing");
+}
+
+TEST(RunConfigurationRun5, AttachTargetsMatchByFileNameOrPath) {
+    const std::string path = native("bin/FrostEditor.exe");
+    EXPECT_TRUE(attachTargetMatches("FrostEditor.exe", path));
+    EXPECT_TRUE(attachTargetMatches(path, path));
+    EXPECT_FALSE(attachTargetMatches("FrostRuntime.exe", path));
+    EXPECT_FALSE(attachTargetMatches(native("other/FrostEditor.exe"), path));
+    EXPECT_FALSE(attachTargetMatches("", path));
+    EXPECT_FALSE(attachTargetMatches("FrostEditor.exe", ""));
+    if constexpr (io::kNativePathStyle == io::PathStyle::Windows) {
+        // Windows names ignore case; either separator names the same path.
+        EXPECT_TRUE(attachTargetMatches("frosteditor.EXE", path));
+        EXPECT_TRUE(attachTargetMatches("c:/work/BIN/frosteditor.exe", path));
+    } else {
+        EXPECT_FALSE(attachTargetMatches("frosteditor.exe", path));
+    }
+}
+
+TEST(RunConfigurationRun5, TheStoreKeepsVersion1UnlessRun5FeaturesAreUsed) {
+    const std::vector<RunConfiguration> plain{everyField(), nativeConfiguration()};
+    EXPECT_NE(serializeRunConfigurations(plain).find("\"version\": 1"), std::string::npos);
+    EXPECT_EQ(serializeRunConfigurations(plain).find("beforeLaunchTasks"), std::string::npos);
+
+    RunConfiguration withTask = nativeConfiguration("tasks");
+    withTask.beforeLaunchTasks = {
+        {.program = native("tools/gen.exe"), .arguments = {"--out", "two words"}, .workingDirectory = native("gen")},
+        {.program = native("tools/check.exe"), .arguments = {}, .workingDirectory = {}}};
+    const std::vector<RunConfiguration> all{everyField(), withTask, compoundConfiguration({"tasks", "app"}),
+                                            attachConfiguration("FrostEditor.exe")};
+    const std::string text = serializeRunConfigurations(all);
+    EXPECT_NE(text.find("\"version\": 2"), std::string::npos) << text;
+    EXPECT_NE(text.find("\"configurations\": [\"tasks\",\"app\"]"), std::string::npos) << text;
+    auto parsed = parseRunConfigurations(text);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error().describe();
+    EXPECT_EQ(*parsed, all);
+    for (const RunConfiguration& configuration : all) {
+        EXPECT_EQ(usesRun5Features(configuration), configuration.id != everyField().id) << configuration.id;
+    }
+
+    // Damaged RUN-5 members refuse the whole file.
+    const auto refused = [](const std::string& text, std::string_view fragment) {
+        auto result = parseRunConfigurations(text);
+        ASSERT_FALSE(result.has_value()) << text;
+        EXPECT_EQ(result.error().code(), ErrorCode::Corrupt);
+        EXPECT_NE(result.error().message().find(fragment), std::string::npos) << result.error().message();
+    };
+    const std::string good = "{\"version\": 2, \"configurations\": [{\"id\": \"a\", \"name\": \"A\", \"type\": "
+                             "\"native\", \"program\": " +
+                             quoted("a.exe");
+    refused(good + ", \"beforeLaunchTasks\": {}}]}", "'beforeLaunchTasks' is not an array");
+    refused(good + ", \"beforeLaunchTasks\": [3]}]}", "not an object");
+    refused(good + ", \"beforeLaunchTasks\": [{\"arguments\": []}]}]}", "'program' is missing");
+    refused(good + ", \"beforeLaunchTasks\": [{\"program\": " + quoted("t.exe") + ", \"arguments\": [1]}]}]}",
+            "not a string");
+    refused("{\"version\": 2, \"configurations\": [{\"id\": \"c\", \"name\": \"C\", \"type\": \"compound\", "
+            "\"configurations\": \"a\"}]}",
+            "'configurations' is not an array");
+    refused("{\"version\": 2, \"configurations\": [{\"id\": \"c\", \"name\": \"C\", \"type\": \"compound\"}]}",
+            "at least one configuration");
 }
 
 TEST(RunLaunchPlan, UsesTheProgramsFolderWithoutAWorkingDirectory) {

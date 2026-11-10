@@ -12,8 +12,10 @@
 
 #include "frost/app/welcome_screen.hpp"
 #include "frost/build/build_session.hpp"
+#include "frost/build/vcxproj_user.hpp"
 #include "frost/core/build_info.hpp"
 #include "frost/core/mutex.hpp"
+#include "frost/input/keymap.hpp"
 #include "frost/io/async_process.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/storage/hot_exit_journal.hpp"
@@ -70,8 +72,11 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -1673,6 +1678,68 @@ TEST(Workbench, KeymapSettingsSwitchesBetweenIntelliJAndVisualStudioModes) {
     buttons->button(QDialogButtonBox::Cancel)->click();
 }
 
+/*
+ * UX-21's keymap picker is Settings > Keymap (never the launcher, never a first-run step): it lists
+ * every built-in keymap, the default stays IntelliJ, and choosing the ReSharper or Visual Studio 2022
+ * keymap there applies it live, with their documented shortcuts on the workbench's real actions.
+ * Compile (Ctrl+F7, SLN-9) comes from the build module's defaults, which neither keymap overrides.
+ */
+TEST(Workbench, TheKeymapPickerOffersEveryBuiltinKeymapAndAppliesReSharperAndVisualStudio2022) {
+    WorkDir dir("settings-keymap-picker");
+    WorkbenchRig rig(dir);
+    rig.show();
+    EXPECT_EQ(rig.workbench->keymap().keymap().id(), "intellij") << "the default keymap is unchanged";
+    const auto primary = [&](std::string_view action) -> std::string {
+        const auto id = rig.workbench->registry().find(action);
+        if (!id)
+            return "(no action " + std::string(action) + ")";
+        const auto list = rig.workbench->keymap().shortcutsFor(*id);
+        return list.empty() ? std::string("(unbound)") : frost::input::formatSequence(list.front());
+    };
+    const struct {
+        const char* keymap;
+        std::vector<std::pair<std::string_view, std::string_view>> shortcuts;
+    } choices[] = {
+        {"resharper",
+         {{"refactor.this", "Ctrl+Shift+R"},
+          {"code.showIntentions", "Alt+Enter"},
+          {"navigate.gotoFile", "Ctrl+Shift+T"},
+          {"build.buildSolution", "Ctrl+Shift+B"},
+          {"build.compileFile", "Ctrl+F7"}}},
+        {"visual-studio-2022",
+         {{"navigate.declaration", "F12"},
+          {"refactor.rename", "Ctrl+R, Ctrl+R"},
+          {"file.saveDocument", "Ctrl+S"},
+          {"build.buildSolution", "Ctrl+Shift+B"},
+          {"build.compileFile", "Ctrl+F7"}}},
+    };
+    for (const auto& choice : choices) {
+        rig.window->refreshActions();
+        rig.window->mainToolbar().button(frost::ui::MainToolbar::kSettings)->click();
+        auto* dialog = rig.window->findChild<QDialog*>(QStringLiteral("settingsDialog"));
+        ASSERT_NE(dialog, nullptr);
+        auto* keymapCombo = dialog->findChild<QComboBox*>(QStringLiteral("setting.keymap.id"));
+        auto* buttons = dialog->findChild<QDialogButtonBox*>();
+        ASSERT_NE(keymapCombo, nullptr);
+        ASSERT_NE(buttons, nullptr);
+        std::set<std::string> listed;
+        for (int i = 0; i < keymapCombo->count(); ++i)
+            listed.insert(keymapCombo->itemData(i).toString().toStdString());
+        for (const std::string_view id : frost::input::builtinKeymapIds())
+            EXPECT_TRUE(listed.contains(std::string(id))) << "the picker does not offer " << id;
+        EXPECT_EQ(listed.size(), frost::input::builtinKeymapIds().size());
+
+        const int index = keymapCombo->findData(QString::fromLatin1(choice.keymap));
+        ASSERT_GE(index, 0) << choice.keymap;
+        keymapCombo->setCurrentIndex(index);
+        buttons->button(QDialogButtonBox::Ok)->click();
+        EXPECT_EQ(rig.settings->snapshot()->get(frost::settings::key::keymapId), choice.keymap);
+        ASSERT_TRUE(waitFor([&] { return rig.workbench->keymap().keymap().id() == choice.keymap; })) << choice.keymap;
+        for (const auto& [action, shortcut] : choice.shortcuts)
+            EXPECT_EQ(primary(action), shortcut) << choice.keymap << " " << action;
+    }
+}
+
 TEST(Workbench, NewProjectSupportsVisualStudioCppLibrariesAndDotNetTemplates) {
     WorkDir dir("new-project-all-templates");
     WorkbenchRig rig(dir);
@@ -1888,8 +1955,13 @@ TEST(Workbench, RenameMoveAndDeleteEditCMakeListsOnlyAfterAPreviewAndNeverMsBuil
         ASSERT_TRUE(rig.workbench->documents().save(rig.workbench->currentView()->document()).has_value());
     }
 
-    // 2. Visual Studio C++ project (.sln + .vcxproj): rename, move and delete happen on disk, the
-    // .vcxproj and .vcxproj.filters keep every byte (SLN-6), and the user is told which still list the file.
+    /*
+     * 2. Visual Studio C++ project (.sln + .vcxproj): rename, move and delete happen on disk. This
+     * rig has no ProjectHost helper, so the project edit that would follow (SLN-6; with the real
+     * helper in WorkbenchProjectEdit.RenameAndDeleteUpdateTheProjectThroughProjectHost) cannot
+     * start: .vcxproj and .vcxproj.filters keep every byte and the user is told which still list
+     * the file, and why.
+     */
     {
         auto created = rig.workbench->createNewProject({
             .name = "VsRenameDemo",
@@ -1904,7 +1976,7 @@ TEST(Workbench, RenameMoveAndDeleteEditCMakeListsOnlyAfterAPreviewAndNeverMsBuil
             EXPECT_EQ(dir.read("VsRenameDemo/VsRenameDemo.vcxproj.filters"), filtersBefore) << what;
             EXPECT_EQ(lastNotice().title, QStringLiteral("Project files not updated")) << what;
             EXPECT_EQ(lastNotice().kind, frost::ui::NotificationKind::Warning) << what;
-            EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("SLN-6"))) << what;
+            EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("No project file was changed"))) << what;
             EXPECT_TRUE(lastNotice().text.contains(QStringLiteral("VsRenameDemo.vcxproj"))) << what;
         };
         const std::string mainCpp = dir.join("VsRenameDemo/main.cpp");
@@ -2295,8 +2367,6 @@ void clickOk(QDialog& dlg) {
     ok->click();
 }
 
-// The Debugging page shows the per-user LocalDebugger* settings read-only (RUN-1): the values come
-// from App.vcxproj.user, the fields cannot be edited, and OK writes neither project file.
 // A FrostEngine asset's metadata sidecar (<asset>.fmeta) moves with it on rename and on move; when
 // the target's sidecar name is taken, neither file moves.
 TEST(Workbench, RenamingOrMovingAnAssetMovesItsFmetaSidecar) {
@@ -2436,7 +2506,11 @@ TEST(Workbench, ProcParsingNamesProcessesFromTheExecutableAndSkipsKernelThreads)
     EXPECT_TRUE(frost::app::readProcProcesses(dir.join("no-proc"), 0, readLink).empty());
 }
 
-TEST(Workbench, ProjectPropertiesDebuggingPageIsReadOnlyAndWritesNothing) {
+// SLN-11: the Debugging page shows the per-user LocalDebugger* settings as MSBuild sees them (the
+// values of App.vcxproj.user) and saves edits to App.vcxproj.user only, in Visual Studio's format:
+// the project file stays byte for byte, the rest of the .user file too, and other configurations'
+// settings are untouched. (Replaces the read-only page of RUN-1, which this epic makes editable.)
+TEST(Workbench, ProjectPropertiesDebuggingPageSavesToTheUserFileOnly) {
     WorkDir dir("project-properties-debugging", "tiny_sln");
     WorkbenchRig rig(dir);
     rig.show();
@@ -2456,26 +2530,28 @@ TEST(Workbench, ProjectPropertiesDebuggingPageIsReadOnlyAndWritesNothing) {
         auto* args = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerCommandArguments"));
         auto* cwd = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerWorkingDirectory"));
         auto* command = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerCommand"));
+        auto* environment = dlg->findChild<QPlainTextEdit*>(QStringLiteral("prop_Prop.LocalDebuggerEnvironment"));
         ASSERT_NE(args, nullptr);
         ASSERT_NE(cwd, nullptr);
         ASSERT_NE(command, nullptr);
+        ASSERT_NE(environment, nullptr);
         EXPECT_EQ(args->text(), QStringLiteral("--print \"two words\" --echo --exit 3"));
         EXPECT_EQ(cwd->text(), QStringLiteral("$(SolutionDir)Lib"));
-        for (QLineEdit* edit : {args, cwd, command}) {
-            EXPECT_TRUE(edit->isReadOnly()) << edit->objectName().toStdString();
-            EXPECT_TRUE(edit->toolTip().contains(QStringLiteral("RUN-1"))) << edit->objectName().toStdString();
-        }
+        EXPECT_EQ(environment->toPlainText(),
+                  QStringLiteral("FROST_TINY_VALUE=hello from $(Configuration)\nFROST_TINY_OTHER=1"));
+        for (QLineEdit* edit : {args, cwd, command})
+            EXPECT_FALSE(edit->isReadOnly()) << edit->objectName().toStdString();
+        EXPECT_FALSE(environment->isReadOnly());
         bool noteFound = false;
-        for (auto* note : dlg->findChildren<QLabel*>(QStringLiteral("projectPropertiesReadOnlyNote")))
-            noteFound = noteFound || note->text().contains(QStringLiteral("RUN-1"));
+        for (auto* note : dlg->findChildren<QLabel*>(QStringLiteral("projectPropertiesNote")))
+            noteFound = noteFound || note->text().contains(QStringLiteral(".vcxproj.user"));
         EXPECT_TRUE(noteFound);
-        // An editable page next to it still saves; here nothing else changes.
-        auto* deps = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Link.AdditionalDependencies"));
-        ASSERT_NE(deps, nullptr);
-        EXPECT_FALSE(deps->isReadOnly());
-        // Text set programmatically past the read-only flag is still never saved.
-        args->setText(QStringLiteral("--changed"));
-        command->setText(QStringLiteral("C:/evil.exe"));
+        EXPECT_TRUE(dlg->findChildren<QLabel*>(QStringLiteral("projectPropertiesReadOnlyNote")).isEmpty() ||
+                    std::ranges::none_of(dlg->findChildren<QLabel*>(QStringLiteral("projectPropertiesReadOnlyNote")),
+                                         [](QLabel* note) { return note->text().contains(QStringLiteral("RUN-1")); }));
+        args->setText(QStringLiteral("--print <changed> & more"));
+        cwd->setText(QString());
+        environment->setPlainText(QStringLiteral("FROST_TINY_VALUE=edited\nFROST_TINY_OTHER=2"));
         auto* buttons = dlg->findChild<QDialogButtonBox*>();
         QPushButton* ok = buttons != nullptr ? buttons->button(QDialogButtonBox::Ok) : nullptr;
         ASSERT_NE(ok, nullptr);
@@ -2485,9 +2561,23 @@ TEST(Workbench, ProjectPropertiesDebuggingPageIsReadOnlyAndWritesNothing) {
     frost::app::showProjectPropertiesDialog(rig.window.get(), frost::io::realFileSystem(), dir.join("App/App.vcxproj"),
                                             "Debug|x64", [&] { savedCalled = true; });
     EXPECT_TRUE(inspected);
-    EXPECT_EQ(dir.read("App/App.vcxproj"), vcxproj);
-    EXPECT_EQ(dir.read("App/App.vcxproj.user"), user);
-    (void)savedCalled; // Whether OK reports a save of unchanged values is not what this test pins.
+    EXPECT_TRUE(savedCalled);
+    EXPECT_EQ(dir.read("App/App.vcxproj"), vcxproj) << "debugger settings never go into the shared project file";
+    // The writer's own output for the same edit (the writer is checked against MSBuild in
+    // build_msbuild_tests): the Debug|x64 group changes, everything else of the file stays.
+    auto expected = frost::build::updateUserFileProperties(
+        user, "Debug", "x64",
+        {{"LocalDebuggerCommandArguments", "--print <changed> & more"},
+         {"LocalDebuggerWorkingDirectory", ""},
+         {"LocalDebuggerEnvironment", "FROST_TINY_VALUE=edited\nFROST_TINY_OTHER=2"}});
+    ASSERT_TRUE(expected.has_value()) << expected.error().describe();
+    const std::string written = dir.read("App/App.vcxproj.user");
+    EXPECT_EQ(written, *expected);
+    EXPECT_TRUE(written.contains("<LocalDebuggerCommandArguments>--print &lt;changed&gt; &amp; more"
+                                 "</LocalDebuggerCommandArguments>"))
+        << written;
+    EXPECT_FALSE(written.contains("LocalDebuggerWorkingDirectory")) << "a cleared field removes the value";
+    EXPECT_TRUE(written.contains("<!-- SPDX-License-Identifier: Apache-2.0 -->")) << written;
 }
 
 TEST(Workbench, ProjectMembershipEditsAreRefusedAndLeaveSolutionFilesUnchanged) {
@@ -2701,7 +2791,10 @@ TEST(Workbench, ProjectDialogsAreReadOnlyAndWriteNoProjectFile) {
     bool written = false;
     const auto onWrite = [&] { written = true; };
 
-    // Configuration Manager: the mappings as loaded, not editable; "Set Active" only selects.
+    /* Configuration Manager (editable since SLN-7; its writes are tested in
+     * solution_configuration_edit_test.cpp and workbench_configuration_manager_test.cpp): the
+     * mappings as loaded, edited only through the row's editors, never typed into the cells; OK
+     * without an edit applies the active configuration and writes nothing. */
     std::optional<int> activeChosen;
     inspectModal(rig.window.get(), QStringLiteral("configurationManagerDialog"), [](QDialog& dlg) {
         auto* table = dlg.findChild<QTableWidget*>(QStringLiteral("cfgManagerProjectTable"));
@@ -2712,19 +2805,11 @@ TEST(Workbench, ProjectDialogsAreReadOnlyAndWriteNoProjectFile) {
                 ASSERT_NE(table->item(row, column), nullptr);
                 EXPECT_FALSE(table->item(row, column)->flags().testFlag(Qt::ItemIsEditable));
             }
-            EXPECT_FALSE(table->item(row, 3)->flags().testFlag(Qt::ItemIsEnabled));
             EXPECT_EQ(table->item(row, 1)->text(), QStringLiteral("Debug"));
             EXPECT_EQ(table->item(row, 2)->text(), QStringLiteral("x64"));
         }
-        auto* note = dlg.findChild<QLabel*>(QStringLiteral("cfgManagerReadOnlyNote"));
-        ASSERT_NE(note, nullptr);
-        EXPECT_TRUE(note->text().contains(QStringLiteral("SLN-6")));
-        auto* buttons = dlg.findChild<QDialogButtonBox*>();
-        ASSERT_NE(buttons, nullptr);
-        EXPECT_EQ(buttons->button(QDialogButtonBox::Ok), nullptr);
-        auto* setActive = dlg.findChild<QPushButton*>(QStringLiteral("cfgManagerSetActiveButton"));
-        ASSERT_NE(setActive, nullptr);
-        setActive->click();
+        EXPECT_EQ(dlg.findChild<QLabel*>(QStringLiteral("cfgManagerReadOnlyNote")), nullptr);
+        clickOk(dlg);
     });
     frost::app::showConfigurationManagerDialog(
         rig.window.get(), fs, *solution, 0, [&](int index) { activeChosen = index; }, onWrite);
@@ -3099,9 +3184,10 @@ TEST(Workbench, CompoundRunIsUnavailableUntilRunFiveAndStartsNothing) {
     EXPECT_TRUE(launcher.launches().empty());
 }
 
-// The Run/Debug Configurations dialog's compound section (RUN-3's dialog) reaches the same
-// refusal: the RUN-5 notice and no launch.
-TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAndStartsNothing) {
+// RUN-5: the Run/Debug Configurations dialog's compound section is the feature now (it replaced
+// R2's disabled RUN-5 notice, D32): in an open workspace Add Compound... adds an unnamed compound
+// configuration to the dialog's list and starts nothing; Cancel stores nothing.
+TEST(Workbench, CompoundRunInTheRunConfigurationsDialogAddsAConfigurationAndStartsNothing) {
     WorkDir dir("compound-run-dialog", "tiny_sln");
     frost::io::ScriptedProcessLauncher launcher;
     RigOptions options;
@@ -3112,19 +3198,26 @@ TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAn
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
     auto id = rig.workbench->registry().find("run.editConfigurations");
     ASSERT_TRUE(id);
+    const std::size_t before = rig.workbench->runController()->configurations().all().size();
     bool clicked = false;
-    bool disabled = false;
-    QString tooltip;
+    bool enabled = false;
+    int rowsBefore = -1;
+    int rowsAfter = -1;
+    QString added;
     QTimer::singleShot(0, rig.window.get(), [&] {
         auto* group = rig.window->findChild<QWidget*>(QStringLiteral("compoundRunGroup"));
         auto* launch = rig.window->findChild<QPushButton*>(QStringLiteral("compoundLaunchButton"));
-        if (group != nullptr && launch != nullptr) {
-            disabled = !launch->isEnabled() && !group->isEnabled();
-            tooltip = launch->toolTip();
-            launch->click(); // A disabled button ignores the click.
+        auto* list = rig.window->findChild<QListWidget*>(QStringLiteral("runConfigurationList"));
+        if (group != nullptr && launch != nullptr && list != nullptr) {
+            enabled = launch->isEnabled() && group->isEnabled();
+            rowsBefore = list->count();
+            launch->click();
+            rowsAfter = list->count();
+            if (list->currentItem() != nullptr)
+                added = list->currentItem()->text();
             clicked = true;
         }
-        // Whatever happened, no dialog stays open.
+        // Cancel: no dialog stays open.
         for (QDialog* dialog : rig.window->findChildren<QDialog*>())
             if (dialog->isVisible())
                 dialog->reject();
@@ -3133,8 +3226,10 @@ TEST(Workbench, CompoundRunInTheRunConfigurationsDialogIsDisabledNamingRunFiveAn
     context.trusted = true;
     EXPECT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
     ASSERT_TRUE(clicked);
-    EXPECT_TRUE(disabled) << "the compound launch controls must not be offered before RUN-5";
-    EXPECT_TRUE(tooltip.contains(QStringLiteral("RUN-5"))) << tooltip.toStdString();
+    EXPECT_TRUE(enabled) << "an open workspace can store a compound configuration";
+    EXPECT_EQ(rowsAfter, rowsBefore + 1);
+    EXPECT_TRUE(added.contains(QStringLiteral("compound"))) << added.toStdString();
+    EXPECT_EQ(rig.workbench->runController()->configurations().all().size(), before) << "Cancel stored it";
     EXPECT_TRUE(launcher.launches().empty());
 }
 

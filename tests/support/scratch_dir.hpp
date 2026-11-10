@@ -66,6 +66,28 @@ inline bool removeTree(io::IFileSystem& fs, const std::string& path) {
     return fs.removeDirectory(path).has_value() && ok;
 }
 
+/*
+ * Makes every file and directory below `path` owner-writable, without following links. git writes
+ * its object files read-only, which Windows refuses to delete; a local clone on the same volume
+ * hard-links them, so a clone's tree holds read-only files even when the clone's own writes did not.
+ * Best effort: errors are ignored, and removeTree reports what still cannot be removed.
+ */
+inline void makeTreeWritable(const std::string& path) {
+    auto root = io::toStdPath(path);
+    if (path.empty() || !root) {
+        return;
+    }
+    std::error_code error;
+    for (auto it = std::filesystem::recursive_directory_iterator(*root, error);
+         !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
+        std::error_code ignored;
+        if (!it->is_symlink(ignored)) {
+            std::filesystem::permissions(it->path(), std::filesystem::perms::owner_write,
+                                         std::filesystem::perm_options::add, ignored);
+        }
+    }
+}
+
 class ScratchDir {
 public:
     // Creates "<temp>/frost-<tag>-<pid>-<n>"; `tag` may contain any characters valid in a file name.

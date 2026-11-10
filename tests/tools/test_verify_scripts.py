@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for the pure helpers inside the verify scripts (ADR 0027), run without running a verification.
-# On Windows the functions Split-WslSummary, ConvertTo-WslPath, Get-CtestCounts and Get-WslArgs are taken
-# from tools/verify.ps1's syntax tree and called in a child Windows PowerShell 5.1, both PowerShell
-# scripts must parse, and every ctest call keeps error boxes off (checked against a real ctest). On
-# Linux tools/verify.sh must pass `bash -n`, and its parse_args, ctest_counts, join_items,
+# On Windows the functions Split-WslSummary, ConvertTo-WslPath, Get-CtestCounts, Get-CtestFailures and
+# Get-WslArgs are taken from tools/verify.ps1's syntax tree and called in a child Windows PowerShell 5.1,
+# both PowerShell scripts must parse, and every ctest call keeps error boxes off (checked against a real
+# ctest). On Linux tools/verify.sh must pass `bash -n`, and its parse_args, ctest_counts, join_items,
 # run_tsan_quick and run_tidy functions are cut out of the script and run in a child bash
 # (tidy and the TSan quick leg are off unless switched on, ADR 0027 decision 9). The two sides share the
 # tables in tests/tools/fixtures/verify (ctest outputs, summary items, WSL paths), so the PowerShell and
@@ -47,7 +47,7 @@ $ErrorActionPreference = 'Stop'
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref]$tokens, [ref]$errors)
 if ($errors.Count -gt 0) { throw "verify.ps1 does not parse: $($errors[0])" }
-$names = @('Split-WslSummary', 'ConvertTo-WslPath', 'Get-CtestCounts', 'Get-WslArgs')
+$names = @('Split-WslSummary', 'ConvertTo-WslPath', 'Get-CtestCounts', 'Get-CtestFailures', 'Get-WslArgs')
 $text = ''
 foreach ($name in $names) {
     $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -60,6 +60,7 @@ $cases = Get-Content -Raw -Encoding UTF8 -Path $CasesFile | ConvertFrom-Json
 $out = New-Object System.Collections.Generic.List[string]
 foreach ($case in $cases) {
     if ($case.fn -eq 'Get-CtestCounts') { $value = Get-CtestCounts ([string[]]@($case.arg)) }
+    elseif ($case.fn -eq 'Get-CtestFailures') { $value = Get-CtestFailures ([string[]]@($case.arg)) }
     elseif ($case.fn -eq 'Split-WslSummary') { $value = Split-WslSummary $case.arg }
     elseif ($case.fn -eq 'Get-WslArgs') {
         # The case's arg is an object of named parameters; JSON null stays $null.
@@ -114,6 +115,16 @@ class VerifyPs1Test(TempDirTestCase):
         for name, value in zip(names, self._call(cases)):
             with self.subTest(fixture=name):
                 self.assertEqual(value, table[name])
+
+    def test_get_ctest_failures_matches_the_fixture_table(self):
+        # The corpus leg reruns ctest in the Debug tree, so the gate keeps each leg's failed tests itself.
+        table = _table("ctest_failures.json")
+        names = sorted(table)
+        cases = [{"fn": "Get-CtestFailures",
+                  "arg": (VERIFY / "ctest" / name).read_text(encoding="utf-8").splitlines()} for name in names]
+        for name, value in zip(names, self._call(cases)):
+            with self.subTest(fixture=name):
+                self.assertEqual(value or [], table[name])
 
     def test_get_wsl_args_passes_the_switches_and_the_list(self):
         # -Tidy and -TsanQuick are off by default (ADR 0027 decision 9): without them verify.sh gets no
@@ -255,6 +266,22 @@ class VerifyShTest(TempDirTestCase):
         self.assertFalse((mirror / "deleted.txt").exists())
         self.assertTrue((mirror / "build" / "object.o").exists())
         self.assertFalse((mirror / ".git").exists())
+
+    def test_mirror_never_copies_a_build_link_and_removes_a_copied_one(self):
+        # R3: a worktree's build junction to another drive is a symlink in WSL; copying it put the Linux
+        # build trees behind it on /mnt/c. The mirror must keep (or regain) its own build directory.
+        source, mirror, elsewhere = self.tmp / "source", self.tmp / "mirror", self.tmp / "elsewhere"
+        for path in (source, mirror, elsewhere):
+            path.mkdir()
+        (source / "a.cpp").write_text("int a;\n", encoding="utf-8")
+        (source / "build").symlink_to(elsewhere, target_is_directory=True)
+        (mirror / "build").symlink_to(elsewhere, target_is_directory=True)  # Left by a run before the fix.
+        script = _bash_function("mirror_source") + 'mirror_source "$1" "$2"\n'
+        result = self._bash(script, str(source), str(mirror))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((mirror / "a.cpp").read_text(encoding="utf-8"), "int a;\n")
+        self.assertFalse((mirror / "build").is_symlink())
+        self.assertTrue(elsewhere.is_dir())  # Only the link went, not what it pointed to.
 
     def test_ctest_counts_matches_the_fixture_table(self):
         table = _table("ctest_counts.json")

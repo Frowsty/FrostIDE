@@ -43,6 +43,7 @@ frost_add_test(input_tests
         shortcut_layouts_test.cpp
         shortcut_matcher_test.cpp
         stroke_syntax_test.cpp
+        visual_studio_keymaps_test.cpp
     DEPS frost::input)
 
 frost_add_test(input_stress_tests

@@ -74,8 +74,13 @@ std::string_view toString(BuildAction action) noexcept {
     case BuildAction::Build: return "Build";
     case BuildAction::Rebuild: return "Rebuild";
     case BuildAction::Clean: return "Clean";
+    case BuildAction::Compile: return "Compile";
     }
     return "Build";
+}
+
+std::string_view msbuildTargetName(BuildAction action) noexcept {
+    return action == BuildAction::Compile ? std::string_view("ClCompile") : toString(action);
 }
 
 std::string solutionTargetName(std::string_view name) {
@@ -133,8 +138,26 @@ Result<io::ProcessSpec> msbuildProcessSpec(const MsBuildRequest& request) {
         project = std::move(*normalized);
     }
     const std::string& file = project ? *project : *solution;
+    const bool compile = request.action == BuildAction::Compile;
+    if (compile && (!project || request.selectedFiles.empty())) {
+        return fail(ErrorCode::InvalidArgument, "a single-file compile needs a project file and the files to compile");
+    }
+    if (!compile && !request.selectedFiles.empty()) {
+        return fail(
+            ErrorCode::InvalidArgument,
+            std::format("{} builds whole projects; only Compile takes selected files", toString(request.action)));
+    }
+    std::string selected;
+    for (const std::string& item : request.selectedFiles) {
+        if (item.empty()) {
+            return fail(ErrorCode::InvalidArgument, "an empty selected file would compile the whole project");
+        }
+        // Each Identity is escaped on its own; the ';' between them separates the list's items.
+        selected += selected.empty() ? "" : ";";
+        selected += escapeMsBuildValue(item);
+    }
 
-    std::string target(toString(request.action));
+    std::string target(msbuildTargetName(request.action));
     if (!request.projectName.empty()) {
         const std::string name = solutionTargetName(request.projectName);
         target = request.action == BuildAction::Build ? name : std::format("{}:{}", name, target);
@@ -160,6 +183,9 @@ Result<io::ProcessSpec> msbuildProcessSpec(const MsBuildRequest& request) {
         spec.arguments.push_back(property("SolutionName", stem));
         spec.arguments.push_back(property("SolutionFileName", fileName));
         spec.arguments.push_back(property("SolutionExt", extension));
+    }
+    if (compile) {
+        spec.arguments.push_back("-p:SelectedFiles=" + selected);
     }
     for (const auto& [name, value] : request.properties) {
         if (!isPropertyName(name)) {

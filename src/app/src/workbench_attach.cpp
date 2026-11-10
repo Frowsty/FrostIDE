@@ -400,6 +400,8 @@ void Workbench::attachToolbar() {
             menu.addAction(m_buildActions->buildSolution());
             menu.addAction(m_buildActions->rebuildSolution());
             menu.addAction(m_buildActions->cleanSolution());
+            m_buildActions->updateEnabled(); // Compile follows the active editor's file.
+            menu.addAction(m_buildActions->compileFile());
             menu.addSeparator();
             menu.addAction(m_buildActions->cancelBuild());
         }

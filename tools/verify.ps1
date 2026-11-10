@@ -20,7 +20,9 @@
 #      non-interactive mode, so no test can raise an error box (see Test-WindowsConfig). After
 #      each test leg, `frost_lint.py skips` lists every skipped test with its reason from ctest's
 #      log; a skip whose reason names a pinned tool fails the gate (FND-6: a missing pinned tool
-#      is a failure, never a skip).
+#      is a failure, never a skip). Each test leg's failed tests are printed, kept in
+#      <build>\Testing\Temporary\FailedTests-<label>.log and listed again above the summary line
+#      (the corpus leg reruns ctest in the Debug tree, which rewrites ctest's LastTestsFailed.log).
 #   3. -Full adds Release and the ASan configuration (RelWithDebInfo), every label but corpus, also in
 #      parallel, and the /MT fuzz smoke: the win-clangcl-fuzz tree (libFuzzer + ASan,
 #      RelWithDebInfo) runs each fuzz target for FROST_FUZZ_SECONDS (60) through ctest -L fuzz,
@@ -155,6 +157,23 @@ function Get-CtestCounts([string[]]$Output) {
     return $text
 }
 
+# The names of the tests ctest listed under "The following tests FAILED:" (failed, timed out,
+# crashed or not run) after its last "tests passed ... out of N" line, in ctest's order; an empty
+# array when it listed none. No side effects; tests/tools/test_verify_scripts.py takes it from this
+# script's syntax tree.
+function Get-CtestFailures([string[]]$Output) {
+    $names = New-Object System.Collections.Generic.List[string]
+    $inList = $false
+    foreach ($line in $Output) {
+        if ($line -match 'tests passed.* out of \d+') { $names.Clear(); $inList = $false; continue }
+        if ($line -match '^The following tests FAILED:') { $inList = $true; continue }
+        if (-not $inList) { continue }
+        $match = [regex]::Match($line, '^\s*\d+ - (.+?) \([^)]*\)')
+        if ($match.Success) { $names.Add($match.Groups[1].Value) } else { $inList = $false }
+    }
+    return , $names.ToArray()
+}
+
 # 'Continue', not 'Stop': under Windows PowerShell 5.1 a native command's stderr
 # line becomes an error record, and 'Stop' would abort the gate on the first
 # warning that ctest, cmake or wsl.exe prints. Failures are detected through
@@ -189,6 +208,26 @@ function Invoke-Native([scriptblock]$Command) {
     return , $lines
 }
 
+# Every ctest stage's failed tests, "win <label>: a, b", printed again just above the summary line.
+$script:failedTests = New-Object System.Collections.Generic.List[string]
+
+# Prints the failed tests of one ctest stage and keeps them in <Dir>\Testing\Temporary\
+# FailedTests-<Label>.log (rewritten every run, empty when none failed). ctest's own
+# LastTestsFailed.log names only the last stage's, because the corpus stage reruns ctest in the Debug
+# tree. Side effects: that file, console output and $script:failedTests.
+function Write-CtestFailures([string]$Label, [string]$Dir, [string[]]$Output) {
+    $names = Get-CtestFailures $Output
+    $temporary = Join-Path $Dir 'Testing\Temporary'
+    if (Test-Path -LiteralPath $temporary) {
+        $file = Join-Path $temporary "FailedTests-$Label.log"
+        [System.IO.File]::WriteAllLines($file, [string[]]$names, (New-Object System.Text.UTF8Encoding $false))
+    }
+    if ($names.Count -eq 0) { return }
+    Write-Host "verify.ps1: win $Label failed tests ($($names.Count)):"
+    $names | ForEach-Object { Write-Host "  $_" }
+    $script:failedTests.Add("win ${Label}: $($names -join ', ')")
+}
+
 # Configures, builds and tests one Windows configuration. $CtestArgs are extra
 # ctest arguments (e.g. -LE '^stress$'). Records a debug or fuzz tree that built in
 # $script:debugDir/$script:debugBuilt and $script:fuzzDir/$script:fuzzBuilt.
@@ -214,6 +253,7 @@ function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [s
     $ok = ($LASTEXITCODE -eq 0)
     $counts = Get-CtestCounts $out
     if (-not $counts) { $counts = 'no-results'; $ok = $false }
+    Write-CtestFailures $Label $Dir $out
     $script:summary.Add("win $Label $counts")
     if (-not $ok) { $script:failed = $true }
     # The skip audit (FND-6): every skipped test with its reason; a skip for a missing pinned tool
@@ -298,6 +338,7 @@ try {
             $out = Invoke-Native { ctest --test-dir $script:debugDir -C Debug --output-on-failure --interactive-debug-mode 0 -L '^corpus$' --timeout 3600 }
             $ok = ($LASTEXITCODE -eq 0)
             $counts = Get-CtestCounts $out
+            Write-CtestFailures 'corpus' $script:debugDir $out
             if (-not $counts) { $summary.Add('win corpus no-tests'); $failed = $true }
             else {
                 $summary.Add("win corpus $counts")
@@ -433,6 +474,11 @@ try {
 }
 
 $line = 'Verified: ' + (($summary + $checks) -join ', ')
+# The failed tests of every Windows ctest stage, so a later stage's output cannot hide them.
+if ($script:failedTests.Count -gt 0) {
+    Write-Host '=== failed tests'
+    $script:failedTests | ForEach-Object { Write-Host $_ }
+}
 if ($failed) {
     $line = "FAILED: $line"
 } elseif ($stampTree) {

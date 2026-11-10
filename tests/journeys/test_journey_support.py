@@ -3,11 +3,14 @@
 # Unit tests for the journey helpers in j1_cmake.py (FND-7a) that need no frost, corpus or tool: the
 # evidence file (format, verdicts, atomic write), the spawn-log reading the evidence cites (tools and
 # their sha256, an unparsable line kept as such), the `cmake --list-presets` parser behind the
-# presets oracle, the caret search and file URIs. The journey itself runs in the corpus tier.
+# presets oracle, the caret search and file URIs; and j2_msvc.py's (FND-7b) parsers of MSBuild's
+# file-logger lines and of the .sln/.slnx project configuration mappings. The journeys themselves
+# run in the integration and corpus tiers.
 
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -16,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import j1_cmake  # noqa: E402
+import j2_msvc  # noqa: E402
 
 
 class EvidenceTest(unittest.TestCase):
@@ -130,6 +134,65 @@ class OracleParsingTest(unittest.TestCase):
         self.assertEqual(j1_cmake.ninja_edges(output),
                          ["Building CXX object Main.cpp.obj", "Linking CXX executable bin\\Child.exe"])
         self.assertEqual(j1_cmake.ninja_edges("ninja: no work to do.\n"), [])
+
+
+class MsvcOracleParsingTest(unittest.TestCase):
+    FIXTURE = j1_cmake.REPO / "tests" / "project" / "fixtures" / "msvc_generated"
+
+    def test_a_file_logger_line_becomes_the_error_lists_row(self) -> None:
+        line = (r"  C:\w\App\app.cpp(1,31): error C2065: 'frost_journey_undeclared_identifier': undeclared "
+                r"identifier [C:\w\App\App.vcxproj]")
+        self.assertEqual(j2_msvc.parse_logged(line),
+                         (j2_msvc.path_key(r"C:\w\App\app.cpp"), 1, 31, "error", "C2065",
+                          "'frost_journey_undeclared_identifier': undeclared identifier"))
+        warning = r"C:\w\Renderer\Renderer.vcxproj : warning MSB8065: Custom build for item ... [C:\w\x.vcxproj]"
+        parsed = j2_msvc.parse_logged(warning)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed[3:5], ("warning", "MSB8065"))
+        self.assertIsNone(j2_msvc.parse_logged("Build succeeded."))
+        # A Problems row in the endpoint's shape (src/app/src/automation_endpoint.cpp) compares equal;
+        # live (clangd) rows are not the build's.
+        row = {"source": "build", "severity": "error", "file": r"C:\w\App\app.cpp", "line": 1, "column": 31,
+               "code": "C2065", "message": "'frost_journey_undeclared_identifier': undeclared identifier"}
+        live = dict(row, source="live")
+        self.assertEqual(j2_msvc.shown_rows([row, live]), [j2_msvc.parse_logged(line)])
+
+    def test_the_sln_and_its_slnx_twin_map_every_configuration_alike(self) -> None:
+        # Generated.slnx is Generated.sln's twin (SLN-0): both parsers must give each project the
+        # same project configuration for every solution configuration the .sln lists.
+        sln, slnx = self.FIXTURE / "Generated.sln", self.FIXTURE / "Generated.slnx"
+        projects = j2_msvc.sln_projects(sln)
+        self.assertEqual(sorted(projects), ["App", "Core", "Renderer"])
+        text = sln.read_text(encoding="utf-8-sig")
+        configurations = sorted(set(re.findall(r"^\s*([A-Za-z]+\|[A-Za-z0-9]+) = \1\s*$", text, re.M)))
+        self.assertIn("Debug|x64", configurations)
+        for configuration in configurations:
+            twin = j2_msvc.slnx_projects(slnx, configuration)
+            for name, info in projects.items():
+                with self.subTest(configuration=configuration, project=name):
+                    self.assertTrue(j1_cmake.same_path(twin[name]["path"], info["path"]))
+                    self.assertEqual(twin[name]["mapping"], j2_msvc.sln_mapping(sln, info["guid"], configuration))
+        self.assertEqual(j2_msvc.sln_mapping(sln, projects["Core"]["guid"], "Profile|x64"), ("Release", "x64"))
+
+    def test_the_debuggable_copy_links_fully_and_compiles_od_before_the_targets_import(self) -> None:
+        # j2_msvc's scratch App (ADR 0081 item 8): the overrides sit just before Microsoft.Cpp.targets,
+        # which reads them, and the file keeps its line endings and everything else.
+        original = (self.FIXTURE / "App" / "App.vcxproj").read_bytes()
+        with tempfile.TemporaryDirectory(prefix="frost-journey-") as tmp:
+            for newline in (b"\n", b"\r\n"):
+                project = Path(tmp) / "App.vcxproj"
+                project.write_bytes(original.replace(b"\r\n", b"\n").replace(b"\n", newline))
+                before = project.read_bytes()
+                j2_msvc.debuggable(project)
+                after = project.read_bytes()
+                targets = after.index(b"Microsoft.Cpp.targets")
+                for setting in (b"<LinkIncremental>false</LinkIncremental>", b"<Optimization>Disabled</Optimization>",
+                                b"<InlineFunctionExpansion>Disabled</InlineFunctionExpansion>"):
+                    self.assertLess(after.index(setting), targets)
+                self.assertEqual(after.count(b"\r\n"), after.count(b"\n") if newline == b"\r\n" else 0)
+                start = after.index(b"  <PropertyGroup>" + newline + b"    <LinkIncremental>")
+                end = after.index(b'  <Import Project="$(VCTargetsPath)\\Microsoft.Cpp.targets')
+                self.assertEqual(after[:start] + after[end:], before)  # Only the block was added.
 
 
 if __name__ == "__main__":

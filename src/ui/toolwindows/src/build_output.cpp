@@ -13,6 +13,7 @@
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QMetaObject>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QScrollBar>
@@ -214,8 +215,8 @@ void BuildOutputPane::setController(BuildController* controller) {
         connect(m_controller, &BuildController::buildFinished, this, &BuildOutputPane::appendSummary));
 }
 
-void BuildOutputPane::insertLine(const OutputLine& line) {
-    const std::size_t index = m_log.size() - 1;
+void BuildOutputPane::insertLine(QTextCursor& cursor, std::size_t index) {
+    const OutputLine& line = m_log.line(index);
     QTextCharFormat format;
     switch (line.style) {
     case OutputLineStyle::Plain: break;
@@ -234,15 +235,50 @@ void BuildOutputPane::insertLine(const OutputLine& line) {
         format.setFontWeight(QFont::Bold);
         break;
     }
+    // A line whose diagnostic arrived while it waited for the view is underlined here.
     if (m_log.locationAt(index)) {
         format.setFontUnderline(true);
     }
-    QTextCursor cursor(m_editor->document());
-    cursor.movePosition(QTextCursor::End);
     if (index > 0) {
         cursor.insertBlock(QTextBlockFormat(), QTextCharFormat());
     }
     cursor.insertText(qs(line.text), format);
+}
+
+void BuildOutputPane::scheduleFlush() {
+    if (m_flushQueued) {
+        return;
+    }
+    m_flushQueued = true;
+    // Queued behind the posted events of the current burst; dropped if the pane is destroyed first.
+    static_cast<void>(QMetaObject::invokeMethod(
+        this,
+        [this] {
+            m_flushQueued = false;
+            flush();
+        },
+        Qt::QueuedConnection));
+}
+
+void BuildOutputPane::flush() {
+    if (m_shown >= m_log.size()) {
+        return;
+    }
+    m_appending = true;
+    QTextCursor cursor(m_editor->document());
+    cursor.beginEditBlock();
+    cursor.movePosition(QTextCursor::End);
+    for (; m_shown < m_log.size(); ++m_shown) {
+        insertLine(cursor, m_shown);
+    }
+    cursor.endEditBlock();
+    scrollToEndIfFollowing();
+    m_appending = false;
+}
+
+QPlainTextEdit* BuildOutputPane::editor() {
+    flush();
+    return m_editor;
 }
 
 void BuildOutputPane::markClickable(std::size_t index) {
@@ -265,34 +301,30 @@ void BuildOutputPane::scrollToEndIfFollowing() {
 }
 
 void BuildOutputPane::appendLine(build::BuildOutputKind kind, const QString& text) {
-    m_appending = true;
     m_clear->setEnabled(true);
-    const std::size_t index = m_log.append(kind, toUtf8(text));
-    insertLine(m_log.line(index));
-    scrollToEndIfFollowing();
-    m_appending = false;
+    static_cast<void>(m_log.append(kind, toUtf8(text)));
+    scheduleFlush();
 }
 
 void BuildOutputPane::addDiagnostic(const build::BuildDiagnostic& diagnostic) {
     for (const std::size_t line : m_log.addDiagnostic(diagnostic)) {
-        if (m_log.locationAt(line)) {
+        // A line still waiting for the view gets its underline when flush() inserts it.
+        if (line < m_shown && m_log.locationAt(line)) {
             markClickable(line);
         }
     }
 }
 
 void BuildOutputPane::appendSummary(const build::BuildOutcome& outcome) {
-    m_appending = true;
     m_clear->setEnabled(true);
-    const std::size_t index = m_log.appendSummary(outcome);
-    insertLine(m_log.line(index));
-    scrollToEndIfFollowing();
-    m_appending = false;
+    static_cast<void>(m_log.appendSummary(outcome));
+    scheduleFlush();
 }
 
 void BuildOutputPane::clear() {
     m_appending = true;
     m_log.clear();
+    m_shown = 0;
     m_editor->clear();
     m_clear->setEnabled(false);
     m_follow = true;
@@ -319,7 +351,7 @@ std::optional<std::size_t> BuildOutputPane::lineAt(QPoint viewportPosition) cons
         return std::nullopt;
     }
     const int block = cursor.block().blockNumber();
-    if (block < 0 || static_cast<std::size_t>(block) >= m_log.size()) {
+    if (block < 0 || static_cast<std::size_t>(block) >= m_shown) {
         return std::nullopt;
     }
     return static_cast<std::size_t>(block);

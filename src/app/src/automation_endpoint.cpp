@@ -11,21 +11,29 @@
 #ifdef FROST_AUTOMATION_ENDPOINT
 #include "frost/app/document_editor.hpp"
 #include "frost/build/cmake_service.hpp"
+#include "frost/build/run_service.hpp"
+#include "frost/debug/debug_session.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/project/cmake_file_api.hpp"
+#include "frost/project/solution_model.hpp"
+#include "frost/project/trust_store.hpp"
 #include "frost/rpc/json.hpp"
 #include "frost/run/run_configuration.hpp"
 #include "frost/run/run_manager.hpp"
+#include "frost/ui/debug_controller.hpp"
+#include "frost/ui/editor/editor_actions.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/run_tool_window.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/shell_window.hpp"
+#include "frost/ui/toolwindows/build_controller.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
+#include "frost/ui/toolwindows/solution_explorer.hpp"
 
 #include <QAbstractProxyModel>
 #include <QCoreApplication>
@@ -44,6 +52,9 @@
 #include <cstdint>
 #include <format>
 #include <functional>
+#include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -80,6 +91,10 @@ constexpr std::string_view kProtocol = "frost-automation-endpoint/1";
 // The longest wait a "wait" request may ask for; the journeys' configure of a whole engine fits.
 constexpr std::int64_t kMaxWaitMs = 60LL * 60 * 1000;
 
+// How long debug.locals waits for lldb-dap's scopes and variables replies (a stopped STL frame
+// answers in well under a second; the limit only ends a request the adapter dropped).
+constexpr std::int64_t kLocalsTimeoutMs = 30000;
+
 // 32 bytes from the system's CSPRNG as 64 lower-case hex digits.
 std::string randomToken() {
     std::array<quint32, 8> words{};
@@ -110,6 +125,8 @@ Json diagnosticJson(const build::BuildDiagnostic& item, std::string_view source)
         .set("code", item.diagnostic.code)
         .set("message", item.diagnostic.message)
         .set("file", item.path.empty() ? item.diagnostic.file : item.path)
+        // The origin as the tool printed it (relative origins are resolved into "file").
+        .set("origin", item.diagnostic.file)
         .set("line", item.diagnostic.line)
         .set("column", item.diagnostic.column)
         .set("jumpable", item.jumpable)
@@ -206,6 +223,14 @@ struct AutomationEndpoint::Impl {
             wait(client, id, params);
             return;
         }
+        if (method == "debug.locals") {
+            debugLocals(client, id);
+            return;
+        }
+        if (method == "debug.variables") {
+            debugVariables(client, id, params);
+            return;
+        }
         reply(client, id, dispatch(method, params));
         if (method == "quit")
             QTimer::singleShot(0, QCoreApplication::instance(), [] { QCoreApplication::quit(); });
@@ -229,7 +254,9 @@ struct AutomationEndpoint::Impl {
      *   wait {for: cmake|clangd, timeoutMs} -> state   replies when the CMake service is idle (no
      *                                               job, no reply read) or clangd runs, or at the
      *                                               timeout with {"timedOut": true}
-     *   problems {} -> {problems: [...]}            the Problems model's rows, in its order
+     *   problems {} -> {problems: [...]}            the Problems model's rows, in its order: severity,
+     *                                               code, message, file (resolved), origin (as
+     *                                               printed), line, column, jumpable, source
      *   problems.activate {index} -> {}             Problems' own activation (opens the location)
      *   editor {} -> {path, line, column} | {}      the current editor and its caret
      *   navigate.definition {} -> {}                Go to Declaration or Definition at the caret
@@ -242,11 +269,47 @@ struct AutomationEndpoint::Impl {
      *                                               these edits (persisted in the workspace store)
      *   run.start {} -> {}                          clicks the toolbar's Run button (refused when
      *                                               it is disabled, with its tooltip)
+     *   run.debug {} -> {}                          clicks the toolbar's Debug button (F5: builds the
+     *                                               startup project, then debugs it under lldb-dap)
      *   run.stop {} -> {}                           clicks the toolbar's Stop button
      *   run.state {} -> {running, tabs: [{key, title, active, current, text}],
      *                    runs: [{configuration, processId, commandLine}]}
      *                                               the Run tool window's tabs (the console text,
      *                                               its last 64 KiB) and the RunManager's runs
+     *   solution {} -> {available, path, format: sln|slnx, configurations, active, state, building,
+     *                    trusted, untrusted (the build gate's folders not trusted), banner,
+     *                    shownSolution, projects: [{name, path, kind, loaded,
+     *                    evaluation: {source, configuration, platform, itemCount}, files}], startup,
+     *                    lastBuild: {action, project, file, configuration, succeeded, exitCode,
+     *                    errors, warnings, error}}  the open MSVC solution (FND-7b): the build
+     *                                               controller's state and the Solution Explorer's
+     *                                               own model (its projects and file paths)
+     *   solution.configuration {name} -> {}         the toolbar configuration combo's choice
+     *                                               ("Release|x64")
+     *   solution.build {action: build|rebuild|clean, project?} -> {}   Build, Rebuild or Clean of
+     *                                               the solution or of one project
+     *   solution.compile {path} -> {}               Build > Compile (Ctrl+F7) of one source file
+     *   solution.startup {project} -> {}            Set as Startup Project
+     *   debug.state {} -> {available, status, session, state, processId?, stop?: {reason,
+     *                      description, exceptionFilter, exceptionType, threadId, frames: [{name,
+     *                      path, line, module}]}, outcome?: {exitCode, error, buildFailed, stopped},
+     *                      breakpoints: [{path, line, enabled, status, message}], console?}  (the
+     *                      console: the last 8000 characters of the Debug console)
+     *                                               the Debug tool window's view of the session
+     *   debug.breakpoint {path, line} -> {}         a line breakpoint (1-based), as a gutter click adds
+     *   debug.exception {filter, enabled?, types?: [...]} -> {}   the Exceptions list's check box
+     *                                               and its type list (DBG-2b)
+     *   debug.continue {} -> {}                     Resume (F5 while paused)
+     *   debug.stop {} -> {}                         Stop
+     *   debug.locals {} -> {variables: [{name, value, type, reference, children: [{name, value,
+     *                       type, reference}]}]}    the selected frame's Locals, one level expanded,
+     *                                               from lldb-dap's replies (asynchronous)
+     *   debug.variables {reference} -> {variables: [{name, value, type, reference}]}   the children
+     *                                               of a row with a reference > 0, as expanding it
+     *                                               asks lldb-dap (asynchronous)
+     *   editor.type {text} -> {}                    typing at the caret of the current editor
+     *   editor.undo {} -> {}                        Edit > Undo in the current editor
+     *   editor.save {} -> {}                        File > Save of the current editor
      *   quit {} -> {}                               QCoreApplication::quit after the reply
      */
     Result<Json> dispatch(const std::string& method, const Json& params) {
@@ -283,6 +346,435 @@ struct AutomationEndpoint::Impl {
             return cmake(method, params);
         if (method.starts_with("run."))
             return runMethod(method, params);
+        if (method == "solution" || method.starts_with("solution."))
+            return solutionMethod(method, params);
+        if (method.starts_with("debug."))
+            return debugMethod(method, params);
+        if (method == "editor.type" || method == "editor.undo" || method == "editor.save")
+            return editorMethod(method, params);
+        return fail(ErrorCode::NotFound, std::format("unknown method '{}'", method));
+    }
+
+    // --- MSVC solutions (FND-7b, j2_msvc) -----------------------------------------------------
+
+    [[nodiscard]] static Result<build::BuildAction> buildActionOf(std::string_view action) {
+        if (action == "build")
+            return build::BuildAction::Build;
+        if (action == "rebuild")
+            return build::BuildAction::Rebuild;
+        if (action == "clean")
+            return build::BuildAction::Clean;
+        return fail(ErrorCode::InvalidArgument, std::format("unknown build action '{}'", action));
+    }
+
+    // The project of `model` named `name` (its solution display name).
+    [[nodiscard]] static std::optional<project::ProjectId> projectNamed(const project::SolutionModel& model,
+                                                                        std::string_view name) {
+        const auto projects = model.projects();
+        for (std::size_t i = 0; i < projects.size(); ++i)
+            if (projects[i].name == name)
+                return project::ProjectId{static_cast<std::uint32_t>(i)};
+        return std::nullopt;
+    }
+
+    Json solutionJson() {
+        ui::BuildController& controller = workbench.build();
+        const auto solution = controller.solution();
+        if (!solution)
+            return Json::object().set("available", false);
+        const std::vector<project::SolutionConfiguration>& listed = controller.configurations();
+        Json configurations = Json::array();
+        for (const project::SolutionConfiguration& configuration : listed)
+            configurations.push(Json(configuration.name()));
+        const auto active = controller.activeConfigurationIndex();
+        // The folders the build gate would ask to trust (trust_store.hpp: buildTrustRoots), as the
+        // trust store answers now; the gate itself only runs when a build or a run starts.
+        Json untrusted = Json::array();
+        for (const std::string& root : project::buildTrustRoots(*solution))
+            if (!workbench.trustStore().isTrusted(root))
+                untrusted.push(Json(root));
+        // The projects and their files as the Solution Explorer shows them (its own model).
+        Json projects = Json::array();
+        const ui::SolutionExplorer* explorer = workbench.solutionExplorer();
+        const auto shown = explorer != nullptr ? explorer->solution() : nullptr;
+        if (shown) {
+            const auto infos = shown->projects();
+            for (std::size_t i = 0; i < infos.size(); ++i) {
+                const project::ProjectInfo& info = infos[i];
+                Json files = Json::array();
+                for (const std::string& path :
+                     shown->projectFilePaths(project::ProjectId{static_cast<std::uint32_t>(i)}))
+                    files.push(Json(path));
+                Json evaluation;
+                if (info.evaluation)
+                    evaluation = Json::object()
+                                     .set("source", std::string(project::toString(info.evaluation->source)))
+                                     .set("configuration", info.evaluation->configuration)
+                                     .set("platform", info.evaluation->platform)
+                                     .set("itemCount", static_cast<std::int64_t>(info.evaluation->itemCount));
+                projects.push(Json::object()
+                                  .set("name", info.name)
+                                  .set("path", info.path)
+                                  .set("kind", std::string(project::toString(info.kind)))
+                                  .set("loaded", info.nodeKind == project::NodeKind::Project)
+                                  .set("evaluation", std::move(evaluation))
+                                  .set("files", std::move(files)));
+            }
+        }
+        Json startup;
+        if (build::RunService* runs = workbench.runService(); runs != nullptr)
+            if (const auto id = runs->startupProject(); id && id->value() < solution->projects().size())
+                startup = Json(solution->project(*id).name);
+        Json last;
+        if (const auto& outcome = controller.lastOutcome()) {
+            last = Json::object()
+                       .set("action", std::string(build::toString(outcome->target.action)))
+                       .set("project", outcome->target.projectName)
+                       .set("file", outcome->target.file)
+                       .set("configuration", outcome->target.configuration.name())
+                       .set("succeeded", outcome->succeeded())
+                       .set("exitCode", outcome->result.exitCode)
+                       .set("errors", static_cast<std::int64_t>(outcome->counts.errors))
+                       .set("warnings", static_cast<std::int64_t>(outcome->counts.warnings))
+                       .set("error", outcome->error ? Json(outcome->error->describe()) : Json());
+        }
+        return Json::object()
+            .set("available", true)
+            .set("path", solution->path())
+            .set("format", solution->format() == project::SolutionFormat::Slnx ? "slnx" : "sln")
+            .set("configurations", std::move(configurations))
+            .set("active", active && *active < listed.size() ? Json(listed[*active].name()) : Json())
+            .set("state", std::string(build::toString(controller.state())))
+            .set("building", controller.isBuilding())
+            .set("trusted", project::checkBuildTrust(workbench.trustStore(), *solution).has_value())
+            .set("untrusted", std::move(untrusted))
+            .set("banner", explorer != nullptr ? explorer->evaluationBanner().toStdString() : std::string())
+            .set("shownSolution", shown ? Json(shown->path()) : Json())
+            .set("projects", std::move(projects))
+            .set("startup", std::move(startup))
+            .set("lastBuild", std::move(last));
+    }
+
+    Result<Json> solutionMethod(const std::string& method, const Json& params) {
+        if (method == "solution")
+            return solutionJson();
+        ui::BuildController& controller = workbench.build();
+        const auto solution = controller.solution();
+        if (!solution)
+            return fail(ErrorCode::InvalidArgument, "no solution is open");
+        if (method == "solution.configuration") {
+            // The toolbar's configuration combo (ConfigurationCombo) sets the same index.
+            const std::string_view name = params.stringAt("name");
+            const std::vector<project::SolutionConfiguration>& listed = controller.configurations();
+            const auto it = std::ranges::find_if(listed, [name](const project::SolutionConfiguration& configuration) {
+                return configuration.name() == name;
+            });
+            if (it == listed.end())
+                return fail(ErrorCode::NotFound, std::format("the solution has no configuration '{}'", name));
+            if (auto set = controller.setActiveConfiguration(static_cast<std::size_t>(it - listed.begin())); !set)
+                return std::unexpected(set.error());
+            return Json::object();
+        }
+        if (method == "solution.build") {
+            auto action = buildActionOf(params.stringAt("action", "build"));
+            if (!action)
+                return std::unexpected(action.error());
+            std::optional<project::ProjectId> project;
+            if (const std::string_view name = params.stringAt("project"); !name.empty()) {
+                project = projectNamed(*solution, name);
+                if (!project)
+                    return fail(ErrorCode::NotFound, std::format("the solution has no project '{}'", name));
+            }
+            if (auto started = controller.build(*action, project); !started)
+                return std::unexpected(started.error());
+            return Json::object();
+        }
+        if (method == "solution.compile") {
+            // Build > Compile (Ctrl+F7) on a file, as the action does for the current editor's file.
+            const std::string path(params.stringAt("path"));
+            if (!controller.canCompile(path))
+                return fail(ErrorCode::InvalidArgument, std::format("Compile is disabled for {}", path));
+            if (auto started = controller.compileFile(path); !started)
+                return std::unexpected(started.error());
+            return Json::object();
+        }
+        if (method == "solution.startup") {
+            // The Solution Explorer's Set as Startup Project goes to the same RunController call.
+            ui::RunController* runs = workbench.runController();
+            if (runs == nullptr)
+                return fail(ErrorCode::InvalidArgument, "the workbench has no run controller");
+            const std::string_view name = params.stringAt("project");
+            const auto project = projectNamed(*solution, name);
+            if (!project)
+                return fail(ErrorCode::NotFound, std::format("the solution has no project '{}'", name));
+            if (auto set = runs->setStartupProject(*project); !set)
+                return std::unexpected(set.error());
+            return Json::object();
+        }
+        return fail(ErrorCode::NotFound, std::format("unknown method '{}'", method));
+    }
+
+    // --- The debugger (FND-7b) ----------------------------------------------------------------
+
+    // What the Debug tool window shows, from the controller's GUI-thread copies of the session's
+    // events, and how the last Debug run ended (DebugController::lastOutcome).
+    Json debugJson() {
+        ui::DebugController* controller = workbench.debugController();
+        if (controller == nullptr)
+            return Json::object().set("available", false);
+        Json out = Json::object()
+                       .set("available", true)
+                       .set("status", controller->statusText().toStdString())
+                       .set("session", controller->debugging())
+                       .set("state", std::string(debug::toString(controller->state())));
+        if (debug::DebugSession* session = controller->session(); session != nullptr)
+            if (const auto pid = session->processId())
+                out.set("processId", *pid);
+        if (const auto& stop = controller->stopInfo(); stop && controller->paused()) {
+            Json frames = Json::array();
+            for (const debug::DebugFrame& frame : controller->frames().frames)
+                frames.push(Json::object()
+                                .set("name", frame.name)
+                                .set("path", frame.path)
+                                .set("line", frame.line)
+                                .set("module", frame.module));
+            out.set("stop", Json::object()
+                                .set("reason", stop->reason)
+                                .set("description", stop->description)
+                                .set("exceptionFilter", stop->exceptionFilter)
+                                .set("exceptionType", stop->exceptionType)
+                                .set("threadId", stop->threadId ? Json(*stop->threadId) : Json())
+                                .set("frames", std::move(frames)));
+        }
+        if (const auto& outcome = controller->lastOutcome())
+            out.set("outcome", Json::object()
+                                   .set("exitCode", outcome->exitCode ? Json(*outcome->exitCode) : Json())
+                                   .set("error", outcome->error ? Json(outcome->error->describe()) : Json())
+                                   .set("buildFailed", outcome->buildFailed)
+                                   .set("stopped", outcome->stopped));
+        // The Breakpoints tab's rows: each line breakpoint with lldb-dap's verdict on it.
+        Json breakpoints = Json::array();
+        for (const debug::LineBreakpoint& breakpoint : controller->breakpoints().all()) {
+            const char* status = "unknown";
+            switch (breakpoint.status) {
+            case debug::BreakpointStatus::Unknown: status = "unknown"; break;
+            case debug::BreakpointStatus::Pending: status = "pending"; break;
+            case debug::BreakpointStatus::Verified: status = "verified"; break;
+            case debug::BreakpointStatus::Unverified: status = "unverified"; break;
+            }
+            breakpoints.push(Json::object()
+                                 .set("path", breakpoint.path)
+                                 .set("line", breakpoint.line)
+                                 .set("enabled", breakpoint.enabled)
+                                 .set("status", std::string(status))
+                                 .set("message", breakpoint.message));
+        }
+        out.set("breakpoints", std::move(breakpoints));
+        // The Debug console's last lines (the adapter's and FrostIDE's notes, the program's output).
+        if (const ui::RunConsole* console = controller->console(); console != nullptr) {
+            const QString text = console->text();
+            constexpr qsizetype kConsoleTail = 8000;
+            out.set("console", text.right(kConsoleTail).toStdString());
+        }
+        return out;
+    }
+
+    Result<Json> debugMethod(const std::string& method, const Json& params) {
+        if (method == "debug.state")
+            return debugJson();
+        ui::DebugController* controller = workbench.debugController();
+        if (controller == nullptr)
+            return fail(ErrorCode::InvalidArgument, "the workbench has no debugger");
+        if (method == "debug.breakpoint") {
+            // A gutter click's breakpoint (1-based line), kept by the same BreakpointManager.
+            auto path = io::normalizePath(params.stringAt("path"));
+            if (!path)
+                return std::unexpected(path.error());
+            if (auto added = controller->breakpoints().add(*path, params.integerAt("line").value_or(0)); !added)
+                return std::unexpected(added.error());
+            return Json::object();
+        }
+        if (method == "debug.exception") {
+            // The Exceptions list's check box and its Edit dialog's type list (DBG-2b).
+            const std::string filter(params.stringAt("filter", "cpp_throw"));
+            if (const Json* types = params.find("types"); types != nullptr && types->isArray()) {
+                std::vector<std::string> list;
+                for (const Json& type : types->items())
+                    if (type.isString())
+                        list.push_back(*type.asString());
+                if (!controller->breakpoints().setExceptionFilterTypes(filter, std::move(list)))
+                    return fail(ErrorCode::NotFound, std::format("no exception filter '{}' takes types", filter));
+            }
+            const bool enabled = params.boolAt("enabled").value_or(true);
+            if (!controller->setExceptionFilterEnabled(filter, enabled))
+                return fail(ErrorCode::NotFound,
+                            std::format("the exception filter '{}' is unknown or unavailable", filter));
+            return Json::object();
+        }
+        if (method == "debug.continue") {
+            if (!controller->resume())
+                return fail(ErrorCode::InvalidArgument, "the debuggee is not stopped");
+            return Json::object();
+        }
+        if (method == "debug.stop") {
+            controller->stop();
+            return Json::object();
+        }
+        return fail(ErrorCode::NotFound, std::format("unknown method '{}'", method));
+    }
+
+    /*
+     * debug.locals: the selected frame's Locals scope, each variable with its children one level
+     * down (the Variables view's first expansion), from lldb-dap's own scopes and variables replies.
+     * Asynchronous: the reply follows the adapter's answers, or an error after kLocalsTimeoutMs.
+     */
+    void debugLocals(Client& client, const Json& id) {
+        ui::DebugController* controller = workbench.debugController();
+        if (controller == nullptr || !controller->paused() || !controller->selectedFrame()) {
+            reply(client, id, fail(ErrorCode::InvalidArgument, "the debuggee is not stopped in a frame"));
+            return;
+        }
+        struct Pending {
+            std::vector<Json> variables;
+            std::size_t waiting = 0;
+            bool answered = false;
+        };
+        auto pending = std::make_shared<Pending>();
+        QPointer<QLocalSocket> socket = client.socket;
+        Client* raw = &client;
+        const auto finish = [this, pending, socket, raw, id](Result<Json> result) {
+            if (pending->answered || socket.isNull())
+                return;
+            pending->answered = true;
+            reply(*raw, id, std::move(result));
+        };
+        QTimer::singleShot(std::chrono::milliseconds(kLocalsTimeoutMs), client.socket.data(), [finish] {
+            finish(fail(ErrorCode::Timeout, "the debug adapter did not answer the Locals requests"));
+        });
+        const auto done = [pending, finish] {
+            Json all = Json::array();
+            for (Json& variable : pending->variables)
+                all.push(std::move(variable));
+            finish(Json::object().set("variables", std::move(all)));
+        };
+        // One child request per variable with children; `done` runs after the last reply.
+        const auto expand = [pending, done](QPointer<ui::DebugController> guard, const debug::VariableList& list) {
+            for (std::size_t i = 0; i < list.size(); ++i) {
+                if (list[i].variablesReference <= 0)
+                    continue;
+                ++pending->waiting;
+                guard->variables(list[i].variablesReference, 0, 0,
+                                 [pending, i, done](Result<debug::VariableList> children) {
+                                     if (children) {
+                                         Json shown = Json::array();
+                                         for (const debug::dap::Variable& child : *children)
+                                             shown.push(Json::object()
+                                                            .set("name", child.name)
+                                                            .set("value", child.value)
+                                                            .set("type", child.type)
+                                                            .set("reference", child.variablesReference));
+                                         pending->variables[i].set("children", std::move(shown));
+                                     }
+                                     if (--pending->waiting == 0)
+                                         done();
+                                 });
+            }
+            if (pending->waiting == 0)
+                done();
+        };
+        QPointer<ui::DebugController> guard(controller);
+        controller->scopes(controller->selectedFrame()->id, [guard, pending, finish,
+                                                             expand](Result<debug::ScopeList> scopes) {
+            if (!scopes || guard.isNull()) {
+                finish(scopes ? fail(ErrorCode::Cancelled, "the debugger ended") : std::unexpected(scopes.error()));
+                return;
+            }
+            const auto locals = std::ranges::find_if(*scopes, [](const debug::dap::Scope& scope) {
+                return scope.presentationHint == "locals" || scope.name == "Locals";
+            });
+            if (locals == scopes->end() || locals->variablesReference <= 0) {
+                finish(fail(ErrorCode::NotFound, "the frame has no Locals scope"));
+                return;
+            }
+            guard->variables(
+                locals->variablesReference, 0, 0, [guard, pending, finish, expand](Result<debug::VariableList> list) {
+                    if (!list || guard.isNull()) {
+                        finish(list ? fail(ErrorCode::Cancelled, "the debugger ended") : std::unexpected(list.error()));
+                        return;
+                    }
+                    for (const debug::dap::Variable& variable : *list)
+                        pending->variables.push_back(Json::object()
+                                                         .set("name", variable.name)
+                                                         .set("value", variable.value)
+                                                         .set("type", variable.type)
+                                                         .set("reference", variable.variablesReference)
+                                                         .set("children", Json::array()));
+                    expand(guard, *list);
+                });
+        });
+    }
+
+    // debug.variables {reference}: the children of one Locals row (a "reference" debug.locals gave),
+    // as expanding it in the Debug tool window asks lldb-dap for them.
+    void debugVariables(Client& client, const Json& id, const Json& params) {
+        ui::DebugController* controller = workbench.debugController();
+        const std::int64_t reference = params.integerAt("reference").value_or(0);
+        if (controller == nullptr || !controller->paused() || reference <= 0) {
+            reply(client, id, fail(ErrorCode::InvalidArgument, "the debuggee is not stopped, or no reference"));
+            return;
+        }
+        auto answered = std::make_shared<bool>(false);
+        QPointer<QLocalSocket> socket = client.socket;
+        Client* raw = &client;
+        const auto finish = [this, answered, socket, raw, id](Result<Json> result) {
+            if (*answered || socket.isNull())
+                return;
+            *answered = true;
+            reply(*raw, id, std::move(result));
+        };
+        QTimer::singleShot(std::chrono::milliseconds(kLocalsTimeoutMs), client.socket.data(), [finish] {
+            finish(fail(ErrorCode::Timeout, "the debug adapter did not answer the variables request"));
+        });
+        controller->variables(reference, 0, 0, [finish](Result<debug::VariableList> children) {
+            if (!children) {
+                finish(std::unexpected(children.error()));
+                return;
+            }
+            Json shown = Json::array();
+            for (const debug::dap::Variable& child : *children)
+                shown.push(Json::object()
+                               .set("name", child.name)
+                               .set("value", child.value)
+                               .set("type", child.type)
+                               .set("reference", child.variablesReference));
+            finish(Json::object().set("variables", std::move(shown)));
+        });
+    }
+
+    // --- Typing in the editor (FND-7b's edit step) ------------------------------------------
+
+    Result<Json> editorMethod(const std::string& method, const Json& params) {
+        DocumentEditorView* view = workbench.currentView();
+        if (view == nullptr)
+            return fail(ErrorCode::InvalidArgument, "no editor is open");
+        if (method == "editor.type") {
+            // As typed at the caret (the editor's own typing path: auto-indent, pairs).
+            if (!view->editor().typeText(params.stringAt("text")))
+                return fail(ErrorCode::InvalidArgument, "the editor refused the typed text (read-only?)");
+            return Json::object();
+        }
+        if (method == "editor.undo") {
+            // Edit > Undo (Ctrl+Z): one step of the editor's own undo history.
+            if (!view->editor().perform(ui::EditorAction::Undo))
+                return fail(ErrorCode::InvalidArgument, "there is nothing to undo");
+            return Json::object();
+        }
+        if (method == "editor.save") {
+            // File > Save (Ctrl+S) of the current editor.
+            if (auto saved = workbench.save(*view); !saved)
+                return std::unexpected(saved.error());
+            return Json::object();
+        }
         return fail(ErrorCode::NotFound, std::format("unknown method '{}'", method));
     }
 
@@ -358,9 +850,10 @@ struct AutomationEndpoint::Impl {
                 return std::unexpected(replaced.error());
             return Json::object();
         }
-        if (method == "run.start" || method == "run.stop") {
-            QToolButton* button =
-                window->mainToolbar().button(method == "run.start" ? ui::MainToolbar::kRun : ui::MainToolbar::kStop);
+        if (method == "run.start" || method == "run.debug" || method == "run.stop") {
+            QToolButton* button = window->mainToolbar().button(method == "run.start"   ? ui::MainToolbar::kRun
+                                                               : method == "run.debug" ? ui::MainToolbar::kDebug
+                                                                                       : ui::MainToolbar::kStop);
             if (button == nullptr)
                 return fail(ErrorCode::NotFound, "the toolbar has no such button");
             if (!button->isEnabled())
@@ -479,8 +972,9 @@ struct AutomationEndpoint::Impl {
         build::CMakeService* service = workbench.cmakeService();
         if (service == nullptr)
             return true;
+        // state() first: it takes no lock, so a running job answers without waiting for the service.
         const build::BuildState state = service->state();
-        return !service->modelLoading() && (state == build::BuildState::Idle || state == build::BuildState::NeedsTrust);
+        return (state == build::BuildState::Idle || state == build::BuildState::NeedsTrust) && !service->modelLoading();
     }
 
     [[nodiscard]] bool clangdRunning() {

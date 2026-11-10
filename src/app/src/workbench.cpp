@@ -285,15 +285,9 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             }
         }
         if (m_solution && m_explorer) {
-            auto model = m_solution;
-            if (trust.trusted && trust.revision == m_projectTrustRevision && m_streamedProjects) {
-                if (auto evaluated = m_streamedProjects->modelSnapshot())
-                    model = std::move(evaluated);
-            }
-            const auto current = m_services.trust.snapshot(m_projectRoot);
-            if (!current.trusted || current.revision != m_projectTrustRevision)
-                model = m_solution;
-            m_explorer->setSolution(std::move(model), true);
+            // ProjectHost's items (SLN-3), else the compile-commands snapshot, else the static model.
+            m_explorer->setSolution(explorerSolutionModel(), true);
+            m_explorer->setEvaluationBanner(solutionEvaluationBanner());
         }
         if (trusted != m_luaObservedTrust) {
             m_luaObservedTrust = trusted;
@@ -346,6 +340,11 @@ Workbench::~Workbench() {
         if (stopped.valid())
             stopped.join();
     m_retiredProjectEvaluations.clear();
+    m_git.reset(); // Its retirer pushes onto m_retiredGit, which is joined next.
+    for (auto& stopped : m_retiredGit)
+        if (stopped.valid())
+            stopped.join();
+    m_retiredGit.clear();
     m_searchSymbolsSlot.cancel();
     m_language.reset();
     // The prompter and the actions refer to the controller; the services' threads post to them.
@@ -413,6 +412,11 @@ void Workbench::createBuildService() {
     if (auto registered = m_buildActions->registerActions(m_registry); !registered) {
         log::warn(kLog, "build actions: {}", registered.error().describe());
     }
+    // Compile (Ctrl+F7, SLN-9) compiles the active editor's file.
+    m_buildActions->setCurrentFileProvider([this] {
+        const DocumentEditorView* view = currentView();
+        return view != nullptr ? std::string(view->path()) : std::string();
+    });
     // A new configuration builds other files with other flags: clangd follows (ADR 0041).
     connect(m_build.get(), &ui::BuildController::activeConfigurationChanged, this, [this](int) {
         if (m_solution && !m_closingSolution) {

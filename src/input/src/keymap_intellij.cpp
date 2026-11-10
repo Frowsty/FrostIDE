@@ -609,9 +609,16 @@ file.settings = Meta+Comma
 run.runWithoutDebugging =
 )keymap";
 
-constexpr std::array<std::string_view, 2> kBuiltinIds = {"intellij", "visual-studio"};
+constexpr std::array<std::string_view, 4> kBuiltinIds = {"intellij", "visual-studio", "visual-studio-2022",
+                                                         "resharper"};
 
 } // namespace
+
+// The Visual Studio 2022 and ReSharper keymaps (UX-21), defined in keymap_visual_studio.cpp.
+namespace detail {
+std::string_view visualStudio2022KeymapText() noexcept;
+std::string_view reSharperKeymapText() noexcept;
+} // namespace detail
 
 std::span<const std::string_view> builtinKeymapIds() noexcept { return kBuiltinIds; }
 
@@ -621,6 +628,12 @@ std::string_view builtinKeymapText(std::string_view id) noexcept {
     }
     if (id == "visual-studio") {
         return kVisualStudioKeymap;
+    }
+    if (id == "visual-studio-2022") {
+        return detail::visualStudio2022KeymapText();
+    }
+    if (id == "resharper") {
+        return detail::reSharperKeymapText();
     }
     return {};
 }

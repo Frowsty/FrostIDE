@@ -126,13 +126,26 @@ target_compile_definitions(app_workbench_git_tests PRIVATE ${_frost_workbench_de
 if(WIN32)
     frost_add_test(app_workbench_msbuild_tests QT
         SOURCES workbench_msbuild_test.cpp workbench_r2a_debug_test.cpp workbench_project_edit_test.cpp
+                workbench_project_host_test.cpp
         DEPS frost::app frost::build frost::io
         LABELS integration msbuild)
-    target_include_directories(app_workbench_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    # src/project/src: the MSBuild oracle (tests/project/msbuild_oracle.hpp) reads JSON with project's parser.
+    target_include_directories(app_workbench_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/project/src)
     target_compile_definitions(app_workbench_msbuild_tests PRIVATE ${_frost_workbench_definitions})
     target_compile_definitions(app_workbench_msbuild_tests PRIVATE
         FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
     add_dependencies(app_workbench_msbuild_tests frost_project_host)
+    # SLN-7: the Configuration Manager switches and remaps configurations; clangd follows on
+    # GetClCommandLines (SLN-5) from the shipped ProjectHost. Tags "msbuild" and "clangd".
+    frost_add_test(app_workbench_configuration_tests QT
+        SOURCES workbench_configuration_manager_test.cpp
+        DEPS frost::app frost::build frost::lang frost::io
+        LABELS integration msbuild clangd)
+    target_include_directories(app_workbench_configuration_tests PRIVATE ${FROST_SOURCE_DIR}/tests
+                               ${FROST_SOURCE_DIR}/src/project/src)
+    target_compile_definitions(app_workbench_configuration_tests PRIVATE ${_frost_workbench_definitions}
+        FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
+    add_dependencies(app_workbench_configuration_tests frost_project_host)
 endif()
 frost_add_test(app_workbench_clangd_tests QT
     SOURCES workbench_clangd_test.cpp
@@ -185,12 +198,16 @@ add_dependencies(app_workbench_run_tests io_test_child run_tree_child)
 
 # Attach to Process and its trust prompt (R0 follow-up 1): the pinned lldb-dap attaches to a real
 # child; no clangd and no cmake run, so the suite carries no tag.
+# RUN-5: an attach configuration attaches to a uniquely named io_test_child copy, and Debug runs a
+# native configuration's before-launch tasks (io_test_child) first.
 frost_add_test(app_workbench_attach_tests QT
     SOURCES workbench_attach_test.cpp
-    DEPS frost::app frost::build frost::debug frost::io frost::lang
+    DEPS frost::app frost::build frost::debug frost::io frost::lang frost::run
     LABELS integration)
 target_include_directories(app_workbench_attach_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
-target_compile_definitions(app_workbench_attach_tests PRIVATE ${_frost_workbench_definitions})
+target_compile_definitions(app_workbench_attach_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_IO_TEST_CHILD="$<TARGET_FILE:io_test_child>")
+add_dependencies(app_workbench_attach_tests io_test_child)
 
 frost_add_test(app_project_open_tests QT
     SOURCES project_open_process_test.cpp

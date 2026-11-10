@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SLN-0's synthetic solution, shaped like a generated work solution: Microsoft.Cpp.Default.props
+     imports this file (through Microsoft.Common.props) before the project's own properties, and it
+     opens a chain of property sheets four levels deep (Common -> Toolchain -> Platform.<p> -> Deep).
+     Only MSBuild's evaluation sees what the chain adds; the static .vcxproj reader cannot. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <GenRoot>$(MSBuildThisFileDirectory)</GenRoot>
+    <GenGenerator>synthetic-generator 3.1</GenGenerator>
+  </PropertyGroup>
+  <Import Project="$(GenRoot)props\Common.props" />
+</Project>

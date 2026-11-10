@@ -238,7 +238,10 @@ struct Entry {
 
         // Keymap.
         {"keymap.id", "Keymap", "The keyboard shortcut scheme.", "Keymap",
-         enumSchema(options({{"intellij", "IntelliJ IDEA (Windows and Linux)"}, {"visual-studio", "Visual Studio"}})),
+         enumSchema(options({{"intellij", "IntelliJ IDEA (Windows and Linux)"},
+                             {"visual-studio", "Visual Studio"},
+                             {"visual-studio-2022", "Visual Studio 2022"},
+                             {"resharper", "ReSharper (Visual Studio scheme)"}})),
          text("intellij"), kApplicationOnly},
         {"keymap.doubleTapIntervalMs", "Double modifier interval",
          "How quickly a modifier must be pressed twice (Double Shift) in milliseconds; 0 uses the system's "

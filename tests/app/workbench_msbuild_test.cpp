@@ -5,8 +5,11 @@
 // from the Build menu. Both reach the Problems tool window (shown because of the error) and the
 // Build output; activating the C2065 row opens main.cpp at line 7 with an error marker in the
 // gutter. The tiny fixture also runs from the Run action (Shift+F10): Run saves all and builds
-// first, and the program's output and its echoed input appear in the Run tool window's console. A
-// machine without Visual Studio skips the tests.
+// first, and the program's output and its echoed input appear in the Run tool window's console.
+// SLN-9: Compile (Ctrl+F7) of the active editor's file, whose Problems rows must equal what
+// MSBuild's own file loggers record for the same compile; SLN-11: debugger arguments and working
+// directory saved on the Project Properties Debugging page reach the program F5 debugs. A machine
+// without Visual Studio skips the tests.
 
 #include "frost/build/msbuild_locator.hpp"
 #include "frost/debug/lldb_dap.hpp"
@@ -23,16 +26,25 @@
 #include "frost/ui/toolwindows/build_output.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 
+#include "../../src/app/src/project_properties_dialog.hpp"
+#include "build/msbuild_diagnostic_oracle.hpp"
 #include "workbench_rig.hpp"
 #include <QAction>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QLineEdit>
+#include <QPushButton>
+#include <QScopeGuard>
+#include <QTimer>
 #include <QTreeView>
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -334,6 +346,161 @@ TEST(WorkbenchMsBuild, RunMarkerRunsTheProjectThatBuildsTheFile) {
     ASSERT_TRUE(waitFor([&] { return !rig.workbench->runController()->running(); }, std::chrono::seconds(30)));
     ASSERT_TRUE(rig.workbench->runService()->lastOutcome().has_value());
     EXPECT_EQ(rig.workbench->runService()->lastOutcome()->exitCode, 3);
+}
+
+// SLN-9: Ctrl+F7 compiles the active editor's file with its project (App) and nothing else; the
+// Problems rows equal the diagnostics MSBuild's own errors-only and warnings-only file loggers
+// record for the same single-file compile.
+TEST(WorkbenchMsBuild, CompileTheCurrentFileShowsWhatMsBuildLogged) {
+    const std::optional<std::string> msbuild = machineMsBuild();
+    if (!msbuild) {
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    }
+    WorkDir dir("msbuild-compile", "tiny_sln");
+    dir.write("App/main.cpp", "#include \"lib.h\"\n"
+                              "\n"
+                              "[[deprecated(\"use tinyAnswer\")]] int oldAnswer();\n"
+                              "\n"
+                              "int main() {\n"
+                              "    int value = oldAnswer();\n"
+                              "    return tinyAnswer() + value + undeclared_thing;\n"
+                              "}\n");
+    RigOptions options;
+    options.workbench.msbuildPath = *msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value()); // No trust dialog in a test.
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
+
+    // Ctrl+F7 is Compile's shortcut in the workbench's keymap.
+    const auto compileId = rig.workbench->registry().find(frost::ui::build_actions::kCompileFile);
+    ASSERT_TRUE(compileId.has_value());
+    const auto shortcut = rig.workbench->keymap().primaryShortcut(*compileId);
+    ASSERT_TRUE(shortcut.has_value());
+    EXPECT_EQ(frost::input::formatSequence(*shortcut), "Ctrl+F7");
+
+    // Without an editor, or on a file no project compiles, there is nothing to compile.
+    rig.window->menus().refresh();
+    QAction* compile = rig.window->menus().action(frost::ui::build_actions::kCompileFile);
+    ASSERT_NE(compile, nullptr);
+    EXPECT_FALSE(compile->isEnabled());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Lib/lib.h")).has_value());
+    rig.window->menus().refresh();
+    EXPECT_FALSE(compile->isEnabled());
+
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("App/main.cpp")).has_value());
+    rig.window->menus().refresh(); // As opening the Build menu does.
+    ASSERT_TRUE(compile->isEnabled());
+    ASSERT_EQ(rig.window->invoke(frost::ui::build_actions::kCompileFile), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->build().isBuilding(); }));
+    ASSERT_TRUE(waitFor([&] { return !rig.workbench->build().isBuilding(); }, std::chrono::seconds(180)));
+    const auto outcome = rig.workbench->build().lastOutcome();
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_EQ(outcome->target.action, frost::build::BuildAction::Compile);
+    EXPECT_FALSE(outcome->error.has_value()) << outcome->error->describe();
+    EXPECT_FALSE(outcome->succeeded());
+
+    frost::ui::ProblemsView* problems = rig.workbench->problems();
+    ASSERT_NE(problems, nullptr);
+    EXPECT_TRUE(rig.window->toolWindows().isVisible(frost::ui::tool_windows::kProblems));
+    std::vector<frost::build::BuildDiagnostic> rows;
+    for (const frost::ui::Problem& problem : problems->model()->problems()) {
+        rows.push_back(problem.diagnostic);
+    }
+
+    // The oracle: the same compile, run by MSBuild itself (main.cpp has an error, so no up-to-date
+    // object makes MSBuild skip it).
+    const std::string solutionDir = dir.path() + "\\";
+    const auto oracle = frost::test::runMsBuildOracle(
+        *msbuild,
+        {dir.join("App/App.vcxproj"), "-t:ClCompile", "-p:SelectedFiles=main.cpp", "-p:Configuration=Debug",
+         "-p:Platform=x64", "-p:SolutionDir=" + solutionDir, "-p:SolutionPath=" + dir.join("Tiny.sln"),
+         "-p:SolutionName=Tiny", "-p:SolutionFileName=Tiny.sln", "-p:SolutionExt=.sln"},
+        dir.join("App"), dir.path());
+    ASSERT_TRUE(oracle.has_value());
+    EXPECT_NE(oracle->exitCode, 0);
+    EXPECT_FALSE(oracle->diagnostics.empty());
+    const auto shown = frost::test::errorListRows(rows);
+    EXPECT_EQ(shown, oracle->diagnostics) << "Problems:" << frost::test::describe(shown)
+                                          << "\nMSBuild logged:" << frost::test::describe(oracle->diagnostics);
+    // Compile builds no referenced project: Lib was never built.
+    EXPECT_FALSE(frost::io::realFileSystem().exists(dir.join("x64/Debug/Lib.lib")).value_or(true));
+}
+
+// SLN-11: the startup project's debugger arguments and working directory, saved on the Project
+// Properties Debugging page (to App.vcxproj.user), are what the program F5 debugs gets: argv[1] and
+// the current directory, read through lldb-dap at a breakpoint.
+TEST(WorkbenchMsBuild, DebugUsesTheDebuggingPagesArgumentsAndWorkingDirectory) {
+    const auto msbuild = machineMsBuild();
+    if (!msbuild)
+        GTEST_SKIP() << "no Visual Studio with MSBuild";
+    auto& fs = frost::io::realFileSystem();
+    const auto lldb = frost::debug::findLldbDap(fs, frost::debug::defaultLldbDapSearch());
+    ASSERT_TRUE(lldb.has_value()) << "the pinned lldb-dap is required (FND-6): " << lldb.error().describe();
+    WorkDir dir("msbuild-debug-user", "tiny_sln");
+    dir.write("App/main.cpp", "#include <direct.h>\n"
+                              "int main(int argc, char** argv) {\n"
+                              "  char cwd[1024] = {};\n"
+                              "  const char* first = argc > 1 ? argv[1] : \"\";\n"
+                              "  _getcwd(cwd, sizeof cwd);\n"
+                              "  return first[0] == '-' && cwd[0] != 0 ? 0 : 1;\n"
+                              "}\n");
+    RigOptions options;
+    options.workbench.msbuildPath = *msbuild;
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
+    ASSERT_NE(rig.workbench->runService(), nullptr);
+    ASSERT_TRUE(rig.workbench->runService()->startupProject().has_value());
+    EXPECT_EQ(rig.workbench->solution()->project(*rig.workbench->runService()->startupProject()).name, "App");
+
+    // The Debugging page: new arguments and a working directory the fixture's user file does not have.
+    bool edited = false;
+    QTimer::singleShot(0, rig.window.get(), [&] {
+        auto* dlg = rig.window->findChild<QDialog*>(QStringLiteral("projectPropertiesDialog"));
+        ASSERT_NE(dlg, nullptr);
+        const auto closeOnExit = qScopeGuard([dlg] {
+            if (dlg->isVisible())
+                dlg->reject();
+        });
+        auto* args = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerCommandArguments"));
+        auto* cwd = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Prop.LocalDebuggerWorkingDirectory"));
+        ASSERT_NE(args, nullptr);
+        ASSERT_NE(cwd, nullptr);
+        args->setText(QStringLiteral("--from-the-debugging-page second"));
+        cwd->setText(QStringLiteral("$(SolutionDir)x64"));
+        auto* buttons = dlg->findChild<QDialogButtonBox*>();
+        QPushButton* ok = buttons != nullptr ? buttons->button(QDialogButtonBox::Ok) : nullptr;
+        ASSERT_NE(ok, nullptr);
+        ok->click();
+        edited = true;
+    });
+    frost::app::showProjectPropertiesDialog(rig.window.get(), fs, dir.join("App/App.vcxproj"), "Debug|x64", {});
+    ASSERT_TRUE(edited);
+    ASSERT_TRUE(dir.read("App/App.vcxproj.user").contains("--from-the-debugging-page second"));
+
+    auto* debug = rig.workbench->debugController();
+    ASSERT_NE(debug, nullptr);
+    debug->toggleBreakpoint(dir.join("App/main.cpp"), 5); // 0-based: the return statement.
+    ASSERT_EQ(rig.window->invoke("run.debug"), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(
+        waitFor([&] { return debug->paused() && debug->selectedFrame().has_value(); }, std::chrono::seconds(240)))
+        << rig.workbench->runConsole()->text().toStdString();
+    ASSERT_EQ(debug->selectedFrame()->line, 6);
+    const auto evaluate = [&](const QString& expression) {
+        auto value = std::make_shared<std::optional<frost::Result<frost::debug::dap::Variable>>>();
+        debug->evaluate(expression, QStringLiteral("watch"), [value](auto result) { *value = std::move(result); });
+        EXPECT_TRUE(waitFor([&] { return value->has_value(); }, std::chrono::seconds(60))) << expression.toStdString();
+        return value->has_value() && value->value().has_value() ? value->value()->value : std::string();
+    };
+    EXPECT_EQ(evaluate(QStringLiteral("argc")), "3");
+    EXPECT_TRUE(evaluate(QStringLiteral("argv[1]")).contains("--from-the-debugging-page"));
+    EXPECT_TRUE(evaluate(QStringLiteral("argv[2]")).contains("second"));
+    // $(SolutionDir)x64 (the build's output directory), not the fixture's Lib nor MSBuild's default App.
+    const std::string cwd = evaluate(QStringLiteral("cwd"));
+    EXPECT_TRUE(cwd.contains("\\\\x64\"") || cwd.contains("\\x64\"")) << cwd;
+    debug->stop();
+    ASSERT_TRUE(waitFor([&] { return !debug->debugging(); }, std::chrono::seconds(60)));
+    EXPECT_TRUE(rig.workbench->closeProject());
 }
 
 } // namespace

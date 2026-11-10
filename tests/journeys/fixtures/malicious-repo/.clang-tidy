@@ -1,0 +1,2 @@
+Checks: '-*,misc-*'
+ExtraArgs: ['-fplugin=planted/plugin.dll', '-Xclang', '-load', '-Xclang', 'planted/plugin.dll']

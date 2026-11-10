@@ -2,7 +2,7 @@
 #
 # frost::ui_toolwindows (W1, ADR 0039): the build-side tool windows the shell docks (Solution
 # Explorer, build output, the Problems list, the configuration combo and Build actions, the trust
-# prompt) and the view models behind them, which tests drive without a window. BuildController
+# prompt, the Configuration Manager of SLN-7) and the view models behind them, which tests drive without a window. BuildController
 # marshals frost::build::BuildService's callbacks to the GUI thread.
 
 frost_add_library(ui_toolwindows LAYER ui
@@ -10,6 +10,7 @@ frost_add_library(ui_toolwindows LAYER ui
         src/build_actions.cpp
         src/build_controller.cpp
         src/build_output.cpp
+        src/configuration_manager_dialog.cpp
         src/file_manager.cpp
         src/problems.cpp
         src/solution_explorer.cpp
@@ -23,6 +24,7 @@ target_sources(frost_ui_toolwindows PRIVATE
     include/frost/ui/toolwindows/build_actions.hpp
     include/frost/ui/toolwindows/build_controller.hpp
     include/frost/ui/toolwindows/build_output.hpp
+    include/frost/ui/toolwindows/configuration_manager_dialog.hpp
     include/frost/ui/toolwindows/problems.hpp
     include/frost/ui/toolwindows/solution_explorer.hpp
     include/frost/ui/toolwindows/solution_tree_model.hpp

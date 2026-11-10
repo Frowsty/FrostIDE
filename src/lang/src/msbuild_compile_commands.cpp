@@ -842,11 +842,10 @@ Result<std::optional<CompileCommandsLocation>> IndependentProjectEvaluation::loc
     return fail(ErrorCode::Cancelled, "project evaluation cancelled");
 }
 
-std::shared_ptr<ICompileCommandsProvider>
-solutionCompileCommandsChain(io::IProcessLauncher& launcher, io::IFileSystem& fs,
-                             std::shared_ptr<const project::SolutionModel> model, std::string root,
-                             std::string cacheDirectory, MsBuildProviderOptions options,
-                             std::shared_ptr<ICompileCommandsProvider> evaluated) {
+std::shared_ptr<ICompileCommandsProvider> solutionCompileCommandsChain(
+    io::IProcessLauncher& launcher, io::IFileSystem& fs, std::shared_ptr<const project::SolutionModel> model,
+    std::string root, std::string cacheDirectory, MsBuildProviderOptions options,
+    std::shared_ptr<ICompileCommandsProvider> evaluated, std::shared_ptr<ICompileCommandsProvider> clCommandLines) {
     const std::string cleanupBoundary = cacheDirectory;
     cacheDirectory = outputDirectory(cacheDirectory);
     SynthesisOptions synthesis = options.fallback;
@@ -857,6 +856,8 @@ solutionCompileCommandsChain(io::IProcessLauncher& launcher, io::IFileSystem& fs
     auto retirement = options.retirement;
     std::vector<std::shared_ptr<ICompileCommandsProvider>> chain;
     chain.push_back(std::make_shared<ExistingCompileCommandsProvider>(fs, std::move(root)));
+    if (clCommandLines)
+        chain.push_back(std::move(clCommandLines));
     if (cacheDirectory.empty()) {
         chain.push_back(std::make_shared<UnavailableCompileCommandsProvider>());
         return std::make_shared<FirstAvailableCompileCommandsProvider>(std::move(chain));

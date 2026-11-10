@@ -80,7 +80,28 @@ void writeConfiguration(std::string& out, const RunConfiguration& configuration,
         environment.push(std::move(item));
     }
     member("environment", environment.dump());
-    member("beforeLaunch", rpc::Json(toString(configuration.beforeLaunch)).dump(), true);
+    const bool tasks = !configuration.beforeLaunchTasks.empty();
+    const bool members = !configuration.configurations.empty();
+    member("beforeLaunch", rpc::Json(toString(configuration.beforeLaunch)).dump(), !tasks && !members);
+    if (tasks) {
+        rpc::Json list = rpc::Json::array();
+        for (const BeforeLaunchTask& task : configuration.beforeLaunchTasks) {
+            rpc::Json taskArguments = rpc::Json::array();
+            for (const std::string& argument : task.arguments) {
+                taskArguments.push(argument);
+            }
+            list.push(rpc::Json::object()
+                          .set("program", task.program)
+                          .set("arguments", std::move(taskArguments))
+                          .set("workingDirectory", task.workingDirectory));
+        }
+        member("beforeLaunchTasks", list.dump(), !members);
+    }
+    if (members) {
+        std::string ids;
+        writeStringArray(ids, configuration.configurations);
+        member("configurations", ids, true);
+    }
     indent(out, depth);
     out += "}";
 }
@@ -105,6 +126,60 @@ Result<std::string> stringMember(const rpc::Json& object, std::string_view key, 
         return corrupt(index, std::format("'{}' is not a string", key));
     }
     return *text;
+}
+
+// An optional array of strings; absent is empty.
+Result<std::vector<std::string>> stringArrayMember(const rpc::Json& object, std::string_view key, std::size_t index) {
+    std::vector<std::string> out;
+    const rpc::Json* value = object.find(key);
+    if (value == nullptr) {
+        return out;
+    }
+    if (!value->isArray()) {
+        return corrupt(index, std::format("'{}' is not an array", key));
+    }
+    for (const rpc::Json& item : value->items()) {
+        const std::string* text = item.asString();
+        if (text == nullptr) {
+            return corrupt(index, std::format("an entry of '{}' is not a string", key));
+        }
+        out.push_back(*text);
+    }
+    return out;
+}
+
+Result<std::vector<BeforeLaunchTask>> readTasks(const rpc::Json& object, std::size_t index) {
+    std::vector<BeforeLaunchTask> tasks;
+    const rpc::Json* list = object.find("beforeLaunchTasks");
+    if (list == nullptr) {
+        return tasks;
+    }
+    if (!list->isArray()) {
+        return corrupt(index, "'beforeLaunchTasks' is not an array");
+    }
+    for (const rpc::Json& item : list->items()) {
+        if (!item.isObject()) {
+            return corrupt(index, "a before-launch task is not an object");
+        }
+        BeforeLaunchTask task;
+        auto program = stringMember(item, "program", true, index);
+        if (!program) {
+            return std::unexpected(std::move(program.error()));
+        }
+        task.program = std::move(*program);
+        auto arguments = stringArrayMember(item, "arguments", index);
+        if (!arguments) {
+            return std::unexpected(std::move(arguments.error()));
+        }
+        task.arguments = std::move(*arguments);
+        auto directory = stringMember(item, "workingDirectory", false, index);
+        if (!directory) {
+            return std::unexpected(std::move(directory.error()));
+        }
+        task.workingDirectory = std::move(*directory);
+        tasks.push_back(std::move(task));
+    }
+    return tasks;
 }
 
 Result<RunConfiguration> readConfiguration(const rpc::Json& object, std::size_t index) {
@@ -197,6 +272,16 @@ Result<RunConfiguration> readConfiguration(const rpc::Json& object, std::size_t 
         }
         configuration.beforeLaunch = *parsedStep;
     }
+    auto tasks = readTasks(object, index);
+    if (!tasks) {
+        return std::unexpected(std::move(tasks.error()));
+    }
+    configuration.beforeLaunchTasks = std::move(*tasks);
+    auto members = stringArrayMember(object, "configurations", index);
+    if (!members) {
+        return std::unexpected(std::move(members.error()));
+    }
+    configuration.configurations = std::move(*members);
     if (auto valid = validateRunConfiguration(configuration); !valid) {
         return corrupt(index, valid.error().message());
     }
@@ -225,12 +310,15 @@ std::string_view toString(RunType type) noexcept {
     case RunType::Native: return "native";
     case RunType::CMakeTarget: return "cmake-target";
     case RunType::MSBuild: return "msbuild";
+    case RunType::Compound: return "compound";
+    case RunType::Attach: return "attach";
     }
     return "native";
 }
 
 std::optional<RunType> parseRunType(std::string_view text) noexcept {
-    for (const RunType type : {RunType::Native, RunType::CMakeTarget, RunType::MSBuild}) {
+    for (const RunType type :
+         {RunType::Native, RunType::CMakeTarget, RunType::MSBuild, RunType::Compound, RunType::Attach}) {
         if (toString(type) == text) {
             return type;
         }
@@ -279,7 +367,66 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
         if (!io::normalizePath(configuration.target)) {
             return invalid(configuration, "an msbuild configuration needs the absolute path of its project file");
         }
+        if (!configuration.beforeLaunchTasks.empty()) {
+            return invalid(configuration, "msbuild configurations cannot have before-launch tasks yet (the "
+                                          "RunService builds and starts them; RUN-5)");
+        }
         break;
+    case RunType::Compound: {
+        if (configuration.configurations.empty()) {
+            return invalid(configuration, "a compound configuration needs at least one configuration to start");
+        }
+        std::set<std::string, std::less<>> seen;
+        for (const std::string& member : configuration.configurations) {
+            if (member.empty() || member.size() > kMaxIdLength || !std::ranges::all_of(member, idCharacter)) {
+                return invalid(configuration, std::format("'{}' is not a run configuration id", member));
+            }
+            if (member == configuration.id) {
+                return invalid(configuration, "a compound configuration cannot start itself");
+            }
+            if (!seen.insert(member).second) {
+                return invalid(configuration, std::format("'{}' is listed twice", member));
+            }
+        }
+        if (!configuration.target.empty() || !configuration.program.empty() || !configuration.arguments.empty() ||
+            !configuration.workingDirectory.empty() || !configuration.environment.empty() ||
+            configuration.beforeLaunch != BeforeLaunch::None || !configuration.beforeLaunchTasks.empty()) {
+            return invalid(configuration, "a compound configuration only lists the configurations it starts");
+        }
+        break;
+    }
+    case RunType::Attach: {
+        const std::string_view target = configuration.target;
+        const bool fileName = !target.empty() && target.find_first_of("/\\:") == std::string_view::npos &&
+                              target != "." && target != "..";
+        if (hasNul(target) || (!fileName && !io::normalizePath(target))) {
+            return invalid(configuration,
+                           "an attach configuration needs the process's executable name or absolute path");
+        }
+        if (!configuration.program.empty() || !configuration.arguments.empty() ||
+            !configuration.workingDirectory.empty() || !configuration.environment.empty() ||
+            configuration.beforeLaunch != BeforeLaunch::None || !configuration.beforeLaunchTasks.empty()) {
+            return invalid(configuration, "an attach configuration starts nothing: it only names the process");
+        }
+        break;
+    }
+    }
+    if (configuration.type != RunType::Compound && !configuration.configurations.empty()) {
+        return invalid(configuration, "only a compound configuration lists other configurations");
+    }
+    for (const BeforeLaunchTask& task : configuration.beforeLaunchTasks) {
+        if (!io::normalizePath(task.program)) {
+            return invalid(configuration,
+                           std::format("the before-launch task '{}' is not an absolute program path", task.program));
+        }
+        if (!task.workingDirectory.empty() && !io::normalizePath(task.workingDirectory)) {
+            return invalid(configuration, std::format("the before-launch task's working directory '{}' is not an "
+                                                      "absolute path",
+                                                      task.workingDirectory));
+        }
+        if (std::ranges::any_of(task.arguments, hasNul)) {
+            return invalid(configuration, "a before-launch task argument contains NUL");
+        }
     }
     if (!configuration.program.empty() && !io::normalizePath(configuration.program)) {
         return invalid(configuration, std::format("the program '{}' is not an absolute path", configuration.program));
@@ -348,8 +495,32 @@ Result<std::vector<RunConfiguration>> parseRunConfigurations(std::string_view js
     return configurations;
 }
 
+bool usesRun5Features(const RunConfiguration& configuration) noexcept {
+    return configuration.type == RunType::Compound || configuration.type == RunType::Attach ||
+           !configuration.beforeLaunchTasks.empty() || !configuration.configurations.empty();
+}
+
+bool attachTargetMatches(std::string_view target, std::string_view executablePath) noexcept {
+    if (target.empty() || executablePath.empty()) {
+        return false;
+    }
+    const bool absolute = target.find_first_of("/\\") != std::string_view::npos;
+    const std::string_view candidate = absolute ? executablePath : io::fileName(executablePath);
+    if constexpr (io::kNativePathStyle == io::PathStyle::Windows) {
+        // Windows file names ignore ASCII case, and either separator names the same path.
+        const auto fold = [](char c) {
+            c = c == '/' ? '\\' : c;
+            return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+        };
+        return std::ranges::equal(target, candidate, [&](char a, char b) { return fold(a) == fold(b); });
+    } else {
+        return target == candidate;
+    }
+}
+
 std::string serializeRunConfigurations(std::span<const RunConfiguration> configurations) {
-    std::string out = std::format("{{\n  \"version\": {},\n  \"configurations\": [", kRunConfigurationsVersion);
+    const int version = std::ranges::any_of(configurations, usesRun5Features) ? kRunConfigurationsVersion : 1;
+    std::string out = std::format("{{\n  \"version\": {},\n  \"configurations\": [", version);
     if (configurations.empty()) {
         out += "]\n}\n";
         return out;

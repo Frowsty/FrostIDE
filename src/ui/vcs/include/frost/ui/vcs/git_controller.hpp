@@ -8,8 +8,9 @@
 /*
  * Threads. Every member runs on the GUI thread (the controller's thread). The service's callbacks
  * run on its workers and reach the controller through queued calls, which Qt drops once the
- * controller is gone; the destructor ends the service (cancelling the running operation and
- * joining its workers) before anything else.
+ * controller is gone. The destructor first closes the callbacks' gate, so no worker reaches the
+ * controller afterwards, then cancels the running operation and either hands the service to the
+ * retirer (setServiceRetirer: it is joined off the GUI thread, FND-9b) or joins its workers itself.
  *
  * Errors of operations are not returned: operationFinished carries them, a notification shows them
  * (when a NotificationCenter is set) and lastResult() keeps the last one. A checkout the work tree
@@ -19,6 +20,7 @@
 #pragma once
 
 #include "frost/core/error.hpp"
+#include "frost/core/mutex.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/vcs/git_repository.hpp"
 #include "frost/vcs/git_runner.hpp"
@@ -43,6 +45,15 @@ class BackgroundTask;
 class BackgroundTaskManager;
 class NotificationCenter;
 
+namespace detail {
+// Shared by a GitController and the callbacks it gives its service: a worker posts to the
+// controller only while `open`, under `mutex`, and the destructor closes it first.
+struct GitCallbackGate {
+    Mutex mutex;
+    bool open FROST_GUARDED_BY(mutex) = true;
+};
+} // namespace detail
+
 class GitController final : public QObject {
     Q_OBJECT
 
@@ -54,6 +65,16 @@ public:
     GitController(vcs::GitRunner runner, io::IFileSystem& fs, vcs::RepositoryInfo info,
                   vcs::GitServiceOptions options = {}, QObject* parent = nullptr);
     ~GitController() override;
+
+    /*
+     * Receives the service when the controller is destroyed, after the callbacks' gate is closed and
+     * the running operation is cancelled, to destroy it (join its workers) off the GUI thread: a git
+     * process that is just starting or ending can hold that join for hundreds of milliseconds
+     * (FND-9b; R3's j2_run measured 600 ms). The retirer must destroy the service before the file
+     * system and launcher it uses go. Unset, the destructor destroys the service itself.
+     */
+    using ServiceRetirer = std::function<void(std::unique_ptr<vcs::GitService>)>;
+    void setServiceRetirer(ServiceRetirer retire) { m_retire = std::move(retire); }
 
     [[nodiscard]] vcs::GitService& service() noexcept { return *m_service; }
     [[nodiscard]] const vcs::RepositoryInfo& info() const noexcept { return m_service->info(); }
@@ -143,6 +164,9 @@ private:
     void remember(const QString& message);
 
     OperationGate m_operationGate;
+    // Before m_service: the service's callbacks capture it.
+    std::shared_ptr<detail::GitCallbackGate> m_gate = std::make_shared<detail::GitCallbackGate>();
+    ServiceRetirer m_retire;
     std::unique_ptr<vcs::GitService> m_service;
     std::shared_ptr<const vcs::GitStatusSnapshot> m_snapshot;
     std::vector<vcs::GitBranch> m_branches;

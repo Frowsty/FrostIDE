@@ -163,6 +163,17 @@ struct ProcessSpec {
     // on POSIX (see the header comment for what each covers).
     bool killOnClose = true;
 
+    /*
+     * Start the child below normal priority, so a CPU-bound tool (a parallel build) leaves the CPU to
+     * this process's UI thread. Windows: BELOW_NORMAL_PRIORITY_CLASS, which every descendant the child
+     * starts inherits (CreateProcessW gives a child of a below-normal process the same class). POSIX:
+     * the child's niceness becomes this process's plus kBelowNormalNiceness (at most 19), set with
+     * setpriority right after posix_spawn returns, which glibc does once the child has executed; its
+     * descendants inherit it. Best effort on POSIX: a failed setpriority is ignored, and a descendant
+     * the child forks before that call keeps the normal niceness. The build sessions set it.
+     */
+    bool belowNormalPriority = false;
+
     // Windows: see ImagePathForm. Ignored on POSIX.
     ImagePathForm imagePathForm = ImagePathForm::Auto;
     /*
@@ -212,6 +223,9 @@ struct ProcessSpec {
 
 // The most descriptors ProcessSpec::posixInheritedFds may pass.
 inline constexpr std::size_t kMaxInheritedFds = 16;
+
+// POSIX: what ProcessSpec::belowNormalPriority adds to the child's niceness (the usual background value).
+inline constexpr int kBelowNormalNiceness = 10;
 
 // The exit code reported after terminate(): 128 + SIGKILL, the POSIX shell's
 // convention, so Windows and POSIX agree.

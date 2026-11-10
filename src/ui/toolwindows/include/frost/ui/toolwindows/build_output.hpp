@@ -16,6 +16,13 @@
  * Auto-scroll. The pane follows new lines while its scroll bar is at the end; scrolling up stops
  * that, and scrolling back to the end resumes it.
  *
+ * Batching. A build can report thousands of lines at once (a translation unit's warnings, a
+ * project's link step), each as its own posted event. appendLine and appendSummary record the line
+ * in the log at once, but the view receives it on the next event-loop turn together with every
+ * line that arrived meanwhile: one edit block, then one scroll. Inserting and scrolling per line
+ * held the UI thread for 3 s during one burst of a FrostEditor build (j2_run's freeze report,
+ * Debug Qt). editor() inserts the waiting lines first, so what it shows never lags the log.
+ *
  * GUI thread only (the log itself is a plain value type with no thread affinity). Memory is
  * O(output); TODO(M4): cap the pane's lines for very long builds.
  */
@@ -36,6 +43,7 @@
 #include <vector>
 
 class QPlainTextEdit;
+class QTextCursor;
 class QToolButton;
 
 namespace frost::ui {
@@ -104,9 +112,11 @@ public:
     // diagnostics and, when it has ended, summary, then streams new events. A new build clears the pane.
     void setController(BuildController* controller);
 
+    // Append to the log at once and to the view on the next event-loop turn (header comment, "Batching").
     void appendLine(build::BuildOutputKind kind, const QString& text);
     void addDiagnostic(const build::BuildDiagnostic& diagnostic);
     void appendSummary(const build::BuildOutcome& outcome);
+    // Empties the log and the view, lines still waiting for the view included.
     void clear();
 
     // Emits openLocation() for line `index` when it is clickable; returns whether it was.
@@ -116,7 +126,8 @@ public:
     [[nodiscard]] bool followsTail() const noexcept { return m_follow; }
 
     [[nodiscard]] const BuildOutputLog& log() const noexcept { return m_log; }
-    [[nodiscard]] QPlainTextEdit* editor() const noexcept { return m_editor; }
+    // The text view, holding every line of the log (the waiting lines are inserted first).
+    [[nodiscard]] QPlainTextEdit* editor();
     [[nodiscard]] QToolButton* clearButton() const noexcept { return m_clear; }
 
 signals:
@@ -126,11 +137,17 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
-    void insertLine(const OutputLine& line);
+    void insertLine(QTextCursor& cursor, std::size_t index);
     void markClickable(std::size_t index);
     void scrollToEndIfFollowing();
+    // Queues one flush() for the next event-loop turn unless one is queued.
+    void scheduleFlush();
+    // Inserts the log's lines the view does not show yet in one edit block, then scrolls once.
+    void flush();
 
     BuildOutputLog m_log;
+    std::size_t m_shown = 0;    // The log lines the view holds; the rest wait for flush().
+    bool m_flushQueued = false; // A flush() is queued.
     QPlainTextEdit* m_editor = nullptr;
     QToolButton* m_clear = nullptr;
     BuildController* m_controller = nullptr;
