@@ -21,6 +21,10 @@
 #include "frost/ui/toolwindows/solution_explorer.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 #include "frost/ui/workbench/file_system_view.hpp"
+#include "frost/update/http_client.hpp"
+#include "frost/update/network_policy.hpp"
+#include "frost/update/safe_updater.hpp"
+#include "frost/update/verification.hpp"
 #include "frost/vcs/git_locator.hpp"
 
 #include "cmake_integration.hpp"
@@ -45,7 +49,6 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
-#include <QNetworkAccessManager>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QStandardPaths>
@@ -56,6 +59,9 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <mutex>
+#include <optional>
+#include <thread>
 #include <utility>
 
 #ifdef _WIN32
@@ -68,6 +74,22 @@ namespace key = settings::key;
 namespace wa = workbench_actions;
 
 namespace {
+
+struct AsyncInstallState {
+    std::mutex mutex;
+    std::optional<Result<update::UpdateOutcome>> outcome;
+    bool done = false;
+};
+
+class InstallWorkerGuard final : public QObject {
+public:
+    explicit InstallWorkerGuard(QObject* parent) : QObject(parent) {}
+    ~InstallWorkerGuard() override {
+        if (worker.joinable())
+            worker.join();
+    }
+    std::thread worker;
+};
 
 QString qs(std::string_view utf8) { return QString::fromUtf8(utf8.data(), static_cast<qsizetype>(utf8.size())); }
 
@@ -116,7 +138,8 @@ void Workbench::showUpdateCheck() {
     if (!parentWin || !interactiveReady() || m_updateChecking)
         return;
     auto snapshot = m_services.settings.snapshot();
-    if (snapshot->get(key::networkOffline)) {
+    auto netPolicy = std::make_shared<update::NetworkPolicy>(snapshot->get(key::networkOffline));
+    if (netPolicy->isOffline()) {
         QMessageBox::information(parentWin, tr("Updates"),
                                  tr("FrostIDE is working offline. Change this in Settings > Updates."));
         return;
@@ -132,11 +155,21 @@ void Workbench::showUpdateCheck() {
                                  tr("This build does not include an official update verification key."));
         return;
     }
-    const auto consent = QMessageBox::question(
-        parentWin, tr("Check for updates"),
-        tr("Connect to GitHub to check Frowsty/FrostIDE releases? GitHub will receive your network address."));
-    if (!guard || consent != QMessageBox::Yes || !interactiveReady() ||
-        m_services.settings.snapshot()->get(key::networkOffline))
+    netPolicy->setConsentPrompt([guard](const update::ConsentRequest&) -> update::ConsentDecision {
+        if (!guard || !guard->interactiveReady() || guard->m_services.settings.snapshot()->get(key::networkOffline))
+            return update::ConsentDecision::Denied;
+        QWidget* win = guard->activeTopWindow();
+        if (!win)
+            return update::ConsentDecision::Denied;
+        const auto consent = QMessageBox::question(
+            win, Workbench::tr("Check for updates"),
+            Workbench::tr(
+                "Connect to GitHub to check Frowsty/FrostIDE releases? GitHub will receive your network address."));
+        return (consent == QMessageBox::Yes) ? update::ConsentDecision::Granted : update::ConsentDecision::Denied;
+    });
+    const auto authorized = netPolicy->checkAndRequestConsent(
+        "https://api.github.com/repos/Frowsty/FrostIDE/releases?per_page=100", "check_github_releases");
+    if (!authorized || !guard || !interactiveReady() || m_services.settings.snapshot()->get(key::networkOffline))
         return;
     frost::update::PublicKey publicKey{};
     std::memcpy(publicKey.data(), decoded.constData(), publicKey.size());
@@ -185,9 +218,11 @@ void Workbench::showUpdateCheck() {
         return acceptUpdate(stateDirectory, envelope, publicKey, fresh);
     };
     auto cancelled = std::make_shared<bool>(false);
-    auto ready = [self = guard, channel, cancelled] {
-        return !*cancelled && self && self->interactiveReady() &&
-               !self->m_services.settings.snapshot()->get(key::networkOffline) &&
+    auto ready = [self = guard, channel, cancelled, netPolicy] {
+        const bool offline = !self || self->m_services.settings.snapshot()->get(key::networkOffline);
+        if (offline)
+            netPolicy->setOffline(true);
+        return !*cancelled && self && self->interactiveReady() && !offline &&
                self->m_services.settings.snapshot()->get(key::updateChannel) == channel;
     };
     m_updateChecking = true;
@@ -200,13 +235,12 @@ void Workbench::showUpdateCheck() {
     progress->show();
     if (!guard)
         return;
-    auto* manager = new QNetworkAccessManager(m_window);
+    auto httpClient = std::make_shared<update::PolicyGatedHttpClient>(update::createNativeHttpClient(), netPolicy);
     auto* check = new UpdateCheck(
-        *manager, publicKey, policy, ready,
+        httpClient, publicKey, policy, ready,
         [] { return static_cast<std::uint64_t>(QDateTime::currentSecsSinceEpoch()); },
-        [self = guard, manager, ready, revalidate, progress, cancelled,
+        [self = guard, httpClient, ready, revalidate, progress, cancelled,
          channel](Result<update::AuthenticatedRelease> result) {
-            manager->deleteLater();
             if (progress)
                 progress->deleteLater();
             if (!self)
@@ -271,12 +305,10 @@ void Workbench::showUpdateCheck() {
             downloadProgress->show();
             if (!self)
                 return;
-            auto* downloadManager = new QNetworkAccessManager(self->m_window);
             auto* download = new UpdateDownload(
-                *downloadManager, envelope->release, downloadReady,
-                [self, downloadManager, envelope, downloadReady, revalidate, downloadProgress,
+                httpClient, envelope->release, downloadReady,
+                [self, envelope, downloadReady, revalidate, downloadProgress,
                  downloadCancelled](Result<std::unique_ptr<QTemporaryFile>> payload) {
-                    downloadManager->deleteLater();
                     if (downloadProgress)
                         downloadProgress->deleteLater();
                     if (!self)
@@ -312,10 +344,10 @@ void Workbench::showUpdateCheck() {
                         self->m_launcherWindow->welcomeScreen()->setUpdateStatus(readyMsg);
                     self->applyVerifiedUpdate();
                 },
-                downloadManager);
+                self->m_window);
             download->start();
         },
-        manager);
+        m_window);
     check->start();
 }
 
@@ -326,7 +358,6 @@ void Workbench::applyVerifiedUpdate() {
 
     const QString versionStr = QString::fromStdString(m_verifiedRelease->release.version);
     const std::uint64_t buildNum = m_verifiedRelease->release.build;
-    const QString zipPath = QDir::toNativeSeparators(m_verifiedUpdate->fileName());
 
     // Side-by-side builds go next to the running one; no developer machine path is assumed.
     QDir appParent(QCoreApplication::applicationDirPath());
@@ -409,102 +440,120 @@ void Workbench::applyVerifiedUpdate() {
     if (dialog.exec() != QDialog::Accepted || installMode == 0)
         return;
 
+    const QString localData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (localData.isEmpty())
+        return;
+    const QString updatesDir = localData + QStringLiteral("/updates");
+    QDir().mkpath(updatesDir);
+    const QString stagedZip =
+        QDir::toNativeSeparators(updatesDir + QStringLiteral("/staged-build-%1.zip").arg(buildNum));
+    QFile::remove(stagedZip);
+    if (!QFile::copy(m_verifiedUpdate->fileName(), stagedZip)) {
+        QMessageBox::warning(parentWin, tr("Update Installation Failed"),
+                             tr("Could not stage update archive to %1.").arg(stagedZip));
+        return;
+    }
+
     if (installMode == 1) {
         const QString targetDir = QDir::fromNativeSeparators(destEdit->text().trimmed());
         if (targetDir.isEmpty())
             return;
-        QDir().mkpath(targetDir);
 
-        QProgressDialog extractProgress(
-            tr("Extracting FrostIDE %1 to %2…").arg(versionStr, QDir::toNativeSeparators(targetDir)), QString(), 0, 0,
-            parentWin);
-        extractProgress.setWindowTitle(tr("Installing Update"));
-        extractProgress.setMinimumDuration(0);
-        extractProgress.show();
-        QCoreApplication::processEvents();
+        const QString backupDir = QDir::toNativeSeparators(updatesDir + QStringLiteral("/rollback-%1").arg(buildNum));
+        update::SafeUpdateSpec spec;
+        spec.installDir = QDir::toNativeSeparators(targetDir).toStdString();
+        spec.backupDir = backupDir.toStdString();
+        spec.payloadPath = stagedZip.toStdString();
+        spec.expectedRelease = m_verifiedRelease->release;
+        spec.executableRelativePath = std::string(update::kDefaultExecutableName);
+        spec.healthCheckArgs = {"--selftest"};
+        spec.healthCheckTimeout = std::chrono::milliseconds{30000};
+        spec.launchDetachedAfterInstall = true;
 
-        auto powershell = windowsPowerShell();
-        if (!powershell) {
-            QMessageBox::warning(parentWin, tr("Update Installation Failed"), qs(powershell.error().message()));
-            return;
-        }
-        QString psZip = zipPath;
-        psZip.replace(QLatin1Char('\''), QStringLiteral("''"));
-        QString psDest = QDir::toNativeSeparators(targetDir);
-        psDest.replace(QLatin1Char('\''), QStringLiteral("''"));
-        const QString psScript =
-            QStringLiteral("$ErrorActionPreference = 'Stop'\n"
-                           "$dest = '%2'\n"
-                           "$tmp = Join-Path $dest '_frost_extract_tmp'\n"
-                           "if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }\n"
-                           "New-Item -ItemType Directory -Path $tmp -Force | Out-Null\n"
-                           "Expand-Archive -LiteralPath '%1' -DestinationPath $tmp -Force\n"
-                           "$src = $tmp\n"
-                           "if (-not (Test-Path -LiteralPath (Join-Path $src 'frost.exe'))) {\n"
-                           "    $sub = Get-ChildItem -LiteralPath $tmp -Directory | Select-Object -First 1\n"
-                           "    if ($sub -and (Test-Path -LiteralPath (Join-Path $sub.FullName 'frost.exe'))) { $src = "
-                           "$sub.FullName }\n"
-                           "}\n"
-                           "Get-ChildItem -LiteralPath $src -Force | ForEach-Object {\n"
-                           "    Copy-Item -LiteralPath $_.FullName -Destination $dest -Recurse -Force\n"
-                           "}\n"
-                           "Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue\n")
-                .arg(psZip, psDest);
-        // TODO(M2): (FND-11) the extraction still blocks the GUI thread (up to 120 s) as before; the safe
-        // updater with rollback replaces this whole path. Auto-updates are frozen (D38).
-        io::ProcessSpec extract;
-        extract.executable = QDir::toNativeSeparators(*powershell).toStdString();
-        extract.arguments = {"-NoProfile", "-NonInteractive", "-ExecutionPolicy",
-                             "Bypass",     "-Command",        psScript.toStdString()};
-        auto extracted = io::runToCompletion(m_services.launcher, extract, {}, std::chrono::seconds(120));
-        if (!extracted || extracted->exitCode != 0) {
-            const QString errOut =
-                extracted ? QString::fromStdString(extracted->stderrBytes).trimmed() : qs(extracted.error().message());
-            QMessageBox::warning(
-                parentWin, tr("Update Installation Failed"),
-                tr("Failed to extract update archive:\n%1")
-                    .arg(errOut.isEmpty()
-                             ? tr("PowerShell exited with code %1").arg(extracted ? extracted->exitCode : -1)
-                             : errOut));
-            return;
-        }
+        const QPointer<QProgressDialog> installProgress = new QProgressDialog(
+            tr("Installing and verifying FrostIDE %1 in %2…").arg(versionStr, QDir::toNativeSeparators(targetDir)),
+            QString(), 0, 0, parentWin);
+        installProgress->setWindowTitle(tr("Installing Update"));
+        installProgress->setMinimumDuration(0);
+        installProgress->setCancelButton(nullptr);
+        installProgress->setAutoClose(false);
+        installProgress->show();
+        m_updateChecking = true;
 
-        const QString newExe = QDir(targetDir).filePath(QStringLiteral("frost.exe"));
-        if (!QFileInfo::exists(newExe)) {
-            QMessageBox::warning(parentWin, tr("Update Installed"),
-                                 tr("Update extracted to %1, but frost.exe was not found at the root.")
-                                     .arg(QDir::toNativeSeparators(targetDir)));
-            return;
-        }
-        if (auto started = launchDetached(m_services.launcher, newExe, {}, QFileInfo(newExe).absolutePath()); started) {
-            m_exitConfirmed = true; // The restart is the user's own choice in this dialog.
-            // A vetoed close (the unsaved-changes prompt) leaves later closes to general.confirmExit.
-            if (m_window && !m_window->close())
-                m_exitConfirmed = false;
-            QCoreApplication::quit();
-        } else {
-            QMessageBox::warning(parentWin, tr("Update Installed"),
-                                 tr("Update extracted, but %1 could not be started: %2")
-                                     .arg(QDir::toNativeSeparators(newExe), qs(started.error().message())));
-        }
+        io::IFileSystem* fs = &m_services.fs;
+        io::IProcessLauncher* launcher = &m_services.launcher;
+        auto state = std::make_shared<AsyncInstallState>();
+        auto* workerGuard = new InstallWorkerGuard(this);
+        workerGuard->worker = std::thread([state, fs, launcher, spec = std::move(spec)]() {
+            update::SafeUpdater updater(*fs, *launcher);
+            auto outcome = updater.applyUpdate(spec);
+            std::lock_guard lock(state->mutex);
+            state->outcome = std::move(outcome);
+            state->done = true;
+        });
+
+        auto* pollTimer = new QTimer(workerGuard);
+        pollTimer->setInterval(20);
+        connect(pollTimer, &QTimer::timeout, this,
+                [this, workerGuard, pollTimer, installProgress, state, versionStr, targetDir]() {
+                    std::optional<Result<update::UpdateOutcome>> outcome;
+                    {
+                        std::lock_guard lock(state->mutex);
+                        if (!state->done)
+                            return;
+                        outcome = std::move(state->outcome);
+                    }
+                    pollTimer->stop();
+                    workerGuard->deleteLater();
+                    if (installProgress)
+                        installProgress->deleteLater();
+                    m_updateChecking = false;
+                    QWidget* activeWin = activeTopWindow();
+                    if (!outcome || !*outcome) {
+                        if (activeWin && outcome) {
+                            QMessageBox::warning(activeWin, Workbench::tr("Update Installation Failed"),
+                                                 qs(outcome->error().message()));
+                        }
+                        return;
+                    }
+                    if ((*outcome)->rolledBack) {
+                        if (activeWin) {
+                            QMessageBox::warning(
+                                activeWin, Workbench::tr("Update Rolled Back"),
+                                Workbench::tr("FrostIDE %1 failed its post-install health check (%2) and was "
+                                              "automatically rolled back.%3")
+                                    .arg(versionStr, qs((*outcome)->failureReason),
+                                         (*outcome)->previousVersionStarted
+                                             ? Workbench::tr(" The previous version passed verification.")
+                                             : QString()));
+                        }
+                        return;
+                    }
+                    if ((*outcome)->applied) {
+                        m_exitConfirmed = true; // The restart is the user's own choice in this dialog.
+                        // A vetoed close (the unsaved-changes prompt) leaves later closes to general.confirmExit.
+                        if (m_window && !m_window->close())
+                            m_exitConfirmed = false;
+                        QCoreApplication::quit();
+                    } else if (activeWin) {
+                        QMessageBox::warning(activeWin, Workbench::tr("Update Installed"),
+                                             Workbench::tr("Update installed to %1, but could not be started.")
+                                                 .arg(QDir::toNativeSeparators(targetDir)));
+                    }
+                });
+        pollTimer->start();
         return;
     }
 
     if (installMode == 2) {
-        const QString localData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
-        if (localData.isEmpty())
-            return;
-        const QString updatesDir = localData + QStringLiteral("/updates");
-        QDir().mkpath(updatesDir);
-        const QString stagedZip =
-            QDir::toNativeSeparators(updatesDir + QStringLiteral("/staged-build-%1.zip").arg(buildNum));
-        QFile::remove(stagedZip);
-        if (!QFile::copy(m_verifiedUpdate->fileName(), stagedZip)) {
-            QMessageBox::warning(parentWin, tr("Update Installation Failed"),
-                                 tr("Could not stage update archive to %1.").arg(stagedZip));
+        update::SafeUpdater verifier(m_services.fs, m_services.launcher);
+        if (auto verified = verifier.verifyPayloadFile(stagedZip.toStdString(), m_verifiedRelease->release);
+            !verified) {
+            QMessageBox::warning(parentWin, tr("Update Installation Failed"), qs(verified.error().message()));
             return;
         }
         const QString scriptPath = QDir::toNativeSeparators(updatesDir + QStringLiteral("/apply-update.ps1"));
+        const QString backupDir = QDir::toNativeSeparators(updatesDir + QStringLiteral("/rollback-inplace"));
         const QString appDir = QDir::toNativeSeparators(QCoreApplication::applicationDirPath());
         const QString appExe = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
         const qint64 pid = QCoreApplication::applicationPid();
@@ -521,17 +570,25 @@ void Workbench::applyVerifiedUpdate() {
         psAppDir.replace(QLatin1Char('\''), QStringLiteral("''"));
         QString psAppExe = appExe;
         psAppExe.replace(QLatin1Char('\''), QStringLiteral("''"));
+        QString psBackupDir = backupDir;
+        psBackupDir.replace(QLatin1Char('\''), QStringLiteral("''"));
 
         const QString scriptContent =
             QStringLiteral(
                 "$ErrorActionPreference = 'SilentlyContinue'\n"
                 "$appDir = '%3'\n"
+                "$backupDir = '%5'\n"
                 "Wait-Process -Id %1 -Timeout 30\n"
                 "Get-Process crashpad_handler, CSharpLanguageServer, frost_held_read -ErrorAction SilentlyContinue | "
                 "Where-Object {\n"
                 "    $_.Path -and $_.Path.StartsWith($appDir, [System.StringComparison]::OrdinalIgnoreCase)\n"
                 "} | Stop-Process -Force -ErrorAction SilentlyContinue\n"
                 "Start-Sleep -Milliseconds 600\n"
+                "if (Test-Path -LiteralPath $backupDir) { Remove-Item -LiteralPath $backupDir -Recurse -Force }\n"
+                "New-Item -ItemType Directory -Path $backupDir -Force | Out-Null\n"
+                "Get-ChildItem -LiteralPath $appDir -Force | ForEach-Object {\n"
+                "    Copy-Item -LiteralPath $_.FullName -Destination $backupDir -Recurse -Force\n"
+                "}\n"
                 "$tmp = Join-Path $env:TEMP ('frost-update-' + [guid]::NewGuid().ToString('N'))\n"
                 "New-Item -ItemType Directory -Path $tmp -Force | Out-Null\n"
                 "Expand-Archive -LiteralPath '%2' -DestinationPath $tmp -Force\n"
@@ -545,9 +602,20 @@ void Workbench::applyVerifiedUpdate() {
                 "    Copy-Item -LiteralPath $_.FullName -Destination $appDir -Recurse -Force\n"
                 "}\n"
                 "Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue\n"
+                "$env:QT_QPA_PLATFORM = 'offscreen'\n"
+                "$check = Start-Process -FilePath '%4' -ArgumentList '--selftest' -WorkingDirectory $appDir -Wait "
+                "-PassThru -WindowStyle Hidden\n"
+                "Remove-Item Env:\\QT_QPA_PLATFORM -ErrorAction SilentlyContinue\n"
+                "if ($null -eq $check -or $check.ExitCode -ne 0) {\n"
+                "    Get-ChildItem -LiteralPath $appDir -Force | Remove-Item -Recurse -Force -ErrorAction "
+                "SilentlyContinue\n"
+                "    Get-ChildItem -LiteralPath $backupDir -Force | ForEach-Object {\n"
+                "        Copy-Item -LiteralPath $_.FullName -Destination $appDir -Recurse -Force\n"
+                "    }\n"
+                "}\n"
                 "Start-Process -FilePath '%4' -WorkingDirectory $appDir\n")
                 .arg(pid)
-                .arg(psStagedZip, psAppDir, psAppExe);
+                .arg(psStagedZip, psAppDir, psAppExe, psBackupDir);
         scriptFile.write(scriptContent.toUtf8());
         scriptFile.close();
 

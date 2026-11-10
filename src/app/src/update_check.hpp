@@ -5,10 +5,14 @@
 #include <QObject>
 #include <QPointer>
 #include <QUrl>
+#include <frost/update/http_client.hpp>
 #include <frost/update/manifest.hpp>
 
+#include <atomic>
 #include <functional>
 #include <memory>
+#include <thread>
+#include <vector>
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -19,6 +23,9 @@ public:
     // Manager is supplied by the application (or an offline fixture), and must outlive this object.
     // Call only after the application has admitted outbound updates and the user has consented.
     UpdateCheck(QNetworkAccessManager& manager, update::PublicKey key, update::ReleasePolicy policy,
+                std::function<bool()> ready, std::function<std::uint64_t()> clock, Completion completion,
+                QObject* parent = nullptr);
+    UpdateCheck(std::shared_ptr<update::IHttpClient> httpClient, update::PublicKey key, update::ReleasePolicy policy,
                 std::function<bool()> ready, std::function<std::uint64_t()> clock, Completion completion,
                 QObject* parent = nullptr);
     ~UpdateCheck() override;
@@ -33,7 +40,9 @@ private:
     void fetchCandidate();
     void selectCandidate(update::AuthenticatedRelease candidate);
     void finishScan();
-    QNetworkAccessManager& m_manager;
+    QNetworkAccessManager* m_manager = nullptr;
+    std::shared_ptr<update::IHttpClient> m_httpClient;
+    std::shared_ptr<std::atomic<bool>> m_cancelled = std::make_shared<std::atomic<bool>>(false);
     update::PublicKey m_key;
     std::string m_channel;
     std::string m_platform;
@@ -61,5 +70,6 @@ private:
     bool m_started = false;
     bool m_finished = false;
     QPointer<QNetworkReply> m_reply;
+    std::vector<std::thread> m_workers;
 };
 } // namespace frost::app
