@@ -510,6 +510,26 @@ std::optional<std::string> processEnvironmentVariable(std::string_view name) {
 #endif
 }
 
+std::span<const std::string_view> fileItemTypeNames() noexcept {
+    static constexpr std::array<std::string_view, kItemTypes.size()> names = [] {
+        std::array<std::string_view, kItemTypes.size()> out{};
+        for (std::size_t i = 0; i < kItemTypes.size(); ++i) {
+            out[i] = kItemTypes[i].name;
+        }
+        return out;
+    }();
+    return names;
+}
+
+std::optional<ItemType> fileItemTypeOf(std::string_view itemName) noexcept {
+    for (const ItemTypeName& entry : kItemTypes) {
+        if (iequals(entry.name, itemName)) {
+            return entry.type;
+        }
+    }
+    return std::nullopt;
+}
+
 std::string_view toString(ItemType type) noexcept {
     for (const ItemTypeName& entry : kItemTypes) {
         if (entry.type == type && type != ItemType::Other) {

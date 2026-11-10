@@ -29,6 +29,18 @@ class LockTest(unittest.TestCase):
         # The corpus directory is named after the pin, under the corpora root.
         self.assertEqual(corpora.corpus_dir(Path("/c"), engine).name, "frostengine-" + engine["sha"][:12])
 
+    def test_repository_lock_pins_r2a_for_windows_only(self) -> None:
+        # SLN-0: R2a is the Notepad++ Visual Studio solution, a Windows corpus.
+        document = corpora.load_lock(REPO / corpora.LOCK_FILE)
+        r2a = {entry["id"]: entry for entry in document["corpora"]}["r2a"]
+        self.assertEqual(r2a["url"], "https://github.com/notepad-plus-plus/notepad-plus-plus.git")
+        self.assertRegex(r2a["sha"], r"^[0-9a-f]{40}$")
+        self.assertEqual(r2a["platforms"], ["windows"])
+        self.assertTrue(corpora.on_platform(r2a, "windows"))
+        self.assertFalse(corpora.on_platform(r2a, "linux"))
+        self.assertNotIn("presets", r2a)  # No engine leg.
+        self.assertIn("PowerEditor/visual.net/notepadPlus.sln", r2a["solutions"])
+
     def test_lock_text_is_what_pin_writes(self) -> None:
         # pin rewrites the file with json.dumps(indent=2); the checked-in text must already be in
         # that form so a re-pin changes only the pinned fields.
@@ -47,6 +59,9 @@ class LockTest(unittest.TestCase):
             {"corpora": [good | {"cacheVariables": ["FROST_X"]}]},
             {"corpora": [good | {"cacheVariables": {"linux": {"BAD NAME": "OFF"}}}]},
             {"corpora": [good | {"cacheVariables": {"linux": {"FROST_X": False}}}]},
+            {"corpora": [good | {"platforms": []}]},
+            {"corpora": [good | {"platforms": ["macos"]}]},
+            {"corpora": [good | {"platforms": "windows"}]},
             [],
         ]
         for index, document in enumerate(bad):
@@ -82,12 +97,30 @@ class CorporaToolTest(TempDirTestCase):
         git("clone", "-q", "--bare", str(work), str(self.bare), cwd=self.tmp)
         self.root = self.tmp / "corpora"
 
-    def _lock(self, sha: str, url: str | None = None) -> Path:
+    def _lock(self, sha: str, url: str | None = None, platforms: list[str] | None = None) -> Path:
         entry = {"id": "engine", "name": "fixture", "url": url or self.bare.as_uri(), "branch": "main",
                  "sha": sha, "purpose": "tests"}
+        if platforms is not None:
+            entry["platforms"] = platforms
         path = self.tmp / "corpora.lock.json"
         path.write_text(json.dumps({"schemaVersion": 1, "corpora": [entry]}, indent=2) + "\n", encoding="utf-8")
         return path
+
+    def test_a_corpus_of_another_platform_is_skipped_not_fetched_or_failed(self) -> None:
+        other = "linux" if corpora.WINDOWS else "windows"
+        lock = self._lock(self.first, platforms=[other])
+        for command in ("fetch", "verify", "engine"):
+            with self.subTest(command=command):
+                result = self._run(lock, command)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"engine: skipped, not a {corpora.PLATFORM} corpus", result.stdout)
+        self.assertFalse(self.root.exists(), "nothing is cloned for another platform")
+        listed = self._run(lock, "list")
+        self.assertIn(f"not a {corpora.PLATFORM} corpus", listed.stdout)
+        # This platform's corpus is fetched as before.
+        mine = self._lock(self.first, platforms=[corpora.PLATFORM])
+        self.assertEqual(self._run(mine, "fetch").returncode, 0)
+        self.assertEqual(self._run(mine, "verify").returncode, 0)
 
     def _run(self, lock: Path, *args: str):
         return run_tool("corpora.py", "--lock", str(lock), "--root", str(self.root), *args, env=clean_env())

@@ -9,11 +9,15 @@
 # Qt-free; depends on io (and core through it). pugixml (ADR 0033) and yyjson (ADR 0021) are linked
 # PRIVATE, so no layer above project sees their headers; FrostLayers' deferred pass checks the
 # $<LINK_ONLY:...> entries a static library propagates.
-# TODO(M2): MSBuild evaluation through path (c) (MSBuild.exe -getTargetResult; ProjectHost follows in
-# M16, ADR 0029), ProjectModelCache and restricted mode join here.
+# The MSBuild evaluation of SLN-2/SLN-3 (project_host.hpp): the ProjectHost client, its MSBuild.exe
+# fallback and the solution-wide evaluation the Solution Explorer shows; it launches processes
+# only through io's IProcessLauncher. ProjectModelCache (SLN-4) keeps those evaluations on disk,
+# cl_command_lines (SLN-5) turns MSBuild's GetClCommandLines into clangd's compile commands, and the
+# safe solution and project edits of SLN-6 (project_edit.hpp) speak the helper's edit protocol.
 
 frost_add_library(project LAYER project
     SOURCES
+        src/cl_command_lines.cpp
         src/cmake_compile_database.cpp
         src/cmake_file_api.cpp
         src/cmake_membership.cpp
@@ -25,8 +29,13 @@ frost_add_library(project LAYER project
         src/json.cpp
         src/paths.cpp
         src/process_environment.cpp
+        src/project_edit.cpp
+        src/project_host.cpp
+        src/project_model_cache.cpp
         src/sln_reader.cpp
+        src/solution_configuration_edit.cpp
         src/slnx_reader.cpp
+        src/solution_evaluation.cpp
         src/solution_model.cpp
         src/text_util.cpp
         src/trust_store.cpp

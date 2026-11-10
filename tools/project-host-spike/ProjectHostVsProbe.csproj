@@ -1,5 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0
-     Experimental .NET Framework ownership probe against an installed VS instance. -->
+     The Windows ProjectHost (.NET Framework 4.7.2) built against an installed VS instance: MSBuild
+     evaluation (SLN-2), project-file edits through the MSBuild construction API and solution edits
+     through Microsoft.VisualStudio.SolutionPersistence (SLN-6, ADR 0082). Every Reference is resolved
+     from that instance (Private="false": nothing of Visual Studio is copied or redistributed);
+     tools/licensecheck.py checks each against its allowlist of ProjectHost references. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
@@ -10,11 +14,17 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="VsProbe.cs" />
+    <Compile Include="ProjectEvaluator.cs" />
+    <Compile Include="ProjectFileEdits.cs" />
+    <Compile Include="SolutionEdits.cs" />
     <Compile Include="EnvironmentFingerprint.cs" />
     <Compile Include="TransactionProbe.cs" />
     <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Xml" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="Microsoft.Build" HintPath="$(VisualStudioMSBuildDir)/Microsoft.Build.dll" Private="false" />
     <Reference Include="Microsoft.Build.Framework" HintPath="$(VisualStudioMSBuildDir)/Microsoft.Build.Framework.dll" Private="false" />
+    <!-- SolutionPersistence ships in MSBuild\Current\Bin, the parent of the amd64 directory. -->
+    <Reference Include="Microsoft.VisualStudio.SolutionPersistence" HintPath="$(VisualStudioMSBuildDir)/../Microsoft.VisualStudio.SolutionPersistence.dll" Private="false" />
   </ItemGroup>
 </Project>

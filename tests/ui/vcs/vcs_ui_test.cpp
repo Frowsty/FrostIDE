@@ -2,13 +2,16 @@
 //
 // Functional tests of frost::ui_vcs without git (offscreen): the Commit window's model over a parsed
 // status, the side-by-side diff viewer (highlights, F7 / Shift+F7, synchronized scrolling), the VCS
-// status colours of every Glacier theme and the colour provider, and the VCS shortcut defaults.
+// status colours of every Glacier theme and the colour provider, the VCS shortcut defaults, and the
+// Git Log window's commit table filled in one insertion and sized from the rows in view.
 
 #include "frost/input/key.hpp"
 #include "frost/ui/frost_style.hpp"
 #include "frost/ui/vcs/commit_window.hpp"
 #include "frost/ui/vcs/diff_viewer.hpp"
 #include "frost/ui/vcs/git_actions.hpp"
+#include "frost/ui/vcs/git_controller.hpp" // GitLogToolWindow holds a QPointer to one.
+#include "frost/ui/vcs/git_log_window.hpp"
 #include "frost/ui/vcs/vcs_colors.hpp"
 #include "frost/vcs/vcs_status.hpp"
 
@@ -16,10 +19,13 @@
 #include "support/appearance_fixture.hpp"
 #include <QCoreApplication>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QScrollBar>
+#include <QStyledItemDelegate>
 #include <QTextBlock>
 #include <QTextDocument>
+#include <QTreeWidget>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -300,6 +306,78 @@ TEST(GitShortcuts, TheDefaultsParseAndStayOffTheKeymapsIds) {
         EXPECT_NE(entry.actionId, git_actions::kRollback);
         EXPECT_TRUE(input::isValidActionId(entry.actionId)) << entry.actionId;
     }
+}
+
+/*
+ * The Git Log window fills its table with one insertion: the 300 commits refresh() reads arrive as
+ * one rowsInserted, and its ResizeToContents columns measure only the rows in view (inserting row by
+ * row and measuring every row held the UI thread for 0.4 to 0.6 s on FrostEngine's history, j2_run's
+ * freeze reports). The rows keep their order and texts, and the first becomes current.
+ */
+// Counts the size hints the commit table asks of one column's cells.
+class CountingDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        ++calls;
+        return QStyledItemDelegate::sizeHint(option, index);
+    }
+    mutable int calls = 0;
+};
+
+TEST(GitLogToolWindow, FillsTheCommitTableInOneInsertion) {
+    GitLogToolWindow window;
+    window.resize(900, 400);
+    window.show();
+    std::vector<vcs::GitCommitEntry> commits;
+    constexpr int kCommits = 300;
+    for (int i = 0; i < kCommits; ++i) {
+        vcs::GitCommitEntry commit;
+        commit.hash = std::format("{:040x}", kCommits - i);
+        commit.shortHash = commit.hash.substr(32);
+        if (i + 1 < kCommits)
+            commit.parents = {std::format("{:040x}", kCommits - i - 1)};
+        commit.author = std::format("Author {}", i % 7);
+        commit.email = "a@example.com";
+        commit.dateIso = "2026-11-09T12:00:00+01:00";
+        commit.subject = std::format("Commit number {}", i);
+        commits.push_back(std::move(commit));
+    }
+    QTreeWidget* tree = window.commitTree();
+    int insertions = 0;
+    int inserted = 0;
+    QObject::connect(tree->model(), &QAbstractItemModel::rowsInserted, &window,
+                     [&](const QModelIndex& parent, int first, int last) {
+                         EXPECT_FALSE(parent.isValid());
+                         ++insertions;
+                         inserted += last - first + 1;
+                     });
+    auto* authors = new CountingDelegate(tree);
+    tree->setItemDelegateForColumn(2, authors);
+    window.setCommits(commits);
+    QCoreApplication::processEvents(); // The delayed layout sizes the ResizeToContents columns.
+    EXPECT_EQ(insertions, 1);
+    /* The author column is sized from the rows in view, not from all 300: each layout pass measures
+       about 20 cells (173 in all here), where measuring every row took 1807, six passes of 300. */
+    EXPECT_GT(authors->calls, 0);
+    EXPECT_LT(authors->calls, kCommits) << "the author column measured " << authors->calls << " cells";
+    EXPECT_EQ(inserted, kCommits);
+    ASSERT_EQ(tree->topLevelItemCount(), kCommits);
+    EXPECT_EQ(tree->topLevelItem(0)->text(1), QStringLiteral("Commit number 0"));
+    EXPECT_EQ(tree->topLevelItem(kCommits - 1)->text(1), QStringLiteral("Commit number 299"));
+    EXPECT_EQ(tree->topLevelItem(5)->text(2), QStringLiteral("Author 5"));
+    EXPECT_EQ(tree->topLevelItem(0)->text(3), QStringLiteral("2026-11-09 12:00:00"));
+    EXPECT_EQ(tree->topLevelItem(0)->text(4).toStdString(), commits.front().shortHash);
+    EXPECT_EQ(tree->currentItem(), tree->topLevelItem(0));
+
+    // The search filter rebuilds the table the same way.
+    insertions = 0;
+    inserted = 0;
+    window.searchEdit()->setText(QStringLiteral("number 29"));
+    EXPECT_EQ(insertions, 1);
+    EXPECT_EQ(inserted, 11); // 29 and 290..299.
+    EXPECT_EQ(tree->topLevelItemCount(), 11);
+    window.hide();
 }
 
 } // namespace

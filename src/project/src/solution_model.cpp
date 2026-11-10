@@ -279,6 +279,11 @@ class SolutionModelBuilder {
 public:
     SolutionModelBuilder(io::IFileSystem& fs, SolutionModel& model, const SolutionLoadOptions& options = {})
         : m_fs(fs), m_model(model) {
+        for (const EvaluatedProjectItems& evaluated : options.evaluated) {
+            if (auto norm = detail::normalizeAbsolute(evaluated.projectPath)) {
+                m_evaluated.emplace(detail::pathKey(*norm), &evaluated);
+            }
+        }
         for (const std::string& p : options.unloadedProjectPaths) {
             if (auto norm = detail::normalizeAbsolute(p)) {
                 m_unloadedKeys.insert(detail::pathKey(*norm));
@@ -481,7 +486,20 @@ private:
             m_model.m_projectsByGuid.emplace(info.projectGuid, id);
         }
         if (info.vcxproj) {
-            addProjectTree(info, id);
+            const EvaluatedProjectItems* evaluated = nullptr;
+            if (auto it = m_evaluated.find(pathKey); !entry.path.empty() && it != m_evaluated.end()) {
+                evaluated = it->second;
+                info.evaluation = ProjectEvaluationSummary{.source = evaluated->source,
+                                                           .configuration = evaluated->configuration,
+                                                           .platform = evaluated->platform,
+                                                           .msbuildVersion = evaluated->msbuildVersion,
+                                                           .imports = evaluated->imports,
+                                                           .itemCount = 0};
+                for (const std::string& message : evaluated->warnings) {
+                    warn(std::format("{} (evaluation): {}", info.name, message));
+                }
+            }
+            addProjectTree(info, id, evaluated);
         } else if (csproj) {
             addCsprojTree(info, id, *csproj, solutionFile, index);
             if (!csproj->references.empty()) {
@@ -491,14 +509,19 @@ private:
         m_model.m_projects.push_back(std::move(info));
     }
 
-    // The filter tree and the files of a loaded C++ project.
-    void addProjectTree(const ProjectInfo& info, ProjectId id) {
+    // The filter tree and the files of a loaded C++ project: the evaluated items when `evaluated`
+    // is set (SolutionLoadOptions::evaluated), else the static reader's.
+    void addProjectTree(ProjectInfo& info, ProjectId id, const EvaluatedProjectItems* evaluated) {
         const VcxProject& project = *info.vcxproj;
         const std::string projectKey = m_model.m_nodes[info.node.value()].key;
         for (const std::string& message : project.warnings) {
             warn(std::format("{}: {}", info.name, message));
         }
+        // An evaluated project has MSBuild's own items, so the static reader's gaps do not apply.
         for (const std::string& include : project.unresolvedIncludes) {
+            if (evaluated != nullptr) {
+                break;
+            }
             warn(std::format("{}: Include '{}' names a property defined outside the project file (imports are not "
                              "read yet); skipped",
                              info.name, include));
@@ -609,7 +632,11 @@ private:
         for (const FilterAssignment& a : filters.assignments) {
             assignment.emplace(detail::pathKey(a.itemPath), a.filter);
         }
-        for (const ProjectItem& item : project.items) {
+        std::unordered_set<std::string> evaluatedPaths;
+        for (const ProjectItem& item : evaluated != nullptr ? evaluated->items : project.items) {
+            if (evaluated != nullptr && !evaluatedPaths.insert(detail::pathKey(item.path)).second) {
+                continue; // MSBuild lists a file once per item; the tree shows it once (as the static reader).
+            }
             NodeId parent = info.node;
             if (mode == CppHierarchyMode::PhysicalFolders) {
                 if (auto folder = physicalFolderParent(item.path)) {
@@ -624,6 +651,9 @@ private:
                 }
             }
             addFile(parent, projectKey, item.path, item.type, id);
+        }
+        if (info.evaluation) {
+            info.evaluation->itemCount = evaluatedPaths.size();
         }
     }
 
@@ -900,6 +930,8 @@ private:
     std::unordered_set<std::string> m_unloadedKeys;
     std::unordered_map<std::string, NodeId> m_folderNodes; // Folder id -> node.
     std::unordered_map<std::uint32_t, std::vector<ProjectReference>> m_csprojReferences;
+    // Project path key -> its evaluated items (SolutionLoadOptions::evaluated; outlives build()).
+    std::unordered_map<std::string, const EvaluatedProjectItems*> m_evaluated;
 };
 
 Result<SolutionModel> SolutionModel::load(io::IFileSystem& fs, std::string_view solutionPath,
@@ -1002,6 +1034,31 @@ SolutionModel SolutionModel::withEvaluatedFiles(ProjectId projectId, ItemType ty
         return x.key < y.key;
     });
     return out;
+}
+
+std::vector<std::string> SolutionModel::projectFilePaths(ProjectId projectId) const {
+    const ProjectInfo& info = project(projectId);
+    std::vector<std::string> out;
+    std::unordered_set<std::string> seen;
+    std::vector<NodeId> pending{info.node};
+    while (!pending.empty()) {
+        const Node& current = node(pending.back());
+        pending.pop_back();
+        if (current.kind == NodeKind::File && seen.insert(detail::pathKey(current.path)).second) {
+            out.push_back(current.path);
+        }
+        pending.insert(pending.end(), current.children.begin(), current.children.end());
+    }
+    std::ranges::sort(out);
+    return out;
+}
+
+std::string_view toString(EvaluationSource source) noexcept {
+    switch (source) {
+    case EvaluationSource::ProjectHost: return "ProjectHost";
+    case EvaluationSource::MsBuildCli: return "MSBuild.exe";
+    }
+    return "unknown";
 }
 
 const ProjectInfo& SolutionModel::project(ProjectId id) const {

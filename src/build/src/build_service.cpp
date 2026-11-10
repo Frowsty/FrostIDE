@@ -177,6 +177,9 @@ std::string seconds(IClock::Duration duration) {
 std::string startLine(const BuildTarget& target, const project::SolutionModel& solution) {
     std::string what = target.project ? std::format("project {} of solution {}", target.projectName, solution.name())
                                       : std::format("solution {}", solution.name());
+    if (!target.file.empty()) {
+        what = std::format("{} in {}", io::fileName(target.file), what);
+    }
     std::string line =
         std::format("{} started: {}, configuration {}", toString(target.action), what, target.configuration.name());
     if (target.projectConfiguration) {
@@ -238,6 +241,11 @@ struct BuildService::State : std::enable_shared_from_this<BuildService::State> {
         if (!options.startBuild) {
             options.startBuild = [this](const MsBuildRequest& request, BuildCallbacks session) {
                 return startMsBuild(launcher, request, std::move(session));
+            };
+        }
+        if (!options.compileItems) {
+            options.compileItems = [this](const RunPropertyRequest& request) {
+                return queryCompileItems(launcher, request, std::chrono::minutes(2));
             };
         }
     }
@@ -509,6 +517,44 @@ struct BuildService::State : std::enable_shared_from_this<BuildService::State> {
             msbuild = msbuildPath;
         }
 
+        // Compile: MSBuild's own Identity of the file (build_service.hpp, "Compile"), asked after
+        // the trust check, outside the lock (it evaluates the project, about a second).
+        std::string selectedIdentity;
+        {
+            std::optional<RunPropertyRequest> itemQuery;
+            {
+                LockGuard lock(mutex);
+                if (!isCurrentLocked(id) || !passTrustGateLocked()) {
+                    return;
+                }
+                const BuildTarget& target = run->target;
+                if (target.action == BuildAction::Compile) {
+                    itemQuery = RunPropertyRequest{.msbuildPath = msbuild,
+                                                   .projectPath = run->solution->project(*target.project).path,
+                                                   .solutionPath = run->solution->path(),
+                                                   .configuration = target.projectConfiguration->configuration,
+                                                   .platform = target.projectConfiguration->platform};
+                }
+            }
+            if (itemQuery) {
+                auto items = options.compileItems(*itemQuery);
+                LockGuard lock(mutex);
+                if (!isCurrentLocked(id)) {
+                    return;
+                }
+                if (!items) {
+                    failLocked(std::move(items.error()).withContext("while asking MSBuild for the project's sources"));
+                    return;
+                }
+                auto identity = selectedFileIdentity(*items, run->target.file);
+                if (!identity) {
+                    failLocked(std::move(identity.error()));
+                    return;
+                }
+                selectedIdentity = std::move(*identity);
+            }
+        }
+
         MsBuildRequest request;
         BuildCallbacks sessionCallbacks;
         {
@@ -532,7 +578,16 @@ struct BuildService::State : std::enable_shared_from_this<BuildService::State> {
                                      .maxCpuCount = options.maxCpuCount,
                                      .verbosity = MsBuildVerbosity::Minimal,
                                      .properties = {},
-                                     .uiLanguage = {}};
+                                     .uiLanguage = {},
+                                     .selectedFiles = {}};
+            if (target.action == BuildAction::Compile) {
+                // The project file itself in its mapped configuration, as Visual Studio compiles one file.
+                request.projectName.clear();
+                request.projectPath = run->solution->project(*target.project).path;
+                request.configuration = target.projectConfiguration->configuration;
+                request.platform = target.projectConfiguration->platform;
+                request.selectedFiles = {selectedIdentity};
+            }
             emitOutput(BuildOutputKind::Status, startLine(target, *run->solution));
             sessionCallbacks = makeSessionCallbacks(id, run->solution->directory());
         }
@@ -950,6 +1005,9 @@ Result<void> BuildService::build(BuildAction action, std::optional<project::Proj
                                  BuildCompletion onDone) {
     State& s = *m_state;
     LockGuard lock(s.mutex);
+    if (action == BuildAction::Compile) {
+        return fail(ErrorCode::InvalidArgument, "a single-file compile names its file: use compile()");
+    }
     if (s.projectEditing || s.externalLaunch)
         return fail(ErrorCode::Busy, "a project edit is in progress");
     if (s.state != BuildState::Idle) {
@@ -990,6 +1048,84 @@ Result<void> BuildService::build(BuildAction action, std::optional<project::Proj
                                .expectedProjects = expectedProjects(solution, *s.active, project),
                                .lastProject = {},
                                .lastOutput = {}};
+    s.run = State::Run{.id = ++s.lastRunId,
+                       .target = std::move(target),
+                       .solution = s.solution,
+                       .untrusted = {},
+                       .session = nullptr,
+                       .finished = {},
+                       .onDone = std::move(onDone)};
+    s.emitDiagnosticsCleared();
+    s.emitProgress(s.progress);
+    if (s.passTrustGateLocked()) {
+        s.startSavingLocked();
+    }
+    return {};
+}
+
+namespace {
+
+// compileProjectFor over a solution and its active configuration (build_service.hpp).
+std::optional<project::ProjectId> compileProject(const project::SolutionModel& solution, std::size_t active,
+                                                 std::string_view filePath) {
+    const std::optional<project::NodeId> node = solution.findFileNode(filePath);
+    if (!node || solution.node(*node).itemType != project::ItemType::ClCompile) {
+        return std::nullopt;
+    }
+    for (const project::ProjectId id : solution.projectsContaining(filePath)) {
+        const project::ProjectInfo& info = solution.project(id);
+        if (!info.path.empty() && info.nodeKind != project::NodeKind::UnavailableProject &&
+            buildsIn(solution, id, active)) {
+            return id;
+        }
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
+std::optional<project::ProjectId> BuildService::compileProjectFor(std::string_view filePath) const {
+    const State& s = *m_state;
+    LockGuard lock(s.mutex);
+    if (!s.solution || !s.active || !io::isAbsolutePath(filePath)) {
+        return std::nullopt;
+    }
+    return compileProject(*s.solution, *s.active, filePath);
+}
+
+Result<void> BuildService::compile(std::string_view filePath, BuildCompletion onDone) {
+    State& s = *m_state;
+    LockGuard lock(s.mutex);
+    if (s.projectEditing || s.externalLaunch)
+        return fail(ErrorCode::Busy, "a project edit is in progress");
+    if (s.state != BuildState::Idle) {
+        return fail(ErrorCode::Busy, std::format("a build is already in progress ({})", toString(s.state)));
+    }
+    if (!s.solution) {
+        return fail(ErrorCode::InvalidArgument, "no solution is open");
+    }
+    if (!s.active) {
+        return fail(ErrorCode::InvalidArgument, std::format("{} has no solution configurations", s.solution->name()));
+    }
+    auto file = io::normalizePath(filePath);
+    if (!file || !io::isAbsolutePath(*file)) {
+        return fail(ErrorCode::InvalidArgument, std::format("'{}' is not an absolute path", filePath));
+    }
+    const project::SolutionModel& solution = *s.solution;
+    const project::SolutionConfiguration& configuration = solution.configurations()[*s.active];
+    const std::optional<project::ProjectId> project = compileProject(solution, *s.active, *file);
+    if (!project) {
+        return fail(ErrorCode::NotFound, std::format("{} is not a C/C++ source of a project that {} builds",
+                                                     io::fileName(*file), configuration.name()));
+    }
+    BuildTarget target{.action = BuildAction::Compile,
+                       .project = project,
+                       .projectName = solutionProjectName(solution, *project),
+                       .configuration = configuration,
+                       .projectConfiguration = solution.projectConfiguration(*project, *s.active),
+                       .file = std::move(*file)};
+    s.diagnostics.clear();
+    s.progress = BuildProgress{.finishedProjects = 0, .expectedProjects = 0, .lastProject = {}, .lastOutput = {}};
     s.run = State::Run{.id = ++s.lastRunId,
                        .target = std::move(target),
                        .solution = s.solution,

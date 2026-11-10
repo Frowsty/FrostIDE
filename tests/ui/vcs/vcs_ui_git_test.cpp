@@ -79,6 +79,38 @@ TEST(GitUiE2E, RejectsSecondCommitUntilFirstCompletionIsDelivered) {
     EXPECT_EQ(trimmed(repo.git({"rev-list", "--count", "HEAD"})), "2");
 }
 
+// FND-9b: a destroyed controller hands its service to the retirer (the Workbench joins it on the
+// pool, not on the GUI thread), and the callbacks it gave the service never reach it again: the
+// retired service's status refresh below fires onStatusChanged into a closed gate.
+TEST(GitUiE2E, ADestroyedControllerHandsItsServiceToTheRetirerAndItsCallbacksStayClosed) {
+    FROST_REQUIRE_OFFSCREEN();
+    TempRepo repo("ui-retired-service");
+    repo.init();
+    repo.write("a.txt", "a\n");
+    repo.commitAll("initial");
+    auto controller = controllerFor(repo);
+    std::unique_ptr<vcs::GitService> retired;
+    controller->setServiceRetirer(
+        [&retired](std::unique_ptr<vcs::GitService> service) { retired = std::move(service); });
+    int statusSignals = 0;
+    QObject::connect(controller.get(), &GitController::statusChanged, [&statusSignals] { ++statusSignals; });
+    controller.reset();
+    ASSERT_NE(retired, nullptr) << "the destructor did not hand the service to the retirer";
+    // The service still works for whoever destroys it, and its callbacks find the gate closed.
+    repo.write("a.txt", "changed after the controller went\n");
+    const std::uint64_t before = retired->snapshot() ? retired->snapshot()->generation : 0;
+    retired->refreshStatus();
+    const auto deadline = std::chrono::steady_clock::now() + kWait;
+    while (std::chrono::steady_clock::now() < deadline &&
+           (!retired->snapshot() || retired->snapshot()->generation == before))
+        std::this_thread::sleep_for(20ms);
+    ASSERT_TRUE(retired->snapshot() && retired->snapshot()->generation > before) << "the refresh never ran";
+    QCoreApplication::processEvents();
+    EXPECT_EQ(statusSignals, 0);
+    // Destroyed off the GUI thread, as the Workbench's pool does.
+    std::thread([service = std::move(retired)]() mutable { service.reset(); }).join();
+}
+
 TEST(GitUiE2E, CommitAndPushRunsAfterTheCommitCompletion) {
     FROST_REQUIRE_OFFSCREEN();
     TempRepo repo("ui-commit-push");

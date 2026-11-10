@@ -84,21 +84,7 @@ public:
 
     // git writes its object files read-only, which Windows refuses to delete: make the tree
     // writable before the ScratchDir removes it.
-    ~TempRepo() {
-        auto root = io::toStdPath(m_root);
-        if (!root || m_root.empty()) {
-            return;
-        }
-        std::error_code error;
-        for (auto it = std::filesystem::recursive_directory_iterator(*root, error);
-             !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
-            std::error_code ignored;
-            if (!it->is_symlink(ignored)) {
-                std::filesystem::permissions(it->path(), std::filesystem::perms::owner_write,
-                                             std::filesystem::perm_options::add, ignored);
-            }
-        }
-    }
+    ~TempRepo() { frost::test::makeTreeWritable(m_root); }
     TempRepo(const TempRepo&) = delete ("owns a scratch directory");
     TempRepo& operator=(const TempRepo&) = delete ("owns a scratch directory");
 

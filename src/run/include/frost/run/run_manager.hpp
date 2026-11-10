@@ -18,7 +18,13 @@
  *     handler returns at once and calls `done` exactly once (a later call is ignored), on any
  *     thread (also inside the call), with the LaunchPlan to start or the error that stops the run
  *     (a failed build). stop() requests the stop token; a handler that honours it calls done with
- *     Cancelled. Whatever done reports after a stop, nothing is started.
+ *     Cancelled. Whatever done reports after a stop, nothing is started. Then the configuration's
+ *     before-launch tasks run (RUN-5, run_configuration.hpp "Before-launch tasks"), one at a time,
+ *     each a contained process tree started through build::RunSession: its output reaches the
+ *     run's onOutput, and onPhaseChanged reports it with RunStatus::beforeLaunchTask set (still
+ *     phase BeforeLaunch). A task that cannot start or exits with a code other than 0 finishes
+ *     the run with beforeLaunchFailed and the program is not started; stop() ends the task's tree.
+ *     Tasks run in Prepare mode too, so Debug runs them before the debugger starts the program.
  *   - Running: build::RunSession runs the plan: the absolute program, its arguments, working
  *     directory and environment, stdin a pipe (sendInput), stdout and stderr piped and streamed as
  *     UTF-8 chunks (not lines), the tree contained (a Job Object on Windows, a new session on
@@ -115,7 +121,9 @@ struct RunStatus {
     RunConfiguration configuration{}; // As it was when start() accepted it.
     RunMode mode = RunMode::Run;
     RunPhase phase = RunPhase::BeforeLaunch;
-    std::string commandLine{};   // displayCommandLine of the plan; known from Running on.
+    std::string commandLine{}; // displayCommandLine of the plan; known from Running on.
+    // While a before-launch task runs (phase BeforeLaunch): its command line; "" otherwise.
+    std::string beforeLaunchTask{};
     io::ProcessId processId = 0; // The program, the root of the tree; known from Running on.
     bool acceptsInput = false;   // sendInput can still reach the program.
 };
@@ -139,7 +147,8 @@ struct RunResult {
 
 // The callbacks of one run (start()); every member optional (header comment, "Callbacks").
 struct RunHandlers {
-    std::function<void(const RunStatus& run)> onPhaseChanged{}; // Running, Stopping.
+    // Running, Stopping, and BeforeLaunch with beforeLaunchTask set when a task starts (RUN-5).
+    std::function<void(const RunStatus& run)> onPhaseChanged{};
     std::function<void(OutputStream stream, std::string_view text)> onOutput{};
     std::function<void(const RunResult& result)> onFinished{};
 };
@@ -147,7 +156,7 @@ struct RunHandlers {
 // The callbacks for every run, for the Run tool window and the toolbar (RUN-3).
 struct RunListener {
     std::function<void(const RunStatus& run)> onStarted{};      // start() accepted it.
-    std::function<void(const RunStatus& run)> onPhaseChanged{}; // Running, Stopping.
+    std::function<void(const RunStatus& run)> onPhaseChanged{}; // As RunHandlers::onPhaseChanged.
     std::function<void(RunId run, OutputStream stream, std::string_view text)> onOutput{};
     std::function<void(const RunResult& result)> onFinished{};
 };
@@ -173,7 +182,8 @@ public:
     /*
      * Starts `configuration` (header comment); returns once the run is accepted. The trust gate is
      * the caller's: only a configuration of a trusted workspace may be passed. Launch errors are
-     * reported through onFinished, not here. Errors: InvalidArgument (validateRunConfiguration),
+     * reported through onFinished, not here. Errors: InvalidArgument (validateRunConfiguration, or a
+     * compound or attach configuration, which start no program of their own),
      * Busy (a run of the same configuration id is active), Unsupported (a before-launch step or
      * program resolution is needed and no handler is set), Cancelled (the manager is closing).
      */

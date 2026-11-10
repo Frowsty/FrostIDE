@@ -49,6 +49,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -73,6 +74,14 @@ enum class ItemType : unsigned char {
 
 // The MSBuild item name ("ClCompile"); "Other" for ItemType::Other.
 [[nodiscard]] std::string_view toString(ItemType type) noexcept;
+
+// The MSBuild item names of every file item type above ("ClCompile", ..., "Xml"), in a fixed
+// order: what the static reader reads and what MSBuild's evaluation is asked for (SLN-3).
+[[nodiscard]] std::span<const std::string_view> fileItemTypeNames() noexcept;
+
+// The ItemType of an MSBuild item name (ASCII case ignored); nullopt for names that are not
+// file item types (ProjectReference, ProjectConfiguration, ...).
+[[nodiscard]] std::optional<ItemType> fileItemTypeOf(std::string_view itemName) noexcept;
 
 // One file item.
 struct ProjectItem {

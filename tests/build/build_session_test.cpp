@@ -187,6 +187,25 @@ TEST(BuildSession, CancelEndsABuildThatNeverFinishes) {
     EXPECT_EQ(recorder.lines[0].second, "working");
 }
 
+// The build tool starts below normal priority (it and its compilers leave the CPU to the UI), and
+// the rest of the spec reaches the launcher unchanged.
+TEST(BuildSession, StartsTheToolBelowNormalPriority) {
+    frost::io::ScriptedProcessLauncher launcher;
+    launcher.expect({.stdoutBytes = "done\n"});
+    const frost::io::ProcessSpec spec = toolSpec();
+    ASSERT_FALSE(spec.belowNormalPriority);
+    auto session = BuildSession::start(launcher, spec, true, {});
+    ASSERT_TRUE(session.has_value());
+    EXPECT_TRUE((*session)->wait().success);
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1U);
+    EXPECT_TRUE(launches[0].spec.belowNormalPriority);
+    EXPECT_EQ(launches[0].spec.executable, spec.executable);
+    EXPECT_EQ(launches[0].spec.arguments, spec.arguments);
+    EXPECT_EQ(launches[0].spec.workingDirectory, spec.workingDirectory);
+    EXPECT_EQ(launches[0].spec.environment, spec.environment);
+}
+
 TEST(BuildSession, DestroyingARunningSessionCancelsIt) {
     frost::io::ScriptedProcessLauncher launcher;
     launcher.expect({.neverExits = true});

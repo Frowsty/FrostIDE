@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for the repository tools in tools/ (frost-lint, frost-licensecheck,
-# frost-featurecheck, corpus_fetch, corpora, asset_fetch, symbolize.py, verify_support.py, frost_perf.py, the
+# frost-featurecheck, corpus_fetch, corpora, asset_fetch, symbolize.py, freeze_triage.py, verify_support.py, frost_perf.py, the
 # verify scripts, the commit-msg hook and verify-stamps in tools/hooks, the lldb-dap build recipes'
 # verify mode, and on Windows the PowerShell scripts bootstrap.ps1 and env.ps1) and for
 # tests/perf/budgets.json. They are Python unittest suites over
@@ -38,7 +38,7 @@ set_tests_properties(unity_compiler_arguments PROPERTIES
     SKIP_RETURN_CODE 77
     ENVIRONMENT "FROST_MANAGED_TEST_DOTNET=${_frost_managed_test_dotnet};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
 
-set(_frost_tool_suites frost_lint licensecheck featurecheck corpus_fetch corpora asset_fetch budgets symbolize
+set(_frost_tool_suites frost_lint licensecheck featurecheck corpus_fetch corpora asset_fetch budgets symbolize freeze_triage
     verify_support frost_perf verify_scripts build_lldb managed_server package_notices hooks)
 if(WIN32)
     # Runs Windows PowerShell 5.1 (bootstrap.ps1 and env.ps1); nothing to test on Linux.

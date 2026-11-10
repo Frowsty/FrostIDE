@@ -2,13 +2,17 @@
 //
 // RunConfigurationsDialog: Run > Edit Configurations... (RUN-3, PLAN.md Appendix C R2), backed by
 // RUN-1's model. It replaces the R0 dialog, whose debugger settings were read-only placeholders.
+// RUN-5 (R3) adds before-launch tasks, compound configurations and attach configurations.
 //
 /*
  * Layout, as Rider's: the configurations on the left (generated ones marked "generated"), with Add
  * (a native configuration), Copy and Remove; the selected one's fields on the right: name, type,
  * target, program, program arguments (one string with Windows command-line quoting, split into argv
  * with the MSVC CRT's rules, build::splitWindowsArguments), working directory, environment (one
- * NAME=VALUE per line; a line with just NAME removes the variable) and the before-launch step.
+ * NAME=VALUE per line; a line with just NAME removes the variable), the before-launch step, and the
+ * before-launch tasks (RUN-5): one command line per line, the absolute program first, with the same
+ * quoting as the arguments; a task's own working directory (from the store) is kept while its line
+ * is unchanged.
  *
  * What can be edited, by type (run_types.hpp):
  *   - native: everything; the program is an absolute path.
@@ -17,9 +21,14 @@
  *   - msbuild: the name only. MSBuild projects run with the debugger settings MSBuild evaluates for
  *     them (LocalDebuggerCommandArguments, ...WorkingDirectory, ...Environment of the .vcxproj and
  *     .vcxproj.user); writing those to the .vcxproj.user is SLN-11's, so the fields say so and
- *     stay read-only.
+ *     stay read-only. They take no before-launch tasks (the RunService runs them).
+ *   - compound (RUN-5, "Add Compound..."): the name and the members: a checkable list of the other
+ *     native, CMake and MSBuild configurations; checked ones start, in the list's order.
+ *   - attach (RUN-5, "Add Attach..."): the name and the process: its executable's file name or
+ *     absolute path. Debug attaches to the one running process that matches.
  * Generated configurations cannot be removed (the next generation brings them back); Remove is
- * disabled for them. Compound runs are shown disabled: they are RUN-5's.
+ * disabled for them. Copy keeps a compound or attach configuration's type; any other becomes a
+ * native copy.
  *
  * OK validates every configuration (run::validateRunConfiguration) and refuses with the first
  * error shown in the dialog; edited() is then the list to hand to RunController::
@@ -37,6 +46,7 @@
 #include <vector>
 
 class QCheckBox;
+class QFormLayout;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -79,6 +89,10 @@ public:
     std::string copySelected();
     // Removes the selected configuration if it is not generated; returns whether it did.
     bool removeSelected();
+    // Adds an empty compound configuration ("Add Compound...") or an attach configuration ("Add
+    // Attach..."), selects it and returns its id ("" when nothing can be added).
+    std::string addCompound();
+    std::string addAttach();
 
     void accept() override;
 
@@ -86,6 +100,8 @@ private:
     void showConfiguration(int row);
     void storeFields();
     void refreshList();
+    std::string addOfType(run::RunType type);
+    void fillMembers(const run::RunConfiguration& configuration);
 
     const run::RunConfigurationSet& m_set;
     std::vector<run::RunConfiguration> m_configurations;
@@ -104,6 +120,12 @@ private:
     QLineEdit* m_workingDirectory = nullptr;
     QPlainTextEdit* m_environment = nullptr;
     QLabel* m_beforeLaunch = nullptr;
+    QPlainTextEdit* m_tasks = nullptr;
+    QListWidget* m_members = nullptr;
+    QLineEdit* m_process = nullptr;
+    QFormLayout* m_form = nullptr;
+    QPushButton* m_addCompound = nullptr;
+    QPushButton* m_addAttach = nullptr;
     QLabel* m_note = nullptr;
     QLabel* m_error = nullptr;
 };

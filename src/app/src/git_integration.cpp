@@ -7,6 +7,7 @@
 #include "frost/diff/merge.hpp"
 #include "frost/document/load_service.hpp"
 #include "frost/io/path.hpp"
+#include "frost/sched/lane.hpp"
 #include "frost/text/text_shaper.hpp"
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/icon_ids.hpp"
@@ -55,6 +56,13 @@
 
 namespace frost::app {
 namespace {
+
+// Destroys a closed project's Git service (cancels its work and joins its workers) on a pool thread.
+sched::Task<void> stopRetiredGitService(std::unique_ptr<vcs::GitService> service) {
+    service.reset();
+    co_return;
+}
+
 constexpr auto kCommit = "commit";
 constexpr auto kDiff = "gitDiff";
 constexpr auto kLog = "gitLog";
@@ -307,6 +315,23 @@ void GitIntegration::installRepository(vcs::RepositoryInfo info, const std::stri
     m_controller =
         std::make_unique<ui::GitController>(vcs::GitRunner(m_workbench.m_services.launcher, executable, options),
                                             m_workbench.m_services.fs, std::move(info), vcs::GitServiceOptions{}, this);
+    // A closed project's service is joined on the pool, not on the GUI thread: its git process may be
+    // starting or ending (FND-9b; a 600 ms freeze in R3's j2_run). The launcher and the file system it
+    // uses are the application's and outlive the Workbench, which joins m_retiredGit before its pool goes.
+    m_controller->setServiceRetirer([workbench = &m_workbench](std::unique_ptr<vcs::GitService> service) {
+        if (!workbench->m_pool) {
+            service.reset();
+            return;
+        }
+        std::erase_if(workbench->m_retiredGit, [](auto& stopped) {
+            if (!stopped.ready())
+                return false;
+            stopped.join();
+            return true;
+        });
+        workbench->m_retiredGit.push_back(
+            workbench->m_pool->spawn(sched::Lane::Background, stopRetiredGitService(std::move(service))));
+    });
     auto& window = *m_workbench.m_window;
     window.setProjectTrusted(m_trusted);
     m_controller->setNotifications(&window.notifications());

@@ -1,0 +1,9 @@
+{
+  "all_passed.txt": [],
+  "mixed.txt": ["a.fail"],
+  "all_skipped.txt": [],
+  "no_tests.txt": [],
+  "two_summaries.txt": [],
+  "disabled_only.txt": [],
+  "three_failed.txt": ["Corpus.Open", "Corpus.Doctest", "journeys.j2_run"]
+}

@@ -23,7 +23,8 @@
 #                      (include directory and define only from a .props sheet and an environment
 #                      variable), its cache, and a real clangd on the evaluated commands; label
 #                      "integration" with the tags "msbuild" and "clangd", Windows only. A few seconds
-#                      per test.
+#                      per test. With them SLN-5: clangd on GetClCommandLines from the shipped
+#                      ProjectHost (tests/project/fixtures/msvc_generated) against MSBuild.exe.
 # The fixtures under fixtures/ are byte-exact inputs (REUSE.toml covers them).
 
 frost_add_test(lang_unit_tests
@@ -72,11 +73,16 @@ target_compile_definitions(lang_clangd_tests PRIVATE FROST_LANG_FIXTURE_DIR="${C
 if(WIN32)
     frost_add_test(lang_msbuild_tests
         SOURCES
+            cl_command_lines_clangd_test.cpp
             msbuild_eval_test.cpp
         DEPS frost::lang frost::build frost::project frost::text frost::io frost::sched
         LABELS integration msbuild clangd)
     target_include_directories(lang_msbuild_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
-    target_compile_definitions(lang_msbuild_tests PRIVATE FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+    target_compile_definitions(lang_msbuild_tests PRIVATE
+        FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        FROST_PROJECT_FIXTURE_DIR="${FROST_SOURCE_DIR}/tests/project/fixtures"
+        FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
+    add_dependencies(lang_msbuild_tests frost_project_host)
 endif()
 
 # CMK-4 and CPP-3 with the real cmake, Ninja (and on Windows the Visual Studio 2022 generator) on

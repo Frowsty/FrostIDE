@@ -30,4 +30,13 @@ namespace frost::lang {
 // file system there ignores case). Equal keys name the same document.
 [[nodiscard]] std::string documentKey(std::string_view path, io::PathStyle style = io::kNativePathStyle);
 
+/*
+ * A cheap test before documentKey(path) == key: false only when `path` cannot have that key because
+ * its file name (the text after the last '/' or '\') differs from the key's even ignoring ASCII case.
+ * A file name that normalisation may still change ("", ".", "..", or one ending in '.' or ' ') always
+ * passes. Lets a caller compare one document against thousands of paths (a CMake model's sources)
+ * without normalising each. Pure; O(file name length).
+ */
+[[nodiscard]] bool mayHaveDocumentKey(std::string_view path, std::string_view key) noexcept;
+
 } // namespace frost::lang

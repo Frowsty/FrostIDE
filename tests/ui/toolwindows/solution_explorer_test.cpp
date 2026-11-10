@@ -18,6 +18,7 @@
 #include <QClipboard>
 #include <QColor>
 #include <QItemSelectionModel>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QTreeView>
@@ -702,6 +703,68 @@ TEST(SolutionExplorer, ContextMenuOffersProjectAndSolutionPropertiesAndCppFilter
         EXPECT_EQ(movedToFilter.at(0).at(0).toString().toStdString(), project::test::sdk("App/App.vcxproj"));
         EXPECT_EQ(movedToFilter.at(0).at(2).toString(), QString());
     }
+}
+
+// tests/project/fixtures/msvc_generated/<relative>, normalised (SLN-0's synthetic solution).
+std::string generatedPath(std::string_view relative) {
+    auto path = io::normalizePath(std::string(FROST_PROJECT_FIXTURE_DIR) + "/msvc_generated/" + std::string(relative));
+    EXPECT_TRUE(path.has_value());
+    return path ? *path : std::string();
+}
+
+// SLN-3: an evaluated project shows MSBuild's items in the .filters tree and says where they came
+// from; a static one says it is not evaluated. The banner (SLN-2) is hidden until the owner sets it.
+TEST(SolutionExplorer, ShowsEvaluatedItemsInTheirFiltersAndTheFallbackBanner) {
+    project::EvaluatedProjectItems core{
+        .projectPath = generatedPath("Core/Core.vcxproj"),
+        .configuration = "Debug",
+        .platform = "x64",
+        .source = project::EvaluationSource::ProjectHost,
+        .msbuildVersion = "17.14",
+        .items = {},
+        .imports = {generatedPath("Directory.Build.props"), generatedPath("props/Deep.props")},
+        .warnings = {}};
+    for (const char* relative : {"shared/deep_shared.cpp", "Core/src/a.cpp"}) {
+        core.items.push_back({.type = project::ItemType::ClCompile,
+                              .itemName = "ClCompile",
+                              .include = relative,
+                              .path = generatedPath(relative),
+                              .fromWildcard = false});
+    }
+    auto loaded = project::SolutionModel::load(
+        io::realFileSystem(), generatedPath("Generated.sln"),
+        {.cppHierarchy = project::CppHierarchyMode::Filters, .unloadedProjectPaths = {}, .evaluated = {core}});
+    ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
+    auto solution = std::make_shared<const project::SolutionModel>(std::move(*loaded));
+    SolutionExplorer explorer;
+    EXPECT_EQ(explorer.evaluationBanner(), QString());
+    EXPECT_TRUE(explorer.evaluationBannerLabel()->isHidden());
+    explorer.setSolution(solution);
+    const SolutionTreeModel& model = *explorer.model();
+    const QModelIndex shared = model.indexOfPath(generatedPath("shared/deep_shared.cpp"));
+    ASSERT_TRUE(shared.isValid());
+    EXPECT_EQ(shared.parent().data().toString(), QStringLiteral("Shared"));     // Core.vcxproj.filters.
+    EXPECT_FALSE(model.indexOfPath(generatedPath("Core/src/b.cpp")).isValid()); // Not in the evaluation.
+    const auto coreId = solution->findProjectByPath(generatedPath("Core/Core.vcxproj"));
+    ASSERT_TRUE(coreId.has_value());
+    const QString coreTip = model.indexOf(solution->project(*coreId).node).data(Qt::ToolTipRole).toString();
+    EXPECT_TRUE(coreTip.contains(QStringLiteral("Items evaluated by ProjectHost for Debug|x64: 2 files, 2 imports")))
+        << coreTip.toStdString();
+    const auto app = solution->findProjectByPath(generatedPath("App/App.vcxproj"));
+    ASSERT_TRUE(app.has_value());
+    EXPECT_TRUE(model.indexOf(solution->project(*app).node)
+                    .data(Qt::ToolTipRole)
+                    .toString()
+                    .contains(QStringLiteral("not evaluated by MSBuild")));
+
+    const QString text =
+        QStringLiteral("ProjectHost unavailable: ProjectHost ended (exit code 9). MSBuild.exe evaluates.");
+    explorer.setEvaluationBanner(text);
+    EXPECT_EQ(explorer.evaluationBanner(), text);
+    EXPECT_FALSE(explorer.evaluationBannerLabel()->isHidden());
+    explorer.setEvaluationBanner({});
+    EXPECT_EQ(explorer.evaluationBanner(), QString());
+    EXPECT_TRUE(explorer.evaluationBannerLabel()->isHidden());
 }
 
 } // namespace

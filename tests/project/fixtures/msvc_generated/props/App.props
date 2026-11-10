@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The application's property sheet: it imports the engine sheet and adds the version file. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildThisFileDirectory)Engine.props" />
+  <ItemGroup>
+    <None Include="$(GenRoot)shared\version.txt" />
+  </ItemGroup>
+</Project>

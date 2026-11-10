@@ -19,6 +19,9 @@
 //   close-stdout-then-sleep MS  closes its stdout, then sleeps MS milliseconds and exits 0
 //   print OUT ERR      writes OUT to stdout and ERR to stderr (raw), then exits 0
 //   sleep MS           sleeps, then exits 0
+//   traceable-sleep MS FILE  Linux: lets any debugger attach (prctl PR_SET_PTRACER_ANY, as a
+//                      debuggee does under Yama ptrace_scope 1); then creates FILE (ready to be
+//                      attached to), sleeps MS and exits 0 (the attach-configuration test, RUN-5)
 //   probe-handle N ID  "inherited" or "not inherited": whether handle/descriptor N (or the
 //                      word "stdin" for the standard input) here is the parent's probe
 //                      object ID (Windows: the name of an event, compared with
@@ -88,6 +91,9 @@
 #include <fcntl.h>
 #include <spawn.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 
 // POSIX requires the application to declare environ; <unistd.h> declares it only under _GNU_SOURCE, which
 // libstdc++ defines, so clang-tidy sees this declaration as redundant.
@@ -346,6 +352,33 @@ int run(const std::vector<std::string>& args) {
     }
     if (mode == "sleep" && args.size() == 3) {
         std::this_thread::sleep_for(std::chrono::milliseconds(number(args[2])));
+        return 0;
+    }
+    if (mode == "traceable-sleep" && args.size() == 4) {
+        const int milliseconds = number(args[2]);
+#ifdef __linux__
+        if (prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0) != 0) {
+            return 66;
+        }
+#endif
+#ifdef _WIN32
+        std::wstring path(static_cast<std::size_t>(MultiByteToWideChar(CP_UTF8, 0, args[3].c_str(), -1, nullptr, 0)),
+                          L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, args[3].c_str(), -1, path.data(), static_cast<int>(path.size()));
+        const HANDLE ready =
+            CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (ready == INVALID_HANDLE_VALUE) {
+            return 66;
+        }
+        CloseHandle(ready);
+#else
+        std::FILE* ready = std::fopen(args[3].c_str(), "wb");
+        if (ready == nullptr) {
+            return 66;
+        }
+        std::fclose(ready);
+#endif
+        std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
         return 0;
     }
     if (mode == "probe-handle" && args.size() == 4) {

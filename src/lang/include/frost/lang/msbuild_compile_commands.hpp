@@ -239,13 +239,16 @@ private:
 
 /*
  * The provider order of ADR 0041 for a solution: an existing compile_commands.json under
- * `root`, then MSBuild's evaluation (trusted solutions on Windows), then the static synthesizer.
- * Both FrostIDE-written databases go below `cacheDirectory` (evaluated/ and synthesized/).
+ * `root`, then MSBuild's GetClCommandLines when `clCommandLines` is given (SLN-5,
+ * cl_command_lines_provider.hpp), then MSBuild's evaluation (trusted solutions on Windows), then
+ * the static synthesizer. Both FrostIDE-written databases of this function go below
+ * `cacheDirectory` (evaluated/ and synthesized/); `clCommandLines` writes its own.
  */
 [[nodiscard]] std::shared_ptr<ICompileCommandsProvider>
 solutionCompileCommandsChain(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                              std::shared_ptr<const project::SolutionModel> model, std::string root,
                              std::string cacheDirectory, MsBuildProviderOptions options,
-                             std::shared_ptr<ICompileCommandsProvider> evaluated = {});
+                             std::shared_ptr<ICompileCommandsProvider> evaluated = {},
+                             std::shared_ptr<ICompileCommandsProvider> clCommandLines = {});
 
 } // namespace frost::lang

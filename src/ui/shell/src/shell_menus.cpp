@@ -211,10 +211,15 @@ constexpr std::array kRefactorMenu{
 
 // The build tool windows' actions (frost/ui/toolwindows/build_actions.hpp, ADR 0039).
 constexpr std::array kBuildMenu{
-    act("build.buildSolution"),         act("build.rebuildSolution"),
-    act("build.cleanSolution"),         sep(),
-    act("build.cancelBuild"),           sep(),
-    act("build.configurationManager"),  act("project.manageNuGetPackages"),
+    act("build.buildSolution"),
+    act("build.rebuildSolution"),
+    act("build.cleanSolution"),
+    act("build.compileFile"),
+    sep(),
+    act("build.cancelBuild"),
+    sep(),
+    act("build.configurationManager"),
+    act("project.manageNuGetPackages"),
     act("project.addProjectReference"),
 };
 

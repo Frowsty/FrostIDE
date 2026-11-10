@@ -255,6 +255,10 @@ struct CMakeServiceOptions {
     bool captureMsvcEnvironment = true; // Windows: vcvarsall for non-Visual Studio generators.
     std::string vsInstanceId{};         // The instance for vcvarsall; "" takes the newest with C++ tools.
     std::string msvcArchitecture = "x64";
+    // SLN-14: the MSVC toolset and Windows SDK vcvarsall sets up (VcvarsSelection, toolchain.hpp);
+    // "" keeps vcvarsall's defaults (the default toolset, the newest SDK).
+    std::string msvcToolsetVersion{};
+    std::string windowsSdkVersion{};
     std::string msvcCacheDirectory{}; // MsvcEnvironmentCache's directory; "" caches in memory only.
     std::string stateFilePath{};      // The persisted active profiles (absolute); "" persists nothing.
     // The `cmake.profiles` setting's records (cmakeProfileRecords) and the scope they came from.
@@ -375,6 +379,9 @@ public:
      */
     void trustChanged();
 
+    // The current state. Any thread, lock-free: it reads the copy published with each change, so a
+    // GUI-thread caller never waits for a step the service thread starts under its lock (process
+    // creation and the spawn log's first digest of cmake.exe held it 0.32 s in j2_run).
     [[nodiscard]] BuildState state() const;
     /*
      * Whether a reply read that openFolder or setActiveProfile queued has not run yet: model() and
