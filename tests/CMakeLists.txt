@@ -42,6 +42,8 @@ frost_add_test_directory(rpc)
 frost_add_test_directory(lang)
 if(NOT FROST_FUZZ)
     frost_add_test_directory(debug)
+    # frost::engine (FEC-1): exact handles, the engine CLI and the schema.export reader.
+    frost_add_test_directory(engine)
 endif()
 # frost::search: the fuzzy path matcher (ADR 0042) and Find and Replace in Files (ADR 0045).
 # frost::term (ADR 0051): the screen model, the keys, the shell rules and the pseudo terminals.

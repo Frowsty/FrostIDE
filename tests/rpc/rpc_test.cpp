@@ -140,4 +140,41 @@ TEST(RpcFraming, DecodersOnSeveralThreadsAreIndependent) {
     EXPECT_EQ(decoded, std::vector<int>(kThreads, kFrames));
 }
 
+// FEC-1: integers above 2^53 (FrostEngine's 64-bit handles and entity ids) keep every digit through
+// parse and dump. Before the fix, values above INT64_MAX became doubles and lost their low bits.
+TEST(RpcJson, IntegersAbove2To53RoundTripExactly) {
+    const std::string text =
+        R"({"a":9007199254740993,"b":16273909378015378282,"c":18446744073709551615,"d":-9223372036854775808})";
+    auto parsed = parseJson(text);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error().message();
+    EXPECT_EQ(parsed->dump(), text);
+    EXPECT_EQ(parsed->integerAt("a"), 9007199254740993LL);
+    EXPECT_EQ(parsed->unsignedAt("a"), 9007199254740993ULL);
+    // Above INT64_MAX: an exact unsigned integer, not an int64.
+    EXPECT_EQ(parsed->find("b")->kind(), Json::Kind::Integer);
+    EXPECT_EQ(parsed->unsignedAt("b"), 16273909378015378282ULL);
+    EXPECT_EQ(parsed->integerAt("b"), std::nullopt);
+    EXPECT_EQ(parsed->unsignedAt("c"), 18446744073709551615ULL);
+    EXPECT_EQ(parsed->integerAt("d"), INT64_MIN);
+    EXPECT_EQ(parsed->unsignedAt("d"), std::nullopt);
+    // Neighbouring handles stay distinct (as doubles they compare equal).
+    EXPECT_NE(Json(16273909378015378282ULL), Json(16273909378015378283ULL));
+    EXPECT_EQ(Json(16273909378015378282ULL), parsed->find("b") != nullptr ? *parsed->find("b") : Json());
+    EXPECT_EQ(Json(std::uint64_t{18446744073709551615ULL}).dump(), "18446744073709551615");
+    // A handle built from a parsed value and written into a request is the same text.
+    const Json request = Json::object().set("entity", *parsed->unsignedAt("b"));
+    EXPECT_EQ(request.dump(), R"({"entity":16273909378015378282})");
+    // The integer kinds do not mix up: an unsigned value is not the int64 with the same bits.
+    EXPECT_NE(Json(18446744073709551615ULL), Json(-1));
+    // Beyond uint64 a number is a double; exact doubles still read as integers.
+    auto beyond = parseJson("[18446744073709551616, 4.0, -1.5]");
+    ASSERT_TRUE(beyond.has_value());
+    EXPECT_EQ(beyond->items()[0].kind(), Json::Kind::Double);
+    EXPECT_EQ(beyond->items()[0].asUnsigned(), std::nullopt);
+    EXPECT_EQ(beyond->items()[1].asUnsigned(), 4U);
+    EXPECT_EQ(beyond->items()[2].asUnsigned(), std::nullopt);
+    EXPECT_EQ(Json(5U).asInteger(), 5);
+    EXPECT_EQ(Json(-5).asUnsigned(), std::nullopt);
+}
+
 } // namespace

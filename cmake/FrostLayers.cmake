@@ -65,6 +65,9 @@ set(FROST_LAYER_RANK_run 8)
 set(FROST_LAYER_RANK_agent 8)
 set(FROST_LAYER_RANK_diag 8)
 set(FROST_LAYER_RANK_update 8)
+# engine (src/engine, frost::engine; FEC-1, PLAN.md Appendix C R4): the FrostEngine contract. Above
+# lang (rank 7), so an engine host provider can feed the Lua service without lang knowing FrostEngine.
+set(FROST_LAYER_RANK_engine 8)
 set(FROST_LAYER_RANK_ui 9)
 set(FROST_LAYER_RANK_app 10)
 

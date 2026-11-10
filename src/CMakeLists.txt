@@ -30,6 +30,8 @@ if(NOT FROST_FUZZ)
     # frost::run (RUN-1): run configurations and the RunManager, above build (its RunSession).
     add_subdirectory(run)
     add_subdirectory(lang)
+    # frost::engine (FEC-1, R4): the FrostEngine contract (engine CLI, exact handles, schema.export).
+    add_subdirectory(engine)
     add_subdirectory(debug)
     add_subdirectory(search)
     # frost::vcs (ADR 0048) links settings, which fuzz trees leave out.

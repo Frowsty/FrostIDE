@@ -37,12 +37,9 @@ bool convert(yyjson_val* value, Json& out, int depth) {
         if (yyjson_is_sint(value)) {
             out = Json(yyjson_get_sint(value));
         } else if (yyjson_is_uint(value)) {
-            const std::uint64_t number = yyjson_get_uint(value);
-            if (number <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-                out = Json(static_cast<std::int64_t>(number));
-            } else {
-                out = Json(static_cast<double>(number));
-            }
+            // Exact up to UINT64_MAX (FEC-1): a FrostEngine handle above 2^53 must survive the round trip,
+            // which a double cannot carry. yyjson reads larger integers as reals.
+            out = Json(yyjson_get_uint(value));
         } else {
             out = Json(yyjson_get_real(value));
         }
@@ -123,7 +120,7 @@ std::optional<bool> Json::asBool() const noexcept {
 
 std::optional<std::int64_t> Json::asInteger() const noexcept {
     if (m_kind == Kind::Integer) {
-        return m_integer;
+        return m_aboveInt64 ? std::nullopt : std::optional<std::int64_t>(m_integer);
     }
     // 2^63 is exactly representable; values in [-2^63, 2^63) convert without overflow.
     constexpr double kLimit = 9223372036854775808.0;
@@ -134,9 +131,26 @@ std::optional<std::int64_t> Json::asInteger() const noexcept {
     return std::nullopt;
 }
 
+std::optional<std::uint64_t> Json::asUnsigned() const noexcept {
+    if (m_kind == Kind::Integer) {
+        if (m_aboveInt64 || m_integer >= 0) {
+            return static_cast<std::uint64_t>(m_integer);
+        }
+        return std::nullopt;
+    }
+    // 2^64 is exactly representable; values in [0, 2^64) convert without overflow.
+    constexpr double kLimit = 18446744073709551616.0;
+    if (m_kind == Kind::Double && std::isfinite(m_double) && std::trunc(m_double) == m_double && m_double >= 0.0 &&
+        m_double < kLimit) {
+        return static_cast<std::uint64_t>(m_double);
+    }
+    return std::nullopt;
+}
+
 std::optional<double> Json::asDouble() const noexcept {
     if (m_kind == Kind::Integer) {
-        return static_cast<double>(m_integer);
+        return m_aboveInt64 ? static_cast<double>(static_cast<std::uint64_t>(m_integer))
+                            : static_cast<double>(m_integer);
     }
     return m_kind == Kind::Double ? std::optional<double>(m_double) : std::nullopt;
 }
@@ -193,6 +207,11 @@ std::optional<std::int64_t> Json::integerAt(std::string_view key) const noexcept
     return member != nullptr ? member->asInteger() : std::nullopt;
 }
 
+std::optional<std::uint64_t> Json::unsignedAt(std::string_view key) const noexcept {
+    const Json* member = find(key);
+    return member != nullptr ? member->asUnsigned() : std::nullopt;
+}
+
 std::optional<bool> Json::boolAt(std::string_view key) const noexcept {
     const Json* member = find(key);
     return member != nullptr ? member->asBool() : std::nullopt;
@@ -208,7 +227,9 @@ void Json::dumpTo(std::string& out) const {
     switch (m_kind) {
     case Kind::Null: out += "null"; return;
     case Kind::Bool: out += m_bool ? "true" : "false"; return;
-    case Kind::Integer: out += std::to_string(m_integer); return;
+    case Kind::Integer:
+        out += m_aboveInt64 ? std::to_string(static_cast<std::uint64_t>(m_integer)) : std::to_string(m_integer);
+        return;
     case Kind::Double: {
         if (!std::isfinite(m_double)) {
             out += "null";
@@ -248,7 +269,7 @@ void Json::dumpTo(std::string& out) const {
 bool operator==(const Json& a, const Json& b) noexcept {
     if (a.isNumber() && b.isNumber()) {
         if (a.m_kind == Json::Kind::Integer && b.m_kind == Json::Kind::Integer) {
-            return a.m_integer == b.m_integer;
+            return a.m_aboveInt64 == b.m_aboveInt64 && a.m_integer == b.m_integer;
         }
         return a.asDouble() == b.asDouble();
     }
