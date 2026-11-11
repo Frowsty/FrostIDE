@@ -40,14 +40,20 @@ using frost::sched::Lane;
 using frost::sched::SimExecutor;
 
 #ifdef _WIN32
-const std::string kTool = "C:\\tools\\clangd.exe";
+const std::string& toolPath() {
+    static const std::string value("C:\\tools\\clangd.exe");
+    return value;
+}
 #else
-const std::string kTool = "/usr/bin/clangd";
+const std::string& toolPath() {
+    static const std::string value("/usr/bin/clangd");
+    return value;
+}
 #endif
 
 ProcessSpec clangd() {
     ProcessSpec spec;
-    spec.executable = kTool;
+    spec.executable = toolPath();
     spec.arguments = {"--log=error"};
     spec.stdinMode = Stdio::Pipe;
     return spec;

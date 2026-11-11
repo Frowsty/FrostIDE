@@ -330,7 +330,7 @@ Result<std::string> Workbench::createNewProject(const NewProjectSpec& spec) {
         }
     }
 
-    const std::string canonicalDir = m_documentRegistry->canonicalize(*targetDir);
+    std::string canonicalDir = m_documentRegistry->canonicalize(*targetDir);
     if (spec.kind == NewProjectTemplate::EmptyFolder) {
         Result<void> opened = openFolder(canonicalDir, false);
         if (!opened) {

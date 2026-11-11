@@ -12,7 +12,7 @@
 
 namespace frost::input::test {
 
-LayoutTable usWith(std::vector<std::pair<Code, KeyLevels>> changes, std::string_view id) {
+LayoutTable usWith(const std::vector<std::pair<Code, KeyLevels>>& changes, std::string_view id) {
     std::map<Code, KeyLevels> cells;
     const LayoutTable& us = simulatedLayout(SimulatedLayoutId::EnUs);
     for (std::size_t i = index(Code::KeyA); i <= index(Code::IntlBackslash); ++i) {

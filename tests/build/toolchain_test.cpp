@@ -169,7 +169,7 @@ TEST(Toolchain, ResolvesChoicesAgainstWhatIsInstalled) {
     EXPECT_EQ(chosen->toolset.version, "14.38.33130");
     EXPECT_EQ(chosen->selection, (VcvarsSelection{.toolsetVersion = "14.38", .sdkVersion = "10.0.26100.0"}));
 
-    const auto refusal = [&](ToolchainChoice choice) {
+    const auto refusal = [&](const ToolchainChoice& choice) {
         auto result = resolveToolchain(inventory, choice);
         EXPECT_FALSE(result.has_value());
         return result ? std::string() : result.error().message();

@@ -12,6 +12,7 @@
 
 #include "editor/editor_harness.hpp"
 #include "lang/feature_server.hpp"
+#include <QFontMetricsF>
 #include <QMouseEvent>
 #include <QThread>
 #include <gtest/gtest.h>
@@ -235,6 +236,82 @@ TEST(EditorInsightBinding, SemanticTokensDiagnosticsAndInactiveCodeReachTheView)
     EXPECT_FALSE(h.view->insightSummary().analyzing);
 }
 
+TEST(EditorInsightTranslation, ImplementationLensOpensSubtypeResults) {
+    const std::vector<frost::ui::lang::CodeVisionCountEntry> entries{
+        {ByteOffset{6}, frost::LineIndex{0}, {std::nullopt, std::nullopt, 2}},
+    };
+    const auto lenses = frost::ui::lang::toCodeVisionCountLenses(entries);
+    ASSERT_EQ(lenses.size(), 1U);
+    EXPECT_EQ(lenses.front().label, "2 implementations");
+    EXPECT_EQ(lenses.front().actionId, "navigate.typeImplementations");
+}
+
+TEST(EditorInsightBinding, CSharpCodeVisionRetainsGitAuthorsWithoutCppIndexRequests) {
+    FROST_REQUIRE_OFFSCREEN();
+    FeatureServer server(capabilities().set("documentSymbolProvider", true));
+    server.on("textDocument/documentSymbol", [](const Json&) {
+        const Json range = Json::object()
+                               .set("start", Json::object().set("line", 0).set("character", 6))
+                               .set("end", Json::object().set("line", 0).set("character", 7));
+        return Json::array(
+            {Json::object().set("name", "C").set("kind", 5).set("range", range).set("selectionRange", range)});
+    });
+    int cppRequests = 0;
+    const auto rejectCppRequest = [&](const Json&) {
+        ++cppRequests;
+        return Json::array();
+    };
+    server.on("textDocument/references", rejectCppRequest);
+    server.on("textDocument/implementation", rejectCppRequest);
+    server.on("textDocument/prepareTypeHierarchy", rejectCppRequest);
+    frost::ui::test::EditorHarness h("class C {}\n", at(workPath("authors.cs")));
+    auto* binding = new EditorInsightBinding(*h.view, {server.client(), server.scheduler()});
+    binding->setCodeVisionEnabled(true);
+    binding->setAuthorProvider([](int line) { return line == 1 ? std::string("Alice") : std::string(); });
+    binding->refreshCodeVision();
+    ASSERT_TRUE(pumpUntil([&] { return !h.view->codeVisionLenses().empty(); }));
+    ASSERT_EQ(h.view->codeVisionLenses().size(), 1U);
+    EXPECT_EQ(h.view->codeVisionLenses().front().label, "Alice");
+    EXPECT_EQ(h.view->codeVisionLenses().front().actionId, "vcs.annotate");
+    EXPECT_EQ(cppRequests, 0);
+}
+
+TEST(EditorInsightBinding, CodeVisionIncludesMethodsInsideNamespacedClasses) {
+    FROST_REQUIRE_OFFSCREEN();
+    FeatureServer server(capabilities().set("documentSymbolProvider", true));
+    const std::string path = workPath("namespaced.cpp");
+    constexpr std::string_view text = "namespace N {\nclass C {\nvoid method();\n};\n}\n";
+    server.on("textDocument/documentSymbol", [](const Json&) {
+        const auto symbol = [](std::string name, int kind, int line, int column) {
+            const Json range = Json::object()
+                                   .set("start", Json::object().set("line", line).set("character", column))
+                                   .set("end", Json::object().set("line", line).set("character", column + 1));
+            return Json::object()
+                .set("name", std::move(name))
+                .set("kind", kind)
+                .set("range", range)
+                .set("selectionRange", range);
+        };
+        Json klass = symbol("C", 5, 1, 6);
+        klass.set("children", Json::array({symbol("method", 6, 2, 5)}));
+        Json space = symbol("N", 3, 0, 10);
+        space.set("children", Json::array({std::move(klass)}));
+        return Json::array({std::move(space)});
+    });
+    server.on("textDocument/references", [](const Json&) { return Json::array(); });
+    server.on("textDocument/implementation", [](const Json&) { return Json::array(); });
+    server.on("textDocument/prepareTypeHierarchy", [](const Json&) { return Json::array(); });
+    frost::ui::test::EditorHarness h(text, at(path));
+    auto* binding = new EditorInsightBinding(*h.view, {server.client(), server.scheduler()});
+    binding->setCodeVisionEnabled(true);
+    binding->refreshCodeVision();
+    ASSERT_TRUE(pumpUntil([&] {
+        return std::ranges::any_of(h.view->codeVisionLenses(), [](const frost::ui::EditorCodeVisionLens& lens) {
+            return lens.line == frost::LineIndex{2} && lens.label == "0 overrides";
+        });
+    }));
+}
+
 TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDisplayList) {
     FROST_REQUIRE_OFFSCREEN();
     Json caps = capabilities().set("inlayHintProvider", true).set("documentSymbolProvider", true);
@@ -288,6 +365,9 @@ TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDispl
                     })),
         });
     });
+    server.on("textDocument/references", [&](const Json&) { return Json::array(); });
+    server.on("textDocument/implementation", [&](const Json&) { return Json::array(); });
+    server.on("textDocument/prepareTypeHierarchy", [&](const Json&) { return Json::array(); });
 
     frost::ui::test::EditorHarness h(text, at(path));
     auto* binding = new EditorInsightBinding(*h.view, {server.client(), server.scheduler()});
@@ -307,13 +387,45 @@ TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDispl
     const frost::ui::EditorDisplayList list = h.view->buildDisplayList();
     EXPECT_NE(list.findText(QStringLiteral(": int")), nullptr);
     EXPECT_NE(list.findText(QStringLiteral("count:")), nullptr);
-    // FND-3 (D32): no usage count guessed from the text and no fixed "implementations" label
-    // (counts arrive with CPP-9); the Git author lens is real data and stays.
-    EXPECT_EQ(list.findText(QStringLiteral("1 usage")), nullptr);
-    EXPECT_EQ(list.findText(QStringLiteral("usages")), nullptr);
-    EXPECT_EQ(list.findText(QStringLiteral("implementations")), nullptr);
+    // Zero is shown only because the mock index answered with an empty reference set.
+    EXPECT_NE(list.findText(QStringLiteral("0 usages")), nullptr);
+    EXPECT_NE(list.findText(QStringLiteral("0 overrides")), nullptr);
     EXPECT_NE(list.findText(QStringLiteral("Alice")), nullptr);
     EXPECT_NE(list.findText(QStringLiteral("value = 42")), nullptr);
+
+    const auto checkInlayGeometry = [&](const frost::ui::EditorDisplayList& display) {
+        const frost::ui::DisplayText* typeHint = display.findText(QStringLiteral(": int"));
+        const auto autoRange = find(text, "auto");
+        const auto valueRange = find(text, "value");
+        // Plain source runs may group whitespace and several tokens. Locate source bytes, then
+        // measure the prefix within that run rather than assuming a syntax-token boundary.
+        const frost::ui::DisplayText* before = display.findTextAt(autoRange.begin);
+        const frost::ui::DisplayText* after = display.findTextAt(valueRange.begin);
+        ASSERT_NE(typeHint, nullptr);
+        ASSERT_NE(before, nullptr);
+        ASSERT_NE(after, nullptr);
+        EXPECT_EQ(typeHint->source.begin, autoRange.end);
+        EXPECT_TRUE(typeHint->source.empty());
+        EXPECT_EQ(before->source.end, autoRange.end);
+        EXPECT_EQ(after->source.begin, autoRange.end);
+        const QFontMetricsF metrics(display.font);
+        const auto prefixWidth = [&](ByteOffset begin, ByteOffset end) {
+            return metrics.horizontalAdvance(QString::fromStdString(h.view->editor().text().text({begin, end})));
+        };
+        EXPECT_NEAR(typeHint->origin.x(), before->origin.x() + prefixWidth(before->source.begin, autoRange.end), 1.0);
+        const double valueX = after->origin.x() + prefixWidth(after->source.begin, valueRange.begin);
+        EXPECT_NEAR(valueX,
+                    typeHint->origin.x() + metrics.horizontalAdvance(QStringLiteral(": int")) +
+                        prefixWidth(autoRange.end, valueRange.begin),
+                    1.0);
+    };
+    checkInlayGeometry(list);
+
+    h.view->reloadFromDocument();
+    const frost::ui::EditorDisplayList reloaded = h.view->buildDisplayList();
+    EXPECT_NE(reloaded.findText(QStringLiteral(": int")), nullptr);
+    EXPECT_NE(reloaded.findText(QStringLiteral("count:")), nullptr);
+    checkInlayGeometry(reloaded);
 }
 
 TEST(EditorInsightBinding, LuaCommentTokensDoNotBecomeInactivePreprocessorRanges) {

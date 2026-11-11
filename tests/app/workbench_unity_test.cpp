@@ -101,7 +101,7 @@ public:
         if (getsockname(listener, reinterpret_cast<sockaddr*>(&addr), &length) != 0)
             return;
         port = ntohs(addr.sin_port);
-        worker = std::jthread([this](std::stop_token stop) { serve(stop); });
+        worker = std::jthread([this](const std::stop_token& stop) { serve(stop); });
     }
     ~UnityServer() {
         if (worker.joinable()) {
@@ -146,7 +146,7 @@ private:
         return send(peer, bytes.data(), bytes.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(bytes.size());
 #endif
     }
-    void serve(std::stop_token stop) {
+    void serve(const std::stop_token& stop) {
         while (!stop.stop_requested()) {
             fd_set set;
             FD_ZERO(&set);

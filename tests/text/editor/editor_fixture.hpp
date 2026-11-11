@@ -111,7 +111,7 @@ public:
     // Runs a pure command on the editor's input and applies it; fails the test on an error.
     template<class Command, class... Args>
     void run(Command&& command, Args&&... args) {
-        const Result<EditorUpdate> update = m_editor.run(command, std::forward<Args>(args)...);
+        const Result<EditorUpdate> update = m_editor.run(std::forward<Command>(command), std::forward<Args>(args)...);
         ASSERT_TRUE(update.has_value()) << update.error().describe();
     }
     // Types `utf8` one code point at a time, as a keyboard would.
@@ -157,7 +157,7 @@ private:
 template<class Command, class... Args>
 std::string applied(std::string_view marked, Command&& command, Args&&... args) {
     EditorFixture fixture(marked);
-    fixture.run(command, std::forward<Args>(args)...);
+    fixture.run(std::forward<Command>(command), std::forward<Args>(args)...);
     return fixture.show();
 }
 

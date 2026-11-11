@@ -147,14 +147,12 @@ std::vector<std::string> charTokens(std::string_view s) {
     while (i < s.size()) {
         const auto c = static_cast<unsigned char>(s[i]);
         std::size_t length = 1;
-        if (c == '\r' && i + 1 < s.size() && s[i + 1] == '\n') {
+        if ((c == '\r' && i + 1 < s.size() && s[i + 1] == '\n') || (c >= 0xC0 && c < 0xE0)) {
             length = 2;
         } else if (c >= 0xF0) {
             length = 4;
         } else if (c >= 0xE0) {
             length = 3;
-        } else if (c >= 0xC0) {
-            length = 2;
         }
         tokens.emplace_back(s.substr(i, length));
         i += length;

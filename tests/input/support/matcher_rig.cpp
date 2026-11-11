@@ -20,6 +20,7 @@ KeymapPlatform keymapPlatformFor(KeyPlatform platform) noexcept {
 }
 
 const LayoutTable& productTable(const LayoutTable& truth, KeyPlatform platform) noexcept {
+    // NOLINTNEXTLINE(bugprone-return-const-ref-from-parameter): The oracle outlives MatcherRig.
     return platform == KeyPlatform::Windows ? truth : linuxM1Layout();
 }
 
@@ -72,7 +73,7 @@ Keymap keymapFrom(std::string_view text) {
 } // namespace
 
 MatcherRig::MatcherRig(const LayoutTable& truthTable, KeyPlatform keyPlatform, std::string_view keymapText,
-                       std::vector<ActionOverride> overrides, std::vector<std::string> extraActions)
+                       std::vector<ActionOverride> overrides, const std::vector<std::string>& extraActions)
     : keymap(keymapFrom(keymapText)), platform(keyPlatform), truth(&truthTable),
       table(&productTable(truthTable, keyPlatform)), keyboard(truthTable, keyPlatform, clock) {
     static_cast<void>(registerKeymapActions(registry, keymap, &log));
@@ -236,8 +237,8 @@ void runMatcherProperty(const LayoutTable& truth, KeyPlatform platform, std::uin
         SCOPED_TRACE(std::format("{} {} stream {} (seed {})", truth.id(),
                                  platform == KeyPlatform::Windows ? "Windows" : "X11", s, seed));
         rig.resetKeyboard();
-        for (std::size_t a = 0; a < disabled.size(); ++a) {
-            disabled[a] = rng() % 8 == 0;
+        for (auto&& actionDisabled : disabled) {
+            actionDisabled = rng() % 8 == 0;
         }
         bool composing = false;
         std::size_t produced = 0;

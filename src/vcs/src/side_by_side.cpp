@@ -20,7 +20,7 @@ LineChangeKind DiffBlock::kind() const noexcept {
     return LineChangeKind::Modified;
 }
 
-Result<SideBySideDiff> SideBySideDiff::compute(std::string left, std::string right, std::stop_token stop) {
+Result<SideBySideDiff> SideBySideDiff::compute(std::string left, std::string right, const std::stop_token& stop) {
     auto a = diff::LineSequence::fromBytes(std::move(left), diff::LineSplit::Lf);
     if (!a) {
         return std::unexpected(std::move(a.error()));

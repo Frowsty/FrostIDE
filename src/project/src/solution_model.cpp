@@ -934,8 +934,10 @@ private:
     std::unordered_map<std::string, const EvaluatedProjectItems*> m_evaluated;
 };
 
-Result<SolutionModel> SolutionModel::load(io::IFileSystem& fs, std::string_view solutionPath,
-                                          SolutionLoadOptions options) {
+Result<SolutionModel> SolutionModel::load(
+    io::IFileSystem& fs, std::string_view solutionPath,
+    // NOLINTNEXTLINE(performance-unnecessary-value-param): Own option snapshot across filesystem callbacks.
+    SolutionLoadOptions options) {
     auto file = readSolutionFile(fs, solutionPath);
     if (!file) {
         return std::unexpected(std::move(file.error()));

@@ -112,7 +112,7 @@ public:
     enum class PendingProbe { None, Timeout, StillPending };
     GeneratedCommandsLease(io::IFileSystem& fs, std::string boundary, std::string directory,
                            std::vector<std::string> ownedParents = {},
-                           std::shared_ptr<GeneratedCommandsRetirement> retirement = {},
+                           const std::shared_ptr<GeneratedCommandsRetirement>& retirement = {},
                            std::function<void()> beforeDeleteForTesting = {},
                            PendingProbe pendingForTesting = PendingProbe::None);
     ~GeneratedCommandsLease();

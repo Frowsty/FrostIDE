@@ -31,8 +31,9 @@ public:
                 char c = m_text[m_pos++];
                 command.name += c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
             }
-            if (!trivia() || m_pos == m_text.size() || m_text[m_pos++] != '(')
+            if (!trivia() || m_pos == m_text.size() || m_text[m_pos] != '(')
                 return fail(ErrorCode::Unsupported, "Expected command opening parenthesis");
+            ++m_pos;
             unsigned depth = 1;
             while (depth) {
                 if (!trivia())

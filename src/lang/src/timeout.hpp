@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <stop_token>
+#include <utility>
 
 namespace frost::lang::detail {
 
@@ -28,7 +29,7 @@ public:
     Deadline(sched::IScheduler& scheduler, IClock::Duration timeout, std::stop_token parent = {})
         : m_expired(std::make_shared<std::atomic<bool>>(false)) {
         if (parent.stop_possible()) {
-            m_link.emplace(parent, Fire{m_fire});
+            m_link.emplace(std::move(parent), Fire{m_fire});
         }
         scheduler.spawn(sched::Lane::UserVisible, timer(scheduler, timeout, m_fire, m_disarm.get_token(), m_expired))
             .detach();

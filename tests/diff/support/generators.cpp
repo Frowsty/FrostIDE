@@ -165,14 +165,14 @@ Lines baseLines(const ClassSource& c, SplitMix64& rng) {
     case PairClass::SparseFallback: {
         const std::uint32_t n = large ? between(rng, 500, 2000) : between(rng, 70, 160);
         for (std::uint32_t i = 0; i < n; ++i) {
-            a.push_back(unit(rng) < 0.97 ? "x\n" : "z\n");
+            a.emplace_back(unit(rng) < 0.97 ? "x\n" : "z\n");
         }
         break;
     }
     case PairClass::DenseFallback: {
         const std::uint32_t n = large ? between(rng, 500, 2000) : between(rng, 140, 200);
         for (std::uint32_t i = 0; i < n; ++i) {
-            a.push_back(unit(rng) < 0.5 ? "x\n" : "y\n");
+            a.emplace_back(unit(rng) < 0.5 ? "x\n" : "y\n");
         }
         break;
     }
@@ -277,7 +277,7 @@ TextPair pathologicalPair(Pathology kind, SplitMix64& rng, std::uint32_t lines) 
         break;
     case Pathology::P2: {
         for (std::uint32_t i = 0; i < lines; ++i) {
-            a.push_back(below(rng, 2) == 0 ? "x\n" : "y\n");
+            a.emplace_back(below(rng, 2) == 0 ? "x\n" : "y\n");
         }
         b = a;
         const auto line = [&] { return std::string(below(rng, 2) == 0 ? "x\n" : "y\n"); };

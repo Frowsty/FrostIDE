@@ -143,9 +143,9 @@ struct Workbench::WatchState {
 };
 
 Workbench::Workbench(ShellWindow& shell, WorkbenchServices services)
-    : m_shell(shell), m_services(std::move(services)), m_findActions(shell.environment().registry) {
+    : m_shell(shell), m_services(std::move(services)), m_findActions(shell.environment().registry),
+      m_scanTimer(new QTimer(this)), m_autosaveTimer(new QTimer(this)) {
     setObjectName(QStringLiteral("workbench"));
-    m_scanTimer = new QTimer(this);
     m_scanTimer->setObjectName(QStringLiteral("projectScanTimer"));
     m_scanTimer->setInterval(25);
     connect(m_scanTimer, &QTimer::timeout, this, [this] { pollScan(); });
@@ -172,7 +172,6 @@ Workbench::Workbench(ShellWindow& shell, WorkbenchServices services)
     connect(&tabs, &EditorTabs::statusUpdated, this, [this](IEditorView* editor) { onEditorStatus(editor); });
     connect(&tabs, &EditorTabs::currentEditorChanged, this,
             [this](IEditorView* editor) { onCurrentEditorChanged(editor); });
-    m_autosaveTimer = new QTimer(this);
     m_autosaveTimer->setObjectName(QStringLiteral("autosaveTimer"));
     m_autosaveTimer->setInterval(500);
     connect(m_autosaveTimer, &QTimer::timeout, this, [this] { pollAutosave(); });
@@ -556,7 +555,7 @@ void Workbench::openSettingsFile(const std::string& path) {
     }
     if (auto exists = m_services.fs.exists(path); exists && !*exists) {
         // A settings file starts as an empty object.
-        static_cast<void>(m_services.fs.createDirectories(std::string(nav::parentOf(path))));
+        static_cast<void>(m_services.fs.createDirectories(nav::parentOf(path)));
         if (auto written = m_services.fs.writeFileAtomic(path, "{}\n"); !written) {
             notifyError(text("Cannot create %1").arg(nativePath(path)), written.error());
             return;

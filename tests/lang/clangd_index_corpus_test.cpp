@@ -27,6 +27,7 @@
 #include "frost/text/document.hpp"
 
 #include "support/crash_dialogs.hpp"
+#include "support/process_memory_evidence.hpp"
 #include "support/scratch_dir.hpp"
 #include "support/test_env.hpp"
 #include <gtest/gtest.h>
@@ -65,7 +66,7 @@ std::string checkedCorpus() {
         return {};
     }
     const std::string sha = FROST_CORPUS_FROSTENGINE_SHA;
-    const std::string corpus = fs_io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
+    std::string corpus = fs_io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
     auto& fs = fs_io::realFileSystem();
     const auto head = fs.readFile(corpus + "/.git/HEAD");
     if (!head || head->substr(0, 40) != sha) {
@@ -209,6 +210,9 @@ TEST(ClangdIndexCorpus, FullBackgroundIndexUnderGovernorAndConcurrentBuildStaysW
     auto service =
         std::make_unique<fl::ClangdService>(fs_io::realProcessLauncher(), context, std::move(serviceOptions));
     fl::setResourceGovernor(*service, governor);
+#ifdef _WIN32
+    const auto wallStarted = std::chrono::steady_clock::now();
+#endif
     ASSERT_TRUE(service->start().has_value());
 
     const auto waitDeadline = std::chrono::steady_clock::now() + 120s;
@@ -301,8 +305,21 @@ TEST(ClangdIndexCorpus, FullBackgroundIndexUnderGovernorAndConcurrentBuildStaysW
     EXPECT_TRUE(foundCrossTuSymbol) << "workspace/symbol did not resolve Frost::UUID from the background index";
 
     // 3. Peak clangd RSS and combined index + build RSS stay strictly under the ResourceGovernor caps.
-    EXPECT_GT(metrics.peakRssBytes, 0ULL);
-    EXPECT_LT(metrics.peakRssBytes, governor->clangdRssCapBytes());
+    const auto afterQueries = fl::indexMetrics(*service);
+    EXPECT_TRUE(afterQueries.peakRssSampleValid) << afterQueries.peakRssSampleError;
+    EXPECT_GT(afterQueries.peakRssBytes, 0ULL);
+    EXPECT_LT(afterQueries.peakRssBytes, governor->clangdRssCapBytes());
+#ifdef _WIN32
+    ASSERT_TRUE(afterQueries.residentMemoryLimitBytes.has_value());
+    EXPECT_GT(*afterQueries.residentMemoryLimitBytes, 0U);
+    EXPECT_LT(*afterQueries.residentMemoryLimitBytes, afterQueries.governorRssCapBytes);
+    if (const auto pid = service->serverPid())
+        frost::test::reportProcessMemoryEvidence(*pid, "CPP4 queried", afterQueries.elapsedMs, wallStarted,
+                                                 afterQueries.governorRssCapBytes,
+                                                 afterQueries.residentMemoryLimitBytes);
+    else
+        ADD_FAILURE() << "missing live clangd PID for independent memory evidence";
+#endif
     EXPECT_LT(governor->peakCombinedRssBytes(), governor->combinedRssCapBytes());
     if (const auto clangdPid = service->serverPid()) {
         EXPECT_FALSE(governor->isProcessOverRssCap(static_cast<std::int64_t>(*clangdPid)));

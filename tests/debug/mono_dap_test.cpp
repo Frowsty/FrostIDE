@@ -120,9 +120,9 @@ public:
         module->pdb = "pdb";
         module->sources = {"/owned/a.cs"};
         module->points = {{0x06000001, 0, 10, 4}, {0x06000001, 0, 11, 8}};
-        return {module, [this](MonoDeadline deadline, std::stop_token stop) {
+        return {module, [this](MonoDeadline deadline, const std::stop_token& stop) {
                     return BinaryLoopback::connect(port, deadline, stop,
-                                                   [this](auto, auto, auto, auto) -> Result<void> {
+                                                   [this](auto, auto, auto, const auto&) -> Result<void> {
                                                        ++verifications;
                                                        return {};
                                                    });
@@ -397,7 +397,7 @@ TEST(MonoDap, InitializesAndReportsConnectorFailureWithoutHanging) {
     module->moduleId = "module";
     module->image = "image";
     module->pdb = "pdb";
-    AdapterTarget target{module, [](MonoDeadline, std::stop_token) -> Result<std::unique_ptr<BinaryLoopback>> {
+    AdapterTarget target{module, [](MonoDeadline, const std::stop_token&) -> Result<std::unique_ptr<BinaryLoopback>> {
                              return fail(ErrorCode::PermissionDenied, "identity denied");
                          }};
     auto factory = monoAdapterFactory(std::move(target));

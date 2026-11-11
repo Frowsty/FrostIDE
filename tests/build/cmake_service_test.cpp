@@ -610,7 +610,7 @@ TEST_F(CMakeServiceTest, PersonalWrapperRunsOnlyAfterTrustAndSaveWithSeparateArg
     waitIdle();
     EXPECT_TRUE(launcher.launches().empty());
     int saves = 0;
-    service->setSaveAllHook([&](SaveAllCompletion done) {
+    service->setSaveAllHook([&](const SaveAllCompletion& done) {
         ++saves;
         done({});
     });
@@ -1006,7 +1006,7 @@ TEST_F(CMakeServiceTest, BuildsCleansAndRebuildsTargets) {
     installReply();
     start();
     int saves = 0;
-    service->setSaveAllHook([&saves](SaveAllCompletion done) {
+    service->setSaveAllHook([&saves](const SaveAllCompletion& done) {
         ++saves;
         done({});
     });

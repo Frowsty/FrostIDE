@@ -17,9 +17,16 @@
 #   run_tree_child         the helper program that builds that tree (not a test itself).
 
 frost_add_test(run_unit_tests
-    SOURCES run_configuration_test.cpp run_types_test.cpp
+    SOURCES run_configuration_test.cpp run_types_test.cpp frostengine_run_test.cpp
     DEPS frost::run frost::project frost::rpc frost::io frost::core)
 target_include_directories(run_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+
+include("${FROST_SOURCE_DIR}/tests/support/EngineCorpus.cmake")
+frost_add_test(frostengine_run_corpus_tests
+    SOURCES frostengine_run_corpus_test.cpp
+    DEPS frost::run frost::engine frost::build frost::io frost::rpc frost::core
+    LABELS integration corpus)
+frost_configure_engine_corpus_target(frostengine_run_corpus_tests)
 
 # A plain console program built with the test flags; only the OS and the C runtime (no frost code),
 # so the tree it builds does not depend on the code under test.
@@ -61,6 +68,15 @@ target_compile_definitions(run_test_parser_tests PRIVATE FROST_RUN_FIXTURES="${C
 
 add_executable(run_gtest_fixture gtest_fixture.cpp)
 frost_apply_compile_options(run_gtest_fixture TEST)
+# RUN-10 debugs this fixture's exact case/source line in every IDE configuration. Like the
+# dedicated debugger fixtures, keep its line table stable rather than selecting an inlined
+# Google Test helper in Release; the IDE and user-project compiler settings remain unchanged.
+if(MSVC)
+    target_compile_options(run_gtest_fixture PRIVATE /Od /Ob0 /Z7)
+    target_link_options(run_gtest_fixture PRIVATE /DEBUG:FULL /INCREMENTAL:NO)
+else()
+    target_compile_options(run_gtest_fixture PRIVATE -O0 -g)
+endif()
 target_link_libraries(run_gtest_fixture PRIVATE GTest::gtest GTest::gtest_main)
 frost_copy_runtime_dlls(run_gtest_fixture)
 

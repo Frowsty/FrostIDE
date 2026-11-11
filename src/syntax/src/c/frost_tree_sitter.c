@@ -20,6 +20,7 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Weverything"
 #endif
+// NOLINTNEXTLINE(bugprone-suspicious-include): Tree-sitter supplies its runtime as this single-TU amalgamation.
 #include "lib.c"
 #if defined(__clang__)
 #pragma clang diagnostic pop

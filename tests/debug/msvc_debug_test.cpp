@@ -336,7 +336,7 @@ protected:
         if (!frame) {
             return {};
         }
-        auto scopes = awaitResult<ScopeList>([&](auto done) { m_session->scopes(frame->id, done); });
+        auto scopes = awaitResult<ScopeList>([&](const auto& done) { m_session->scopes(frame->id, done); });
         EXPECT_TRUE(scopes.has_value()) << (scopes ? "" : scopes.error().describe());
         if (!scopes) {
             return {};
@@ -346,8 +346,8 @@ protected:
         if (scope == scopes->end()) {
             return {};
         }
-        auto list =
-            awaitResult<VariableList>([&](auto done) { m_session->variables(scope->variablesReference, 0, 0, done); });
+        auto list = awaitResult<VariableList>(
+            [&](const auto& done) { m_session->variables(scope->variablesReference, 0, 0, done); });
         EXPECT_TRUE(list.has_value()) << (list ? "" : list.error().describe());
         return list ? *list : VariableList{};
     }
@@ -357,7 +357,7 @@ protected:
             return {};
         }
         auto list = awaitResult<VariableList>(
-            [&](auto done) { m_session->variables(variable.variablesReference, 0, 0, done); });
+            [&](const auto& done) { m_session->variables(variable.variablesReference, 0, 0, done); });
         EXPECT_TRUE(list.has_value()) << (list ? "" : list.error().describe());
         return list ? *list : VariableList{};
     }

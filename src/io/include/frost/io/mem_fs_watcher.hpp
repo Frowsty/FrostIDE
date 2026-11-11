@@ -58,6 +58,8 @@ public:
     void injectFailure(ErrorCode code);
     void setDegraded(DegradeReason reason, std::uint64_t reasonValue = 0);
 
+    // The final implementation is deleted as WatchState; IMemFsObserver only borrows it.
+    // NOLINTNEXTLINE(cppcoreguidelines-virtual-class-destructor): final type has concrete shared_ptr ownership.
     struct WatchState; // mem_fs_watcher.cpp.
 
 private:

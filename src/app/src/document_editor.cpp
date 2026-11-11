@@ -175,7 +175,7 @@ void DocumentEditorView::setBookmarks(std::span<const int> oneBasedLines) {
     lines.reserve(oneBasedLines.size());
     for (const int line : oneBasedLines) {
         if (line >= 1) {
-            lines.push_back(LineIndex{static_cast<std::uint32_t>(line - 1)});
+            lines.emplace_back(static_cast<std::uint32_t>(line - 1));
         }
     }
     m_editor->setBookmarks(std::move(lines));

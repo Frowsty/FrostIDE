@@ -16,8 +16,6 @@
 
 #ifdef _WIN32
 #include <cstdlib>
-
-#include <stdlib.h>
 #else
 #include <client/crashpad_client.h>
 #include <sys/prctl.h>

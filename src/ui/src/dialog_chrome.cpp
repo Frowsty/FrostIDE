@@ -364,7 +364,10 @@ private:
 } // namespace
 
 DialogTitleBar::DialogTitleBar(QDialog* dialog, bool resizable)
-    : QWidget(dialog), m_dialog(dialog), m_resizable(resizable) {
+    : QWidget(dialog), m_dialog(dialog),
+      m_minimizeButton(new DialogCaptionButton(CaptionButtonKind::Minimize, dialog, this)),
+      m_maximizeButton(new DialogCaptionButton(CaptionButtonKind::MaximizeRestore, dialog, this)),
+      m_closeButton(new DialogCaptionButton(CaptionButtonKind::Close, dialog, this)), m_resizable(resizable) {
     setObjectName(QStringLiteral("dialogTitleBar"));
     setFixedHeight(preferredHeight());
 
@@ -372,8 +375,6 @@ DialogTitleBar::DialogTitleBar(QDialog* dialog, bool resizable)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     layout->addStretch(1);
-
-    m_minimizeButton = new DialogCaptionButton(CaptionButtonKind::Minimize, dialog, this);
     m_minimizeButton->setObjectName(QStringLiteral("dialogMinimizeButton"));
     m_minimizeButton->setToolTip(tr("Minimize"));
     connect(m_minimizeButton, &QToolButton::clicked, this, [this] {
@@ -382,8 +383,6 @@ DialogTitleBar::DialogTitleBar(QDialog* dialog, bool resizable)
         }
     });
     layout->addWidget(m_minimizeButton);
-
-    m_maximizeButton = new DialogCaptionButton(CaptionButtonKind::MaximizeRestore, dialog, this);
     m_maximizeButton->setObjectName(QStringLiteral("dialogMaximizeButton"));
     m_maximizeButton->setToolTip(tr("Maximize / Restore"));
     m_maximizeButton->setVisible(m_resizable);
@@ -400,8 +399,6 @@ DialogTitleBar::DialogTitleBar(QDialog* dialog, bool resizable)
         m_maximizeButton->update();
     });
     layout->addWidget(m_maximizeButton);
-
-    m_closeButton = new DialogCaptionButton(CaptionButtonKind::Close, dialog, this);
     m_closeButton->setObjectName(QStringLiteral("dialogCloseButton"));
     m_closeButton->setToolTip(tr("Close"));
     connect(m_closeButton, &QToolButton::clicked, this, [this] {

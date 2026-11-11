@@ -22,8 +22,8 @@
  * Actions: Run All (every test of the setup), Run Selected (the tests under the selection; a group
  * runs its tests, a case its test), Run Failed (the tests whose last result failed or did not run,
  * as ctest --rerun-failed), Stop (ends ctest's whole process tree), Refresh, and on a test without
- * a --gtest_filter "List Google Test Cases" (its program's --gtest_list_tests). Debugging one test
- * is RUN-10's: Debug Selected Test is disabled and says so. Double-click opens a failure's location,
+ * a --gtest_filter "List Google Test Cases" (its program's --gtest_list_tests). Debug Selected
+ * launches one selected test or listed case through the debugger (RUN-10). Double-click opens a failure's location,
  * else where the test is defined (DEF_SOURCE_LINE, a case's report entry), else its add_test call.
  *
  * doctest (RUN-8). After each listing, every test whose command runs a doctest program
@@ -41,8 +41,16 @@
  */
 #pragma once
 
+#include "frost/core/error.hpp"
+#include "frost/run/test_runner.hpp"
+
+#include <QString>
+
 #include <functional>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 class QWidget;
 
@@ -70,9 +78,45 @@ struct UnitTestsWindowContext {
     std::function<bool()> solutionOpen{};
     // Opens `path` (absolute) at 1-based `line`.
     std::function<void(const std::string& path, int line)> openLocation{};
+    // Starts a debug session for a single test or case (RUN-10).
+    std::function<Result<void>(const run::SingleTestLaunch& launch)> debugTest{};
+    // Called when the discovered tests or listed cases change (RUN-10).
+    std::function<void()> testsChanged{};
 };
+
+// Where the window's tests come from, or why it has none (project_unit_tests.cpp).
+struct UnitTestsSource {
+    std::optional<run::CTestSetup> setup{};
+    QString unavailable{};
+    std::string trustRoot{};
+    std::uint64_t trustRevision = 0;
+};
+
+struct UnitTestsSelectionDetails {
+    QString text{};
+    std::vector<std::pair<QString, run::TestLocation>> locations{};
+};
+
+[[nodiscard]] std::string unitTestsSourceKey(const UnitTestsWindowContext& context);
+[[nodiscard]] UnitTestsSource unitTestsSource(const UnitTestsWindowContext& context);
+[[nodiscard]] std::optional<run::TestLocation>
+unitTestsLocationOf(const std::string& testName, const std::string& caseName, const run::DiscoveredTest* test,
+                    const run::TestResult* result, const std::vector<run::DoctestCase>* doctestCases);
+[[nodiscard]] UnitTestsSelectionDetails
+unitTestsDescribeSelection(const std::string& testName, const std::string& caseName, const run::DiscoveredTest* test,
+                           const run::TestResult* result, const std::vector<run::DoctestCase>* doctestCases);
 
 // Creates the window's widget (header comment). Its object name is "unitTestsToolWindow".
 [[nodiscard]] QWidget* createUnitTestsToolWindowWidget(QWidget* parent, UnitTestsWindowContext context);
+
+// Returns the ctest-backed gutter test cases for `filePath` and `content` from `unitTestsWidget`.
+[[nodiscard]] std::vector<run::GutterTestCase>
+unitTestsGutterCasesForFile(QWidget* unitTestsWidget, std::string_view filePath, std::string_view content);
+
+// Runs a single gutter test case in `unitTestsWidget` (RUN-10).
+[[nodiscard]] Result<void> runGutterTestCase(QWidget* unitTestsWidget, const run::GutterTestCase& testCase);
+
+// Debugs a single gutter test case via `unitTestsWidget` (RUN-10).
+[[nodiscard]] Result<void> debugGutterTestCase(QWidget* unitTestsWidget, const run::GutterTestCase& testCase);
 
 } // namespace frost::app

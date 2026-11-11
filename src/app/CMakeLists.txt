@@ -47,6 +47,13 @@ frost_add_library(app LAYER app
         src/cmake_integration.cpp
         src/engine_integration.cpp
         src/engine_integration.hpp
+        src/engine_integration_internal.hpp
+        src/engine_integration_session.cpp
+        src/engine_integration_events.cpp
+        src/engine_integration_commands.cpp
+        src/engine_integration_run.cpp
+        src/engine_locator.cpp
+        src/engine_locator.hpp
         src/update_check.cpp
         src/update_state.cpp
         src/update_state.hpp
@@ -58,6 +65,7 @@ frost_add_library(app LAYER app
         src/git_integration.cpp
         src/git_integration.hpp
         src/engine_request_helper.cpp
+        src/engine_request_helper_session.cpp
         src/engine_request_helper.hpp
         src/project_open_broker.cpp
         src/project_open_broker.hpp
@@ -95,9 +103,13 @@ frost_add_library(app LAYER app
         src/language_bridge.hpp
         src/stable_lsp_requester.hpp
         src/workbench_documents.cpp
+        src/workbench_engine.cpp
+        src/workbench_engine_debug.cpp
+        src/engine_native_debug.hpp
         src/workbench_language.cpp
         src/workbench_save_actions.cpp
         src/workbench_lua.cpp
+        src/workbench_inspection.cpp
         src/workbench_managed.cpp
         src/managed_debug_preparation.cpp
         src/managed_source_snapshot.cpp

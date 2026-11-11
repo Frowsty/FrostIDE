@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The four layers behind DisplayMap (private header; frost/text/display_map.hpp, ADR 0026): the fold
-// layer, the soft-wrap layer, the inlay layer (an identity until M15) and the
-// block-decoration layer, with the line and row patches that carry an edit up the stack.
+// layer, the soft-wrap layer, the inlay layer and the block-decoration layer, with the line and row
+// patches that carry an edit up the stack.
 /*
  * Each layer maps its input to its output coordinates in O(B log n) and turns a patch of its input
  * into a patch of its output:
@@ -193,8 +193,9 @@ public:
     [[nodiscard]] LineIndex bufferLine(std::uint32_t line) const noexcept;
 
     // Calls fn(std::string_view chunk, SegmentKind kind) over the folded text [begin, end) (char
-    // boundaries) in order: Text chunks, and FoldPlaceholder chunks from M15 on.
+    // boundaries) in order: Text chunks and FoldPlaceholder chunks.
     template<class F>
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): callback is reused as an lvalue.
     void forEachChunk(std::uint64_t begin, std::uint64_t end, F&& fn) const noexcept {
         auto cursor = m_runs.seek([begin](const FoldRunSummary& sum) { return sum.projected.bytes > begin; });
         while (const FoldRun* run = cursor.item()) {
@@ -220,6 +221,7 @@ public:
     // Calls fn(std::uint32_t line, const FoldLine& info) for the lines [first, end) in order.
     // Precondition: first < end <= lineCount(). O(B log n + bytes of the lines).
     template<class F>
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): callback is reused as an lvalue.
     void forEachLine(std::uint32_t first, std::uint32_t end, F&& fn) const noexcept {
         if (m_runs.summary().folds == 0) {
             auto cursor = m_text.linesFrom(LineIndex{first});
@@ -352,28 +354,50 @@ void wrapLine(const FoldLayer& fold, const FoldLine& line, const ITextShaper& sh
 // --- Inlay layer --------------------------------------------------------------------------------
 
 /*
- * Inline text inside wrap rows. An identity layer until M15: inlay rows are wrap rows (inlays never
- * add rows) and inlay columns are wrap columns. M15 adds the inlays (anchored strings) behind the
- * same queries; the block layer and DisplayMap read only these. An immutable value.
+ * Inline text inside wrap rows (UX-4). Inlay rows are wrap rows (inlays never add rows); each
+ * anchored inline inlay shifts columns after it on its wrap row and splits the row's segments into
+ * SegmentKind::Text and SegmentKind::Inlay slices.
  */
 class InlayLayer {
 public:
-    // The inlay column of wrap column `column` in wrap row `row`; at an inlay, Left is before it.
-    [[nodiscard]] std::uint32_t toInlayColumn(std::uint32_t /*row*/, std::uint32_t column,
-                                              Bias /*bias*/) const noexcept {
-        return column;
-    }
+    using Inlay = DisplayInlay;
+
+    struct ProjectedInlay {
+        std::uint32_t wrapRow = 0;
+        std::uint32_t wrapCol = 0;
+        ByteOffset offset{};
+        Bias bias = Bias::Left;
+        std::string text;
+    };
+
+    InlayLayer() noexcept = default;
+    explicit InlayLayer(std::vector<Inlay> inlays) noexcept;
+    InlayLayer(std::vector<Inlay> inlays, const FoldLayer& fold, const WrapLayer& wrap) noexcept;
+
+    [[nodiscard]] const std::vector<Inlay>& inlays() const noexcept { return m_inlays; }
+    [[nodiscard]] const std::vector<ProjectedInlay>& projected() const noexcept { return m_projected; }
+
+    // The inlay column of wrap column `column` in wrap row `row`; at an inlay, Left is before it
+    // and Right is after it.
+    [[nodiscard]] std::uint32_t toInlayColumn(std::uint32_t row, std::uint32_t column, Bias bias) const noexcept;
     // The wrap column of inlay column `column` in row `row`; a column inside an inlay snaps to its
     // side by `bias`.
-    [[nodiscard]] std::uint32_t toWrapColumn(std::uint32_t /*row*/, std::uint32_t column,
-                                             Bias /*bias*/) const noexcept {
-        return column;
-    }
-    // Appends the display segments of wrap row `wrapRow` (`row`, with its buffer range `buffer`):
-    // the row's buffer text, split around its inlays (none until M15).
+    [[nodiscard]] std::uint32_t toWrapColumn(std::uint32_t row, std::uint32_t column, Bias bias) const noexcept;
+    // Appends or splits the display segments of wrap row `wrapRow` (`row`, with its buffer range
+    // `buffer`) around its inlays.
     void appendSegments(std::uint32_t wrapRow, ByteRange buffer, std::vector<RowSegment>& out) const noexcept;
     // The row patch of the layer above: inlays never add rows, so the wrap patch passes through.
     [[nodiscard]] InlayLayer updated(std::span<const SpanEdit> rows, std::vector<SpanEdit>& out) const noexcept;
+    [[nodiscard]] InlayLayer updated(std::span<const RawEdit> edits, const FoldLayer& fold, const WrapLayer& wrap,
+                                     std::span<const SpanEdit> rows, std::vector<SpanEdit>& out) const noexcept;
+    [[nodiscard]] Result<void> checkInvariants(const FoldLayer& fold, const WrapLayer& wrap) const noexcept;
+
+private:
+    void rebuildProjection(const FoldLayer& fold, const WrapLayer& wrap) noexcept;
+
+    std::vector<Inlay> m_inlays;
+    std::vector<ProjectedInlay> m_projected;
+    std::vector<std::uint32_t> m_projectedPrefixWidths;
 };
 
 // --- Block-decoration layer ---------------------------------------------------------------------

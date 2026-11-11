@@ -165,7 +165,7 @@ std::string trustedUnityRevision(const std::string& root) {
         !std::ranges::all_of(std::string_view(*revision).substr(35),
                              [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); }))
         return {};
-    const std::string generation = revision->substr(2, 32);
+    std::string generation = revision->substr(2, 32);
     if (!readUnityControl(physicalRoot, {".frost", "unity", "generations", generation, "FrostUnity.sln"}, false))
         return {};
     return generation;

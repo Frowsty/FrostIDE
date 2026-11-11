@@ -206,15 +206,23 @@ class RepositoryRulesTest(TempDirTestCase):
         self.assertIn("missing", messages[0])
 
     def test_vendored_sources_need_only_reuse_coverage(self) -> None:
-        # No header and a narrow API: fine under third_party/tree-sitter once REUSE.toml covers it.
+        # No header and a narrow API: fine under tree-sitter / the explicitly vendored test tool
+        # once REUSE.toml covers them. The latter's hash and BSD-3-Clause are also checked by
+        # licensecheck (ADR 0086).
         rel = "third_party/tree-sitter/lib/src/a.c"
         _write(self.tmp / rel, "int f(void) { return CreateFileA(0); }\n")
         found = [(v.path, v.rule) for v in frost_lint.lint(self.tmp, [rel])]
         self.assertEqual(found, [(rel, "reuse")])
+        tool_rel = "tools/_vendor/fastjsonschema/draft04.py"
+        _write(self.tmp / tool_rel, "# TODO: upstream byte exact\n")
+        self.assertEqual([(v.path, v.rule) for v in frost_lint.lint(self.tmp, [tool_rel])], [(tool_rel, "reuse")])
         _write(self.tmp / "REUSE.toml", "# SPDX-License-Identifier: Apache-2.0\n#\n# REUSE annotations for the test.\n"
                'version = 1\n\n[[annotations]]\npath = "third_party/tree-sitter/**"\n'
-               'SPDX-FileCopyrightText = "Copyright (c) 2018 Max Brunsfeld"\nSPDX-License-Identifier = "MIT"\n')
-        self.assertEqual(frost_lint.lint(self.tmp, [rel, "REUSE.toml"]), [])
+               'SPDX-FileCopyrightText = "Copyright (c) 2018 Max Brunsfeld"\nSPDX-License-Identifier = "MIT"\n'
+               '\n[[annotations]]\npath = "tools/_vendor/fastjsonschema/**"\n'
+               'SPDX-FileCopyrightText = "Copyright (c) 2018, Michal Horejsek"\n'
+               'SPDX-License-Identifier = "BSD-3-Clause"\n')
+        self.assertEqual(frost_lint.lint(self.tmp, [rel, tool_rel, "REUSE.toml"]), [])
         # The same file outside the vendored directories gets every rule.
         _write(self.tmp / "src/a.c", "int f(void) { return CreateFileA(0); }\n")
         rules = {v.rule for v in frost_lint.lint(self.tmp, ["src/a.c"])}

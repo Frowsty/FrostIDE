@@ -103,7 +103,7 @@ Result<LineDiff> diffLinesWith(const LineSequence& a, const LineSequence& b, con
         out.hunks.push_back(whole);
         return out;
     }
-    WorkBudget budget(options.limits.maxWork, stop);
+    WorkBudget budget(options.limits.maxWork, std::move(stop));
     std::array<std::vector<std::uint32_t>, 2> ids;
     const std::array<const LineSequence*, 2> sequences{&a, &b};
     const std::uint32_t idCount = internSequences(sequences, ids, budget, hashes);

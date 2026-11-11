@@ -34,9 +34,9 @@
 
 namespace frost::lang {
 
-StreamedProjectContexts::StreamedProjectContexts(std::shared_ptr<GeneratedCommandsRetirement> retirement,
+StreamedProjectContexts::StreamedProjectContexts(const std::shared_ptr<GeneratedCommandsRetirement>& retirement,
                                                  std::shared_ptr<const project::SolutionModel> model)
-    : m_retirement(std::move(retirement)), m_baseModel(model), m_model(std::move(model)) {}
+    : m_retirement(retirement), m_baseModel(model), m_model(std::move(model)) {}
 void StreamedProjectContexts::publish(StreamedProjectContext record) {
     std::shared_ptr<const project::SolutionModel> previous;
     {
@@ -106,7 +106,9 @@ namespace {
 // concurrent, as IProcess permits; communicate() cannot overlap terminate(). The watchdog
 // also bounds a descendant retaining an output pipe after the MSBuild process exits.
 Result<io::ProcessResult> runEvaluation(io::IProcessLauncher& launcher, const io::ProcessSpec& spec,
-                                        IClock::Duration timeout, std::stop_token stop) {
+                                        IClock::Duration timeout,
+                                        std::stop_token stop) { // NOLINT(performance-unnecessary-value-param): Virtual
+                                                                // process operations may replace the caller's token.
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
     auto launched = launcher.launch(spec);
@@ -125,7 +127,7 @@ Result<io::ProcessResult> runEvaluation(io::IProcessLauncher& launcher, const io
     std::stop_callback cancel(stop, interrupt);
     std::mutex timerMutex;
     std::condition_variable_any timer;
-    std::jthread watchdog([&](std::stop_token done) {
+    std::jthread watchdog([&](const std::stop_token& done) {
         std::unique_lock lock(timerMutex);
         if (!timer.wait_for(lock, done, timeout, [] { return false; }) && !done.stop_requested()) {
             expired.store(true);
@@ -555,9 +557,9 @@ std::vector<CompileCommand> commandsFromEvaluation(const ProjectEvaluation& eval
 
 MsBuildCompileCommandsProvider::MsBuildCompileCommandsProvider(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                                                std::shared_ptr<const project::SolutionModel> model,
-                                                               std::string cacheDirectory,
+                                                               const std::string& cacheDirectory,
                                                                MsBuildProviderOptions options,
-                                                               std::string cleanupBoundary,
+                                                               const std::string& cleanupBoundary,
                                                                std::vector<std::string> cleanupParents)
     : m_launcher(launcher), m_fs(fs), m_model(std::move(model)), m_cacheDirectory(outputDirectory(cacheDirectory)),
       m_lease(std::make_shared<GeneratedCommandsLease>(fs, cleanupBoundary.empty() ? cacheDirectory : cleanupBoundary,
@@ -798,15 +800,16 @@ Result<std::optional<CompileCommandsLocation>> MsBuildCompileCommandsProvider::e
 
 IndependentProjectEvaluation::IndependentProjectEvaluation(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                                            std::shared_ptr<const project::SolutionModel> model,
-                                                           std::string cacheDirectory, MsBuildProviderOptions options) {
-    m_trusted = options.trusted;
+                                                           const std::string& cacheDirectory,
+                                                           MsBuildProviderOptions options)
+    : m_trusted(options.trusted) {
     options.onFirstDatabase = [this](const CompileCommandsLocation& first) {
         std::lock_guard lock(m_mutex);
         m_first = first;
         m_changed.notify_all();
     };
-    m_provider = std::make_shared<MsBuildCompileCommandsProvider>(launcher, fs, std::move(model),
-                                                                  std::move(cacheDirectory), std::move(options));
+    m_provider = std::make_shared<MsBuildCompileCommandsProvider>(launcher, fs, std::move(model), cacheDirectory,
+                                                                  std::move(options));
     m_worker = std::jthread([this] {
         auto result = m_provider->locate(m_stop.get_token());
         std::lock_guard lock(m_mutex);

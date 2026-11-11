@@ -97,10 +97,10 @@ struct GitService::State {
 
     void refreshNow() {
         const auto now = Clock::now();
-        reads.schedule(now, now, [this](std::stop_token stop) { refresh(stop); });
+        reads.schedule(now, now, [this](const std::stop_token& stop) { refresh(stop); });
     }
 
-    void refresh(std::stop_token stop) {
+    void refresh(const std::stop_token& stop) {
         auto status = repository.status(stop);
         if (!status) {
             if (status.error().code() != ErrorCode::Cancelled && callbacks.onStatusFailed) {
@@ -142,14 +142,15 @@ struct GitService::State {
     // Runs `body` as operation `kind`: started, the body's error or output, finished.
     template<class Body>
     void operation(GitOperationKind kind, std::string target, Body body) {
-        operations.post([this, kind, target = std::move(target), body = std::move(body)](std::stop_token stop) mutable {
-            started(kind);
-            GitOperationResult result;
-            result.kind = kind;
-            result.target = target;
-            body(stop, result);
-            finished(result);
-        });
+        operations.post(
+            [this, kind, target = std::move(target), body = std::move(body)](const std::stop_token& stop) mutable {
+                started(kind);
+                GitOperationResult result;
+                result.kind = kind;
+                result.target = target;
+                body(stop, result);
+                finished(result);
+            });
     }
 
     void pushNow(const PushOptions& pushOptions, std::stop_token stop) {
@@ -244,7 +245,8 @@ void GitService::applyChanges(const io::FileChangeBatch& batch) {
     const auto debounce = std::chrono::duration_cast<Clock::duration>(m_state->options.debounce);
     const auto maxDelay = std::chrono::duration_cast<Clock::duration>(m_state->options.maxDelay);
     State* state = m_state.get();
-    m_state->reads.schedule(now + debounce, now + maxDelay, [state](std::stop_token stop) { state->refresh(stop); });
+    m_state->reads.schedule(now + debounce, now + maxDelay,
+                            [state](const std::stop_token& stop) { state->refresh(stop); });
 }
 
 sched::Task<Result<void>> GitService::follow(io::IDirectoryWatch& watch, std::stop_token token) {
@@ -261,7 +263,7 @@ void GitService::commit(CommitRequest request, bool pushAfter) {
     State* state = m_state.get();
     state->operation(
         GitOperationKind::Commit, {},
-        [state, request = std::move(request), pushAfter](std::stop_token stop, GitOperationResult& result) {
+        [state, request = std::move(request), pushAfter](const std::stop_token& stop, GitOperationResult& result) {
             auto committed = state->repository.commit(request, state->control(stop));
             if (committed) {
                 result.commit = committed->commit;
@@ -271,26 +273,28 @@ void GitService::commit(CommitRequest request, bool pushAfter) {
             }
             if (pushAfter && result.succeeded()) {
                 // Commit and Push: the push follows as its own operation, after the commit's result.
-                state->operations.post([state](std::stop_token pushStop) { state->pushNow(PushOptions{}, pushStop); });
+                state->operations.post(
+                    [state](const std::stop_token& pushStop) { state->pushNow(PushOptions{}, pushStop); });
             }
         });
 }
 
 void GitService::rollback(std::vector<std::string> absolutePaths) {
     State* state = m_state.get();
-    state->operation(GitOperationKind::Rollback, {},
-                     [state, paths = std::move(absolutePaths)](std::stop_token stop, GitOperationResult& result) {
-                         if (auto done = state->repository.rollback(paths, state->control(stop)); !done) {
-                             result.error = std::move(done.error());
-                         }
-                     });
+    state->operation(
+        GitOperationKind::Rollback, {},
+        [state, paths = std::move(absolutePaths)](const std::stop_token& stop, GitOperationResult& result) {
+            if (auto done = state->repository.rollback(paths, state->control(stop)); !done) {
+                result.error = std::move(done.error());
+            }
+        });
 }
 
 void GitService::checkout(std::string branch) {
     State* state = m_state.get();
     std::string target = branch;
     state->operation(GitOperationKind::Checkout, std::move(target),
-                     [state, branch = std::move(branch)](std::stop_token stop, GitOperationResult& result) {
+                     [state, branch = std::move(branch)](const std::stop_token& stop, GitOperationResult& result) {
                          if (auto done = state->repository.checkout(branch, state->control(stop)); !done) {
                              result.error = std::move(done.error());
                          }
@@ -301,7 +305,7 @@ void GitService::createBranch(std::string name) {
     State* state = m_state.get();
     std::string target = name;
     state->operation(GitOperationKind::CreateBranch, std::move(target),
-                     [state, name = std::move(name)](std::stop_token stop, GitOperationResult& result) {
+                     [state, name = std::move(name)](const std::stop_token& stop, GitOperationResult& result) {
                          if (auto done = state->repository.createBranch(name, state->control(stop)); !done) {
                              result.error = std::move(done.error());
                          }
@@ -310,7 +314,7 @@ void GitService::createBranch(std::string name) {
 
 void GitService::fetch() {
     State* state = m_state.get();
-    state->operation(GitOperationKind::Fetch, {}, [state](std::stop_token stop, GitOperationResult& result) {
+    state->operation(GitOperationKind::Fetch, {}, [state](const std::stop_token& stop, GitOperationResult& result) {
         auto fetched = state->repository.fetch(state->control(stop));
         if (fetched) {
             result.output = fetched->stdoutBytes + fetched->stderrBytes;
@@ -322,26 +326,27 @@ void GitService::fetch() {
 
 void GitService::pull(PullStrategy strategy) {
     State* state = m_state.get();
-    state->operation(GitOperationKind::Pull, {}, [state, strategy](std::stop_token stop, GitOperationResult& result) {
-        auto pulled = state->repository.pull(strategy, state->control(stop));
-        if (pulled) {
-            result.output = pulled->stdoutBytes + pulled->stderrBytes;
-        } else {
-            result.error = std::move(pulled.error());
-        }
-    });
+    state->operation(GitOperationKind::Pull, {},
+                     [state, strategy](const std::stop_token& stop, GitOperationResult& result) {
+                         auto pulled = state->repository.pull(strategy, state->control(stop));
+                         if (pulled) {
+                             result.output = pulled->stdoutBytes + pulled->stderrBytes;
+                         } else {
+                             result.error = std::move(pulled.error());
+                         }
+                     });
 }
 
 void GitService::push(PushOptions options) {
     State* state = m_state.get();
-    state->operations.post([state, options](std::stop_token stop) { state->pushNow(options, stop); });
+    state->operations.post([state, options](const std::stop_token& stop) { state->pushNow(options, stop); });
 }
 
 void GitService::cherryPick(std::string commitHash) {
     State* state = m_state.get();
     std::string target = commitHash;
     state->operation(GitOperationKind::CherryPick, std::move(target),
-                     [state, hash = std::move(commitHash)](std::stop_token stop, GitOperationResult& result) {
+                     [state, hash = std::move(commitHash)](const std::stop_token& stop, GitOperationResult& result) {
                          auto out = state->repository.cherryPick(hash, state->control(stop));
                          if (out) {
                              result.output = out->stdoutBytes + out->stderrBytes;
@@ -355,7 +360,7 @@ void GitService::revertCommit(std::string commitHash) {
     State* state = m_state.get();
     std::string target = commitHash;
     state->operation(GitOperationKind::Revert, std::move(target),
-                     [state, hash = std::move(commitHash)](std::stop_token stop, GitOperationResult& result) {
+                     [state, hash = std::move(commitHash)](const std::stop_token& stop, GitOperationResult& result) {
                          auto out = state->repository.revertCommit(hash, state->control(stop));
                          if (out) {
                              result.output = out->stdoutBytes + out->stderrBytes;
@@ -369,7 +374,7 @@ void GitService::resetBranch(std::string commitHash, std::string mode) {
     State* state = m_state.get();
     std::string target = commitHash;
     state->operation(GitOperationKind::Reset, std::move(target),
-                     [state, hash = std::move(commitHash), mode = std::move(mode)](std::stop_token stop,
+                     [state, hash = std::move(commitHash), mode = std::move(mode)](const std::stop_token& stop,
                                                                                    GitOperationResult& result) {
                          auto out = state->repository.resetBranch(hash, mode, state->control(stop));
                          if (out) {
@@ -384,7 +389,7 @@ void GitService::createTag(std::string tagName, std::string commitHash) {
     State* state = m_state.get();
     std::string target = tagName;
     state->operation(GitOperationKind::Tag, std::move(target),
-                     [state, tag = std::move(tagName), hash = std::move(commitHash)](std::stop_token stop,
+                     [state, tag = std::move(tagName), hash = std::move(commitHash)](const std::stop_token& stop,
                                                                                      GitOperationResult& result) {
                          if (auto done = state->repository.createTag(tag, hash, state->control(stop)); !done) {
                              result.error = std::move(done.error());
@@ -396,7 +401,7 @@ void GitService::createBranchAt(std::string name, std::string startPoint) {
     State* state = m_state.get();
     std::string target = name;
     state->operation(GitOperationKind::CreateBranch, std::move(target),
-                     [state, name = std::move(name), start = std::move(startPoint)](std::stop_token stop,
+                     [state, name = std::move(name), start = std::move(startPoint)](const std::stop_token& stop,
                                                                                     GitOperationResult& result) {
                          if (auto done = state->repository.createBranchAt(name, start, state->control(stop)); !done) {
                              result.error = std::move(done.error());
@@ -408,7 +413,7 @@ void GitService::mergeBranch(std::string branch) {
     State* state = m_state.get();
     std::string target = branch;
     state->operation(GitOperationKind::Merge, std::move(target),
-                     [state, branch = std::move(branch)](std::stop_token stop, GitOperationResult& result) {
+                     [state, branch = std::move(branch)](const std::stop_token& stop, GitOperationResult& result) {
                          auto out = state->repository.mergeBranch(branch, state->control(stop));
                          if (out) {
                              result.output = out->stdoutBytes + out->stderrBytes;
@@ -422,7 +427,7 @@ void GitService::rebaseBranch(std::string ontoBranch) {
     State* state = m_state.get();
     std::string target = ontoBranch;
     state->operation(GitOperationKind::Rebase, std::move(target),
-                     [state, onto = std::move(ontoBranch)](std::stop_token stop, GitOperationResult& result) {
+                     [state, onto = std::move(ontoBranch)](const std::stop_token& stop, GitOperationResult& result) {
                          auto out = state->repository.rebaseBranch(onto, state->control(stop));
                          if (out) {
                              result.output = out->stdoutBytes + out->stderrBytes;
@@ -435,19 +440,20 @@ void GitService::rebaseBranch(std::string ontoBranch) {
 void GitService::deleteBranch(std::string branch, bool force) {
     State* state = m_state.get();
     std::string target = branch;
-    state->operation(GitOperationKind::DeleteBranch, std::move(target),
-                     [state, branch = std::move(branch), force](std::stop_token stop, GitOperationResult& result) {
-                         if (auto done = state->repository.deleteBranch(branch, force, state->control(stop)); !done) {
-                             result.error = std::move(done.error());
-                         }
-                     });
+    state->operation(
+        GitOperationKind::DeleteBranch, std::move(target),
+        [state, branch = std::move(branch), force](const std::stop_token& stop, GitOperationResult& result) {
+            if (auto done = state->repository.deleteBranch(branch, force, state->control(stop)); !done) {
+                result.error = std::move(done.error());
+            }
+        });
 }
 
 void GitService::renameBranch(std::string oldName, std::string newName) {
     State* state = m_state.get();
     std::string target = newName;
     state->operation(GitOperationKind::RenameBranch, std::move(target),
-                     [state, oldName = std::move(oldName), newName = std::move(newName)](std::stop_token stop,
+                     [state, oldName = std::move(oldName), newName = std::move(newName)](const std::stop_token& stop,
                                                                                          GitOperationResult& result) {
                          if (auto done = state->repository.renameBranch(oldName, newName, state->control(stop));
                              !done) {
@@ -460,7 +466,7 @@ void GitService::stashPush(std::string message, bool includeUntracked) {
     State* state = m_state.get();
     state->operation(
         GitOperationKind::Stash, {},
-        [state, msg = std::move(message), includeUntracked](std::stop_token stop, GitOperationResult& result) {
+        [state, msg = std::move(message), includeUntracked](const std::stop_token& stop, GitOperationResult& result) {
             auto out = state->repository.stashPush(msg, includeUntracked, state->control(stop));
             if (out) {
                 result.output = out->stdoutBytes + out->stderrBytes;
@@ -473,7 +479,7 @@ void GitService::stashPush(std::string message, bool includeUntracked) {
 void GitService::stashApply(int index, bool pop) {
     State* state = m_state.get();
     state->operation(GitOperationKind::Unstash, std::to_string(index),
-                     [state, index, pop](std::stop_token stop, GitOperationResult& result) {
+                     [state, index, pop](const std::stop_token& stop, GitOperationResult& result) {
                          auto out = state->repository.stashApply(index, pop, state->control(stop));
                          if (out) {
                              result.output = out->stdoutBytes + out->stderrBytes;
@@ -486,7 +492,7 @@ void GitService::stashApply(int index, bool pop) {
 void GitService::stashDrop(int index) {
     State* state = m_state.get();
     state->operation(GitOperationKind::DropStash, std::to_string(index),
-                     [state, index](std::stop_token stop, GitOperationResult& result) {
+                     [state, index](const std::stop_token& stop, GitOperationResult& result) {
                          if (auto done = state->repository.stashDrop(index, state->control(stop)); !done) {
                              result.error = std::move(done.error());
                          }
@@ -500,7 +506,7 @@ bool GitService::operationBusy() const { return m_state->operations.busy(); }
 void GitService::readHeadContent(std::string absolutePath,
                                  std::function<void(Result<std::optional<std::string>>)> done) {
     State* state = m_state.get();
-    state->reads.post([state, path = std::move(absolutePath), done = std::move(done)](std::stop_token stop) {
+    state->reads.post([state, path = std::move(absolutePath), done = std::move(done)](const std::stop_token& stop) {
         done(state->repository.headContent(path, stop));
     });
 }
@@ -508,7 +514,7 @@ void GitService::readHeadContent(std::string absolutePath,
 void GitService::readIndexContent(std::string absolutePath,
                                   std::function<void(Result<std::optional<std::string>>)> done) {
     State* state = m_state.get();
-    state->reads.post([state, path = std::move(absolutePath), done = std::move(done)](std::stop_token stop) {
+    state->reads.post([state, path = std::move(absolutePath), done = std::move(done)](const std::stop_token& stop) {
         done(state->repository.indexContent(path, stop));
     });
 }
@@ -516,19 +522,20 @@ void GitService::readIndexContent(std::string absolutePath,
 void GitService::readBranches(std::function<void(Result<std::vector<GitBranch>>)> done) {
     State* state = m_state.get();
     state->reads.post(
-        [state, done = std::move(done)](std::stop_token stop) { done(state->repository.branches(stop)); });
+        [state, done = std::move(done)](const std::stop_token& stop) { done(state->repository.branches(stop)); });
 }
 
 void GitService::readLastCommitMessage(std::function<void(Result<std::string>)> done) {
     State* state = m_state.get();
-    state->reads.post(
-        [state, done = std::move(done)](std::stop_token stop) { done(state->repository.lastCommitMessage(stop)); });
+    state->reads.post([state, done = std::move(done)](const std::stop_token& stop) {
+        done(state->repository.lastCommitMessage(stop));
+    });
 }
 
 void GitService::readRecentCommitMessages(std::size_t count,
                                           std::function<void(Result<std::vector<std::string>>)> done) {
     State* state = m_state.get();
-    state->reads.post([state, count, done = std::move(done)](std::stop_token stop) {
+    state->reads.post([state, count, done = std::move(done)](const std::stop_token& stop) {
         done(state->repository.recentCommitMessages(count, stop));
     });
 }
@@ -537,7 +544,7 @@ void GitService::readLog(std::size_t maxCount, std::string branchFilter, std::st
                          std::function<void(Result<std::vector<GitCommitEntry>>)> done) {
     State* state = m_state.get();
     state->reads.post([state, maxCount, branch = std::move(branchFilter), search = std::move(searchFilter),
-                       done = std::move(done)](std::stop_token stop) {
+                       done = std::move(done)](const std::stop_token& stop) {
         done(state->repository.log(maxCount, branch, search, stop));
     });
 }
@@ -545,7 +552,7 @@ void GitService::readLog(std::size_t maxCount, std::string branchFilter, std::st
 void GitService::readCommitFiles(std::string commitHash,
                                  std::function<void(Result<std::vector<GitCommitFileChange>>)> done) {
     State* state = m_state.get();
-    state->reads.post([state, hash = std::move(commitHash), done = std::move(done)](std::stop_token stop) {
+    state->reads.post([state, hash = std::move(commitHash), done = std::move(done)](const std::stop_token& stop) {
         done(state->repository.commitFiles(hash, stop));
     });
 }
@@ -553,15 +560,14 @@ void GitService::readCommitFiles(std::string commitHash,
 void GitService::readStashes(std::function<void(Result<std::vector<GitStashEntry>>)> done) {
     State* state = m_state.get();
     state->reads.post(
-        [state, done = std::move(done)](std::stop_token stop) { done(state->repository.stashList(stop)); });
+        [state, done = std::move(done)](const std::stop_token& stop) { done(state->repository.stashList(stop)); });
 }
 
 void GitService::readBlame(std::string relativeOrAbsolutePath,
                            std::function<void(Result<std::vector<GitBlameLine>>)> done) {
     State* state = m_state.get();
-    state->reads.post([state, path = std::move(relativeOrAbsolutePath), done = std::move(done)](std::stop_token stop) {
-        done(state->repository.blame(path, stop));
-    });
+    state->reads.post([state, path = std::move(relativeOrAbsolutePath), done = std::move(done)](
+                          const std::stop_token& stop) { done(state->repository.blame(path, stop)); });
 }
 
 bool GitService::waitForIdle(std::chrono::milliseconds timeout) const {

@@ -62,10 +62,8 @@ inline std::string testGitPath() {
 class TempRepo {
 public:
     // A scratch directory with an isolated git configuration; init() makes it a repository.
-    explicit TempRepo(std::string_view tag, bool trusted = true) : m_scratch(tag) {
-        m_fs = &io::realFileSystem();
-        m_root = m_scratch.path();
-        m_work = join(m_root, "work");
+    explicit TempRepo(std::string_view tag, bool trusted = true)
+        : m_scratch(tag), m_fs(&io::realFileSystem()), m_root(m_scratch.path()), m_work(join(m_root, "work")) {
         const std::string config = join(m_root, "gitconfig");
         EXPECT_TRUE(m_fs->createDirectories(m_work).has_value());
         const std::string configText = "[user]\n\tname = Frost Test\n\temail = test@example.invalid\n"
@@ -102,10 +100,10 @@ public:
     [[nodiscard]] std::string path(std::string_view relative) const { return absoluteGitPath(m_work, relative); }
 
     // Runs git in `directory` (the work tree by default); expects exit code `expectedExit`.
-    GitOutput git(std::vector<std::string> arguments, int expectedExit = 0, std::string directory = {}) const {
+    GitOutput git(std::vector<std::string> arguments, int expectedExit = 0, const std::string& directory = {}) const {
         GitInvocation invocation;
         invocation.arguments = std::move(arguments);
-        invocation.workingDirectory = directory.empty() ? m_work : std::move(directory);
+        invocation.workingDirectory = directory.empty() ? m_work : directory;
         auto output = m_runner->run(invocation);
         EXPECT_TRUE(output.has_value()) << (output ? "" : output.error().describe());
         if (!output) {
@@ -141,7 +139,7 @@ public:
 
     void write(std::string_view relative, std::string_view content) const {
         const std::string file = path(relative);
-        EXPECT_TRUE(m_fs->createDirectories(std::string(io::parentPath(file))).has_value());
+        EXPECT_TRUE(m_fs->createDirectories(io::parentPath(file)).has_value());
         EXPECT_TRUE(m_fs->writeFileAtomic(file, content).has_value()) << file;
     }
 

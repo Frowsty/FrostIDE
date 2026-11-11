@@ -346,7 +346,7 @@ Result<void> CMakeService::setBuildWrappers(std::vector<CMakeBuildWrapper> wrapp
 }
 
 Result<void> CMakeService::build(BuildAction action, std::optional<std::size_t> target, CMakeBuildCompletion done,
-                                 std::shared_ptr<const project::CMakeProject> expectedModel) {
+                                 const std::shared_ptr<const project::CMakeProject>& expectedModel) {
     State& s = *m_state;
     LockGuard lock(s.mutex);
     if (expectedModel && expectedModel != s.model)

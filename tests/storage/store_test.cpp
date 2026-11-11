@@ -41,7 +41,6 @@ using frost::storage::OpenOptions;
 using frost::storage::openStore;
 using frost::storage::removeDatabaseFiles;
 using frost::storage::SchemaSpec;
-using frost::storage::TransactionKind;
 using frost::storage::Verify;
 using frost::storage::test::fastOptions;
 using frost::storage::test::fileExists;

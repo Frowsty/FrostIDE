@@ -50,6 +50,9 @@
 //                      thread, from GetUserObjectInformationW(UOI_NAME)
 //   window             Windows: creates a top-level window that is never shown, prints
 //                      "window:<handle in decimal>", and keeps it until stdin reaches EOF
+//   resident-memory QUOTA PEAK_BUDGET BYTES
+//                      Windows: verifies first-entry HARDWS_MAX=QUOTA, commits/writes/reads BYTES,
+//                      reports kernel lifetime peak and job membership, fails unless peak < PEAK_BUDGET
 //
 // Numeric arguments (exit, sleep, probe-handle on POSIX) must be whole decimal ints, or it exits with
 // status 65; an unknown mode or a wrong argument count exits with 64.
@@ -66,6 +69,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -77,6 +81,7 @@
 #include <crtdbg.h>
 #include <fcntl.h>
 #include <io.h>
+#include <psapi.h>
 // GetSecurityInfo; ConvertSecurityDescriptorToStringSecurityDescriptorW. Both need windows.h first.
 #include <aclapi.h>
 #include <sddl.h>
@@ -101,6 +106,69 @@ extern char** environ; // NOLINT(readability-redundant-declaration): POSIX requi
 #endif
 
 namespace {
+
+#ifdef _WIN32
+// Filled by the first wmain statement, before error-mode setup, argument conversion or mode dispatch.
+struct EntryWorkingSet {
+    SIZE_T minimum = 0;
+    SIZE_T maximum = 0;
+    DWORD flags = 0;
+    BOOL queried = FALSE;
+};
+EntryWorkingSet g_entryWorkingSet;
+
+void captureEntryWorkingSet() {
+    g_entryWorkingSet.queried = GetProcessWorkingSetSizeEx(GetCurrentProcess(), &g_entryWorkingSet.minimum,
+                                                           &g_entryWorkingSet.maximum, &g_entryWorkingSet.flags);
+}
+
+struct FreeVirtualMemory {
+    void operator()(unsigned char* memory) const noexcept { VirtualFree(memory, 0, MEM_RELEASE); }
+};
+
+int residentMemoryOracle(std::uint64_t quota, std::uint64_t peakBudget, std::uint64_t allocationBytes) {
+    if (quota == 0 || quota >= peakBudget || peakBudget > 512ULL * 1024 * 1024 || allocationBytes <= peakBudget ||
+        allocationBytes > 1024ULL * 1024 * 1024) {
+        return 65;
+    }
+    if (g_entryWorkingSet.queried == FALSE || g_entryWorkingSet.maximum != quota ||
+        (g_entryWorkingSet.flags & QUOTA_LIMITS_HARDWS_MAX_ENABLE) == 0 ||
+        (g_entryWorkingSet.flags & QUOTA_LIMITS_HARDWS_MAX_DISABLE) != 0) {
+        return 70;
+    }
+    const auto bytes = static_cast<SIZE_T>(allocationBytes);
+    const std::unique_ptr<unsigned char, FreeVirtualMemory> allocation(
+        static_cast<unsigned char*>(VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)));
+    if (!allocation) {
+        return 71;
+    }
+    // Every allocated byte is written and read back. Volatile reads retain the full data-fidelity
+    // oracle even in optimized builds, while the kernel's lifetime peak includes all prior activity.
+    volatile unsigned char* memory = allocation.get();
+    for (SIZE_T i = 0; i < bytes; ++i) {
+        memory[i] = static_cast<unsigned char>(i % 251);
+    }
+    for (SIZE_T i = 0; i < bytes; ++i) {
+        if (memory[i] != static_cast<unsigned char>(i % 251)) {
+            return 72;
+        }
+    }
+    PROCESS_MEMORY_COUNTERS counters{};
+    counters.cb = sizeof(counters);
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) == FALSE) {
+        return 73;
+    }
+    BOOL inJob = FALSE;
+    if (IsProcessInJob(GetCurrentProcess(), nullptr, &inJob) == FALSE) {
+        return 74;
+    }
+    std::printf("resident-memory %llu %lu %llu %llu %d %llu\n",
+                static_cast<unsigned long long>(g_entryWorkingSet.maximum), g_entryWorkingSet.flags,
+                static_cast<unsigned long long>(counters.PeakWorkingSetSize), static_cast<unsigned long long>(bytes),
+                static_cast<int>(inJob), static_cast<unsigned long long>(peakBudget));
+    return counters.PeakWorkingSetSize < peakBudget ? 0 : 75;
+}
+#endif
 
 std::string hex(const std::string& bytes) {
     static constexpr char kDigits[] = "0123456789abcdef";
@@ -238,6 +306,13 @@ int run(const std::vector<std::string>& args) {
         return 64;
     }
     const std::string& mode = args[1];
+#ifdef _WIN32
+    if (mode == "resident-memory" && args.size() == 5) {
+        return residentMemoryOracle(static_cast<std::uint64_t>(number(args[2])),
+                                    static_cast<std::uint64_t>(number(args[3])),
+                                    static_cast<std::uint64_t>(number(args[4])));
+    }
+#endif
     if (mode == "invalid-utf8") {
         constexpr char bytes[] = {'a', static_cast<char>(0xff), '\n'};
         std::fwrite(bytes, 1, sizeof(bytes), stdout);
@@ -341,7 +416,7 @@ int run(const std::vector<std::string>& args) {
 #else
         close(STDOUT_FILENO);
 #endif
-        std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(args[2].c_str())));
+        std::this_thread::sleep_for(std::chrono::milliseconds(number(args[2])));
         std::_Exit(0);
     }
     if (mode == "print" && args.size() == 4) {
@@ -503,7 +578,7 @@ int run(const std::vector<std::string>& args) {
         return 0;
     }
     if (mode == "fd-write" && args.size() == 4) {
-        const int fd = std::atoi(args[2].c_str());
+        const int fd = number(args[2]);
         const ssize_t wrote = write(fd, args[3].data(), args[3].size());
         line(wrote == static_cast<ssize_t>(args[3].size()) ? "wrote" : "write error " + std::to_string(errno));
         return 0;
@@ -561,6 +636,7 @@ int run(const std::vector<std::string>& args) {
 
 #ifdef _WIN32
 int wmain(int argc, wchar_t** argv) {
+    captureEntryWorkingSet();
     // Never a dialog on the desktop: crashes, aborts and Debug CRT assertions go to stderr
     // and end the process, so a failing test reports instead of waiting for a click.
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);

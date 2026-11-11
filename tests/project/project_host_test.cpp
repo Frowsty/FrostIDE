@@ -192,7 +192,7 @@ TEST_F(ProjectHostReal, TheHelperEvaluatesEveryProjectAsMsBuildExeDoes) {
     EXPECT_FALSE((*client)->hello().msbuildVersion.empty());
     // The helper loaded the instance's Microsoft.Build (the locator), not another copy.
     EXPECT_TRUE(detail::isSameOrUnder(detail::normalizeAbsolute((*client)->hello().msbuildAssembly).value_or(""),
-                                      std::string(io::parentPath(m_msbuild))))
+                                      io::parentPath(m_msbuild)))
         << (*client)->hello().msbuildAssembly;
     const std::vector<std::string> metadata{"PreprocessorDefinitions", "AdditionalIncludeDirectories"};
     for (const char* project : {"Core/Core.vcxproj", "Renderer/Renderer.vcxproj", "App/App.vcxproj"}) {

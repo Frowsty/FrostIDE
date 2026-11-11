@@ -18,11 +18,13 @@
 #include "frost/sched/thread_pool.hpp"
 
 #include "process_env.hpp"
+#include "resident_memory_support.hpp"
 #include <gtest/gtest.h>
 
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -578,5 +580,69 @@ TEST(AsyncProcess, ManyConcurrentProcesses) {
     processes.clear();
     EXPECT_TRUE(env.settlesWithin(30s)) << env.boundObjects() << " states still bound";
 }
+
+#ifdef _WIN32
+TEST(AsyncProcess, ResidentMemoryLimitPrecedesChildEntryAndBoundsLifetimePeak) {
+    AsyncEnv env;
+    auto spec = childSpec({"resident-memory", std::to_string(frost::test::kResidentTestQuota),
+                           std::to_string(frost::test::kResidentTestPeakBudget),
+                           std::to_string(frost::test::kResidentTestAllocation)});
+    spec.residentMemoryLimitBytes = frost::test::kResidentTestQuota;
+    auto process = env.launch(spec);
+    ASSERT_TRUE(process.has_value()) << process.error().describe();
+    const auto result = env.run((*process)->communicate("", 120s));
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    frost::test::expectResidentMemoryOracle(*result);
+}
+
+TEST(AsyncProcess, ResidentMemorySetupFailuresEndSuspendedChildAndCloseInheritedWriters) {
+    AsyncEnv env;
+    using enum frost::io::detail::ResidentMemoryLaunchFault;
+    for (const auto fault : {SetLimit, ReadLimit, WrongLimit, WrongFlags, Resume}) {
+        for (const bool killOnClose : {false, true}) {
+            SCOPED_TRACE(static_cast<int>(fault));
+            SCOPED_TRACE(killOnClose);
+            frost::test::ResidentMemoryFailureProbe probe(fault);
+            auto spec = childSpec({"print", "child-executed", ""});
+            spec.killOnClose = killOnClose;
+            spec.residentMemoryLimitBytes = frost::test::kResidentTestQuota;
+            const auto process = env.launch(spec);
+            ASSERT_FALSE(process.has_value());
+            const auto expectedCode =
+                fault == WrongLimit || fault == WrongFlags ? ErrorCode::IoError : ErrorCode::PermissionDenied;
+            EXPECT_EQ(process.error().code(), expectedCode) << process.error().describe();
+            probe.expectEndedWithoutExecuting();
+            EXPECT_EQ(env.boundObjects(), 0);
+        }
+    }
+}
+
+TEST(AsyncProcess, ResidentMemoryLimitRejectsInvalidNativeValuesBeforeCreation) {
+    AsyncEnv env;
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    const std::uint64_t page = system.dwPageSize;
+    for (const auto limit : {std::uint64_t{0}, page * 19, page * 20 + 1, UINT64_MAX}) {
+        frost::test::ResidentMemoryFailureProbe probe(frost::io::detail::ResidentMemoryLaunchFault::None);
+        auto spec = childSpec({"print", "child-executed", ""});
+        spec.residentMemoryLimitBytes = limit;
+        const auto process = env.launch(spec);
+        ASSERT_FALSE(process.has_value()) << limit;
+        EXPECT_EQ(process.error().code(), ErrorCode::InvalidArgument) << limit;
+        EXPECT_FALSE(probe.capturedChild());
+        EXPECT_EQ(env.boundObjects(), 0);
+    }
+}
+#else
+TEST(AsyncProcess, RequestedResidentMemoryLimitIsUnsupported) {
+    AsyncEnv env;
+    auto spec = childSpec({"print", "child-executed", ""});
+    spec.residentMemoryLimitBytes = 128ULL * 1024 * 1024;
+    const auto process = env.launch(spec);
+    ASSERT_FALSE(process.has_value());
+    EXPECT_EQ(process.error().code(), ErrorCode::Unsupported);
+    EXPECT_EQ(env.boundObjects(), 0);
+}
+#endif
 
 } // namespace

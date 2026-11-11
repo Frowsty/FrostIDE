@@ -29,7 +29,10 @@ using test::SessionRecorder;
 using test::waitUntil;
 using test::workPath;
 
-const std::string kSource = workPath("App/main.cpp");
+const std::string& kSource() {
+    static const std::string value = workPath("App/main.cpp");
+    return value;
+}
 
 TEST(DebugSessionAdapterProfile, InitializeCarriesTheSelectedAdapterId) {
     FakeDebugAdapter adapter;
@@ -42,7 +45,7 @@ TEST(DebugSessionAdapterProfile, InitializeCarriesTheSelectedAdapterId) {
 
 TEST(DebugSessionAdapterProfile, FrameIdZeroRemainsSelectableAndCanRequestScopes) {
     FakeDebugAdapter adapter;
-    FakeProgram program{.sourcePath = kSource, .codeLines = {10}};
+    FakeProgram program{.sourcePath = kSource(), .codeLines = {10}};
     scriptProgram(adapter, std::move(program));
     adapter.on("stackTrace", [](const rpc::Json&) {
         return FakeDebugAdapter::Reply{
@@ -53,11 +56,11 @@ TEST(DebugSessionAdapterProfile, FrameIdZeroRemainsSelectableAndCanRequestScopes
                                                    .set("name", "Main")
                                                    .set("line", 10)
                                                    .set("column", 1)
-                                                   .set("source", rpc::Json::object().set("path", kSource))}))
+                                                   .set("source", rpc::Json::object().set("path", kSource()))}))
                         .set("totalFrames", 1)};
     });
     auto session =
-        DebugSession::start(fakeFactory(adapter), rpc::Json::object(), {{kSource, {{1, 10}}}}, {}, false, "coreclr");
+        DebugSession::start(fakeFactory(adapter), rpc::Json::object(), {{kSource(), {{1, 10}}}}, {}, false, "coreclr");
     ASSERT_TRUE(waitUntil([&] { return session->selectedFrame().has_value(); }));
     EXPECT_EQ(session->selectedFrame()->id, 0);
     ASSERT_TRUE(session->selectFrame(1, 0));
@@ -78,7 +81,7 @@ rpc::Json launchArguments() {
 class DebugSessionTest : public ::testing::Test {
 protected:
     void start(FakeProgram program, std::map<std::string, std::vector<BreakpointLine>> breakpoints) {
-        program.sourcePath = kSource;
+        program.sourcePath = kSource();
         scriptProgram(adapter, std::move(program));
         session =
             DebugSession::start(fakeFactory(adapter), launchArguments(), std::move(breakpoints), recorder.callbacks());
@@ -110,7 +113,7 @@ protected:
 };
 
 TEST_F(DebugSessionTest, LaunchesConfiguresBreakpointsAndStopsOnOne) {
-    start(FakeProgram{.codeLines = {10, 20}}, {{kSource, {{1, 10}, {2, 11}}}});
+    start(FakeProgram{.codeLines = {10, 20}}, {{kSource(), {{1, 10}, {2, 11}}}});
     waitForStop(1);
     // The DAP launch sequence: launch right after initialize, breakpoints after "initialized".
     const auto commands = adapter.commands();
@@ -122,7 +125,7 @@ TEST_F(DebugSessionTest, LaunchesConfiguresBreakpointsAndStopsOnOne) {
     EXPECT_EQ(launch.stringAt("program"), workPath("App/App.exe"));
     EXPECT_EQ(launch.boolAt("stopOnEntry"), false);
     const rpc::Json set = adapter.argumentsOf("setBreakpoints").front();
-    EXPECT_EQ(set.find("source")->stringAt("path"), kSource);
+    EXPECT_EQ(set.find("source")->stringAt("path"), kSource());
     ASSERT_EQ(set.find("breakpoints")->size(), 2U);
 
     EXPECT_EQ(session->state(), DebugState::Stopped);
@@ -148,7 +151,7 @@ TEST_F(DebugSessionTest, LaunchesConfiguresBreakpointsAndStopsOnOne) {
     ASSERT_EQ(frames.frames.size(), 3U);
     EXPECT_TRUE(frames.complete);
     EXPECT_EQ(frames.frames[0].name, "main()");
-    EXPECT_EQ(frames.frames[0].path, kSource);
+    EXPECT_EQ(frames.frames[0].path, kSource());
     EXPECT_EQ(frames.frames[0].line, 10);
     EXPECT_FALSE(frames.frames[2].hasSource()) << "the outermost frame has no source";
     const auto selected = session->selectedFrame();
@@ -215,7 +218,7 @@ TEST_F(DebugSessionTest, RunningCallbackCanStopReentrantlyWithOrWithoutConfigura
 
 TEST_F(DebugSessionTest, AbortFunctionBreakpointSelectsTheUserFrame) {
     using Reply = FakeDebugAdapter::Reply;
-    scriptProgram(adapter, FakeProgram{.sourcePath = kSource, .runsForever = true});
+    scriptProgram(adapter, FakeProgram{.sourcePath = kSource(), .runsForever = true});
     adapter.on("initialize", [](const rpc::Json&) {
         return Reply{.body = rpc::Json::object()
                                  .set("supportsConfigurationDoneRequest", true)
@@ -244,7 +247,7 @@ TEST_F(DebugSessionTest, AbortFunctionBreakpointSelectsTheUserFrame) {
                         .set("id", 2)
                         .set("name", "main")
                         .set("line", 10)
-                        .set("source", rpc::Json::object().set("path", kSource));
+                        .set("source", rpc::Json::object().set("path", kSource()));
         return Reply{.body =
                          rpc::Json::object().set("stackFrames", rpc::Json::array({crt, user})).set("totalFrames", 2)};
     });
@@ -254,12 +257,12 @@ TEST_F(DebugSessionTest, AbortFunctionBreakpointSelectsTheUserFrame) {
     EXPECT_TRUE(session->stopInfo()->isCrash());
     EXPECT_EQ(session->stopInfo()->reason, "abort");
     ASSERT_TRUE(session->selectedFrame().has_value());
-    EXPECT_EQ(session->selectedFrame()->path, kSource);
+    EXPECT_EQ(session->selectedFrame()->path, kSource());
     EXPECT_EQ(session->selectedFrame()->line, 10);
 }
 
 TEST_F(DebugSessionTest, RejectedStepRestoresStoppedStateAndCanContinue) {
-    start(FakeProgram{.codeLines = {10}}, {{kSource, {{1, 10}}}});
+    start(FakeProgram{.codeLines = {10}}, {{kSource(), {{1, 10}}}});
     waitForStop(1);
     adapter.on("next",
                [](const rpc::Json&) { return FakeDebugAdapter::Reply{.success = false, .message = "step rejected"}; });
@@ -276,7 +279,7 @@ TEST_F(DebugSessionTest, RejectedStepRestoresStoppedStateAndCanContinue) {
 }
 
 TEST_F(DebugSessionTest, LateRejectedStepDoesNotOverwriteANewerStop) {
-    start(FakeProgram{.codeLines = {10}}, {{kSource, {{1, 10}}}});
+    start(FakeProgram{.codeLines = {10}}, {{kSource(), {{1, 10}}}});
     waitForStop(1);
     adapter.on("next", [](const rpc::Json&) { return FakeDebugAdapter::Reply{.respond = false}; });
     ASSERT_TRUE(session->next().has_value());
@@ -328,7 +331,7 @@ TEST_F(DebugSessionTest, StopBeforeInitializeReplyPreventsLaunchAndConfiguration
 }
 
 TEST_F(DebugSessionTest, StepsPausesAndRunsToTheExit) {
-    start(FakeProgram{.codeLines = {10}, .exitCode = 7, .runsForever = false}, {{kSource, {{1, 10}}}});
+    start(FakeProgram{.codeLines = {10}, .exitCode = 7, .runsForever = false}, {{kSource(), {{1, 10}}}});
     waitForStop(1);
     EXPECT_EQ(session->pause().error().code(), ErrorCode::Busy) << "pause needs a running program";
 
@@ -387,7 +390,7 @@ TEST_F(DebugSessionTest, AnExceptionStopSelectsTheFaultingFrame) {
 }
 
 TEST_F(DebugSessionTest, FramesLoadAPageAtATime) {
-    start(FakeProgram{.codeLines = {10}, .frameCount = 45}, {{kSource, {{1, 10}}}});
+    start(FakeProgram{.codeLines = {10}, .frameCount = 45}, {{kSource(), {{1, 10}}}});
     waitForStop(1);
     FrameList frames = session->frames(1);
     EXPECT_EQ(frames.frames.size(), static_cast<std::size_t>(DebugSession::kFramePage));
@@ -405,19 +408,19 @@ TEST_F(DebugSessionTest, FramesLoadAPageAtATime) {
 }
 
 TEST_F(DebugSessionTest, ScopesVariablesPagingAndEvaluate) {
-    start(FakeProgram{.codeLines = {10}, .arrayLength = 250}, {{kSource, {{1, 10}}}});
+    start(FakeProgram{.codeLines = {10}, .arrayLength = 250}, {{kSource(), {{1, 10}}}});
     waitForStop(1);
     const auto frame = session->selectedFrame();
     ASSERT_TRUE(frame.has_value());
 
-    auto scopes = awaitResult<ScopeList>([&](auto done) { session->scopes(frame->id, done); });
+    auto scopes = awaitResult<ScopeList>([&](const auto& done) { session->scopes(frame->id, done); });
     ASSERT_TRUE(scopes.has_value()) << scopes.error().describe();
     ASSERT_EQ(scopes->size(), 2U);
     EXPECT_EQ((*scopes)[0].name, "Locals");
     EXPECT_TRUE((*scopes)[1].expensive);
 
-    auto locals =
-        awaitResult<VariableList>([&](auto done) { session->variables((*scopes)[0].variablesReference, 0, 0, done); });
+    auto locals = awaitResult<VariableList>(
+        [&](const auto& done) { session->variables((*scopes)[0].variablesReference, 0, 0, done); });
     ASSERT_TRUE(locals.has_value());
     ASSERT_EQ(locals->size(), 3U);
     EXPECT_EQ((*locals)[0].name, "x");
@@ -426,10 +429,10 @@ TEST_F(DebugSessionTest, ScopesVariablesPagingAndEvaluate) {
     EXPECT_EQ((*locals)[1].variablesReference, 101) << "a struct has children";
     EXPECT_EQ((*locals)[2].indexedVariables, 250);
 
-    auto members = awaitResult<VariableList>([&](auto done) { session->variables(101, 0, 0, done); });
+    auto members = awaitResult<VariableList>([&](const auto& done) { session->variables(101, 0, 0, done); });
     ASSERT_TRUE(members.has_value());
     EXPECT_EQ(members->size(), 2U);
-    auto page = awaitResult<VariableList>([&](auto done) { session->variables(102, 100, 100, done); });
+    auto page = awaitResult<VariableList>([&](const auto& done) { session->variables(102, 100, 100, done); });
     ASSERT_TRUE(page.has_value());
     ASSERT_EQ(page->size(), 100U);
     EXPECT_EQ(page->front().name, "[100]");
@@ -438,14 +441,16 @@ TEST_F(DebugSessionTest, ScopesVariablesPagingAndEvaluate) {
     EXPECT_EQ(paged.integerAt("start"), 100);
     EXPECT_EQ(paged.integerAt("count"), 100);
 
-    auto sum = awaitResult<dap::Variable>([&](auto done) { session->evaluate("x + 1", frame->id, "watch", done); });
+    auto sum =
+        awaitResult<dap::Variable>([&](const auto& done) { session->evaluate("x + 1", frame->id, "watch", done); });
     ASSERT_TRUE(sum.has_value());
     EXPECT_EQ(sum->name, "x + 1");
     EXPECT_EQ(sum->value, "43");
-    auto point = awaitResult<dap::Variable>([&](auto done) { session->evaluate("p", frame->id, "repl", done); });
+    auto point = awaitResult<dap::Variable>([&](const auto& done) { session->evaluate("p", frame->id, "repl", done); });
     ASSERT_TRUE(point.has_value());
     EXPECT_EQ(point->variablesReference, 101);
-    auto missing = awaitResult<dap::Variable>([&](auto done) { session->evaluate("nope", frame->id, "watch", done); });
+    auto missing =
+        awaitResult<dap::Variable>([&](const auto& done) { session->evaluate("nope", frame->id, "watch", done); });
     ASSERT_FALSE(missing.has_value());
     EXPECT_EQ(missing.error().message(), "evaluate: use of undeclared identifier 'nope'");
     const auto evaluations = adapter.argumentsOf("evaluate");
@@ -454,9 +459,9 @@ TEST_F(DebugSessionTest, ScopesVariablesPagingAndEvaluate) {
 }
 
 TEST_F(DebugSessionTest, BreakpointsChangeDuringTheSessionAndRunToLineUsesATemporaryOne) {
-    start(FakeProgram{.codeLines = {10, 20, 25, 40}, .runsForever = true}, {{kSource, {{1, 10}}}});
+    start(FakeProgram{.codeLines = {10, 20, 25, 40}, .runsForever = true}, {{kSource(), {{1, 10}}}});
     waitForStop(1);
-    session->setBreakpoints(kSource, {{1, 10}, {5, 40}});
+    session->setBreakpoints(kSource(), {{1, 10}, {5, 40}});
     ASSERT_TRUE(adapter.waitForRequest("setBreakpoints", 2));
     ASSERT_TRUE(waitUntil([&] {
         LockGuard lock(recorder.mutex);
@@ -469,7 +474,7 @@ TEST_F(DebugSessionTest, BreakpointsChangeDuringTheSessionAndRunToLineUsesATempo
     }
 
     // Run to Cursor at line 25: a temporary breakpoint there, dropped again at the stop.
-    ASSERT_TRUE(session->runToLine(kSource, 25).has_value());
+    ASSERT_TRUE(session->runToLine(kSource(), 25).has_value());
     waitForStop(2);
     EXPECT_EQ(session->selectedFrame()->line, 25);
     ASSERT_TRUE(adapter.waitForRequest("setBreakpoints", 4));
@@ -485,7 +490,7 @@ TEST_F(DebugSessionTest, BreakpointsChangeDuringTheSessionAndRunToLineUsesATempo
 }
 
 TEST_F(DebugSessionTest, LoadedSourceResponseExpiresWhenExecutionResumes) {
-    start(FakeProgram{.codeLines = {10}, .runsForever = true}, {{kSource, {{1, 10}}}});
+    start(FakeProgram{.codeLines = {10}, .runsForever = true}, {{kSource(), {{1, 10}}}});
     waitForStop(1);
     adapter.on("source", [](const rpc::Json&) { return FakeDebugAdapter::Reply{.respond = false}; });
     auto completion = std::make_shared<std::promise<Result<std::string>>>();
@@ -617,7 +622,7 @@ TEST_F(DebugSessionTest, FailedAttachDoesNotTerminateTheHost) {
 }
 
 TEST_F(DebugSessionTest, StopDisconnectsAndTerminatesTheDebuggee) {
-    start(FakeProgram{.codeLines = {10}}, {{kSource, {{1, 10}}}});
+    start(FakeProgram{.codeLines = {10}}, {{kSource(), {{1, 10}}}});
     waitForStop(1);
     session->stop();
     ASSERT_TRUE(waitUntil([&] { return recorder.hasEnded(); }));
@@ -631,7 +636,7 @@ TEST_F(DebugSessionTest, StopDisconnectsAndTerminatesTheDebuggee) {
 }
 
 TEST_F(DebugSessionTest, AnAdapterCrashEndsTheSessionWithAnError) {
-    start(FakeProgram{.codeLines = {10}}, {{kSource, {{1, 10}}}});
+    start(FakeProgram{.codeLines = {10}}, {{kSource(), {{1, 10}}}});
     waitForStop(1);
     adapter.crash(3);
     ASSERT_TRUE(waitUntil([&] { return recorder.hasEnded(); }));
@@ -644,7 +649,7 @@ TEST_F(DebugSessionTest, AnAdapterCrashEndsTheSessionWithAnError) {
 }
 
 TEST_F(DebugSessionTest, AFailedLaunchOrFactoryEndsTheSession) {
-    scriptProgram(adapter, FakeProgram{.sourcePath = kSource});
+    scriptProgram(adapter, FakeProgram{.sourcePath = kSource()});
     adapter.on("launch", [](const rpc::Json&) {
         return FakeDebugAdapter::Reply{.success = false, .message = "error: the program does not exist"};
     });
@@ -656,7 +661,7 @@ TEST_F(DebugSessionTest, AFailedLaunchOrFactoryEndsTheSession) {
 
     SessionRecorder other;
     auto failed = DebugSession::start(
-        [](DapHandlers) -> Result<std::unique_ptr<IDebugAdapterClient>> {
+        [](const DapHandlers&) -> Result<std::unique_ptr<IDebugAdapterClient>> {
             return fail(ErrorCode::NotFound, "lldb-dap is not installed");
         },
         launchArguments(), {}, other.callbacks());
@@ -669,7 +674,7 @@ TEST_F(DebugSessionTest, AFailedLaunchOrFactoryEndsTheSession) {
 // The program loading without symbols (lldb-dap's module event, "Symbols not found.") is named once in
 // the console: its breakpoints cannot bind (ADR 0081 item 8). Other modules without symbols are not.
 TEST_F(DebugSessionTest, AProgramWithoutSymbolsIsNamedOnce) {
-    start(FakeProgram{.codeLines = {10}}, {{kSource, {{1, 10}}}});
+    start(FakeProgram{.codeLines = {10}}, {{kSource(), {{1, 10}}}});
     waitForStop(1);
     std::string program = workPath("App/App.exe");
 #ifdef _WIN32

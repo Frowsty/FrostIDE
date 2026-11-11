@@ -14,9 +14,9 @@
 
 namespace frost::app {
 namespace {
-Result<std::string> runOwned(io::IProcessLauncher& launcher, io::ProcessSpec spec, std::optional<std::string> input,
-                             std::size_t limit, std::chrono::milliseconds timeout, std::stop_token stop,
-                             const std::function<bool()>& current) {
+Result<std::string> runOwned(io::IProcessLauncher& launcher, const io::ProcessSpec& spec,
+                             std::optional<std::string> input, std::size_t limit, std::chrono::milliseconds timeout,
+                             const std::stop_token& stop, const std::function<bool()>& current) {
     if (stop.stop_requested() || !current())
         return fail(ErrorCode::Cancelled, "Mono helper admission was cancelled");
     auto launched = launcher.launch(spec);
@@ -165,8 +165,10 @@ Result<std::string> runOwned(io::IProcessLauncher& launcher, io::ProcessSpec spe
     return std::move(state->output);
 }
 } // namespace
+// Keep cancellation identity alive across reentrant launchers, even if the source owner is released.
 Result<std::string> captureMonoHeldInput(io::IProcessLauncher& launcher, std::string_view helper, std::string_view root,
                                          std::string_view path, std::size_t limit, std::chrono::milliseconds timeout,
+                                         // NOLINTNEXTLINE(performance-unnecessary-value-param): Own token.
                                          std::stop_token stop, const std::function<bool()>& current) {
     if (!io::isAbsolutePath(helper) || !io::isAbsolutePath(root) || !io::isAbsolutePath(path) ||
         limit > 4 * 1024 * 1024 || timeout <= std::chrono::milliseconds::zero() || timeout > std::chrono::seconds(60) ||
@@ -180,10 +182,12 @@ Result<std::string> captureMonoHeldInput(io::IProcessLauncher& launcher, std::st
     spec.stdoutMode = io::Stdio::Pipe;
     spec.stderrMode = io::Stdio::Pipe;
     spec.killOnClose = true;
-    return runOwned(launcher, std::move(spec), std::nullopt, limit, timeout, stop, current);
+    return runOwned(launcher, spec, std::nullopt, limit, timeout, stop, current);
 }
+// The synchronous helper borrows this owning token throughout its reentrant launcher call.
 Result<std::string> runMonoGuardInput(io::IProcessLauncher& launcher, std::string_view dotnet, std::string_view guard,
                                       std::string_view root, bool mapPhase, std::string input,
+                                      // NOLINTNEXTLINE(performance-unnecessary-value-param): Own token.
                                       std::chrono::milliseconds timeout, std::stop_token stop,
                                       const std::function<bool()>& current) {
     constexpr std::size_t maxInput = 18 * 1024 * 1024 + 65536;
@@ -202,6 +206,6 @@ Result<std::string> runMonoGuardInput(io::IProcessLauncher& launcher, std::strin
     spec.stdoutMode = io::Stdio::Pipe;
     spec.stderrMode = io::Stdio::Pipe;
     spec.killOnClose = true;
-    return runOwned(launcher, std::move(spec), std::move(input), maxOutput, timeout, stop, current);
+    return runOwned(launcher, spec, std::move(input), maxOutput, timeout, stop, current);
 }
 } // namespace frost::app

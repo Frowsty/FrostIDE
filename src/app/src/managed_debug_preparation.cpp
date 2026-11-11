@@ -62,7 +62,7 @@ struct ManagedDebugPreparation::Relay : std::enable_shared_from_this<Relay> {
                 [self, generation, phase, result = std::move(result), output = std::move(output),
                  error = std::move(error), overflow]() mutable {
                     if (self->m_active && self->m_generation == generation)
-                        self->finished(phase, std::move(result), std::move(output), std::move(error), overflow);
+                        self->finished(phase, std::move(result), output, std::move(error), overflow);
                 },
                 Qt::QueuedConnection);
         }
@@ -231,8 +231,8 @@ Result<void> ManagedDebugPreparation::launch(Phase phase) {
     return {};
 }
 
-void ManagedDebugPreparation::finished(Phase phase, build::BuildResult result, std::string output, std::string error,
-                                       bool overflow) {
+void ManagedDebugPreparation::finished(Phase phase, build::BuildResult result, const std::string& output,
+                                       std::string error, bool overflow) {
     m_session.reset();
     if (m_cancelled || result.cancelled) {
         complete(fail(ErrorCode::Cancelled, "managed debug preparation was cancelled"));

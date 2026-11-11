@@ -20,7 +20,7 @@ namespace frost::input::test {
 // The en-US simulated table with `changes` applied (a change replaces the whole cell; an
 // all-zero KeyLevels empties it), as a FullTable layout called `id` with no compositions.
 // Fails the test (and returns en-US) when make() rejects the cells.
-[[nodiscard]] LayoutTable usWith(std::vector<std::pair<Code, KeyLevels>> changes, std::string_view id = "test");
+[[nodiscard]] LayoutTable usWith(const std::vector<std::pair<Code, KeyLevels>>& changes, std::string_view id = "test");
 
 namespace synthetic {
 

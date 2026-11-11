@@ -6,11 +6,10 @@
 // runs clang-format with the project's .clang-format). The resulting edits are applied by the
 // caller through IWorkspaceEditApplier (workspace_edit.hpp) on the thread that owns the documents.
 /*
- * Quick fixes. Code actions that carry an edit are offered; command-only actions (clangd's
- * tweaks, which answer with a server-to-client workspace/applyEdit) are dropped for now.
- * TODO(M3): run tweaks through workspace/executeCommand once the client applies server edits.
- * The list is sorted preferred fixes first, then quick fixes, then the rest, each in the
- * server's order.
+ * Quick fixes and clangd tweaks (REF-3) and include management (REF-11). Direct WorkspaceEdit
+ * actions are applied by the caller; command actions are sent through requestExecuteCommand, with
+ * workspace/applyEdit handled by the existing server callback. The list is sorted preferred fixes
+ * first, then quick fixes, then the rest, each in the server's order.
  * Threads: the requests are coroutines; the rest is pure.
  */
 #pragma once
@@ -78,6 +77,13 @@ requestCodeActions(ILspRequester& server, std::string path, LspRange range, std:
 [[nodiscard]] sched::Task<Result<Json>> requestExecuteCommand(LspRequestSender& server, std::string_view command,
                                                               const std::vector<Json>& arguments = {},
                                                               std::stop_token token = {});
+
+// Queries `textDocument/codeAction` across `diagnostics` (or the document) for clangd's
+// include-cleaner unused-include removal and missing-include insertion quick fixes and merges
+// their non-overlapping TextEdits into a single WorkspaceEdit (REF-11).
+[[nodiscard]] sched::Task<Result<WorkspaceEdit>>
+requestOptimizeIncludes(ILspRequester& server, std::string path, std::span<const LiveDiagnostic> diagnostics = {},
+                        std::stop_token token = {});
 
 // The diagnostics of `all` whose LSP range overlaps or touches `range`.
 [[nodiscard]] std::vector<LiveDiagnostic> diagnosticsAt(std::span<const LiveDiagnostic> all, LspRange range);

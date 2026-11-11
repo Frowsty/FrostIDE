@@ -26,11 +26,14 @@ using frost::lang::ClangdSearch;
 using frost::lang::findClangd;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
-const std::string kExe = kWindows ? "clangd.exe" : "clangd";
+const std::string& kExe() {
+    static const std::string value = kWindows ? "clangd.exe" : "clangd";
+    return value;
+}
 const char kSep = kWindows ? ';' : ':';
 
 std::string dir(std::string_view name) { return (kWindows ? "C:\\" : "/") + std::string(name); }
-std::string exeIn(std::string_view name) { return frost::io::joinPath(dir(name), kExe).value(); }
+std::string exeIn(std::string_view name) { return frost::io::joinPath(dir(name), kExe()).value(); }
 
 void place(MemFs& fs, std::string_view name) {
     ASSERT_TRUE(fs.createDirectories(dir(name)).has_value());

@@ -238,6 +238,8 @@ struct DebugSessionCallbacks {
     std::function<void()> onTerminated{};
     // The adapter's capabilities: after initialize and after each capabilities event.
     std::function<void(const dap::Capabilities& capabilities)> onCapabilities{};
+    // Actual process identity events, outside session locks; 0 means the adapter withdrew the PID.
+    std::function<void(std::int64_t processId)> onProcess{};
 };
 
 // How a session starts (DebugSession::start).
@@ -302,9 +304,19 @@ public:
     [[nodiscard]] std::optional<DebugOutcome> outcome() const;
     // The debuggee's process id from the adapter's process event; nullopt before it (or when 0).
     [[nodiscard]] std::optional<std::int64_t> processId() const;
+    [[nodiscard]] DebugTargetMode targetMode() const noexcept;
+    // True when explicit termination is supported, or launch ownership permits standard DAP
+    // disconnect(terminateDebuggee=true). An ordinary attached-session stop remains a detach.
+    [[nodiscard]] bool canTerminateDebuggee() const;
+    using TerminateDone = std::function<void(Result<void>)>;
+    // Explicit user termination of this exact observed PID. O(1), thread-safe. Refuses a missing/
+    // different PID, Starting/Ended session, duplicate request or unsupported attached termination.
+    // done receives the actual DAP response on the session callback thread. A successful response
+    // is not a process-exit observation; onTerminated/onEnded carry that separately. No kill fallback.
+    [[nodiscard]] Result<void> terminateDebuggee(std::int64_t expectedPid, TerminateDone done = {});
 
     // Replaces the breakpoint lines of `path` and sends them when configured (header comment).
-    void setBreakpoints(std::string path, std::vector<BreakpointLine> lines);
+    void setBreakpoints(const std::string& path, std::vector<BreakpointLine> lines);
     // Replaces the function breakpoints and sends them when configured (header comment).
     void setFunctionBreakpoints(std::vector<FunctionBreakpointLine> breakpoints);
     // Replaces the exception filters to stop on and sends them when configured (header comment).
@@ -329,7 +341,7 @@ public:
     [[nodiscard]] Result<void> stepOut();
     [[nodiscard]] Result<void> pause();
     // Continues to `line` of `path` through a temporary breakpoint (header comment). Errors: as next().
-    [[nodiscard]] Result<void> runToLine(std::string path, std::int64_t line);
+    [[nodiscard]] Result<void> runToLine(const std::string& path, std::int64_t line);
 
     // Selects a thread; its first frames load when they are not loaded yet. Errors: NotFound.
     [[nodiscard]] Result<void> selectThread(std::int64_t threadId);

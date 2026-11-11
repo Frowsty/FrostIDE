@@ -126,11 +126,11 @@ void TerminalSession::waiterLoop() {
 void TerminalSession::flushOutputLocked() {
     std::string bytes = m_screen.takeOutput();
     if (!bytes.empty()) {
-        enqueue(std::move(bytes));
+        enqueue(bytes);
     }
 }
 
-void TerminalSession::enqueue(std::string bytes) {
+void TerminalSession::enqueue(const std::string& bytes) {
     LockGuard lock(m_queueMutex);
     if (m_stopWriter) {
         return;

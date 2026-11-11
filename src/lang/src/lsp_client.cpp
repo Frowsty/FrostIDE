@@ -435,17 +435,6 @@ struct LspClient::Shared {
         if (method == "window/workDoneProgress/create" || method == "window/showMessageRequest") {
             return Json();
         }
-        if (method == "workspace/applyEdit") {
-            ApplyEditHandler handler;
-            {
-                LockGuard lock(mutex);
-                handler = applyEditHandler;
-            }
-            if (handler && handler(params)) {
-                return Json::object().set("applied", true);
-            }
-            return Json::object().set("applied", false).set("failureReason", "FrostIDE does not apply edits yet");
-        }
         return std::unexpected(ResponseError{
             .code = rpc_error::kMethodNotFound, .message = std::format("unhandled method {}", method), .data = {}});
     }
@@ -468,6 +457,30 @@ struct LspClient::Shared {
         LockGuard lock(mutex);
         return ready;
     }
+
+    bool asyncAnswer(std::string_view method, const Json& params,
+                     std::function<void(std::expected<Json, ResponseError>)> done) {
+        if (method != "workspace/applyEdit") {
+            return false;
+        }
+        ApplyEditHandler handler;
+        {
+            LockGuard lock(mutex);
+            handler = applyEditHandler;
+        }
+        if (!handler) {
+            done(Json::object().set("applied", false).set("failureReason", "FrostIDE has no edit applier"));
+            return true;
+        }
+        handler(params, [done = std::move(done)](bool applied) mutable {
+            Json result = Json::object().set("applied", applied);
+            if (!applied) {
+                result.set("failureReason", "FrostIDE refused the edit");
+            }
+            done(std::move(result));
+        });
+        return true;
+    }
 };
 
 LspClient::LspClient(std::unique_ptr<IByteStream> stream, sched::IScheduler& scheduler, InitializeOptions options,
@@ -480,6 +493,10 @@ LspClient::LspClient(std::unique_ptr<IByteStream> stream, sched::IScheduler& sch
     ConnectionHandlers connection;
     connection.onRequest = [shared = m_shared](std::string_view method, const Json& params) {
         return shared->answer(method, params);
+    };
+    connection.onAsyncRequest = [shared = m_shared](std::string_view method, const Json& params,
+                                                    std::function<void(std::expected<Json, ResponseError>)> done) {
+        return shared->asyncAnswer(method, params, std::move(done));
     };
     connection.onNotification = [shared = m_shared](std::string_view method, const Json& params) {
         shared->notification(method, params);
@@ -613,11 +630,11 @@ sched::Task<Result<Json>> LspClient::request(std::string method, Json params, st
     co_return co_await m_connection->request(std::move(method), std::move(params), std::move(token));
 }
 
-Result<void> LspClient::notify(std::string method, Json params) {
+Result<void> LspClient::notify(const std::string& method, Json params) {
     if (!m_shared->isReady()) {
         return fail(ErrorCode::Busy, method + ": the server is not initialized");
     }
-    return m_connection->notify(std::move(method), std::move(params));
+    return m_connection->notify(method, std::move(params));
 }
 
 Result<void> LspClient::didOpen(std::string_view uri, std::string_view languageId, std::int64_t version,

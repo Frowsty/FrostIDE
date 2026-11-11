@@ -88,7 +88,7 @@ static Result<ManagedSourceSnapshot> captureSources(io::IFileSystem& fs, const p
         return fail(ErrorCode::Untrusted, "managed workspace is untrusted or uses a filesystem alias");
     if (!std::string_view(prepared.target.assembly).ends_with(".dll"))
         return fail(ErrorCode::InvalidArgument, "managed target is not a DLL");
-    const auto rootKey = *canonical;
+    const auto& rootKey = *canonical;
     auto assembly = capture(fs, trust, prepared.target.assembly, prepared.assemblySha256, rootKey, moduleLimit);
     if (!assembly)
         return std::unexpected(std::move(assembly.error()));

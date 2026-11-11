@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <limits>
 #include <map>
+#include <ranges>
 #include <set>
 
 namespace frost::text::detail {
@@ -1246,16 +1247,16 @@ FoldLayer FoldLayer::updated(std::span<const TextChange> changes, std::span<cons
                     changed.buffer.bytes == 0 ? FoldRunTree{} : FoldRunTree::fromItems(std::span(&changed, 1));
                 next.m_runs = concatIdentityRuns(concatIdentityRuns(left, replacement), tail.withoutFront());
             }
-            for (auto it = edits.rbegin(); it != edits.rend(); ++it) {
-                if (it->isNoOp())
+            for (const RawEdit& edit : edits | std::views::reverse) {
+                if (edit.isNoOp())
                     continue;
-                auto [before, after] =
-                    next.m_events.split([&](const FoldEventSummary& sum) { return sum.bytes > it->range.end.value(); });
+                auto [before, after] = next.m_events.split(
+                    [&](const FoldEventSummary& sum) { return sum.bytes > edit.range.end.value(); });
                 if (after.empty())
                     continue;
                 FoldEvent first = *after.front();
                 const auto delta =
-                    static_cast<std::int64_t>(it->newBytes) - static_cast<std::int64_t>(it->range.size());
+                    static_cast<std::int64_t>(edit.newBytes) - static_cast<std::int64_t>(edit.range.size());
                 const auto gap = static_cast<std::int64_t>(first.gap) + delta;
                 FROST_ASSERT(gap >= 0);
                 first.gap = static_cast<std::uint64_t>(gap);
@@ -1362,20 +1363,6 @@ FoldLayer FoldLayer::updated(std::span<const TextChange> changes, std::span<cons
     const std::vector<SpanEdit> lines = composeLinePatch(changes);
     patch.insert(patch.end(), lines.begin(), lines.end());
     return FoldLayer(std::move(newText), {}, {}, m_nextFoldId);
-}
-
-// --- InlayLayer ---------------------------------------------------------------------------------
-
-void InlayLayer::appendSegments(std::uint32_t /*wrapRow*/, ByteRange buffer,
-                                std::vector<RowSegment>& out) const noexcept {
-    if (!buffer.empty()) {
-        out.push_back(RowSegment{SegmentKind::Text, DisplayColumn{0}, buffer, {}});
-    }
-}
-
-InlayLayer InlayLayer::updated(std::span<const SpanEdit> rows, std::vector<SpanEdit>& out) const noexcept {
-    out.insert(out.end(), rows.begin(), rows.end());
-    return *this;
 }
 
 } // namespace frost::text::detail

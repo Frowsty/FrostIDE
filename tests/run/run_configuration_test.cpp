@@ -82,7 +82,7 @@ TEST(RunConfiguration, ValidationNamesWhatIsWrong) {
     EXPECT_TRUE(validateRunConfiguration(nativeConfiguration()).has_value());
     EXPECT_TRUE(validateRunConfiguration(everyField()).has_value());
 
-    const auto refused = [](RunConfiguration configuration, std::string_view fragment) {
+    const auto refused = [](const RunConfiguration& configuration, std::string_view fragment) {
         auto checked = validateRunConfiguration(configuration);
         ASSERT_FALSE(checked.has_value()) << fragment;
         EXPECT_EQ(checked.error().code(), ErrorCode::InvalidArgument);
@@ -141,7 +141,7 @@ TEST(RunConfiguration, ValidationNamesWhatIsWrong) {
 TEST(RunConfigurationStore, SerializedConfigurationsReadBackEqual) {
     const std::vector<RunConfiguration> configurations{everyField(), nativeConfiguration()};
     const std::string text = serializeRunConfigurations(configurations);
-    EXPECT_TRUE(text.ends_with("\n"));
+    EXPECT_TRUE(text.ends_with('\n'));
     EXPECT_NE(text.find("\"version\": 1"), std::string::npos);
     EXPECT_NE(text.find("\"type\": \"cmake-target\""), std::string::npos);
     EXPECT_NE(text.find("{\"name\":\"TMP\",\"unset\":true}"), std::string::npos);
@@ -193,8 +193,8 @@ TEST(RunConfigurationStore, RefusesDamagedFilesWhole) {
     refused("[]", ErrorCode::Corrupt, "not a JSON object");
     refused("{\"configurations\": []}", ErrorCode::Corrupt, "'version'");
     refused("{\"version\": 0}", ErrorCode::Corrupt, "version 0");
-    // Version 2 is RUN-5's (before-launch tasks, compound and attach); the next one is refused.
-    refused("{\"version\": 3, \"configurations\": []}", ErrorCode::Unsupported, "version 3 is newer");
+    // Version 3 adds RUN-11 engine types; the next version remains unsupported.
+    refused("{\"version\": 4, \"configurations\": []}", ErrorCode::Unsupported, "version 4 is newer");
     refused("{\"version\": 1, \"configurations\": {}}", ErrorCode::Corrupt, "not an array");
     refused(head + good + "}, " + good + "}]}", ErrorCode::Corrupt, "#2: the id 'a' is used twice");
     refused(head + good + "}, 3]}", ErrorCode::Corrupt, "#2: not an object");
@@ -279,7 +279,7 @@ TEST(RunConfigurationRun5, CompoundAndAttachSpellingsRoundTrip) {
 }
 
 TEST(RunConfigurationRun5, ValidationOfTasksMembersAndProcesses) {
-    const auto refused = [](RunConfiguration configuration, std::string_view fragment) {
+    const auto refused = [](const RunConfiguration& configuration, std::string_view fragment) {
         auto checked = validateRunConfiguration(configuration);
         ASSERT_FALSE(checked.has_value()) << fragment;
         EXPECT_EQ(checked.error().code(), ErrorCode::InvalidArgument);
@@ -468,7 +468,7 @@ TEST(RunManagerRules, PrepareResolvesThePlanAndStartsNothing) {
     std::vector<std::jthread> workers;
     RunManagerOptions options;
     // The handler answers on another thread, as a build would.
-    options.beforeLaunch = [&](const RunConfiguration& configuration, std::stop_token, BeforeLaunchDone done) {
+    options.beforeLaunch = [&](const RunConfiguration& configuration, const std::stop_token&, BeforeLaunchDone done) {
         asked.push_back(configuration.target);
         workers.emplace_back(
             [done = std::move(done)] { done(LaunchPlan{.program = native("build/./game.exe"), .arguments = {"-x"}}); });
@@ -510,7 +510,7 @@ TEST(RunManagerRules, PrepareResolvesThePlanAndStartsNothing) {
 
 TEST(RunManagerRules, AFailedBeforeLaunchStepEndsTheRunWithItsError) {
     RunManagerOptions options;
-    options.beforeLaunch = [](const RunConfiguration&, std::stop_token, BeforeLaunchDone done) {
+    options.beforeLaunch = [](const RunConfiguration&, const std::stop_token&, const BeforeLaunchDone& done) {
         done(fail(ErrorCode::IoError, "the build failed: 2 errors")); // Inside the call is allowed too.
     };
     auto manager = RunManager::create(io::realProcessLauncher(), std::move(options));
@@ -526,7 +526,7 @@ TEST(RunManagerRules, AFailedBeforeLaunchStepEndsTheRunWithItsError) {
 
     // A plan that is not absolute is refused, not launched.
     RunManagerOptions relative;
-    relative.beforeLaunch = [](const RunConfiguration&, std::stop_token, BeforeLaunchDone done) {
+    relative.beforeLaunch = [](const RunConfiguration&, const std::stop_token&, const BeforeLaunchDone& done) {
         done(LaunchPlan{.program = "game.exe"});
     };
     auto second = RunManager::create(io::realProcessLauncher(), std::move(relative));
@@ -545,8 +545,9 @@ TEST(RunManagerRules, StopCancelsTheBeforeLaunchStep) {
     RunManagerOptions options;
     options.beforeLaunch = [&](const RunConfiguration&, std::stop_token stop, BeforeLaunchDone done) {
         // A build that only ends when it is cancelled.
-        cancel = std::make_unique<StopCallback>(
-            stop, std::function<void()>([done] { done(fail(ErrorCode::Cancelled, "build cancelled")); }));
+        cancel = std::make_unique<StopCallback>(std::move(stop), std::function<void()>([done = std::move(done)] {
+                                                    done(fail(ErrorCode::Cancelled, "build cancelled"));
+                                                }));
         called.set_value();
     };
     auto manager = RunManager::create(io::realProcessLauncher(), std::move(options));

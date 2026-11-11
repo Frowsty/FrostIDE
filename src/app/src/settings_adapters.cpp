@@ -106,7 +106,7 @@ Result<input::KeymapPreferences> StoreKeymapSettings::load() const {
                 valid = false; // A hand-edited entry that does not parse is skipped whole.
                 break;
             }
-            override.sequences.push_back(std::move(*sequence));
+            override.sequences.push_back(*sequence);
         }
         if (valid) {
             preferences.overrides.push_back(std::move(override));

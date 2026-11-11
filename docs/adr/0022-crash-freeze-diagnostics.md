@@ -71,12 +71,23 @@ start only through `io::IProcessLauncher`.
    (event start, awake, end of a `ScopedUiIdle`) for more than 50 ms; nested loops, modal size/move/menu loops
    and `ScopedUiIdle` count as idle. The UI thread counts stalls exactly (B21: one clock read and one atomic
    store per hook). A "frost-watchdog" thread polls every 10 ms while busy, parks after 1 s idle, samples the UI
-   thread from 25 ms (Windows: suspend, copy the stack, resume, unwind the copy with RtlVirtualUnwind, after
+   thread from 25 ms (Windows: suspend, copy the stack, resume, unwind the copy with bounded RtlVirtualUnwind2, after
    Chromium base/profiler, BSD-3-Clause; Linux: a real-time signal and an async-signal-safe unwind) and writes
    `<cache>/crashes/freezes/freeze-<UTC>-<pid>-<seq>.json` (schema `frost-freeze-report/1`, modules identified
    by PDB70 GUID/age or GNU build-id, frames as module index plus RVA; no document text). Interim report at 2 s,
    at most 20 per session, 10 s apart; late wakes mark a stretch unreliable; nothing is reported under a
    debugger. Linux binaries link with `--build-id=sha1`.
+   The 2026-11-11 R5 verification follow-up retains a temporary reference to each Windows image while
+   reading PE/unwind metadata, acquired only after the target resumes. Static image ownership and stack
+   bounds are checked; dynamic metadata without a retained owner is unsupported. The Windows 11 bounded
+   unwind entry point is resolved before suspension; absence is an explicit Unsupported result. A DLL
+   unloading between capture and deeper-frame lookup permits at most three fresh capture attempts, only
+   for that transient image loss, yielding between attempts after all image references are released.
+   Earlier attempts are discarded; exhaustion is not a captured stack.
+   `StackSample` has an allocation-free outcome distinguishing Empty, Captured, Busy and ResumeFailed.
+   An already-suspended target is left under its original owner's control. Busy/resume-failure results
+   construct no heap-backed error while the target may hold the heap lock. Only Captured results with
+   actual frames enter watchdog reports or the unchanged capture-rate stress gate.
 9. **Self-tests.** `--selftest=crash` starts the handler synchronously (10 s bound), prints
    `selftest: crash-reporter ok pid=... handler=... database=...`, then writes to 0xF00D in
    `frost::diag::selfTestCrash` (marker `FROST-SELFTEST-CRASH-SITE`); the handler writes the dump. `--selftest=freeze`

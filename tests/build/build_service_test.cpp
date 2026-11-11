@@ -34,9 +34,15 @@ using test::MemTree;
 constexpr auto kWait = 30s;
 
 #ifdef _WIN32
-const std::string kMsBuild = "C:\\VS\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe";
+const std::string& msBuildPath() {
+    static const std::string value("C:\\VS\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe");
+    return value;
+}
 #else
-const std::string kMsBuild = "/opt/vs/MSBuild/Current/Bin/amd64/MSBuild.exe";
+const std::string& msBuildPath() {
+    static const std::string value("/opt/vs/MSBuild/Current/Bin/amd64/MSBuild.exe");
+    return value;
+}
 #endif
 
 std::string vcxproj(std::string_view items) {
@@ -175,7 +181,7 @@ protected:
 
     [[nodiscard]] BuildServiceOptions options() {
         return {.stateFilePath = MemTree::path("data/active-configurations.txt"),
-                .msbuildPath = kMsBuild,
+                .msbuildPath = msBuildPath(),
                 .vsInstanceId = {},
                 .maxCpuCount = 2,
                 .startBuild = [this](const MsBuildRequest& request,
@@ -390,7 +396,7 @@ TEST_F(ServiceTest, SolutionAndProjectBuildsAskMsBuildForTheRightTarget) {
     const std::vector<MsBuildRequest> seen = requests();
     ASSERT_EQ(seen.size(), 3U);
     EXPECT_EQ(seen[0].solutionPath, MemTree::path("Game/Game.sln"));
-    EXPECT_EQ(seen[0].msbuildPath, kMsBuild);
+    EXPECT_EQ(seen[0].msbuildPath, msBuildPath());
     EXPECT_TRUE(seen[0].projectName.empty());
     EXPECT_EQ(seen[0].action, BuildAction::Rebuild);
     EXPECT_EQ(seen[0].configuration, "Debug");
@@ -459,7 +465,7 @@ TEST_F(ServiceTest, CompileCompilesTheFilesEvaluatedIdentityWithItsProject) {
     {
         LockGuard lock(queryMutex);
         ASSERT_EQ(queries.size(), 1U);
-        EXPECT_EQ(queries[0].msbuildPath, kMsBuild);
+        EXPECT_EQ(queries[0].msbuildPath, msBuildPath());
         EXPECT_EQ(queries[0].projectPath, MemTree::path("Game/App/App.vcxproj"));
         EXPECT_EQ(queries[0].solutionPath, MemTree::path("Game/Game.sln"));
         EXPECT_EQ(queries[0].configuration, "Debug");
@@ -619,7 +625,7 @@ TEST_F(ServiceTest, SaveAllRunsAndFinishesBeforeTheBuildStarts) {
 TEST_F(ServiceTest, AFailedSaveAllAbortsTheBuild) {
     trustAll();
     createService();
-    service->setSaveAllHook([](SaveAllCompletion done) { done(fail(ErrorCode::IoError, "disk full")); });
+    service->setSaveAllHook([](const SaveAllCompletion& done) { done(fail(ErrorCode::IoError, "disk full")); });
     ASSERT_TRUE(service->build(BuildAction::Build).has_value());
     const BuildOutcome outcome = finishedOutcome();
     ASSERT_TRUE(outcome.error.has_value());

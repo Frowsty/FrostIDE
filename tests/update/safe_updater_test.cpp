@@ -37,7 +37,7 @@ protected:
         std::filesystem::remove_all(m_root);
         std::filesystem::create_directories(m_root);
 
-        const auto helperBytes = m_fs.readFile(FROST_UPDATE_TEST_HELPER_PATH);
+        auto helperBytes = m_fs.readFile(FROST_UPDATE_TEST_HELPER_PATH);
         ASSERT_TRUE(helperBytes.has_value()) << "Could not read helper binary at " << FROST_UPDATE_TEST_HELPER_PATH
                                              << ": " << helperBytes.error().message();
         m_baseHelperImage = std::move(*helperBytes);

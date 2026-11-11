@@ -143,8 +143,9 @@ inline DWORD recoverAliasRecord(std::wstring_view target, const SaveFileIdentity
     // identity is checked before deletion and absent is safe before publication.
     const auto targetSlash = target.find_last_of(L"\\/");
     const auto tempSlash = record.temp.find_last_of(L"\\/");
-    if (targetSlash == std::wstring_view::npos || tempSlash == std::wstring::npos ||
-        _wcsnicmp(target.data(), record.temp.c_str(), targetSlash + 1) != 0 || targetSlash != tempSlash ||
+    if (targetSlash == std::wstring_view::npos || tempSlash == std::wstring::npos || targetSlash != tempSlash ||
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): comparison consumes the bounded parent length.
+        _wcsnicmp(target.data(), record.temp.c_str(), targetSlash + 1) != 0 ||
         !validAliasTempName(std::wstring_view(record.temp).substr(tempSlash + 1)))
         return ERROR_INVALID_DATA;
     if (current == record.header.original) {

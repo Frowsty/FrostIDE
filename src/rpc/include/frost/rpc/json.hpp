@@ -42,19 +42,26 @@ public:
 
     // Null.
     Json() noexcept = default;
+    // NOLINTNEXTLINE(google-explicit-constructor): Scalar conversion is the Json set()/array() value contract.
     Json(std::nullptr_t) noexcept {}
+    // NOLINTNEXTLINE(google-explicit-constructor): Scalar conversion is the Json set()/array() value contract.
     Json(bool value) noexcept : m_kind(Kind::Bool), m_bool(value) {}
     // Any integer type; unsigned values above INT64_MAX stay unsigned (asUnsigned()).
     template<std::integral I>
         requires(!std::same_as<I, bool>)
+    // NOLINTNEXTLINE(google-explicit-constructor): Scalar conversion is the Json set()/array() value contract.
     Json(I value) noexcept : m_kind(Kind::Integer), m_integer(static_cast<std::int64_t>(value)) {
         if constexpr (std::is_unsigned_v<I>) {
             m_aboveInt64 = static_cast<std::uint64_t>(value) > static_cast<std::uint64_t>(INT64_MAX);
         }
     }
+    // NOLINTNEXTLINE(google-explicit-constructor): Scalar conversion is the Json set()/array() value contract.
     Json(double value) noexcept : m_kind(Kind::Double), m_double(value) {}
+    // NOLINTNEXTLINE(google-explicit-constructor): Scalar conversion is the Json set()/array() value contract.
     Json(std::string value) : m_kind(Kind::String), m_string(std::move(value)) {}
+    // NOLINTNEXTLINE(google-explicit-constructor): Scalar conversion is the Json set()/array() value contract.
     Json(std::string_view value) : m_kind(Kind::String), m_string(value) {}
+    // NOLINTNEXTLINE(google-explicit-constructor): Scalar conversion is the Json set()/array() value contract.
     Json(const char* value) : m_kind(Kind::String), m_string(value) {}
 
     // An empty array, or one holding `items`.

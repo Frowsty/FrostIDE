@@ -22,7 +22,7 @@ Result<HostEvaluation>
 evaluateWithMsBuildCli(io::IProcessLauncher& launcher, std::string_view msbuildPath,
                        const ProjectEvaluationRequest& request,
                        const std::vector<std::pair<std::string, std::optional<std::string>>>& environment,
-                       IClock::Duration timeout, std::stop_token stop);
+                       IClock::Duration timeout, const std::stop_token& stop);
 } // namespace detail
 
 namespace {
@@ -55,7 +55,7 @@ bool sameItems(const EvaluatedProjectItems& a, const EvaluatedProjectItems& b) {
 SolutionEvaluation::SolutionEvaluation(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                        std::shared_ptr<const SolutionModel> model, SolutionEvaluationOptions options)
     : m_launcher(launcher), m_fs(fs), m_model(std::move(model)), m_options(std::move(options)) {
-    m_worker = std::jthread([this](std::stop_token stop) { run(stop); });
+    m_worker = std::jthread([this](std::stop_token stop) { run(std::move(stop)); });
 }
 
 SolutionEvaluation::~SolutionEvaluation() { stopAndJoin(); }
@@ -89,7 +89,7 @@ std::optional<io::ProcessId> SolutionEvaluation::hostPid() const {
     return m_hostPid;
 }
 
-void SolutionEvaluation::publish(std::function<void(SolutionEvaluationStatus&)> change) {
+void SolutionEvaluation::publish(const std::function<void(SolutionEvaluationStatus&)>& change) {
     LockGuard lock(m_mutex);
     change(m_status);
 }

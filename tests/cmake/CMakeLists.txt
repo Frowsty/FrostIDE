@@ -62,6 +62,10 @@ add_test(NAME FrostRuntimeDlls.CopiesOncePerDirectory
 set_tests_properties(FrostRuntimeDlls.CopiesOncePerDirectory PROPERTIES LABELS unit TIMEOUT 180 PROCESSORS 4)
 
 if(NOT FROST_SANITIZE)
+    find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME io_static_init_checker
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_static_init_coff.py)
+    set_tests_properties(io_static_init_checker PROPERTIES LABELS unit TIMEOUT 120)
     # The LLVM tools beside the compiler (the pinned LLVM; never a PATH search).
     get_filename_component(_frost_llvm_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
     find_program(FROST_LLVM_OBJDUMP llvm-objdump PATHS "${_frost_llvm_bin}" NO_DEFAULT_PATH REQUIRED)
@@ -79,6 +83,7 @@ if(NOT FROST_SANITIZE)
             -DARCHIVE=$<TARGET_FILE:frost_io>
             -DFORMAT=${_frost_object_format}
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/check_static_init.cmake)
     set_tests_properties(io_no_static_init PROPERTIES LABELS unit TIMEOUT 120)
 endif()

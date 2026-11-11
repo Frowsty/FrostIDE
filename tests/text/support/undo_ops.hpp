@@ -99,7 +99,7 @@ struct UndoStepInfo {
 class UndoDriver {
 public:
     // Loads `initial` (well formed, within the buffer limit) and creates the tracked anchors.
-    UndoDriver(UndoDriverOptions options, std::string label, std::string initial);
+    UndoDriver(UndoDriverOptions options, std::string label, const std::string& initial);
     UndoDriver(const UndoDriver&) = delete ("the Document refers to the driver's clock");
     UndoDriver& operator=(const UndoDriver&) = delete ("the Document refers to the driver's clock");
 

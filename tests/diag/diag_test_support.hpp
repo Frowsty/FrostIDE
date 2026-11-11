@@ -63,7 +63,7 @@ inline ChildEnvironment crashEnvironment(ChildEnvironment extra = {}) {
  * waits at most `timeout`. `stdinBytes` is written to the child's stdin, which is then closed.
  */
 inline ChildRun runChild(const std::string& executable, std::vector<std::string> arguments,
-                         ChildEnvironment environment = {}, std::string stdinBytes = {},
+                         ChildEnvironment environment = {}, const std::string& stdinBytes = {},
                          std::chrono::milliseconds timeout = std::chrono::seconds(60), bool passDesktop = true) {
     io::ProcessSpec spec;
     spec.executable = executable;
@@ -79,7 +79,7 @@ inline ChildRun runChild(const std::string& executable, std::vector<std::string>
     }
     spec.desktop = desktop.name();
     if (passDesktop) {
-        spec.arguments.push_back("--desktop");
+        spec.arguments.emplace_back("--desktop");
         spec.arguments.push_back(desktop.name());
     }
 #else

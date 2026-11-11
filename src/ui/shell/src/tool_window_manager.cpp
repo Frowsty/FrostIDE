@@ -147,7 +147,7 @@ protected:
 
 class RiderSplitter final : public QSplitter {
 public:
-    RiderSplitter(Qt::Orientation orientation, QWidget* parent = nullptr) : QSplitter(orientation, parent) {
+    explicit RiderSplitter(Qt::Orientation orientation, QWidget* parent = nullptr) : QSplitter(orientation, parent) {
         setHandleWidth(1);
         setChildrenCollapsible(false);
     }
@@ -246,7 +246,7 @@ private:
 
 class ToolWindowSidebar final : public QWidget {
 public:
-    ToolWindowSidebar(bool borderOnRight, QWidget* parent = nullptr)
+    explicit ToolWindowSidebar(bool borderOnRight, QWidget* parent = nullptr)
         : QWidget(parent), m_borderOnRight(borderOnRight) {}
 
 protected:
@@ -818,9 +818,7 @@ void ToolWindowManager::activate(std::string_view id) {
     if (window == nullptr) {
         return;
     }
-    if (!window->visible) {
-        show(id, true);
-    } else if (focusedWindow() != id) {
+    if (!window->visible || focusedWindow() != id) {
         show(id, true);
     } else {
         hide(id);

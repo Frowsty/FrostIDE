@@ -83,6 +83,7 @@ void writeUnit(std::uint32_t value, std::size_t width, bool bigEndian, std::stri
 }
 
 template<class Fn>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): Call the same mutable functor for each scalar.
 void forEachScalar(std::string_view utf8, Fn&& fn) {
     for (std::size_t i = 0; i < utf8.size();) {
         char32_t c = 0;

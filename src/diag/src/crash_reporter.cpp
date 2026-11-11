@@ -46,7 +46,7 @@ std::vector<std::string> crashpadHandlerArguments(const CrashReporterConfig& con
         arguments.push_back(std::format("--pipe-name={}", pipeName));
     } else {
         arguments.push_back("--database=" + config.databasePath);
-        arguments.push_back("--initial-client-fd=3");
+        arguments.emplace_back("--initial-client-fd=3");
         // SetHandlerSocket's client speaks the shared-socket protocol (it signals the request and
         // waits for SIGCONT instead of reading a reply), so the handler must expect it; crashpad's
         // own CrashpadClient::StartHandler pairs the two options the same way.
@@ -55,7 +55,7 @@ std::vector<std::string> crashpadHandlerArguments(const CrashReporterConfig& con
     arguments.emplace_back("--no-periodic-tasks");
     arguments.emplace_back("--annotation=prod=FrostIDE");
     arguments.push_back("--annotation=ver=" + config.version);
-    arguments.push_back(windowsRules ? "--annotation=plat=win" : "--annotation=plat=linux");
+    arguments.emplace_back(windowsRules ? "--annotation=plat=win" : "--annotation=plat=linux");
     return arguments;
 }
 
@@ -85,11 +85,17 @@ namespace {
 
 // The client-side annotations (crashpad::StringAnnotation, which must never be destroyed:
 // constinit and trivially destructible).
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): constinit enforces compile-time construction.
 constinit crashpad::StringAnnotation<4096> g_imagePath("frost.image_path");
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): constinit enforces compile-time construction.
 constinit crashpad::StringAnnotation<4096> g_restartedFrom("frost.restarted_from");
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): constinit enforces compile-time construction.
 constinit crashpad::StringAnnotation<32> g_selfTest("frost.selftest");
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): constinit enforces compile-time construction.
 constinit crashpad::StringAnnotation<64> g_reason("frost.fatal_reason");
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): constinit enforces compile-time construction.
 constinit crashpad::StringAnnotation<1024> g_message("frost.message");
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): constinit enforces compile-time construction.
 constinit crashpad::StringAnnotation<4096> g_frames("frost.frames");
 
 constinit std::atomic<bool> g_registered{false};
@@ -316,7 +322,7 @@ void InMemoryCrashReporter::annotate(AnnotationKey key, std::string_view value) 
     try {
         const std::scoped_lock lock(m_mutex);
         m_annotations.emplace_back(key, std::string(value));
-    } catch (...) {
+    } catch (...) { // NOLINT(bugprone-empty-catch): allocation failure drops this best-effort annotation.
     }
 }
 

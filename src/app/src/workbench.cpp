@@ -78,7 +78,6 @@
 namespace frost::app {
 
 namespace key = settings::key;
-namespace wa = workbench_actions;
 
 namespace {
 
@@ -93,7 +92,7 @@ QString typedText(const QKeyEvent& event) {
     if ((event.modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) != 0) {
         return {};
     }
-    const QString typed = event.text();
+    QString typed = event.text();
     if (typed.isEmpty() || !std::ranges::all_of(typed, [](QChar c) { return c.isPrint(); })) {
         return {};
     }
@@ -117,7 +116,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             return *m_options.layout;
         }
         Result<input::LayoutTable> active = input::readActiveLayout();
-        return active ? std::move(*active) : input::simulatedLayout(input::SimulatedLayoutId::EnUs);
+        return active ? *active : input::simulatedLayout(input::SimulatedLayoutId::EnUs);
     }();
     const auto interval = std::chrono::milliseconds(QGuiApplication::styleHints()->mouseDoubleClickInterval());
     Result<input::KeymapService> keymap =
@@ -228,12 +227,24 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
         log::warn(kLog, "language actions: {}", registered.error().describe());
     }
 
+    m_luaTrustWatch.setParent(this);
+    m_luaTrustWatch.setObjectName(QStringLiteral("projectTrustWatch"));
     m_luaTrustWatch.setInterval(1000);
     connect(&m_luaTrustWatch, &QTimer::timeout, this, [this] {
         if (m_shutDown || m_projectRoot.empty())
             return;
         const auto trust = m_services.trust.snapshot(m_projectRoot);
         const bool trusted = trust.trusted;
+        if (m_cppInspectionTrustRevision && (!trusted || trust.revision != *m_cppInspectionTrustRevision)) {
+            m_cppInspectionStop.request_stop();
+            ++m_cppInspectionGeneration;
+            m_cppInspectionTrustRevision.reset();
+            m_lastCppInspectionReport.reset();
+            if (m_problems)
+                m_problems->model()->setProblems(ui::DiagnosticSource::Inspection, {});
+        }
+        if (m_engine)
+            m_engine->trustChanged();
         if (trusted && m_projectTrustDialog) {
             const bool allTrusted = std::ranges::all_of(m_projectTrustDialog->roots(), [this](const QString& r) {
                 return m_services.trust.isTrusted(r.toUtf8().toStdString());
@@ -674,7 +685,7 @@ bool Workbench::eventFilter(QObject* watched, QEvent* event) {
     if (m_language->keyPress(key->key(), key->modifiers())) {
         return true;
     }
-    if (const QString typed = typedText(*key); !typed.isEmpty()) {
+    if (QString typed = typedText(*key); !typed.isEmpty()) {
         // editorTextChanged passes it on once the editor has inserted it (this key press only).
         m_typed = typed.toStdString();
         QTimer::singleShot(0, this, [this] { m_typed.clear(); });
@@ -779,6 +790,7 @@ void Workbench::shutdown() {
         return;
     }
     m_shutDown = true;
+    m_cppInspectionStop.request_stop();
     if (m_clone) {
         // Ends git's process tree and waits for the worker; its queued result is then ignored.
         m_clone->cancelled = true;
@@ -793,6 +805,11 @@ void Workbench::shutdown() {
     }
     if (m_projectEdit)
         m_projectEdit->stop();
+    ++m_projectEditAdmissionGeneration;
+    if (m_projectEditWaitingForReaders)
+        m_buildService->cancelProjectEdit();
+    m_projectEditWaitingForReaders = false;
+    m_projectEvaluationDeferred = false;
     if (m_language)
         m_language->setStructureVisible(false);
     invalidateManagedDebug();

@@ -58,7 +58,10 @@ std::string samples() {
 }
 
 // The cluster boundaries of samples(), from 0 to its size.
-const std::vector<std::uint64_t> kBoundaries{0, 1, 4, 12, 20, 38, 40, 48, 54, 61, 62};
+const std::vector<std::uint64_t>& boundaries() {
+    static const std::vector<std::uint64_t> value{0, 1, 4, 12, 20, 38, 40, 48, 54, 61, 62};
+    return value;
+}
 
 TEST(ReverseChunks, MatchForwardChunksInReverse) {
     std::string text;
@@ -93,20 +96,20 @@ TEST(ReverseChunks, MatchForwardChunksInReverse) {
 TEST(Grapheme, NextAndPreviousStepOverWholeClusters) {
     for (const std::uint32_t pieceBytes : {4096u, 4u, 5u}) {
         const Snapshot snap = snapshotOf(samples(), pieceBytes);
-        ASSERT_EQ(snap.size().value(), kBoundaries.back());
+        ASSERT_EQ(snap.size().value(), boundaries().back());
         std::vector<std::uint64_t> forward{0};
         for (ByteOffset at{0}; at < snap.size();) {
             at = nextGraphemeBoundary(snap, at);
             forward.push_back(at.value());
         }
-        EXPECT_EQ(forward, kBoundaries) << "pieces of " << pieceBytes;
+        EXPECT_EQ(forward, boundaries()) << "pieces of " << pieceBytes;
         std::vector<std::uint64_t> backward{snap.size().value()};
         for (ByteOffset at = snap.size(); at > ByteOffset{0};) {
             at = previousGraphemeBoundary(snap, at);
             backward.push_back(at.value());
         }
         std::reverse(backward.begin(), backward.end());
-        EXPECT_EQ(backward, kBoundaries) << "pieces of " << pieceBytes;
+        EXPECT_EQ(backward, boundaries()) << "pieces of " << pieceBytes;
     }
 }
 
@@ -116,7 +119,7 @@ TEST(Grapheme, BoundariesInsideClusters) {
         if (!snap.isCharBoundary(ByteOffset{at})) {
             continue;
         }
-        const bool expected = std::find(kBoundaries.begin(), kBoundaries.end(), at) != kBoundaries.end();
+        const bool expected = std::find(boundaries().begin(), boundaries().end(), at) != boundaries().end();
         EXPECT_EQ(isGraphemeBoundary(snap, ByteOffset{at}), expected) << "offset " << at;
     }
     // Inside a cluster, next goes to its end and previous to its start.

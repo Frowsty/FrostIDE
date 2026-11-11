@@ -170,6 +170,8 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
         LockGuard lock(mutex);
         governorRef = std::move(next);
         indexMetricsState.governorRssCapBytes = governorRef->clangdRssCapBytes();
+        indexMetricsState.peakRssSampleValid = false;
+        indexMetricsState.peakRssSampleError = "governor changed; OS peak not sampled yet";
     }
 
     void setState(ClangdState next) {
@@ -186,26 +188,41 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
 
     // Samples the running clangd process's RSS via the ResourceGovernor and updates peakRssBytes.
     void sampleServerRss() {
-        io::ProcessId pid = 0;
+        std::shared_ptr<io::IAsyncProcess> sampledProcess;
         std::shared_ptr<sched::ResourceGovernor> gov;
+        std::uint64_t sampledRound = 0;
         {
             LockGuard lock(mutex);
             gov = governorRef;
-            if (process) {
-                pid = process->pid();
-            }
+            sampledProcess = process;
+            sampledRound = round;
         }
+        const io::ProcessId pid = sampledProcess ? sampledProcess->pid() : 0;
         std::uint64_t sampledBytes = 0;
+        bool sampleValid = false;
+        std::string sampleError = "clangd process is not running";
         if (pid > 0) {
-            if (auto sampled =
-                    gov->sampleProcessRss(static_cast<std::int64_t>(pid), sched::HeavyLegKind::BackgroundIndex)) {
+            auto sampled = gov->sampleProcessRss(static_cast<std::int64_t>(pid), sched::HeavyLegKind::BackgroundIndex);
+            if (sampled) {
                 sampledBytes = *sampled;
+                sampleValid = true;
+                sampleError.clear();
+            } else {
+                sampleError = sampled.error().describe();
             }
             sampledBytes = std::max(sampledBytes, gov->peakProcessRssBytes(static_cast<std::int64_t>(pid)));
         }
         sampledBytes = std::max(sampledBytes, gov->peakLegRssBytes(sched::HeavyLegKind::BackgroundIndex));
         LockGuard lock(mutex);
+        if (round != sampledRound || process != sampledProcess || governorRef != gov) {
+            return; // A sample from an older process/governor cannot validate the current round.
+        }
         indexMetricsState.peakRssBytes = std::max(indexMetricsState.peakRssBytes, sampledBytes);
+        indexMetricsState.peakRssSampleValid = sampleValid;
+        indexMetricsState.peakRssSampleError = std::move(sampleError);
+        if (!sampledProcess) {
+            indexMetricsState.residentMemoryLimitBytes.reset();
+        }
         indexMetricsState.governorRssCapBytes = gov->clangdRssCapBytes();
     }
 
@@ -453,7 +470,7 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             log::write(level, kLogCategory, "{}", message);
         };
         out.onProtocolError = [](const Error& problem) { log::warn(kLogCategory, "protocol: {}", problem.describe()); };
-        out.onApplyEdit = [weak](const Json& params) {
+        out.onApplyEdit = [weak](const Json& params, std::function<void(bool)> done) {
             if (auto self = weak.lock()) {
                 ApplyEditHandler handler;
                 {
@@ -461,10 +478,11 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                     handler = self->applyEditHandler;
                 }
                 if (handler) {
-                    return handler(params);
+                    handler(params, std::move(done));
+                    return;
                 }
             }
-            return false;
+            done(false);
         };
         return out;
     }
@@ -494,7 +512,18 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
     [[nodiscard]] io::ProcessSpec processSpec(const std::optional<CompileCommandsLocation>& location) const {
         const std::shared_ptr<sched::ResourceGovernor> gov = governor();
         ClangdLaunchOptions governedLaunch = options.launch;
-        const unsigned governedJobs = gov->clangdJobs();
+        io::ProcessSpec spec;
+#ifdef _WIN32
+        // Leave 16 MiB between the OS ceiling and the strict RSS gate. Small/invalid caps
+        // request zero, which the launcher rejects instead of silently launching unbounded.
+        constexpr std::uint64_t headroom = 16ULL * 1024ULL * 1024ULL;
+        SYSTEM_INFO system{};
+        GetSystemInfo(&system);
+        const auto page = static_cast<std::uint64_t>(system.dwPageSize);
+        const auto cap = gov->clangdRssCapBytes();
+        spec.residentMemoryLimitBytes = cap > headroom && page > 0 ? ((cap - headroom) / page) * page : 0;
+#endif
+        const unsigned governedJobs = gov->clangdJobs(spec.residentMemoryLimitBytes.has_value());
         if (governedLaunch.jobs == 0) {
             governedLaunch.jobs = governedJobs;
         } else if (gov->isLegActive(sched::HeavyLegKind::Build) || gov->isLegActive(sched::HeavyLegKind::Inspection) ||
@@ -502,12 +531,11 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             governedLaunch.jobs = std::min(governedLaunch.jobs, governedJobs);
         }
 
-        io::ProcessSpec spec;
         spec.executable = options.clangdPath;
         spec.arguments = clangdArguments(governedLaunch, location);
 
         // Apply ResourceGovernor (FND-18, CPP-4) flags: --pch-storage=disk and
-        // --background-index-priority=background.
+        // the platform's background-index priority.
         if (gov->pchStorageDisk()) {
             for (std::string& arg : spec.arguments) {
                 if (arg == "--pch-storage=memory") {
@@ -544,6 +572,10 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
         unsigned consecutive = 0;
         while (!stop.stop_requested()) {
             self->setState(ClangdState::Starting);
+            {
+                LockGuard lock(self->mutex);
+                self->indexMetricsState.residentMemoryLimitBytes.reset();
+            }
             std::optional<CompileCommandsLocation> location;
             if (self->options.compileCommands) {
                 auto found = self->options.compileCommands->locate(stop);
@@ -558,7 +590,8 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             if (location) {
                 log::info(kLogCategory, "compile commands ({}): {}", toString(location->source), location->file);
             }
-            auto launched = self->launcher.launchAsync(self->processSpec(location), self->context);
+            const io::ProcessSpec launchSpec = self->processSpec(location);
+            auto launched = self->launcher.launchAsync(launchSpec, self->context);
             if (!launched) {
                 self->recordError(std::move(launched.error().withContext("starting clangd")), ClangdState::Failed);
                 co_return;
@@ -571,12 +604,15 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             {
                 LockGuard lock(self->mutex);
                 thisRound = ++self->round;
+                self->indexMetricsState.peakRssSampleValid = false;
+                self->indexMetricsState.peakRssSampleError = "new process round; OS peak not sampled yet";
             }
             auto client = std::make_shared<LspClient>(processByteStream(process), scheduler, self->initializeOptions(),
                                                       self->handlers(thisRound));
             {
                 LockGuard lock(self->mutex);
                 self->process = process;
+                self->indexMetricsState.residentMemoryLimitBytes = launchSpec.residentMemoryLimitBytes;
                 self->processLease = processLease;
                 self->client = client;
                 self->compileCommands = location;
@@ -642,6 +678,7 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                 ++self->restarts;
                 self->client.reset();
                 self->process.reset();
+                self->indexMetricsState.residentMemoryLimitBytes.reset();
                 self->processLease.reset();
                 self->capabilities.reset();
             }
@@ -718,6 +755,7 @@ ClangdService::~ClangdService() {
         LockGuard lock(m_shared->mutex);
         client = std::move(m_shared->client);
         process = std::move(m_shared->process);
+        m_shared->indexMetricsState.residentMemoryLimitBytes.reset();
         processLease = std::move(m_shared->processLease);
         m_shared->state = ClangdState::Stopped;
     }
@@ -772,6 +810,7 @@ sched::Task<void> ClangdService::finishStop() {
         LockGuard lock(self->mutex);
         client = std::move(self->client);
         process = std::move(self->process);
+        self->indexMetricsState.residentMemoryLimitBytes.reset();
         processLease = std::move(self->processLease);
         running = self->state == ClangdState::Running;
         self->state = ClangdState::Stopped;
@@ -1030,7 +1069,7 @@ void ClangdService::removeInactiveRegionsListener(std::uint64_t id) {
     m_shared->inactiveListeners.erase(id);
 }
 
-Result<void> ClangdService::notify(std::string method, Json params) {
+Result<void> ClangdService::notify(const std::string& method, Json params) {
     std::shared_ptr<LspClient> client;
     {
         LockGuard lock(m_shared->mutex);
@@ -1038,7 +1077,7 @@ Result<void> ClangdService::notify(std::string method, Json params) {
     }
     if (!client)
         return fail(ErrorCode::Busy, method + ": clangd is not running");
-    return client->notify(std::move(method), std::move(params));
+    return client->notify(method, std::move(params));
 }
 
 sched::Task<Result<Json>> ClangdService::request(std::string method, Json params, std::stop_token token) {

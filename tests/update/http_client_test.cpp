@@ -82,6 +82,7 @@ public:
         WSADATA wsa{};
         WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif
+        // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer): WSAStartup must run first.
         m_listenSocket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         EXPECT_NE(m_listenSocket, kInvalidSocket);
 

@@ -57,6 +57,7 @@ std::optional<int> takeNumber(std::string_view& text) noexcept {
         return std::nullopt;
     }
     int value = 0;
+    // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): from_chars reads its explicit begin/end range.
     const auto [end, error] = std::from_chars(text.data(), text.data() + length, value);
     if (error != std::errc{} || value <= 0) {
         return std::nullopt;

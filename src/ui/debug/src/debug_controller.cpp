@@ -301,7 +301,7 @@ Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
 }
 
 Result<void> DebugController::attachTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
-                                           rpc::Json attachArguments, std::function<bool()> ownerAdmission) {
+                                           rpc::Json attachArguments, const std::function<bool()>& ownerAdmission) {
     const bool admitted = ownerAdmission ? ownerAdmission() : (!m_hooks.mayStart || m_hooks.mayStart());
     if (m_pendingRun || m_alternatePending || !admitted)
         return fail(ErrorCode::Busy, "another run or debug launch is already pending");
@@ -338,7 +338,7 @@ DebugController::attachManagedTarget(const debug::DebugTarget& target, debug::Ad
                                      std::vector<std::string> allowedSources,
                                      std::map<std::string, std::vector<debug::BreakpointLine>> verifiedBreakpoints,
                                      std::function<void(std::string, std::function<void(bool)>)> validateBreakpoint,
-                                     std::function<bool()> ownerAdmission) {
+                                     const std::function<bool()>& ownerAdmission) {
     const bool admitted = ownerAdmission && ownerAdmission();
     if (m_pendingRun || m_alternatePending || !admitted)
         return fail(ErrorCode::Busy, "another run or debug launch is already pending");
@@ -412,7 +412,7 @@ Result<void> DebugController::startCoreClrTarget(
 }
 
 Result<void> DebugController::startSession(std::string title, std::string program, std::string adapterName,
-                                           SessionStarter starter, bool attach) {
+                                           const SessionStarter& starter, bool attach) {
     if (m_shutdown)
         return fail(ErrorCode::Cancelled, "the workbench is shutting down");
     if (m_session)
@@ -467,6 +467,10 @@ Result<void> DebugController::startSession(std::string title, std::string progra
         .onCapabilities =
             [relay, generation](const debug::dap::Capabilities& capabilities) {
                 relay->post(generation, [capabilities](DebugController* self) { self->onCapabilities(capabilities); });
+            },
+        .onProcess =
+            [relay, generation](std::int64_t) {
+                relay->post(generation, [](DebugController* self) { emit self->stateChanged(); });
             },
     };
     m_breakpoints.resetStatus(debug::BreakpointStatus::Pending);
@@ -646,6 +650,7 @@ void DebugController::onCapabilities(const debug::dap::Capabilities& capabilitie
                                                    }
                                                    return debug::msvcUnsupportedFilter(filter).value_or(std::string());
                                                });
+    emit stateChanged(); // Actual capability changes may enable/refuse explicit engine termination.
 }
 
 void DebugController::onEnded(std::uint64_t endingGeneration, const debug::DebugOutcome& outcome) {

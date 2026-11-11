@@ -111,7 +111,7 @@ Result<std::vector<IconSpec>> parseManifest(const QByteArray& bytes) {
     }
     std::vector<IconSpec> icons;
     std::set<std::string> ids;
-    for (const QJsonValue& value : root.value(QLatin1String("icons")).toArray()) {
+    for (const auto& value : root.value(QLatin1String("icons")).toArray()) {
         if (!value.isObject()) {
             return bad("every icon must be an object");
         }
@@ -135,7 +135,7 @@ Result<std::vector<IconSpec>> parseManifest(const QByteArray& bytes) {
         if (!object.value(QLatin1String("sizes")).isArray()) {
             return bad(where + "sizes must be an array");
         }
-        for (const QJsonValue& size : object.value(QLatin1String("sizes")).toArray()) {
+        for (const auto& size : object.value(QLatin1String("sizes")).toArray()) {
             const int px = size.toInt(-1);
             const bool known = std::ranges::find(frost::ui::kIconDesignSizes, px) != frost::ui::kIconDesignSizes.end();
             if (!size.isDouble() || !known || std::ranges::find(icon.sizes, px) != icon.sizes.end()) {
@@ -360,7 +360,7 @@ int bake(const Options& options) {
         for (const QString& input : inputs) {
             text += " " + depfilePath(input);
         }
-        text += "\n";
+        text += '\n';
         // Written on every run: Ninja consumes the depfile after each command.
         QSaveFile depfile(options.depfile);
         const QByteArray bytes = QByteArray::fromStdString(text);

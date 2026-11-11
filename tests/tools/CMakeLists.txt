@@ -7,7 +7,8 @@
 # tests/perf/budgets.json. They are Python unittest suites over
 # the fixtures in tests/tools/fixtures, registered with CTest (label "unit", and mod.tools from
 # tests/CMakeLists.txt) so they run in both verify legs. Standard library only; Python 3.11+
-# (tomllib). Each suite is one CTest test; git must be on PATH. test_verify_scripts runs PowerShell
+# (tomllib), apart from the byte-pinned local SARIF validator (ADR 0086). Each suite is one CTest
+# test; git must be on PATH. test_verify_scripts runs PowerShell
 # 5.1 on Windows and bash on Linux.
 
 # Prefer the SDK's Python on Windows (tools/bootstrap.ps1 creates it), so ctest uses the
@@ -38,8 +39,28 @@ set_tests_properties(unity_compiler_arguments PROPERTIES
     SKIP_RETURN_CODE 77
     ENVIRONMENT "FROST_MANAGED_TEST_DOTNET=${_frost_managed_test_dotnet};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
 
-set(_frost_tool_suites frost_lint licensecheck featurecheck corpus_fetch corpora asset_fetch budgets symbolize freeze_triage
-    verify_support frost_perf verify_scripts build_lldb managed_server package_notices hooks)
+# Portable fixture policy tests use explicit doubles and never launch Unity or another process.
+add_test(NAME unity_legacy_fixture_policy
+    COMMAND "${Python3_EXECUTABLE}" -B "${FROST_SOURCE_DIR}/tests/unity/test_legacy_unity_fixtures.py"
+            -v PreferenceGuardPolicy LegacyRunnerPolicy)
+set_tests_properties(unity_legacy_fixture_policy PROPERTIES
+    LABELS unit
+    TIMEOUT 120
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+if(WIN32)
+    # Actual DPAPI and contained Python child/descendant primitives use only private unit inputs.
+    add_test(NAME unity_legacy_fixture_primitives
+        COMMAND "${Python3_EXECUTABLE}" -B "${FROST_SOURCE_DIR}/tests/unity/test_legacy_unity_fixtures.py"
+                -v WindowsGuardPrimitives)
+    set_tests_properties(unity_legacy_fixture_primitives PROPERTIES
+        LABELS integration
+        RESOURCE_LOCK frost_desktop
+        TIMEOUT 120
+        ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+endif()
+
+set(_frost_tool_suites frost_lint licensecheck validate_sarif featurecheck corpus_fetch corpora asset_fetch budgets symbolize freeze_triage
+    verify_support frost_perf verify_scripts build_lldb managed_server managed_fixture package_notices hooks)
 if(WIN32)
     # Runs Windows PowerShell 5.1 (bootstrap.ps1 and env.ps1); nothing to test on Linux.
     list(APPEND _frost_tool_suites windows_scripts)

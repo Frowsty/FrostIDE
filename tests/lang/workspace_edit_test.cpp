@@ -154,7 +154,7 @@ TEST(WorkspaceEditApplier, EditsOpenDocumentsAndClosedFiles) {
     frost::io::MemFs fs(frost::systemClock());
     const std::string a = workPath("a.cpp");
     const std::string b = workPath("b.cpp");
-    ASSERT_TRUE(fs.createDirectories(std::string(frost::io::parentPath(a))).has_value());
+    ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(a)).has_value());
     ASSERT_TRUE(fs.writeFileAtomic(b, "int value = value;\n").has_value());
     FakeDocuments documents;
     documents.open(a, "int value();\nint x = value();\n", 3);
@@ -184,7 +184,7 @@ TEST(WorkspaceEditApplier, ConflictsRefuseTheWholeEdit) {
     const std::string a = workPath("a.cpp");
     const std::string b = workPath("b.cpp");
     const std::string missing = workPath("gone.cpp");
-    ASSERT_TRUE(fs.createDirectories(std::string(frost::io::parentPath(a))).has_value());
+    ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(a)).has_value());
     ASSERT_TRUE(fs.writeFileAtomic(b, "int value;\n").has_value());
     FakeDocuments documents;
     documents.open(a, "int value;\n", 4);

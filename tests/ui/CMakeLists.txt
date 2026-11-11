@@ -164,6 +164,7 @@ _frost_ui_test_wiring(ui_tests)
 frost_add_test(ui_shell_tests QT
     SOURCES
         shell/editor_tabs_test.cpp
+        shell/engine_controls_test.cpp
         shell/notifications_test.cpp
         shell/shell_window_test.cpp
     DEPS frost::ui_shell frost::ui frost::input frost::io)
@@ -260,6 +261,9 @@ frost_add_test(ui_toolwindows_tests QT
         toolwindows/build_controller_test.cpp
         toolwindows/build_output_test.cpp
         toolwindows/problems_test.cpp
+        toolwindows/engine_console_test.cpp
+        toolwindows/engine_problems_test.cpp
+        toolwindows/engine_view_test.cpp
         toolwindows/solution_explorer_test.cpp
         toolwindows/trust_dialog_test.cpp
     DEPS frost::ui_toolwindows frost::ui frost::build frost::project frost::input frost::io)
@@ -270,7 +274,8 @@ target_compile_definitions(ui_toolwindows_tests PRIVATE
 
 if(TARGET frost::ui_run)
     frost_add_test(ui_run_tests QT
-        SOURCES run/run_console_test.cpp run/run_tool_window_test.cpp
+        SOURCES run/run_console_test.cpp run/run_tool_window_test.cpp run/test_results_tree_test.cpp
+                run/frostengine_run_test.cpp
         DEPS frost::ui_run frost::run frost::build frost::input frost::io)
     _frost_ui_test_wiring(ui_run_tests)
 endif()

@@ -111,7 +111,7 @@ void ShellStatusBar::showEditor(const EditorStatus* status) {
 }
 
 QString ShellStatusBar::caretText(const EditorStatus& status) {
-    const QString position = QStringLiteral("%1:%2").arg(status.line).arg(status.column);
+    QString position = QStringLiteral("%1:%2").arg(status.line).arg(status.column);
     if (status.selectedCharacters <= 0) {
         return position;
     }

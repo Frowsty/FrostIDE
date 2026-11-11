@@ -564,6 +564,14 @@ void EditorView::reloadFromDocument() {
     for (EditorInlayHint& hint : m_inlayHints) {
         hint.offset = std::min(hint.offset, size);
     }
+    std::vector<text::Editor::Inlay> inlays;
+    inlays.reserve(m_inlayHints.size());
+    for (const EditorInlayHint& hint : m_inlayHints) {
+        if (!hint.label.empty()) {
+            inlays.push_back(text::Editor::Inlay{hint.offset, hint.label, text::Bias::Right});
+        }
+    }
+    m_editor->setInlays(std::move(inlays));
     const std::uint32_t maxLine = snapshot.lineCount() > 0 ? snapshot.lineCount() - 1 : 0;
     for (EditorCodeVisionLens& lens : m_codeVisionLenses) {
         lens.symbolOffset = std::min(lens.symbolOffset, size);

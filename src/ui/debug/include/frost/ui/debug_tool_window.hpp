@@ -154,7 +154,7 @@ public:
 
     [[nodiscard]] QLineEdit* expression() const noexcept { return m_expression; }
     [[nodiscard]] QTreeView* resultView() const noexcept { return m_resultView; }
-    [[nodiscard]] VariablesModel* result() const noexcept { return m_result; }
+    [[nodiscard]] VariablesModel* resultModel() const noexcept { return m_result; }
 
 private:
     QLineEdit* m_expression = nullptr;

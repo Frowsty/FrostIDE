@@ -196,7 +196,7 @@ C:\Users\a\E__dev\x.props
 
 TEST(MsBuildEvaluation, CommandLine) {
     const std::string root = kWindows ? "C:\\w" : "/w";
-    const auto in = [&](std::string name) { return frost::io::joinPath(root, name).value(); };
+    const auto in = [&](const std::string& name) { return frost::io::joinPath(root, name).value(); };
     frost::lang::MsBuildEvaluationRequest request{.msbuildPath = in("MSBuild.exe"),
                                                   .projectPath = in("App.vcxproj"),
                                                   .solutionPath = in("My;App.sln"),
@@ -270,7 +270,7 @@ TEST(MsBuildProvider, StreamsFirstSolutionProjectWhileNextEvaluationIsHeld) {
     options.configuration = "Debug|x64";
     options.streamedProjects = streamed;
     frost::lang::MsBuildCompileCommandsProvider provider(launcher, fs, shared, "C:\\cache", options);
-    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(stop); });
+    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(std::move(stop)); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < deadline &&
            (streamed->snapshot().size() < 2 || launcher.launches().size() < 2))
@@ -412,7 +412,7 @@ TEST(MsBuildProvider, FailedProjectKeepsStaticTreeWhileNextIsPending) {
     options.configuration = "Debug|x64";
     options.streamedProjects = streamed;
     frost::lang::MsBuildCompileCommandsProvider provider(launcher, fs, shared, "C:\\cache", options);
-    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(stop); });
+    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(std::move(stop)); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < deadline && launcher.launches().size() < 2)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -446,7 +446,7 @@ TEST(MsBuildProvider, MalformedEvaluationKeepsTheStaticProjectTree) {
     options.configuration = "Debug|x64";
     options.streamedProjects = streamed;
     frost::lang::MsBuildCompileCommandsProvider provider(launcher, fs, shared, "C:\\cache", options);
-    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(stop); });
+    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(std::move(stop)); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < deadline && launcher.launches().size() < 2)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -506,7 +506,7 @@ TEST(MsBuildProvider, IndependentWorkerOffersFirstDatabaseWhileSecondIsHeld) {
     std::atomic<bool> ready{false};
     std::optional<frost::lang::CompileCommandsLocation> location;
     std::jthread consumer([&](std::stop_token stop) {
-        auto result = evaluation->locate(stop);
+        auto result = evaluation->locate(std::move(stop));
         if (result && *result)
             location = **result;
         ready.store(true);

@@ -14,7 +14,8 @@
  *
  * Results. applyResult takes an interim result (a progress line) or a final one; finishRun applies
  * the report's results, which replace the interim ones, and clears Pending/Running from tests that
- * got none (a stopped run). A result for a test that is not listed adds its name under "(not in
+ * got none (a stopped run). markPending discards the previous result first, so no old verdict is
+ * restored when a rerun ends without one. A result for a test that is not listed adds its name under "(not in
  * the last test list)" (ctest's report names a test the last discovery did not see). setTests
  * drops every result.
  *
@@ -61,7 +62,8 @@ public:
     void setDoctestCases(std::vector<std::pair<std::string, std::vector<run::DoctestCase>>> listings);
     // The doctest cases listed for `test`, or null when none were.
     [[nodiscard]] const std::vector<run::DoctestCase>* doctestCases(const std::string& test) const;
-    // Marks `names` Pending: a run of them was started.
+    // Marks `names` Pending and forgets their previous verdicts; an interrupted or failed rerun
+    // without a new result must not leave a stale verdict visible.
     void markPending(const std::vector<std::string>& names);
     // ctest started `name`.
     void testStarted(const std::string& name);

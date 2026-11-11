@@ -15,6 +15,7 @@
 
 #include <chrono>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 
@@ -37,6 +38,7 @@ struct EngineCliRequest {
     std::string project{};                  // --project <dir|file.frostproj> when not empty (absolute).
     std::string workingDirectory{};         // The child's current directory when not empty (absolute).
     std::chrono::milliseconds timeout = std::chrono::minutes(5);
+    std::stop_token stopToken{};
 };
 
 // The engine's refusal of a command, from its error object.
@@ -59,7 +61,8 @@ struct EngineCliOutcome {
  * child is contained (its process tree ends with it) and gets no stdin. Blocks the calling thread:
  * call it from a worker, never the GUI thread.
  * Result: the engine's result or its own error object (EngineCliOutcome). Errors: Timeout when the
- * run outlives request.timeout (the child is ended); Corrupt when stdout is not the one JSON
+ * run outlives request.timeout (the child is ended); Cancelled when request.stopToken is stopped
+ * (an already started contained child is terminated); Corrupt when stdout is not the one JSON
  * object of the contract (the message carries the exit code and the start of stderr); the
  * launcher's errors (NotFound, PermissionDenied, ...) as they are.
  */

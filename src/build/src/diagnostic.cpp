@@ -190,6 +190,7 @@ std::optional<Head> parseHead(std::string_view head) noexcept {
 std::optional<int> parseNumber(std::string_view text) noexcept {
     int value = 0;
     const char* end = text.data() + text.size();
+    // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): from_chars reads its explicit begin/end range.
     const auto [ptr, error] = std::from_chars(text.data(), end, value);
     if (error != std::errc{} || ptr != end || text.empty()) {
         return std::nullopt;

@@ -356,7 +356,7 @@ TEST(ProjectOpenProcess, Utf16RequestIsRejectedByLegacyOwner) {
     auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(*root));
     ASSERT_TRUE(owner);
     std::atomic<int> requests{0};
-    ASSERT_TRUE((*owner)->start([&](std::string request) -> frost::Result<std::string> {
+    ASSERT_TRUE((*owner)->start([&](const std::string& request) -> frost::Result<std::string> {
         ++requests;
         auto payload = frost::lang::parseJson(request);
         if (!payload || payload->integerAt("line").value_or(-1) < 0)
@@ -588,7 +588,7 @@ TEST(ProjectOpenProcess, UnityEditorDrivesProductionControls) {
     QElapsedTimer stopClock;
     stopClock.start();
     for (auto* combo : panel->findChildren<QComboBox*>())
-        std::cout << "Stop selected editor: " << combo->currentText().toStdString() << std::endl;
+        std::cout << "Stop selected editor: " << combo->currentText().toStdString() << '\n' << std::flush;
     ASSERT_TRUE(click(QStringLiteral("Stop")));
     const auto panelStatus = [&] {
         QStringList values;
@@ -597,14 +597,15 @@ TEST(ProjectOpenProcess, UnityEditorDrivesProductionControls) {
         return values.join(QStringLiteral(" | "));
     };
     QString lastStatus = panelStatus();
-    std::cout << "Stop panel status at " << stopClock.elapsed() << " ms: " << lastStatus.toStdString() << std::endl;
+    std::cout << "Stop panel status at " << stopClock.elapsed() << " ms: " << lastStatus.toStdString() << '\n'
+              << std::flush;
     const bool stoppedStatus = waitFor(
         [&] {
             const QString current = panelStatus();
             if (current != lastStatus) {
                 lastStatus = current;
-                std::cout << "Stop panel status at " << stopClock.elapsed() << " ms: " << current.toStdString()
-                          << std::endl;
+                std::cout << "Stop panel status at " << stopClock.elapsed() << " ms: " << current.toStdString() << '\n'
+                          << std::flush;
             }
             return status(QStringLiteral("Unity stopped"));
         },
@@ -612,7 +613,7 @@ TEST(ProjectOpenProcess, UnityEditorDrivesProductionControls) {
     if (!stoppedStatus) {
         auto diagnostic = observe("stoptimeout");
         if (diagnostic)
-            std::cout << "Stop timeout observer: " << diagnostic->dump() << std::endl;
+            std::cout << "Stop timeout observer: " << diagnostic->dump() << '\n' << std::flush;
     }
     ASSERT_TRUE(stoppedStatus);
     auto stopped = observe("stopped");

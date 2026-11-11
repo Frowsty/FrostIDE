@@ -55,7 +55,7 @@ public:
             } else if (isElement(child, "Project")) {
                 project(child, "");
             } else if (isElement(child, "File")) {
-                m_file.warnings.push_back("a <File> outside any <Folder> was ignored");
+                m_file.warnings.emplace_back("a <File> outside any <Folder> was ignored");
             }
         }
         if (buildTypes.empty()) {
@@ -108,7 +108,7 @@ private:
         }
         const std::string id = ensureFolder(fullName);
         if (id.empty()) {
-            m_file.warnings.push_back("a <Folder> without a Name was ignored");
+            m_file.warnings.emplace_back("a <Folder> without a Name was ignored");
             return;
         }
         for (pugi::xml_node child = node.first_child(); child; child = child.next_sibling()) {
@@ -132,7 +132,7 @@ private:
     void project(const pugi::xml_node& node, std::string_view parentId) {
         const std::string_view path = detail::trim(attribute(node, "Path"));
         if (path.empty()) {
-            m_file.warnings.push_back("a <Project> without a Path was ignored");
+            m_file.warnings.emplace_back("a <Project> without a Path was ignored");
             return;
         }
         SolutionProjectEntry entry;

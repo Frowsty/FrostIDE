@@ -38,7 +38,10 @@ using frost::io::ScriptedProcessLauncher;
 using frost::io::SpawnLogLauncher;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
-const std::string kRoot = kWindows ? "C:\\work" : "/work";
+const std::string& rootPath() {
+    static const std::string value(kWindows ? "C:\\work" : "/work");
+    return value;
+}
 
 /*
  * A minimal JSON reader for the records (objects of strings, integers, booleans, null and arrays),
@@ -221,7 +224,7 @@ private:
     std::size_t m_at = 0;
 };
 
-std::string at(std::string_view relative) { return frost::io::joinPath(kRoot, relative).value(); }
+std::string at(std::string_view relative) { return frost::io::joinPath(rootPath(), relative).value(); }
 
 // The session file's records, parsed.
 std::vector<Json> records(frost::io::MemFs& fs, const SpawnLogLauncher& log) {
@@ -436,8 +439,8 @@ TEST(SpawnLog, TakesTheStartTimeBeforeAndTheDigestAfterTheLaunch) {
         frost::IClock::SteadyTime{},
         frost::IClock::SystemTime{std::chrono::sys_days{std::chrono::year{2026} / 11 / 8}.time_since_epoch()}};
     frost::io::MemFs fs{clock};
-    const std::string tool = kRoot + (kWindows ? "\\bin\\tool.exe" : "/bin/tool");
-    ASSERT_TRUE(fs.createDirectories(kRoot + (kWindows ? "\\bin" : "/bin")).has_value());
+    const std::string tool = rootPath() + (kWindows ? "\\bin\\tool.exe" : "/bin/tool");
+    ASSERT_TRUE(fs.createDirectories(rootPath() + (kWindows ? "\\bin" : "/bin")).has_value());
     ASSERT_TRUE(fs.writeFileAtomic(tool, "the old image").has_value());
     ScriptedProcessLauncher scripted;
     class SlowLauncher final : public frost::io::IProcessLauncher {
@@ -460,7 +463,7 @@ TEST(SpawnLog, TakesTheStartTimeBeforeAndTheDigestAfterTheLaunch) {
         frost::io::MemFs& m_fs;
         std::string m_tool;
     } slow(scripted, clock, fs, tool);
-    auto log = SpawnLogLauncher::open(slow, fs, clock, kRoot + (kWindows ? "\\logs" : "/logs"));
+    auto log = SpawnLogLauncher::open(slow, fs, clock, rootPath() + (kWindows ? "\\logs" : "/logs"));
     ASSERT_TRUE(log.has_value()) << log.error().describe();
     ProcessSpec spec;
     spec.executable = tool;

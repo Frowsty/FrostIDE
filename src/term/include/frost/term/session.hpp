@@ -109,7 +109,7 @@ private:
     void waiterLoop();
     // Moves the screen's outgoing bytes to the writer queue. Called with m_mutex held.
     void flushOutputLocked() FROST_REQUIRES(m_mutex);
-    void enqueue(std::string bytes);
+    void enqueue(const std::string& bytes);
 
     std::unique_ptr<IPty> m_pty;
     io::ProcessId m_pid = 0;

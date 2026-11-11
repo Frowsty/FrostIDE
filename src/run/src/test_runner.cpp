@@ -91,7 +91,7 @@ struct TestRunner::State {
      * Runs `spec` to its end: stdout is collected (and passed to `onStdout` as it arrives), stderr
      * collected; `stop` ends the tree. Errors: the launcher's.
      */
-    Result<ProcessOutcome> runProcess(io::ProcessSpec spec, std::stop_token token,
+    Result<ProcessOutcome> runProcess(io::ProcessSpec spec, const std::stop_token& token,
                                       const std::function<void(std::string_view)>& onStdout) {
         struct Collector {
             std::mutex mutex;
@@ -188,69 +188,6 @@ Result<void> checkSetup(const CTestSetup& setup) {
 
 } // namespace
 
-Result<CTestSetup> ctestSetupFor(const project::CMakeProject& model, const project::CMakeProfile& profile,
-                                 const project::CMakeTestPreset* preset) {
-    if (!model.cmakeVersion.empty() && !build::versionAtLeast(model.cmakeVersion, 3, 21))
-        return fail(ErrorCode::Unsupported,
-                    std::format("ctest {} cannot write a JUnit report; the test runner needs CMake 3.21 or later",
-                                model.cmakeVersion));
-    CTestSetup setup;
-    if (auto ctest = model.cacheValue("CMAKE_CTEST_COMMAND"); ctest && !ctest->empty()) {
-        setup.ctest = *ctest;
-    } else if (auto cmake = model.cacheValue("CMAKE_COMMAND"); cmake && !cmake->empty()) {
-        const std::string_view cmakePath = *cmake;
-        const auto slash = cmakePath.find_last_of("/\\");
-        const std::string_view name = slash == std::string_view::npos ? cmakePath : cmakePath.substr(slash + 1);
-        const bool exe = name.size() > 4 && (name.ends_with(".exe") || name.ends_with(".EXE"));
-        setup.ctest = std::string(cmakePath.substr(0, slash == std::string_view::npos ? 0 : slash + 1)) + "ctest" +
-                      (exe ? ".exe" : "");
-    } else {
-        return fail(ErrorCode::NotFound, "the CMake cache names no ctest (CMAKE_CTEST_COMMAND)");
-    }
-    auto ctest = io::normalizePath(setup.ctest);
-    if (!ctest || !io::isAbsolutePath(*ctest))
-        return fail(ErrorCode::InvalidArgument, std::format("ctest '{}' is not an absolute path", setup.ctest));
-    setup.ctest = std::move(*ctest);
-    setup.ctestVersion = model.cmakeVersion;
-    setup.buildDirectory = model.buildDirectory;
-    if (!io::isAbsolutePath(setup.buildDirectory))
-        return fail(ErrorCode::InvalidArgument, "the CMake model has no absolute build directory");
-    if (model.multiConfig)
-        setup.configuration = model.configuration.empty() ? profile.effectiveConfiguration() : model.configuration;
-    setup.environment = profile.buildEnvironment ? *profile.buildEnvironment : profile.environment;
-    if (preset) {
-        setup.testPreset = preset->name;
-        if (!preset->configuration.empty())
-            setup.configuration = preset->configuration;
-        setup.includeName = preset->includeName;
-        setup.excludeName = preset->excludeName;
-        setup.includeLabel = preset->includeLabel;
-        setup.excludeLabel = preset->excludeLabel;
-        setup.jobs = preset->jobs.value_or(0);
-        setup.timeout = preset->timeout;
-        setup.stopOnFailure = preset->stopOnFailure;
-        setup.environment = preset->environment;
-    }
-    return setup;
-}
-
-const project::CMakeTestPreset* testPresetFor(const project::CMakePresets& presets,
-                                              const project::CMakeProfile& profile) {
-    if (profile.configurePreset.empty())
-        return nullptr;
-    const std::vector<const project::CMakeTestPreset*> candidates = presets.testPresetsFor(profile.configurePreset);
-    const project::CMakeTestPreset* first = nullptr;
-    for (const project::CMakeTestPreset* preset : candidates) {
-        if (!preset || preset->hidden || !preset->enabled)
-            continue;
-        if (preset->name == profile.buildPreset || preset->name == profile.configurePreset)
-            return preset;
-        if (!first)
-            first = preset;
-    }
-    return first;
-}
-
 std::vector<std::string> ctestDiscoveryArguments(const CTestSetup& setup) {
     std::vector<std::string> arguments = {"--test-dir", setup.buildDirectory};
     appendSelection(setup, arguments);
@@ -313,6 +250,7 @@ Result<void> startJob(TestRunner::State& state, std::shared_ptr<TestRunner::Stat
     if (previous.joinable())
         previous.join(); // It finished (busy was false); only its thread's end is left.
     lock.lock();
+    // The worker owns token; synchronous jobs and their joined subworkers borrow it for this call.
     state.worker = std::jthread([keep = std::move(keep), job = std::move(job), token, number]() mutable {
         auto finish = [&keep] {
             std::lock_guard guard(keep->mutex);
@@ -331,7 +269,7 @@ Result<void> TestRunner::discover(const CTestSetup& setup,
     if (auto valid = checkSetup(setup); !valid)
         return valid;
     return startJob(*m_state, m_state,
-                    [setup, done = std::move(done)](State& state, std::stop_token token, std::uint64_t,
+                    [setup, done = std::move(done)](State& state, const std::stop_token& token, std::uint64_t,
                                                     const std::function<void()>& finish) {
                         Result<std::vector<DiscoveredTest>> result = fail(ErrorCode::Cancelled, "stopped");
                         auto outcome = state.runProcess(ctestSpec(setup, ctestDiscoveryArguments(setup)), token, {});
@@ -360,7 +298,7 @@ Result<void> TestRunner::run(const CTestSetup& setup, std::vector<DiscoveredTest
     return startJob(
         *m_state, m_state,
         [setup, tests = std::move(tests), names = std::move(names), handlers = std::move(handlers)](
-            State& state, std::stop_token token, std::uint64_t job, const std::function<void()>& finish) {
+            State& state, const std::stop_token& token, std::uint64_t job, const std::function<void()>& finish) {
             TestRunReport report;
             const std::string reportPath = state.scratchPath(setup, job, "junit.xml");
             const std::string listPath = state.scratchPath(setup, job, "tests.txt");
@@ -531,26 +469,27 @@ Result<void> TestRunner::listGTestCases(const CTestSetup& setup, const Discovere
         spec.workingDirectory = test.workingDirectory;
     spec.environment = setup.environment;
     spec.environment.emplace_back("GTEST_OUTPUT", std::nullopt); // The listing goes to stdout only.
-    return startJob(*m_state, m_state,
-                    [spec = std::move(spec), done = std::move(done)](State& state, std::stop_token token, std::uint64_t,
-                                                                     const std::function<void()>& finish) {
-                        Result<std::vector<GTestCase>> result = fail(ErrorCode::Cancelled, "stopped");
-                        const std::string program = spec.executable;
-                        auto outcome = state.runProcess(spec, token, {});
-                        if (!outcome) {
-                            result = std::unexpected(std::move(outcome.error()));
-                        } else if (outcome->exit.stopped || token.stop_requested()) {
-                            result = fail(ErrorCode::Cancelled, "listing the Google Test cases was stopped");
-                        } else if (outcome->exit.exitCode != 0 || outcome->exit.waitFailed) {
-                            result = fail(ErrorCode::IoError,
-                                          toolFailure(program, outcome->exit.exitCode, outcome->out, outcome->err));
-                        } else {
-                            result = parseGTestList(outcome->out);
-                        }
-                        finish();
-                        if (done)
-                            done(std::move(result));
-                    });
+    return startJob(
+        *m_state, m_state,
+        [spec = std::move(spec), done = std::move(done)](State& state, const std::stop_token& token, std::uint64_t,
+                                                         const std::function<void()>& finish) {
+            Result<std::vector<GTestCase>> result = fail(ErrorCode::Cancelled, "stopped");
+            const std::string program = spec.executable;
+            auto outcome = state.runProcess(spec, token, {});
+            if (!outcome) {
+                result = std::unexpected(std::move(outcome.error()));
+            } else if (outcome->exit.stopped || token.stop_requested()) {
+                result = fail(ErrorCode::Cancelled, "listing the Google Test cases was stopped");
+            } else if (outcome->exit.exitCode != 0 || outcome->exit.waitFailed) {
+                result =
+                    fail(ErrorCode::IoError, toolFailure(program, outcome->exit.exitCode, outcome->out, outcome->err));
+            } else {
+                result = parseGTestList(outcome->out);
+            }
+            finish();
+            if (done)
+                done(std::move(result));
+        });
 }
 
 namespace {
@@ -651,20 +590,27 @@ Result<void> TestRunner::listDoctestCases(const CTestSetup& setup, std::vector<D
         });
 }
 
-Result<void> TestRunner::runDoctest(const CTestSetup& setup, std::vector<DoctestRunRequest> requests,
-                                    TestRunHandlers handlers) {
+namespace {
+
+template<typename Request, typename MakeSpec, typename ParseAndBuild>
+Result<void> runDirectRequests(TestRunner::State& state, std::shared_ptr<TestRunner::State> keep,
+                               const CTestSetup& setup, std::vector<Request> requests, TestRunHandlers handlers,
+                               std::string_view reportTag, std::string_view reportKind, MakeSpec makeSpec,
+                               ParseAndBuild parseAndBuild) {
     if (auto valid = checkSetup(setup); !valid)
         return valid;
-    for (const DoctestRunRequest& request : requests)
+    for (const Request& request : requests)
         if (auto valid = checkProgram(request.test); !valid)
             return valid;
     return startJob(
-        *m_state, m_state,
-        [setup, requests = std::move(requests), handlers = std::move(handlers)](
-            State& state, std::stop_token token, std::uint64_t job, const std::function<void()>& finish) {
+        state, std::move(keep),
+        [setup, requests = std::move(requests), handlers = std::move(handlers), tag = std::string(reportTag),
+         kind = std::string(reportKind), makeSpec = std::move(makeSpec),
+         parseAndBuild = std::move(parseAndBuild)](TestRunner::State& st, const std::stop_token& token,
+                                                   std::uint64_t job, const std::function<void()>& finish) {
             TestRunReport report;
             std::vector<std::string> errors;
-            if (auto made = state.makeScratchDirectory(setup); !made) {
+            if (auto made = st.makeScratchDirectory(setup); !made) {
                 report.error = made.error();
                 finish();
                 if (handlers.onFinished)
@@ -672,47 +618,43 @@ Result<void> TestRunner::runDoctest(const CTestSetup& setup, std::vector<Doctest
                 return;
             }
             for (std::size_t i = 0; i < requests.size(); ++i) {
-                const DoctestRunRequest& request = requests[i];
+                const Request& request = requests[i];
                 if (token.stop_requested()) {
                     report.stopped = true;
                     break;
                 }
-                const std::string reportPath = state.scratchPath(setup, job, std::format("doctest-run-{}.xml", i));
+                const std::string reportPath = st.scratchPath(setup, job, std::format("{}-{}", i, tag));
                 if (reportPath.empty()) {
-                    errors.emplace_back("the build directory cannot hold doctest's report");
+                    errors.emplace_back(std::format("the build directory cannot hold {}'s report", kind));
                     break;
                 }
-                io::ProcessSpec spec = doctestSpec(
-                    setup, request.test, doctestRunArguments(request.test.command, request.cases, reportPath));
+                io::ProcessSpec spec = makeSpec(setup, request, reportPath);
                 if (i == 0 || report.commandLine.empty())
                     report.commandLine = programDisplay(spec);
                 if (handlers.onTestStarted)
                     handlers.onTestStarted(request.test.name);
-                auto outcome = state.runProcess(std::move(spec), token, handlers.onOutput);
+                auto outcome = st.runProcess(std::move(spec), token, handlers.onOutput);
                 if (!outcome) {
                     errors.push_back(std::format("{}: {}", request.test.name, outcome.error().describe()));
                     continue;
                 }
-                DoctestProcessEnd processEnd;
-                processEnd.exitCode = outcome->exit.exitCode;
-                processEnd.stopped = outcome->exit.stopped || token.stop_requested();
-                processEnd.duration = std::chrono::duration_cast<std::chrono::microseconds>(outcome->exit.duration);
-                processEnd.output = outcome->err.empty() ? outcome->out : outcome->out + outcome->err;
-                auto text = state.fs.readFile(reportPath);
-                static_cast<void>(state.fs.remove(reportPath));
-                const Result<DoctestReport> parsed =
-                    text ? parseDoctestXmlReport(*text) : Result<DoctestReport>(fail(ErrorCode::NotFound, "no report"));
-                if (auto result = doctestRunResult(request.test.name, parsed, processEnd)) {
+                const bool stopped = outcome->exit.stopped || token.stop_requested();
+                auto text = st.fs.readFile(reportPath);
+                static_cast<void>(st.fs.remove(reportPath));
+                std::string parseError;
+                if (auto result = parseAndBuild(request, request.test.name,
+                                                text ? std::optional<std::string_view>(*text) : std::nullopt, *outcome,
+                                                stopped, parseError)) {
                     if (handlers.onTestFinished)
                         handlers.onTestFinished(*result);
                     report.results.push_back(std::move(*result));
-                } else if (!processEnd.stopped) {
+                } else if (!stopped) {
                     errors.push_back(std::format(
                         "{}: {}", request.test.name,
                         toolFailure(request.test.command.front(), outcome->exit.exitCode, outcome->out, outcome->err) +
-                            (text ? "\n(" + parsed.error().message() + ")" : "\n(it wrote no doctest report)")));
+                            (text ? "\n(" + parseError + ")" : std::format("\n(it wrote no {} report)", kind))));
                 }
-                if (processEnd.stopped) {
+                if (stopped) {
                     report.stopped = true;
                     break;
                 }
@@ -726,6 +668,151 @@ Result<void> TestRunner::runDoctest(const CTestSetup& setup, std::vector<Doctest
             finish();
             if (handlers.onFinished)
                 handlers.onFinished(report);
+        });
+}
+
+} // namespace
+
+Result<std::vector<std::string>> doctestCaseSelectionCommand(const std::vector<std::string>& command,
+                                                             const std::vector<std::string>& cases) {
+    if (command.empty())
+        return fail(ErrorCode::InvalidArgument, "the doctest command has no program");
+    if (cases.empty())
+        return command;
+    for (const std::string& name : cases) {
+        if (name.empty())
+            return fail(ErrorCode::InvalidArgument, "doctest cannot select an empty case name");
+        // doctest 2.5.3 wildcmp always treats these as wildcards, even after a backslash.
+        if (name.find_first_of("*?") != std::string::npos)
+            return fail(ErrorCode::Unsupported,
+                        std::format("doctest cannot select the case '{}' literally: '*' and '?' are wildcards", name));
+    }
+    bool prefixed = false;
+    std::vector<std::string> selected{command.front()};
+    for (std::size_t i = 1; i < command.size(); ++i) {
+        std::string_view key = command[i];
+        const auto first = key.find_first_not_of('-');
+        if (first != 0 && first != std::string_view::npos) {
+            key.remove_prefix(first);
+            if (key.starts_with("dt-")) {
+                prefixed = true;
+                key.remove_prefix(3);
+            }
+            key = key.substr(0, key.find('='));
+            // doctest parses the short and long aliases independently. Retaining either can
+            // add cases or override case sensitivity even when a new long option is appended.
+            if (key == "test-case" || key == "tc" || key == "case-sensitive" || key == "cs")
+                continue;
+        }
+        selected.push_back(command[i]);
+    }
+    const std::string_view prefix = prefixed ? "dt-" : "";
+    selected.push_back(std::format("--{}case-sensitive=true", prefix));
+    selected.push_back(std::format("--{}test-case={}", prefix, doctestFilterValue(cases)));
+    return selected;
+}
+
+Result<void> TestRunner::runDoctest(const CTestSetup& setup, std::vector<DoctestRunRequest> requests,
+                                    TestRunHandlers handlers) {
+    for (DoctestRunRequest& request : requests) {
+        if (request.cases.empty())
+            continue;
+        auto selected = doctestCaseSelectionCommand(request.test.command, request.cases);
+        if (!selected)
+            return std::unexpected(std::move(selected.error()));
+        request.test.command = std::move(*selected);
+    }
+    return runDirectRequests(
+        *m_state, m_state, setup, std::move(requests), std::move(handlers), "doctest-run.xml", "doctest",
+        [](const CTestSetup& s, const DoctestRunRequest& req, std::string_view path) {
+            return doctestSpec(s, req.test, doctestRunArguments(req.test.command, {}, path));
+        },
+        [](const DoctestRunRequest& request, const std::string& name, std::optional<std::string_view> text,
+           const ProcessOutcome& outcome, bool stopped, std::string& parseError) {
+            DoctestProcessEnd end{outcome.exit.exitCode, stopped,
+                                  std::chrono::duration_cast<std::chrono::microseconds>(outcome.exit.duration),
+                                  outcome.err.empty() ? outcome.out : outcome.out + outcome.err};
+            const Result<DoctestReport> parsed =
+                text ? parseDoctestXmlReport(*text) : Result<DoctestReport>(fail(ErrorCode::NotFound, "no report"));
+            if (!parsed)
+                parseError = parsed.error().message();
+            if (parsed && !stopped) {
+                const std::size_t executed = parsed->passedCases + parsed->failedCases;
+                // An interrupted report has no final counts. Completed case records and the
+                // unfinished case still carry real execution evidence that must remain visible.
+                const bool hasCaseEvidence = !parsed->cases.empty() || parsed->unfinished.has_value();
+                if ((parsed->complete && executed == 0) || (!parsed->complete && !hasCaseEvidence)) {
+                    parseError = "doctest reported no executed cases";
+                    return std::optional<TestResult>{};
+                }
+                if (!request.cases.empty()) {
+                    std::vector<std::string> expected = request.cases;
+                    std::vector<std::string> actual;
+                    for (const TestResult& item : parsed->cases)
+                        actual.push_back(item.name);
+                    if (!parsed->complete && parsed->unfinished)
+                        actual.push_back(parsed->unfinished->name);
+                    std::ranges::sort(expected);
+                    std::ranges::sort(actual);
+                    // Interrupted runs may execute only a subset. Retain that real evidence as
+                    // a failed run, while rejecting any case outside the requested selection.
+                    const bool matches =
+                        parsed->complete ? actual == expected : std::ranges::includes(expected, actual);
+                    if (!matches) {
+                        parseError = std::format("doctest reported [{}], expected {} [{}]", gtestFilterValue(actual),
+                                                 parsed->complete ? "exactly" : "only selected cases from",
+                                                 gtestFilterValue(expected));
+                        return std::optional<TestResult>{};
+                    }
+                }
+            }
+            return doctestRunResult(name, parsed, end);
+        });
+}
+
+Result<void> TestRunner::runGTest(const CTestSetup& setup, std::vector<GTestRunRequest> requests,
+                                  TestRunHandlers handlers) {
+    return runDirectRequests(
+        *m_state, m_state, setup, std::move(requests), std::move(handlers), "gtest-run.json", "Google Test",
+        [](const CTestSetup& s, const GTestRunRequest& req, std::string_view path) {
+            const std::span<const std::string> allArgs(req.test.command);
+            const auto baseArgs = allArgs.size() > 1 ? allArgs.subspan(1) : std::span<const std::string>{};
+            io::ProcessSpec spec = doctestSpec(s, req.test, gtestRunArguments(baseArgs, req.cases, path));
+            spec.environment.emplace_back("GTEST_OUTPUT", std::nullopt);
+            return spec;
+        },
+        [](const GTestRunRequest& request, const std::string& name, std::optional<std::string_view> text,
+           const ProcessOutcome& outcome, bool stopped, std::string& parseError) {
+            GTestProcessEnd end{outcome.exit.exitCode, stopped,
+                                std::chrono::duration_cast<std::chrono::microseconds>(outcome.exit.duration),
+                                outcome.err.empty() ? outcome.out : outcome.out + outcome.err};
+            const Result<std::vector<TestResult>> parsed =
+                text ? parseGTestJsonReport(*text)
+                     : Result<std::vector<TestResult>>(fail(ErrorCode::NotFound, "no report"));
+            if (!parsed)
+                parseError = parsed.error().message();
+            if (parsed && !stopped) {
+                std::vector<std::string> actual;
+                actual.reserve(parsed->size());
+                for (const TestResult& testCase : *parsed)
+                    actual.push_back(testCase.name);
+                if (actual.empty()) {
+                    parseError = "Google Test reported no executed cases";
+                    return std::optional<TestResult>{};
+                }
+                if (!request.cases.empty()) {
+                    auto expected = request.cases;
+                    std::ranges::sort(expected);
+                    auto sortedActual = actual;
+                    std::ranges::sort(sortedActual);
+                    if (expected != sortedActual) {
+                        parseError = std::format("Google Test reported [{}], expected exactly [{}]",
+                                                 gtestFilterValue(actual), gtestFilterValue(request.cases));
+                        return std::optional<TestResult>{};
+                    }
+                }
+            }
+            return gtestRunResult(name, parsed, end);
         });
 }
 

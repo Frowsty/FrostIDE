@@ -38,7 +38,10 @@ protected:
         tree.write("src/wide_nobom.txt", utf16le("a needle without a byte order mark\n"));
         tree.write("src/legacy.txt", "caf\xE9 needle\r\nna\xEFve\r\n");
         tree.write("bin/skipped.cpp", "needle in an excluded directory\n");
-        tree.write("data/blob.bin", std::string("\x00\x00\x00\x00needle\x00\x00\x00\x00\x01\x02", 18));
+        // Keep all 18 fixture bytes explicit, including both final zero padding bytes.
+        constexpr char binary[] = "\x00\x00\x00\x00needle\x00\x00\x00\x00\x01\x02\0";
+        static_assert(sizeof(binary) == 18);
+        tree.write("data/blob.bin", std::string_view(binary, sizeof(binary)));
     }
 
     Tree tree{"search-encodings"};
@@ -219,7 +222,7 @@ protected:
         model.emplace(std::move(*loaded));
     }
 
-    [[nodiscard]] FindRequest request(SearchScope scope) const {
+    [[nodiscard]] FindRequest request(const SearchScope& scope) const {
         FindRequest out;
         out.query.pattern = "tinyAnswer";
         auto target = resolveScope(scope, &*model, {});

@@ -8,7 +8,7 @@
 
 namespace frost::vcs::detail {
 
-SerialQueue::SerialQueue() : m_thread([this](std::stop_token stop) { run(stop); }) {}
+SerialQueue::SerialQueue() : m_thread([this](const std::stop_token& stop) { run(stop); }) {}
 
 SerialQueue::~SerialQueue() {
     {
@@ -75,7 +75,7 @@ bool SerialQueue::waitIdle(std::chrono::milliseconds timeout) const {
     });
 }
 
-void SerialQueue::run(std::stop_token stop) {
+void SerialQueue::run(const std::stop_token& stop) {
     while (true) {
         Job job;
         std::stop_token token;

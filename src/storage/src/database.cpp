@@ -115,7 +115,7 @@ Result<void> checkTarget(const std::string& path, OpenMode mode) {
         return std::unexpected(std::move(status.error()).withContext("open database"));
     }
     const std::string_view parent = io::parentPath(path);
-    auto parentStatus = fs.status(std::string(parent));
+    auto parentStatus = fs.status(parent);
     if (!parentStatus) {
         if (parentStatus.error().code() == ErrorCode::NotFound) {
             return fail(ErrorCode::NotFound, std::format("open database '{}': parent directory missing", path));
@@ -673,6 +673,7 @@ Result<CheckpointResult> Database::checkpoint(CheckpointMode mode) {
 namespace {
 
 // Runs an integrity pragma; "ok" means healthy, anything else is Corrupt with the first rows.
+// NOLINTNEXTLINE(performance-unnecessary-value-param): own stable cancellation identity across SQLite callbacks.
 Result<void> runCheck(Database& db, std::string_view pragma, std::stop_token stop) {
     if (stop.stop_requested()) {
         return fail(ErrorCode::Cancelled, "integrity check cancelled");
@@ -722,6 +723,7 @@ Result<void> Database::quickCheck(std::stop_token stop) {
     return runCheck(*this, "PRAGMA quick_check(10)", std::move(stop));
 }
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param): own stable cancellation identity across SQLite callbacks.
 Result<void> Database::integrityCheck(std::stop_token stop) {
     FROST_PRE(m_connection != nullptr);
     if (auto checked = runCheck(*this, "PRAGMA integrity_check(10)", stop); !checked) {

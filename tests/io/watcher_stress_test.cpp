@@ -36,9 +36,6 @@
 namespace {
 
 using namespace std::chrono_literals;
-using frost::io::FileChange;
-using frost::io::FileChangeBatch;
-using frost::io::FileChangeKind;
 using frost::io::IDirectoryWatch;
 using frost::io::WatchMode;
 using frost::io::WatchOptions;

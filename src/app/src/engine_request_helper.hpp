@@ -7,6 +7,7 @@
 namespace frost::app {
 // Executes one bounded-by-parent automation request in the isolated helper process.
 [[nodiscard]] Result<lang::Json> executeEngineHelper(const lang::Json& input);
-// Injectable transport for deterministic discovery tests.
+// Explicit legacy/injected transport for deterministic discovery tests. Production uses the
+// no-transport-argument HMAC session entry point; this seam still requires the schema policy.
 [[nodiscard]] Result<lang::Json> executeEngineHelper(const lang::Json& input, const lang::EngineConnect& connect);
 } // namespace frost::app

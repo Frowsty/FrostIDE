@@ -137,7 +137,7 @@ TEST(ListVsInstances, RunsVswhereAndChecksEachMsBuild) {
     frost::ManualClock clock;
     frost::io::MemFs fs(clock);
     ASSERT_TRUE(fs.createDirectories("C:\\Installer").has_value());
-    ASSERT_TRUE(fs.writeFileAtomic(std::string(kVswhere), "").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(kVswhere, "").has_value());
     const std::string msbuild =
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\Build Töols\\MSBuild\\Current\\Bin\\amd64";
     ASSERT_TRUE(fs.createDirectories(msbuild).has_value());
@@ -171,7 +171,7 @@ TEST(ListVsInstances, VswhereFailureIsAnError) {
     frost::ManualClock clock;
     frost::io::MemFs fs(clock);
     ASSERT_TRUE(fs.createDirectories("C:\\Installer").has_value());
-    ASSERT_TRUE(fs.writeFileAtomic(std::string(kVswhere), "").has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(kVswhere, "").has_value());
     frost::io::ScriptedProcessLauncher launcher;
     launcher.expect({.exitCode = 87, .stderrBytes = "Error 0x57: bad argument\r\n"});
     auto listed = frost::build::listVsInstances(launcher, fs, {.vswherePath = std::string(kVswhere)});

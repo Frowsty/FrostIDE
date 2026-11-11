@@ -308,7 +308,7 @@ void appendCallableStub(std::string& out, std::string_view declarationName, std:
 
 [[nodiscard]] std::string componentClassName(std::string_view componentName,
                                              const std::set<std::string, std::less<>>& reservedTopLevel) {
-    const std::string ident = sanitizeIdentifier(componentName, "Component");
+    std::string ident = sanitizeIdentifier(componentName, "Component");
     if (reservedTopLevel.contains(ident)) {
         return ident + "Component";
     }

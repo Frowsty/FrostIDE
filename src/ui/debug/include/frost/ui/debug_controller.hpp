@@ -141,7 +141,8 @@ public:
     // Attach to an existing host using a preconnected adapter. Trust is checked again here; Stop
     // disconnects the adapter without terminating that host.
     [[nodiscard]] Result<void> attachTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
-                                            rpc::Json attachArguments, std::function<bool()> ownerAdmission = {});
+                                            rpc::Json attachArguments,
+                                            const std::function<bool()>& ownerAdmission = {});
 
     // Attaches a verified managed module with a source allowlist and per-change validator.
     // The caller must establish process identity, trust, and source freshness before calling.
@@ -151,7 +152,7 @@ public:
                         std::vector<std::string> allowedSources,
                         std::map<std::string, std::vector<debug::BreakpointLine>> verifiedBreakpoints,
                         std::function<void(std::string, std::function<void(bool)>)> validateBreakpoint,
-                        std::function<bool()> ownerAdmission);
+                        const std::function<bool()>& ownerAdmission);
 
     // Whether a session is live (Starting, Running or Stopped).
     [[nodiscard]] bool debugging() const noexcept {
@@ -184,6 +185,13 @@ public:
     [[nodiscard]] const debug::FrameList& frames() const noexcept { return m_frames; }
     [[nodiscard]] const std::optional<debug::DebugFrame>& selectedFrame() const noexcept { return m_frame; }
     [[nodiscard]] debug::DebugSession* session() const noexcept { return m_session.get(); }
+    // Native lldb-DAP only; managed and embedded Lua sessions never bind an engine PID overlay.
+    [[nodiscard]] bool nativeSession() const noexcept { return m_session != nullptr && m_nativeSession; }
+    // GUI thread, O(1). Explicit engine Stop must match both the observed OS PID and current debug
+    // generation. Refusal never starts the ordinary stop() kill timeout. done is GUI-thread scoped
+    // to that session; actual state changes continue to come only from DAP events.
+    [[nodiscard]] Result<void> terminateTarget(std::int64_t expectedPid, std::uint64_t expectedGeneration,
+                                               debug::DebugSession::TerminateDone done = {});
     [[nodiscard]] debug::BreakpointManager& breakpoints() noexcept { return m_breakpoints; }
     // The session's title ("App [Debug|x64]").
     [[nodiscard]] const QString& title() const noexcept { return m_title; }
@@ -297,7 +305,7 @@ private:
     [[nodiscard]] Result<debug::AdapterFactory> adapterFactory();
     using SessionStarter = std::function<Result<std::unique_ptr<debug::DebugSession>>(debug::DebugSessionCallbacks)>;
     [[nodiscard]] Result<void> startSession(std::string title, std::string program, std::string adapterName,
-                                            SessionStarter starter, bool attach = false);
+                                            const SessionStarter& starter, bool attach = false);
     bool report(Result<void> result, const QString& what);
     void endSession();
 

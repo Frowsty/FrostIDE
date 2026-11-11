@@ -270,7 +270,7 @@ TEST(NavigationModel, FindUsagesGroupsByFileWithLineText) {
     EXPECT_EQ(server.paramsOf("textDocument/references")[0].find("context")->boolAt("includeDeclaration"), true);
 
     frost::io::MemFs fs(frost::systemClock());
-    ASSERT_TRUE(fs.createDirectories(std::string(frost::io::parentPath(a))).has_value());
+    ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(a)).has_value());
     ASSERT_TRUE(fs.writeFileAtomic(b, "// b\n    int total = value();\n").has_value());
     // a.cpp is "open": its text comes from the snapshot, not the disk (where it does not exist).
     const auto openA = frost::text::TextBuffer::fromUtf8("int value();\nint main() {\n    value();\n}\n").value();
@@ -312,7 +312,7 @@ TEST(NavigationModel, DocumentHighlightsAreSortedWithKinds) {
 
 TEST(SymbolsModel, FileStructureTreeWithSpeedSearch) {
     FeatureServer server;
-    const auto symbol = [](std::string name, int kind, std::uint32_t line, Json children = Json::array()) {
+    const auto symbol = [](const std::string& name, int kind, std::uint32_t line, Json children = Json::array()) {
         return Json::object()
             .set("name", name)
             .set("kind", kind)
@@ -349,7 +349,7 @@ TEST(SymbolsModel, FileStructureTreeWithSpeedSearch) {
 TEST(SymbolsModel, GoToSymbolRanksMatches) {
     FeatureServer server;
     server.on("workspace/symbol", [](const Json&) {
-        const auto info = [](std::string name, std::string container) {
+        const auto info = [](const std::string& name, const std::string& container) {
             return Json::object()
                 .set("name", name)
                 .set("containerName", container)
@@ -409,7 +409,7 @@ TEST(RefactoringModel, QuickFixesSendDiagnosticsAndKeepEdits) {
     FeatureServer server;
     const std::string a = workPath("a.cpp");
     server.on("textDocument/codeAction", [&](const Json&) {
-        const auto fix = [&](std::string title, std::string kind, bool preferred) {
+        const auto fix = [&](const std::string& title, const std::string& kind, bool preferred) {
             return Json::object()
                 .set("title", title)
                 .set("kind", kind)

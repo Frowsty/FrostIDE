@@ -173,7 +173,7 @@ TEST(RunBeforeLaunch, StopDuringATaskEndsItsTreeAndStartsNothing) {
     auto id = manager->start(program("stopped", {"print", "[program]", ""}, {task({"sleep", "120000"})}),
                              std::move(handlers));
     ASSERT_TRUE(id.has_value()) << id.error().describe();
-    ASSERT_TRUE(collector.waitUntil([&](const auto&) { return taskRunning.load(); }, kWait).events.size() > 0);
+    ASSERT_TRUE(!collector.waitUntil([&](const auto&) { return taskRunning.load(); }, kWait).events.empty());
     ASSERT_TRUE(taskRunning.load());
     EXPECT_FALSE(childrenLeft().empty()) << "the sleeping task is not in the process table";
     manager->stop(*id);

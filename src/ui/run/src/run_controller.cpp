@@ -7,6 +7,7 @@
 #include "frost/ui/run_controller.hpp"
 
 #include "frost/core/mutex.hpp"
+#include "frost/io/path.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/run_tool_window.hpp"
 
@@ -15,6 +16,7 @@
 #include <QSignalBlocker>
 
 #include <algorithm>
+#include <atomic>
 #include <format>
 #include <string>
 #include <utility>
@@ -229,6 +231,8 @@ void RunController::applySelection(const run::RunConfiguration& configuration) {
         }
         break;
     case run::RunType::Native:
+    case run::RunType::FrostEditor:
+    case run::RunType::FrostPlayer:
     case run::RunType::Compound:
     case run::RunType::Attach: break;
     }
@@ -322,6 +326,10 @@ bool RunController::canRun() const {
     if (const run::RunConfiguration* selected = selectedConfiguration()) {
         switch (selected->type) {
         case run::RunType::Native: return m_runs != nullptr;
+        case run::RunType::FrostEditor:
+        case run::RunType::FrostPlayer:
+            return m_runs != nullptr && bool(m_hooks.prepareEngineConfiguration) &&
+                   bool(m_hooks.engineLaunchAdmissionFor) && bool(m_hooks.engineLaunchPlanFor);
         case run::RunType::Attach: return false; // Debug-only (RUN-5).
         case run::RunType::Compound:
         case run::RunType::CMakeTarget:
@@ -357,7 +365,9 @@ Result<build::RunId> RunController::runConfiguration(const std::string& id) {
     }
     const run::RunConfiguration configuration = *found;
     switch (configuration.type) {
-    case run::RunType::Native: return runNative(configuration);
+    case run::RunType::Native:
+    case run::RunType::FrostEditor:
+    case run::RunType::FrostPlayer: return runNative(configuration);
     case run::RunType::CMakeTarget:
         if (!m_hooks.alternateRun) {
             return fail(ErrorCode::Unsupported, "no CMake project is open");
@@ -495,6 +505,33 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
             return std::unexpected(std::move(allowed.error()));
         }
     }
+    run::RunConfiguration launchConfiguration = configuration;
+    const bool engine = run::isFrostEngineRunType(configuration.type);
+    if (engine) {
+        if (!m_hooks.prepareEngineConfiguration) {
+            return fail(ErrorCode::Unsupported, "FrostEngine session integration is unavailable");
+        }
+        if (auto valid = run::validateRunConfiguration(configuration); !valid) {
+            return std::unexpected(std::move(valid.error()));
+        }
+        auto prepared = m_hooks.prepareEngineConfiguration(configuration);
+        if (!prepared) {
+            return std::unexpected(std::move(prepared.error()));
+        }
+        launchConfiguration = std::move(*prepared);
+        if (launchConfiguration.id != configuration.id || launchConfiguration.type != configuration.type ||
+            launchConfiguration.program != configuration.program ||
+            launchConfiguration.engineProjectPath != configuration.engineProjectPath) {
+            Error error(ErrorCode::InvalidArgument, "engine preparation changed the run identity, program or project");
+            if (m_hooks.engineProcessFinished) {
+                run::RunResult failed;
+                failed.configurationId = configuration.id;
+                failed.error = error;
+                m_hooks.engineProcessFinished(failed);
+            }
+            return std::unexpected(std::move(error));
+        }
+    }
     const std::string id = configuration.id;
     RunConsole* console = nullptr;
     if (m_window) {
@@ -526,10 +563,61 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
     const QPointer<RunConsole> target(console);
     const std::shared_ptr<Relay> relay = m_relay;
     run::RunHandlers handlers;
-    handlers.onPhaseChanged = [relay, target](const run::RunStatus& status) {
-        relay->post([target, status](RunController* self) {
+    // Fixed per-run identity: never resolve a configuration id to a later rerun in queued output.
+    const auto engineRunId = std::make_shared<std::atomic<run::RunId>>(0);
+    const auto engineStarted = std::make_shared<std::atomic<bool>>(false);
+    if (engine) {
+        if (m_hooks.engineLaunchAdmissionFor) {
+            handlers.launchAdmission = m_hooks.engineLaunchAdmissionFor(launchConfiguration);
+        }
+        if (!handlers.launchAdmission) {
+            handlers.launchAdmission = []() -> Result<void> {
+                return fail(ErrorCode::PermissionDenied, "FrostEngine launch has no current trust/session admission");
+            };
+        }
+        std::function<Result<run::LaunchPlan>(run::LaunchPlan)> resolve;
+        if (m_hooks.engineLaunchPlanFor) {
+            resolve = m_hooks.engineLaunchPlanFor(launchConfiguration);
+        }
+        handlers.transformLaunchPlan = [resolve = std::move(resolve)](run::LaunchPlan plan) -> Result<run::LaunchPlan> {
+            if (!resolve) {
+                return fail(ErrorCode::PermissionDenied, "FrostEngine launch has no physical project resolver");
+            }
+            const run::LaunchPlan original = plan;
+            auto transformed = resolve(std::move(plan));
+            if (!transformed) {
+                return std::unexpected(std::move(transformed.error()));
+            }
+            if (original.arguments.size() < 2 || original.arguments[0] != "--project" ||
+                transformed->arguments.size() != original.arguments.size() ||
+                !io::normalizePath(transformed->arguments[1])) {
+                return fail(ErrorCode::InvalidArgument,
+                            "engine resolution did not preserve an absolute project argument");
+            }
+            // This transient seam pins the physical project; it cannot change the saved identity,
+            // executable, environment, working directory or any caller-supplied engine options.
+            run::LaunchPlan expected = original;
+            expected.arguments[1] = transformed->arguments[1];
+            if (*transformed != expected) {
+                return fail(ErrorCode::InvalidArgument,
+                            "engine resolution changed fields other than the project argument");
+            }
+            return transformed;
+        };
+        if (console) {
+            console->appendOutput(build::RunOutputKind::System, "Engine output is shown in Engine Console.\n");
+        }
+    }
+    handlers.onPhaseChanged = [relay, target, engine, engineStarted](const run::RunStatus& status) {
+        if (engine && status.phase == run::RunPhase::Running) {
+            engineStarted->store(true);
+        }
+        relay->post([target, status, engine](RunController* self) {
+            if (engine && status.phase == run::RunPhase::Running && self->m_hooks.engineProcessStarted) {
+                self->m_hooks.engineProcessStarted(status);
+            }
             if (target) {
-                if (status.phase == run::RunPhase::Running && !status.commandLine.empty()) {
+                if (!engine && status.phase == run::RunPhase::Running && !status.commandLine.empty()) {
                     target->appendOutput(build::RunOutputKind::System, status.commandLine + "\n");
                 }
                 if (status.phase == run::RunPhase::BeforeLaunch && !status.beforeLaunchTask.empty()) {
@@ -542,8 +630,20 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
             emit self->runStateChanged();
         });
     };
-    handlers.onOutput = [relay, target](run::OutputStream stream, std::string_view text) {
-        relay->post([target, stream, text = std::string(text)](RunController*) {
+    handlers.onOutput = [relay, target, engineRunId, engine, engineStarted](run::OutputStream stream,
+                                                                            std::string_view text) {
+        if (engine && !engineStarted->load()) {
+            return; // Before-launch task output is not an engine discovery record.
+        }
+        relay->post([target, stream, text = std::string(text), engineRunId, engine](RunController* self) {
+            if (engine) {
+                // The startup record carries credentials. Raw engine streams are private session
+                // input, never RunConsole text; authenticated push logs feed Engine Console.
+                if (self->m_hooks.engineProcessOutput) {
+                    self->m_hooks.engineProcessOutput(engineRunId->load(), stream, text);
+                }
+                return;
+            }
             if (target) {
                 target->appendOutput(stream == run::OutputStream::Stdout ? build::RunOutputKind::Stdout
                                                                          : build::RunOutputKind::Stderr,
@@ -551,11 +651,22 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
             }
         });
     };
-    handlers.onFinished = [relay, id](const run::RunResult& result) {
-        relay->post([id, result](RunController* self) { self->nativeFinished(id, result); });
+    handlers.onFinished = [relay, id, engine](const run::RunResult& result) {
+        relay->post([id, result, engine](RunController* self) {
+            if (engine && self->m_hooks.engineProcessFinished) {
+                self->m_hooks.engineProcessFinished(result);
+            }
+            self->nativeFinished(id, result);
+        });
     };
-    auto started = m_runs->start(configuration, std::move(handlers));
+    auto started = m_runs->start(launchConfiguration, std::move(handlers));
     if (!started) {
+        if (engine && m_hooks.engineProcessFinished) {
+            run::RunResult failed;
+            failed.configurationId = configuration.id;
+            failed.error = started.error();
+            m_hooks.engineProcessFinished(failed);
+        }
         if (console) {
             build::RunOutcome failed;
             failed.error = started.error();
@@ -563,10 +674,14 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
         }
         return std::unexpected(std::move(started.error()));
     }
+    engineRunId->store(*started);
     NativeRun& entry = m_native[id];
     entry.id = *started;
     entry.console = console;
     entry.rerunPending = false;
+    if (engine && m_hooks.engineRunAccepted) {
+        m_hooks.engineRunAccepted(*started, launchConfiguration);
+    }
     emit runStateChanged();
     return build::RunId{*started};
 }

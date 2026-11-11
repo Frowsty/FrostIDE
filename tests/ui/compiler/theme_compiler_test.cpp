@@ -35,7 +35,10 @@
 namespace frost::ui {
 namespace {
 
-const std::filesystem::path kSourceDir(FROST_SOURCE_DIR);
+const std::filesystem::path& sourceDir() {
+    static const std::filesystem::path path(FROST_SOURCE_DIR);
+    return path;
+}
 constexpr std::string_view kShippedThemes[] = {"glacier-dark",
                                                "glacier-light",
                                                "glacier-classic",
@@ -154,7 +157,7 @@ TEST(ThemeCompiler, MinimalThemeCompiles) {
 
 TEST(ThemeCompiler, ShippedThemesCompileStrict) {
     for (const std::string_view id : kShippedThemes) {
-        const std::string json = readFile(kSourceDir / "resources" / "themes" / (std::string(id) + ".theme.json"));
+        const std::string json = readFile(sourceDir() / "resources" / "themes" / (std::string(id) + ".theme.json"));
         const CompileResult result = compileText(json, {}, id);
         ASSERT_TRUE(result.ok()) << id << "\n" << dump(result);
         EXPECT_TRUE(result.diagnostics.empty()) << id << "\n" << dump(result);
@@ -173,7 +176,7 @@ TEST(ThemeCompiler, ShippedThemesCompileStrict) {
     }
     // Glacier Classic is flat: no island arc or gap in either density.
     const CompileResult classic = compileText(
-        readFile(kSourceDir / "resources" / "themes" / "glacier-classic.theme.json"), {}, "glacier-classic");
+        readFile(sourceDir() / "resources" / "themes" / "glacier-classic.theme.json"), {}, "glacier-classic");
     ASSERT_TRUE(classic.ok());
     for (const MetricKey key : {MetricKey::IslandArc, MetricKey::IslandGap}) {
         EXPECT_EQ(classic.data->metrics[static_cast<std::size_t>(key)], 0.0F);
@@ -186,7 +189,7 @@ TEST(ThemeCompiler, ShippedThemesCompileStrict) {
 TEST(ThemeCompiler, ShippedThemesMeetContrastPolicy) {
     for (const std::string_view id : kShippedThemes) {
         const CompileResult result =
-            compileText(readFile(kSourceDir / "resources" / "themes" / (std::string(id) + ".theme.json")), {}, id);
+            compileText(readFile(sourceDir() / "resources" / "themes" / (std::string(id) + ".theme.json")), {}, id);
         ASSERT_TRUE(result.ok()) << id;
         const Theme theme = *Theme::fromData(*result.data);
         for (const ContrastPair& pair : kContrastPairs) {
@@ -576,7 +579,7 @@ TEST(ThemeCompiler, InputLimits) {
 }
 
 TEST(ThemeCompiler, MalformedJsonCorpus) {
-    const std::filesystem::path dir = kSourceDir / "tests" / "ui" / "fixtures" / "themes" / "bad";
+    const std::filesystem::path dir = sourceDir() / "tests" / "ui" / "fixtures" / "themes" / "bad";
     std::size_t cases = 0;
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
         const std::string json = readFile(entry.path());
@@ -601,7 +604,7 @@ std::string shuffledJson(const QJsonValue& value, test::SplitMix64& rng) {
         std::string out = "{";
         for (const QString& key : keys) {
             if (out.size() > 1) {
-                out += ",";
+                out += ',';
             }
             out += QJsonDocument(QJsonArray{key}).toJson(QJsonDocument::Compact).toStdString().substr(1);
             out.pop_back(); // "[\"key\"]" -> "\"key\""
@@ -616,7 +619,7 @@ std::string shuffledJson(const QJsonValue& value, test::SplitMix64& rng) {
 
 TEST(ThemeCompiler, DeterministicUnderMemberShuffle) {
     // Consistency: QJsonObject orders keys itself, so this guards the compiler's own walk order.
-    const std::string json = readFile(kSourceDir / "resources" / "themes" / "glacier-dark.theme.json");
+    const std::string json = readFile(sourceDir() / "resources" / "themes" / "glacier-dark.theme.json");
     const auto reference = compileThemeToBlob("glacier-dark", test::asBytes(json));
     ASSERT_TRUE(reference) << reference.error().describe();
     const QJsonDocument document = QJsonDocument::fromJson(QByteArray::fromStdString(json));
@@ -690,7 +693,7 @@ TEST(ThemecCli, ExitCodesOutputsAndRestat) {
 }
 
 TEST(UiFuzzReplay, ThemeJson) {
-    auto seeds = fuzz::readCorpus(kSourceDir / "tests" / "fuzz" / "corpus" / "theme_json");
+    auto seeds = fuzz::readCorpus(sourceDir() / "tests" / "fuzz" / "corpus" / "theme_json");
     EXPECT_GE(seeds.size(), 4U) << "the shipped themes are committed as seeds";
     const std::string minimal = toJson(minimalTheme());
     seeds.emplace_back(minimal.begin(), minimal.end());

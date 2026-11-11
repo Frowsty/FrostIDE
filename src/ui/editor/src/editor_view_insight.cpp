@@ -338,6 +338,12 @@ bool EditorView::setInlayHints(std::uint64_t textVersion, std::vector<EditorInla
     }
     std::erase_if(hints, [](const EditorInlayHint& hint) { return hint.label.empty(); });
     std::ranges::stable_sort(hints, {}, &EditorInlayHint::offset);
+    std::vector<text::Editor::Inlay> inlays;
+    inlays.reserve(hints.size());
+    for (const EditorInlayHint& hint : hints) {
+        inlays.push_back(text::Editor::Inlay{hint.offset, hint.label, text::Bias::Right});
+    }
+    (void)m_editor->setInlays(std::move(inlays));
     m_inlayHints = std::move(hints);
     viewport()->update();
     return true;

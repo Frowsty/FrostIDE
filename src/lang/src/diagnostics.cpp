@@ -115,6 +115,7 @@ void mapToSnapshot(FileDiagnostics& diagnostics, const text::Snapshot& snapshot,
     }
 }
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param): Own the snapshot across reentrant listeners.
 void DiagnosticsStore::publish(FileDiagnostics diagnostics) {
     const std::string key = documentKey(diagnostics.file);
     {

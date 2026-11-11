@@ -87,6 +87,7 @@ public:
     void injectFailure(Error error);
     // Updates status fields other than the counters the queue keeps itself.
     template<class F>
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): preserve lvalue updater invocation.
     void updateStatus(F&& update) {
         LockGuard lock(m_mutex);
         update(m_status);

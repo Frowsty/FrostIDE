@@ -10,6 +10,8 @@
 tests/**/fixtures/** -text
 tests/**/goldens/** -text
 tests/fuzz/corpus/** -text
+# Official OASIS SARIF schema is byte-exact to its pinned source (ADR 0086).
+tests/tools/schemas/sarif-schema-2.1.0.json -text
 # Pinned third-party assets stay byte-identical to their SHA-256 pins (resources/assets.lock.json).
 resources/fonts/** -text
 resources/icons/lucide/** -text
@@ -18,6 +20,10 @@ third_party/tree-sitter/** -text
 third_party/grammars/** -text
 # Vendored libvterm sources, likewise (ADR 0051).
 third_party/libvterm/** -text
+# Test-only fastjsonschema source files are byte-exact to the pinned PyPI wheel (ADR 0086).
+tools/_vendor/fastjsonschema/** -text
+# Its upstream licence uses CRLF; retain the pinned bytes and treat CR as a line ending.
+tools/_vendor/fastjsonschema/LICENSE whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 # Binary assets.
 *.png binary
 *.ico binary

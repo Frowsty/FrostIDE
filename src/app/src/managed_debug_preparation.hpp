@@ -62,7 +62,7 @@ private:
     struct Relay;
     enum class Phase : unsigned char { Build, Query, SourceCheck };
     [[nodiscard]] Result<void> launch(Phase phase);
-    void finished(Phase phase, build::BuildResult result, std::string output, std::string error, bool overflow);
+    void finished(Phase phase, build::BuildResult result, const std::string& output, std::string error, bool overflow);
     void complete(Result<PreparedManagedDebug> result);
     [[nodiscard]] bool current() const;
 

@@ -22,9 +22,15 @@ namespace {
 using frost::lang::LuaRcSettings;
 
 #ifdef _WIN32
-const std::string kRoot = "C:\\proj";
+const std::string& kRoot() {
+    static const std::string value = "C:\\proj";
+    return value;
+}
 #else
-const std::string kRoot = "/proj";
+const std::string& kRoot() {
+    static const std::string value = "/proj";
+    return value;
+}
 #endif
 
 TEST(LuaRc, ReadsEveryKeyFormLuaLsAccepts) {
@@ -115,10 +121,10 @@ TEST(LuaRc, EditsKeepOtherKeysUpdateEveryFormAndDropDefaults) {
 TEST(LuaRc, WritesOnlyChangesAndNeverOverAnEditOnDisk) {
     frost::ManualClock clock;
     frost::io::MemFs fs(clock);
-    ASSERT_TRUE(fs.createDirectories(kRoot).has_value());
-    const std::string path = frost::io::joinPath(kRoot, ".luarc.json").value();
+    ASSERT_TRUE(fs.createDirectories(kRoot()).has_value());
+    const std::string path = frost::io::joinPath(kRoot(), ".luarc.json").value();
 
-    auto missing = frost::lang::readLuaRc(fs, kRoot);
+    auto missing = frost::lang::readLuaRc(fs, kRoot());
     ASSERT_TRUE(missing.has_value()) << missing.error().describe();
     EXPECT_FALSE(missing->exists);
     EXPECT_EQ(missing->path, path);
@@ -128,7 +134,7 @@ TEST(LuaRc, WritesOnlyChangesAndNeverOverAnEditOnDisk) {
     LuaRcSettings settings;
     settings.runtimeVersion = "Lua 5.1";
     ASSERT_TRUE(frost::lang::writeLuaRc(fs, *missing, settings).has_value());
-    auto loaded = frost::lang::readLuaRc(fs, kRoot);
+    auto loaded = frost::lang::readLuaRc(fs, kRoot());
     ASSERT_TRUE(loaded.has_value());
     EXPECT_TRUE(loaded->exists);
     EXPECT_EQ(loaded->settings, settings);
@@ -151,7 +157,7 @@ TEST(LuaRc, WritesOnlyChangesAndNeverOverAnEditOnDisk) {
 
     EXPECT_EQ(frost::lang::readLuaRc(fs, "relative").error().code(), frost::ErrorCode::InvalidArgument);
     ASSERT_TRUE(fs.writeFileAtomic(path, "not json").has_value());
-    EXPECT_EQ(frost::lang::readLuaRc(fs, kRoot).error().code(), frost::ErrorCode::Corrupt);
+    EXPECT_EQ(frost::lang::readLuaRc(fs, kRoot()).error().code(), frost::ErrorCode::Corrupt);
 }
 
 } // namespace

@@ -86,11 +86,12 @@ void ProblemsModel::add(const build::BuildDiagnostic& diagnostic, DiagnosticSour
     endInsertRows();
 }
 
-void ProblemsModel::setProblems(DiagnosticSource source, const std::vector<build::BuildDiagnostic>& diagnostics) {
+void ProblemsModel::setProblems(DiagnosticSource source, std::vector<build::BuildDiagnostic> diagnostics) {
     beginResetModel();
     std::erase_if(m_problems, [source](const Problem& problem) { return problem.source == source; });
-    for (const build::BuildDiagnostic& diagnostic : diagnostics) {
-        m_problems.push_back(Problem{diagnostic, source});
+    m_problems.reserve(m_problems.size() + diagnostics.size());
+    for (build::BuildDiagnostic& diagnostic : diagnostics) {
+        m_problems.push_back(Problem{std::move(diagnostic), source});
     }
     endResetModel();
 }
@@ -171,7 +172,14 @@ QVariant ProblemsModel::data(const QModelIndex& index, int role) const {
             return d.line;
         }
         return d.line > 0 ? QVariant(d.line) : QVariant(QString());
-    case SourceColumn: return problem.source == DiagnosticSource::Build ? tr("Build") : tr("Live");
+    case SourceColumn:
+        switch (problem.source) {
+        case DiagnosticSource::Build: return tr("Build");
+        case DiagnosticSource::Live: return tr("Live");
+        case DiagnosticSource::Inspection: return tr("Inspection");
+        case DiagnosticSource::Engine: return tr("Engine");
+        }
+        return {};
     case ColumnCount: break;
     }
     return {};
@@ -288,7 +296,9 @@ ProblemsView::ProblemsView(QWidget* parent)
     };
     makeScopeTab(tr("All Problems"), "problemsScopeAll", std::nullopt, true);
     makeScopeTab(tr("Toolset, Environment"), "problemsScopeBuild", DiagnosticSource::Build, false);
-    makeScopeTab(tr("All Solution Files"), "problemsScopeLive", DiagnosticSource::Live, false);
+    makeScopeTab(tr("Live Analysis"), "problemsScopeLive", DiagnosticSource::Live, false);
+    makeScopeTab(tr("Inspection"), "problemsScopeInspection", DiagnosticSource::Inspection, false);
+    makeScopeTab(tr("Engine"), "problemsScopeEngine", DiagnosticSource::Engine, false);
 
     auto* sep = new QFrame(this);
     sep->setFrameShape(QFrame::VLine);

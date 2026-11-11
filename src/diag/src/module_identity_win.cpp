@@ -7,6 +7,8 @@
 #include "frost/diag/module_identity.hpp"
 #include "frost/io/utf.hpp"
 
+#include "win_image.hpp"
+
 #include <cstring>
 #include <format>
 
@@ -33,7 +35,7 @@ std::string guidText(const GUID& guid) {
 
 // Reads the identity of the image mapped at `base` (a loaded module, so the headers and the
 // debug data are mapped at their RVAs).
-void readImage(const unsigned char* base, ModuleIdentity& module) {
+void readImage(const unsigned char* base, const detail::ImageView& image, ModuleIdentity& module) {
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
         return;
@@ -42,12 +44,13 @@ void readImage(const unsigned char* base, ModuleIdentity& module) {
     if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
         return;
     }
-    module.size = nt->OptionalHeader.SizeOfImage;
+    module.size = image.size;
     if (nt->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_DEBUG) {
         return;
     }
     const IMAGE_DATA_DIRECTORY& directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
-    if (directory.VirtualAddress == 0 || directory.Size < sizeof(IMAGE_DEBUG_DIRECTORY)) {
+    if (directory.VirtualAddress == 0 || directory.Size < sizeof(IMAGE_DEBUG_DIRECTORY) ||
+        !image.contains(image.base + directory.VirtualAddress, directory.Size)) {
         return;
     }
     const auto* entries = reinterpret_cast<const IMAGE_DEBUG_DIRECTORY*>(base + directory.VirtualAddress);
@@ -56,7 +59,7 @@ void readImage(const unsigned char* base, ModuleIdentity& module) {
         const IMAGE_DEBUG_DIRECTORY& entry = entries[i];
         if (entry.Type != IMAGE_DEBUG_TYPE_CODEVIEW || entry.AddressOfRawData == 0 ||
             entry.SizeOfData < offsetof(RsdsRecord, pdbPath) + 1 ||
-            entry.AddressOfRawData + entry.SizeOfData > module.size) {
+            !image.contains(image.base + entry.AddressOfRawData, entry.SizeOfData)) {
             continue;
         }
         const auto* record = reinterpret_cast<const RsdsRecord*>(base + entry.AddressOfRawData);
@@ -75,10 +78,16 @@ void readImage(const unsigned char* base, ModuleIdentity& module) {
 } // namespace
 
 Result<ModuleIdentity> moduleForAddress(std::uintptr_t address) {
-    HMODULE handle = nullptr;
-    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           reinterpret_cast<LPCWSTR>(address), &handle) == FALSE) {
+    // A handle with UNCHANGED_REFCOUNT can be unmapped as soon as the loader lookup returns.
+    // Keep an ordinary temporary reference until every PE/PDB byte and the path have been copied.
+    auto reference = detail::ImageReference::acquire(address);
+    if (!reference) {
         return fail(ErrorCode::NotFound, std::format("no module contains 0x{:x}", address));
+    }
+    const HMODULE handle = reference->get();
+    const auto image = detail::imageView(*reference);
+    if (!image || !image->contains(address, 1)) {
+        return fail(ErrorCode::Unsupported, "module has unsupported PE headers");
     }
     ModuleIdentity module;
     module.base = reinterpret_cast<std::uintptr_t>(handle);
@@ -96,7 +105,7 @@ Result<ModuleIdentity> moduleForAddress(std::uintptr_t address) {
         path.resize(path.size() * 2);
     }
     module.path = io::fromWide(path).value_or(std::string());
-    readImage(reinterpret_cast<const unsigned char*>(handle), module);
+    readImage(reinterpret_cast<const unsigned char*>(handle), *image, module);
     return module;
 }
 

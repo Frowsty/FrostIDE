@@ -387,11 +387,10 @@ void CompletionPopup::keyPressEvent(QKeyEvent* event) {
 
 // --- ParameterInfoPopup ---
 
-ParameterInfoPopup::ParameterInfoPopup(QWidget* parent) : HintPopup(parent) {
+ParameterInfoPopup::ParameterInfoPopup(QWidget* parent) : HintPopup(parent), m_label(new QLabel(this)) {
     setObjectName(QStringLiteral("parameterInfoPopup"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(6, 4, 6, 4);
-    m_label = new QLabel(this);
     m_label->setTextFormat(Qt::RichText);
     m_label->setWordWrap(false);
     layout->addWidget(m_label);
@@ -431,11 +430,10 @@ QString ParameterInfoPopup::html() const { return m_label->text(); }
 
 // --- QuickDocPopup ---
 
-QuickDocPopup::QuickDocPopup(QWidget* parent) : HintPopup(parent) {
+QuickDocPopup::QuickDocPopup(QWidget* parent) : HintPopup(parent), m_browser(new QTextBrowser(this)) {
     setObjectName(QStringLiteral("quickDocPopup"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(1, 1, 1, 1);
-    m_browser = new QTextBrowser(this);
     m_browser->setFocusPolicy(Qt::NoFocus);
     m_browser->setOpenLinks(false);
     m_browser->setMinimumSize(360, 80);

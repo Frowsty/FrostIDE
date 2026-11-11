@@ -315,7 +315,7 @@ int FrostStyle::pixelMetric(PixelMetric metric, const QStyleOption* option, cons
     case PM_ButtonIconSize: return metricPx(MetricKey::IconSize);
     case PM_ToolBarIconSize: return metricPx(MetricKey::ToolbarIconSize);
     case PM_ScrollBarExtent: return metricPx(MetricKey::ScrollBarWidth);
-    case PM_DefaultFrameWidth: return 1;
+    case PM_DefaultFrameWidth:
     case PM_MenuPanelWidth: return 1;
     case PM_MenuHMargin: return m_scale.px(4);
     case PM_MenuVMargin: return m_scale.px(6);
@@ -384,7 +384,7 @@ QSize FrostStyle::sizeFromContents(ContentsType type, const QStyleOption* option
 int FrostStyle::styleHint(StyleHint hint, const QStyleOption* option, const QWidget* widget,
                           QStyleHintReturn* returnData) const {
     switch (hint) {
-    case SH_Widget_Animation_Duration: return 0; // decision 13: off until M11's reduced-motion work
+    case SH_Widget_Animation_Duration: // decision 13: off until M11's reduced-motion work
     case SH_EtchDisabledText: return 0;
     case SH_ItemView_ShowDecorationSelected: return 1;
     default: return QProxyStyle::styleHint(hint, option, widget, returnData);

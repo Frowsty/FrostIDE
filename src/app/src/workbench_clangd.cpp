@@ -45,6 +45,7 @@
 #include <chrono>
 #include <format>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <utility>
 
@@ -126,6 +127,13 @@ void Workbench::stopProjectEvaluation() {
 }
 
 void Workbench::startProjectEvaluation(const std::string& root) {
+    if (m_shutDown)
+        return;
+    if (m_buildService->projectEditInProgress()) {
+        m_projectEvaluationDeferred = true;
+        return;
+    }
+    m_projectEvaluationDeferred = false;
     if (m_explorer) {
         m_explorer->endSpeedSearch();
         if (m_solution)
@@ -246,6 +254,12 @@ QString Workbench::solutionEvaluationBanner() const {
 }
 
 void Workbench::startClangd(const std::string& root) {
+    if (m_shutDown)
+        return;
+    if (m_buildService->projectEditInProgress()) {
+        m_projectEvaluationDeferred = true;
+        return;
+    }
     stopClangd();
     if (!m_options.clangd) {
         return;
@@ -700,32 +714,34 @@ void Workbench::refreshLiveProblems() {
         live = m_clangd->diagnostics().problems();
     if (m_lua) {
         auto lua = m_lua->diagnostics().problems();
-        live.insert(live.end(), lua.begin(), lua.end());
+        live.insert(live.end(), std::make_move_iterator(lua.begin()), std::make_move_iterator(lua.end()));
     }
-    for (const lang::FileDiagnostics& set : luaInspectedDiagnostics()) {
+    for (lang::FileDiagnostics& set : luaInspectedDiagnostics()) {
         if (m_lua && m_lua->diagnostics().forFile(set.file))
             continue;
-        live.insert(live.end(), set.diagnostics.begin(), set.diagnostics.end());
+        live.insert(live.end(), std::make_move_iterator(set.diagnostics.begin()),
+                    std::make_move_iterator(set.diagnostics.end()));
     }
     if (m_managed) {
         auto managed = m_managed->diagnostics().problems();
-        live.insert(live.end(), managed.begin(), managed.end());
+        live.insert(live.end(), std::make_move_iterator(managed.begin()), std::make_move_iterator(managed.end()));
     }
-    for (const lang::LiveDiagnostic& d : live) {
+    rows.reserve(live.size());
+    for (lang::LiveDiagnostic& d : live) {
         build::BuildDiagnostic row;
         row.diagnostic.severity = d.severity == lang::DiagnosticSeverity::Error     ? build::Severity::Error
                                   : d.severity == lang::DiagnosticSeverity::Warning ? build::Severity::Warning
                                                                                     : build::Severity::Message;
-        row.diagnostic.code = d.code;
-        row.diagnostic.message = d.message;
+        row.diagnostic.code = std::move(d.code);
+        row.diagnostic.message = std::move(d.message);
         row.diagnostic.file = d.file;
         row.diagnostic.line = d.line;
         row.diagnostic.column = d.column;
-        row.path = d.file;
         row.jumpable = !d.file.empty() && d.line > 0;
+        row.path = std::move(d.file);
         rows.push_back(std::move(row));
     }
-    m_problems->model()->setProblems(ui::DiagnosticSource::Live, rows);
+    m_problems->model()->setProblems(ui::DiagnosticSource::Live, std::move(rows));
 }
 
 void Workbench::onClangdProgress(const lang::ClangdProgress& progress) {

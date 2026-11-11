@@ -24,11 +24,15 @@
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "project_properties_dialog.hpp"
+#include "unit_tests_window.hpp"
+#include <QAction>
 #include <QDir>
 #include <QFileInfo>
+#include <QMenu>
 
 #include <algorithm>
 #include <chrono>
+#include <format>
 #include <limits>
 #include <utility>
 
@@ -199,6 +203,26 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             m_language->gotoDeclarationAt(offset);
         }
     });
+    connect(editor, &ui::EditorView::codeVisionClicked, this, [this, editor](const ui::EditorCodeVisionLens& lens) {
+        DocumentEditorView* targetView = nullptr;
+        for (DocumentEditorView* v : m_editors->views())
+            if (&v->editor() == editor) {
+                targetView = v;
+                break;
+            }
+        if (!targetView)
+            return;
+        editor->setFocus();
+        editor->setState(text::EditorState::caretAt(lens.symbolOffset));
+        if (lens.actionId == "navigate.findUsages")
+            m_language->findUsages();
+        else if (lens.actionId == "navigate.implementation")
+            m_language->gotoImplementation();
+        else if (lens.actionId == "navigate.typeImplementations")
+            m_language->typeImplementations();
+        else if (lens.actionId == "navigate.typeHierarchy")
+            m_language->typeHierarchy();
+    });
     // CPP-5: Ctrl+click on a document link (an #include clangd resolved) opens its target.
     connect(editor, &ui::EditorView::documentLinkActivated, this,
             [this](const QString& target) { openLocation(target, 1, 1); });
@@ -238,7 +262,7 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             (void)m_window->invoke(actionId.toStdString());
         }
     });
-    connect(editor, &ui::EditorView::gutterRunMarkerClicked, this, [this, editor](int lineZeroBased, QPoint) {
+    connect(editor, &ui::EditorView::gutterRunMarkerClicked, this, [this, editor](int lineZeroBased, QPoint globalPos) {
         DocumentEditorView* targetView = nullptr;
         for (DocumentEditorView* v : m_editors->views()) {
             if (&v->editor() == editor) {
@@ -248,11 +272,35 @@ void Workbench::editorOpened(DocumentEditorView& view) {
         }
         if (!targetView)
             return;
-        const auto entries =
-            discoverTestsAndEntryPointsInFile(targetView->path(), targetView->document().document().text().text());
         const int targetLine = lineZeroBased + 1;
-        // Only entry points have run markers (refreshMarkers); they run the project that builds the
-        // file (entryPointRun), not the startup project. Test markers stay hidden until RUN-10.
+        const std::string content = targetView->document().document().text().text();
+        QWidget* testsWidget = m_window ? m_window->toolWindows().content(kUnitTestsToolWindow) : nullptr;
+        const auto testCases = unitTestsGutterCasesForFile(testsWidget, targetView->path(), content);
+        std::vector<run::GutterTestCase> casesOnLine;
+        for (const run::GutterTestCase& testCase : testCases)
+            if (testCase.line == targetLine)
+                casesOnLine.push_back(testCase);
+        if (!casesOnLine.empty()) {
+            QMenu menu(m_window);
+            for (const run::GutterTestCase& testCase : casesOnLine) {
+                QAction* run = menu.addAction(text("Run %1").arg(qs(testCase.displayName)));
+                connect(run, &QAction::triggered, this, [this, testsWidget, testCase] {
+                    auto started = runGutterTestCase(testsWidget, testCase);
+                    if (!started)
+                        notify(text("Unit Tests"), qs(started.error().message()), ui::NotificationKind::Error);
+                });
+                QAction* debug = menu.addAction(text("Debug %1").arg(qs(testCase.displayName)));
+                connect(debug, &QAction::triggered, this, [this, testsWidget, testCase] {
+                    auto started = debugGutterTestCase(testsWidget, testCase);
+                    if (!started)
+                        notify(text("Unit Tests"), qs(started.error().message()), ui::NotificationKind::Error);
+                });
+            }
+            menu.exec(globalPos);
+            return;
+        }
+        const auto entries = discoverTestsAndEntryPointsInFile(targetView->path(), content);
+        // Entry points run the project that builds the file (entryPointRun), not the startup project.
         for (const auto& entry : entries) {
             if (entry.line != targetLine || !entry.isEntryPoint)
                 continue;
@@ -287,6 +335,8 @@ void Workbench::editorClosing(DocumentEditorView& view) {
 }
 
 void Workbench::editorClosed(DocumentEditorView& view) {
+    // A close notification can reenter the document/view owner.
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): Stable close identity.
     const std::string path = view.path();
     if (m_documentRegistry->viewCount(path) > 1)
         return;
@@ -776,11 +826,10 @@ void Workbench::refreshMarkers(DocumentEditorView& view) {
         markers.insert(markers.end(), live->second.begin(), live->second.end());
     }
     if (!view.path().empty() && !view.editor().fileInfo().largeFile) {
-        const auto runnable = discoverTestsAndEntryPointsInFile(view.path(), view.document().document().text().text());
+        const std::string content = view.document().document().text().text();
+        const auto runnable = discoverTestsAndEntryPointsInFile(view.path(), content);
         std::optional<EntryPointRun> run;
         for (const auto& entry : runnable) {
-            // Test markers are hidden until RUN-10's test runner can run and debug one test; a
-            // marker for a test it cannot run would promise a result nothing produces.
             if (entry.line <= 0 || !entry.isEntryPoint)
                 continue;
             if (!run) {
@@ -791,6 +840,14 @@ void Workbench::refreshMarkers(DocumentEditorView& view) {
             const QString tip = run->project || !run->cmakeTarget.empty() ? run->label : run->unavailable;
             markers.push_back(ui::LineMarker{LineIndex{static_cast<std::uint32_t>(entry.line - 1)},
                                              ui::MarkerSeverity::RunTest, tip.toStdString()});
+        }
+        QWidget* testsWidget = m_window ? m_window->toolWindows().content(kUnitTestsToolWindow) : nullptr;
+        for (const run::GutterTestCase& testCase : unitTestsGutterCasesForFile(testsWidget, view.path(), content)) {
+            if (testCase.line <= 0)
+                continue;
+            markers.push_back(ui::LineMarker{LineIndex{static_cast<std::uint32_t>(testCase.line - 1)},
+                                             ui::MarkerSeverity::RunTest,
+                                             std::format("Run or debug {}", testCase.displayName)});
         }
     }
     view.editor().setLineMarkers(std::move(markers));

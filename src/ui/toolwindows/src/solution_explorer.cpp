@@ -59,7 +59,7 @@ bool isProjectKind(NodeKind kind) {
 } // namespace
 
 SolutionExplorer::SolutionExplorer(QWidget* parent)
-    : QWidget(parent), m_hierarchyCombo(new QComboBox(this)), m_view(new QTreeView(this)),
+    : QWidget(parent), m_banner(new QLabel(this)), m_hierarchyCombo(new QComboBox(this)), m_view(new QTreeView(this)),
       m_searchField(new QLineEdit(this)), m_model(new SolutionTreeModel(this)),
       m_filter(new SolutionFilterModel(this)) {
     setObjectName(QStringLiteral("solutionExplorer"));
@@ -130,7 +130,6 @@ SolutionExplorer::SolutionExplorer(QWidget* parent)
     m_view->viewport()->installEventFilter(this);
 
     // The evaluation banner (SLN-2): hidden unless the owner reports a fallback.
-    m_banner = new QLabel(this);
     m_banner->setObjectName(QStringLiteral("solutionEvaluationBanner"));
     m_banner->setWordWrap(true);
     m_banner->setTextFormat(Qt::PlainText);
@@ -453,9 +452,8 @@ bool SolutionExplorer::eventFilter(QObject* watched, QEvent* event) {
     if (watched == m_view && event->type() == QEvent::KeyPress) {
         return handleKey(*static_cast<QKeyEvent*>(event));
     }
-    if (watched == m_view && event->type() == QEvent::FocusOut) {
-        endSpeedSearch();
-    } else if (watched == m_view->viewport() && event->type() == QEvent::MouseButtonPress) {
+    if ((watched == m_view && event->type() == QEvent::FocusOut) ||
+        (watched == m_view->viewport() && event->type() == QEvent::MouseButtonPress)) {
         endSpeedSearch();
     } else if (watched == m_view->viewport() &&
                (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)) {
@@ -1131,12 +1129,10 @@ QMenu* SolutionExplorer::createContextMenu(const QModelIndex& index, QWidget* pa
             targetDir = QString::fromStdString(solution->directory());
         else if (item.kind == NodeKind::Filter && !item.path.empty())
             targetDir = QString::fromStdString(item.path);
-        else if (item.kind == NodeKind::File && !item.path.empty())
+        else if (!item.path.empty() && (item.kind == NodeKind::File || !item.project))
             targetDir = QString::fromStdString(std::string(io::parentPath(item.path)));
         else if (item.project)
             targetDir = QString::fromStdString(std::string(io::parentPath(solution->project(*item.project).path)));
-        else if (!item.path.empty())
-            targetDir = QString::fromStdString(std::string(io::parentPath(item.path)));
         if (!targetDir.isEmpty()) {
             if (m_newFileHandler) {
                 QAction* newFile = menu->addAction(tr("New File..."));

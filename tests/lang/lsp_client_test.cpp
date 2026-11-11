@@ -32,14 +32,20 @@ using frost::test::LangEnv;
 using frost::test::MemoryPipe;
 
 #ifdef _WIN32
-const std::string kRoot = "C:\\work\\proj";
+const std::string& kRoot() {
+    static const std::string value = "C:\\work\\proj";
+    return value;
+}
 #else
-const std::string kRoot = "/work/proj";
+const std::string& kRoot() {
+    static const std::string value = "/work/proj";
+    return value;
+}
 #endif
 
 InitializeOptions options() {
     InitializeOptions init;
-    init.rootPath = kRoot;
+    init.rootPath = kRoot();
     init.processId = 1234;
     init.clientVersion = "test";
     init.configuration = [](std::string_view section) { return section == "frost" ? Json("yes") : Json(); };
@@ -96,7 +102,7 @@ TEST(LspClientTest, InitializeNegotiatesUtf8AndSendsInitialized) {
     const Json* params = received[0].find("params");
     ASSERT_NE(params, nullptr);
     EXPECT_EQ(params->integerAt("processId"), 1234);
-    EXPECT_EQ(params->stringAt("rootUri"), frost::lang::pathToUri(kRoot).value());
+    EXPECT_EQ(params->stringAt("rootUri"), frost::lang::pathToUri(kRoot()).value());
     EXPECT_EQ(params->find("clientInfo")->stringAt("name"), "FrostIDE");
     const Json* encodings = params->find("capabilities")->find("general")->find("positionEncodings");
     ASSERT_NE(encodings, nullptr);

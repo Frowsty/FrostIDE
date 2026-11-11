@@ -248,7 +248,7 @@ void LogBackend::write(log::Level level, std::string_view category, std::string_
 void LogBackend::flush() noexcept {
     try {
         m_impl->logger->flush();
-    } catch (...) {
+    } catch (...) { // NOLINT(bugprone-empty-catch): noexcept flush cannot recursively log a backend failure.
     }
 }
 

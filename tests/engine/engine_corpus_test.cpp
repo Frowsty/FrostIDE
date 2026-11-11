@@ -130,7 +130,7 @@ std::string checkedCorpus() {
         return {};
     }
     const std::string sha = FROST_CORPUS_FROSTENGINE_SHA;
-    const std::string corpus = io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
+    std::string corpus = io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
     const auto head = io::realFileSystem().readFile(corpus + "/.git/HEAD");
     if (!head || head->substr(0, 40) != sha) {
         ADD_FAILURE() << corpus << " is not the pinned FrostEngine clone (python tools/corpora.py fetch, verify)";

@@ -234,16 +234,15 @@ void Popup::paintEvent(QPaintEvent* /*event*/) {
 }
 
 ListPopup::ListPopup(QWidget* owner, const QString& title, bool filterable)
-    : Popup(owner), m_title(new QLabel(title, this)), m_filter(new QLineEdit(this)), m_list(new QListWidget(this)) {
+    : Popup(owner), m_title(new QLabel(title, this)), m_scopeBar(new QWidget(this)),
+      m_scopeLayout(new QHBoxLayout(m_scopeBar)), m_filter(new QLineEdit(this)), m_list(new QListWidget(this)) {
     setObjectName(QStringLiteral("listPopup"));
     m_title->setObjectName(QStringLiteral("popupTitle"));
     QFont titleFont = m_title->font();
     titleFont.setBold(true);
     m_title->setFont(titleFont);
     m_title->setVisible(!title.isEmpty());
-    m_scopeBar = new QWidget(this);
     m_scopeBar->setObjectName(QStringLiteral("popupScopeTabs"));
-    m_scopeLayout = new QHBoxLayout(m_scopeBar);
     m_scopeLayout->setContentsMargins(0, 0, 0, 0);
     m_scopeLayout->setSpacing(4);
     m_scopeBar->setVisible(false);

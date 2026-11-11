@@ -253,6 +253,75 @@ class StageScriptTest(TempDirTestCase):
         return ["-BundleTools", "-SdkRoot", str(sdk), "-ManagedServerDir", str(managed),
                 "-ManagedDebugDir", str(debug)]
 
+    def _fake_asan_runtime(self, build: Path) -> tuple[Path, list[str]]:
+        """Exercise cache-driven runtime staging with the existing prebuilt Debug fixture."""
+        lock = json.loads((TOOLS.parent / "sdk/sdk.lock.json").read_text(encoding="utf-8"))["windows"]["llvm"]
+        sdk = self.tmp / "sdk"
+        runtime = (sdk / f"llvm-{lock['version']}/lib/clang/{lock['version'].split('.')[0]}/lib/windows/"
+                   "clang_rt.asan_dynamic-x86_64.dll")
+        runtime.parent.mkdir(parents=True, exist_ok=True)
+        runtime.write_bytes(b"MZ-pinned-ASan-runtime-fixture")
+        shutil.copyfile(runtime, build / "src/app/Debug" / runtime.name)
+        with (build / "CMakeCache.txt").open("a", encoding="utf-8") as cache:
+            cache.write("FROST_SANITIZE:STRING=address\n")
+        return runtime, ["-SdkRoot", str(sdk)]
+
+    def test_asan_stage_carries_the_verified_pinned_runtime(self) -> None:
+        build = self._fake_build()
+        runtime, arguments = self._fake_asan_runtime(build)
+        destination = self.tmp / "asan-stage"
+        result = self._stage(build, destination, *arguments)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((destination / runtime.name).read_bytes(), runtime.read_bytes())
+        self.assertTrue((destination / "frost_app.dll").is_file())
+
+    def test_asan_input_provenance_is_checked_before_force_replaces_destination(self) -> None:
+        for problem in ("missing pinned ASan runtime", "missing build ASan runtime",
+                        "build ASan runtime differs"):
+            with self.subTest(problem=problem):
+                build = self._fake_build()
+                runtime, arguments = self._fake_asan_runtime(build)
+                sidecar = build / "src/app/Debug" / runtime.name
+                if problem == "missing pinned ASan runtime":
+                    runtime.unlink()
+                elif problem == "missing build ASan runtime":
+                    sidecar.unlink()
+                else:
+                    sidecar.write_bytes(b"MZ-unrelated-runtime")
+                destination = self.tmp / "asan-preflight"
+                destination.mkdir(exist_ok=True)
+                marker = destination / "existing.txt"
+                marker.write_bytes(b"preserve on input failure")
+                result = self._stage(build, destination, *arguments, "-Force")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(problem, result.stdout)
+                self.assertEqual(marker.read_bytes(), b"preserve on input failure")
+                self.assertFalse((self.tmp / "asan-preflight-symbols.zip").exists())
+
+    def test_non_asan_stage_does_not_bundle_an_incidental_asan_sidecar(self) -> None:
+        build = self._fake_build()
+        name = "clang_rt.asan_dynamic-x86_64.dll"
+        (build / "src/app/Debug" / name).write_bytes(b"unrelated sidecar")
+        destination = self.tmp / "normal-stage"
+        result = self._stage(build, destination)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((destination / name).exists())
+
+    def test_tampered_staged_asan_runtime_fails_and_removes_partial_stage(self) -> None:
+        build = self._fake_build()
+        runtime, arguments = self._fake_asan_runtime(build)
+        deploy = self.tmp / "tamper-asan-deploy.cmd"
+        deploy.write_text(_FAKE_WINDEPLOYQT.replace("exit /b 0", f'echo changed>"%DEST%\\{runtime.name}"\nexit /b 0'),
+                          encoding="ascii", newline="\r\n")
+        destination = self.tmp / "asan-corrupt"
+        result = run_powershell(TOOLS / "stage.ps1", "-Destination", str(destination), "-Config", "Debug",
+                                "-BuildDir", str(build), "-WinDeployQt", str(deploy), "-Python", sys.executable,
+                                "-SkipBuild", *arguments)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("staged ASan runtime differs", result.stdout)
+        self.assertFalse(destination.exists())
+        self.assertFalse((self.tmp / "asan-corrupt-symbols.zip").exists())
+
     def test_bundled_tools_and_luals_are_staged(self) -> None:
         build = self._fake_build()
         destination = self.tmp / "bundled"

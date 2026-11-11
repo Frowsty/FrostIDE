@@ -277,8 +277,10 @@ def strip_drvfs(value: str, keep: Sequence[str] = ()) -> tuple[str, int]:
 SOURCE_EXTENSIONS = (".c", ".cc", ".cpp", ".cxx")
 HEADER_EXTENSIONS = (".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp")
 # Never analysed: compile-fail probes (they do not compile by design), byte-exact fixtures, build trees.
+# The M1 syntax integration handoff (docs/progress.md) also requires excluding pinned upstream
+# source trees before enabling tidy. Keep FrostIDE wrappers and other third_party adapters in scope.
 _EXCLUDED = (re.compile(r"^tests/toolchain_probe/banned/"), re.compile(r"^tests/[^/]+/fixtures/"),
-             re.compile(r"^build/"))
+             re.compile(r"^build/"), re.compile(r"^third_party/(tree-sitter|grammars|libvterm)/"))
 # A change to any of these changes how every TU is analysed, so tidy runs on all of them.
 _ALL_TU_FILES = frozenset({"sdk/sdk.lock.json", "cmake/FrostCompilerOptions.cmake", "CMakePresets.json"})
 

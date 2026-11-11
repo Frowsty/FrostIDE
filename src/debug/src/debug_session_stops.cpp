@@ -127,13 +127,12 @@ void DebugSession::State::checkStepThunk(StopInfo info) {
                     command = "stepIn"; // Through the thunk's jmp.
                     arguments.set("granularity", "instruction");
                     self->stepInPhase = StepInPhase::FollowedThunk;
-                } else if (top && phase == StepInPhase::FollowedThunk && hasSource(*top) &&
-                           top->name.starts_with(kStepAvoidPrefix)) {
-                    command = "stepOut"; // A function lldb's own step-in would not stop in.
-                    self->stepInPhase = StepInPhase::LeftAvoided;
-                } else if (top && !hasSource(*top) && self->stepOutOfNoDebug &&
-                           (phase == StepInPhase::Stepping || phase == StepInPhase::FollowedThunk)) {
-                    command = "stepOut"; // No debug information: lldb's step-in-avoid-nodebug, done here.
+                } else if (top && ((phase == StepInPhase::FollowedThunk && hasSource(*top) &&
+                                    top->name.starts_with(kStepAvoidPrefix)) ||
+                                   (!hasSource(*top) && self->stepOutOfNoDebug &&
+                                    (phase == StepInPhase::Stepping || phase == StepInPhase::FollowedThunk)))) {
+                    // Step out of an avoided function or a frame whose debug information is missing.
+                    command = "stepOut";
                     self->stepInPhase = StepInPhase::LeftAvoided;
                 } else if (top && phase == StepInPhase::LeftAvoided && self->stepInOrigin &&
                            top->name == self->stepInOrigin->first && top->line == self->stepInOrigin->second) {
@@ -224,46 +223,47 @@ void DebugSession::State::readThrownType(StopInfo info, std::int64_t thread, con
 void DebugSession::State::evaluateThrowInfo(const ThrowReadPtr& read, std::string expression) {
     rpc::Json arguments =
         rpc::Json::object().set("expression", expression).set("frameId", read->frameId).set("context", "watch");
-    send("evaluate", std::move(arguments), [weak = weak(), read, expression](Result<rpc::Json> body) {
-        const auto self = weak.lock();
-        if (!self) {
-            return;
-        }
-        std::optional<std::uint64_t> address;
-        if (body) {
-            address = msvc::parseAddress(body->stringAt("result"));
-        }
-        if (!address || *address == 0) {
-            if (expression != "$rdx") {
-                self->evaluateThrowInfo(read, "$rdx"); // The argument has no location here.
-                return;
-            }
-            self->throwTypeRead(read, fail(ErrorCode::NotFound, "the debugger did not show the ThrowInfo "
-                                                                "argument of _CxxThrowException"));
-            return;
-        }
-        read->throwInfo = *address;
-        std::optional<std::pair<std::string, std::string>> known;
-        {
-            LockGuard lock(self->mutex);
-            if (const auto found = self->thrownTypes.find(*address); found != self->thrownTypes.end()) {
-                known = found->second;
-            }
-            for (const auto& [base, size] : self->imageSizes) {
-                if (*address >= base && *address - base < size) {
-                    read->base = base;
-                    read->imageSize = size;
-                }
-            }
-        }
-        if (known) {
-            self->throwTypeRead(read, std::move(*known));
-        } else if (read->base != 0) {
-            self->readThrowInfo(read);
-        } else {
-            self->findThrowModule(read);
-        }
-    });
+    send("evaluate", std::move(arguments),
+         [weak = weak(), read, expression = std::move(expression)](Result<rpc::Json> body) {
+             const auto self = weak.lock();
+             if (!self) {
+                 return;
+             }
+             std::optional<std::uint64_t> address;
+             if (body) {
+                 address = msvc::parseAddress(body->stringAt("result"));
+             }
+             if (!address || *address == 0) {
+                 if (expression != "$rdx") {
+                     self->evaluateThrowInfo(read, "$rdx"); // The argument has no location here.
+                     return;
+                 }
+                 self->throwTypeRead(read, fail(ErrorCode::NotFound, "the debugger did not show the ThrowInfo "
+                                                                     "argument of _CxxThrowException"));
+                 return;
+             }
+             read->throwInfo = *address;
+             std::optional<std::pair<std::string, std::string>> known;
+             {
+                 LockGuard lock(self->mutex);
+                 if (const auto found = self->thrownTypes.find(*address); found != self->thrownTypes.end()) {
+                     known = found->second;
+                 }
+                 for (const auto& [base, size] : self->imageSizes) {
+                     if (*address >= base && *address - base < size) {
+                         read->base = base;
+                         read->imageSize = size;
+                     }
+                 }
+             }
+             if (known) {
+                 self->throwTypeRead(read, std::move(*known));
+             } else if (read->base != 0) {
+                 self->readThrowInfo(read);
+             } else {
+                 self->findThrowModule(read);
+             }
+         });
 }
 
 // The module holding the ThrowInfo: the highest module base below it, confirmed by its PE header.
@@ -499,7 +499,7 @@ void DebugSession::State::sendWithoutThread(const std::string& command) {
 }
 
 void DebugSession::State::requestThreads(std::uint64_t gen, std::optional<std::string> then) {
-    send("threads", rpc::Json(), [weak = weak(), gen, then](Result<rpc::Json> body) {
+    send("threads", rpc::Json(), [weak = weak(), gen, then = std::move(then)](Result<rpc::Json> body) {
         const auto self = weak.lock();
         if (!self) {
             return;

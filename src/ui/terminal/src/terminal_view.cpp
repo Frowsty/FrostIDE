@@ -187,14 +187,14 @@ bool isWordBreak(const std::string& text) {
 
 } // namespace
 
-TerminalView::TerminalView(QWidget* parent) : QWidget(parent), m_colors(TerminalColors::defaults()) {
+TerminalView::TerminalView(QWidget* parent)
+    : QWidget(parent), m_colors(TerminalColors::defaults()), m_scrollBar(new QScrollBar(Qt::Vertical, this)) {
     setObjectName(QStringLiteral("terminalView"));
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_InputMethodEnabled, true);
     setAttribute(Qt::WA_OpaquePaintEvent, true);
     setMouseTracking(true);
     setCursor(Qt::IBeamCursor);
-    m_scrollBar = new QScrollBar(Qt::Vertical, this);
     m_scrollBar->setObjectName(QStringLiteral("terminalScrollBar"));
     m_scrollBar->setFocusPolicy(Qt::NoFocus);
     m_scrollBar->setCursor(Qt::ArrowCursor);
@@ -205,7 +205,7 @@ TerminalView::TerminalView(QWidget* parent) : QWidget(parent), m_colors(Terminal
     font.setStyleHint(QFont::TypeWriter, QFont::PreferDefault);
     font.setFixedPitch(true);
     font.setPointSizeF(13);
-    m_font = font;
+    m_font = std::move(font);
     updateMetrics();
 }
 
@@ -260,7 +260,7 @@ void TerminalView::setFontSettings(const QString& family, double pointSize) {
     font.setStyleHint(QFont::TypeWriter, QFont::PreferDefault);
     font.setFixedPitch(true);
     font.setPointSizeF(std::max(1.0, pointSize));
-    m_font = font;
+    m_font = std::move(font);
     updateMetrics();
     update();
 }
@@ -544,12 +544,10 @@ void TerminalView::keyPressEvent(QKeyEvent* event) {
         m_session->sendText(toUtf8(text)); // AltGr text.
     } else if (mods.ctrl || mods.alt) {
         const std::optional<char32_t> base = baseCharOf(key);
-        if (mods.alt && !mods.ctrl && isPrintable(text)) {
+        if (isPrintable(text) && ((mods.alt && !mods.ctrl) || !base)) {
             m_session->sendChar(firstCodePoint(text), mods); // Alt with the layout's (shifted) character.
         } else if (base) {
             m_session->sendChar(*base, mods);
-        } else if (isPrintable(text)) {
-            m_session->sendChar(firstCodePoint(text), mods);
         } else {
             event->ignore();
             return;

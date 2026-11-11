@@ -68,10 +68,33 @@ frost_add_test(lang_clangd_tests
         clangd_test.cpp
         clangd_encoding_test.cpp
         clangd_features_test.cpp
+        navigation_test.cpp
+        refactoring_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched
     LABELS integration clangd)
 target_include_directories(lang_clangd_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(lang_clangd_tests PRIVATE FROST_LANG_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+
+# CPP-10 exercises the pinned clang-tidy process as well as inspection profiles and SARIF.
+if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{FROST_SDK}/py/Scripts/python.exe")
+    set(Python3_EXECUTABLE "$ENV{FROST_SDK}/py/Scripts/python.exe")
+endif()
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+file(TO_CMAKE_PATH "${Python3_EXECUTABLE}" _frost_lang_python)
+frost_add_test(lang_inspection_tests
+    SOURCES inspection_test.cpp
+    DEPS frost::lang frost::project frost::text frost::io frost::sched
+    LABELS integration)
+target_include_directories(lang_inspection_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(lang_inspection_tests PRIVATE
+    FROST_TEST_PYTHON="${_frost_lang_python}"
+    FROST_VALIDATE_SARIF="${FROST_SOURCE_DIR}/tools/validate_sarif.py")
+
+frost_add_test(lang_code_vision_real_tests
+    SOURCES code_vision_real_test.cpp
+    DEPS frost::lang frost::text frost::io frost::sched
+    LABELS integration clangd)
+target_include_directories(lang_code_vision_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 
 if(WIN32)
     frost_add_test(lang_msbuild_tests
@@ -109,8 +132,9 @@ frost_add_test(lang_lua_tests
     LABELS integration)
 target_include_directories(lang_lua_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 
-# Real pinned Roslyn-backed managed server, enabled by explicit test tool paths.
-frost_add_test(lang_managed_tests
+# Real pinned Roslyn-backed managed server from configured, offline-verified fixture tools.
+include("${FROST_SOURCE_DIR}/tests/support/ManagedFixtures.cmake")
+frost_add_managed_fixture_test(lang_managed_tests
     SOURCES managed_e2e_test.cpp
     DEPS frost::lang frost::project frost::text frost::io frost::sched
     LABELS integration)
@@ -152,3 +176,34 @@ target_compile_definitions(lang_index_corpus_tests PRIVATE
     FROST_CORPUS_FROSTENGINE_SHA="${_frost_lang_engine_sha}"
     FROST_CORPUS_FROSTENGINE_PRESET="${_frost_lang_engine_preset}"
     FROST_TEST_CMAKE="${CMAKE_COMMAND}")
+
+# CPP-6 oracle comparisons run only in the mandatory corpus tier, never by textual inclusion
+# into a UI test. Missing pinned input is a failure in these tests.
+frost_add_test(lang_cpp6_corpus_tests
+    SOURCES cpp6_navigation_corpus_test.cpp
+    DEPS frost::lang frost::project frost::text frost::io frost::sched
+    LABELS integration corpus)
+target_include_directories(lang_cpp6_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(lang_cpp6_corpus_tests PRIVATE
+    FROST_CORPUS_FROSTENGINE_SHA="${_frost_lang_engine_sha}"
+    FROST_CORPUS_FROSTENGINE_PRESET="${_frost_lang_engine_preset}")
+
+frost_add_test(lang_code_vision_corpus_tests
+    SOURCES code_vision_corpus_test.cpp
+    DEPS frost::lang frost::text frost::io frost::sched
+    LABELS integration corpus clangd)
+target_include_directories(lang_code_vision_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(lang_code_vision_corpus_tests PRIVATE
+    FROST_CORPUS_FROSTENGINE_SHA="${_frost_lang_engine_sha}"
+    FROST_CORPUS_FROSTENGINE_PRESET="${_frost_lang_engine_preset}")
+
+frost_add_test(lang_inspection_corpus_tests
+    SOURCES inspection_corpus_test.cpp
+    DEPS frost::lang frost::project frost::text frost::io frost::sched frost::vcs
+    LABELS integration corpus)
+target_include_directories(lang_inspection_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(lang_inspection_corpus_tests PRIVATE
+    FROST_CORPUS_FROSTENGINE_SHA="${_frost_lang_engine_sha}"
+    FROST_CORPUS_FROSTENGINE_PRESET="${_frost_lang_engine_preset}"
+    FROST_TEST_PYTHON="${_frost_lang_python}"
+    FROST_VALIDATE_SARIF="${FROST_SOURCE_DIR}/tools/validate_sarif.py")

@@ -220,7 +220,7 @@ public:
     using Script = std::function<bool(FakeServer& server, const lang::Json& message)>;
 
     FakeServer(MemoryPipe& pipe, Script script) : m_pipe(pipe), m_script(std::move(script)) {
-        m_thread = std::jthread([this](std::stop_token stop) { serve(stop); });
+        m_thread = std::jthread([this](const std::stop_token& stop) { serve(stop); });
     }
     ~FakeServer() {
         m_thread.request_stop();

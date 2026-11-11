@@ -14,7 +14,9 @@
 // can see where and how the runner started it. The real doctest is FrostEngine's FrostTests
 // (tests/app/corpus_doctest_test.cpp). Test code only; the standard library only.
 
+#include <charconv>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -25,6 +27,20 @@
 #include <thread>
 
 namespace {
+
+// Missing optional values retain their zero default. Malformed explicit test inputs fail the
+// helper instead of silently choosing a different exit code or cancellation delay.
+int number(std::string_view text) {
+    if (text.empty())
+        return 0;
+    int value = 0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) {
+        std::fputs("doctest stub: invalid numeric option\n", stderr);
+        std::exit(65);
+    }
+    return value;
+}
 
 std::string valueOf(int argc, char** argv, std::string_view option) {
     std::string value;
@@ -75,7 +91,7 @@ int main(int argc, char** argv) {
     std::cout << "\n" << std::flush;
 
     if (const std::string sleep = valueOf(argc, argv, "--stub-sleep-ms="); !sleep.empty())
-        std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(sleep.c_str())));
+        std::this_thread::sleep_for(std::chrono::milliseconds(number(sleep)));
     const std::string out = valueOf(argc, argv, "--out=");
     const bool listing = has(argc, argv, "--list-test-cases");
     const std::string report = valueOf(argc, argv, listing ? "--stub-list=" : "--stub-run=");
@@ -85,9 +101,9 @@ int main(int argc, char** argv) {
     }
     // doctest lists without running anything and exits 0; a program with nothing to list fails.
     if (listing)
-        return report.empty() ? std::atoi(valueOf(argc, argv, "--stub-exit=").c_str()) : 0;
+        return report.empty() ? number(valueOf(argc, argv, "--stub-exit=")) : 0;
     if (const std::string console = valueOf(argc, argv, "--stub-console="); !console.empty())
         std::cout << read(console) << std::flush;
     const std::string code = valueOf(argc, argv, "--stub-exit=");
-    return code.empty() ? 0 : std::atoi(code.c_str());
+    return code.empty() ? 0 : number(code);
 }

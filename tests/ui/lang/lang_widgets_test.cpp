@@ -33,7 +33,7 @@ void press(QWidget* target, int key, Qt::KeyboardModifiers modifiers = Qt::NoMod
     QCoreApplication::sendEvent(target, &event);
 }
 
-fl::CompletionItem item(std::string label, fl::CompletionItemKind kind, std::string detail = {},
+fl::CompletionItem item(const std::string& label, fl::CompletionItemKind kind, std::string detail = {},
                         std::string documentation = {}) {
     fl::CompletionItem out;
     out.label = label;
@@ -124,7 +124,8 @@ TEST(FindUsagesPanelWidget, GroupsByFileAndOpensUsages) {
     FindUsagesPanel panel;
     const auto usage = [](std::string path, std::uint32_t line, std::string text) {
         fl::Usage out;
-        out.location = fl::Location{.path = path, .uri = {}, .range = fl::LspRange{{line - 1, 4}, {line - 1, 9}}};
+        out.location =
+            fl::Location{.path = std::move(path), .uri = {}, .range = fl::LspRange{{line - 1, 4}, {line - 1, 9}}};
         out.line = line;
         out.column = 5;
         out.lineText = std::move(text);

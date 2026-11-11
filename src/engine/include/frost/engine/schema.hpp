@@ -90,10 +90,20 @@ struct SchemaEvent {
     SchemaSource source;
 };
 
+// Explicit engine opt-in for commands sent by an IDE. Missing metadata grants no permission.
+// States and capabilities name the engine protocol's vocabulary, not inferred categories.
+struct SchemaCommandIdePolicy {
+    bool allowed = false;
+    std::vector<std::string> states;
+    bool requiresMutationPermission = true;
+    std::vector<std::string> requiredCapabilities;
+};
+
 struct SchemaCommand {
     std::string name;
     std::string category;
     std::vector<std::string> flags;
+    std::optional<SchemaCommandIdePolicy> idePolicy;
 };
 
 // The whole document, in the engine's order (registration order throughout).

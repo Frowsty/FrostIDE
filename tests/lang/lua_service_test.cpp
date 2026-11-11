@@ -24,24 +24,38 @@
 namespace {
 using namespace std::chrono_literals;
 #ifdef _WIN32
-const std::string root = "C:\\project";
-const std::string tool = "C:\\tools\\lua-language-server.exe";
+const std::string& root() {
+    static const std::string value = "C:\\project";
+    return value;
+}
+const std::string& tool() {
+    static const std::string value = "C:\\tools\\lua-language-server.exe";
+    return value;
+}
 #else
-const std::string root = "/project";
-const std::string tool = "/tools/lua-language-server";
+const std::string& root() {
+    static const std::string value = "/project";
+    return value;
+}
+const std::string& tool() {
+    static const std::string value = "/tools/lua-language-server";
+    return value;
+}
 #endif
-std::string frame(std::string body) { return "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body; }
+std::string frame(const std::string& body) {
+    return "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+}
 TEST(LuaService, DiscoveryRejectsRelativeAndMissingExplicitPaths) {
     frost::io::MemFs fs(frost::systemClock());
-    ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(tool)).has_value());
-    ASSERT_TRUE(fs.writeFileAtomic(tool, "exe").has_value());
+    ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(tool())).has_value());
+    ASSERT_TRUE(fs.writeFileAtomic(tool(), "exe").has_value());
     frost::lang::LuaSearch search{
-        .configuredPath = "relative", .directories = {std::string(frost::io::parentPath(tool))}, .pathVariable = {}};
+        .configuredPath = "relative", .directories = {std::string(frost::io::parentPath(tool()))}, .pathVariable = {}};
     EXPECT_EQ(frost::lang::findLuaLanguageServer(fs, search).error().code(), frost::ErrorCode::InvalidArgument);
-    search.configuredPath = root;
+    search.configuredPath = root();
     EXPECT_EQ(frost::lang::findLuaLanguageServer(fs, search).error().code(), frost::ErrorCode::NotFound);
     search.configuredPath.clear();
-    EXPECT_EQ(frost::lang::findLuaLanguageServer(fs, search).value(), tool);
+    EXPECT_EQ(frost::lang::findLuaLanguageServer(fs, search).value(), tool());
 }
 // LUA-1: the default search names the pinned release's folder (staged and SDK) before PATH.
 TEST(LuaService, DefaultSearchPrefersThePinnedInstall) {
@@ -63,7 +77,7 @@ TEST(LuaService, DefaultSearchPrefersThePinnedInstall) {
         EXPECT_TRUE(frost::io::isAbsolutePath(dir)) << dir;
 }
 TEST(LuaService, StateArgumentsKeepLogAndMetaUnderTheGivenDirectory) {
-    const std::string state = frost::io::joinPath(root, "state").value();
+    const std::string state = frost::io::joinPath(root(), "state").value();
     const auto arguments = frost::lang::luaLanguageServerArguments(state);
     ASSERT_TRUE(arguments.has_value());
     EXPECT_EQ(*arguments, (std::vector<std::string>{"--logpath=" + frost::io::joinPath(state, "log").value(),
@@ -72,15 +86,15 @@ TEST(LuaService, StateArgumentsKeepLogAndMetaUnderTheGivenDirectory) {
 }
 TEST(LuaService, FrostEngineWorkspaceNeedsAFrostprojInTheRoot) {
     frost::io::MemFs fs(frost::systemClock());
-    ASSERT_TRUE(fs.createDirectories(frost::io::joinPath(root, "sub").value()).has_value());
-    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, root));
-    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(root, "sub/Game.frostproj").value(), "{}").has_value());
-    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, root)) << "only the root itself counts";
-    ASSERT_TRUE(fs.createDirectories(frost::io::joinPath(root, "dir.frostproj").value()).has_value());
-    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, root)) << "a directory is not a project file";
-    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(root, "Game.frostproj").value(), "{}").has_value());
-    EXPECT_TRUE(frost::lang::isFrostEngineLuaWorkspace(fs, root));
-    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, frost::io::joinPath(root, "missing").value()));
+    ASSERT_TRUE(fs.createDirectories(frost::io::joinPath(root(), "sub").value()).has_value());
+    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, root()));
+    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(root(), "sub/Game.frostproj").value(), "{}").has_value());
+    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, root())) << "only the root itself counts";
+    ASSERT_TRUE(fs.createDirectories(frost::io::joinPath(root(), "dir.frostproj").value()).has_value());
+    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, root())) << "a directory is not a project file";
+    ASSERT_TRUE(fs.writeFileAtomic(frost::io::joinPath(root(), "Game.frostproj").value(), "{}").has_value());
+    EXPECT_TRUE(frost::lang::isFrostEngineLuaWorkspace(fs, root()));
+    EXPECT_FALSE(frost::lang::isFrostEngineLuaWorkspace(fs, frost::io::joinPath(root(), "missing").value()));
 }
 // One rule for the LuaLS defaults and the FrostEngine tool window: .frostproj or .feproject, ASCII
 // case ignored on every platform, a non-empty stem, a regular file directly in the root.
@@ -92,9 +106,9 @@ TEST(LuaService, FrostEngineProjectDetectionIsOneRuleForBothSuffixesAndAnyCase) 
         EXPECT_FALSE(isFrostEngineProjectFileName(name)) << name;
 
     frost::io::MemFs fs(frost::systemClock());
-    const std::string legacy = frost::io::joinPath(root, "legacy").value();
-    const std::string upper = frost::io::joinPath(root, "upper").value();
-    const std::string hidden = frost::io::joinPath(root, "hidden").value();
+    const std::string legacy = frost::io::joinPath(root(), "legacy").value();
+    const std::string upper = frost::io::joinPath(root(), "upper").value();
+    const std::string hidden = frost::io::joinPath(root(), "hidden").value();
     ASSERT_TRUE(fs.createDirectories(legacy).has_value());
     ASSERT_TRUE(fs.createDirectories(upper).has_value());
     ASSERT_TRUE(fs.createDirectories(hidden).has_value());
@@ -112,10 +126,10 @@ TEST(ManagedService, RequiresTrustAndConfiguresCSharpProcess) {
     ASSERT_TRUE(reactor.has_value());
     frost::sched::SimExecutor sim;
     frost::io::ScriptedProcessLauncher launcher;
-    auto options = frost::lang::managedServiceOptions(tool, root + "/CSharpLanguageServer.dll", root, false);
+    auto options = frost::lang::managedServiceOptions(tool(), root() + "/CSharpLanguageServer.dll", root(), false);
     EXPECT_EQ(options.languageId, "csharp");
     ASSERT_EQ(options.arguments.size(), 3U);
-    EXPECT_EQ(options.arguments[0], root + "/CSharpLanguageServer.dll");
+    EXPECT_EQ(options.arguments[0], root() + "/CSharpLanguageServer.dll");
     frost::lang::ManagedService server(launcher, {**reactor, sim}, options);
     EXPECT_EQ(server.start().error().code(), frost::ErrorCode::Untrusted);
     EXPECT_TRUE(launcher.launches().empty());
@@ -128,7 +142,7 @@ TEST(ManagedService, RequiresTrustAndConfiguresCSharpProcess) {
     frost::lang::ManagedService trusted(launcher, {**reactor, sim}, options);
     auto document = frost::text::Document::fromUtf8("class Sample {}\n");
     ASSERT_TRUE(document.has_value());
-    ASSERT_TRUE(trusted.openDocument(frost::io::joinPath(root, "main.cs").value(), document->text()).has_value());
+    ASSERT_TRUE(trusted.openDocument(frost::io::joinPath(root(), "main.cs").value(), document->text()).has_value());
     ASSERT_TRUE(trusted.start().has_value());
     sim.runFor(5ms);
     ASSERT_EQ(trusted.state(), frost::lang::LuaState::Running);
@@ -179,8 +193,8 @@ TEST(LuaService, ConfigurationMatchesEngineAndSupportsSections) {
 }
 TEST(LuaService, ParseCheckReportAndInspectGateValidateInputs) {
     frost::io::MemFs fs(frost::systemClock());
-    const std::string fileA = frost::io::joinPath(root, "scripts/a.lua").value();
-    const std::string fileB = frost::io::joinPath(root, "scripts/b.lua").value();
+    const std::string fileA = frost::io::joinPath(root(), "scripts/a.lua").value();
+    const std::string fileB = frost::io::joinPath(root(), "scripts/b.lua").value();
     ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(fileA)).has_value());
     ASSERT_TRUE(fs.writeFileAtomic(fileA, "local x = 1\nprint(missingGlobal)\n").has_value());
     ASSERT_TRUE(fs.writeFileAtomic(fileB, "local unused = 2\n").has_value());
@@ -235,8 +249,8 @@ TEST(LuaService, ParseCheckReportAndInspectGateValidateInputs) {
 
     frost::io::ScriptedProcessLauncher launcher;
     frost::lang::LuaInspectOptions inspectOpts;
-    inspectOpts.directory = frost::io::joinPath(root, "scripts").value();
-    inspectOpts.stateDirectory = frost::io::joinPath(root, "state").value();
+    inspectOpts.directory = frost::io::joinPath(root(), "scripts").value();
+    inspectOpts.stateDirectory = frost::io::joinPath(root(), "state").value();
     inspectOpts.search = frost::lang::LuaSearch{};
     inspectOpts.trusted = false;
     EXPECT_EQ(frost::lang::inspectLuaDirectory(launcher, fs, inspectOpts).error().code(), frost::ErrorCode::Untrusted);
@@ -256,8 +270,8 @@ TEST(LuaService, DelayedRequestSurvivesServiceDestruction) {
     frost::sched::SimExecutor sim;
     frost::io::ScriptedProcessLauncher launcher;
     frost::lang::LuaServiceOptions options;
-    options.serverPath = tool;
-    options.workspaceRoot = root;
+    options.serverPath = tool();
+    options.workspaceRoot = root();
     auto service =
         std::make_unique<frost::lang::LuaService>(launcher, frost::io::AsyncContext{**reactor, sim}, options);
     auto request = service->request("textDocument/hover", frost::lang::Json::object());
@@ -272,8 +286,8 @@ TEST(LuaService, TrustStopsLaunchAndScriptedServerReceivesLuaDocuments) {
     frost::sched::SimExecutor sim;
     frost::io::ScriptedProcessLauncher launcher;
     frost::lang::LuaServiceOptions options;
-    options.serverPath = tool;
-    options.workspaceRoot = root;
+    options.serverPath = tool();
+    options.workspaceRoot = root();
     {
         frost::lang::LuaService untrusted(launcher, {**reactor, sim}, options);
         EXPECT_EQ(untrusted.start().error().code(), frost::ErrorCode::Untrusted);
@@ -290,7 +304,7 @@ TEST(LuaService, TrustStopsLaunchAndScriptedServerReceivesLuaDocuments) {
     frost::lang::LuaService service(launcher, {**reactor, sim}, options);
     auto document = frost::text::Document::fromUtf8("local x = 1\n");
     ASSERT_TRUE(document.has_value());
-    ASSERT_TRUE(service.openDocument(frost::io::joinPath(root, "main.lua").value(), document->text()).has_value());
+    ASSERT_TRUE(service.openDocument(frost::io::joinPath(root(), "main.lua").value(), document->text()).has_value());
     ASSERT_TRUE(service.start().has_value());
     sim.runFor(5ms);
     ASSERT_EQ(service.state(), frost::lang::LuaState::Running);

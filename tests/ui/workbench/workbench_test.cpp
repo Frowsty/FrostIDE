@@ -921,8 +921,8 @@ TEST_F(WorkbenchTest, MergeViewAppliesPerChunkChoicesAndResolves) {
     MergeView* view = app.window->findChild<MergeView*>(QStringLiteral("mergeView"));
     ASSERT_NE(view, nullptr);
     // Three aligned panes: every pane has the same rows.
-    EXPECT_EQ(view->layout().map(nav::MergePane::Yours).rowCount(),
-              view->layout().map(nav::MergePane::Disk).rowCount());
+    EXPECT_EQ(view->mergePanes().map(nav::MergePane::Yours).rowCount(),
+              view->mergePanes().map(nav::MergePane::Disk).rowCount());
     ASSERT_EQ(view->changes().size(), 2U); // The conflict on line 1, the disk's change on line 3.
     EXPECT_EQ(view->unresolvedCount(), 1U);
     ASSERT_TRUE(view->acceptRight(view->changes()[0]).has_value());

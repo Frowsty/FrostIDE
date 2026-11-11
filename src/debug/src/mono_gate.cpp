@@ -18,7 +18,7 @@ Result<Ticket> SessionGate::begin(Operation op, std::uint32_t requestId) {
     case Operation::Version: allowed = phase == Phase::Version; break;
     case Operation::Negotiate: allowed = phase == Phase::Negotiating; break;
     case Operation::Suspend: allowed = phase == Phase::Running; break;
-    case Operation::Resume: allowed = phase == Phase::Suspended; break;
+    case Operation::Resume:
     case Operation::Metadata:
     case Operation::Breakpoint:
     case Operation::Frames:

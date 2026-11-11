@@ -113,6 +113,7 @@ TEST(ThreadSampler, SampledFramesSymbolizeToTheBlockedChain) {
     __atomic_store_n(&g_release, true, __ATOMIC_RELEASE);
     target.join();
     ASSERT_TRUE(taken.has_value()) << taken.error().describe();
+    ASSERT_TRUE(sample.captured());
     ASSERT_GE(sample.count, 3u);
 
     const std::vector<std::uintptr_t> frames(sample.frames.begin(), sample.frames.begin() + 3);

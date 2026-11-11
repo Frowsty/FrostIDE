@@ -801,7 +801,7 @@ CommandResult toggleCase(const CommandInput& in) noexcept {
             if (len > 0) {
                 converted.append(reinterpret_cast<const char*>(buf), static_cast<std::size_t>(len));
             } else {
-                converted.append(rem.data(), c.bytes);
+                converted.append(rem.substr(0, c.bytes));
             }
             rem.remove_prefix(c.bytes);
         }
@@ -814,9 +814,7 @@ CommandResult toggleCase(const CommandInput& in) noexcept {
     std::vector<Selection> after;
     after.reserve(plans.size());
     for (const Plan& plan : plans) {
-        if (!plan.editId) {
-            after.push_back(Selection::caret(batch.map(plan.originalCaret, Bias::Right)));
-        } else if (plan.wasEmpty) {
+        if (!plan.editId || plan.wasEmpty) {
             after.push_back(Selection::caret(batch.map(plan.originalCaret, Bias::Right)));
         } else {
             const ByteOffset start = batch.post(*plan.editId, 0);

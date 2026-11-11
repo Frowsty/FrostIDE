@@ -19,6 +19,7 @@ namespace frost::vcs::detail {
 
 class SerialQueue {
 public:
+    // The erased invocation owns its token until the synchronous callback returns.
     using Job = std::function<void(std::stop_token)>;
     using Clock = std::chrono::steady_clock;
 
@@ -44,7 +45,7 @@ public:
     [[nodiscard]] bool waitIdle(std::chrono::milliseconds timeout) const;
 
 private:
-    void run(std::stop_token stop);
+    void run(const std::stop_token& stop);
 
     mutable Mutex m_mutex;
     mutable std::condition_variable m_changed;

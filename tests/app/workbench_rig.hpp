@@ -126,7 +126,7 @@ public:
     }
     void write(std::string_view relative, std::string_view bytes) const {
         const std::string file = join(relative);
-        ASSERT_TRUE(io::realFileSystem().createDirectories(std::string(io::parentPath(file))).has_value());
+        ASSERT_TRUE(io::realFileSystem().createDirectories(io::parentPath(file)).has_value());
         ASSERT_TRUE(io::realFileSystem().writeFileAtomic(file, bytes).has_value()) << file;
     }
     [[nodiscard]] std::string read(std::string_view relative) const {

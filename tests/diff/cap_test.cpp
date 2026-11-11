@@ -41,7 +41,7 @@ public:
         for (std::uint32_t i = 0; i < lines; ++i) {
             m_starts.push_back(m_text.size());
             if (i % 7 == 3) {
-                m_text += "\n";
+                m_text += '\n';
             } else if (i % 11 == 5) {
                 m_text += "}\n";
             } else {

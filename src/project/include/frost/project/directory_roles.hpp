@@ -119,8 +119,8 @@ public:
      * The roles of the project at `root` (absolute). Errors: InvalidArgument (a relative root). Never
      * reads the file system itself; decide() does (header comment).
      */
-    [[nodiscard]] static Result<std::shared_ptr<const DirectoryRoles>> create(io::IFileSystem& fs, std::string root,
-                                                                              Options options);
+    [[nodiscard]] static Result<std::shared_ptr<const DirectoryRoles>> create(io::IFileSystem& fs,
+                                                                              const std::string& root, Options options);
     /*
      * create() with rule 3 filled from the root's CMake presets (every configure preset's binaryDir,
      * hidden and disabled ones included: the folders exist whichever preset is active). Reading

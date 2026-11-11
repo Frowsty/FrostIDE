@@ -147,6 +147,16 @@ struct RunResult {
 
 // The callbacks of one run (start()); every member optional (header comment, "Callbacks").
 struct RunHandlers {
+    // Optional final admission on the dispatcher immediately before each child starts (tasks too).
+    // Must be thread-safe and must not wait on the GUI. May validate physical paths/configuration
+    // directories on this worker; errors finish without launching that child. Use shared revision
+    // state to revoke a queued engine run when trust/session generation changes.
+    std::function<Result<void>()> launchAdmission{};
+    // Optional dispatcher-thread resolution of the final program plan, after tasks and initial
+    // admission, before the root child. May perform bounded worker I/O; no QObjects. The result is
+    // normalized, saved as the actual plan, then launchAdmission is rechecked (it must be idempotent).
+    // Errors prevent the root child. Does not affect task plans or RunMode::Prepare's returned plan.
+    std::function<Result<LaunchPlan>(LaunchPlan)> transformLaunchPlan{};
     // Running, Stopping, and BeforeLaunch with beforeLaunchTask set when a task starts (RUN-5).
     std::function<void(const RunStatus& run)> onPhaseChanged{};
     std::function<void(OutputStream stream, std::string_view text)> onOutput{};

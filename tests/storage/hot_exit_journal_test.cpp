@@ -32,7 +32,6 @@ using frost::storage::HotExitJournal;
 using frost::storage::JournalOptions;
 using frost::storage::PutOutcome;
 using frost::storage::RecoveredJournal;
-using frost::storage::RecoveryScan;
 using frost::storage::Synchronous;
 using frost::storage::test::fileExists;
 using frost::storage::test::HookGuard;
@@ -163,7 +162,6 @@ TEST(HotExitJournal, ChunkBoundaries) {
 
 TEST(HotExitJournal, TenThousandOneBytePieces) {
     ScratchDir dir("storage-journal");
-    std::string expected;
     std::vector<std::string_view> pieces;
     const std::string bytes = randomBytes(10000, 77);
     for (std::size_t i = 0; i < bytes.size(); ++i) {

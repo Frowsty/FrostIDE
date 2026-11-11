@@ -29,9 +29,9 @@ protected:
         ASSERT_EQ(crypto_sign_keypair(key.data(), secret.data()), 0);
     }
     void TearDown() override { sodium_memzero(secret.data(), secret.size()); }
-    frost::update::AuthenticatedRelease release(std::uint64_t build = 42, std::string version = "1.2.3",
-                                                std::string digest = std::string(64, 'a'),
-                                                std::string channel = "stable") {
+    frost::update::AuthenticatedRelease release(std::uint64_t build = 42, const std::string& version = "1.2.3",
+                                                const std::string& digest = std::string(64, 'a'),
+                                                const std::string& channel = "stable") {
         const auto json = "{\"schema\":1,\"channel\":\"" + channel +
                           "\",\"platform\":\"windows\",\"arch\":\"x64\",\"version\":\"" + version +
                           "\",\"build\":" + std::to_string(build) +

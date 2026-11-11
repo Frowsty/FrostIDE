@@ -275,7 +275,7 @@ TEST(CMakePresetsOracle, ResolvesMacrosAndInheritanceAsCMakeConfigures) {
         const CMakeProfile profile = cmakeProfileFromPreset(folder, preset, nullptr);
         auto arguments = cmakeConfigureArguments(profile, folder, ninja);
         ASSERT_TRUE(arguments.has_value()) << arguments.error().describe();
-        arguments->push_back("--fresh");
+        arguments->emplace_back("--fresh");
         auto direct = runCMake(*arguments, folder, profile.environment);
         ASSERT_TRUE(direct.has_value()) << direct.error().describe();
         ASSERT_EQ(direct->exitCode, 0) << direct->stdoutBytes << direct->stderrBytes;

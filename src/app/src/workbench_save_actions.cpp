@@ -67,6 +67,8 @@ void Workbench::runActionsOnSave(document::FileDocument& document) {
     if (view == nullptr || view->editor().isReadOnly()) {
         return;
     }
+    // Save actions can invoke editor/notification callbacks that rebind the document.
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): Stable save identity.
     const std::string path = document.path();
     const QString name = displayName(path);
     if (!m_clangd || m_clangd->state() != lang::ClangdState::Running) {

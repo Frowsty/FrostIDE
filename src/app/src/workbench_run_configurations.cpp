@@ -17,6 +17,7 @@
 #include "frost/ui/tr.hpp"
 
 #include "cmake_integration.hpp"
+#include "engine_integration.hpp"
 #include <QDialog>
 
 #include <format>
@@ -55,6 +56,13 @@ std::vector<run::RunConfiguration> Workbench::generatedRunConfigurations() const
         }
         for (run::RunConfiguration& entry : run::msbuildRunConfigurations(*m_solution, configuration)) {
             // A CMake target and a project of the same name keep distinct ids.
+            entry.id = run::uniqueRunConfigurationId(entry.id, generated);
+            generated.push_back(std::move(entry));
+        }
+    }
+    if (m_engine) {
+        auto engineConfigurations = m_engine->configurations();
+        for (auto& entry : engineConfigurations) {
             entry.id = run::uniqueRunConfigurationId(entry.id, generated);
             generated.push_back(std::move(entry));
         }

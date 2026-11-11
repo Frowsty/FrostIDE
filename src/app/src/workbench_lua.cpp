@@ -478,7 +478,7 @@ void Workbench::refreshLuaConfiguration() {
         m_retiredLua.push_back(m_pool->spawn(
             sched::Lane::UserVisible,
             prepareLuaPlanTask(&m_services.fs, m_luaState, m_luaRuntimeVersion, stateDirectory, root, self,
-                               [self, generation](LuaPlan plan, std::optional<std::string>) {
+                               [self, generation](LuaPlan plan, std::optional<std::string>&&) {
                                    if (!self || self->m_shutDown || !self->m_lua || !self->m_luaState ||
                                        self->m_luaState->generation != generation)
                                        return;
@@ -744,7 +744,7 @@ Result<std::vector<lang::FileDiagnostics>> Workbench::inspectLuaCode(std::string
     }
     WorkbenchLuaState& state = luaState(m_luaState, m_services.launcher);
     const std::string scopeKey = lang::documentKey(target);
-    const auto applyFileToViews = [this](const std::string& file, const std::optional<lang::FileDiagnostics>& set) {
+    const auto applyFileToViews = [this](const std::string& file, const lang::FileDiagnostics* set) {
         if (m_lua && m_lua->diagnostics().forFile(file))
             return;
         std::vector<ui::LineMarker> markers;
@@ -767,9 +767,12 @@ Result<std::vector<lang::FileDiagnostics>> Workbench::inspectLuaCode(std::string
         for (DocumentEditorView* view : m_editors->views()) {
             if (lang::documentKey(view->path()) != key)
                 continue;
-            if (auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>())
-                binding->setLiveDiagnostics(set.value_or(emptyFileDiagnostics(file)));
-            else
+            if (auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>()) {
+                if (set)
+                    binding->setLiveDiagnostics(*set);
+                else
+                    binding->setLiveDiagnostics(emptyFileDiagnostics(file));
+            } else
                 view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live,
                                               set ? ui::lang::toEditorDiagnostics(*set)
                                                   : std::vector<ui::EditorDiagnostic>{});
@@ -779,12 +782,12 @@ Result<std::vector<lang::FileDiagnostics>> Workbench::inspectLuaCode(std::string
     for (const lang::FileDiagnostics& previous : state.inspected.files()) {
         if (touches(lang::documentKey(previous.file), scopeKey)) {
             state.inspected.publish(emptyFileDiagnostics(previous.file));
-            applyFileToViews(previous.file, std::nullopt);
+            applyFileToViews(previous.file, nullptr);
         }
     }
     for (const lang::FileDiagnostics& file : *result) {
         state.inspected.publish(file);
-        applyFileToViews(file.file, file);
+        applyFileToViews(file.file, &file);
     }
     refreshLiveProblems();
     if (m_window)
@@ -842,7 +845,7 @@ void Workbench::inspectLuaCodeAsync(std::string_view scopeDirectory,
                               WorkbenchLuaState& state = luaState(self->m_luaState, self->m_services.launcher);
                               const std::string scopeKey = lang::documentKey(target);
                               const auto applyFileToViews = [self](const std::string& file,
-                                                                   const std::optional<lang::FileDiagnostics>& set) {
+                                                                   const lang::FileDiagnostics* set) {
                                   if (self->m_lua && self->m_lua->diagnostics().forFile(file))
                                       return;
                                   std::vector<ui::LineMarker> markers;
@@ -866,9 +869,12 @@ void Workbench::inspectLuaCodeAsync(std::string_view scopeDirectory,
                                   for (DocumentEditorView* view : self->m_editors->views()) {
                                       if (lang::documentKey(view->path()) != key)
                                           continue;
-                                      if (auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>())
-                                          binding->setLiveDiagnostics(set.value_or(emptyFileDiagnostics(file)));
-                                      else
+                                      if (auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>()) {
+                                          if (set)
+                                              binding->setLiveDiagnostics(*set);
+                                          else
+                                              binding->setLiveDiagnostics(emptyFileDiagnostics(file));
+                                      } else
                                           view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live,
                                                                         set ? ui::lang::toEditorDiagnostics(*set)
                                                                             : std::vector<ui::EditorDiagnostic>{});
@@ -878,12 +884,12 @@ void Workbench::inspectLuaCodeAsync(std::string_view scopeDirectory,
                               for (const lang::FileDiagnostics& previous : state.inspected.files()) {
                                   if (touches(lang::documentKey(previous.file), scopeKey)) {
                                       state.inspected.publish(emptyFileDiagnostics(previous.file));
-                                      applyFileToViews(previous.file, std::nullopt);
+                                      applyFileToViews(previous.file, nullptr);
                                   }
                               }
                               for (const lang::FileDiagnostics& file : *result) {
                                   state.inspected.publish(file);
-                                  applyFileToViews(file.file, file);
+                                  applyFileToViews(file.file, &file);
                               }
                               self->refreshLiveProblems();
                               if (self->m_window)

@@ -9,6 +9,7 @@
 #include "frost/io/path.hpp"
 
 #include <algorithm>
+#include <array>
 #include <format>
 #include <limits>
 #include <set>
@@ -89,8 +90,9 @@ public:
     }
 
     // An array of strings, each checked against `vocabulary` when one is given.
+    template<typename Vocabulary = std::set<std::string, std::less<>>>
     std::vector<std::string> strings(const Json& object, const std::string& path, std::string_view key,
-                                     const std::set<std::string, std::less<>>* vocabulary = nullptr) {
+                                     const Vocabulary* vocabulary = nullptr) {
         std::vector<std::string> out;
         const Json* list = array(object, path, key);
         if (list == nullptr) {
@@ -103,7 +105,14 @@ public:
                 fault(at, std::format("is {}, expected a string", kindName(list->items()[i].kind())));
                 return out;
             }
-            if (vocabulary != nullptr && !vocabulary->contains(*text)) {
+            const auto known = [&] {
+                if constexpr (requires { vocabulary->contains(*text); }) {
+                    return vocabulary->contains(*text);
+                } else {
+                    return std::ranges::contains(*vocabulary, std::string_view(*text));
+                }
+            };
+            if (vocabulary != nullptr && !known()) {
                 fault(at, std::format("\"{}\" is not one of the document's own names", *text));
                 return out;
             }
@@ -405,6 +414,29 @@ Result<SchemaDocument> parseSchemaDocument(const rpc::Json& document) {
             parsed.name = read.string(command, at, "name", true);
             parsed.category = read.string(command, at, "category");
             parsed.flags = read.strings(command, at, "flags");
+            if (const Json* policy = command.find("idePolicy")) {
+                const std::string policyAt = at + ".idePolicy";
+                if (!policy->isObject()) {
+                    read.fault(policyAt, "is not an object");
+                } else {
+                    SchemaCommandIdePolicy ide;
+                    ide.allowed = read.boolean(*policy, policyAt, "allowed");
+                    static constexpr std::array<std::string_view, 5> states{"Edit", "Play", "Simulate", "Paused",
+                                                                            "DebuggerPaused"};
+                    ide.states = read.strings(*policy, policyAt, "states", &states);
+                    ide.requiresMutationPermission = read.boolean(*policy, policyAt, "requiresMutationPermission");
+                    ide.requiredCapabilities = read.strings(*policy, policyAt, "requiredCapabilities");
+                    if (ide.allowed && ide.states.empty()) {
+                        read.fault(policyAt + ".states", "an allowed command requires at least one state");
+                    }
+                    for (std::size_t cap = 0; cap < ide.requiredCapabilities.size(); ++cap) {
+                        if (ide.requiredCapabilities[cap].empty()) {
+                            read.fault(std::format("{}.requiredCapabilities[{}]", policyAt, cap), "is empty");
+                        }
+                    }
+                    parsed.idePolicy = std::move(ide);
+                }
+            }
             out.commands.push_back(std::move(parsed));
         }
     }

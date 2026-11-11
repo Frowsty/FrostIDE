@@ -22,6 +22,9 @@
  *                    file name ("FrostEditor.exe", ASCII case ignored on Windows) or the absolute
  *                    path of its executable (RUN-5). Debug-only: there is nothing to run. It has no
  *                    program, arguments, working directory, environment or before-launch steps.
+ *   - frost-editor / frost-player: `program` selects the actual editor/player executable and build
+ *                    configuration; `engineProjectPath` names an absolute project directory or
+ *                    .frostproj. launchPlanFor adds --project with that path (RUN-11).
  * beforeLaunch Build asks the RunManager's before-launch handler to build `target` first (only for
  * cmake-target and msbuild: a native program has nothing FrostIDE could build).
  *
@@ -31,7 +34,7 @@
  * with a code other than 0, or cannot start, stops the run: the program is not started. Each task's
  * program is absolute; its working directory is its own, else the configuration's, else the
  * program's folder; it gets FrostIDE's own environment (not the configuration's changes). Tasks are
- * allowed on native and cmake-target configurations; msbuild configurations run through the
+ * allowed on native, cmake-target and FrostEngine configurations; msbuild configurations run through the
  * RunService, which has no task step yet, so they refuse tasks rather than skip them.
  *
  * Store. One UTF-8 JSON file per workspace, <workspace>/.frost/runConfigurations/configurations.json
@@ -62,6 +65,9 @@
  * written as version 1, so a FrostIDE before RUN-5 reads it; one that uses them is version 2, which
  * such a FrostIDE refuses (Unsupported) instead of dropping what it does not know.
  *
+ * Version 3 (RUN-11) adds "frost-editor", "frost-player" and "engineProjectPath". Stores
+ * using these types require version 3; ordinary stores retain their version 1 or 2 format.
+ *
  * Reading is strict about what it understands and lenient about what it does not: unknown members
  * are ignored (a later version-1 writer may add some), but a missing or wrong-typed known member,
  * an unknown type or beforeLaunch spelling, an invalid configuration (validateRunConfiguration) or
@@ -88,9 +94,9 @@ class IFileSystem;
 
 namespace frost::run {
 
-enum class RunType : std::uint8_t { Native, CMakeTarget, MSBuild, Compound, Attach };
+enum class RunType : std::uint8_t { Native, CMakeTarget, MSBuild, Compound, Attach, FrostEditor, FrostPlayer };
 
-// "native", "cmake-target", "msbuild", "compound" or "attach" (the JSON spelling).
+// JSON spelling, including "frost-editor" and "frost-player" (RUN-11).
 [[nodiscard]] std::string_view toString(RunType type) noexcept;
 // The type for its JSON spelling; nullopt for anything else. Case-sensitive.
 [[nodiscard]] std::optional<RunType> parseRunType(std::string_view text) noexcept;
@@ -137,10 +143,15 @@ struct RunConfiguration {
     std::string workingDirectory{};
     std::vector<EnvironmentEntry> environment{};
     BeforeLaunch beforeLaunch = BeforeLaunch::None;
-    // Run after the Build step, before the program (header comment); native and cmake-target only.
+    // Run after the Build step, before the program (header comment); native, cmake-target and engine types.
     std::vector<BeforeLaunchTask> beforeLaunchTasks{};
     // compound: the member configurations' ids, in start order; empty for every other type.
     std::vector<std::string> configurations{};
+
+    // RUN-11: absolute project directory or .frostproj file. The explicit program selects the
+    // editor/player build configuration. Empty on other types. Both types own their launched process;
+    // pairing with an external editor is an EngineSession operation, never a run configuration.
+    std::string engineProjectPath{};
 
     friend bool operator==(const RunConfiguration&, const RunConfiguration&) = default;
 };
@@ -157,16 +168,19 @@ struct RunConfiguration {
  * native: a program, no target and no Build step; cmake-target: a target; msbuild: an absolute
  * target; compound: at least one member, each a valid id, none twice and not its own; attach: a
  * target that is a file name or an absolute path; compound and attach: nothing else set; tasks only
- * on native and cmake-target, each with an absolute program and an empty or absolute working
+ * on native, cmake-target and FrostEngine types, each with an absolute program and an empty or absolute working
  * directory; program and workingDirectory empty or absolute (io::normalizePath accepts them);
  * environment names non-empty and free of '=' and NUL, values and arguments free of NUL.
  * Errors: InvalidArgument naming the configuration and the field. Pure. O(size).
  */
 [[nodiscard]] Result<void> validateRunConfiguration(const RunConfiguration& configuration);
 
-// The store's newest format version; files with a higher one are refused (Unsupported). A store
-// without version-2 features is written as version 1 (header comment, "Version 2").
-inline constexpr int kRunConfigurationsVersion = 2;
+// The store's newest format version; files with a higher one are refused (Unsupported). Stores
+// retain version 1 or 2 when no RUN-11 types are present (header comment, "Version 3").
+inline constexpr int kRunConfigurationsVersion = 3;
+
+// Whether this is a RUN-11 editor/player configuration. Pure, constant time.
+[[nodiscard]] bool isFrostEngineRunType(RunType type) noexcept;
 
 // Parses a store file's text (header comment). Errors: Corrupt (malformed JSON, a bad entry, a
 // duplicate id), Unsupported (a newer version). O(size).

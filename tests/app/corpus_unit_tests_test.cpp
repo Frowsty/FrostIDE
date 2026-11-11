@@ -41,7 +41,7 @@ std::string pinnedCorpus() {
         return {};
     }
     const std::string sha = FROST_CORPUS_FROSTENGINE_SHA;
-    const std::string corpus = frost::io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
+    std::string corpus = frost::io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
     const auto head = frost::io::realFileSystem().readFile(corpus + "/.git/HEAD");
     if (!head || head->substr(0, 40) != sha) {
         ADD_FAILURE() << corpus << " is missing or not detached at its pin (python tools/corpora.py verify)";

@@ -12,8 +12,12 @@
 
 frost_add_library(engine LAYER engine
     SOURCES
+        src/command_policy.cpp
         src/engine_cli.cpp
         src/engine_lua.cpp
         src/handle.cpp
+        src/project_content.cpp
         src/schema.cpp
-    DEPS frost::lang frost::text frost::rpc frost::io frost::core)
+        src/session.cpp
+    DEPS frost::lang frost::text frost::rpc frost::io frost::core
+    THIRD_PARTY unofficial-sodium::sodium)

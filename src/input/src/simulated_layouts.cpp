@@ -253,14 +253,19 @@ constexpr std::array kFrFrCompositions = {
 static_assert(kEnUsKeys.size() == 48 && kDeDeKeys.size() == 48 && kPlPlKeys.size() == 48 && kFrFrKeys.size() == 48,
               "each simulated layout holds the 48 ANSI/ISO writing keys");
 
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): constinit enforces compile-time table construction.
 constinit const LayoutTable kEnUs =
     LayoutTable::build("en-US:00000409", MappingMode::FullTable, kEnUsKeys, std::span<const Composition>());
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): constinit enforces compile-time table construction.
 constinit const LayoutTable kDeDe =
     LayoutTable::build("de-DE:00000407", MappingMode::FullTable, kDeDeKeys, kDeDeCompositions);
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): constinit enforces compile-time table construction.
 constinit const LayoutTable kPlPl =
     LayoutTable::build("pl-PL:00000415", MappingMode::FullTable, kPlPlKeys, kPlPlCompositions);
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): constinit enforces compile-time table construction.
 constinit const LayoutTable kFrFr =
     LayoutTable::build("fr-FR:0000040C", MappingMode::FullTable, kFrFrKeys, kFrFrCompositions);
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): constinit enforces compile-time table construction.
 constinit const LayoutTable kLinuxM1 =
     LayoutTable::build("en-US:LettersByLabel", MappingMode::LettersByLabel, kEnUsKeys, std::span<const Composition>());
 

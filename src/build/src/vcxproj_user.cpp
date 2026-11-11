@@ -309,9 +309,7 @@ Result<std::string> updateUserFileProperties(std::string_view existing, std::str
         first = false;
         node.print(writer, "", pugi::format_raw | pugi::format_no_declaration, pugi::encoding_utf8);
     }
-    if (fresh) {
-        writer.text.push_back('\n');
-    } else if (existing.ends_with('\n')) {
+    if (fresh || existing.ends_with('\n')) {
         writer.text.push_back('\n');
     }
     std::string result(bom ? kBom : std::string_view());

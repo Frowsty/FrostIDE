@@ -54,6 +54,8 @@ struct EditorUpdate {
 
 class Editor {
 public:
+    using Inlay = DisplayMap::Inlay;
+
     // An editor on `document` with one caret at 0, wrapping and measuring with `config.wrap` and
     // `shaper`. Precondition: both outlive the editor.
     Editor(Document& document, const ITextShaper& shaper, EditorConfig config = {}) noexcept;
@@ -85,8 +87,9 @@ public:
     [[nodiscard]] Result<EditorUpdate> apply(const CommandResult& result) noexcept;
     // Runs a pure command on input() and applies it: run(commands::type, "x").
     template<class Command, class... Args>
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): preserve lvalue command invocation.
     [[nodiscard]] Result<EditorUpdate> run(Command&& command, Args&&... args) noexcept {
-        return apply(command(input(), static_cast<Args&&>(args)...));
+        return apply(command(input(), std::forward<Args>(args)...));
     }
 
     // Undo and redo through the Document; the selections become the step's recorded ones.
@@ -114,6 +117,8 @@ public:
     }
     [[nodiscard]] Result<FoldId> addFold(ByteRange range) noexcept { return m_display.addFold(range); }
     [[nodiscard]] Result<void> removeFold(FoldId id) noexcept { return m_display.removeFold(id); }
+    void setInlays(std::vector<Inlay> inlays) noexcept;
+    [[nodiscard]] const std::vector<Inlay>& inlays() const noexcept;
 
 private:
     // Follows a history step: display map, then the step's selections (else the mapped ones).

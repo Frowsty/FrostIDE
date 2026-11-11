@@ -197,8 +197,9 @@ std::vector<RunningProcessInfo> enumerateRunningProcesses() {
     return processes;
 }
 
-void showAttachToProcessDialog(QWidget* parent,
-                               std::function<void(const RunningProcessInfo& proc, bool attachAsDotNet)> onAttach) {
+void showAttachToProcessDialog(
+    QWidget* parent, // NOLINTNEXTLINE(performance-unnecessary-value-param): Modal callback snapshot.
+    std::function<void(const RunningProcessInfo& proc, bool attachAsDotNet)> onAttach) {
     QDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("attachToProcessDialog"));
     dialog.setWindowTitle(QStringLiteral("Attach to Process"));

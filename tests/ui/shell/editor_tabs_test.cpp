@@ -55,7 +55,7 @@ TEST(EditorTabs, OpensActivatesAndReusesTabs) {
     EXPECT_EQ(tabs.open("/src/c.cpp", false).value_or(-1), 2);
     EXPECT_EQ(tabs.currentIndex(), 0);
 
-    factory.failing.push_back("/missing");
+    factory.failing.emplace_back("/missing");
     const auto failed = tabs.open("/missing");
     ASSERT_FALSE(failed.has_value());
     EXPECT_EQ(failed.error().code(), frost::ErrorCode::NotFound);

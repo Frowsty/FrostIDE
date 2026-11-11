@@ -197,7 +197,7 @@ std::optional<std::string> checkLspReplayByExtraction(std::string_view oldText, 
     return std::nullopt;
 }
 
-UndoDriver::UndoDriver(UndoDriverOptions options, std::string label, std::string initial)
+UndoDriver::UndoDriver(UndoDriverOptions options, std::string label, const std::string& initial)
     : m_options(options), m_label(std::move(label)),
       m_document(std::move(TextBuffer::fromUtf8(initial, options.buffer)).value(),
                  DocumentOptions{options.coalesceWindow, options.maxTransactions}, m_clock),

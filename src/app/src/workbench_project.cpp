@@ -430,9 +430,18 @@ void Workbench::offerProjectTrust() {
     }
 }
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param): Own identities across reentrant project callbacks.
 void Workbench::setProject(std::string root, QString name, std::string recentPath) {
     invalidateManagedDebug();
     cancelFind();
+    if (!m_resourceGovernor)
+        m_resourceGovernor = std::make_shared<sched::ResourceGovernor>();
+    m_cppInspectionStop.request_stop();
+    ++m_cppInspectionGeneration;
+    m_lastCppInspectionReport.reset();
+    m_cppInspectionTrustRevision.reset();
+    if (m_problems)
+        m_problems->model()->setProblems(ui::DiagnosticSource::Inspection, {});
     if (m_debug)
         m_debug->cancelRerun();
     m_projectRoot = std::move(root);
@@ -461,7 +470,7 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
 }
 
 bool Workbench::closeForOpen() {
-    if (m_projectEdit && m_projectEdit->busy()) {
+    if (m_projectEditWaitingForReaders || (m_projectEdit && m_projectEdit->busy())) {
         notify(text("The project stays open"), text("Wait for the project edit to finish."),
                ui::NotificationKind::Warning);
         return false;
@@ -508,6 +517,12 @@ bool Workbench::closeForOpen() {
         }
     }
     m_closingSolution = true;
+    m_cppInspectionStop.request_stop();
+    ++m_cppInspectionGeneration;
+    m_lastCppInspectionReport.reset();
+    m_cppInspectionTrustRevision.reset();
+    if (m_problems)
+        m_problems->model()->setProblems(ui::DiagnosticSource::Inspection, {});
     delete m_projectTrustDialog.data();
     m_projectTrustDialog.clear();
     m_projectTrustPromptedRoot.clear();

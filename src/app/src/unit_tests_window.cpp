@@ -6,15 +6,14 @@
 
 #include "unit_tests_window.hpp"
 
-#include "frost/build/cmake_service.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
-#include "frost/project/cmake_presets.hpp"
-#include "frost/project/trust_store.hpp"
 #include "frost/run/run_manager.hpp"
 #include "frost/run/test_runner.hpp"
 #include "frost/ui/test_results_tree.hpp"
 
+#include "project_properties_dialog.hpp"
+#include "trusted_project_launcher.hpp"
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -28,7 +27,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-#include <format>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -47,19 +46,14 @@ constexpr qsizetype kMaxConsole = 1 << 20;
 constexpr int kLocationPathRole = Qt::UserRole + 1;
 constexpr int kLocationLineRole = Qt::UserRole + 2;
 
-QString debugUnavailable() { return QStringLiteral("Debugging a single test comes with RUN-10."); }
-
-// Where the window's tests come from, or why it has none (unit_tests_window.hpp, "Where the tests come from").
-struct Source {
-    std::optional<run::CTestSetup> setup{};
-    QString unavailable{};
-};
+QString debugUnavailable() { return QStringLiteral("Select a single test or case to debug (RUN-10)."); }
 
 class UnitTestsWindow final : public QWidget {
 public:
     UnitTestsWindow(QWidget* parent, UnitTestsWindowContext context)
         : QWidget(parent), m_context(std::move(context)),
-          m_runner(run::TestRunner::create(*m_context.launcher, *m_context.fs)) {
+          m_runner(run::TestRunner::create(*m_context.launcher, *m_context.fs)), m_summary(new QLabel(this)),
+          m_watch(new QTimer(this)) {
         setObjectName(QStringLiteral("unitTestsToolWindow"));
         auto* outer = new QVBoxLayout(this);
         outer->setContentsMargins(6, 6, 6, 6);
@@ -85,13 +79,13 @@ public:
                            QStringLiteral("List the tests again (ctest -N)."));
         m_debug = button(QStringLiteral("Debug Selected Test"), "unitTestsDebugSelectedButton", debugUnavailable());
         m_debug->setEnabled(false);
+        // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer): Preserve Qt tab order.
         m_filter = new QLineEdit(this);
         m_filter->setObjectName(QStringLiteral("unitTestsFilterEdit"));
         m_filter->setPlaceholderText(QStringLiteral("Filter tests..."));
         toolbar->addWidget(m_filter, 1);
         outer->addLayout(toolbar);
 
-        m_summary = new QLabel(this);
         m_summary->setObjectName(QStringLiteral("unitTestsSummaryLabel"));
         m_summary->setWordWrap(true);
         m_summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -129,6 +123,7 @@ public:
         });
         connect(m_stop, &QPushButton::clicked, this, [this] { m_runner->cancel(); });
         connect(m_refresh, &QPushButton::clicked, this, [this] { refresh(); });
+        connect(m_debug, &QPushButton::clicked, this, [this] { debugSelected(); });
         connect(m_filter, &QLineEdit::textChanged, this, [this](const QString& text) {
             m_tree->setFilter(text);
             updateActions();
@@ -148,11 +143,13 @@ public:
         });
 
         // A new reply, profile or trust state lists the tests again (header comment, "Refresh").
-        m_watch = new QTimer(this);
         m_watch->setInterval(1000);
         connect(m_watch, &QTimer::timeout, this, [this] {
-            if (isVisible() && !m_runner->busy() && sourceKey() != m_listedKey)
-                refresh();
+            if (unitTestsSourceKey(m_context) != m_listedKey) {
+                m_runner->cancel();
+                if (!m_runner->busy())
+                    refresh();
+            }
         });
         m_watch->start();
         refresh();
@@ -166,56 +163,83 @@ public:
     UnitTestsWindow(const UnitTestsWindow&) = delete ("a QWidget");
     UnitTestsWindow& operator=(const UnitTestsWindow&) = delete ("a QWidget");
 
-private:
-    build::CMakeService* cmake() const { return m_context.cmake ? m_context.cmake() : nullptr; }
-
-    // Changes whenever the source would give another setup (cheap: a model snapshot).
-    std::string sourceKey() const {
-        build::CMakeService* service = cmake();
-        if (!service)
-            return m_context.solutionOpen && m_context.solutionOpen() ? "solution" : "none";
-        const auto model = service->model();
-        const auto profile = service->activeProfile();
-        const bool trusted = m_context.trust && m_context.trust->isTrusted(service->sourceDirectory());
-        return std::format("cmake|{}|{}|{}|{}", model ? model->replyIndex : std::string(),
-                           profile ? profile->name : std::string(), trusted, service->profileGeneration());
+    [[nodiscard]] std::vector<run::GutterTestCase> gutterCasesForFile(std::string_view filePath,
+                                                                      std::string_view content) const {
+        if (!listingCurrent())
+            return {};
+        std::vector<run::DiscoveredTest> tests;
+        std::vector<std::pair<std::string, std::vector<run::DoctestCase>>> doctestListings;
+        for (const std::string& name : m_tree->testNames()) {
+            if (const auto* t = m_tree->test(name))
+                tests.push_back(*t);
+            if (const auto* dc = m_tree->doctestCases(name))
+                doctestListings.emplace_back(name, *dc);
+        }
+        std::vector<std::pair<std::string, std::vector<run::GTestCase>>> gtestListings(m_listedGTestCases.begin(),
+                                                                                       m_listedGTestCases.end());
+        return run::resolveGutterTestCasesInFile(filePath, content, tests, doctestListings, gtestListings,
+                                                 m_setup->buildDirectory);
     }
 
-    Source source() const {
-        Source out;
-        build::CMakeService* service = cmake();
-        if (!service) {
-            out.unavailable =
-                m_context.solutionOpen && m_context.solutionOpen()
-                    ? QStringLiteral("Tests are listed by ctest, from a configured CMake build directory. This "
-                                     "Visual Studio solution has none, so no test is listed.")
-                    : QStringLiteral("Open a CMake folder: the Unit Tests window lists the tests ctest finds in "
-                                     "its configured build directory.");
-            return out;
+    [[nodiscard]] Result<void> runSingleCase(const run::GutterTestCase& tc) {
+        if (!listingCurrent() || m_runner->busy())
+            return fail(ErrorCode::Busy, "Unit tests runner is busy or not configured");
+        if (!currentGutterCase(tc))
+            return fail(ErrorCode::InvalidArgument, "The gutter test is no longer in the current test listing");
+        if (tc.framework == run::TestCaseFramework::Doctest && !tc.caseName.empty())
+            return startDoctestRequests({run::TestRunner::DoctestRunRequest{.test = tc.test, .cases = {tc.caseName}}},
+                                        {tc.test.name});
+        if (tc.framework == run::TestCaseFramework::GoogleTest && !tc.caseName.empty())
+            return startGTestRequests({run::TestRunner::GTestRunRequest{.test = tc.test, .cases = {tc.caseName}}},
+                                      {tc.test.name});
+        startRun({tc.test.name});
+        return {};
+    }
+
+    [[nodiscard]] Result<void> debugSingleCase(const run::GutterTestCase& tc) {
+        if (!listingCurrent() || m_runner->busy())
+            return fail(ErrorCode::Busy, "Unit tests are busy or not configured");
+        if (!currentGutterCase(tc))
+            return fail(ErrorCode::InvalidArgument, "The gutter test is no longer in the current test listing");
+        auto launch = run::buildSingleTestLaunch(*m_setup, tc.test, tc.caseName, tc.framework);
+        if (!launch)
+            return std::unexpected(launch.error());
+        return startDebug(*launch);
+    }
+
+private:
+    [[nodiscard]] bool currentGutterCase(const run::GutterTestCase& tc) const {
+        const auto* test = m_tree->test(tc.test.name);
+        if (!test || *test != tc.test)
+            return false;
+        if (tc.framework == run::TestCaseFramework::CTestWhole)
+            return tc.caseName.empty();
+        if (tc.framework == run::TestCaseFramework::Doctest) {
+            const auto* cases = m_tree->doctestCases(tc.test.name);
+            return cases && std::ranges::any_of(*cases, [&tc](const auto& item) { return item.name == tc.caseName; });
         }
-        const auto model = service->model();
-        const auto profile = service->activeProfile();
-        if (!model || !profile) {
-            out.unavailable = QStringLiteral("The CMake folder is not configured yet. Its tests are listed once a "
-                                             "configure has written its build directory.");
-            return out;
+        // CTest can register several exact cases in one positive Google Test filter. A gutter
+        // action narrows that command to one of its tokens; wildcards and exclusions are never
+        // evidence for an individual case identity.
+        if (!tc.caseName.empty() && tc.caseName.find_first_of("*?:-") == std::string::npos &&
+            tc.caseName.find('.') != std::string::npos && test->gtestFilter.find('-') == std::string::npos) {
+            std::string_view remaining(test->gtestFilter);
+            while (!remaining.empty()) {
+                const auto separator = remaining.find(':');
+                if (remaining.substr(0, separator) == tc.caseName)
+                    return true;
+                if (separator == std::string_view::npos)
+                    break;
+                remaining.remove_prefix(separator + 1);
+            }
         }
-        if (!m_context.trust || !m_context.trust->isTrusted(service->sourceDirectory())) {
-            out.unavailable = QStringLiteral("Trust this folder to list and run its tests: ctest runs the "
-                                             "project's test scripts and test programs.");
-            return out;
-        }
-        const project::CMakeTestPreset* preset = nullptr;
-        auto presets = project::loadCMakePresets(*m_context.fs, service->sourceDirectory());
-        if (presets && presets->has_value())
-            preset = run::testPresetFor(**presets, *profile);
-        auto setup = run::ctestSetupFor(*model, *profile, preset);
-        if (!setup) {
-            out.unavailable = QStringLiteral("ctest is unavailable: %1").arg(qs(setup.error().message()));
-            return out;
-        }
-        out.setup = std::move(*setup);
-        return out;
+        const auto listed = m_listedGTestCases.find(tc.test.name);
+        return listed != m_listedGTestCases.end() &&
+               std::ranges::any_of(listed->second, [&tc](const auto& item) { return item.fullName() == tc.caseName; });
+    }
+
+    [[nodiscard]] bool listingCurrent() const {
+        return m_setup.has_value() && !m_listedKey.empty() && unitTestsSourceKey(m_context) == m_listedKey;
     }
 
     // Posts `work` to the GUI thread (the runner calls back on its own threads).
@@ -224,13 +248,32 @@ private:
         QMetaObject::invokeMethod(this, std::move(work), Qt::QueuedConnection);
     }
 
+    // A job's callbacks must not publish to a new project/profile or a later trust grant.
+    template<typename F>
+    void postForSource(const std::string& source, std::uint64_t generation, F work) {
+        post([this, source, generation, work = std::move(work)]() mutable {
+            if (generation == m_listingGeneration && source == m_listedKey && source == unitTestsSourceKey(m_context))
+                work();
+        });
+    }
+
     void setSummary(const QString& text) { m_summary->setText(text); }
+
+    void notifyTestsChanged() {
+        if (m_context.testsChanged)
+            m_context.testsChanged();
+    }
 
     void refresh(std::optional<std::vector<std::string>> thenRun = std::nullopt) {
         if (m_runner->busy())
             return;
-        m_listedKey = sourceKey();
-        Source current = source();
+        const std::string key = unitTestsSourceKey(m_context);
+        if (m_listedKey != key)
+            m_explicitDoctest.clear();
+        m_listedKey = key;
+        const std::uint64_t generation = ++m_listingGeneration;
+        m_listedGTestCases.clear();
+        UnitTestsSource current = unitTestsSource(m_context);
         m_setup = current.setup;
         if (!m_setup) {
             m_tree->setTests({});
@@ -238,13 +281,23 @@ private:
             m_unavailable = current.unavailable;
             showDetails();
             updateActions();
+            notifyTestsChanged();
             return;
         }
         m_unavailable.clear();
+        // Each setup captures its trust admission. Delayed batch launches check that revision
+        // through the adapter, without consulting GUI-owned CMake state on a worker thread.
+        m_runner.reset();
+        m_projectLauncher = std::make_unique<TrustedProjectLauncher>(*m_context.launcher, *m_context.trust,
+                                                                     current.trustRoot, current.trustRevision);
+        m_runner = run::TestRunner::create(*m_projectLauncher, *m_context.fs);
         setSummary(QStringLiteral("Listing the tests (ctest -N in %1)...").arg(qs(m_setup->buildDirectory)));
         const run::CTestSetup setup = *m_setup;
-        auto started = m_runner->discover(setup, [this, thenRun](Result<std::vector<run::DiscoveredTest>> tests) {
-            post([this, thenRun, tests = std::move(tests)]() mutable { listed(std::move(tests), thenRun); });
+        auto started = m_runner->discover(setup, [this, key, generation, thenRun = std::move(thenRun)](
+                                                     Result<std::vector<run::DiscoveredTest>> tests) mutable {
+            postForSource(key, generation, [this, thenRun = std::move(thenRun), tests = std::move(tests)]() mutable {
+                listed(std::move(tests), std::move(thenRun));
+            });
         });
         if (!started)
             setSummary(QStringLiteral("ctest could not list the tests: %1").arg(qs(started.error().message())));
@@ -259,6 +312,7 @@ private:
                 QStringLiteral("ctest could not list the tests: %1").arg(message.section(QLatin1Char('\n'), 0, 0)));
             m_details->setPlainText(message);
             updateActions();
+            notifyTestsChanged();
             return;
         }
         const std::size_t count = tests->size();
@@ -268,15 +322,18 @@ private:
         if (!m_setup->testPreset.empty())
             text += QStringLiteral(" (test preset %1)").arg(qs(m_setup->testPreset));
         setSummary(text);
-        m_listedSummary = text;
+        m_listedSummary = std::move(text);
         showDetails();
         updateActions();
+        notifyTestsChanged();
         listDoctest(m_tree->testNames(), std::move(thenRun));
     }
 
     // Lists the doctest cases of `names`' doctest programs (header comment, "doctest"), then runs
     // `thenRun` when given.
     void listDoctest(const std::vector<std::string>& names, std::optional<std::vector<std::string>> thenRun) {
+        if (!listingCurrent())
+            return;
         std::vector<run::DiscoveredTest> doctest;
         for (const std::string& name : names)
             if (const run::DiscoveredTest* test = m_tree->test(name);
@@ -291,8 +348,10 @@ private:
         setSummary(m_listedSummary +
                    QStringLiteral("; listing the doctest cases of %1 test(s)...").arg(doctest.size()));
         auto started = m_runner->listDoctestCases(
-            *m_setup, std::move(doctest), [this, thenRun](std::vector<run::TestRunner::DoctestListing> listings) {
-                post([this, thenRun, listings = std::move(listings)]() mutable {
+            *m_setup, std::move(doctest),
+            [this, key = m_listedKey, generation = m_listingGeneration,
+             thenRun](std::vector<run::TestRunner::DoctestListing> listings) {
+                postForSource(key, generation, [this, thenRun, listings = std::move(listings)]() mutable {
                     doctestListed(std::move(listings), std::move(thenRun));
                 });
             });
@@ -304,6 +363,8 @@ private:
 
     void doctestListed(std::vector<run::TestRunner::DoctestListing> listings,
                        std::optional<std::vector<std::string>> thenRun) {
+        if (!listingCurrent())
+            return;
         std::size_t cases = 0, tests = 0;
         QStringList failures;
         std::vector<std::pair<std::string, std::vector<run::DoctestCase>>> listed;
@@ -324,6 +385,7 @@ private:
         }
         setSummary(text);
         updateActions();
+        notifyTestsChanged();
         if (thenRun)
             startRun(std::move(*thenRun));
     }
@@ -333,40 +395,51 @@ private:
 
     /*
      * Run Selected (header comment, "doctest"): a selection of only doctest tests and cases that
-     * holds a case runs them with doctest directly, which gives every case's result; any other
-     * selection runs its tests with ctest.
+     * holds a case runs them with doctest directly, which gives every case's result; a selection
+     * of Google Test cases runs them with --gtest_filter directly (RUN-10); any other selection
+     * runs its tests with ctest.
      */
     void runSelection() {
         const std::vector<std::string> names = m_tree->selectedTestNames();
         if (names.empty())
             return;
         const auto cases = m_tree->selectedCases();
-        if (!cases.empty() && std::ranges::all_of(names, [this](const std::string& n) { return isDoctestTest(n); })) {
-            runDoctest(names, cases);
-            return;
+        if (!cases.empty()) {
+            if (std::ranges::all_of(names, [this](const std::string& n) { return isDoctestTest(n); })) {
+                runDoctest(names, cases);
+                return;
+            }
+            if (std::ranges::none_of(names, [this](const std::string& n) { return isDoctestTest(n); })) {
+                runGTest(names, cases);
+                return;
+            }
         }
         requestRun(names);
+    }
+
+    std::set<std::string> selectedWholeTests() const {
+        std::set<std::string> wholeTests;
+        for (const QTreeWidgetItem* item : m_tree->selectedItems())
+            if (item->data(0, ui::TestResultsTree::kCaseNameRole).toString().isEmpty() &&
+                !item->data(0, ui::TestResultsTree::kTestNameRole).toString().isEmpty())
+                wholeTests.insert(item->data(0, ui::TestResultsTree::kTestNameRole).toString().toStdString());
+        return wholeTests;
     }
 
     // Runs `names` with doctest: the whole test, or only its cases in `cases` when it has any there
     // and its own row is not selected.
     void runDoctest(const std::vector<std::string>& names,
                     const std::vector<std::pair<std::string, std::string>>& cases) {
-        if (!m_setup || m_runner->busy() || sourceKey() != m_listedKey)
+        if (!listingCurrent() || m_runner->busy())
             return;
-        std::set<std::string> wholeTests;
-        for (const QTreeWidgetItem* item : m_tree->selectedItems())
-            if (item->data(0, ui::TestResultsTree::kCaseNameRole).toString().isEmpty() &&
-                !item->data(0, ui::TestResultsTree::kTestNameRole).toString().isEmpty())
-                wholeTests.insert(item->data(0, ui::TestResultsTree::kTestNameRole).toString().toStdString());
+        const std::set<std::string> wholeTests = selectedWholeTests();
         std::vector<run::TestRunner::DoctestRunRequest> requests;
         std::vector<std::string> started;
         for (const std::string& name : names) {
             const run::DiscoveredTest* test = m_tree->test(name);
             if (!test || !isDoctestTest(name))
                 continue;
-            run::TestRunner::DoctestRunRequest request;
-            request.test = *test;
+            run::TestRunner::DoctestRunRequest request{.test = *test};
             if (!wholeTests.contains(name))
                 for (const auto& [testName, caseName] : cases)
                     if (testName == name)
@@ -374,8 +447,13 @@ private:
             requests.push_back(std::move(request));
             started.push_back(name);
         }
-        if (requests.empty())
-            return;
+        (void)startDoctestRequests(std::move(requests), started);
+    }
+
+    Result<void> startDoctestRequests(std::vector<run::TestRunner::DoctestRunRequest> requests,
+                                      const std::vector<std::string>& started) {
+        if (requests.empty() || !m_setup)
+            return fail(ErrorCode::InvalidArgument, "No doctest request to run");
         m_tree->markPending(started);
         m_console.clear();
         m_runKind = QStringLiteral("doctest");
@@ -387,23 +465,109 @@ private:
             setSummary(QStringLiteral("Running %1 test(s) with doctest...").arg(started.size()));
         }
         updateActions();
+        return run;
+    }
+
+    void runGTest(const std::vector<std::string>& names,
+                  const std::vector<std::pair<std::string, std::string>>& cases) {
+        if (!listingCurrent() || m_runner->busy())
+            return;
+        const std::set<std::string> wholeTests = selectedWholeTests();
+        std::vector<run::TestRunner::GTestRunRequest> requests;
+        std::vector<std::string> started;
+        for (const std::string& name : names) {
+            const run::DiscoveredTest* test = m_tree->test(name);
+            if (!test || isDoctestTest(name))
+                continue;
+            run::TestRunner::GTestRunRequest request{.test = *test};
+            if (!wholeTests.contains(name))
+                for (const auto& [testName, caseName] : cases)
+                    if (testName == name)
+                        request.cases.push_back(caseName);
+            requests.push_back(std::move(request));
+            started.push_back(name);
+        }
+        (void)startGTestRequests(std::move(requests), started);
+    }
+
+    Result<void> startGTestRequests(std::vector<run::TestRunner::GTestRunRequest> requests,
+                                    const std::vector<std::string>& started) {
+        if (requests.empty() || !m_setup)
+            return fail(ErrorCode::InvalidArgument, "No Google Test request to run");
+        m_tree->markPending(started);
+        m_console.clear();
+        m_runKind = QStringLiteral("Google Test");
+        auto run = m_runner->runGTest(*m_setup, std::move(requests), runHandlers());
+        if (!run) {
+            m_tree->finishRun({});
+            setSummary(QStringLiteral("Google Test could not start: %1").arg(qs(run.error().message())));
+        } else {
+            setSummary(QStringLiteral("Running %1 test(s) with Google Test...").arg(started.size()));
+        }
+        updateActions();
+        return run;
+    }
+
+    std::optional<run::SingleTestLaunch> selectedSingleTarget() const {
+        if (!listingCurrent())
+            return std::nullopt;
+        const auto items = m_tree->selectedItems();
+        if (items.size() != 1)
+            return std::nullopt;
+        const std::string testName =
+            items.front()->data(0, ui::TestResultsTree::kTestNameRole).toString().toStdString();
+        const std::string caseName =
+            items.front()->data(0, ui::TestResultsTree::kCaseNameRole).toString().toStdString();
+        const run::DiscoveredTest* test = testName.empty() ? nullptr : m_tree->test(testName);
+        if (!test || test->command.empty())
+            return std::nullopt;
+        const auto framework = caseName.empty()          ? run::TestCaseFramework::CTestWhole
+                               : isDoctestTest(testName) ? run::TestCaseFramework::Doctest
+                                                         : run::TestCaseFramework::GoogleTest;
+        auto launch = run::buildSingleTestLaunch(*m_setup, *test, caseName, framework);
+        return launch ? std::optional<run::SingleTestLaunch>(std::move(*launch)) : std::nullopt;
+    }
+
+    void debugSelected() {
+        if (auto launch = selectedSingleTarget())
+            (void)startDebug(*launch);
+    }
+
+    Result<void> startDebug(const run::SingleTestLaunch& launch) {
+        if (!listingCurrent() || m_runner->busy())
+            return fail(ErrorCode::Busy, "Unit tests source changed or the runner is busy");
+        if (!m_context.debugTest)
+            return fail(ErrorCode::NotFound, "No debug handler is configured");
+        auto started = m_context.debugTest(launch);
+        if (!started)
+            setSummary(QStringLiteral("Could not start debugging %1: %2")
+                           .arg(qs(launch.displayName), qs(started.error().message())));
+        else
+            setSummary(QStringLiteral("Debugging %1...").arg(qs(launch.displayName)));
+        return started;
     }
 
     // The callbacks of a run (ctest or doctest), posted to the GUI thread.
     run::TestRunHandlers runHandlers() {
         run::TestRunHandlers handlers;
-        handlers.onTestStarted = [this](const std::string& name) { post([this, name] { m_tree->testStarted(name); }); };
-        handlers.onTestFinished = [this](const run::TestResult& result) {
-            post([this, result] { m_tree->applyResult(result); });
+        const std::string key = m_listedKey;
+        const std::uint64_t generation = m_listingGeneration;
+        handlers.onTestStarted = [this, key, generation](const std::string& name) {
+            postForSource(key, generation, [this, name] { m_tree->testStarted(name); });
         };
-        handlers.onOutput = [this](std::string_view text) {
-            post([this, chunk = qs(text)] {
+        handlers.onTestFinished = [this, key, generation](const run::TestResult& result) {
+            postForSource(key, generation, [this, result] { m_tree->applyResult(result); });
+        };
+        handlers.onOutput = [this, key, generation](std::string_view text) {
+            postForSource(key, generation, [this, chunk = qs(text)] {
                 m_console += chunk;
                 if (m_console.size() > kMaxConsole)
                     m_console.remove(0, m_console.size() - kMaxConsole);
             });
         };
-        handlers.onFinished = [this](const run::TestRunReport& report) { post([this, report] { finished(report); }); };
+        handlers.onFinished = [this, key, generation](const run::TestRunReport& report) {
+            postForSource(key, generation, [this, report] { finished(report); });
+        };
         return handlers;
     }
 
@@ -411,7 +575,7 @@ private:
     void requestRun(std::vector<std::string> names) {
         if (m_runner->busy())
             return;
-        if (!m_setup || sourceKey() != m_listedKey) {
+        if (!listingCurrent()) {
             refresh(std::move(names));
             return;
         }
@@ -419,7 +583,7 @@ private:
     }
 
     void startRun(std::vector<std::string> names) {
-        if (!m_setup || m_runner->busy())
+        if (!listingCurrent() || m_runner->busy())
             return;
         std::vector<run::DiscoveredTest> tests;
         for (const std::string& name : m_tree->testNames())
@@ -474,7 +638,7 @@ private:
 
     void updateActions() {
         const bool busy = m_runner->busy();
-        const bool ready = m_setup.has_value() && !busy;
+        const bool ready = listingCurrent() && !busy;
         const QString why = m_unavailable.isEmpty() ? QStringLiteral("A test job is running.") : m_unavailable;
         const auto enable = [&](QPushButton* b, bool on, const QString& tip, const QString& off) {
             b->setEnabled(on);
@@ -491,40 +655,8 @@ private:
                QStringLiteral("Nothing is running."));
         enable(m_refresh, !busy, QStringLiteral("List the tests again (ctest -N)."),
                QStringLiteral("A test job is running."));
-    }
-
-    // The location to open for a test or case (header comment), relative paths against the build directory.
-    std::optional<run::TestLocation> locationOf(const std::string& testName, const std::string& caseName) const {
-        const run::DiscoveredTest* test = m_tree->test(testName);
-        const run::TestResult* result = m_tree->result(testName);
-        if (!caseName.empty()) {
-            if (result) {
-                for (const run::TestResult& testCase : result->cases) {
-                    if (testCase.name != caseName)
-                        continue;
-                    for (const run::TestFailure& failure : testCase.failures)
-                        if (failure.location)
-                            return failure.location;
-                    if (testCase.definition)
-                        return testCase.definition;
-                }
-            }
-            if (const auto* listed = m_tree->doctestCases(testName)) {
-                const auto found = std::ranges::find(*listed, caseName, &run::DoctestCase::name);
-                if (found != listed->end() && found->location)
-                    return found->location;
-            }
-            return std::nullopt;
-        }
-        if (result)
-            for (const run::TestFailure& failure : result->failures)
-                if (failure.location)
-                    return failure.location;
-        if (test && test->definition)
-            return test->definition;
-        if (test && test->declaration)
-            return test->declaration;
-        return std::nullopt;
+        enable(m_debug, ready && m_context.debugTest != nullptr && selectedSingleTarget().has_value(),
+               QStringLiteral("Debug the selected test or case (RUN-10)."), debugUnavailable());
     }
 
     std::string absolute(const std::string& file) const {
@@ -534,7 +666,9 @@ private:
     }
 
     void open(const std::string& test, const std::string& caseName) {
-        if (const auto location = locationOf(test, caseName); location && m_context.openLocation)
+        const auto location =
+            unitTestsLocationOf(test, caseName, m_tree->test(test), m_tree->result(test), m_tree->doctestCases(test));
+        if (location && m_context.openLocation)
             m_context.openLocation(absolute(location->file), location->line);
     }
 
@@ -561,83 +695,11 @@ private:
             return;
         }
         const std::string caseName = item->data(0, ui::TestResultsTree::kCaseNameRole).toString().toStdString();
-        const run::DiscoveredTest* test = m_tree->test(testName);
-        const run::TestResult* result = m_tree->result(testName);
-        QStringList lines;
-        const auto describe = [&](const run::TestResult& r) {
-            lines << QStringLiteral("Status: %1").arg(qs(run::toString(r.outcome)));
-            if (!r.reason.empty())
-                lines << QStringLiteral("Reason: %1").arg(qs(r.reason));
-            if (r.duration)
-                lines << QStringLiteral("Duration: %1").arg(qs(run::formatTestDuration(r.duration)));
-            if (r.interim)
-                lines << QStringLiteral("(from ctest's progress; its report has not been read yet)");
-            for (const run::TestFailure& failure : r.failures) {
-                lines << QString() << QStringLiteral("Failure:") << qs(failure.message);
-                if (failure.location)
-                    addLocation(QStringLiteral("Failure"), *failure.location);
-            }
-        };
-        if (!caseName.empty()) {
-            const auto* doctestCases = m_tree->doctestCases(testName);
-            lines << QStringLiteral("%1 case: %2")
-                         .arg(doctestCases ? QStringLiteral("doctest") : QStringLiteral("Google Test"), qs(caseName))
-                  << QStringLiteral("Runs in: %1").arg(qs(testName));
-            if (doctestCases) {
-                const auto listed = std::ranges::find(*doctestCases, caseName, &run::DoctestCase::name);
-                if (listed != doctestCases->end() && !listed->suite.empty())
-                    lines << QStringLiteral("Test suite: %1").arg(qs(listed->suite));
-                if (listed != doctestCases->end() && listed->location)
-                    addLocation(QStringLiteral("Defined"), *listed->location);
-            }
-            const run::TestResult* caseResult = nullptr;
-            if (result)
-                for (const run::TestResult& c : result->cases)
-                    if (c.name == caseName)
-                        caseResult = &c;
-            if (caseResult) {
-                describe(*caseResult);
-                if (caseResult->definition)
-                    addLocation(QStringLiteral("Defined"), *caseResult->definition);
-            } else {
-                lines << QStringLiteral("Status: no result yet");
-            }
-            m_details->setPlainText(lines.join(QLatin1Char('\n')));
-            return;
-        }
-        lines << QStringLiteral("Test: %1").arg(qs(testName));
-        if (test) {
-            if (!test->command.empty()) {
-                run::LaunchPlan plan;
-                plan.program = test->command.front();
-                plan.arguments.assign(test->command.begin() + 1, test->command.end());
-                lines << QStringLiteral("Command: %1").arg(qs(run::displayCommandLine(plan)));
-            } else {
-                lines << QStringLiteral("Command: none (ctest found no program for this test)");
-            }
-            if (!test->workingDirectory.empty())
-                lines << QStringLiteral("Working directory: %1").arg(qs(test->workingDirectory));
-            if (!test->labels.empty()) {
-                QStringList labels;
-                for (const auto& label : test->labels)
-                    labels << qs(label);
-                lines << QStringLiteral("Labels: %1").arg(labels.join(QStringLiteral(", ")));
-            }
-            if (test->disabled)
-                lines << QStringLiteral("DISABLED");
-            if (test->definition)
-                addLocation(QStringLiteral("Defined"), *test->definition);
-            if (test->declaration)
-                addLocation(QStringLiteral("add_test"), *test->declaration);
-        }
-        if (result) {
-            describe(*result);
-            if (!result->output.empty())
-                lines << QString() << QStringLiteral("Output:") << qs(result->output);
-        } else {
-            lines << QStringLiteral("Status: no result yet");
-        }
-        m_details->setPlainText(lines.join(QLatin1Char('\n')));
+        const UnitTestsSelectionDetails details = unitTestsDescribeSelection(
+            testName, caseName, m_tree->test(testName), m_tree->result(testName), m_tree->doctestCases(testName));
+        for (const auto& [label, loc] : details.locations)
+            addLocation(label, loc);
+        m_details->setPlainText(details.text);
     }
 
     void contextMenu(const QPoint& at) {
@@ -646,10 +708,15 @@ private:
             return;
         const std::string testName = item->data(0, ui::TestResultsTree::kTestNameRole).toString().toStdString();
         QMenu menu(this);
+        const bool idle = listingCurrent() && !m_runner->busy();
         QAction* run = menu.addAction(QStringLiteral("Run"));
-        run->setEnabled(m_setup.has_value() && !m_runner->busy());
+        run->setEnabled(idle);
+        QAction* debug = menu.addAction(QStringLiteral("Debug"));
+        const auto singleTarget = selectedSingleTarget();
+        debug->setEnabled(idle && m_context.debugTest != nullptr && singleTarget.has_value());
         const run::DiscoveredTest* test = testName.empty() ? nullptr : m_tree->test(testName);
-        const bool idle = m_setup.has_value() && !m_runner->busy();
+        const auto testCopy = test ? std::optional<run::DiscoveredTest>(*test) : std::nullopt;
+        const auto generation = m_listingGeneration;
         QAction* runWithDoctest = menu.addAction(QStringLiteral("Run with doctest (Every Case's Result)"));
         const std::vector<std::string> selected = m_tree->selectedTestNames();
         runWithDoctest->setEnabled(idle && !selected.empty() &&
@@ -661,31 +728,39 @@ private:
         listWithDoctest->setEnabled(test && !test->command.empty() && idle);
         listWithDoctest->setToolTip(QStringLiteral("Run the test's program with doctest's --list-test-cases."));
         QAction* chosen = menu.exec(m_tree->viewport()->mapToGlobal(at));
+        if (generation != m_listingGeneration || !listingCurrent())
+            return;
         if (chosen == run) {
-            if (auto names = m_tree->selectedTestNames(); !names.empty())
-                requestRun(std::move(names));
+            runSelection();
+        } else if (chosen == debug && singleTarget) {
+            (void)startDebug(*singleTarget);
         } else if (chosen == runWithDoctest) {
             runDoctest(m_tree->selectedTestNames(), m_tree->selectedCases());
-        } else if (chosen == list && test) {
-            listCases(*test);
-        } else if (chosen == listWithDoctest && test) {
-            m_explicitDoctest.insert(test->name);
-            listDoctest({test->name}, std::nullopt);
+        } else if (chosen == list && testCopy) {
+            listCases(*testCopy);
+        } else if (chosen == listWithDoctest && testCopy) {
+            m_explicitDoctest.insert(testCopy->name);
+            listDoctest({testCopy->name}, std::nullopt);
         }
     }
 
     void listCases(const run::DiscoveredTest& test) {
-        if (!m_setup)
+        if (!listingCurrent() || m_runner->busy())
             return;
         const std::string name = test.name;
-        auto started =
-            m_runner->listGTestCases(*m_setup, test, [this, name](Result<std::vector<run::GTestCase>> cases) {
-                post([this, name, cases = std::move(cases)] {
-                    if (cases)
+        auto started = m_runner->listGTestCases(
+            *m_setup, test,
+            [this, key = m_listedKey, generation = m_listingGeneration,
+             name](Result<std::vector<run::GTestCase>> cases) {
+                postForSource(key, generation, [this, name, cases = std::move(cases)] {
+                    if (cases) {
+                        m_listedGTestCases[name] = *cases;
                         m_tree->setGTestCases(name, *cases);
-                    else
+                        notifyTestsChanged();
+                    } else {
                         setSummary(QStringLiteral("Listing the Google Test cases of %1 failed: %2")
                                        .arg(qs(name), qs(cases.error().message()).section(QLatin1Char('\n'), 0, 0)));
+                    }
                     updateActions();
                 });
             });
@@ -695,12 +770,15 @@ private:
     }
 
     UnitTestsWindowContext m_context;
+    std::unique_ptr<TrustedProjectLauncher> m_projectLauncher;
     std::unique_ptr<run::TestRunner> m_runner;
     std::optional<run::CTestSetup> m_setup;
     std::string m_listedKey;
+    std::uint64_t m_listingGeneration = 0;
     QString m_listedSummary;
     QString m_runKind = QStringLiteral("ctest");
     std::set<std::string> m_explicitDoctest; // Tests the user listed with "List doctest Cases".
+    std::map<std::string, std::vector<run::GTestCase>> m_listedGTestCases;
     QString m_unavailable;
     QString m_console;
     QString m_lastCommand;
@@ -722,6 +800,26 @@ private:
 
 QWidget* createUnitTestsToolWindowWidget(QWidget* parent, UnitTestsWindowContext context) {
     return new UnitTestsWindow(parent, std::move(context));
+}
+
+std::vector<run::GutterTestCase> unitTestsGutterCasesForFile(QWidget* unitTestsWidget, std::string_view filePath,
+                                                             std::string_view content) {
+    auto* window = static_cast<UnitTestsWindow*>(unitTestsWidget);
+    return window ? window->gutterCasesForFile(filePath, content) : std::vector<run::GutterTestCase>{};
+}
+
+Result<void> runGutterTestCase(QWidget* unitTestsWidget, const run::GutterTestCase& testCase) {
+    auto* window = static_cast<UnitTestsWindow*>(unitTestsWidget);
+    if (!window)
+        return fail(ErrorCode::NotFound, "Unit Tests window is not created");
+    return window->runSingleCase(testCase);
+}
+
+Result<void> debugGutterTestCase(QWidget* unitTestsWidget, const run::GutterTestCase& testCase) {
+    auto* window = static_cast<UnitTestsWindow*>(unitTestsWidget);
+    if (!window)
+        return fail(ErrorCode::NotFound, "Unit Tests window is not created");
+    return window->debugSingleCase(testCase);
 }
 
 } // namespace frost::app

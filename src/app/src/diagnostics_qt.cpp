@@ -36,6 +36,7 @@
 
 #include <windows.h>
 
+// NOLINTNEXTLINE(bugprone-reserved-identifier): MSVC linker-provided symbol for this DLL image base.
 extern "C" IMAGE_DOS_HEADER __ImageBase; // This module: frost_app.dll in the program.
 #else
 #include <unistd.h>

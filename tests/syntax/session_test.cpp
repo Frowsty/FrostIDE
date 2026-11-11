@@ -153,7 +153,7 @@ TEST(SyntaxRows, CrlfAndLoneCrRowsMatchEditorLines) {
     const std::size_t e = all.find('e');
     EXPECT_EQ(tree.text().pointAt(ByteOffset{e}).line.value(), 5u);
     // Edits that create and split CRLF pairs keep the rows right.
-    const auto check = [&](ChangeSet change, std::string_view what) {
+    const auto check = [&](const ChangeSet& change, std::string_view what) {
         session.apply(change, doc.text());
         EXPECT_EQ(session.tree().dumpForTesting(true), freshDump(LanguageId::C, doc.text().text())) << what;
         expectPointsMatchEditorLines(session.tree());
@@ -212,6 +212,7 @@ TEST(SyntaxSize, DefaultThresholdIsFiftyMegabytes) {
     static_assert(frost::syntax::kDefaultMaxDocumentBytes == 50'000'000);
     SimExecutor sim;
     SyntaxSession session(registry(), sim, sim);
+    // NOLINTNEXTLINE(bugprone-string-constructor): Deliberate limit+1 allocation.
     const frost::text::TextBuffer big = frost::text::TextBuffer::fromUtf8(std::string(50'000'001, ' ')).value();
     session.open(LanguageId::C, big.current());
     EXPECT_EQ(session.state(), SyntaxState::Off);

@@ -11,6 +11,7 @@
 # folder, <Destination>-symbols.zip holds frost.exe and frost_app.dll with the PDBs whose GUID and
 # age match them (tools/symbolize.py archive; symbolize.py --symbol-archive reads it). Windows only;
 # tools/stage.sh stages a Linux build.
+# AddressSanitizer builds also carry the pinned runtime DLL, checked against the build's sidecar.
 #
 # Every check that can fail on the inputs (the build tree, the ProjectHost, the resources, the HTTPS
 # backend, the dependency notices, the bundled tools, the PDB identities of frost.exe and
@@ -161,6 +162,23 @@ if (-not (Test-Path -LiteralPath $tlsSource)) { Fail "the build has no HTTPS bac
 $cachePath = Join-Path $BuildDir 'CMakeCache.txt'
 if (-not (Test-Path -LiteralPath $cachePath)) { Fail 'no CMake cache for dependency notice provenance' }
 $cacheText = Get-Content -Raw -LiteralPath $cachePath
+$asanRuntime = $null
+$asanRuntimeHash = $null
+$sanitizerMatch = [regex]::Match($cacheText, '(?m)^FROST_SANITIZE:[^=]+=([^\r\n]*)')
+if ($sanitizerMatch.Success -and (($sanitizerMatch.Groups[1].Value -split ';') -contains 'address')) {
+    # CMake copies this exact pinned runtime beside instrumented binaries. Do not infer its
+    # provenance from PATH or copy an arbitrary sidecar with the same DLL name.
+    $llvmMajor = ($lock.windows.llvm.version -split '\.')[0]
+    $asanName = 'clang_rt.asan_dynamic-x86_64.dll'
+    $asanRuntime = Join-Path $SdkRoot "llvm-$($lock.windows.llvm.version)\lib\clang\$llvmMajor\lib\windows\$asanName"
+    if (-not (Test-Path -LiteralPath $asanRuntime -PathType Leaf)) { Fail "missing pinned ASan runtime: $asanRuntime" }
+    $buildAsanRuntime = Join-Path $binDir $asanName
+    if (-not (Test-Path -LiteralPath $buildAsanRuntime -PathType Leaf)) { Fail "missing build ASan runtime: $buildAsanRuntime" }
+    $asanRuntimeHash = (Get-FileHash -LiteralPath $asanRuntime -Algorithm SHA256).Hash
+    if ((Get-FileHash -LiteralPath $buildAsanRuntime -Algorithm SHA256).Hash -ne $asanRuntimeHash) {
+        Fail 'the build ASan runtime differs from the pinned SDK runtime'
+    }
+}
 $installedMatch = [regex]::Match($cacheText, '(?m)^VCPKG_INSTALLED_DIR:[^=]+=([^\r\n]+)')
 $tripletMatch = [regex]::Match($cacheText, '(?m)^VCPKG_TARGET_TRIPLET:[^=]+=([a-zA-Z0-9_-]+)\r?$')
 if (-not $installedMatch.Success -or -not $tripletMatch.Success -or
@@ -248,6 +266,9 @@ if (-not $script:destinationExisted) { [void][System.IO.Directory]::CreateDirect
 # 3. FrostIDE's own files.
 foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
+}
+if ($asanRuntime) {
+    Copy-Item -LiteralPath $asanRuntime -Destination $Destination
 }
 $projectHostDestination = Join-Path $Destination 'project-host'
 New-Item -ItemType Directory -Force -Path $projectHostDestination | Out-Null
@@ -355,6 +376,13 @@ foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpt
 if ((Get-FileHash -LiteralPath $tlsSource -Algorithm SHA256).Hash -ne
     (Get-FileHash -LiteralPath (Join-Path (Join-Path $Destination 'tls') $tlsPlugin) -Algorithm SHA256).Hash) {
     Fail 'the staged HTTPS backend differs from the build output'
+}
+if ($asanRuntime) {
+    $stagedAsanRuntime = Join-Path $Destination $asanName
+    if (-not (Test-Path -LiteralPath $stagedAsanRuntime -PathType Leaf)) { Fail 'the staged ASan runtime is missing' }
+    if ((Get-FileHash -LiteralPath $stagedAsanRuntime -Algorithm SHA256).Hash -ne $asanRuntimeHash) {
+        Fail 'the staged ASan runtime differs from the pinned SDK runtime'
+    }
 }
 # The staged ConPTY pair must be byte-identical to the pair the build deployed.
 foreach ($name in @('conpty.dll', 'OpenConsole.exe')) {

@@ -27,16 +27,22 @@ using frost::lang::Json;
 using frost::lang::LuaHostContribution;
 
 #ifdef _WIN32
-const std::string kRoot = "C:\\work";
+const std::string& kRoot() {
+    static const std::string value = "C:\\work";
+    return value;
+}
 #else
-const std::string kRoot = "/work";
+const std::string& kRoot() {
+    static const std::string value = "/work";
+    return value;
+}
 #endif
 
-std::string join(std::string_view relative) { return frost::io::joinPath(kRoot, relative).value(); }
+std::string join(std::string_view relative) { return frost::io::joinPath(kRoot(), relative).value(); }
 
 void write(frost::io::MemFs& fs, std::string_view relative, std::string_view text) {
     const std::string path = join(relative);
-    ASSERT_TRUE(fs.createDirectories(std::string(frost::io::parentPath(path))).has_value());
+    ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(path)).has_value());
     ASSERT_TRUE(fs.writeFileAtomic(path, text).has_value());
 }
 
@@ -79,7 +85,7 @@ TEST(LuaHost, TheRegistryAsksProvidersInOrderReplacesByNameAndRemoves) {
     registry.add(std::make_shared<FixedProvider>("C", "elsewhere", withGlobals({"c"})));
     registry.add(nullptr);
     EXPECT_EQ(registry.names(), (std::vector<std::string>{"A", "B", "C"}));
-    auto got = registry.contributions(fs, kRoot);
+    auto got = registry.contributions(fs, kRoot());
     ASSERT_EQ(got.size(), 2U) << "C does not claim this folder";
     EXPECT_EQ(got[0].provider, "A") << "the registry fills in the provider's name";
     EXPECT_EQ(got[1].globals, std::vector<std::string>{"b"});
@@ -87,7 +93,7 @@ TEST(LuaHost, TheRegistryAsksProvidersInOrderReplacesByNameAndRemoves) {
     EXPECT_EQ(registry.names(), (std::vector<std::string>{"B", "C", "A"})) << "a replacement goes last";
     EXPECT_TRUE(registry.remove("B"));
     EXPECT_FALSE(registry.remove("B"));
-    got = registry.contributions(fs, kRoot);
+    got = registry.contributions(fs, kRoot());
     ASSERT_EQ(got.size(), 1U);
     EXPECT_EQ(got[0].globals, std::vector<std::string>{"a2"});
 }
@@ -127,14 +133,14 @@ TEST(LuaHost, CompositionMergesContributionsOverTheUsersDefaults) {
 
 TEST(LuaHost, MetaFilesLiveInAnOwnedFolderThatHoldsExactlyThem) {
     frost::io::MemFs fs(frost::systemClock());
-    const auto directory = frost::lang::luaHostMetaDirectory(join("state"), "Frost Engine", kRoot);
+    const auto directory = frost::lang::luaHostMetaDirectory(join("state"), "Frost Engine", kRoot());
     ASSERT_TRUE(directory.has_value()) << directory.error().describe();
-    EXPECT_EQ(*directory, frost::lang::luaHostMetaDirectory(join("state"), "Frost Engine", kRoot).value())
+    EXPECT_EQ(*directory, frost::lang::luaHostMetaDirectory(join("state"), "Frost Engine", kRoot()).value())
         << "stable across calls (and runs: FNV-1a of the folder's key)";
     EXPECT_NE(*directory, frost::lang::luaHostMetaDirectory(join("state"), "Frost Engine", join("other")).value());
     EXPECT_NE(directory->find("Frost_Engine-"), std::string::npos) << *directory;
-    EXPECT_FALSE(frost::lang::luaHostMetaDirectory("state", "x", kRoot).has_value());
-    EXPECT_FALSE(frost::lang::luaHostMetaDirectory(join("state"), "", kRoot).has_value());
+    EXPECT_FALSE(frost::lang::luaHostMetaDirectory("state", "x", kRoot()).has_value());
+    EXPECT_FALSE(frost::lang::luaHostMetaDirectory(join("state"), "", kRoot()).has_value());
 
     const std::array first{frost::lang::LuaMetaFile{"engine.lua", "---@meta\nEngine = {}\n"},
                            frost::lang::LuaMetaFile{"components/transform.lua", "---@meta\n"}};
@@ -170,7 +176,7 @@ TEST(LuaHost, FrostEngineIsAProviderOnTheApiWithItsCheckoutsProjectsAsFolders) {
     write(fs, "Tools/Probe/Probe.feproject", "{}");
     frost::lang::FrostEngineLuaProvider provider;
     EXPECT_EQ(provider.name(), "FrostEngine");
-    const auto checkout = provider.contribute(fs, kRoot);
+    const auto checkout = provider.contribute(fs, kRoot());
     ASSERT_TRUE(checkout.has_value());
     EXPECT_EQ(checkout->runtimeVersion, "Lua 5.4");
     EXPECT_EQ(checkout->globals, (std::vector<std::string>{"Wait", "_VERSION"}));

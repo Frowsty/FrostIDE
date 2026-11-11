@@ -4,6 +4,7 @@
 // to its own binary image so each test payload has distinct bytes, SHA-256 digest, and behavior.
 
 #include <algorithm>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -22,6 +23,18 @@
 #endif
 
 namespace {
+
+// Test payload metadata contains decimal exit codes. Refuse malformed metadata instead of
+// silently reporting a successful health check through atoi's zero fallback.
+int exitCode(std::string_view text) {
+    int value = 0;
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) {
+        std::fputs("updater helper: invalid exit-code metadata\n", stderr);
+        std::exit(65);
+    }
+    return value;
+}
 
 std::string readSelfTail(const char* argv0) {
     std::ifstream in;
@@ -79,8 +92,8 @@ int main(int argc, char** argv) {
     }
 
     const std::string version = extractField(meta, "version", "0.0.0");
-    const int selftestExit = std::atoi(extractField(meta, "selftest_exit", "0").c_str());
-    const int runExit = std::atoi(extractField(meta, "run_exit", "0").c_str());
+    const int selftestExit = exitCode(extractField(meta, "selftest_exit", "0"));
+    const int runExit = exitCode(extractField(meta, "run_exit", "0"));
 
     bool isSelftest = false;
     for (int i = 1; i < argc; ++i) {

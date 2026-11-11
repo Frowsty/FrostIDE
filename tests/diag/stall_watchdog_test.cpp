@@ -33,7 +33,10 @@ using frost::diag::StallWatchdog;
 using SteadyTime = frost::IClock::SteadyTime;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
-const std::string kFreezes = kWindows ? "C:\\cache\\crashes\\freezes" : "/cache/crashes/freezes";
+const std::string& freezesPath() {
+    static const std::string value(kWindows ? "C:\\cache\\crashes\\freezes" : "/cache/crashes/freezes");
+    return value;
+}
 
 SteadyTime at(std::chrono::nanoseconds offset) { return SteadyTime(std::chrono::seconds(1000) + offset); }
 
@@ -126,8 +129,8 @@ struct Rig {
 
     explicit Rig(StallWatchdog::Options options = {}) {
         fs.addRoot(kWindows ? "C:\\" : "/");
-        EXPECT_TRUE(fs.createDirectories(kFreezes).has_value());
-        options.freezesDirectory = kFreezes;
+        EXPECT_TRUE(fs.createDirectories(freezesPath()).has_value());
+        options.freezesDirectory = freezesPath();
         options.version = "1.2.3";
         options.threaded = false;
         options.debuggerPresent = [this] { return debugger; };
@@ -194,6 +197,26 @@ TEST(StallWatchdog, WritesAFreezeReportWithSamples) {
     EXPECT_EQ(info->samples, 28u);
     EXPECT_EQ(info->durationMs, 300);
     EXPECT_FALSE(info->ongoing);
+}
+
+TEST(StallWatchdog, UnavailableAttemptsAndEmptyCapturesNeverBecomePersistedSamples) {
+    using Outcome = frost::diag::StackSample::Outcome;
+    for (const auto outcome : {Outcome::Empty, Outcome::Captured, Outcome::Busy, Outcome::ResumeFailed}) {
+        Rig rig;
+        rig.sampler->unavailableWith = outcome; // Even Captured with count 0 is not a usable capture.
+        rig.watchdog->eventLoopWillBlock();
+        rig.stall(300ms);
+        EXPECT_GT(rig.sampler->calls.load(), 0U);
+        const auto report = rig.watchdog->lastReport();
+        ASSERT_TRUE(report.has_value());
+        EXPECT_EQ(report->samples, 0U);
+        const auto reports = rig.reports();
+        ASSERT_EQ(reports.size(), 1U);
+        const auto bytes = rig.fs.readFile(reports.front());
+        ASSERT_TRUE(bytes.has_value());
+        EXPECT_TRUE(bytes->contains("\"samples\": []")) << *bytes;
+        EXPECT_FALSE(bytes->contains("\"frames\"")) << *bytes;
+    }
 }
 
 TEST(StallWatchdog, ShortStretchesNeverSampleOrReport) {
@@ -340,9 +363,9 @@ TEST(StallWatchdog, CountAgreesWithTheWatchdogOnRandomTimelines) {
 TEST(StallWatchdog, StopIsBoundedEvenDuringAStall) {
     frost::io::MemFs fs(frost::systemClock());
     fs.addRoot(kWindows ? "C:\\" : "/");
-    ASSERT_TRUE(fs.createDirectories(kFreezes).has_value());
+    ASSERT_TRUE(fs.createDirectories(freezesPath()).has_value());
     StallWatchdog::Options options;
-    options.freezesDirectory = kFreezes;
+    options.freezesDirectory = freezesPath();
     options.debuggerPresent = [] { return false; };
     auto watchdog =
         StallWatchdog::start(options, std::make_unique<frost::diag::FakeThreadSampler>(), fs, frost::systemClock());
@@ -362,7 +385,7 @@ TEST(StallWatchdog, StartRejectsBadOptions) {
     StallWatchdog::Options options;
     options.threaded = false;
     EXPECT_FALSE(StallWatchdog::start(options, std::make_unique<frost::diag::FakeThreadSampler>(), fs, clock));
-    options.freezesDirectory = kFreezes;
+    options.freezesDirectory = freezesPath();
     EXPECT_FALSE(StallWatchdog::start(options, nullptr, fs, clock));
     options.pollPeriod = 0ms;
     EXPECT_FALSE(StallWatchdog::start(options, std::make_unique<frost::diag::FakeThreadSampler>(), fs, clock));

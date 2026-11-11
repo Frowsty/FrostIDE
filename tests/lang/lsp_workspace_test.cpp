@@ -30,19 +30,31 @@ using frost::test::LangEnv;
 using frost::test::MemoryPipe;
 
 #ifdef _WIN32
-const std::string kRoot = "C:\\work\\proj";
-const std::string kGame = "C:\\work\\proj\\Samples\\Game";
+const std::string& kRoot() {
+    static const std::string value = "C:\\work\\proj";
+    return value;
+}
+const std::string& kGame() {
+    static const std::string value = "C:\\work\\proj\\Samples\\Game";
+    return value;
+}
 #else
-const std::string kRoot = "/work/proj";
-const std::string kGame = "/work/proj/Samples/Game";
+const std::string& kRoot() {
+    static const std::string value = "/work/proj";
+    return value;
+}
+const std::string& kGame() {
+    static const std::string value = "/work/proj/Samples/Game";
+    return value;
+}
 #endif
 
 std::string uri(const std::string& path) { return frost::lang::pathToUri(path).value(); }
 
 InitializeOptions multiRoot() {
     InitializeOptions init;
-    init.rootPath = kRoot;
-    init.workspaceFolders = {kGame, kRoot};
+    init.rootPath = kRoot();
+    init.workspaceFolders = {kGame(), kRoot()};
     init.scopedConfiguration = [](std::string_view scopeUri, std::string_view section) {
         return Json(std::string(section) + "@" + (scopeUri.empty() ? std::string("none") : std::string(scopeUri)));
     };
@@ -58,10 +70,10 @@ TEST(LspWorkspace, InitializeAnnouncesEveryFolderInOrderAndTheExtraCapabilities)
     const Json* folders = params->find("workspaceFolders");
     ASSERT_NE(folders, nullptr);
     ASSERT_EQ(folders->size(), 2U);
-    EXPECT_EQ(folders->items()[0].stringAt("uri"), uri(kGame));
+    EXPECT_EQ(folders->items()[0].stringAt("uri"), uri(kGame()));
     EXPECT_EQ(folders->items()[0].stringAt("name"), "Game");
-    EXPECT_EQ(folders->items()[1].stringAt("uri"), uri(kRoot));
-    EXPECT_EQ(params->stringAt("rootUri"), uri(kRoot));
+    EXPECT_EQ(folders->items()[1].stringAt("uri"), uri(kRoot()));
+    EXPECT_EQ(params->stringAt("rootUri"), uri(kRoot()));
     const Json* workspace = params->find("capabilities")->find("workspace");
     ASSERT_NE(workspace, nullptr);
     EXPECT_EQ(workspace->find("semanticTokens")->boolAt("refreshSupport"), true);
@@ -72,11 +84,11 @@ TEST(LspWorkspace, InitializeAnnouncesEveryFolderInOrderAndTheExtraCapabilities)
 
     // Without workspaceFolders the root alone is the folder, and nothing extra is announced.
     InitializeOptions plain;
-    plain.rootPath = kRoot;
+    plain.rootPath = kRoot();
     const auto single = frost::lang::initializeParams(plain);
     ASSERT_TRUE(single.has_value());
     ASSERT_EQ(single->find("workspaceFolders")->size(), 1U);
-    EXPECT_EQ(single->find("workspaceFolders")->items()[0].stringAt("uri"), uri(kRoot));
+    EXPECT_EQ(single->find("workspaceFolders")->items()[0].stringAt("uri"), uri(kRoot()));
     EXPECT_EQ(single->find("capabilities")->find("workspace")->find("semanticTokens")->boolAt("refreshSupport"), false);
     EXPECT_EQ(single->find("capabilities")->find("workspace")->find("didChangeWatchedFiles"), nullptr);
 }
@@ -88,17 +100,18 @@ TEST(LspWorkspace, AnswersFoldersScopedConfigurationRegistrationsAndRefreshes) {
         "watchers", Json::array({Json::object().set("globPattern", "**/*.lua").set("kind", 1 | 4),
                                  Json::object().set(
                                      "globPattern",
-                                     Json::object().set("baseUri", uri(kGame)).set("pattern", "Assets/**/*.json"))}));
+                                     Json::object().set("baseUri", uri(kGame())).set("pattern", "Assets/**/*.json"))}));
     FakeServer server(pipe, [&](FakeServer& s, const Json& message) {
         const std::string_view method = message.stringAt("method");
         if (method == "initialize") {
             s.respond(*message.find("id"), Json::object().set("capabilities", Json::object()));
         } else if (method == "initialized") {
             s.requestClient(1, "workspace/workspaceFolders", Json());
-            s.requestClient(2, "workspace/configuration",
-                            Json::object().set(
-                                "items", Json::array({Json::object().set("scopeUri", uri(kGame)).set("section", "Lua"),
-                                                      Json::object().set("section", "Lua.runtime")})));
+            s.requestClient(
+                2, "workspace/configuration",
+                Json::object().set("items",
+                                   Json::array({Json::object().set("scopeUri", uri(kGame())).set("section", "Lua"),
+                                                Json::object().set("section", "Lua.runtime")})));
             s.requestClient(
                 3, "client/registerCapability",
                 Json::object().set(
@@ -139,10 +152,10 @@ TEST(LspWorkspace, AnswersFoldersScopedConfigurationRegistrationsAndRefreshes) {
     const Json* folders = answerTo(1);
     ASSERT_NE(folders, nullptr);
     ASSERT_EQ(folders->size(), 2U);
-    EXPECT_EQ(folders->items()[0].stringAt("uri"), uri(kGame));
+    EXPECT_EQ(folders->items()[0].stringAt("uri"), uri(kGame()));
     const Json* configuration = answerTo(2);
     ASSERT_NE(configuration, nullptr);
-    EXPECT_EQ(configuration->dump(), Json::array({Json("Lua@" + uri(kGame)), Json("Lua.runtime@none")}).dump());
+    EXPECT_EQ(configuration->dump(), Json::array({Json("Lua@" + uri(kGame())), Json("Lua.runtime@none")}).dump());
     ASSERT_NE(answerTo(3), nullptr);
     EXPECT_TRUE(answerTo(3)->isNull());
     ASSERT_NE(answerTo(4), nullptr);
@@ -159,7 +172,7 @@ TEST(LspWorkspace, AnswersFoldersScopedConfigurationRegistrationsAndRefreshes) {
     EXPECT_EQ(kept[0].kind, 5);
     EXPECT_TRUE(kept[0].basePath.empty());
     EXPECT_EQ(kept[1].glob, "Assets/**/*.json");
-    EXPECT_EQ(kept[1].basePath, kGame);
+    EXPECT_EQ(kept[1].basePath, kGame());
     EXPECT_EQ(kept[1].kind, 7);
 
     ASSERT_TRUE(client.notify("frost/unregister", Json::object()).has_value());
@@ -167,8 +180,8 @@ TEST(LspWorkspace, AnswersFoldersScopedConfigurationRegistrationsAndRefreshes) {
 }
 
 TEST(LspWorkspace, WatchersMatchPlainAndRelativeGlobsAndTheirKinds) {
-    const std::string mainLua = kRoot + (kRoot.front() == '/' ? "/src/main.lua" : "\\src\\main.lua");
-    const std::string config = kGame + (kRoot.front() == '/' ? "/Assets/Data/a.json" : "\\Assets\\Data\\a.json");
+    const std::string mainLua = kRoot() + (kRoot().front() == '/' ? "/src/main.lua" : "\\src\\main.lua");
+    const std::string config = kGame() + (kRoot().front() == '/' ? "/Assets/Data/a.json" : "\\Assets\\Data\\a.json");
     const FileSystemWatcher lua{.glob = "**/*.lua", .basePath = {}, .kind = 1 | 4};
     EXPECT_TRUE(fileWatcherMatches(lua, mainLua, FileChangeType::Created));
     EXPECT_TRUE(fileWatcherMatches(lua, mainLua, FileChangeType::Deleted));
@@ -176,12 +189,12 @@ TEST(LspWorkspace, WatchersMatchPlainAndRelativeGlobsAndTheirKinds) {
     EXPECT_FALSE(fileWatcherMatches(lua, config, FileChangeType::Created));
     const FileSystemWatcher name{.glob = "*.lua", .basePath = {}, .kind = 7};
     EXPECT_TRUE(fileWatcherMatches(name, mainLua, FileChangeType::Changed)) << "a name pattern matches in any folder";
-    const FileSystemWatcher relative{.glob = "Assets/**/*.json", .basePath = kGame, .kind = 7};
+    const FileSystemWatcher relative{.glob = "Assets/**/*.json", .basePath = kGame(), .kind = 7};
     EXPECT_TRUE(fileWatcherMatches(relative, config, FileChangeType::Changed));
     EXPECT_FALSE(fileWatcherMatches(relative, mainLua, FileChangeType::Changed));
-    EXPECT_FALSE(fileWatcherMatches(relative, kGame, FileChangeType::Changed)) << "the base itself is not below it";
+    EXPECT_FALSE(fileWatcherMatches(relative, kGame(), FileChangeType::Changed)) << "the base itself is not below it";
     // An absolute pattern (LuaLS's own form: "<folder>/**").
-    std::string absolute = kGame + "/**";
+    std::string absolute = kGame() + "/**";
     std::ranges::replace(absolute, '\\', '/');
     const FileSystemWatcher tree{.glob = absolute, .basePath = {}, .kind = 7};
     EXPECT_TRUE(fileWatcherMatches(tree, config, FileChangeType::Created));

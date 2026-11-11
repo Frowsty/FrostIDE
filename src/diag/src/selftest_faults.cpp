@@ -5,7 +5,6 @@
 
 #include "frost/diag/selftest_faults.hpp"
 
-#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 
@@ -13,10 +12,10 @@ namespace frost::diag {
 namespace {
 
 // The call in selfTestFreeze's loop: opaque to the optimiser, so the loop stays a loop with a
-// call in it, and each sample shows selfTestFreeze as the caller.
-[[clang::noinline]] void spinOnce(std::atomic<std::uint64_t>& counter) noexcept {
-    counter.fetch_add(1, std::memory_order_relaxed);
-}
+// call in it, and each sample shows selfTestFreeze as the caller. Only the
+// calling thread accesses counter. Volatile keeps its load/store observable
+// without Debug STL atomic helper frames hiding that caller from the sampler.
+[[clang::noinline]] void spinOnce(volatile std::uint64_t& counter) noexcept { counter = counter + 1; }
 
 } // namespace
 
@@ -28,7 +27,7 @@ namespace {
 }
 
 [[clang::noinline]] void selfTestFreeze(std::chrono::milliseconds duration) noexcept {
-    std::atomic<std::uint64_t> counter{0};
+    volatile std::uint64_t counter = 0;
     const auto end = std::chrono::steady_clock::now() + duration;
     // The clock is read once per 4096 calls, so nearly every sample lands in spinOnce or this
     // loop rather than in the clock's own frames.

@@ -99,8 +99,8 @@ Result<std::unique_ptr<LoopbackStream>> LoopbackStream::connect(std::uint16_t po
         return fail(ErrorCode::InvalidArgument, "invalid loopback port");
     auto impl = std::make_unique<Impl>();
     impl->deadline = deadline;
-    impl->stop = stop;
-    if (stop.stop_requested())
+    impl->stop = std::move(stop);
+    if (impl->stop.stop_requested())
         return fail(ErrorCode::Cancelled, "loopback request cancelled");
 #ifdef _WIN32
     WSADATA data{};
@@ -179,6 +179,7 @@ Result<void> LoopbackStream::write(std::string_view bytes) {
             return std::unexpected(std::move(ready.error()));
         const auto size = std::min<std::size_t>(bytes.size(), 65536);
 #ifdef _WIN32
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): send consumes the explicit bounded byte count.
         const int count = send(m_impl->socket, bytes.data(), static_cast<int>(size), 0);
 #else
         const auto count = send(m_impl->socket, bytes.data(), size, MSG_NOSIGNAL);

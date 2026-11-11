@@ -20,6 +20,21 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 The FrostIDE authors"
 SPDX-License-Identifier = "Apache-2.0"
 
+# Byte-exact OASIS SARIF 2.1.0 Errata 01 schema and its reproduction notice; retained unmodified.
+[[annotations]]
+path = ["tests/tools/schemas/sarif-schema-2.1.0.json", "tests/tools/schemas/NOTICE.txt",
+        "LICENSES/LicenseRef-OASIS-SARIF-Errata-01.txt"]
+precedence = "override"
+SPDX-FileCopyrightText = "Copyright © OASIS Open 2023"
+SPDX-License-Identifier = "LicenseRef-OASIS-SARIF-Errata-01"
+
+# Test-only fastjsonschema 2.22.3 source, preserved from its BSD-3-Clause PyPI wheel (ADR 0086).
+[[annotations]]
+path = ["tools/_vendor/fastjsonschema/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "Copyright (c) 2018, Michal Horejsek"
+SPDX-License-Identifier = "BSD-3-Clause"
+
 [[annotations]]
 path = ["resources/**/*.png", "resources/**/*.ico", "resources/icons/frost/**"]
 precedence = "aggregate"

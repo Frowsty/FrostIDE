@@ -56,7 +56,9 @@ protected:
     frost::Result<TreeScan> scan(ScanOptions options = {}, std::string root = "/repo", std::uint64_t seed = 0,
                                  std::stop_token token = {}) {
         SimExecutor sim(frost::sched::SimOptions{.seed = seed});
-        return sim.spawn(Lane::Background, frost::io::scanTree(fs, sim, std::move(root), std::move(options), token))
+        return sim
+            .spawn(Lane::Background,
+                   frost::io::scanTree(fs, sim, std::move(root), std::move(options), std::move(token)))
             .join();
     }
 

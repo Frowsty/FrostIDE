@@ -1029,7 +1029,7 @@ std::vector<project::ProjectId> RunService::startupCandidates() const {
     const auto projects = m_state->solution->projects();
     for (std::uint32_t i = 0; i < projects.size(); ++i) {
         if (isLoadedCpp(projects[i])) {
-            candidates.push_back(project::ProjectId{i});
+            candidates.emplace_back(i);
         }
     }
     return candidates;

@@ -427,7 +427,7 @@ TEST(ShellWindow, StatusBarFollowsTheActiveEditor) {
 
 TEST(ShellWindow, OpenFailureBecomesAnErrorNotification) {
     ShellRig rig;
-    rig.editors.failing.push_back("/missing.cpp");
+    rig.editors.failing.emplace_back("/missing.cpp");
     ShellWindow window(rig.environment());
     EXPECT_FALSE(window.openFile("/missing.cpp").has_value());
     ASSERT_EQ(window.notifications().log().size(), 1U);

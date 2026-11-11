@@ -71,7 +71,6 @@
 namespace frost::app {
 
 namespace key = settings::key;
-namespace wa = workbench_actions;
 
 namespace {
 
@@ -120,8 +119,8 @@ Result<QString> windowsPowerShell() {
     const UINT length = GetSystemDirectoryW(buffer.data(), static_cast<UINT>(buffer.size()));
     if (length == 0 || length >= buffer.size())
         return fail(ErrorCode::IoError, "GetSystemDirectoryW failed");
-    const QString path = QString::fromWCharArray(buffer.data(), static_cast<qsizetype>(length)) +
-                         QStringLiteral("\\WindowsPowerShell\\v1.0\\powershell.exe");
+    QString path = QString::fromWCharArray(buffer.data(), static_cast<qsizetype>(length)) +
+                   QStringLiteral("\\WindowsPowerShell\\v1.0\\powershell.exe");
     if (!QFileInfo(path).isFile())
         return fail(ErrorCode::NotFound, "Windows PowerShell was not found at " + path.toStdString());
     return path;

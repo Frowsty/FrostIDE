@@ -113,7 +113,6 @@ private:
 };
 
 using frost::app::DocumentEditorView;
-using frost::app::IWorkbenchPrompts;
 using frost::app::test::RigOptions;
 using frost::app::test::sendKey;
 using frost::app::test::waitFor;
@@ -681,7 +680,7 @@ TEST(Workbench, SaveAllRunsBeforeABuild) {
     const std::string mainPath = dir.join("App/main.cpp");
     options.workbench.startBuild =
         [&](const frost::build::MsBuildRequest&,
-            frost::build::BuildCallbacks) -> frost::Result<std::unique_ptr<frost::build::BuildSession>> {
+            const frost::build::BuildCallbacks&) -> frost::Result<std::unique_ptr<frost::build::BuildSession>> {
         {
             frost::LockGuard lock(mutex);
             atStart = frost::io::realFileSystem().readFile(mainPath).value_or("<unreadable>");
@@ -723,7 +722,7 @@ TEST(Workbench, SwitchingProjectsDuringBuildKeepsTheCurrentProjectAndTabs) {
     options.workbench.msbuildPath = dir.join("tools/MSBuild.exe");
     options.workbench.startBuild =
         [&](const frost::build::MsBuildRequest&,
-            frost::build::BuildCallbacks) -> frost::Result<std::unique_ptr<frost::build::BuildSession>> {
+            const frost::build::BuildCallbacks&) -> frost::Result<std::unique_ptr<frost::build::BuildSession>> {
         started = true;
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (!release && std::chrono::steady_clock::now() < deadline) {

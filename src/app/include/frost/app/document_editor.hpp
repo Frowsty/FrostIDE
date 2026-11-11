@@ -41,10 +41,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace frost::app {
 
+// NOLINTNEXTLINE(cppcoreguidelines-virtual-class-destructor): Final concrete owner; base destruction is protected.
 class DocumentEditorFactory;
 class DocumentEditorView;
 
@@ -126,13 +128,15 @@ private:
     bool m_forcedReadOnly = false;
 };
 
+// NOLINTNEXTLINE(cppcoreguidelines-virtual-class-destructor): Final concrete owner; base destruction is protected.
 class DocumentEditorFactory final : public ui::IEditorFactory {
 public:
     DocumentEditorFactory(document::SaveManager& documents, IDocumentEditorListener& listener) noexcept
         : m_documents(documents), m_listener(listener) {}
+    ~DocumentEditorFactory() = default;
 
     // What new views get (the services' pointers must outlive the views). Applies to later opens.
-    void setServices(ui::EditorServices services) { m_services = services; }
+    void setServices(ui::EditorServices services) { m_services = std::move(services); }
     // The store and file system each new view's settings binding follows; null store: defaults.
     void setSettings(settings::SettingsStore* store, io::IFileSystem* fs) noexcept {
         m_store = store;

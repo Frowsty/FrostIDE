@@ -40,7 +40,10 @@ using frost::text::test::reproduceSeed;
 using frost::text::test::toHex;
 
 constexpr std::string_view kExe = "text_encoding_tests";
-const std::string kFffd(frost::text::kReplacementUtf8);
+const std::string& replacementText() {
+    static const std::string value(frost::text::kReplacementUtf8);
+    return value;
+}
 
 std::vector<FakeCodePage::Unit> asciiUnits() {
     std::vector<FakeCodePage::Unit> units;
@@ -133,7 +136,8 @@ TEST(LegacyDriver, DbcsLeadAsciiTrailReadsTrailAgain) {
     auto o = open(smallDbcs());
     const Decoded d = decode(*o->codec, "\x81"
                                         "A\x81\n");
-    EXPECT_EQ(d.text, kFffd + "A" + kFffd + "\n") << "the ASCII trail and the LF are read again (WHATWG)";
+    EXPECT_EQ(d.text, replacementText() + "A" + replacementText() + "\n")
+        << "the ASCII trail and the LF are read again (WHATWG)";
     EXPECT_EQ(d.stats.replacements, 2u);
     EXPECT_EQ(d.stats.firstInvalidInput, 0u);
 }
@@ -141,14 +145,14 @@ TEST(LegacyDriver, DbcsLeadAsciiTrailReadsTrailAgain) {
 TEST(LegacyDriver, DbcsLeadHighInvalidTrailConsumesTwo) {
     auto o = open(smallDbcs());
     const Decoded d = decode(*o->codec, byteString({0x81, 0xFF, 0x42, 0x81, 0x40}));
-    EXPECT_EQ(d.text, kFffd + "B" + fromU8(u8"\u3000"));
+    EXPECT_EQ(d.text, replacementText() + "B" + fromU8(u8"\u3000"));
     EXPECT_EQ(d.stats.replacements, 1u);
 }
 
 TEST(LegacyDriver, DbcsLeadAtEnd) {
     auto o = open(smallDbcs());
     const Decoded final = decode(*o->codec, "A\x81");
-    EXPECT_EQ(final.text, "A" + kFffd);
+    EXPECT_EQ(final.text, "A" + replacementText());
     EXPECT_EQ(final.consumed, 2u);
     const Decoded more = decode(*o->codec, "A\x81", InputEnd::More);
     EXPECT_EQ(more.text, "A");
@@ -161,7 +165,7 @@ TEST(LegacyDriver, SbcsUndefinedByte) {
     auto o = open(smallSbcs(false));
     const Decoded d = decode(*o->codec, "a\xA5"
                                         "b\xE9");
-    EXPECT_EQ(d.text, "a" + kFffd + "b" + fromU8(u8"\u00e9"));
+    EXPECT_EQ(d.text, "a" + replacementText() + "b" + fromU8(u8"\u00e9"));
     EXPECT_EQ(d.stats.firstInvalidInput, 1u);
     EXPECT_EQ(d.stats.firstReplacementOutput, 1u);
 }
@@ -177,7 +181,7 @@ TEST(LegacyDriver, WindowsOnlyC1Decode) {
     // A lead byte in the list is still a lead byte: 82 alone is invalid, 80 maps to U+0080.
     auto o = open(smallDbcs());
     const Decoded d = decode(*o->codec, byteString({0x80, 0x82, 0x41}));
-    EXPECT_EQ(d.text, fromU8(u8"\u0080") + kFffd + "A");
+    EXPECT_EQ(d.text, fromU8(u8"\u0080") + replacementText() + "A");
 }
 
 TEST(LegacyDriver, WindowsOnlyC1Encode) {

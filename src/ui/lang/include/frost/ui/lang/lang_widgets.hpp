@@ -156,10 +156,6 @@ public:
     [[nodiscard]] std::size_t usageCount() const noexcept { return m_count; }
     void setGroupByDirectory(bool enabled);
     [[nodiscard]] bool groupByDirectory() const noexcept;
-    void setShowReadAccess(bool show);
-    [[nodiscard]] bool showReadAccess() const noexcept;
-    void setShowWriteAccess(bool show);
-    [[nodiscard]] bool showWriteAccess() const noexcept;
     // Opens the usage at `index` of `group` (the same as double-clicking it).
     void activate(std::size_t group, std::size_t index);
 
@@ -174,8 +170,6 @@ private:
     QString m_baseTitle;
     QLabel* m_title = nullptr;
     QToolButton* m_groupByDirButton = nullptr;
-    QToolButton* m_showReadButton = nullptr;
-    QToolButton* m_showWriteButton = nullptr;
     QSplitter* m_splitter = nullptr;
     QTreeWidget* m_tree = nullptr;
     QPlainTextEdit* m_preview = nullptr;
@@ -231,9 +225,9 @@ public:
     explicit SymbolPopup(QWidget* parent = nullptr);
 
     // File structure of `path`.
-    void setStructure(QString title, std::string path, std::vector<::frost::lang::DocumentSymbol> symbols);
+    void setStructure(const QString& title, std::string path, std::vector<::frost::lang::DocumentSymbol> symbols);
     // Go to symbol: the results for the current query.
-    void setWorkspaceSymbols(QString title, std::vector<::frost::lang::WorkspaceSymbol> symbols);
+    void setWorkspaceSymbols(const QString& title, std::vector<::frost::lang::WorkspaceSymbol> symbols);
     // Shows centred over `over` (the editor) and focuses the search field.
     void popup(QWidget* over);
     [[nodiscard]] QString query() const;
@@ -363,7 +357,7 @@ public:
 
     explicit HierarchyPopup(QWidget* parent = nullptr);
     void configureModes(const QString& primaryModeLabel, const QString& secondaryModeLabel, bool secondaryActive);
-    void setEntries(const QString& title, std::vector<Entry> entries);
+    void setEntries(const QString& title, const std::vector<Entry>& entries);
     void popup(QWidget* over);
     [[nodiscard]] QTreeWidget* tree() const noexcept { return m_tree; }
     [[nodiscard]] bool isSecondaryMode() const noexcept;

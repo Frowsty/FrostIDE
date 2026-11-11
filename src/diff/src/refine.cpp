@@ -320,9 +320,9 @@ Result<Refinement> detail::refineHunkWith(const LineSequence& a, const LineSeque
             shifted(windowA, from, static_cast<std::uint32_t>(sa.size() - edges.suffixBytes));
         const text::ByteRange middleB =
             shifted(windowB, from, static_cast<std::uint32_t>(sb.size() - edges.suffixBytes));
-        FROST_ASSERT(middleA.size() > 0 || middleB.size() > 0); // One byte middle exceeds maxBytes >= 0.
+        FROST_ASSERT(!middleA.empty() || !middleB.empty()); // One byte middle exceeds maxBytes >= 0.
         out.changes.push_back(RangePair{middleA, middleB});
-        out.coarse = middleA.size() > 0 && middleB.size() > 0;
+        out.coarse = !middleA.empty() && !middleB.empty();
         return out;
     }
     const std::vector<std::uint32_t> startsA = tokenize(sa, granularity);
@@ -359,7 +359,7 @@ Result<Refinement> detail::refineHunkWith(const LineSequence& a, const LineSeque
         return coarseMiddle();
     }
 
-    detail::WorkBudget budget(limits.maxWork, stop);
+    detail::WorkBudget budget(limits.maxWork, std::move(stop));
     // Tokens are short and their table stays small (at most 2 * maxBytes keys), so a token costs
     // one unit, not the line rate.
     detail::Interner interner(na + nb, 1);

@@ -55,7 +55,7 @@ int indexOf(const QComboBox* combo, const std::string& value) {
 
 ConfigurationManagerDialog::ConfigurationManagerDialog(const project::SolutionModel& model, int activeConfiguration,
                                                        Apply apply, QWidget* parent)
-    : QDialog(parent), m_model(model), m_apply(std::move(apply)) {
+    : QDialog(parent), m_model(model), m_apply(std::move(apply)), m_active(new QComboBox(this)) {
     setObjectName(QStringLiteral("configurationManagerDialog"));
     setWindowTitle(QStringLiteral("Configuration Manager"));
     setModal(true);
@@ -63,7 +63,6 @@ ConfigurationManagerDialog::ConfigurationManagerDialog(const project::SolutionMo
     auto* outer = new QVBoxLayout(this);
     auto* top = new QHBoxLayout();
     top->addWidget(new QLabel(QStringLiteral("Active solution configuration:"), this));
-    m_active = new QComboBox(this);
     m_active->setObjectName(QStringLiteral("cfgManagerActiveCombo"));
     for (const project::SolutionConfiguration& configuration : model.configurations()) {
         m_active->addItem(qs(configuration.name()));
@@ -97,7 +96,7 @@ ConfigurationManagerDialog::ConfigurationManagerDialog(const project::SolutionMo
     outer->addWidget(buttons);
 
     for (std::size_t p = 0; p < model.projects().size(); ++p) {
-        m_rows.push_back(project::ProjectId{static_cast<std::uint32_t>(p)});
+        m_rows.emplace_back(static_cast<std::uint32_t>(p));
     }
     connect(m_active, &QComboBox::currentIndexChanged, this, [this](int) { populate(); });
     connect(m_table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* item) {

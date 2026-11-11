@@ -37,11 +37,23 @@ using test::peImage;
 constexpr auto kWait = 30s;
 
 #ifdef _WIN32
-const std::string kMsBuild = "C:\\VS\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe";
-const std::string kCmd = "C:\\Windows\\System32\\cmd.exe";
+const std::string& msBuildPath() {
+    static const std::string value("C:\\VS\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe");
+    return value;
+}
+const std::string& cmdPath() {
+    static const std::string value("C:\\Windows\\System32\\cmd.exe");
+    return value;
+}
 #else
-const std::string kMsBuild = "/opt/vs/MSBuild/Current/Bin/amd64/MSBuild.exe";
-const std::string kCmd = "/bin/cmd.exe"; // Never used: the external console needs Windows.
+const std::string& msBuildPath() {
+    static const std::string value("/opt/vs/MSBuild/Current/Bin/amd64/MSBuild.exe");
+    return value;
+}
+const std::string& cmdPath() {
+    static const std::string value("/bin/cmd.exe");
+    return value;
+} // Never used: the external console needs Windows.
 #endif
 
 // Polls `done` every few milliseconds for up to kWait.
@@ -194,7 +206,7 @@ struct Recorder {
             .onRunStateChanged =
                 [this](const RunInfo& run) {
                     LockGuard lock(mutex);
-                    events.push_back(std::string(toString(run.state)));
+                    events.emplace_back(toString(run.state));
                 },
             .onOutput =
                 [this](RunId, RunOutputKind kind, std::string_view text) {
@@ -206,7 +218,7 @@ struct Recorder {
             .onRunFinished =
                 [this](const RunOutcome& outcome) {
                     LockGuard lock(mutex);
-                    events.push_back("finished");
+                    events.emplace_back("finished");
                     finished.push_back(outcome);
                 },
             .onStartupProjectChanged =
@@ -265,9 +277,9 @@ protected:
 
     [[nodiscard]] RunServiceOptions options() {
         return {.stateFilePath = MemTree::path("data/run-settings.txt"),
-                .msbuildPath = kMsBuild,
+                .msbuildPath = msBuildPath(),
                 .vsInstanceId = {},
-                .cmdPath = kCmd,
+                .cmdPath = cmdPath(),
                 .properties = [this](const RunPropertyRequest& request) -> Result<RunProperties> {
                     LockGuard lock(requestsMutex);
                     requests.push_back(request);
@@ -438,7 +450,7 @@ TEST_F(RunServiceTest, BuildsFirstAndDoesNotRunAfterAFailedBuild) {
     EXPECT_EQ(requests[0].solutionPath, MemTree::path("Run/Run.sln"));
     EXPECT_EQ(requests[0].configuration, "Debug");
     EXPECT_EQ(requests[0].platform, "x64");
-    EXPECT_EQ(requests[0].msbuildPath, kMsBuild);
+    EXPECT_EQ(requests[0].msbuildPath, msBuildPath());
 }
 
 TEST_F(RunServiceTest, ASecondRunIsBusyAndRerunStopsAndStartsAgain) {
@@ -516,7 +528,7 @@ TEST_F(RunServiceTest, ConsoleProgramsGoToTheExternalConsoleAndGuiProgramsGetNon
     ASSERT_TRUE(service->setUseExternalConsole(true).has_value());
     writeProgram("App");
     // The cmd wrapper is only asserted: the scripted launcher starts nothing, so no window opens.
-    launcher.expect({.expectExecutable = test::kWindows ? kCmd : programPath("App")});
+    launcher.expect({.expectExecutable = test::kWindows ? cmdPath() : programPath("App")});
     ASSERT_TRUE(service->run().has_value());
     builder.finish(true);
     RunOutcome outcome = lastOutcome();
@@ -526,7 +538,7 @@ TEST_F(RunServiceTest, ConsoleProgramsGoToTheExternalConsoleAndGuiProgramsGetNon
     if constexpr (test::kWindows) {
         const io::ProcessSpec& spec = launches[0].spec;
         EXPECT_EQ(outcome.run.mode, ConsoleMode::ExternalConsole);
-        EXPECT_EQ(spec.executable, kCmd);
+        EXPECT_EQ(spec.executable, cmdPath());
         EXPECT_TRUE(spec.arguments.empty());
         ASSERT_TRUE(spec.rawArguments.has_value());
         EXPECT_TRUE(spec.rawArguments->starts_with("/d /s /c \"\"" + programPath("App") + "\" --flag \"two words\" & "))
@@ -689,7 +701,7 @@ TEST_F(RunServiceTest, TheBuildServiceAdapterBuildsBeforeTheRun) {
     // A real BuildService whose MSBuild is scripted: the launches show the order.
     BuildServiceOptions buildOptions{
         .stateFilePath = MemTree::path("data/active-configurations.txt"),
-        .msbuildPath = kMsBuild,
+        .msbuildPath = msBuildPath(),
         .vsInstanceId = {},
         .maxCpuCount = 2,
         .startBuild = [this](const MsBuildRequest& request,
@@ -706,20 +718,20 @@ TEST_F(RunServiceTest, TheBuildServiceAdapterBuildsBeforeTheRun) {
     ASSERT_TRUE(service->openSolution(solution).has_value());
     writeProgram("App");
 
-    launcher.expect({.expectExecutable = kMsBuild, .exitCode = 1});
+    launcher.expect({.expectExecutable = msBuildPath(), .exitCode = 1});
     ASSERT_TRUE(service->run().has_value());
     RunOutcome outcome = lastOutcome();
     EXPECT_TRUE(outcome.buildFailed);
     EXPECT_EQ(launcher.launches().size(), 1U) << "the program is not started after a failed build";
 
-    launcher.expect({.expectExecutable = kMsBuild});
+    launcher.expect({.expectExecutable = msBuildPath()});
     launcher.expect({.expectExecutable = programPath("App"), .exitCode = 7});
     ASSERT_TRUE(service->run().has_value());
     outcome = lastOutcome();
     EXPECT_EQ(outcome.exitCode, 7) << (outcome.error ? outcome.error->describe() : "");
     const auto launches = launcher.launches();
     ASSERT_EQ(launches.size(), 3U);
-    EXPECT_EQ(launches[1].spec.executable, kMsBuild);
+    EXPECT_EQ(launches[1].spec.executable, msBuildPath());
     EXPECT_EQ(launches[2].spec.executable, programPath("App"));
     service.reset();
     EXPECT_TRUE(buildService->waitForIdle(kWait));

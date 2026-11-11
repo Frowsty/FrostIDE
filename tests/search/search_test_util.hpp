@@ -58,7 +58,7 @@ public:
             }
         }
         const std::string file = m_scratch.join(native);
-        EXPECT_TRUE(io::realFileSystem().createDirectories(std::string(io::parentPath(file))));
+        EXPECT_TRUE(io::realFileSystem().createDirectories(io::parentPath(file)));
         EXPECT_TRUE(io::realFileSystem().writeFileAtomic(file, bytes)) << file;
         return file;
     }

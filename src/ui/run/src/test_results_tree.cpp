@@ -226,9 +226,16 @@ const std::vector<run::DoctestCase>* TestResultsTree::doctestCases(const std::st
 void TestResultsTree::markPending(const std::vector<std::string>& names) {
     for (const std::string& name : names) {
         m_state[name] = QStringLiteral("Pending");
+        // A pending rerun invalidates the previous verdict. If this run stops or fails before it
+        // produces a new result, showing that old verdict would make it look current.
+        m_results.erase(name);
         if (auto* item = itemFor(name)) {
             item->setText(StatusColumn, m_state[name]);
             item->setText(DurationColumn, QString());
+            for (int i = 0; i < item->childCount(); ++i) {
+                item->child(i)->setText(StatusColumn, QString());
+                item->child(i)->setText(DurationColumn, QString());
+            }
         }
     }
 }

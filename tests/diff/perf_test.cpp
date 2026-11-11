@@ -497,8 +497,21 @@ TEST(DiffPerf, CapScale) {
     constexpr std::uint32_t kSizes[] = {100'000, 150'000, 200'000,   250'000,   262'144,
                                         300'000, 500'000, 1'000'000, 1'500'000, kDefaultMaxLines};
     for (const std::uint32_t lines : kSizes) {
-        const LineSequence a = makeSequence(statements(lines, 0, 0, ""));
-        const LineSequence b = makeSequence(statements(lines, lines / 10, lines / 23, "edited"));
+        auto bytesA = statements(lines, 0, 0, "");
+        auto bytesB = statements(lines, lines / 10, lines / 23, "edited");
+        // This algorithm-scale fixture reaches the line limit with its original statement bytes,
+        // exceeding the ordinary 64 MiB sequence limit. Opt in only for these generated inputs.
+        SequenceLimits limitsA, limitsB;
+        limitsA.maxBytes = std::max<std::uint64_t>(limitsA.maxBytes, bytesA.size());
+        limitsB.maxBytes = std::max<std::uint64_t>(limitsB.maxBytes, bytesB.size());
+        auto builtA = LineSequence::fromBytes(std::move(bytesA), LineSplit::Lsp, limitsA);
+        auto builtB = LineSequence::fromBytes(std::move(bytesB), LineSplit::Lsp, limitsB);
+        ASSERT_TRUE(builtA) << builtA.error().describe();
+        ASSERT_TRUE(builtB) << builtB.error().describe();
+        const LineSequence a = std::move(*builtA);
+        const LineSequence b = std::move(*builtB);
+        ASSERT_EQ(a.size(), lines);
+        ASSERT_EQ(b.size(), lines);
         DiffOptions unlimited;
         unlimited.limits.maxWork = std::numeric_limits<std::uint64_t>::max();
         auto needed = diffLines(a, b, unlimited);

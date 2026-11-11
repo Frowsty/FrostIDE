@@ -99,11 +99,43 @@ TEST(ProblemsModel, ShowsTheColumnsAndCounts) {
     // Live diagnostics (W2) sit next to the build's and are cleared on their own.
     model.setProblems(DiagnosticSource::Live,
                       {diagnostic(Severity::Error, "clang", "expected ';'", FROST_SRC("Lib", "lib.cpp"), 4, 2)});
-    ASSERT_EQ(model.rowCount(), 5);
+    model.setProblems(DiagnosticSource::Inspection, {diagnostic(Severity::Warning, "modernize-use-nullptr",
+                                                                "use nullptr", FROST_SRC("Lib", "lib.cpp"), 8, 3)});
+    ASSERT_EQ(model.rowCount(), 6);
     EXPECT_EQ(cell(model, 4, ProblemsModel::SourceColumn), QStringLiteral("Live"));
+    EXPECT_EQ(cell(model, 5, ProblemsModel::SourceColumn), QStringLiteral("Inspection"));
     model.clear(DiagnosticSource::Build);
-    ASSERT_EQ(model.rowCount(), 1);
+    ASSERT_EQ(model.rowCount(), 2);
     EXPECT_EQ(model.counts().errors, 1U);
+    model.setProblems(DiagnosticSource::Live, {});
+    ASSERT_EQ(model.rowCount(), 1);
+    EXPECT_EQ(cell(model, 0, ProblemsModel::SourceColumn), QStringLiteral("Inspection"));
+}
+
+TEST(ProblemsModel, ReplacementPreservesCallerSnapshotAndMovesOwnedRowsInOrder) {
+    ProblemsModel model;
+    model.add(diagnostic(Severity::Error, "build", "build retained", FROST_SRC("App", "main.cpp"), 1, 2));
+    auto snapshot = sample();
+    model.setProblems(DiagnosticSource::Live, snapshot);
+    ASSERT_EQ(snapshot.size(), 4U);
+    EXPECT_EQ(snapshot.front().diagnostic.code, "C2065");
+    snapshot.front().diagnostic.message = "caller changed its snapshot";
+    EXPECT_EQ(cell(model, 1, ProblemsModel::DescriptionColumn), QStringLiteral("'x': undeclared identifier"));
+
+    auto replacement = sample();
+    replacement.front().diagnostic.message = "owned replacement";
+    model.setProblems(DiagnosticSource::Live, std::move(replacement));
+    ASSERT_EQ(model.rowCount(), 5);
+    EXPECT_EQ(cell(model, 0, ProblemsModel::CodeColumn), QStringLiteral("build"));
+    EXPECT_EQ(cell(model, 1, ProblemsModel::DescriptionColumn), QStringLiteral("owned replacement"));
+    EXPECT_EQ(cell(model, 2, ProblemsModel::CodeColumn), QStringLiteral("C4100"));
+    EXPECT_EQ(cell(model, 3, ProblemsModel::CodeColumn), QStringLiteral("C4244"));
+    EXPECT_EQ(cell(model, 4, ProblemsModel::SourceColumn), QStringLiteral("Live"));
+    EXPECT_EQ(model.locationAt(1), (SourceLocation{FROST_SRC("App", "main.cpp"), 7, 27}));
+    EXPECT_FALSE(model.locationAt(4));
+    EXPECT_EQ(model.counts().errors, 2U);
+    EXPECT_EQ(model.counts().warnings, 2U);
+    EXPECT_EQ(model.counts().messages, 1U);
 }
 
 TEST(ProblemsView, FiltersBySeverityAndTextWithCountsInTheToggles) {

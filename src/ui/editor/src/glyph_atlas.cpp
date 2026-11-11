@@ -56,6 +56,8 @@ constexpr int kPadding = 1;
 EditorGlyphAtlas::EditorGlyphAtlas(int initialSize, int maxSize)
     : m_initialSize(std::max(initialSize, 64)), m_maxSize(std::max(maxSize, std::max(initialSize, 64))) {
     reset(1.0);
+    // Construction must clear the rebuild counted by reset().
+    // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer): reset() increments this counter.
     m_rebuilds = 0; // The construction is not a rebuild.
 }
 

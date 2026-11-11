@@ -40,7 +40,7 @@ Result<void> DebugSession::pause() {
     return {};
 }
 
-Result<void> DebugSession::runToLine(std::string path, std::int64_t line) {
+Result<void> DebugSession::runToLine(const std::string& path, std::int64_t line) {
     {
         LockGuard lock(m_state->mutex);
         if (m_state->state != DebugState::Stopped) {
@@ -199,12 +199,12 @@ std::int64_t DebugSession::variables(std::int64_t variablesReference, std::int64
 
 std::int64_t DebugSession::evaluate(std::string expression, std::optional<std::int64_t> frameId, std::string context,
                                     EvaluateDone done) {
-    rpc::Json arguments = rpc::Json::object().set("expression", expression).set("context", context);
+    rpc::Json arguments = rpc::Json::object().set("expression", expression).set("context", std::move(context));
     if (frameId) {
         arguments.set("frameId", *frameId);
     }
     return m_state->send("evaluate", std::move(arguments),
-                         [done = std::move(done), expression](Result<rpc::Json> body) {
+                         [done = std::move(done), expression = std::move(expression)](Result<rpc::Json> body) {
                              if (!body) {
                                  done(std::unexpected(std::move(body.error())));
                                  return;

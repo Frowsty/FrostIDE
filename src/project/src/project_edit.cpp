@@ -265,7 +265,7 @@ Result<void> runProjectEdit(io::IProcessLauncher& launcher, const ProjectEditLau
     });
     // The watchdog ends the helper when the whole edit takes longer than the launch allows.
     std::atomic<bool> timedOut{false};
-    std::jthread watchdog([&process, &timedOut, timeout = launch.timeout](std::stop_token stop) {
+    std::jthread watchdog([&process, &timedOut, timeout = launch.timeout](const std::stop_token& stop) {
         std::mutex mutex;
         std::condition_variable_any wake;
         std::unique_lock lock(mutex);

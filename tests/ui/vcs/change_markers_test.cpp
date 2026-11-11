@@ -33,7 +33,7 @@ struct FakeBase {
     int reads = 0;
 
     EditorChangeMarkers::BaseProvider provider() {
-        return [this](const std::string&, std::function<void(Result<std::optional<std::string>>)> done) {
+        return [this](const std::string&, const std::function<void(Result<std::optional<std::string>>)>& done) {
             ++reads;
             done(base);
         };

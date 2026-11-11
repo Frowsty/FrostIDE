@@ -185,7 +185,7 @@ std::string normalizeFilterPath(std::string_view filter) {
 template<class Warn>
 std::vector<std::string> resolveInclude(io::IFileSystem& fs, std::string_view directory, std::string_view entry,
                                         const Scope& scope, std::vector<std::string>& unresolved, bool& wildcard,
-                                        Warn&& warn) {
+                                        const Warn& warn) {
     wildcard = false;
     auto expanded = expandProperties(entry, scope);
     if (!expanded) {

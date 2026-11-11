@@ -67,15 +67,16 @@ bool DebugController::validateCoreClrPath(std::string path, std::function<void(D
     const auto epoch = m_coreClrValidationEpoch;
     const auto generation = m_generation;
     const auto relay = m_relay;
-    m_coreClrBreakpointValidator(
-        path, [relay, generation, epoch, sequence, path, approved = std::move(approved)](bool ok) {
-            relay->post(generation, [ok, epoch, sequence, path, approved](DebugController* self) {
-                const auto it = self->m_coreClrPathRequests.find(path);
-                if (ok && self->m_session && self->m_coreClrSession && self->m_coreClrValidationEpoch == epoch &&
-                    it != self->m_coreClrPathRequests.end() && it->second == sequence)
-                    approved(*self);
-            });
+    std::string requestedPath = path;
+    m_coreClrBreakpointValidator(std::move(requestedPath), [relay, generation, epoch, sequence, path = std::move(path),
+                                                            approved = std::move(approved)](bool ok) {
+        relay->post(generation, [ok, epoch, sequence, path, approved](DebugController* self) {
+            const auto it = self->m_coreClrPathRequests.find(path);
+            if (ok && self->m_session && self->m_coreClrSession && self->m_coreClrValidationEpoch == epoch &&
+                it != self->m_coreClrPathRequests.end() && it->second == sequence)
+                approved(*self);
         });
+    });
     return true;
 }
 
@@ -172,6 +173,26 @@ void DebugController::rerun() {
     stop();
     m_rerunPending = true;
     m_rerunTimer.start();
+}
+
+Result<void> DebugController::terminateTarget(std::int64_t expectedPid, std::uint64_t expectedGeneration,
+                                              debug::DebugSession::TerminateDone done) {
+    if (!nativeSession() || m_generation != expectedGeneration || m_session->processId() != expectedPid)
+        return fail(ErrorCode::PermissionDenied, "The selected engine is not this native debugger session");
+    m_rerunPending = false;
+    m_rerunTimer.stop();
+    const auto relay = m_relay;
+    return m_session->terminateDebuggee(
+        expectedPid, [relay, expectedGeneration, done = std::move(done)](Result<void> result) mutable {
+            relay->post(expectedGeneration, [done = std::move(done),
+                                             result = std::move(result)](DebugController* self) mutable {
+                if (!result)
+                    self->report(Result<void>(std::unexpected(result.error())), QStringLiteral("Stop FrostEngine"));
+                if (done)
+                    done(std::move(result));
+                emit self->stateChanged();
+            });
+        });
 }
 
 void DebugController::stop() {

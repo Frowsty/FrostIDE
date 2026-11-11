@@ -98,7 +98,7 @@ struct ServerCapabilities {
  */
 class ILspRequester {
 public:
-    using ApplyEditHandler = std::function<bool(const Json& params)>;
+    using ApplyEditHandler = std::function<void(const Json& params, std::function<void(bool)> done)>;
 
     virtual ~ILspRequester() = default;
     // Sends `method` with `params`; stopping `token` cancels it ($/cancelRequest). Errors: Busy
@@ -109,8 +109,10 @@ public:
     [[nodiscard]] virtual PositionEncoding encoding() const = 0;
     // The server's capabilities while initialized, else nullopt.
     [[nodiscard]] virtual std::optional<ServerCapabilities> serverCapabilities() const = 0;
-    // Optional callback invoked when the server sends a `workspace/applyEdit` request.
-    virtual void setApplyEditHandler(ApplyEditHandler handler) { static_cast<void>(handler); }
+    // Optional callback for `workspace/applyEdit`. Invoke done once the edit was applied or refused.
+    // The callback may retain done and finish on another thread; done must be invoked at most once.
+    // NOLINTNEXTLINE(performance-unnecessary-value-param): Overrides take ownership of the callback.
+    virtual void setApplyEditHandler(ApplyEditHandler) {}
 
 protected:
     ILspRequester() = default;
@@ -186,7 +188,7 @@ public:
         std::function<void(const Json& params)> onDiagnostics;
         // window/logMessage and window/showMessage: LSP MessageType (1 error .. 4 log) and text.
         std::function<void(int type, std::string_view message)> onMessage;
-        // Server-initiated workspace/applyEdit request; returns true when applied.
+        // Server-initiated workspace/applyEdit request; invoke done when application completes.
         ApplyEditHandler onApplyEdit;
         std::function<void(const Error& problem)> onProtocolError;
         std::function<void(const Error& why)> onClosed;
@@ -198,7 +200,7 @@ public:
     // Starts the connection over `stream` on `scheduler` (see jsonrpc.hpp for the threads).
     LspClient(std::unique_ptr<IByteStream> stream, sched::IScheduler& scheduler, InitializeOptions options,
               Handlers handlers);
-    ~LspClient();
+    ~LspClient() override;
     LspClient(const LspClient&) = delete ("a client owns its connection");
     LspClient& operator=(const LspClient&) = delete ("a client owns its connection");
 
@@ -233,7 +235,7 @@ public:
     // Sets or replaces the handler for server-initiated workspace/applyEdit requests.
     void setApplyEditHandler(ApplyEditHandler handler) override;
     // A notification. Errors: Busy (not initialized), IoError (closed).
-    [[nodiscard]] Result<void> notify(std::string method, Json params);
+    [[nodiscard]] Result<void> notify(const std::string& method, Json params);
 
     // Text-document notifications (never wait on the server). Errors: as notify().
     [[nodiscard]] Result<void> didOpen(std::string_view uri, std::string_view languageId, std::int64_t version,

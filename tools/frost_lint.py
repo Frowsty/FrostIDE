@@ -102,10 +102,12 @@ CLOSED_MILESTONES: frozenset[int] = frozenset({0})
 DATA_GLOBS = ("tests/**/fixtures/**", "tests/**/goldens/**", "tests/fuzz/corpus/**")
 
 # Vendored third-party sources, byte-identical to their pins in third_party/vendor.lock.json
-# (ADR 0023; libvterm, ADR 0051): our header and code rules do not apply to them, only REUSE
-# coverage (REUSE.toml names their upstream copyright and licence). Mirrors the `-text` entries in
+# (ADR 0023; libvterm, ADR 0051), plus the test-only fastjsonschema wheel source (ADR 0086):
+# our header and code rules do not apply to them, only REUSE coverage. Their regular package
+# checks still enforce the pinned source hashes and licence. Mirrors the `-text` entries in
 # .gitattributes.
-VENDORED_GLOBS = ("third_party/tree-sitter/**", "third_party/grammars/**", "third_party/libvterm/**")
+VENDORED_GLOBS = ("third_party/tree-sitter/**", "third_party/grammars/**", "third_party/libvterm/**",
+                  "tools/_vendor/fastjsonschema/**")
 
 # Directories exempt from the banned-C++26 rule only (every other rule still applies):
 #   src/compat/**                   the compat layer may wrap or probe C++26 library
@@ -259,6 +261,8 @@ RESULT_TYPES: tuple[ResultType, ...] = (
     # settings::Diagnostic, theme_compiler::Diagnostic and io::IgnoreDiagnostic are FrostIDE's
     # own validators reporting on its own inputs, never a tool's result.
     ResultType("LiveDiagnostic", "diagnostic", ("src/lang/src/diagnostics.cpp",)),
+    # FER-7: fields decoded from authenticated, identity-bound engine diagnostic push events.
+    ResultType("EngineDiagnostic", "diagnostic", ("src/engine/src/session.cpp",)),
     ResultType("BuildDiagnostic", "diagnostic", ("src/build/src/**",)),
     ResultType("Diagnostic", "diagnostic",
                ("src/build/src/**", "src/settings/src/**", "src/ui/theme_compiler/**")),
@@ -314,11 +318,22 @@ SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
     # Reviewed real site: the Problems window's live rows adapt LSP LiveDiagnostics (clangd, LuaLS,
     # the managed server) into BuildDiagnostic rows field by field.
     SiteAllowance("src/app/src/workbench_clangd.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
-                  "adapter of lang::LiveDiagnostic from publishDiagnostics", context="row.diagnostic.message = d.message;"),
+                  "adapter of lang::LiveDiagnostic from publishDiagnostics", context="row.diagnostic.message = std::move(d.message);"),
+    # CPP-10: adapt the parsed clang-tidy findings to Problems without synthesizing diagnostics.
+    SiteAllowance("src/app/src/workbench_inspection.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+                  "adapter of InspectionFinding parsed from the clang-tidy process output",
+                  context="row.diagnostic.message = finding.message;"),
+    SiteAllowance("src/app/src/engine_integration_events.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+                  "adapter of EngineDiagnostic decoded from authenticated engine push events",
+                  context="row.diagnostic.message = entry.message;"),
     # Reviewed real site: the author lens shows git blame's author (VcsService through authorForLine).
     SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
                   "out.push_back(EditorCodeVisionLens{", "git blame author from VcsService (authorForLine)",
                   context=".label = author,"),
+    # CPP-9: display the reference/implementation/type-hierarchy counts returned by clangd.
+    SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
+                  "out.push_back(EditorCodeVisionLens{", "adapter of CppCodeVisionProvider LSP result counts",
+                  context='.label = std::to_string(count) + " " + noun,'),
 )
 
 # Synthesized tool output: literals that imitate a tool's own output lines. Outside the files

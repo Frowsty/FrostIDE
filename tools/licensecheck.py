@@ -32,6 +32,9 @@
 #   vendored     third_party/vendor.lock.json (ADR 0023; absent means nothing vendored): the
 #                same checks for each vendored source component (no font checks apply), which
 #                becomes an SBOM package with its purl.
+#   SARIF validator  tests/tools/schemas/sarif-validator.lock.json (ADR 0086): the official OASIS
+#                schema digest, validator version, exact PyPI wheel URL and digest, BSD-3-Clause
+#                licence, ADR, exact vendored file set and each file's digest.
 # Module licences come from Qt's own SBOMs (<qt-root>/sbom/*.spdx.json, qt-root defaulting
 # to $FROST_QT_ROOT) and fall back to QT_MODULE_LICENCES for modules not installed.
 #
@@ -725,6 +728,31 @@ def check_qt(repo: Path, uses: list[QtUse], qt_root: Path | None, report: Report
 ASSET_MANIFEST = "resources/assets.lock.json"
 # Vendored third-party sources (ADR 0023), checked with the same gate.
 VENDOR_MANIFEST = "third_party/vendor.lock.json"
+# Test-only official SARIF schema and validator (ADR 0086). These pins are policy constants as
+# well as manifest values, so editing the lock alone cannot silently bless a new dependency.
+SARIF_VALIDATOR_MANIFEST = "tests/tools/schemas/sarif-validator.lock.json"
+SARIF_SCHEMA_SHA256 = "c3b4bb2d6093897483348925aaa73af03b3e3f4bd4ca38cef26dcb4212a2682e"
+SARIF_VALIDATOR_VERSION = "2.22.3"
+SARIF_VALIDATOR_WHEEL_URL = (
+    "https://files.pythonhosted.org/packages/d7/0d/6caab33488dc9d26440c24221fa610c7c8b83c30715ab45d31f0e004308e/"
+    "fastjsonschema-2.22.3-py3-none-any.whl"
+)
+SARIF_VALIDATOR_WHEEL_SHA256 = "f670b443830b75aca3f00b75949efa20f4b2a80302ec7a21505c28dd54cffd43"
+SARIF_VALIDATOR_LICENCE = "BSD-3-Clause"
+SARIF_SCHEMA_LICENCE = "LicenseRef-OASIS-SARIF-Errata-01"
+SARIF_VALIDATOR_FILES = frozenset({
+    "__init__.py", "__main__.py", "AUTHORS", "draft04.py", "draft06.py", "draft07.py", "draft2019.py",
+    "exceptions.py", "generator.py", "indent.py", "LICENSE", "py.typed", "ref_resolver.py", "version.py",
+})
+SARIF_VALIDATOR_WHEEL_MEMBERS = frozenset({
+    "fastjsonschema/__init__.py", "fastjsonschema/__main__.py", "fastjsonschema/draft04.py",
+    "fastjsonschema/draft06.py", "fastjsonschema/draft07.py", "fastjsonschema/draft2019.py",
+    "fastjsonschema/exceptions.py", "fastjsonschema/generator.py", "fastjsonschema/indent.py",
+    "fastjsonschema/py.typed", "fastjsonschema/ref_resolver.py", "fastjsonschema/version.py",
+    "fastjsonschema-2.22.3.dist-info/licenses/AUTHORS", "fastjsonschema-2.22.3.dist-info/licenses/LICENSE",
+    "fastjsonschema-2.22.3.dist-info/METADATA", "fastjsonschema-2.22.3.dist-info/WHEEL",
+    "fastjsonschema-2.22.3.dist-info/top_level.txt", "fastjsonschema-2.22.3.dist-info/RECORD",
+})
 # Text every licence file must contain for each licence in the asset's expression.
 LICENCE_MARKERS = {
     "OFL-1.1": "SIL OPEN FONT LICENSE Version 1.1",
@@ -987,6 +1015,106 @@ def check_assets(repo: Path, report: Report, files: list[str] | None = None,
             _spdx_id(f"{'Vendored' if vendored else 'Asset'}-{asset['id']}"), asset["name"], asset["version"],
             licence, licence if allowed else "NOASSERTION", asset["url"], asset["homepage"], asset.get("purl"),
             f"{kind} ({dest}), pinned in {manifest_rel}", "DEPENDS_ON", asset["sha256"] or None))
+
+
+def check_sarif_validator(repo: Path, report: Report) -> None:
+    """Check ADR 0086's test-only OASIS schema and exact fastjsonschema wheel/source pins."""
+    rel = SARIF_VALIDATOR_MANIFEST
+    manifest_path = repo / rel
+    if not manifest_path.is_file():
+        # Minimal licensecheck fixtures without any SARIF artifacts remain independent of ADR 0086.
+        # Once the feature or its schema is present, the lock is mandatory.
+        if ((repo / "tools/validate_sarif.py").exists()
+                or (repo / "tests/tools/schemas/sarif-schema-2.1.0.json").exists()
+                or (repo / "docs/adr/0086-sarif-schema-validation-tool.md").exists()):
+            report.violations.append(Violation(rel, 1, "SARIF validator pin manifest is missing (ADR 0086)"))
+        return
+    try:
+        document = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+        schema = document["schema"]
+        validator = document["validator"]
+        schema_path = schema["path"]
+        files = document["files"]
+        wheel_members = document["wheel_members"]
+        if not isinstance(files, dict) or not files:
+            raise ValueError("validator files must be a non-empty path-to-SHA-256 object")
+        if not isinstance(wheel_members, list) or not all(isinstance(member, str) for member in wheel_members):
+            raise ValueError("wheel_members must be a list of wheel archive paths")
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        report.violations.append(Violation(rel, 1, f"invalid SARIF validator pin manifest: {error}"))
+        return
+
+    expected_schema = "tests/tools/schemas/sarif-schema-2.1.0.json"
+    if schema_path != "sarif-schema-2.1.0.json" or schema.get("sha256") != SARIF_SCHEMA_SHA256:
+        report.violations.append(Violation(rel, 1, "official OASIS SARIF schema path or SHA-256 differs from ADR 0086"))
+    schema_file = repo / expected_schema
+    try:
+        actual_schema_sha = asset_fetch.sha256_file(schema_file)
+        if actual_schema_sha != SARIF_SCHEMA_SHA256:
+            report.violations.append(Violation(expected_schema, 1, "SHA-256 differs from the official OASIS schema pin"))
+    except OSError as error:
+        report.violations.append(Violation(expected_schema, 1, f"official OASIS schema is missing or unreadable: {error}"))
+
+    if (validator.get("name"), validator.get("version"), validator.get("wheel_url"),
+            validator.get("wheel_sha256"), validator.get("license")) != (
+            "fastjsonschema", SARIF_VALIDATOR_VERSION, SARIF_VALIDATOR_WHEEL_URL,
+            SARIF_VALIDATOR_WHEEL_SHA256, SARIF_VALIDATOR_LICENCE):
+        report.violations.append(Violation(rel, 1, "fastjsonschema source, version, wheel SHA-256 or BSD-3-Clause licence differs from ADR 0086"))
+    if set(wheel_members) != SARIF_VALIDATOR_WHEEL_MEMBERS:
+        report.violations.append(Violation(rel, 1, "fastjsonschema wheel member list differs from the pinned PyPI wheel"))
+    adr = "docs/adr/0086-sarif-schema-validation-tool.md"
+    if not (repo / adr).is_file():
+        report.violations.append(Violation(rel, 1, f"ADR 0086 is missing: {adr}"))
+    license_path = repo / "tools/_vendor/fastjsonschema/LICENSE"
+    if not license_path.is_file() or "Redistribution and use in source and binary forms" not in license_path.read_text(
+            encoding="utf-8", errors="replace"):
+        report.violations.append(Violation("tools/_vendor/fastjsonschema/LICENSE", 1,
+                                            "vendored fastjsonschema must retain its BSD-3-Clause licence text"))
+    notice_path = repo / "tests/tools/schemas/NOTICE.txt"
+    try:
+        notice = re.sub(r"\s+", " ", notice_path.read_text(encoding="utf-8"))
+        if ("Copyright © OASIS Open 2023" not in notice or "document itself may not be modified" not in notice
+                or "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/" not in notice):
+            raise ValueError("required OASIS copyright, terms or source link is missing")
+    except (OSError, UnicodeError, ValueError) as error:
+        report.violations.append(Violation("tests/tools/schemas/NOTICE.txt", 1,
+                                            f"OASIS schema notice is missing or incomplete: {error}"))
+
+    vendor_root = repo / "tools/_vendor/fastjsonschema"
+    expected_paths: set[str] = set()
+    if set(files) != SARIF_VALIDATOR_FILES:
+        report.violations.append(Violation(rel, 1, "fastjsonschema vendored file set differs from the pinned wheel source"))
+    for path, digest in sorted(files.items()):
+        if not isinstance(path, str) or not path or Path(path).is_absolute() or ".." in Path(path).parts:
+            report.violations.append(Violation(rel, 1, f"unsafe vendored validator path: {path!r}"))
+            continue
+        expected_paths.add(path)
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            report.violations.append(Violation(rel, 1, f"invalid SHA-256 for vendored validator file {path!r}"))
+            continue
+        file_path = vendor_root / Path(path)
+        shown = f"tools/_vendor/fastjsonschema/{path}"
+        try:
+            actual = asset_fetch.sha256_file(file_path)
+        except OSError as error:
+            report.violations.append(Violation(shown, 1, f"vendored validator file is missing or unreadable: {error}"))
+            continue
+        if actual != digest:
+            report.violations.append(Violation(shown, 1, "SHA-256 differs from the pinned validator source"))
+    actual_paths = {p.relative_to(vendor_root).as_posix() for p in vendor_root.rglob("*") if p.is_file()} if vendor_root.is_dir() else set()
+    if actual_paths != expected_paths:
+        for path in sorted(actual_paths - expected_paths):
+            report.violations.append(Violation(f"tools/_vendor/fastjsonschema/{path}", 1,
+                                                f"unlisted vendored validator file in {rel}"))
+        for path in sorted(expected_paths - actual_paths):
+            report.violations.append(Violation(f"tools/_vendor/fastjsonschema/{path}", 1,
+                                                f"listed vendored validator file is missing from {rel}"))
+    report.packages.append(Package(
+        _spdx_id("TestTool-fastjsonschema"), "fastjsonschema", SARIF_VALIDATOR_VERSION,
+        SARIF_VALIDATOR_LICENCE, SARIF_VALIDATOR_LICENCE, SARIF_VALIDATOR_WHEEL_URL,
+        "https://github.com/hynek/fastjsonschema", "pkg:pypi/fastjsonschema@2.22.3",
+        "Test-only validator, pinned in tests/tools/schemas/sarif-validator.lock.json (ADR 0086)",
+        "DEPENDS_ON", SARIF_VALIDATOR_WHEEL_SHA256))
 
 
 # ---------------------------------------------------------------------------------------
@@ -1267,6 +1395,7 @@ def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Pa
     check_qt(repo, uses, qt_root, report)
     check_assets(repo, report, files)
     check_assets(repo, report, files, VENDOR_MANIFEST)
+    check_sarif_validator(repo, report)
     check_sdk_conpty(repo, report)
     check_sdk_luals(repo, report)
     check_sdk_managed(repo, report)

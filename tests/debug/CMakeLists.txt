@@ -23,6 +23,7 @@ frost_add_test(debug_unit_tests
         coreclr_dap_test.cpp
         dap_client_test.cpp
         debug_session_test.cpp
+        debug_terminate_test.cpp
         debug_session_breakpoints_test.cpp
         lldb_dap_test.cpp
         mono_dap_test.cpp

@@ -247,8 +247,7 @@ Result<void> ProjectOpenBroker::start() {
                     if (waiter->done)
                         return;
                 }
-                Result<std::string> result =
-                    self ? self->accept(std::move(request)) : fail(ErrorCode::Cancelled, "window closed");
+                Result<std::string> result = self ? self->accept(request) : fail(ErrorCode::Cancelled, "window closed");
                 {
                     std::lock_guard lock(waiter->mutex);
                     waiter->result = std::move(result);
@@ -267,7 +266,7 @@ Result<void> ProjectOpenBroker::start() {
         return std::move(waiter->result);
     });
 }
-Result<std::string> ProjectOpenBroker::accept(std::string request) {
+Result<std::string> ProjectOpenBroker::accept(const std::string& request) {
     auto json = lang::parseJson(request);
     if (!json || !json->isObject())
         return fail(ErrorCode::InvalidArgument, "invalid open request");

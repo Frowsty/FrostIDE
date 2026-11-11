@@ -10,9 +10,9 @@
 //   - untrusted folders: an untrusted CMake folder and an untrusted .frostproj folder start no
 //     build, no CMake configure and no FrostEngine command until trust is granted in the trust
 //     dialog, and nothing is trusted silently;
-//   - R0 follow-up 13: FrostEngine engine-helper launches (scripted, as in workbench_engine_test.cpp)
-//     while the real pinned LuaLS runs for the same .frostproj folder: both coexist, every launch is
-//     accounted for and the LuaLS stays Running.
+//   - R0 follow-up 13: a labelled HMAC-v2 engine session peer while the real pinned LuaLS runs
+//     for the same .frostproj folder. Requests and pushed state coexist with real Lua diagnostics,
+//     every child launch is accounted for, and the same LuaLS stays Running.
 // The profile data (settings, trust store, sessions) of every rig lives in a work directory of its
 // own, apart from the project, so a "nothing was written" check sees only what the product wrote.
 
@@ -20,21 +20,22 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
-#include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/rpc/json.hpp"
 #include "frost/ui/lang/language_controller.hpp"
+#include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
+#include "frost/ui/toolwindows/engine_console.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
+#include "engine_session_peer.hpp"
 #include "support/crash_dialogs.hpp"
 #include "workbench_rig.hpp"
 #include <QCoreApplication>
 #include <QLabel>
-#include <QListWidget>
 #include <QPushButton>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -70,20 +71,15 @@ std::string toolName(std::string_view executable) {
 }
 
 /*
- * The spawn log of a test: every launch's executable, in order. Launches of `scriptedExecutable`
- * (the FrostEngine request helper, which is this test binary unless the options name another) go to
- * a ScriptedProcessLauncher; every other launch goes to the real launcher. Thread-safe.
+ * The spawn log of a test: every launch's executable, in order, forwarded to the actual launcher.
+ * The engine protocol peer opens a local socket and does not create a child process. Thread-safe.
  */
 class RecordingLauncher final : public frost::io::IProcessLauncher {
 public:
     RecordingLauncher() = default;
-    RecordingLauncher(std::string scriptedExecutable, frost::io::ScriptedProcessLauncher& scripted)
-        : m_scriptedExecutable(std::move(scriptedExecutable)), m_scripted(&scripted) {}
 
     frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
         record(spec);
-        if (scripted(spec))
-            return m_scripted->launch(spec);
         if (auto refused = refuseThisBinary(spec); !refused)
             return std::unexpected(std::move(refused.error()));
         return frost::io::realProcessLauncher().launch(spec);
@@ -91,8 +87,6 @@ public:
     frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
     launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
         record(spec);
-        if (scripted(spec))
-            return m_scripted->launchAsync(spec, context);
         if (auto refused = refuseThisBinary(spec); !refused)
             return std::unexpected(std::move(refused.error()));
         return frost::io::realProcessLauncher().launchAsync(spec, context);
@@ -117,8 +111,7 @@ public:
     }
 
 private:
-    // This test binary is the default engine helper; it must never start for real (gtest would run
-    // every test of the binary again inside the "helper").
+    // Refuse a mistaken recursive launch of this test binary.
     static frost::Result<void> refuseThisBinary(const frost::io::ProcessSpec& spec) {
         const std::string self = QCoreApplication::applicationFilePath().toStdString();
         if (frost::io::normalizePath(spec.executable).value_or(spec.executable) ==
@@ -126,15 +119,10 @@ private:
             return frost::fail(frost::ErrorCode::InvalidArgument, "the test refuses to start its own binary");
         return {};
     }
-    [[nodiscard]] bool scripted(const frost::io::ProcessSpec& spec) const {
-        return m_scripted != nullptr && spec.executable == m_scriptedExecutable;
-    }
     void record(const frost::io::ProcessSpec& spec) {
         const std::scoped_lock lock(m_mutex);
         m_executables.push_back(spec.executable);
     }
-    std::string m_scriptedExecutable;
-    frost::io::ScriptedProcessLauncher* m_scripted = nullptr;
     mutable std::mutex m_mutex;
     std::vector<std::string> m_executables;
 };
@@ -195,19 +183,6 @@ std::string allNotices(WorkbenchRig& rig) {
 // Lets queued events and worker results arrive for `duration` (nothing is waited for).
 void settle(std::chrono::milliseconds duration) {
     static_cast<void>(waitFor([] { return false; }, duration));
-}
-
-QPushButton* button(QWidget* panel, const QString& text) {
-    for (auto* candidate : panel->findChildren<QPushButton*>())
-        if (candidate->text() == text)
-            return candidate;
-    return nullptr;
-}
-bool hasStatus(QWidget* panel, const QString& text) {
-    for (auto* label : panel->findChildren<QLabel*>())
-        if (label->text().contains(text))
-            return true;
-    return false;
 }
 
 // An absolute path in a directory that does not exist: a tool setting that points nowhere.
@@ -299,7 +274,7 @@ TEST(R0ToolAblation, WithoutClangdCMakeAndLuaLsTheIdeSaysUnavailableAndShowsNoRe
         ASSERT_NE(structure, nullptr);
         EXPECT_EQ(structure->topLevelItemCount(), 0) << file << ": a Structure without a language server";
     }
-    rig.window->toolWindows().show(std::string(frost::app::kUnitTestsToolWindow));
+    rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow);
     auto* tests = rig.window->findChild<QTreeWidget*>(QStringLiteral("unitTestsTreeWidget"));
     ASSERT_NE(tests, nullptr);
     // Tests come from ctest (RUN-7), which a folder that never configured does not have: no test,
@@ -458,11 +433,96 @@ TEST(R0Trust, AnUntrustedCMakeFolderRunsNoBuildOrConfigureUntilTrustIsGranted) {
     ASSERT_TRUE(rig.workbench->cmakeService()->waitForIdle(120s));
 }
 
+using EngineSessionPeer = frost::app::test::EngineSessionPeer;
+using EngineJson = frost::rpc::Json;
+
+void advertiseEnginePeer(const WorkDir& profile, const EngineSessionPeer& peer) {
+    profile.write("automation/Instances/" + peer.instanceId() + ".json", peer.record().dump());
+}
+
+bool pairEnginePeer(WorkbenchRig& rig, const EngineSessionPeer& peer) {
+    EXPECT_NE(peer.port(), 0U);
+    auto refreshed = rig.workbench->refreshEngineInstances();
+    EXPECT_TRUE(refreshed) << (refreshed ? "" : refreshed.error().describe());
+    if (!refreshed || !waitFor(
+                          [&] {
+                              const auto state = rig.workbench->engineState();
+                              const auto* instances = state.find("instances");
+                              return instances && std::ranges::any_of(instances->items(), [&](const auto& instance) {
+                                         return instance.stringAt("instanceId") == peer.instanceId();
+                                     });
+                          },
+                          5s))
+        return false;
+    auto paired = rig.workbench->pairEngineInstance(peer.instanceId());
+    EXPECT_TRUE(paired) << (paired ? "" : paired.error().describe());
+    return paired && waitFor(
+                         [&] {
+                             const auto state = rig.workbench->engineState();
+                             return state.boolAt("connected") == true &&
+                                    state.stringAt("selectedInstanceId") == peer.instanceId() &&
+                                    state.stringAt("state") == "Edit";
+                         },
+                         5s);
+}
+
+bool engineCommandCompleted(WorkbenchRig& rig, std::uint64_t request) {
+    const auto state = rig.workbench->engineState();
+    const auto* reply = state.find("lastReply");
+    return state.unsignedAt("lastCompletedRequestId") == request && reply && !reply->isNull();
+}
+
+bool consoleContains(frost::ui::EngineConsole& console, const QString& text) {
+    for (QTreeWidgetItemIterator it(console.view()); *it; ++it)
+        if ((*it)->text(3).contains(text))
+            return true;
+    return false;
+}
+
+// This is a protocol fixture reply, independent from the explicit state event below.
+EngineJson peerPlayReceipt() {
+    return EngineJson::object().set("state", "Play").set("mode", "Play").set("paused", false).set("frames", 7);
+}
+void publishPeerPlay(EngineSessionPeer& peer) { peer.state("Play", false, 7); }
+
+void exercisePeerPlay(WorkbenchRig& rig, EngineSessionPeer& peer) {
+    const auto receipt = peerPlayReceipt();
+    peer.result("play.start", receipt);
+    auto* play = rig.window->mainToolbar().button(frost::ui::MainToolbar::kEnginePlay);
+    ASSERT_NE(play, nullptr);
+    ASSERT_TRUE(play->isEnabled());
+    play->click();
+    ASSERT_TRUE(waitFor([&] { return peer.requests("play.start").size() == 1; }, 10s));
+    const auto request = rig.workbench->engineState().unsignedAt("lastRequestId");
+    ASSERT_TRUE(request);
+    ASSERT_TRUE(waitFor([&] { return engineCommandCompleted(rig, *request); }, 20s));
+    const auto replied = rig.workbench->engineState();
+    ASSERT_NE(replied.find("lastReply"), nullptr);
+    EXPECT_EQ(*replied.find("lastReply"), receipt);
+    auto* panel = rig.window->toolWindows().content("frostEngine");
+    ASSERT_NE(panel, nullptr);
+    auto* console = panel->findChild<frost::ui::EngineConsole*>(QStringLiteral("engineConsole"));
+    ASSERT_NE(console, nullptr);
+    ASSERT_TRUE(waitFor([&] { return consoleContains(*console, QStringLiteral("play.start")); }, 20s));
+    EXPECT_EQ(replied.stringAt("state"), "Edit");
+    ASSERT_TRUE(rig.window->mainToolbar().engineState());
+    EXPECT_FALSE(rig.window->mainToolbar().engineState()->playing);
+    const auto sequence = replied.unsignedAt("eventSequence").value_or(0);
+    publishPeerPlay(peer);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto state = rig.workbench->engineState();
+            return state.unsignedAt("eventSequence").value_or(0) > sequence && state.stringAt("state") == "Play" &&
+                   state.boolAt("playing") == true;
+        },
+        10s));
+    EXPECT_TRUE(rig.window->mainToolbar().engineState()->playing);
+}
+
 /*
- * An untrusted FrostEngine project folder (a .frostproj beside a CMakeLists.txt). Opening it and
- * pressing every FrostEngine action starts no engine command, no build and no configure, and trusts
- * nothing; each action says to trust the project. After the trust dialog's grant, Play starts
- * exactly one engine helper (scripted).
+ * Untrusted project entry points send no engine frames and start no children. The actual trust
+ * dialog grant enables pairing with the labelled HMAC-v2 protocol peer and the normal Play action.
+ * CMake remains an actual installed tool, observed by the same recording launcher.
  */
 TEST(R0Trust, AnUntrustedFrostProjFolderRunsNoEngineCommandBuildOrConfigureUntilTrustIsGranted) {
     WorkDir profile("untrusted-engine-profile");
@@ -470,11 +530,13 @@ TEST(R0Trust, AnUntrustedFrostProjFolderRunsNoEngineCommandBuildOrConfigureUntil
     writeCMakeProject(dir);
     dir.write("Game.frostproj", "{}");
     dir.write("Assets/Scripts/enemy.lua", "return {}\n");
-    const std::string helper = QCoreApplication::applicationFilePath().toStdString();
-    frost::io::ScriptedProcessLauncher scripted;
-    RecordingLauncher launcher(helper, scripted);
+    EngineSessionPeer peer(dir.path());
+    ASSERT_NE(peer.port(), 0U);
+    advertiseEnginePeer(profile, peer);
+    RecordingLauncher launcher;
     RigOptions options;
     options.launcher = &launcher;
+    options.workbench.engineAutomationDirectory = profile.join("automation");
     WorkbenchRig rig(profile, options);
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Game.frostproj")));
@@ -482,37 +544,51 @@ TEST(R0Trust, AnUntrustedFrostProjFolderRunsNoEngineCommandBuildOrConfigureUntil
     rig.window->toolWindows().show("frostEngine");
     auto* panel = rig.window->toolWindows().content("frostEngine");
     ASSERT_NE(panel, nullptr);
-    for (const char* action :
-         {"Play", "Stop", "State", "Validate Script", "Run Tests", "Refresh Log", "Focus Editor"}) {
-        auto* pressed = button(panel, QString::fromLatin1(action));
-        ASSERT_NE(pressed, nullptr) << action;
-        pressed->click();
-        EXPECT_TRUE(hasStatus(panel, QStringLiteral("Trust the project"))) << action;
+    auto* console = panel->findChild<frost::ui::EngineConsole*>(QStringLiteral("engineConsole"));
+    ASSERT_NE(console, nullptr);
+    EXPECT_FALSE(console->submitCommand(QStringLiteral("play.start")));
+    auto paired = rig.workbench->pairEngineInstance(peer.instanceId());
+    EXPECT_FALSE(paired);
+    EXPECT_FALSE(rig.workbench->validateEngineScript());
+    EXPECT_FALSE(rig.workbench->startEngineEditor());
+    for (const char* method : {"play.start", "play.stop", "play.state", "play.pause", "play.step", "play.simulate",
+                               "script.validate", "test.run", "editor.focus"}) {
+        auto denied = rig.workbench->sendEngineCommand(method, EngineJson::object());
+        ASSERT_FALSE(denied) << method;
+        EXPECT_FALSE(denied.error().message().empty()) << method;
+        EXPECT_TRUE(peer.requests(method).empty()) << method;
     }
-    ASSERT_TRUE(rig.workbench->build().build(frost::build::BuildAction::Build).has_value());
+    for (const auto id : {frost::ui::MainToolbar::kEnginePlay, frost::ui::MainToolbar::kEngineStop,
+                          frost::ui::MainToolbar::kEnginePause, frost::ui::MainToolbar::kEngineStep,
+                          frost::ui::MainToolbar::kEngineSimulate}) {
+        auto* action = rig.window->mainToolbar().button(id);
+        ASSERT_NE(action, nullptr);
+        EXPECT_FALSE(action->isEnabled());
+        action->click();
+    }
+    ASSERT_TRUE(rig.workbench->build().build(frost::build::BuildAction::Build));
     settle(3s);
     EXPECT_TRUE(launcher.executables().empty()) << "launches before trust:" << launcher.describe();
-    EXPECT_TRUE(scripted.launches().empty());
-    EXPECT_FALSE(rig.trust->isTrusted(dir.path())) << "trusted silently";
+    EXPECT_EQ(peer.authenticated.load(), 0U);
+    EXPECT_TRUE(peer.requests("auth.challenge").empty());
+    EXPECT_FALSE(rig.trust->isTrusted(dir.path()));
+    EXPECT_EQ(rig.workbench->engineState().boolAt("connected"), false);
+    const auto beforeTrust = rig.workbench->engineState();
+    ASSERT_NE(beforeTrust.find("lastReply"), nullptr);
+    EXPECT_TRUE(beforeTrust.find("lastReply")->isNull());
 
     auto* dialog = rig.window->findChild<frost::ui::TrustDialog*>(QStringLiteral("trustDialog"));
-    ASSERT_NE(dialog, nullptr) << "opening an untrusted FrostEngine project offers trust";
+    ASSERT_NE(dialog, nullptr);
     dialog->trustButton()->click();
     ASSERT_TRUE(rig.trust->isTrusted(dir.path()));
-    // Wait out what the grant itself starts (the build asked for above, its configure), then play.
     ASSERT_TRUE(waitFor([&] { return !rig.workbench->build().isBuilding(); }, 240s));
     if (auto* cmake = rig.workbench->cmakeService())
         ASSERT_TRUE(cmake->waitForIdle(120s));
-    const auto reply = frost::lang::Json::object()
-                           .set("ok", true)
-                           .set("value", frost::lang::Json::object()
-                                             .set("result", frost::lang::Json::object().set("state", "Play"))
-                                             .set("locations", frost::lang::Json::object()));
-    scripted.expect(frost::io::ScriptedProcess{.stdoutBytes = reply.dump()});
-    button(panel, QStringLiteral("Play"))->click();
-    ASSERT_TRUE(waitFor([&] { return hasStatus(panel, QStringLiteral("FrostEngine request complete")); }, 10s));
-    ASSERT_EQ(scripted.launches().size(), 1U);
-    EXPECT_EQ(frost::lang::parseJson(scripted.launches().front().stdinBytes)->stringAt("method"), "play.start");
+    ASSERT_TRUE(pairEnginePeer(rig, peer)) << allNotices(rig);
+    EXPECT_GT(peer.authenticated.load(), 0U);
+    const auto beforeCommands = launcher.executables();
+    ASSERT_NO_FATAL_FAILURE(exercisePeerPlay(rig, peer));
+    EXPECT_EQ(launcher.executables(), beforeCommands) << launcher.describe();
 }
 
 // The pinned LuaLS (ADR 0079); a missing one fails the test (LUA-1).
@@ -526,26 +602,27 @@ frost::Result<std::string> pinnedLuaLs() {
 }
 
 /*
- * R0 follow-up 13: FrostEngine engine helpers beside a running LuaLS for the same .frostproj
- * folder. The real pinned LuaLS starts for the trusted project and reports an undefined global in
- * a script under Assets; then State, Validate Script (with that open script's buffer) and Play each
- * start one scripted engine helper and show its answer. Every launch is accounted for: exactly one
- * LuaLS and exactly three helpers, in that order; the LuaLS stays Running throughout and still
- * answers afterwards (a fresh edit gets fresh diagnostics).
+ * R0 follow-up 13 through the persistent session transport. A labelled HMAC-v2 engine peer
+ * receives state/validation/Play requests while the actual pinned LuaLS diagnoses the same
+ * unsaved script. Replies and pushes are observed separately, every child belongs to the real
+ * LuaLS, and that same server still reports a fresh undefined global afterwards.
  */
-TEST(R0Engine, EngineHelpersRunBesideARunningLuaLsForTheSameFrostProjFolder) {
+TEST(R0Engine, PersistentSessionPeerRunsBesideARunningLuaLsForTheSameFrostProjFolder) {
     auto luals = pinnedLuaLs();
-    ASSERT_TRUE(luals.has_value()) << luals.error().describe();
+    ASSERT_TRUE(luals) << luals.error().describe();
     WorkDir profile("engine-luals-profile");
     WorkDir dir("engine-luals");
     dir.write("Game.frostproj", "{}");
-    dir.write("Assets/Scripts/enemy.lua", "local speed = missingSpeed\nreturn speed\n");
+    const std::string diskSource = "local speed = missingSpeed\nreturn speed\n";
+    dir.write("Assets/Scripts/enemy.lua", diskSource);
     const std::string script = dir.join("Assets/Scripts/enemy.lua");
-    const std::string helper = QCoreApplication::applicationFilePath().toStdString();
-    frost::io::ScriptedProcessLauncher scripted;
-    RecordingLauncher launcher(helper, scripted);
+    EngineSessionPeer peer(dir.path());
+    ASSERT_NE(peer.port(), 0U);
+    advertiseEnginePeer(profile, peer);
+    RecordingLauncher launcher;
     RigOptions options;
     options.launcher = &launcher;
+    options.workbench.engineAutomationDirectory = profile.join("automation");
     WorkbenchRig rig(profile, options);
     ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
                                   *luals));
@@ -562,85 +639,91 @@ TEST(R0Engine, EngineHelpersRunBesideARunningLuaLsForTheSameFrostProjFolder) {
         return waitFor(
             [&] {
                 auto set = lua->diagnostics().forFile(script);
-                return set && std::ranges::any_of(set->diagnostics, [&](const auto& d) {
-                           return d.code == "undefined-global" && d.message.find(name) != std::string::npos;
+                return set && std::ranges::any_of(set->diagnostics, [&](const auto& diagnostic) {
+                           return diagnostic.code == "undefined-global" &&
+                                  diagnostic.message.find(name) != std::string::npos;
                        });
             },
             60s);
     };
-    ASSERT_TRUE(reports("missingSpeed")) << "LuaLS reported no undefined global";
+    ASSERT_TRUE(reports("missingSpeed"));
     ASSERT_EQ(launcher.count({"lua-language-server"}), 1U) << launcher.describe();
-
+    ASSERT_TRUE(pairEnginePeer(rig, peer));
+    const auto connectionGeneration = rig.workbench->engineState().unsignedAt("connectionGeneration");
+    ASSERT_TRUE(connectionGeneration && *connectionGeneration > 0);
     rig.window->toolWindows().show("frostEngine");
     auto* panel = rig.window->toolWindows().content("frostEngine");
     ASSERT_NE(panel, nullptr);
-    auto* output = panel->findChild<QListWidget*>();
-    ASSERT_NE(output, nullptr);
-    const auto answer = [](frost::lang::Json result) {
-        return frost::lang::Json::object()
-            .set("ok", true)
-            .set("value", frost::lang::Json::object()
-                              .set("result", std::move(result))
-                              .set("locations", frost::lang::Json::object()))
-            .dump();
-    };
-    struct Step {
-        const char* action;
-        const char* method;
-        std::string reply;
-        QString shown;
-    };
-    const std::vector<Step> steps = {
-        {"State", "play.state", answer(frost::lang::Json::object().set("state", "Edit")), QStringLiteral("Edit")},
-        {"Validate Script", "script.validate", answer(frost::lang::Json::object().set("valid", true)), QString()},
-        {"Play", "play.start", answer(frost::lang::Json::object().set("state", "Play")), QStringLiteral("Play")},
-    };
-    for (std::size_t i = 0; i < steps.size(); ++i) {
-        const Step& step = steps[i];
-        scripted.expect(frost::io::ScriptedProcess{.stdoutBytes = step.reply});
-        ASSERT_TRUE(rig.workbench->openPath(script)); // Validate Script needs the script in front.
-        auto* pressed = button(panel, QString::fromLatin1(step.action));
-        ASSERT_NE(pressed, nullptr) << step.action;
-        pressed->click();
-        const QString done = std::string_view(step.method) == "script.validate" ? QStringLiteral("Script is valid")
-                                                                                : QStringLiteral("request complete");
-        ASSERT_TRUE(waitFor([&] { return hasStatus(panel, done); }, 20s)) << step.action;
-        if (!step.shown.isEmpty()) {
-            ASSERT_GT(output->count(), 0) << step.action;
-            EXPECT_EQ(output->item(output->count() - 1)->text(), step.shown) << step.action;
-        }
-        const auto launched = scripted.launches();
-        ASSERT_EQ(launched.size(), i + 1) << step.action;
-        auto request = frost::lang::parseJson(launched.back().stdinBytes);
-        ASSERT_TRUE(request.has_value()) << step.action;
-        EXPECT_EQ(request->stringAt("method"), step.method);
-        EXPECT_TRUE(running()) << "LuaLS left Running during " << step.action;
-    }
-    // The validated buffer is the open script's text, sent to the engine helper, not to LuaLS.
-    auto validate = frost::lang::parseJson(scripted.launches()[1].stdinBytes);
-    ASSERT_TRUE(validate.has_value());
-    EXPECT_NE(validate->dump().find("missingSpeed"), std::string::npos) << validate->dump();
+    auto* console = panel->findChild<frost::ui::EngineConsole*>(QStringLiteral("engineConsole"));
+    ASSERT_NE(console, nullptr);
+    const auto launchesBeforeCommands = launcher.executables();
 
-    // The spawn log: one LuaLS, then exactly the three helpers, and nothing else of either kind.
-    const auto all = launcher.executables();
-    const std::string& helperExe = helper;
-    EXPECT_EQ(std::ranges::count(all, helperExe), 3) << launcher.describe();
-    EXPECT_EQ(launcher.count({"lua-language-server"}), 1U) << launcher.describe();
-    const auto firstHelper = std::ranges::find(all, helperExe);
-    const auto lualsLaunch =
-        std::ranges::find_if(all, [](const std::string& e) { return toolName(e) == "lua-language-server"; });
-    EXPECT_LT(lualsLaunch - all.begin(), firstHelper - all.begin()) << launcher.describe();
+    const auto edit =
+        EngineJson::object().set("state", "Edit").set("mode", "Edit").set("paused", false).set("frames", 0);
+    peer.result("play.state", edit);
+    ASSERT_TRUE(console->submitCommand(QStringLiteral("play.state")));
+    ASSERT_TRUE(waitFor([&] { return peer.requests("play.state").size() == 1; }, 20s));
+    const auto stateRequest = rig.workbench->engineState().unsignedAt("lastRequestId");
+    ASSERT_TRUE(stateRequest);
+    ASSERT_TRUE(waitFor([&] { return engineCommandCompleted(rig, *stateRequest); }, 20s));
+    const auto stateReply = rig.workbench->engineState();
+    ASSERT_NE(stateReply.find("lastReply"), nullptr);
+    EXPECT_EQ(*stateReply.find("lastReply"), edit);
+    ASSERT_TRUE(waitFor([&] { return consoleContains(*console, QStringLiteral("Edit")); }, 20s));
+    EXPECT_TRUE(running());
 
-    // LuaLS still answers: a new undefined global in an edit is reported, by the same process.
     auto* view = rig.workbench->currentView();
     ASSERT_NE(view, nullptr);
     ASSERT_EQ(view->path(), script);
     view->editor().editor().setState(frost::text::EditorState::caretAt(frost::ByteOffset{0}));
-    ASSERT_TRUE(view->editor().typeText("local boost = missingBoost\n"));
-    ASSERT_TRUE(reports("missingBoost")) << "LuaLS stopped answering after the engine commands";
+    ASSERT_TRUE(view->editor().typeText("-- validation buffer only\n"));
+    const auto submitted = view->editor().document().text().text();
+    ASSERT_NE(submitted, diskSource);
+    peer.hold("script.validate");
+    auto* validate = panel->findChild<QPushButton*>(QStringLiteral("engineValidateScriptButton"));
+    ASSERT_NE(validate, nullptr);
+    ASSERT_TRUE(validate->isEnabled());
+    validate->click();
+    ASSERT_TRUE(waitFor([&] { return peer.requests("script.validate").size() == 1; }, 20s));
+    const auto validationId = rig.workbench->engineState().unsignedAt("lastRequestId");
+    ASSERT_TRUE(validationId);
+    ASSERT_TRUE(view->editor().typeText("-- changed after submission\n"));
+    const auto requests = peer.requests("script.validate");
+    const auto* params = requests.front().find("params");
+    ASSERT_NE(params, nullptr);
+    EXPECT_EQ(params->stringAt("path"), "Assets/Scripts/enemy.lua");
+    EXPECT_EQ(params->stringAt("source"), submitted);
+    EXPECT_NE(view->editor().document().text().text(), submitted);
+    const auto validationReply = EngineJson::object().set("valid", true).set("diagnostics", EngineJson::array());
+    peer.release("script.validate", validationReply);
+    ASSERT_TRUE(waitFor([&] { return engineCommandCompleted(rig, *validationId); }, 20s));
+    const auto validated = rig.workbench->engineState();
+    ASSERT_NE(validated.find("lastReply"), nullptr);
+    EXPECT_EQ(*validated.find("lastReply"), validationReply);
+    ASSERT_TRUE(waitFor([&] { return consoleContains(*console, QStringLiteral("script.validate")); }, 20s));
+    EXPECT_TRUE(consoleContains(*console, QStringLiteral("valid")));
+    EXPECT_TRUE(view->document().dirty());
+    EXPECT_EQ(dir.read("Assets/Scripts/enemy.lua"), diskSource);
     EXPECT_TRUE(running());
-    EXPECT_EQ(rig.workbench->lua(), lua) << "the LuaLS was replaced";
+
+    ASSERT_NO_FATAL_FAILURE(exercisePeerPlay(rig, peer));
+    EXPECT_TRUE(running());
+    EXPECT_EQ(launcher.executables(), launchesBeforeCommands) << launcher.describe();
     EXPECT_EQ(launcher.count({"lua-language-server"}), 1U) << launcher.describe();
+    EXPECT_EQ(launcher.count(kBuildTools), 0U) << launcher.describe();
+    EXPECT_EQ(launcher.executables().size(), launcher.count({"lua-language-server"})) << launcher.describe();
+
+    view->editor().editor().setState(frost::text::EditorState::caretAt(frost::ByteOffset{0}));
+    ASSERT_TRUE(view->editor().typeText("local boost = missingBoost\n"));
+    ASSERT_TRUE(reports("missingBoost")) << "LuaLS stopped answering after session commands";
+    EXPECT_TRUE(running());
+    EXPECT_EQ(rig.workbench->lua(), lua);
+    EXPECT_EQ(rig.workbench->engineState().unsignedAt("connectionGeneration"), connectionGeneration);
+    EXPECT_EQ(peer.authenticated.load(), 1U);
+    EXPECT_EQ(launcher.count({"lua-language-server"}), 1U) << launcher.describe();
+    EXPECT_EQ(launcher.executables(), launchesBeforeCommands) << launcher.describe();
+    EXPECT_TRUE(view->document().dirty());
+    EXPECT_EQ(dir.read("Assets/Scripts/enemy.lua"), diskSource);
 }
 
 } // namespace

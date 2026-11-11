@@ -214,11 +214,8 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
     State(io::IFileSystem& fileSystem, io::IProcessLauncher& processLauncher, project::TrustStore& store,
           CMakeServiceOptions serviceOptions, CMakeServiceCallbacks serviceCallbacks)
         : fs(fileSystem), launcher(processLauncher), trustStore(store), options(std::move(serviceOptions)),
-          callbacks(std::move(serviceCallbacks)), msvcCache(fileSystem, processLauncher, options.msvcCacheDirectory) {
-        records = options.profileRecords;
-        wrappers = options.buildWrappers;
-        recordSource = options.profileRecordSource;
-    }
+          callbacks(std::move(serviceCallbacks)), msvcCache(fileSystem, processLauncher, options.msvcCacheDirectory),
+          records(options.profileRecords), wrappers(options.buildWrappers), recordSource(options.profileRecordSource) {}
 
     io::IFileSystem& fs;
     io::IProcessLauncher& launcher;

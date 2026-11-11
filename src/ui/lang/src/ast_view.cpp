@@ -27,16 +27,14 @@ constexpr int kEndRole = Qt::UserRole + 3;
 
 } // namespace
 
-AstViewPopup::AstViewPopup(QWidget* parent) : QFrame(parent) {
+AstViewPopup::AstViewPopup(QWidget* parent) : QFrame(parent), m_title(new QLabel(this)), m_tree(new QTreeWidget(this)) {
     setObjectName(QStringLiteral("astViewPopup"));
     setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
     setFrameShape(QFrame::Box);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
     layout->setSpacing(3);
-    m_title = new QLabel(this);
     m_title->setObjectName(QStringLiteral("astViewTitle"));
-    m_tree = new QTreeWidget(this);
     m_tree->setObjectName(QStringLiteral("astViewTree"));
     m_tree->setColumnCount(3);
     m_tree->setHeaderLabels({QStringLiteral("Node"), QStringLiteral("Role"), QStringLiteral("Range")});

@@ -279,7 +279,7 @@ struct UnityControlIntegration::Impl {
         auto* trust = &workbench.m_services.trust;
         const auto trustRoot = workbench.projectRoot();
         worker = std::jthread([receiver, round, target, id, challenge, trust, trustRoot,
-                               command = std::move(command)](std::stop_token stop) mutable {
+                               command = std::move(command)](const std::stop_token& stop) mutable {
             Result<lang::Json> result = fail(ErrorCode::Cancelled, "Unity request cancelled");
             auto connection = io::LoopbackStream::connect(target.port, std::chrono::steady_clock::now() + 5s, stop);
             if (connection) {

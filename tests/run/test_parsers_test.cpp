@@ -470,4 +470,144 @@ TEST(TestRunnerSetup, TheExactNameRegexEscapesEveryMetacharacter) {
     EXPECT_EQ(frost::run::ctestExactNameRegex({"^$|*?\\{}"}), "^(\\^\\$\\|\\*\\?\\\\\\{\\})$");
 }
 
+TEST(TestRunnerGutterMapping, AListedFilteredGoogleTestCaseMapsToItsSourceDeclaration) {
+    frost::run::DiscoveredTest test;
+    test.name = "Suite.Case";
+    test.command = {"E:/build/tests.exe", "--gtest_filter=Suite.Case"};
+    test.gtestFilter = "Suite.Case";
+    const std::string source = "TEST(Suite, Case) { EXPECT_TRUE(true); }\n";
+    auto cases = frost::run::resolveGutterTestCasesInFile("E:/src/test.cpp", source,
+                                                          std::span<const frost::run::DiscoveredTest>(&test, 1));
+    ASSERT_EQ(cases.size(), 1U);
+    EXPECT_EQ(cases.front().caseName, "Suite.Case");
+    EXPECT_EQ(cases.front().framework, frost::run::TestCaseFramework::GoogleTest);
+    EXPECT_EQ(cases.front().line, 1);
+}
+
+TEST(TestRunnerGutterMapping, ACombinedCTestFilterBecomesSeparateExactGutterCases) {
+    frost::run::DiscoveredTest test;
+    test.name = "both";
+    test.command = {"E:/build/tests.exe", "--gtest_filter=Suite.One:Suite.Two"};
+    test.gtestFilter = "Suite.One:Suite.Two";
+    const std::string source = "TEST(Suite, One) {}\nTEST(Suite, Two) {}\n";
+    auto cases = frost::run::resolveGutterTestCasesInFile("E:/src/test.cpp", source,
+                                                          std::span<const frost::run::DiscoveredTest>(&test, 1));
+    ASSERT_EQ(cases.size(), 2U);
+    EXPECT_EQ(cases[0].caseName, "Suite.One");
+    EXPECT_EQ(cases[1].caseName, "Suite.Two");
+    frost::run::CTestSetup setup;
+    setup.buildDirectory = "E:/build";
+    for (const auto& resolved : cases) {
+        const auto launch =
+            frost::run::buildSingleTestLaunch(setup, resolved.test, resolved.caseName, resolved.framework);
+        ASSERT_TRUE(launch.has_value());
+        const std::string expected = "--gtest_filter=" + resolved.caseName;
+        EXPECT_EQ(std::ranges::count(launch->arguments, expected), 1);
+        EXPECT_EQ(std::ranges::count_if(launch->arguments,
+                                        [](const std::string& arg) { return arg.starts_with("--gtest_filter="); }),
+                  1);
+    }
+}
+
+TEST(TestRunnerGutterMapping, CombinedParameterizedGoogleTestFilterKeepsItsExactTokens) {
+    frost::run::DiscoveredTest test;
+    test.name = "parameterized";
+    test.command = {"E:/build/tests.exe", "--gtest_filter=Suite/0.One/0:Suite/1.Two/1"};
+    test.gtestFilter = "Suite/0.One/0:Suite/1.Two/1";
+    const std::string source = "TEST_P(Suite, One) {}\nTEST_P(Suite, Two) {}\n";
+    const auto cases = frost::run::resolveGutterTestCasesInFile("E:/src/test.cpp", source,
+                                                                std::span<const frost::run::DiscoveredTest>(&test, 1));
+    ASSERT_EQ(cases.size(), 2U);
+    EXPECT_EQ(cases[0].caseName, "Suite/0.One/0");
+    EXPECT_EQ(cases[1].caseName, "Suite/1.Two/1");
+}
+
+TEST(TestRunnerGutterMapping, WildcardOrNegativeGoogleTestFiltersDoNotClaimOneCase) {
+    frost::run::DiscoveredTest test;
+    test.name = "filtered";
+    test.command = {"E:/build/tests.exe", "--gtest_filter=Suite.*"};
+    test.gtestFilter = "Suite.*";
+    const std::string source = "TEST(Suite, One) {}\n";
+    EXPECT_TRUE(frost::run::resolveGutterTestCasesInFile("E:/src/test.cpp", source,
+                                                         std::span<const frost::run::DiscoveredTest>(&test, 1))
+                    .empty());
+    test.gtestFilter = "Suite.One-Suite.Two";
+    EXPECT_TRUE(frost::run::resolveGutterTestCasesInFile("E:/src/test.cpp", source,
+                                                         std::span<const frost::run::DiscoveredTest>(&test, 1))
+                    .empty());
+}
+
+TEST(TestRunnerGutterMapping, SourceTextAloneNeverCreatesRunnableTests) {
+    const std::string source = "TEST(Suite, Case) { EXPECT_TRUE(true); }\nTEST_CASE(\"example\") {}\n";
+    EXPECT_TRUE(frost::run::resolveGutterTestCasesInFile("E:/src/test.cpp", source, {}).empty());
+
+    frost::run::DiscoveredTest wholeGTest;
+    wholeGTest.name = "all";
+    wholeGTest.command = {"E:/build/tests.exe"};
+    EXPECT_TRUE(frost::run::resolveGutterTestCasesInFile("E:/src/test.cpp", source,
+                                                         std::span<const frost::run::DiscoveredTest>(&wholeGTest, 1))
+                    .empty());
+
+    frost::run::DiscoveredTest doctest;
+    doctest.name = "doctests";
+    doctest.command = {"E:/build/tests.exe", "--reporters=xml"};
+    EXPECT_TRUE(frost::run::resolveGutterTestCasesInFile("E:/src/test.cpp", source,
+                                                         std::span<const frost::run::DiscoveredTest>(&doctest, 1))
+                    .empty());
+}
+
+TEST(TestRunnerGutterMapping, DoctestLocationsMustIdentifyThisExactPath) {
+    frost::run::DiscoveredTest doctest;
+    doctest.name = "doctests";
+    doctest.command = {"E:/build/doctests.exe", "--reporters=xml"};
+    const std::string source = "TEST_CASE(\"example\") {}\n";
+    std::vector<std::pair<std::string, std::vector<frost::run::DoctestCase>>> listing{
+        {"doctests", {{.name = "example", .location = frost::run::TestLocation{"E:/other/test.cpp", 1}}}}};
+    EXPECT_TRUE(frost::run::resolveGutterTestCasesInFile(
+                    "E:/src/test.cpp", source, std::span<const frost::run::DiscoveredTest>(&doctest, 1), listing)
+                    .empty());
+}
+
+TEST(TestRunnerGutterMapping, AValidDoctestListingMapsToTheListedSourceLocation) {
+    frost::run::DiscoveredTest doctest;
+    doctest.name = "doctests";
+    doctest.command = {"E:/build/doctests.exe", "--reporters=xml"};
+    const std::string source = "TEST_CASE(\"example\") {}\n";
+    std::vector<std::pair<std::string, std::vector<frost::run::DoctestCase>>> listing{
+        {"doctests", {{.name = "example", .location = frost::run::TestLocation{"E:/src/test.cpp", 1}}}}};
+    auto cases = frost::run::resolveGutterTestCasesInFile(
+        "E:/src/test.cpp", source, std::span<const frost::run::DiscoveredTest>(&doctest, 1), listing);
+    ASSERT_EQ(cases.size(), 1U);
+    EXPECT_EQ(cases.front().framework, frost::run::TestCaseFramework::Doctest);
+    EXPECT_EQ(cases.front().caseName, "example");
+    EXPECT_EQ(cases.front().line, 1);
+}
+
+TEST(TestRunnerGutterMapping, PathsRemainCaseSensitiveOnLinux) {
+#ifndef _WIN32
+    frost::run::DiscoveredTest doctest;
+    doctest.name = "doctests";
+    doctest.command = {"/build/doctests", "--reporters=xml"};
+    const std::string source = "TEST_CASE(\"example\") {}\n";
+    std::vector<std::pair<std::string, std::vector<frost::run::DoctestCase>>> listing{
+        {"doctests", {{.name = "example", .location = frost::run::TestLocation{"/src/Test.cpp", 1}}}}};
+    EXPECT_TRUE(frost::run::resolveGutterTestCasesInFile(
+                    "/src/test.cpp", source, std::span<const frost::run::DiscoveredTest>(&doctest, 1), listing)
+                    .empty());
+#endif
+}
+
+TEST(TestRunnerGTestArguments, RepeatCannotTurnASelectedCaseIntoAnEmptyOrUnboundedRun) {
+    const std::vector<std::string> base{"--gtest_repeat=-1", "--gtest_filter=Other.Case", "--color=no"};
+    const std::vector<std::string> cases{"Suite.Case"};
+    const auto arguments = frost::run::gtestRunArguments(base, cases, "E:/tmp/report.json");
+    EXPECT_EQ(arguments, (std::vector<std::string>{"--color=no", "--gtest_filter=Suite.Case",
+                                                   "--gtest_output=json:E:/tmp/report.json"}));
+}
+
+TEST(TestRunnerGTestResult, EmptySuccessfulReportIsNotAProvenPass) {
+    const frost::Result<std::vector<frost::run::TestResult>> empty = std::vector<frost::run::TestResult>{};
+    EXPECT_FALSE(frost::run::gtestRunResult("tests", empty, {0, false, 1ms, {}}).has_value());
+}
+
 } // namespace

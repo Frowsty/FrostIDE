@@ -12,10 +12,28 @@
 #                        debug_corpus_tests (tests/debug): on Linux FrostEditor is most of an engine
 #                        build, which the corpus tier never does (tools/corpora.py, "engine").
 frost_add_test(engine_tests
-    SOURCES engine_test.cpp
+    SOURCES engine_test.cpp command_policy_test.cpp project_content_test.cpp
     DEPS frost::engine frost::rpc frost::io frost::core
     LABELS unit)
 target_include_directories(engine_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+
+# FER-2 exercises real loopback connections and independent reader/watchdog threads.
+frost_add_test(engine_session_tests
+    SOURCES session_test.cpp
+    DEPS frost::engine frost::rpc frost::io frost::core
+    THIRD_PARTY unofficial-sodium::sodium
+    LABELS integration)
+target_include_directories(engine_session_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+if(WIN32)
+    target_link_libraries(engine_session_tests PRIVATE ws2_32)
+endif()
+
+include("${FROST_SOURCE_DIR}/tests/support/EngineCorpus.cmake")
+frost_add_test(engine_session_corpus_tests
+    SOURCES session_corpus_test.cpp
+    DEPS frost::engine frost::build frost::rpc frost::io frost::core
+    LABELS integration corpus)
+frost_configure_engine_corpus_target(engine_session_corpus_tests)
 
 if(WIN32)
     set(_frost_engine_corpora_lock_file "${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json")

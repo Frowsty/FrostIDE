@@ -37,11 +37,6 @@ bool isSourceExt(std::string_view ext) {
     return ext == ".c" || ext == ".cc" || ext == ".cpp" || ext == ".cxx" || ext == ".m" || ext == ".mm";
 }
 
-bool isClassLikeSymbol(fl::SymbolKind kind) {
-    return kind == fl::SymbolKind::Class || kind == fl::SymbolKind::Struct || kind == fl::SymbolKind::Interface ||
-           kind == fl::SymbolKind::Enum || kind == fl::SymbolKind::Namespace;
-}
-
 struct SplitPathParts {
     std::string dir;
     std::string stem;
@@ -119,7 +114,7 @@ std::optional<std::string> findRelatedProjectFile(std::string_view currentPath,
     const std::span<const std::string_view> exts =
         wantSource ? std::span<const std::string_view>(kSourceExts) : std::span<const std::string_view>(kHeaderExts);
     for (std::string_view targetExt : exts) {
-        const std::string siblingStr = current.prefixWithoutExt + std::string(targetExt);
+        std::string siblingStr = current.prefixWithoutExt + std::string(targetExt);
         if (fs.exists(siblingStr) == true) {
             return siblingStr;
         }
@@ -470,8 +465,8 @@ void LanguageController::findUsagesAt(std::string path, fl::LspPosition position
     }
     start<std::vector<fl::UsageGroup>>(
         m_usagesSlot,
-        [&server = m_services.server, &fs = m_services.fs, open = m_services.host.openDocuments(), path, position,
-         encoding = m_services.server.encoding()](std::stop_token token) {
+        [&server = m_services.server, &fs = m_services.fs, open = m_services.host.openDocuments(),
+         path = std::move(path), position, encoding = m_services.server.encoding()](std::stop_token token) {
             return detail::runFindUsagesTask(server, fs, open, path, position, encoding, std::move(token));
         },
         [this, name](Result<std::vector<fl::UsageGroup>> groups) {
@@ -575,10 +570,8 @@ void LanguageController::requestWorkspaceSymbols(const QString& query) {
                 return;
             }
             if (m_symbols->isVisible() && !m_symbols->structureMode()) {
-                std::vector<fl::WorkspaceSymbol> filtered = std::move(*symbols);
-                if (classesOnly) {
-                    std::erase_if(filtered, [](const fl::WorkspaceSymbol& s) { return !isClassLikeSymbol(s.kind); });
-                }
+                std::vector<fl::WorkspaceSymbol> filtered =
+                    classesOnly ? fl::filterWorkspaceClasses(std::move(*symbols)) : std::move(*symbols);
                 m_symbols->setWorkspaceSymbols(title, std::move(filtered));
             }
         });

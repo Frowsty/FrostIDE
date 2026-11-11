@@ -64,10 +64,10 @@ bool wantsMultiline(const std::string& pattern, bool regex) {
 } // namespace
 
 FindPopup::FindPopup(QWidget* owner, FindSessionServices services, const FindSettings& settings, bool solutionOpen)
-    : Popup(owner), m_services(std::move(services)), m_base(settings), m_replaceMode(settings.replaceMode) {
+    : Popup(owner), m_services(std::move(services)), m_base(settings), m_replaceMode(settings.replaceMode),
+      m_debounce(new QTimer(this)) {
     setObjectName(QStringLiteral("findInFilesPopup"));
     m_session = new FindSession(m_services, this);
-    m_debounce = new QTimer(this);
     m_debounce->setSingleShot(true);
     m_debounce->setInterval(kDebounceMs);
     connect(m_debounce, &QTimer::timeout, this, &FindPopup::searchNow);
@@ -491,7 +491,7 @@ void FindPopup::updatePreview() {
     cursor.setPosition(cursor.position() + static_cast<int>(fromUtf8(text.substr(column, length)).size()),
                        QTextCursor::KeepAnchor);
     QTextEdit::ExtraSelection selection;
-    selection.cursor = cursor;
+    selection.cursor = std::move(cursor);
     selection.format.setBackground(find_detail::matchBackground());
     selection.format.setFontWeight(QFont::Bold);
     m_preview->setExtraSelections({selection});

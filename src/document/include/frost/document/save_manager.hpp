@@ -404,10 +404,11 @@ private:
         storage::DiskBase disk;
         ReadOnlyReason readOnly = ReadOnlyReason::None;
     };
-    ExternalChange prepareMerge(FileDocument& document, Theirs theirs);
+    ExternalChange prepareMerge(FileDocument& document, const Theirs& theirs);
     void adoptTheirs(FileDocument& document, PendingMerge& merge);
     // Restore one entry; true when its journal must be kept (the entry is not safe in this journal).
-    [[nodiscard]] bool restoreEntry(const storage::JournalEntry& entry, std::string content, RestoreReport& report);
+    [[nodiscard]] bool restoreEntry(const storage::JournalEntry& entry, const std::string& content,
+                                    RestoreReport& report);
     // Puts a refused entry into this process's journal unchanged; true if it landed there.
     [[nodiscard]] bool carryOver(const storage::JournalEntry& entry, std::string_view content, Error reason,
                                  RestoreReport& report);

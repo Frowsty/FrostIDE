@@ -54,9 +54,6 @@
 
 namespace frost::app {
 
-namespace key = settings::key;
-namespace wa = workbench_actions;
-
 namespace {
 
 constexpr std::string_view kLog = "workbench";

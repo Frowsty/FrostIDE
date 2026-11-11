@@ -371,7 +371,7 @@ Result<std::vector<std::string>> GitRunner::apply(std::span<const GitCase> cases
     m_writeTime += std::chrono::steady_clock::now() - start;
     std::vector<std::string> arguments = {"apply", "--whitespace=nowarn"};
     if (unidiffZero) {
-        arguments.push_back("--unidiff-zero");
+        arguments.emplace_back("--unidiff-zero");
     }
     arguments.push_back(*patchPath);
     auto result = run(std::move(arguments), *directory);

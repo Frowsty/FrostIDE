@@ -5,6 +5,7 @@
 
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
+#include "frost/io/path.hpp"
 #include "frost/ui/debug_actions.hpp"
 #include "frost/ui/find/find_feature.hpp"
 #include "frost/ui/run_actions.hpp"
@@ -24,6 +25,7 @@
 #include "language_bridge.hpp"
 #include "project_properties_dialog.hpp"
 #include "unity_control.hpp"
+#include <QFileDialog>
 
 #include <array>
 #include <cstring>
@@ -31,7 +33,6 @@
 
 namespace frost::app {
 
-namespace key = settings::key;
 namespace wa = workbench_actions;
 
 namespace {
@@ -81,6 +82,46 @@ void Workbench::registerActions() {
     add(
         "code.inspectLua", "Inspect Lua Code...", [this] { (void)inspectLuaCode(); },
         [this] { return !m_projectRoot.empty(); });
+    input::ActionSpec inspectCpp;
+    inspectCpp.id = "code.inspectCpp";
+    inspectCpp.name = "Inspect C++ Module...";
+    inspectCpp.group = "Code";
+    inspectCpp.description =
+        "Runs the project's clang-tidy profile over the active source module; asks for trust first.";
+    inspectCpp.context.none = input::ContextKeys{input::ContextKey::DialogFocus};
+    inspectCpp.enabled = [this](const input::ActionContext&) {
+        DocumentEditorView* view = currentView();
+        return m_window != nullptr && view != nullptr && isCFamilySource(view->path());
+    };
+    inspectCpp.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
+        DocumentEditorView* view = currentView();
+        if (!view || !isCFamilySource(view->path()))
+            return;
+        const std::string directory(io::parentPath(view->path()));
+        inspectCppCodeAsync(directory, [](Result<lang::InspectionReport>) {});
+    };
+    if (auto added = m_registry.add(std::move(inspectCpp)); !added)
+        log::warn(kLog, "C++ inspect action: {}", added.error().describe());
+    add(
+        "code.exportCppInspectionSarif", "Export C++ Inspection as SARIF...",
+        [this] {
+            if (!m_window || !m_lastCppInspectionReport)
+                return;
+            const QString path = QFileDialog::getSaveFileName(m_window, QStringLiteral("Export C++ Inspection"),
+                                                              QStringLiteral("inspection.sarif"),
+                                                              QStringLiteral("SARIF 2.1.0 (*.sarif);;JSON (*.json)"));
+            if (path.isEmpty())
+                return;
+            const auto exported = exportCppInspectionSarif(path.toUtf8().toStdString());
+            if (!exported)
+                notify(QStringLiteral("SARIF export failed"),
+                       QString::fromUtf8(exported.error().message().data(),
+                                         static_cast<qsizetype>(exported.error().message().size())),
+                       ui::NotificationKind::Warning);
+            else
+                notify(QStringLiteral("SARIF exported"), path, ui::NotificationKind::Info);
+        },
+        [this] { return m_window != nullptr && m_lastCppInspectionReport.has_value(); });
     {
         input::ActionSpec cppBinding;
         cppBinding.id = std::string(ui::actions::kGoToCppBinding);

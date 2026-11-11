@@ -450,7 +450,10 @@ void SettingsDialog::reload() {
         const auto* member = document->find(row->spec->key);
         row->expectedRaw = member ? std::optional<std::string>(document->rawValue(*member)) : std::nullopt;
         auto value = document->value(row->spec->key, row->spec->schema);
-        row->initial = value ? std::move(*value) : row->spec->defaultValue;
+        if (value)
+            row->initial = std::move(*value);
+        else
+            row->initial = row->spec->defaultValue;
         row->reset = false;
         row->dirty = false;
         row->title->setText(text(row->spec->title));

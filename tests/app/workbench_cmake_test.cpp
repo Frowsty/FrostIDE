@@ -319,7 +319,7 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     // The old completion must not launch its already-built executable or end the pending Run.
     auto* service = rig.workbench->cmakeService();
     ASSERT_NE(service, nullptr);
-    service->setSaveAllHook([](frost::build::SaveAllCompletion done) { done({}); });
+    service->setSaveAllHook([](const frost::build::SaveAllCompletion& done) { done({}); });
     ASSERT_TRUE(service->build(frost::build::BuildAction::Build).has_value());
     ASSERT_TRUE(service->waitForIdle(60s)); // No Qt events are processed here.
     dir.write("main.c", "int main(void) { return missing_symbol; }\n");
@@ -403,7 +403,7 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     ASSERT_NE(service, nullptr);
     ASSERT_TRUE(waitFor([&] { return service->state() == frost::build::BuildState::Idle; }, 60s));
     ASSERT_TRUE(displayedTarget(rig, QStringLiteral("hello")));
-    service->setSaveAllHook([](frost::build::SaveAllCompletion done) { done({}); });
+    service->setSaveAllHook([](const frost::build::SaveAllCompletion& done) { done({}); });
     const auto reopenedRun = rig.workbench->runController()->run();
     ASSERT_TRUE(reopenedRun.has_value()) << reopenedRun.error().describe();
     ASSERT_TRUE(service->waitForIdle(60s)); // The Run completion is still queued on the GUI thread.
@@ -587,7 +587,7 @@ TEST(WorkbenchCMake, DebugRejectsCompletionAfterProfileSwitch) {
     ASSERT_NE(service, nullptr);
     ASSERT_TRUE(waitFor([&] { return service->model() && service->state() == frost::build::BuildState::Idle; }, 240s));
     ASSERT_TRUE(displayedTarget(rig, QStringLiteral("debuggee")));
-    service->setSaveAllHook([](frost::build::SaveAllCompletion done) { done({}); });
+    service->setSaveAllHook([](const frost::build::SaveAllCompletion& done) { done({}); });
     auto* debug = rig.workbench->debugController();
     ASSERT_TRUE(debug->debug().has_value());
     ASSERT_TRUE(service->waitForIdle(120s)); // Keep the completion queued on the GUI thread.

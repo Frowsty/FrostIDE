@@ -33,7 +33,10 @@ using frost::diag::LogBackend;
 using frost::diag::LogBackendOptions;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
-const std::string kLogs = kWindows ? "C:\\cache\\logs" : "/cache/logs";
+const std::string& logsPath() {
+    static const std::string value(kWindows ? "C:\\cache\\logs" : "/cache/logs");
+    return value;
+}
 
 /*
  * Files in memory. `taken` names fail with AlreadyExists, `failWith` fails every create;
@@ -109,7 +112,7 @@ struct Rig {
     FakeOpener opener;
 
     std::unique_ptr<LogBackend> start(LogBackendOptions options = {}) {
-        options.directory = kLogs;
+        options.directory = logsPath();
         options.pid = 1234;
         auto backend = LogBackend::start(options, opener, clock);
         EXPECT_TRUE(backend.has_value()) << backend.error().describe();
@@ -118,7 +121,7 @@ struct Rig {
 };
 
 std::string logPath(unsigned sequence) {
-    return frost::io::joinPath(kLogs, std::format("frost-20261101T185912Z-1234-{}.log", sequence)).value();
+    return frost::io::joinPath(logsPath(), std::format("frost-20261101T185912Z-1234-{}.log", sequence)).value();
 }
 
 TEST(LogBackend, FileNames) {
@@ -164,7 +167,7 @@ TEST(LogBackend, RotatesAndKeepsAtMostFourFiles) {
     auto backend = rig.start(options);
     ASSERT_NE(backend, nullptr);
     for (int i = 0; i < 60; ++i) {
-        backend->write(frost::log::Level::Info, "app", std::string(60, 'a' + static_cast<char>(i % 26)));
+        backend->write(frost::log::Level::Info, "app", std::string(60, static_cast<char>('a' + i % 26)));
     }
     ASSERT_TRUE(backend->flushFor(5s));
     const auto files = rig.opener.files();
@@ -229,7 +232,7 @@ TEST(LogBackend, StartRejectsBadOptions) {
     Rig rig;
     LogBackendOptions options;
     EXPECT_EQ(LogBackend::start(options, rig.opener, rig.clock).error().code(), ErrorCode::InvalidArgument);
-    options.directory = kLogs;
+    options.directory = logsPath();
     options.queueSlots = 0;
     EXPECT_EQ(LogBackend::start(options, rig.opener, rig.clock).error().code(), ErrorCode::InvalidArgument);
 }

@@ -67,7 +67,7 @@ std::string pinnedLuaLs() {
 
 void write(const std::string& path, std::string_view text) {
     auto& fs = frost::io::realFileSystem();
-    ASSERT_TRUE(fs.createDirectories(std::string(frost::io::parentPath(path))).has_value()) << path;
+    ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(path)).has_value()) << path;
     ASSERT_TRUE(fs.writeFileAtomic(path, text).has_value()) << path;
 }
 

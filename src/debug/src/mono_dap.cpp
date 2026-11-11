@@ -551,24 +551,21 @@ public:
             thread.join();
     }
     std::int64_t request(std::string command, rpc::Json args, Completion done) override {
-        std::shared_ptr<Request> request;
-        {
-            std::lock_guard lock(state->mutex);
-            if (!state->closing && state->requests.size() < 128 && state->next < INT64_MAX) {
-                request = std::make_shared<Request>();
-                request->seq = state->next++;
-                request->command = std::move(command);
-                request->args = std::move(args);
-                request->done = std::move(done);
-                state->requests.emplace(request->seq, request);
-                state->queue.push_back(request);
-            }
-        }
-        if (!request) {
+        std::unique_lock lock(state->mutex);
+        if (state->closing || state->requests.size() >= 128 || state->next >= INT64_MAX) {
+            lock.unlock();
             if (done)
                 done(fail(ErrorCode::IoError, "Mono adapter is closed or busy"));
             return 0;
         }
+        auto request = std::make_shared<Request>();
+        request->seq = state->next++;
+        request->command = std::move(command);
+        request->args = std::move(args);
+        request->done = std::move(done);
+        state->requests.emplace(request->seq, request);
+        state->queue.push_back(request);
+        lock.unlock();
         state->cv.notify_one();
         return request->seq;
     }

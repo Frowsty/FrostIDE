@@ -71,8 +71,7 @@ TEST(ManagedE2E, InheritedProfilePreservesCustomNugetFeed) {
         GTEST_SKIP()
             << "Windows NuGet LocalAppData migration marker is absent; SDK startup would modify the user profile";
     const std::string dotnet = testEnvironment("FROST_TEST_CSHARP_DOTNET");
-    if (dotnet.empty())
-        GTEST_SKIP() << "Set FROST_TEST_CSHARP_DOTNET to the pinned SDK";
+    ASSERT_FALSE(dotnet.empty()) << "Required managed fixture lacks FROST_TEST_CSHARP_DOTNET";
     test::ScratchDir scratch("managed-feed");
     auto& fs = io::realFileSystem();
     ASSERT_TRUE(fs.createDirectories(scratch.join(".nuget/NuGet")).has_value());
@@ -108,8 +107,8 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
             << "Windows NuGet LocalAppData migration marker is absent; SDK startup would modify the user profile";
     const std::string dotnet = testEnvironment("FROST_TEST_CSHARP_DOTNET");
     const std::string serverPath = testEnvironment("FROST_TEST_CSHARP_SERVER");
-    if (dotnet.empty() || serverPath.empty())
-        GTEST_SKIP() << "Set FROST_TEST_CSHARP_DOTNET and FROST_TEST_CSHARP_SERVER to absolute pinned tools";
+    ASSERT_FALSE(dotnet.empty()) << "Required managed fixture lacks FROST_TEST_CSHARP_DOTNET";
+    ASSERT_FALSE(serverPath.empty()) << "Required managed fixture lacks FROST_TEST_CSHARP_SERVER";
     test::ScratchDir scratch("managed-e2e");
     auto& fs = io::realFileSystem();
     ASSERT_TRUE(fs.createDirectories(scratch.join("App")).has_value());

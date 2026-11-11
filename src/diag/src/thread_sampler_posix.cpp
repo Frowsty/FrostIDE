@@ -179,6 +179,7 @@ public:
         }
         const std::scoped_lock lock(sampleMutex());
         out.count = 0;
+        out.outcome = StackSample::Outcome::Empty;
         m_slot->out = &out;
         m_slot->state.store(kRequested, std::memory_order_release);
         g_slot.store(m_slot, std::memory_order_release);
@@ -204,6 +205,7 @@ public:
         }
         g_slot.store(nullptr, std::memory_order_release);
         m_slot->state.store(kIdle, std::memory_order_release);
+        out.outcome = out.count != 0 ? StackSample::Outcome::Captured : StackSample::Outcome::Empty;
         return {};
     }
 

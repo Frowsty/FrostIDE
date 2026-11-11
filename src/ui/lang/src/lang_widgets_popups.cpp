@@ -43,17 +43,15 @@ void setUpPopupFrame(QFrame* frame) {
 
 // --- SymbolPopup ---
 
-SymbolPopup::SymbolPopup(QWidget* parent) : QFrame(parent) {
+SymbolPopup::SymbolPopup(QWidget* parent)
+    : QFrame(parent), m_title(new QLabel(this)), m_search(new QLineEdit(this)), m_tree(new QTreeWidget(this)) {
     setObjectName(QStringLiteral("symbolPopup"));
     setUpPopupFrame(this);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
     layout->setSpacing(3);
-    m_title = new QLabel(this);
-    m_search = new QLineEdit(this);
     m_search->setObjectName(QStringLiteral("symbolSearch"));
     m_search->setClearButtonEnabled(true);
-    m_tree = new QTreeWidget(this);
     m_tree->setHeaderHidden(true);
     m_tree->setUniformRowHeights(true);
     m_tree->setFocusPolicy(Qt::NoFocus);
@@ -76,7 +74,7 @@ SymbolPopup::SymbolPopup(QWidget* parent) : QFrame(parent) {
     connect(m_tree, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem*, int) { activateCurrent(); });
 }
 
-void SymbolPopup::setStructure(QString title, std::string path, std::vector<fl::DocumentSymbol> symbols) {
+void SymbolPopup::setStructure(const QString& title, std::string path, std::vector<fl::DocumentSymbol> symbols) {
     m_structureMode = true;
     m_title->setText(title);
     m_path = std::move(path);
@@ -84,7 +82,7 @@ void SymbolPopup::setStructure(QString title, std::string path, std::vector<fl::
     rebuild();
 }
 
-void SymbolPopup::setWorkspaceSymbols(QString title, std::vector<fl::WorkspaceSymbol> symbols) {
+void SymbolPopup::setWorkspaceSymbols(const QString& title, std::vector<fl::WorkspaceSymbol> symbols) {
     m_structureMode = false;
     m_title->setText(title);
     m_workspaceSymbols = std::move(symbols);
@@ -206,13 +204,12 @@ bool SymbolPopup::eventFilter(QObject* watched, QEvent* event) {
 
 // --- RenameInput ---
 
-RenameInput::RenameInput(QWidget* parent) : QFrame(parent) {
+RenameInput::RenameInput(QWidget* parent) : QFrame(parent), m_field(new QLineEdit(this)) {
     setObjectName(QStringLiteral("renameInput"));
     setUpPopupFrame(this);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
     m_label = new QLabel(QStringLiteral("Rename to:"), this);
-    m_field = new QLineEdit(this);
     m_field->setMinimumWidth(260);
     m_searchComments = new QCheckBox(QStringLiteral("Search in comments and strings"), this);
     m_previewUsages = new QCheckBox(QStringLiteral("Preview usages"), this);
@@ -272,15 +269,13 @@ bool RenameInput::eventFilter(QObject* watched, QEvent* event) {
 
 // --- ChoicePopup ---
 
-ChoicePopup::ChoicePopup(QWidget* parent) : QFrame(parent) {
+ChoicePopup::ChoicePopup(QWidget* parent) : QFrame(parent), m_title(new QLabel(this)), m_list(new QListWidget(this)) {
     setObjectName(QStringLiteral("choicePopup"));
     setUpPopupFrame(this);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(2, 2, 2, 2);
     layout->setSpacing(2);
-    m_title = new QLabel(this);
     m_title->setContentsMargins(4, 2, 4, 2);
-    m_list = new QListWidget(this);
     m_list->setObjectName(QStringLiteral("choiceList"));
     layout->addWidget(m_title);
     layout->addWidget(m_list);
@@ -350,15 +345,14 @@ bool ChoicePopup::eventFilter(QObject* watched, QEvent* event) {
 
 // --- QuickDefinitionPopup ---
 
-QuickDefinitionPopup::QuickDefinitionPopup(QWidget* parent) : QFrame(parent) {
+QuickDefinitionPopup::QuickDefinitionPopup(QWidget* parent)
+    : QFrame(parent), m_header(new QLabel(this)), m_editor(new QPlainTextEdit(this)) {
     setObjectName(QStringLiteral("quickDefinitionPopup"));
     setUpPopupFrame(this);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
     layout->setSpacing(3);
-    m_header = new QLabel(this);
     m_header->setContentsMargins(4, 2, 4, 2);
-    m_editor = new QPlainTextEdit(this);
     m_editor->setObjectName(QStringLiteral("quickDefinitionEditor"));
     m_editor->setReadOnly(true);
     m_editor->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
@@ -406,7 +400,8 @@ bool QuickDefinitionPopup::eventFilter(QObject* watched, QEvent* event) {
 
 // --- HierarchyPopup ---
 
-HierarchyPopup::HierarchyPopup(QWidget* parent) : QFrame(parent) {
+HierarchyPopup::HierarchyPopup(QWidget* parent)
+    : QFrame(parent), m_title(new QLabel(this)), m_tree(new QTreeWidget(this)) {
     setObjectName(QStringLiteral("hierarchyPopup"));
     setUpPopupFrame(this);
     auto* layout = new QVBoxLayout(this);
@@ -415,7 +410,6 @@ HierarchyPopup::HierarchyPopup(QWidget* parent) : QFrame(parent) {
     auto* topBar = new QHBoxLayout();
     topBar->setContentsMargins(2, 2, 2, 2);
     topBar->setSpacing(4);
-    m_title = new QLabel(this);
     m_primaryBtn =
         makeToggleToolButton(this, QStringLiteral("Incoming"), QStringLiteral("Primary hierarchy view"), true);
     m_secondaryBtn =
@@ -423,7 +417,7 @@ HierarchyPopup::HierarchyPopup(QWidget* parent) : QFrame(parent) {
     topBar->addWidget(m_title, 1);
     topBar->addWidget(m_primaryBtn);
     topBar->addWidget(m_secondaryBtn);
-    m_tree = new QTreeWidget(this);
+    setTabOrder(m_secondaryBtn, m_tree);
     m_tree->setObjectName(QStringLiteral("hierarchyTree"));
     m_tree->setHeaderHidden(true);
     m_tree->setColumnCount(2);
@@ -454,7 +448,7 @@ void HierarchyPopup::configureModes(const QString& primaryModeLabel, const QStri
     m_secondaryBtn->setChecked(secondaryActive);
 }
 
-void HierarchyPopup::setEntries(const QString& title, std::vector<Entry> entries) {
+void HierarchyPopup::setEntries(const QString& title, const std::vector<Entry>& entries) {
     m_title->setText(title);
     m_tree->clear();
     const auto addEntry = [&](auto& self, const Entry& entry, QTreeWidgetItem* parent) -> void {

@@ -330,7 +330,7 @@ TEST(Icons, IdsMatchManifest) {
     QFile file(QString::fromStdString(test::sourceDir()) + "/resources/icons/icons.json");
     ASSERT_TRUE(file.open(QIODevice::ReadOnly));
     std::set<std::string> manifest;
-    for (const QJsonValue& icon : QJsonDocument::fromJson(file.readAll()).object().value("icons").toArray()) {
+    for (const auto& icon : QJsonDocument::fromJson(file.readAll()).object().value("icons").toArray()) {
         manifest.insert(icon.toObject().value("id").toString().toStdString());
     }
     const std::set<std::string> constants(icons::kAllIconIds.begin(), icons::kAllIconIds.end());

@@ -44,8 +44,8 @@ class IconCache;
 
 class BuildController;
 
-// Where a row came from: the last build, or (W2) a language server's live analysis.
-enum class DiagnosticSource : std::uint8_t { Build, Live };
+// The originating tool family, kept distinct for filtering and independent result clearing.
+enum class DiagnosticSource : std::uint8_t { Build, Live, Inspection, Engine };
 
 struct Problem {
     build::BuildDiagnostic diagnostic;
@@ -79,7 +79,8 @@ public:
 
     void add(const build::BuildDiagnostic& diagnostic, DiagnosticSource source = DiagnosticSource::Build);
     // Replaces every row of `source` with `diagnostics` (in that order, after the other sources' rows).
-    void setProblems(DiagnosticSource source, const std::vector<build::BuildDiagnostic>& diagnostics);
+    // Consumes an owned vector; passing an lvalue retains the caller's snapshot.
+    void setProblems(DiagnosticSource source, std::vector<build::BuildDiagnostic> diagnostics);
     // Removes every row of `source`.
     void clear(DiagnosticSource source);
 

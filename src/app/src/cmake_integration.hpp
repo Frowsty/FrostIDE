@@ -41,6 +41,7 @@ namespace frost::settings {
 class SettingsStore;
 }
 namespace frost::app {
+// NOLINTNEXTLINE(cppcoreguidelines-virtual-class-destructor): Final concrete owner; base destruction is protected.
 class CMakeBuildBackend;
 
 class CMakeIntegration final : public QObject {

@@ -4,6 +4,7 @@
 // and the UI build on: discovery, status, the HEAD and index versions of a file, commit of selected
 // files, rollback, branches, checkout, and fetch, pull and push. Every call runs git through a
 // GitRunner and blocks the calling thread; GitService runs them on its own threads.
+// Each call owns its cancellation snapshot across reentrant Git/launcher callbacks.
 /*
  * Discovery (discoverRepository). `git rev-parse --show-toplevel --absolute-git-dir` in the opened
  * folder (or a solution file's directory): the enclosing work tree, whatever depth the folder has.

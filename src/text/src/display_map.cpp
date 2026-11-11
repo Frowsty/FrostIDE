@@ -50,18 +50,19 @@ void replaceFoldProjection(DisplayLayers& layers, detail::FoldLayer next, ByteRa
     std::vector<SpanEdit> rows;
     auto wrap = layers.wrap.updated(layers.fold, next, std::span(&lineEdit, 1), *layers.shaper, rows);
     std::vector<SpanEdit> inlayRows;
-    auto inlay = layers.inlay.updated(rows, inlayRows);
+    auto inlay = detail::InlayLayer(layers.inlay.inlays(), next, wrap).updated(rows, inlayRows);
     const detail::RegionEdit region{lineEdit, inlayRows.front()};
     std::vector<RowEdit> ignored;
     layers.block.apply({}, next.buffer().version(), std::span(&region, 1), next, wrap, ignored);
     layers.fold = std::move(next);
     layers.wrap = std::move(wrap);
-    layers.inlay = inlay;
+    layers.inlay = std::move(inlay);
 }
 
 // Calls fn(char32_t cp, std::uint32_t column) for the code points of text row `row` in display
 // order, until fn returns false.
 template<class F>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): visitor is reused as an lvalue.
 void forEachDisplayChar(const Snapshot& text, const DisplayRowInfo& row, F&& fn) noexcept {
     for (const RowSegment& segment : row.segments) {
         std::uint32_t column = segment.column.value();
@@ -185,7 +186,7 @@ Result<std::vector<RowEdit>> DisplayMap::apply(const ChangeSet& changes, const S
     std::vector<SpanEdit> wrapRows;
     detail::WrapLayer wrap = layers.wrap.updated(layers.fold, fold, lines, *layers.shaper, wrapRows);
     std::vector<SpanEdit> inlayRows;
-    const detail::InlayLayer inlay = layers.inlay.updated(wrapRows, inlayRows);
+    const detail::InlayLayer inlay = layers.inlay.updated(changes.edits, fold, wrap, wrapRows, inlayRows);
     FROST_ASSERT(inlayRows.size() == lines.size());
     std::vector<detail::RegionEdit> regions;
     regions.reserve(lines.size());
@@ -216,6 +217,7 @@ std::vector<RowEdit> DisplayMap::setWrap(WrapSettings wrap) noexcept {
     const std::uint32_t oldRows = rowCount();
     layers.settings = wrap;
     layers.wrap = detail::WrapLayer(layers.fold, *layers.shaper, effectiveWidth(wrap, *layers.shaper));
+    layers.inlay = detail::InlayLayer(layers.inlay.inlays(), layers.fold, layers.wrap);
     layers.block.rebuild(layers.fold, layers.wrap);
     return wholeEdit(oldRows);
 }
@@ -258,6 +260,7 @@ Result<std::vector<RowEdit>> DisplayMap::setFolds(std::vector<ByteRange> ranges)
     DisplayLayers& layers = *m_layers;
     layers.fold = detail::FoldLayer(source, std::move(ranges), {}, layers.fold.nextFoldId());
     layers.wrap = detail::WrapLayer(layers.fold, *layers.shaper, effectiveWidth(layers.settings, *layers.shaper));
+    layers.inlay = detail::InlayLayer(layers.inlay.inlays(), layers.fold, layers.wrap);
     layers.block.rebuild(layers.fold, layers.wrap);
     return wholeEdit(oldRows);
 }
@@ -312,6 +315,13 @@ std::optional<FoldInfo> DisplayMap::firstFoldStartingIn(ByteRange range) const n
 std::optional<FoldInfo> DisplayMap::foldAtBoundary(ByteOffset offset, bool start) const noexcept {
     return m_layers->fold.atBoundary(offset, start);
 }
+
+void DisplayMap::setInlays(std::vector<Inlay> inlays) noexcept {
+    DisplayLayers& layers = *m_layers;
+    layers.inlay = detail::InlayLayer(std::move(inlays), layers.fold, layers.wrap);
+}
+
+const std::vector<DisplayMap::Inlay>& DisplayMap::inlays() const noexcept { return m_layers->inlay.inlays(); }
 
 Result<BlockId> DisplayMap::addBlock(const BlockDecoration& block) noexcept {
     return m_layers->block.add(block, m_layers->fold, m_layers->wrap);
@@ -406,6 +416,10 @@ void DisplayMap::rowInfo(DisplayRow row, DisplayRowInfo& out) const noexcept {
     out.placement = BlockPlacement::Below;
     out.tag = 0;
     layers.fold.appendSegments(wrapped.start, wrapped.end, out.segments);
+    if (!out.segments.empty()) {
+        out.buffer = {out.segments.front().buffer.begin, out.segments.back().buffer.end};
+    }
+    layers.inlay.appendSegments(ref.inputRow, out.buffer, out.segments);
     if (!out.segments.empty()) {
         out.buffer = {out.segments.front().buffer.begin, out.segments.back().buffer.end};
     }
@@ -509,7 +523,320 @@ Result<void> DisplayMap::checkInvariants() const noexcept {
     if (Result<void> wrap = layers.wrap.checkInvariants(layers.fold); !wrap) {
         return wrap;
     }
-    return layers.block.checkInvariants(layers.fold, layers.wrap);
+    if (Result<void> inlay = layers.inlay.checkInvariants(layers.fold, layers.wrap); !inlay) {
+        return inlay;
+    }
+    if (Result<void> block = layers.block.checkInvariants(layers.fold, layers.wrap); !block) {
+        return block;
+    }
+    for (std::uint32_t r = 0; r < rowCount(); ++r) {
+        const DisplayRowInfo info = rowInfo(DisplayRow{r});
+        if (info.kind == RowKind::Block) {
+            continue;
+        }
+        std::uint32_t expectedCol = 0;
+        ByteOffset prevEnd = info.buffer.begin;
+        for (const RowSegment& seg : info.segments) {
+            if (seg.column.value() != expectedCol) {
+                return fail(ErrorCode::Internal, "D4: segment column is not contiguous");
+            }
+            if (seg.buffer.begin < prevEnd || seg.buffer.end < seg.buffer.begin || seg.buffer.end > info.buffer.end) {
+                return fail(ErrorCode::Internal, "D4: segment buffer range is out of order");
+            }
+            if (seg.kind == SegmentKind::Text) {
+                if (seg.buffer.empty() || !seg.text.empty()) {
+                    return fail(ErrorCode::Internal, "D4: malformed Text segment");
+                }
+                expectedCol += static_cast<std::uint32_t>(seg.buffer.size());
+            } else if (seg.kind == SegmentKind::Inlay) {
+                if (!seg.buffer.empty() || seg.text.empty()) {
+                    return fail(ErrorCode::Internal, "D4: malformed Inlay segment");
+                }
+                expectedCol += static_cast<std::uint32_t>(seg.text.size());
+            } else {
+                if (seg.buffer.empty() || seg.text.empty()) {
+                    return fail(ErrorCode::Internal, "D4: malformed FoldPlaceholder segment");
+                }
+                expectedCol += static_cast<std::uint32_t>(seg.text.size());
+            }
+            prevEnd = seg.buffer.end;
+        }
+    }
+    return {};
 }
+
+namespace detail {
+
+namespace {
+
+void sortInlays(std::vector<InlayLayer::Inlay>& inlays) noexcept {
+    std::ranges::stable_sort(inlays, [](const InlayLayer::Inlay& a, const InlayLayer::Inlay& b) {
+        if (a.offset != b.offset) {
+            return a.offset < b.offset;
+        }
+        return static_cast<std::uint8_t>(a.bias) < static_cast<std::uint8_t>(b.bias);
+    });
+}
+
+} // namespace
+
+InlayLayer::InlayLayer(std::vector<Inlay> inlays) noexcept : m_inlays(std::move(inlays)) {
+    sortInlays(m_inlays);
+    m_projected.reserve(m_inlays.size());
+    for (const Inlay& item : m_inlays) {
+        if (item.text.empty()) {
+            continue;
+        }
+        m_projected.push_back(ProjectedInlay{
+            .wrapRow = 0,
+            .wrapCol = static_cast<std::uint32_t>(item.offset.value()),
+            .offset = item.offset,
+            .bias = item.bias,
+            .text = item.text,
+        });
+    }
+    m_projectedPrefixWidths.reserve(m_projected.size() + 1);
+    m_projectedPrefixWidths.push_back(0);
+    for (const ProjectedInlay& item : m_projected) {
+        m_projectedPrefixWidths.push_back(m_projectedPrefixWidths.back() +
+                                          static_cast<std::uint32_t>(item.text.size()));
+    }
+}
+
+InlayLayer::InlayLayer(std::vector<Inlay> inlays, const FoldLayer& fold, const WrapLayer& wrap) noexcept
+    : m_inlays(std::move(inlays)) {
+    const Snapshot& buf = fold.buffer();
+    for (Inlay& item : m_inlays) {
+        item.offset = buf.clip(std::min(item.offset, buf.size()));
+    }
+    sortInlays(m_inlays);
+    rebuildProjection(fold, wrap);
+}
+
+void InlayLayer::rebuildProjection(const FoldLayer& fold, const WrapLayer& wrap) noexcept {
+    m_projected.clear();
+    m_projected.reserve(m_inlays.size());
+    for (const Inlay& item : m_inlays) {
+        if (item.text.empty() || fold.intersects({item.offset, item.offset})) {
+            continue;
+        }
+        const std::uint64_t folded = fold.toFold(item.offset, item.bias);
+        const std::uint32_t wRow = wrap.rowAt(folded, item.bias, fold);
+        const WrapRow row = wrap.row(wRow, fold);
+        const auto wCol = static_cast<std::uint32_t>(std::clamp(folded, row.start, row.end) - row.start);
+        m_projected.push_back(ProjectedInlay{
+            .wrapRow = wRow,
+            .wrapCol = wCol,
+            .offset = item.offset,
+            .bias = item.bias,
+            .text = item.text,
+        });
+    }
+    // Both offset mapping and the offset -> (wrap row, column) projection are monotone, so
+    // sorted inlays stay sorted; rebuilding this index does not need another O(n log n) sort.
+    m_projectedPrefixWidths.reserve(m_projected.size() + 1);
+    m_projectedPrefixWidths.clear();
+    m_projectedPrefixWidths.push_back(0);
+    for (const ProjectedInlay& item : m_projected) {
+        m_projectedPrefixWidths.push_back(m_projectedPrefixWidths.back() +
+                                          static_cast<std::uint32_t>(item.text.size()));
+    }
+}
+
+std::uint32_t InlayLayer::toInlayColumn(std::uint32_t row, std::uint32_t column, Bias bias) const noexcept {
+    const auto [first, last] = std::ranges::equal_range(m_projected, row, {}, &ProjectedInlay::wrapRow);
+    if (first == last) {
+        return column;
+    }
+    const auto included = bias == Bias::Right
+                              ? std::ranges::upper_bound(first, last, column, {}, &ProjectedInlay::wrapCol)
+                              : std::ranges::lower_bound(first, last, column, {}, &ProjectedInlay::wrapCol);
+    const auto beginIndex = static_cast<std::size_t>(first - m_projected.begin());
+    const auto endIndex = static_cast<std::size_t>(included - m_projected.begin());
+    return column + (m_projectedPrefixWidths[endIndex] - m_projectedPrefixWidths[beginIndex]);
+}
+
+std::uint32_t InlayLayer::toWrapColumn(std::uint32_t row, std::uint32_t column, Bias bias) const noexcept {
+    const auto [first, last] = std::ranges::equal_range(m_projected, row, {}, &ProjectedInlay::wrapRow);
+    if (first == last) {
+        return column;
+    }
+    const auto beginIndex = static_cast<std::size_t>(first - m_projected.begin());
+    const auto endIndex = static_cast<std::size_t>(last - m_projected.begin());
+    std::size_t low = beginIndex;
+    std::size_t high = endIndex;
+    while (low < high) {
+        const std::size_t mid = low + (high - low) / 2;
+        const std::uint32_t start =
+            m_projected[mid].wrapCol + (m_projectedPrefixWidths[mid] - m_projectedPrefixWidths[beginIndex]);
+        if (start < column || (start == column && bias == Bias::Right)) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    const std::size_t candidate = low == beginIndex ? beginIndex : low - 1;
+    if (candidate < endIndex) {
+        const ProjectedInlay& item = m_projected[candidate];
+        const std::uint32_t start =
+            item.wrapCol + (m_projectedPrefixWidths[candidate] - m_projectedPrefixWidths[beginIndex]);
+        const std::uint32_t finish = start + static_cast<std::uint32_t>(item.text.size());
+        if (column >= start && column <= finish) {
+            return item.wrapCol;
+        }
+        if (column > finish) {
+            return column - (m_projectedPrefixWidths[candidate + 1] - m_projectedPrefixWidths[beginIndex]);
+        }
+    }
+    return column;
+}
+
+void InlayLayer::appendSegments(std::uint32_t wrapRow, ByteRange buffer, std::vector<RowSegment>& out) const noexcept {
+    if (out.empty() && !buffer.empty()) {
+        out.push_back(RowSegment{SegmentKind::Text, DisplayColumn{0}, buffer, {}});
+    }
+    const auto [first, last] = std::ranges::equal_range(m_projected, wrapRow, {}, &ProjectedInlay::wrapRow);
+    if (first == last) {
+        return;
+    }
+    std::vector<RowSegment> merged;
+    merged.reserve(out.size() + static_cast<std::size_t>(last - first) * 2);
+    auto inlayIt = first;
+    std::uint32_t extraCols = 0;
+
+    for (RowSegment seg : out) {
+        std::uint32_t segWrapStart = seg.column.value();
+        const std::uint32_t segWrapLen = seg.kind == SegmentKind::Text ? static_cast<std::uint32_t>(seg.buffer.size())
+                                                                       : static_cast<std::uint32_t>(seg.text.size());
+        const std::uint32_t segWrapEnd = segWrapStart + segWrapLen;
+
+        while (inlayIt != last && inlayIt->wrapCol <= segWrapStart) {
+            merged.push_back(RowSegment{
+                SegmentKind::Inlay,
+                DisplayColumn{inlayIt->wrapCol + extraCols},
+                ByteRange{inlayIt->offset, inlayIt->offset},
+                inlayIt->text,
+            });
+            extraCols += static_cast<std::uint32_t>(inlayIt->text.size());
+            ++inlayIt;
+        }
+
+        if (seg.kind == SegmentKind::Text) {
+            while (inlayIt != last && inlayIt->wrapCol < segWrapEnd) {
+                const std::uint32_t prefixBytes = inlayIt->wrapCol - segWrapStart;
+                const ByteOffset splitAt = seg.buffer.begin + prefixBytes;
+                if (splitAt > seg.buffer.begin) {
+                    merged.push_back(RowSegment{
+                        SegmentKind::Text,
+                        DisplayColumn{segWrapStart + extraCols},
+                        ByteRange{seg.buffer.begin, splitAt},
+                        {},
+                    });
+                    segWrapStart = inlayIt->wrapCol;
+                    seg.buffer.begin = splitAt;
+                }
+                merged.push_back(RowSegment{
+                    SegmentKind::Inlay,
+                    DisplayColumn{inlayIt->wrapCol + extraCols},
+                    ByteRange{inlayIt->offset, inlayIt->offset},
+                    inlayIt->text,
+                });
+                extraCols += static_cast<std::uint32_t>(inlayIt->text.size());
+                ++inlayIt;
+            }
+            if (!seg.buffer.empty()) {
+                seg.column = DisplayColumn{segWrapStart + extraCols};
+                merged.push_back(seg);
+            }
+        } else {
+            seg.column = DisplayColumn{segWrapStart + extraCols};
+            merged.push_back(seg);
+        }
+    }
+
+    while (inlayIt != last) {
+        merged.push_back(RowSegment{
+            SegmentKind::Inlay,
+            DisplayColumn{inlayIt->wrapCol + extraCols},
+            ByteRange{inlayIt->offset, inlayIt->offset},
+            inlayIt->text,
+        });
+        extraCols += static_cast<std::uint32_t>(inlayIt->text.size());
+        ++inlayIt;
+    }
+
+    out = std::move(merged);
+}
+
+InlayLayer InlayLayer::updated(std::span<const SpanEdit> rows, std::vector<SpanEdit>& out) const noexcept {
+    out.insert(out.end(), rows.begin(), rows.end());
+    return *this;
+}
+
+InlayLayer InlayLayer::updated(std::span<const RawEdit> edits, const FoldLayer& fold, const WrapLayer& wrap,
+                               std::span<const SpanEdit> rows, std::vector<SpanEdit>& out) const noexcept {
+    out.insert(out.end(), rows.begin(), rows.end());
+    if (m_inlays.empty()) {
+        return *this;
+    }
+    std::vector<Inlay> mapped = m_inlays;
+    for (Inlay& item : mapped) {
+        item.offset = mapOffset(item.offset, item.bias, edits);
+    }
+    const auto less = [](const Inlay& a, const Inlay& b) {
+        if (a.offset != b.offset) {
+            return a.offset < b.offset;
+        }
+        return static_cast<std::uint8_t>(a.bias) < static_cast<std::uint8_t>(b.bias);
+    };
+    if (!std::ranges::is_sorted(mapped, less)) {
+        sortInlays(mapped);
+    }
+    InlayLayer next;
+    next.m_inlays = std::move(mapped);
+    next.rebuildProjection(fold, wrap);
+    return next;
+}
+
+Result<void> InlayLayer::checkInvariants(const FoldLayer& fold, const WrapLayer& wrap) const noexcept {
+    for (std::size_t i = 0; i < m_inlays.size(); ++i) {
+        if (m_inlays[i].offset > fold.buffer().size() || !fold.buffer().isCharBoundary(m_inlays[i].offset)) {
+            return fail(ErrorCode::Internal, "D4: inlay offset is out of range or not a char boundary");
+        }
+        if (i > 0) {
+            const Inlay& prev = m_inlays[i - 1];
+            const Inlay& cur = m_inlays[i];
+            if (cur.offset < prev.offset || (cur.offset == prev.offset && static_cast<std::uint8_t>(cur.bias) <
+                                                                              static_cast<std::uint8_t>(prev.bias))) {
+                return fail(ErrorCode::Internal, "D4: inlays are not sorted by (offset, bias)");
+            }
+        }
+    }
+    for (std::size_t i = 0; i < m_projected.size(); ++i) {
+        const ProjectedInlay& proj = m_projected[i];
+        if (proj.wrapRow >= wrap.rowCount()) {
+            return fail(ErrorCode::Internal, "D4: projected inlay wrapRow out of bounds");
+        }
+        const WrapRow row = wrap.row(proj.wrapRow, fold);
+        if (proj.wrapCol > row.end - row.start) {
+            return fail(ErrorCode::Internal, "D4: projected inlay wrapCol out of bounds");
+        }
+        const std::uint32_t leftCol = toInlayColumn(proj.wrapRow, proj.wrapCol, Bias::Left);
+        const std::uint32_t rightCol = toInlayColumn(proj.wrapRow, proj.wrapCol, Bias::Right);
+        if (toWrapColumn(proj.wrapRow, leftCol, Bias::Left) != proj.wrapCol ||
+            toWrapColumn(proj.wrapRow, rightCol, Bias::Right) != proj.wrapCol) {
+            return fail(ErrorCode::Internal, "D4: inlay column round-trip failed");
+        }
+        if (i > 0) {
+            const ProjectedInlay& prev = m_projected[i - 1];
+            if (proj.wrapRow < prev.wrapRow || (proj.wrapRow == prev.wrapRow && proj.wrapCol < prev.wrapCol)) {
+                return fail(ErrorCode::Internal, "D4: projected inlays are not sorted");
+            }
+        }
+    }
+    return {};
+}
+
+} // namespace detail
 
 } // namespace frost::text

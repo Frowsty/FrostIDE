@@ -22,7 +22,6 @@ namespace {
 
 using test::kWindows;
 using test::MemTree;
-using test::native;
 
 std::string exe(std::string_view name) { return kWindows ? std::string(name) + ".exe" : std::string(name); }
 

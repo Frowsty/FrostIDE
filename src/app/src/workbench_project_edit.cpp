@@ -27,6 +27,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaObject>
 #include <QUuid>
 
 #include <algorithm>
@@ -51,7 +52,48 @@ std::string nativeSeparators(std::string path) {
 
 // At most this many edits wait behind the running one (a move touching many projects).
 constexpr std::size_t kMaxQueuedProjectEdits = 64;
+
+// Awaiting retirement suspends this task, including on a one-worker pool. The Workbench retains
+// and joins the resulting task before QObject destruction, so posting to its GUI context is safe.
+sched::Task<void> projectEditReadersStopped(Workbench* owner, std::vector<sched::JoinHandle<void>> readers,
+                                            std::function<void()> launch) {
+    for (auto& reader : readers)
+        co_await std::move(reader);
+    QMetaObject::invokeMethod(owner, std::move(launch), Qt::QueuedConnection);
+}
 } // namespace
+
+void Workbench::waitForProjectEditReaders(std::function<void()> launch) {
+    m_projectEditWaitingForReaders = true;
+    const auto generation = ++m_projectEditAdmissionGeneration;
+    m_projectEvaluationDeferred = true;
+    stopClangd();
+    stopProjectEvaluation();
+    auto readers = std::move(m_retiredProjectEvaluations);
+    m_retiredProjectEvaluations.clear();
+    for (auto& reader : m_retiredClangd)
+        readers.push_back(std::move(reader));
+    m_retiredClangd.clear();
+    auto ready = [this, generation, launch = std::move(launch)]() mutable {
+        if (m_shutDown || generation != m_projectEditAdmissionGeneration || !m_projectEditWaitingForReaders)
+            return;
+        m_projectEditWaitingForReaders = false;
+        launch();
+    };
+    if (readers.empty()) {
+        ready();
+        return;
+    }
+    m_retiredProjectEvaluations.push_back(
+        m_pool->spawn(sched::Lane::Background, projectEditReadersStopped(this, std::move(readers), std::move(ready))));
+}
+
+void Workbench::resumeProjectEvaluationAfterEdit() {
+    if (!m_projectEvaluationDeferred || m_shutDown || m_projectRoot.empty() || m_buildService->projectEditInProgress())
+        return;
+    startProjectEvaluation(m_projectRoot);
+    startClangd(m_projectRoot);
+}
 
 void Workbench::removeProjectFile(const QString& projectName, const QString& sourceName, bool adding,
                                   const QString& filter) {
@@ -152,7 +194,8 @@ void Workbench::publishProjectEdit(const std::shared_ptr<const project::Solution
 }
 
 void Workbench::startQueuedProjectEdit() {
-    while (!m_projectEditQueue.empty() && !m_shutDown && m_projectEdit && !m_projectEdit->busy()) {
+    while (!m_projectEditQueue.empty() && !m_shutDown && !m_projectEditWaitingForReaders && m_projectEdit &&
+           !m_projectEdit->busy()) {
         auto [edit, title] = std::move(m_projectEditQueue.front());
         m_projectEditQueue.pop_front();
         if (auto refused = submitProjectEdit(std::move(edit), title))
@@ -161,7 +204,7 @@ void Workbench::startQueuedProjectEdit() {
 }
 
 std::optional<QString> Workbench::submitProjectEdit(project::ProjectEdit edit, const QString& title) {
-    if (m_projectEdit && m_projectEdit->busy() && m_solution) {
+    if (m_projectEdit && (m_projectEditWaitingForReaders || m_projectEdit->busy()) && m_solution) {
         if (m_projectEditQueue.size() >= kMaxQueuedProjectEdits)
             return QStringLiteral("Too many project edits are waiting.");
         m_projectEditQueue.emplace_back(std::move(edit), title);
@@ -241,17 +284,19 @@ std::optional<QString> Workbench::submitProjectEdit(project::ProjectEdit edit, c
     spec.arguments = {std::string(io::parentPath(tools->second))};
     if (auto reserved = m_buildService->beginProjectEdit(); !reserved)
         return q(reserved.error().message());
+    const auto trustRevision = m_services.trust.snapshot(root).revision;
     const auto managedIdle = [this] {
         return (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
-    const std::string markerPath = *marker;
-    const auto admit = [this, solution, root, projectPath, definitionsClosed, managedIdle, markerPath,
-                        lineage](const std::string& digest) mutable {
-        const auto admissible = [&] {
-            return !m_shutDown && m_solution == solution && m_projectRoot == root && m_services.trust.isTrusted(root) &&
-                   m_services.trust.isTrusted(projectPath) && m_buildService->state() == build::BuildState::Idle &&
-                   definitionsClosed() && !(m_debug && m_debug->debugging()) && managedIdle();
-        };
+    const std::string& markerPath = *marker;
+    const auto admissible = [this, solution, root, projectPath, definitionsClosed, managedIdle, trustRevision] {
+        const auto trust = m_services.trust.snapshot(root);
+        return !m_shutDown && m_solution == solution && m_projectRoot == root && trust.trusted &&
+               trust.revision == trustRevision && m_services.trust.isTrusted(projectPath) &&
+               m_buildService->state() == build::BuildState::Idle && definitionsClosed() &&
+               !(m_debug && m_debug->debugging()) && managedIdle();
+    };
+    const auto admit = [this, admissible, markerPath, lineage](const std::string& digest) mutable {
         if (!admissible())
             return false;
         const auto exists = m_services.fs.exists(markerPath);
@@ -282,6 +327,7 @@ std::optional<QString> Workbench::submitProjectEdit(project::ProjectEdit edit, c
             m_projectEditQueue.clear();
             notify(title, q(error + (accepted ? " Recovery information was retained at " + markerPath : "")),
                    ui::NotificationKind::Error);
+            resumeProjectEvaluationAfterEdit();
             return;
         }
         if (m_solution != solution || m_projectRoot != root) {
@@ -290,12 +336,18 @@ std::optional<QString> Workbench::submitProjectEdit(project::ProjectEdit edit, c
         }
         publishProjectEdit(solution, title);
         startQueuedProjectEdit();
+        resumeProjectEvaluationAfterEdit();
     };
-    auto started = m_projectEdit->start(std::move(spec), std::move(*request), id, admit, complete);
-    if (!started) {
-        m_buildService->cancelProjectEdit();
-        return q(started.error().message());
-    }
+    waitForProjectEditReaders(
+        [this, admissible, spec = std::move(spec), request = std::move(*request), id, admit, complete]() mutable {
+            if (!admissible()) {
+                complete(false, false, "The project or its trust changed while project readers were stopping.");
+                return;
+            }
+            auto started = m_projectEdit->start(std::move(spec), std::move(request), id, admit, complete);
+            if (!started)
+                complete(false, false, started.error().message());
+        });
     return std::nullopt;
 }
 
@@ -303,7 +355,8 @@ void Workbench::recoverProjectEdit(const QString& projectName) {
     const QString title = QStringLiteral("Project recovery");
     const auto failEdit = [this, title](const QString& reason) { notify(title, reason, ui::NotificationKind::Error); };
     const std::string projectPath = utf8(projectName);
-    if (auto blocked = projectEditBlocked(projectPath); blocked || m_projectEdit->busy()) {
+    if (auto blocked = projectEditBlocked(projectPath);
+        blocked || m_projectEditWaitingForReaders || m_projectEdit->busy()) {
         failEdit(blocked.value_or(QStringLiteral("Wait for the running project edit to finish.")));
         return;
     }
@@ -403,6 +456,7 @@ void Workbench::recoverProjectEdit(const QString& projectName) {
             return;
         }
     }
+    const auto trustRevision = m_services.trust.snapshot(root).revision;
     QJsonObject request{{"Project", projectName},      {"Root", q(root)},
                         {"Trusted", "true"},           {"Recover", "true"},
                         {"TransactionId", q(ownedId)}, {"JournalDigest", q(ownedDigest)}};
@@ -410,10 +464,10 @@ void Workbench::recoverProjectEdit(const QString& projectName) {
     spec.executable = tools->first;
     spec.arguments = {std::string(io::parentPath(tools->second))};
     const auto admit = [this, solution, root, projectPath, definitionsClosed, managedIdle, ownedMarker, ownedBytes,
-                        ownedDigest](const std::string& digest) {
+                        ownedDigest, trustRevision](const std::string& digest) {
         if (m_shutDown || m_solution != solution || m_projectRoot != root || !m_services.trust.isTrusted(root) ||
-            !m_services.trust.isTrusted(projectPath) || !definitionsClosed() || digest != ownedDigest ||
-            (m_debug && m_debug->debugging()) || !managedIdle())
+            m_services.trust.snapshot(root).revision != trustRevision || !m_services.trust.isTrusted(projectPath) ||
+            !definitionsClosed() || digest != ownedDigest || (m_debug && m_debug->debugging()) || !managedIdle())
             return false;
         const auto bytes = m_services.fs.readFile(ownedMarker);
         return bytes && *bytes == ownedBytes;
@@ -427,10 +481,18 @@ void Workbench::recoverProjectEdit(const QString& projectName) {
         if (m_solution != solution || m_projectRoot != root)
             return;
         publishProjectEdit(solution, title);
+        resumeProjectEvaluationAfterEdit();
     };
-    auto started = m_projectEdit->start(
-        std::move(spec), QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString(), ownedId, admit, complete);
-    if (!started)
-        failEdit(q(started.error().message()));
+    waitForProjectEditReaders([this, spec = std::move(spec),
+                               request = QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString(), ownedId,
+                               ownedDigest, admit, complete, failEdit]() mutable {
+        if (!admit(ownedDigest)) {
+            failEdit(QStringLiteral("The project or its trust changed while project readers were stopping."));
+            return;
+        }
+        auto started = m_projectEdit->start(std::move(spec), std::move(request), ownedId, admit, complete);
+        if (!started)
+            failEdit(q(started.error().message()));
+    });
 }
 } // namespace frost::app

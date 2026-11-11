@@ -70,7 +70,7 @@ public:
     // Ends the stream as a crash would: the client reads EOF, and the transport reports `exitCode`.
     void crash(int exitCode = 3);
     // Queues raw bytes.
-    void sendRaw(std::string bytes);
+    void sendRaw(const std::string& bytes);
 
     // Every request the client sent (the whole message), in order.
     [[nodiscard]] std::vector<rpc::Json> requests() const;

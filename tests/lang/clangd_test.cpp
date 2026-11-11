@@ -32,6 +32,7 @@
 #include "frost/text/document.hpp"
 
 #include "support/crash_dialogs.hpp"
+#include "support/process_memory_evidence.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -57,7 +58,6 @@ using frost::lang::ClangdService;
 using frost::lang::ClangdServiceOptions;
 using frost::lang::ClangdState;
 using frost::lang::DiagnosticSeverity;
-using frost::lang::FileDiagnostics;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
 
@@ -864,16 +864,17 @@ frost::lang::LspPosition positionOf(std::string_view marker, std::size_t offsetI
 class EditSink {
 public:
     void attach(ClangdService& service) {
-        service.setApplyEditHandler([this](const frost::lang::Json& params) {
+        service.setApplyEditHandler([this](const frost::lang::Json& params, const std::function<void(bool)>& done) {
             const frost::lang::Json* edit = params.find("edit");
             auto parsed = frost::lang::parseWorkspaceEdit(edit != nullptr ? *edit : params);
             std::lock_guard lock(m_mutex);
             if (!parsed) {
                 ADD_FAILURE() << parsed.error().describe();
-                return false;
+                done(false);
+                return;
             }
             m_edits.push_back(std::move(*parsed));
-            return true;
+            done(true);
         });
     }
     [[nodiscard]] std::size_t count() {
@@ -1094,13 +1095,93 @@ TEST(ClangdE2E, GovernedLaunchFlagsUsePchStorageDiskAndBackgroundIndexPriority) 
     ASSERT_EQ(launches.size(), 1u);
     const std::vector<std::string>& args = launches.front().spec.arguments;
     EXPECT_NE(std::ranges::find(args, "--background-index"), args.end());
+#ifdef _WIN32
+    EXPECT_NE(std::ranges::find(args, "--background-index-priority=low"), args.end());
+#else
     EXPECT_NE(std::ranges::find(args, "--background-index-priority=background"), args.end());
+#endif
     EXPECT_NE(std::ranges::find(args, "--pch-storage=disk"), args.end());
     EXPECT_EQ(std::ranges::find(args, "--pch-storage=memory"), args.end());
     EXPECT_NE(std::ranges::find(args, "-j=2"), args.end());
+#ifdef _WIN32
+    ASSERT_TRUE(launches.front().spec.residentMemoryLimitBytes.has_value());
+    EXPECT_EQ(*launches.front().spec.residentMemoryLimitBytes, 4080ULL * 1024ULL * 1024ULL);
+#else
+    EXPECT_FALSE(launches.front().spec.residentMemoryLimitBytes.has_value());
+#endif
 }
 
+TEST(ClangdE2E, GovernedDefaultAndExplicitJobsCarryPlatformResidencyPolicy) {
+    for (unsigned requestedJobs : {0U, 3U}) {
+        SCOPED_TRACE(requestedJobs);
+        frost::sched::ResourceGovernorOptions governorOptions;
+        governorOptions.hostOverride = frost::sched::HostResources{
+            .logicalCores = 24, .availablePhysicalBytes = 16ULL << 30, .availableCommitBytes = 16ULL << 30};
+        if (requestedJobs != 0)
+            governorOptions.clangdRssCapBytes -= 12345; // Exercise non-page-aligned configured caps too.
+        auto governor = std::make_shared<frost::sched::ResourceGovernor>(governorOptions);
+        frost::io::ScriptedProcessLauncher launcher;
+        Env env;
+        ASSERT_TRUE(env.ok());
+        ClangdServiceOptions options;
+        options.clangdPath = fixture("dummy-clangd");
+        options.workspaceRoot = fixture(".");
+        options.launch.jobs = requestedJobs;
+        ClangdService service(launcher, env.context(), std::move(options));
+        frost::lang::setResourceGovernor(service, governor);
+        ASSERT_TRUE(service.start());
+        ASSERT_TRUE(waitFor([&] { return service.state() == ClangdState::Failed; }));
+        const auto launches = launcher.launches();
+        ASSERT_EQ(launches.size(), 1U);
+        EXPECT_FALSE(launches.front().launched); // Empty script queue rejects the prospective launch.
+        const auto& spec = launches.front().spec;
+#ifdef _WIN32
+        EXPECT_NE(std::ranges::find(spec.arguments, requestedJobs == 0 ? "-j=8" : "-j=3"), spec.arguments.end());
+        ASSERT_TRUE(spec.residentMemoryLimitBytes.has_value());
+        SYSTEM_INFO system{};
+        GetSystemInfo(&system);
+        ASSERT_GT(system.dwPageSize, 0U);
+        EXPECT_EQ(*spec.residentMemoryLimitBytes % system.dwPageSize, 0U);
+        EXPECT_LT(*spec.residentMemoryLimitBytes, governorOptions.clangdRssCapBytes);
+        const auto gap = governorOptions.clangdRssCapBytes - *spec.residentMemoryLimitBytes;
+        EXPECT_GE(gap, 16ULL * 1024ULL * 1024ULL);
+        EXPECT_LT(gap, 16ULL * 1024ULL * 1024ULL + system.dwPageSize);
+#else
+        EXPECT_NE(std::ranges::find(spec.arguments, requestedJobs == 0 ? "-j=6" : "-j=3"), spec.arguments.end());
+        EXPECT_FALSE(spec.residentMemoryLimitBytes.has_value());
+#endif
+        EXPECT_FALSE(frost::lang::indexMetrics(service).residentMemoryLimitBytes.has_value());
+        stopAndCheck(env, service);
+    }
+}
+
+#ifdef _WIN32
+TEST(ClangdE2E, UnusableResidentCapFailsBeforeStartingRealClangd) {
+    Env env;
+    ASSERT_TRUE(env.ok());
+    frost::sched::ResourceGovernorOptions governorOptions;
+    governorOptions.clangdRssCapBytes = 16ULL * 1024ULL * 1024ULL;
+    auto governor = std::make_shared<frost::sched::ResourceGovernor>(governorOptions);
+    ClangdServiceOptions options;
+    options.clangdPath = clangdPath();
+    options.workspaceRoot = fixture(".");
+    ClangdService service(frost::io::realProcessLauncher(), env.context(), std::move(options));
+    frost::lang::setResourceGovernor(service, governor);
+    ASSERT_TRUE(service.start());
+    ASSERT_TRUE(waitFor([&] { return service.state() == ClangdState::Failed; }));
+    const auto error = service.lastError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code(), frost::ErrorCode::InvalidArgument);
+    EXPECT_FALSE(service.serverPid().has_value());
+    EXPECT_FALSE(frost::lang::indexMetrics(service).residentMemoryLimitBytes.has_value());
+    stopAndCheck(env, service);
+}
+#endif
+
 TEST(ClangdE2E, BackgroundIndexProgressAndMetricsTrackedWithRealClangd) {
+#ifdef _WIN32
+    const auto wallStarted = std::chrono::steady_clock::now();
+#endif
     frost::test::ScratchDir scratch("lang-clangd-index-metrics");
     writeCmakeDatabase(scratch);
     Env env;
@@ -1131,13 +1212,42 @@ TEST(ClangdE2E, BackgroundIndexProgressAndMetricsTrackedWithRealClangd) {
     EXPECT_TRUE(metrics.completed);
     EXPECT_GE(metrics.elapsedMs, 1ULL);
     EXPECT_GE(metrics.shardCount, 1U);
+    EXPECT_TRUE(metrics.peakRssSampleValid) << metrics.peakRssSampleError;
     EXPECT_GT(metrics.peakRssBytes, 0ULL);
     EXPECT_LT(metrics.peakRssBytes, metrics.governorRssCapBytes);
     EXPECT_EQ(metrics.governorRssCapBytes, governor->clangdRssCapBytes());
     EXPECT_FALSE(governor->isLegActive(frost::sched::HeavyLegKind::BackgroundIndex));
 
+    const auto pid = service.serverPid();
+    ASSERT_TRUE(pid.has_value());
+#ifdef _WIN32
+    ASSERT_TRUE(metrics.residentMemoryLimitBytes.has_value());
+    EXPECT_LT(*metrics.residentMemoryLimitBytes, metrics.governorRssCapBytes);
+    frost::test::reportProcessMemoryEvidence(*pid, "clangd metrics test", metrics.elapsedMs, wallStarted,
+                                             metrics.governorRssCapBytes, metrics.residentMemoryLimitBytes);
+    frost::sched::ResourceGovernorOptions replacementOptions;
+    replacementOptions.clangdRssCapBytes = 8ULL * 1024ULL * 1024ULL * 1024ULL;
+    auto replacementGovernor = std::make_shared<frost::sched::ResourceGovernor>(replacementOptions);
+    frost::lang::setResourceGovernor(service, replacementGovernor);
+    const auto changedGovernor = frost::lang::indexMetrics(service);
+    EXPECT_EQ(changedGovernor.residentMemoryLimitBytes, metrics.residentMemoryLimitBytes);
+    EXPECT_EQ(changedGovernor.governorRssCapBytes, replacementOptions.clangdRssCapBytes);
+#else
+    EXPECT_FALSE(metrics.residentMemoryLimitBytes.has_value());
+#endif
+    const auto osPeak = frost::sched::queryProcessPeakRssBytes(static_cast<std::int64_t>(*pid));
+    ASSERT_TRUE(osPeak.has_value()) << osPeak.error().describe();
+    const auto refreshed = frost::lang::indexMetrics(service);
+    EXPECT_TRUE(refreshed.peakRssSampleValid) << refreshed.peakRssSampleError;
+    EXPECT_GE(refreshed.peakRssBytes, *osPeak);
+
     ASSERT_TRUE(service.closeDocument(path).has_value());
     stopAndCheck(env, service);
+    const auto stopped = frost::lang::indexMetrics(service);
+    EXPECT_FALSE(stopped.peakRssSampleValid);
+    EXPECT_FALSE(stopped.peakRssSampleError.empty());
+    EXPECT_FALSE(stopped.residentMemoryLimitBytes.has_value());
+    EXPECT_GE(stopped.peakRssBytes, refreshed.peakRssBytes);
 }
 
 } // namespace

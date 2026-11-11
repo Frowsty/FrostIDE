@@ -18,6 +18,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QFontMetrics>
+#include <QInputDialog>
 #include <QLinearGradient>
 #include <QMenu>
 #include <QMouseEvent>
@@ -315,7 +316,7 @@ class WindowCaptionButton final : public QToolButton {
 public:
     enum class Kind { Minimize, MaximizeRestore, Close };
 
-    WindowCaptionButton(Kind kind, QWidget* parent = nullptr) : QToolButton(parent), m_kind(kind) {
+    explicit WindowCaptionButton(Kind kind, QWidget* parent = nullptr) : QToolButton(parent), m_kind(kind) {
         setAutoRaise(true);
         setFocusPolicy(Qt::NoFocus);
         setAttribute(Qt::WA_Hover, true);
@@ -480,6 +481,8 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
             m_vcsMenuBuilder(*m_vcsMenu);
         }
     });
+    // addWidget must follow the project widget to preserve toolbar action order.
+    // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer): Preserve action insertion order.
     m_vcsAction = addWidget(m_vcsBranch);
     setVcsBranchName({});
 
@@ -516,6 +519,35 @@ MainToolbar::MainToolbar(Invoker invoke, QWidget* parent)
     addSlot(kRun, icons::kRunRun, "Run", IconRole::Success);
     addSlot(kDebug, icons::kRunDebug, "Debug", IconRole::Success);
     addSlot(kStop, icons::kRunStop, "Stop", IconRole::Error);
+    addSlot(kEnginePlay, icons::kRunRun, "Play in FrostEngine", IconRole::Success);
+    addSlot(kEnginePause, {}, "Pause");
+    addSlot(kEngineStep, {}, "Step");
+    auto* step = button(kEngineStep);
+    auto* stepMenu = new QMenu(step);
+    step->setMenu(stepMenu);
+    step->setPopupMode(QToolButton::MenuButtonPopup);
+    const auto requestStep = [this](int frames) {
+        m_engineStepFrames = frames;
+        const auto invoke = m_invoke;
+        if (invoke)
+            invoke(kEngineStep);
+    };
+    for (const int frames : {1, 5, 10, 60}) {
+        auto* action = stepMenu->addAction(tr("Step %1 frame(s)").arg(frames));
+        action->setData(frames);
+        connect(action, &QAction::triggered, this, [requestStep, frames] { requestStep(frames); });
+    }
+    auto* customStep = stepMenu->addAction(tr("Step frames..."));
+    connect(customStep, &QAction::triggered, this, [this, requestStep] {
+        bool accepted = false;
+        const int frames = QInputDialog::getInt(this, tr("Step FrostEngine"), tr("Frames:"), m_engineStepFrames, 1,
+                                                1000000, 1, &accepted);
+        if (accepted)
+            requestStep(frames);
+    });
+    addSlot(kEngineStop, icons::kRunStop, "Stop FrostEngine", IconRole::Error);
+    addSlot(kEngineSimulate, {}, "Simulate");
+    applyEngineState();
     auto* utilitySpacer = new QWidget(this);
     utilitySpacer->setObjectName(QStringLiteral("toolbarUtilitySpacer"));
     utilitySpacer->setFixedWidth(scaledPx(12));
@@ -861,13 +893,62 @@ void MainToolbar::addSlot(std::string_view actionId, std::string_view iconId, st
     // The slot's current action is looked up at click time (setSlotAction may rebind it).
     connect(button, &QToolButton::clicked, this, [this, id] {
         for (const Slot& slot : m_slots) {
-            if (slot.slotId == id && m_invoke) {
-                m_invoke(slot.actionId);
+            if (slot.slotId == id) {
+                const std::string actionId = slot.actionId;
+                const auto invoke = m_invoke;
+                applyEngineState();
+                if (invoke)
+                    invoke(actionId);
+                return;
             }
         }
     });
     addWidget(button);
     m_slots.push_back(Slot{id, id, std::string(iconId), iconRole, button});
+}
+
+void MainToolbar::setEngineState(std::optional<EngineControlState> state) {
+    m_engineState = state;
+    applyEngineState();
+    updateTabOrder();
+}
+
+void MainToolbar::applyEngineState() {
+    const EngineControlState state = m_engineState.value_or(EngineControlState{});
+    const bool ready = state.connected && !state.debuggerPaused;
+    for (Slot& slot : m_slots) {
+        bool permitted = false;
+        if (slot.slotId == kEnginePlay) {
+            permitted = ready && state.canPlay && (!state.playing || state.paused);
+        } else if (slot.slotId == kEnginePause) {
+            permitted = ready && state.canPause && state.playing && !state.paused;
+        } else if (slot.slotId == kEngineStep) {
+            permitted = ready && state.canStep && state.playing && state.paused;
+        } else if (slot.slotId == kEngineStop) {
+            // A paused debugger is stopped through DAP by the app, not a main-thread RPC.
+            permitted =
+                (state.connected || state.debuggerPaused) && state.canStop && (state.playing || state.debuggerPaused);
+        } else if (slot.slotId == kEngineSimulate) {
+            permitted = ready && state.canSimulate && !state.playing;
+        } else {
+            continue;
+        }
+        for (QAction* action : actions()) {
+            if (widgetForAction(action) == slot.button) {
+                action->setVisible(m_engineState.has_value());
+                break;
+            }
+        }
+        slot.button->setCheckable(slot.slotId == kEnginePlay || slot.slotId == kEnginePause);
+        slot.button->setChecked(slot.slotId == kEnginePlay ? state.playing
+                                                           : slot.slotId == kEnginePause && state.paused);
+        slot.button->setEnabled(slot.actionEnabled && permitted);
+        slot.button->setAccessibleDescription(state.debuggerPaused ? tr("FrostEngine is paused in the debugger")
+                                              : state.paused       ? tr("FrostEngine is paused")
+                                              : state.playing      ? tr("FrostEngine is playing")
+                                              : state.connected    ? tr("FrostEngine is connected")
+                                                                   : tr("FrostEngine is disconnected"));
+    }
 }
 
 void MainToolbar::refresh(input::ActionRegistry& registry, input::KeymapService& keymap,
@@ -881,6 +962,7 @@ void MainToolbar::refresh(input::ActionRegistry& registry, input::KeymapService&
         }
         const std::optional<input::ActionId> id = registry.find(slot.actionId);
         if (!id) {
+            slot.actionEnabled = false;
             slot.button->setEnabled(false);
             continue;
         }
@@ -891,8 +973,10 @@ void MainToolbar::refresh(input::ActionRegistry& registry, input::KeymapService&
                        QStringLiteral(")");
         }
         slot.button->setToolTip(tooltip);
-        slot.button->setEnabled(registry.isEnabled(*id, context));
+        slot.actionEnabled = registry.isEnabled(*id, context);
+        slot.button->setEnabled(slot.actionEnabled);
     }
+    applyEngineState();
     const QIcon paletteIcon = shell_detail::themedIcon(icons::kActionsShow);
     if (!paletteIcon.isNull()) {
         m_themeButton->setIcon(paletteIcon);

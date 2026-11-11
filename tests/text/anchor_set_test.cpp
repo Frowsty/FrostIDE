@@ -157,7 +157,7 @@ TEST(AnchorSet, DeletionBoundaries) {
         std::vector<std::string> texts;
         std::vector<frost::text::Edit> edits;
         for (const RawEdit& e : c.batch) {
-            texts.push_back(std::string(e.newBytes, 'Q'));
+            texts.emplace_back(e.newBytes, 'Q');
         }
         for (std::size_t i = 0; i < c.batch.size(); ++i) {
             edits.push_back(frost::text::Edit{c.batch[i].range, texts[i]});

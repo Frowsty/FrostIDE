@@ -2,6 +2,7 @@
 // Real Windows ProjectHost removal through Workbench on isolated solution fixtures.
 #include "frost/build/msbuild_locator.hpp"
 #include "frost/document/file_document.hpp"
+#include "frost/io/async_process.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
@@ -19,6 +20,7 @@
 #include <QJsonObject>
 #include <QMenu>
 #include <QScopeGuard>
+#include <QTimer>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -47,6 +49,7 @@ std::string launchExecutables(frost::io::ScriptedProcessLauncher& launcher) {
 
 class ReloadFaultFs : public frost::io::IFileSystem {
 public:
+    virtual ~ReloadFaultFs() = default;
     explicit ReloadFaultFs(std::string solution)
         : m_solution(std::move(solution)), m_real(frost::io::realFileSystem()) {}
     frost::Result<std::string> readFile(std::string_view path) override {
@@ -111,6 +114,115 @@ private:
     std::condition_variable m_release;
     std::atomic<bool> m_entered{false};
     bool m_released = false;
+};
+
+// A controlled owned evaluator holds a real Windows sharing constraint until cancellation AND
+// the test's completion latch. This distinguishes requesting cancellation from joining readers.
+struct HeldProjectReader {
+    ~HeldProjectReader() {
+        if (handle != INVALID_HANDLE_VALUE)
+            CloseHandle(handle);
+    }
+    void release() {
+        std::lock_guard lock(mutex);
+        released = true;
+        changed.notify_all();
+    }
+    std::mutex mutex;
+    std::condition_variable changed;
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    bool released = false;
+    std::atomic<bool> entered = false, cancelled = false, returned = false;
+};
+
+class HeldProjectReaderProcess final : public frost::io::IProcess {
+public:
+    HeldProjectReaderProcess(std::unique_ptr<IProcess> process, std::shared_ptr<HeldProjectReader> reader)
+        : m_process(std::move(process)), m_reader(std::move(reader)) {}
+    frost::io::ProcessId pid() const noexcept override { return m_process->pid(); }
+    frost::Result<void> writeStdin(std::string_view bytes) override { return m_process->writeStdin(bytes); }
+    void closeStdin() noexcept override { m_process->closeStdin(); }
+    frost::Result<std::size_t> readStdout(std::span<char>) override {
+        std::unique_lock lock(m_reader->mutex);
+        m_reader->entered.store(true);
+        const bool complete =
+            m_reader->changed.wait_for(lock, 30s, [&] { return m_reader->cancelled.load() && m_reader->released; });
+        if (m_reader->handle != INVALID_HANDLE_VALUE)
+            CloseHandle(m_reader->handle);
+        m_reader->handle = INVALID_HANDLE_VALUE;
+        m_reader->returned.store(true);
+        if (!complete)
+            return frost::fail(frost::ErrorCode::Timeout, "held project reader was not released after cancellation");
+        return std::size_t{0};
+    }
+    frost::Result<std::size_t> readStderr(std::span<char> bytes) override { return m_process->readStderr(bytes); }
+    frost::Result<frost::io::ExitStatus> wait(std::optional<frost::IClock::Duration> timeout) override {
+        return m_process->wait(timeout);
+    }
+    frost::Result<void> terminate() override {
+        m_reader->cancelled.store(true);
+        m_reader->changed.notify_all();
+        return m_process->terminate();
+    }
+    frost::Result<frost::io::ProcessResult> communicate(std::string_view input,
+                                                        frost::IClock::Duration timeout) override {
+        return m_process->communicate(input, timeout);
+    }
+    void abandonOutput() noexcept override { m_process->abandonOutput(); }
+
+private:
+    std::unique_ptr<IProcess> m_process;
+    std::shared_ptr<HeldProjectReader> m_reader;
+};
+
+// Only the first evaluation is controlled. ProjectHost and the subsequent evaluation use the
+// actual installed tools, keeping the edit's bytes and refreshed model as independent oracles.
+class ProjectReaderLauncher final : public frost::io::IProcessLauncher {
+public:
+    ProjectReaderLauncher(std::string msbuild, std::string project)
+        : m_msbuild(std::move(msbuild)), m_project(std::move(project)) {
+        m_script.expect({.neverExits = true});
+    }
+    frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+        if (spec.executable == m_msbuild && evaluations.fetch_add(1) == 0) {
+            auto path = frost::io::toWin32Path(m_project);
+            if (!path)
+                return std::unexpected(path.error());
+            reader->handle =
+                CreateFileW(path->c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (reader->handle == INVALID_HANDLE_VALUE)
+                return frost::fail(frost::ErrorCode::IoError, "cannot hold the real project reader");
+            auto scripted = m_script.launch(spec);
+            if (!scripted)
+                return std::unexpected(scripted.error());
+            return std::make_unique<HeldProjectReaderProcess>(std::move(*scripted), reader);
+        }
+        if (spec.executable == FROST_PROJECT_HOST) {
+            mutationBeforeReaderReturned.store(!reader->returned.load());
+            mutationStarted.store(true);
+        }
+        if (spec.executable == m_msbuild) {
+            const auto bytes = frost::io::realFileSystem().readFile(m_project);
+            if (mutationStarted.load()) {
+                resumedWithRemovedSource.store(!bytes || bytes->find("extra.cpp") != std::string::npos);
+                resumedAfterMutation.store(true);
+            }
+        }
+        return frost::io::realProcessLauncher().launch(spec);
+    }
+    frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
+    launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
+        return frost::io::realProcessLauncher().launchAsync(spec, context);
+    }
+    std::shared_ptr<HeldProjectReader> reader = std::make_shared<HeldProjectReader>();
+    std::atomic<unsigned> evaluations = 0;
+    std::atomic<bool> mutationStarted = false, mutationBeforeReaderReturned = false;
+    std::atomic<bool> resumedWithRemovedSource = false;
+    std::atomic<bool> resumedAfterMutation = false;
+
+private:
+    std::string m_msbuild, m_project;
+    frost::io::ScriptedProcessLauncher m_script;
 };
 
 QJsonObject journalEntry(const std::string& path, const std::string& before, const std::string& after) {
@@ -300,7 +412,6 @@ TEST(WorkbenchProjectEdit, AddsExistingSourceThroughProjectMenu) {
 TEST(WorkbenchProjectEdit, ManagedPreparationBlocksRemovalUntilWorkspaceReopened) {
     WorkDir dir("managed preparation edit", "tiny_sln");
     WorkDir privateData("managed preparation edit state");
-    const auto projectPath = dir.join("App/App.vcxproj");
     const auto sourcePath = dir.join("App/extra.cpp");
     auto project = dir.read("App/App.vcxproj");
     const auto position = project.find("<ClCompile Include=\"main.cpp\" />");
@@ -380,7 +491,6 @@ TEST(WorkbenchProjectEdit, ManagedPreparationBlocksRemovalUntilWorkspaceReopened
 TEST(WorkbenchProjectEdit, PendingManagedSnapshotBlocksRemovalUntilCancelled) {
     WorkDir dir("managed snapshot edit", "tiny_sln");
     WorkDir privateData("managed snapshot edit state");
-    const auto projectPath = dir.join("App/App.vcxproj");
     const auto sourcePath = dir.join("App/extra.cpp");
     auto project = dir.read("App/App.vcxproj");
     const auto position = project.find("<ClCompile Include=\"main.cpp\" />");
@@ -481,6 +591,124 @@ TEST(WorkbenchProjectEdit, PendingManagedSnapshotBlocksRemovalUntilCancelled) {
     triggerRemove();
     ASSERT_TRUE(waitFor([&] { return launcher.launches().size() == 4; }, 10s));
     EXPECT_EQ(launcher.launches().back().spec.executable, dir.join("host.exe"));
+}
+
+TEST(WorkbenchProjectEdit, OwnedReadersJoinBeforeExclusiveEditsAndDeferredTrustRefreshHonorsCancellation) {
+    auto found = frost::build::findMsBuild(frost::io::realProcessLauncher(), frost::io::realFileSystem());
+    ASSERT_TRUE(found) << found.error().describe();
+    enum class Outcome { Commit, RevokeTrust, Shutdown };
+    for (const auto outcome : {Outcome::Commit, Outcome::RevokeTrust, Outcome::Shutdown}) {
+        SCOPED_TRACE(static_cast<int>(outcome));
+        WorkDir dir("held project reader", "tiny_sln");
+        WorkDir privateData("reader edit state");
+        const auto projectPath = dir.join("App/App.vcxproj");
+        const auto sourcePath = dir.join("App/extra.cpp");
+        const std::string diskSource = "int extra() { return 1; }\n";
+        dir.write("App/extra.cpp", diskSource);
+        auto project = dir.read("App/App.vcxproj");
+        const std::string mainItem = "<ClCompile Include=\"main.cpp\" />";
+        const auto position = project.find(mainItem);
+        ASSERT_NE(position, std::string::npos);
+        project.insert(position + mainItem.size(), "\n    <ClCompile Include=\"extra.cpp\" />");
+        dir.write("App/App.vcxproj", project);
+        ProjectReaderLauncher launcher(found->msbuildPath, projectPath);
+        RigOptions options;
+        options.launcher = &launcher;
+        options.workbench.workers = 1;
+        options.workbench.msbuildPath = found->msbuildPath;
+        options.workbench.projectEditHostPath = FROST_PROJECT_HOST;
+        options.workbench.projectEditStateDirectory = privateData.join("project-edits");
+        auto rig = std::make_unique<WorkbenchRig>(dir, std::move(options));
+        // Every fatal assertion releases the reader before Workbench joins its owned workers.
+        const auto release = qScopeGuard([&] { launcher.reader->release(); });
+        ASSERT_TRUE(rig->trust->trust(dir.path()));
+        ASSERT_TRUE(rig->workbench->openPath(dir.join("Tiny.sln")));
+        ASSERT_TRUE(rig->workbench->openPath(sourcePath));
+        auto* document = rig->workbench->documentRegistry().find(sourcePath);
+        ASSERT_NE(document, nullptr);
+        ASSERT_TRUE(document->document().replace(frost::text::ByteRange{frost::ByteOffset{0}, frost::ByteOffset{0}},
+                                                 "// unsaved\n", frost::text::EditContext{}));
+        ASSERT_TRUE(waitFor([&] { return launcher.reader->entered.load(); }, 10s));
+        auto wide = frost::io::toWin32Path(projectPath);
+        ASSERT_TRUE(wide);
+        HANDLE writer = CreateFileW(wide->c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                                    OPEN_EXISTING, 0, nullptr);
+        const auto writerError = GetLastError();
+        if (writer != INVALID_HANDLE_VALUE)
+            CloseHandle(writer);
+        ASSERT_EQ(writer, INVALID_HANDLE_VALUE);
+        ASSERT_EQ(writerError, ERROR_SHARING_VIOLATION);
+
+        // Advance the observed trust revision before the request captures its admission. The
+        // actual trust timer callback must defer this refresh while the edit owns the reservation.
+        ASSERT_TRUE(rig->trust->trust(privateData.path()));
+        auto* explorer = rig->workbench->solutionExplorer();
+        const auto index = explorer->filterModel()->mapFromSource(explorer->model()->indexOfPath(sourcePath));
+        ASSERT_TRUE(index.isValid());
+        std::unique_ptr<QMenu> menu(explorer->createContextMenu(index));
+        const auto actions = menu->actions();
+        const auto remove = std::ranges::find_if(
+            actions, [](QAction* action) { return action->objectName() == QStringLiteral("removeFromProject"); });
+        ASSERT_NE(remove, actions.end());
+        (*remove)->trigger();
+        ASSERT_TRUE(waitFor([&] { return launcher.reader->cancelled.load(); }, 10s));
+        EXPECT_TRUE(rig->workbench->buildService().projectEditInProgress());
+        auto* trustWatch = rig->workbench->findChild<QTimer*>(QStringLiteral("projectTrustWatch"));
+        ASSERT_NE(trustWatch, nullptr);
+        ASSERT_TRUE(QMetaObject::invokeMethod(trustWatch, "timeout", Qt::DirectConnection));
+        EXPECT_EQ(launcher.evaluations.load(), 1U);
+        EXPECT_FALSE(launcher.mutationStarted.load());
+        EXPECT_FALSE(launcher.reader->returned.load());
+        EXPECT_EQ(dir.read("App/App.vcxproj"), project);
+        EXPECT_TRUE(document->dirty());
+        bool guiHeartbeat = false;
+        QTimer::singleShot(0, rig->workbench.get(), [&] { guiHeartbeat = true; });
+        ASSERT_TRUE(waitFor([&] { return guiHeartbeat; }, 10s));
+
+        if (outcome == Outcome::Shutdown) {
+            rig->workbench->shutdown();
+            launcher.reader->release();
+            rig.reset(); // Joins all retirement/admission tasks, then discards their GUI callbacks.
+            QApplication::processEvents();
+            EXPECT_TRUE(launcher.reader->returned.load());
+            EXPECT_FALSE(launcher.mutationStarted.load());
+            EXPECT_EQ(launcher.evaluations.load(), 1U);
+            EXPECT_EQ(dir.read("App/App.vcxproj"), project);
+            EXPECT_EQ(dir.read("App/extra.cpp"), diskSource);
+            continue;
+        }
+        if (outcome == Outcome::RevokeTrust)
+            ASSERT_TRUE(rig->trust->untrust(dir.path()));
+        launcher.reader->release();
+        ASSERT_TRUE(waitFor([&] { return !rig->workbench->buildService().projectEditInProgress(); }, 120s));
+        EXPECT_TRUE(launcher.reader->returned.load());
+        EXPECT_FALSE(launcher.mutationBeforeReaderReturned.load());
+        EXPECT_TRUE(document->dirty());
+        EXPECT_EQ(dir.read("App/extra.cpp"), diskSource);
+        if (outcome == Outcome::RevokeTrust) {
+            EXPECT_FALSE(launcher.mutationStarted.load());
+            EXPECT_EQ(launcher.evaluations.load(), 1U);
+            EXPECT_EQ(dir.read("App/App.vcxproj"), project);
+            ASSERT_TRUE(rig->trust->trust(dir.path()));
+            ASSERT_TRUE(QMetaObject::invokeMethod(trustWatch, "timeout", Qt::DirectConnection));
+            ASSERT_TRUE(waitFor([&] { return launcher.evaluations.load() > 1; }, 10s));
+            (*remove)->trigger();
+            ASSERT_TRUE(waitFor([&] { return !rig->workbench->buildService().projectEditInProgress(); }, 120s));
+            EXPECT_TRUE(launcher.mutationStarted.load());
+            EXPECT_FALSE(launcher.mutationBeforeReaderReturned.load());
+            EXPECT_TRUE(document->dirty());
+            EXPECT_EQ(dir.read("App/extra.cpp"), diskSource);
+            EXPECT_EQ(dir.read("App/App.vcxproj").find("extra.cpp"), std::string::npos);
+            ASSERT_TRUE(waitFor([&] { return launcher.resumedAfterMutation.load(); }, 10s));
+            EXPECT_FALSE(launcher.resumedWithRemovedSource.load());
+        } else {
+            EXPECT_TRUE(launcher.mutationStarted.load());
+            ASSERT_TRUE(waitFor([&] { return launcher.resumedAfterMutation.load(); }, 10s));
+            EXPECT_FALSE(launcher.resumedWithRemovedSource.load());
+            EXPECT_FALSE(explorer->model()->indexOfPath(sourcePath).isValid());
+            EXPECT_EQ(dir.read("App/App.vcxproj").find("extra.cpp"), std::string::npos);
+        }
+    }
 }
 
 TEST(WorkbenchProjectEdit, RemovesSourceFromBothSolutionFormatsWithoutSavingDirtyTab) {

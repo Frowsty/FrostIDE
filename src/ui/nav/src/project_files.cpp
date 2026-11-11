@@ -66,7 +66,7 @@ ProjectFiles::ProjectFiles(std::string root) : m_root(std::move(root)) {
 
 void ProjectFiles::setScan(const io::TreeScan& scan) { static_cast<void>(setScanCancellable(scan, {})); }
 
-bool ProjectFiles::setScanCancellable(const io::TreeScan& scan, std::stop_token token) {
+bool ProjectFiles::setScanCancellable(const io::TreeScan& scan, const std::stop_token& token) {
     m_nodes.clear();
     m_byPath.clear();
     m_nodes.push_back(Node{std::string(baseName(m_root)), m_root, {}, true, std::nullopt, {}});
@@ -129,7 +129,7 @@ void ProjectFiles::setSolutionFiles(std::vector<std::string> files) {
     static_cast<void>(setSolutionFilesCancellable(std::move(files), {}));
 }
 
-bool ProjectFiles::setSolutionFilesCancellable(std::vector<std::string> files, std::stop_token token) {
+bool ProjectFiles::setSolutionFilesCancellable(std::vector<std::string> files, const std::stop_token& token) {
     m_solutionFiles = std::move(files);
     return rebuildCandidates(token);
 }
@@ -143,7 +143,7 @@ std::optional<std::size_t> ProjectFiles::find(std::string_view path) const {
     return it->second;
 }
 
-bool ProjectFiles::rebuildCandidates(std::stop_token token) {
+bool ProjectFiles::rebuildCandidates(const std::stop_token& token) {
     m_candidates.clear();
     m_display.clear();
     const bool foldCase = styleOf(m_root) == io::PathStyle::Windows;

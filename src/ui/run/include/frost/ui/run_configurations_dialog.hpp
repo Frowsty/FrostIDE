@@ -16,6 +16,9 @@
  *
  * What can be edited, by type (run_types.hpp):
  *   - native: everything; the program is an absolute path.
+ *   - frost-editor / frost-player (RUN-11): executable (selecting the built engine configuration),
+ *     project directory or .frostproj, arguments, working directory, environment and tasks.
+ *     The engine project field supplies --project; it cannot be overridden by the arguments.
  *   - cmake-target: name, arguments, working directory and environment. The program comes from the
  *     target's artifact after the build, so it is shown as such and cannot be typed.
  *   - msbuild: the name only. MSBuild projects run with the debugger settings MSBuild evaluates for
@@ -27,7 +30,7 @@
  *   - attach (RUN-5, "Add Attach..."): the name and the process: its executable's file name or
  *     absolute path. Debug attaches to the one running process that matches.
  * Generated configurations cannot be removed (the next generation brings them back); Remove is
- * disabled for them. Copy keeps a compound or attach configuration's type; any other becomes a
+ * disabled for them. Copy keeps compound, attach and FrostEngine types; any other becomes a
  * native copy.
  *
  * OK validates every configuration (run::validateRunConfiguration) and refuses with the first
@@ -93,6 +96,9 @@ public:
     // Attach..."), selects it and returns its id ("" when nothing can be added).
     std::string addCompound();
     std::string addAttach();
+    // RUN-11: add a typed editor/player configuration, with editable executable and project.
+    std::string addFrostEditor();
+    std::string addFrostPlayer();
 
     void accept() override;
 
@@ -108,14 +114,17 @@ private:
     bool m_canAddNative = true;
     int m_row = -1;
     bool m_loading = false;
-    QListWidget* m_list = nullptr;
     QPushButton* m_add = nullptr;
     QPushButton* m_copy = nullptr;
     QPushButton* m_remove = nullptr;
+    QListWidget* m_list = nullptr;
     QLineEdit* m_name = nullptr;
     QLabel* m_type = nullptr;
     QLabel* m_target = nullptr;
     QLineEdit* m_program = nullptr;
+    QLineEdit* m_engineProject = nullptr;
+    QPushButton* m_addFrostEditor = nullptr;
+    QPushButton* m_addFrostPlayer = nullptr;
     QLineEdit* m_arguments = nullptr;
     QLineEdit* m_workingDirectory = nullptr;
     QPlainTextEdit* m_environment = nullptr;

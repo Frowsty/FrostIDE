@@ -291,7 +291,7 @@ TEST(WorkbenchFind, DirectoryRolesDecideWhatTheProjectTreeAndFindInFilesWalk) {
     ASSERT_TRUE(app::test::waitFor([&] { return rig.nav().initialScanReady() && !rig.nav().scanPending(); }));
     ASSERT_NE(rig.nav().directoryRoles(), nullptr);
     const auto inTree = [&](std::string_view relative) {
-        return rig.nav().projectFiles().find(dir.join(std::string(relative))).has_value();
+        return rig.nav().projectFiles().find(dir.join(relative)).has_value();
     };
     EXPECT_TRUE(inTree("Renderer/Debug/stats.cpp"));
     EXPECT_TRUE(inTree("vendor/lib.cpp"));
@@ -377,7 +377,7 @@ TEST(WorkbenchFind, NodeModulesAndUnitysGeneratedFoldersAreNeitherListedNorSearc
     EXPECT_EQ(roles->decide(dir.join("Library")).reason, project::DirectoryRoleReason::UnityProject);
     EXPECT_EQ(roles->decide(dir.join("node_modules")).reason, project::DirectoryRoleReason::DependencyName);
     const auto inTree = [&](std::string_view relative) {
-        return rig.nav().projectFiles().find(dir.join(std::string(relative))).has_value();
+        return rig.nav().projectFiles().find(dir.join(relative)).has_value();
     };
     EXPECT_TRUE(inTree("Assets/Scripts/Player.cs"));
     EXPECT_TRUE(inTree("Tools/web/app.js"));

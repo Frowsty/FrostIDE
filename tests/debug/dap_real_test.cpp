@@ -24,11 +24,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cstdlib>
 #include <format>
 #include <future>
 #include <map>
+#include <optional>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #ifdef _WIN32
@@ -95,6 +98,15 @@ std::string field(std::string_view text, std::string_view key) {
         start = end + 1;
     }
     return {};
+}
+
+// Parse complete decimal oracle values, rejecting missing, malformed and out-of-range output.
+std::optional<int> oracleInteger(std::string_view value) {
+    int number = 0;
+    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
+    if (error != std::errc{} || end != value.data() + value.size())
+        return std::nullopt;
+    return number;
 }
 
 // Every line of `text` that starts with `prefix`, without the prefix.
@@ -218,7 +230,7 @@ protected:
     }
 
     // Starts a session as the product does (lldbDapLaunchArguments, lldbDapSessionOptions).
-    void launch(std::vector<std::string> arguments, std::vector<BreakpointLine> lines = {}, Extras extras = {}) {
+    void launch(std::vector<std::string> arguments, std::vector<BreakpointLine> lines = {}, const Extras& extras = {}) {
         DebugSessionOptions options = lldbDapSessionOptions(DebugTargetMode::Launch);
         options.functionBreakpoints = extras.functions;
         options.exceptionFilters = extras.exceptionFilters;
@@ -343,7 +355,8 @@ protected:
 
     // The Locals scope of `frameId` (the selected frame by default).
     std::optional<dap::Scope> localsScope(std::optional<std::int64_t> frameId = std::nullopt) {
-        auto scopes = await<ScopeList>([&](auto done) { m_session->scopes(frameId.value_or(frame().id), done); });
+        auto scopes =
+            await<ScopeList>([&](const auto& done) { m_session->scopes(frameId.value_or(frame().id), done); });
         if (!scopes) {
             ADD_FAILURE() << scopes.error().describe();
             return std::nullopt;
@@ -359,7 +372,7 @@ protected:
     }
 
     VariableList variablesOf(std::int64_t reference) {
-        auto list = await<VariableList>([&](auto done) { m_session->variables(reference, 0, 0, done); });
+        auto list = await<VariableList>([&](const auto& done) { m_session->variables(reference, 0, 0, done); });
         if (!list) {
             ADD_FAILURE() << list.error().describe();
             return {};
@@ -389,8 +402,9 @@ protected:
 
     // "watch": lldb-dap's "repl" context answers in lldb's command style ("(int) $0 = 4").
     Result<dap::Variable> eval(std::string expression, std::string context = "watch") {
-        return await<dap::Variable>(
-            [&](auto done) { m_session->evaluate(std::move(expression), frame().id, std::move(context), done); });
+        return await<dap::Variable>([&](const auto& done) {
+            m_session->evaluate(std::move(expression), frame().id, std::move(context), done);
+        });
     }
 
     std::string evalValue(std::string expression) {
@@ -830,7 +844,9 @@ TEST_F(DapReal, HitCountKeepsStoppingAfterTheNthHit) {
     counted.hitCondition = "3";
     launch({"values"}, {counted});
     ASSERT_TRUE(waitStop(1));
-    const int first = std::atoi(evalValue("i").c_str());
+    const auto parsedFirst = oracleInteger(evalValue("i"));
+    ASSERT_TRUE(parsedFirst);
+    const int first = *parsedFirst;
     ASSERT_TRUE(m_session->continueRun());
     ASSERT_TRUE(waitStop(2));
     EXPECT_EQ(evalValue("i"), std::to_string(first + 1));
@@ -1151,7 +1167,9 @@ TEST_F(DapReal, StackFramesCarryTheSourceAndLines) {
 
 TEST_F(DapReal, RecursionDepthMatchesTheProgram) {
     const io::ProcessResult expected = oracle({"deep"});
-    const int depth = std::atoi(field(expected.stdoutBytes, "depth").c_str());
+    const auto parsedDepth = oracleInteger(field(expected.stdoutBytes, "depth"));
+    ASSERT_TRUE(parsedDepth);
+    const int depth = *parsedDepth;
     ASSERT_GT(depth, 0);
     launch({"deep"}, {at("recurse-bottom")});
     ASSERT_TRUE(waitStop(1));
@@ -1308,8 +1326,12 @@ TEST_F(DapReal, EvaluateComputesFromLocals) {
     const io::ProcessResult expected = oracle({"values"});
     launch({"values"}, {at("values")});
     ASSERT_TRUE(waitStop(1));
-    const int count = std::atoi(field(expected.stdoutBytes, "outer.inner.count").c_str());
-    const int third = std::atoi(field(expected.stdoutBytes, "outer.values[2]").c_str());
+    const auto parsedCount = oracleInteger(field(expected.stdoutBytes, "outer.inner.count"));
+    ASSERT_TRUE(parsedCount);
+    const int count = *parsedCount;
+    const auto parsedThird = oracleInteger(field(expected.stdoutBytes, "outer.values[2]"));
+    ASSERT_TRUE(parsedThird);
+    const int third = *parsedThird;
     EXPECT_EQ(evalValue("outer.inner.count + outer.values[2]"), std::to_string(count + third));
 }
 
@@ -1341,13 +1363,15 @@ TEST_F(DapReal, EvaluateOfAStructGivesChildren) {
 TEST_F(DapReal, SetVariableChangesWhatTheProgramPrints) {
     const io::ProcessResult expected = oracle({"setvar"});
     const std::string original = field(expected.stdoutBytes, "changed");
-    const std::string changed = std::to_string(std::atoi(original.c_str()) + 72);
+    const auto parsedOriginal = oracleInteger(original);
+    ASSERT_TRUE(parsedOriginal);
+    const std::string changed = std::to_string(*parsedOriginal + 72);
     launch({"setvar"}, {at("setvar")});
     ASSERT_TRUE(waitStop(1));
     const auto scope = localsScope();
     ASSERT_TRUE(scope);
     auto set = await<dap::Variable>(
-        [&](auto done) { m_session->setVariable(scope->variablesReference, "changed", changed, done); });
+        [&](const auto& done) { m_session->setVariable(scope->variablesReference, "changed", changed, done); });
     ASSERT_TRUE(set) << set.error().describe();
     ASSERT_TRUE(continueToExit());
     EXPECT_EQ(field(output(), "changed"), changed) << report();
@@ -1359,7 +1383,7 @@ TEST_F(DapReal, SetVariableAnswersWithTheNewValue) {
     const auto scope = localsScope();
     ASSERT_TRUE(scope);
     auto set = await<dap::Variable>(
-        [&](auto done) { m_session->setVariable(scope->variablesReference, "changed", "1234", done); });
+        [&](const auto& done) { m_session->setVariable(scope->variablesReference, "changed", "1234", done); });
     ASSERT_TRUE(set) << set.error().describe();
     EXPECT_EQ(set->value, "1234");
     EXPECT_EQ(local("changed").value, "1234");
@@ -1477,6 +1501,30 @@ TEST_F(DapReal, ContinueFromABreakpointRunsToTheExit) {
 }
 
 // --- Terminate, disconnect, kill ---
+
+TEST_F(DapReal, ExplicitPidBoundTerminationAfterRealPauseAndContinueEndsTheObservedProcess) {
+    launchSpinning();
+    ASSERT_TRUE(test::waitUntil([&] { return m_session->processId().has_value(); }, kWait)) << report();
+    const auto pid = *m_session->processId();
+    EXPECT_TRUE(processAlive(pid));
+    auto wrong = m_session->terminateDebuggee(pid + 1);
+    ASSERT_FALSE(wrong);
+    EXPECT_EQ(wrong.error().code(), ErrorCode::PermissionDenied);
+    ASSERT_TRUE(m_session->pause()) << report();
+    ASSERT_TRUE(waitStop(1)) << report();
+    EXPECT_EQ(m_session->state(), DebugState::Stopped);
+    EXPECT_EQ(m_session->processId(), pid);
+    ASSERT_TRUE(m_session->continueRun()) << report();
+    ASSERT_TRUE(test::waitUntil([&] { return m_session->state() == DebugState::Running; }, kWait)) << report();
+    ASSERT_TRUE(m_session->pause()) << report();
+    ASSERT_TRUE(waitStop(2)) << report();
+    ASSERT_TRUE(m_session->canTerminateDebuggee()) << report();
+    ASSERT_TRUE(m_session->terminateDebuggee(pid)) << report();
+    const auto outcome = waitEnd();
+    ASSERT_TRUE(outcome) << report();
+    EXPECT_TRUE(outcome->stopped);
+    EXPECT_TRUE(test::waitUntil([&] { return !processAlive(pid); }, kWait)) << "the observed native target still runs";
+}
 
 TEST_F(DapReal, StopWhileStoppedEndsTheSessionAndTheProgram) {
     launch({"values"}, {at("values")});

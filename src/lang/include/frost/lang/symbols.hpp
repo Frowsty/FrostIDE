@@ -24,6 +24,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -79,5 +80,25 @@ struct WorkspaceSymbol {
 // workspace/symbol, ranked for `query`. Errors: request's.
 [[nodiscard]] sched::Task<Result<std::vector<WorkspaceSymbol>>>
 requestWorkspaceSymbols(ILspRequester& server, std::string query, std::stop_token token = {});
+
+// Whether `kind` is a class-like symbol shown by Go to Class (Class, Struct, Interface, Enum, Namespace).
+[[nodiscard]] bool isClassLikeSymbol(SymbolKind kind) noexcept;
+
+// Filters ranked workspace symbols to class-like kinds, preserving their rank order.
+[[nodiscard]] std::vector<WorkspaceSymbol> filterWorkspaceClasses(std::vector<WorkspaceSymbol> symbols);
+
+// workspace/symbol filtered to class-like symbols and ranked for `query`. Errors: request's.
+[[nodiscard]] sched::Task<Result<std::vector<WorkspaceSymbol>>>
+requestWorkspaceClasses(ILspRequester& server, std::string query, std::stop_token token = {});
+
+struct WorkspaceFile {
+    std::string path;
+    std::string fileName;
+    FuzzyMatch match;
+};
+
+// Workspace files matching `query` (by file name, or by path when `query` contains '/' or '\\'),
+// ranked by match kind, score, shorter file name, then path.
+[[nodiscard]] std::vector<WorkspaceFile> rankWorkspaceFiles(std::span<const std::string> paths, std::string_view query);
 
 } // namespace frost::lang

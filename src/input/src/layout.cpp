@@ -78,7 +78,6 @@ Key numLockOffKey(Code code) noexcept {
     case Code::Numpad3: return Key::PageDown;
     case Code::Numpad0: return Key::Insert;
     case Code::NumpadDecimal: return Key::Delete;
-    case Code::Numpad5: return Key::None;
     default: return Key::None;
     }
 }
@@ -189,8 +188,6 @@ void appendStrokeText(std::string& out, Stroke stroke, const LayoutTable& layout
         appendName(out, "Num", false);
         out.push_back(' ');
         out.push_back(static_cast<char>('0' + (index(key) - index(Key::Numpad0))));
-    } else if (isFunctionKey(key)) {
-        out += keyName(key);
     } else if (isTypingKey(key) && key != Key::Space) {
         const char32_t label = layout.labelFor(key);
         appendUtf8(out, label != 0 ? simpleUpper(label) : simpleUpper(static_cast<unsigned char>(usCharForKey(key))));

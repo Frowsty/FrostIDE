@@ -484,10 +484,8 @@ Result<Sequence> parseLenient(std::string_view text) {
             std::size_t keySigns = 0;
             if (atStrokeStart) {
                 keySigns = signs.size(); // "+" or "-" at a stroke's start is the key itself.
-            } else if (signs.size() == 2) {
-                keySigns = 1; // "ctrl+-": the second is the key.
-            } else if (signs.size() == 1 && atEnd) {
-                keySigns = 1; // "ctrl+": a separator at the end is the key.
+            } else if (signs.size() == 2 || (signs.size() == 1 && atEnd)) {
+                keySigns = 1; // "ctrl+-" uses its second sign; a final "ctrl+" uses its separator.
             }
             for (std::size_t s = signs.size() - keySigns; s < signs.size(); ++s) {
                 if (auto added = addKey(signs[s] == '+' ? Key::Equal : Key::Minus, runStart + 1); !added) {
@@ -583,8 +581,7 @@ Key keyForUsChar(char32_t c) noexcept {
         return Key::None;
     }
     const std::size_t at = kUsKeyChars.find(static_cast<char>(c));
-    return at == std::string_view::npos || at >= kUsKeyChars.size() - 1 ? Key::None
-                                                                        : static_cast<Key>(index(Key::A) + at);
+    return at >= kUsKeyChars.size() - 1 ? Key::None : static_cast<Key>(index(Key::A) + at);
 }
 
 char usCharForKey(Key key) noexcept {
