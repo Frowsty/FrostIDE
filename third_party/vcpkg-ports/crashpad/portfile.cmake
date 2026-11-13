@@ -37,6 +37,8 @@ vcpkg_from_git(
         frost-getopt.patch
         # FrostIDE: the handler pipe admits the current user and SYSTEM only.
         frost-pipe-dacl.patch
+        # The pinned LLVM ASan dispatcher selects faults before Crashpad's user filter.
+        frost-asan-seh-dispatch.patch
 )
 
 vcpkg_find_acquire_program(PYTHON3)
@@ -208,10 +210,17 @@ elseif(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW AND VCPKG_TARGET_AR
             message(FATAL_ERROR "crashpad (FrostIDE overlay): no ASan runtime in ${frost_asan_dir}")
         endif()
         foreach(frost_config IN ITEMS DEBUG RELEASE)
+            # Match Crashpad's sanitizer integration: its instrumented vectored heap
+            # handler can recurse while processing an exception (crashpad_client_win.cc).
+            string(APPEND VCPKG_COMBINED_C_FLAGS_${frost_config} " -DADDRESS_SANITIZER=1")
+            string(APPEND VCPKG_COMBINED_CXX_FLAGS_${frost_config} " -DADDRESS_SANITIZER=1")
             string(APPEND VCPKG_COMBINED_EXE_LINKER_FLAGS_${frost_config}
                 " \"/LIBPATH:${frost_asan_dir}\" clang_rt.asan_dynamic-x86_64.lib"
                 " /INCLUDE:__asan_seh_interceptor"
-                " \"/WHOLEARCHIVE:${frost_asan_dir}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib\"")
+                " \"/WHOLEARCHIVE:${frost_asan_dir}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib\""
+                # Keep empty/suffix literals out of other instrumented globals' redzones.
+                # https://github.com/llvm/llvm-project/issues/62078
+                " /OPT:NOLLDTAILMERGE")
         endforeach()
     endif()
     set(link_flags_var EXE)

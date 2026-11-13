@@ -9,6 +9,8 @@
 //
 //   av-main                  selfTestCrash() on the main thread (write to 0xF00D)
 //   av-worker                selfTestCrash() on a std::thread
+//   asan-heap-overflow       ASan builds: a real heap overflow after reporter registration
+//   asan-global-overflow     ASan builds: a real global overflow after reporter registration
 //   stack-overflow           unbounded recursion on the main thread
 //   contract-enforce         a FROST_PRE violation under enforce (contractEnforceSite)
 //   contract-quick           a FROST_PRE violation under quick_enforce (crash_child_quick.cpp)
@@ -74,6 +76,10 @@ void contractQuickSite(int value);
 } // namespace frost::test
 
 namespace {
+
+#if defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer)
+volatile char g_asanGlobalBuffer[4] = {};
+#endif
 
 void say(std::string_view line) { std::cout << line << '\n' << std::flush; }
 
@@ -242,6 +248,15 @@ int main(int argc, char** argv) {
 
     if (mode == "av-main") {
         frost::diag::selfTestCrash();
+#if defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer)
+    } else if (mode == "asan-heap-overflow") {
+        volatile char* buffer = new char[4];
+        buffer[4] = 1;
+        delete[] buffer;
+    } else if (mode == "asan-global-overflow") {
+        volatile unsigned index = sizeof(g_asanGlobalBuffer);
+        g_asanGlobalBuffer[index] = 1;
+#endif
     } else if (mode == "av-worker") {
         std::thread([] { frost::diag::selfTestCrash(); }).join();
     } else if (mode == "stack-overflow") {
