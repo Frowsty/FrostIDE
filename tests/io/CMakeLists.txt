@@ -19,6 +19,7 @@
 frost_add_test(io_unit_tests
     SOURCES
         change_coalescer_test.cpp
+        file_transaction_plan_test.cpp
         ignore_rules_test.cpp
         mem_fs_test.cpp
         mem_fs_watcher_test.cpp

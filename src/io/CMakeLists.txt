@@ -13,6 +13,7 @@ set(frost_io_sources
     src/async_process.cpp
     src/change_coalescer.cpp
     src/file_system.cpp
+    src/file_transaction_plan.cpp
     src/ignore_rules.cpp
     src/internal.cpp
     src/loopback_stream.cpp
