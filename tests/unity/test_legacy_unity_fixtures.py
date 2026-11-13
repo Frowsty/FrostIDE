@@ -277,7 +277,10 @@ class WindowsGuardPrimitives(unittest.TestCase):
                           "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
                           "print(child.pid,flush=True); time.sleep(30)")
                 log = directory / "child.log"
-                job.start([sys.executable, "-c", script], dict(os.environ), directory, log)
+                # A Windows venv executable redirects to a second interpreter process.
+                # Use the base interpreter so the exact two-process ownership oracle holds.
+                python = getattr(sys, "_base_executable", None) or sys.executable
+                job.start([python, "-c", script], dict(os.environ), directory, log)
                 deadline = time.monotonic() + 10
                 child = None
                 while time.monotonic() < deadline:

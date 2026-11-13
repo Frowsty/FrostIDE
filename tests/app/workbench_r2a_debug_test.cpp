@@ -330,8 +330,8 @@ TEST(WorkbenchR2a, NotepadPlusPlusDebuggerAcceptance) {
             variables->fetchMore(scope);
         ASSERT_TRUE(waitFor([&] { return variables->rowCount(scope) > 0 || variables->pendingRequests() == 0; }, 120s))
             << "scope=" << scopeName.toStdString() << " pending=" << variables->pendingRequests();
-        for (int child = 0; child < variables->rowCount(scope); ++child) {
-            const auto item = variables->index(child, 0, scope);
+        for (int childRow = 0; childRow < variables->rowCount(scope); ++childRow) {
+            const auto item = variables->index(childRow, 0, scope);
             if (variables->data(item, Qt::DisplayRole).toString() == QStringLiteral("pCmdLine")) {
                 foundCommandLine = true;
                 EXPECT_TRUE(variables->valueAt(item.siblingAtColumn(1)).contains(QStringLiteral("multiInst")));

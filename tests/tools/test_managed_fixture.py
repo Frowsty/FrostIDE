@@ -10,8 +10,9 @@ import sys
 import unittest
 from unittest import mock
 
-import managed_fixture
 from tools_test_support import TempDirTestCase
+
+import managed_fixture
 
 
 FEED = "ManagedE2E.InheritedProfilePreservesCustomNugetFeed"
