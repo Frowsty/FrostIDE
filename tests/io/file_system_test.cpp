@@ -1052,4 +1052,49 @@ TEST(ScratchDirSupport, JoinRecordsAFailureForARejectedName) {
     EXPECT_EQ(joined, "");
 }
 
+TEST(RealFileSystem, PhysicalPathResolvesRealAliasesWithoutChangingDocumentSpelling) {
+    const ScratchDir dir("fs-physical-path");
+    ASSERT_TRUE(fs().createDirectories(dir.join("target/sub")));
+    ASSERT_TRUE(fs().writeFileAtomic(dir.join("target/sub/file.txt"), "actual target"));
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryLink(dir.join("alias"), dir.join("target")));
+    const auto oracle = std::filesystem::canonical(frost::io::toStdPath(dir.join("target/sub/file.txt")).value());
+    const auto expected = frost::io::fromStdPath(oracle);
+    ASSERT_TRUE(expected);
+    const auto resolved = fs().physicalPath(dir.join("alias/sub/file.txt"));
+    ASSERT_TRUE(resolved) << resolved.error().describe();
+    EXPECT_EQ(*resolved, *expected);
+    EXPECT_NE(fs().canonicalPath(dir.join("alias/sub/file.txt")).value(), *resolved);
+    EXPECT_EQ(fs().readFile(*resolved).value(), "actual target");
+    const auto missing = fs().physicalPath(dir.join("alias/missing"));
+    ASSERT_FALSE(missing);
+    EXPECT_EQ(missing.error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(fs().physicalPath("relative").error().code(), ErrorCode::InvalidArgument);
+    using frost::io::IFileSystem;
+    EXPECT_EQ(fs().IFileSystem::physicalPath(dir.path()).error().code(), ErrorCode::Unsupported);
+    // A retarget changes physical admission, while the document-spelling API keeps its contract.
+    ASSERT_TRUE(fs().createDirectories(dir.join("replacement/sub")));
+    ASSERT_TRUE(fs().writeFileAtomic(dir.join("replacement/sub/file.txt"), "replacement"));
+    ASSERT_TRUE(fs().removeFile(dir.join("alias")));
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryLink(dir.join("alias"), dir.join("replacement")));
+    const auto replaced = fs().physicalPath(dir.join("alias/sub/file.txt"));
+    ASSERT_TRUE(replaced);
+    EXPECT_NE(*replaced, *resolved);
+    EXPECT_EQ(fs().readFile(*replaced).value(), "replacement");
+    EXPECT_EQ(fs().readFile(*resolved).value(), "actual target");
+    ASSERT_TRUE(fs().removeFile(dir.join("alias")));
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryLink(dir.join("alias"), dir.join("absent")));
+    EXPECT_FALSE(fs().physicalPath(dir.join("alias")));
+}
+
+#ifndef _WIN32
+TEST(RealFileSystem, PhysicalPathFollowsFinalFileLinksAndRefusesCycles) {
+    const ScratchDir dir("fs-physical-final-link");
+    ASSERT_TRUE(fs().writeFileAtomic(dir.join("target.txt"), "kept"));
+    ASSERT_EQ(symlink(dir.join("target.txt").c_str(), dir.join("alias.txt").c_str()), 0);
+    EXPECT_EQ(fs().physicalPath(dir.join("alias.txt")).value(), fs().physicalPath(dir.join("target.txt")).value());
+    ASSERT_EQ(symlink(dir.join("cycle").c_str(), dir.join("cycle").c_str()), 0);
+    EXPECT_FALSE(fs().physicalPath(dir.join("cycle")));
+}
+#endif
+
 } // namespace

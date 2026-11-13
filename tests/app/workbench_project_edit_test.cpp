@@ -81,6 +81,7 @@ public:
     frost::Result<void> removeDirectory(std::string_view path) override { return m_real.removeDirectory(path); }
     frost::Result<bool> exists(std::string_view path) override { return m_real.exists(path); }
     frost::Result<std::string> canonicalPath(std::string_view path) override { return m_real.canonicalPath(path); }
+    frost::Result<std::string> physicalPath(std::string_view path) override { return m_real.physicalPath(path); }
     void arm() { m_arm.store(true); }
 
 private:

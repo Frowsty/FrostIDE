@@ -1104,6 +1104,22 @@ public:
         return {};
     }
 
+    Result<std::string> physicalPath(std::string_view path) override {
+        auto normalized = normalizePath(path, PathStyle::Windows);
+        if (!normalized)
+            return std::unexpected(normalized.error());
+        auto wide = toWin32Path(*normalized);
+        if (!wide)
+            return std::unexpected(wide.error());
+        // Follow the final reparse point as well as every parent; canonicalPath deliberately
+        // opens the link itself to preserve document spelling and must remain separate.
+        const UniqueHandle handle(
+            CreateFileW(wide->c_str(), 0, kShareAll, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+        if (!handle.valid())
+            return std::unexpected(lastWin32Error("physicalPath", path));
+        return finalPathOfHandle(handle.get(), "physicalPath", path);
+    }
+
     /*
      * One spelling per file (ADR 0042, ADR 0044): the real case of every component. The fast path
      * is GetFinalPathNameByHandleW, used when its answer differs from the normalised input in ASCII

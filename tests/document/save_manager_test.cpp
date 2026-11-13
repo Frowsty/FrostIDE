@@ -314,6 +314,7 @@ public:
     Result<void> removeDirectory(std::string_view p) override { return m_fs.removeDirectory(p); }
     Result<bool> exists(std::string_view p) override { return m_fs.exists(p); }
     Result<std::string> canonicalPath(std::string_view p) override { return m_fs.canonicalPath(p); }
+    Result<std::string> physicalPath(std::string_view p) override { return m_fs.physicalPath(p); }
     Result<io::SafeWriteResult> safeWrite(std::string_view p, std::string_view d,
                                           const io::SafeWriteOptions& options) override {
         auto result = m_fs.safeWrite(p, d, options);

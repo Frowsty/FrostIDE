@@ -99,6 +99,7 @@ public:
     Result<void> rename(std::string_view from, std::string_view to) override { return m_inner.rename(from, to); }
     Result<bool> exists(std::string_view path) override { return m_inner.exists(path); }
     Result<std::string> canonicalPath(std::string_view path) override { return m_inner.canonicalPath(path); }
+    Result<std::string> physicalPath(std::string_view path) override { return m_inner.physicalPath(path); }
 
     std::set<std::string> huge;
     bool warnOnSave = false;

@@ -348,4 +348,17 @@ TEST(MemFs, ConcurrentWritersDoNotInterfere) {
     }
 }
 
+TEST_F(MemFsTest, PhysicalPathRequiresAnExistingModeledTargetAndRetainsFaults) {
+    ASSERT_TRUE(iface.writeFileAtomic("/proj/item", "bytes"));
+    EXPECT_EQ(iface.physicalPath("/proj/src/../item").value(), "/proj/item");
+    EXPECT_EQ(iface.physicalPath("/proj/src").value(), "/proj/src");
+    EXPECT_EQ(iface.physicalPath("/missing").error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(iface.physicalPath("/missing/../proj/item").error().code(), ErrorCode::NotFound);
+    EXPECT_EQ(iface.physicalPath("relative").error().code(), ErrorCode::InvalidArgument);
+    fs.injectFault(FsOp::Exists, "/proj/item", ErrorCode::PermissionDenied);
+    EXPECT_EQ(iface.physicalPath("/proj/item").error().code(), ErrorCode::PermissionDenied);
+    EXPECT_EQ(fs.pendingFaults(), 0U);
+    EXPECT_EQ(iface.physicalPath("/proj/item").value(), "/proj/item");
+}
+
 } // namespace

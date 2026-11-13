@@ -3,6 +3,7 @@
 // establish persistent authenticated EngineSessions, receive real state and disconnect on owned Stop.
 
 #include "frost/engine/session.hpp"
+#include "frost/io/async_process.hpp"
 #include "frost/run/run_configuration.hpp"
 #include "frost/run/run_manager.hpp"
 

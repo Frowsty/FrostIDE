@@ -87,6 +87,10 @@ Result<void> IFileSystem::removeAll(std::string_view path) {
     return removeDirectory(path);
 }
 
+Result<std::string> IFileSystem::physicalPath(std::string_view /*path*/) {
+    return fail(ErrorCode::Unsupported, "physical path resolution is unavailable");
+}
+
 Result<std::string> IFileSystem::canonicalPath(std::string_view path) {
     auto normalized = normalizePath(path);
     if (!normalized) {

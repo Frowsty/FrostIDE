@@ -106,6 +106,7 @@ public:
     frost::Result<void> removeDirectory(std::string_view path) override { return inner.removeDirectory(path); }
     frost::Result<bool> exists(std::string_view path) override { return inner.exists(path); }
     frost::Result<std::string> canonicalPath(std::string_view path) override { return inner.canonicalPath(path); }
+    frost::Result<std::string> physicalPath(std::string_view path) override { return inner.physicalPath(path); }
     bool warn = false;
 
 private:

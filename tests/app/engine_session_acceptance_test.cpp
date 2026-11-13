@@ -6,6 +6,7 @@
 #include "frost/run/run_manager.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
+#include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/engine_console.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 

@@ -689,6 +689,18 @@ public:
         return std::unexpected(std::move(result.error()));
     }
 
+    Result<std::string> physicalPath(std::string_view path) override {
+        auto normalized = normalizePath(path, PathStyle::Posix);
+        if (!normalized)
+            return std::unexpected(normalized.error());
+        char* resolved = ::realpath(normalized->c_str(), nullptr);
+        if (!resolved)
+            return std::unexpected(errnoError(errno, "physicalPath", path));
+        std::string result(resolved);
+        std::free(resolved); // NOLINT(cppcoreguidelines-no-malloc): realpath allocates with malloc.
+        return result;
+    }
+
     /*
      * The lexical normal form, except that a path with a ".." component takes realpath's answer:
      * normalizePath keeps ".." on POSIX (through a symbolic link it is not lexical), so ".../Lib/../a"
