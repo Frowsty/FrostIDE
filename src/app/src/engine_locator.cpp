@@ -104,7 +104,7 @@ Result<std::vector<EngineInstanceRecord>> listEngineInstances(io::IFileSystem& f
                                                               std::string_view projectRoot, std::stop_token stop) {
     if (!io::isAbsolutePath(automationDirectory) || !io::isAbsolutePath(projectRoot))
         return fail(ErrorCode::InvalidArgument, "FrostEngine instance discovery requires absolute paths");
-    auto physicalRoot = fs.canonicalPath(projectRoot);
+    auto physicalRoot = fs.physicalPath(projectRoot);
     if (!physicalRoot)
         return std::unexpected(physicalRoot.error());
     const std::string rootKey = lang::documentKey(*physicalRoot);
@@ -163,7 +163,7 @@ Result<std::vector<EngineInstanceRecord>> listEngineInstances(io::IFileSystem& f
             continue;
         if (!io::isAbsolutePath(document->stringAt("projectPath")))
             continue;
-        auto project = fs.canonicalPath(document->stringAt("projectPath"));
+        auto project = fs.physicalPath(document->stringAt("projectPath"));
         if (!project || lang::documentKey(*project) != rootKey)
             continue;
         const std::string instance(document->stringAt("instanceId"));
@@ -181,7 +181,7 @@ bool retainEngineProjectIdentity(io::IFileSystem& fs, std::string_view lexicalRo
                                  const std::shared_ptr<std::atomic<bool>>& admission) {
     if (!admission->load())
         return false;
-    auto current = fs.canonicalPath(lexicalRoot);
+    auto current = fs.physicalPath(lexicalRoot);
     if (!current || lang::documentKey(*current) != originalKey) {
         admission->store(false);
         return false;

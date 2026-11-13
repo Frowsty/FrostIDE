@@ -209,7 +209,7 @@ Result<ProjectContent> loadProjectContent(io::IFileSystem& fs, io::IProcessLaunc
     const bool inputFile = inputStatus->type == io::FileType::Regular && projectFileName(*project);
     if (!inputFile && inputStatus->type != io::FileType::Directory)
         return fail(ErrorCode::InvalidArgument, "engine content needs a project directory or .frostproj");
-    auto expectedRoot = fs.canonicalPath(inputFile ? io::parentPath(*project) : *project);
+    auto expectedRoot = fs.physicalPath(inputFile ? io::parentPath(*project) : *project);
     if (!expectedRoot)
         return std::unexpected(std::move(expectedRoot.error()));
     auto invoke = [&](std::string command) -> Result<rpc::Json> {
@@ -232,13 +232,13 @@ Result<ProjectContent> loadProjectContent(io::IFileSystem& fs, io::IProcessLaunc
     auto file = pathMember(*info, "projectFile");
     if (!root || !file)
         return fail(ErrorCode::Corrupt, "project.info did not identify a project");
-    auto physicalRoot = fs.canonicalPath(*root);
-    auto physicalFile = fs.canonicalPath(*file);
+    auto physicalRoot = fs.physicalPath(*root);
+    auto physicalFile = fs.physicalPath(*file);
     if (!physicalRoot || !physicalFile || !samePath(*physicalRoot, *expectedRoot) ||
         !samePath(io::parentPath(*physicalFile), *expectedRoot))
         return fail(ErrorCode::Corrupt, "project.info belongs to a different project");
     if (inputFile) {
-        auto expectedFile = fs.canonicalPath(*project);
+        auto expectedFile = fs.physicalPath(*project);
         if (!expectedFile || !samePath(*expectedFile, *physicalFile))
             return fail(ErrorCode::Corrupt, "project.info identified a different .frostproj");
     }
@@ -251,7 +251,7 @@ Result<ProjectContent> loadProjectContent(io::IFileSystem& fs, io::IProcessLaunc
     auto content = parseProjectContent(*document, *info, *assets);
     if (!content)
         return content;
-    auto physicalAssets = fs.canonicalPath(content->assetsDirectory);
+    auto physicalAssets = fs.physicalPath(content->assetsDirectory);
     if (!physicalAssets || !beneath(*physicalAssets, *expectedRoot))
         return fail(ErrorCode::Corrupt, "the engine's assets directory escapes the project");
     if (!stillTrusted())
@@ -269,9 +269,9 @@ Result<std::string> resolveProjectAsset(io::IFileSystem& fs, const ProjectConten
     auto path = io::joinPath(content.directory, relativePath);
     if (!path)
         return std::unexpected(std::move(path.error()));
-    auto physical = fs.canonicalPath(*path);
-    auto root = fs.canonicalPath(content.assetsDirectory);
-    auto projectRoot = fs.canonicalPath(content.directory);
+    auto physical = fs.physicalPath(*path);
+    auto root = fs.physicalPath(content.assetsDirectory);
+    auto projectRoot = fs.physicalPath(content.directory);
     if (!physical)
         return std::unexpected(std::move(physical.error()));
     if (!root)

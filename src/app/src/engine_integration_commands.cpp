@@ -47,7 +47,7 @@ Result<void> EngineIntegration::validateScript() {
                      expectedProjectKey, admission, revision, stop, path, source] {
         if (stop.stop_requested() || !retainEngineProjectIdentity(*fs, expectedRoot, expectedProjectKey, admission))
             return;
-        auto actual = fs->canonicalPath(path);
+        auto actual = fs->physicalPath(path);
         Result<lang::Json> params =
             fail(ErrorCode::InvalidArgument, "The script is outside this project's Assets folder");
         if (actual) {

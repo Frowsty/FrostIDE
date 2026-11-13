@@ -31,7 +31,7 @@ Result<std::string> sourcePath(io::IFileSystem& fs, std::string_view physicalRoo
     auto absolute = io::isAbsolutePath(file) ? io::normalizePath(file) : io::joinPath(physicalRoot, file);
     if (!absolute)
         return std::unexpected(absolute.error());
-    auto path = fs.canonicalPath(*absolute);
+    auto path = fs.physicalPath(*absolute);
     if (!path || !within(physicalRoot, *path))
         return fail(ErrorCode::PermissionDenied, "Engine source is outside the selected physical project");
     const QString suffix = qs(io::fileName(*path)).section(QLatin1Char('.'), -1).toLower();

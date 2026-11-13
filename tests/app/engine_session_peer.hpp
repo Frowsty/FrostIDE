@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -109,6 +110,12 @@ public:
     std::atomic<bool> stallChallenge{false}, closed{false}, heartbeats{true};
     std::atomic<std::int64_t> processId{0};
     std::atomic<unsigned> authenticated{0};
+    // Copied under the peer mutex and invoked outside it on the owned network thread after
+    // recording a real request, before replying. Captures must outlive this peer (joined on teardown).
+    void setBeforeReply(std::function<void(std::string_view)> callback) {
+        std::lock_guard lock(m_mutex);
+        m_beforeReply = std::move(callback);
+    }
     std::vector<Json> requests(std::string_view method) const {
         std::lock_guard lock(m_mutex);
         std::vector<Json> found;
@@ -349,6 +356,13 @@ private:
                     std::lock_guard lock(m_mutex);
                     m_requests.push_back(*request);
                 }
+                std::function<void(std::string_view)> beforeReply;
+                {
+                    std::lock_guard lock(m_mutex);
+                    beforeReply = m_beforeReply;
+                }
+                if (beforeReply)
+                    beforeReply(method);
                 Json result;
                 if (method == "auth.challenge") {
                     if (stallChallenge.load())
@@ -469,6 +483,7 @@ private:
     std::uint16_t m_port = 0;
     std::jthread m_worker;
     mutable std::mutex m_mutex;
+    std::function<void(std::string_view)> m_beforeReply;
     std::vector<Json> m_requests;
     std::map<std::string, std::size_t> m_replied;
     std::set<std::string> m_held;

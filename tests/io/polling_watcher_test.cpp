@@ -11,6 +11,7 @@
 #include "frost/io/file_watcher.hpp"
 #include "frost/io/path.hpp"
 
+#include "support/directory_link.hpp"
 #include "support/scratch_dir.hpp"
 #include "support/watch_mirror.hpp"
 #include "watch_env.hpp"
@@ -137,11 +138,7 @@ TEST(PollingWatcher, DirectorySymlinksAreNotFollowed) {
     frost::test::ScratchDir scratch("poll-link");
     frost::test::writePlain(nativeJoin(outside.path(), "secret"), "s");
     std::error_code error;
-    std::filesystem::create_directory_symlink(frost::io::toStdPath(outside.path()).value(),
-                                              frost::io::toStdPath(nativeJoin(scratch.path(), "link")).value(), error);
-    if (error) {
-        GTEST_SKIP() << "cannot create a directory symlink here: " << error.message();
-    }
+    ASSERT_NO_FATAL_FAILURE(frost::test::makeDirectoryLink(nativeJoin(scratch.path(), "link"), outside.path()));
     WatchEnv env;
     auto watch = env.watch(scratch.path(), polling());
     ASSERT_TRUE(watch);

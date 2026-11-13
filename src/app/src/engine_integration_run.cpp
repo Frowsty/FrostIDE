@@ -203,7 +203,7 @@ std::function<Result<void>()> EngineIntegration::launchAdmissionFor(const run::R
         if (!retainEngineProjectIdentity(*admission->fs, admission->root, admission->projectKey,
                                          admission->physicalAdmission))
             return fail(ErrorCode::PermissionDenied, "The physical project changed before engine launch");
-        auto project = admission->fs->canonicalPath(admission->project);
+        auto project = admission->fs->physicalPath(admission->project);
         if (!project)
             return std::unexpected(project.error());
         auto status = admission->fs->status(*project);
@@ -255,7 +255,7 @@ EngineIntegration::launchPlanFor(const run::RunConfiguration& configuration) con
         if (plan.arguments.size() < 2 || plan.arguments.front() != "--project" ||
             plan.arguments[1] != admission->project)
             return fail(ErrorCode::InvalidArgument, "Engine launch plan lost its declared project argument");
-        auto project = admission->fs->canonicalPath(admission->project);
+        auto project = admission->fs->physicalPath(admission->project);
         if (!project)
             return std::unexpected(project.error());
         auto status = admission->fs->status(*project);
@@ -369,7 +369,7 @@ void EngineIntegration::Impl::endpointFromOutput() {
                     port = static_cast<std::uint16_t>(*port), record = std::move(record)]() mutable {
             if (!retainEngineProjectIdentity(*fs, expectedRoot, originalKey, admission))
                 return;
-            auto physical = fs->canonicalPath(record.stringAt("projectPath"));
+            auto physical = fs->physicalPath(record.stringAt("projectPath"));
             Result<EngineInstanceRecord> instance =
                 fail(ErrorCode::PermissionDenied, "FrostEngine startup reported a different physical project");
             if (physical && lang::documentKey(*physical) == originalKey)

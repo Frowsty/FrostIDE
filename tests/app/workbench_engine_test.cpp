@@ -13,6 +13,7 @@
 #include "frost/ui/toolwindows/build_controller.hpp"
 #include "frost/ui/toolwindows/engine_console.hpp"
 
+#include "engine_request_helper.hpp"
 #include "engine_session_peer.hpp"
 #include "workbench_rig.hpp"
 #include <QLabel>
@@ -20,14 +21,22 @@
 #include <QTreeWidget>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <string_view>
 #include <thread>
+
+#ifdef _WIN32
+#include "frost/io/utf.hpp"
+
+#include <windows.h>
+#endif
 
 namespace {
 using namespace std::chrono_literals;
@@ -45,6 +54,55 @@ bool hasStatus(QWidget* panel, const QString& text) {
             return true;
     return false;
 }
+// A physical directory alias: Windows junctions require no symlink privilege. Failure is a
+// fixture failure, never a skipped canonical-identity regression. ScratchDir unlinks aliases.
+void makeDirectoryAlias(const std::string& target, const std::string& alias) {
+#ifdef _WIN32
+    std::array<wchar_t, MAX_PATH> system{};
+    const UINT length = GetSystemDirectoryW(system.data(), MAX_PATH);
+    ASSERT_GT(length, 0U);
+    ASSERT_LT(length, system.size());
+    const auto systemPath = frost::io::fromWide(std::wstring_view(system.data(), length));
+    ASSERT_TRUE(systemPath);
+    frost::io::ProcessSpec spec;
+    spec.executable = *systemPath + "\\cmd.exe";
+    spec.arguments = {"/d", "/c", "mklink", "/J", alias, target};
+    spec.stderrMode = frost::io::Stdio::MergeIntoStdout;
+    const auto made = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, "", 30s);
+    ASSERT_TRUE(made) << made.error().describe();
+    ASSERT_EQ(made->exitCode, 0) << made->stdoutBytes;
+#else
+    const auto targetPath = frost::io::toStdPath(target), aliasPath = frost::io::toStdPath(alias);
+    ASSERT_TRUE(targetPath && aliasPath);
+    std::error_code error;
+    std::filesystem::create_directory_symlink(*targetPath, *aliasPath, error);
+    ASSERT_FALSE(error) << error.message();
+#endif
+    const auto targetPathForOracle = frost::io::toStdPath(target);
+    const auto aliasPathForOracle = frost::io::toStdPath(alias);
+    ASSERT_TRUE(targetPathForOracle && aliasPathForOracle);
+    std::error_code targetError, aliasError;
+    const auto physicalTarget = std::filesystem::canonical(*targetPathForOracle, targetError);
+    const auto physicalAlias = std::filesystem::canonical(*aliasPathForOracle, aliasError);
+    ASSERT_FALSE(targetError) << targetError.message();
+    ASSERT_FALSE(aliasError) << aliasError.message();
+    ASSERT_EQ(physicalAlias, physicalTarget);
+}
+
+#ifdef _WIN32
+// A real NTFS file alias with an unchanged parent, unlike retargeting a directory junction.
+DWORD setProjectShortName(const std::filesystem::path& target, const wchar_t* name) {
+    const HANDLE file = CreateFileW(target.c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    nullptr, OPEN_EXISTING, 0, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return GetLastError();
+    const BOOL changed = SetFileShortNameW(file, name);
+    const DWORD error = changed ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(file);
+    return error;
+}
+#endif
+
 void advertise(const WorkDir& dir, const EngineSessionPeer& peer, std::string_view project = {}) {
     dir.write("automation/Instances/" + peer.instanceId() + ".json", peer.record(project).dump());
 }
@@ -342,13 +400,7 @@ TEST(WorkbenchEngine, DiscoveryFindsAliasRecordInsteadOfOtherProjectFallback) {
     WorkDir dir("engine-alias-record");
     dir.write("project/Game.frostproj", "{}");
     dir.write("other/Other.frostproj", "{}");
-    auto root = frost::io::toStdPath(dir.join("project"));
-    auto alias = frost::io::toStdPath(dir.join("alias"));
-    ASSERT_TRUE(root && alias);
-    std::error_code error;
-    std::filesystem::create_directory_symlink(*root, *alias, error);
-    if (error)
-        GTEST_SKIP() << "directory symbolic links unavailable: " << error.message();
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryAlias(dir.join("project"), dir.join("alias")));
     EngineSessionPeer peer(dir.join("project"));
     EngineSessionPeer other(dir.join("other"), 'b');
     advertise(dir, peer, dir.join("alias"));
@@ -375,13 +427,7 @@ TEST(WorkbenchEngine, PairsCanonicalRecordWhenWorkspaceWasOpenedThroughAlias) {
     WorkDir dir("engine-alias-workspace");
     dir.write("project/Game.frostproj", "{}");
     dir.write("other/Other.frostproj", "{}");
-    auto root = frost::io::toStdPath(dir.join("project"));
-    auto alias = frost::io::toStdPath(dir.join("alias"));
-    ASSERT_TRUE(root && alias);
-    std::error_code error;
-    std::filesystem::create_directory_symlink(*root, *alias, error);
-    if (error)
-        GTEST_SKIP() << "directory symbolic links unavailable: " << error.message();
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryAlias(dir.join("project"), dir.join("alias")));
     EngineSessionPeer peer(dir.join("project"));
     EngineSessionPeer other(dir.join("other"), 'b');
     advertise(dir, peer);
@@ -501,6 +547,104 @@ TEST(WorkbenchEngine, ResultActivationRevalidatesLocationBeforeOpening) {
     EXPECT_EQ(rig.workbench->currentView()->status().line, 2);
     EXPECT_TRUE(peer.requests("navigation.resolve").empty()); // Local worker revalidates physical containment.
 }
+TEST(WorkbenchEngine, RealDirectoryAliasCannotExposeOutOfProjectDiagnosticLocations) {
+    WorkDir dir("engine-physical-diagnostic");
+    dir.write("project/Game.frostproj", "{}");
+    dir.write("project/Assets/Inside/Script.lua", "return {}\n");
+    dir.write("outside/Script.lua", "return 'outside'\n");
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryAlias(dir.join("outside"), dir.join("project/Assets/Escape")));
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryAlias(dir.join("project/Assets/Inside"), dir.join("project/Assets/Alias")));
+    EngineSessionPeer peer(dir.join("project"));
+    advertise(dir, peer);
+    WorkbenchRig rig(dir, peerOptions(dir));
+    ASSERT_TRUE(openTrusted(rig, dir.join("project")));
+    ASSERT_TRUE(pairPeer(rig, peer));
+    auto* output = console(rig);
+    ASSERT_NE(output, nullptr);
+    peer.log("escaped diagnostic", "Assets/Escape/Script.lua", 1);
+    ASSERT_TRUE(waitFor([&] { return rowContaining(output, QStringLiteral("escaped diagnostic")) != nullptr; }, 3s));
+    auto* escaped = rowContaining(output, QStringLiteral("escaped diagnostic"));
+    EXPECT_EQ(escaped->childCount(), 0);
+    EXPECT_FALSE(output->activate(escaped));
+    EXPECT_EQ(rig.workbench->currentView(), nullptr);
+    peer.log("in-project alias diagnostic", "Assets/Alias/Script.lua", 1);
+    ASSERT_TRUE(
+        waitFor([&] { return rowContaining(output, QStringLiteral("in-project alias diagnostic")) != nullptr; }, 3s));
+    auto* inside = rowContaining(output, QStringLiteral("in-project alias diagnostic"));
+    ASSERT_GT(inside->childCount(), 0);
+    EXPECT_TRUE(output->activate(inside));
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->currentView() != nullptr; }, 3s));
+    EXPECT_EQ(rig.workbench->currentView()->path(),
+              frost::io::realFileSystem().physicalPath(dir.join("project/Assets/Inside/Script.lua")).value());
+    EXPECT_TRUE(peer.requests("navigation.resolve").empty());
+}
+
+TEST(WorkbenchEngine, RetargetingRealWorkspaceAliasRevokesItsOriginalPhysicalAdmission) {
+    WorkDir dir("engine-physical-root-retarget");
+    dir.write("first/Game.frostproj", "{}");
+    dir.write("second/Game.frostproj", "{}");
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryAlias(dir.join("first"), dir.join("alias")));
+    EngineSessionPeer peer(dir.join("first"));
+    advertise(dir, peer);
+    WorkbenchRig rig(dir, peerOptions(dir));
+    ASSERT_TRUE(openTrusted(rig, dir.join("alias")));
+    ASSERT_TRUE(pairPeer(rig, peer));
+    ASSERT_TRUE(frost::io::realFileSystem().removeFile(dir.join("alias")));
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryAlias(dir.join("second"), dir.join("alias")));
+    const auto requested = rig.workbench->sendEngineCommand("editor.focus", Json::object());
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->engineState().boolAt("physicalRootValid") == false; }, 3s));
+    if (requested)
+        ASSERT_TRUE(waitFor([&] { return rig.workbench->engineState().unsignedAt("pendingRequestCount") == 0U; }, 3s));
+    EXPECT_TRUE(peer.requests("editor.focus").empty());
+    // Restoring the old target does not revive an already invalidated admission.
+    ASSERT_TRUE(frost::io::realFileSystem().removeFile(dir.join("alias")));
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryAlias(dir.join("first"), dir.join("alias")));
+    EXPECT_FALSE(rig.workbench->sendEngineCommand("editor.focus", Json::object()));
+    EXPECT_TRUE(peer.requests("editor.focus").empty());
+}
+
+TEST(WorkbenchEngine, ActualSessionHelperRejectsTrustedAliasRetargetAfterAuthenticationBeforeCommandWrite) {
+    WorkDir dir("engine-helper-physical-admission");
+    dir.write("first/Game.frostproj", "{}");
+    dir.write("second/Game.frostproj", "{}");
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryAlias(dir.join("first"), dir.join("alias")));
+    auto& fs = frost::io::realFileSystem();
+    const auto trustPath = dir.join("trusted-roots.txt");
+    auto trust = frost::project::TrustStore::open(fs, trustPath);
+    ASSERT_TRUE(trust);
+    ASSERT_TRUE((*trust)->trust(dir.join("alias")));
+    std::atomic<bool> retargeted{false}; // Outlives the peer's joined callback thread.
+    EngineSessionPeer peer(dir.join("first"));
+    advertise(dir, peer);
+    peer.setBeforeReply([&](std::string_view method) {
+        if (method != "schema.export")
+            return;
+        // Schema arrives during the authenticated handshake, before the helper submits the
+        // requested editor.focus. Keep the replacement present until admission observes it.
+        EXPECT_GT(peer.authenticated.load(), 0U);
+        ASSERT_TRUE(fs.removeFile(dir.join("alias")));
+        ASSERT_NO_FATAL_FAILURE(makeDirectoryAlias(dir.join("second"), dir.join("alias")));
+        retargeted = true;
+    });
+    const auto input = Json::object()
+                           .set("root", dir.join("alias"))
+                           .set("directory", dir.join("automation"))
+                           .set("trustPath", trustPath)
+                           .set("method", "editor.focus")
+                           .set("params", Json::object());
+    auto completed = std::async(std::launch::async, [&] { return frost::app::executeEngineHelper(input); });
+    ASSERT_EQ(completed.wait_for(15s), std::future_status::ready);
+    const auto result = completed.get();
+    ASSERT_TRUE(retargeted.load());
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), frost::ErrorCode::Untrusted);
+    EXPECT_TRUE(peer.requests("editor.focus").empty());
+    EXPECT_TRUE((*trust)->isTrusted(dir.join("alias"))) << "the lexical authorization itself did not change";
+    ASSERT_TRUE(fs.removeFile(dir.join("alias")));
+    ASSERT_NO_FATAL_FAILURE(makeDirectoryAlias(dir.join("first"), dir.join("alias")));
+    EXPECT_TRUE(peer.requests("editor.focus").empty());
+}
+
 TEST(WorkbenchEngine, SessionPeerValidatesUnsavedBufferAndReportsState) {
     WorkDir dir("engine-buffer-state");
     dir.write("project/Game.frostproj", "{}");
@@ -685,10 +829,14 @@ TEST(WorkbenchEngine, CancelRequestReleasesPendingTestRunAndKeepsSessionUsable) 
     EXPECT_TRUE(rig.workbench->engineState().boolAt("connected").value_or(false));
     EXPECT_TRUE(rig.workbench->engineState().find("lastReply")->isNull());
     ASSERT_TRUE(cancel->isEnabled());
+    const auto requestId = rig.workbench->engineState().unsignedAt("lastRequestId");
+    ASSERT_TRUE(requestId && *requestId != 0);
     cancel->click();
-    ASSERT_TRUE(waitFor(
-        [&] { return rig.workbench->engineState().stringAt("lastError").find("cancel") != std::string_view::npos; },
-        3s));
+    ASSERT_TRUE(
+        waitFor([&] { return rig.workbench->engineState().unsignedAt("lastCompletedRequestId") == *requestId; }, 3s));
+    const auto cancelled = rig.workbench->engineState();
+    EXPECT_EQ(cancelled.unsignedAt("pendingRequestCount"), 0U);
+    EXPECT_EQ(cancelled.stringAt("lastError"), "engine request interrupted; outcome uncertain");
     EXPECT_TRUE(rig.workbench->engineState().boolAt("connected").value_or(false));
     // Cancellation releases this request, not the authenticated session, and never replays it.
     peer.release("test.run", Json::object().set("late", "cancelled-run-result"));
@@ -1000,13 +1148,27 @@ TEST(WorkbenchEngine, WorkerLaunchLatchesExactProjectFileAndRefusesSameRootAlias
     WorkDir dir("engine-project-file-latch");
     dir.write("project/A.frostproj", "{}");
     dir.write("project/B.frostproj", "{}");
-    const auto alias = frost::io::toStdPath(dir.join("project/Selected.frostproj"));
+#ifdef _WIN32
+    const std::string aliasName = "project/SELECT~1.FRO";
+#else
+    const std::string aliasName = "project/Selected.frostproj";
+#endif
+    const auto alias = frost::io::toStdPath(dir.join(aliasName));
     const auto first = frost::io::toStdPath(dir.join("project/A.frostproj"));
     const auto second = frost::io::toStdPath(dir.join("project/B.frostproj"));
     ASSERT_TRUE(alias && first && second);
+#ifndef _WIN32
     std::error_code error;
+#endif
+#ifdef _WIN32
+    ASSERT_EQ(setProjectShortName(*first, L"SELECT~1.FRO"), ERROR_SUCCESS);
+#else
     std::filesystem::create_symlink(*first, *alias, error);
     ASSERT_FALSE(error) << "required project-file alias fixture unavailable: " << error.message();
+#endif
+    const auto physicalRoot = std::filesystem::canonical(*first).parent_path();
+    ASSERT_EQ(std::filesystem::canonical(*alias), std::filesystem::canonical(*first));
+    ASSERT_EQ(std::filesystem::canonical(*second).parent_path(), physicalRoot);
     const auto program = editorProgram(dir);
     const std::string task = dir.join("before-task");
     EngineRunLauncher launcher;
@@ -1020,7 +1182,7 @@ TEST(WorkbenchEngine, WorkerLaunchLatchesExactProjectFileAndRefusesSameRootAlias
         std::ranges::find(edited, frost::run::RunType::FrostEditor, &frost::run::RunConfiguration::type);
     ASSERT_NE(configuration, edited.end());
     const std::string id = configuration->id;
-    configuration->engineProjectPath = dir.join("project/Selected.frostproj");
+    configuration->engineProjectPath = dir.join(aliasName);
     configuration->arguments = {"--log-level", "warn"};
     configuration->beforeLaunchTasks.push_back({task, {"unchanged-task-argument"}, {}});
     ASSERT_TRUE(controller->replaceConfigurations(edited));
@@ -1029,11 +1191,18 @@ TEST(WorkbenchEngine, WorkerLaunchLatchesExactProjectFileAndRefusesSameRootAlias
     launcher.afterRunLaunch = [&](const frost::io::ProcessSpec& spec) {
         if (spec.executable != task)
             return;
+#ifdef _WIN32
+        DWORD failure = setProjectShortName(*first, L"");
+        if (failure == ERROR_SUCCESS)
+            failure = setProjectShortName(*second, L"SELECT~1.FRO");
+        retargetError = static_cast<int>(failure);
+#else
         std::error_code failure;
         std::filesystem::remove(*alias, failure);
         if (!failure)
             std::filesystem::create_symlink(*second, *alias, failure);
         retargetError = failure.value();
+#endif
         retargeted = true;
     };
     launcher.runs.expect(frost::io::ScriptedProcess{.expectExecutable = task});
@@ -1042,6 +1211,12 @@ TEST(WorkbenchEngine, WorkerLaunchLatchesExactProjectFileAndRefusesSameRootAlias
     ASSERT_TRUE(waitFor([&] { return runReservationReleased(rig); }, 5s));
     ASSERT_TRUE(retargeted.load());
     ASSERT_EQ(retargetError.load(), 0);
+    ASSERT_EQ(std::filesystem::canonical(*alias), std::filesystem::canonical(*second));
+    ASSERT_NE(std::filesystem::canonical(*alias), std::filesystem::canonical(*first));
+    ASSERT_EQ(std::filesystem::canonical(*alias).parent_path(), physicalRoot);
+    ASSERT_EQ(std::filesystem::canonical(*first).parent_path(), physicalRoot);
+    ASSERT_TRUE(std::filesystem::exists(*first));
+    ASSERT_TRUE(std::filesystem::exists(*second));
     ASSERT_EQ(launcher.runs.launches().size(), 1U) << "retargeted alias reached engine process creation";
     EXPECT_TRUE(hasStatus(rig.window->toolWindows().content("frostEngine"),
                           QStringLiteral("target changed after its launch was admitted")));
@@ -1049,10 +1224,16 @@ TEST(WorkbenchEngine, WorkerLaunchLatchesExactProjectFileAndRefusesSameRootAlias
     EXPECT_EQ(launcher.runs.launches().front().spec.arguments, std::vector<std::string>{"unchanged-task-argument"});
     // A fresh explicit run gets its own latch and passes the original physical file to the child.
     launcher.afterRunLaunch = {};
+#ifdef _WIN32
+    ASSERT_EQ(setProjectShortName(*second, L""), ERROR_SUCCESS);
+    ASSERT_EQ(setProjectShortName(*first, L"SELECT~1.FRO"), ERROR_SUCCESS);
+#else
     std::filesystem::remove(*alias, error);
     ASSERT_FALSE(error);
     std::filesystem::create_symlink(*first, *alias, error);
     ASSERT_FALSE(error);
+#endif
+    ASSERT_EQ(std::filesystem::canonical(*alias), std::filesystem::canonical(*first));
     edited = controller->configurations().all();
     configuration = std::ranges::find(edited, id, &frost::run::RunConfiguration::id);
     ASSERT_NE(configuration, edited.end());
@@ -1068,7 +1249,7 @@ TEST(WorkbenchEngine, WorkerLaunchLatchesExactProjectFileAndRefusesSameRootAlias
     const auto arguments = launcher.runs.launches().back().spec.arguments;
     ASSERT_GE(arguments.size(), 4U);
     EXPECT_EQ(arguments.front(), "--project");
-    EXPECT_EQ(arguments[1], frost::io::realFileSystem().canonicalPath(dir.join("project/A.frostproj")).value());
+    EXPECT_EQ(arguments[1], frost::io::realFileSystem().physicalPath(dir.join("project/A.frostproj")).value());
     const auto logLevel = std::ranges::find(arguments, "--log-level");
     ASSERT_NE(logLevel, arguments.end());
     ASSERT_NE(std::next(logLevel), arguments.end());

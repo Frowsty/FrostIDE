@@ -10,6 +10,7 @@
 #include "engine_locator.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <optional>
@@ -40,13 +41,13 @@ Result<lang::Json> executeEngineSessionHelper(const lang::Json& input) {
         method.empty() || !params || !params->isObject())
         return fail(ErrorCode::InvalidArgument, "Invalid engine helper request");
     auto& fs = io::realFileSystem();
-    auto physicalRoot = fs.canonicalPath(root);
+    auto physicalRoot = fs.physicalPath(root);
     if (!physicalRoot)
         return std::unexpected(physicalRoot.error());
     auto trustStore = project::TrustStore::open(fs, trustPath);
-    if (!trustStore || !(*trustStore)->isTrusted(*physicalRoot))
+    if (!trustStore || !(*trustStore)->isTrusted(root))
         return fail(ErrorCode::Untrusted, "Project is not trusted");
-    const auto admission = (*trustStore)->snapshot(*physicalRoot);
+    const auto admission = (*trustStore)->snapshot(root);
     auto originalTrustDocument = fs.readFile(trustPath);
     if (!originalTrustDocument)
         return std::unexpected(originalTrustDocument.error());
@@ -76,18 +77,21 @@ Result<lang::Json> executeEngineSessionHelper(const lang::Json& input) {
     engine::EngineSessionOptions options;
     options.endpoint = std::move(endpoint);
     options.trustRevision = admission.revision;
+    const auto physicalAdmission = std::make_shared<std::atomic<bool>>(true);
     const auto freshAdmission =
-        [&fs, trustPath = std::string(trustPath), root = *physicalRoot, original = std::move(*originalTrustDocument),
+        [&fs, trustPath = std::string(trustPath), root = *physicalRoot, trustRoot = std::string(root),
+         physicalAdmission, original = std::move(*originalTrustDocument),
          expectedRevision = admission.revision](std::string_view project, std::uint64_t revision) {
             // The helper is a different process: its initial TrustStore cannot observe GUI mutations.
             // Re-read the persisted decision at each admission, including the final pre-send check.
-            if (revision != expectedRevision || lang::documentKey(project) != lang::documentKey(root))
+            if (!retainEngineProjectIdentity(fs, trustRoot, lang::documentKey(root), physicalAdmission) ||
+                revision != expectedRevision || lang::documentKey(project) != lang::documentKey(root))
                 return false;
             auto currentBytes = fs.readFile(trustPath);
             if (!currentBytes || *currentBytes != original)
                 return false;
             auto fresh = project::TrustStore::open(fs, trustPath);
-            return fresh && (*fresh)->isTrusted(root);
+            return fresh && (*fresh)->isTrusted(trustRoot);
         };
     options.trusted = freshAdmission;
     const auto timeout = lang::engineMethodTimeout(method);

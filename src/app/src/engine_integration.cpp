@@ -100,7 +100,7 @@ void EngineIntegration::Impl::projectChanged() {
     invalidate(true);
     root = workbench.projectRoot();
     auto physical =
-        root.empty() ? Result<std::string>(fail(ErrorCode::NotFound)) : workbench.m_services.fs.canonicalPath(root);
+        root.empty() ? Result<std::string>(fail(ErrorCode::NotFound)) : workbench.m_services.fs.physicalPath(root);
     physicalRoot = physical ? *physical : std::string{};
     selectedProject = lang::isFrostEngineProjectFileName(io::fileName(workbench.m_projectIdentity))
                           ? workbench.m_projectIdentity
