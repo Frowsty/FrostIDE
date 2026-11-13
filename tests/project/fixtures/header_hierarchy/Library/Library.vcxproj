@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Synthetic real-MSBuild header membership; no user code or external imports beyond installed C++ targets. -->
+<Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+ <ItemGroup Label="ProjectConfigurations">
+  <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  <ProjectConfiguration Include="Debug|Win32"><Configuration>Debug</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+  <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  <ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+ </ItemGroup>
+ <PropertyGroup Label="Globals"><ProjectGuid>{12438C03-58B9-4D37-A8EE-731668F03721}</ProjectGuid><Keyword>Win32Proj</Keyword></PropertyGroup>
+ <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props"/>
+ <PropertyGroup Label="Configuration"><ConfigurationType>StaticLibrary</ConfigurationType><PlatformToolset>v143</PlatformToolset></PropertyGroup>
+ <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props"/>
+ <Import Project="../props/headers.props"/>
+ <ItemGroup><ClCompile Include="source.cpp"/><ClInclude Include="include/explicit.hpp"/>
+  <ClInclude Include="include/glob/**/*.hpp" Exclude="include/glob/excluded.hpp"/>
+  <None Include="include/notes.h"/><CustomBuild Include="include/custom.h"><ExcludedFromBuild>true</ExcludedFromBuild></CustomBuild></ItemGroup>
+ <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
+ <Import Project="../props/headers.targets"/>
+</Project>

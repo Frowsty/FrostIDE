@@ -59,6 +59,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -175,8 +176,10 @@ public:
     [[nodiscard]] static Result<SolutionModel> load(io::IFileSystem& fs, std::string_view solutionPath,
                                                     SolutionLoadOptions options = {});
 
-    // Worker-thread overlay for one successfully evaluated project's item type.
-    // Unlisted static nodes of this type are disconnected; other item types and filters remain.
+    // Pure worker-thread overlay for one successfully evaluated project's item type. Unlisted
+    // nodes are disconnected; returning items regain their original hierarchy and indices.
+    // New items follow the loaded filter/folder policy; saved layout never grants membership.
+    // Other projects/types remain unchanged. O(model size + changed sibling sorting), no file IO.
     [[nodiscard]] SolutionModel withEvaluatedFiles(ProjectId project, ItemType type,
                                                    std::span<const std::string> files) const;
 
@@ -243,6 +246,10 @@ private:
     std::unordered_map<std::string, ProjectId> m_projectsByGuid;
     // Path key -> the file nodes at that path, in creation order.
     std::unordered_map<std::string, std::vector<NodeId>> m_filesByPath;
+    // Resolved .filters layout only, never membership. Shared immutable receipts keep worker
+    // overlays independent of the filesystem without copying every assignment on each publish.
+    std::unordered_map<std::uint32_t, std::shared_ptr<const std::unordered_map<std::string, std::string>>>
+        m_cppFilterAssignments;
 };
 
 } // namespace frost::project

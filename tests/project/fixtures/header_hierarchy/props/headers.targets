@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- An imported targets file contributes a normal evaluated header without executing a target. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+ <ItemGroup Condition="'$(MSBuildProjectName)'=='Library'"><ClInclude Include="include/from_targets.hpp"/></ItemGroup>
+</Project>

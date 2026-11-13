@@ -16,11 +16,13 @@
 #include "msbuild_oracle.hpp"
 #include "paths.hpp"
 #include "project_test_util.hpp"
+#include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <set>
 #include <string>
 #include <thread>
@@ -177,6 +179,128 @@ TEST_F(ProjectHostReal, TheOracleProducesItemAndFlagListsFromRealMsBuild) {
     const auto deepRelease = find(*release, generated("shared/deep_shared.cpp"));
     ASSERT_NE(deepRelease, release->items.end());
     EXPECT_NE(deepRelease->metadata.at("PreprocessorDefinitions").find("GEN_WIN32=1"), std::string::npos);
+}
+
+TEST_F(ProjectHostReal, HeaderOnlyImportedWildcardAndLinkedItemsMatchRealMsBuildAcrossReload) {
+    auto client = ProjectHostClient::start(io::realProcessLauncher(), {.hostPath = hostPath(),
+                                                                       .msbuildPath = m_msbuild,
+                                                                       .environment = {},
+                                                                       .startTimeout = 120s,
+                                                                       .requestTimeout = 300s});
+    ASSERT_TRUE(client) << client.error().describe();
+    const auto path = [](std::string_view file) {
+        return fixture(std::string("header_hierarchy/") + std::string(file));
+    };
+    std::vector<std::string> onlyDebugHeaders;
+    std::vector<std::string> onlyReleaseHeaders;
+    for (const auto& [configuration, platform] : {std::pair{"Debug", "x64"}, std::pair{"Release", "x64"},
+                                                  std::pair{"Debug", "Win32"}, std::pair{"Release", "Win32"}}) {
+        std::vector<EvaluatedProjectItems> results;
+        std::vector<test::OracleEvaluation> oracles;
+        for (const char* name : {"Library", "HeadersOnly"}) {
+            const ProjectEvaluationRequest request{.projectPath = path(std::string(name) + "/" + name + ".vcxproj"),
+                                                   .configuration = configuration,
+                                                   .platform = platform,
+                                                   .solutionPath = path("Headers.sln")};
+            auto observed = (*client)->evaluate(request);
+            auto oracle = test::runOracle(m_msbuild, request);
+            ASSERT_TRUE(observed) << observed.error().describe();
+            ASSERT_TRUE(oracle);
+            results.push_back(
+                toEvaluatedProjectItems(*observed, EvaluationSource::ProjectHost, (*client)->hello().msbuildVersion));
+            std::set<std::pair<std::string, std::string>> actual;
+            std::set<std::pair<std::string, std::string>> expected;
+            for (const auto& item : observed->items)
+                actual.emplace(item.type, detail::pathKey(item.fullPath));
+            for (const auto& item : oracle->items)
+                expected.emplace(item.type, detail::pathKey(item.fullPath));
+            EXPECT_EQ(actual, expected);
+            if (std::string_view(name) == "HeadersOnly" && std::string_view(platform) == "x64") {
+                auto& headers = std::string_view(configuration) == "Debug" ? onlyDebugHeaders : onlyReleaseHeaders;
+                for (const auto& item : oracle->items)
+                    if (item.type == "ClInclude")
+                        headers.push_back(item.fullPath);
+            }
+            oracles.push_back(std::move(*oracle));
+        }
+        for (const char* solution : {"Headers.sln", "Headers.slnx"}) {
+            SCOPED_TRACE(std::string(solution) + " " + configuration + "|" + platform);
+            auto model =
+                SolutionModel::load(io::realFileSystem(), path(solution),
+                                    {.cppHierarchy = CppHierarchyMode::FiltersAndFolders, .evaluated = results});
+            ASSERT_TRUE(model) << model.error().describe();
+            ASSERT_EQ(model->projects().size(), oracles.size());
+            for (std::size_t i = 0; i < oracles.size(); ++i) {
+                const ProjectId id{static_cast<std::uint32_t>(i)};
+                std::vector<std::string> shown;
+                for (const auto& file : model->projectFilePaths(id))
+                    shown.push_back(detail::pathKey(file));
+                std::ranges::sort(shown);
+                EXPECT_EQ(shown, test::oraclePathKeys(oracles[i]));
+            }
+            EXPECT_FALSE(model->findFileNode(path("Library/include/orphan.hpp")));
+            EXPECT_FALSE(model->findFileNode(path("Library/include/glob/excluded.hpp")));
+            const auto header = model->findFileNode(path("Library/include/imported.hpp"));
+            ASSERT_TRUE(header);
+            EXPECT_EQ(model->node(*header).itemType, ItemType::ClInclude);
+            ASSERT_TRUE(model->parent(*header));
+            EXPECT_EQ(model->node(*model->parent(*header)).displayName, "API");
+        }
+    }
+    ASSERT_FALSE(onlyDebugHeaders.empty());
+    ASSERT_TRUE(onlyReleaseHeaders.empty()); // A real empty evaluation, not missing ClInclude output.
+    auto initial = SolutionModel::load(io::realFileSystem(), path("Headers.sln"));
+    ASSERT_TRUE(initial);
+    const auto only = initial->findProjectByPath(path("HeadersOnly/HeadersOnly.vcxproj"));
+    ASSERT_TRUE(only);
+    auto first = initial->withEvaluatedFiles(*only, ItemType::ClInclude, onlyDebugHeaders);
+    auto empty = first.withEvaluatedFiles(*only, ItemType::ClInclude, onlyReleaseHeaders);
+    auto returned = empty.withEvaluatedFiles(*only, ItemType::ClInclude, onlyDebugHeaders);
+    auto shown = returned.projectFilePaths(*only);
+    std::ranges::sort(shown);
+    std::ranges::sort(onlyDebugHeaders);
+    EXPECT_EQ(shown, onlyDebugHeaders);
+
+    // Build only an owned scratch copy; neither the pinned fixture nor any user's solution is written.
+    frost::test::ScratchDir scratch("header-membership-build");
+    std::error_code copyError;
+    std::filesystem::copy(std::filesystem::path(io::toWin32Path(path("")).value()),
+                          std::filesystem::path(io::toWin32Path(scratch.path()).value()),
+                          std::filesystem::copy_options::recursive, copyError);
+    ASSERT_FALSE(copyError) << copyError.message();
+    io::ProcessSpec build;
+    build.executable = m_msbuild;
+    build.arguments = {scratch.join("Headers.sln"), "-nologo",        "-m:1", "-nodeReuse:false",
+                       "-p:Configuration=Debug",    "-p:Platform=x64"};
+    build.workingDirectory = scratch.path();
+    build.environment = {{"MSBUILDDISABLENODEREUSE", "1"}, {"MSBUILDTERMINALLOGGER", "off"}};
+    const auto built = io::runToCompletion(io::realProcessLauncher(), build, {}, 120s);
+    ASSERT_TRUE(built) << built.error().describe();
+    ASSERT_EQ(built->exitCode, 0) << built->stdoutBytes << built->stderrBytes;
+    std::vector<EvaluatedProjectItems> rebuiltItems;
+    for (const char* name : {"Library", "HeadersOnly"}) {
+        const ProjectEvaluationRequest request{.projectPath = scratch.join(std::string(name) + "/" + name + ".vcxproj"),
+                                               .configuration = "Debug",
+                                               .platform = "x64",
+                                               .solutionPath = scratch.join("Headers.sln")};
+        auto observed = (*client)->evaluate(request);
+        auto oracle = test::runOracle(m_msbuild, request);
+        ASSERT_TRUE(observed) << observed.error().describe();
+        ASSERT_TRUE(oracle);
+        rebuiltItems.push_back(
+            toEvaluatedProjectItems(*observed, EvaluationSource::ProjectHost, (*client)->hello().msbuildVersion));
+        auto reloaded =
+            SolutionModel::load(io::realFileSystem(), scratch.join("Headers.sln"),
+                                {.cppHierarchy = CppHierarchyMode::FiltersAndFolders, .evaluated = rebuiltItems});
+        ASSERT_TRUE(reloaded);
+        const auto project = reloaded->findProjectByPath(request.projectPath);
+        ASSERT_TRUE(project);
+        std::vector<std::string> afterBuild;
+        for (const auto& file : reloaded->projectFilePaths(*project))
+            afterBuild.push_back(detail::pathKey(file));
+        std::ranges::sort(afterBuild);
+        EXPECT_EQ(afterBuild, test::oraclePathKeys(*oracle));
+    }
 }
 
 // SLN-2: the helper evaluates each project exactly as MSBuild.exe does: the same items in the

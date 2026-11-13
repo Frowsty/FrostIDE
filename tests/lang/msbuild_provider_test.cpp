@@ -460,6 +460,34 @@ TEST(MsBuildProvider, MalformedEvaluationKeepsTheStaticProjectTree) {
     EXPECT_EQ(overlay, shared);
 }
 
+TEST(MsBuildProvider, StreamedHeaderAbsenceAndAuthoritativeEmptyRemainDistinctAcrossRepublication) {
+    auto loaded = frost::project::SolutionModel::load(frost::io::realFileSystem(),
+                                                      fixture("../../project/fixtures/sdk_solution/SdkApp.sln"));
+    ASSERT_TRUE(loaded);
+    auto base = std::make_shared<const frost::project::SolutionModel>(std::move(*loaded));
+    const std::string project = fixture("../../project/fixtures/sdk_solution/Libraries/Core/Core.vcxproj");
+    const std::string header = fixture("../../project/fixtures/sdk_solution/Libraries/Core/include/core/core.h");
+    frost::sched::ThreadPool pool(frost::sched::ThreadPoolOptions{.workerCount = 1});
+    auto retirement = std::make_shared<frost::lang::GeneratedCommandsRetirement>(pool);
+    frost::lang::StreamedProjectContexts streamed(retirement, base);
+    frost::lang::StreamedProjectContext record{.projectPath = project,
+                                               .configuration = "Debug",
+                                               .platform = "x64",
+                                               .state = frost::lang::ProjectEvaluationState::Evaluated,
+                                               .commands = {}};
+    streamed.publish(record); // No ClInclude result: the static headers remain authoritative fallback.
+    ASSERT_TRUE(streamed.modelSnapshot()->findFileNode(header));
+    record.headers = std::vector<std::string>{};
+    streamed.publish(record); // An actual empty result must remove this project's headers.
+    EXPECT_FALSE(streamed.modelSnapshot()->findFileNode(header));
+    record.headers = std::vector<std::string>{header};
+    streamed.publish(record);
+    ASSERT_TRUE(streamed.modelSnapshot()->findFileNode(header))
+        << "a later successful evaluation must make a previously removed header reachable again";
+    streamed.clear();
+    EXPECT_EQ(streamed.modelSnapshot(), base); // Normal refresh still resets to its static base.
+}
+
 TEST(MsBuildProvider, MissingMsBuildMarksProjectsFailed) {
     if (!kWindows)
         GTEST_SKIP() << "MSBuild evaluation runs on Windows only";

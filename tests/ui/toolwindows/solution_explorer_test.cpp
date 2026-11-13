@@ -197,6 +197,28 @@ TEST(SolutionExplorer, SpeedSearchFindsAFileAndEnterOpensIt) {
     EXPECT_EQ(explorer.currentPath().toStdString(), project::test::sdk("Libraries/Core/src/detail/strings.cpp"));
 }
 
+TEST(SolutionExplorer, ReintroducedHeaderIsVisibleAndActivatesItsExactPath) {
+    const auto initial = loadSdk();
+    ASSERT_TRUE(initial);
+    const auto core = initial->findProjectByPath(project::test::sdk("Libraries/Core/Core.vcxproj"));
+    ASSERT_TRUE(core);
+    const std::string header = project::test::sdk("Libraries/Core/include/core/core.h");
+    const std::vector<std::string> none;
+    const auto absent = initial->withEvaluatedFiles(*core, project::ItemType::ClInclude, none);
+    const std::vector<std::string> headers{header};
+    auto returned = std::make_shared<const project::SolutionModel>(
+        absent.withEvaluatedFiles(*core, project::ItemType::ClInclude, headers));
+    SolutionExplorer explorer;
+    explorer.setSolution(returned);
+    test::SignalLog opened(&explorer, &SolutionExplorer::openFile);
+    typeText(explorer.view(), QStringLiteral("core.h"));
+    ASSERT_EQ(explorer.speedSearchMatches().size(), 1U);
+    EXPECT_EQ(explorer.currentPath().toStdString(), header);
+    pressKey(explorer.view(), Qt::Key_Return);
+    ASSERT_EQ(opened.count(), 1);
+    EXPECT_EQ(opened.at(0).at(0).toString().toStdString(), header);
+}
+
 TEST(SolutionExplorer, StreamedSnapshotPreservesSearchAndSelection) {
     SolutionExplorer explorer;
     const auto initial = loadSdk();

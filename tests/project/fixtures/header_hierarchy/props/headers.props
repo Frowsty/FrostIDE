@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Imports add genuine ClInclude items; the static reader must not invent their membership. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+ <PropertyGroup><HeaderFixtureRoot>$(MSBuildThisFileDirectory)..\</HeaderFixtureRoot></PropertyGroup>
+ <ItemGroup Condition="'$(MSBuildProjectName)'=='Library'">
+  <ClInclude Include="$(HeaderFixtureRoot)Library/include/imported.hpp"/>
+  <ClInclude Include="$(HeaderFixtureRoot)Shared/linked.hpp"/>
+  <ClInclude Include="$(HeaderFixtureRoot)Library/include/debug.hpp" Condition="'$(Configuration)'=='Debug'"/>
+  <ClInclude Include="$(HeaderFixtureRoot)Library/include/win32.hpp" Condition="'$(Platform)'=='Win32'"/>
+ </ItemGroup>
+</Project>
