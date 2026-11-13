@@ -4,6 +4,7 @@
 
 #include "frost/app/main_window.hpp"
 #include "frost/app/workbench.hpp"
+#include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/json.hpp"
 #include "frost/lang/uri.hpp"
@@ -33,6 +34,9 @@ std::string utf8(const QString& text) {
     return {bytes.constData(), static_cast<std::size_t>(bytes.size())};
 }
 QString qs(std::string_view text) { return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())); }
+Result<std::string> physicalInfoPath(const QFileInfo& info) {
+    return io::realFileSystem().physicalPath(utf8(info.absoluteFilePath()));
+}
 struct Waiter {
     std::mutex mutex;
     std::condition_variable changed;
@@ -51,17 +55,15 @@ Result<std::string> externalProjectRoot(std::string_view project) {
             return fail(ErrorCode::InvalidArgument, "project must be a folder or .frostproj file");
         // Resolve the project file itself before taking its parent: a symlink may point to
         // a different directory than the link. Workbench opens that same canonical file.
-        const QString canonicalFile = info.canonicalFilePath();
-        if (canonicalFile.isEmpty())
-            return fail(ErrorCode::IoError, "cannot resolve project file");
-        info = QFileInfo(QFileInfo(canonicalFile).absolutePath());
+        const auto canonicalFile = physicalInfoPath(info);
+        if (!canonicalFile)
+            return std::unexpected(canonicalFile.error());
+        info = QFileInfo(QFileInfo(qs(*canonicalFile)).absolutePath());
     }
     if (!info.isDir())
         return fail(ErrorCode::InvalidArgument, "project must be a folder or .frostproj file");
-    const QString canonical = info.canonicalFilePath();
-    if (canonical.isEmpty())
-        return fail(ErrorCode::IoError, "cannot resolve project path");
-    return utf8(canonical);
+    // Broker identity follows directory junctions independently of editor spelling.
+    return physicalInfoPath(info);
 }
 std::optional<std::string> inferExternalProjectRootForFile(std::string_view filePath) {
     if (filePath.empty() || filePath.find('\0') != std::string_view::npos)
@@ -160,20 +162,20 @@ Result<void> openExternalFile(Workbench& workbench, std::string_view path, int l
     if (!io::isAbsolutePath(path) || path.find('\0') != std::string_view::npos || line < 0 || column < 0)
         return fail(ErrorCode::InvalidArgument, "invalid external file or location");
     const QFileInfo requested(qs(path));
-    const QString canonicalPath = requested.canonicalFilePath();
-    const QFileInfo target(canonicalPath);
-    if (canonicalPath.isEmpty() || !target.isFile() ||
+    const auto canonicalPath = physicalInfoPath(requested);
+    const QFileInfo target(canonicalPath ? qs(*canonicalPath) : QString{});
+    if (!canonicalPath || !target.isFile() ||
         target.suffix().compare(QStringLiteral("frostproj"), Qt::CaseInsensitive) == 0 ||
         target.suffix().compare(QStringLiteral("sln"), Qt::CaseInsensitive) == 0 ||
         target.suffix().compare(QStringLiteral("slnx"), Qt::CaseInsensitive) == 0)
         return fail(ErrorCode::InvalidArgument, "external file must be an existing editor document");
-    const std::string canonical = utf8(canonicalPath);
-    // An editor opened through a symlink can already hold unsaved changes. Reopen its
+    const std::string canonical = *canonicalPath;
+    // An editor opened through a symlink or directory junction can already hold unsaved changes. Reopen its
     // original path to select that tab instead of creating a second document for the target.
     std::string editorPath = canonical;
     for (auto* view : workbench.editors().views()) {
-        const QString existing = QFileInfo(qs(view->path())).canonicalFilePath();
-        if (!existing.isEmpty() && lang::documentKey(utf8(existing)) == lang::documentKey(canonical)) {
+        const auto existing = physicalInfoPath(QFileInfo(qs(view->path())));
+        if (existing && lang::documentKey(*existing) == lang::documentKey(canonical)) {
             editorPath = view->path();
             break;
         }
