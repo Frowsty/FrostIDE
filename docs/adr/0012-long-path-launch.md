@@ -529,6 +529,21 @@ Every frost run went through a private desktop (tests: `tests/support/private_de
   there gets a clear message rather than a new workaround. Long paths of project files are ordinary file I/O and are
   not affected.
 
+## R5 acceptance qualification (2026-11-13)
+
+The current Windows runtime can refuse a restart through a short junction backed by a physically
+long installation with `ERROR_ACCESS_DENIED` (5). The launcher reports that error and advises an
+installation whose frost.exe path is shorter than 260 UTF-16 units, implementing the frozen-support
+decision above. The physical-long GUI tests require either the original successful window/handler
+behaviour or that exact parent-owned modal refusal, status 4, preserved install identity and released
+junction; crashes, timeouts and other errors fail.
+
+Positive native-plugin launch-spelling coverage at 260, 261, 300 and 400 units uses real directory
+junctions to a short physical installation, in plain and extended forms. The missing-plugin GUI case
+and a separate mandatory crash-handler case use the same fixture, retaining successful restart,
+window/error ownership and handler cleanup assertions. These tests do not claim that physically
+long installs work on this runtime, and add no product workaround or security exception.
+
 ## Alternatives considered
 - **Strip RT_MANIFEST 2 from the deployed DLLs** (design B; probe 10; for the ASan runtime alone, branch
   `m0/e4-asan-runtime`): works, but modifies vendor binaries (their Authenticode signatures must go) and must be

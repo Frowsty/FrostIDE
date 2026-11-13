@@ -815,6 +815,92 @@ std::wstring extendedWide(const std::string& utf8) {
     return frost::io::toWide(frost::io::extendedLengthPath(utf8).value()).value();
 }
 
+/*
+ * Long launch spellings backed by a short physical installation. Unlike hard links, a
+ * directory junction preserves the short physical image name returned by Windows. Remove
+ * only the junction itself before ScratchDir recursively removes its parents and master.
+ */
+class LongInstallJunctions {
+public:
+    ~LongInstallJunctions() {
+        for (auto it = m_links.rbegin(); it != m_links.rend(); ++it) {
+            EXPECT_NE(RemoveDirectoryW(extendedWide(*it).c_str()), FALSE) << *it << ": " << GetLastError();
+        }
+    }
+    LongInstallJunctions() = default;
+    LongInstallJunctions(const LongInstallJunctions&) = delete;
+    LongInstallJunctions& operator=(const LongInstallJunctions&) = delete;
+
+    std::string add(const std::string& master, const std::string& link) {
+        const std::string physicalExe = frost::io::joinPath(master, "frost.exe").value();
+        if (utf16Units(physicalExe) >= MAX_PATH) {
+            ADD_FAILURE() << "junction master must have a short physical image path: " << physicalExe;
+            return {};
+        }
+        const HANDLE image =
+            CreateFileW(extendedWide(physicalExe).c_str(), FILE_READ_ATTRIBUTES,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (image == INVALID_HANDLE_VALUE) {
+            ADD_FAILURE() << "cannot inspect physical master image: " << GetLastError();
+            return {};
+        }
+        std::wstring finalImage(32768, L'\0');
+        const DWORD finalUnits = GetFinalPathNameByHandleW(image, finalImage.data(),
+                                                           static_cast<DWORD>(finalImage.size()), FILE_NAME_NORMALIZED);
+        const DWORD finalError = GetLastError();
+        CloseHandle(image);
+        if (finalUnits == 0 || finalUnits >= finalImage.size()) {
+            ADD_FAILURE() << "cannot resolve physical master image: " << finalError;
+            return {};
+        }
+        finalImage.resize(finalUnits);
+        const std::wstring_view physicalName = finalImage.starts_with(L"\\\\?\\")
+                                                   ? std::wstring_view(finalImage).substr(4)
+                                                   : std::wstring_view(finalImage);
+        if (physicalName.size() >= MAX_PATH) {
+            ADD_FAILURE() << "junction master resolves to a physically long image";
+            return {};
+        }
+        std::error_code error;
+        fs::create_directories(anyLengthPath(std::string(frost::io::parentPath(link))), error);
+        if (error) {
+            ADD_FAILURE() << error.message();
+            return {};
+        }
+        wchar_t system[MAX_PATH]{};
+        const UINT length = GetSystemDirectoryW(system, MAX_PATH);
+        if (length == 0 || length >= MAX_PATH) {
+            ADD_FAILURE() << "GetSystemDirectoryW: " << GetLastError();
+            return {};
+        }
+        frost::io::ProcessSpec spec;
+        spec.executable = frost::io::fromWide(std::wstring_view(system, length)).value() + "\\cmd.exe";
+        spec.arguments = {"/d", "/c", "mklink", "/J", "\\\\?\\" + link, master};
+        spec.stderrMode = frost::io::Stdio::MergeIntoStdout;
+        const auto result = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, "", 30s);
+        if (!result || result->exitCode != 0) {
+            ADD_FAILURE() << (result ? result->stdoutBytes : result.error().describe());
+            return {};
+        }
+        m_links.push_back(link);
+        WIN32_FIND_DATAW data{};
+        const HANDLE found = FindFirstFileW(extendedWide(link).c_str(), &data);
+        if (found == INVALID_HANDLE_VALUE) {
+            ADD_FAILURE() << "cannot inspect junction: " << GetLastError();
+            return {};
+        }
+        FindClose(found);
+        EXPECT_NE(data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT, 0u);
+        EXPECT_EQ(data.dwReserved0, static_cast<DWORD>(IO_REPARSE_TAG_MOUNT_POINT));
+        const std::string exe = frost::io::joinPath(link, "frost.exe").value();
+        EXPECT_TRUE(fs::equivalent(anyLengthPath(exe), anyLengthPath(physicalExe), error)) << error.message();
+        return exe;
+    }
+
+private:
+    std::vector<std::string> m_links;
+};
+
 // An entry of the launcher's short-link folder.
 struct ShortLinkEntry {
     std::string path;      // <LOCALAPPDATA>\FrostIDE\i\<name>.
@@ -882,21 +968,29 @@ TEST(FrostProcess, SelfTestOnScreenFromEveryImagePathLength) {
      * and \\?\ (the prefix counts), and the build directory. Plain from MAX_PATH on needs this
      * process's long paths; without them CreateProcessW's refusal is expected there.
      */
+    // At 260+ units the spelling is a directory junction to a short physical master;
+    // physical-long installs have a separate strict refusal contract (ADR 0012).
     const ScratchDir scratch("app-process-onscreen");
     const std::string base = longFormOf(scratch);
     ASSERT_FALSE(base.empty());
-    const std::string master = frost::io::joinPath(scratch.path(), "m").value();
-    ASSERT_FALSE(copyFrostTo(master).empty());
     struct Cell {
         std::string exe;
         ImagePathForm form;
         std::size_t units; // The image path's length as started, or 0 for the build directory.
     };
+    LongInstallJunctions junctions;
     std::vector<Cell> cells{{frostExe(), ImagePathForm::Auto, 0}};
     for (const std::size_t units :
          {std::size_t{250}, std::size_t{259}, std::size_t{260}, std::size_t{261}, std::size_t{300}, std::size_t{400}}) {
         for (const ImagePathForm form : {ImagePathForm::Plain, ImagePathForm::Extended}) {
-            cells.push_back({linkTree(master, imagePathCell(base, units, form)), form, units});
+            // Each spelling gets a fresh physical image: an earlier hard-link start must
+            // not seed Windows image-section naming for a later directory-junction start.
+            const std::string master = scratch.join(std::format("m{}", cells.size()));
+            ASSERT_FALSE(copyFrostTo(master).empty());
+            const std::string dir = imagePathCell(base, units, form);
+            const std::string exe = units >= MAX_PATH ? junctions.add(master, dir) : linkTree(master, dir);
+            ASSERT_FALSE(exe.empty());
+            cells.push_back({exe, form, units});
         }
     }
     for (std::size_t index = 0; index < cells.size(); ++index) {
@@ -925,6 +1019,74 @@ TEST(FrostProcess, SelfTestOnScreenFromEveryImagePathLength) {
             }
             continue;
         }
+        const std::vector<ShortLinkEntry> links = shortLinksIn(localAppData);
+        ASSERT_EQ(links.size(), 1u) << result.output;
+        EXPECT_TRUE(links.front().junction);
+        // The restarted frost runs from the link, in plain form, and names the first path.
+        const std::string expected = std::format(
+            "image-path: plain form, {} UTF-16 units; restarted through this short link from {} ({}, {} UTF-16 units)",
+            utf16Units(links.front().path) + std::string_view("\\frost.exe").size(), startedAs(cell.exe, cell.form),
+            reportedForm(cell.form), cell.units);
+        EXPECT_TRUE(result.output.contains(expected)) << "expected " << expected << "\n" << result.output;
+        EXPECT_TRUE(result.output.contains(links.front().path + "\\platforms\\")) << result.output;
+    }
+}
+
+TEST(FrostProcess, SelfTestOnScreenFromPhysicalLongInstallOrDocumentsRefusal) {
+    // Physical-long installation coverage stays separate from the mandatory positive
+    // launch-spelling matrix. ADR 0012 permits only the documented Windows restart refusal.
+    const ScratchDir scratch("app-process-onscreen");
+    const std::string base = longFormOf(scratch);
+    ASSERT_FALSE(base.empty());
+    const std::string master = frost::io::joinPath(scratch.path(), "m").value();
+    ASSERT_FALSE(copyFrostTo(master).empty());
+    struct Cell {
+        std::string exe;
+        ImagePathForm form;
+        std::size_t units; // The image path's length as started, or 0 for the build directory.
+    };
+    std::vector<Cell> cells;
+    for (const std::size_t units : {std::size_t{260}, std::size_t{261}, std::size_t{300}, std::size_t{400}}) {
+        for (const ImagePathForm form : {ImagePathForm::Plain, ImagePathForm::Extended}) {
+            cells.push_back({linkTree(master, imagePathCell(base, units, form)), form, units});
+        }
+    }
+    for (std::size_t index = 0; index < cells.size(); ++index) {
+        const Cell& cell = cells[index];
+        SCOPED_TRACE(cell.units == 0 ? std::string("build directory")
+                                     : std::format("{}, {} units", formName(cell.form), cell.units));
+        const std::string localAppData = localAppDataIn(scratch, std::format("lad {}", index));
+        Environment environment = ownPluginsOnly();
+        environment.emplace_back("LOCALAPPDATA", localAppData);
+        const auto result = runFrost(cell.exe, {"--selftest=onscreen"}, environment, cell.form, 60s);
+        if (cell.form == ImagePathForm::Plain && cell.units >= MAX_PATH && !parentLongPathsEffective()) {
+            EXPECT_EQ(result.exitCode, -1) << result.output;
+            continue;
+        }
+        if (result.exitCode == 4) {
+            EXPECT_TRUE(result.startError.empty()) << result.startError;
+            const auto links = shortLinksIn(localAppData);
+            ASSERT_EQ(links.size(), 1u) << result.output;
+            EXPECT_TRUE(links.front().junction);
+            std::error_code error;
+            EXPECT_TRUE(
+                fs::equivalent(anyLengthPath(links.front().path + "\\frost.exe"), anyLengthPath(cell.exe), error))
+                << error.message();
+            EXPECT_TRUE(result.output.starts_with("frost: cannot restart frost through its short link " +
+                                                  links.front().path + "\\frost.exe: "))
+                << result.output;
+            EXPECT_TRUE(result.output.contains("(win32 error 5)")) << result.output;
+            EXPECT_TRUE(result.output.ends_with(
+                "Install FrostIDE in a directory whose frost.exe path is shorter than 260 UTF-16 units.\n"))
+                << result.output;
+            EXPECT_NE(RemoveDirectoryW(extendedWide(links.front().path).c_str()), FALSE) << GetLastError();
+            EXPECT_TRUE(fs::is_regular_file(anyLengthPath(cell.exe), error)) << error.message();
+            continue;
+        }
+        EXPECT_EQ(result.exitCode, 0) << result.startError << result.output;
+        EXPECT_TRUE(result.output.contains("platform plugin 'windows'")) << result.output;
+        EXPECT_TRUE(result.output.contains("ok   main-window: main window exposed and closed")) << result.output;
+        EXPECT_TRUE(result.output.contains("selftest: PASSED")) << result.output;
         const std::vector<ShortLinkEntry> links = shortLinksIn(localAppData);
         ASSERT_EQ(links.size(), 1u) << result.output;
         EXPECT_TRUE(links.front().junction);
@@ -979,7 +1141,12 @@ TEST(FrostProcess, RestartReportsTheRestartedProgramsFailure) {
      */
     const ScratchDir scratch("app-process-restartfail");
     const ImagePathForm form = longStartForm();
-    const std::string exe = copyFrostTo(imagePathCell(longFormOf(scratch), 300, form), Plugins::None);
+    // Exercise the child's failure, independently of Windows' physical-long restart refusal.
+    const std::string master = scratch.join("m");
+    ASSERT_FALSE(copyFrostTo(master, Plugins::None).empty());
+    LongInstallJunctions junctions;
+    const std::string exe = junctions.add(master, imagePathCell(longFormOf(scratch), 300, form));
+    ASSERT_FALSE(exe.empty());
     Environment environment = ownPluginsOnly();
     environment.emplace_back("LOCALAPPDATA", localAppDataIn(scratch, "lad"));
     const auto started = std::chrono::steady_clock::now();
@@ -1204,7 +1371,18 @@ TEST(FrostProcess, RestartPassesStatusAndStandardStreamsThrough) {
         const Case& c = cases[index];
         SCOPED_TRACE(std::format("{}, {} units, {}", formName(c.form), c.units,
                                  c.args.empty() ? std::string("GUI") : c.args.front()));
-        const std::string exe = copyProbeTo(imagePathCell(base, c.units, c.form));
+        LongInstallJunctions junctions;
+        const std::string dir = imagePathCell(base, c.units, c.form);
+        std::string exe;
+        if (c.units >= MAX_PATH) {
+            // Keep each restart case's physical image independent of preceding launch spellings.
+            const std::string master = scratch.join(std::format("m{}", index));
+            ASSERT_FALSE(copyProbeTo(master).empty());
+            exe = junctions.add(master, dir);
+        } else {
+            exe = copyProbeTo(dir);
+        }
+        ASSERT_FALSE(exe.empty());
         const std::string localAppData = localAppDataIn(scratch, std::format("lad {}", index));
         const ProbeRun run = runProbe(exe, c.args,
                                       {{"LOCALAPPDATA", localAppData},
@@ -1280,16 +1458,23 @@ TEST(FrostProcess, RestartedLauncherNeverRestartsAgain) {
     }
     {
         SCOPED_TRACE("a marker naming another file, 300 units");
+        // This branch must really restart, while the preceding branch must refuse a loop.
+        const std::string master = scratch.join("m stale");
+        ASSERT_FALSE(copyProbeTo(master).empty());
+        LongInstallJunctions junctions;
+        const std::string restartExe =
+            junctions.add(master, imagePathCell(scratch.join("stale"), 300, ImagePathForm::Extended));
+        ASSERT_FALSE(restartExe.empty());
         const std::string localAppData = localAppDataIn(scratch, "lad stale");
         const ProbeRun run =
-            runProbe(exe, {"--selftest=onscreen"}, {{"LOCALAPPDATA", localAppData}, {"FROST_RESTARTED_FROM", stale}},
-                     ImagePathForm::Extended);
+            runProbe(restartExe, {"--selftest=onscreen"},
+                     {{"LOCALAPPDATA", localAppData}, {"FROST_RESTARTED_FROM", stale}}, ImagePathForm::Extended);
         ASSERT_TRUE(run.error.empty()) << run.error;
         EXPECT_EQ(run.exitCode, 0) << run.header << run.stderrBytes;
         const std::vector<ShortLinkEntry> links = shortLinksIn(localAppData);
         ASSERT_EQ(links.size(), 1u) << run.header;
-        EXPECT_TRUE(run.header.ends_with(", restarted from " + startedAs(exe, ImagePathForm::Extended) + ", image " +
-                                         links.front().path + "\\frost.exe, marker unset"))
+        EXPECT_TRUE(run.header.ends_with(", restarted from " + startedAs(restartExe, ImagePathForm::Extended) +
+                                         ", image " + links.front().path + "\\frost.exe, marker unset"))
             << run.header;
     }
 
@@ -1323,7 +1508,12 @@ TEST(FrostProcess, RestartRefusesWithoutAUsableShortLink) {
     const std::string base = longFormOf(scratch);
     ASSERT_FALSE(base.empty());
     const ImagePathForm form = longStartForm();
-    const std::string exe = copyProbeTo(imagePathCell(base, 300, form));
+    // The usable-link control must start the child before testing occupied-link refusal.
+    const std::string master = scratch.join("m");
+    ASSERT_FALSE(copyProbeTo(master).empty());
+    LongInstallJunctions junctions;
+    const std::string exe = junctions.add(master, imagePathCell(base, 300, form));
+    ASSERT_FALSE(exe.empty());
     const std::string why = std::format("frost: frost.exe's path is {} UTF-16 units long, and graphics drivers end a "
                                         "program started from 260 units (MAX_PATH) or more, so frost restarts "
                                         "through a short link, but ",
@@ -1426,10 +1616,17 @@ DWORD parentProcessOf(DWORD pid) {
  * `process` (the launcher) ends. Returns the window and its owner, or {nullptr, 0}.
  */
 std::pair<HWND, DWORD> waitForRestartedWindow(const frost::test::PrivateDesktop& desktop, std::wstring_view title,
-                                              frost::io::IProcess& process, std::chrono::milliseconds limit) {
+                                              frost::io::IProcess& process, std::chrono::milliseconds limit,
+                                              bool allowParentRefusal = false) {
     const auto launcher = static_cast<DWORD>(process.pid());
     const auto deadline = std::chrono::steady_clock::now() + limit;
     while (std::chrono::steady_clock::now() < deadline) {
+        if (allowParentRefusal) {
+            for (const auto& [window, owner] : shownWindowsTitled(desktop.handle(), L"FrostIDE cannot start")) {
+                if (owner == launcher)
+                    return {window, owner};
+            }
+        }
         for (const auto& [window, owner] : shownWindowsTitled(desktop.handle(), title)) {
             if (owner != launcher) {
                 return {window, owner};
@@ -1445,11 +1642,34 @@ std::pair<HWND, DWORD> waitForRestartedWindow(const frost::test::PrivateDesktop&
 
 /*
  * Starts `exe` without arguments (the GUI) in `form` on `desktop`, stdout piped with stderr
- * merged into it, under an error mode without hard-error boxes; null after a failure the
- * test records.
+ * merged into it, under an error mode without hard-error boxes. Requires an existing scratch
+ * LOCALAPPDATA directory and creates a fresh roaming directory below it for APPDATA, so GUI
+ * preferences never come from the user's profile. Null after a failure the test records.
  */
 std::unique_ptr<frost::io::IProcess> startGui(const std::string& exe, Environment environment, ImagePathForm form,
                                               const frost::test::PrivateDesktop& desktop) {
+    const auto local = std::find_if(environment.begin(), environment.end(),
+                                    [](const auto& entry) { return entry.first == "LOCALAPPDATA"; });
+    if (local == environment.end() || !local->second || !frost::io::isAbsolutePath(*local->second)) {
+        ADD_FAILURE() << "GUI tests require an explicit absolute scratch LOCALAPPDATA";
+        return nullptr;
+    }
+    std::error_code error;
+    if (!fs::is_directory(anyLengthPath(*local->second), error) || error) {
+        ADD_FAILURE() << "GUI scratch LOCALAPPDATA is not an existing directory: " << error.message();
+        return nullptr;
+    }
+    const auto roaming = frost::io::joinPath(*local->second, "roaming");
+    if (!roaming) {
+        ADD_FAILURE() << roaming.error().describe();
+        return nullptr;
+    }
+    if (!fs::create_directory(anyLengthPath(*roaming), error) || error) {
+        ADD_FAILURE() << "cannot create a fresh GUI scratch APPDATA: " << error.message();
+        return nullptr;
+    }
+    std::erase_if(environment, [](const auto& entry) { return entry.first == "APPDATA"; });
+    environment.emplace_back("APPDATA", *roaming);
     frost::io::ProcessSpec spec;
     spec.executable = exe;
     spec.environment = std::move(environment);
@@ -1465,7 +1685,44 @@ std::unique_ptr<frost::io::IProcess> startGui(const std::string& exe, Environmen
     return std::move(*process);
 }
 
-TEST(FrostProcess, GuiStartFromALongPathShowsItsWindow) {
+// Defined with the crash-report fixtures below.
+std::vector<DWORD> crashHandlersOf(DWORD parent);
+
+// ADR 0012 freezes physical-long install workarounds. Only the measured access-denied
+// restart failure is accepted: the parent must show it, name its real junction and give
+// relocation advice, exit 4, and release the held link without touching the installation.
+void expectPhysicalLongInstallRefusal(HWND box, DWORD owner, frost::io::IProcess& process, const std::string& exe,
+                                      const std::string& localAppData, const frost::test::PrivateDesktop& desktop) {
+    EXPECT_EQ(owner, static_cast<DWORD>(process.pid()));
+    std::wstring text(4096, L'\0');
+    text.resize(static_cast<std::size_t>(GetDlgItemTextW(box, 0xFFFF, text.data(), static_cast<int>(text.size()))));
+    const auto links = shortLinksIn(localAppData);
+    ASSERT_EQ(links.size(), 1u);
+    EXPECT_TRUE(links.front().junction);
+    std::error_code error;
+    EXPECT_TRUE(fs::equivalent(anyLengthPath(links.front().path + "\\frost.exe"), anyLengthPath(exe), error))
+        << error.message();
+    const std::string shown = frost::io::fromWide(text).value_or("?");
+    EXPECT_TRUE(
+        shown.starts_with("cannot restart frost through its short link " + links.front().path + "\\frost.exe: "))
+        << shown;
+    EXPECT_TRUE(shown.contains("(win32 error 5)")) << shown;
+    EXPECT_TRUE(
+        shown.ends_with("Install FrostIDE in a directory whose frost.exe path is shorter than 260 UTF-16 units."))
+        << shown;
+    ASSERT_NE(PostMessageW(box, WM_CLOSE, 0, 0), FALSE) << GetLastError();
+    const auto result = process.communicate({}, 30s);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->exitCode, 4) << result->stdoutBytes;
+    EXPECT_TRUE(result->stdoutBytes.contains("frost: " + shown)) << result->stdoutBytes;
+    EXPECT_TRUE(shownWindowsTitled(desktop.handle(), L"FrostIDE").empty());
+    EXPECT_TRUE(shownWindowsTitled(desktop.handle(), L"FrostIDE cannot start").empty());
+    EXPECT_TRUE(crashHandlersOf(static_cast<DWORD>(process.pid())).empty());
+    EXPECT_NE(RemoveDirectoryW(extendedWide(links.front().path).c_str()), FALSE) << GetLastError();
+    EXPECT_TRUE(fs::is_regular_file(anyLengthPath(exe), error)) << error.message();
+}
+
+TEST(FrostProcess, GuiStartFromALongPathShowsItsWindowOrDocumentsRefusal) {
     /*
      * The GUI from a 300-unit image path, as a user starts it (no arguments): the launcher
      * restarts frost through its short link and waits; the main window ("FrostIDE") appears on
@@ -1482,7 +1739,11 @@ TEST(FrostProcess, GuiStartFromALongPathShowsItsWindow) {
     ASSERT_TRUE(desktop.valid());
     const auto process = startGui(exe, environment, form, desktop);
     ASSERT_NE(process, nullptr);
-    const auto [window, owner] = waitForRestartedWindow(desktop, L"FrostIDE", *process, 60s);
+    const auto [window, owner] = waitForRestartedWindow(desktop, L"FrostIDE", *process, 60s, true);
+    if (window != nullptr && owner == static_cast<DWORD>(process->pid())) {
+        expectPhysicalLongInstallRefusal(window, owner, *process, exe, localAppData, desktop);
+        return;
+    }
     if (window == nullptr) {
         const auto rest = process->communicate({}, 10s);
         FAIL() << "no FrostIDE window from a restarted frost; launcher output: "
@@ -1504,13 +1765,19 @@ TEST(FrostProcess, GuiFailureAfterARestartNamesTheInstallDirectory) {
      * After a restart every path frost names itself is the link's, so a GUI failure message
      * also says where FrostIDE is installed. Here platforms\ is missing: the restarted frost's
      * box ("FrostIDE cannot start", on the private desktop) and its stderr name the real
-     * install directory and the link. The test closes the box; status 4 comes back through
+     * supplied long installation spelling and the link. The long directory is a junction
+     * backed by a short physical master; restart refusal is not accepted here. The test
+     * closes the box; status 4 comes back through
      * the launcher.
      */
     const ScratchDir scratch("app-process-guifail");
     const ImagePathForm form = longStartForm();
     const std::string dir = imagePathCell(longFormOf(scratch), 300, form);
-    const std::string exe = copyFrostTo(dir, Plugins::None);
+    const std::string master = scratch.join("m");
+    ASSERT_FALSE(copyFrostTo(master, Plugins::None).empty());
+    LongInstallJunctions junctions;
+    const std::string exe = junctions.add(master, dir);
+    ASSERT_FALSE(exe.empty());
     const std::string localAppData = localAppDataIn(scratch, "lad");
     Environment environment = ownPluginsOnly();
     environment.emplace_back("LOCALAPPDATA", localAppData);
@@ -2125,7 +2392,60 @@ TEST(FrostProcess, GuiStartsTheCrashHandlerAfterTheFirstFrame) {
 }
 
 #ifdef _WIN32
-TEST(FrostProcess, GuiStartsTheCrashHandlerThroughTheShortLink) {
+TEST(FrostProcess, GuiStartsTheCrashHandlerThroughTheShortLinkOrDocumentsRefusal) {
+    /*
+     * A GUI start from a 310-unit image path restarts through the short link (ADR 0012); the
+     * restarted frost starts exactly one crash handler, from the link (its path is under
+     * <LOCALAPPDATA>\FrostIDE\i\), annotated with the first launcher as frost.restarted_from;
+     * the first launcher starts none, and the handler ends with frost after a close. A
+     * physical-long restart refusal must meet the strict parent-owned error contract.
+     */
+    const ScratchDir scratch("app-process-gui-link");
+    const ImagePathForm form = longStartForm();
+    const std::string exe = copyFrostTo(imagePathCell(longFormOf(scratch), 310, form));
+    const std::string localAppData = localAppDataIn(scratch, "lad");
+    const TestCache cache = testCacheIn(localAppData);
+    Environment environment = ownPluginsOnly();
+    environment.insert(environment.end(), cache.environment.begin(), cache.environment.end());
+    const frost::test::PrivateDesktop desktop;
+    ASSERT_TRUE(desktop.valid());
+    const auto process = startGui(exe, environment, form, desktop);
+    ASSERT_NE(process, nullptr);
+    const auto [window, owner] = waitForRestartedWindow(desktop, L"FrostIDE", *process, 60s, true);
+    if (window != nullptr && owner == static_cast<DWORD>(process->pid())) {
+        expectPhysicalLongInstallRefusal(window, owner, *process, exe, localAppData, desktop);
+        return;
+    }
+    if (window == nullptr) {
+        const auto rest = process->communicate({}, 10s);
+        FAIL() << "no FrostIDE window from a restarted frost; launcher output: "
+               << (rest ? rest->stdoutBytes : rest.error().describe());
+    }
+    const std::string log = waitForHandlerLine(cache.logs, 60s);
+    const std::size_t registered = log.find("crash handler registered pid=");
+    ASSERT_NE(registered, std::string::npos) << log;
+    const std::string line = log.substr(registered, log.find('\n', registered) - registered);
+    const auto handler = static_cast<DWORD>(std::stoul(fieldAfter(line, "pid")));
+    EXPECT_EQ(crashHandlersOf(owner), std::vector<DWORD>{handler}) << line;
+    EXPECT_TRUE(crashHandlersOf(static_cast<DWORD>(process->pid())).empty()) << "the first launcher starts none";
+    // frost started the handler by its path through the link; the kernel names the image by the
+    // resolved physical path, which is checked below.
+    const std::string linkFolder = frost::io::joinPath(localAppData, "FrostIDE\\i").value();
+    EXPECT_TRUE(fieldAfter(line, "path").starts_with(linkFolder + "\\")) << line << " not under " << linkFolder;
+    const std::string handlerImage = imagePathOf(handler);
+    const std::string handlerPlain = handlerImage.starts_with("\\\\?\\") ? handlerImage.substr(4) : handlerImage;
+    EXPECT_EQ(handlerPlain, frost::io::joinPath(frost::io::parentPath(exe), "crashpad_handler.exe").value());
+    // frost.restarted_from is annotated with this value just before the line is logged.
+    const std::string restartedFrom = fieldAfter(line, "restarted-from");
+    EXPECT_TRUE(restartedFrom == startedAs(exe, form) || restartedFrom == exe) << line;
+    ASSERT_NE(PostMessageW(window, WM_CLOSE, 0, 0), FALSE) << GetLastError();
+    const auto result = process->communicate({}, 30s);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    EXPECT_EQ(result->exitCode, 0) << result->stdoutBytes;
+    EXPECT_TRUE(frost::test::waitForProcessGone(handler, 2s)) << "the crash handler outlived frost";
+}
+
+TEST(FrostProcess, GuiStartsTheCrashHandlerThroughAShortBackedLongJunction) {
     /*
      * A GUI start from a 310-unit image path restarts through the short link (ADR 0012); the
      * restarted frost starts exactly one crash handler, from the link (its path is under
@@ -2134,7 +2454,11 @@ TEST(FrostProcess, GuiStartsTheCrashHandlerThroughTheShortLink) {
      */
     const ScratchDir scratch("app-process-gui-link");
     const ImagePathForm form = longStartForm();
-    const std::string exe = copyFrostTo(imagePathCell(longFormOf(scratch), 310, form));
+    const std::string master = scratch.join("m");
+    ASSERT_FALSE(copyFrostTo(master).empty());
+    LongInstallJunctions junctions;
+    const std::string exe = junctions.add(master, imagePathCell(longFormOf(scratch), 310, form));
+    ASSERT_FALSE(exe.empty());
     const std::string localAppData = localAppDataIn(scratch, "lad");
     const TestCache cache = testCacheIn(localAppData);
     Environment environment = ownPluginsOnly();
@@ -2152,17 +2476,24 @@ TEST(FrostProcess, GuiStartsTheCrashHandlerThroughTheShortLink) {
     const std::string log = waitForHandlerLine(cache.logs, 60s);
     const std::size_t registered = log.find("crash handler registered pid=");
     ASSERT_NE(registered, std::string::npos) << log;
+    const std::size_t firstFrame = log.find("first frame shown");
+    ASSERT_NE(firstFrame, std::string::npos) << log;
+    EXPECT_LT(firstFrame, registered) << log;
+    EXPECT_EQ(parentProcessOf(owner), static_cast<DWORD>(process->pid()));
+    const auto links = shortLinksIn(localAppData);
+    ASSERT_EQ(links.size(), 1u);
+    EXPECT_TRUE(links.front().junction);
     const std::string line = log.substr(registered, log.find('\n', registered) - registered);
     const auto handler = static_cast<DWORD>(std::stoul(fieldAfter(line, "pid")));
     EXPECT_EQ(crashHandlersOf(owner), std::vector<DWORD>{handler}) << line;
     EXPECT_TRUE(crashHandlersOf(static_cast<DWORD>(process->pid())).empty()) << "the first launcher starts none";
     // frost started the handler by its path through the link; the kernel names the image by the
-    // resolved path, which is the handler beside the long-path copy.
+    // resolved physical path, which is checked below.
     const std::string linkFolder = frost::io::joinPath(localAppData, "FrostIDE\\i").value();
     EXPECT_TRUE(fieldAfter(line, "path").starts_with(linkFolder + "\\")) << line << " not under " << linkFolder;
     const std::string handlerImage = imagePathOf(handler);
     const std::string handlerPlain = handlerImage.starts_with("\\\\?\\") ? handlerImage.substr(4) : handlerImage;
-    EXPECT_EQ(handlerPlain, frost::io::joinPath(frost::io::parentPath(exe), "crashpad_handler.exe").value());
+    EXPECT_EQ(handlerPlain, frost::io::joinPath(master, "crashpad_handler.exe").value());
     // frost.restarted_from is annotated with this value just before the line is logged.
     const std::string restartedFrom = fieldAfter(line, "restarted-from");
     EXPECT_TRUE(restartedFrom == startedAs(exe, form) || restartedFrom == exe) << line;
