@@ -276,8 +276,9 @@ run_config() {
     if [[ "$label" == debug ]]; then debug_built=1; fi
     if [[ "$label" == fuzz ]]; then fuzz_built=1; fi
     echo "=== $label: test ($preset)"
-    local out counts
-    out="$(ctest --preset "$preset" "$@" 2>&1)" || status=1
+    local out counts skip_junit="$PWD/build/$configure/skip-audit.xml"
+    rm -f -- "$skip_junit"
+    out="$(ctest --preset "$preset" --output-junit "$skip_junit" "$@" 2>&1)" || status=1
     echo "$out" | tail -15
     counts="$(ctest_counts <<< "$out")"
     if [[ -z "$counts" ]]; then
@@ -287,7 +288,7 @@ run_config() {
     # The skip audit (FND-6): every skipped test with its reason; a skip for a missing pinned tool
     # fails the run ("<label> skips FAILED (...)"), environment skips are only listed.
     local audit audit_rc=0
-    audit="$(python3 -I tools/frost_lint.py skips --log "build/$configure/Testing/Temporary/LastTest.log" 2>&1)" ||
+    audit="$(python3 -I tools/frost_lint.py skips --log "build/$configure/Testing/Temporary/LastTest.log" --junit "$skip_junit" 2>&1)" ||
         audit_rc=$?
     echo "$audit"
     if ((audit_rc != 0)); then

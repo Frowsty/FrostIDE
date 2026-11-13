@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import io
 import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -591,6 +592,79 @@ class SkipAuditTest(TempDirTestCase):
         result = run_tool("frost_lint.py", "skips", "--log", str(self.tmp / "missing.log"))
         self.assertEqual(result.returncode, 0)
         self.assertTrue(result.stdout.splitlines()[-1].startswith("skips not-run (cannot read "))
+
+    def test_junit_enriches_and_deduplicates_exact_names_without_counting_disabled(self) -> None:
+        log = self._log(self._block(1, "A.B", self.GTEST_SKIPPED.format(reason="no GPU device"), self.BY_REGEX))
+        report = self.tmp / "tests.xml"
+        _write(report, '<testsuite><testcase name="A.B" status="notrun">'
+               '<skipped message="SKIP_REGULAR_EXPRESSION_MATCHED"/><system-out>clangd is on PATH</system-out>'
+               '</testcase><testcase name="tools.return77" status="notrun">'
+               '<skipped message="SKIP_RETURN_CODE=77"/><system-out>'
+               "test_x ... skipped 'spawn log is Debug-only'\n</system-out></testcase>"
+               '<testcase name="disabled" status="disabled"><skipped message="Disabled"/></testcase></testsuite>')
+        result = run_tool("frost_lint.py", "skips", "--log", log, "--junit", str(report), "--junit", str(report))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count("skipped (environment): A.B:"), 1)
+        self.assertIn("tools.return77: spawn log is Debug-only", result.stdout)
+        self.assertNotIn("disabled", result.stdout)
+        self.assertNotIn("MISSING TOOL", result.stdout)
+        self.assertIn("skips ok (2 skipped, none for a missing pinned tool)", result.stdout)
+
+    def test_same_name_junit_pinned_reason_cannot_hide_behind_log_environment_reason(self) -> None:
+        log = self._log(self._block(1, "A.B", self.GTEST_SKIPPED.format(reason="no GPU device"), self.BY_REGEX))
+        report = self.tmp / "tests.xml"
+        _write(report, '<testsuite><testcase name="A.B" status="notrun">'
+               '<skipped message="SKIP_RETURN_CODE=77"/><system-out>'
+               "test_tool ... skipped 'clangd is unavailable'\n</system-out></testcase></testsuite>")
+        result = run_tool("frost_lint.py", "skips", "--log", log, "--junit", str(report))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count("skipped (MISSING TOOL): A.B:"), 1)
+        self.assertIn("no GPU device", result.stdout)
+        self.assertIn("clangd is unavailable", result.stdout)
+        self.assertIn("skips FAILED (1 of 1 skipped for a missing pinned tool)", result.stdout)
+
+    def test_invalid_explicit_junit_fails_instead_of_reporting_an_incomplete_audit(self) -> None:
+        for content in (None, '<testsuite>'):
+            with self.subTest(content=content):
+                report = self.tmp / "invalid.xml"
+                if content is not None:
+                    _write(report, content)
+                result = run_tool("frost_lint.py", "skips", "--junit", str(report))
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("skips FAILED (cannot read JUnit", result.stdout)
+
+    def test_actual_ctest_return77_regex_skip_and_disabled_outcomes(self) -> None:
+        ctest = shutil.which("ctest")
+        self.assertIsNotNone(ctest, "the pinned CTest is required for the skip-audit regression")
+        child = self.tmp / "skip_child.py"
+        _write(child, "import sys\nprint(sys.argv[1])\nraise SystemExit(int(sys.argv[2]))\n")
+        quote = lambda path: str(path).replace("\\", "/")
+        _write(self.tmp / "CTestTestfile.cmake",
+               f'add_test(env77 "{quote(sys.executable)}" "{quote(child)}" '
+               '"test_env ... skipped \'spawn log is Debug-only\'" "77")\n'
+               'set_tests_properties(env77 PROPERTIES SKIP_RETURN_CODE 77)\n'
+               f'add_test(regex "{quote(sys.executable)}" "{quote(child)}" '
+               '"[  SKIPPED ] no GPU device" "0")\n'
+               'set_tests_properties(regex PROPERTIES SKIP_REGULAR_EXPRESSION "SKIPPED")\n'
+               f'add_test(pinned77 "{quote(sys.executable)}" "{quote(child)}" '
+               '"test_tool ... skipped \'clangd is unavailable\'" "77")\n'
+               'set_tests_properties(pinned77 PROPERTIES SKIP_RETURN_CODE 77)\n'
+               f'add_test(disabled "{quote(sys.executable)}" "{quote(child)}" "unused" "0")\n'
+               'set_tests_properties(disabled PROPERTIES DISABLED TRUE)\n'
+               f'add_test(passed "{quote(sys.executable)}" "{quote(child)}" "clangd is available" "0")\n')
+        report = self.tmp / "tests.xml"
+        actual = subprocess.run([ctest, "--test-dir", str(self.tmp), "--output-junit", str(report)],
+                                capture_output=True, text=True, env=clean_env(), check=False)
+        self.assertEqual(actual.returncode, 0, actual.stdout + actual.stderr)
+        log = self.tmp / "Testing/Temporary/LastTest.log"
+        result = run_tool("frost_lint.py", "skips", "--log", str(log), "--junit", str(report))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("env77: spawn log is Debug-only", result.stdout)
+        self.assertIn("skipped (MISSING TOOL): pinned77: clangd is unavailable", result.stdout)
+        self.assertNotIn("disabled", result.stdout)
+        self.assertNotIn("passed:", result.stdout)
+        self.assertEqual(result.stdout.count("skipped (environment): regex:"), 1)
+        self.assertIn("skips FAILED (1 of 3 skipped for a missing pinned tool)", result.stdout)
 
 
 class RatchetTest(TempDirTestCase):

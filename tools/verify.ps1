@@ -249,7 +249,9 @@ function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [s
     # (0), so a test that fails to start (0xC0000142, 0xC0000135) or crashes raises a hard-error or
     # WER box on the user's desktop, whatever desktop the test runs on. In mode 0 the tests inherit
     # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX and just fail with their status (ADR 0027).
-    $out = Invoke-Native { ctest --test-dir $Dir -C $Config --output-on-failure --interactive-debug-mode 0 @CtestArgs }
+    $skipJunit = Join-Path (Resolve-Path -LiteralPath $Dir).ProviderPath 'skip-audit.xml'
+    if (Test-Path -LiteralPath $skipJunit) { Remove-Item -LiteralPath $skipJunit }
+    $out = Invoke-Native { ctest --test-dir $Dir -C $Config --output-on-failure --interactive-debug-mode 0 --output-junit $skipJunit @CtestArgs }
     $ok = ($LASTEXITCODE -eq 0)
     $counts = Get-CtestCounts $out
     if (-not $counts) { $counts = 'no-results'; $ok = $false }
@@ -258,7 +260,7 @@ function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [s
     if (-not $ok) { $script:failed = $true }
     # The skip audit (FND-6): every skipped test with its reason; a skip for a missing pinned tool
     # fails the gate ("win <label> skips FAILED (...)"), environment skips are only listed.
-    $audit = Invoke-Native { & $python -I (Join-Path $PSScriptRoot 'frost_lint.py') skips --log (Join-Path $Dir 'Testing\Temporary\LastTest.log') }
+    $audit = Invoke-Native { & $python -I (Join-Path $PSScriptRoot 'frost_lint.py') skips --log (Join-Path $Dir 'Testing\Temporary\LastTest.log') --junit $skipJunit }
     if ($LASTEXITCODE -ne 0) {
         $auditLine = $audit | Where-Object { $_ -match '^skips ' } | Select-Object -Last 1
         if (-not $auditLine) { $auditLine = "skips FAILED (exit $LASTEXITCODE)" }
