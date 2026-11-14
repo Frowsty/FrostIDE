@@ -1,0 +1,13 @@
+# Native Create from Usage
+
+Create from Usage offers the native recovered-AST function/method planner alongside actual language-provider create/declaration actions. Choose the unresolved identifier in an ordinary C++ function body. The request retains the existing pre-query editor/project/trust guards and previews one atomic refactoring transaction.
+
+The original source is expected to have an unresolved-use error. The helper admits only Clang's exact unresolved identifier/member diagnostic IDs at the selected token. Other baseline errors, macros, existing overloads, dependent/template calls and unsupported class lookup profiles refuse. This does not suppress arbitrary compiler failures to make generation appear successful.
+
+Arguments come from real recovered expression QualTypes. Scalar/pointer arguments become value parameters and record arguments become const references; array arguments decay to pointers. Parameter names use actual referenced identifiers where available, otherwise `arg1`, `arg2`, etc. Return type may be inferred only from a known initializer/direct return/discarded-value context; an explicit C++ return type is required otherwise. Supply implementation statements without outer braces. No fake default result, throwing placeholder or invented business behavior is generated. Non-void bodies must be supplied and must pass return-path diagnostics.
+
+Free calls insert a source-local definition before the enclosing ordinary namespace-scope function. Object-member calls insert a public inline definition into the actual complete project class, including a captured header; const object calls receive a const method. The supported class profile excludes bases, templates, unions and local/lambda classes. Doxygen uses the selected name and actual inferred parameter identifiers, with the implementation labelled user-supplied.
+
+The complete candidate reparses without errors in every captured compilation configuration using the existing frozen VFS/dependency receipts. Different inferred signatures across configurations refuse. Preview and Apply recheck the existing target, generated/read-only source, trust, source-generation and immutable input guards. Existing source/header insertion creates no files or project-membership claims. One global Undo restores the accepted operation.
+
+Authored future tests cover raw recovery, unrelated errors and macros, a no-exception profile, real candidate compile/link, ordinary captured-header methods, transport/native chooser admission and Workbench stale-header/atomic Undo. No build, compiler, helper or test execution was performed during implementation-first development.
