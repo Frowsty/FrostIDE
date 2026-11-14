@@ -2079,7 +2079,8 @@ TEST(LanguageControllerTemplates, StalePopupCannotInsertIntoChangedDocument) {
     EXPECT_EQ(host.text(), "changed");
 }
 } // namespace
-} // namespace frost::ui::langnamespace frost::ui::lang {
+} // namespace frost::ui::lang
+namespace frost::ui::lang {
 namespace {
 TEST(LanguageControllerTemplates, ClosingControllerDuringAuthorPromptDoesNotApplyATemplate) {
     FeatureServer server;
