@@ -119,6 +119,14 @@ sched::Task<void> checkRenameTask(io::IFileSystem* fs, io::IProcessLauncher* lau
             admission->evidence.dependencies.push_back({dependency.path, std::move(*bytes)});
         }
     }
+    for (const auto& path : result->directoryDependencies) {
+        const auto state = fs->status(path);
+        if (!state || state->type != io::FileType::Directory) {
+            done(fail(ErrorCode::Busy, "A C++ include directory changed during rename analysis: " + path));
+            co_return;
+        }
+        admission->evidence.dependencies.push_back({path, std::nullopt, true});
+    }
     for (const auto& path : result->missingDependencies) {
         const auto state = fs->status(path);
         if (state || state.error().code() != ErrorCode::NotFound) {
