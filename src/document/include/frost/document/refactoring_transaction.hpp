@@ -16,6 +16,11 @@ struct DiskReplacement {
     std::string expectedBytes;
     std::string afterBytes;
 };
+// Absent, closed endpoint in an existing directory. Bytes are staged privately; never prewrite.
+struct FileCreation {
+    std::string path;
+    std::string afterBytes;
+};
 struct FileRename {
     std::string from;
     std::string to;
@@ -44,6 +49,7 @@ struct RefactoringPlan {
     std::vector<ReadDependency> dependencies;
     std::vector<FileRename> renames;
     std::vector<BufferDependency> bufferDependencies;
+    std::vector<FileCreation> creates;
     // Final initial admission only; caller freezes captured preview/config/trust generations.
     std::function<Result<void>()> revalidateContext;
 };
@@ -73,14 +79,16 @@ struct RefactoringOptions {
     std::function<void(FileDocument&, std::string_view oldPath)> renamed;
 };
 /*
- * SaveManager/fs outlive the coordinator. Owner-thread only; synchronous native preparation.
- * All predecision failures return unexpected with workspace/buffers unchanged. After a durable
- * decision, any incomplete settlement returns a VALUE with PendingRecovery and retained token;
- * never treat it as unapplied. resume() retries the frozen operation, never a changed preview.
- * External filesystem readers may see per-file transitions/gaps. Native participants enforce
- * their explicitly limited metadata/platform profile; no universal metadata or power-loss claim.
- * Undo/redo revalidate every disk participant and exact document boundary before any inverse.
- * Local Document Undo/Redo cannot split a global edge even if this coordinator is destroyed.
+ * SaveManager/fs outlive the coordinator; one coordinator per SaveManager. Owner-thread only; synchronous native
+ * preparation. All predecision failures return unexpected with workspace/buffers unchanged. After a durable decision,
+ * any incomplete settlement returns a VALUE with PendingRecovery and retained token; never treat it as unapplied.
+ * resume() retries the frozen operation, never a changed preview. External filesystem readers may see per-file
+ * transitions/gaps. Native participants enforce their explicitly limited metadata/platform profile; no universal
+ * metadata or power-loss claim. Undo/redo revalidate every disk participant and exact document boundary before any
+ * inverse. Created files can be opened clean after Apply. Global Undo leaves that view intact in the ordinary Deleted
+ * disk state; Redo returns it InSync. Dirty/foreign views refuse history before effects. Saving a Deleted view creates
+ * a foreign object and makes Redo refuse. Local Document Undo/Redo cannot split a global edge even if this coordinator
+ * is destroyed.
  */
 class RefactoringCoordinator {
 public:
