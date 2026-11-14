@@ -104,6 +104,9 @@ public:
     [[nodiscard]] FileReplacementOutcome moveOriginalTo(std::string_view destination);
     [[nodiscard]] FileReplacementOutcome restoreMove();
     [[nodiscard]] FileReplacementOutcome reapplyMove();
+    // Time-bounded parent-object/native-leaf equality, including when target is absent. Does not
+    // grant mutation authority. Used to identify already-open aliases before creation/history.
+    [[nodiscard]] Result<bool> namesTargetEndpoint(std::string_view path) const;
     // Fresh all-participant preflight used before coordinated Undo/Redo; no namespace changes.
     [[nodiscard]] Result<void> validateCurrent(bool after) const;
 
