@@ -18,12 +18,13 @@ bool safePath(std::string_view path, bool commandPath = false) {
 } // namespace
 
 Result<rpc::Json> dbgEngDapLaunchArguments(const DbgEngTarget& target) {
-    if (target.native.sourceMap)
-        return fail(ErrorCode::Unsupported, "DbgEng source mapping is not implemented in the FER-16 backend slice");
-    const bool invalidProgram = target.dumpFile.empty()
-                                    ? !safePath(target.native.program, true)
-                                    : (!safePath(target.dumpFile) ||
-                                       (!target.native.program.empty() && !safePath(target.native.program, true)));
+    if (target.processId && (*target.processId == 0 || !target.dumpFile.empty()))
+        return fail(ErrorCode::InvalidArgument, "Attach requires a nonzero PID and no dump");
+    const bool invalidProgram =
+        target.processId          ? (!target.native.program.empty() && !safePath(target.native.program, true))
+        : target.dumpFile.empty() ? !safePath(target.native.program, true)
+                                  : (!safePath(target.dumpFile) ||
+                                     (!target.native.program.empty() && !safePath(target.native.program, true)));
     if (invalidProgram ||
         (!target.native.workingDirectory.empty() && !safePath(target.native.workingDirectory, true)) ||
         target.natvisFiles.size() > 64 || target.localSymbolPaths.size() > 64) {
@@ -64,6 +65,11 @@ Result<rpc::Json> dbgEngDapLaunchArguments(const DbgEngTarget& target) {
                       .set("stopOnEntry", target.native.stopOnEntry)
                       .set("natvis", std::move(natvis))
                       .set("symbolPaths", std::move(symbols));
+    if (target.processId)
+        result.set("processId", *target.processId);
+    if (target.native.sourceMap)
+        result.set("sourceMap",
+                   rpc::Json::object().set(target.native.sourceMap->from(), target.native.sourceMap->to()));
     if (!target.dumpFile.empty())
         result.set("dumpFile", target.dumpFile);
     return result;
