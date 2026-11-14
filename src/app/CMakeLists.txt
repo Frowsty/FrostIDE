@@ -305,3 +305,7 @@ add_custom_target(frost_visualizers
     VERBATIM)
 
 add_dependencies(frost frost_visualizers)
+
+# Optional locally built standalone Lua; no download or recipe execution during the IDE build.
+include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
+frost_stage_lua_runtime(frost)
