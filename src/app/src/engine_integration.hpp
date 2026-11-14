@@ -45,6 +45,11 @@ public:
     [[nodiscard]] Result<std::uint64_t> command(std::string method, lang::Json params);
     [[nodiscard]] Result<build::RunId> startEditor();
     [[nodiscard]] Result<void> validateScript();
+    // Actual authenticated content command; callback runs on GUI only for the retained session.
+    [[nodiscard]] Result<std::uint64_t> contentCommand(std::string method, lang::Json params,
+                                                       std::function<void(Result<lang::Json>)> completed);
+    [[nodiscard]] Result<void> findAssetUsagesForDocument(std::string_view absolutePath, bool reveal = true);
+    void invalidateAssetUsages();
     [[nodiscard]] Result<void> cancelRequest();
     [[nodiscard]] lang::Json snapshot() const;
     // GUI-only immutable CLI/project capture; returned admission is worker-safe and revision-bound.

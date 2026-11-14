@@ -21,6 +21,7 @@
 
 #include "frost/build/cmake_toolchain.hpp"
 #include "frost/build/msbuild_locator.hpp"
+#include "frost/engine/asset_index.hpp"
 #include "frost/engine/engine_cli.hpp"
 #include "frost/engine/engine_lua.hpp"
 #include "frost/engine/handle.hpp"
@@ -378,6 +379,68 @@ void collectIds(const Json& entities, std::vector<std::uint64_t>& out, std::vect
             collectIds(*children, out, bad);
         }
     }
+}
+
+TEST_F(CorpusEngineContract, AssetIndexAndUsagesEqualActualEngineCliIncludingNewReference) {
+    const auto program = builtEditor();
+    ASSERT_FALSE(program.empty());
+    test::ScratchDir work("engine-asset-index");
+    std::error_code ec;
+    std::filesystem::copy(std::filesystem::path(m_corpus) / "TestProject", std::filesystem::path(work.path()) / "Game",
+                          std::filesystem::copy_options::recursive, ec);
+    ASSERT_FALSE(ec) << ec.message();
+    const auto project = work.join("Game");
+    auto& fs = io::realFileSystem();
+    ProjectContentRequest load;
+    load.program = program;
+    load.project = project;
+    auto content = loadProjectContent(fs, io::realProcessLauncher(), load, [] { return true; });
+    ASSERT_TRUE(content) << content.error().describe();
+    ASSERT_FALSE(content->assets.empty());
+    const auto target = content->assets.front();
+    ASSERT_TRUE(fs.writeFileAtomic(project + "/Assets/AssetUsageFixture.lua",
+                                   "local asset = " + Json(target.path).dump() + "\nreturn asset\n"));
+    EngineCliRequest request;
+    request.project = project;
+    request.command = "assets.refresh";
+    ASSERT_TRUE(runEngineCliResult(io::realProcessLauncher(), program, request));
+    content = loadProjectContent(fs, io::realProcessLauncher(), load, [] { return true; });
+    ASSERT_TRUE(content);
+    auto index = AssetIndex::create(*content);
+    ASSERT_TRUE(index);
+    request.command = "assets.list";
+    auto listed = runEngineCliResult(io::realProcessLauncher(), program, request);
+    ASSERT_TRUE(listed);
+    ASSERT_NE(listed->find("assets"), nullptr);
+    EXPECT_EQ(index->content().assets.size(), listed->find("assets")->size());
+    for (const auto& row : listed->find("assets")->items()) {
+        auto handle = engineHandleAt(row, "handle");
+        ASSERT_TRUE(handle);
+        const auto* actual = index->find(*handle);
+        ASSERT_NE(actual, nullptr);
+        EXPECT_EQ(actual->path, row.stringAt("path"));
+        EXPECT_EQ(actual->type, row.stringAt("type"));
+    }
+    request.command = "assets.find-references";
+    request.params = Json::object().set("asset", toJson(target.handle));
+    auto references = runEngineCliResult(io::realProcessLauncher(), program, request);
+    ASSERT_TRUE(references);
+    auto usages = parseAssetUsages(*index, target.handle, *references);
+    ASSERT_TRUE(usages) << usages.error().describe();
+    ASSERT_NE(references->find("references"), nullptr);
+    EXPECT_EQ(usages->references.size(), references->find("references")->size());
+    EXPECT_TRUE(std::ranges::any_of(usages->references, [](const auto& row) {
+        return row.path == "Assets/AssetUsageFixture.lua" && row.count > 0;
+    }));
+    std::uint64_t oracleCount{};
+    for (const auto& row : references->find("references")->items()) {
+        auto* count = row.find("count");
+        ASSERT_NE(count, nullptr);
+        ASSERT_TRUE(count->asUnsigned());
+        oracleCount += *count->asUnsigned();
+    }
+    EXPECT_EQ(usages->occurrences, oracleCount);
+    EXPECT_EQ(usages->codeVisionCount(), references->find("references")->size());
 }
 
 TEST_F(CorpusEngineContract, EntityIdsAbove2To53RoundTripExactlyThroughTheEngine) {

@@ -92,5 +92,38 @@ TEST(EngineView, RefreshRequestsWorkWithoutInventingContent) {
     EXPECT_EQ(view.tree()->topLevelItemCount(), 0);
 }
 
+TEST(EngineView, UsageRowsDistinguishOccurrenceDocumentAndUnsavedNavigationFacts) {
+    EngineView view;
+    view.setContent(content());
+    engine::AssetUsages usages;
+    usages.target = content().assets[1];
+    engine::AssetUsage settings;
+    settings.path = "Game.frostproj";
+    settings.type = "ProjectSettings";
+    settings.setting = "General.StartScene";
+    settings.count = 3;
+    engine::AssetUsage scene;
+    scene.path = "Assets/Unsaved.fscene";
+    scene.type = "Scene";
+    scene.unsaved = true;
+    scene.indexed = false;
+    scene.count = 1;
+    usages.references = {settings, scene};
+    usages.occurrences = 4;
+    view.setAssetUsages(usages);
+    auto* tree = view.findChild<QTreeWidget*>(QStringLiteral("engineAssetUsages"));
+    ASSERT_NE(tree, nullptr);
+    ASSERT_EQ(tree->topLevelItemCount(), 2);
+    EXPECT_EQ(tree->topLevelItem(0)->text(1), QStringLiteral("3"));
+    EXPECT_TRUE(tree->topLevelItem(1)->text(2).contains(QStringLiteral("FrostEditor only")));
+    std::vector<QString> opened;
+    QObject::connect(&view, &EngineView::openAssetUsage, [&](const QString& path) { opened.push_back(path); });
+    tree->itemActivated(tree->topLevelItem(0), 0);
+    ASSERT_EQ(opened.size(), 1u);
+    EXPECT_EQ(opened[0], QStringLiteral("Game.frostproj"));
+    view.clearAssetUsages();
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+}
+
 } // namespace
 } // namespace frost::ui

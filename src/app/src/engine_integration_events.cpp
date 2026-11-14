@@ -237,6 +237,7 @@ void EngineIntegration::Impl::drainPushEvents() {
                             if constexpr (std::is_same_v<T, engine::EngineState>) {
                                 if (impl.state && entry.sequence < impl.state->sequence)
                                     return;
+                                impl.clearAssetUsages();
                                 impl.state = entry;
                                 statePublished = true;
                                 impl.observeEvent("play.state", entry.data, entry.sequence);

@@ -90,6 +90,8 @@ void EngineIntegration::Impl::invalidate(bool stopOwned) {
     clearSession(true);
     instances.clear();
     installations.clear();
+    clearAssetUsages();
+    assetIndex.reset();
     projectContent.reset();
     if (picker)
         picker->clear();
@@ -433,6 +435,32 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
         if (found != m_impl->projectContent->assets.end() &&
             std::to_string(found->handle.value) == handle.toUtf8().toStdString())
             m_impl->openAsset(relative);
+    });
+    connect(impl.projectView, &ui::EngineView::findAssetUsages, this,
+            [this](const QString& path, const QString& handle) {
+                auto id = engine::engineHandleFrom(lang::Json(handle.toStdString()));
+                auto result = id ? m_impl->findAssetUsages(path.toStdString(), *id)
+                                 : Result<void>(fail(ErrorCode::InvalidArgument, "Invalid asset handle"));
+                if (!result)
+                    m_impl->setStatus(qs(result.error().message()));
+            });
+    connect(impl.projectView, &ui::EngineView::openAssetUsage, this, [this](const QString& path) {
+        if (!m_impl->assetUsages || !m_impl->projectContent)
+            return;
+        const auto relative = path.toStdString();
+        for (const auto& ref : m_impl->assetUsages->references)
+            if (ref.path == relative) {
+                if (!ref.indexed) {
+                    m_impl->setStatus(QStringLiteral("This unsaved scene exists only in FrostEditor; no IDE disk "
+                                                     "document represents its current contents"));
+                } else if (ref.type == "ProjectSettings") {
+                    // The navigation workbench opens text documents only; unlike the app-level
+                    // open-location route it cannot select/switch a project by file extension.
+                    m_impl->openProjectSettingsDocument();
+                } else
+                    m_impl->openAsset(relative);
+                return;
+            }
     });
     for (const auto& [id, name, method] : {std::tuple{"engine.play", "Play", "play.start"},
                                            {"engine.pause", "Pause", "play.pause"},

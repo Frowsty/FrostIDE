@@ -12,6 +12,7 @@
 
 frost_add_library(engine LAYER engine
     SOURCES
+        src/asset_index.cpp
         src/binding_index.cpp
         src/binding_preview.cpp
         src/binding_queries.cpp

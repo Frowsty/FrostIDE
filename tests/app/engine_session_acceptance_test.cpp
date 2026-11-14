@@ -14,6 +14,7 @@
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/engine_console.hpp"
+#include "frost/ui/toolwindows/engine_view.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 
 #include "engine_crash_observer.hpp"
@@ -436,6 +437,47 @@ TEST_F(RealEngineWorkbench, EngineViewMatchesRealCliAssetsAndPickerSelectsExactR
     };
     EXPECT_EQ(exactAssets(*content->find("assets")), exactAssets(*oracle->find("assets")));
     EXPECT_EQ(state.stringAt("selectedInstanceId"), b->instanceId);
+    // Real connected usage query, then project-settings text navigation (never workspace switching).
+    auto info = build.cli("project.info", project);
+    ASSERT_TRUE(info);
+    const auto* start = info->find("startScene");
+    ASSERT_NE(start, nullptr);
+    const std::string scenePath(start->stringAt("path"));
+    ASSERT_FALSE(scenePath.empty());
+    auto usages = build.cli("assets.find-references", project, Json::object().set("asset", scenePath));
+    ASSERT_TRUE(usages);
+    auto& windows = rig.window->toolWindows();
+    windows.show("engineProject");
+    auto* view = qobject_cast<frost::ui::EngineView*>(windows.content("engineProject"));
+    ASSERT_NE(view, nullptr);
+    auto* assets = view->tree()->topLevelItem(1);
+    QTreeWidgetItem* target{};
+    for (int row = 0; row < assets->childCount(); ++row)
+        if (assets->child(row)->text(0) == QString::fromStdString(scenePath))
+            target = assets->child(row);
+    ASSERT_NE(target, nullptr);
+    view->tree()->setCurrentItem(target);
+    auto* find = view->findChild<QPushButton*>(QStringLiteral("engineFindAssetUsages"));
+    ASSERT_NE(find, nullptr);
+    find->click();
+    auto* rows = view->findChild<QTreeWidget*>(QStringLiteral("engineAssetUsages"));
+    ASSERT_NE(rows, nullptr);
+    ASSERT_TRUE(waitFor([&] { return rows->topLevelItemCount() > 0; }, 30s));
+    EXPECT_EQ(static_cast<std::size_t>(rows->topLevelItemCount()), usages->find("references")->size());
+    QTreeWidgetItem* settings{};
+    for (int row = 0; row < rows->topLevelItemCount(); ++row)
+        if (rows->topLevelItem(row)->text(0).endsWith(QStringLiteral(".frostproj")))
+            settings = rows->topLevelItem(row);
+    ASSERT_NE(settings, nullptr);
+    const auto rootBefore = rig.workbench->projectRoot();
+    rows->itemActivated(settings, 0);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return rig.workbench->currentView() &&
+                   rig.workbench->currentView()->path() == info->stringAt("projectFile");
+        },
+        30s));
+    EXPECT_EQ(rig.workbench->projectRoot(), rootBefore);
     rig.workbench->disconnectEngineSession();
     // Disconnecting an externally paired editor does not grant ownership of its process.
     frost::engine::EngineSessionOptions check;

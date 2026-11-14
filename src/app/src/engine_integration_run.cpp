@@ -464,6 +464,8 @@ void EngineIntegration::processFinished(const run::RunResult& result) {
 }
 
 void EngineIntegration::Impl::refreshProjectContent() {
+    clearAssetUsages();
+    assetIndex.reset();
     const auto generation = ++contentGeneration;
     if (!admitted(epoch, root, trustRevision)) {
         projectView->setUnavailable(QStringLiteral("Trust the project to read its engine content"));
@@ -511,6 +513,13 @@ void EngineIntegration::Impl::refreshProjectContent() {
                     return;
                 impl.projectBusy = false;
                 if (content) {
+                    auto index = engine::AssetIndex::create(*content);
+                    if (!index) {
+                        impl.projectContent.reset();
+                        impl.projectView->setUnavailable(qs(index.error().message()));
+                        return;
+                    }
+                    impl.assetIndex = std::make_shared<const engine::AssetIndex>(std::move(*index));
                     impl.projectContent = *content;
                     impl.projectView->setContent(std::move(*content));
                 } else {
@@ -552,6 +561,43 @@ void EngineIntegration::Impl::openAsset(std::string relative) {
                         (void)self->m_impl->workbench.m_nav->openFile(*resolved);
                 } else
                     self->m_impl->setStatus(qs(resolved.error().message()));
+            },
+            Qt::QueuedConnection);
+    });
+}
+
+void EngineIntegration::Impl::openProjectSettingsDocument() {
+    if (!projectContent)
+        return;
+    const auto content = *projectContent;
+    const auto currentEpoch = epoch;
+    const auto expectedRoot = root;
+    const auto revision = trustRevision;
+    const auto generation = contentGeneration;
+    auto* fs = &workbench.m_services.fs;
+    const auto key = projectKey;
+    const auto admission = physicalAdmission;
+    const QPointer<EngineIntegration> self(&owner);
+    background([self, fs, content, currentEpoch, expectedRoot, revision, generation, key, admission] {
+        if (!retainEngineProjectIdentity(*fs, expectedRoot, key, admission))
+            return;
+        auto actual = fs->physicalPath(content.projectFile);
+        auto parent = fs->physicalPath(content.directory);
+        const bool allowed =
+            actual && parent && lang::documentKey(io::parentPath(*actual)) == lang::documentKey(*parent);
+        if (!self)
+            return;
+        QMetaObject::invokeMethod(
+            self.data(),
+            [self, content, currentEpoch, expectedRoot, revision, generation, allowed] {
+                if (!self || !self->m_impl->admitted(currentEpoch, expectedRoot, revision) ||
+                    self->m_impl->contentGeneration != generation)
+                    return;
+                if (allowed && self->m_impl->workbench.m_nav)
+                    static_cast<void>(self->m_impl->workbench.m_nav->openFile(content.projectFile));
+                else
+                    self->m_impl->setStatus(
+                        QStringLiteral("Engine project settings document no longer belongs to the admitted project"));
             },
             Qt::QueuedConnection);
     });

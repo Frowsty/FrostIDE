@@ -398,5 +398,19 @@ TEST(EditorInsight, F2GoesToTheNextErrorWithABalloon) {
     EXPECT_TRUE(h.view->problemBalloonText().isEmpty());
 }
 
+TEST(EditorInsight, IndependentEngineCodeVisionDoesNotReplaceLanguageCounts) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("return {}\n");
+    h.view->setCodeVisionLenses({{LineIndex{0}, ByteOffset{0}, "2 usages", "navigate.findUsages", "language index"}});
+    h.view->setCodeVisionLensesForProvider("engine.asset", {{LineIndex{0}, ByteOffset{0}, "3 asset references",
+                                                             "engine.assetUsages", "actual engine reply"}});
+    EXPECT_EQ(h.view->codeVisionLenses().size(), 2u);
+    h.view->setCodeVisionLenses({});
+    ASSERT_EQ(h.view->codeVisionLenses().size(), 1u);
+    EXPECT_EQ(h.view->codeVisionLenses()[0].actionId, "engine.assetUsages");
+    h.view->setCodeVisionLensesForProvider("engine.asset", {});
+    EXPECT_TRUE(h.view->codeVisionLenses().empty());
+}
+
 } // namespace
 } // namespace frost::ui
