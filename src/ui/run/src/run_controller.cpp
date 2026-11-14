@@ -231,6 +231,8 @@ void RunController::applySelection(const run::RunConfiguration& configuration) {
         }
         break;
     case run::RunType::Native:
+    case run::RunType::LuaScript:
+    case run::RunType::LuaRepl:
     case run::RunType::FrostEditor:
     case run::RunType::FrostPlayer:
     case run::RunType::Compound:
@@ -325,7 +327,9 @@ std::optional<run::RunId> RunController::configurationRun(const std::string& id)
 bool RunController::canRun() const {
     if (const run::RunConfiguration* selected = selectedConfiguration()) {
         switch (selected->type) {
-        case run::RunType::Native: return m_runs != nullptr;
+        case run::RunType::Native:
+        case run::RunType::LuaScript:
+        case run::RunType::LuaRepl: return m_runs != nullptr;
         case run::RunType::FrostEditor:
         case run::RunType::FrostPlayer:
             return m_runs != nullptr && bool(m_hooks.prepareEngineConfiguration) &&
@@ -380,6 +384,8 @@ Result<build::RunId> RunController::runConfiguration(const std::string& id) {
     const run::RunConfiguration configuration = *found;
     switch (configuration.type) {
     case run::RunType::Native:
+    case run::RunType::LuaScript:
+    case run::RunType::LuaRepl:
     case run::RunType::FrostEditor:
     case run::RunType::FrostPlayer: return runNative(configuration);
     case run::RunType::CMakeTarget:
@@ -506,6 +512,8 @@ void RunController::notifyExplicitEngineStop(run::RunId id) {
 }
 
 Result<build::RunId> RunController::runNative(const run::RunConfiguration& configuration) {
+    if (configuration.type == run::RunType::LuaRepl && !m_window)
+        return fail(ErrorCode::Unsupported, "Lua REPL requires the interactive Run console");
     if (m_runs == nullptr) {
         return fail(ErrorCode::Unsupported, "native run configurations need the RunManager");
     }
@@ -588,6 +596,12 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
     const QPointer<RunConsole> target(console);
     const std::shared_ptr<Relay> relay = m_relay;
     run::RunHandlers handlers;
+    if (run::isLuaRunType(configuration.type)) {
+        if (m_hooks.launchAdmissionFor)
+            handlers.launchAdmission = m_hooks.launchAdmissionFor(configuration);
+        if (!handlers.launchAdmission)
+            return fail(ErrorCode::Unsupported, "standalone Lua has no current project/trust admission");
+    }
     // Fixed per-run identity: never resolve a configuration id to a later rerun in queued output.
     const auto engineRunId = std::make_shared<std::atomic<run::RunId>>(0);
     const auto engineStarted = std::make_shared<std::atomic<bool>>(false);

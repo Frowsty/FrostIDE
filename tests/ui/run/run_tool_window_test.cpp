@@ -482,5 +482,41 @@ TEST(RunControllerConfigurations, ANativeConfigurationRunsIntoItsTab) {
     EXPECT_FALSE(controller.running());
 }
 
+TEST(RunConfigurationsDialog, LuaScriptAndReplCopyExplicitInterpreterWithoutChangingAnalysisRuntime) {
+    run::RunConfigurationSet set;
+    RunConfigurationsDialog dialog(set, "");
+    const auto interpreter = MemTree::path("sdk/lua54/lua");
+    const auto script = MemTree::path("project/main.lua");
+    dialog.setLuaDefaults(interpreter, script, MemTree::path("project"));
+    ASSERT_FALSE(dialog.addLuaScript().empty());
+    auto* program = child<QLineEdit>(dialog, "runConfigurationProgram");
+    auto* target = child<QLineEdit>(dialog, "runConfigurationLuaScript");
+    auto* flags = child<QLineEdit>(dialog, "runConfigurationInterpreterArguments");
+    ASSERT_NE(program, nullptr);
+    ASSERT_NE(target, nullptr);
+    ASSERT_NE(flags, nullptr);
+    EXPECT_EQ(program->text().toStdString(), interpreter);
+    EXPECT_EQ(target->text().toStdString(), script);
+    flags->setText(QStringLiteral("-E -e \"print('startup')\""));
+    auto configurations = dialog.edited();
+    ASSERT_EQ(configurations.size(), 1U);
+    EXPECT_EQ(configurations.front().type, run::RunType::LuaScript);
+    EXPECT_EQ(configurations.front().interpreterArguments, (std::vector<std::string>{"-E", "-e", "print('startup')"}));
+    const auto copy = dialog.copySelected();
+    ASSERT_FALSE(copy.empty());
+    configurations = dialog.edited();
+    EXPECT_EQ(configurations.back().type, run::RunType::LuaScript);
+    EXPECT_EQ(configurations.back().target, script);
+    EXPECT_EQ(configurations.back().program, interpreter);
+    ASSERT_FALSE(dialog.addLuaRepl().empty());
+    configurations = dialog.edited();
+    const auto& repl = configurations.back();
+    EXPECT_EQ(repl.type, run::RunType::LuaRepl);
+    EXPECT_EQ(repl.program, interpreter);
+    EXPECT_TRUE(repl.target.empty());
+    EXPECT_TRUE(repl.arguments.empty());
+    EXPECT_TRUE(run::validateRunConfiguration(repl));
+}
+
 } // namespace
 } // namespace frost::ui
