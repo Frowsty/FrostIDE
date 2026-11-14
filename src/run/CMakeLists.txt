@@ -26,6 +26,7 @@ frost_add_library(run LAYER run
         src/ctest_parsers.cpp
         src/gtest_parsers.cpp
         src/framework_parsers.cpp
+        src/lua_framework_parsers.cpp
         src/doctest_parsers.cpp
         src/test_runner.cpp
     DEPS frost::build frost::settings frost::project frost::rpc frost::io frost::core)
