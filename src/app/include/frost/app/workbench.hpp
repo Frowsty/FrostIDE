@@ -835,6 +835,9 @@ private:
     [[nodiscard]] std::optional<QString> projectEditBlocked(const std::string& project);
     // The ProjectHost helper and MSBuild.exe a project edit runs with, or the reason they are missing.
     [[nodiscard]] Result<std::pair<std::string, std::string>> projectEditTools();
+    [[nodiscard]] Result<project::HostEvaluation> evaluatePropertyPage(const std::string& projectPath,
+        const std::string& root, const std::string& solution, std::string_view configuration,
+        const std::vector<std::string>& keys, std::stop_token stop);
     // Whether the solution root holds a project edit journal (an interrupted edit); errors read as true.
     [[nodiscard]] bool projectEditJournalPresent();
     // Reloads the solution after a committed edit and publishes it to the build, run and explorer.

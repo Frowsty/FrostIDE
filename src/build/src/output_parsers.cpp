@@ -4,6 +4,7 @@
 // block reader and the per-stream parser objects BuildSession runs.
 
 #include "frost/build/output_parsers.hpp"
+#include "json.hpp"
 
 #include <charconv>
 #include <utility>
@@ -362,6 +363,34 @@ std::optional<Diagnostic> parseCompilerDiagnosticLine(std::string_view line) {
         return canonical;
     }
     return parseGnuDiagnosticLine(line);
+}
+
+std::optional<Diagnostic> parseStructuredMsBuildLine(std::string_view line) {
+    constexpr std::string_view prefix = "FROSTBUILD1 ";
+    if (!line.starts_with(prefix) || line.size() > 4 * 1024 * 1024)
+        return std::nullopt;
+    auto event = detail::parseJson(line.substr(prefix.size()));
+    if (!event || event->kind != detail::JsonValue::Kind::Object)
+        return std::nullopt;
+    const auto severity = event->stringMember("Severity");
+    if (severity != "error" && severity != "warning")
+        return std::nullopt;
+    const auto number = [&](std::string_view key) {
+        const auto* member = event->find(key);
+        int value = 0;
+        if (!member || member->kind != detail::JsonValue::Kind::Number)
+            return 0;
+        const auto [end, error] = std::from_chars(member->text.data(), member->text.data() + member->text.size(), value);
+        return error == std::errc{} && end == member->text.data() + member->text.size() && value >= 0 ? value : 0;
+    };
+    return Diagnostic{.severity = severity == "error" ? Severity::Error : Severity::Warning,
+                      .code = event->stringMember("Code"), .message = event->stringMember("Message"),
+                      .file = event->stringMember("File"), .line = number("Line"), .column = number("Column"),
+                      .project = event->stringMember("Project")};
+}
+
+std::unique_ptr<IOutputParser> makeStructuredMsBuildOutputParser() {
+    return std::make_unique<LineParser>(&parseStructuredMsBuildLine);
 }
 
 std::unique_ptr<IOutputParser> makeMsBuildOutputParser() { return std::make_unique<LineParser>(&parseDiagnosticLine); }

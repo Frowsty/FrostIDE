@@ -64,6 +64,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QCoreApplication>
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
@@ -458,6 +459,14 @@ void Workbench::createBuildService() {
     options.stateFilePath = m_options.buildStatePath;
     options.msbuildPath = !m_options.msbuildPath.empty() ? m_options.msbuildPath : snapshot->get(key::toolsMsbuildPath);
     options.maxCpuCount = static_cast<unsigned>(std::max<std::int64_t>(0, snapshot->get(key::buildMsbuildMaxCpuCount)));
+    const std::string logger = QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("project-host/ProjectHostVsProbe.exe")).toStdString();
+    if (m_services.fs.exists(logger).value_or(false))
+        options.loggerAssembly = logger;
+    if (!m_options.buildStatePath.empty()) {
+        if (auto logs = io::joinPath(io::parentPath(m_options.buildStatePath), "build-logs"))
+            options.binaryLogDirectory = *logs;
+    }
     options.startBuild = m_options.startBuild;
     m_buildService = build::BuildService::create(m_services.fs, m_services.launcher, m_services.trust, options,
         m_build->serviceCallbacks([this] { return !m_cmake && !m_standalone; }));
