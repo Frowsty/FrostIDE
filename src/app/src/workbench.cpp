@@ -43,6 +43,7 @@
 #include "frost/vcs/git_locator.hpp"
 
 #include "cmake_integration.hpp"
+#include "standalone_build_backend.hpp"
 #include "engine_binding_integration.hpp"
 #include "engine_crash_observer.hpp"
 #include "engine_dump_controller.hpp"
@@ -446,7 +447,7 @@ void Workbench::createBuildService() {
     options.maxCpuCount = static_cast<unsigned>(std::max<std::int64_t>(0, snapshot->get(key::buildMsbuildMaxCpuCount)));
     options.startBuild = m_options.startBuild;
     m_buildService = build::BuildService::create(m_services.fs, m_services.launcher, m_services.trust, options,
-                                                 m_build->serviceCallbacks([this] { return !m_cmake; }));
+        m_build->serviceCallbacks([this] { return !m_cmake && !m_standalone; }));
     m_buildBackend = std::make_unique<ui::BuildServiceBackend>(*m_buildService);
     m_build->setBackend(m_buildBackend.get());
     m_build->setSaveAllHandler(this);
@@ -879,6 +880,10 @@ void Workbench::shutdown() {
     if (m_unity)
         m_unity->shutdown();
     stopTerminal();
+    if (m_standalone) {
+        m_build->setBackend(m_buildBackend.get());
+        m_standalone.reset(); // Cancels and joins its contained session before services disappear.
+    }
     if (m_cmake)
         m_cmake->shutdown();
     if (m_nav) {

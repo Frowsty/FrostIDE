@@ -33,6 +33,7 @@ frost_add_library(project LAYER project
         src/project_host.cpp
         src/project_model_cache.cpp
         src/sln_reader.cpp
+        src/standalone_project.cpp
         src/solution_configuration_edit.cpp
         src/slnx_reader.cpp
         src/solution_evaluation.cpp

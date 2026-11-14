@@ -705,8 +705,12 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
             const QString suffix = file.suffix().toLower();
             const bool cmakeProject = parsed->project.empty() && parsed->line == 0 && parsed->column == 0 &&
                                       file.isFile() && file.fileName() == QStringLiteral("CMakeLists.txt");
+            const bool standaloneProject = parsed->project.empty() && parsed->line == 0 && parsed->column == 0 &&
+                file.isFile() && (file.fileName() == QStringLiteral("compile_commands.json") ||
+                    file.fileName() == QStringLiteral("GNUmakefile") || file.fileName() == QStringLiteral("makefile") ||
+                    file.fileName() == QStringLiteral("Makefile"));
             const bool project =
-                cmakeProject || file.isDir() ||
+                cmakeProject || standaloneProject || file.isDir() ||
                 (file.isFile() && (suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx") ||
                                    suffix == QStringLiteral("frostproj")));
             (project ? projects : files).push_back(std::move(absolute));
