@@ -66,6 +66,7 @@ void TestResultsTree::setTests(std::vector<run::DiscoveredTest> tests) {
     m_unlisted.clear();
     m_results.clear();
     m_listedCases.clear();
+    m_frameworkCases.clear();
     m_doctestCases.clear();
     m_state.clear();
     rebuild();
@@ -114,7 +115,7 @@ void TestResultsTree::rebuild() {
     const QString filter = m_filter;
     const auto matches = [&filter](const run::DiscoveredTest& test, const run::TestResult* result,
                                    const std::vector<run::GTestCase>* listed,
-                                   const std::vector<run::DoctestCase>* doctest) {
+                                   const std::vector<run::DoctestCase>* doctest, const std::vector<run::FrameworkCase>* framework) {
         if (filter.isEmpty())
             return true;
         if (qs(test.name).contains(filter, Qt::CaseInsensitive) ||
@@ -124,6 +125,7 @@ void TestResultsTree::rebuild() {
                 return qs(c.name).contains(filter, Qt::CaseInsensitive);
             }))
             return true;
+        if (framework && std::ranges::any_of(*framework, [&](const auto& c) { return qs(c.name).contains(filter, Qt::CaseInsensitive); })) return true;
         if (doctest && std::ranges::any_of(*doctest, [&](const run::DoctestCase& c) {
                 return qs(c.name).contains(filter, Qt::CaseInsensitive);
             }))
@@ -136,9 +138,11 @@ void TestResultsTree::rebuild() {
         const auto result = m_results.find(test.name);
         const auto listed = m_listedCases.find(test.name);
         const auto doctest = m_doctestCases.find(test.name);
+        const auto framework = m_frameworkCases.find(test.name);
         if (!matches(test, result == m_results.end() ? nullptr : &result->second,
                      listed == m_listedCases.end() ? nullptr : &listed->second,
-                     doctest == m_doctestCases.end() ? nullptr : &doctest->second))
+                     doctest == m_doctestCases.end() ? nullptr : &doctest->second,
+                     framework == m_frameworkCases.end() ? nullptr : &framework->second))
             continue;
         QTreeWidgetItem* item = addTestItem(test);
         if (doctest != m_doctestCases.end()) {
@@ -156,6 +160,15 @@ void TestResultsTree::rebuild() {
                     tip << QStringLiteral("%1:%2").arg(qs(testCase.location->file)).arg(testCase.location->line);
                 child->setToolTip(NameColumn, tip.join(QLatin1Char('\n')));
             }
+        }
+        if (framework != m_frameworkCases.end()) for (const auto& entry : framework->second) {
+            auto* child = new QTreeWidgetItem(item, {qs(entry.name)});
+            child->setData(0, kTestNameRole, qs(test.name));
+            child->setData(0, kCaseNameRole, qs(entry.name));
+            QString tip;
+            if (entry.location) tip = QStringLiteral("%1:%2").arg(qs(entry.location->file)).arg(entry.location->line);
+            if (entry.disabled) tip += QStringLiteral(" (disabled by default)");
+            child->setToolTip(NameColumn, tip);
         }
         if (listed != m_listedCases.end()) {
             for (const run::GTestCase& testCase : listed->second) {
@@ -207,14 +220,26 @@ void TestResultsTree::showResult(QTreeWidgetItem* item, const run::TestResult& r
     showCases(item, result);
 }
 
+void TestResultsTree::setFrameworkCases(const std::string& test, std::vector<run::FrameworkCase> cases) {
+    m_listedCases.erase(test); m_doctestCases.erase(test);
+    m_frameworkCases[test] = std::move(cases);
+    rebuild();
+}
+const std::vector<run::FrameworkCase>* TestResultsTree::frameworkCases(const std::string& test) const {
+    const auto found = m_frameworkCases.find(test);
+    return found == m_frameworkCases.end() ? nullptr : &found->second;
+}
 void TestResultsTree::setGTestCases(const std::string& test, const std::vector<run::GTestCase>& cases) {
+    m_frameworkCases.erase(test);
     m_listedCases[test] = cases;
     rebuild();
 }
 
 void TestResultsTree::setDoctestCases(std::vector<std::pair<std::string, std::vector<run::DoctestCase>>> listings) {
-    for (auto& [test, cases] : listings)
+    for (auto& [test, cases] : listings) {
+        m_frameworkCases.erase(test);
         m_doctestCases[test] = std::move(cases);
+    }
     rebuild();
 }
 

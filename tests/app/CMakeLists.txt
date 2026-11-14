@@ -419,3 +419,8 @@ target_compile_definitions(app_unit_tests_window_tests PRIVATE ${_frost_workbenc
     FROST_RUN_GTEST_FIXTURE="$<TARGET_FILE:run_gtest_fixture>"
     FROST_RUN_GTEST_SOURCE="${FROST_SOURCE_DIR}/tests/run/gtest_fixture.cpp")
 add_dependencies(app_unit_tests_window_tests run_ctest_stub run_gtest_fixture)
+
+if(FROST_BUILD_FRAMEWORK_ACCEPTANCE)
+    target_compile_definitions(app_unit_tests_window_tests PRIVATE FROST_RUN_CATCH_FIXTURE="$<TARGET_FILE:run_catch_fixture>")
+    add_dependencies(app_unit_tests_window_tests run_catch_fixture)
+endif()

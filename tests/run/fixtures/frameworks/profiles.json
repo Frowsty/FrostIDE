@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Optional externally provisioned real-framework acceptance; no vendor downloads or product runtime dependencies",
+  "packages": [
+    {"name": "Catch2", "version": "3.7.1", "upstreamTag": "v3.7.1", "repository": "https://github.com/catchorg/Catch2", "license": "BSL-1.0", "cmakeTarget": "Catch2::Catch2WithMain"},
+    {"name": "Boost", "version": "1.85.0", "upstreamTag": "boost-1.85.0", "repository": "https://github.com/boostorg/boost", "license": "BSL-1.0", "component": "header-only Boost.Test"}
+  ],
+  "provisioning": "Install exact packages outside the source tree; pass their CMake package roots via CMAKE_PREFIX_PATH and enable FROST_BUILD_FRAMEWORK_ACCEPTANCE. Missing or different packages are configuration errors, never skipped tests."
+}

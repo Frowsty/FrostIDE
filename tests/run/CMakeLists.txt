@@ -124,3 +124,26 @@ target_compile_definitions(run_doctest_runner_tests PRIVATE
     FROST_TEST_NINJA="${CMAKE_MAKE_PROGRAM}"
     FROST_RUN_DOCTEST_STUB="$<TARGET_FILE:run_doctest_stub>")
 add_dependencies(run_doctest_runner_tests run_doctest_stub)
+
+# RUN-9 real acceptance is an explicit provisioning profile, never a runtime skip. Enabling this
+# requires the exact external packages and fails configuration if either is absent; no downloads.
+option(FROST_BUILD_FRAMEWORK_ACCEPTANCE "Build real Catch2 3.7.1 and Boost.Test 1.85 acceptance fixtures" OFF)
+if(FROST_BUILD_FRAMEWORK_ACCEPTANCE)
+    find_package(Threads REQUIRED)
+    find_package(Catch2 3.7.1 EXACT CONFIG REQUIRED)
+    find_package(Boost 1.85.0 EXACT REQUIRED)
+    add_executable(run_catch_fixture fixtures/frameworks/catch_fixture.cpp)
+    target_link_libraries(run_catch_fixture PRIVATE Catch2::Catch2WithMain Threads::Threads)
+    frost_apply_compile_options(run_catch_fixture TEST)
+    frost_copy_runtime_dlls(run_catch_fixture)
+    add_executable(run_boost_fixture fixtures/frameworks/boost_fixture.cpp)
+    target_include_directories(run_boost_fixture PRIVATE ${Boost_INCLUDE_DIRS})
+    frost_apply_compile_options(run_boost_fixture TEST)
+    frost_copy_runtime_dlls(run_boost_fixture)
+    frost_add_test(run_framework_real_tests SOURCES framework_real_test.cpp
+        DEPS frost::run frost::io frost::core LABELS integration framework)
+    target_include_directories(run_framework_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(run_framework_real_tests PRIVATE FROST_TEST_CTEST="${CMAKE_CTEST_COMMAND}"
+        FROST_RUN_CATCH_FIXTURE="$<TARGET_FILE:run_catch_fixture>" FROST_RUN_BOOST_FIXTURE="$<TARGET_FILE:run_boost_fixture>")
+    add_dependencies(run_framework_real_tests run_catch_fixture run_boost_fixture)
+endif()

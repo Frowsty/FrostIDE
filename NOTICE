@@ -97,3 +97,9 @@ and Ionide Contributors (MIT). The MIT permission text above applies to the
 MIT components listed in the manifest, with their recorded copyright notices.
 Castle.Core and FSharp.Control.AsyncSeq are Apache-2.0; their original licence
 texts are included alongside the other notices.
+
+Optional external acceptance fixtures (not bundled product dependencies):
+- Catch2 3.7.1, Catch2 Authors, Boost Software License 1.0 (BSL-1.0);
+- Boost.Test from Boost 1.85.0, Boost contributors, BSL-1.0.
+Provisioned packages must retain their upstream licence notices. See
+ docs/adr/0093-framework-protocol-fixtures.md and the fixture profiles.json.

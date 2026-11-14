@@ -46,4 +46,18 @@ TEST(TestResultsTree, AFailedOrStoppedRerunDoesNotRestoreThePreviousVerdict) {
 }
 
 } // namespace
+TEST(TestResultsTree, ExplicitFrameworkListingsHaveNoInventedVerdictsAndRemainFilterable) {
+    TestResultsTree tree;
+    run::DiscoveredTest test; test.name = "actual-binary";
+    tree.setTests({test});
+    tree.setFrameworkCases(test.name, {{"suite/leaf", run::TestLocation{"actual.cpp", 17}, false}, {"disabled", {}, true}});
+    auto* item = tree.itemFor(test.name, "suite/leaf"); ASSERT_NE(item, nullptr);
+    EXPECT_TRUE(item->text(1).isEmpty()); EXPECT_TRUE(item->text(2).isEmpty());
+    EXPECT_TRUE(item->toolTip(0).contains(QStringLiteral("actual.cpp:17")));
+    EXPECT_TRUE(tree.itemFor(test.name, "disabled")->text(1).isEmpty());
+    tree.setFilter(QStringLiteral("suite/leaf"));
+    EXPECT_NE(tree.itemFor(test.name, "suite/leaf"), nullptr);
+    tree.setTests({test}); EXPECT_EQ(tree.frameworkCases(test.name), nullptr);
+}
+
 } // namespace frost::ui
