@@ -259,6 +259,8 @@ void scanSourceTests(std::string_view content, std::vector<SourceGTest>& gtests,
 
 Result<SingleTestLaunch> buildSingleTestLaunch(const CTestSetup& setup, const DiscoveredTest& test,
                                                std::string_view caseName, TestCaseFramework framework) {
+    if (framework == TestCaseFramework::Busted || framework == TestCaseFramework::LuaUnit)
+        return fail(ErrorCode::Unsupported, "Lua framework launches require the selected Lua configuration, not a CTest command");
     if (!io::isAbsolutePath(setup.buildDirectory))
         return fail(ErrorCode::InvalidArgument,
                     std::format("the build directory '{}' is not an absolute path", setup.buildDirectory));
