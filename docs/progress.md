@@ -19,6 +19,13 @@ what is next, blockers and open questions for the user.
 - GPT-6.1 Sol implementations received independent GPT-6 Astra source reviews. Regression sources cover semantic rename, previews, project planning, native recovery, dirty-buffer journal failure/retry and composed Workbench history. No builds, feature runs, test execution, WSL or verification runners were used in this continuation. Runtime correctness, the 50-file timing target, build-after-refactoring and Windows/WSL golden-corpus acceptance remain unverified under the user's implementation-first override.
 - R5/R6 and R7 are already on `main`. R9 debugger implementations are being integrated separately; independent R10 project/configuration work has started. No new binary or beta release was built.
 
+## 2026-11-14: R10 standalone C++ projects and native file build source
+
+- Added explicit compile_commands.json and GNU Make project opening, recent/session identity, marker discovery and clangd database routing. Folder opening does not evaluate recipes or run a build. Existing per-folder native Run/Debug configurations remain the executable authority; compilation databases do not invent link products.
+- Added a GNU Make backend for Build/Rebuild/Clean, literal targets and Install, sharing Save All, project trust, build/run/edit admission, contained process cancellation, streamed output and compiler diagnostics with other build paths. Missing Make reports tool unavailable. Make projects without a database retain clangd fallback flags; the IDE does not invent compile commands or automatically execute a capture tool.
+- Added CMake named/install targets and Ninja single-file Build/Compile/Rebuild/Clean from the actual compilation database's unique object output. Build uses cmake --build; object clean uses native Ninja's target clean. Missing/ambiguous/outside outputs and other generators refuse explicitly; personal build wrappers do not silently receive file operations.
+- Authored model/argv, application admission/save-cancellation/rebuild-failure, and native CMake command tests. Independent source review completed. No build, test, external tool, WSL or feature execution ran under the implementation-first override; runtime acceptance remains deferred.
+
 ## 2026-11-14: R7 implementation recovery on current main
 
 - Recovered the existing R7 IDE implementation onto current `main`, preserving the older integration candidates and their staged/unstaged work. The recovered source includes authenticated engine Lua DAP, independent/compound sessions, mixed native/Lua debugging, the engine Unit Tests provider, recovered crash-artifact inspection, and AST-backed cross-language binding navigation/usages/rename previews. Current R5/R6 and header-hierarchy fixes remain in the base.

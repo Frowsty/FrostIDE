@@ -26,6 +26,7 @@ class QLabel;
 class QAction;
 class QComboBox;
 class QLineEdit;
+class QMenu;
 
 namespace frost::ui {
 class BuildController;
@@ -141,6 +142,7 @@ private:
     QPointer<QAction> m_profileAction;
     QPointer<QAction> m_targetAction;
     QPointer<QAction> m_wrapperAction;
+    QPointer<QMenu> m_buildMenu;
     bool m_solutionActionVisible = false;
     bool m_runActionVisible = false;
     QStringList m_expandedKeys;

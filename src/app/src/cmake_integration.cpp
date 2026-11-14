@@ -33,6 +33,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMenuBar>
+#include <QInputDialog>
+#include <QFileDialog>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPlainTextEdit>
@@ -148,6 +151,33 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     m_wrapperAction->setObjectName(QStringLiteral("cmakeBuildWrapperAction"));
     toolbar.insertAction(before, m_wrapperAction);
     connect(m_wrapperAction, &QAction::triggered, this, [this] { editBuildWrapper(); });
+    // CMK-12: generator-provided targets (notably install) are not necessarily File API targets.
+    // They still use the service's Save All, trust, admission and contained cmake --build path.
+    m_buildMenu = new QMenu(tr("CMake Build"), &window);
+    window.menuBar()->addMenu(m_buildMenu);
+    connect(m_buildMenu->addAction(tr("Build named target…")), &QAction::triggered, this, [this] {
+        bool accepted = false;
+        const auto target = QInputDialog::getText(&m_window, tr("CMake target"), tr("Literal target name:"),
+                                                 QLineEdit::Normal, {}, &accepted);
+        if (!accepted) return;
+        auto started = m_service->buildNamedTarget(target.toStdString());
+        if (!started) QMessageBox::warning(&m_window, tr("Build target"), QString::fromStdString(started.error().message()));
+    });
+    connect(m_buildMenu->addAction(tr("Install")), &QAction::triggered, this, [this] {
+        auto started = m_service->buildNamedTarget("install");
+        if (!started) QMessageBox::warning(&m_window, tr("Install"), QString::fromStdString(started.error().message()));
+    });
+    for (const auto& [label, action] : {std::pair{tr("Build file…"), build::BuildAction::Build},
+                                     std::pair{tr("Rebuild file…"), build::BuildAction::Rebuild},
+                                     std::pair{tr("Clean file…"), build::BuildAction::Clean}}) {
+        connect(m_buildMenu->addAction(label), &QAction::triggered, this, [this, action] {
+            const auto source = QFileDialog::getOpenFileName(&m_window, tr("Source file"),
+                QString::fromStdString(m_service->sourceDirectory()));
+            if (source.isEmpty()) return;
+            auto started = m_service->buildFile(action, source.toStdString());
+            if (!started) QMessageBox::warning(&m_window, tr("File build"), QString::fromStdString(started.error().message()));
+        });
+    }
     connect(m_profiles, &QComboBox::activated, this, [this](int index) { m_controller->selectProfile(index); });
     connect(m_targets, &QComboBox::activated, this, [this](int index) {
         if (!targetsCurrent() || m_displayProfileGeneration != m_service->profileGeneration())
@@ -350,6 +380,7 @@ Result<void> CMakeIntegration::debugConfigure() {
 }
 
 CMakeIntegration::~CMakeIntegration() {
+    delete m_buildMenu.data();
     {
         LockGuard lock(m_runRelay->mutex);
         m_runRelay->target = nullptr;
