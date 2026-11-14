@@ -258,6 +258,20 @@ void EditorView::followAppearance() {
 void EditorView::setTheme(std::shared_ptr<const Theme> theme) {
     m_theme = std::move(theme);
     m_colors = m_theme ? EditorColors::fromTheme(*m_theme) : EditorColors::defaults();
+    if (m_theme && !m_settings.schemeColors.empty()) {
+        auto data = m_theme->data();
+        for (const auto& row : m_settings.schemeColors) {
+            const auto* nameField = settings::findField(row, "name");
+            const auto* colorField = settings::findField(row, "color");
+            const auto* name = nameField ? std::get_if<std::string>(nameField) : nullptr;
+            const auto* color = colorField ? std::get_if<std::string>(colorField) : nullptr;
+            if (!name || !color || !(name->starts_with("Editor.") || name->starts_with("Syntax.") || name->starts_with("Semantic."))) continue;
+            const auto key = findName(kColorNameIndex, *name);
+            const auto rgba = parseHexColor(*color);
+            if (key && rgba && rgba->opaque()) data.colors[static_cast<std::size_t>(*key)] = *rgba;
+        }
+        if (auto scheme = Theme::fromData(std::move(data))) m_colors = EditorColors::fromTheme(*scheme);
+    }
     viewport()->update();
 }
 
@@ -304,6 +318,7 @@ void EditorView::applySettings(const EditorViewSettings& settings) {
                              settings.ligatures != m_settings.ligatures || settings.tabSize != m_settings.tabSize;
     const bool rendererChanged = settings.renderer != m_settings.renderer;
     m_settings = settings;
+    setTheme(m_theme); // Re-resolve the base theme plus the user's editor-only scheme overrides.
     m_editor->setSettings(modelSettings(m_settings));
     if (fontChanged) {
         rebuildFont();

@@ -11,6 +11,7 @@
 
 #include "settings_keymap_page.hpp"
 #include "settings_lua_page.hpp"
+#include "settings_import.hpp"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -422,6 +423,14 @@ void SettingsDialog::build() {
     auto* buttons =
         new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply, this);
     auto* reloadButton = buttons->addButton(text("Reload"), QDialogButtonBox::ActionRole);
+    auto* importButton = buttons->addButton(text("Import Visual Studio Settings..."), QDialogButtonBox::ActionRole);
+    connect(importButton, &QPushButton::clicked, this, [this] {
+        if (m_apply->isEnabled()) {
+            m_status->setText(text("Apply or Reload pending changes before importing a scheme."));
+            return;
+        }
+        if (showSettingsImport(m_store, this)) { m_keymap.reloadPreferences(); reload(); }
+    });
     reloadButton->setToolTip(text("Discard pending changes and reload settings from disk"));
     m_apply = buttons->button(QDialogButtonBox::Apply);
     outer->addWidget(buttons);

@@ -28,6 +28,7 @@ class EditorView;
  */
 struct EditorViewSettings {
     std::string fontFamily = "JetBrains Mono";
+    settings::RecordList schemeColors;
     double fontSize = 13.0; // Points, before IDE zoom.
     double lineSpacing = 1.2;
     bool ligatures = false;

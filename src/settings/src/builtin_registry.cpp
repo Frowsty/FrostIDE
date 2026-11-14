@@ -58,6 +58,10 @@ struct Entry {
     const ScopeMask editorConfig = kAllScopesWithEditorConfig;
     return {
         // Editor: font.
+        {"editor.schemeColors", "Editor color scheme", "Explicit editor and syntax color overrides imported or edited by the user.", "Editor/Color Scheme",
+         recordListSchema({FieldSpec{.name = "name", .type = FieldType::String, .required = true},
+                           FieldSpec{.name = "color", .type = FieldType::String, .required = true}}, 128),
+         Value(RecordList{}), kApplicationOnly},
         {"editor.fontFamily", "Font",
          "The editor font family. FrostIDE bundles JetBrains Mono, Fira Code, Cascadia Code, Cascadia Mono, "
          "Source Code Pro, IBM Plex Mono, Inconsolata, Intel One Mono, CommitMono, and Fantasque Sans Mono.",

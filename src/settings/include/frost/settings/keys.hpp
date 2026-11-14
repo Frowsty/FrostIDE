@@ -24,6 +24,7 @@ namespace key {
 
 // Editor: font.
 inline constexpr Key<std::string> editorFontFamily{"editor.fontFamily"};
+inline constexpr Key<RecordList> editorSchemeColors{"editor.schemeColors"};
 inline constexpr Key<std::int64_t> editorFontSize{"editor.fontSize"};
 inline constexpr Key<double> editorLineSpacing{"editor.lineSpacing"};
 inline constexpr Key<bool> editorFontLigatures{"editor.fontLigatures"};
