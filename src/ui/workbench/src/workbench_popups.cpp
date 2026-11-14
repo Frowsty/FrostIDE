@@ -11,11 +11,49 @@
 
 #include "workbench_internal.hpp"
 #include <QLineEdit>
+#include <QTimer>
 
 #include <iterator>
 #include <set>
 
 namespace frost::ui {
+namespace {
+using IndexedFiles = std::vector<std::pair<std::string, std::string>>;
+sched::Task<Result<IndexedFiles>> indexedFiles(sched::IScheduler& scheduler,
+    std::shared_ptr<const nav::ProjectFiles> snapshot, std::vector<std::string> recents, std::string root,
+    std::string pattern, std::size_t limit, std::stop_token stop) {
+    co_await scheduler.schedule(sched::Lane::Interactive);
+    if (stop.stop_requested()) co_return fail(ErrorCode::Cancelled, "File search cancelled");
+    IndexedFiles candidates;
+    std::vector<std::string> display;
+    std::set<std::string> seen;
+    for (const auto& hit : snapshot->searchIndex().query(pattern, snapshot->displayCandidates(), limit, stop)) {
+        const auto& path = snapshot->candidates()[hit.index];
+        seen.insert(path);
+        candidates.emplace_back(path, snapshot->displayCandidates()[hit.index]);
+        display.push_back(candidates.back().second);
+    }
+    for (const auto& path : recents) {
+        if (stop.stop_requested()) co_return fail(ErrorCode::Cancelled, "File search cancelled");
+        if (!seen.insert(path).second) continue;
+        candidates.emplace_back(path, root.empty() ? path : nav::relativeTo(root, path));
+        display.push_back(candidates.back().second);
+    }
+    IndexedFiles out;
+    for (const auto& hit : search::rankPaths(pattern, display, limit)) out.push_back(std::move(candidates[hit.index]));
+    if (stop.stop_requested()) co_return fail(ErrorCode::Cancelled, "File search cancelled");
+    co_return out;
+}
+struct FilePopupQuery {
+    std::stop_source stop;
+    std::optional<sched::JoinHandle<Result<IndexedFiles>>> pending;
+    IndexedFiles files;
+    std::vector<WorkbenchSymbol> symbols;
+    std::shared_ptr<const nav::ProjectFiles> snapshot;
+    std::function<void()> publish;
+    ~FilePopupQuery() { stop.request_stop(); }
+};
+}
 
 using workbench_detail::fileIcon;
 using workbench_detail::fromUtf8;
@@ -327,9 +365,23 @@ ListPopup* Workbench::showSearchEverywhere(const QString& query, SearchEverywher
                         static_cast<int>(category));
     auto currentCategory = std::make_shared<SearchEverywhereCategory>(category);
     auto queryGen = std::make_shared<std::uint64_t>(0);
+    auto fileQuery = std::make_shared<FilePopupQuery>();
+    auto* pollFiles = new QTimer(popup);
+    pollFiles->setInterval(16);
+    const QPointer<Workbench> owner(this);
+    connect(pollFiles, &QTimer::timeout, popup, [owner, popup, fileQuery] {
+        if (!fileQuery->pending || !fileQuery->pending->ready()) return;
+        auto result = fileQuery->pending->join();
+        fileQuery->pending.reset();
+        if (!owner || owner->m_files != fileQuery->snapshot || !result) return;
+        fileQuery->files = std::move(*result);
+        if (fileQuery->publish) fileQuery->publish();
+    });
+    pollFiles->start();
     const auto buildSyncItems = [this, captured](const search::LocationQuery& location, const std::string& utf8,
                                                  SearchEverywhereCategory cat,
-                                                 const std::vector<WorkbenchSymbol>* symbols) {
+                                                 const std::vector<WorkbenchSymbol>* symbols,
+                                                 const IndexedFiles& indexed) {
         std::vector<ListPopupItem> items;
         if (symbols != nullptr && !symbols->empty() &&
             (cat == SearchEverywhereCategory::All || cat == SearchEverywhereCategory::Classes ||
@@ -358,7 +410,16 @@ ListPopup* Workbench::showSearchEverywhere(const QString& query, SearchEverywher
         }
         if (cat == SearchEverywhereCategory::All || cat == SearchEverywhereCategory::Files) {
             const std::size_t limit = cat == SearchEverywhereCategory::Files ? 50 : 8;
-            std::vector<ListPopupItem> files = fileItems(location.pattern, limit);
+            std::vector<ListPopupItem> files;
+            for (const auto& [path, display] : indexed) {
+                if (files.size() == limit) break;
+                ListPopupItem item;
+                item.text = fromUtf8(nav::baseName(path));
+                item.detail = nativePath(nav::parentOf(display));
+                item.icon = fileIcon(nav::baseName(path));
+                item.data = fileData(path);
+                files.push_back(std::move(item));
+            }
             if (!files.empty()) {
                 ListPopupItem header;
                 header.text = text("Files");
@@ -386,12 +447,35 @@ ListPopup* Workbench::showSearchEverywhere(const QString& query, SearchEverywher
         }
         return items;
     };
-    const auto update = [this, popup, currentCategory, queryGen, buildSyncItems](const QString& value) {
+    const auto update = [this, popup, currentCategory, queryGen, buildSyncItems, fileQuery, owner](const QString& value) {
         const std::uint64_t gen = ++(*queryGen);
         const std::string utf8 = toUtf8(value.trimmed());
         const search::LocationQuery location = search::parseLocationQuery(utf8);
         const SearchEverywhereCategory cat = *currentCategory;
-        popup->setItems(buildSyncItems(location, utf8, cat, nullptr));
+        fileQuery->stop.request_stop();
+        fileQuery->stop = std::stop_source{};
+        fileQuery->pending.reset();
+        fileQuery->files.clear();
+        fileQuery->symbols.clear();
+        fileQuery->snapshot = m_files;
+        const std::weak_ptr<FilePopupQuery> weakQuery = fileQuery;
+        fileQuery->publish = [owner, popup, weakQuery, queryGen, gen, location, utf8, cat, buildSyncItems] {
+            auto state = weakQuery.lock();
+            if (!owner || !state || *queryGen != gen) return;
+            popup->setItems(buildSyncItems(location, utf8, cat, &state->symbols, state->files));
+        };
+        if (cat == SearchEverywhereCategory::All || cat == SearchEverywhereCategory::Files) {
+            if (m_services.scheduler) {
+                fileQuery->pending.emplace(m_services.scheduler->spawn(sched::Lane::Interactive,
+                    indexedFiles(*m_services.scheduler, m_files, m_recentFiles.paths(), m_root, location.pattern,
+                                 cat == SearchEverywhereCategory::Files ? 50 : 8, fileQuery->stop.get_token())));
+            } else {
+                // Small embedders/tests without a scheduler use the immutable index directly.
+                for (const auto& hit : m_files->searchIndex().query(location.pattern, m_files->displayCandidates(), 50))
+                    fileQuery->files.emplace_back(m_files->candidates()[hit.index], m_files->displayCandidates()[hit.index]);
+            }
+        }
+        fileQuery->publish();
         const bool wantsSymbols = (cat == SearchEverywhereCategory::All || cat == SearchEverywhereCategory::Classes ||
                                    cat == SearchEverywhereCategory::Symbols) &&
                                   !location.pattern.empty() && static_cast<bool>(m_services.queryWorkspaceSymbols);
@@ -400,15 +484,18 @@ ListPopup* Workbench::showSearchEverywhere(const QString& query, SearchEverywher
             const bool classesOnly = (cat == SearchEverywhereCategory::Classes);
             m_services.queryWorkspaceSymbols(
                 location.pattern, classesOnly,
-                [safePopup, queryGen, gen, location, utf8, cat, classesOnly,
-                 buildSyncItems](std::vector<WorkbenchSymbol> symbols) {
+                [safePopup, queryGen, gen, classesOnly, weakQuery, owner](std::vector<WorkbenchSymbol> symbols) {
                     if (safePopup == nullptr || *queryGen != gen) {
                         return;
                     }
                     if (classesOnly) {
                         std::erase_if(symbols, [](const WorkbenchSymbol& s) { return !s.isClassLike; });
                     }
-                    safePopup->setItems(buildSyncItems(location, utf8, cat, &symbols));
+                    if (symbols.size() > 50) symbols.resize(50);
+                    auto state = weakQuery.lock();
+                    if (!owner || !state) return;
+                    state->symbols = std::move(symbols);
+                    if (state->publish) state->publish();
                 });
         }
     };

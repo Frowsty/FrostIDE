@@ -168,7 +168,7 @@ bool ProjectFiles::rebuildCandidates(const std::stop_token& token) {
             return false;
         add(path);
     }
-    return !token.stop_requested();
+    return m_searchIndex.build(m_display, token);
 }
 
 } // namespace frost::ui::nav
