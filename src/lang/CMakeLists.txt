@@ -31,6 +31,7 @@ frost_add_library(lang LAYER lang
         src/clangd_locator.cpp
         src/clangd_service.cpp
         src/cmake_compile_commands.cpp
+        src/cmake_language.cpp
         src/code_assist.cpp
         src/code_vision.cpp
         src/compile_commands.cpp
