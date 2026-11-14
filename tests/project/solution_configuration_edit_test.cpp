@@ -29,7 +29,7 @@ std::string generated(std::string_view relative) {
 }
 
 SolutionModel loadModel(const std::string& path) {
-    auto model = SolutionModel::load(io::realFileSystem(), path);
+    auto model = SolutionModel::load(io::realFileSystem(), path, {.mode = SolutionModelMode::NativeStatic});
     EXPECT_TRUE(model.has_value()) << (model ? "" : model.error().describe());
     return std::move(*model);
 }
@@ -250,6 +250,28 @@ TEST(SolutionConfigurationEdit, TheVerifiedWriteReadsBackTheEditedMappings) {
                   model.projectConfiguration(projectNamed(model, "Renderer"), debug))
             << "other projects keep their mapping";
     }
+}
+
+TEST(SolutionConfigurationEdit, ApproximateModelRefusesMappingWritesBeforeTouchingSolutionBytes) {
+    test::MemTree tree;
+    tree.write("Approx.slnx", R"(<Solution><Configurations><BuildType Name="Debug" />
+<Platform Name="x64" /></Configurations><Project Path="App.vcxproj" /></Solution>)");
+    tree.write("App.vcxproj", "<Project />");
+    auto model = SolutionModel::load(tree.fs, test::MemTree::path("Approx.slnx"),
+                                     {.mode = SolutionModelMode::ApproximateReadOnly});
+    ASSERT_TRUE(model);
+    const auto before = tree.fs.readFile(model->path());
+    ASSERT_TRUE(before);
+    const ConfigurationMappingEdit edit{
+        .project = ProjectId{0},
+        .solutionConfiguration = 0,
+        .mapping = ProjectConfigurationMapping{.configuration = "Release", .platform = "x64", .build = true}};
+    const auto written = writeSolutionConfigurationEdits(tree.fs, *model, std::span(&edit, 1));
+    ASSERT_FALSE(written);
+    EXPECT_EQ(written.error().code(), ErrorCode::Unsupported);
+    const auto after = tree.fs.readFile(model->path());
+    ASSERT_TRUE(after);
+    EXPECT_EQ(*after, *before);
 }
 
 } // namespace

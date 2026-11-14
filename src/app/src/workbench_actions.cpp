@@ -171,12 +171,20 @@ void Workbench::registerActions() {
             std::string activeCfg = "Debug|x64";
             if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
                 activeCfg = m_build->configurations()[*idx].name();
-            showProjectPropertiesDialog(m_window, m_services.fs, projPath, activeCfg, [this] {
-                refreshSolutionExplorerForFsChange();
-                startProjectEvaluation(m_projectRoot);
-                if (m_clangd)
-                    restartClangd();
-            });
+            const auto propertiesSolution = m_solution;
+            showProjectPropertiesDialog(
+                m_window, m_services.fs, projPath, activeCfg,
+                [this] {
+                    refreshSolutionExplorerForFsChange();
+                    startProjectEvaluation(m_projectRoot);
+                    if (m_clangd)
+                        restartClangd();
+                },
+                [this, propertiesSolution]() -> Result<void> {
+                    if (m_shutDown || m_solution != propertiesSolution)
+                        return fail(ErrorCode::Busy, "Solution changed while property pages were open");
+                    return propertiesSolution->requireProjectMutation();
+                });
         },
         [this] { return m_window != nullptr && m_solution != nullptr; });
     add(

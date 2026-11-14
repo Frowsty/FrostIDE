@@ -40,6 +40,10 @@ struct RenameProject {
 
 Result<document::RefactoringPlan> Workbench::prepareProjectSourceRename(const std::string& oldPath,
                                                                         const std::string& newPath) {
+    if (m_solution) {
+        if (auto allowed = m_solution->requireProjectMutation(); !allowed)
+            return std::unexpected(allowed.error());
+    }
     QPointer<Workbench> owner(this);
     const auto root = m_projectRoot;
     const auto solution = m_solution;
@@ -61,6 +65,10 @@ Result<document::RefactoringPlan> Workbench::prepareProjectSourceRename(const st
             owner->m_evaluatedGeneration != evaluationGeneration ||
             (owner->m_build ? owner->m_build->activeConfigurationIndex() : std::nullopt) != active)
             return fail(ErrorCode::Busy, "Project/configuration changed; prepare the rename again");
+        if (owner->m_solution) {
+            if (auto allowed = owner->m_solution->requireProjectMutation(); !allowed)
+                return std::unexpected(allowed.error());
+        }
         const auto currentTrust = owner->m_services.trust.snapshot(root);
         if (currentTrust.trusted != trust.trusted || currentTrust.revision != trust.revision)
             return fail(ErrorCode::PermissionDenied, "Project trust changed during rename preparation");

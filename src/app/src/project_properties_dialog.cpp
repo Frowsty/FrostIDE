@@ -432,7 +432,8 @@ void buildPropertyPagesUi(const std::vector<PageSpec>& specs, QTreeWidget* tree,
 } // namespace
 
 void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std::string& projectPath,
-                                 const std::string& activeConfigPlatform, std::function<void()> onSaved) {
+                                 const std::string& activeConfigPlatform, std::function<void()> onSaved,
+                                 std::function<Result<void>()> authorizeWrite) {
     auto readRes = fs.readFile(projectPath);
     if (!readRes) {
         QMessageBox::warning(parent, QStringLiteral("Project Properties"),
@@ -521,6 +522,13 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
         }
         if (updates.empty())
             return true;
+        if (authorizeWrite) {
+            if (auto allowed = authorizeWrite(); !allowed) {
+                QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"),
+                                     toQs(allowed.error().message()));
+                return false;
+            }
+        }
         const std::string cfg = cfgCombo ? cfgCombo->currentText().toStdString() : std::string();
         // The debugger settings go to <project>.vcxproj.user (kDebuggingNote), in each configuration
         // the combo names ("All Configurations": every one it lists), never into the project file.
