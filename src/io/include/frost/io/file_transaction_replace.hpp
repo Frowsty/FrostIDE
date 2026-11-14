@@ -37,6 +37,8 @@ struct FileReplacementReceipt {
     std::string metadataProfile;
     std::string moveDestination;
     FileImageObservation moveParent;
+    // Empty images.beforeSha256 denotes an ABSENT Before for prepareFileCreation only; unlike
+    // sha256(empty file), it is not an existing zero-length file or a replaceable placeholder.
     std::string beforeMetadataSha256;
     std::string privateAfterMetadataSha256;
     std::string installedAfterMetadataSha256;
@@ -111,9 +113,20 @@ private:
     std::unique_ptr<State> m_state;
     friend Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementReceipt&, std::string_view,
                                                                   std::string_view, bool, std::size_t);
+    friend Result<PreparedFileReplacement> prepareFileCreation(std::string_view, std::string_view, std::string_view,
+                                                               std::size_t);
     friend Result<PreparedFileReplacement> prepareFileReplacement(std::string_view, std::string_view, std::string_view,
                                                                   std::size_t, std::size_t);
 };
+
+// Absent endpoint, existing non-reparse parent, same-volume owner-private store. New files retain
+// their restricted creation ACL (Windows) / mode0600 (POSIX), not inherited workspace permissions.
+// No pre-existing metadata to preserve, no mkdir, no overwrite. Same native supported profile,
+// inspection/error rules and retained-artifact/partial-effect semantics as replacements. Undo
+// restores absence by retaining After; Redo requires absence and reinstalls the identical object.
+[[nodiscard]] Result<PreparedFileReplacement> prepareFileCreation(std::string_view target,
+                                                                  std::string_view privateStore, std::string_view after,
+                                                                  std::size_t maxAfterBytes);
 
 // Explicit NEW preparation, not an upgrade of an earlier partially observed metadata receipt.
 // Native metadata is captured before byte preparation and revalidated after it. Stage metadata is
@@ -152,6 +165,7 @@ private:
 [[nodiscard]] Result<std::string> claimTransactionDirectory(std::string_view store, std::string_view leaf);
 
 // Creates/reuses a current-owner restricted transaction store, refusing unsafe existing objects.
+// For an absent target, derives volume from its existing parent; it never creates target/parents.
 // Prefer recoveryRoot when on target volume; otherwise use a per-user sibling of workspaceRoot.
 // With no workspaceRoot the fallback is adjacent to target (caller must exclude it from project
 // indexing/VCS). No privileges or existing unsafe directory ACL/mode are changed. O(path depth).

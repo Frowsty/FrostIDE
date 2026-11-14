@@ -485,6 +485,31 @@ Result<void> directoryAt(std::string_view path, const Native& expected, bool res
     return {};
 }
 
+Result<FileImageObservation> directoryIdentity(const Native& file, std::string_view path) {
+    FileImageObservation out;
+#ifdef _WIN32
+    FILE_ID_INFO id{};
+    FILE_ATTRIBUTE_TAG_INFO tag{};
+    if (!GetFileInformationByHandleEx(file.get(), FileIdInfo, &id, sizeof(id)) ||
+        !GetFileInformationByHandleEx(file.get(), FileAttributeTagInfo, &tag, sizeof(tag)))
+        return std::unexpected(lastWin32Error("create: directory identity", path));
+    if ((tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+        (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+        return fail(ErrorCode::Unsupported, "create: actual non-reparse directory required");
+    out.volume = std::to_string(id.VolumeSerialNumber);
+    out.object.assign(reinterpret_cast<const char*>(id.FileId.Identifier), sizeof(id.FileId.Identifier));
+#else
+    struct stat id{};
+    if (::fstat(file.get(), &id) != 0)
+        return std::unexpected(errnoError(errno, "create: directory identity", path));
+    if (!S_ISDIR(id.st_mode))
+        return fail(ErrorCode::Unsupported, "create: actual directory required");
+    out.volume = std::to_string(id.st_dev);
+    out.object = std::to_string(id.st_ino);
+#endif
+    return out;
+}
+
 std::string metadataDigest(const Metadata& metadata) {
 #ifdef _WIN32
     const auto values = std::format("{}:{}:{}:", metadata.basic.FileAttributes, metadata.basic.CreationTime.QuadPart,
@@ -542,6 +567,127 @@ PreparedFileReplacement::PreparedFileReplacement(PreparedFileReplacement&&) noex
 PreparedFileReplacement& PreparedFileReplacement::operator=(PreparedFileReplacement&&) noexcept = default;
 const FileReplacementReceipt* PreparedFileReplacement::receipt() const noexcept {
     return m_state ? &m_state->receipt : nullptr;
+}
+
+Result<PreparedFileReplacement> prepareFileCreation(std::string_view target, std::string_view privateStorePath,
+                                                    std::string_view after, std::size_t maxAfterBytes) {
+    if (after.size() > maxAfterBytes)
+        return fail(ErrorCode::OutOfRange, "create: image exceeds explicit limit");
+    auto normalized = normalizePath(target);
+    auto normalizedStore = normalizePath(privateStorePath);
+    if (!normalized || !normalizedStore || !isAbsolutePath(*normalized) || !isAbsolutePath(*normalizedStore) ||
+        fileName(*normalized).empty())
+        return fail(ErrorCode::InvalidArgument, "create: absolute file/store paths required");
+#ifdef _WIN32
+    if (fileName(*normalized).find(':') != std::string_view::npos)
+        return fail(ErrorCode::Unsupported, "create: alternate data stream destinations are unsupported");
+#endif
+    auto state = std::make_unique<PreparedFileReplacement::State>();
+    state->parentPath = std::string(parentPath(*normalized));
+    state->storePath = *normalizedStore;
+    auto parent = openNative(state->parentPath, false, true);
+    auto store = openNative(state->storePath, false, true);
+    if (!parent)
+        return std::unexpected(parent.error());
+    if (!store)
+        return std::unexpected(store.error());
+    state->parent = std::move(*parent);
+    state->store = std::move(*store);
+    if (auto checked = directoryAt(state->storePath, state->store, true); !checked)
+        return std::unexpected(checked.error());
+    auto parentId = directoryIdentity(state->parent, state->parentPath);
+    auto storeId = directoryIdentity(state->store, state->storePath);
+    if (!parentId)
+        return std::unexpected(parentId.error());
+    if (!storeId)
+        return std::unexpected(storeId.error());
+    if (parentId->volume != storeId->volume ||
+        (parentId->object == storeId->object && parentId->volume == storeId->volume))
+        return fail(ErrorCode::Unsupported, "create: separate private same-volume store required");
+    if (auto absent = absentEndpoint(*normalized); !absent)
+        return std::unexpected(absent.error());
+    state->afterPayload = after;
+    auto& receipt = state->receipt;
+    receipt.images.targetPath = *normalized;
+    receipt.images.targetParent = *parentId;
+    receipt.images.store = *storeId;
+    receipt.images.afterSha256 = sha256Hex(after);
+    // No Before object/hash: this represents absence, not an empty-file replacement.
+    auto leaf = std::format(".frost-create-{}-{}", detail::currentProcessId(), detail::nextUniqueId());
+    auto stage = joinPath(state->storePath, leaf);
+    if (!stage)
+        return std::unexpected(stage.error());
+    receipt.replacementPath = *stage;
+    receipt.images.stagePath = *stage;
+    receipt.retainedBeforePath = *stage + ".before"; // Reserved absent endpoint, never fabricated.
+    const auto retained = [&](Error error) -> std::unexpected<Error> {
+        return std::unexpected(error.withContext("create: private image retained at '" + *stage + "'"));
+    };
+#ifdef _WIN32
+    auto wide = toWin32Path(*stage);
+    if (!wide)
+        return std::unexpected(wide.error());
+    // Store admission proves restrictive inheritable child ACL BEFORE the first byte is written.
+    state->replacement.reset(CreateFileW(wide->c_str(), GENERIC_READ | GENERIC_WRITE | DELETE | READ_CONTROL,
+                                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_NEW,
+                                         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (!state->replacement.valid())
+        return std::unexpected(lastWin32Error("create: exclusive stage", *stage));
+    if (auto restricted = privateStore(state->replacement.get(), *stage); !restricted)
+        return retained(restricted.error());
+#else
+    state->replacement.reset(
+        ::openat(state->store.get(), leaf.c_str(), O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600));
+    if (!state->replacement.valid())
+        return std::unexpected(errnoError(errno, "create: exclusive stage", *stage));
+#endif
+    if (auto checked = directoryAt(state->storePath, state->store, true); !checked)
+        return retained(checked.error());
+    std::size_t done = 0;
+    while (done < after.size()) {
+        const auto want = std::min<std::size_t>(after.size() - done, 1024 * 1024);
+#ifdef _WIN32
+        DWORD count = 0;
+        if (!WriteFile(state->replacement.get(), after.data() + done, static_cast<DWORD>(want), &count, nullptr))
+            return retained(lastWin32Error("create: write private image", *stage));
+#else
+        const auto count = ::write(state->replacement.get(), after.data() + done, want);
+        if (count < 0) {
+            if (errno == EINTR)
+                continue;
+            return retained(errnoError(errno, "create: write private image", *stage));
+        }
+#endif
+        if (count == 0)
+            return retained(Error(ErrorCode::IoError, "create: zero-progress write"));
+        done += static_cast<std::size_t>(count);
+    }
+    if (auto flushed = flushNative(state->replacement, *stage); !flushed)
+        return retained(flushed.error());
+    auto meta = metadataOf(state->replacement, *stage, true);
+    if (!meta)
+        return retained(meta.error());
+    if (meta->volume != parentId->volume)
+        return retained(Error(ErrorCode::Busy, "create: stage volume changed during preparation"));
+    state->after = std::move(*meta);
+    receipt.images.stage.volume = state->after.volume;
+    receipt.images.stage.object = state->after.object;
+    receipt.images.stage.size = after.size();
+    receipt.privateAfterMetadataSha256 = metadataDigest(state->after);
+    receipt.images.stage.metadata = receipt.privateAfterMetadataSha256;
+    receipt.metadataProfile = "CREATE LIMITED: absent Before; restricted new regular single-link file, same native "
+                              "observable metadata profile as replacement; no prior metadata/SACL preservation claim";
+    receipt.images.metadataObservationProfile = receipt.metadataProfile;
+    detail::observeReplacement(detail::ReplacementBoundary::ByteImagesPrepared, receipt);
+    if (auto checked = objectAt(*stage, state->after, after, true, true); !checked)
+        return retained(checked.error());
+    if (auto checked = directoryAt(state->parentPath, state->parent); !checked)
+        return retained(checked.error());
+    if (auto checked = directoryAt(state->storePath, state->store, true); !checked)
+        return retained(checked.error());
+    if (auto absent = absentEndpoint(*normalized); !absent)
+        return retained(absent.error());
+    return PreparedFileReplacement(std::move(state));
 }
 
 Result<PreparedFileReplacement> prepareFileReplacement(std::string_view target, std::string_view privateStorePath,
@@ -657,6 +803,13 @@ FileReplacementOutcome PreparedFileReplacement::retireOriginal() {
     if (!m_state)
         return {{}, Error(ErrorCode::InvalidArgument, "replacement: moved-from participant")};
     auto& state = *m_state;
+    if (state.receipt.images.beforeSha256.empty()) {
+        auto checked = validateCurrent(false);
+        if (!checked)
+            return {state.receipt, checked.error()};
+        state.receipt.phase = FileReplacementPhase::OriginalRetained; // Verified absence; no original exists.
+        return {state.receipt, std::nullopt};
+    }
     const auto failed = [&](Error error) { return FileReplacementOutcome{state.receipt, std::move(error)}; };
     if (auto parent = directoryAt(state.parentPath, state.parent); !parent)
         return failed(parent.error());
@@ -698,8 +851,12 @@ FileReplacementOutcome PreparedFileReplacement::installAfter() {
         state.receipt.phase != FileReplacementPhase::AfterInstalledUnverified)
         return failed(Error(ErrorCode::InvalidArgument, "replacement: install requires verified retained Before"));
     if (state.receipt.phase == FileReplacementPhase::OriginalRetained) {
-        if (auto retained = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
-            !retained)
+        if (state.receipt.images.beforeSha256.empty()) {
+            if (auto absent = absentEndpoint(state.receipt.retainedBeforePath); !absent)
+                return failed(absent.error());
+        } else if (auto retained =
+                       objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
+                   !retained)
             return failed(retained.error());
         if (auto stage = objectAt(state.receipt.replacementPath, state.after, state.afterPayload, true, true); !stage)
             return failed(stage.error());
@@ -715,44 +872,48 @@ FileReplacementOutcome PreparedFileReplacement::installAfter() {
             return failed(store.error());
     }
 #ifdef _WIN32
-    // Before broadening permissions, prove the named intended endpoint still owns this private
-    // After object. A moved-away private image must never receive the workspace's broader DACL.
-    if (auto endpoint = objectAt(state.receipt.images.targetPath, state.after, state.afterPayload, false); !endpoint)
-        return failed(endpoint.error());
-    auto securityState = metadataOf(state.replacement, state.receipt.images.targetPath);
-    if (!securityState)
-        return failed(securityState.error());
-    if (securityState->security != state.after.security && securityState->security != state.before.security)
-        return failed(Error(ErrorCode::Busy, "published After security changed outside the frozen transition"));
-    // Stage permissions stay owner-private until the file is at the intended workspace endpoint.
-    PSID owner = nullptr, group = nullptr;
-    PACL acl = nullptr;
-    BOOL defaulted = FALSE, present = FALSE;
-    auto* descriptor = reinterpret_cast<PSECURITY_DESCRIPTOR>(state.before.security.data());
-    if (!GetSecurityDescriptorOwner(descriptor, &owner, &defaulted) ||
-        !GetSecurityDescriptorGroup(descriptor, &group, &defaulted) ||
-        !GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted) || !present)
-        return failed(lastWin32Error("replacement: decode captured owner/group/DACL", state.receipt.images.targetPath));
-    SECURITY_DESCRIPTOR_CONTROL control{};
-    DWORD revision = 0;
-    if (!GetSecurityDescriptorControl(descriptor, &control, &revision))
-        return failed(lastWin32Error("replacement: decode captured DACL control", state.receipt.images.targetPath));
-    const auto error = SetSecurityInfo(state.replacement.get(), SE_FILE_OBJECT,
-                                       DACL_SECURITY_INFORMATION |
-                                           ((control & SE_DACL_PROTECTED) ? PROTECTED_DACL_SECURITY_INFORMATION
-                                                                          : UNPROTECTED_DACL_SECURITY_INFORMATION),
-                                       nullptr, nullptr, acl, nullptr);
-    if (error != ERROR_SUCCESS)
-        return failed(win32Error(error, "replacement: install supported DACL; publication already occurred",
-                                 state.receipt.images.targetPath));
-    auto installed = metadataOf(state.replacement, state.receipt.images.targetPath);
-    if (!installed)
-        return failed(installed.error());
-    if (!sameSupportedMetadata(*installed, state.before))
-        return failed(
-            Error(ErrorCode::IoError, "replacement: published supported metadata mismatch; retain both images"));
-    state.after = std::move(*installed);
-    state.receipt.installedAfterMetadataSha256 = metadataDigest(state.after);
+    if (!state.receipt.images.beforeSha256.empty()) {
+        // Before broadening permissions, prove the named intended endpoint still owns this private
+        // After object. A moved-away private image must never receive the workspace's broader DACL.
+        if (auto endpoint = objectAt(state.receipt.images.targetPath, state.after, state.afterPayload, false);
+            !endpoint)
+            return failed(endpoint.error());
+        auto securityState = metadataOf(state.replacement, state.receipt.images.targetPath);
+        if (!securityState)
+            return failed(securityState.error());
+        if (securityState->security != state.after.security && securityState->security != state.before.security)
+            return failed(Error(ErrorCode::Busy, "published After security changed outside the frozen transition"));
+        // Stage permissions stay owner-private until the file is at the intended workspace endpoint.
+        PSID owner = nullptr, group = nullptr;
+        PACL acl = nullptr;
+        BOOL defaulted = FALSE, present = FALSE;
+        auto* descriptor = reinterpret_cast<PSECURITY_DESCRIPTOR>(state.before.security.data());
+        if (!GetSecurityDescriptorOwner(descriptor, &owner, &defaulted) ||
+            !GetSecurityDescriptorGroup(descriptor, &group, &defaulted) ||
+            !GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted) || !present)
+            return failed(
+                lastWin32Error("replacement: decode captured owner/group/DACL", state.receipt.images.targetPath));
+        SECURITY_DESCRIPTOR_CONTROL control{};
+        DWORD revision = 0;
+        if (!GetSecurityDescriptorControl(descriptor, &control, &revision))
+            return failed(lastWin32Error("replacement: decode captured DACL control", state.receipt.images.targetPath));
+        const auto error = SetSecurityInfo(state.replacement.get(), SE_FILE_OBJECT,
+                                           DACL_SECURITY_INFORMATION |
+                                               ((control & SE_DACL_PROTECTED) ? PROTECTED_DACL_SECURITY_INFORMATION
+                                                                              : UNPROTECTED_DACL_SECURITY_INFORMATION),
+                                           nullptr, nullptr, acl, nullptr);
+        if (error != ERROR_SUCCESS)
+            return failed(win32Error(error, "replacement: install supported DACL; publication already occurred",
+                                     state.receipt.images.targetPath));
+        auto installed = metadataOf(state.replacement, state.receipt.images.targetPath);
+        if (!installed)
+            return failed(installed.error());
+        if (!sameSupportedMetadata(*installed, state.before))
+            return failed(
+                Error(ErrorCode::IoError, "replacement: published supported metadata mismatch; retain both images"));
+        state.after = std::move(*installed);
+        state.receipt.installedAfterMetadataSha256 = metadataDigest(state.after);
+    }
 #endif
     if (auto installed = objectAt(state.receipt.images.targetPath, state.after, state.afterPayload); !installed)
         return failed(installed.error());
@@ -765,6 +926,39 @@ FileReplacementOutcome PreparedFileReplacement::restoreBefore() {
         return {{}, Error(ErrorCode::InvalidArgument, "replacement: moved-from participant")};
     auto& state = *m_state;
     const auto failed = [&](Error error) { return FileReplacementOutcome{state.receipt, std::move(error)}; };
+    if (state.receipt.images.beforeSha256.empty()) {
+        if (auto checked = directoryAt(state.parentPath, state.parent); !checked)
+            return failed(checked.error());
+        if (auto checked = directoryAt(state.storePath, state.store, true); !checked)
+            return failed(checked.error());
+        if (auto absent = absentEndpoint(state.receipt.retainedBeforePath); !absent)
+            return failed(absent.error());
+        if (state.receipt.phase == FileReplacementPhase::AfterInstalled) {
+            if (auto checked = validateCurrent(true); !checked)
+                return failed(checked.error());
+            if (auto empty = absentEndpoint(state.receipt.replacementPath); !empty)
+                return failed(empty.error());
+            auto renamed = renameNoReplace(state.replacement, state.parent, state.receipt.images.targetPath,
+                                           state.store, state.receipt.replacementPath);
+            if (!renamed)
+                return failed(renamed.error());
+            state.receipt.phase = FileReplacementPhase::AfterRetiredUnverified;
+            detail::observeReplacement(detail::ReplacementBoundary::AfterRetired, state.receipt);
+        } else if (state.receipt.phase != FileReplacementPhase::AfterRetiredUnverified &&
+                   state.receipt.phase != FileReplacementPhase::AfterRetained)
+            return failed(Error(ErrorCode::Busy, "create: inverse requires installed/retained After"));
+        if (auto checked = directoryAt(state.parentPath, state.parent); !checked)
+            return failed(checked.error());
+        if (auto checked = directoryAt(state.storePath, state.store, true); !checked)
+            return failed(checked.error());
+        if (auto checked = objectAt(state.receipt.replacementPath, state.after, state.afterPayload, true, true);
+            !checked)
+            return failed(checked.error());
+        if (auto absent = absentEndpoint(state.receipt.images.targetPath); !absent)
+            return failed(absent.error());
+        state.receipt.phase = FileReplacementPhase::BeforeRestored;
+        return {state.receipt, std::nullopt};
+    }
     if (auto parent = directoryAt(state.parentPath, state.parent); !parent)
         return failed(parent.error());
     if (auto store = directoryAt(state.storePath, state.store, true); !store)
@@ -816,6 +1010,21 @@ FileReplacementOutcome PreparedFileReplacement::settle() {
     if (!m_state)
         return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
     auto& state = *m_state;
+    if (state.receipt.images.beforeSha256.empty()) {
+        if (state.receipt.phase == FileReplacementPhase::Prepared) {
+            auto retired = retireOriginal();
+            if (!retired.complete())
+                return retired;
+        }
+        if (state.receipt.phase == FileReplacementPhase::OriginalRetained ||
+            state.receipt.phase == FileReplacementPhase::AfterInstalledUnverified)
+            return installAfter();
+        if (state.receipt.phase == FileReplacementPhase::AfterRetiredUnverified ||
+            state.receipt.phase == FileReplacementPhase::AfterRetained)
+            return restoreBefore();
+        auto checked = validateCurrent(state.receipt.phase == FileReplacementPhase::AfterInstalled);
+        return {state.receipt, checked ? std::nullopt : std::optional(checked.error())};
+    }
     auto verify = [&](std::string_view path, const Metadata& metadata, std::string_view bytes,
                       bool privateObject) -> std::optional<Error> {
         auto checked = objectAt(path, metadata, bytes, true, privateObject);
@@ -859,6 +1068,15 @@ FileReplacementOutcome PreparedFileReplacement::reapplyAfter() {
     if (!m_state)
         return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
     auto& state = *m_state;
+    if (state.receipt.images.beforeSha256.empty()) {
+        if (state.receipt.phase != FileReplacementPhase::BeforeRestored)
+            return {state.receipt, Error(ErrorCode::Busy, "create: Redo requires completed inverse")};
+        auto checked = validateCurrent(false);
+        if (!checked)
+            return {state.receipt, checked.error()};
+        state.receipt.phase = FileReplacementPhase::OriginalRetained;
+        return installAfter();
+    }
     if (state.receipt.phase != FileReplacementPhase::BeforeRestored)
         return {state.receipt, Error(ErrorCode::Busy, "Redo requires a completed inverse")};
     if (auto before = objectAt(state.receipt.images.targetPath, state.before, state.beforePayload); !before)
@@ -870,6 +1088,9 @@ FileReplacementOutcome PreparedFileReplacement::reapplyAfter() {
 }
 
 Result<void> PreparedFileReplacement::prepareMoveDestination(std::string_view destination) {
+    if (m_state && m_state->receipt.images.beforeSha256.empty())
+        return fail(ErrorCode::InvalidArgument, "create: absent Before cannot be moved");
+
     if (!m_state)
         return fail(ErrorCode::InvalidArgument, "moved-from replacement");
     auto& state = *m_state;
@@ -1027,6 +1248,27 @@ Result<void> PreparedFileReplacement::validateCurrent(bool after) const {
     if (!m_state)
         return fail(ErrorCode::InvalidArgument, "moved-from replacement");
     const auto& state = *m_state;
+    if (state.receipt.images.beforeSha256.empty()) {
+        if (auto checked = directoryAt(state.parentPath, state.parent); !checked)
+            return checked;
+        if (auto checked = directoryAt(state.storePath, state.store, true); !checked)
+            return checked;
+        if (auto empty = absentEndpoint(state.receipt.retainedBeforePath); !empty)
+            return empty;
+        if (after) {
+            if (state.receipt.phase != FileReplacementPhase::AfterInstalled)
+                return fail(ErrorCode::Busy, "create: installation is unfinished");
+            if (auto empty = absentEndpoint(state.receipt.replacementPath); !empty)
+                return empty;
+            return objectAt(state.receipt.images.targetPath, state.after, state.afterPayload);
+        }
+        if (state.receipt.phase != FileReplacementPhase::Prepared &&
+            state.receipt.phase != FileReplacementPhase::BeforeRestored)
+            return fail(ErrorCode::Busy, "create: Before absence is unfinished");
+        if (auto empty = absentEndpoint(state.receipt.images.targetPath); !empty)
+            return empty;
+        return objectAt(state.receipt.replacementPath, state.after, state.afterPayload, true, true);
+    }
     if (auto parent = directoryAt(state.parentPath, state.parent); !parent)
         return std::unexpected(parent.error());
     if (auto store = directoryAt(state.storePath, state.store, true); !store)
@@ -1071,18 +1313,30 @@ Result<void> PreparedFileReplacement::validateCurrent(bool after) const {
 Result<std::string> ensurePrivateTransactionStore(std::string_view target, std::string_view preferred,
                                                   std::string_view workspaceRoot) {
     auto targetFile = openNative(target);
-    if (!targetFile)
-        return std::unexpected(targetFile.error());
-    auto identity = metadataOf(*targetFile, target);
-    if (!identity)
-        return std::unexpected(identity.error());
+    std::string targetVolume;
+    if (targetFile) {
+        auto identity = metadataOf(*targetFile, target);
+        if (!identity)
+            return std::unexpected(identity.error());
+        targetVolume = identity->volume;
+    } else {
+        if (targetFile.error().code() != ErrorCode::NotFound)
+            return std::unexpected(targetFile.error());
+        auto targetParent = openNative(parentPath(target), false, true);
+        if (!targetParent)
+            return std::unexpected(targetParent.error());
+        auto identity = directoryIdentity(*targetParent, parentPath(target));
+        if (!identity)
+            return std::unexpected(identity.error());
+        targetVolume = identity->volume;
+    }
     std::string chosen(preferred);
     auto parent = openNative(parentPath(chosen), false, true);
     bool sameVolume = false;
 #ifdef _WIN32
     FILE_ID_INFO preferredId{};
     sameVolume = parent && GetFileInformationByHandleEx(parent->get(), FileIdInfo, &preferredId, sizeof(preferredId)) &&
-                 std::to_string(preferredId.VolumeSerialNumber) == identity->volume;
+                 std::to_string(preferredId.VolumeSerialNumber) == targetVolume;
     HANDLE rawToken = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &rawToken))
         return std::unexpected(lastWin32Error("transaction store: current token", target));
@@ -1104,7 +1358,7 @@ Result<std::string> ensurePrivateTransactionStore(std::string_view target, std::
 #else
     struct stat preferredId{};
     sameVolume =
-        parent && ::fstat(parent->get(), &preferredId) == 0 && std::to_string(preferredId.st_dev) == identity->volume;
+        parent && ::fstat(parent->get(), &preferredId) == 0 && std::to_string(preferredId.st_dev) == targetVolume;
     const auto userTag = std::to_string(::geteuid());
 #endif
     if (!sameVolume) {
@@ -1141,12 +1395,12 @@ Result<std::string> ensurePrivateTransactionStore(std::string_view target, std::
     FILE_ID_INFO actual{};
     if (!GetFileInformationByHandleEx(directory->get(), FileIdInfo, &actual, sizeof(actual)))
         return std::unexpected(lastWin32Error("transaction store: verify volume", chosen));
-    if (std::to_string(actual.VolumeSerialNumber) != identity->volume)
+    if (std::to_string(actual.VolumeSerialNumber) != targetVolume)
 #else
     struct stat actual{};
     if (::fstat(directory->get(), &actual) != 0)
         return std::unexpected(errnoError(errno, "transaction store: verify volume", chosen));
-    if (std::to_string(actual.st_dev) != identity->volume)
+    if (std::to_string(actual.st_dev) != targetVolume)
 #endif
         return fail(ErrorCode::Unsupported, "transaction store is not on target volume");
     return chosen;
@@ -1155,7 +1409,13 @@ Result<std::string> ensurePrivateTransactionStore(std::string_view target, std::
 Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementReceipt& saved, std::string_view before,
                                                        std::string_view after, bool desiredBefore,
                                                        std::size_t maxBytes) {
-    if (before.size() > maxBytes || after.size() > maxBytes || io::sha256Hex(before) != saved.images.beforeSha256 ||
+    const bool creation = saved.images.beforeSha256.empty();
+    if (creation &&
+        (!before.empty() || saved.images.target != FileImageObservation{} || !saved.moveDestination.empty() ||
+         !saved.beforeMetadataSha256.empty() || !saved.metadataProfile.starts_with("CREATE LIMITED:")))
+        return fail(ErrorCode::Corrupt, "invalid absent-Before creation receipt");
+    if (before.size() > maxBytes || after.size() > maxBytes ||
+        (!creation && io::sha256Hex(before) != saved.images.beforeSha256) ||
         io::sha256Hex(after) != saved.images.afterSha256)
         return fail(ErrorCode::Corrupt, "recovery payload does not match frozen image hashes/limits");
     auto state = std::make_unique<PreparedFileReplacement::State>();
@@ -1197,32 +1457,34 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
     if (auto checked = parentMatches(state->store, saved.images.store); !checked)
         return std::unexpected(checked.error());
     std::string beforeLocation, afterLocation;
-    for (const auto& path :
-         std::array<std::string, 3>{saved.retainedBeforePath, saved.moveDestination, saved.images.targetPath}) {
-        if (path.empty())
-            continue;
-        auto file = openNative(path);
-        if (!file)
-            continue;
-        auto spelling = actualLeafSpelling(*file, path);
-        if (!spelling)
-            return std::unexpected(spelling.error());
-        if (!*spelling)
-            continue;
-        auto meta = metadataOf(*file, path, path == saved.retainedBeforePath);
-        if (!meta)
-            continue;
-        if (meta->volume != saved.images.target.volume || meta->object != saved.images.target.object)
-            continue;
-        auto bytes = readNative(*file, maxBytes, path);
-        if (!bytes || *bytes != before || metadataDigest(*meta) != saved.beforeMetadataSha256)
-            return fail(ErrorCode::Busy, "retained Before data/metadata changed; recovery refuses inverse authority");
-        state->original = std::move(*file);
-        state->before = std::move(*meta);
-        beforeLocation = path;
-        break;
-    }
-    if (beforeLocation.empty())
+    if (!creation)
+        for (const auto& path :
+             std::array<std::string, 3>{saved.retainedBeforePath, saved.moveDestination, saved.images.targetPath}) {
+            if (path.empty())
+                continue;
+            auto file = openNative(path);
+            if (!file)
+                continue;
+            auto spelling = actualLeafSpelling(*file, path);
+            if (!spelling)
+                return std::unexpected(spelling.error());
+            if (!*spelling)
+                continue;
+            auto meta = metadataOf(*file, path, path == saved.retainedBeforePath);
+            if (!meta)
+                continue;
+            if (meta->volume != saved.images.target.volume || meta->object != saved.images.target.object)
+                continue;
+            auto bytes = readNative(*file, maxBytes, path);
+            if (!bytes || *bytes != before || metadataDigest(*meta) != saved.beforeMetadataSha256)
+                return fail(ErrorCode::Busy,
+                            "retained Before data/metadata changed; recovery refuses inverse authority");
+            state->original = std::move(*file);
+            state->before = std::move(*meta);
+            beforeLocation = path;
+            break;
+        }
+    if (!creation && beforeLocation.empty())
         return fail(ErrorCode::Busy, "frozen Before object is unavailable; retain recovery records");
     for (const auto& path : std::array<std::string, 2>{saved.replacementPath, saved.images.targetPath}) {
         auto file = openNative(path, true);
@@ -1245,6 +1507,23 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
         state->after = std::move(*meta);
         afterLocation = path;
         break;
+    }
+    if (creation) {
+        if (afterLocation.empty())
+            return fail(ErrorCode::Busy, "create recovery: frozen After unavailable; preserve artifacts");
+        if (auto empty = absentEndpoint(saved.retainedBeforePath); !empty)
+            return std::unexpected(empty.error());
+        if (afterLocation == saved.images.targetPath) {
+            if (auto empty = absentEndpoint(saved.replacementPath); !empty)
+                return std::unexpected(empty.error());
+            state->receipt.phase = FileReplacementPhase::AfterInstalled;
+        } else {
+            if (auto empty = absentEndpoint(saved.images.targetPath); !empty)
+                return std::unexpected(empty.error());
+            state->receipt.phase =
+                desiredBefore ? FileReplacementPhase::BeforeRestored : FileReplacementPhase::Prepared;
+        }
+        return PreparedFileReplacement(std::move(state));
     }
     if (!saved.moveDestination.empty()) {
         state->moveParentPath = std::string(parentPath(saved.moveDestination));
