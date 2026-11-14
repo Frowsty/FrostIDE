@@ -32,6 +32,9 @@ def main() -> None:
         value = getattr(args, name)
         if not value.is_absolute() or not value.is_file():
             parser.error(f"--{name} must name an existing absolute file")
+    resource_compiler = args.clang.parent / "llvm-rc.exe" if os.name == "nt" else None
+    if resource_compiler is not None and not resource_compiler.is_file():
+        parser.error("pinned Clang directory must contain llvm-rc.exe for the UTF-8 executable manifest")
     with args.archive.open("rb") as stream:
         actual = hashlib.file_digest(stream, "sha256").hexdigest()
     if actual != pin["sha256"]:
@@ -59,6 +62,8 @@ def main() -> None:
         "-DCMAKE_MAKE_PROGRAM=" + str(args.ninja), "-DLUA_SOURCE_DIR=" + str(source),
         "-DCMAKE_INSTALL_PREFIX=" + str(args.prefix),
         "-DFROST_PINNED_CLANG_VERSION=" + lock["windows" if os.name == "nt" else "linux"]["llvm"]["version"]]
+    if resource_compiler is not None:
+        configure.append("-DCMAKE_RC_COMPILER=" + str(resource_compiler))
     subprocess.run(configure, check=True)
     subprocess.run([str(args.cmake), "--build", str(args.work_dir / "build")], check=True)
     subprocess.run([str(args.cmake), "--install", str(args.work_dir / "build")], check=True)
