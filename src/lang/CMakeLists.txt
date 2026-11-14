@@ -58,6 +58,7 @@ frost_add_library(lang LAYER lang
         src/lua_rc.cpp
         src/lua_service.cpp
         src/lua_refactoring.cpp
+        src/lua_module_rename.cpp
         src/managed_service.cpp
         src/lsp_types.cpp
         src/msbuild_compile_commands.cpp

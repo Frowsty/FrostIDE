@@ -595,6 +595,8 @@ bool Workbench::previewCppRefactoring(const document::RefactoringPlan& plan) {
         add(file.path, file.expectedText, file.afterText);
     for (const auto& file : plan.disk)
         add(file.path, file.expectedBytes, file.afterBytes);
+    for (const auto& file : plan.renames)
+        add(file.from + " -> " + file.to, file.expectedBytes, file.expectedBytes);
     layout->addWidget(tabs);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
     connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, &QDialog::accept);

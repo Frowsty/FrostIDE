@@ -110,7 +110,7 @@ public:
     // Worker-side actual AST admission: only current, error-free Lua trees. Owns strings/snapshot,
     // so the result no longer borrows grammar/tree nodes. Bounded iterative O(nodes+edges),
     // cancellation/timeouts return errors, never a partial or fabricated semantic projection.
-    [[nodiscard]] Result<LuaAstProjection> luaAstProjection(const LuaAstLimits& limits={}) const;
+    [[nodiscard]] Result<LuaAstProjection> luaAstProjection(const LuaAstLimits& limits = {}) const;
 
     /*
      * The ranges of the named nodes that contain `selection`, smallest first, strictly growing and
