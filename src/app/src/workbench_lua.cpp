@@ -589,15 +589,6 @@ void Workbench::onLuaFilesChanged(const io::FileChangeBatch& batch) {
     else if (*sent > 0)
         log::debug("workbench", "LuaLS didChangeWatchedFiles: {} changes", *sent);
     // A host's own files changed (the engine wrote its reference or definitions): compose again.
-<<<<<<< HEAD
-    if (hostInputs && !m_luaState->configurationRefreshQueued) {
-        auto state = m_luaState;
-        state->configurationRefreshQueued = true;
-        const auto generation = state->generation;
-        QTimer::singleShot(75, this, [this, state, generation] {
-            state->configurationRefreshQueued = false;
-            if (m_luaState == state && state->generation == generation && m_lua)
-=======
     if (hostInputs && m_luaState->configurationRefreshQueued != m_luaState->generation) {
         auto state = m_luaState;
         const auto generation = state->generation;
@@ -606,7 +597,6 @@ void Workbench::onLuaFilesChanged(const io::FileChangeBatch& batch) {
             if (state->configurationRefreshQueued == generation)
                 state->configurationRefreshQueued.reset();
             if (m_luaState == state && state->generation == generation && m_lua)
->>>>>>> c1ac5eaf (fix(lua): keep refresh queues scoped to server generation)
                 refreshLuaConfiguration();
         });
     }
