@@ -370,6 +370,7 @@ void EditorView::setInputToPaintSink(std::function<void(const InputToPaintSample
 void EditorView::afterChange(const text::EditorUpdate& update, bool notifyTextChange) {
     if (update.change) {
         refreshBookmarks();
+        refreshStickyScope();
         // Grapheme boundaries can change anywhere on an edited line (for example regional
         // indicator parity), even when the edit did not touch the stored endpoint itself.
         const auto& snapshot = m_editor->text();
@@ -593,6 +594,7 @@ void EditorView::reloadFromDocument() {
     m_editor = std::make_unique<text::Editor>(*m_document, *m_shaper, config);
     const text::Snapshot& snapshot = m_editor->text();
     m_editor->setState(text::EditorState::caretAt(snapshot.clip(std::min(caret, snapshot.size()))));
+    refreshBookmarks();
     if (m_syntax) {
         m_syntax->open(m_syntaxLanguage, snapshot);
     }
@@ -757,6 +759,7 @@ bool EditorView::pollSyntax() {
             m_services.scheduler->spawn(sched::Lane::UserVisible, queryFolds(m_foldJob), m_foldJob->stop.get_token()));
         m_foldTimer.start();
     }
+    refreshStickyScope();
     viewport()->update();
     return true;
 }

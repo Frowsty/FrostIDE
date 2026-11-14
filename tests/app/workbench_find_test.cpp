@@ -29,6 +29,30 @@ namespace actions = ui::find_actions;
 
 ui::FindFeature* feature(WorkbenchRig& rig) { return rig.window->findChild<ui::FindFeature*>(); }
 
+TEST(WorkbenchFind, TodoActionUsesCurrentProjectDirtyTextAndIgnoredFileRules) {
+    WorkDir dir("todo-action");
+    dir.write("open.txt", "original\n");
+    dir.write("closed.txt", "// FIXME later\nTODOISH is not a task\n");
+    dir.write("ignored.txt", "TODO ignored\n");
+    dir.write(".gitignore", "ignored.txt\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("open.txt")));
+    ASSERT_TRUE(rig.view()->editor().typeText("TODO unsaved "));
+    rig.show();
+    ASSERT_EQ(rig.window->invoke("editor.showTodos"), input::InvokeResult::Ran);
+    auto* window = feature(rig)->toolWindow();
+    ASSERT_NE(window, nullptr);
+    ASSERT_NE(window->session(), nullptr);
+    window->session()->wait();
+    ASSERT_FALSE(window->session()->error());
+    std::set<std::string> files;
+    for (const auto& file : window->session()->files()) files.insert(file.path);
+    EXPECT_EQ(files, (std::set<std::string>{dir.join("open.txt"), dir.join("closed.txt")}));
+    EXPECT_EQ(window->session()->matchCount(), 2u);
+    EXPECT_EQ(dir.read("open.txt"), "original\n");
+}
+
 TEST(WorkbenchFind, FindsDirtyAndClosedFilesAndNavigatesUtf8ByteColumn) {
     WorkDir dir("find-navigate");
     dir.write("open.txt", "original\n");

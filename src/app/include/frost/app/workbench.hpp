@@ -796,6 +796,7 @@ private:
 
     // Construction steps.
     void registerActions();
+    void registerEditorExtrasActions();
     void registerRefactoringActions();
     void registerCppRefactoringActions();
     void showCppRefactoring(std::string operation);

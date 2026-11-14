@@ -3,6 +3,8 @@
 #include "frost/ui/editor/markdown_preview.hpp"
 #include "editor/editor_harness.hpp"
 #include <QTextDocument>
+#include <QLabel>
+#include <QScrollBar>
 #include <QUrl>
 #include <gtest/gtest.h>
 namespace frost::ui {
@@ -15,6 +17,26 @@ TEST(EditorExtras, MarkdownNeverLoadsEmbeddedFilesOrRemoteImages) {
     EXPECT_FALSE(preview.openLinks());
     EXPECT_FALSE(preview.setSourceMarkdown(QString(512 * 1024 + 1, QLatin1Char('x'))));
 }
+TEST(EditorExtras, StickyScopeUsesTheCurrentParsedOutline) {
+    std::string source = "void sample_function() {\n";
+    for (int i = 0; i < 100; ++i) source += "    // body\n";
+    source += "}\n";
+    test::HarnessOptions options;
+    options.path = "sample.cpp";
+    options.syntax = true;
+    test::EditorHarness h(source, options);
+    h.settle();
+    h.view->verticalScrollBar()->setValue(30);
+    h.view->refreshStickyScope();
+    const auto* sticky = h.view->findChild<QLabel*>(QStringLiteral("editorStickyScope"));
+    ASSERT_NE(sticky, nullptr);
+    EXPECT_EQ(sticky->text(), QStringLiteral("sample_function"));
+    EXPECT_FALSE(sticky->isHidden());
+    h.view->goToLine(1, 1);
+    h.view->refreshStickyScope();
+    EXPECT_TRUE(sticky->isHidden());
+}
+
 TEST(EditorExtras, BookmarkFollowsInsertedLinesAndUndo) {
     test::EditorHarness h("first\nsecond\nthird\n");
     h.view->goToLine(2, 1);
