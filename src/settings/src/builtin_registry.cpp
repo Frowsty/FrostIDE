@@ -420,6 +420,15 @@ struct Entry {
          kApplicationOnly, true, true},
         toolPath("tools.debugger.path", "Debugger", "The debug adapter executable; empty uses the bundled one."),
         toolPath("tools.lldbDap.path", "lldb-dap", "The lldb-dap executable; empty uses the SDK-pinned one."),
+        toolPath("tools.gdb.path", "GDB", "Absolute user-installed GNU GDB >=16 executable with Python/DAP support (Linux)."),
+        {"debug.nativeBackend", "Native debugger", "Backend used for ordinary native launch and attach sessions.",
+         "Build, Execution, Deployment/Debugger",
+#ifdef __linux__
+         enumSchema(options({{"lldb-dap", "LLDB"}, {"gdb", "GDB (Linux, version 16 or newer)"}})),
+#else
+         enumSchema(options({{"lldb-dap", "LLDB"}})),
+#endif
+         text("lldb-dap"), kApplicationOnly, true},
         {"debug.sourceMap.from", "Debug source build root",
          "Translate this build-time source root to the local project root. This does not verify source contents.",
          "Build, Execution, Deployment/Debugger", stringSchema(4096, StringHint::Path), text(""), kApplicationOnly},

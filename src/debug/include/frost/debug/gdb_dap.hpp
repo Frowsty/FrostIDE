@@ -18,9 +18,10 @@ namespace frost::debug {
     const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
     const std::map<std::string, std::string>& inheritedEnvironment,
     std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
-    std::optional<NativeDebugPrivacy> privacy = {});
+    std::optional<NativeDebugPrivacy> privacy = {},
+    std::vector<FunctionBreakpointLine> functionBreakpoints = {}, std::vector<std::string> exceptionFilters = {});
 [[nodiscard]] Result<std::unique_ptr<DebugSession>> attachGdbDebugSession(
     const project::TrustStore& trust, const DebugTarget& target, std::int64_t pid, AdapterFactory factory,
-    std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks);
+    std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
+    std::vector<FunctionBreakpointLine> functionBreakpoints = {}, std::vector<std::string> exceptionFilters = {});
 } // namespace frost::debug
-

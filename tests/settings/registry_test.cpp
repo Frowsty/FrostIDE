@@ -38,6 +38,23 @@ void expectTypedKey(Key<T> key) {
                    .advanced = false};
 }
 
+TEST(SettingsRegistry, NativeDebuggerSelectionDefaultsToLldbAndExecutesOnlyAtApplicationScope) {
+    const auto* backend = builtinRegistry().find(key::debugNativeBackend.name);
+    ASSERT_NE(backend, nullptr);
+    EXPECT_EQ(std::get<std::string>(backend->defaultValue), "lldb-dap");
+    EXPECT_TRUE(backend->executes);
+    EXPECT_EQ(backend->scopes, kApplicationOnly);
+    EXPECT_TRUE(validateValue(backend->schema, Value(std::string("lldb-dap"))));
+#ifdef __linux__
+    EXPECT_TRUE(validateValue(backend->schema, Value(std::string("gdb"))));
+#else
+    EXPECT_FALSE(validateValue(backend->schema, Value(std::string("gdb"))));
+#endif
+    const auto* path = builtinRegistry().find(key::toolsGdbPath.name);
+    ASSERT_NE(path, nullptr);
+    EXPECT_TRUE(path->executes);
+    EXPECT_EQ(path->scopes, kApplicationOnly);
+}
 TEST(SettingsRegistry, BuiltinKeysAreValid) {
     const Registry& registry = builtinRegistry();
     EXPECT_GE(registry.size(), 40U);

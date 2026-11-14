@@ -10,6 +10,7 @@ frost_add_library(ui_debug LAYER ui
     SOURCES
         src/debug_actions.cpp
         src/debug_controller.cpp
+        src/debug_controller_native.cpp
         src/debug_controller_actions.cpp
         src/debug_models.cpp
         src/debug_retirement.cpp

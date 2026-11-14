@@ -82,13 +82,16 @@ Result<std::unique_ptr<DebugSession>> startGdbDebugSession(
     const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
     const std::map<std::string, std::string>& inheritedEnvironment,
     std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
-    std::optional<NativeDebugPrivacy> privacy) {
+    std::optional<NativeDebugPrivacy> privacy,
+    std::vector<FunctionBreakpointLine> functionBreakpoints, std::vector<std::string> exceptionFilters) {
     if (auto allowed = validateDebugTargetTrust(trust, target); !allowed)
         return std::unexpected(std::move(allowed.error()));
     auto arguments = gdbDapLaunchArguments(target, inheritedEnvironment);
     if (!arguments) return std::unexpected(std::move(arguments.error()));
     DebugSessionOptions options;
     options.adapterId = "gdb";
+    options.functionBreakpoints = std::move(functionBreakpoints);
+    options.exceptionFilters = std::move(exceptionFilters);
     if (privacy) {
         if (!privacy->launchAdmission) return fail(ErrorCode::InvalidArgument, "A private native launch requires final admission");
         options.privateSession = true;
@@ -100,7 +103,8 @@ Result<std::unique_ptr<DebugSession>> startGdbDebugSession(
 
 Result<std::unique_ptr<DebugSession>> attachGdbDebugSession(
     const project::TrustStore& trust, const DebugTarget& target, std::int64_t pid, AdapterFactory factory,
-    std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks) {
+    std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
+    std::vector<FunctionBreakpointLine> functionBreakpoints, std::vector<std::string> exceptionFilters) {
     if (pid <= 0) return fail(ErrorCode::InvalidArgument, "GDB attach requires a positive process ID");
     if (target.stopOnEntry) return fail(ErrorCode::Unsupported, "GDB 16 DAP does not support stopping at the first instruction");
     if (target.sourceMap) return fail(ErrorCode::Unsupported, "GDB DAP source mapping is not supported");
@@ -108,10 +112,11 @@ Result<std::unique_ptr<DebugSession>> attachGdbDebugSession(
         return std::unexpected(std::move(allowed.error()));
     DebugSessionOptions options;
     options.adapterId = "gdb";
+    options.functionBreakpoints = std::move(functionBreakpoints);
+    options.exceptionFilters = std::move(exceptionFilters);
     options.targetMode = DebugTargetMode::Attach;
     options.attachHint = ptraceAttachHint(io::realFileSystem());
     return DebugSession::start(std::move(factory), rpc::Json::object().set("program", target.program).set("pid", pid),
                                std::move(breakpoints), std::move(callbacks), std::move(options));
 }
 } // namespace frost::debug
-

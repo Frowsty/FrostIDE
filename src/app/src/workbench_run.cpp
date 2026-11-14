@@ -163,6 +163,8 @@ void Workbench::createRunService() {
     debugOptions.launcher = &m_services.launcher;
     debugOptions.adapterFactory = m_options.debugAdapterFactory;
     debugOptions.lldbDapSetting = [this] { return m_services.settings.snapshot()->get(key::toolsLldbDapPath); };
+    debugOptions.nativeBackendSetting = [this] { return m_services.settings.snapshot()->get(key::debugNativeBackend); };
+    debugOptions.gdbSetting = [this] { return m_services.settings.snapshot()->get(key::toolsGdbPath); };
     debugOptions.sourceMapSetting = [this] {
         const auto snapshot = m_services.settings.snapshot();
         return std::pair{snapshot->get(key::debugSourceMapFrom), snapshot->get(key::debugSourceMapTo)};
