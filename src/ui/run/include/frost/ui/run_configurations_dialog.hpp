@@ -41,6 +41,8 @@
 
 #include "frost/run/run_configuration.hpp"
 #include "frost/run/run_configuration_set.hpp"
+#include "frost/run/vs_import.hpp"
+#include <functional>
 
 #include <QDialog>
 #include <QString>
@@ -101,6 +103,10 @@ public:
     std::string addFrostEditor();
     std::string addFrostPlayer();
 
+    using ImportHandler = std::function<Result<run::RunImportReport>(const std::string& path,
+        std::span<const run::RunConfiguration> current)>;
+    void setImportHandler(ImportHandler handler);
+    [[nodiscard]] Result<run::RunImportReport> importFile(const std::string& path);
     void accept() override;
 
 private:
@@ -115,6 +121,8 @@ private:
     bool m_canAddNative = true;
     int m_row = -1;
     bool m_loading = false;
+    ImportHandler m_importHandler;
+    QPushButton* m_import = nullptr;
     QPushButton* m_add = nullptr;
     QPushButton* m_copy = nullptr;
     QPushButton* m_remove = nullptr;

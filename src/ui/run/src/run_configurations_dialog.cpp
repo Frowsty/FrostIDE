@@ -12,6 +12,8 @@
 #include "frost/run/run_types.hpp"
 
 #include <QComboBox>
+#include <QFileDialog>
+#include <QMessageBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -146,6 +148,22 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     buttons->addWidget(m_copy);
     buttons->addWidget(m_remove);
     left->addLayout(buttons);
+    m_import = new QPushButton(tr("Import Visual Studio configurations..."), this);
+    m_import->setObjectName(QStringLiteral("runConfigurationImportVisualStudio"));
+    m_import->setEnabled(false);
+    left->addWidget(m_import);
+    connect(m_import, &QPushButton::clicked, this, [this] {
+        const auto file = QFileDialog::getOpenFileName(this, tr("Import Visual Studio configurations"), {},
+            tr("Visual Studio configurations (launch.vs.json tasks.vs.json)"));
+        if (file.isEmpty()) return;
+        auto result = importFile(utf8(file));
+        if (!result) { m_error->setText(qs(result.error().message())); return; }
+        QString message = tr("Imported %1 configurations into this dialog. Save with OK; Cancel discards them. No command was executed.")
+            .arg(result->configurations.size());
+        for (const auto& issue : result->skipped)
+            message += QStringLiteral("\n") + qs(issue.entry + ": " + issue.reason);
+        QMessageBox::information(this, tr("Import result"), message);
+    });
     m_list->setObjectName(QStringLiteral("runConfigurationList"));
     left->addWidget(m_list, 1);
     body->addLayout(left, 2);
@@ -264,6 +282,23 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
 }
 
 RunConfigurationsDialog::~RunConfigurationsDialog() = default;
+void RunConfigurationsDialog::setImportHandler(ImportHandler handler) {
+    m_importHandler = std::move(handler);
+    m_import->setEnabled(m_canAddNative && static_cast<bool>(m_importHandler));
+}
+Result<run::RunImportReport> RunConfigurationsDialog::importFile(const std::string& path) {
+    if (!m_canAddNative || !m_importHandler)
+        return fail(ErrorCode::Unsupported, "Import requires an open workspace");
+    storeFields();
+    auto result = m_importHandler(path, m_configurations);
+    if (!result) return std::unexpected(result.error());
+    for (const auto& config : result->configurations)
+        m_configurations.push_back(config);
+    refreshList();
+    m_row = -1;
+    if (!result->configurations.empty()) m_list->setCurrentRow(static_cast<int>(m_configurations.size() - 1));
+    return result;
+}
 
 void RunConfigurationsDialog::refreshList() {
     m_loading = true;

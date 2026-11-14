@@ -17,6 +17,7 @@
 
 frost_add_library(run LAYER run
     SOURCES
+        src/vs_import.cpp
         src/run_configuration.cpp
         src/run_configuration_set.cpp
         src/run_manager.cpp
