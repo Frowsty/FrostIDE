@@ -3,6 +3,7 @@
 #pragma once
 
 #include "frost/app/workbench.hpp"
+#include "frost/engine/asset_index.hpp"
 #include "frost/engine/command_policy.hpp"
 #include "frost/engine/project_content.hpp"
 #include "frost/engine/session.hpp"
@@ -117,6 +118,10 @@ struct EngineIntegration::Impl {
     std::shared_ptr<EngineEventQueue> eventQueue = std::make_shared<EngineEventQueue>();
     std::function<void(EnginePush)> pushSink;
     std::optional<engine::ProjectContent> projectContent;
+    std::shared_ptr<const engine::AssetIndex> assetIndex;
+    std::optional<engine::AssetUsages> assetUsages;
+    std::uint64_t assetQueryGeneration{}, assetInvalidationGeneration{};
+    std::map<std::uint64_t, std::uint64_t> assetQueries;
     std::string selectedInstance;
     std::string selectedServerGeneration;
     std::uint64_t lastRequest = 0, lastCompletedRequest = 0;
@@ -153,9 +158,13 @@ struct EngineIntegration::Impl {
     [[nodiscard]] bool currentIdentity(const engine::EngineIdentity& observed) const;
     [[nodiscard]] Result<void> refresh();
     [[nodiscard]] Result<void> connectInstance(const EngineInstanceRecord& instance);
-    [[nodiscard]] Result<std::uint64_t> send(std::string method, lang::Json params);
+    [[nodiscard]] Result<std::uint64_t> send(std::string method, lang::Json params,
+                                             std::function<void(Result<lang::Json>)> completed = {});
+    [[nodiscard]] Result<void> findAssetUsages(std::string relative, engine::EngineHandle handle);
+    void clearAssetUsages();
     void refreshProjectContent();
     void openAsset(std::string relative);
+    void openProjectSettingsDocument();
     void openLocation(std::string file, int line, int column);
     void drainPushEvents();
     void observeEvent(std::string_view topic, const lang::Json& data,

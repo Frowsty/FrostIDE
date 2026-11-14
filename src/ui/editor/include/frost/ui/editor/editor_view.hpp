@@ -384,6 +384,9 @@ public:
     [[nodiscard]] const std::vector<text::ByteRange>& foldCandidates() const noexcept { return m_foldCandidates; }
     // Replaces the clickable Code Vision lenses shown on declarations.
     void setCodeVisionLenses(std::vector<EditorCodeVisionLens> lenses);
+    // Independent actual-data providers coexist with language lenses. Empty replaces/removes
+    // only this provider; callers own generation/trust invalidation. GUI thread, O(all lenses).
+    void setCodeVisionLensesForProvider(std::string provider, std::vector<EditorCodeVisionLens> lenses);
     [[nodiscard]] const std::vector<EditorCodeVisionLens>& codeVisionLenses() const noexcept {
         return m_codeVisionLenses;
     }
@@ -776,6 +779,7 @@ private:
     std::vector<text::ByteRange> m_languageFolds;    // In the text of m_languageFoldsVersion.
     std::uint64_t m_languageFoldsVersion = 0;
     std::vector<EditorCodeVisionLens> m_codeVisionLenses;
+    std::map<std::string, std::vector<EditorCodeVisionLens>, std::less<>> m_codeVisionProviders;
     std::vector<EditorInlineValue> m_inlineDebuggerValues;
     DebugHoverProvider m_debugHoverProvider;
     std::deque<EditRecord> m_editHistory;

@@ -22,6 +22,7 @@
 
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
+#include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "project_properties_dialog.hpp"
@@ -222,7 +223,11 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             return;
         editor->setFocus();
         editor->setState(text::EditorState::caretAt(lens.symbolOffset));
-        if (lens.actionId == "navigate.findUsages")
+        if (lens.actionId == "engine.assetUsages" && m_engine) {
+            auto result = m_engine->findAssetUsagesForDocument(targetView->path());
+            if (!result)
+                notify(text("Engine asset usages"), qs(result.error().message()), ui::NotificationKind::Error);
+        } else if (lens.actionId == "navigate.findUsages")
             m_language->findUsages();
         else if (lens.actionId == "navigate.implementation")
             m_language->gotoImplementation();
@@ -335,6 +340,8 @@ void Workbench::editorOpened(DocumentEditorView& view) {
         }
     });
     transitionLauncherToMainWindow();
+    if (m_engine)
+        static_cast<void>(m_engine->findAssetUsagesForDocument(view.path(), false));
 }
 
 void Workbench::editorClosing(DocumentEditorView& view) {
@@ -435,6 +442,8 @@ bool Workbench::editorCloseRequested(DocumentEditorView& view) {
 }
 
 void Workbench::documentChanged(const std::string& path) {
+    if (m_engine)
+        m_engine->invalidateAssetUsages();
     if (m_engineBindings && (isCFamilySource(path) || isLuaSource(path)))
         m_engineBindings->cancel();
     invalidateManagedDebug();

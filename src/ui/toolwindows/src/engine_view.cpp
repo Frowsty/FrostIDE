@@ -55,11 +55,40 @@ EngineView::EngineView(QWidget* parent) : QWidget(parent) {
     m_tree->setSortingEnabled(false); // Preserve the engine's order within each category.
     layout->addWidget(m_tree);
     connect(m_tree, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* item) { (void)activate(item); });
+    auto* find = new QPushButton(tr("Find Asset Usages"), this);
+    find->setObjectName(QStringLiteral("engineFindAssetUsages"));
+    layout->addWidget(find);
+    connect(find, &QPushButton::clicked, this, [this] {
+        auto* item = m_tree->currentItem();
+        if (!m_content || !item)
+            return;
+        const auto path = item->data(0, kPathRole).toString();
+        const auto handle = item->data(0, kHandleRole).toString();
+        for (const auto& a : m_content->assets)
+            if (qs(a.path) == path && QString::number(static_cast<qulonglong>(a.handle.value)) == handle) {
+                emit findAssetUsages(path, handle);
+                return;
+            }
+    });
+    m_usageStatus = new QLabel(this);
+    m_usageStatus->setWordWrap(true);
+    m_usageStatus->setTextFormat(Qt::PlainText);
+    layout->addWidget(m_usageStatus);
+    m_usages = new QTreeWidget(this);
+    m_usages->setObjectName(QStringLiteral("engineAssetUsages"));
+    m_usages->setColumnCount(4);
+    m_usages->setHeaderLabels({tr("Referencing document"), tr("Occurrences"), tr("State"), tr("Setting")});
+    layout->addWidget(m_usages);
+    connect(m_usages, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* item) {
+        if (item && item->treeWidget() == m_usages && !item->data(0, kPathRole).toString().isEmpty())
+            emit openAssetUsage(item->data(0, kPathRole).toString());
+    });
     clear();
 }
 
 void EngineView::setContent(engine::ProjectContent content) {
     m_tree->clear();
+    clearAssetUsages();
     m_content = std::move(content);
     const auto& value = *m_content;
     m_status->setText(tr("%1 — %2").arg(qs(value.name), qs(value.projectFile)));
@@ -79,6 +108,7 @@ void EngineView::setContent(engine::ProjectContent content) {
 
 void EngineView::setUnavailable(const QString& reason) {
     m_content.reset();
+    clearAssetUsages();
     m_tree->clear();
     m_tree->setEnabled(false);
     m_status->setText(reason);
@@ -98,6 +128,33 @@ bool EngineView::activate(QTreeWidgetItem* item) {
         return false;
     emit openAsset(path, handle);
     return true;
+}
+
+void EngineView::clearAssetUsages(const QString& reason) {
+    m_usages->clear();
+    m_usageStatus->setText(reason);
+}
+void EngineView::setAssetUsages(const engine::AssetUsages& usages) {
+    clearAssetUsages();
+    m_usageStatus->setText(usages.unreadable.empty()
+                               ? tr("Engine snapshot: %1 occurrences in %2 referencing documents for %3")
+                                     .arg(usages.occurrences)
+                                     .arg(usages.references.size())
+                                     .arg(qs(usages.target.path))
+                               : tr("Incomplete engine search for %1: %2 unreadable document(s); no complete count")
+                                     .arg(qs(usages.target.path))
+                                     .arg(usages.unreadable.size()));
+    for (const auto& ref : usages.references) {
+        auto* item = new QTreeWidgetItem(m_usages, {qs(ref.path), QString::number(ref.count),
+                                                    !ref.indexed  ? tr("Unregistered unsaved scene — FrostEditor only")
+                                                    : ref.unsaved ? tr("Unsaved in FrostEditor")
+                                                                  : tr("Engine document"),
+                                                    qs(ref.setting)});
+        item->setData(0, kPathRole, qs(ref.path));
+        item->setToolTip(0, tr("The engine reports document-level references, not source lines. Opens the document."));
+    }
+    for (const auto& path : usages.unreadable)
+        new QTreeWidgetItem(m_usages, {qs(path), {}, tr("Unreadable — references unknown")});
 }
 
 } // namespace frost::ui

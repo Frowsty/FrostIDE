@@ -12,7 +12,7 @@
 #                        debug_corpus_tests (tests/debug): on Linux FrostEditor is most of an engine
 #                        build, which the corpus tier never does (tools/corpora.py, "engine").
 frost_add_test(engine_tests
-    SOURCES engine_test.cpp command_policy_test.cpp project_content_test.cpp
+    SOURCES asset_index_test.cpp engine_test.cpp command_policy_test.cpp project_content_test.cpp
             binding_index_test.cpp binding_queries_test.cpp binding_preview_test.cpp binding_lua_metadata_test.cpp
             engine_test_provider_test.cpp crash_artifact_test.cpp
     DEPS frost::engine frost::lang frost::text frost::sched frost::rpc frost::io frost::core

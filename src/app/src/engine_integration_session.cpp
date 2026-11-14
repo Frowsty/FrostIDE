@@ -49,6 +49,7 @@ void EngineIntegration::Impl::retireSession() {
 }
 
 void EngineIntegration::Impl::clearSession(bool clearOutput, bool preserveCrashObservation) {
+    clearAssetUsages();
     if (!preserveCrashObservation)
         revokeCrashObservation();
     ++sessionEpoch;
@@ -384,7 +385,8 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
     return {};
 }
 
-Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Json params) {
+Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Json params,
+                                                    std::function<void(Result<lang::Json>)> completed) {
     if (!admitted(epoch, root, trustRevision))
         return fail(ErrorCode::Untrusted, "Project trust changed before the engine command");
     if (!session || !identity || !session->connected())
@@ -420,13 +422,13 @@ Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Js
     auto started = session->request(
         method, std::move(params),
         [self, fs, originalKey, admission, observed, currentEpoch, expectedRoot, revision, exactSession, requestId,
-         method](Result<lang::Json> result) {
+         method, completed = std::move(completed)](Result<lang::Json> result) mutable {
             if (!self || !retainEngineProjectIdentity(*fs, expectedRoot, originalKey, admission))
                 return;
             QMetaObject::invokeMethod(
                 self.data(),
                 [self, observed, currentEpoch, expectedRoot, revision, exactSession, requestId, method,
-                 result = std::move(result)]() mutable {
+                 result = std::move(result), completed = std::move(completed)]() mutable {
                     if (!self)
                         return;
                     auto& impl = *self->m_impl;
@@ -451,7 +453,14 @@ Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Js
                     if (impl.pushSink)
                         impl.pushSink(std::move(reply));
                     impl.setStatus(result ? QStringLiteral("Command completed") : qs(result.error().message()));
+                    // Other engine operations may change content; retain no complete usage
+                    // snapshot across them. External edits have no content event in contract v2,
+                    // so retained counts are explicitly labelled query snapshots, not live values.
+                    if (result && method != "assets.find-references")
+                        impl.clearAssetUsages();
                     // Command replies never change the toolbar's play/paused/frame state.
+                    if (completed)
+                        completed(std::move(result));
                 },
                 Qt::QueuedConnection);
         });
