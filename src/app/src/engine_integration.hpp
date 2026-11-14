@@ -50,6 +50,7 @@ public:
                                                        std::function<void(Result<lang::Json>)> completed);
     [[nodiscard]] Result<void> findAssetUsagesForDocument(std::string_view absolutePath, bool reveal = true);
     void invalidateAssetUsages();
+    [[nodiscard]] Result<void> showSerializedProperties();
     [[nodiscard]] Result<void> cancelRequest();
     [[nodiscard]] lang::Json snapshot() const;
     // GUI-only immutable CLI/project capture; returned admission is worker-safe and revision-bound.

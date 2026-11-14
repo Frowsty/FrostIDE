@@ -427,6 +427,10 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
     impl.projectView = new ui::EngineView(workbench.m_window);
     impl.projectView->hide();
     connect(impl.projectView, &ui::EngineView::refreshRequested, this, [this] { m_impl->refreshProjectContent(); });
+    connect(impl.projectView, &ui::EngineView::serializedPropertiesRequested, this, [this] {
+        if (auto result = showSerializedProperties(); !result)
+            m_impl->setStatus(qs(result.error().message()));
+    });
     connect(impl.projectView, &ui::EngineView::openAsset, this, [this](const QString& path, const QString& handle) {
         if (!m_impl->projectContent)
             return;

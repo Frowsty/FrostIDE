@@ -70,6 +70,10 @@ EngineView::EngineView(QWidget* parent) : QWidget(parent) {
                 return;
             }
     });
+    auto* properties = new QPushButton(tr("Serialized properties..."), this);
+    properties->setObjectName(QStringLiteral("engineSerializedPropertiesButton"));
+    layout->addWidget(properties);
+    connect(properties, &QPushButton::clicked, this, &EngineView::serializedPropertiesRequested);
     m_usageStatus = new QLabel(this);
     m_usageStatus->setWordWrap(true);
     m_usageStatus->setTextFormat(Qt::PlainText);

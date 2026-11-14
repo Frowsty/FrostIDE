@@ -22,10 +22,12 @@
 #include "frost/build/cmake_toolchain.hpp"
 #include "frost/build/msbuild_locator.hpp"
 #include "frost/engine/asset_index.hpp"
+#include "frost/engine/command_policy.hpp"
 #include "frost/engine/engine_cli.hpp"
 #include "frost/engine/engine_lua.hpp"
 #include "frost/engine/handle.hpp"
 #include "frost/engine/schema.hpp"
+#include "frost/engine/serialized_properties.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
@@ -441,6 +443,48 @@ TEST_F(CorpusEngineContract, AssetIndexAndUsagesEqualActualEngineCliIncludingNew
     }
     EXPECT_EQ(usages->occurrences, oracleCount);
     EXPECT_EQ(usages->codeVisionCount(), references->find("references")->size());
+}
+
+TEST_F(CorpusEngineContract, ActualPublishedAssetAndPropertyPoliciesAdmitOnlyTheirExplicitAuthority) {
+    const auto program = builtEditor();
+    ASSERT_FALSE(program.empty());
+    EngineCliRequest request;
+    request.command = "schema.export";
+    auto raw = runEngineCliResult(io::realProcessLauncher(), program, request);
+    ASSERT_TRUE(raw);
+    auto schema = parseSchemaDocument(*raw);
+    ASSERT_TRUE(schema);
+    request.command = "commands.describe";
+    request.params = Json::object().set("command", "component.set");
+    auto descriptor = runEngineCliResult(io::realProcessLauncher(), program, request);
+    ASSERT_TRUE(descriptor);
+    EXPECT_TRUE(supportsExpectedComponentSet(*descriptor));
+    CommandPolicy policy(std::move(*schema), "physical-project", "exact-session");
+    CommandPolicyContext context;
+    context.connected = true;
+    context.paired = true;
+    context.trusted = true;
+    context.editorAvailable = true;
+    context.selectedProject = context.sessionProject = "physical-project";
+    context.selectedSession = context.sessionId = "exact-session";
+    context.state = "Edit";
+    context.capabilities = {"session.v2"};
+    context.availableCommands = {"assets.find-references", "commands.describe", "component.get", "component.set"};
+    const auto params = Json::object();
+    EXPECT_TRUE(policy.admit("assets.find-references", params, context));
+    EXPECT_TRUE(policy.admit("commands.describe", params, context));
+    EXPECT_TRUE(policy.admit("component.get", params, context));
+    EXPECT_FALSE(policy.admit("component.set", params, context));
+    context.mutationAllowed = true;
+    EXPECT_TRUE(policy.admit("component.set", params, context));
+    context.state = "Play";
+    EXPECT_FALSE(policy.admit("component.set", params, context));
+    context.state = "Edit";
+    context.trusted = false;
+    EXPECT_FALSE(policy.admit("assets.find-references", params, context));
+    context.trusted = true;
+    context.selectedSession = "replacement-session";
+    EXPECT_FALSE(policy.admit("component.get", params, context));
 }
 
 TEST_F(CorpusEngineContract, EntityIdsAbove2To53RoundTripExactlyThroughTheEngine) {

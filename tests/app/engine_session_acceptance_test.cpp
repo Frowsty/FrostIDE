@@ -21,7 +21,12 @@
 #include "support/real_engine_session.hpp"
 #include "workbench_rig.hpp"
 #include <QAction>
+#include <QComboBox>
+#include <QDialog>
+#include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QTabWidget>
 #include <QTreeView>
@@ -487,6 +492,106 @@ TEST_F(RealEngineWorkbench, EngineViewMatchesRealCliAssetsAndPickerSelectsExactR
     ASSERT_TRUE(alive) << alive.error().describe();
     ASSERT_TRUE(waitFor([&] { return (*alive)->connected(); }, 20s));
     (*alive)->shutdown();
+}
+
+TEST_F(RealEngineWorkbench, SerializedPropertyEditorRoundTripsAndRefusesAStaleLiveBefore) {
+    frost::test::RealEditor editor;
+    auto endpoint = editor.start(build, project, config);
+    ASSERT_TRUE(endpoint);
+    WorkbenchRig rig(dir, options());
+    ASSERT_NO_FATAL_FAILURE(open(rig));
+    ASSERT_NO_FATAL_FAILURE(pair(rig, *endpoint));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            auto s = rig.workbench->engineState();
+            const auto* c = s.find("engineProject");
+            return c && c->boolAt("available").value_or(false);
+        },
+        30s));
+    auto info = build.cli("project.info", project);
+    ASSERT_TRUE(info);
+    const auto* scene = info->find("startScene");
+    ASSERT_NE(scene, nullptr);
+    const std::string scenePath(scene->stringAt("path"));
+    auto entities = build.cli("entity.list", project, Json::object().set("scene", scenePath));
+    ASSERT_TRUE(entities);
+    const auto* list = entities->find("entities");
+    ASSERT_NE(list, nullptr);
+    ASSERT_FALSE(list->items().empty());
+    const auto entity = frost::engine::engineHandleAt(list->items().front(), "id");
+    ASSERT_TRUE(entity);
+    rig.window->toolWindows().show("engineProject");
+    auto* view = qobject_cast<frost::ui::EngineView*>(rig.window->toolWindows().content("engineProject"));
+    ASSERT_NE(view, nullptr);
+    auto* button = view->findChild<QPushButton*>(QStringLiteral("engineSerializedPropertiesButton"));
+    ASSERT_NE(button, nullptr);
+    button->click();
+    auto* dialog = rig.window->findChild<QDialog*>(QStringLiteral("engineSerializedProperties"));
+    ASSERT_NE(dialog, nullptr);
+    auto* scenes = dialog->findChild<QComboBox*>(QStringLiteral("enginePropertyScene"));
+    auto* components = dialog->findChild<QComboBox*>(QStringLiteral("enginePropertyComponent"));
+    auto* name = dialog->findChild<QLineEdit*>(QStringLiteral("enginePropertyEntity"));
+    auto* read = dialog->findChild<QPushButton*>(QStringLiteral("enginePropertyRead"));
+    auto* apply = dialog->findChild<QPushButton*>(QStringLiteral("enginePropertyApply"));
+    auto* fields = dialog->findChild<QPlainTextEdit*>(QStringLiteral("enginePropertyFields"));
+    ASSERT_NE(scenes, nullptr);
+    ASSERT_NE(components, nullptr);
+    ASSERT_NE(name, nullptr);
+    ASSERT_NE(read, nullptr);
+    ASSERT_NE(apply, nullptr);
+    ASSERT_NE(fields, nullptr);
+    scenes->setCurrentText(QString::fromStdString(scenePath));
+    components->setCurrentText(QStringLiteral("Transform"));
+    name->setText(QString::number(entity->value));
+    read->click();
+    ASSERT_TRUE(waitFor([&] { return apply->isEnabled(); }, 30s));
+    auto before = frost::rpc::parseJson(fields->toPlainText().toStdString());
+    ASSERT_TRUE(before);
+    auto desired = *before;
+    desired.set("Translation", Json::array({12.5, 34.5, 0.0}));
+    fields->setPlainText(QString::fromStdString(desired.dump()));
+    apply->click();
+    ASSERT_TRUE(waitFor([&] { return apply->isEnabled(); }, 30s));
+    auto after = frost::rpc::parseJson(fields->toPlainText().toStdString());
+    ASSERT_TRUE(after);
+    ASSERT_NE(after->find("Translation"), nullptr);
+    EXPECT_EQ(*after->find("Translation"), *desired.find("Translation"));
+    // A distinct actual engine request changes the component after this dialog's read.
+    auto competing = rig.workbench->sendEngineCommand(
+        "component.set", Json::object()
+                             .set("scene", scenePath)
+                             .set("entity", frost::engine::toJson(*entity))
+                             .set("component", "Transform")
+                             .set("fields", Json::object().set("Translation", Json::array({20.5, 30.5, 0.0})))
+                             .set("expected", *after));
+    ASSERT_TRUE(competing);
+    ASSERT_TRUE(
+        waitFor([&] { return rig.workbench->engineState().unsignedAt("lastCompletedRequestId") == *competing; }, 30s));
+    fields->setPlainText(QString::fromStdString(desired.set("Translation", Json::array({40.5, 50.5, 0.0})).dump()));
+    apply->click();
+    ASSERT_TRUE(waitFor(
+        [&] {
+            for (auto* label : dialog->findChildren<QLabel*>())
+                if (label->text().contains(QStringLiteral("changed since")))
+                    return true;
+            return false;
+        },
+        30s));
+    auto actual = rig.workbench->sendEngineCommand("component.get", Json::object()
+                                                                        .set("scene", scenePath)
+                                                                        .set("entity", frost::engine::toJson(*entity))
+                                                                        .set("component", "Transform"));
+    ASSERT_TRUE(actual);
+    ASSERT_TRUE(
+        waitFor([&] { return rig.workbench->engineState().unsignedAt("lastCompletedRequestId") == *actual; }, 30s));
+    const auto state = rig.workbench->engineState();
+    const auto* reply = state.find("lastReply");
+    ASSERT_NE(reply, nullptr);
+    const auto* current = reply->find("fields");
+    ASSERT_NE(current, nullptr);
+    ASSERT_NE(current->find("Translation"), nullptr);
+    EXPECT_EQ(*current->find("Translation"), Json::array({20.5, 30.5, 0.0}));
+    dialog->reject();
 }
 
 TEST_F(RealEngineWorkbench, RealEngineRefusesDiscoveryForAnotherProject) {
