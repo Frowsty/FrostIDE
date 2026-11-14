@@ -1005,7 +1005,8 @@ Result<void> startLuaJob(std::shared_ptr<TestRunner::State> state, TestRunner::L
                     error(Error{ErrorCode::Cancelled, "Lua version check stopped"});
                     return;
                 }
-                if (actual->exit.waitFailed || actual->exit.exitCode || value != "2.2.0") {
+                if (actual->exit.waitFailed || actual->exit.cleanupFailed || actual->exit.decodingFailed ||
+                    actual->exit.exitCode || value != "2.2.0") {
                     error(Error{ErrorCode::Unsupported, "Busted 2.2.0 is required: " + actual->out + actual->err});
                     return;
                 }
@@ -1030,6 +1031,13 @@ Result<void> startLuaJob(std::shared_ptr<TestRunner::State> state, TestRunner::L
                 return;
             }
             report.exitCode = actual->exit.exitCode;
+            if (actual->exit.cleanupFailed || actual->exit.decodingFailed) {
+                report.stopped = actual->exit.stopped;
+                error(Error{ErrorCode::IoError, actual->exit.cleanupFailed
+                                                    ? "Lua framework owned descendant cleanup failed"
+                                                    : "Lua framework wrote malformed UTF-8"});
+                return;
+            }
             if (stop.stop_requested() || actual->exit.stopped) {
                 report.stopped = true;
                 error(Error{ErrorCode::Cancelled, "Lua test process tree stopped"});
