@@ -14,6 +14,7 @@
 //      initializers and type locations naming <old-symbol> in the main file via ASTMatchers, and
 //      rewrites only those C++ tokens via clang::Rewriter (leaving comments and string literals
 //      untouched).
+//   3. --plan-local-rename: read-only canonical local/parameter rename proposals (REF-4 preparation).
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
@@ -41,6 +42,7 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+#include "local_rename_plan.hpp"
 
 #include <cstdlib>
 #include <memory>
@@ -318,6 +320,14 @@ int runSymbolRewriter(int argc, char* argv[]) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+#ifdef FROST_CLANG_PLAN_TESTS
+    if (argc == 2 && std::string_view(argv[1]) == "--check-local-rename-planner") {
+        return frost::clang_engine::checkLocalRenamePlanner(detectClangResourceDir());
+    }
+#endif
+    if (argc >= 2 && std::string_view(argv[1]) == "--plan-local-rename") {
+        return frost::clang_engine::runLocalRenamePlan(argc, argv, detectClangResourceDir());
+    }
     if (argc >= 2 && std::string_view(argv[1]) == "--rewrite-symbol") {
         return runSymbolRewriter(argc, argv);
     }

@@ -50,8 +50,12 @@ endif()
 
 add_executable(frost-clang
     src/frost_clang_main.cpp
+    src/local_rename_plan.cpp
     src/llvm_compression_shim.cpp
 )
+if(FROST_BUILD_TESTS)
+    target_compile_definitions(frost-clang PRIVATE FROST_CLANG_PLAN_TESTS)
+endif()
 
 target_compile_features(frost-clang PRIVATE cxx_std_23)
 

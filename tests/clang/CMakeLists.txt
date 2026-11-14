@@ -21,3 +21,14 @@ target_compile_definitions(clang_spike_tests PRIVATE
     FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 add_dependencies(clang_spike_tests frost-clang)
+
+# Read-only REF-4 preparation: separate real-tool tests leave CLANG-0's rewrite spike intact.
+frost_add_test(local_rename_plan_tests
+    SOURCES local_rename_plan_test.cpp
+    DEPS frost::rpc frost::io frost::core
+    LABELS integration)
+target_include_directories(local_rename_plan_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(local_rename_plan_tests PRIVATE
+    FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+add_dependencies(local_rename_plan_tests frost-clang)
