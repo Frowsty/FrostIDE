@@ -623,17 +623,26 @@ Result<CMakeMembershipPlan> planCMakeSourceRename(const CMakeProject& model, std
     return plan;
 }
 
-Result<std::vector<CMakeMembershipPlan>>
-planCMakeSourceRenameAllTargets(const CMakeProject& model, std::string_view oldSourcePath,
-                                std::string_view newSourcePath, std::span<const CMakeInputSnapshot> inputs) {
-    struct Change { std::size_t begin; std::size_t end; std::string replacement; };
-    struct Definition { std::string original; std::vector<Change> changes; };
+Result<std::vector<CMakeMembershipPlan>> planCMakeSourceRenameAllTargets(const CMakeProject& model,
+                                                                         std::string_view oldSourcePath,
+                                                                         std::string_view newSourcePath,
+                                                                         std::span<const CMakeInputSnapshot> inputs) {
+    struct Change {
+        std::size_t begin;
+        std::size_t end;
+        std::string replacement;
+    };
+    struct Definition {
+        std::string original;
+        std::vector<Change> changes;
+    };
     std::map<std::string, Definition> definitions;
     bool found = false;
     for (const auto& input : inputs) {
-        const auto modeled = std::ranges::find_if(model.inputs, [&](const auto& item) { return equalPath(item.path,input.path); });
+        const auto modeled =
+            std::ranges::find_if(model.inputs, [&](const auto& item) { return equalPath(item.path, input.path); });
         if (modeled == model.inputs.end())
-            return fail(ErrorCode::Unsupported,"Captured CMake input is not in the published input graph");
+            return fail(ErrorCode::Unsupported, "Captured CMake input is not in the published input graph");
         if (modeled->generated)
             continue;
         auto parsed = scanCMakeSyntax(input.contents);
@@ -643,19 +652,22 @@ planCMakeSourceRenameAllTargets(const CMakeProject& model, std::string_view oldS
             if (command.name != "add_library" && command.name != "add_executable" && command.name != "target_sources")
                 continue;
             if (command.arguments.empty() || !command.arguments[0].isLiteral)
-                return fail(ErrorCode::Unsupported,"Current target name is not a literal");
+                return fail(ErrorCode::Unsupported, "Current target name is not a literal");
             const auto* target = model.findTarget(command.arguments[0].literal);
             if (!target)
-                return fail(ErrorCode::Unsupported,"Current target declarations differ from the published model; reconfigure first");
-            auto args = sourceArguments(command,target->name);
+                return fail(ErrorCode::Unsupported,
+                            "Current target declarations differ from the published model; reconfigure first");
+            auto args = sourceArguments(command, target->name);
             if (!args)
                 return std::unexpected(std::move(args.error()));
             for (const auto* argument : args->sources) {
                 if (!safeLiteral(argument->literal))
-                    return fail(ErrorCode::Unsupported,"Current source membership is indirect");
-                if (sourceMatches(argument->literal,oldSourcePath,io::parentPath(input.path),true) &&
-                    std::ranges::none_of(target->sources,[&](const auto& source) { return equalPath(source.path,oldSourcePath); }))
-                    return fail(ErrorCode::Unsupported,"Current source membership differs from the published model; reconfigure first");
+                    return fail(ErrorCode::Unsupported, "Current source membership is indirect");
+                if (sourceMatches(argument->literal, oldSourcePath, io::parentPath(input.path), true) &&
+                    std::ranges::none_of(target->sources,
+                                         [&](const auto& source) { return equalPath(source.path, oldSourcePath); }))
+                    return fail(ErrorCode::Unsupported,
+                                "Current source membership differs from the published model; reconfigure first");
             }
         }
     }
@@ -670,6 +682,12 @@ planCMakeSourceRenameAllTargets(const CMakeProject& model, std::string_view oldS
                 return fail(ErrorCode::Unsupported, "A source membership has ambiguous provenance");
             CMakeProject selected = model;
             selected.targets = {target};
+            // Every source command above is unscoped and contains only literals; the complete
+            // invocation graph is checked by the inner planner. Such memberships are identical
+            // in each configuration by construction, not inferred from one configuration's
+            // generated source list. Dynamic/configuration-dependent commands were refused.
+            selected.multiConfig = false;
+            selected.configurations = {model.configuration};
             const auto& path = source.backtraces[0][0].file;
             auto plan = planCMakeSourceRename(selected, 0, oldSourcePath, newSourcePath, path, inputs);
             if (!plan)
@@ -684,10 +702,11 @@ planCMakeSourceRenameAllTargets(const CMakeProject& model, std::string_view oldS
                 ++begin;
             std::size_t suffix = 0;
             while (suffix < plan->original.size() - begin && suffix < plan->replacement.size() - begin &&
-                   plan->original[plan->original.size()-1-suffix] == plan->replacement[plan->replacement.size()-1-suffix])
+                   plan->original[plan->original.size() - 1 - suffix] ==
+                       plan->replacement[plan->replacement.size() - 1 - suffix])
                 ++suffix;
-            Change change{begin, plan->original.size()-suffix,
-                          plan->replacement.substr(begin, plan->replacement.size()-begin-suffix)};
+            Change change{begin, plan->original.size() - suffix,
+                          plan->replacement.substr(begin, plan->replacement.size() - begin - suffix)};
             const auto duplicate = std::ranges::find_if(definition.changes, [&](const auto& item) {
                 return item.begin == change.begin && item.end == change.end && item.replacement == change.replacement;
             });
@@ -701,11 +720,11 @@ planCMakeSourceRenameAllTargets(const CMakeProject& model, std::string_view oldS
     for (auto& [path, definition] : definitions) {
         std::ranges::sort(definition.changes, {}, &Change::begin);
         for (std::size_t i = 1; i < definition.changes.size(); ++i)
-            if (definition.changes[i].begin < definition.changes[i-1].end)
+            if (definition.changes[i].begin < definition.changes[i - 1].end)
                 return fail(ErrorCode::InvalidArgument, "Target memberships propose overlapping definition edits");
         CMakeMembershipPlan plan{path, definition.original, definition.original};
         for (auto it = definition.changes.rbegin(); it != definition.changes.rend(); ++it)
-            plan.replacement.replace(it->begin, it->end-it->begin, it->replacement);
+            plan.replacement.replace(it->begin, it->end - it->begin, it->replacement);
         result.push_back(std::move(plan));
     }
     return result;
