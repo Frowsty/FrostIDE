@@ -693,5 +693,29 @@ TEST(CMakeMembershipRename, AggregateProvesStaticMembershipAcrossMultiConfigMode
     EXPECT_FALSE(planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs));
 }
 
+TEST(CMakeMembershipRename, CurrentDirtyDestinationMembershipIsNotAdoptedFromStaleModel) {
+    auto model = editableProject();
+    auto other = model.targets[0];
+    other.name = "other";
+    other.sources[0].path = source("sub/base.cpp");
+    other.sources[0].backtraces[0][0].line = 4;
+    other.sources[0].backtraces[0][0].command = "add_library";
+    model.targets.push_back(other);
+    const auto definition = source("sub/CMakeLists.txt");
+    std::array inputs{
+        CMakeInputSnapshot{source("CMakeLists.txt"),
+                           "cmake_minimum_required(VERSION 3.20)\nproject(Test)\nadd_subdirectory(sub)\n"},
+        CMakeInputSnapshot{definition, "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/a "
+                                       "b.cpp\")\nadd_library(other STATIC base.cpp dir/new.cpp)\n"}};
+    auto result = planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::AlreadyExists);
+    inputs[1].contents = "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/a b.cpp\" "
+                         "dir/new.cpp)\nadd_library(other STATIC base.cpp)\n";
+    result = planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::AlreadyExists);
+}
+
 } // namespace
 } // namespace frost::project
