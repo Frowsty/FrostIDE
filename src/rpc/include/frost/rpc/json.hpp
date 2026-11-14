@@ -139,5 +139,8 @@ private:
 // Nesting deeper than 256 levels is refused. Errors: Corrupt, with yyjson's reason and the byte
 // position. O(size).
 [[nodiscard]] Result<Json> parseJson(std::string_view text);
+// JSONC document editing/imports: strips // and /* */ comments and trailing commas outside
+// strings, preserving every byte offset. Unterminated comments refuse. Does not evaluate text.
+[[nodiscard]] Result<std::string> normalizeJsonComments(std::string_view text);
 
 } // namespace frost::rpc
