@@ -278,3 +278,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         FROST_GDB_TRUST_PATH="${CMAKE_CURRENT_BINARY_DIR}/gdb-trusted-roots.txt")
     add_dependencies(debug_gdb_tests debug_test_debuggee)
 endif()
+
+# Authored R12 real-tool workflows; missing configured tools fail, never skip/pass by simulation.
+include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
+frost_add_test(debug_standalone_lua_real_tests
+    SOURCES standalone_lua_real_test.cpp
+    DEPS frost::debug frost::run frost::project frost::io frost::core
+    LABELS integration lua standalone)
+target_include_directories(debug_standalone_lua_real_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${FROST_SOURCE_DIR}/tests)
+file(TO_CMAKE_PATH "${FROST_LUA54_EXECUTABLE}" _frost_test_lua)
+file(TO_CMAKE_PATH "${FROST_LUA_DEBUG_ADAPTER}" _frost_test_lua_adapter)
+target_compile_definitions(debug_standalone_lua_real_tests PRIVATE
+    FROST_TEST_LUA_INTERPRETER="${_frost_test_lua}"
+    FROST_TEST_LUA_DEBUG_ADAPTER="${_frost_test_lua_adapter}"
+    FROST_TEST_LUA_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/standalone_lua.lua")
