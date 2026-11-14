@@ -390,24 +390,41 @@ TEST(LuaWorkspaceE2E, ProgressArrivesAsLuaLsSendsIt) {
 }
 
 TEST(LuaTemplatesReal, SharedLuaExpansionsPassThePinnedServersActualBatchCheck) {
-    const auto server=pinnedLuaLs(); ASSERT_FALSE(server.empty());
+    const auto server = pinnedLuaLs();
+    ASSERT_FALSE(server.empty());
     frost::test::ScratchDir scratch("lua-shared-template-check");
-    const auto folder=scratch.join("scripts");
-    const std::string prefix="local value = 1\nlocal count = 3\nlocal items = {1,2,3}\nlocal condition = false\nlocal callable = function() return 42 end\n";
-    for(const auto& definition:frost::lang::builtinTemplates()) {
-        if(definition.language!="lua" || definition.kind!=frost::lang::TemplateKind::Live || definition.body.find("${AUTHOR}")!=std::string_view::npos) continue;
-        auto expanded=frost::lang::expandTemplate(definition.body,{}); ASSERT_TRUE(expanded);
-        write(folder+"/"+std::string(definition.id)+".lua",prefix+expanded->parsed.text+"\n");
+    const auto folder = scratch.join("scripts");
+    const std::string prefix = "local value = 1\nlocal count = 3\nlocal items = {1,2,3}\nlocal condition = "
+                               "false\nlocal callable = function() return 42 end\n";
+    for (const auto& definition : frost::lang::builtinTemplates()) {
+        if (definition.language != "lua" || definition.kind != frost::lang::TemplateKind::Live ||
+            definition.body.find("${AUTHOR}") != std::string_view::npos)
+            continue;
+        auto expanded = frost::lang::expandTemplate(definition.body, {});
+        ASSERT_TRUE(expanded);
+        write(folder + "/" + std::string(definition.id) + ".lua", prefix + expanded->parsed.text + "\n");
     }
-    const auto output=scratch.join("check.json");
-    auto arguments=frost::lang::luaLanguageServerArguments(scratch.join("state")); ASSERT_TRUE(arguments);
-    arguments->insert(arguments->end(),{"--check="+folder,"--checklevel=Error","--check_format=json","--check_out_path="+output});
-    frost::io::ProcessSpec spec; spec.executable=server; spec.arguments=*arguments; spec.stdinMode=frost::io::Stdio::Null; spec.stderrMode=frost::io::Stdio::MergeIntoStdout; spec.killOnClose=true;
-    auto result=frost::io::runToCompletion(frost::io::realProcessLauncher(),spec,{},180s); ASSERT_TRUE(result)<<result.error().describe();
-    EXPECT_EQ(result->exitCode,0)<<result->stdoutBytes;
-    auto report=frost::io::realFileSystem().readFile(output); ASSERT_TRUE(report)<<report.error().describe();
-    auto parsed=frost::lang::parseJson(*report); ASSERT_TRUE(parsed);
-    if(parsed->isObject()) for(const auto& diagnostics:parsed->items()) for(const auto& diagnostic:diagnostics.items())
-        EXPECT_NE(diagnostic.integerAt("severity"),1)<<diagnostic.dump();
+    const auto output = scratch.join("check.json");
+    auto arguments = frost::lang::luaLanguageServerArguments(scratch.join("state"));
+    ASSERT_TRUE(arguments);
+    arguments->insert(arguments->end(),
+                      {"--check=" + folder, "--checklevel=Error", "--check_format=json", "--check_out_path=" + output});
+    frost::io::ProcessSpec spec;
+    spec.executable = server;
+    spec.arguments = *arguments;
+    spec.stdinMode = frost::io::Stdio::Null;
+    spec.stderrMode = frost::io::Stdio::MergeIntoStdout;
+    spec.killOnClose = true;
+    auto result = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, {}, 180s);
+    ASSERT_TRUE(result) << result.error().describe();
+    EXPECT_EQ(result->exitCode, 0) << result->stdoutBytes;
+    auto report = frost::io::realFileSystem().readFile(output);
+    ASSERT_TRUE(report) << report.error().describe();
+    auto parsed = frost::lang::parseJson(*report);
+    ASSERT_TRUE(parsed);
+    if (parsed->isObject())
+        for (const auto& diagnostics : parsed->items())
+            for (const auto& diagnostic : diagnostics.items())
+                EXPECT_NE(diagnostic.integerAt("severity"), 1) << diagnostic.dump();
 }
 } // namespace

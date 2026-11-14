@@ -5,7 +5,6 @@
 // location it shows came from ctest's, Google Test's or doctest's output through frost::run's parsers.
 
 #include "unit_tests_window.hpp"
-#include "lua_unit_tests_window.hpp"
 
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
@@ -13,6 +12,7 @@
 #include "frost/run/test_runner.hpp"
 #include "frost/ui/test_results_tree.hpp"
 
+#include "lua_unit_tests_window.hpp"
 #include "project_properties_dialog.hpp"
 #include "trusted_project_launcher.hpp"
 #include <QFontDatabase>

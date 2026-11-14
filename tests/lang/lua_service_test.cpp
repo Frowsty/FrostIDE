@@ -85,10 +85,11 @@ TEST(LuaService, StateArgumentsKeepLogAndMetaUnderTheGivenDirectory) {
     EXPECT_EQ(frost::lang::luaLanguageServerArguments("relative").error().code(), frost::ErrorCode::InvalidArgument);
 }
 TEST(LuaService, ExperimentalEmmyHasExplicitStdioAndPrivateResourcesWithoutLuaLsFlags) {
-    const auto state=frost::io::joinPath(root(),"state").value();
-    auto args=frost::lang::emmyLuaArguments(state); ASSERT_TRUE(args);
-    EXPECT_EQ(*args,(std::vector<std::string>{"--communication","stdio","--resources-path",
-        frost::io::joinPath(state,"emmylua").value(),"--log-path","none"}));
+    const auto state = frost::io::joinPath(root(), "state").value();
+    auto args = frost::lang::emmyLuaArguments(state);
+    ASSERT_TRUE(args);
+    EXPECT_EQ(*args, (std::vector<std::string>{"--communication", "stdio", "--resources-path",
+                                               frost::io::joinPath(state, "emmylua").value(), "--log-path", "none"}));
     EXPECT_FALSE(frost::lang::emmyLuaArguments("relative"));
 }
 TEST(LuaService, FrostEngineWorkspaceNeedsAFrostprojInTheRoot) {
