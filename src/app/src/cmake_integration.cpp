@@ -329,12 +329,13 @@ Result<void> CMakeIntegration::debugConfigure() {
     const std::string endpoint = directory->filePath(QStringLiteral("dap.sock")).toStdString();
 #endif
     std::weak_ptr<build::CMakeService> weakService = m_service;
-    const auto cancel = [weakService, directory] {
-        if (auto service = weakService.lock()) service->cancel();
+    const auto cancel = [weakService, directory, endpoint] {
+        if (auto service = weakService.lock()) service->cancel(endpoint);
     };
     auto relay = m_runRelay;
     return m_service->configureDebug(endpoint, [relay, endpoint, root, cancel] {
         relay->post([endpoint, root, cancel](CMakeIntegration& self) {
+            if (!self.m_service->debugConfigureCurrent(endpoint)) return;
             if (auto started = self.m_configureDebugger(endpoint, root, cancel); !started) {
                 cancel();
                 self.console().appendOutput(build::RunOutputKind::System, started.error().message());

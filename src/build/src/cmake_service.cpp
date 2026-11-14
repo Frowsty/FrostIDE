@@ -386,9 +386,16 @@ Result<void> CMakeService::build(BuildAction action, std::optional<std::size_t> 
     return s.startJobLocked(State::JobKind::Build, false, std::move(request), std::move(steps), std::move(done));
 }
 
-void CMakeService::cancel() {
+bool CMakeService::debugConfigureCurrent(std::string_view endpoint) const {
+    LockGuard lock(m_state->mutex);
+    return m_state->job && !endpoint.empty() && m_state->job->debuggerEndpoint == endpoint &&
+           m_state->state == BuildState::Running;
+}
+
+void CMakeService::cancel(std::string_view debuggerEndpoint) {
     State& s = *m_state;
     LockGuard lock(s.mutex);
+    if (!debuggerEndpoint.empty() && (!s.job || s.job->debuggerEndpoint != debuggerEndpoint)) return;
     s.reloadPending = false;
     switch (s.state) {
     case BuildState::Idle:
