@@ -16,6 +16,7 @@
 //      untouched).
 //   3. --plan-local-rename: read-only canonical local/parameter rename proposals (REF-4 preparation).
 
+#include "ast_refactoring_plan.hpp"
 #include "binding_map.hpp"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
@@ -331,6 +332,9 @@ int main(int argc, char* argv[]) {
 #endif
     if (argc == 2 && std::string_view(argv[1]) == "--plan-project-rename") {
         return frost::clang_engine::runProjectRenamePlan(detectClangResourceDir());
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--plan-ast-refactoring") {
+        return frost::clang_engine::runAstRefactoringPlan(detectClangResourceDir());
     }
     if (argc >= 2 && std::string_view(argv[1]) == "--plan-local-rename") {
         return frost::clang_engine::runLocalRenamePlan(argc, argv, detectClangResourceDir());

@@ -48,7 +48,14 @@ struct CppRenameProposal {
     [[nodiscard]] bool ready() const noexcept { return status == "ready"; }
 };
 [[nodiscard]] Json cppRenameRequestJson(const CppRenameRequest& request);
-[[nodiscard]] Result<CppRenameProposal> parseCppRenameProposal(std::string_view bytes);
+[[nodiscard]] Result<CppRenameProposal> parseCppRenameProposal(std::string_view bytes,
+                                                               std::string_view expectedKind = "cpp-rename-plan");
+// Shared receipt/overlay/exit validation for semantic operations. Mode/kind must be the two
+// built-in protocol pairs; payload is captured source context, never an executable command.
+[[nodiscard]] sched::Task<Result<CppRenameProposal>>
+requestCppSemanticPlan(io::IProcessLauncher& launcher, io::AsyncContext context, std::string helper,
+                       CppRenameRequest request, Json payload, std::string mode, std::string kind,
+                       IClock::Duration timeout, std::stop_token stop = {});
 /*
  * Starts absolute pinned frost-clang --plan-project-rename, writes JSON to stdin and awaits
  * completion asynchronously. No source writes or Apply. Context/launcher outlive the task.
