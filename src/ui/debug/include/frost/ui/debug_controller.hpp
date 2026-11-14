@@ -92,6 +92,8 @@ struct DebugControllerOptions {
     io::IFileSystem* fs = nullptr;                 // For lldb-dap discovery and workspace.json.
     io::IProcessLauncher* launcher = nullptr;      // Starts lldb-dap.
     std::function<std::string()> lldbDapSetting{}; // tools.lldbDap.path; empty: "".
+    std::function<std::string()> nativeBackendSetting{}; // lldb-dap (default) or gdb (Linux).
+    std::function<std::string()> gdbSetting{}; // absolute user-installed GDB >=16.
     std::function<std::pair<std::string, std::string>()> sourceMapSetting{};
     // Overrides lldb-dap (tests: the fake-dap double). Empty: lldb-dap through `launcher`.
     debug::AdapterFactory adapterFactory{};

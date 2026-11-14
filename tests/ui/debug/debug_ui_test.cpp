@@ -10,6 +10,7 @@
 #include "frost/debug/fake_debug_adapter.hpp"
 #include "frost/input/action.hpp"
 #include "frost/io/mem_fs.hpp"
+#include "frost/io/scripted_process_launcher.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/rpc/framing.hpp"
 #include "frost/ui/debug_actions.hpp"
@@ -160,6 +161,33 @@ protected:
     std::unique_ptr<DebugController> controller;
 };
 
+#ifdef __linux__
+TEST_F(DebugUiTest, SelectedGdbRoutesLaunchAndAttachThroughVersionAdmission) {
+    io::ScriptedProcessLauncher launcher;
+    const auto executable = workPath("tools/gdb");
+    ASSERT_TRUE(fs.createDirectories(workPath("tools")));
+    ASSERT_TRUE(fs.writeFileAtomic(executable, "fixture"));
+    DebugControllerOptions options;
+    options.trust = trust.get();
+    options.fs = &fs;
+    options.launcher = &launcher;
+    options.nativeBackendSetting = [] { return "gdb"; };
+    options.gdbSetting = [executable] { return executable; };
+    DebugController selected(breakpoints, options);
+    launcher.expect({.expectExecutable = executable, .stdoutBytes = "GNU gdb (GDB) 15.2\n"});
+    auto launch = selected.startTarget(target());
+    ASSERT_FALSE(launch);
+    EXPECT_EQ(launch.error().code(), ErrorCode::Unsupported);
+    auto calls = launcher.launches();
+    ASSERT_EQ(calls.size(), 1U);
+    EXPECT_EQ(calls.front().spec.arguments, (std::vector<std::string>{"--nx", "--quiet", "--version"}));
+    launcher.expect({.expectExecutable = executable, .stdoutBytes = "GNU gdb (GDB) 15.2\n"});
+    auto attach = selected.attachTarget(target(), {}, rpc::Json::object().set("type", "lldb-dap").set("pid", 123));
+    ASSERT_FALSE(attach);
+    EXPECT_EQ(attach.error().code(), ErrorCode::Unsupported);
+    EXPECT_EQ(launcher.launches().size(), 2U);
+}
+#endif
 TEST_F(DebugUiTest, ConfiguredSourceMapIsValidatedBeforeLaunchingTheAdapter) {
     std::pair<std::string, std::string> mapping{"relative", workPath("Trusted")};
     DebugControllerOptions options{
