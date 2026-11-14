@@ -88,14 +88,27 @@ struct FrameContext {
 class ModelStore {
 public:
     [[nodiscard]] Result<void> initialize(IDebugClient5* client);
+    [[nodiscard]] bool structured() const noexcept { return bool(m_evaluator); }
+    [[nodiscard]] Result<rpc::Json> write(std::int64_t reference, std::string_view name, std::string_view value);
+    [[nodiscard]] Result<std::pair<ULONG64, ULONG64>> location(std::int64_t reference, std::string_view name);
     void clear() noexcept;
     void shutdown() noexcept;
     [[nodiscard]] Result<std::int64_t> scope(FrameContext frame, bool parameters);
     [[nodiscard]] Result<rpc::Json> evaluate(std::string_view expression, FrameContext frame);
     [[nodiscard]] Result<rpc::Json> children(std::int64_t reference, std::size_t start, std::size_t count,
-                                             std::string_view filter);
+                                             std::string_view filter, bool raw = false);
 
 private:
+    struct BasicValue {
+        FrameContext frame;
+        ULONG flags = DEBUG_SCOPE_GROUP_ALL;
+        std::string expression;
+        std::vector<std::wstring> path;
+    };
+    [[nodiscard]] Result<std::pair<ComPtr<IDebugSymbolGroup2>, ULONG>> basicGroup(const BasicValue& saved, bool expand);
+    [[nodiscard]] Result<rpc::Json> basicChildren(std::int64_t reference, std::size_t start, std::size_t count);
+    [[nodiscard]] Result<rpc::Json> basicVariable(IDebugSymbolGroup2* group, ULONG index, const BasicValue& parent);
+    std::map<std::int64_t, BasicValue> m_basic;
     struct Value {
         ComPtr<IModelObject> object;
         ComPtr<IKeyStore> metadata;
