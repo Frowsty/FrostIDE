@@ -179,6 +179,7 @@ _frost_ui_test_wiring(ui_cmake_tests)
 frost_add_test(ui_editor_tests QT
     SOURCES
         editor/editor_features_test.cpp
+        editor/editor_extras_test.cpp
         editor/editor_insight_test.cpp
         editor/editor_rhi_parity_test.cpp
         editor/editor_rhi_test.cpp
