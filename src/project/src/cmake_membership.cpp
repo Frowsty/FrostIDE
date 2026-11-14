@@ -663,7 +663,12 @@ Result<std::vector<CMakeMembershipPlan>> planCMakeSourceRenameAllTargets(const C
             for (const auto* argument : args->sources) {
                 if (!safeLiteral(argument->literal))
                     return fail(ErrorCode::Unsupported, "Current source membership is indirect");
-                if (sourceMatches(argument->literal, oldSourcePath, io::parentPath(input.path), true) &&
+                if (sourceMatches(argument->literal, newSourcePath, io::parentPath(input.path), true) ||
+                    sourceMatches(argument->literal, newSourcePath, target->sourceDirectory, true))
+                    return fail(ErrorCode::AlreadyExists,
+                                "Destination is already named by a current CMake source command");
+                if ((sourceMatches(argument->literal, oldSourcePath, io::parentPath(input.path), true) ||
+                     sourceMatches(argument->literal, oldSourcePath, target->sourceDirectory, true)) &&
                     std::ranges::none_of(target->sources,
                                          [&](const auto& source) { return equalPath(source.path, oldSourcePath); }))
                     return fail(ErrorCode::Unsupported,
