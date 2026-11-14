@@ -76,6 +76,7 @@ public:
 
     // Copies the value of the Variables or Watches row with focus to the clipboard.
     void copySelectedValue();
+    [[nodiscard]] bool readOnlySession() const;
     // Prompts to modify the value of the selected variable row.
     void promptSetVariableValue(QTreeView* view, VariablesModel* model, const QModelIndex& index);
     // Opens the Edit Breakpoint dialog for `id` (or the selected row in the Breakpoints tab when 0).

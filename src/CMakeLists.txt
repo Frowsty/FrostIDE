@@ -36,6 +36,9 @@ if(NOT FROST_FUZZ)
     # frost::engine (FEC-1, R4): the FrostEngine contract (engine CLI, exact handles, schema.export).
     add_subdirectory(engine)
     add_subdirectory(debug)
+    if(WIN32)
+        add_subdirectory(dbgeng)
+    endif()
     add_subdirectory(search)
     # frost::vcs (ADR 0048) links settings, which fuzz trees leave out.
     add_subdirectory(vcs)

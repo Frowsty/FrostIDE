@@ -215,6 +215,27 @@ Result<std::string> MemFs::readFile(std::string_view path) {
     return node->content;
 }
 
+Result<std::string> MemFs::readFileSnapshot(std::string_view path, std::size_t maxBytes) {
+    LockGuard lock(m_mutex);
+    auto key = resolve(path, "readFile", /*entryTarget=*/false);
+    if (!key) {
+        return std::unexpected(std::move(key.error()));
+    }
+    if (auto fault = takeFault(FsOp::Read, *key, path); !fault) {
+        return std::unexpected(std::move(fault.error()));
+    }
+    if (isDirectory(*key)) {
+        return std::unexpected(detail::isADirectoryError("readFile", path));
+    }
+    const Node* node = find(*key);
+    if (node == nullptr) {
+        return std::unexpected(notFound("readFile", path));
+    }
+    if (node->content.size() > maxBytes)
+        return fail(ErrorCode::OutOfRange, "snapshot exceeds its byte limit");
+    return node->content;
+}
+
 Result<void> MemFs::writeFileAtomic(std::string_view path, std::string_view data) {
     LockGuard lock(m_mutex);
     auto key = resolve(path, "writeFileAtomic", /*entryTarget=*/true);

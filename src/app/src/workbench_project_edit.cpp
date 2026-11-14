@@ -134,7 +134,7 @@ std::optional<QString> Workbench::projectEditBlocked(const std::string& projectP
         (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     if (!m_solution || !m_projectEdit || m_projectRoot.empty() || !m_services.trust.isTrusted(m_projectRoot) ||
         !m_services.trust.isTrusted(projectPath) || m_buildService->state() != build::BuildState::Idle ||
-        (m_debug && m_debug->debugging()) || !managedIdle)
+        anyDebugSessionActive() || !managedIdle)
         return QStringLiteral("Open a trusted solution and wait for any build or project edit to finish.");
     return std::nullopt;
 #endif
@@ -293,8 +293,8 @@ std::optional<QString> Workbench::submitProjectEdit(project::ProjectEdit edit, c
         const auto trust = m_services.trust.snapshot(root);
         return !m_shutDown && m_solution == solution && m_projectRoot == root && trust.trusted &&
                trust.revision == trustRevision && m_services.trust.isTrusted(projectPath) &&
-               m_buildService->state() == build::BuildState::Idle && definitionsClosed() &&
-               !(m_debug && m_debug->debugging()) && managedIdle();
+               m_buildService->state() == build::BuildState::Idle && definitionsClosed() && !anyDebugSessionActive() &&
+               managedIdle();
     };
     const auto admit = [this, admissible, markerPath, lineage](const std::string& digest) mutable {
         if (!admissible())
@@ -467,7 +467,7 @@ void Workbench::recoverProjectEdit(const QString& projectName) {
                         ownedDigest, trustRevision](const std::string& digest) {
         if (m_shutDown || m_solution != solution || m_projectRoot != root || !m_services.trust.isTrusted(root) ||
             m_services.trust.snapshot(root).revision != trustRevision || !m_services.trust.isTrusted(projectPath) ||
-            !definitionsClosed() || digest != ownedDigest || (m_debug && m_debug->debugging()) || !managedIdle())
+            !definitionsClosed() || digest != ownedDigest || anyDebugSessionActive() || !managedIdle())
             return false;
         const auto bytes = m_services.fs.readFile(ownedMarker);
         return bytes && *bytes == ownedBytes;

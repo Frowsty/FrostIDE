@@ -24,6 +24,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QSplitter>
+#include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -796,6 +797,25 @@ private:
     QTimer* m_watch = nullptr;
 };
 
+// Resolve only a concrete CTest provider or one unambiguous provider page. Object names and
+// the currently selected tab cannot establish a widget's type or select its test backend.
+UnitTestsWindow* ctestProvider(QWidget* widget) {
+    if (auto* direct = dynamic_cast<UnitTestsWindow*>(widget))
+        return direct;
+    auto* tabs = qobject_cast<QTabWidget*>(widget);
+    if (!tabs)
+        return nullptr;
+    UnitTestsWindow* found = nullptr;
+    for (int index = 0; index < tabs->count(); ++index) {
+        if (auto* provider = dynamic_cast<UnitTestsWindow*>(tabs->widget(index))) {
+            if (found)
+                return nullptr;
+            found = provider;
+        }
+    }
+    return found;
+}
+
 } // namespace
 
 QWidget* createUnitTestsToolWindowWidget(QWidget* parent, UnitTestsWindowContext context) {
@@ -804,19 +824,19 @@ QWidget* createUnitTestsToolWindowWidget(QWidget* parent, UnitTestsWindowContext
 
 std::vector<run::GutterTestCase> unitTestsGutterCasesForFile(QWidget* unitTestsWidget, std::string_view filePath,
                                                              std::string_view content) {
-    auto* window = static_cast<UnitTestsWindow*>(unitTestsWidget);
+    auto* window = ctestProvider(unitTestsWidget);
     return window ? window->gutterCasesForFile(filePath, content) : std::vector<run::GutterTestCase>{};
 }
 
 Result<void> runGutterTestCase(QWidget* unitTestsWidget, const run::GutterTestCase& testCase) {
-    auto* window = static_cast<UnitTestsWindow*>(unitTestsWidget);
+    auto* window = ctestProvider(unitTestsWidget);
     if (!window)
         return fail(ErrorCode::NotFound, "Unit Tests window is not created");
     return window->runSingleCase(testCase);
 }
 
 Result<void> debugGutterTestCase(QWidget* unitTestsWidget, const run::GutterTestCase& testCase) {
-    auto* window = static_cast<UnitTestsWindow*>(unitTestsWidget);
+    auto* window = ctestProvider(unitTestsWidget);
     if (!window)
         return fail(ErrorCode::NotFound, "Unit Tests window is not created");
     return window->debugSingleCase(testCase);

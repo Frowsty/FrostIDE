@@ -3,6 +3,12 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-14: R7 implementation recovery on current main
+
+- Recovered the existing R7 IDE implementation onto current `main`, preserving the older integration candidates and their staged/unstaged work. The recovered source includes authenticated engine Lua DAP, independent/compound sessions, mixed native/Lua debugging, the engine Unit Tests provider, recovered crash-artifact inspection, and AST-backed cross-language binding navigation/usages/rename previews. Current R5/R6 and header-hierarchy fixes remain in the base.
+- Added the two missing composed acceptance test sources: real scene listing/selected results through the Workbench provider, and a real owned editor crash recovered into a read-only dump session. Their Windows adapter dependency is explicit. Existing engine corpus tests explicitly provision their separate crash and DbgEng helper targets.
+- This continuation follows the user's implementation-first override: no build, feature execution, test, WSL or verification runner was run. Source review is the current evidence; runtime behavior and performance remain unverified. Rename application remains REF-1 work in R8, rather than an R7 preview claim.
+
 ## 2026-11-14: R5/R6 merged; implementation-first continuation
 
 - R5/R6 source was merged and pushed to `main` as `6d101b16` at the user's explicit instruction. Engine R6 source `37cc258b` is published on `codex/r6-contract`; the corpus lock now selects it. The worktree was clean and GitHub's main ref matched the local merge. No build or test ran for the merge.

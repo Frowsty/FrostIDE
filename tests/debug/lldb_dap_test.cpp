@@ -244,6 +244,21 @@ TEST(LldbDap, TheFactoryStartsLldbDapThroughTheLauncher) {
     EXPECT_NE(failed.error().describe().find("lldb-dap"), std::string::npos) << failed.error().describe();
 }
 
+TEST(LldbDap, PrivateAdapterDisablesInheritedRawProtocolAndDebugserverTraceSinks) {
+    io::ScriptedProcessLauncher launcher;
+    const auto executable = workPath("sdk/" + kExe);
+    launcher.expect({.expectExecutable = executable, .launchError = Error(ErrorCode::NotFound, "fixture")});
+    auto factory = lldbDapAdapterFactory(launcher, executable, DapProcessOutput{.privateOutput = true});
+    EXPECT_FALSE(factory(DapHandlers{.privateSession = true}));
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1U);
+    for (const auto name : {"LLDBDAP_LOG", "LLDB_DEBUGSERVER_LOG_FILE", "LLDB_DEBUGSERVER_LOG_FLAGS",
+                            "LLDB_SERVER_LOG_CHANNELS", "LLDB_DEBUGSERVER_EXTRA_ARG_1", "LLDB_DEBUGSERVER_PATH"})
+        EXPECT_TRUE(removes(launches.front().spec, name)) << name;
+    EXPECT_TRUE(launches.front().spec.killOnClose);
+    EXPECT_EQ(launches.front().spec.arguments, (std::vector<std::string>{"--no-lldbinit"}));
+}
+
 class DebugTrust : public ::testing::Test {
 protected:
     void SetUp() override {

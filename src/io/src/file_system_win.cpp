@@ -630,6 +630,51 @@ public:
         return out;
     }
 
+    Result<std::string> readFileSnapshot(std::string_view path, std::size_t maxBytes) override {
+        auto wide = toWin32Path(path);
+        if (!wide)
+            return std::unexpected(wide.error());
+        UniqueHandle file(CreateFileW(wide->c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                      FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+        if (!file.valid())
+            return std::unexpected(lastWin32Error("readFileSnapshot", path));
+        BY_HANDLE_FILE_INFORMATION before{};
+        if (GetFileType(file.get()) != FILE_TYPE_DISK || !GetFileInformationByHandle(file.get(), &before))
+            return fail(ErrorCode::InvalidArgument, "snapshot is not a regular disk file");
+        if (before.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY) ||
+            before.nNumberOfLinks != 1)
+            return fail(ErrorCode::PermissionDenied, "snapshot cannot follow links or reparse points");
+        const std::uint64_t size = (std::uint64_t(before.nFileSizeHigh) << 32) | before.nFileSizeLow;
+        if (size > maxBytes)
+            return fail(ErrorCode::OutOfRange, "snapshot exceeds its byte limit");
+        std::string bytes(static_cast<std::size_t>(size), '\0');
+        std::size_t used = 0;
+        while (used < bytes.size()) {
+            const DWORD wanted = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - used, 64 * 1024));
+            DWORD got = 0;
+            if (!ReadFile(file.get(), bytes.data() + used, wanted, &got, nullptr))
+                return std::unexpected(lastWin32Error("readFileSnapshot", path));
+            if (got == 0)
+                return fail(ErrorCode::Busy, "snapshot was truncated during its read");
+            used += got;
+        }
+        char extra = 0;
+        DWORD got = 0;
+        if (!ReadFile(file.get(), &extra, 1, &got, nullptr))
+            return std::unexpected(lastWin32Error("readFileSnapshot", path));
+        BY_HANDLE_FILE_INFORMATION after{};
+        if (!GetFileInformationByHandle(file.get(), &after))
+            return std::unexpected(lastWin32Error("readFileSnapshot", path));
+        if (got != 0 || after.dwVolumeSerialNumber != before.dwVolumeSerialNumber ||
+            after.nFileIndexHigh != before.nFileIndexHigh || after.nFileIndexLow != before.nFileIndexLow ||
+            after.nFileSizeHigh != before.nFileSizeHigh || after.nFileSizeLow != before.nFileSizeLow ||
+            after.ftLastWriteTime.dwHighDateTime != before.ftLastWriteTime.dwHighDateTime ||
+            after.ftLastWriteTime.dwLowDateTime != before.ftLastWriteTime.dwLowDateTime ||
+            after.dwFileAttributes != before.dwFileAttributes || after.nNumberOfLinks != before.nNumberOfLinks)
+            return fail(ErrorCode::Busy, "snapshot changed during its read");
+        return bytes;
+    }
+
     Result<void> writeFileAtomic(std::string_view path, std::string_view data) override {
         return writeFileAtomicImpl(path, data, std::nullopt);
     }

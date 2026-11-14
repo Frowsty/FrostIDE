@@ -86,6 +86,8 @@ frost_add_test(io_integration_tests
         loopback_stream_test.cpp
         polling_watcher_test.cpp
         process_test.cpp
+        process_deadline_test.cpp
+        file_snapshot_test.cpp
         safe_write_test.cpp
     DEPS frost::io frost::sched
     LABELS integration)

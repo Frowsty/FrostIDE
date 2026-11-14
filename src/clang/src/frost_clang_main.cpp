@@ -15,6 +15,7 @@
 //      rewrites only those C++ tokens via clang::Rewriter (leaving comments and string literals
 //      untouched).
 
+#include "binding_map.hpp"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
@@ -318,6 +319,9 @@ int runSymbolRewriter(int argc, char* argv[]) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    if (argc >= 2 && std::string_view(argv[1]) == "--binding-map") {
+        return frost::clang_engine::runBindingMap(argc, argv, detectClangResourceDir());
+    }
     if (argc >= 2 && std::string_view(argv[1]) == "--rewrite-symbol") {
         return runSymbolRewriter(argc, argv);
     }

@@ -20,6 +20,7 @@
 #include "frost/io/path.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/debug_actions.hpp"
+#include "frost/ui/debug_retirement.hpp"
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/find/find_feature.hpp"
 #include "frost/ui/lang/language_controller.hpp"
@@ -42,11 +43,19 @@
 #include "frost/vcs/git_locator.hpp"
 
 #include "cmake_integration.hpp"
+#include "engine_binding_integration.hpp"
+#include "engine_crash_observer.hpp"
+#include "engine_dump_controller.hpp"
 #include "engine_integration.hpp"
+#include "engine_mixed_debug.hpp"
+#include "engine_mixed_launch.hpp"
+#include "engine_run_debug.hpp"
+#include "engine_unit_tests_window.hpp"
 #include "git_clone.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "managed_debug_preparation.hpp"
+#include "multi_session_debug.hpp"
 #include "project_edit_process.hpp"
 #include "settings_dialog.hpp"
 #include "unity_control.hpp"
@@ -109,6 +118,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     m_pool = std::make_unique<sched::ThreadPool>(
         sched::ThreadPoolOptions{.workerCount = m_options.workers != 0 ? m_options.workers : 2U});
     m_commandsRetirement = std::make_shared<lang::GeneratedCommandsRetirement>(*m_pool);
+    m_engineTestsRetirements = std::make_shared<EngineTestsRetirementBatch>();
+    m_engineDumpWork = std::make_shared<EngineDumpWorkBatch>();
 
     // The keymap on the given layout, else the thread's active one (en-US when it cannot be read).
     input::LayoutTable layout = [&] {
@@ -357,6 +368,9 @@ Workbench::~Workbench() {
             stopped.join();
     m_retiredGit.clear();
     m_searchSymbolsSlot.cancel();
+    if (m_engineBindings)
+        m_engineBindings->shutdown();
+    m_engineBindings.reset();
     m_language.reset();
     // The prompter and the actions refer to the controller; the services' threads post to them.
     delete m_trustPrompter;
@@ -366,7 +380,24 @@ Workbench::~Workbench() {
     if (m_runController) {
         m_runController->setService(nullptr);
     }
+    m_compoundDebug.reset();
+    m_debugSessions.reset();
     m_debug.reset();
+    // The window is gone and controllers cannot enqueue more retirements. Join attached
+    // transports before the admission callbacks' borrowed launcher, trust and filesystem die.
+    if (m_debugRetirements)
+        m_debugRetirements->drain();
+    m_debugRetirements.reset();
+    if (m_engineTestsRetirements)
+        m_engineTestsRetirements->drain();
+    m_engineTestsRetirements.reset();
+    m_engineTestValidation.reset();
+    for (auto& retirement : m_retiredEngineBindings)
+        retirement->join();
+    m_retiredEngineBindings.clear();
+    if (m_engineDumpWork)
+        m_engineDumpWork->drain();
+    m_engineDumpWork.reset();
     m_managedDebugPreparation.reset();
     m_runService.reset(); // Stops every run and joins its thread before the builder goes.
     m_runBuilder.reset();
@@ -785,6 +816,12 @@ std::string Workbench::defaultNewItemDirectory() const {
     return m_projectRoot;
 }
 
+bool Workbench::anyDebugSessionActive() const {
+    return m_engineTestDebugPending || (m_compoundDebug && m_compoundDebug->busy()) ||
+           (m_debugSessions ? m_debugSessions->hasPendingWork() || m_debugSessions->anyDebugging()
+                            : m_debug && m_debug->debugging());
+}
+
 void Workbench::shutdown() {
     if (m_shutDown) {
         return;
@@ -814,11 +851,28 @@ void Workbench::shutdown() {
         m_language->setStructureVisible(false);
     invalidateManagedDebug();
     m_luaTrustWatch.stop();
+    cancelEngineTestDebugPreparation();
+    if (m_engineCrashObserver)
+        m_engineCrashObserver->shutdown();
+    if (m_engineDumps)
+        m_engineDumps->shutdown();
+    if (m_engineBindings)
+        m_engineBindings->shutdown();
     cancelFind();
     // Registered shell callbacks hold QPointers: destroying the feature makes queued actions inert.
     m_find.reset();
     m_git.reset();
-    if (m_debug)
+    if (m_compoundDebug)
+        m_compoundDebug->cancel();
+    if (m_engineRunDebug)
+        m_engineRunDebug->cancel();
+    if (m_engineMixedLaunch)
+        m_engineMixedLaunch->cancel();
+    if (m_engineLuaDebug)
+        m_engineLuaDebug->cancel();
+    if (m_debugSessions)
+        m_debugSessions->shutdown();
+    else if (m_debug)
         m_debug->shutdown();
     if (m_engine)
         m_engine->shutdown();

@@ -641,6 +641,200 @@ frost::text::Document load(const std::string& path) {
     return std::move(*document);
 }
 
+frost::Result<frost::lang::Json> analysisSymbol(Env& env, ClangdService& service, const std::string& path,
+                                                frost::text::Snapshot snapshot, std::string_view name,
+                                                std::stop_token stop = {}) {
+    const auto offset = snapshot.text().find(name);
+    if (offset == std::string::npos)
+        return frost::fail(frost::ErrorCode::NotFound, "test snapshot has no requested declaration");
+    const auto params =
+        frost::lang::Json::object()
+            .set("textDocument", frost::lang::Json::object().set("uri", frost::lang::pathToUri(path).value()))
+            .set("position", frost::lang::toJson(
+                                 frost::lang::toLspPosition(snapshot, frost::ByteOffset{offset}, service.encoding())));
+    frost::Result<frost::lang::Json> result = frost::fail(frost::ErrorCode::Internal, "request did not run");
+    env.run([&]() -> frost::sched::Task<void> {
+        result = co_await service.request("textDocument/symbolInfo", params, stop);
+    }());
+    return result;
+}
+
+void expectAnalysisSymbol(Env& env, ClangdService& service, const std::string& path, frost::text::Snapshot snapshot,
+                          std::string_view name) {
+    auto actual = analysisSymbol(env, service, path, snapshot, name);
+    ASSERT_TRUE(actual) << actual.error().describe();
+    ASSERT_TRUE(actual->isArray()) << actual->dump();
+    ASSERT_EQ(actual->items().size(), 1U) << actual->dump();
+    EXPECT_EQ(actual->items().front().stringAt("name"), name) << actual->dump();
+    EXPECT_FALSE(actual->items().front().stringAt("usr").empty()) << actual->dump();
+}
+
+TEST(ClangdE2E, AnalysisLeaseAcquiresOnlyAbsentDocumentsAndQueuesRealRequestsInOrder) {
+    frost::test::ScratchDir scratch("clangd-analysis-lease");
+    const auto path = scratch.join("analysis.cpp");
+    const std::string disk = "// semantic input is the explicitly supplied unsaved snapshot\n";
+    ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(path, disk));
+    auto original = frost::text::Document::fromUtf8("int leasedNative() { return 1; }\n");
+    auto replacement = frost::text::Document::fromUtf8("int secondNative() { return 2; }\n");
+    ASSERT_TRUE(original && replacement);
+    Env env;
+    ASSERT_TRUE(env.ok());
+    auto service = startService(env, scratch.path(), nullptr);
+    ASSERT_TRUE(waitFor([&] { return running(*service) || service->state() == ClangdState::Failed; }));
+    ASSERT_TRUE(running(*service)) << describe(*service);
+    ASSERT_TRUE(service->capabilities());
+    EXPECT_NE(service->capabilities()->serverVersion.find(frost::lang::pinnedLlvmVersion()), std::string::npos);
+    auto lease = service->acquireAnalysisDocument(path, original->text());
+    ASSERT_TRUE(lease) << lease.error().describe();
+    EXPECT_GT(lease->token, 0U);
+    EXPECT_GT(lease->generation, 0U);
+    EXPECT_EQ(lease->lspVersion, service->documentVersion(path));
+    EXPECT_TRUE(lease->snapshot.sharesStorageWith(original->text()));
+    EXPECT_TRUE(service->analysisDocumentCurrent(*lease));
+    auto collision = service->acquireAnalysisDocument(path, replacement->text());
+    ASSERT_FALSE(collision);
+    EXPECT_EQ(collision.error().code(), frost::ErrorCode::AlreadyExists);
+    EXPECT_TRUE(service->analysisDocumentCurrent(*lease));
+    expectAnalysisSymbol(env, *service, path, lease->snapshot, "leasedNative");
+    ClangdServiceOptions foreignOptions;
+    ClangdService foreign(frost::io::realProcessLauncher(), env.context(), std::move(foreignOptions));
+    EXPECT_FALSE(foreign.analysisDocumentCurrent(*lease));
+    EXPECT_TRUE(foreign.releaseAnalysisDocument(*lease));
+    EXPECT_TRUE(service->analysisDocumentCurrent(*lease));
+    ASSERT_TRUE(service->releaseAnalysisDocument(*lease));
+    EXPECT_FALSE(service->documentVersion(path));
+    auto next = service->acquireAnalysisDocument(path, replacement->text());
+    ASSERT_TRUE(next) << next.error().describe();
+    EXPECT_GT(next->token, lease->token);
+    EXPECT_EQ(next->lspVersion, lease->lspVersion);
+    ASSERT_TRUE(service->releaseAnalysisDocument(*lease));
+    EXPECT_TRUE(service->analysisDocumentCurrent(*next));
+    expectAnalysisSymbol(env, *service, path, next->snapshot, "secondNative");
+    ASSERT_TRUE(service->releaseAnalysisDocument(*next));
+    EXPECT_EQ(frost::io::realFileSystem().readFile(path).value_or(""), disk);
+    stopAndCheck(env, *service);
+}
+
+TEST(ClangdE2E, AnalysisLeaseOrdinaryAdoptionUsesActualEditorBytesAndRevokesSameVersionCleanup) {
+    frost::test::ScratchDir scratch("clangd-analysis-adoption");
+    const auto path = scratch.join("analysis.cpp");
+    ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(path, "// disk\n"));
+    auto temporary = frost::text::Document::fromUtf8("int temporaryNative() { return 1; }\n");
+    auto editor = frost::text::Document::fromUtf8("int editorNative() { return 2; }\n");
+    ASSERT_TRUE(temporary && editor);
+    ASSERT_EQ(temporary->text().version(), editor->text().version());
+    Env env;
+    ASSERT_TRUE(env.ok());
+    auto service = startService(env, scratch.path(), nullptr);
+    ASSERT_TRUE(waitFor([&] { return running(*service) || service->state() == ClangdState::Failed; }));
+    ASSERT_TRUE(running(*service)) << describe(*service);
+    auto lease = service->acquireAnalysisDocument(path, temporary->text());
+    ASSERT_TRUE(lease) << lease.error().describe();
+    ASSERT_TRUE(service->openDocument(path, editor->text()));
+    EXPECT_FALSE(service->analysisDocumentCurrent(*lease));
+    EXPECT_EQ(service->documentVersion(path), lease->lspVersion + 1);
+    ASSERT_TRUE(service->releaseAnalysisDocument(*lease));
+    expectAnalysisSymbol(env, *service, path, editor->text(), "editorNative");
+    auto ordinaryCollision = service->openDocument(path, temporary->text());
+    ASSERT_FALSE(ordinaryCollision);
+    EXPECT_EQ(ordinaryCollision.error().code(), frost::ErrorCode::AlreadyExists);
+    expectAnalysisSymbol(env, *service, path, editor->text(), "editorNative");
+    ASSERT_TRUE(service->closeDocument(path));
+    ASSERT_TRUE(service->openDocument(path, editor->text()));
+    ASSERT_EQ(service->documentVersion(path), lease->lspVersion);
+    ASSERT_TRUE(service->releaseAnalysisDocument(*lease));
+    ASSERT_TRUE(service->documentVersion(path));
+    expectAnalysisSymbol(env, *service, path, editor->text(), "editorNative");
+    ASSERT_TRUE(service->closeDocument(path));
+    for (const bool save : {false, true}) {
+        auto adopted = service->acquireAnalysisDocument(path, editor->text());
+        ASSERT_TRUE(adopted);
+        if (save) {
+            ASSERT_TRUE(service->saveDocument(path));
+        } else {
+            frost::text::ChangeSet noOp;
+            noOp.baseVersion = noOp.version = editor->text().version();
+            ASSERT_TRUE(service->changeDocument(path, noOp, editor->text()));
+        }
+        EXPECT_FALSE(service->analysisDocumentCurrent(*adopted));
+        ASSERT_TRUE(service->releaseAnalysisDocument(*adopted));
+        ASSERT_TRUE(service->documentVersion(path));
+        expectAnalysisSymbol(env, *service, path, editor->text(), "editorNative");
+        ASSERT_TRUE(service->closeDocument(path));
+    }
+    stopAndCheck(env, *service);
+}
+
+TEST(ClangdE2E, AnalysisLeaseRestartDropsTemporaryDocumentsAndLateCleanupCannotCloseNewOwners) {
+    frost::test::ScratchDir scratch("clangd-analysis-restart");
+    const auto temporaryPath = scratch.join("temporary.cpp");
+    const auto editorPath = scratch.join("editor.cpp");
+    ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(temporaryPath, "// disk\n"));
+    ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(editorPath, "// disk\n"));
+    auto document = frost::text::Document::fromUtf8("int retainedNative() { return 1; }\n");
+    ASSERT_TRUE(document);
+    Env env;
+    ASSERT_TRUE(env.ok());
+    auto service =
+        startService(env, scratch.path(), nullptr,
+                     {.initialDelay = 100ms, .maxDelay = 1s, .maxConsecutiveCrashes = 3, .stableAfter = 60s});
+    ASSERT_TRUE(waitFor([&] { return running(*service) || service->state() == ClangdState::Failed; }));
+    ASSERT_TRUE(running(*service)) << describe(*service);
+    ASSERT_TRUE(service->openDocument(editorPath, document->text()));
+    auto old = service->acquireAnalysisDocument(temporaryPath, document->text());
+    ASSERT_TRUE(old);
+    expectAnalysisSymbol(env, *service, temporaryPath, old->snapshot, "retainedNative");
+    ASSERT_TRUE(service->killServerForTesting());
+    ASSERT_TRUE(waitFor([&] { return service->restarts() == 1 && running(*service); })) << describe(*service);
+    EXPECT_FALSE(service->analysisDocumentCurrent(*old));
+    EXPECT_FALSE(service->documentVersion(temporaryPath));
+    EXPECT_TRUE(service->documentVersion(editorPath));
+    expectAnalysisSymbol(env, *service, editorPath, document->text(), "retainedNative");
+    auto current = service->acquireAnalysisDocument(temporaryPath, document->text());
+    ASSERT_TRUE(current);
+    EXPECT_GT(current->generation, old->generation);
+    EXPECT_GT(current->token, old->token);
+    EXPECT_EQ(current->lspVersion, old->lspVersion);
+    ASSERT_TRUE(service->releaseAnalysisDocument(*old));
+    EXPECT_TRUE(service->analysisDocumentCurrent(*current));
+    expectAnalysisSymbol(env, *service, temporaryPath, current->snapshot, "retainedNative");
+    ASSERT_TRUE(service->releaseAnalysisDocument(*current));
+    stopAndCheck(env, *service);
+}
+
+TEST(ClangdE2E, AnalysisLeaseCancelledRequestCleanupAndStopRespectExactOwnership) {
+    frost::test::ScratchDir scratch("clangd-analysis-cancel");
+    const auto path = scratch.join("analysis.cpp");
+    ASSERT_TRUE(frost::io::realFileSystem().writeFileAtomic(path, "// disk\n"));
+    auto document = frost::text::Document::fromUtf8("int cancelledNative() { return 1; }\n");
+    ASSERT_TRUE(document);
+    Env env;
+    ASSERT_TRUE(env.ok());
+    auto service = startService(env, scratch.path(), nullptr);
+    ASSERT_TRUE(waitFor([&] { return running(*service) || service->state() == ClangdState::Failed; }));
+    ASSERT_TRUE(running(*service)) << describe(*service);
+    auto lease = service->acquireAnalysisDocument(path, document->text());
+    ASSERT_TRUE(lease);
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    auto cancelled = analysisSymbol(env, *service, path, document->text(), "cancelledNative", cancellation.get_token());
+    ASSERT_FALSE(cancelled);
+    EXPECT_EQ(cancelled.error().code(), frost::ErrorCode::Cancelled);
+    ASSERT_TRUE(service->releaseAnalysisDocument(*lease));
+    EXPECT_FALSE(service->documentVersion(path));
+    auto stopped = service->acquireAnalysisDocument(path, document->text());
+    ASSERT_TRUE(stopped);
+    auto stopping = service->stop(); // Ownership is revoked synchronously, before awaiting shutdown.
+    EXPECT_FALSE(service->analysisDocumentCurrent(*stopped));
+    EXPECT_FALSE(service->documentVersion(path));
+    ASSERT_TRUE(service->releaseAnalysisDocument(*stopped));
+    env.run(std::move(stopping));
+    auto unavailable = service->acquireAnalysisDocument(path, document->text());
+    ASSERT_FALSE(unavailable);
+    EXPECT_EQ(unavailable.error().code(), frost::ErrorCode::Busy);
+    EXPECT_EQ(service->state(), ClangdState::Stopped);
+}
+
 TEST(ClangdE2E, CmakeDatabaseReportsAndClearsAnUndeclaredIdentifier) {
     frost::test::ScratchDir scratch("lang-clangd-cmake");
     writeCmakeDatabase(scratch);

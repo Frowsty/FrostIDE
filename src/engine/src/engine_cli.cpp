@@ -86,7 +86,8 @@ Result<EngineCliOutcome> runEngineCliCommand(io::IProcessLauncher& launcher, std
         spec.arguments.push_back(request.project);
     }
     spec.workingDirectory = request.workingDirectory;
-    auto run = io::runToCompletion(launcher, spec, {}, request.timeout, request.stopToken);
+    const auto timeout = request.timeout ? std::optional<IClock::Duration>(*request.timeout) : std::nullopt;
+    auto run = io::runToCompletionUntil(launcher, spec, {}, timeout, request.stopToken);
     if (!run) {
         return std::unexpected(std::move(run.error()));
     }

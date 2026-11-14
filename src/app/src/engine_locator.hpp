@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -21,7 +22,9 @@ struct EngineInstallation {
     std::string cliProgram; // Absolute console CLI executable, when the platform supplies one.
     std::string root;
     std::string preset;
-    std::string playerProgram; // Empty when no real sibling FrostRuntime executable exists.
+    std::string playerProgram;               // Empty when no real sibling FrostRuntime executable exists.
+    std::optional<io::FileStatus> cliStatus; // Actual discovery-worker metadata; GUI snapshots never stat the tool.
+    std::string physicalCliProgram{}; // Discovery-worker receipt, separate from launch/display spelling.
 };
 
 struct EngineInstanceRecord {

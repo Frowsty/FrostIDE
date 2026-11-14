@@ -23,7 +23,6 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
-#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -110,12 +109,6 @@ public:
     std::atomic<bool> stallChallenge{false}, closed{false}, heartbeats{true};
     std::atomic<std::int64_t> processId{0};
     std::atomic<unsigned> authenticated{0};
-    // Copied under the peer mutex and invoked outside it on the owned network thread after
-    // recording a real request, before replying. Captures must outlive this peer (joined on teardown).
-    void setBeforeReply(std::function<void(std::string_view)> callback) {
-        std::lock_guard lock(m_mutex);
-        m_beforeReply = std::move(callback);
-    }
     std::vector<Json> requests(std::string_view method) const {
         std::lock_guard lock(m_mutex);
         std::vector<Json> found;
@@ -123,6 +116,19 @@ public:
             if (request.stringAt("method") == method)
                 found.push_back(request);
         return found;
+    }
+    // Explicit opt-in for FER-9 coordinator protocol tests; all existing R6 peers remain unchanged.
+    void luaDebugEndpoint(std::uint16_t port) {
+        std::lock_guard lock(m_mutex);
+        m_luaDebugPort = port;
+        m_results.insert_or_assign("script.debug.bootstrap", identity()
+                                                                 .set("protocolVersion", 1)
+                                                                 .set("host", "127.0.0.1")
+                                                                 .set("port", static_cast<std::uint64_t>(port))
+                                                                 .set("processId", 12345)
+                                                                 .set("debugSessionId", std::string(32, 'c'))
+                                                                 .set("credential", std::string(64, 'd'))
+                                                                 .set("expiresMs", 30000));
     }
     std::size_t replies(std::string_view method) const {
         std::lock_guard lock(m_mutex);
@@ -356,13 +362,6 @@ private:
                     std::lock_guard lock(m_mutex);
                     m_requests.push_back(*request);
                 }
-                std::function<void(std::string_view)> beforeReply;
-                {
-                    std::lock_guard lock(m_mutex);
-                    beforeReply = m_beforeReply;
-                }
-                if (beforeReply)
-                    beforeReply(method);
                 Json result;
                 if (method == "auth.challenge") {
                     if (stallChallenge.load())
@@ -412,6 +411,12 @@ private:
                                      .set("role", "editor");
                         if (processId.load() > 0)
                             result.set("processId", processId.load());
+                        {
+                            std::lock_guard lock(m_mutex);
+                            if (m_luaDebugPort != 0)
+                                result.set("scriptDebug",
+                                           Json::object().set("available", true).set("protocolVersion", 1));
+                        }
                     } else if (method == "schema.export")
                         result = schema();
                     else if (method == "server.subscribe") {
@@ -482,8 +487,8 @@ private:
     Socket m_listener = kInvalid, m_socket = kInvalid;
     std::uint16_t m_port = 0;
     std::jthread m_worker;
+    std::uint16_t m_luaDebugPort = 0;
     mutable std::mutex m_mutex;
-    std::function<void(std::string_view)> m_beforeReply;
     std::vector<Json> m_requests;
     std::map<std::string, std::size_t> m_replied;
     std::set<std::string> m_held;

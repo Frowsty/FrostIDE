@@ -109,6 +109,9 @@ unitTestsDescribeSelection(const std::string& testName, const std::string& caseN
 // Creates the window's widget (header comment). Its object name is "unitTestsToolWindow".
 [[nodiscard]] QWidget* createUnitTestsToolWindowWidget(QWidget* parent, UnitTestsWindowContext context);
 
+// These GUI-thread helpers accept the concrete CTest widget or a provider QTabWidget containing
+// exactly one concrete CTest page, regardless of its selected tab. Null, unrelated widgets and
+// ambiguous containers return empty cases or NotFound; object names do not confer provider type.
 // Returns the ctest-backed gutter test cases for `filePath` and `content` from `unitTestsWidget`.
 [[nodiscard]] std::vector<run::GutterTestCase>
 unitTestsGutterCasesForFile(QWidget* unitTestsWidget, std::string_view filePath, std::string_view content);

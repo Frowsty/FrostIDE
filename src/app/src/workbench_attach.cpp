@@ -34,9 +34,16 @@
 #include "frost/vcs/git_locator.hpp"
 
 #include "cmake_integration.hpp"
+#include "engine_binding_integration.hpp"
+#include "engine_crash_observer.hpp"
+#include "engine_dump_controller.hpp"
 #include "engine_integration.hpp"
+#include "engine_mixed_debug.hpp"
+#include "engine_mixed_launch.hpp"
+#include "engine_run_debug.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "multi_session_debug.hpp"
 #include "project_properties_dialog.hpp"
 #include "settings_dialog.hpp"
 #include "unity_control.hpp"
@@ -198,12 +205,114 @@ void Workbench::attach(ui::ShellWindow& window) {
     attachToolWindows();
     attachNavigationBar();
     m_engine = std::make_unique<EngineIntegration>(*this);
+    m_engineLuaDebug = std::make_unique<EngineLuaDebugCoordinator>(*m_engine, this);
+    connect(m_engineLuaDebug.get(), &EngineLuaDebugCoordinator::failed, this,
+            [this](const QString& message) { notify(text("Lua debugger"), message, ui::NotificationKind::Error); });
+    m_engineRunDebug = std::make_unique<EngineRunDebugCoordinator>(*m_runController, *m_runManager, *m_engine,
+                                                                   *m_engineLuaDebug, this);
+    m_engineMixedLaunch =
+        std::make_unique<EngineMixedLaunchCoordinator>(*m_engine, *m_engineLuaDebug, *m_runManager, this);
+    connect(m_engineMixedLaunch.get(), &EngineMixedLaunchCoordinator::failed, this,
+            [this](const QString& message) { notify(text("Mixed debugger"), message, ui::NotificationKind::Error); });
+    m_engineMixedDebug = std::make_unique<EngineMixedDebugCoordinator>(
+        *m_debugSessions, *m_engineLuaDebug,
+        [this] { return m_engine ? m_engine->nativeDebugBinding() : std::nullopt; },
+        [](const EngineNativeDebugBinding& binding) {
+            return binding.controller && binding.controller->sessionGeneration() == binding.debugGeneration &&
+                   binding.controller->nativeOsThreadIdsVerified();
+        },
+        this);
+    connect(m_engineMixedDebug.get(), &EngineMixedDebugCoordinator::failed, this,
+            [this](const QString& message) { notify(text("Mixed debugger"), message, ui::NotificationKind::Error); });
+    EngineDumpControllerOptions dumpOptions;
+    dumpOptions.notifications = &m_window->notifications();
+    dumpOptions.sessions = m_debugSessions.get();
+    dumpOptions.launcher = &m_services.launcher;
+    dumpOptions.work = m_engineDumpWork;
+    dumpOptions.cacheDirectory = m_options.engineDumpCacheDirectory;
+    dumpOptions.adapterExecutable = m_options.engineDumpAdapterPath;
+    if (dumpOptions.adapterExecutable.empty()) {
+#ifdef _WIN32
+        constexpr std::string_view adapterName = "frost-dbgeng-dap.exe";
+#else
+        constexpr std::string_view adapterName = "frost-dbgeng-dap";
+#endif
+        dumpOptions.adapterExecutable =
+            io::joinPath(QCoreApplication::applicationDirPath().toStdString(), adapterName).value_or("");
+    }
+    m_engineDumps = std::make_unique<EngineDumpController>(std::move(dumpOptions), this);
+    m_engineCrashObserver = std::make_unique<EngineCrashObserver>(
+        EngineCrashObserverOptions{&m_services.fs, &m_services.clock, m_engineDumpWork, m_engineDumps.get(),
+                                   &m_window->notifications()},
+        this);
+    connect(m_engine.get(), &EngineIntegration::crashSourceObserved, this, [this] {
+        if (!m_engine || !m_engineCrashObserver)
+            return;
+        auto source = m_engine->captureCrashObservationSource();
+        if (!source)
+            return;
+        if (auto observing = m_engineCrashObserver->observe(std::move(*source)); !observing)
+            log::warn(kLog, "crash observation: {}", observing.error().describe());
+    });
+    connect(m_engine.get(), &EngineIntegration::crashSourceUnexpectedLoss, this,
+            [this](const engine::EngineIdentity& identity) {
+                if (m_engineCrashObserver)
+                    m_engineCrashObserver->unexpectedLoss(identity);
+            });
+    connect(m_engine.get(), &EngineIntegration::crashSourceRevoked, this, [this] {
+        if (m_engineCrashObserver)
+            m_engineCrashObserver->revoke();
+        if (m_engineDumps)
+            m_engineDumps->revoke();
+    });
+    connect(m_engineRunDebug.get(), &EngineRunDebugCoordinator::failed, this,
+            [this](const QString& message) { notify(text("Engine debugger"), message, ui::NotificationKind::Error); });
+    m_compoundDebug->setAdditionalPrepare(
+        [this](const run::RunConfiguration& configuration, std::stop_token stop,
+               MultiSessionDebugCoordinator::Prepared completed) -> std::optional<Result<void>> {
+            if (!run::isFrostEngineRunType(configuration.type))
+                return std::nullopt;
+            if (!m_engineRunDebug || m_shutDown)
+                return Result<void>(fail(ErrorCode::Unsupported, "The engine debugger is unavailable"));
+            if (configuration.engineDebugMode == run::EngineDebugMode::NativeAndLua) {
+                if (!m_engineMixedLaunch)
+                    return Result<void>(fail(ErrorCode::Unsupported, "The mixed debugger is unavailable"));
+                return m_engineMixedLaunch->prepare(configuration, stop, std::move(completed));
+            }
+            return m_engineRunDebug->prepare(configuration, stop, std::move(completed));
+        });
     m_unity = std::make_unique<UnityControlIntegration>(*this);
     attachToolbar();
     attachRun();
-    if (auto registered = ui::registerDebugToolWindow(m_window->toolWindows(), m_registry, *m_debug); !registered)
+    if (auto registered = ui::registerDebugToolWindow(
+            m_window->toolWindows(), m_registry, *m_debugSessions,
+            [this] {
+                auto* pane = new ui::MixedDebugWindow();
+                pane->setSnapshot(m_engineMixedDebug->snapshot());
+                connect(m_engineMixedDebug.get(), &EngineMixedDebugCoordinator::changed, pane,
+                        [this, pane] { pane->setSnapshot(m_engineMixedDebug->snapshot()); });
+                connect(pane, &ui::MixedDebugWindow::captureRequested, this, [this] {
+                    if (auto result = captureEngineNativeStack(); !result)
+                        notify(text("Mixed debugger"), qs(result.error().message()), ui::NotificationKind::Error);
+                });
+                connect(pane, &ui::MixedDebugWindow::resumeRequested, this, [this] {
+                    if (auto result = resumeEngineMixedDebug(); !result)
+                        notify(text("Mixed debugger"), qs(result.error().message()), ui::NotificationKind::Error);
+                });
+                connect(pane, &ui::MixedDebugWindow::frameRequested, this,
+                        [this](std::uint64_t session, std::int64_t thread, std::int64_t frame) {
+                            if (m_engineMixedDebug) {
+                                if (auto result = m_engineMixedDebug->selectFrame(session, thread, frame); !result)
+                                    notify(text("Mixed debugger"), qs(result.error().message()),
+                                           ui::NotificationKind::Error);
+                            }
+                        });
+                return pane;
+            });
+        !registered)
         log::warn(kLog, "debug tool window: {}", registered.error().describe());
     attachLanguage();
+    attachEngineBindings();
     attachResolveContext(); // CPP-3.
     connect(&window.tabs(), &ui::EditorTabs::currentEditorChanged, this, [this](ui::IEditorView*) {
         m_language->editorChanged();
@@ -297,14 +406,37 @@ void Workbench::detach() {
     m_window->mainToolbar().setBuildMenuBuilder({});
     QCoreApplication::instance()->removeEventFilter(this);
     cancelFind();
+    cancelEngineTestDebugPreparation();
+    // The shell can outlive this Workbench. Destroy providers while their borrowed services and
+    // retirement batch are alive; the final drain must see every worker they retire.
+    m_window->toolWindows().hide(kUnitTestsToolWindow);
+    m_window->toolWindows().setContent(kUnitTestsToolWindow, new QWidget());
     m_find.reset();
     m_git.reset();
+    if (m_compoundDebug)
+        m_compoundDebug->cancel();
+    if (m_engineRunDebug)
+        m_engineRunDebug->cancel();
+    if (m_engineMixedLaunch)
+        m_engineMixedLaunch->cancel();
+    if (m_debugSessions)
+        m_debugSessions->shutdown();
     if (m_debug) {
-        m_debug->shutdown();
+        if (!m_debugSessions)
+            m_debug->shutdown();
         m_window->toolWindows().hide(ui::kDebugToolWindowId);
         m_window->toolWindows().setContent(ui::kDebugToolWindowId, new QWidget());
     }
     m_unity.reset();
+    if (m_engineBindings)
+        m_engineBindings->shutdown();
+    m_engineBindings.reset();
+    m_engineCrashObserver.reset();
+    m_engineDumps.reset();
+    m_engineMixedDebug.reset();
+    m_engineMixedLaunch.reset();
+    m_engineRunDebug.reset();
+    m_engineLuaDebug.reset();
     m_engine.reset();
     stopTerminal();
     m_terminal.reset();

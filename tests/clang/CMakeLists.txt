@@ -21,3 +21,15 @@ target_compile_definitions(clang_spike_tests PRIVATE
     FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 add_dependencies(clang_spike_tests frost-clang)
+
+# FEC-13 keeps semantic registration extraction read-only and checks identities against real ASTs.
+frost_add_test(clang_binding_map_tests
+    SOURCES binding_map_test.cpp
+    DEPS frost::rpc frost::io frost::core
+    LABELS integration)
+target_include_directories(clang_binding_map_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(clang_binding_map_tests PRIVATE
+    FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+    FROST_BINDING_MAP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/binding-map")
+add_dependencies(clang_binding_map_tests frost-clang)

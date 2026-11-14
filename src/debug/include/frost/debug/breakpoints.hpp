@@ -189,6 +189,12 @@ public:
     // Every breakpoint to `status` with no message (Pending when a session starts, Unknown when it ends).
     void resetStatus(BreakpointStatus status = BreakpointStatus::Unknown);
 
+    // Copies shared logical line/function definitions and mute state, retaining this manager's
+    // verification for unchanged definitions. Exception capabilities/settings stay session-local.
+    // Stable ids and the next-id watermark come from source. GUI thread; O(breakpoints log n).
+    // Only changed logical files/functions are notified; adapter status is never copied.
+    void replaceLogicalFrom(const BreakpointManager& source);
+
     // Registers a listener; returns its token for unsubscribe().
     std::uint64_t subscribe(Listener listener);
     void unsubscribe(std::uint64_t token);

@@ -16,7 +16,7 @@
  *   - msbuild:       `target` is the absolute path of a .vcxproj (or other project file); `program`
  *                    is resolved like cmake-target's (RUN-2, TargetPath), or pinned.
  *   - compound:      `configurations` lists the ids of the configurations it starts together, in
- *                    that order (RUN-5). Run-only: compound debugging is DBG-10's. It has no
+ *                    that order (RUN-5/DBG-10). The invoked Run or Debug action selects the mode. It has no
  *                    program, target, arguments, environment or before-launch steps of its own.
  *   - attach:        `target` names the running process the debugger attaches to: its executable's
  *                    file name ("FrostEditor.exe", ASCII case ignored on Windows) or the absolute
@@ -67,6 +67,8 @@
  *
  * Version 3 (RUN-11) adds "frost-editor", "frost-player" and "engineProjectPath". Stores
  * using these types require version 3; ordinary stores retain their version 1 or 2 format.
+ * Version 4 adds explicit engineDebugMode native-and-lua. Lua-only engine stores remain version 3;
+ * older readers must refuse mixed launch intent instead of silently choosing a different debugger.
  *
  * Reading is strict about what it understands and lenient about what it does not: unknown members
  * are ignored (a later version-1 writer may add some), but a missing or wrong-typed known member,
@@ -103,6 +105,11 @@ enum class RunType : std::uint8_t { Native, CMakeTarget, MSBuild, Compound, Atta
 
 // What happens before the program starts (header comment).
 enum class BeforeLaunch : std::uint8_t { None, Build };
+// R7 Debug behavior for one typed engine host. NativeAndLua launches that host under built-in
+// native DAP first, then authenticates/attaches Lua; Run remains the ordinary owned host launch.
+enum class EngineDebugMode : std::uint8_t { Lua, NativeAndLua };
+[[nodiscard]] std::string_view toString(EngineDebugMode mode) noexcept;
+[[nodiscard]] std::optional<EngineDebugMode> parseEngineDebugMode(std::string_view text) noexcept;
 
 // "none" or "build" (the JSON spelling).
 [[nodiscard]] std::string_view toString(BeforeLaunch step) noexcept;
@@ -152,6 +159,7 @@ struct RunConfiguration {
     // editor/player build configuration. Empty on other types. Both types own their launched process;
     // pairing with an external editor is an EngineSession operation, never a run configuration.
     std::string engineProjectPath{};
+    EngineDebugMode engineDebugMode = EngineDebugMode::Lua; // Other run types must keep the default.
 
     friend bool operator==(const RunConfiguration&, const RunConfiguration&) = default;
 };
@@ -177,7 +185,7 @@ struct RunConfiguration {
 
 // The store's newest format version; files with a higher one are refused (Unsupported). Stores
 // retain version 1 or 2 when no RUN-11 types are present (header comment, "Version 3").
-inline constexpr int kRunConfigurationsVersion = 3;
+inline constexpr int kRunConfigurationsVersion = 4;
 
 // Whether this is a RUN-11 editor/player configuration. Pure, constant time.
 [[nodiscard]] bool isFrostEngineRunType(RunType type) noexcept;

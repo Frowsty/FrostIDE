@@ -52,6 +52,7 @@ class QCheckBox;
 class QFormLayout;
 class QLabel;
 class QLineEdit;
+class QComboBox;
 class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
@@ -123,6 +124,7 @@ private:
     QLabel* m_target = nullptr;
     QLineEdit* m_program = nullptr;
     QLineEdit* m_engineProject = nullptr;
+    QComboBox* m_engineDebugMode = nullptr;
     QPushButton* m_addFrostEditor = nullptr;
     QPushButton* m_addFrostPlayer = nullptr;
     QLineEdit* m_arguments = nullptr;

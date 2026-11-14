@@ -16,11 +16,14 @@
 #include "frost/input/action.hpp"
 
 #include <array>
+#include <functional>
 #include <string_view>
 
+class QWidget;
 namespace frost::ui {
 
 class DebugController;
+class DebugSessionRegistry;
 class ToolWindowManager;
 
 // The tool window's id and its activation action.
@@ -61,6 +64,10 @@ inline constexpr std::array kDebugActions{
  * GUI thread only.
  */
 [[nodiscard]] Result<void> registerDebugActions(input::ActionRegistry& registry, DebugController& controller);
+// Actions resolve the selected stable session at invocation time. launch/mayLaunch belong to the
+// workspace coordinator and may start another session while existing sessions remain live.
+[[nodiscard]] Result<void> registerDebugActions(input::ActionRegistry& registry, DebugSessionRegistry& sessions,
+                                                std::function<Result<void>()> launch, std::function<bool()> mayLaunch);
 
 /*
  * Adds the Debug tool window (bottom, DebugToolWindow as its content) to `windows` and registers
@@ -68,5 +75,8 @@ inline constexpr std::array kDebugActions{
  */
 [[nodiscard]] Result<void> registerDebugToolWindow(ToolWindowManager& windows, input::ActionRegistry& registry,
                                                    DebugController& controller);
+[[nodiscard]] Result<void> registerDebugToolWindow(ToolWindowManager& windows, input::ActionRegistry& registry,
+                                                   DebugSessionRegistry& sessions,
+                                                   std::function<QWidget*()> mixedFactory = {});
 
 } // namespace frost::ui

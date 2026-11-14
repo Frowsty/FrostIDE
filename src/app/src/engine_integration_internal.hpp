@@ -8,6 +8,7 @@
 #include "frost/engine/session.hpp"
 #include "frost/ui/shell/engine_state.hpp"
 
+#include "engine_crash_observer.hpp"
 #include "engine_integration.hpp"
 #include "engine_locator.hpp"
 #include "engine_native_debug.hpp"
@@ -31,6 +32,7 @@ class EngineView;
 } // namespace frost::ui
 
 namespace frost::app {
+struct EngineNativeHostState;
 
 inline constexpr std::string_view kEngineConsoleWindow = "frostEngine";
 inline constexpr std::string_view kEngineProjectWindow = "engineProject";
@@ -84,7 +86,7 @@ struct EngineIntegration::Impl {
     Workbench& workbench;
     QPointer<QWidget> panel;
     QPointer<QComboBox> picker;
-    QPointer<QPushButton> refreshButton, pairButton, startButton, disconnectButton, cancelButton;
+    QPointer<QPushButton> refreshButton, pairButton, startButton, disconnectButton, cancelButton, debugLuaButton;
     QPointer<ui::EngineConnectionIndicator> indicator;
     QPointer<ui::EngineConsole> console;
     QPointer<ui::EngineView> projectView;
@@ -97,15 +99,19 @@ struct EngineIntegration::Impl {
     std::string root, physicalRoot, projectKey, selectedProject, automationDirectory, chosenProgram;
     std::uint64_t trustRevision = 0;
     std::shared_ptr<std::atomic<bool>> physicalAdmission = std::make_shared<std::atomic<bool>>(true);
+    std::shared_ptr<std::atomic<std::uint64_t>> testsSourceRevision = std::make_shared<std::atomic<std::uint64_t>>(1);
     std::stop_source workStop;
     std::vector<sched::JoinHandle<void>> tasks;
     std::vector<EngineInstallation> installations;
     std::vector<EngineInstanceRecord> instances;
     std::unique_ptr<engine::EngineSession> session;
     std::unique_ptr<EngineNativeDebugAdapter> nativeDebug;
+    std::optional<engine::NativePauseLease> nativePauseLease;
+    std::optional<EngineNativeDebugBinding> nativePauseBinding;
     std::optional<EngineNativeDebugTarget> nativeTarget;
-    std::optional<std::uint64_t> retainedDebugGeneration, nativeBoundDebugGeneration;
+    std::optional<EngineNativeDebugBinding> retainedNativeBinding, nativeBoundBinding;
     std::shared_ptr<EnginePolicyState> policy = std::make_shared<EnginePolicyState>();
+    std::shared_ptr<EngineCrashSessionHolder> crashSessions = std::make_shared<EngineCrashSessionHolder>();
     std::optional<engine::EngineIdentity> identity;
     std::optional<engine::EngineState> state;
     std::shared_ptr<EngineEventQueue> eventQueue = std::make_shared<EngineEventQueue>();
@@ -125,6 +131,8 @@ struct EngineIntegration::Impl {
     std::uint64_t lastEventSequence = 0;
     std::shared_ptr<EngineRunAdmission> runAdmission;
     std::optional<run::RunId> ownedRun;
+    std::shared_ptr<EngineNativeHostState> nativeHost;
+    std::uint64_t nativeHostReservation = 0;
     io::ProcessId ownedPid = 0;
     std::string ownedConfigDirectory, ownedOutput, ownedSecret;
     IClock::SteadyTime startupDeadline;
@@ -136,7 +144,9 @@ struct EngineIntegration::Impl {
     void setStatus(const QString& message);
     void background(std::function<void()> work);
     void retireSession();
-    void clearSession(bool clearOutput);
+    void clearSession(bool clearOutput, bool preserveCrashObservation = false);
+    void revokeCrashObservation();
+    void observedCrashLoss(const engine::EngineIdentity& identity);
     void invalidate(bool stopOwned);
     [[nodiscard]] bool admitted(std::uint64_t expectedEpoch, std::string_view expectedRoot,
                                 std::uint64_t expectedTrust) const;
@@ -153,6 +163,7 @@ struct EngineIntegration::Impl {
     [[nodiscard]] Result<run::RunConfiguration> prepare(const run::RunConfiguration& configuration);
     void endpointFromOutput();
     void checkOwnedStartup();
+    void stopOwnedHost();
     [[nodiscard]] std::vector<run::RunConfiguration> generated() const;
 };
 

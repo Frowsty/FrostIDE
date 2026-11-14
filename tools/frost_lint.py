@@ -248,6 +248,11 @@ RESULT_TYPES: tuple[ResultType, ...] = (
     ResultType("DiscoveredTest", "test discovery", _RUN7_TEST_PARSERS),
     ResultType("GTestCase", "test discovery", _RUN7_TEST_PARSERS),
     ResultType("DoctestCase", "test discovery", _RUN7_TEST_PARSERS),
+    # FER-10 scene/case outcomes are decoded from the actual test.run CLI report, including
+    # exact selection, counters and contradictory-status checks before publishing any result.
+    ResultType("EngineSceneTestResult", "test outcome", ("src/engine/src/engine_test_parsers.cpp",)),
+    ResultType("EngineTestOutcome", "test outcome", ("src/engine/src/engine_test_parsers.cpp",),
+               ("Passed", "Failed", "Skipped")),
     # Packages: PackageReference items read from the user's own .csproj are file contents, not
     # invented; a package catalogue needs a real feed (LTR-7).
     ResultType("NuGetPackageEntry", "package", ("src/app/src/project_properties_xml.cpp",)),
@@ -255,6 +260,9 @@ RESULT_TYPES: tuple[ResultType, ...] = (
     # Usage counts and usages: LSP textDocument/references and Code Vision lenses.
     ResultType("Usage", "usage", ("src/lang/src/navigation.cpp",)),
     ResultType("UsageGroup", "usage", ("src/lang/src/navigation.cpp",)),
+    # FEC-13 normalizes actual references replies with the provider's captured identity,
+    # negotiated encoding and exact document snapshots, then combines those parsed usages.
+    ResultType("BindingUsage", "usage", ("src/engine/src/binding_queries.cpp",)),
     ResultType("EditorCodeVisionLens", "usage count"),
     # IL and disassembly: the DAP disassemble response.
     ResultType("DisassembledInstruction", "disassembly", ("src/debug/src/dap_types.cpp",)),
@@ -310,6 +318,12 @@ SITE_CONTEXT_LINES = 8
 # Every entry is a reviewed site in a file that the fabricated-result or tool-output rule scans.
 # The temporary FND-3 entries were deleted at the R0 integration together with their harms.
 SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
+    # FER-10 storage defaults are unpublished: parseEngineTestRun assigns the scene outcome
+    # from test.run and appendRun supplies every case outcome explicitly before returning.
+    SiteAllowance("src/engine/include/frost/engine/engine_test_provider.hpp", "EngineTestOutcome",
+                  "EngineTestOutcome outcome = EngineTestOutcome::Passed;",
+                  "unpublished scene/case member defaults; strict engine report parser supplies actual outcomes",
+                  count=2),
     # Reviewed, labelled heuristic: regular expressions over the source text find tests and entry
     # points; only the entry points (main, Main) become the editor gutter's run markers, and no
     # outcome is shown. Since RUN-7 the Unit Tests window lists ctest's tests instead. Five sites,

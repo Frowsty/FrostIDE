@@ -49,6 +49,8 @@ if(MSVC)
 endif()
 
 add_executable(frost-clang
+    src/binding_map.cpp
+    src/binding_map_command.cpp
     src/frost_clang_main.cpp
     src/llvm_compression_shim.cpp
 )
@@ -113,6 +115,7 @@ target_link_libraries(frost-clang PRIVATE
     clangToolingCore
     clangToolingRefactoring
     clangToolingSyntax
+    clangUnifiedSymbolResolution
     clangASTMatchers
     clangRewrite
     clangFrontend

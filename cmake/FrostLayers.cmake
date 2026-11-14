@@ -516,8 +516,10 @@ cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _frost_add_runtime_dll
 # A unit suite that needs the same isolation (a private desktop, MessageBoxW, a native window)
 # says RESOURCE_LOCK frost_desktop; a test added with add_test or gtest_discover_tests directly
 # sets these properties itself.
+# TIMEOUT optionally supplies a positive per-case seconds bound to PRE_TEST discovery; omitted
+# callers retain CTest's existing default. Corpus gates can include an actual locked engine build.
 function(frost_add_test name)
-    cmake_parse_arguments(ARG "QT;RUN_SERIAL" "RESOURCE_LOCK;PROCESSORS" "SOURCES;DEPS;THIRD_PARTY;LABELS" ${ARGN})
+    cmake_parse_arguments(ARG "QT;RUN_SERIAL" "RESOURCE_LOCK;PROCESSORS;TIMEOUT" "SOURCES;DEPS;THIRD_PARTY;LABELS" ${ARGN})
     if(NOT ARG_LABELS)
         set(ARG_LABELS unit)
     endif()
@@ -537,6 +539,9 @@ function(frost_add_test name)
     endforeach()
     if(DEFINED ARG_PROCESSORS AND NOT ARG_PROCESSORS MATCHES "^[1-9][0-9]*$")
         message(FATAL_ERROR "frost_add_test(${name}): PROCESSORS needs a positive integer (got '${ARG_PROCESSORS}')")
+    endif()
+    if(DEFINED ARG_TIMEOUT AND NOT ARG_TIMEOUT MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "frost_add_test(${name}): TIMEOUT needs positive seconds (got '${ARG_TIMEOUT}')")
     endif()
     if(ARG_QT)
         add_executable(${name} ${ARG_SOURCES} ${FROST_SOURCE_DIR}/tests/support/qt_test_main.cpp)
@@ -569,6 +574,9 @@ function(frost_add_test name)
     endif()
     if(ARG_PROCESSORS)
         list(APPEND properties PROCESSORS ${ARG_PROCESSORS})
+    endif()
+    if(ARG_TIMEOUT)
+        list(APPEND properties TIMEOUT ${ARG_TIMEOUT})
     endif()
     gtest_discover_tests(${name}
         DISCOVERY_MODE PRE_TEST

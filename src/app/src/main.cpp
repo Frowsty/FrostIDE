@@ -413,6 +413,7 @@ GuiStores openGuiStores() {
 frost::app::WorkbenchOptions workbenchOptions(const GuiStores& stores) {
     frost::app::WorkbenchOptions options;
     if (!stores.dataDirectory.empty()) {
+        options.engineDumpCacheDirectory = stores.dataDirectory;
         const auto under = [&](std::string_view name) {
             auto path = frost::io::joinPath(stores.dataDirectory, name);
             return path ? std::move(*path) : std::string();

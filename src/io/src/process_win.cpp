@@ -517,6 +517,8 @@ public:
     }
 
     Result<ProcessResult> communicate(std::string_view stdinData, IClock::Duration timeout) override;
+    Result<ProcessResult> communicateUntil(std::string_view stdinData,
+                                           std::optional<IClock::Duration> timeout) override;
 
     Result<std::vector<ContainedProcess>> containedProcesses() override {
         if (!m_job.valid()) {
@@ -709,10 +711,14 @@ private:
  * the kernel never writes into a dead frame.
  */
 Result<ProcessResult> WindowsProcess::communicate(std::string_view stdinData, IClock::Duration timeout) {
+    return communicateUntil(stdinData, timeout);
+}
+Result<ProcessResult> WindowsProcess::communicateUntil(std::string_view stdinData,
+                                                       std::optional<IClock::Duration> timeout) {
     if (!stdinData.empty() && !m_in.pipe.valid()) {
         return fail(ErrorCode::InvalidArgument, "communicate: stdin data given but stdin is not an open pipe");
     }
-    const auto deadline = detail::deadlineAfter(timeout);
+    const auto deadline = timeout ? std::optional(detail::deadlineAfter(*timeout)) : std::nullopt;
 
     struct Channel {
         Stream* stream = nullptr;
@@ -763,7 +769,7 @@ Result<ProcessResult> WindowsProcess::communicate(std::string_view stdinData, IC
         WaitForSingleObject(m_process.get(), kReapGraceMs);
         return fail(ErrorCode::Timeout,
                     std::format("process {} did not finish within {} ms and was terminated", m_pid,
-                                std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()));
+                                std::chrono::duration_cast<std::chrono::milliseconds>(*timeout).count()));
     };
     // Ends the stdin channel: everything written, or the child stopped reading.
     const auto finishStdin = [&] {
@@ -820,11 +826,11 @@ Result<ProcessResult> WindowsProcess::communicate(std::string_view stdinData, IC
         if (count == 0) {
             continue;
         }
-        const auto left = deadline - std::chrono::steady_clock::now();
-        if (left <= IClock::Duration::zero()) {
+        const auto left = deadline ? std::optional(*deadline - std::chrono::steady_clock::now()) : std::nullopt;
+        if (left && *left <= IClock::Duration::zero()) {
             return timedOut();
         }
-        const DWORD signalled = WaitForMultipleObjects(count, events.data(), FALSE, toWaitMs(left));
+        const DWORD signalled = WaitForMultipleObjects(count, events.data(), FALSE, left ? toWaitMs(*left) : INFINITE);
         if (signalled == WAIT_TIMEOUT) {
             continue; // One wait slice ended; the check above decides whether the deadline has.
         }
@@ -858,9 +864,12 @@ Result<ProcessResult> WindowsProcess::communicate(std::string_view stdinData, IC
         }
     }
 
-    if (waitUntil(m_process.get(), deadline) != WAIT_OBJECT_0) {
+    const DWORD finished =
+        deadline ? waitUntil(m_process.get(), *deadline) : WaitForSingleObject(m_process.get(), INFINITE);
+    if (finished == WAIT_TIMEOUT)
         return timedOut();
-    }
+    if (finished != WAIT_OBJECT_0)
+        return failWith(lastWin32Error("communicate: WaitForSingleObject"));
     auto status = exitStatus();
     if (!status) {
         return std::unexpected(std::move(status.error()));

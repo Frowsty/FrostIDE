@@ -162,6 +162,13 @@ struct Variable {
 // The evaluate response's body, as a Variable without a name (the expression is its name).
 [[nodiscard]] Variable parseEvaluateResult(const rpc::Json& body, std::string_view expression);
 
+// FrostEngine's actual Lua-hook pause identity. OS thread IDs are distinct from DAP coroutine IDs;
+// only an explicitly verified native adapter mapping may correlate them.
+struct ScriptPauseIdentity {
+    std::uint64_t vmGeneration = 0, osThreadId = 0, stopGeneration = 0;
+    friend bool operator==(const ScriptPauseIdentity&, const ScriptPauseIdentity&) = default;
+};
+
 // The stopped event's body.
 struct StoppedEvent {
     std::string reason; // "step", "breakpoint", "exception", "pause", "entry", "goto", "signal", ...
@@ -170,6 +177,7 @@ struct StoppedEvent {
     std::string text;
     bool allThreadsStopped = false;
     std::vector<std::int64_t> hitBreakpointIds;
+    std::optional<ScriptPauseIdentity> scriptPause;
 };
 
 [[nodiscard]] StoppedEvent parseStoppedEvent(const rpc::Json& body);

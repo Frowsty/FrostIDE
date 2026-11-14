@@ -143,17 +143,40 @@ void addCommentAndStringOccurrences(fl::FileEdit& fileEdit, const text::Snapshot
 } // namespace
 
 void LanguageController::onRenameAccepted(const QString& name) {
-    if (name.isEmpty() || m_renamePath.empty()) {
+    if (name.isEmpty() || m_renamePath.empty())
         return;
-    }
+    const auto path = m_renamePath;
+    const auto position = m_renamePosition;
+    const auto oldName = m_renameOldName;
+    const auto newName = name.toStdString();
     const bool searchComments = m_rename->searchInCommentsAndStrings();
     const bool preview = m_rename->previewUsages();
-    const std::string oldName = m_renameOldName;
-    const std::string newName = name.toStdString();
+    const auto captured = m_services.host.snapshot();
+    const auto version = m_services.host.documentVersion();
+    const auto identity = m_services.host.structureIdentity();
+    QPointer<LanguageController> self(this);
+    const auto ordinary = [self, path, position, oldName, newName, searchComments, preview, captured, version,
+                           identity] {
+        if (!self || !captured || fl::documentKey(self->m_services.host.documentPath()) != fl::documentKey(path) ||
+            self->m_services.host.documentVersion() != version || self->m_services.host.structureIdentity() != identity)
+            return;
+        const auto current = self->m_services.host.snapshot();
+        if (!current || !current->sharesStorageWith(*captured) || current->version() != captured->version())
+            return;
+        self->performAcceptedRename(path, position, oldName, newName, searchComments, preview);
+    };
+    if (m_services.combinedBindingRename && m_services.combinedBindingRename(path, position, newName, ordinary))
+        return;
+    ordinary();
+}
+
+void LanguageController::performAcceptedRename(std::string path, fl::LspPosition position, std::string oldName,
+                                               std::string newName, bool searchComments, bool preview) {
     start<fl::WorkspaceEdit>(
         m_renameSlot,
-        [&server = m_services.server, path = m_renamePath, position = m_renamePosition, newName](
-            std::stop_token token) { return fl::requestRename(server, path, position, newName, std::move(token)); },
+        [&server = m_services.server, path, position, newName](std::stop_token token) {
+            return fl::requestRename(server, path, position, newName, std::move(token));
+        },
         [this, searchComments, preview, oldName, newName](Result<fl::WorkspaceEdit> edit) {
             if (!edit) {
                 report(edit.error(), "Rename failed");

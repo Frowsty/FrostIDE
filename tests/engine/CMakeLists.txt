@@ -13,7 +13,9 @@
 #                        build, which the corpus tier never does (tools/corpora.py, "engine").
 frost_add_test(engine_tests
     SOURCES engine_test.cpp command_policy_test.cpp project_content_test.cpp
-    DEPS frost::engine frost::rpc frost::io frost::core
+            binding_index_test.cpp binding_queries_test.cpp binding_preview_test.cpp binding_lua_metadata_test.cpp
+            engine_test_provider_test.cpp crash_artifact_test.cpp
+    DEPS frost::engine frost::lang frost::text frost::sched frost::rpc frost::io frost::core
     LABELS unit)
 target_include_directories(engine_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 
@@ -34,6 +36,41 @@ frost_add_test(engine_session_corpus_tests
     DEPS frost::engine frost::build frost::rpc frost::io frost::core
     LABELS integration corpus)
 frost_configure_engine_corpus_target(engine_session_corpus_tests)
+
+# FER-10 compares discovery, selected/all/failed results and cancellation with the real CLI.
+frost_add_test(engine_test_provider_corpus_tests
+    SOURCES engine_test_provider_corpus_test.cpp
+    DEPS frost::engine frost::build frost::rpc frost::io frost::core
+    LABELS integration corpus)
+frost_configure_engine_corpus_target(engine_test_provider_corpus_tests)
+
+# FEC-13 compares usages with real providers and applies the reviewed preview only in an owned
+# disposable clone before a full engine build/test/exporter oracle. The shared lock spans each case.
+frost_add_test(binding_queries_corpus_tests
+    SOURCES binding_queries_corpus_test.cpp binding_corpus_support.hpp
+    DEPS frost::engine frost::build frost::lang frost::sched frost::text frost::io frost::rpc frost::core
+    LABELS integration corpus clangd luals
+    TIMEOUT 18000)
+frost_configure_engine_corpus_target(binding_queries_corpus_tests)
+target_compile_definitions(binding_queries_corpus_tests PRIVATE
+    FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+    FROST_BINDING_CORPORA_SCRIPT="${FROST_SOURCE_DIR}/tools/corpora.py"
+    FROST_BINDING_REPO_ROOT="${FROST_SOURCE_DIR}"
+    FROST_BINDING_CORPUS_ARTIFACTS="${CMAKE_BINARY_DIR}/binding-corpus-artifacts")
+add_dependencies(binding_queries_corpus_tests frost-clang)
+
+# FER-16 uses the actual contained Windows engine CrashHandler helper and mutual-authentication
+# source correlation; parser fixtures alone cannot establish native minidump acceptance.
+if(WIN32)
+    frost_add_test(engine_crash_artifact_corpus_tests
+        SOURCES crash_artifact_corpus_test.cpp
+        DEPS frost::engine frost::build frost::io frost::rpc frost::core
+        THIRD_PARTY unofficial-sodium::sodium
+        LABELS integration corpus
+        TIMEOUT 18000)
+    frost_configure_engine_corpus_target(engine_crash_artifact_corpus_tests)
+endif()
 
 if(WIN32)
     set(_frost_engine_corpora_lock_file "${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json")

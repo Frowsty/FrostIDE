@@ -22,7 +22,10 @@ frost_add_test(debug_unit_tests
         breakpoints_test.cpp
         coreclr_dap_test.cpp
         dap_client_test.cpp
+        dap_private_test.cpp
+        dbgeng_dap_test.cpp
         debug_session_test.cpp
+        debug_session_multi_test.cpp
         debug_terminate_test.cpp
         debug_session_breakpoints_test.cpp
         lldb_dap_test.cpp
@@ -34,21 +37,100 @@ frost_add_test(debug_unit_tests
         mono_gate_test.cpp
         mono_protocol_session_test.cpp
         mono_transport_test.cpp
-        lua_debug_endpoint_test.cpp
     DEPS frost::debug frost::project frost::text frost::io)
 target_include_directories(debug_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# The Lua DAP conformance suite (lua_dap_conformance_test.cpp, LUA-11a): runs all 30 scenarios
-# against the FrostEngine Lua debug endpoint and luaDebugAdapterFactory with zero skipped cases
-# and checks the live outcomes against lua_dap_conformance_baseline.json.
+# The legacy Lua DAP catalogue/refusal checks do not claim live protocol conformance. The actual
+# locked-engine gates below exercise Debug, Release and Dist, including watchdog and hook safety.
 frost_add_test(lua_dap_conformance_tests
     SOURCES lua_dap_conformance_test.cpp
     DEPS frost::debug frost::io frost::rpc frost::core
     LABELS unit)
 target_include_directories(lua_dap_conformance_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(lua_dap_conformance_tests PRIVATE
-    FROST_LUA_DAP_CONFORMANCE_BASELINE="${CMAKE_CURRENT_SOURCE_DIR}/lua_dap_conformance_baseline.json"
-    FROST_CORPORA_LOCK_PATH="${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json")
+    FROST_LUA_DAP_CONFORMANCE_BASELINE="${CMAKE_CURRENT_SOURCE_DIR}/lua_dap_conformance_baseline.json")
+
+# Authentication tests use actual loopback sockets, including negative transcript vectors.
+frost_add_test(lua_debug_endpoint_tests
+    SOURCES lua_debug_endpoint_test.cpp
+    DEPS frost::debug frost::rpc frost::io frost::core
+    THIRD_PARTY unofficial-sodium::sodium
+    LABELS integration lua)
+target_include_directories(lua_debug_endpoint_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(WIN32)
+    target_link_libraries(lua_debug_endpoint_tests PRIVATE ws2_32)
+endif()
+
+# FER-8/LUA-11 uses the same locked engine SHA as every R6 corpus target. Release and Dist
+# require separately provisioned native engine presets; Debug timing cannot substitute for them.
+include("${FROST_SOURCE_DIR}/tests/support/EngineCorpus.cmake")
+
+# DBG-11 drives actual LLDB native all-stop and the pinned Lua endpoint through the app coordinator.
+if(FROST_BUILD_UI)
+    frost_add_test(engine_mixed_debug_real_corpus_tests QT
+        SOURCES engine_mixed_debug_real_corpus_test.cpp
+        DEPS frost::app frost::ui_debug frost::debug frost::engine frost::build frost::io frost::rpc
+        LABELS integration corpus lldb lua
+        TIMEOUT 18000)
+    frost_configure_engine_corpus_target(engine_mixed_debug_real_corpus_tests)
+    target_include_directories(engine_mixed_debug_real_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/src/app/src)
+    target_compile_definitions(engine_mixed_debug_real_corpus_tests PRIVATE
+        FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/mixed-work"
+        FROST_BUILD_FIXTURES="${FROST_SOURCE_DIR}/tests/build/fixtures")
+endif()
+
+set(_frost_lua_nm "${FROST_LLVM_ROOT}/bin/llvm-nm${CMAKE_EXECUTABLE_SUFFIX}")
+if(NOT EXISTS "${_frost_lua_nm}")
+    message(FATAL_ERROR "the pinned LLVM symbol tool is required for real Lua Dist acceptance: ${_frost_lua_nm}")
+endif()
+if(WIN32)
+    set(_frost_lua_release_preset windows-release)
+    set(_frost_lua_dist_preset windows-dist)
+else()
+    set(_frost_lua_release_preset linux-release)
+    set(_frost_lua_dist_preset linux-dist)
+endif()
+foreach(_frost_lua_gate IN ITEMS conformance release dist)
+    set(_frost_lua_target "lua_dap_real_${_frost_lua_gate}_tests")
+    frost_add_test(${_frost_lua_target}
+        SOURCES lua_dap_real_corpus_test.cpp
+        DEPS frost::debug frost::engine frost::build frost::io frost::rpc frost::core
+        LABELS integration corpus lua
+        TIMEOUT 18000)
+    frost_configure_engine_corpus_target(${_frost_lua_target})
+    target_compile_definitions(${_frost_lua_target} PRIVATE
+        FROST_LUA_REAL_DRIVER="${CMAKE_CURRENT_SOURCE_DIR}/lua_dap_real_driver.py"
+        FROST_LUA_REAL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/lua_real"
+        FROST_LUA_REAL_CATALOGUE="${CMAKE_CURRENT_SOURCE_DIR}/lua_dap_conformance_baseline.json"
+        FROST_LUA_REAL_NM="${_frost_lua_nm}"
+        FROST_LUA_REAL_RELEASE_PRESET="${_frost_lua_release_preset}"
+        FROST_LUA_REAL_MODE="${_frost_lua_gate}")
+    if(_frost_lua_gate STREQUAL "conformance")
+        get_target_property(_frost_lua_debug_preset ${_frost_lua_target} FROST_ENGINE_CORPUS_PRESET)
+        target_compile_definitions(${_frost_lua_target} PRIVATE FROST_LUA_REAL_CONFORMANCE=1
+            FROST_LUA_REAL_ENGINE_PRESET="${_frost_lua_debug_preset}")
+    elseif(_frost_lua_gate STREQUAL "release")
+        target_compile_definitions(${_frost_lua_target} PRIVATE FROST_LUA_REAL_RELEASE=1
+            FROST_LUA_REAL_ENGINE_PRESET="${_frost_lua_release_preset}")
+    else()
+        target_compile_definitions(${_frost_lua_target} PRIVATE FROST_LUA_REAL_DIST=1
+            FROST_LUA_REAL_ENGINE_PRESET="${_frost_lua_dist_preset}")
+    endif()
+endforeach()
+
+if(WIN32)
+    # Helpers build in the pinned engine; the IDE links none of its archives or CRT.
+    frost_add_test(debug_dbgeng_real_tests
+        SOURCES dbgeng_real_test.cpp
+        DEPS frost::debug frost::engine frost::build frost::rpc frost::io frost::core
+        LABELS integration corpus dbgeng
+        TIMEOUT 18000)
+    frost_configure_engine_corpus_target(debug_dbgeng_real_tests)
+    target_include_directories(debug_dbgeng_real_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(debug_dbgeng_real_tests PRIVATE
+        FROST_DBGENG_ADAPTER_PATH="$<TARGET_FILE:frost-dbgeng-dap>")
+    add_dependencies(debug_dbgeng_real_tests frost-dbgeng-dap)
+endif()
 
 # The debuggee: a plain C++ program without frost code, built without optimisation and with full
 # debug information so lldb sees its lines and locals.

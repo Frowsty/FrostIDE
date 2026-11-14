@@ -27,7 +27,10 @@
 #include "frost/ui/tr.hpp"
 
 #include "cmake_integration.hpp"
+#include "engine_binding_integration.hpp"
 #include "engine_integration.hpp"
+#include "engine_mixed_launch.hpp"
+#include "engine_run_debug.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "project_edit_process.hpp"
@@ -433,6 +436,13 @@ void Workbench::offerProjectTrust() {
 // NOLINTNEXTLINE(performance-unnecessary-value-param): Own identities across reentrant project callbacks.
 void Workbench::setProject(std::string root, QString name, std::string recentPath) {
     invalidateManagedDebug();
+    cancelEngineTestDebugPreparation();
+    if (m_engineBindings)
+        m_engineBindings->cancel();
+    if (m_engineRunDebug)
+        m_engineRunDebug->cancel();
+    if (m_engineMixedLaunch)
+        m_engineMixedLaunch->cancel();
     cancelFind();
     if (!m_resourceGovernor)
         m_resourceGovernor = std::make_shared<sched::ResourceGovernor>();
@@ -476,7 +486,16 @@ bool Workbench::closeForOpen() {
         return false;
     }
     m_language->structureChanged();
+    cancelEngineTestDebugPreparation();
     invalidateManagedDebug();
+    if (m_engineBindings)
+        m_engineBindings->cancel();
+    if (m_engineRunDebug)
+        m_engineRunDebug->cancel();
+    if (m_engineMixedLaunch)
+        m_engineMixedLaunch->cancel();
+    if (m_engineLuaDebug)
+        m_engineLuaDebug->cancel();
     if (m_engine)
         m_engine->cancel();
     if (m_unity)
@@ -486,7 +505,7 @@ bool Workbench::closeForOpen() {
     }
     // Check the services themselves: the controller's queued state can lag a newly started build.
     // Keep the current project and its tabs intact until the user stops the build or run.
-    if ((m_debug && m_debug->debugging()) ||
+    if (anyDebugSessionActive() ||
         (m_solution && (m_buildService->state() != build::BuildState::Idle || !m_runService->activeRuns().empty())) ||
         (m_cmake && (m_cmake->service().state() != build::BuildState::Idle || m_cmake->running()))) {
         notify(text("The project stays open"), text("Stop the build and running programs before closing the project."),
