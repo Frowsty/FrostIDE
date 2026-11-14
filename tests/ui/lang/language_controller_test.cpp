@@ -1727,14 +1727,14 @@ TEST(LanguageControllerRefactoring, CppFeaturesNeverTouchLuaFiles) {
     EXPECT_FALSE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier)); // No postfix template.
     rig.controller.surroundWith();
     rig.controller.completeStatement();
-    rig.controller.insertLiveTemplate();
+
     rig.controller.optimizeImports();
     rig.controller.extractVariable();
     rig.controller.generateCode();
     EXPECT_EQ(host.text(), original);
     EXPECT_EQ(host.undoSteps, 0);
     EXPECT_FALSE(rig.controller.choicePopup().isVisible());
-    EXPECT_EQ(status.size(), 6U);
+    EXPECT_EQ(status.size(), 5U);
     EXPECT_TRUE(server.paramsOf("textDocument/codeAction").empty());
 
     frost::input::ActionRegistry registry;
@@ -1742,7 +1742,7 @@ TEST(LanguageControllerRefactoring, CppFeaturesNeverTouchLuaFiles) {
     frost::input::ActionContext inEditor;
     inEditor.keys.set(frost::input::ContextKey::EditorFocus);
     for (const char* id :
-         {"code.surroundWith", "code.completeStatement", "code.insertLiveTemplate", "code.optimizeImports",
+         {"code.surroundWith", "code.completeStatement", "code.optimizeImports",
           "refactor.extractVariable", "refactor.extractMethod", "code.generate", "code.implementMethods"}) {
         EXPECT_FALSE(registry.isEnabled(*registry.find(id), inEditor)) << id;
     }
@@ -2040,6 +2040,21 @@ TEST(LanguageControllerTemplates, ClosingControllerDuringAuthorPromptDoesNotAppl
     });
     popup.chosen(selected);
     EXPECT_FALSE(rig); EXPECT_TRUE(host.text().empty());
+}
+}
+}namespace frost::ui::lang {
+namespace {
+TEST(LanguageControllerLuaTemplates, LuaModuleUsesSharedLivePickerAndLinkedReturnBinding) {
+    FeatureServer server; FakeHost host("",workPath("module.lua")); Rig rig(server,host);
+    rig.controller.insertLiveTemplate(); auto& popup=rig.controller.choicePopup(); ASSERT_TRUE(popup.isVisible());
+    std::size_t row=static_cast<std::size_t>(popup.list()->count());
+    for(int i=0;i<popup.list()->count();++i) if(popup.list()->item(i)->text()==QStringLiteral("module table")) row=static_cast<std::size_t>(i);
+    ASSERT_LT(row,static_cast<std::size_t>(popup.list()->count())); popup.chosen(row);
+    ASSERT_TRUE(host.selected); const auto range=*host.selected;
+    fl::ByteEdit rename{range,"Module"}; ASSERT_TRUE(host.applyEdits(std::span(&rename,1),"Edit template binding",ByteOffset{range.begin.value()+6}));
+    ASSERT_TRUE(rig.controller.keyPress(Qt::Key_Tab,Qt::NoModifier));
+    EXPECT_EQ(host.text(),"local Module = {}\n\n\n\nreturn Module");
+    EXPECT_TRUE(host.selected && host.selected->empty());
 }
 }
 }

@@ -65,3 +65,13 @@ TEST(Templates, AdjacentEmptyPlaceholdersHaveRightInsertionAffinity) {
     EXPECT_EQ(mirrored->next.expected.text,"xx");
     EXPECT_EQ(mirrored->selection->begin,2); EXPECT_EQ(mirrored->selection->end,2);
 }
+TEST(TemplatesLua, CatalogueHasLuaStructuresAndFileModuleUsesActualAuthor) {
+    for(const auto* id:{"lua.function","lua.if","lua.for","lua.pairs","lua.ipairs","lua.repeat","lua.module","lua.pcall"}) {
+        const auto* definition=lang::findTemplate(id); ASSERT_NE(definition,nullptr);
+        EXPECT_EQ(definition->language,"lua"); auto expanded=lang::expandTemplate(definition->body,{}); ASSERT_TRUE(expanded);
+        EXPECT_FALSE(expanded->parsed.tabStops.empty());
+    }
+    auto module=lang::expandTemplate(lang::findTemplate("file.lua.module")->body,{{"CLASS","Module"},{"AUTHOR","Actual Author"},{"DESCRIPTION","Actual module"}});
+    ASSERT_TRUE(module); EXPECT_NE(module->parsed.text.find("@author Actual Author"),std::string::npos);
+    EXPECT_NE(module->parsed.text.find("return Module"),std::string::npos);
+}
