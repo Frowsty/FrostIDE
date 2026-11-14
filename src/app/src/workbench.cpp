@@ -244,6 +244,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
         checkCppRename(std::move(path), position, std::move(name), std::move(required), std::move(offered), cancel,
                        std::move(done));
     });
+    m_language->setCppAstRefactoring([this](std::string operation) { showCppRefactoring(std::move(operation)); });
+    m_language->setCppSemanticEditFactory([this] { return beginCppProviderRefactoring(); });
     if (auto registered = m_language->registerActions(m_registry); !registered) {
         log::warn(kLog, "language actions: {}", registered.error().describe());
     }

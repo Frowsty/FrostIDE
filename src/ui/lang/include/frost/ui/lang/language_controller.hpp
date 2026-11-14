@@ -48,6 +48,7 @@
 #include <QPointer>
 #include <QTimer>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -118,6 +119,12 @@ public:
     void setCppRenameCheck(decltype(LanguageServices::cppRenameCheck) check) {
         m_services.cppRenameCheck = std::move(check);
     }
+    // App-owned custom AST operations. Stock clangd extraction remains authoritative for its
+    // broader applicable selections; the callback never supplies guessed WorkspaceEdits.
+    void setCppAstRefactoring(std::function<void(std::string)> handler) { m_cppAstRefactoring = std::move(handler); }
+    using SemanticApply = std::function<Result<void>(const ::frost::lang::WorkspaceEdit&)>;
+    using SemanticBegin = std::function<Result<SemanticApply>()>;
+    void setCppSemanticEditFactory(SemanticBegin begin) { m_cppSemanticBegin = std::move(begin); }
     LanguageController(const LanguageController&) = delete ("owns popups and request slots");
     LanguageController& operator=(const LanguageController&) = delete ("owns popups and request slots");
 
@@ -281,8 +288,8 @@ private:
     void requestSignatureHelp(std::optional<char> trigger);
     void requestWorkspaceSymbols(const QString& query);
     void applyWorkspaceEdit(const ::frost::lang::WorkspaceEdit& edit, const QString& label);
-    void executeServerCommand(std::string commandName, std::vector<::frost::lang::Json> arguments,
-                              const QString& label);
+    void executeServerCommand(std::string commandName, std::vector<::frost::lang::Json> arguments, const QString& label,
+                              std::shared_ptr<SemanticApply> semantic = {});
     void initServiceHooks();
     void onRenameAccepted(const QString& name);
     void performAcceptedRename(std::string path, ::frost::lang::LspPosition position, std::string oldName,
@@ -302,7 +309,7 @@ private:
     // the status bar when clangd does not offer it there. C++ only (capabilities().clangdTweaks).
     void runClangdTweak(std::string_view tweakId, const QString& label, const QString& none);
     // A server code action: its edit through the applier, then its command on the server.
-    void runCodeAction(::frost::lang::CodeActionItem action);
+    void runCodeAction(::frost::lang::CodeActionItem action, std::shared_ptr<SemanticApply> semantic = {});
     // A command without a correct engine for the active document: `reason` names the owning epic.
     void unavailable(const QString& reason);
     // `none` plus why the server may have found nothing (ServerReadiness).
@@ -314,6 +321,10 @@ private:
     void showTypeHierarchy(bool subtypes);
 
     LanguageServices m_services;
+    std::function<void(std::string)> m_cppAstRefactoring;
+    SemanticBegin m_cppSemanticBegin;
+    std::atomic<std::shared_ptr<SemanticApply>> m_cppSemanticApply;
+    bool m_cppSemanticCommand = false; // GUI-thread serialization until the terminal command response.
     std::unique_ptr<CompletionPopup> m_completion;
     std::unique_ptr<ParameterInfoPopup> m_parameterInfo;
     std::unique_ptr<QuickDocPopup> m_quickDoc;
@@ -347,6 +358,8 @@ private:
     sched::LatestWins m_symbolSlot;
     sched::LatestWins m_renameSlot;
     sched::LatestWins m_actionSlot;
+    sched::LatestWins
+        m_semanticCommandSlot; // Not cancelled by caret/document changes; admission refuses stale effects.
     sched::LatestWins m_formatSlot;
     sched::LatestWins m_hierarchySlot;
     sched::LatestWins m_astSlot;
