@@ -199,15 +199,20 @@ TEST_F(ProjectRename, InteriorCaretMapsToRenamedTokenForBothShorteningAndGrowth)
     }
 }
 TEST_F(ProjectRename, ReorderedTranslationUnitsKeepTheEntireVirtualChain) {
-    const std::string header = "#pragma once\nstruct A{virtual int tick(){return 1;}}; struct B:A{int tick() "
-                               "override{return 2;}}; struct C:B{int tick() override{return 3;}};\n";
-    auto result = plan({{"chain.h", header},
-                        {"last.cpp", "#include \"chain.h\"\nint last(C& c){return c.tick();}"},
-                        {"first.cpp", "#include \"chain.h\"\nint first(A& a){return a.tick();}"},
-                        {"middle.cpp", "#include \"chain.h\"\nint middle(B& b){return b.tick();}"}},
-                       {"last.cpp", "first.cpp", "middle.cpp"}, "chain.h", header.find("tick"), "next");
+    // Alternate configurations split the graph: the first command observes B-C but
+    // not the selected A declaration; later commands observe A-B but never C.
+    const std::string a = "#pragma once\nstruct A{virtual int tick(){return 1;}};\n";
+    const std::string b = "#pragma once\n#ifdef TOP\n#include \"a.h\"\nstruct B:A{int tick() override{return "
+                          "2;}};\n#else\nstruct B{virtual int tick(){return 2;}};\n#endif\n";
+    auto result = plan({{"a.h", a},
+                        {"b.h", b},
+                        {"c.h", "#pragma once\n#include \"b.h\"\nstruct C:B{int tick() override{return 3;}};\n"},
+                        {"last.cpp", "#include \"c.h\"\nint last(C& c){return c.tick();}"},
+                        {"first.cpp", "#define TOP\n#include \"b.h\"\nint first(A& a){return a.tick();}"},
+                        {"middle.cpp", "#define TOP\n#include \"b.h\"\nint middle(B& b){return b.tick();}"}},
+                       {"last.cpp", "first.cpp", "middle.cpp"}, "a.h", a.find("tick"), "next");
     ASSERT_EQ(result.stringAt("status"), "ready");
-    for (const auto& name : {"chain.h", "last.cpp", "first.cpp", "middle.cpp"}) {
+    for (const auto& name : {"a.h", "b.h", "c.h", "last.cpp", "first.cpp", "middle.cpp"}) {
         const auto* changed = image(result, name);
         ASSERT_NE(changed, nullptr);
         EXPECT_EQ(changed->stringAt("after").find("tick"), std::string_view::npos);
