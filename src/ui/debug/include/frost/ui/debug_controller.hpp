@@ -284,6 +284,8 @@ public:
     using EvaluateDone = std::function<void(Result<debug::dap::Variable>)>;
     using DisassembleDone = std::function<void(Result<std::vector<debug::dap::DisassembledInstruction>>)>;
     using ReadMemoryDone = std::function<void(Result<debug::dap::ReadMemoryResult>)>;
+    using InspectionDone = debug::DebugSession::InspectionDone;
+    std::int64_t requestInspection(std::string command, rpc::Json arguments, InspectionDone done);
     void scopes(std::int64_t frameId, ScopesDone done);
     void variables(std::int64_t reference, std::int64_t start, std::int64_t count, VariablesDone done);
     // Evaluates in the selected frame.

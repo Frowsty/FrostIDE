@@ -475,6 +475,7 @@ void DebugToolWindow::wireControllerSignals() {
         }
     });
     connect(&m_controller, &DebugController::frameSelected, this, [this] {
+        ++m_disassemblyRequest; ++m_memoryRequest;
         if (m_memoryAddressInput && m_controller.selectedFrame())
             m_memoryAddressInput->setText(qs(m_controller.selectedFrame()->instructionPointerReference));
         if (m_disassemblyTree) m_disassemblyTree->clear();
@@ -524,6 +525,7 @@ void DebugToolWindow::updateActions() {
         m_readMemoryButton->setToolTip(QStringLiteral("Requires adapter memory-read support"));
     }
     if (!paused) {
+        ++m_disassemblyRequest; ++m_memoryRequest;
         if (m_disassemblyTree) m_disassemblyTree->clear();
         if (m_memoryView) m_memoryView->clear();
         if (m_memoryAddressInput) m_memoryAddressInput->clear();
@@ -663,8 +665,9 @@ void DebugToolWindow::requestDisassembly() {
         return;
     }
     QPointer<DebugToolWindow> self(this);
-    m_controller.disassemble(ref, 64, [self](Result<std::vector<debug::dap::DisassembledInstruction>> res) {
-        if (!self || self->m_disassemblyTree == nullptr) {
+    const auto request = ++m_disassemblyRequest;
+    m_controller.disassemble(ref, 64, [self, request](Result<std::vector<debug::dap::DisassembledInstruction>> res) {
+        if (!self || self->m_disassemblyRequest != request || self->m_disassemblyTree == nullptr) {
             return;
         }
         self->m_disassemblyTree->clear();
@@ -693,8 +696,9 @@ void DebugToolWindow::requestMemoryDump() {
         return;
     }
     QPointer<DebugToolWindow> self(this);
-    m_controller.readMemory(ref, 256, [self](Result<debug::dap::ReadMemoryResult> res) {
-        if (!self || self->m_memoryView == nullptr) {
+    const auto request = ++m_memoryRequest;
+    m_controller.readMemory(ref, 256, [self, request](Result<debug::dap::ReadMemoryResult> res) {
+        if (!self || self->m_memoryRequest != request || self->m_memoryView == nullptr) {
             return;
         }
         if (!res) {

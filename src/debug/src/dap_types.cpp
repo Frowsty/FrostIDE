@@ -102,6 +102,11 @@ Capabilities mergeCapabilities(Capabilities caps, const rpc::Json& body) {
     mergeFlag(caps.supportsSingleThreadExecutionRequests, source, "supportsSingleThreadExecutionRequests");
     mergeFlag(caps.supportsValueFormattingOptions, source, "supportsValueFormattingOptions");
     mergeFlag(caps.frostSupportsThreadFreeze, source, "frostSupportsThreadFreeze");
+    mergeFlag(caps.supportsModulesRequest, source, "supportsModulesRequest");
+    mergeFlag(caps.frostSupportsSymbolControl, source, "frostSupportsSymbolControl");
+    mergeFlag(caps.frostSupportsSourceMap, source, "frostSupportsSourceMap");
+    mergeFlag(caps.frostSupportsNatvisReload, source, "frostSupportsNatvisReload");
+
 
     if (const rpc::Json* filters = source.find("exceptionBreakpointFilters");
         filters != nullptr && filters->isArray()) {

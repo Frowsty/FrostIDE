@@ -366,6 +366,8 @@ public:
     using InspectionDone = std::function<void(Result<rpc::Json>)>;
     // Capability-gated stopped inspection; references expire on resume, stop or selection change.
     std::int64_t stepInTargets(InspectionDone done);
+    // Bounded, explicit inspection allowlist; command-specific capabilities still govern admission.
+    std::int64_t requestInspection(std::string command, rpc::Json arguments, InspectionDone done);
     std::int64_t setThreadFrozen(std::int64_t threadId, bool frozen, InspectionDone done);
     std::int64_t dataBreakpointInfo(std::int64_t reference, std::string name, InspectionDone done);
     // Replaces the complete adapter data-breakpoint set, following DAP semantics.

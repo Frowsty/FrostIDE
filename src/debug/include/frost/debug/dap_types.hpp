@@ -55,6 +55,10 @@ struct Capabilities {
     bool supportsSingleThreadExecutionRequests = false;
     bool supportsValueFormattingOptions = false;
     bool frostSupportsThreadFreeze = false;
+    bool supportsModulesRequest = false;
+    bool frostSupportsSymbolControl = false;
+    bool frostSupportsSourceMap = false;
+    bool frostSupportsNatvisReload = false;
     std::vector<ExceptionFilter> exceptionBreakpointFilters{};
 };
 

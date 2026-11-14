@@ -274,6 +274,21 @@ void DebugController::loadMoreFrames() {
     }
 }
 
+std::int64_t DebugController::requestInspection(std::string command, rpc::Json arguments, InspectionDone done) {
+    if (!m_session) { done(fail(ErrorCode::Busy, "No debugger session")); return 0; }
+    const auto relay = m_relay;
+    const auto generation = m_generation;
+    const auto epoch = m_session->inspectionGeneration();
+    const bool modules = command == "modules";
+    return m_session->requestInspection(std::move(command), std::move(arguments),
+        [relay, generation, epoch, modules, done = std::move(done)](Result<rpc::Json> body) {
+            relay->post(generation, [epoch, modules, done, body = std::move(body)](DebugController* self) mutable {
+                if (modules && (!self->m_session || !self->paused() || self->m_session->inspectionGeneration() != epoch)) return;
+                done(std::move(body));
+            });
+        });
+}
+
 void DebugController::scopes(std::int64_t frameId, ScopesDone done) {
     if (!m_session) {
         return;
@@ -400,10 +415,16 @@ void DebugController::disassemble(const QString& memoryReference, int instructio
     }
     const std::shared_ptr<Relay> relay = m_relay;
     const std::uint64_t generation = m_generation;
+    const auto epoch = m_session->inspectionGeneration();
+    const auto thread = m_thread;
+    const auto frame = m_frame ? std::optional(m_frame->id) : std::nullopt;
     m_session->disassemble(
         memoryReference.trimmed().toStdString(), instructionCount,
-        [relay, generation, done = std::move(done)](Result<std::vector<debug::dap::DisassembledInstruction>> res) {
-            relay->post(generation, [done, res = std::move(res)](DebugController*) mutable {
+        [relay, generation, epoch, thread, frame, done = std::move(done)](Result<std::vector<debug::dap::DisassembledInstruction>> res) {
+            relay->post(generation, [done, epoch, thread, frame, res = std::move(res)](DebugController* self) mutable {
+                if (!self->m_session || !self->paused() || self->m_session->inspectionGeneration() != epoch ||
+                    self->m_thread != thread || (self->m_frame ? std::optional(self->m_frame->id) : std::nullopt) != frame)
+                    return;
                 if (done) {
                     done(std::move(res));
                 }
@@ -417,9 +438,15 @@ void DebugController::readMemory(const QString& memoryReference, int count, Read
     }
     const std::shared_ptr<Relay> relay = m_relay;
     const std::uint64_t generation = m_generation;
+    const auto epoch = m_session->inspectionGeneration();
+    const auto thread = m_thread;
+    const auto frame = m_frame ? std::optional(m_frame->id) : std::nullopt;
     m_session->readMemory(memoryReference.trimmed().toStdString(), count,
-                          [relay, generation, done = std::move(done)](Result<debug::dap::ReadMemoryResult> res) {
-                              relay->post(generation, [done, res = std::move(res)](DebugController*) mutable {
+                          [relay, generation, epoch, thread, frame, done = std::move(done)](Result<debug::dap::ReadMemoryResult> res) {
+                              relay->post(generation, [done, epoch, thread, frame, res = std::move(res)](DebugController* self) mutable {
+                if (!self->m_session || !self->paused() || self->m_session->inspectionGeneration() != epoch ||
+                    self->m_thread != thread || (self->m_frame ? std::optional(self->m_frame->id) : std::nullopt) != frame)
+                    return;
                                   if (done) {
                                       done(std::move(res));
                                   }

@@ -112,6 +112,23 @@ std::int64_t DebugSession::stepInTargets(InspectionDone done) {
         });
 }
 
+std::int64_t DebugSession::requestInspection(std::string command, rpc::Json arguments, InspectionDone done) {
+    const auto caps = capabilities();
+    const bool supported = (command == "modules" && caps.supportsModulesRequest) ||
+        ((command == "frost.setSymbolPaths" || command == "frost.reloadSymbols") && caps.frostSupportsSymbolControl) ||
+        (command == "frost.setSourceMap" && caps.frostSupportsSourceMap) ||
+        (command == "frost.reloadNatvis" && caps.frostSupportsNatvisReload);
+    if (!supported) { done(fail(ErrorCode::Unsupported, "Adapter does not support this inspection operation")); return 0; }
+    if (!arguments.isObject() || arguments.dump().size() > 65536) {
+        done(fail(ErrorCode::InvalidArgument, "Inspection arguments must be a bounded object")); return 0;
+    }
+    if (command == "modules") return m_state->inspect(std::move(command), std::move(arguments), std::move(done));
+    // Symbol paths/maps/visualizer reload change adapter inspection configuration. Their successful
+    // ACK stays authoritative across frame selection, unlike frame-scoped inspection data.
+    if (state() != DebugState::Stopped) { done(fail(ErrorCode::Busy, "Pause before changing debugger inspection settings")); return 0; }
+    return m_state->send(std::move(command), std::move(arguments), std::move(done));
+}
+
 std::int64_t DebugSession::setThreadFrozen(std::int64_t threadId, bool frozen, InspectionDone done) {
     std::optional<Error> error;
     {

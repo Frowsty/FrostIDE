@@ -50,6 +50,11 @@ TEST(DebugDepthSession, MissingCapabilitiesRefuseWithoutSendingOptionalRequests)
         ASSERT_FALSE(result); EXPECT_EQ(result.error().code(), ErrorCode::Unsupported);
     });
     EXPECT_TRUE(adapter.argumentsOf("frost.setThreadFrozen").empty());
+    session->requestInspection("evaluate", rpc::Json::object().set("expression", "sideEffect()"),
+        [&](Result<rpc::Json> result) {
+            ASSERT_FALSE(result); EXPECT_EQ(result.error().code(), ErrorCode::Unsupported);
+        });
+    EXPECT_TRUE(adapter.argumentsOf("evaluate").empty());
     session->readMemory("opaque", 16, [&](Result<dap::ReadMemoryResult> result) {
         ASSERT_FALSE(result); EXPECT_EQ(result.error().code(), ErrorCode::Unsupported);
     });

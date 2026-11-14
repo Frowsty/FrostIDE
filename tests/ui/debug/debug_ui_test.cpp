@@ -33,6 +33,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
@@ -196,6 +197,37 @@ TEST_F(DebugUiTest, SelectedGdbRoutesLaunchAndAttachThroughVersionAdmission) {
     EXPECT_EQ(launcher.launches().size(), 2U);
 }
 #endif
+// R9 fixture: LLDB returns register groups whose children hold the actual register values.
+// A flat first-level register pane would show only "General Purpose Registers" and fail here.
+TEST_F(DebugUiTest, RegisterGroupsLoadActualRegistersOnlyWhenExpanded) {
+    ASSERT_TRUE(breakpoints.add(source, 10));
+    debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .codeLines = {10}});
+    adapter.on("variables", [](const rpc::Json& arguments) {
+        auto values = rpc::Json::array();
+        if (arguments.integerAt("variablesReference") == 900)
+            values.push(rpc::Json::object().set("name", "General Purpose Registers").set("value", "")
+                .set("variablesReference", 901));
+        if (arguments.integerAt("variablesReference") == 901)
+            values.push(rpc::Json::object().set("name", "rax").set("value", "0x000000000000002a")
+                .set("type", "unsigned long long").set("variablesReference", 0));
+        return debug::FakeDebugAdapter::Reply{.body = rpc::Json::object().set("variables", std::move(values))};
+    });
+    DebugToolWindow window(*controller);
+    ASSERT_TRUE(controller->startTarget(target()));
+    ASSERT_TRUE(spinUntil([&] { return controller->paused() && controller->selectedFrame().has_value(); }));
+    auto* load = window.findChild<QPushButton*>(QStringLiteral("debugLoadRegisters"));
+    auto* registers = window.findChild<QTreeWidget*>(QStringLiteral("debugRegisters"));
+    ASSERT_NE(load, nullptr); ASSERT_NE(registers, nullptr);
+    load->click();
+    ASSERT_TRUE(spinUntil([&] { return registers->topLevelItemCount() == 1; }));
+    auto* group = registers->topLevelItem(0);
+    EXPECT_EQ(group->text(0), QStringLiteral("General Purpose Registers"));
+    registers->expandItem(group);
+    ASSERT_TRUE(spinUntil([&] { return group->childCount() == 1 && group->child(0)->text(0) == QStringLiteral("rax"); }));
+    EXPECT_EQ(group->child(0)->text(1), QStringLiteral("0x000000000000002a"));
+    stopSession();
+}
+
 TEST_F(DebugUiTest, ConfiguredSourceMapIsValidatedBeforeLaunchingTheAdapter) {
     std::pair<std::string, std::string> mapping{"relative", workPath("Trusted")};
     DebugControllerOptions options{

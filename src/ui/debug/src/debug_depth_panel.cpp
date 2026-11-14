@@ -9,6 +9,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QTreeWidget>
 #include <QStringList>
 #include <QVBoxLayout>
@@ -43,7 +44,14 @@ auto deliver(DebugController& controller, QWidget* owner, Done done, bool select
 }
 DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("debugDepthPanel"));
-    auto* layout = new QVBoxLayout(this);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    auto* scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    auto* contents = new QWidget(scroll);
+    auto* layout = new QVBoxLayout(contents);
+    scroll->setWidget(contents);
+    outer->addWidget(scroll);
     auto* hex = new QCheckBox(QStringLiteral("Hexadecimal values"), this);
     hex->setChecked(controller.hexadecimalValues());
     connect(hex, &QCheckBox::toggled, &controller, &DebugController::setHexadecimalValues);
@@ -55,6 +63,7 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     auto* step = new QPushButton(QStringLiteral("Step into selected call"), this);
     auto* registers = new QTreeWidget(this);
     registers->setObjectName(QStringLiteral("debugRegisters"));
+    registers->setMinimumHeight(160);
     registers->setHeaderLabels({QStringLiteral("Register"), QStringLiteral("Value"), QStringLiteral("Type")});
     auto* instruction = new QPushButton(QStringLiteral("Step one instruction"), this);
     connect(instruction, &QPushButton::clicked, this, [&controller, status] {
@@ -78,6 +87,7 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     connect(freeze, &QPushButton::clicked, this, [setFrozen] { setFrozen(true); });
     connect(thaw, &QPushButton::clicked, this, [setFrozen] { setFrozen(false); });
     auto* loadRegisters = new QPushButton(QStringLiteral("Load registers"), this);
+    loadRegisters->setObjectName(QStringLiteral("debugLoadRegisters"));
     auto* form = new QFormLayout;
     auto* reference = m_reference = new QLineEdit(this);
     reference->hide();
@@ -90,6 +100,7 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     auto* clear = new QPushButton(QStringLiteral("Clear hardware watchpoints"), this);
     auto dataId = std::make_shared<std::string>();
     auto selection = std::make_shared<std::uint64_t>(0);
+    auto registerEpoch = std::make_shared<std::uint64_t>(0);
     form->addRow(QStringLiteral("Variable name"), name);
     form->addRow(QStringLiteral("Access"), access);
     layout->addWidget(status);
@@ -99,7 +110,8 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     layout->addWidget(freeze); layout->addWidget(thaw);
     layout->addWidget(loadRegisters); layout->addWidget(registers, 1);
     layout->addLayout(form); layout->addWidget(info); layout->addWidget(install); layout->addWidget(clear);
-    auto update = [&controller, status, refresh, calls, step, loadRegisters, registers, info, install, clear, access, dataId, selection, reference, name, hex, instruction, freeze, thaw] {
+    auto update = [&controller, status, refresh, calls, step, loadRegisters, registers, info, install, clear, access, dataId, selection, reference, name, hex, instruction, freeze, thaw, registerEpoch] {
+        ++*registerEpoch;
         ++*selection; reference->clear(); name->clear();
         calls->clear(); registers->clear(); access->clear(); dataId->clear();
         const auto* session = controller.session();
@@ -141,23 +153,56 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
         if (auto result = controller.session()->stepIntoTarget(calls->currentData().toLongLong()); !result)
             status->setText(QString::fromStdString(result.error().message()));
     });
-    connect(loadRegisters, &QPushButton::clicked, this, [this, &controller, registers, status] {
-        if (!controller.selectedFrame()) return;
-        registers->clear();
-        controller.scopes(controller.selectedFrame()->id, deliver<debug::ScopeList>(controller, this, [this, &controller, registers, status](Result<debug::ScopeList> scopes) {
-            if (!scopes) { status->setText(QString::fromStdString(scopes.error().message())); return; }
-            bool found = false;
-            for (const auto& scope : *scopes) if (scope.presentationHint == "registers") {
-                found = true;
-                controller.variables(scope.variablesReference, 0, 256, deliver<debug::VariableList>(controller, this, [registers, status](Result<debug::VariableList> values) {
-                    if (!values) { status->setText(QString::fromStdString(values.error().message())); return; }
-                    for (const auto& value : *values) new QTreeWidgetItem(registers, {QString::fromStdString(value.name),
-                        QString::fromStdString(value.value), QString::fromStdString(value.type)});
+    auto populateRegisters = [registers](QTreeWidgetItem* parent, const debug::VariableList& values) {
+        for (const auto& value : values) {
+            auto* item = new QTreeWidgetItem({QString::fromStdString(value.name),
+                QString::fromStdString(value.value), QString::fromStdString(value.type)});
+            if (parent) parent->addChild(item); else registers->addTopLevelItem(item);
+            item->setData(0, Qt::UserRole, QVariant::fromValue<qlonglong>(value.variablesReference));
+            if (value.variablesReference > 0) new QTreeWidgetItem(item, {QStringLiteral("Expand to load registers")});
+        }
+    };
+    connect(registers, &QTreeWidget::itemExpanded, this,
+        [this, &controller, status, registerEpoch, populateRegisters](QTreeWidgetItem* item) {
+            const auto reference = item->data(0, Qt::UserRole).toLongLong();
+            if (reference <= 0 || item->data(0, Qt::UserRole + 1).toBool()) return;
+            item->setData(0, Qt::UserRole + 1, true);
+            const auto epoch = *registerEpoch;
+            controller.variables(reference, 0, 256, deliver<debug::VariableList>(controller, this,
+                [item, status, registerEpoch, epoch, populateRegisters](Result<debug::VariableList> values) {
+                    if (*registerEpoch != epoch) return;
+                    while (item->childCount()) delete item->takeChild(0);
+                    if (!values) {
+                        item->setData(0, Qt::UserRole + 1, false);
+                        status->setText(QString::fromStdString(values.error().message()));
+                        new QTreeWidgetItem(item, {QStringLiteral("Expand to retry")});
+                        return;
+                    }
+                    populateRegisters(item, *values);
                 }));
-            }
-            if (!found) status->setText(QStringLiteral("The adapter exposes no registers scope for this frame."));
-        }));
-    });
+        });
+    connect(loadRegisters, &QPushButton::clicked, this,
+        [this, &controller, registers, status, registerEpoch, populateRegisters] {
+            if (!controller.selectedFrame()) return;
+            const auto epoch = ++*registerEpoch;
+            registers->clear();
+            controller.scopes(controller.selectedFrame()->id, deliver<debug::ScopeList>(controller, this,
+                [this, &controller, status, registerEpoch, epoch, populateRegisters](Result<debug::ScopeList> scopes) {
+                    if (*registerEpoch != epoch) return;
+                    if (!scopes) { status->setText(QString::fromStdString(scopes.error().message())); return; }
+                    bool found = false;
+                    for (const auto& scope : *scopes) if (scope.presentationHint == "registers") {
+                        found = true;
+                        controller.variables(scope.variablesReference, 0, 256, deliver<debug::VariableList>(controller, this,
+                            [status, registerEpoch, epoch, populateRegisters](Result<debug::VariableList> values) {
+                                if (*registerEpoch != epoch) return;
+                                if (!values) { status->setText(QString::fromStdString(values.error().message())); return; }
+                                populateRegisters(nullptr, *values);
+                            }));
+                    }
+                    if (!found) status->setText(QStringLiteral("The adapter exposes no registers scope for this frame."));
+                }));
+        });
     auto invalidate = [dataId, install, access, selection] { ++*selection; dataId->clear(); install->setEnabled(false); access->clear(); };
     connect(name, &QLineEdit::textChanged, this, invalidate);
     connect(reference, &QLineEdit::textChanged, this, invalidate);

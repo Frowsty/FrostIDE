@@ -139,6 +139,8 @@ private:
     QPushButton* m_readMemoryButton = nullptr;
     QTreeWidget* m_disassemblyTree = nullptr;
     QPlainTextEdit* m_memoryView = nullptr;
+    std::uint64_t m_disassemblyRequest = 0;
+    std::uint64_t m_memoryRequest = 0;
     bool m_fillingThreads = false;
     bool m_fillingBreakpoints = false;
     bool m_editingBreakpoint = false; // Inside the list's itemChanged: rebuild it later.
