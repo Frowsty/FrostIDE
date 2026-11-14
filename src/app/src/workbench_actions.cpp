@@ -66,6 +66,8 @@ void Workbench::registerActions() {
             log::warn(kLog, "action {}: {}", id, added.error().describe());
         }
     };
+    add("project.dependencies", "Install or Restore Dependencies...", [this] { showDependencies(); },
+        [this] { return hasProject() && !anyDebugSessionActive(); });
     input::ActionSpec checkUpdate;
     checkUpdate.id = "help.checkForUpdates";
     checkUpdate.name = "Check for Updates...";

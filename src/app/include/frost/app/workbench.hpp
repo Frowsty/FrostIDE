@@ -780,6 +780,7 @@ private:
     void checkCppRename(std::string path, lang::LspPosition position, std::string newName, lang::WorkspaceEdit required,
                         lang::WorkspaceEdit offered, std::stop_token cancel, std::function<void(Result<void>)> done);
     [[nodiscard]] Result<void> admitCppRename(const lang::WorkspaceEdit& selected, document::RefactoringPlan& plan);
+    void showDependencies();
     void createBuildService();
     void createRunService();
     // Run configurations (RUN-2/RUN-3, workbench_run_configurations.cpp): the generated ones of the
