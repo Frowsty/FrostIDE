@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Standalone real-framework fixture. Configure/build only when explicitly running acceptance later.
+cmake_minimum_required(VERSION 3.24)
+project(FrostFrameworkFixtures LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+find_package(Catch2 3.7.1 EXACT CONFIG REQUIRED)
+find_package(Boost 1.85.0 EXACT REQUIRED)
+add_executable(catch_fixture catch_fixture.cpp)
+target_link_libraries(catch_fixture PRIVATE Catch2::Catch2WithMain)
+add_executable(boost_fixture boost_fixture.cpp)
+target_include_directories(boost_fixture PRIVATE ${Boost_INCLUDE_DIRS})
+enable_testing()
+add_test(NAME catch_fixture COMMAND catch_fixture)
+add_test(NAME boost_fixture COMMAND boost_fixture)
+set_tests_properties(catch_fixture PROPERTIES LABELS "framework;catch2-xml3")
+set_tests_properties(boost_fixture PROPERTIES LABELS "framework;boost-test-1.85")

@@ -61,7 +61,7 @@ add_dependencies(run_process_tests io_test_child run_tree_child)
 #                          over real doctest 2.5.3 output in fixtures/doctest; run_test_runner_tests
 #                          holds the doctest jobs with run_doctest_stub (below).
 frost_add_test(run_test_parser_tests
-    SOURCES test_parsers_test.cpp doctest_parsers_test.cpp
+    SOURCES test_parsers_test.cpp doctest_parsers_test.cpp framework_parsers_test.cpp
     DEPS frost::run frost::project frost::io frost::core)
 target_include_directories(run_test_parser_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(run_test_parser_tests PRIVATE FROST_RUN_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
