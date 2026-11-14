@@ -40,13 +40,13 @@ std::vector<RankedPath> PathIndex::query(std::string_view pattern, std::span<con
         if (m_postings[c].empty()) return hits;
         if (!smallest || m_postings[c].size() < smallest->size()) smallest = &m_postings[c];
     }
-    if (!smallest) return hits;
     const auto better = [&](const RankedPath& a, const RankedPath& b) {
         if (a.score != b.score) return a.score > b.score;
         if (paths[a.index].size() != paths[b.index].size()) return paths[a.index].size() < paths[b.index].size();
         return paths[a.index] < paths[b.index];
     };
-    for (const auto i : *smallest) {
+    for (std::size_t ordinal = 0; ordinal < (smallest ? smallest->size() : paths.size()); ++ordinal) {
+        const auto i = smallest ? (*smallest)[ordinal] : ordinal;
         if (stop.stop_requested()) return {};
         bool candidate = true;
         for (std::size_t c = 0; c < required.size(); ++c) if (required[c] &&
