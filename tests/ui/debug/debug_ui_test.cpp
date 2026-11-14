@@ -228,6 +228,41 @@ TEST_F(DebugUiTest, RegisterGroupsLoadActualRegistersOnlyWhenExpanded) {
     stopSession();
 }
 
+#ifdef _WIN32
+TEST_F(DebugUiTest, SelectedDbgEngUsesConfiguredAdapterAndGuiNatvisDiscoveryForLaunchAndAttach) {
+    io::ScriptedProcessLauncher launcher;
+    const auto executable = workPath("tools/frost-dbgeng-dap.exe");
+    ASSERT_TRUE(fs.createDirectories(workPath("tools")));
+    ASSERT_TRUE(fs.writeFileAtomic(executable, "fixture"));
+    DebugControllerOptions options;
+    options.trust = trust.get();
+    options.fs = &fs;
+    options.launcher = &launcher;
+    options.nativeBackendSetting = [] { return "frost-dbgeng"; };
+    options.dbgEngPathSetting = [executable] { return executable; };
+    int discoveries = 0;
+    options.natvisFiles = [&](const debug::DebugTarget& resolved) -> Result<std::vector<std::string>> {
+        EXPECT_EQ(resolved.program, target().program);
+        ++discoveries;
+        return std::vector<std::string>{workPath("Trusted/types.natvis")};
+    };
+    bool mayStart = true;
+    DebugControllerHooks hooks;
+    hooks.mayStart = [&] { return mayStart; };
+    DebugController selected(breakpoints, options, hooks);
+    launcher.expect({.expectExecutable = executable, .launchError = Error(ErrorCode::NotFound, "fixture adapter unavailable")});
+    auto launch = selected.startTarget(target());
+    ASSERT_FALSE(launch);
+    EXPECT_NE(launch.error().message().find("fixture adapter unavailable"), std::string::npos);
+    launcher.expect({.expectExecutable = executable, .launchError = Error(ErrorCode::NotFound, "fixture adapter unavailable")});
+    mayStart = false; // The owned compound prepare already holds admission.
+    auto attach = selected.attachTarget(target(), {}, rpc::Json::object().set("type", "lldb-dap").set("pid", 123), [] { return true; });
+    ASSERT_FALSE(attach);
+    EXPECT_NE(attach.error().message().find("fixture adapter unavailable"), std::string::npos);
+    EXPECT_EQ(discoveries, 2);
+    EXPECT_EQ(launcher.launches().size(), 2U);
+}
+#endif
 TEST_F(DebugUiTest, ConfiguredSourceMapIsValidatedBeforeLaunchingTheAdapter) {
     std::pair<std::string, std::string> mapping{"relative", workPath("Trusted")};
     DebugControllerOptions options{

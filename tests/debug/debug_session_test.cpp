@@ -11,6 +11,9 @@
 
 #include "../../src/debug/src/debug_session_internal.hpp"
 #include "debug_test_util.hpp"
+#include "frost/core/clock.hpp"
+#include "frost/io/mem_fs.hpp"
+#include "frost/project/trust_store.hpp"
 #include <gtest/gtest.h>
 
 #include <cctype>
@@ -34,6 +37,37 @@ const std::string& kSource() {
     return value;
 }
 
+TEST(DebugSessionAdapterProfile, AttachAdmissionRechecksTrustAfterInitializeBeforeAnyAttachFrame) {
+    ManualClock clock;
+    io::MemFs fs(clock);
+    const auto root = workPath("project");
+    ASSERT_TRUE(fs.createDirectories(root));
+    ASSERT_TRUE(fs.createDirectories(workPath("data")));
+    auto trust = project::TrustStore::open(fs, workPath("data/trust"));
+    ASSERT_TRUE(trust);
+    ASSERT_TRUE((*trust)->trust(root));
+    FakeDebugAdapter adapter;
+    adapter.on("initialize", [&](const rpc::Json&) {
+        EXPECT_TRUE((*trust)->untrust(root));
+        return FakeDebugAdapter::Reply{.body = rpc::Json::object().set("supportsConfigurationDoneRequest", true)};
+    });
+    adapter.on("disconnect", [](const rpc::Json&) { return FakeDebugAdapter::Reply{.exitAfter = true}; });
+    DebugSessionOptions options;
+    options.targetMode = DebugTargetMode::Attach;
+    options.launchAdmission = [&]() -> Result<void> {
+        if (!(*trust)->isTrusted(root)) return fail(ErrorCode::Untrusted, "Attach trust revoked during initialize");
+        return {};
+    };
+    test::SessionRecorder recorder;
+    auto session = DebugSession::start(fakeFactory(adapter), rpc::Json::object().set("pid", 123), {},
+                                        recorder.callbacks(), std::move(options));
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(test::waitUntil([&] { return recorder.hasEnded(); }));
+    EXPECT_TRUE(adapter.argumentsOf("attach").empty());
+    ASSERT_TRUE((*session)->outcome());
+    ASSERT_TRUE((*session)->outcome()->error);
+    EXPECT_EQ((*session)->outcome()->error->code(), ErrorCode::Untrusted);
+}
 TEST(DebugSessionAdapterProfile, InitializeCarriesTheSelectedAdapterId) {
     FakeDebugAdapter adapter;
     scriptProgram(adapter, FakeProgram{});

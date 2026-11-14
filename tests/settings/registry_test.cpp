@@ -50,6 +50,15 @@ TEST(SettingsRegistry, NativeDebuggerSelectionDefaultsToLldbAndExecutesOnlyAtApp
 #else
     EXPECT_FALSE(validateValue(backend->schema, Value(std::string("gdb"))));
 #endif
+#ifdef _WIN32
+    EXPECT_TRUE(validateValue(backend->schema, Value(std::string("frost-dbgeng"))));
+#else
+    EXPECT_FALSE(validateValue(backend->schema, Value(std::string("frost-dbgeng"))));
+#endif
+    const auto* dbgeng = builtinRegistry().find(key::toolsDbgEngPath.name);
+    ASSERT_NE(dbgeng, nullptr);
+    EXPECT_TRUE(dbgeng->executes);
+    EXPECT_EQ(dbgeng->scopes, kApplicationOnly);
     const auto* path = builtinRegistry().find(key::toolsGdbPath.name);
     ASSERT_NE(path, nullptr);
     EXPECT_TRUE(path->executes);
