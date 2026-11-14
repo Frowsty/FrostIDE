@@ -38,6 +38,7 @@ frost_add_library(debug LAYER debug
         src/debug_session_stops.cpp
         src/fake_debug_adapter.cpp
         src/lldb_dap.cpp
+        src/gdb_dap.cpp
         src/msvc_throw.cpp
         src/mono_dap.cpp
         src/mono_wire.cpp

@@ -298,8 +298,7 @@ AdapterFactory lldbDapAdapterFactory(io::IProcessLauncher& launcher, std::string
     };
 }
 
-namespace {
-Result<void> checkDebugTrust(const project::TrustStore& trust, const DebugTarget& target) {
+Result<void> validateDebugTargetTrust(const project::TrustStore& trust, const DebugTarget& target) {
     if (!io::isAbsolutePath(target.program)) {
         return fail(ErrorCode::InvalidArgument,
                     std::format("the program to debug is not an absolute path: {}", target.program));
@@ -321,8 +320,6 @@ Result<void> checkDebugTrust(const project::TrustStore& trust, const DebugTarget
         return fail(ErrorCode::Untrusted, "source mapping destination is no longer a trusted debug root");
     return {};
 }
-} // namespace
-
 Result<std::unique_ptr<DebugSession>> startDebugSession(const project::TrustStore& trust, const DebugTarget& target,
                                                         AdapterFactory factory,
                                                         std::map<std::string, std::vector<BreakpointLine>> breakpoints,
@@ -335,7 +332,7 @@ startDebugSession(const project::TrustStore& trust, const DebugTarget& target, A
                   std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
                   std::vector<FunctionBreakpointLine> functionBreakpoints, std::vector<std::string> exceptionFilters,
                   std::vector<std::string> throwTypes, std::optional<NativeDebugPrivacy> privacy) {
-    if (auto allowed = checkDebugTrust(trust, target); !allowed)
+    if (auto allowed = validateDebugTargetTrust(trust, target); !allowed)
         return std::unexpected(std::move(allowed.error()));
     DebugSessionOptions options = lldbDapSessionOptions(DebugTargetMode::Launch);
     if (privacy && !privacy->launchAdmission)
@@ -355,7 +352,7 @@ Result<std::unique_ptr<DebugSession>> attachDebugSession(const project::TrustSto
                                                          AdapterFactory factory, rpc::Json attachArguments,
                                                          std::map<std::string, std::vector<BreakpointLine>> breakpoints,
                                                          DebugSessionCallbacks callbacks, std::string adapterId) {
-    if (auto allowed = checkDebugTrust(trust, target); !allowed)
+    if (auto allowed = validateDebugTargetTrust(trust, target); !allowed)
         return std::unexpected(std::move(allowed.error()));
     DebugSessionOptions options;
     if (adapterId == "lldb-dap") {
