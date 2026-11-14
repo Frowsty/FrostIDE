@@ -404,12 +404,13 @@ void Workbench::registerActions() {
             const auto snapshot = view->editor().editor().text();
             const std::string path = view->path();
             const std::string key = view->document().key();
-            const QPointer<DocumentEditorView> original(view);
+            const QPointer<ui::EditorView> liveEditor(&view->editor());
+            DocumentEditorView* original = view;
             const QPointer<Workbench> owner(this);
             showLocalHistoryDialog(
                 m_window, m_options.historyPath, key, path, snapshot.size().value() <= 4 * 1024 * 1024 ? snapshot.text() : std::string("Current file is too large for history preview."),
-                [owner, original, path, version = snapshot.version()](const std::string& restored) -> Result<void> {
-                    if (!owner || !original || original->path() != path ||
+                [owner, original, liveEditor, path, version = snapshot.version()](const std::string& restored) -> Result<void> {
+                    if (!owner || !liveEditor || original->path() != path ||
                         original->editor().editor().text().version() != version)
                         return fail(ErrorCode::Busy, "The editor changed while history was open; reopen Local History.");
                     const auto current = original->editor().editor().text();

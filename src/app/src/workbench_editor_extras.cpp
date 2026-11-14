@@ -132,9 +132,10 @@ void Workbench::registerEditorExtrasActions() {
         layout->addWidget(notice);
         auto* browser = new ui::MarkdownPreview(dialog);
         layout->addWidget(browser);
-        const QPointer<DocumentEditorView> source(view);
-        const auto refresh = [source, browser] {
-            if (!source)
+        const QPointer<ui::EditorView> liveEditor(&view->editor());
+        DocumentEditorView* source = view;
+        const auto refresh = [source, liveEditor, browser] {
+            if (!liveEditor)
                 return;
             const auto snapshot = source->editor().editor().text();
             if (snapshot.size().value() > 512 * 1024) {
@@ -148,7 +149,7 @@ void Workbench::registerEditorExtrasActions() {
         timer->setInterval(150);
         connect(timer, &QTimer::timeout, dialog, refresh);
         connect(&view->editor(), &ui::EditorView::textChanged, dialog, [timer] { timer->start(); });
-        connect(view, &QObject::destroyed, dialog, &QDialog::close);
+        connect(&view->editor(), &QObject::destroyed, dialog, &QDialog::close);
         refresh();
         ui::installDialogChrome(dialog, true);
         dialog->show();
