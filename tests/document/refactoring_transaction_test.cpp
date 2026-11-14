@@ -584,5 +584,53 @@ TEST_F(RefactoringTransactionTest, UnicodeCaseAliasesCannotOwnTwoAbsentCreationE
 }
 #endif
 
+TEST_F(RefactoringTransactionTest, AliasedCreatedViewFormatChangeAfterUndoRefusesRedoBeforeMembership) {
+    const auto real = scratch.join("real");
+    const auto alias = scratch.join("alias");
+    ASSERT_TRUE(fs.createDirectories(scratch.join("real/sub")));
+    frost::test::makeDirectoryLink(alias, real);
+    const auto generated = scratch.join("real/sub/generated.cpp");
+    const auto spelling = scratch.join("alias/sub/generated.cpp");
+    RefactoringPlan value;
+    value.creates = {{generated, "created\n"}};
+    value.disk = {{project, "a.cpp\nb.cpp\n", "generated.cpp\n"}};
+    auto applied = coordinator->apply(value);
+    ASSERT_TRUE(applied);
+    ASSERT_EQ(applied->status, RefactoringStatus::Applied);
+    auto* doc = open(spelling);
+    ASSERT_NE(doc, nullptr);
+    EXPECT_EQ(doc->document().undoState().externalUndo, applied->token);
+    ASSERT_TRUE(coordinator->undo(applied->token));
+    EXPECT_EQ(doc->diskState(), DiskState::Deleted);
+    EXPECT_EQ(doc->document().undoState().externalRedo, applied->token);
+    doc->setLineSeparator(text::LineSeparator::Cr);
+    ASSERT_TRUE(doc->dirty());
+    EXPECT_FALSE(coordinator->redo(applied->token));
+    EXPECT_FALSE(fs.exists(generated).value_or(true));
+    EXPECT_EQ(bytes(project), "a.cpp\nb.cpp\n");
+    EXPECT_EQ(doc->encoding().format.lineSeparator, text::LineSeparator::Cr);
+}
+
+TEST_F(RefactoringTransactionTest, MultipleOpenCreationSpellingsNeverBypassDirtyViewAdmission) {
+    const auto real = scratch.join("real");
+    const auto alias = scratch.join("alias");
+    ASSERT_TRUE(fs.createDirectories(scratch.join("real/sub")));
+    frost::test::makeDirectoryLink(alias, real);
+    const auto generated = scratch.join("real/sub/generated.cpp");
+    RefactoringPlan value;
+    value.creates = {{generated, "created\n"}};
+    auto applied = coordinator->apply(value);
+    ASSERT_TRUE(applied);
+    auto* direct = open(generated);
+    auto* second = open(scratch.join("alias/sub/generated.cpp"));
+    ASSERT_NE(direct, nullptr);
+    ASSERT_NE(second, nullptr);
+    ASSERT_NE(direct, second);
+    ASSERT_TRUE(second->document().replace({0, 0}, "dirty ", {}));
+    EXPECT_FALSE(coordinator->undo(applied->token));
+    EXPECT_EQ(bytes(generated), "created\n");
+    EXPECT_EQ(second->document().text().text(), "dirty created\n");
+}
+
 } // namespace
 } // namespace frost::document::test
