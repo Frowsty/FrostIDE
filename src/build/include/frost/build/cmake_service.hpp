@@ -174,6 +174,7 @@ struct CMakeBuildRequest {
     std::optional<std::size_t> target{}; // Index into the model's targets; empty: the profile's default (all).
     std::string targetName{};            // Its name, or "".
     std::string profile{};               // The profile's name.
+    std::string file{};                  // Compile: captured absolute source; resolved on the job worker.
 };
 
 // An explicitly configured personal command for one project root and profile.
@@ -364,6 +365,17 @@ public:
     [[nodiscard]] Result<void> build(BuildAction action, std::optional<std::size_t> target = std::nullopt,
                                      CMakeBuildCompletion done = {},
                                      const std::shared_ptr<const project::CMakeProject>& expectedModel = {});
+    // Literal native target, including generator-provided targets such as install. Same trust,
+    // Save All, wrapper/admission and contained execution pipeline as build(). No shell parsing.
+    [[nodiscard]] Result<void> buildNamedTarget(std::string target);
+    // CMK-12: Ninja object compilation through cmake --build, using the actual compilation
+    // database's unique object output. Other generators/missing or ambiguous outputs refuse
+    // explicitly; no compiler command or object path is synthesized. Database read is on the job worker.
+    [[nodiscard]] bool canCompileFile(std::string_view path) const;
+    [[nodiscard]] Result<void> compileFile(std::string_view path);
+    // Build/Compile/Rebuild/Clean one recorded Ninja object. Cleaning uses that generator's
+    // native `ninja -t clean <object>`; building uses cmake --build. No whole-project clean.
+    [[nodiscard]] Result<void> buildFile(BuildAction action, std::string_view path);
     // Cancels the job in progress (BuildService::cancel). Idempotent.
     void cancel();
     // Trusts `root` and lets a job waiting in NeedsTrust go on; once the folder is trusted and has no

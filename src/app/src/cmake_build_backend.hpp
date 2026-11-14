@@ -31,6 +31,8 @@ public:
         return m_service.build(action);
     }
     void cancel() override { m_service.cancel(); }
+    Result<void> compileFile(std::string_view path) override { return m_service.compileFile(path); }
+    bool canCompile(std::string_view path) const override { return m_service.canCompileFile(path); }
     Result<void> trust(std::string_view root) override { return m_service.trust(root); }
     build::BuildState state() const override { return m_service.state(); }
     std::vector<std::string> untrustedRoots() const override { return m_service.untrustedRoots(); }
@@ -61,6 +63,7 @@ inline build::CMakeServiceCallbacks cmakeBuildCallbacks(build::CMakeServiceCallb
             build::BuildOutcome translated;
             translated.target.action = outcome.request.action;
             translated.target.projectName = outcome.request.targetName;
+            translated.target.file = outcome.request.file;
             translated.result = outcome.result;
             translated.error = outcome.error;
             translated.counts = outcome.counts;
@@ -74,6 +77,7 @@ inline build::CMakeServiceCallbacks cmakeBuildCallbacks(build::CMakeServiceCallb
                 build::BuildOutcome translated;
                 translated.target.action = outcome.request.action;
                 translated.target.projectName = outcome.request.targetName;
+                translated.target.file = outcome.request.file;
                 translated.result = outcome.result;
                 translated.error = outcome.error;
                 translated.counts = outcome.counts;
