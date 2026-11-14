@@ -69,7 +69,8 @@ inline constexpr std::array<LanguageCapabilities, 5> kLanguageCapabilities{{
 [[nodiscard]] constexpr std::string_view languageIdForPath(std::string_view path) noexcept {
     const std::size_t slash = path.find_last_of("/\\");
     const std::string_view name = slash == std::string_view::npos ? path : path.substr(slash + 1);
-    if (name == "CMakeLists.txt" || name == "cmakelists.txt") return "cmake";
+    if (name == "CMakeLists.txt" || name == "cmakelists.txt")
+        return "cmake";
     const std::size_t dot = name.rfind('.');
     if (dot == std::string_view::npos || dot + 1 >= name.size() || name.size() - dot > 8) {
         return "plaintext";
@@ -88,7 +89,8 @@ inline constexpr std::array<LanguageCapabilities, 5> kLanguageCapabilities{{
             return "cpp";
         }
     }
-    if (e == "cmake") return "cmake";
+    if (e == "cmake")
+        return "cmake";
     if (e == "cs" || e == "csx") {
         return "csharp";
     }

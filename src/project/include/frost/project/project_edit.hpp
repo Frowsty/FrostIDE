@@ -155,8 +155,8 @@ struct ProjectEditPlan {
 };
 // Decodes the versioned, bounded Commit=false response, including exact inverse/input bytes.
 [[nodiscard]] Result<ProjectEditPlan> parseProjectEditPlan(std::string_view line);
-// Blocking worker-only pre-move rename/pre-create AddFiles plan. Refuses committing requests; cancellation ends the owned
-// helper. No Ready/approval round trip, source move, journal or definition write is permitted.
+// Blocking worker-only pre-move rename/pre-create AddFiles plan. Refuses committing requests; cancellation ends the
+// owned helper. No Ready/approval round trip, source move, journal or definition write is permitted.
 [[nodiscard]] Result<ProjectEditPlan> runProjectEditPlan(io::IProcessLauncher& launcher,
                                                          const ProjectEditLaunch& launch, const ProjectEdit& edit,
                                                          std::stop_token stop = {});

@@ -19,12 +19,14 @@ namespace {
 
 class Parser {
 public:
-    explicit Parser(std::string_view snippet) : m_s(snippet),
-        m_budget(std::min(snippet.size(), (std::numeric_limits<std::size_t>::max()-64)/8)*8+64) {}
+    explicit Parser(std::string_view snippet)
+        : m_s(snippet),
+          m_budget(std::min(snippet.size(), (std::numeric_limits<std::size_t>::max() - 64) / 8) * 8 + 64) {}
 
     ParsedSnippet run() {
         parseAny(false);
-        if (m_exhausted) return ParsedSnippet{std::string(m_s),{},true};
+        if (m_exhausted)
+            return ParsedSnippet{std::string(m_s), {}, true};
         ParsedSnippet out;
         out.text = std::move(m_out);
         out.tabStops = std::move(m_stops);
@@ -37,8 +39,12 @@ public:
 
 private:
     bool work() {
-        if (!m_budget) { m_exhausted = true; return false; }
-        --m_budget; return true;
+        if (!m_budget) {
+            m_exhausted = true;
+            return false;
+        }
+        --m_budget;
+        return true;
     }
     struct Mark {
         std::size_t position;
@@ -57,9 +63,15 @@ private:
 
     // Text and constructs up to the end, or (nested) up to an unescaped '}' left unconsumed.
     void parseAny(bool nested) {
-        if (m_depth > 64) { m_exhausted = true; return; }
+        if (m_depth > 64) {
+            m_exhausted = true;
+            return;
+        }
         ++m_depth;
-        struct Depth { std::size_t& value; ~Depth() { --value; } } depth{m_depth};
+        struct Depth {
+            std::size_t& value;
+            ~Depth() { --value; }
+        } depth{m_depth};
         while (m_i < m_s.size() && !m_exhausted && work()) {
             const char c = m_s[m_i];
             if (c == '\\' && m_i + 1 < m_s.size() &&

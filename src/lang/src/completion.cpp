@@ -56,9 +56,10 @@ bool isIdentifierByte(char c) noexcept { return isIdentifierStartByte(c) || (c >
 
 bool completionRequestsParameterHints(const CompletionItem& item) {
     const auto* command = item.raw.find("command");
-    if (command && command->stringAt("command") == "editor.action.triggerParameterHints") return true;
+    if (command && command->stringAt("command") == "editor.action.triggerParameterHints")
+        return true;
     const bool call = item.kind == CompletionItemKind::Function || item.kind == CompletionItemKind::Method ||
-        item.kind == CompletionItemKind::Constructor;
+                      item.kind == CompletionItemKind::Constructor;
     return call && item.snippet && item.insertText.find('(') != std::string::npos;
 }
 
@@ -211,9 +212,11 @@ sched::Task<Result<CompletionItem>> resolveCompletionItem(ILspRequester& server,
     if (!result) {
         co_return std::unexpected(std::move(result.error()));
     }
-    if (!result->isObject()) co_return fail(ErrorCode::Corrupt, "Completion resolve returned no item");
+    if (!result->isObject())
+        co_return fail(ErrorCode::Corrupt, "Completion resolve returned no item");
     Json merged = item.raw;
-    for (std::size_t i = 0; i < result->keys().size(); ++i) merged.set(result->keys()[i], result->items()[i]);
+    for (std::size_t i = 0; i < result->keys().size(); ++i)
+        merged.set(result->keys()[i], result->items()[i]);
     CompletionItem resolved = parseCompletionItem(merged);
     // Keep what the popup sorted and filtered by; take the resolved details.
     resolved.label = std::move(item.label);
@@ -278,7 +281,8 @@ void CompletionModel::refilter() {
             const auto& item = m_items[entry.item];
             return item.preselect && !item.deprecated && entry.match.kind == m_entries.front().match.kind;
         });
-        if (preferred != m_entries.end()) m_selected = static_cast<std::size_t>(preferred - m_entries.begin());
+        if (preferred != m_entries.end())
+            m_selected = static_cast<std::size_t>(preferred - m_entries.begin());
     }
 }
 

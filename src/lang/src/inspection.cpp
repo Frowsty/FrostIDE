@@ -591,8 +591,7 @@ Result<std::vector<CompileCommand>> loadCompileCommands(io::IFileSystem& fs,
 Result<std::vector<CompileCommandEntry>> parseInspectionCompileCommands(std::string_view bytes) {
     auto parsed = parseJson(bytes);
     if (!parsed) {
-        return fail(ErrorCode::Corrupt,
-                    std::string("Invalid compilation database: ") + parsed.error().message());
+        return fail(ErrorCode::Corrupt, std::string("Invalid compilation database: ") + parsed.error().message());
     }
     if (!parsed->isArray()) {
         return fail(ErrorCode::Corrupt, "Compilation database must be a JSON array");
@@ -858,7 +857,8 @@ Result<InspectionReport> runClangTidyInspection(io::IProcessLauncher& launcher, 
         auto path = io::normalizePath(request.exportFixesPath);
         if (!path)
             return std::unexpected(path.error());
-        if (!io::isAbsolutePath(*path)) return fail(ErrorCode::InvalidArgument, "Exported fixes require an absolute owned path");
+        if (!io::isAbsolutePath(*path))
+            return fail(ErrorCode::InvalidArgument, "Exported fixes require an absolute owned path");
         auto exists = fs.exists(*path);
         if (!exists)
             return std::unexpected(exists.error());

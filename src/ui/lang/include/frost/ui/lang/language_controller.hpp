@@ -27,14 +27,13 @@
  * scheduler before destroying the server); host and applier must outlive the controller.
  */
 #pragma once
-#include "frost/lang/templates.hpp"
-
 #include "frost/core/error.hpp"
 #include "frost/input/action.hpp"
 #include "frost/lang/completion.hpp"
 #include "frost/lang/diagnostics.hpp"
 #include "frost/lang/lsp_client.hpp"
 #include "frost/lang/refactoring.hpp"
+#include "frost/lang/templates.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/sched/latest_wins.hpp"
 #include "frost/sched/scheduler.hpp"
@@ -310,7 +309,8 @@ private:
     bool nextTabStop();
     bool advanceLiveTemplate();
     void beginLiveTemplate(const ::frost::lang::ParsedSnippet&, ByteOffset base);
-    void insertAuthoredTemplateAt(text::ByteRange, std::string_view, const ::frost::lang::TemplateVariables&, std::string_view label);
+    void insertAuthoredTemplateAt(text::ByteRange, std::string_view, const ::frost::lang::TemplateVariables&,
+                                  std::string_view label);
     bool tryExpandPostfixCompletion();
     void insertSnippetAt(text::ByteRange replaceRange, std::string_view rawSnippet, std::string_view undoLabel);
     // The capability row of the active document (language_capabilities.hpp).

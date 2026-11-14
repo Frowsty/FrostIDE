@@ -24,6 +24,7 @@
 #include <QCheckBox>
 #include <QDialog>
 #include <QEvent>
+#include <QInputDialog>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
@@ -31,7 +32,6 @@
 #include <QShortcut>
 #include <QThread>
 #include <QTimer>
-#include <QInputDialog>
 #include <QTreeWidget>
 #include <QWidget>
 #include <gtest/gtest.h>
@@ -516,11 +516,14 @@ TEST(LanguageControllerCompletion, CppCallSnippetRequestsParameterHintsWithoutAn
     server.on("textDocument/signatureHelp", [](const Json&) {
         return Json::object().set("signatures", Json::array({Json::object().set("label", "foo(int count)")}));
     });
-    FakeHost host("fo"); host.caretAfter("fo"); Rig rig(server, host);
+    FakeHost host("fo");
+    host.caretAfter("fo");
+    Rig rig(server, host);
     rig.controller.completeCode();
     ASSERT_TRUE(pumpUntil([&] { return rig.controller.completionPopup().isVisible(); }));
     ASSERT_TRUE(rig.controller.keyPress(Qt::Key_Return, Qt::NoModifier));
-    EXPECT_EQ(host.text(), "foo(count)"); ASSERT_TRUE(host.selected);
+    EXPECT_EQ(host.text(), "foo(count)");
+    ASSERT_TRUE(host.selected);
     EXPECT_EQ(host.text().substr(host.selected->begin.value(), host.selected->size()), "count");
     ASSERT_TRUE(pumpUntil([&] { return rig.controller.parameterInfoPopup().isVisible(); }));
     EXPECT_EQ(server.paramsOf("textDocument/signatureHelp").size(), 1U);
@@ -1539,6 +1542,38 @@ TEST(LanguageControllerRefactoring, ChangeSignatureUsesExplicitParameterEditorRa
     EXPECT_EQ(operations, (std::vector<std::string>{"edit-signature"}));
     EXPECT_TRUE(rig.applier.edits.empty());
 }
+
+TEST(LanguageControllerRefactoring, NativeCreateUsageChoicePreservesPreChoiceSnapshotAdmission) {
+    FeatureServer server;
+    FakeHost host("int f(){return missing(1);}", workPath("main.cpp"));
+    Rig rig(server, host);
+    bool current = true;
+    unsigned captures = 0;
+    rig.controller.setCppSemanticEditFactory([&]() -> frost::Result<LanguageController::SemanticApply> {
+        ++captures;
+        return LanguageController::SemanticApply{[&](const fl::WorkspaceEdit&) -> frost::Result<void> {
+            if (!current)
+                return frost::fail(frost::ErrorCode::Busy, "selection changed before native creation");
+            return {};
+        }};
+    });
+    std::vector<std::string> operations;
+    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(operation); });
+    rig.controller.createFromUsage();
+    auto& choice = rig.controller.choicePopup();
+    ASSERT_TRUE(choice.isVisible());
+    ASSERT_EQ(choice.list()->count(), 2);
+    EXPECT_TRUE(choice.list()->item(0)->text().contains(QStringLiteral("native recovered AST")));
+    emit choice.chosen(0);
+    EXPECT_EQ(operations, (std::vector<std::string>{"create-from-usage"}));
+    EXPECT_EQ(captures, 1U);
+    rig.controller.createFromUsage();
+    current = false;
+    emit choice.chosen(0);
+    EXPECT_EQ(operations.size(), 1U);
+    EXPECT_TRUE(server.paramsOf("textDocument/codeAction").empty());
+    EXPECT_TRUE(rig.applier.edits.empty());
+}
 TEST(LanguageControllerRefactoring, PublishedAndModuleFixScopeHaveDifferentExplicitOwners) {
     FeatureServer server;
     FakeHost host("int main(){return 0;}", workPath("main.cpp"));
@@ -2003,53 +2038,69 @@ namespace {
 TEST(LanguageControllerTemplates, SharedLoopPlaceholderEditsMirrorBeforeAdvancing) {
     FeatureServer server;
     FakeHost host("void f() {\n    \n}\n", workPath("main.cpp"));
-    host.caretAfter("{\n    "); Rig rig(server,host);
+    host.caretAfter("{\n    ");
+    Rig rig(server, host);
     rig.controller.insertLiveTemplate();
-    auto& choice=rig.controller.choicePopup(); ASSERT_TRUE(choice.isVisible());
+    auto& choice = rig.controller.choicePopup();
+    ASSERT_TRUE(choice.isVisible());
     choice.chosen(0); // The catalogue's actual first C++ item is the index loop.
-    ASSERT_TRUE(host.selected); const auto active=*host.selected;
-    fl::ByteEdit edit{active,"index"};
-    ASSERT_TRUE(host.applyEdits(std::span(&edit,1),"Edit placeholder",ByteOffset{active.begin.value()+5}));
-    EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab,Qt::NoModifier));
-    EXPECT_NE(host.text().find("std::size_t index = 0; index < count; ++index"),std::string::npos);
     ASSERT_TRUE(host.selected);
-    EXPECT_EQ(host.snapshot()->text(*host.selected),"count");
+    const auto active = *host.selected;
+    fl::ByteEdit edit{active, "index"};
+    ASSERT_TRUE(host.applyEdits(std::span(&edit, 1), "Edit placeholder", ByteOffset{active.begin.value() + 5}));
+    EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
+    EXPECT_NE(host.text().find("std::size_t index = 0; index < count; ++index"), std::string::npos);
+    ASSERT_TRUE(host.selected);
+    EXPECT_EQ(host.snapshot()->text(*host.selected), "count");
 }
 TEST(LanguageControllerTemplates, CMakePostfixAndLiveSetsUseCurrentEditorText) {
     FeatureServer server;
-    FakeHost host("    items.for",workPath("CMakeLists.txt")); host.caretAfter("items.for");
-    Rig rig(server,host);
-    EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab,Qt::NoModifier));
-    EXPECT_EQ(host.text(),"    foreach(item IN LISTS items)\n        \n    endforeach()");
+    FakeHost host("    items.for", workPath("CMakeLists.txt"));
+    host.caretAfter("items.for");
+    Rig rig(server, host);
+    EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
+    EXPECT_EQ(host.text(), "    foreach(item IN LISTS items)\n        \n    endforeach()");
     rig.controller.insertLiveTemplate();
-    auto& choices=rig.controller.choicePopup(); ASSERT_TRUE(choices.isVisible());
-    bool function=false; for(int i=0;i<choices.list()->count();++i) function |= choices.list()->item(i)->text().startsWith("function");
+    auto& choices = rig.controller.choicePopup();
+    ASSERT_TRUE(choices.isVisible());
+    bool function = false;
+    for (int i = 0; i < choices.list()->count(); ++i)
+        function |= choices.list()->item(i)->text().startsWith("function");
     EXPECT_TRUE(function);
 }
 TEST(LanguageControllerTemplates, StalePopupCannotInsertIntoChangedDocument) {
-    FeatureServer server; FakeHost host("",workPath("main.cpp")); Rig rig(server,host);
-    rig.controller.insertLiveTemplate(); ASSERT_TRUE(rig.controller.choicePopup().isVisible());
-    host.type("changed"); rig.controller.choicePopup().chosen(0);
-    EXPECT_EQ(host.text(),"changed");
+    FeatureServer server;
+    FakeHost host("", workPath("main.cpp"));
+    Rig rig(server, host);
+    rig.controller.insertLiveTemplate();
+    ASSERT_TRUE(rig.controller.choicePopup().isVisible());
+    host.type("changed");
+    rig.controller.choicePopup().chosen(0);
+    EXPECT_EQ(host.text(), "changed");
 }
 } // namespace
 } // namespace frost::ui::langnamespace frost::ui::lang {
 namespace {
 TEST(LanguageControllerTemplates, ClosingControllerDuringAuthorPromptDoesNotApplyATemplate) {
-    FeatureServer server; FakeHost host("",workPath("main.cpp"));
-    auto rig=std::make_unique<Rig>(server,host);
+    FeatureServer server;
+    FakeHost host("", workPath("main.cpp"));
+    auto rig = std::make_unique<Rig>(server, host);
     rig->controller.insertLiveTemplate();
-    auto& popup=rig->controller.choicePopup();
-    std::size_t selected=static_cast<std::size_t>(popup.list()->count());
-    for(int row=0;row<popup.list()->count();++row) if(popup.list()->item(row)->text().startsWith("Doxygen")) selected=static_cast<std::size_t>(row);
-    ASSERT_LT(selected,static_cast<std::size_t>(popup.list()->count()));
-    QTimer::singleShot(0,[&] {
-        auto* dialog=qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+    auto& popup = rig->controller.choicePopup();
+    std::size_t selected = static_cast<std::size_t>(popup.list()->count());
+    for (int row = 0; row < popup.list()->count(); ++row)
+        if (popup.list()->item(row)->text().startsWith("Doxygen"))
+            selected = static_cast<std::size_t>(row);
+    ASSERT_LT(selected, static_cast<std::size_t>(popup.list()->count()));
+    QTimer::singleShot(0, [&] {
+        auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
         rig.reset();
-        if(dialog) dialog->reject();
+        if (dialog)
+            dialog->reject();
     });
     popup.chosen(selected);
-    EXPECT_FALSE(rig); EXPECT_TRUE(host.text().empty());
+    EXPECT_FALSE(rig);
+    EXPECT_TRUE(host.text().empty());
 }
 }
 }

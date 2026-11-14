@@ -115,7 +115,8 @@ void TestResultsTree::rebuild() {
     const QString filter = m_filter;
     const auto matches = [&filter](const run::DiscoveredTest& test, const run::TestResult* result,
                                    const std::vector<run::GTestCase>* listed,
-                                   const std::vector<run::DoctestCase>* doctest, const std::vector<run::FrameworkCase>* framework) {
+                                   const std::vector<run::DoctestCase>* doctest,
+                                   const std::vector<run::FrameworkCase>* framework) {
         if (filter.isEmpty())
             return true;
         if (qs(test.name).contains(filter, Qt::CaseInsensitive) ||
@@ -125,7 +126,10 @@ void TestResultsTree::rebuild() {
                 return qs(c.name).contains(filter, Qt::CaseInsensitive);
             }))
             return true;
-        if (framework && std::ranges::any_of(*framework, [&](const auto& c) { return qs(c.name).contains(filter, Qt::CaseInsensitive); })) return true;
+        if (framework && std::ranges::any_of(*framework, [&](const auto& c) {
+                return qs(c.name).contains(filter, Qt::CaseInsensitive);
+            }))
+            return true;
         if (doctest && std::ranges::any_of(*doctest, [&](const run::DoctestCase& c) {
                 return qs(c.name).contains(filter, Qt::CaseInsensitive);
             }))
@@ -161,15 +165,18 @@ void TestResultsTree::rebuild() {
                 child->setToolTip(NameColumn, tip.join(QLatin1Char('\n')));
             }
         }
-        if (framework != m_frameworkCases.end()) for (const auto& entry : framework->second) {
-            auto* child = new QTreeWidgetItem(item, {qs(entry.name)});
-            child->setData(0, kTestNameRole, qs(test.name));
-            child->setData(0, kCaseNameRole, qs(entry.name));
-            QString tip;
-            if (entry.location) tip = QStringLiteral("%1:%2").arg(qs(entry.location->file)).arg(entry.location->line);
-            if (entry.disabled) tip += QStringLiteral(" (disabled by default)");
-            child->setToolTip(NameColumn, tip);
-        }
+        if (framework != m_frameworkCases.end())
+            for (const auto& entry : framework->second) {
+                auto* child = new QTreeWidgetItem(item, {qs(entry.name)});
+                child->setData(0, kTestNameRole, qs(test.name));
+                child->setData(0, kCaseNameRole, qs(entry.name));
+                QString tip;
+                if (entry.location)
+                    tip = QStringLiteral("%1:%2").arg(qs(entry.location->file)).arg(entry.location->line);
+                if (entry.disabled)
+                    tip += QStringLiteral(" (disabled by default)");
+                child->setToolTip(NameColumn, tip);
+            }
         if (listed != m_listedCases.end()) {
             for (const run::GTestCase& testCase : listed->second) {
                 auto* child = new QTreeWidgetItem(item, {qs(testCase.fullName())});
@@ -221,7 +228,8 @@ void TestResultsTree::showResult(QTreeWidgetItem* item, const run::TestResult& r
 }
 
 void TestResultsTree::setFrameworkCases(const std::string& test, std::vector<run::FrameworkCase> cases) {
-    m_listedCases.erase(test); m_doctestCases.erase(test);
+    m_listedCases.erase(test);
+    m_doctestCases.erase(test);
     m_frameworkCases[test] = std::move(cases);
     rebuild();
 }

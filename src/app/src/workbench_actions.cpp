@@ -164,7 +164,9 @@ void Workbench::registerActions() {
             return m_window && m_build && m_build->state() == build::BuildState::Idle && !m_projectRoot.empty() &&
                    m_services.trust.isTrusted(m_projectRoot);
         });
-    add("file.newFromTemplate", "New File / Class / Target from Template...", [this] { showSourceTemplateDialog(); }, [this] { return hasProject(); });
+    add(
+        "file.newFromTemplate", "New File / Class / Target from Template...", [this] { showSourceTemplateDialog(); },
+        [this] { return hasProject(); });
     add(wa::kNewProject, "New Project...", [this] { showNewProjectDialog(); });
     add(wa::kOpenFolder, "Open Folder...", [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::Folder); });
     add("file.settings", "Settings...", [this] { showSettings(); }, [this] { return m_window != nullptr; });

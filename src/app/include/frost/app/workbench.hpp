@@ -68,7 +68,6 @@
 #include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
 #include "frost/debug/breakpoints.hpp"
-#include "frost/lang/file_templates.hpp"
 #include "frost/document/autosave.hpp"
 #include "frost/document/refactoring_transaction.hpp"
 #include "frost/document/save_manager.hpp"
@@ -83,6 +82,7 @@
 #include "frost/lang/cmake_compile_commands.hpp"
 #include "frost/lang/cpp_refactoring_plan.hpp"
 #include "frost/lang/diagnostics.hpp"
+#include "frost/lang/file_templates.hpp"
 #include "frost/lang/frost_engine_assets.hpp"
 #include "frost/lang/inspection.hpp"
 #include "frost/lang/json.hpp"
@@ -635,8 +635,9 @@ public:
     [[nodiscard]] Result<document::RefactoringOutcome> applyRefactoring(const document::RefactoringPlan& plan);
     // Captures the active project/database/dirty documents and asynchronously prepares one atomic
     // replacement proposal. No mutation; consumer previews before applyRefactoring. Owner thread.
-    void prepareCppInspectionScopeFixes(lang::InspectionScope scope, lang::InspectionProfile profile, std::stop_token cancel,
-        std::function<void(Result<document::RefactoringPlan>)> done);
+    void prepareCppInspectionScopeFixes(lang::InspectionScope scope, lang::InspectionProfile profile,
+                                        std::stop_token cancel,
+                                        std::function<void(Result<document::RefactoringPlan>)> done);
     void prepareCppRefactoring(lang::CppRefactoringRequest request, std::stop_token cancel,
                                std::function<void(Result<document::RefactoringPlan>)> done);
     [[nodiscard]] Result<document::RefactoringOutcome> undoRefactoring();
