@@ -37,6 +37,13 @@
 #include <QStylePainter>
 #include <QTextEdit>
 #include <QVBoxLayout>
+#include <QCloseEvent>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QTimer>
 
 #include <algorithm>
 #include <utility>
@@ -46,6 +53,7 @@ namespace frost::ui {
 using shell_detail::text;
 
 namespace {
+constexpr auto kDockMime = "application/x-frostide-tool-window";
 
 bool isValidWindowId(std::string_view id) noexcept {
     if (id.empty() || id.size() > 64 || id.front() < 'a' || id.front() > 'z') {
@@ -542,7 +550,62 @@ ToolWindowManager::ToolWindowManager(QWidget& host, QWidget& center, IShellSetti
     connect(m_vertical, &QSplitter::splitterMoved, this, [this] { syncSizesFromSplitters(); });
 }
 
-ToolWindowManager::~ToolWindowManager() = default;
+ToolWindowManager::~ToolWindowManager() {
+    for (auto& window : m_windows) if (window.floatingHost) {
+        window.floatingHost->removeEventFilter(this);
+        if (window.content) side(window.spec.side).stack->addWidget(window.content);
+        delete window.floatingHost;
+    }
+}
+
+void StripeButton::mousePressEvent(QMouseEvent* event) {
+    m_dragStart = event->position().toPoint();
+    QToolButton::mousePressEvent(event);
+}
+void StripeButton::mouseMoveEvent(QMouseEvent* event) {
+    if (!(event->buttons() & Qt::LeftButton) || (event->position().toPoint() - m_dragStart).manhattanLength() < QApplication::startDragDistance()) {
+        QToolButton::mouseMoveEvent(event);
+        return;
+    }
+    const auto id = property("frostToolWindowId").toByteArray();
+    if (id.isEmpty()) return;
+    setDown(false);
+    auto* mime = new QMimeData;
+    mime->setData(kDockMime, id);
+    QDrag drag(this);
+    drag.setMimeData(mime);
+    drag.exec(Qt::MoveAction);
+}
+
+bool ToolWindowManager::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::DragEnter || event->type() == QEvent::Drop) {
+        for (const auto which : {ToolWindowSide::Left, ToolWindowSide::Right, ToolWindowSide::Bottom}) {
+            if (watched != side(which).stripe && watched != side(which).panel) continue;
+            auto* drop = static_cast<QDropEvent*>(event);
+            const auto id = drop->mimeData()->data(kDockMime).toStdString();
+            const auto* window = find(id);
+            if (!window || drop->source() != window->button) return false;
+            if (event->type() == QEvent::Drop) moveToSide(id, which);
+            drop->acceptProposedAction();
+            return true;
+        }
+    }
+    for (auto& window : m_windows) if (watched == window.floatingHost) {
+        if (event->type() == QEvent::Close) {
+            hide(window.spec.id);
+            static_cast<QCloseEvent*>(event)->ignore();
+            return true;
+        }
+        if ((event->type() == QEvent::Move || event->type() == QEvent::Resize) && window.floatingHost->isVisible()) {
+            window.geometry = window.floatingHost->saveGeometry().toBase64().toStdString();
+            if (!m_floatStoreQueued) {
+                m_floatStoreQueued = true;
+                QTimer::singleShot(150, this, [this] { m_floatStoreQueued = false; storeLayout(); });
+            }
+        }
+    }
+    return QObject::eventFilter(watched, event);
+}
 
 void ToolWindowManager::buildSide(ToolWindowSide which) {
     Side& s = side(which);
@@ -553,6 +616,8 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
     panel->setObjectName(QStringLiteral("toolWindowPanel.") + name);
     panel->setFocusPolicy(Qt::StrongFocus);
     s.panel = panel;
+    panel->setAcceptDrops(true);
+    panel->installEventFilter(this);
     s.title = new QLabel(panel);
     s.title->setObjectName(QStringLiteral("toolWindowTitle"));
     QFont bold = s.title->font();
@@ -586,6 +651,8 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
         connect(optionsMenu->addAction(text("Reset Default Size")), &QAction::triggered, this,
                 [this, which, shown] { setSize(shown, which == ToolWindowSide::Bottom ? 220 : 280); });
         optionsMenu->addSeparator();
+        connect(optionsMenu->addAction(text("Float Tool Window")), &QAction::triggered, this,
+                [this, shown] { setFloating(shown, true); });
         if (which != ToolWindowSide::Left) {
             connect(optionsMenu->addAction(text("Move to Left - Top")), &QAction::triggered, this,
                     [this, shown] { moveToSide(shown, ToolWindowSide::Left); });
@@ -650,6 +717,8 @@ void ToolWindowManager::buildSide(ToolWindowSide which) {
         s.stripe = new QWidget(m_leftSidebar);
     }
     s.stripe->setObjectName(QStringLiteral("toolWindowStripe.") + name);
+    s.stripe->setAcceptDrops(true);
+    s.stripe->installEventFilter(this);
     s.stripe->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(s.stripe, &QWidget::customContextMenuRequested, this, [this, stripeWidget = s.stripe](const QPoint& pos) {
         QMenu menu(stripeWidget);
@@ -690,6 +759,7 @@ Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
     button->setToolTip(spec.shortcutText.isEmpty() ? spec.title
                                                    : QStringLiteral("%1 (%2)").arg(spec.title, spec.shortcutText));
     const std::string id = spec.id;
+    button->setProperty("frostToolWindowId", shell_detail::fromUtf8(id));
     button->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(button, &QWidget::customContextMenuRequested, this, [this, id, button](const QPoint& pos) {
         Window* w = find(id);
@@ -698,6 +768,8 @@ Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
         }
         QMenu menu(button);
         menu.setObjectName(QStringLiteral("stripeButtonContextMenu"));
+        connect(menu.addAction(w->floating ? text("Dock Tool Window") : text("Float Tool Window")), &QAction::triggered, this,
+                [this, id] { setFloating(id, !isFloating(id)); });
         if (w->spec.side != ToolWindowSide::Left) {
             connect(menu.addAction(text("Move to Left - Top")), &QAction::triggered, this,
                     [this, id] { moveToSide(id, ToolWindowSide::Left); });
@@ -719,6 +791,7 @@ Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
                 win->pinned = checked;
                 win->button->setVisible(win->pinned || win->visible);
                 updateSidebarVisibility();
+                storeLayout();
             }
         });
         QAction* showNames = menu.addAction(text("Show Tool Window Names"));
@@ -768,10 +841,14 @@ Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
     updateSidebarVisibility();
     if (const Result<ShellLayout> layout = m_settings.load(); layout) {
         if (const ToolWindowLayout* remembered = layout->find(id); remembered != nullptr) {
+            if (remembered->side >= 0 && remembered->side <= 2) moveToSide(id, static_cast<ToolWindowSide>(remembered->side));
+            if (remembered->pinned) window.pinned = *remembered->pinned;
+            window.geometry = remembered->geometry;
+            if (remembered->floating) setFloating(id, true);
             if (remembered->size > 0) {
                 window.size = std::max(remembered->size, kMinimumSize);
             }
-            if (remembered->visible && side(window.spec.side).shown.empty()) {
+            if (remembered->visible && (window.floating || side(window.spec.side).shown.empty())) {
                 setVisible(window, true, false);
             }
         }
@@ -896,6 +973,8 @@ std::string ToolWindowManager::focusedWindow() const {
     if (focus == nullptr) {
         return {};
     }
+    for (const auto& window : m_windows) if (window.floating && window.visible && window.floatingHost &&
+        (window.floatingHost == focus || window.floatingHost->isAncestorOf(focus))) return window.spec.id;
     for (const Side& s : m_sides) {
         if (!s.shown.empty() && (s.panel == focus || s.panel->isAncestorOf(focus))) {
             return s.shown;
@@ -916,9 +995,10 @@ void ToolWindowManager::setContent(std::string_view id, QWidget* replacement) {
     }
     Side& s = side(window->spec.side);
     QWidget* old = std::exchange(window->content, replacement);
-    s.stack->addWidget(replacement);
+    if (window->floatingHost && window->floating) window->floatingHost->layout()->addWidget(replacement);
+    else s.stack->addWidget(replacement);
     applyToolWindowChromePalette(replacement);
-    if (window->visible) {
+    if (window->visible && !window->floating) {
         s.stack->setCurrentWidget(replacement);
     }
     if (old != nullptr) {
@@ -946,6 +1026,7 @@ void ToolWindowManager::setSize(std::string_view id, int newSize) {
 
 void ToolWindowManager::moveToSide(std::string_view id, ToolWindowSide newSide) {
     Window* window = find(id);
+    if (window && window->floating) setFloating(id, false);
     if (window == nullptr || window->spec.side == newSide) {
         return;
     }
@@ -974,6 +1055,39 @@ void ToolWindowManager::moveToSide(std::string_view id, ToolWindowSide newSide) 
     if (wasVisible) {
         setVisible(*window, true, true);
     }
+    storeLayout();
+}
+
+bool ToolWindowManager::isFloating(std::string_view id) const { const auto* window = find(id); return window && window->floating; }
+QWidget* ToolWindowManager::floatingWindow(std::string_view id) const { const auto* window = find(id); return window ? window->floatingHost : nullptr; }
+void ToolWindowManager::setFloating(std::string_view id, bool floating) {
+    auto* window = find(id);
+    if (!window || window->floating == floating) return;
+    const bool visible = window->visible;
+    if (visible) setVisible(*window, false, false);
+    ensureContent(*window);
+    if (floating) {
+        if (!window->floatingHost) {
+            window->floatingHost = new QWidget(&m_host, Qt::Tool);
+            window->floatingHost->setObjectName(QStringLiteral("floatingToolWindow.") + shell_detail::fromUtf8(id));
+            window->floatingHost->setWindowTitle(window->spec.title);
+            auto* layout = new QVBoxLayout(window->floatingHost);
+            layout->setContentsMargins(0, 0, 0, 0);
+            window->floatingHost->resize(560, 400);
+            if (!window->geometry.empty()) window->floatingHost->restoreGeometry(QByteArray::fromBase64(QByteArray::fromStdString(window->geometry)));
+            window->floatingHost->installEventFilter(this);
+            window->geometry = window->floatingHost->saveGeometry().toBase64().toStdString();
+        }
+        side(window->spec.side).stack->removeWidget(window->content);
+        window->floatingHost->layout()->addWidget(window->content);
+    } else {
+        window->geometry = window->floatingHost->saveGeometry().toBase64().toStdString();
+        window->floatingHost->hide();
+        side(window->spec.side).stack->addWidget(window->content);
+    }
+    window->floating = floating;
+    if (visible) setVisible(*window, true, true);
+    storeLayout();
 }
 
 void ToolWindowManager::setShowStripeLabels(bool show) {
@@ -1051,6 +1165,21 @@ void ToolWindowManager::ensureContent(Window& window) {
 }
 
 void ToolWindowManager::setVisible(Window& window, bool visible, bool focus) {
+    if (window.floating && window.floatingHost) {
+        const bool changed = window.visible != visible;
+        window.visible = visible;
+        if (!visible) window.geometry = window.floatingHost->saveGeometry().toBase64().toStdString();
+        window.button->setChecked(visible);
+        window.button->setVisible(window.pinned || visible);
+        window.floatingHost->setVisible(visible);
+        if (visible) {
+            m_lastActive = window.spec.id;
+            if (focus) { window.floatingHost->raise(); window.floatingHost->activateWindow(); window.content->setFocus(); }
+        }
+        if (changed) emit visibilityChanged(shell_detail::fromUtf8(window.spec.id), visible);
+        storeLayout();
+        return;
+    }
     Side& s = side(window.spec.side);
     if (visible) {
         if (!s.shown.empty() && s.shown != window.spec.id) {
@@ -1141,6 +1270,10 @@ void ToolWindowManager::storeLayout() {
         ToolWindowLayout& entry = layout.entry(window.spec.id);
         entry.visible = window.visible;
         entry.size = window.size;
+        entry.side = static_cast<int>(window.spec.side);
+        entry.floating = window.floating;
+        entry.pinned = window.pinned;
+        entry.geometry = window.geometry;
     }
     if (const Result<void> stored = m_settings.store(layout); !stored) {
         if (!m_storeFailed) {

@@ -245,7 +245,11 @@ struct Entry {
                            FieldSpec{.name = "size",
                                      .type = FieldType::Integer,
                                      .required = false,
-                                     .description = "Its width or height in pixels; 0 or absent uses the default."}},
+                                       .description = "Its width or height in pixels; 0 or absent uses the default."},
+                             FieldSpec{.name = "side", .type = FieldType::Integer, .required = false},
+                             FieldSpec{.name = "floating", .type = FieldType::Bool, .required = false},
+                             FieldSpec{.name = "pinned", .type = FieldType::Bool, .required = false},
+                             FieldSpec{.name = "geometry", .type = FieldType::String, .required = false}},
                           64),
          Value(RecordList{}), kApplicationOnly, false, true},
 

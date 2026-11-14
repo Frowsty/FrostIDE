@@ -79,10 +79,13 @@ public:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
 
 private:
     ToolWindowSide m_side;
     bool m_showLabel = false;
+    QPoint m_dragStart;
 };
 
 /*
@@ -139,6 +142,11 @@ public:
     void setSize(std::string_view id, int size);
     // Moves a tool window to another dock side (Left, Right, Bottom).
     void moveToSide(std::string_view id, ToolWindowSide newSide);
+    // Detaches the real content into an owned tool window; docking reparents the same widget.
+    // Mode, side, pin state and geometry are restored from ShellLayout; GUI thread only.
+    void setFloating(std::string_view id, bool floating);
+    [[nodiscard]] bool isFloating(std::string_view id) const;
+    [[nodiscard]] QWidget* floatingWindow(std::string_view id) const;
     // Whether side stripes render text labels alongside icons (Rider "Show Tool Window Names").
     [[nodiscard]] bool showStripeLabels() const noexcept { return m_showStripeLabels; }
     void setShowStripeLabels(bool show);
@@ -159,6 +167,9 @@ signals:
     // Storing the layout failed (reported once per failure).
     void storeFailed(const QString& message);
 
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
     struct Window {
         ToolWindowSpec spec;
@@ -168,6 +179,9 @@ private:
         int unmaximizedSize = 0;
         bool visible = false;
         bool pinned = true;
+        QWidget* floatingHost = nullptr;
+        bool floating = false;
+        std::string geometry;
     };
     struct Side {
         QWidget* panel = nullptr;
@@ -190,6 +204,7 @@ private:
     QWidget& m_host;
     QWidget& m_center;
     IShellSettings& m_settings;
+    bool m_floatStoreQueued = false;
     QWidget* m_leftSidebar = nullptr;
     QToolButton* m_moreButton = nullptr;
     QSplitter* m_horizontal = nullptr;

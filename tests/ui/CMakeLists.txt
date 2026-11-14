@@ -164,6 +164,7 @@ _frost_ui_test_wiring(ui_tests)
 frost_add_test(ui_shell_tests QT
     SOURCES
         shell/editor_tabs_test.cpp
+        shell/docking_v2_test.cpp
         shell/engine_controls_test.cpp
         shell/notifications_test.cpp
         shell/shell_window_test.cpp

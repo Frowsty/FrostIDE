@@ -29,6 +29,10 @@ struct ToolWindowLayout {
     std::string id;
     bool visible = false;
     int size = 0; // Width (left, right) or height (bottom) in logical pixels; 0: the default.
+    int side = -1; // -1: registered default, 0 left, 1 right, 2 bottom.
+    bool floating = false;
+    std::optional<bool> pinned;
+    std::string geometry; // Qt's versioned opaque geometry, base64; no executable data.
     friend bool operator==(const ToolWindowLayout&, const ToolWindowLayout&) = default;
 };
 
