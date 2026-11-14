@@ -601,4 +601,46 @@ TEST_F(FileTransactionReplace, ObservedSpecialInodeFlagsRefuseBeforeAnyEffects) 
     expectBytes(target, before);
 }
 #endif
+
+TEST_F(FileTransactionReplace, ReversibleMoveAndRedoPreserveExactSourceAndForeignDestination) {
+    auto value=prepare();ASSERT_TRUE(value)<<value.error().describe();
+    const auto destination=scratch.join("b.cpp");
+    ASSERT_TRUE(value->prepareMoveDestination(destination));
+    auto moved=value->moveOriginalTo(destination);ASSERT_TRUE(moved.complete())<<moved.error->describe();
+    EXPECT_EQ(moved.receipt.phase,FileReplacementPhase::OriginalMoved);expectBytes(destination,before);
+    ASSERT_TRUE(value->validateCurrent(true));
+    auto restored=value->restoreMove();ASSERT_TRUE(restored.complete())<<restored.error->describe();
+    EXPECT_EQ(restored.receipt.phase,FileReplacementPhase::MoveRestored);expectBytes(target,before);
+    ASSERT_TRUE(value->reapplyMove().complete());expectBytes(destination,before);
+}
+TEST_F(FileTransactionReplace, PrivateStoreProvisioningReusesOnlyRestrictedOwnedDirectories) {
+    const auto requested=scratch.join("new-private");
+    auto created=ensurePrivateTransactionStore(target,requested,scratch.path());ASSERT_TRUE(created)<<created.error().describe();
+    auto reused=ensurePrivateTransactionStore(target,requested,scratch.path());ASSERT_TRUE(reused)<<reused.error().describe();
+    EXPECT_EQ(*created,*reused);
+    auto first=acquireTransactionStoreLease(*created);ASSERT_TRUE(first)<<first.error().describe();
+    EXPECT_FALSE(acquireTransactionStoreLease(*created));
+}
+TEST_F(FileTransactionReplace, FreshRecoveryReacquiresOwnedObjectsWithoutTrustingClaimedPhase) {
+    FileReplacementReceipt saved;
+    {
+        auto value=prepare();ASSERT_TRUE(value)<<value.error().describe();
+        saved=*value->receipt(); // Initial immutable receipt, before either effect.
+        ASSERT_TRUE(value->retireOriginal().complete());ASSERT_TRUE(value->installAfter().complete());
+    }
+    saved.phase=FileReplacementPhase::Prepared; // Recovery must observe actual native state.
+    auto recovered=recoverFileReplacement(saved,before,after,true,65536);ASSERT_TRUE(recovered)<<recovered.error().describe();
+    EXPECT_EQ(recovered->receipt()->phase,FileReplacementPhase::AfterInstalled);
+    auto undone=recovered->restoreBefore();ASSERT_TRUE(undone.complete())<<undone.error->describe();expectBytes(target,before);
+}
+TEST_F(FileTransactionReplace, RecoveryDoesNotAdoptTamperedRetainedBefore) {
+    FileReplacementReceipt saved;
+    {
+        auto value=prepare();ASSERT_TRUE(value)<<value.error().describe();saved=*value->receipt();
+        ASSERT_TRUE(value->retireOriginal().complete());ASSERT_TRUE(value->installAfter().complete());
+    }
+    ASSERT_TRUE(overwriteNative(saved.retainedBeforePath,"foreign retained bytes"));
+    EXPECT_FALSE(recoverFileReplacement(saved,before,after,true,65536));
+    expectBytes(target,after);expectBytes(saved.retainedBeforePath,"foreign retained bytes");
+}
 } // namespace

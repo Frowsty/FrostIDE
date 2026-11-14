@@ -22,7 +22,12 @@ enum class FileReplacementPhase : unsigned char {
     AfterRetiredUnverified,
     AfterRetained,
     BeforeRestoredUnverified,
-    BeforeRestored
+    BeforeRestored,
+    OriginalMovedUnverified,
+    OriginalMoved,
+    MoveRetainedForInverse,
+    MoveRestoredUnverified,
+    MoveRestored
 };
 
 struct FileReplacementReceipt {
@@ -30,6 +35,8 @@ struct FileReplacementReceipt {
     std::string replacementPath;
     std::string retainedBeforePath;
     std::string metadataProfile;
+    std::string moveDestination;
+    FileImageObservation moveParent;
     std::string beforeMetadataSha256;
     std::string privateAfterMetadataSha256;
     std::string installedAfterMetadataSha256;
@@ -85,11 +92,24 @@ public:
     // AfterInstalled -> AfterRetained -> BeforeRestored. Every endpoint is no-replace; conflicts
     // preserve both objects. AfterRetained can be retried only after revalidating both owned images.
     [[nodiscard]] FileReplacementOutcome restoreBefore();
+    // Repeat the frozen forward/inverse after a reported partial effect. Revalidates every owned
+    // object; foreign/tampered objects remain conflicts. No new preview is accepted on recovery.
+    [[nodiscard]] FileReplacementOutcome settle();
+    [[nodiscard]] FileReplacementOutcome reapplyAfter();
+    // Same-volume reversible source-file movement, including case-only names via private retirement.
+    // Prepared/OriginalRetained only; unchanged bytes+metadata. Destination never overwritten.
+    [[nodiscard]] Result<void> prepareMoveDestination(std::string_view destination);
+    [[nodiscard]] FileReplacementOutcome moveOriginalTo(std::string_view destination);
+    [[nodiscard]] FileReplacementOutcome restoreMove();
+    [[nodiscard]] FileReplacementOutcome reapplyMove();
+    // Fresh all-participant preflight used before coordinated Undo/Redo; no namespace changes.
+    [[nodiscard]] Result<void> validateCurrent(bool after) const;
 
 private:
     struct State;
     explicit PreparedFileReplacement(std::unique_ptr<State>) noexcept;
     std::unique_ptr<State> m_state;
+    friend Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementReceipt&,std::string_view,std::string_view,bool,std::size_t);
     friend Result<PreparedFileReplacement> prepareFileReplacement(std::string_view, std::string_view, std::string_view,
                                                                   std::size_t, std::size_t);
 };
@@ -103,5 +123,36 @@ private:
                                                                      std::string_view privateStore,
                                                                      std::string_view after, std::size_t maxBeforeBytes,
                                                                      std::size_t maxAfterBytes);
+
+// Reacquires native objects from an immutable private manifest. IDs, payload hashes and admitted
+// metadata must match; reported phase is freshly observed, never trusted from disk. desiredBefore
+// selects recovery direction only after the caller verified the durable decision. Foreign data is
+// never overwritten. This does not fabricate a PreparedFileImages capability.
+[[nodiscard]] Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementReceipt& receipt,
+    std::string_view before,std::string_view after,bool desiredBefore,std::size_t maxBytes);
+
+// Cooperating coordinators hold one live OS lock per private recovery root. Destruction releases
+// the lock, never removes recovery records. No claim against hostile same-user directory rewrites.
+class TransactionStoreLease {
+public:
+    ~TransactionStoreLease();
+    TransactionStoreLease(TransactionStoreLease&&) noexcept;
+    TransactionStoreLease& operator=(TransactionStoreLease&&) noexcept;
+private:
+    struct State;
+    explicit TransactionStoreLease(std::unique_ptr<State>) noexcept;
+    std::unique_ptr<State> m_state;
+    friend Result<TransactionStoreLease> acquireTransactionStoreLease(std::string_view);
+};
+[[nodiscard]] Result<TransactionStoreLease> acquireTransactionStoreLease(std::string_view store);
+// Atomic exclusive subdirectory creation, restricted at creation; existing names are refused.
+[[nodiscard]] Result<std::string> claimTransactionDirectory(std::string_view store, std::string_view leaf);
+
+// Creates/reuses a current-owner restricted transaction store, refusing unsafe existing objects.
+// Prefer recoveryRoot when on target volume; otherwise use a per-user sibling of workspaceRoot.
+// With no workspaceRoot the fallback is adjacent to target (caller must exclude it from project
+// indexing/VCS). No privileges or existing unsafe directory ACL/mode are changed. O(path depth).
+[[nodiscard]] Result<std::string> ensurePrivateTransactionStore(std::string_view target,
+    std::string_view preferredRecoveryRoot, std::string_view workspaceRoot = {});
 
 } // namespace frost::io
