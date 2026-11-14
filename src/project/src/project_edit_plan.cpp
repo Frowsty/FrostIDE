@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "frost/io/path.hpp"
 #include "frost/project/project_edit.hpp"
 
-#include "frost/io/path.hpp"
 #include "json.hpp"
 #include "paths.hpp"
 
@@ -71,8 +71,8 @@ Result<ProjectEditPlan> parseProjectEditPlan(std::string_view line) {
         return fail(ErrorCode::Corrupt, "Malformed or duplicate-key ProjectHost plan");
     const auto* error = root->find("Error");
     const auto* edit = root->find("Edit");
-    if (!error || !error->isNull() || !edit || !edit->isObject() ||
-        edit->integerAt("PlanVersion") != 1 || edit->stringAt("Mode") != "BeforeFileMoveRename")
+    if (!error || !error->isNull() || !edit || !edit->isObject() || edit->integerAt("PlanVersion") != 1 ||
+        edit->stringAt("Mode") != "BeforeFileMoveRename")
         return fail(ErrorCode::Corrupt, "Expected a successful versioned pre-move ProjectHost plan");
     ProjectEditPlan result;
     result.projectPath = edit->stringAt("ProjectPath");
@@ -113,8 +113,7 @@ Result<ProjectEditPlan> parseProjectEditPlan(std::string_view line) {
     for (const auto& input : imports->items) {
         const auto path = input.stringAt("Path");
         auto content = bytes(input, "Before");
-        if (!input.isObject() || !io::isAbsolutePath(path) || !content ||
-            !seen.insert(detail::pathKey(path)).second)
+        if (!input.isObject() || !io::isAbsolutePath(path) || !content || !seen.insert(detail::pathKey(path)).second)
             return fail(ErrorCode::Corrupt, "ProjectHost import inputs are malformed or duplicated");
         total += content->size();
         if (total > 48 * 1024 * 1024)

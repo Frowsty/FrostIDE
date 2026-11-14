@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Proposal assembly and composed Workbench rename/undo tests; execution is deferred.
-#include "workbench_source_rename.hpp"
 #include "frost/core/clock.hpp"
 #include "frost/io/mem_fs.hpp"
 #include "frost/ui/editor/editor_view.hpp"
-#include "workbench_rig.hpp"
 
+#include "workbench_rig.hpp"
+#include "workbench_source_rename.hpp"
 #include <gtest/gtest.h>
+
 #include <algorithm>
 
 namespace {
@@ -175,7 +176,10 @@ TEST(SourceRenamePlan, CleanUtf16ImportedBufferMatchesOnlyItsLosslesslyDecodedEv
     io::MemFs fs{clock, io::PathStyle::Posix};
     ASSERT_TRUE(fs.createDirectories("/p"));
     std::string bytes = "\xff\xfe";
-    for (char value : std::string("<Project/>")) { bytes += value; bytes += '\0'; }
+    for (char value : std::string("<Project/>")) {
+        bytes += value;
+        bytes += '\0';
+    }
     ASSERT_TRUE(fs.writeFileAtomic("/p/shared.props", bytes));
     auto input = app::captureRefactoringInput(fs, "/p/shared.props", "<Project/>");
     ASSERT_TRUE(input);

@@ -55,9 +55,9 @@
 #pragma once
 
 #include "frost/core/clock.hpp"
-#include "frost/core/transaction_id.hpp"
 #include "frost/core/error.hpp"
 #include "frost/core/strong_type.hpp"
+#include "frost/core/transaction_id.hpp"
 #include "frost/text/anchor.hpp"
 #include "frost/text/anchor_set.hpp"
 #include "frost/text/positions.hpp"
@@ -195,7 +195,7 @@ public:
     [[nodiscard]] Result<void> acquireExternalWrite(TransactionId id) noexcept;
     void releaseExternalWrite(TransactionId id) noexcept;
     [[nodiscard]] Result<ChangeSet> replaceExternal(TransactionId id, ByteRange range, std::string_view utf8,
-                                                     const EditContext& context) noexcept;
+                                                    const EditContext& context) noexcept;
     // Marks the current sealed nonroot edge; tombstone survives coordinator destruction. Local
     // Undo/Redo refuses it until the owning coordinator admits the entire inverse/forward plan.
     [[nodiscard]] Result<void> markExternalTransaction(TransactionId id) noexcept;

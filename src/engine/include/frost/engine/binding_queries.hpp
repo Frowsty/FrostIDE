@@ -140,7 +140,7 @@ struct BindingGeneratedResourcePreview {
     std::string observedLanguageServerText; // May omit nonsemantic derived Same as documentation updates.
 };
 struct BindingEmbeddedLuaCapture {
-    BindingNameLiteral literal; // Exact AST decoded bytes and whole original C++ token.
+    BindingNameLiteral literal;        // Exact AST decoded bytes and whole original C++ token.
     BindingDocumentCapture projection; // A unique temporary LuaLS document holding decoded bytes.
 };
 
@@ -192,7 +192,6 @@ queryBindingRenamePreview(std::vector<BindingRenameRequest> requests, std::vecto
 querySelectedBindingRenamePreview(std::shared_ptr<const BindingIndex> index, SelectedLuaBindingRename selected,
                                   std::vector<BindingRenameRequest> nativeRenames,
                                   std::vector<BindingDocumentCapture> documents, BindingQueryAdmission stillCurrent,
-                                  std::stop_token stop = {},
-                                  std::vector<BindingEmbeddedLuaCapture> embeddedLua = {});
+                                  std::stop_token stop = {}, std::vector<BindingEmbeddedLuaCapture> embeddedLua = {});
 
 } // namespace frost::engine

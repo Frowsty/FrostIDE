@@ -21,20 +21,20 @@ struct RefactoringInputSnapshot {
 
 // Owner thread: openText is a captured FileDocument UTF8 snapshot, when open. Only NotFound is
 // absence; unreadable/nonregular/oversized files fail. The caller retains project/trust context.
-[[nodiscard]] Result<RefactoringInputSnapshot>
-captureRefactoringInput(io::IFileSystem& fs, std::string path, std::optional<std::string> openText = {});
+[[nodiscard]] Result<RefactoringInputSnapshot> captureRefactoringInput(io::IFileSystem& fs, std::string path,
+                                                                       std::optional<std::string> openText = {});
 
 // Appends exact disk and optional read-only buffer dependencies; conflicting duplicate receipts
 // fail. These functions only assemble values; discard the aggregate plan on any failure.
 [[nodiscard]] Result<void> appendRefactoringDependency(document::RefactoringPlan& plan,
-                                                        const RefactoringInputSnapshot& input);
+                                                       const RefactoringInputSnapshot& input);
 [[nodiscard]] Result<void> appendRefactoringReplacement(document::RefactoringPlan& plan,
-                                                         const RefactoringInputSnapshot& input,
-                                                         std::string_view before, std::string after);
+                                                        const RefactoringInputSnapshot& input, std::string_view before,
+                                                        std::string after);
 // Host evaluation reads disk, not an unsaved editor overlay. Both disk and any open logical
 // text must match its observed input; decode losslessly (including UTF8/UTF16 BOMs) for comparison.
 [[nodiscard]] Result<void> refactoringInputMatchesEvaluation(const RefactoringInputSnapshot& input,
-                                                               const std::optional<std::string>& evaluatedBytes);
+                                                             const std::optional<std::string>& evaluatedBytes);
 
 // One byte-preserving file rename and optional .fmeta rename, with destination/sidecar absence
 // dependencies. Folders and direct metadata operations are refused. Coordinator owns application,

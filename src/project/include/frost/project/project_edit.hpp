@@ -150,7 +150,7 @@ struct ProjectEditPlan {
 // Blocking worker-only plan. Refuses committing/non-rename requests; cancellation ends the owned
 // helper. No Ready/approval round trip, source move, journal or definition write is permitted.
 [[nodiscard]] Result<ProjectEditPlan> runProjectEditPlan(io::IProcessLauncher& launcher,
-                                                         const ProjectEditLaunch& launch,
-                                                         const ProjectEdit& edit, std::stop_token stop = {});
+                                                         const ProjectEditLaunch& launch, const ProjectEdit& edit,
+                                                         std::stop_token stop = {});
 
 } // namespace frost::project

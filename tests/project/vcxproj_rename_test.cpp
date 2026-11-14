@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Authored R8 membership/plan protocol coverage; execution is deferred by user instruction.
-#include "frost/project/vcxproj_rename.hpp"
 #include "frost/project/vcxproj.hpp"
+#include "frost/project/vcxproj_rename.hpp"
 
 #include "project_test_util.hpp"
 #include <gtest/gtest.h>
@@ -23,12 +23,13 @@ struct RenameRig {
 
 TEST(VcxprojRename, IncludesFiltersAndDisplayLinkJoinOneBeforeAfterPlan) {
     RenameRig rig;
-    rig.inputs[0].contents = "<?xml version=\"1.0\"?><Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">"
-                            "<!--keep--><ItemGroup><ClCompile Include=\"src\\old.cpp\">"
-                            "<Link>Virtual\\old.cpp</Link><ExcludedFromBuild Condition=\"'$(Configuration)'=='Release'\">true"
-                            "</ExcludedFromBuild></ClCompile></ItemGroup></Project>";
+    rig.inputs[0].contents =
+        "<?xml version=\"1.0\"?><Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">"
+        "<!--keep--><ItemGroup><ClCompile Include=\"src\\old.cpp\">"
+        "<Link>Virtual\\old.cpp</Link><ExcludedFromBuild Condition=\"'$(Configuration)'=='Release'\">true"
+        "</ExcludedFromBuild></ClCompile></ItemGroup></Project>";
     rig.inputs[1].contents = "<Project><ItemGroup><ClCompile Include=\"src\\old.cpp\"><Filter>Source Files</Filter>"
-                            "</ClCompile></ItemGroup></Project>";
+                             "</ClCompile></ItemGroup></Project>";
     const auto original = rig.inputs;
     auto plan = rig.plan();
     ASSERT_TRUE(plan) << plan.error().describe();
@@ -53,7 +54,7 @@ TEST(VcxprojRename, IncludesFiltersAndDisplayLinkJoinOneBeforeAfterPlan) {
 TEST(VcxprojRename, AbsentFiltersRemainAnObservedAbsenceAndCustomLinkAliasesStay) {
     RenameRig rig;
     rig.inputs[0].contents = "<Project><ItemGroup><ClCompile Include='src/old.cpp'><Link>Alias.cpp</Link>"
-                            "</ClCompile></ItemGroup></Project>";
+                             "</ClCompile></ItemGroup></Project>";
     auto plan = rig.plan();
     ASSERT_TRUE(plan) << plan.error().describe();
     EXPECT_EQ(plan->replacements.size(), 1);
@@ -75,13 +76,13 @@ TEST(VcxprojRename, XmlEscapesDestinationInsteadOfInjectingMarkup) {
 }
 
 TEST(VcxprojRename, AmbiguousIncludesAndBuildTimeOrExcludedMembershipAreRefused) {
-    for (const std::string xml : {
-             "<Project><ItemGroup><ClCompile Include='src/*.cpp'/></ItemGroup></Project>",
-             "<Project><ItemGroup><ClCompile Include='$(Sources)'/></ItemGroup></Project>",
-             "<Project><ItemGroup><ClCompile Include='src/old.cpp;other.cpp'/></ItemGroup></Project>",
-             "<Project><Target Name='Build'><ItemGroup><ClCompile Include='src/old.cpp'/></ItemGroup></Target></Project>",
-             "<Project><ItemGroup><ClCompile Include='src/old.cpp' Exclude='old.cpp'/></ItemGroup></Project>",
-             "<Project><ItemGroup><ClCompile Update='src/old.cpp'/></ItemGroup></Project>"}) {
+    for (const std::string xml :
+         {"<Project><ItemGroup><ClCompile Include='src/*.cpp'/></ItemGroup></Project>",
+          "<Project><ItemGroup><ClCompile Include='$(Sources)'/></ItemGroup></Project>",
+          "<Project><ItemGroup><ClCompile Include='src/old.cpp;other.cpp'/></ItemGroup></Project>",
+          "<Project><Target Name='Build'><ItemGroup><ClCompile Include='src/old.cpp'/></ItemGroup></Target></Project>",
+          "<Project><ItemGroup><ClCompile Include='src/old.cpp' Exclude='old.cpp'/></ItemGroup></Project>",
+          "<Project><ItemGroup><ClCompile Update='src/old.cpp'/></ItemGroup></Project>"}) {
         RenameRig rig;
         rig.inputs[0].contents = xml;
         auto plan = rig.plan();
@@ -91,11 +92,13 @@ TEST(VcxprojRename, AmbiguousIncludesAndBuildTimeOrExcludedMembershipAreRefused)
 }
 
 TEST(VcxprojRename, PureRouteRefusesFileDependentGroupItemAndMetadataConditions) {
-    for (const std::string xml : {
-             "<Project><ItemGroup Condition=\"Exists('src/old.cpp')\"><ClCompile Include='src/old.cpp'/></ItemGroup></Project>",
-             "<Project><ItemGroup><ClCompile Include='src/old.cpp' Condition=\"Exists('src/new.cpp')\"/></ItemGroup></Project>",
-             "<Project><ItemGroup><ClCompile Include='src/old.cpp'><ExcludedFromBuild Condition=\"Exists('src/old.cpp')\">true"
-             "</ExcludedFromBuild></ClCompile></ItemGroup></Project>"}) {
+    for (const std::string xml : {"<Project><ItemGroup Condition=\"Exists('src/old.cpp')\"><ClCompile "
+                                  "Include='src/old.cpp'/></ItemGroup></Project>",
+                                  "<Project><ItemGroup><ClCompile Include='src/old.cpp' "
+                                  "Condition=\"Exists('src/new.cpp')\"/></ItemGroup></Project>",
+                                  "<Project><ItemGroup><ClCompile Include='src/old.cpp'><ExcludedFromBuild "
+                                  "Condition=\"Exists('src/old.cpp')\">true"
+                                  "</ExcludedFromBuild></ClCompile></ItemGroup></Project>"}) {
         RenameRig rig;
         rig.inputs[0].contents = xml;
         auto plan = rig.plan();
@@ -105,8 +108,8 @@ TEST(VcxprojRename, PureRouteRefusesFileDependentGroupItemAndMetadataConditions)
 }
 
 TEST(VcxprojRename, ImportsAndBothSdkFormsRequireActualPlanOnlyMsbuild) {
-    for (const std::string prefix : {"<Project><Import Project='sdk.props'/>",
-                                     "<Project Sdk='Vendor.Sdk'>", "<Project><Sdk Name='Vendor.Sdk'/>"}) {
+    for (const std::string prefix : {"<Project><Import Project='sdk.props'/>", "<Project Sdk='Vendor.Sdk'>",
+                                     "<Project><Sdk Name='Vendor.Sdk'/>"}) {
         RenameRig rig;
         rig.inputs[0].contents = prefix + "<ItemGroup><ClCompile Include='src/old.cpp'/></ItemGroup></Project>";
         auto plan = rig.plan();
@@ -119,7 +122,7 @@ TEST(VcxprojRename, ImportsAndBothSdkFormsRequireActualPlanOnlyMsbuild) {
 TEST(VcxprojRename, DestinationCollisionsMalformedXmlAndDuplicateSnapshotsRefuseTheWholePlan) {
     RenameRig rig;
     rig.inputs[0].contents = "<Project><ItemGroup><ClCompile Include='src/old.cpp'/><ClCompile Include='src/new.cpp'/>"
-                            "</ItemGroup></Project>";
+                             "</ItemGroup></Project>";
     auto collision = rig.plan();
     ASSERT_FALSE(collision);
     EXPECT_EQ(collision.error().code(), ErrorCode::AlreadyExists);

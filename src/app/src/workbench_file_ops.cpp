@@ -151,8 +151,8 @@ Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_
         if (!owner)
             return fail(ErrorCode::Cancelled, "Workbench closed during rename preparation");
         if (!transaction) {
-            notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))),
-                   qs(transaction.error().message()), ui::NotificationKind::Error);
+            notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(transaction.error().message()),
+                   ui::NotificationKind::Error);
             return std::unexpected(transaction.error());
         }
         auto outcome = applyRefactoring(*transaction);
@@ -459,7 +459,8 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
                            ui::NotificationKind::Warning);
                     continue;
                 }
-                const auto changes = project::projectEditsForPathChange(*m_solution, canonicalOld, *targetJoined, false);
+                const auto changes =
+                    project::projectEditsForPathChange(*m_solution, canonicalOld, *targetJoined, false);
                 if (!std::ranges::any_of(changes, [&](const auto& change) {
                         return lang::documentKey(change.project) == lang::documentKey(projectPath);
                     })) {

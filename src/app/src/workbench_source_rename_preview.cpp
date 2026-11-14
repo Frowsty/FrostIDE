@@ -34,30 +34,41 @@ public:
         connect(m_cancel, &QPushButton::clicked, this, [this] { reject(); });
         layout->addWidget(m_cancel);
     }
-    void complete() { m_complete = true; done(QDialog::Accepted); }
+    void complete() {
+        m_complete = true;
+        done(QDialog::Accepted);
+    }
     void reject() override {
-        if (m_complete) { QDialog::reject(); return; }
+        if (m_complete) {
+            QDialog::reject();
+            return;
+        }
         m_stop.request_stop();
         m_label->setText(text("Cancelling project preparation…"));
         m_cancel->setEnabled(false);
     }
+
 protected:
     void closeEvent(QCloseEvent* event) override {
-        if (m_complete) { event->accept(); return; }
+        if (m_complete) {
+            event->accept();
+            return;
+        }
         event->ignore();
         reject();
     }
+
 private:
     std::stop_source& m_stop;
     QLabel* m_label = nullptr;
     QPushButton* m_cancel = nullptr;
     bool m_complete = false;
 };
-}
+} // namespace
 
 Result<document::RefactoringPlan>
 prepareSourceRenameInBackground(QWidget* ownerWindow,
-    std::function<Result<document::RefactoringPlan>(std::stop_token)> prepare) {
+                                std::function<Result<document::RefactoringPlan>(std::stop_token)> prepare) {
     std::stop_source cancellation;
     RenamePlanningDialog dialog(cancellation);
     if (ownerWindow)
@@ -65,10 +76,13 @@ prepareSourceRenameInBackground(QWidget* ownerWindow,
     std::optional<Result<document::RefactoringPlan>> completed;
     std::jthread worker([&, prepare = std::move(prepare)] {
         auto result = prepare(cancellation.get_token());
-        QMetaObject::invokeMethod(&dialog, [&, result = std::move(result)]() mutable {
-            completed = std::move(result);
-            dialog.complete();
-        }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            &dialog,
+            [&, result = std::move(result)]() mutable {
+                completed = std::move(result);
+                dialog.complete();
+            },
+            Qt::QueuedConnection);
     });
     dialog.exec();
     const bool cancelled = cancellation.stop_requested();

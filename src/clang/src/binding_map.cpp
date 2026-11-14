@@ -461,8 +461,8 @@ public:
         if (literal)
             captureNameLiteral(*literal, m_context, m_request.root, candidate);
         if (!candidate.nameLiteral) {
-            m_request.embeddedLuaRefusals.push_back(*path + ":" +
-                std::to_string(sm.getExpansionLineNumber(location)) + ": computed/macro/concatenated Lua chunk");
+            m_request.embeddedLuaRefusals.push_back(*path + ":" + std::to_string(sm.getExpansionLineNumber(location)) +
+                                                    ": computed/macro/concatenated Lua chunk");
         } else {
             m_request.embeddedLua.push_back(std::move(*candidate.nameLiteral));
         }

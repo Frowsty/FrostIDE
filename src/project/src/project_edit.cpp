@@ -232,9 +232,9 @@ std::vector<ProjectPathChange> projectEditsForPathChange(const SolutionModel& so
 }
 
 static Result<void> runProjectEditImpl(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch,
-                                        const ProjectEdit& edit,
-                                        const std::function<bool(std::string_view digest)>& admit,
-                                        std::string* plannedResponse, std::stop_token stop) {
+                                       const ProjectEdit& edit,
+                                       const std::function<bool(std::string_view digest)>& admit,
+                                       std::string* plannedResponse, std::stop_token stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "Project membership planning was cancelled");
     auto request = projectEditRequest(edit);

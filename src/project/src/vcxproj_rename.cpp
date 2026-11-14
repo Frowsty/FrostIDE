@@ -4,6 +4,7 @@
 #include "frost/io/path.hpp"
 #include "frost/io/utf.hpp"
 #include "frost/project/vcxproj.hpp"
+
 #include "paths.hpp"
 #include "text_util.hpp"
 #include "xml.hpp"
@@ -83,8 +84,8 @@ const VcxprojRenameInput* findInput(std::span<const VcxprojRenameInput> inputs, 
 }
 
 Result<void> load(pugi::xml_document& xml, const VcxprojRenameInput& input) {
-    if (!input.contents || input.contents->size() > 8 * 1024 * 1024 ||
-        !io::isValidUtf8(*input.contents) || input.contents->find('\0') != std::string::npos)
+    if (!input.contents || input.contents->size() > 8 * 1024 * 1024 || !io::isValidUtf8(*input.contents) ||
+        input.contents->find('\0') != std::string::npos)
         return fail(ErrorCode::Unsupported, "Capture readable UTF-8 project XML smaller than 8 MiB");
     auto parsed = xml.load_buffer(input.contents->data(), input.contents->size(),
                                   pugi::parse_full | pugi::parse_ws_pcdata, pugi::encoding_utf8);
@@ -102,8 +103,7 @@ struct XmlPlan {
     bool imports = false;
 };
 
-Result<XmlPlan> transform(const VcxprojRenameInput& input, std::string_view from, std::string_view to,
-                          bool filters) {
+Result<XmlPlan> transform(const VcxprojRenameInput& input, std::string_view from, std::string_view to, bool filters) {
     pugi::xml_document xml;
     if (auto loaded = load(xml, input); !loaded)
         return std::unexpected(loaded.error());
@@ -179,7 +179,8 @@ Result<XmlPlan> transform(const VcxprojRenameInput& input, std::string_view from
                         continue;
                     std::string link(detail::elementText(child));
                     if (!literal(link) || !child.first_child() || child.first_child().next_sibling() ||
-                        (child.first_child().type() != pugi::node_pcdata && child.first_child().type() != pugi::node_cdata)) {
+                        (child.first_child().type() != pugi::node_pcdata &&
+                         child.first_child().type() != pugi::node_cdata)) {
                         error = Error(ErrorCode::Unsupported, "Use literal Link metadata before renaming this item");
                         return;
                     }
@@ -223,10 +224,10 @@ Result<XmlPlan> transform(const VcxprojRenameInput& input, std::string_view from
 
 Result<VcxprojRenamePlan> planVcxprojRename(const VcxprojRenameRequest& request) {
     if (request.inputs.size() > 512 || !literal(request.fromPath) || !literal(request.toPath) ||
-        !detail::normalizeAbsolute(request.projectPath) ||
-        !detail::normalizeAbsolute(request.fromPath) || !detail::normalizeAbsolute(request.toPath) ||
-        request.fromPath == request.toPath)
-        return fail(ErrorCode::InvalidArgument, "A membership rename needs distinct absolute source paths and bounded inputs");
+        !detail::normalizeAbsolute(request.projectPath) || !detail::normalizeAbsolute(request.fromPath) ||
+        !detail::normalizeAbsolute(request.toPath) || request.fromPath == request.toPath)
+        return fail(ErrorCode::InvalidArgument,
+                    "A membership rename needs distinct absolute source paths and bounded inputs");
     if (!detail::iendsWith(request.projectPath, ".vcxproj"))
         return fail(ErrorCode::InvalidArgument, "Select a .vcxproj definition for this rename");
     for (std::size_t i = 0; i < request.inputs.size(); ++i) {
@@ -242,7 +243,8 @@ Result<VcxprojRenamePlan> planVcxprojRename(const VcxprojRenameRequest& request)
         return fail(ErrorCode::InvalidArgument, "Capture the project and the presence or absence of its .filters file");
     if (equalPath(request.fromPath, definition->path) || equalPath(request.toPath, definition->path) ||
         equalPath(request.fromPath, filters->path) || equalPath(request.toPath, filters->path))
-        return fail(ErrorCode::Unsupported, "Rename project definitions through the solution operation, not source membership");
+        return fail(ErrorCode::Unsupported,
+                    "Rename project definitions through the solution operation, not source membership");
     auto project = transform(*definition, request.fromPath, request.toPath, false);
     if (!project)
         return std::unexpected(project.error());
@@ -264,10 +266,8 @@ Result<VcxprojRenamePlan> planVcxprojRename(const VcxprojRenameRequest& request)
     return plan;
 }
 
-Result<VcxprojRenamePlan> planVcxprojRenameWithHost(io::IProcessLauncher& launcher,
-                                                    const ProjectEditLaunch& launch,
-                                                    const ProjectEdit& edit,
-                                                    std::span<const VcxprojRenameInput> inputs,
+Result<VcxprojRenamePlan> planVcxprojRenameWithHost(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch,
+                                                    const ProjectEdit& edit, std::span<const VcxprojRenameInput> inputs,
                                                     std::stop_token stop) {
     const auto* definition = findInput(inputs, edit.definition);
     const auto* filters = findInput(inputs, edit.definition + ".filters");
@@ -284,7 +284,8 @@ Result<VcxprojRenamePlan> planVcxprojRenameWithHost(io::IProcessLauncher& launch
     if (!planned)
         return std::unexpected(planned.error());
     if (*definition->contents != planned->projectBefore || filters->contents != planned->filtersBefore)
-        return fail(ErrorCode::Busy, "Project/filter buffers differ from the MSBuild plan; save or reload and preview again");
+        return fail(ErrorCode::Busy,
+                    "Project/filter buffers differ from the MSBuild plan; save or reload and preview again");
     VcxprojRenamePlan result;
     result.dependencies.assign(inputs.begin(), inputs.end());
     for (const auto& dependency : planned->imports) {

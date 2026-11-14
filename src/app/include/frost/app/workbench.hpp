@@ -71,7 +71,6 @@
 #include "frost/document/autosave.hpp"
 #include "frost/document/refactoring_transaction.hpp"
 #include "frost/document/save_manager.hpp"
-#include "frost/document/refactoring_transaction.hpp"
 #include "frost/input/action.hpp"
 #include "frost/input/keymap_service.hpp"
 #include "frost/input/layout.hpp"
@@ -952,8 +951,8 @@ private:
     void refreshSolutionExplorerForFsChange(std::string_view selectPath = {});
     void renameSourceInCMakeLists(const std::string& oldPath, const std::string& newPath, bool directory);
     // Source, optional .fmeta and all project memberships are prepared before any effect.
-    [[nodiscard]] Result<document::RefactoringPlan>
-    prepareProjectSourceRename(const std::string& oldPath, const std::string& newPath);
+    [[nodiscard]] Result<document::RefactoringPlan> prepareProjectSourceRename(const std::string& oldPath,
+                                                                               const std::string& newPath);
     void removeSourceFromCMakeLists(const std::string& deletedPath, bool directory);
     // Writes `after` over `before` in `canonicalLists` only after a confirmed preview (`change`
     // describes it in the declined notice); Cancelled when declined.

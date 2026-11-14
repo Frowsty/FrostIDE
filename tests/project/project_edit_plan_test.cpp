@@ -21,7 +21,8 @@ std::string quoted(std::string_view value) {
 }
 std::string answer(std::string_view project = MemTree::path("App/App.vcxproj")) {
     return "{\"Error\":null,\"Edit\":{\"PlanVersion\":1,\"Mode\":\"BeforeFileMoveRename\",\"ProjectPath\":" +
-           quoted(project) + R"(,"ProjectBefore":"PFByb2plY3QvPg==","Project":"PFByb2plY3QvPg==",)"
+           quoted(project) +
+           R"(,"ProjectBefore":"PFByb2plY3QvPg==","Project":"PFByb2plY3QvPg==",)"
            R"("FiltersBefore":null,"Filters":null,"Configurations":["Debug|x64"],"Environment":"captured",)"
            R"("InputBytes":[]}})";
 }
@@ -55,10 +56,10 @@ TEST(ProjectEditPlan, DecodesExactBeforeAfterAndObservedFilterAbsence) {
 
 TEST(ProjectEditPlan, MalformedVersionDuplicateKeysAndNoncanonicalBase64AreRejected) {
     for (auto [from, to] : {std::pair{"\"PlanVersion\":1", "\"PlanVersion\":2"},
-                           std::pair{"\"PlanVersion\":1", "\"PlanVersion\":1,\"PlanVersion\":1"},
-                           std::pair{"PFByb2plY3QvPg==", "PFByb2plY3QvPh=="},
-                           std::pair{"\"Filters\":null", "\"Filters\":\"PFByb2plY3QvPg==\""},
-                           std::pair{"\"Debug|x64\"", "\"Debug|x64\",\"Debug|x64\""}}) {
+                            std::pair{"\"PlanVersion\":1", "\"PlanVersion\":1,\"PlanVersion\":1"},
+                            std::pair{"PFByb2plY3QvPg==", "PFByb2plY3QvPh=="},
+                            std::pair{"\"Filters\":null", "\"Filters\":\"PFByb2plY3QvPg==\""},
+                            std::pair{"\"Debug|x64\"", "\"Debug|x64\",\"Debug|x64\""}}) {
         auto response = answer();
         auto at = response.find(from);
         ASSERT_NE(at, std::string::npos);
@@ -104,7 +105,7 @@ TEST(ProjectEditPlan, CancellationRacingLaunchEndsTheOwnedHelperBeforeBlockingRe
             return process;
         }
         Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
-                                                              const io::AsyncContext& context) override {
+                                                               const io::AsyncContext& context) override {
             return scripted.launchAsync(spec, context);
         }
     } processes;
@@ -119,8 +120,9 @@ TEST(ProjectEditPlan, CancellationRacingLaunchEndsTheOwnedHelperBeforeBlockingRe
 
 TEST(ProjectEditPlan, UnexpectedReadyAndDifferentProjectAreNotAcceptedAsPlans) {
     io::ScriptedProcessLauncher processes;
-    processes.expect({.stdoutBytes = R"({"Ready":true,"TransactionId":"9cdb031c-2eb4-4765-a6f9-62bbeb5f3a15","JournalDigest":")" +
-                                    std::string(64, 'a') + "\"}\n"});
+    processes.expect(
+        {.stdoutBytes = R"({"Ready":true,"TransactionId":"9cdb031c-2eb4-4765-a6f9-62bbeb5f3a15","JournalDigest":")" +
+                        std::string(64, 'a') + "\"}\n"});
     EXPECT_FALSE(runProjectEditPlan(processes, launch(), edit()));
     EXPECT_EQ(processes.launches()[0].stdinBytes.find("Decision"), std::string::npos);
     processes.expect({.stdoutBytes = answer(MemTree::path("Other.vcxproj")) + "\n"});
@@ -137,7 +139,7 @@ TEST(ProjectEditPlan, CancellationBeforeLaunchStartsNothingAndDirtyDefinitionRef
     EXPECT_TRUE(processes.launches().empty());
     const auto request = edit();
     std::vector<VcxprojRenameInput> inputs{{request.definition, "<Project><!--dirty--></Project>"},
-                                          {request.definition + ".filters", std::nullopt}};
+                                           {request.definition + ".filters", std::nullopt}};
     processes.expect({.stdoutBytes = answer() + "\n"});
     auto dirty = planVcxprojRenameWithHost(processes, launch(), request, inputs);
     ASSERT_FALSE(dirty);

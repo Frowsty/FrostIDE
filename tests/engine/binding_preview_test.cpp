@@ -290,12 +290,13 @@ TEST(BindingSelectedPreview, EmbeddedLuaProviderEditsMapThroughWholeEscapedAstLi
     rig.documents.push_back({nativePath, snapshot("execute(" + spelling + ");"), {}, BindingDocumentRole::UserSource});
     BindingDocumentCapture projection{projectedPath, snapshot(decoded), 29, BindingDocumentRole::UserSource};
     rig.documents.push_back(projection);
-    BindingEmbeddedLuaCapture chunk{{{nativePath, {ByteOffset{8}, ByteOffset{8 + spelling.size()}}}, decoded, spelling}, projection};
+    BindingEmbeddedLuaCapture chunk{{{nativePath, {ByteOffset{8}, ByteOffset{8 + spelling.size()}}}, decoded, spelling},
+                                    projection};
     auto changes = *rig.lua.edits.find("documentChanges");
     changes.push(fileEdit(projection, {ByteOffset{0}, ByteOffset{4}}, lang::PositionEncoding::Utf16, "Trace"));
     rig.lua.edits.set("documentChanges", std::move(changes));
     auto result = sched::syncWait(querySelectedBindingRenamePreview(rig.index, rig.selected, {}, rig.documents,
-        [](const auto&) { return true; }, {}, {chunk}));
+                                                                    [](const auto&) { return true; }, {}, {chunk}));
     ASSERT_TRUE(result) << result.error().message();
     const auto file = std::ranges::find(result->sourceFiles, nativePath, &BindingPreviewFile::path);
     ASSERT_NE(file, result->sourceFiles.end());
@@ -309,15 +310,16 @@ TEST(BindingSelectedPreview, EmbeddedLuaProviderEditsMapThroughWholeEscapedAstLi
 TEST(BindingSelectedPreview, EmbeddedLuaAstSpellingMismatchRefusesWholePreview) {
     Rig rig;
     BindingDocumentCapture projection{path(".binding-projection.lua"), snapshot("Cast()"), 29,
-        BindingDocumentRole::UserSource};
+                                      BindingDocumentRole::UserSource};
     rig.documents.push_back({path("Calls.cpp"), snapshot("\"Other()\""), {}, BindingDocumentRole::UserSource});
     rig.documents.push_back(projection);
-    BindingEmbeddedLuaCapture chunk{{{path("Calls.cpp"), {ByteOffset{0}, ByteOffset{8}}}, "Cast()", "\"Cast()\""}, projection};
+    BindingEmbeddedLuaCapture chunk{{{path("Calls.cpp"), {ByteOffset{0}, ByteOffset{8}}}, "Cast()", "\"Cast()\""},
+                                    projection};
     auto changes = *rig.lua.edits.find("documentChanges");
     changes.push(fileEdit(projection, {ByteOffset{0}, ByteOffset{4}}, lang::PositionEncoding::Utf16, "Trace"));
     rig.lua.edits.set("documentChanges", std::move(changes));
     auto result = sched::syncWait(querySelectedBindingRenamePreview(rig.index, rig.selected, {}, rig.documents,
-        [](const auto&) { return true; }, {}, {chunk}));
+                                                                    [](const auto&) { return true; }, {}, {chunk}));
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error().code(), ErrorCode::Busy);
 }

@@ -52,8 +52,7 @@ struct VcxprojRenamePlan {
 // Capture project and project+'.filters' (including absence) in inputs. The result joins the
 // caller's single RefactoringPlan, never the helper's independent commit/journal path.
 [[nodiscard]] Result<VcxprojRenamePlan>
-planVcxprojRenameWithHost(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch,
-                           const ProjectEdit& edit, std::span<const VcxprojRenameInput> inputs,
-                           std::stop_token stop = {});
+planVcxprojRenameWithHost(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch, const ProjectEdit& edit,
+                          std::span<const VcxprojRenameInput> inputs, std::stop_token stop = {});
 
 } // namespace frost::project

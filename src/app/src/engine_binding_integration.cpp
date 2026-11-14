@@ -115,19 +115,22 @@ struct EngineBindingIntegration::Impl {
             return;
         invalidate(true);
         setStatus("Binding sources settled; refreshing actual engine schema (rebuild may be required)");
-        const auto expected = status == document::RefactoringStatus::Undone ? applied.previousIdentity : applied.renamedIdentity;
-        retirement->jobs.push_back(workbench.m_pool->spawn(sched::Lane::Background,
-            regenerateSchema(relay, applied, expected, revision, &workbench.m_services.fs, &workbench.m_services.trust)));
+        const auto expected =
+            status == document::RefactoringStatus::Undone ? applied.previousIdentity : applied.renamedIdentity;
+        retirement->jobs.push_back(workbench.m_pool->spawn(
+            sched::Lane::Background, regenerateSchema(relay, applied, expected, revision, &workbench.m_services.fs,
+                                                      &workbench.m_services.trust)));
     }
-    static sched::Task<void> regenerateSchema(std::shared_ptr<EngineBindingPostRelay> delivery,
-        AppliedBinding applied, std::string expected, std::uint64_t generation, io::IFileSystem* fs,
-        project::TrustStore* trust) {
+    static sched::Task<void> regenerateSchema(std::shared_ptr<EngineBindingPostRelay> delivery, AppliedBinding applied,
+                                              std::string expected, std::uint64_t generation, io::IFileSystem* fs,
+                                              project::TrustStore* trust) {
         if (!trust->isTrusted(applied.root) || !trust->isTrusted(applied.engineRoot))
             co_return;
         applied.host->invalidateSchemaCache();
         const auto schema = applied.host->schemaForWorkspace(*fs, applied.root);
-        const bool present = schema && std::ranges::any_of(schema->luaEntries,
-            [&](const auto& entry) { return entry.qualifiedName == expected; });
+        const bool present = schema && std::ranges::any_of(schema->luaEntries, [&](const auto& entry) {
+                                 return entry.qualifiedName == expected;
+                             });
         delivery->post([root = applied.root, generation, present](EngineBindingIntegration& target) {
             auto& impl = *target.m_impl;
             if (impl.stopped || impl.revision != generation || impl.workbench.m_projectRoot != root)
@@ -136,7 +139,8 @@ struct EngineBindingIntegration::Impl {
                 impl.workbench.refreshLuaConfiguration();
                 impl.setStatus("Actual engine schema refreshed; Lua metadata configuration refresh requested");
             } else {
-                impl.setStatus("Binding sources settled. Actual engine schema is stale or unavailable; rebuild the engine and refresh Lua configuration");
+                impl.setStatus("Binding sources settled. Actual engine schema is stale or unavailable; rebuild the "
+                               "engine and refresh Lua configuration");
             }
         });
         co_return;
@@ -338,8 +342,9 @@ struct EngineBindingIntegration::Impl {
             if (impl.preview && impl.diff)
                 impl.diff->setPlainText(qs(result->previewDisplay));
             impl.setStatus(
-                impl.preview ? (impl.preview->applicationSafe ? "Preview ready: Apply covered references (see scope and excluded chunks below)" :
-                    "Preview only: " + impl.preview->applicationRefusal)
+                impl.preview ? (impl.preview->applicationSafe
+                                    ? "Preview ready: Apply covered references (see scope and excluded chunks below)"
+                                    : "Preview only: " + impl.preview->applicationRefusal)
                 : capture.operation == binding_work::Operation::Refresh
                     ? "Semantic bindings captured from actual schema and AST inputs"
                     : std::format(
@@ -404,8 +409,8 @@ struct EngineBindingIntegration::Impl {
         if (!raw)
             error = raw.error().message();
         else {
-            auto admission = binding_work::admitRenameDefinitions(*probe.fs, *raw, probe.metadataPath,
-                                                                  probe.expectedMetadataPhysical, probe.metadataRequired);
+            auto admission = binding_work::admitRenameDefinitions(
+                *probe.fs, *raw, probe.metadataPath, probe.expectedMetadataPhysical, probe.metadataRequired);
             if (!admission)
                 error = admission.error().message();
             else {
@@ -651,15 +656,14 @@ EngineBindingIntegration::EngineBindingIntegration(Workbench& workbench,
             Impl::navigate(m_impl->relay, *m_impl->published, m_impl->graph, m_impl->usages[index])));
     });
     connect(&workbench, &Workbench::projectChanged, this, [this](const QString&) { cancel(); });
-    connect(&workbench, &Workbench::refactoringSettled, this,
-        [this](const document::RefactoringOutcome& outcome) {
-            // Initial Apply emits synchronously before the returned token is recorded.
-            if (m_impl->applying)
-                return;
-            const auto found = std::ranges::find(m_impl->appliedBindings, outcome.token, &Impl::AppliedBinding::token);
-            if (found != m_impl->appliedBindings.end())
-                m_impl->regenerate(*found, outcome.status);
-        });
+    connect(&workbench, &Workbench::refactoringSettled, this, [this](const document::RefactoringOutcome& outcome) {
+        // Initial Apply emits synchronously before the returned token is recorded.
+        if (m_impl->applying)
+            return;
+        const auto found = std::ranges::find(m_impl->appliedBindings, outcome.token, &Impl::AppliedBinding::token);
+        if (found != m_impl->appliedBindings.end())
+            m_impl->regenerate(*found, outcome.status);
+    });
     impl.registrySubscription = workbench.m_documentRegistry->subscribe([this](const std::string& path) {
         if (isCFamilySource(path) || isLuaSource(path))
             cancel();
@@ -669,10 +673,11 @@ EngineBindingIntegration::EngineBindingIntegration(Workbench& workbench,
         [this](std::string path, lang::LspPosition position, std::string name, std::function<void()> ordinary) {
             return m_impl->interceptRename(std::move(path), position, std::move(name), std::move(ordinary));
         });
-    for (const auto& [id, name, operation] : {std::tuple{"engine.bindings.refresh", "Refresh Engine Bindings", 0},
-                                              {"navigate.bindingUsages", "Find C++/Lua Binding Usages", 1},
-                                              {"refactor.bindingRenamePreview", "Preview C++/Lua Binding Rename", 2},
-                                              {"refactor.bindingRenameApply", "Apply Covered C++/Lua Binding References", 3}}) {
+    for (const auto& [id, name, operation] :
+         {std::tuple{"engine.bindings.refresh", "Refresh Engine Bindings", 0},
+          {"navigate.bindingUsages", "Find C++/Lua Binding Usages", 1},
+          {"refactor.bindingRenamePreview", "Preview C++/Lua Binding Rename", 2},
+          {"refactor.bindingRenameApply", "Apply Covered C++/Lua Binding References", 3}}) {
         input::ActionSpec action;
         action.id = id;
         action.name = name;
@@ -698,8 +703,8 @@ EngineBindingIntegration::EngineBindingIntegration(Workbench& workbench,
         action.enabled = [window, operation](const input::ActionContext&) {
             if (operation == 3)
                 return window && window->m_engineBindings && window->m_engineBindings->m_impl->applyPlan &&
-                    window->m_engineBindings->m_impl->published &&
-                    window->m_engineBindings->m_impl->published->current();
+                       window->m_engineBindings->m_impl->published &&
+                       window->m_engineBindings->m_impl->published->current();
             return window && window->m_engineBindings && !window->m_engineBindings->m_impl->stopped &&
                    !window->m_projectRoot.empty();
         };
@@ -740,12 +745,16 @@ std::shared_ptr<EngineBindingRetirement> EngineBindingIntegration::takeRetiremen
 }
 Result<document::RefactoringOutcome> EngineBindingIntegration::applyRename() {
     auto& impl = *m_impl;
-    if (impl.stopped || impl.busy || !impl.published || !impl.published->current() ||
-        !impl.preview || !impl.preview->applicationSafe || !impl.applyPlan)
+    if (impl.stopped || impl.busy || !impl.published || !impl.published->current() || !impl.preview ||
+        !impl.preview->applicationSafe || !impl.applyPlan)
         return fail(ErrorCode::Busy, "Create a current application-safe binding preview before Apply");
     const auto plan = impl.applyPlan;
-    Impl::AppliedBinding binding{{}, impl.published->root, impl.graph->engineRoot, impl.preview->previousLuaIdentity,
-        impl.preview->renamedLuaIdentity, impl.published->host};
+    Impl::AppliedBinding binding{{},
+                                 impl.published->root,
+                                 impl.graph->engineRoot,
+                                 impl.preview->previousLuaIdentity,
+                                 impl.preview->renamedLuaIdentity,
+                                 impl.published->host};
     impl.applying = true;
     auto outcome = impl.workbench.applyRefactoring(*plan);
     impl.applying = false;
@@ -813,10 +822,12 @@ lang::Json EngineBindingIntegration::snapshot() const {
     state.set("bindings", std::move(bindings))
         .set("usages", std::move(usages))
         .set("previewReady", current && impl.preview.has_value());
-    state.set("coverage", lang::Json::object()
-                              .set("scope", current && impl.preview ? impl.preview->supportedProfile : "provider-indexed")
-                              .set("embeddedLanguageReferencesVerified", current && impl.preview && impl.preview->embeddedLanguageReferencesVerified)
-                              .set("applicationSafe", current && impl.preview && impl.preview->applicationSafe));
+    state.set("coverage",
+              lang::Json::object()
+                  .set("scope", current && impl.preview ? impl.preview->supportedProfile : "provider-indexed")
+                  .set("embeddedLanguageReferencesVerified",
+                       current && impl.preview && impl.preview->embeddedLanguageReferencesVerified)
+                  .set("applicationSafe", current && impl.preview && impl.preview->applicationSafe));
     if (current && impl.preview)
         state.set("preview", impl.previewSummary);
     return state;

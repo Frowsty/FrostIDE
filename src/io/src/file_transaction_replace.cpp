@@ -24,8 +24,8 @@
 #include <sddl.h>
 #else
 #include <linux/fs.h>
-#include <sys/ioctl.h>
 #include <sys/file.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/vfs.h>
@@ -312,43 +312,56 @@ bool sameSupportedMetadata(const Metadata& a, const Metadata& b, bool includeSec
 }
 
 Result<void> absentEndpoint(std::string_view path) {
-    auto file=openNative(path);
-    if (file) return fail(ErrorCode::AlreadyExists,"transaction private/namespace endpoint became occupied");
-    if (file.error().code()!=ErrorCode::NotFound) return std::unexpected(file.error());
+    auto file = openNative(path);
+    if (file)
+        return fail(ErrorCode::AlreadyExists, "transaction private/namespace endpoint became occupied");
+    if (file.error().code() != ErrorCode::NotFound)
+        return std::unexpected(file.error());
     return {};
 }
-Result<bool> actualLeafSpelling(const Native& file,std::string_view path) {
+Result<bool> actualLeafSpelling(const Native& file, std::string_view path) {
 #ifdef _WIN32
-    std::vector<std::byte> storage(sizeof(FILE_NAME_INFO)+65536);
-    if (!GetFileInformationByHandleEx(file.get(),FileNameInfo,storage.data(),static_cast<DWORD>(storage.size())))
-        return std::unexpected(lastWin32Error("recovery: inspect exact native leaf spelling",path));
-    const auto* info=reinterpret_cast<const FILE_NAME_INFO*>(storage.data());
-    if (info->FileNameLength>65536||info->FileNameLength%sizeof(wchar_t)!=0)
-        return fail(ErrorCode::Corrupt,"recovery: invalid native file-name observation");
-    const std::wstring_view actual(info->FileName,info->FileNameLength/sizeof(wchar_t));
-    auto declared=toWin32Path(path);if (!declared) return std::unexpected(declared.error());
-    const auto a=actual.substr(actual.find_last_of(L"\\/")+1);
+    std::vector<std::byte> storage(sizeof(FILE_NAME_INFO) + 65536);
+    if (!GetFileInformationByHandleEx(file.get(), FileNameInfo, storage.data(), static_cast<DWORD>(storage.size())))
+        return std::unexpected(lastWin32Error("recovery: inspect exact native leaf spelling", path));
+    const auto* info = reinterpret_cast<const FILE_NAME_INFO*>(storage.data());
+    if (info->FileNameLength > 65536 || info->FileNameLength % sizeof(wchar_t) != 0)
+        return fail(ErrorCode::Corrupt, "recovery: invalid native file-name observation");
+    const std::wstring_view actual(info->FileName, info->FileNameLength / sizeof(wchar_t));
+    auto declared = toWin32Path(path);
+    if (!declared)
+        return std::unexpected(declared.error());
+    const auto a = actual.substr(actual.find_last_of(L"\\/") + 1);
     const std::wstring_view expected(*declared);
-    return a==expected.substr(expected.find_last_of(L"\\/")+1);
+    return a == expected.substr(expected.find_last_of(L"\\/") + 1);
 #else
-    static_cast<void>(file);static_cast<void>(path);return true;
+    static_cast<void>(file);
+    static_cast<void>(path);
+    return true;
 #endif
 }
-Result<void> emptyMoveEndpoint(std::string_view destination,std::string_view source,const Metadata& expected) {
-    auto occupied=openNative(destination);
+Result<void> emptyMoveEndpoint(std::string_view destination, std::string_view source, const Metadata& expected) {
+    auto occupied = openNative(destination);
     if (!occupied) {
-        if (occupied.error().code()==ErrorCode::NotFound) return {};
+        if (occupied.error().code() == ErrorCode::NotFound)
+            return {};
         return std::unexpected(occupied.error());
     }
-    auto actual=metadataOf(*occupied,destination);if (!actual) return std::unexpected(actual.error());
-    bool caseOnly=false;
+    auto actual = metadataOf(*occupied, destination);
+    if (!actual)
+        return std::unexpected(actual.error());
+    bool caseOnly = false;
 #ifdef _WIN32
-    auto from=toWin32Path(source);auto to=toWin32Path(destination);
-    caseOnly=from&&to&&CompareStringOrdinal(from->data(),static_cast<int>(from->size()),to->data(),static_cast<int>(to->size()),TRUE)==CSTR_EQUAL;
+    auto from = toWin32Path(source);
+    auto to = toWin32Path(destination);
+    caseOnly = from && to &&
+               CompareStringOrdinal(from->data(), static_cast<int>(from->size()), to->data(),
+                                    static_cast<int>(to->size()), TRUE) == CSTR_EQUAL;
 #else
     static_cast<void>(source);
 #endif
-    if (!caseOnly||!sameObject(*actual,expected)) return fail(ErrorCode::AlreadyExists,"transaction movement endpoint is occupied");
+    if (!caseOnly || !sameObject(*actual, expected))
+        return fail(ErrorCode::AlreadyExists, "transaction movement endpoint is occupied");
     return {};
 }
 
@@ -506,9 +519,10 @@ Result<void> objectAt(std::string_view path, const Metadata& expected, std::stri
 
 struct PreparedFileReplacement::State {
     State() = default;
-    explicit State(PreparedFileImages value) : images(std::move(value)),beforePayload(images->beforeBytes()),afterPayload(images->afterBytes()) {}
+    explicit State(PreparedFileImages value)
+        : images(std::move(value)), beforePayload(images->beforeBytes()), afterPayload(images->afterBytes()) {}
     std::optional<PreparedFileImages> images;
-    std::string beforePayload,afterPayload;
+    std::string beforePayload, afterPayload;
     FileReplacementReceipt receipt;
     Metadata before;
     Metadata after;
@@ -633,8 +647,7 @@ Result<PreparedFileReplacement> prepareFileReplacement(std::string_view target, 
         return retainedError(parentCheck.error());
     if (auto storeCheck = directoryAt(state->storePath, state->store, true); !storeCheck)
         return retainedError(storeCheck.error());
-    if (auto staged = objectAt(state->receipt.replacementPath, state->after, state->afterPayload, true, true);
-        !staged)
+    if (auto staged = objectAt(state->receipt.replacementPath, state->after, state->afterPayload, true, true); !staged)
         return retainedError(staged.error());
     state->images.reset();
     return PreparedFileReplacement(std::move(state));
@@ -653,8 +666,7 @@ FileReplacementOutcome PreparedFileReplacement::retireOriginal() {
         return failed(Error(ErrorCode::InvalidArgument, "replacement: retirement requires Prepared phase"));
     if (auto current = objectAt(state.receipt.images.targetPath, state.before, state.beforePayload); !current)
         return failed(current.error());
-    if (auto stage = objectAt(state.receipt.replacementPath, state.after, state.afterPayload, true, true);
-        !stage)
+    if (auto stage = objectAt(state.receipt.replacementPath, state.after, state.afterPayload, true, true); !stage)
         return failed(stage.error());
     if (auto renamed = renameNoReplace(state.original, state.parent, state.receipt.images.targetPath, state.store,
                                        state.receipt.retainedBeforePath);
@@ -666,8 +678,7 @@ FileReplacementOutcome PreparedFileReplacement::retireOriginal() {
         return failed(parent.error());
     if (auto store = directoryAt(state.storePath, state.store, true); !store)
         return failed(store.error());
-    if (auto retained =
-            objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
+    if (auto retained = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
         !retained)
         return failed(retained.error());
     state.receipt.phase = FileReplacementPhase::OriginalRetained;
@@ -687,33 +698,32 @@ FileReplacementOutcome PreparedFileReplacement::installAfter() {
         state.receipt.phase != FileReplacementPhase::AfterInstalledUnverified)
         return failed(Error(ErrorCode::InvalidArgument, "replacement: install requires verified retained Before"));
     if (state.receipt.phase == FileReplacementPhase::OriginalRetained) {
-    if (auto retained =
-            objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
-        !retained)
-        return failed(retained.error());
-    if (auto stage = objectAt(state.receipt.replacementPath, state.after, state.afterPayload, true, true);
-        !stage)
-        return failed(stage.error());
-    if (auto renamed = renameNoReplace(state.replacement, state.store, state.receipt.replacementPath, state.parent,
-                                       state.receipt.images.targetPath);
-        !renamed)
-        return failed(renamed.error());
-    state.receipt.phase = FileReplacementPhase::AfterInstalledUnverified;
-    detail::observeReplacement(detail::ReplacementBoundary::AfterInstalled, state.receipt);
-    if (auto parent = directoryAt(state.parentPath, state.parent); !parent)
-        return failed(parent.error());
-    if (auto store = directoryAt(state.storePath, state.store, true); !store)
-        return failed(store.error());
+        if (auto retained = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
+            !retained)
+            return failed(retained.error());
+        if (auto stage = objectAt(state.receipt.replacementPath, state.after, state.afterPayload, true, true); !stage)
+            return failed(stage.error());
+        if (auto renamed = renameNoReplace(state.replacement, state.store, state.receipt.replacementPath, state.parent,
+                                           state.receipt.images.targetPath);
+            !renamed)
+            return failed(renamed.error());
+        state.receipt.phase = FileReplacementPhase::AfterInstalledUnverified;
+        detail::observeReplacement(detail::ReplacementBoundary::AfterInstalled, state.receipt);
+        if (auto parent = directoryAt(state.parentPath, state.parent); !parent)
+            return failed(parent.error());
+        if (auto store = directoryAt(state.storePath, state.store, true); !store)
+            return failed(store.error());
     }
 #ifdef _WIN32
     // Before broadening permissions, prove the named intended endpoint still owns this private
     // After object. A moved-away private image must never receive the workspace's broader DACL.
     if (auto endpoint = objectAt(state.receipt.images.targetPath, state.after, state.afterPayload, false); !endpoint)
         return failed(endpoint.error());
-    auto securityState=metadataOf(state.replacement,state.receipt.images.targetPath);
-    if (!securityState) return failed(securityState.error());
-    if (securityState->security!=state.after.security&&securityState->security!=state.before.security)
-        return failed(Error(ErrorCode::Busy,"published After security changed outside the frozen transition"));
+    auto securityState = metadataOf(state.replacement, state.receipt.images.targetPath);
+    if (!securityState)
+        return failed(securityState.error());
+    if (securityState->security != state.after.security && securityState->security != state.before.security)
+        return failed(Error(ErrorCode::Busy, "published After security changed outside the frozen transition"));
     // Stage permissions stay owner-private until the file is at the intended workspace endpoint.
     PSID owner = nullptr, group = nullptr;
     PACL acl = nullptr;
@@ -763,8 +773,7 @@ FileReplacementOutcome PreparedFileReplacement::restoreBefore() {
         state.receipt.phase != FileReplacementPhase::AfterRetained)
         return failed(
             Error(ErrorCode::InvalidArgument, "replacement: inverse requires verified AfterInstalled/AfterRetained"));
-    if (auto retained =
-            objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
+    if (auto retained = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
         !retained)
         return failed(retained.error());
     if (state.receipt.phase == FileReplacementPhase::AfterInstalled) {
@@ -785,8 +794,7 @@ FileReplacementOutcome PreparedFileReplacement::restoreBefore() {
             return failed(retained.error());
         state.receipt.phase = FileReplacementPhase::AfterRetained;
     }
-    if (auto retained = objectAt(state.receipt.replacementPath, state.after, state.afterPayload, true, true);
-        !retained)
+    if (auto retained = objectAt(state.receipt.replacementPath, state.after, state.afterPayload, true, true); !retained)
         return failed(retained.error());
     if (auto renamed = renameNoReplace(state.original, state.store, state.receipt.retainedBeforePath, state.parent,
                                        state.receipt.images.targetPath);
@@ -805,11 +813,14 @@ FileReplacementOutcome PreparedFileReplacement::restoreBefore() {
 }
 
 FileReplacementOutcome PreparedFileReplacement::settle() {
-    if (!m_state) return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
+    if (!m_state)
+        return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
     auto& state = *m_state;
-    auto verify = [&](std::string_view path, const Metadata& metadata, std::string_view bytes, bool privateObject) -> std::optional<Error> {
+    auto verify = [&](std::string_view path, const Metadata& metadata, std::string_view bytes,
+                      bool privateObject) -> std::optional<Error> {
         auto checked = objectAt(path, metadata, bytes, true, privateObject);
-        if (!checked) return checked.error();
+        if (!checked)
+            return checked.error();
         return std::nullopt;
     };
     if (state.receipt.phase == FileReplacementPhase::OriginalRetiredUnverified) {
@@ -819,7 +830,8 @@ FileReplacementOutcome PreparedFileReplacement::settle() {
     }
     if (state.receipt.phase == FileReplacementPhase::Prepared) {
         auto retired = retireOriginal();
-        if (!retired.complete()) return retired;
+        if (!retired.complete())
+            return retired;
     }
     if (state.receipt.phase == FileReplacementPhase::OriginalRetained ||
         state.receipt.phase == FileReplacementPhase::AfterInstalledUnverified)
@@ -829,7 +841,8 @@ FileReplacementOutcome PreparedFileReplacement::settle() {
             return {state.receipt, std::move(error)};
         state.receipt.phase = FileReplacementPhase::AfterRetained;
     }
-    if (state.receipt.phase == FileReplacementPhase::AfterRetained) return restoreBefore();
+    if (state.receipt.phase == FileReplacementPhase::AfterRetained)
+        return restoreBefore();
     if (state.receipt.phase == FileReplacementPhase::BeforeRestoredUnverified) {
         if (auto error = verify(state.receipt.images.targetPath, state.before, state.beforePayload, false))
             return {state.receipt, std::move(error)};
@@ -843,7 +856,8 @@ FileReplacementOutcome PreparedFileReplacement::settle() {
 }
 
 FileReplacementOutcome PreparedFileReplacement::reapplyAfter() {
-    if (!m_state) return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
+    if (!m_state)
+        return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
     auto& state = *m_state;
     if (state.receipt.phase != FileReplacementPhase::BeforeRestored)
         return {state.receipt, Error(ErrorCode::Busy, "Redo requires a completed inverse")};
@@ -856,76 +870,101 @@ FileReplacementOutcome PreparedFileReplacement::reapplyAfter() {
 }
 
 Result<void> PreparedFileReplacement::prepareMoveDestination(std::string_view destination) {
-    if (!m_state) return fail(ErrorCode::InvalidArgument,"moved-from replacement");
-    auto& state=*m_state;
-    auto normalized=normalizePath(destination);
-    if (!normalized||!isAbsolutePath(normalized?*normalized:std::string{}))
-        return fail(ErrorCode::InvalidArgument,"move destination must be absolute");
+    if (!m_state)
+        return fail(ErrorCode::InvalidArgument, "moved-from replacement");
+    auto& state = *m_state;
+    auto normalized = normalizePath(destination);
+    if (!normalized || !isAbsolutePath(normalized ? *normalized : std::string{}))
+        return fail(ErrorCode::InvalidArgument, "move destination must be absolute");
     if (!state.receipt.moveDestination.empty()) {
-        if (state.receipt.moveDestination!=*normalized) return fail(ErrorCode::Busy,"frozen move destination changed");
-        if (auto parent=directoryAt(state.moveParentPath,state.moveParent);!parent) return parent;
-        if (state.receipt.phase==FileReplacementPhase::Prepared||state.receipt.phase==FileReplacementPhase::MoveRestored)
-            return emptyMoveEndpoint(*normalized,state.receipt.images.targetPath,state.before);
+        if (state.receipt.moveDestination != *normalized)
+            return fail(ErrorCode::Busy, "frozen move destination changed");
+        if (auto parent = directoryAt(state.moveParentPath, state.moveParent); !parent)
+            return parent;
+        if (state.receipt.phase == FileReplacementPhase::Prepared ||
+            state.receipt.phase == FileReplacementPhase::MoveRestored)
+            return emptyMoveEndpoint(*normalized, state.receipt.images.targetPath, state.before);
         return {};
     }
-    if (state.receipt.phase!=FileReplacementPhase::Prepared)
-        return fail(ErrorCode::Busy,"move destination must be admitted before retirement");
-    const auto parentPathValue=std::string(parentPath(*normalized));
-    auto parent=openNative(parentPathValue,false,true);if (!parent) return std::unexpected(parent.error());
+    if (state.receipt.phase != FileReplacementPhase::Prepared)
+        return fail(ErrorCode::Busy, "move destination must be admitted before retirement");
+    const auto parentPathValue = std::string(parentPath(*normalized));
+    auto parent = openNative(parentPathValue, false, true);
+    if (!parent)
+        return std::unexpected(parent.error());
 #ifdef _WIN32
     FILE_ID_INFO id{};
-    if (!GetFileInformationByHandleEx(parent->get(),FileIdInfo,&id,sizeof(id)))
-        return std::unexpected(lastWin32Error("move: inspect destination volume",destination));
-    if (std::to_string(id.VolumeSerialNumber)!=state.before.volume)
+    if (!GetFileInformationByHandleEx(parent->get(), FileIdInfo, &id, sizeof(id)))
+        return std::unexpected(lastWin32Error("move: inspect destination volume", destination));
+    if (std::to_string(id.VolumeSerialNumber) != state.before.volume)
 #else
     struct stat id{};
-    if (::fstat(parent->get(),&id)!=0) return std::unexpected(errnoError(errno,"move: inspect destination volume",destination));
-    if (std::to_string(id.st_dev)!=state.before.volume)
+    if (::fstat(parent->get(), &id) != 0)
+        return std::unexpected(errnoError(errno, "move: inspect destination volume", destination));
+    if (std::to_string(id.st_dev) != state.before.volume)
 #endif
-        return fail(ErrorCode::Unsupported,"transaction movement crosses volumes");
-    auto occupied=openNative(*normalized);
+        return fail(ErrorCode::Unsupported, "transaction movement crosses volumes");
+    auto occupied = openNative(*normalized);
     if (occupied) {
-        auto actual=metadataOf(*occupied,*normalized);if (!actual) return std::unexpected(actual.error());
-        bool caseOnly=false;
+        auto actual = metadataOf(*occupied, *normalized);
+        if (!actual)
+            return std::unexpected(actual.error());
+        bool caseOnly = false;
 #ifdef _WIN32
-        auto from=toWin32Path(state.receipt.images.targetPath);auto to=toWin32Path(*normalized);
-        caseOnly=from&&to&&CompareStringOrdinal(from->data(),static_cast<int>(from->size()),to->data(),static_cast<int>(to->size()),TRUE)==CSTR_EQUAL;
+        auto from = toWin32Path(state.receipt.images.targetPath);
+        auto to = toWin32Path(*normalized);
+        caseOnly = from && to &&
+                   CompareStringOrdinal(from->data(), static_cast<int>(from->size()), to->data(),
+                                        static_cast<int>(to->size()), TRUE) == CSTR_EQUAL;
 #endif
-        if (!caseOnly||!sameObject(*actual,state.before)) return fail(ErrorCode::AlreadyExists,"move destination is occupied");
-    } else if (occupied.error().code()!=ErrorCode::NotFound) return std::unexpected(occupied.error());
+        if (!caseOnly || !sameObject(*actual, state.before))
+            return fail(ErrorCode::AlreadyExists, "move destination is occupied");
+    } else if (occupied.error().code() != ErrorCode::NotFound)
+        return std::unexpected(occupied.error());
 #ifdef _WIN32
-    state.receipt.moveParent.volume=std::to_string(id.VolumeSerialNumber);
-    state.receipt.moveParent.object.assign(reinterpret_cast<const char*>(id.FileId.Identifier),sizeof(id.FileId.Identifier));
+    state.receipt.moveParent.volume = std::to_string(id.VolumeSerialNumber);
+    state.receipt.moveParent.object.assign(reinterpret_cast<const char*>(id.FileId.Identifier),
+                                           sizeof(id.FileId.Identifier));
 #else
-    state.receipt.moveParent.volume=std::to_string(id.st_dev);state.receipt.moveParent.object=std::to_string(id.st_ino);
+    state.receipt.moveParent.volume = std::to_string(id.st_dev);
+    state.receipt.moveParent.object = std::to_string(id.st_ino);
 #endif
-    state.receipt.moveDestination=*normalized;state.moveParentPath=parentPathValue;state.moveParent=std::move(*parent);
+    state.receipt.moveDestination = *normalized;
+    state.moveParentPath = parentPathValue;
+    state.moveParent = std::move(*parent);
     return {};
 }
 
 FileReplacementOutcome PreparedFileReplacement::moveOriginalTo(std::string_view destination) {
-    if (!m_state) return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
+    if (!m_state)
+        return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
     auto& state = *m_state;
     const auto failWith = [&](Error error) { return FileReplacementOutcome{state.receipt, std::move(error)}; };
     auto normalized = normalizePath(destination);
     if (!normalized || !isAbsolutePath(normalized ? *normalized : std::string{}))
         return failWith(Error(ErrorCode::InvalidArgument, "move requires an absolute native destination"));
-    if (auto admitted=prepareMoveDestination(*normalized);!admitted) return failWith(admitted.error());
+    if (auto admitted = prepareMoveDestination(*normalized); !admitted)
+        return failWith(admitted.error());
     if (state.receipt.phase == FileReplacementPhase::OriginalRetiredUnverified) {
-        if (auto retained = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true); !retained)
+        if (auto retained = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
+            !retained)
             return failWith(retained.error());
         state.receipt.phase = FileReplacementPhase::OriginalRetained;
     }
     if (state.receipt.phase == FileReplacementPhase::Prepared) {
         auto retired = retireOriginal();
-        if (!retired.complete()) return retired;
+        if (!retired.complete())
+            return retired;
     }
-    if (auto parent = directoryAt(state.moveParentPath, state.moveParent); !parent) return failWith(parent.error());
+    if (auto parent = directoryAt(state.moveParentPath, state.moveParent); !parent)
+        return failWith(parent.error());
     if (state.receipt.phase == FileReplacementPhase::OriginalRetained) {
-        if (auto retained = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true); !retained)
+        if (auto retained = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
+            !retained)
             return failWith(retained.error());
         if (auto moved = renameNoReplace(state.original, state.store, state.receipt.retainedBeforePath,
-                                          state.moveParent, state.receipt.moveDestination); !moved)
+                                         state.moveParent, state.receipt.moveDestination);
+            !moved)
             return failWith(moved.error());
         state.receipt.phase = FileReplacementPhase::OriginalMovedUnverified;
     }
@@ -939,25 +978,32 @@ FileReplacementOutcome PreparedFileReplacement::moveOriginalTo(std::string_view 
 }
 
 FileReplacementOutcome PreparedFileReplacement::restoreMove() {
-    if (!m_state) return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
+    if (!m_state)
+        return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
     auto& state = *m_state;
     const auto failWith = [&](Error error) { return FileReplacementOutcome{state.receipt, std::move(error)}; };
-    if (auto parent = directoryAt(state.parentPath, state.parent); !parent) return failWith(parent.error());
-    if (auto parent = directoryAt(state.moveParentPath, state.moveParent); !parent) return failWith(parent.error());
-    if (auto store = directoryAt(state.storePath, state.store, true); !store) return failWith(store.error());
+    if (auto parent = directoryAt(state.parentPath, state.parent); !parent)
+        return failWith(parent.error());
+    if (auto parent = directoryAt(state.moveParentPath, state.moveParent); !parent)
+        return failWith(parent.error());
+    if (auto store = directoryAt(state.storePath, state.store, true); !store)
+        return failWith(store.error());
     if (state.receipt.phase == FileReplacementPhase::OriginalMoved) {
         if (auto current = objectAt(state.receipt.moveDestination, state.before, state.beforePayload); !current)
             return failWith(current.error());
-        if (auto moved = renameNoReplace(state.original, state.moveParent, state.receipt.moveDestination,
-                                          state.store, state.receipt.retainedBeforePath); !moved)
+        if (auto moved = renameNoReplace(state.original, state.moveParent, state.receipt.moveDestination, state.store,
+                                         state.receipt.retainedBeforePath);
+            !moved)
             return failWith(moved.error());
         state.receipt.phase = FileReplacementPhase::MoveRetainedForInverse;
     }
     if (state.receipt.phase == FileReplacementPhase::MoveRetainedForInverse) {
-        if (auto retained = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true); !retained)
+        if (auto retained = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
+            !retained)
             return failWith(retained.error());
-        if (auto moved = renameNoReplace(state.original, state.store, state.receipt.retainedBeforePath,
-                                          state.parent, state.receipt.images.targetPath); !moved)
+        if (auto moved = renameNoReplace(state.original, state.store, state.receipt.retainedBeforePath, state.parent,
+                                         state.receipt.images.targetPath);
+            !moved)
             return failWith(moved.error());
         state.receipt.phase = FileReplacementPhase::MoveRestoredUnverified;
     }
@@ -969,7 +1015,8 @@ FileReplacementOutcome PreparedFileReplacement::restoreMove() {
     return {state.receipt, std::nullopt};
 }
 FileReplacementOutcome PreparedFileReplacement::reapplyMove() {
-    if (!m_state) return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
+    if (!m_state)
+        return {{}, Error(ErrorCode::InvalidArgument, "moved-from replacement")};
     if (m_state->receipt.phase != FileReplacementPhase::MoveRestored)
         return {m_state->receipt, Error(ErrorCode::Busy, "redo move requires a completed inverse")};
     m_state->receipt.phase = FileReplacementPhase::Prepared;
@@ -977,51 +1024,65 @@ FileReplacementOutcome PreparedFileReplacement::reapplyMove() {
 }
 
 Result<void> PreparedFileReplacement::validateCurrent(bool after) const {
-    if (!m_state) return fail(ErrorCode::InvalidArgument, "moved-from replacement");
+    if (!m_state)
+        return fail(ErrorCode::InvalidArgument, "moved-from replacement");
     const auto& state = *m_state;
-    if (auto parent = directoryAt(state.parentPath, state.parent); !parent) return std::unexpected(parent.error());
-    if (auto store = directoryAt(state.storePath, state.store, true); !store) return std::unexpected(store.error());
+    if (auto parent = directoryAt(state.parentPath, state.parent); !parent)
+        return std::unexpected(parent.error());
+    if (auto store = directoryAt(state.storePath, state.store, true); !store)
+        return std::unexpected(store.error());
     if (!state.receipt.moveDestination.empty()) {
         const auto expected = after ? FileReplacementPhase::OriginalMoved : FileReplacementPhase::MoveRestored;
         if (state.receipt.phase != expected && !(state.receipt.phase == FileReplacementPhase::Prepared && !after))
             return fail(ErrorCode::Busy, "file movement has unfinished effects");
-        if (auto empty=emptyMoveEndpoint(after?state.receipt.images.targetPath:state.receipt.moveDestination,
-                after?state.receipt.moveDestination:state.receipt.images.targetPath,state.before);!empty) return empty;
+        if (auto empty = emptyMoveEndpoint(after ? state.receipt.images.targetPath : state.receipt.moveDestination,
+                                           after ? state.receipt.moveDestination : state.receipt.images.targetPath,
+                                           state.before);
+            !empty)
+            return empty;
         if (!after) {
-            if (auto empty=absentEndpoint(state.receipt.retainedBeforePath);!empty) return empty;
-            if (auto staged=objectAt(state.receipt.replacementPath,state.after,state.afterPayload,true,true);!staged) return staged;
+            if (auto empty = absentEndpoint(state.receipt.retainedBeforePath); !empty)
+                return empty;
+            if (auto staged = objectAt(state.receipt.replacementPath, state.after, state.afterPayload, true, true);
+                !staged)
+                return staged;
         }
-        return objectAt(after ? state.receipt.moveDestination : state.receipt.images.targetPath,
-            state.before, state.beforePayload);
+        return objectAt(after ? state.receipt.moveDestination : state.receipt.images.targetPath, state.before,
+                        state.beforePayload);
     }
     if (after) {
         if (state.receipt.phase != FileReplacementPhase::AfterInstalled)
             return fail(ErrorCode::Busy, "replacement has unfinished effects");
-        if (auto original = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true); !original)
+        if (auto original = objectAt(state.receipt.retainedBeforePath, state.before, state.beforePayload, true, true);
+            !original)
             return std::unexpected(original.error());
         return objectAt(state.receipt.images.targetPath, state.after, state.afterPayload);
     }
-    if (state.receipt.phase != FileReplacementPhase::Prepared && state.receipt.phase != FileReplacementPhase::BeforeRestored)
+    if (state.receipt.phase != FileReplacementPhase::Prepared &&
+        state.receipt.phase != FileReplacementPhase::BeforeRestored)
         return fail(ErrorCode::Busy, "replacement is not at its Before state");
     if (auto original = objectAt(state.receipt.images.targetPath, state.before, state.beforePayload); !original)
         return std::unexpected(original.error());
-    if (auto empty=absentEndpoint(state.receipt.retainedBeforePath);!empty) return empty;
+    if (auto empty = absentEndpoint(state.receipt.retainedBeforePath); !empty)
+        return empty;
     return objectAt(state.receipt.replacementPath, state.after, state.afterPayload, true, true);
 }
 
 Result<std::string> ensurePrivateTransactionStore(std::string_view target, std::string_view preferred,
                                                   std::string_view workspaceRoot) {
     auto targetFile = openNative(target);
-    if (!targetFile) return std::unexpected(targetFile.error());
+    if (!targetFile)
+        return std::unexpected(targetFile.error());
     auto identity = metadataOf(*targetFile, target);
-    if (!identity) return std::unexpected(identity.error());
+    if (!identity)
+        return std::unexpected(identity.error());
     std::string chosen(preferred);
     auto parent = openNative(parentPath(chosen), false, true);
     bool sameVolume = false;
 #ifdef _WIN32
     FILE_ID_INFO preferredId{};
     sameVolume = parent && GetFileInformationByHandleEx(parent->get(), FileIdInfo, &preferredId, sizeof(preferredId)) &&
-        std::to_string(preferredId.VolumeSerialNumber) == identity->volume;
+                 std::to_string(preferredId.VolumeSerialNumber) == identity->volume;
     HANDLE rawToken = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &rawToken))
         return std::unexpected(lastWin32Error("transaction store: current token", target));
@@ -1038,21 +1099,25 @@ Result<std::string> ensurePrivateTransactionStore(std::string_view target, std::
         return std::unexpected(lastWin32Error("transaction store: current SID", target));
     const std::wstring sid(rawSid);
     LocalFree(rawSid);
-    const auto userTag = sha256Hex(std::string(reinterpret_cast<const char*>(sid.data()), sid.size() * sizeof(wchar_t))).substr(0, 16);
+    const auto userTag =
+        sha256Hex(std::string(reinterpret_cast<const char*>(sid.data()), sid.size() * sizeof(wchar_t))).substr(0, 16);
 #else
     struct stat preferredId{};
-    sameVolume = parent && ::fstat(parent->get(), &preferredId) == 0 && std::to_string(preferredId.st_dev) == identity->volume;
+    sameVolume =
+        parent && ::fstat(parent->get(), &preferredId) == 0 && std::to_string(preferredId.st_dev) == identity->volume;
     const auto userTag = std::to_string(::geteuid());
 #endif
     if (!sameVolume) {
         const auto base = workspaceRoot.empty() ? parentPath(target) : parentPath(workspaceRoot);
         auto fallback = joinPath(base, ".frost-refactoring-" + userTag);
-        if (!fallback) return std::unexpected(fallback.error());
+        if (!fallback)
+            return std::unexpected(fallback.error());
         chosen = std::move(*fallback);
     }
 #ifdef _WIN32
     auto wide = toWin32Path(chosen);
-    if (!wide) return std::unexpected(wide.error());
+    if (!wide)
+        return std::unexpected(wide.error());
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     const std::wstring sddl = L"D:P(A;OICI;FA;;;" + sid + L")";
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr))
@@ -1068,8 +1133,10 @@ Result<std::string> ensurePrivateTransactionStore(std::string_view target, std::
         return std::unexpected(errnoError(errno, "transaction store: exclusive private directory", chosen));
 #endif
     auto directory = openNative(chosen, false, true);
-    if (!directory) return std::unexpected(directory.error());
-    if (auto checked = directoryAt(chosen, *directory, true); !checked) return std::unexpected(checked.error());
+    if (!directory)
+        return std::unexpected(directory.error());
+    if (auto checked = directoryAt(chosen, *directory, true); !checked)
+        return std::unexpected(checked.error());
 #ifdef _WIN32
     FILE_ID_INFO actual{};
     if (!GetFileInformationByHandleEx(directory->get(), FileIdInfo, &actual, sizeof(actual)))
@@ -1085,104 +1152,161 @@ Result<std::string> ensurePrivateTransactionStore(std::string_view target, std::
     return chosen;
 }
 
-Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementReceipt& saved,
-    std::string_view before,std::string_view after,bool desiredBefore,std::size_t maxBytes) {
-    if (before.size()>maxBytes||after.size()>maxBytes||io::sha256Hex(before)!=saved.images.beforeSha256||
-        io::sha256Hex(after)!=saved.images.afterSha256)
-        return fail(ErrorCode::Corrupt,"recovery payload does not match frozen image hashes/limits");
-    auto state=std::make_unique<PreparedFileReplacement::State>();
-    state->receipt=saved;state->beforePayload=before;state->afterPayload=after;
-    state->parentPath=std::string(parentPath(saved.images.targetPath));
-    state->storePath=std::string(parentPath(saved.replacementPath));
-    if (saved.replacementPath!=saved.images.stagePath||parentPath(saved.retainedBeforePath)!=state->storePath)
-        return fail(ErrorCode::Corrupt,"recovery private artifact containment differs from manifest");
-    auto parent=openNative(state->parentPath,false,true);if (!parent) return std::unexpected(parent.error());
-    auto store=openNative(state->storePath,false,true);if (!store) return std::unexpected(store.error());
-    if (auto checked=directoryAt(state->storePath,*store,true);!checked) return std::unexpected(checked.error());
-    state->parent=std::move(*parent);state->store=std::move(*store);
-    const auto parentMatches=[&](const Native& file,const FileImageObservation& observed)->Result<void> {
+Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementReceipt& saved, std::string_view before,
+                                                       std::string_view after, bool desiredBefore,
+                                                       std::size_t maxBytes) {
+    if (before.size() > maxBytes || after.size() > maxBytes || io::sha256Hex(before) != saved.images.beforeSha256 ||
+        io::sha256Hex(after) != saved.images.afterSha256)
+        return fail(ErrorCode::Corrupt, "recovery payload does not match frozen image hashes/limits");
+    auto state = std::make_unique<PreparedFileReplacement::State>();
+    state->receipt = saved;
+    state->beforePayload = before;
+    state->afterPayload = after;
+    state->parentPath = std::string(parentPath(saved.images.targetPath));
+    state->storePath = std::string(parentPath(saved.replacementPath));
+    if (saved.replacementPath != saved.images.stagePath || parentPath(saved.retainedBeforePath) != state->storePath)
+        return fail(ErrorCode::Corrupt, "recovery private artifact containment differs from manifest");
+    auto parent = openNative(state->parentPath, false, true);
+    if (!parent)
+        return std::unexpected(parent.error());
+    auto store = openNative(state->storePath, false, true);
+    if (!store)
+        return std::unexpected(store.error());
+    if (auto checked = directoryAt(state->storePath, *store, true); !checked)
+        return std::unexpected(checked.error());
+    state->parent = std::move(*parent);
+    state->store = std::move(*store);
+    const auto parentMatches = [&](const Native& file, const FileImageObservation& observed) -> Result<void> {
 #ifdef _WIN32
         FILE_ID_INFO id{};
-        if (!GetFileInformationByHandleEx(file.get(),FileIdInfo,&id,sizeof(id)))
-            return std::unexpected(lastWin32Error("recovery: retained directory identity",state->storePath));
-        const std::string object(reinterpret_cast<const char*>(id.FileId.Identifier),sizeof(id.FileId.Identifier));
-        if (std::to_string(id.VolumeSerialNumber)!=observed.volume||object!=observed.object)
+        if (!GetFileInformationByHandleEx(file.get(), FileIdInfo, &id, sizeof(id)))
+            return std::unexpected(lastWin32Error("recovery: retained directory identity", state->storePath));
+        const std::string object(reinterpret_cast<const char*>(id.FileId.Identifier), sizeof(id.FileId.Identifier));
+        if (std::to_string(id.VolumeSerialNumber) != observed.volume || object != observed.object)
 #else
         struct stat id{};
-        if (::fstat(file.get(),&id)!=0) return std::unexpected(errnoError(errno,"recovery: retained directory identity",state->storePath));
-        if (std::to_string(id.st_dev)!=observed.volume||std::to_string(id.st_ino)!=observed.object)
+        if (::fstat(file.get(), &id) != 0)
+            return std::unexpected(errnoError(errno, "recovery: retained directory identity", state->storePath));
+        if (std::to_string(id.st_dev) != observed.volume || std::to_string(id.st_ino) != observed.object)
 #endif
-            return fail(ErrorCode::Busy,"recovery parent/store object changed");
+            return fail(ErrorCode::Busy, "recovery parent/store object changed");
         return {};
     };
-    if (auto checked=parentMatches(state->parent,saved.images.targetParent);!checked) return std::unexpected(checked.error());
-    if (auto checked=parentMatches(state->store,saved.images.store);!checked) return std::unexpected(checked.error());
-    std::string beforeLocation,afterLocation;
-    for (const auto& path:std::array<std::string,3>{saved.retainedBeforePath,saved.moveDestination,saved.images.targetPath}) {
-        if (path.empty()) continue;
-        auto file=openNative(path);if (!file) continue;
-        auto spelling=actualLeafSpelling(*file,path);if (!spelling) return std::unexpected(spelling.error());
-        if (!*spelling) continue;
-        auto meta=metadataOf(*file,path,path==saved.retainedBeforePath);if (!meta) continue;
-        if (meta->volume!=saved.images.target.volume||meta->object!=saved.images.target.object) continue;
-        auto bytes=readNative(*file,maxBytes,path);if (!bytes||*bytes!=before||metadataDigest(*meta)!=saved.beforeMetadataSha256)
-            return fail(ErrorCode::Busy,"retained Before data/metadata changed; recovery refuses inverse authority");
-        state->original=std::move(*file);state->before=std::move(*meta);beforeLocation=path;break;
+    if (auto checked = parentMatches(state->parent, saved.images.targetParent); !checked)
+        return std::unexpected(checked.error());
+    if (auto checked = parentMatches(state->store, saved.images.store); !checked)
+        return std::unexpected(checked.error());
+    std::string beforeLocation, afterLocation;
+    for (const auto& path :
+         std::array<std::string, 3>{saved.retainedBeforePath, saved.moveDestination, saved.images.targetPath}) {
+        if (path.empty())
+            continue;
+        auto file = openNative(path);
+        if (!file)
+            continue;
+        auto spelling = actualLeafSpelling(*file, path);
+        if (!spelling)
+            return std::unexpected(spelling.error());
+        if (!*spelling)
+            continue;
+        auto meta = metadataOf(*file, path, path == saved.retainedBeforePath);
+        if (!meta)
+            continue;
+        if (meta->volume != saved.images.target.volume || meta->object != saved.images.target.object)
+            continue;
+        auto bytes = readNative(*file, maxBytes, path);
+        if (!bytes || *bytes != before || metadataDigest(*meta) != saved.beforeMetadataSha256)
+            return fail(ErrorCode::Busy, "retained Before data/metadata changed; recovery refuses inverse authority");
+        state->original = std::move(*file);
+        state->before = std::move(*meta);
+        beforeLocation = path;
+        break;
     }
-    if (beforeLocation.empty()) return fail(ErrorCode::Busy,"frozen Before object is unavailable; retain recovery records");
-    for (const auto& path:std::array<std::string,2>{saved.replacementPath,saved.images.targetPath}) {
-        auto file=openNative(path,true);if (!file) file=openNative(path);
-        if (!file) continue;
-        auto meta=metadataOf(*file,path,path==saved.replacementPath);if (!meta) continue;
-        if (meta->volume!=saved.images.stage.volume||meta->object!=saved.images.stage.object) continue;
-        auto bytes=readNative(*file,maxBytes,path);
-        const auto digest=metadataDigest(*meta);
-        if (!bytes||*bytes!=after||(digest!=saved.privateAfterMetadataSha256&&digest!=saved.beforeMetadataSha256&&
-            (saved.installedAfterMetadataSha256.empty()||digest!=saved.installedAfterMetadataSha256)))
-            return fail(ErrorCode::Busy,"frozen After object was tampered; preserve conflict");
-        state->replacement=std::move(*file);state->after=std::move(*meta);afterLocation=path;break;
+    if (beforeLocation.empty())
+        return fail(ErrorCode::Busy, "frozen Before object is unavailable; retain recovery records");
+    for (const auto& path : std::array<std::string, 2>{saved.replacementPath, saved.images.targetPath}) {
+        auto file = openNative(path, true);
+        if (!file)
+            file = openNative(path);
+        if (!file)
+            continue;
+        auto meta = metadataOf(*file, path, path == saved.replacementPath);
+        if (!meta)
+            continue;
+        if (meta->volume != saved.images.stage.volume || meta->object != saved.images.stage.object)
+            continue;
+        auto bytes = readNative(*file, maxBytes, path);
+        const auto digest = metadataDigest(*meta);
+        if (!bytes || *bytes != after ||
+            (digest != saved.privateAfterMetadataSha256 && digest != saved.beforeMetadataSha256 &&
+             (saved.installedAfterMetadataSha256.empty() || digest != saved.installedAfterMetadataSha256)))
+            return fail(ErrorCode::Busy, "frozen After object was tampered; preserve conflict");
+        state->replacement = std::move(*file);
+        state->after = std::move(*meta);
+        afterLocation = path;
+        break;
     }
     if (!saved.moveDestination.empty()) {
-        state->moveParentPath=std::string(parentPath(saved.moveDestination));
-        auto moveParent=openNative(state->moveParentPath,false,true);if (!moveParent) return std::unexpected(moveParent.error());
-        state->moveParent=std::move(*moveParent);
-        if (auto checked=parentMatches(state->moveParent,saved.moveParent);!checked) return std::unexpected(checked.error());
-        if (beforeLocation==saved.moveDestination) state->receipt.phase=FileReplacementPhase::OriginalMoved;
-        else if (beforeLocation==saved.retainedBeforePath)
-            state->receipt.phase=desiredBefore?FileReplacementPhase::MoveRetainedForInverse:FileReplacementPhase::OriginalRetained;
-        else state->receipt.phase=desiredBefore?FileReplacementPhase::MoveRestored:FileReplacementPhase::Prepared;
+        state->moveParentPath = std::string(parentPath(saved.moveDestination));
+        auto moveParent = openNative(state->moveParentPath, false, true);
+        if (!moveParent)
+            return std::unexpected(moveParent.error());
+        state->moveParent = std::move(*moveParent);
+        if (auto checked = parentMatches(state->moveParent, saved.moveParent); !checked)
+            return std::unexpected(checked.error());
+        if (beforeLocation == saved.moveDestination)
+            state->receipt.phase = FileReplacementPhase::OriginalMoved;
+        else if (beforeLocation == saved.retainedBeforePath)
+            state->receipt.phase =
+                desiredBefore ? FileReplacementPhase::MoveRetainedForInverse : FileReplacementPhase::OriginalRetained;
+        else
+            state->receipt.phase = desiredBefore ? FileReplacementPhase::MoveRestored : FileReplacementPhase::Prepared;
     } else {
-        if (afterLocation.empty()) return fail(ErrorCode::Busy,"frozen After object unavailable; preserve recovery material");
-        if (beforeLocation==saved.images.targetPath&&afterLocation==saved.replacementPath)
-            state->receipt.phase=desiredBefore?FileReplacementPhase::BeforeRestored:FileReplacementPhase::Prepared;
-        else if (beforeLocation==saved.retainedBeforePath&&afterLocation==saved.images.targetPath)
-            state->receipt.phase=metadataDigest(state->after)==saved.beforeMetadataSha256?FileReplacementPhase::AfterInstalled:FileReplacementPhase::AfterInstalledUnverified;
-        else if (beforeLocation==saved.retainedBeforePath&&afterLocation==saved.replacementPath)
-            state->receipt.phase=desiredBefore?FileReplacementPhase::AfterRetained:FileReplacementPhase::OriginalRetained;
-        else return fail(ErrorCode::Busy,"contradictory native recovery layout; preserve all artifacts");
+        if (afterLocation.empty())
+            return fail(ErrorCode::Busy, "frozen After object unavailable; preserve recovery material");
+        if (beforeLocation == saved.images.targetPath && afterLocation == saved.replacementPath)
+            state->receipt.phase =
+                desiredBefore ? FileReplacementPhase::BeforeRestored : FileReplacementPhase::Prepared;
+        else if (beforeLocation == saved.retainedBeforePath && afterLocation == saved.images.targetPath)
+            state->receipt.phase = metadataDigest(state->after) == saved.beforeMetadataSha256
+                                       ? FileReplacementPhase::AfterInstalled
+                                       : FileReplacementPhase::AfterInstalledUnverified;
+        else if (beforeLocation == saved.retainedBeforePath && afterLocation == saved.replacementPath)
+            state->receipt.phase =
+                desiredBefore ? FileReplacementPhase::AfterRetained : FileReplacementPhase::OriginalRetained;
+        else
+            return fail(ErrorCode::Busy, "contradictory native recovery layout; preserve all artifacts");
     }
     return PreparedFileReplacement(std::move(state));
 }
 
-struct TransactionStoreLease::State { Native file; Native directory; };
+struct TransactionStoreLease::State {
+    Native file;
+    Native directory;
+};
 TransactionStoreLease::TransactionStoreLease(std::unique_ptr<State> state) noexcept : m_state(std::move(state)) {}
 TransactionStoreLease::~TransactionStoreLease() = default;
 TransactionStoreLease::TransactionStoreLease(TransactionStoreLease&&) noexcept = default;
 TransactionStoreLease& TransactionStoreLease::operator=(TransactionStoreLease&&) noexcept = default;
 Result<TransactionStoreLease> acquireTransactionStoreLease(std::string_view storePath) {
     auto directory = openNative(storePath, false, true);
-    if (!directory) return std::unexpected(directory.error());
-    if (auto safe = directoryAt(storePath, *directory, true); !safe) return std::unexpected(safe.error());
+    if (!directory)
+        return std::unexpected(directory.error());
+    if (auto safe = directoryAt(storePath, *directory, true); !safe)
+        return std::unexpected(safe.error());
     auto path = joinPath(storePath, ".coordinator-lock");
-    if (!path) return std::unexpected(path.error());
+    if (!path)
+        return std::unexpected(path.error());
     auto state = std::make_unique<TransactionStoreLease::State>();
     state->directory = std::move(*directory);
 #ifdef _WIN32
     auto wide = toWin32Path(*path);
-    if (!wide) return std::unexpected(wide.error());
+    if (!wide)
+        return std::unexpected(wide.error());
     state->file.reset(CreateFileW(wide->c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
                                   FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-    if (!state->file.valid()) return std::unexpected(lastWin32Error("transaction: acquire recovery owner", *path));
+    if (!state->file.valid())
+        return std::unexpected(lastWin32Error("transaction: acquire recovery owner", *path));
     FILE_ATTRIBUTE_TAG_INFO tag{};
     FILE_STANDARD_INFO info{};
     if (!GetFileInformationByHandleEx(state->file.get(), FileAttributeTagInfo, &tag, sizeof(tag)) ||
@@ -1192,9 +1316,11 @@ Result<TransactionStoreLease> acquireTransactionStoreLease(std::string_view stor
         return fail(ErrorCode::Unsupported, "transaction recovery lock is not a private regular file");
 #else
     state->file.reset(::open(path->c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600));
-    if (!state->file.valid()) return std::unexpected(errnoError(errno, "transaction: open recovery lock", *path));
+    if (!state->file.valid())
+        return std::unexpected(errnoError(errno, "transaction: open recovery lock", *path));
     struct stat info{};
-    if (::fstat(state->file.get(), &info) != 0) return std::unexpected(errnoError(errno, "transaction: inspect recovery lock", *path));
+    if (::fstat(state->file.get(), &info) != 0)
+        return std::unexpected(errnoError(errno, "transaction: inspect recovery lock", *path));
     if (!S_ISREG(info.st_mode) || info.st_nlink != 1 || info.st_uid != ::geteuid() || (info.st_mode & 0777) != 0600)
         return fail(ErrorCode::Unsupported, "transaction recovery lock is not owner-private");
     if (::flock(state->file.get(), LOCK_EX | LOCK_NB) != 0)
@@ -1206,13 +1332,17 @@ Result<std::string> claimTransactionDirectory(std::string_view storePath, std::s
     if (leaf.empty() || leaf.find_first_of("/\\:") != leaf.npos || leaf == "." || leaf == "..")
         return fail(ErrorCode::InvalidArgument, "transaction directory requires one ordinary leaf");
     auto parent = openNative(storePath, false, true);
-    if (!parent) return std::unexpected(parent.error());
-    if (auto safe = directoryAt(storePath, *parent, true); !safe) return std::unexpected(safe.error());
+    if (!parent)
+        return std::unexpected(parent.error());
+    if (auto safe = directoryAt(storePath, *parent, true); !safe)
+        return std::unexpected(safe.error());
     auto path = joinPath(storePath, leaf);
-    if (!path) return std::unexpected(path.error());
+    if (!path)
+        return std::unexpected(path.error());
 #ifdef _WIN32
     auto wide = toWin32Path(*path);
-    if (!wide) return std::unexpected(wide.error());
+    if (!wide)
+        return std::unexpected(wide.error());
     // Restricted inheritable parent was verified before creation, no permissive default-DACL fallback.
     if (!CreateDirectoryW(wide->c_str(), nullptr))
         return std::unexpected(lastWin32Error("transaction: claim exclusive recovery directory", *path));
@@ -1221,8 +1351,10 @@ Result<std::string> claimTransactionDirectory(std::string_view storePath, std::s
         return std::unexpected(errnoError(errno, "transaction: claim exclusive recovery directory", *path));
 #endif
     auto owned = openNative(*path, false, true);
-    if (!owned) return std::unexpected(owned.error());
-    if (auto safe = directoryAt(*path, *owned, true); !safe) return std::unexpected(safe.error());
+    if (!owned)
+        return std::unexpected(owned.error());
+    if (auto safe = directoryAt(*path, *owned, true); !safe)
+        return std::unexpected(safe.error());
     return *path;
 }
 } // namespace frost::io

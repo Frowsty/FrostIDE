@@ -3,6 +3,7 @@
 #pragma once
 
 #include "frost/document/refactoring_transaction.hpp"
+
 #include <functional>
 #include <stop_token>
 
@@ -15,6 +16,6 @@ namespace frost::app {
 // Cancelling requests the helper's stop token and retains the dialog until owned work completes.
 [[nodiscard]] Result<document::RefactoringPlan>
 prepareSourceRenameInBackground(QWidget* ownerWindow,
-    std::function<Result<document::RefactoringPlan>(std::stop_token)> prepare);
+                                std::function<Result<document::RefactoringPlan>(std::stop_token)> prepare);
 
 } // namespace frost::app

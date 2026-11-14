@@ -135,7 +135,8 @@ UndoState Document::undoState() const noexcept {
 }
 
 Result<void> Document::acquireExternalWrite(TransactionId id) noexcept {
-    if (!id.assigned()) return fail(ErrorCode::InvalidArgument, "unassigned transaction writer");
+    if (!id.assigned())
+        return fail(ErrorCode::InvalidArgument, "unassigned transaction writer");
     if (m_externalWriter.assigned() || m_undo->composition || m_undo->groupDepth != 0)
         return fail(ErrorCode::Busy, "document has an active writer, group or composition");
     breakCoalescing();
@@ -143,10 +144,13 @@ Result<void> Document::acquireExternalWrite(TransactionId id) noexcept {
     return {};
 }
 void Document::releaseExternalWrite(TransactionId id) noexcept {
-    if (m_externalWriter == id) { m_externalWriter = {}; m_externalPermit = {}; }
+    if (m_externalWriter == id) {
+        m_externalWriter = {};
+        m_externalPermit = {};
+    }
 }
 Result<ChangeSet> Document::replaceExternal(TransactionId id, ByteRange range, std::string_view utf8,
-                                             const EditContext& context) noexcept {
+                                            const EditContext& context) noexcept {
     if (m_externalWriter != id || !id.assigned())
         return fail(ErrorCode::Busy, "transaction does not own this document");
     m_externalPermit = id;

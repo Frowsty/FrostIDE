@@ -109,7 +109,8 @@ private:
     struct State;
     explicit PreparedFileReplacement(std::unique_ptr<State>) noexcept;
     std::unique_ptr<State> m_state;
-    friend Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementReceipt&,std::string_view,std::string_view,bool,std::size_t);
+    friend Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementReceipt&, std::string_view,
+                                                                  std::string_view, bool, std::size_t);
     friend Result<PreparedFileReplacement> prepareFileReplacement(std::string_view, std::string_view, std::string_view,
                                                                   std::size_t, std::size_t);
 };
@@ -129,7 +130,8 @@ private:
 // selects recovery direction only after the caller verified the durable decision. Foreign data is
 // never overwritten. This does not fabricate a PreparedFileImages capability.
 [[nodiscard]] Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementReceipt& receipt,
-    std::string_view before,std::string_view after,bool desiredBefore,std::size_t maxBytes);
+                                                                     std::string_view before, std::string_view after,
+                                                                     bool desiredBefore, std::size_t maxBytes);
 
 // Cooperating coordinators hold one live OS lock per private recovery root. Destruction releases
 // the lock, never removes recovery records. No claim against hostile same-user directory rewrites.
@@ -138,6 +140,7 @@ public:
     ~TransactionStoreLease();
     TransactionStoreLease(TransactionStoreLease&&) noexcept;
     TransactionStoreLease& operator=(TransactionStoreLease&&) noexcept;
+
 private:
     struct State;
     explicit TransactionStoreLease(std::unique_ptr<State>) noexcept;
@@ -153,6 +156,7 @@ private:
 // With no workspaceRoot the fallback is adjacent to target (caller must exclude it from project
 // indexing/VCS). No privileges or existing unsafe directory ACL/mode are changed. O(path depth).
 [[nodiscard]] Result<std::string> ensurePrivateTransactionStore(std::string_view target,
-    std::string_view preferredRecoveryRoot, std::string_view workspaceRoot = {});
+                                                                std::string_view preferredRecoveryRoot,
+                                                                std::string_view workspaceRoot = {});
 
 } // namespace frost::io

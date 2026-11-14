@@ -138,8 +138,8 @@ Json mappedResult(const Json& request) {
 TEST(BindingIndexBoundary, MissingOrMalformedEmbeddedCoverageCannotGrantProfileAuthority) {
     SchemaDocument schema;
     const auto request = bindingMapRequest(schema, root, root, path("Bindings.cpp")).value();
-    auto response = Json::object().set("schemaVersion", 1).set("translationUnitParsed", true)
-        .set("results", Json::array());
+    auto response =
+        Json::object().set("schemaVersion", 1).set("translationUnitParsed", true).set("results", Json::array());
     auto report = parseBindingMapReport(request, response);
     ASSERT_TRUE(report);
     EXPECT_FALSE(report->embeddedLuaProfileVerified);

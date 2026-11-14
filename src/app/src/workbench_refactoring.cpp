@@ -98,9 +98,11 @@ Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document:
     }
     if (!m_refactoringRecoveryChecked) {
         auto recovered = m_refactoring->recoverPending();
-        if (!recovered) return std::unexpected(std::move(recovered.error()));
+        if (!recovered)
+            return std::unexpected(std::move(recovered.error()));
         m_refactoringRecoveryChecked = true;
-        for (const auto& outcome : *recovered) publishRefactoringOutcome(outcome);
+        for (const auto& outcome : *recovered)
+            publishRefactoringOutcome(outcome);
         m_pendingRefactoring = m_refactoring->pendingToken();
     }
     if (m_refactoring->pending())
