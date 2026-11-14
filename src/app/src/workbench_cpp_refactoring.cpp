@@ -264,6 +264,7 @@ void Workbench::registerCppRefactoringActions() {
 }
 
 void Workbench::showCppRefactoring(std::string operation) {
+    if (operation == "fix-in-scope") { showCppInspectionScopeFixes(); return; }
     if (operation == "move-file") {
         moveCppProjectSource();
         return;

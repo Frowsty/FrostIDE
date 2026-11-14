@@ -634,7 +634,9 @@ public:
     // committed work, not an unapplied failure; callers must not resubmit it. UI thread only.
     [[nodiscard]] Result<document::RefactoringOutcome> applyRefactoring(const document::RefactoringPlan& plan);
     // Captures the active project/database/dirty documents and asynchronously prepares one atomic
-    // AST proposal. No mutation; consumer previews before calling applyRefactoring. Owner thread.
+    // replacement proposal. No mutation; consumer previews before applyRefactoring. Owner thread.
+    void prepareCppInspectionScopeFixes(lang::InspectionScope scope, lang::InspectionProfile profile, std::stop_token cancel,
+        std::function<void(Result<document::RefactoringPlan>)> done);
     void prepareCppRefactoring(lang::CppRefactoringRequest request, std::stop_token cancel,
                                std::function<void(Result<document::RefactoringPlan>)> done);
     [[nodiscard]] Result<document::RefactoringOutcome> undoRefactoring();
@@ -796,6 +798,7 @@ private:
     void registerRefactoringActions();
     void registerCppRefactoringActions();
     void showCppRefactoring(std::string operation);
+    void showCppInspectionScopeFixes();
     void moveCppProjectSource();
     void showCppPublishedFixes();
     [[nodiscard]] Result<std::function<Result<void>(const lang::WorkspaceEdit&)>> beginCppProviderRefactoring();
