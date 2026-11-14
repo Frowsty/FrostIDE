@@ -47,4 +47,23 @@ struct CMakeMembershipPlan {
                                                               std::string_view definitionPath,
                                                               std::span<const CMakeInputSnapshot> inputs);
 
+/*
+ * Rename one source leaf in its existing directory, preserving its unique literal argument's
+ * position and visibility. Uses the same complete configured-input evidence and caller-owned
+ * freshness/publication preconditions as planCMakeMembership. Does not check destination disk
+ * absence, resolve physical aliases, rename files, write project bytes or establish Undo.
+ * Other-target membership, moves, existing destination membership and unsupported provenance
+ * are refused. The returned replacement must join the source rename in one REF-1 transaction;
+ * every configured input/profile/document generation remains a read dependency through commit.
+ * Paths use the existing native lexical comparison (ASCII case-insensitive on Windows);
+ * case-only Windows renames are refused. Physical aliases are not detected or authorized here.
+ * O(argument count * definition bytes + existing membership-validation work), with temporary
+ * O(input bytes + parsed arguments) storage; same thread-safety as planCMakeMembership.
+ */
+[[nodiscard]] Result<CMakeMembershipPlan> planCMakeSourceRename(const CMakeProject& model, std::size_t targetIndex,
+                                                                std::string_view oldSourcePath,
+                                                                std::string_view newSourcePath,
+                                                                std::string_view definitionPath,
+                                                                std::span<const CMakeInputSnapshot> inputs);
+
 } // namespace frost::project
