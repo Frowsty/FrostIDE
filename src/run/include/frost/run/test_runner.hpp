@@ -54,6 +54,7 @@
 #include "frost/project/cmake_presets.hpp"
 #include "frost/project/cmake_profile.hpp"
 #include "frost/run/doctest_parsers.hpp"
+#include "frost/run/framework_parsers.hpp"
 #include "frost/run/test_model.hpp"
 
 #include <functional>
@@ -113,7 +114,7 @@ struct CTestSetup {
 // An anchored ctest regular expression matching exactly `names` (header comment). Pure.
 [[nodiscard]] std::string ctestExactNameRegex(const std::vector<std::string>& names);
 
-enum class TestCaseFramework : std::uint8_t { CTestWhole, GoogleTest, Doctest };
+enum class TestCaseFramework : std::uint8_t { CTestWhole, GoogleTest, Doctest, Catch2, BoostTest };
 
 // Replaces doctest's case filters and case-sensitivity flags with exact, case-sensitive selection.
 // Returns the full command, preserving its option prefix. Errors: InvalidArgument (empty command,
@@ -261,6 +262,17 @@ public:
     };
     [[nodiscard]] Result<void> runGTest(const CTestSetup& setup, std::vector<GTestRunRequest> requests,
                                         TestRunHandlers handlers);
+
+    // Explicit protocol selection; no filename/source-macro framework guessing.
+    [[nodiscard]] Result<void> listFrameworkCases(const CTestSetup& setup, const DiscoveredTest& test,
+        FrameworkProfile profile, std::function<void(Result<std::vector<FrameworkCase>>)> done);
+    struct FrameworkRunRequest {
+        DiscoveredTest test;
+        FrameworkProfile profile = FrameworkProfile::Catch2Xml3;
+        std::vector<std::string> cases;
+    };
+    [[nodiscard]] Result<void> runFramework(const CTestSetup& setup, std::vector<FrameworkRunRequest> requests,
+                                          TestRunHandlers handlers);
 
     // Ends the current job's process tree; the job then finishes as stopped/Cancelled. Idempotent.
     void cancel();
