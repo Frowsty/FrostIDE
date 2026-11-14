@@ -9,6 +9,41 @@ namespace frost::lang {
 namespace {
 bool word(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' || c == ':' || c == '.'; }
 struct Symbol { std::string name, detail, path; std::size_t line = 0; int kind = 6; };
+constexpr std::pair<std::string_view, std::string_view> commands[] = {
+    {"add_executable", "add_executable(<name> [WIN32] [MACOSX_BUNDLE] [EXCLUDE_FROM_ALL] <sources>...)"},
+    {"add_library", "add_library(<name> [STATIC | SHARED | MODULE | OBJECT | INTERFACE] <sources>...)"},
+    {"add_custom_target", "add_custom_target(<name> [ALL] [COMMAND <command> [<args>...]]...)"},
+    {"add_subdirectory", "add_subdirectory(<source_dir> [<binary_dir>] [EXCLUDE_FROM_ALL] [SYSTEM])"},
+    {"cmake_minimum_required", "cmake_minimum_required(VERSION <min>[...<policy_max>] [FATAL_ERROR])"},
+    {"project", "project(<name> [VERSION <version>] [DESCRIPTION <text>] [LANGUAGES <languages>...])"},
+    {"set", "set(<variable> <value>... [PARENT_SCOPE]); set(<variable> <value>... CACHE <type> <docstring> [FORCE])"},
+    {"unset", "unset(<variable> [CACHE | PARENT_SCOPE])"},
+    {"option", "option(<variable> <help_text> [value])"},
+    {"function", "function(<name> [<arguments>...]) ... endfunction()"},
+    {"macro", "macro(<name> [<arguments>...]) ... endmacro()"},
+    {"include", "include(<file|module> [OPTIONAL] [RESULT_VARIABLE <variable>] [NO_POLICY_SCOPE])"},
+    {"find_package", "find_package(<PackageName> [version] [REQUIRED] [COMPONENTS <components>...])"},
+    {"target_sources", "target_sources(<target> <INTERFACE|PUBLIC|PRIVATE> [items...]...)"},
+    {"target_link_libraries", "target_link_libraries(<target> <PRIVATE|PUBLIC|INTERFACE> <items>...)"},
+    {"target_include_directories", "target_include_directories(<target> [SYSTEM] [AFTER|BEFORE] <INTERFACE|PUBLIC|PRIVATE> <items>...)"},
+    {"target_compile_definitions", "target_compile_definitions(<target> <INTERFACE|PUBLIC|PRIVATE> <items>...)"},
+    {"target_compile_options", "target_compile_options(<target> [BEFORE] <INTERFACE|PUBLIC|PRIVATE> <items>...)"},
+    {"target_compile_features", "target_compile_features(<target> <PRIVATE|PUBLIC|INTERFACE> <features>...)"},
+    {"target_link_options", "target_link_options(<target> [BEFORE] <INTERFACE|PUBLIC|PRIVATE> <items>...)"},
+    {"message", "message([<mode>] <message>...)"},
+    {"if", "if(<condition>) ... [elseif(<condition>) ...] [else() ...] endif()"},
+    {"foreach", "foreach(<loop_var> <items>) ... endforeach()"},
+    {"while", "while(<condition>) ... endwhile()"},
+    {"return", "return([PROPAGATE <variables>...])"},
+    {"list", "list(<subcommand> <list> [arguments...])"},
+    {"string", "string(<subcommand> [arguments...])"},
+    {"file", "file(<subcommand> [arguments...])"},
+    {"get_property", "get_property(<variable> <scope> PROPERTY <name> [SET | DEFINED | BRIEF_DOCS | FULL_DOCS])"},
+    {"set_property", "set_property(<scope> [APPEND] [APPEND_STRING] PROPERTY <name> [values...])"},
+    {"enable_testing", "enable_testing()"},
+    {"add_test", "add_test(NAME <name> COMMAND <command> [<args>...] [CONFIGURATIONS <config>...] [WORKING_DIRECTORY <dir>])"},
+    {"install", "install(<TARGETS|FILES|DIRECTORY|EXPORT|SCRIPT|CODE> <arguments>...)"}
+};
 Json location(const Symbol& s) {
     auto uri = pathToUri(s.path);
     if (!uri) return {};
@@ -72,6 +107,8 @@ Result<Json> queryCMakeLanguage(const CMakeLanguageInput& input, std::string_vie
         for (const auto& entry : input.model->cache)
             symbols.push_back({entry.name, entry.type + " = " + entry.value + " (last configured cache)", "", 0, 6});
     }
+    for (const auto& [name, signature] : commands)
+        symbols.push_back({std::string(name), std::string(signature) + "\nCMake built-in command", "", 0, 3});
     Json result = Json::array();
     std::map<std::string, bool> seen;
     for (const auto& s : symbols) {
