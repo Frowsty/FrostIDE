@@ -38,6 +38,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
 using System.Xml;
 using Microsoft.Build.Construction;
@@ -52,6 +53,7 @@ sealed class FileEditRequest
     public string[] Removed = new string[0];
     public string[] RenamedFrom = new string[0];
     public string[] RenamedTo = new string[0];
+    public bool BeforeFileMove;
     public bool Adding { get { return Added.Length != 0; } }
     // The files the project lists now and must list exactly once (Remove, RenameFrom).
     public IEnumerable<string> Existing { get { return Removed.Concat(RenamedFrom); } }
@@ -110,6 +112,11 @@ static class ProjectFileEdits
             ProjectPath = Path.GetFullPath(projectPath), Added = Paths(request, "Add"), Removed = Paths(request, "Remove"),
             RenamedFrom = Paths(request, "RenameFrom"), RenamedTo = Paths(request, "RenameTo")
         };
+        string beforeMove, commit;
+        edit.BeforeFileMove = request.TryGetValue("BeforeFileMove", out beforeMove) && beforeMove == "true";
+        if (edit.BeforeFileMove && (edit.RenamedFrom.Length == 0 ||
+            (request.TryGetValue("Commit", out commit) && commit == "true")))
+            throw new InvalidOperationException("BeforeFileMove requires a non-committing rename plan");
         string filter;
         if (request.TryGetValue("Filter", out filter) && filter != null)
         {
@@ -255,6 +262,17 @@ static class ProjectFileEdits
                 {
                     int at = expected.IndexOf(Signature(element));
                     element.Include = IncludeFor(directory, edit.RenamedTo[r], Path.IsPathRooted(element.Include));
+                    foreach (var metadata in element.Metadata.Where(m => edit.BeforeFileMove && m.Name.Equals("Link", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (!Literal(metadata.Value))
+                            throw new InvalidOperationException("Use literal Link metadata before transactional rename");
+                        if (Path.GetFileName(metadata.Value).Equals(Path.GetFileName(edit.RenamedFrom[r]), StringComparison.OrdinalIgnoreCase))
+                        {
+                            string parent = Path.GetDirectoryName(metadata.Value);
+                            metadata.Value = String.IsNullOrEmpty(parent) ? Path.GetFileName(edit.RenamedTo[r]) :
+                                Path.Combine(parent, Path.GetFileName(edit.RenamedTo[r]));
+                        }
+                    }
                     expected[at] = Signature(element);
                 }
             }
@@ -332,6 +350,243 @@ static class ProjectFileEdits
         return collection.LoadProject(path);
     }
 
+    static string ExpandAt(Project project, ProjectRootElement root, string value)
+    {
+        string directory = Path.GetDirectoryName(root.FullPath) + "\\";
+        var reserved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
+            { "MSBuildThisFileDirectory", directory },
+            { "MSBuildThisFileDirectoryNoRoot", directory.Substring(Path.GetPathRoot(directory).Length) },
+            { "MSBuildThisFileFullPath", root.FullPath }, { "MSBuildThisFile", Path.GetFileName(root.FullPath) },
+            { "MSBuildThisFileName", Path.GetFileNameWithoutExtension(root.FullPath) },
+            { "MSBuildThisFileExtension", Path.GetExtension(root.FullPath) }
+        };
+        value = Regex.Replace(value,
+            @"\$\((MSBuildThisFileDirectory|MSBuildThisFileDirectoryNoRoot|MSBuildThisFileFullPath|MSBuildThisFileName|MSBuildThisFileExtension|MSBuildThisFile)\)",
+            m => reserved[m.Groups[1].Value], RegexOptions.IgnoreCase);
+        return project.ExpandString(value);
+    }
+
+    // Over-approximate declaration-time property values instead of substituting only the final
+    // evaluated value. Every captured declaration is considered, even a currently inactive one.
+    // Cyclic/massively ambiguous property construction refuses; trailing-slash normalization is
+    // idempotent for path identity and needs no recursive expansion of itself.
+    static List<string> PossibleValues(Project project, ProjectRootElement root, string value,
+        Dictionary<string, List<ProjectPropertyElement>> definitions, HashSet<string> visiting, ref int remaining)
+    {
+        if (--remaining < 0) throw new InvalidOperationException("Filesystem predicate property expansion is ambiguous");
+        if (value.IndexOf("@(", StringComparison.Ordinal) >= 0 || value.IndexOf("%(", StringComparison.Ordinal) >= 0)
+            throw new InvalidOperationException("Item/metadata expressions cannot prove declaration-time filesystem paths");
+        var token = Regex.Match(value, @"\$\(([A-Za-z_][A-Za-z0-9_.-]*)\)");
+        if (!token.Success)
+        {
+            if (Regex.IsMatch(value, @"\$\((?!\[)"))
+                throw new InvalidOperationException("Instance/unresolved property functions in filesystem inputs require explicit literals");
+            return new List<string> { ExpandAt(project, root, value) };
+        }
+        string name = token.Groups[1].Value;
+        if (name.IndexOf('.') >= 0)
+            throw new InvalidOperationException("Dotted/instance property inputs cannot prove declaration-time filesystem paths");
+        // Reserved current-file values are contextual facts, not mutable property declarations.
+        if (new[] { "MSBuildThisFileDirectory", "MSBuildThisFileDirectoryNoRoot", "MSBuildThisFileFullPath",
+                    "MSBuildThisFileName", "MSBuildThisFileExtension", "MSBuildThisFile" }
+            .Contains(name, StringComparer.OrdinalIgnoreCase))
+        {
+            string expanded = ExpandAt(project, root, token.Value);
+            return PossibleValues(project, root, value.Substring(0, token.Index) + expanded +
+                value.Substring(token.Index + token.Length), definitions, visiting, ref remaining);
+        }
+        if (!visiting.Add(name)) throw new InvalidOperationException("Cyclic property in a filesystem predicate");
+        var alternatives = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { project.GetPropertyValue(name) };
+        List<ProjectPropertyElement> declarations;
+        if (definitions.TryGetValue(name, out declarations))
+            foreach (var declaration in declarations)
+            {
+                string trimmed = declaration.Value.Trim();
+                if (trimmed.Equals("$(" + name + ")\\", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.Equals("$(" + name + ")/", StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (string alternative in PossibleValues(project, declaration.ContainingProject,
+                    declaration.Value, definitions, visiting, ref remaining)) alternatives.Add(alternative);
+            }
+        visiting.Remove(name);
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string alternative in alternatives)
+            foreach (string expanded in PossibleValues(project, root,
+                value.Substring(0, token.Index) + alternative + value.Substring(token.Index + token.Length),
+                definitions, visiting, ref remaining)) result.Add(expanded);
+        return result.ToList();
+    }
+
+    static List<string> PossibleValues(Project project, ProjectRootElement root, string value,
+        Dictionary<string, List<ProjectPropertyElement>> definitions)
+    {
+        int remaining = 1024;
+        return PossibleValues(project, root, value, definitions,
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase), ref remaining);
+    }
+
+    static void CheckNamespaceExpression(Project project, ProjectRootElement root, string expression,
+                                         FileEditRequest edit, Dictionary<string, List<ProjectPropertyElement>> definitions)
+    {
+        // Check original expressions, not just their already-evaluated true/false property value.
+        // A normal SDK Exists(toolchain.props) is stable; Exists(old.cpp/new.cpp) is not.
+        foreach (Match io in Regex.Matches(expression, @"\[System\.IO\.(?:File|Directory)\]::(\w+)", RegexOptions.IgnoreCase))
+            if (!io.Groups[1].Value.Equals("Exists", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Unmodeled filesystem property functions cannot be planned before a rename");
+        foreach (Match function in Regex.Matches(expression,
+            @"\b(Exists|GetDirectoryNameOfFileAbove|GetPathOfFileAbove)\s*\(", RegexOptions.IgnoreCase))
+        {
+            int start = function.Index + function.Length, depth = 1;
+            char quote = '\0';
+            var arguments = new List<string>();
+            for (int i = start; i < expression.Length; ++i)
+            {
+                char c = expression[i];
+                if (quote != '\0') { if (c == quote) quote = '\0'; continue; }
+                if (c == '\'' || c == '"') { quote = c; continue; }
+                if (c == '(') ++depth;
+                if (c == ')') --depth;
+                if ((c == ',' && depth == 1) || depth == 0)
+                {
+                    arguments.Add(expression.Substring(start, i - start).Trim()); start = i + 1;
+                    if (depth == 0) break;
+                }
+            }
+            bool exists = function.Groups[1].Value.Equals("Exists", StringComparison.OrdinalIgnoreCase);
+            if (depth != 0 || (exists ? arguments.Count != 1 : arguments.Count < 1 || arguments.Count > 2))
+                throw new InvalidOperationException("Unresolved filesystem expression in project inputs");
+            foreach (string argument in arguments)
+            {
+                string value = argument;
+                if (value.Length >= 2 && (value[0] == '\'' || value[0] == '"') && value[value.Length - 1] == value[0])
+                    value = value.Substring(1, value.Length - 2);
+                foreach (string candidate in PossibleValues(project, root, value, definitions))
+                {
+                    if (candidate.Length == 0) continue;
+                    if (!Literal(candidate))
+                        throw new InvalidOperationException("A filesystem expression could not be resolved for rename planning");
+                    string full = FullPathOf(Path.GetDirectoryName(root.FullPath), candidate);
+                    if (edit.Existing.Concat(edit.Incoming).Contains(full, StringComparer.OrdinalIgnoreCase) ||
+                        (!exists && edit.Existing.Concat(edit.Incoming).Any(p =>
+                            Path.GetFileName(p).Equals(Path.GetFileName(candidate), StringComparison.OrdinalIgnoreCase))))
+                        throw new InvalidOperationException("A project/import expression depends on the old or new source existing");
+                }
+            }
+        }
+    }
+
+    // A pre-move plan cannot evaluate arbitrary file-dependent item creation. Standard explicit
+    // C++ items and configuration/platform conditions are supported; dynamic imported item rules
+    // are refused rather than guessed from the old item's ownership.
+    static void CheckMembershipProfile(Project project, FileEditRequest edit)
+    {
+        var roots = new[] { project.Xml }.Concat(project.Imports.Select(i => i.ImportedProject)).Distinct().ToArray();
+        var definitions = roots.SelectMany(r => r.Properties).Where(p => !InTarget(p))
+            .GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+        foreach (var root in roots)
+        {
+            if (!String.IsNullOrEmpty(root.Sdk) || root.Children.Any(c => c is ProjectSdkElement))
+                throw new InvalidOperationException("Implicit SDK resolver inputs are not captured; use explicit VC imports for this rename profile");
+            foreach (var property in root.Properties.Where(p => !InTarget(p)))
+            {
+                CheckNamespaceExpression(project, root, property.Value, edit, definitions);
+                for (ProjectElement current = property; current != null && !(current is ProjectRootElement); current = current.Parent)
+                    CheckNamespaceExpression(project, root, current.Condition, edit, definitions);
+            }
+            foreach (var item in root.Items.Where(i => IsFileItemType(i.ItemType) && !InTarget(i)))
+            {
+                foreach (string value in new[] { item.Include, item.Remove, item.Update, item.Exclude })
+                    if (value.Length != 0 && (value.IndexOfAny(new[] { '@', '%' }) >= 0 || !Literal(ExpandAt(project, root, value))))
+                        throw new InvalidOperationException("Dynamic or wildcard imported membership requires an explicit source item before rename");
+                for (ProjectElement current = item; current != null && !(current is ProjectRootElement); current = current.Parent)
+                {
+                    string condition = current.Condition.Replace("$(Configuration)", "").Replace("$(Platform)", "");
+                    if (condition.IndexOfAny(new[] { '$', '@', '%' }) >= 0 ||
+                        condition.IndexOf("Exists", StringComparison.OrdinalIgnoreCase) >= 0)
+                        throw new InvalidOperationException("File-dependent item conditions cannot be planned before the physical rename");
+                }
+            }
+            foreach (var import in root.Imports)
+            {
+                for (ProjectElement current = import; current != null && !(current is ProjectRootElement); current = current.Parent)
+                    CheckNamespaceExpression(project, root, current.Condition, edit, definitions);
+                CheckNamespaceExpression(project, root, import.Project, edit, definitions);
+                foreach (string path in PossibleValues(project, root, import.Project, definitions))
+                {
+                    if (path.IndexOfAny(new[] { '*', '?' }) >= 0)
+                    {
+                        // Ordinary VC SDK ImportBefore/After globs live in the toolchain directory,
+                        // which this source rename does not touch. A glob rooted at/above either
+                        // renamed path can change discovery and requires an explicit import instead.
+                        int wildcard = path.IndexOfAny(new[] { '*', '?' });
+                        int separator = path.LastIndexOfAny(new[] { '\\', '/' }, wildcard);
+                        string prefix = separator < 0 ? "." : path.Substring(0, separator + 1);
+                        string directory = FullPathOf(Path.GetDirectoryName(root.FullPath), prefix).TrimEnd('\\', '/') + "\\";
+                        if (edit.Existing.Concat(edit.Incoming).Any(p => p.StartsWith(directory, StringComparison.OrdinalIgnoreCase)))
+                            throw new InvalidOperationException("A wildcard import can change when this source is renamed; use an explicit import");
+                        continue;
+                    }
+                    if (path.IndexOfAny(new[] { '$', '@', '%', ';' }) >= 0)
+                        throw new InvalidOperationException("An import path could not be resolved for this configuration");
+                    if (path.Length != 0 && Literal(path))
+                    {
+                        string full = FullPathOf(Path.GetDirectoryName(root.FullPath), path);
+                        if (edit.Existing.Concat(edit.Incoming).Contains(full, StringComparer.OrdinalIgnoreCase))
+                            throw new InvalidOperationException("The renamed source also controls an import path");
+                    }
+                }
+            }
+        }
+    }
+
+    static List<string> Membership(Project project, FileEditRequest edit, bool renamed)
+    {
+        var result = new List<string>();
+        foreach (var item in project.Items.Where(i => IsFileItemType(i.ItemType)))
+        {
+            string path = FullPathOf(Path.GetDirectoryName(edit.ProjectPath), item.EvaluatedInclude);
+            if (renamed)
+                for (int i = 0; i < edit.RenamedFrom.Length; ++i)
+                    if (path.Equals(edit.RenamedFrom[i], StringComparison.OrdinalIgnoreCase))
+                    { path = edit.RenamedTo[i]; break; }
+            result.Add(item.ItemType + "\u0001" + path);
+        }
+        result.Sort(StringComparer.OrdinalIgnoreCase);
+        return result;
+    }
+
+    // Evaluate transformed construction XML IN MEMORY at its real project path. Ordinary SDK
+    // imports see the real directory and properties; no project/source is temporarily written.
+    static void CheckAfter(byte[] after, FileEditRequest edit, string[] configurations,
+                           SortedDictionary<string, string> imports)
+    {
+        var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
+        foreach (string configuration in configurations)
+        using (var beforeCollection = new ProjectCollection())
+        using (var afterCollection = new ProjectCollection())
+        {
+            var before = Load(beforeCollection, edit.ProjectPath, configuration);
+            CheckMembershipProfile(before, edit);
+            string[] parts = configuration.Split('|');
+            afterCollection.SetGlobalProperty("Configuration", parts[0]);
+            afterCollection.SetGlobalProperty("Platform", parts[1]);
+            ProjectRootElement root;
+            using (var reader = XmlReader.Create(new StringReader(new UTF8Encoding(false, true).GetString(after).TrimStart('﻿')), settings))
+                root = ProjectRootElement.Create(reader, afterCollection, true);
+            root.FullPath = edit.ProjectPath;
+            var planned = new Project(root, null, null, afterCollection);
+            CheckMembershipProfile(planned, edit);
+            if (!Membership(before, edit, true).SequenceEqual(Membership(planned, edit, false), StringComparer.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Imported rules change or duplicate the proposed renamed membership");
+            var actualImports = planned.Imports.Select(i => i.ImportedProject.FullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var beforeImports = before.Imports.Select(i => i.ImportedProject.FullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (!actualImports.OrderBy(i => i, StringComparer.OrdinalIgnoreCase).SequenceEqual(
+                    beforeImports.OrderBy(i => i, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase) ||
+                actualImports.Any(i => !imports.ContainsKey(i)))
+                throw new InvalidOperationException("The proposed rename changes the imported input set");
+        }
+    }
+
     /*
      * Handles one request: fences the trusted root, the project and the edited files, evaluates every
      * declared configuration twice (the second time with the imports fenced and hashed), plans both
@@ -349,6 +604,12 @@ static class ProjectFileEdits
             fences.Add(TransactionProbe.FenceEvaluation(rootPath, edit.ProjectPath));
             foreach (string file in edit.Incoming)
             {
+                if (edit.BeforeFileMove)
+                {
+                    if (File.Exists(file) || Directory.Exists(file))
+                        throw new InvalidOperationException("The rename destination already exists: " + file);
+                    continue;
+                }
                 // A project may list files beside the trusted root ("..\src\a.cpp"); only the
                 // definitions are written, and those must be inside it (TransactionProbe).
                 if (!File.Exists(file) || (File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
@@ -356,7 +617,17 @@ static class ProjectFileEdits
                 if (file.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
                     fences.Add(TransactionProbe.FenceEvaluation(rootPath, file));
             }
+            if (edit.BeforeFileMove)
+                foreach (string file in edit.Existing)
+                {
+                    if (!File.Exists(file) || (File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidOperationException("The source is missing or is a link: " + file);
+                    if (file.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                        fences.Add(TransactionProbe.FenceEvaluation(rootPath, file));
+                }
             byte[] snapshot = File.ReadAllBytes(edit.ProjectPath);
+            if (edit.BeforeFileMove && snapshot.Length > 8 * 1024 * 1024)
+                throw new InvalidOperationException("Project exceeds the plan input limit");
             string environment = EnvironmentFingerprint.Current();
             string[] configurations;
             var inputs = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -410,6 +681,12 @@ static class ProjectFileEdits
                 string filtersPath = edit.ProjectPath + ".filters";
                 byte[] filters = File.Exists(filtersPath) ? File.ReadAllBytes(filtersPath) : null;
                 byte[] filtersAfter = filters == null ? null : Plan(filters, edit, true);
+                if (edit.BeforeFileMove)
+                {
+                    if (filters != null && filters.Length > 8 * 1024 * 1024)
+                        throw new InvalidOperationException("Filters exceed the plan input limit");
+                    CheckAfter(projectAfter, edit, configurations, inputs);
+                }
                 if (filters == null && edit.Filter.Length != 0)
                     throw new InvalidOperationException("The project has no .filters file to place the file in");
                 string commit;
@@ -430,7 +707,31 @@ static class ProjectFileEdits
                         Entries = entries.ToArray()
                     }, digest => approve(transactionId, digest));
                 }
+                if (!edit.BeforeFileMove)
+                    return new { Items = (object)null, Error = (string)null, Edit = new {
+                        Project = Convert.ToBase64String(projectAfter),
+                        Filters = filtersAfter == null ? null : Convert.ToBase64String(filtersAfter),
+                        Configurations = configurations, Environment = environment, ImportedInputs = inputs } };
+                if (inputs.Count > 512 || configurations.Length > 256)
+                    throw new InvalidOperationException("Project configuration/import count exceeds the plan limit");
+                long planBytes = snapshot.Length + projectAfter.Length +
+                    (filters == null ? 0 : filters.Length + filtersAfter.Length);
+                var inputBytes = inputs.Select(pair => {
+                    byte[] content = File.ReadAllBytes(pair.Key);
+                    if (Sha256(content) != pair.Value) throw new InvalidOperationException("An import changed before plan publication");
+                    if (content.Length > 8 * 1024 * 1024) throw new InvalidOperationException("An import exceeds the plan input limit");
+                    planBytes += content.Length;
+                    if (planBytes > 36 * 1024 * 1024) throw new InvalidOperationException("Combined project plan inputs exceed the publication limit");
+                    return new { Path = pair.Key, Before = Convert.ToBase64String(content) };
+                }).ToArray();
+                if (edit.BeforeFileMove && (!snapshot.SequenceEqual(File.ReadAllBytes(edit.ProjectPath)) ||
+                    (filters == null ? File.Exists(filtersPath) : !File.Exists(filtersPath) || !filters.SequenceEqual(File.ReadAllBytes(filtersPath))) ||
+                    environment != EnvironmentFingerprint.Current()))
+                    throw new InvalidOperationException("Project inputs changed before plan publication");
                 return new { Items = (object)null, Error = (string)null, Edit = new {
+                    PlanVersion = 1, Mode = edit.BeforeFileMove ? "BeforeFileMoveRename" : "LegacyEdit",
+                    ProjectPath = edit.ProjectPath, ProjectBefore = Convert.ToBase64String(snapshot),
+                    FiltersBefore = filters == null ? null : Convert.ToBase64String(filters), InputBytes = inputBytes,
                     Project = Convert.ToBase64String(projectAfter),
                     Filters = filtersAfter == null ? null : Convert.ToBase64String(filtersAfter),
                     Configurations = configurations, Environment = environment, ImportedInputs = inputs } };
