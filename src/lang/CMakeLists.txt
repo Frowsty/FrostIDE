@@ -63,6 +63,7 @@ frost_add_library(lang LAYER lang
         src/save_actions.cpp
         src/semantic_tokens.cpp
         src/snippet.cpp
+        src/templates.cpp
         src/symbols.cpp
         src/uri.cpp
         src/workspace_edit.cpp
