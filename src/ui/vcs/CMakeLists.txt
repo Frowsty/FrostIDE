@@ -16,9 +16,10 @@ frost_add_library(ui_vcs LAYER ui
         src/git_console.cpp
         src/git_controller.cpp
         src/git_log_window.cpp
+        src/merge_editor.cpp
         src/vcs_colors.cpp
     DEPS
-        frost::ui_editor frost::ui_shell frost::ui frost::ui_model frost::vcs frost::diff frost::text_editor
+        frost::ui_editor frost::ui_nav frost::ui_shell frost::ui frost::ui_model frost::vcs frost::diff frost::text_editor
         frost::text frost::input frost::io frost::core
     THIRD_PARTY Qt6::Widgets)
 # The Q_OBJECT classes live in public headers; moc runs on them through AUTOMOC.

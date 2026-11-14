@@ -153,6 +153,7 @@ public:
     void createBranchAt(std::string name, std::string startPoint);
     void mergeBranch(std::string branch);
     void rebaseBranch(std::string ontoBranch);
+    void rebaseStep(RebaseStep step);
     void deleteBranch(std::string branch, bool force = false);
     void renameBranch(std::string oldName, std::string newName);
     void stashPush(std::string message = {}, bool includeUntracked = true);

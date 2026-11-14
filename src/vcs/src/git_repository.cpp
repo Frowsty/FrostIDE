@@ -1272,7 +1272,7 @@ Result<GitOutput> GitRepository::mergeBranch(std::string_view branch, const RunC
     if (auto trusted = requireTrust("Merge"); !trusted) {
         return std::unexpected(std::move(trusted.error()));
     }
-    if (branch.empty()) {
+    if (branch.empty() || branch.front() == '-') {
         return fail(ErrorCode::InvalidArgument, "branch name is empty");
     }
     auto output = git({"merge", std::string(branch)}, control, kHookTimeout);
@@ -1286,13 +1286,27 @@ Result<GitOutput> GitRepository::rebaseBranch(std::string_view ontoBranch, const
     if (auto trusted = requireTrust("Rebase"); !trusted) {
         return std::unexpected(std::move(trusted.error()));
     }
-    if (ontoBranch.empty()) {
+    if (ontoBranch.empty() || ontoBranch.front() == '-') {
         return fail(ErrorCode::InvalidArgument, "target branch name is empty");
     }
     auto output = git({"rebase", std::string(ontoBranch)}, control, kHookTimeout);
     if (output && !output->succeeded()) {
         return std::unexpected(gitFailure(std::format("Rebase onto '{}'", ontoBranch), *output));
     }
+    return output;
+}
+
+Result<GitOutput> GitRepository::rebaseStep(RebaseStep step, const RunControl& control) const {
+    if (auto trusted = requireTrust("Rebase control"); !trusted) return std::unexpected(std::move(trusted.error()));
+    std::string argument;
+    switch (step) {
+    case RebaseStep::Continue: argument = "--continue"; break;
+    case RebaseStep::Skip: argument = "--skip"; break;
+    case RebaseStep::Abort: argument = "--abort"; break;
+    default: return fail(ErrorCode::InvalidArgument, "Unknown rebase action");
+    }
+    auto output = git({"rebase", argument}, control, kHookTimeout);
+    if (output && !output->succeeded()) return std::unexpected(gitFailure("Rebase " + argument, *output));
     return output;
 }
 

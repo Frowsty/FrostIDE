@@ -437,6 +437,15 @@ void GitService::rebaseBranch(std::string ontoBranch) {
                      });
 }
 
+void GitService::rebaseStep(RebaseStep step) {
+    State* state = m_state.get();
+    state->operation(GitOperationKind::Rebase, {}, [state, step](const std::stop_token& stop, GitOperationResult& result) {
+        auto output = state->repository.rebaseStep(step, state->control(stop));
+        if (output) result.output = output->stdoutBytes + output->stderrBytes;
+        else result.error = std::move(output.error());
+    });
+}
+
 void GitService::deleteBranch(std::string branch, bool force) {
     State* state = m_state.get();
     std::string target = branch;

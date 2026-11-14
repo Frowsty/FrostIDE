@@ -139,6 +139,8 @@ struct CommitResult {
 };
 
 enum class PullStrategy : std::uint8_t { Merge, Rebase };
+// Explicit control of a paused real rebase. Abort and Skip require user review in the UI.
+enum class RebaseStep : std::uint8_t { Continue, Skip, Abort };
 
 struct PushOptions {
     // --force-with-lease. Refused unless `confirmed` is set too: the UI asks first.
@@ -240,6 +242,8 @@ public:
     // Branch operations (merge, rebase, delete, rename).
     [[nodiscard]] Result<GitOutput> mergeBranch(std::string_view branch, const RunControl& control = {}) const;
     [[nodiscard]] Result<GitOutput> rebaseBranch(std::string_view ontoBranch, const RunControl& control = {}) const;
+    // Runs git rebase --continue/--skip/--abort. Trust, cancellation and hook timeout as rebaseBranch.
+    [[nodiscard]] Result<GitOutput> rebaseStep(RebaseStep step, const RunControl& control = {}) const;
     [[nodiscard]] Result<void> deleteBranch(std::string_view branch, bool force = false,
                                             const RunControl& control = {}) const;
     [[nodiscard]] Result<void> renameBranch(std::string_view oldName, std::string_view newName,

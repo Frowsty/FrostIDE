@@ -226,6 +226,10 @@ void GitController::rebaseBranch(const QString& ontoBranch) {
         m_service->rebaseBranch(ontoBranch.trimmed().toStdString());
 }
 
+void GitController::rebaseStep(vcs::RebaseStep step) {
+    if (allow(vcs::GitOperationKind::Rebase)) m_service->rebaseStep(step);
+}
+
 void GitController::deleteBranch(const QString& branch, bool force) {
     if (allow(vcs::GitOperationKind::DeleteBranch))
         m_service->deleteBranch(branch.trimmed().toStdString(), force);
