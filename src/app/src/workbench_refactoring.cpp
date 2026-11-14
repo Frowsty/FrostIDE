@@ -96,6 +96,15 @@ Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document:
         m_refactoring =
             std::make_unique<document::RefactoringCoordinator>(*m_documents, m_services.fs, std::move(options));
     }
+    if (!m_refactoringRecoveryChecked) {
+        auto recovered = m_refactoring->recoverPending();
+        if (!recovered) return std::unexpected(std::move(recovered.error()));
+        m_refactoringRecoveryChecked = true;
+        for (const auto& outcome : *recovered) publishRefactoringOutcome(outcome);
+        m_pendingRefactoring = m_refactoring->pendingToken();
+    }
+    if (m_refactoring->pending())
+        return fail(ErrorCode::Busy, "Finish the pending refactoring with Resume Refactoring before starting another");
     auto admittedPlan = plan;
     admittedPlan.revalidateContext = [this, mutationPaths, context = plan.revalidateContext]() -> Result<void> {
         if (m_shutDown)

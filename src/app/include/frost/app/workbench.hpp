@@ -1011,6 +1011,7 @@ private:
     };
     std::vector<RefactoringPaths> m_refactoringPaths;
     TransactionId m_pendingRefactoring;
+    bool m_refactoringRecoveryChecked = false;
     TransactionId m_refactoringAdmissionToken;
     std::shared_ptr<CppRenameAdmission> m_cppRenameAdmission;
     std::stop_source m_cppRenameStop;
