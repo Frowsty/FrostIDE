@@ -6,8 +6,7 @@ and DebugSession for initialization/configuration, breakpoint replacement, threa
 and stack loading, scopes/variables, evaluation, stepping, disconnect and teardown.
 No MI translation or scripted production responses are involved.
 
-GDB must be version 16 or newer and built with Python/DAP. The factory probes
-`--version` with a five-second deadline before opening the DAP transport; the DAP
+GDB must be version 16 or newer and built with Python/DAP. The DAP reader worker probes `--version` with a cancellable five-second deadline before opening the process transport; the DAP
 initialize handshake then detects unavailable Python/DAP support. All init files,
 auto-loaded object/repository scripts and debuginfod downloads are disabled.
 GDB is user-installed, not redistributed or discovered through PATH.
@@ -37,7 +36,7 @@ their own selection. Private engine launches require pinned LLDB and refuse GDB.
 
 The production controller snapshots the actual process environment immediately
 before calling the GDB session starter, then merges the resolved launch overrides.
-Function and exception breakpoints enter the initial options before initialization.
+Function and exception breakpoints enter the initial options before initialization. Final current-trust checks run on the DAP writer for both launch and attach after asynchronous preparation.
 Capabilities come from the actual GDB initialize response; GDB is never given LLDB's
 verified native OS-thread identity provenance. The UI/settings admission tests are
 authored only and runtime validation remains deferred.

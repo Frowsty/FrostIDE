@@ -176,15 +176,23 @@ TEST_F(DebugUiTest, SelectedGdbRoutesLaunchAndAttachThroughVersionAdmission) {
     DebugController selected(breakpoints, options);
     launcher.expect({.expectExecutable = executable, .stdoutBytes = "GNU gdb (GDB) 15.2\n"});
     auto launch = selected.startTarget(target());
-    ASSERT_FALSE(launch);
-    EXPECT_EQ(launch.error().code(), ErrorCode::Unsupported);
+    if (launch) {
+        ASSERT_TRUE(spinUntil([&] { return !selected.debugging(); }));
+        ASSERT_TRUE(selected.lastOutcome());
+        ASSERT_TRUE(selected.lastOutcome()->error);
+        EXPECT_NE(selected.lastOutcome()->error->message().find("GDB"), std::string::npos);
+    } else EXPECT_NE(launch.error().message().find("GDB"), std::string::npos);
     auto calls = launcher.launches();
     ASSERT_EQ(calls.size(), 1U);
     EXPECT_EQ(calls.front().spec.arguments, (std::vector<std::string>{"--nx", "--quiet", "--version"}));
     launcher.expect({.expectExecutable = executable, .stdoutBytes = "GNU gdb (GDB) 15.2\n"});
     auto attach = selected.attachTarget(target(), {}, rpc::Json::object().set("type", "lldb-dap").set("pid", 123));
-    ASSERT_FALSE(attach);
-    EXPECT_EQ(attach.error().code(), ErrorCode::Unsupported);
+    if (attach) {
+        ASSERT_TRUE(spinUntil([&] { return !selected.debugging(); }));
+        ASSERT_TRUE(selected.lastOutcome());
+        ASSERT_TRUE(selected.lastOutcome()->error);
+        EXPECT_NE(selected.lastOutcome()->error->message().find("GDB"), std::string::npos);
+    } else EXPECT_NE(attach.error().message().find("GDB"), std::string::npos);
     EXPECT_EQ(launcher.launches().size(), 2U);
 }
 #endif

@@ -8,6 +8,8 @@ namespace frost::debug {
 [[nodiscard]] Result<void> validateGdbDapVersion(std::string_view banner);
 [[nodiscard]] Result<std::string> findGdbDap(io::IFileSystem& fs, std::string configured);
 [[nodiscard]] io::ProcessSpec gdbDapProcessSpec(std::string executable);
+// Factory returns immediately. DAP reader performs cancellable version/process preparation.
+// Launcher and trust store supplied to the session helpers must outlive all sessions.
 [[nodiscard]] AdapterFactory gdbDapAdapterFactory(io::IProcessLauncher& launcher, std::string executable,
                                                 DapProcessOutput output = {});
 // inheritedEnvironment is a snapshot supplied by the caller; explicit target values win.
