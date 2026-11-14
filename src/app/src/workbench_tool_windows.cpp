@@ -134,6 +134,7 @@ void Workbench::attachToolWindows() {
         std::string activeCfg = "Debug|x64";
         if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
             activeCfg = m_build->configurations()[*idx].name();
+        const auto propertiesSolution = m_solution;
         showProjectPropertiesDialog(m_window, m_services.fs, projectPath.toStdString(), activeCfg, [this] {
             refreshSolutionExplorerForFsChange();
             startProjectEvaluation(m_projectRoot);
@@ -162,6 +163,10 @@ void Workbench::attachToolWindows() {
             auto evaluated = evaluatePropertyPage(propertyProject, root, solution, configuration, keys, stop);
             if (!evaluated) return std::unexpected(std::move(evaluated.error()));
             return std::move(evaluated->properties);
+        }, [this, propertiesSolution]() -> Result<void> {
+            if (m_shutDown || m_solution != propertiesSolution)
+                return fail(ErrorCode::Busy, "Solution changed while property pages were open");
+            return propertiesSolution->requireProjectMutation();
         });
     });
     connect(explorer, &ui::SolutionExplorer::solutionPropertiesRequested, this, [this] {

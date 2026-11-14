@@ -3427,4 +3427,35 @@ TEST(Workbench, ApproximateSolutionRefusesMembershipRenameButSourceTextRemainsEd
 }
 #endif
 
+#ifndef _WIN32
+TEST(Workbench, ApproximateExplorerPropertyActionCannotWriteManagedDefinition) {
+    WorkDir dir("approximate-explorer-properties");
+    dir.write("Managed.slnx", "<Solution><Project Path=\"App.csproj\" /></Solution>");
+    dir.write("App.csproj", "<Project><PropertyGroup><AssemblyName>Before</AssemblyName></PropertyGroup></Project>");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Managed.slnx")));
+    const auto before = dir.read("App.csproj");
+    bool refused = false;
+    inspectModal(rig.window.get(), QStringLiteral("projectPropertiesDialog"), [&](QDialog& dialog) {
+        auto* field = dialog.findChild<QLineEdit*>(QStringLiteral("prop_Prop.AssemblyName"));
+        ASSERT_NE(field, nullptr);
+        field->setText(QStringLiteral("must-not-be-written"));
+        QTimer::singleShot(0, &dialog, [&dialog, &refused] {
+            auto* warning = dialog.findChild<QMessageBox*>();
+            ASSERT_NE(warning, nullptr);
+            refused = true;
+            warning->accept();
+        });
+        clickOk(dialog);
+        EXPECT_TRUE(dialog.isVisible());
+    });
+    auto* explorer = rig.workbench->solutionExplorer();
+    ASSERT_NE(explorer, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(explorer, "projectPropertiesRequested", Qt::DirectConnection,
+                                          Q_ARG(QString, QString::fromStdString(dir.join("App.csproj")))));
+    EXPECT_TRUE(refused);
+    EXPECT_EQ(dir.read("App.csproj"), before);
+}
+#endif
+
 } // namespace
