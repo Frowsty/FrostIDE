@@ -16,20 +16,19 @@ Json location(const Symbol& s) {
                                                                 {static_cast<std::uint32_t>(s.line), 0}}));
 }
 void declarations(std::vector<Symbol>& out, std::string_view path, std::string_view text) {
-    auto parsed = project::scanCMakeSyntax(text);
-    if (!parsed) return; // Never infer declarations from comments, strings, or malformed scopes.
-    for (const auto& cmd : *parsed) {
+    const auto parsed = project::scanCMakeSyntaxPrefix(text);
+    for (const auto& cmd : parsed) {
         if (cmd.arguments.empty() || !cmd.arguments.front().isLiteral) continue;
         const auto& name = cmd.arguments.front().literal;
         if (name.empty()) continue;
-        if (cmd.name == "function" || cmd.name == "macro") {
-            out.push_back({name, cmd.name + " " + name + " (source declaration)", std::string(path), cmd.line, 3});
+        if ((cmd.name == "function" || cmd.name == "macro") && cmd.scopeDepth == 0) {
+            out.push_back({name, cmd.name + " " + name + " (source declaration)", std::string(path), cmd.line - 1, 3});
         } else if ((cmd.name == "set" || cmd.name == "option") && cmd.scopeDepth == 0) {
             // Do not claim conditional or function-local values are global values.
             std::string detail = cmd.name + " " + name + " (source declaration; not evaluated)";
-            out.push_back({name, std::move(detail), std::string(path), cmd.line, 6});
+            out.push_back({name, std::move(detail), std::string(path), cmd.line - 1, 6});
         } else if (cmd.name == "add_executable" || cmd.name == "add_library" || cmd.name == "add_custom_target") {
-            out.push_back({name, cmd.name + " " + name + " (source declaration)", std::string(path), cmd.line, 7});
+            out.push_back({name, cmd.name + " " + name + " (source declaration)", std::string(path), cmd.line - 1, 7});
         }
     }
 }

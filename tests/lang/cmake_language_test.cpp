@@ -40,4 +40,14 @@ TEST(CMakeLanguage, SkipsCommentsDynamicNamesAndConditionalVariables) {
     stop.request_stop();
     EXPECT_FALSE(queryCMakeLanguage(input, "textDocument/completion", params(5, 0), stop.get_token()));
 }
+TEST(CMakeLanguage, CompletionKeepsCompletedDeclarationsWhileTypingAnUnfinishedCommand) {
+    auto buffer = text::TextBuffer::fromUtf8("set(MY_OPTION value)\nmessage(${MY_").value();
+    CMakeLanguageInput input;
+    input.path = "C:/project/CMakeLists.txt";
+    input.source = buffer.snapshot();
+    auto result = queryCMakeLanguage(input, "textDocument/completion", params(1, 13));
+    ASSERT_TRUE(result);
+    ASSERT_EQ(result->size(), 1);
+    EXPECT_EQ(result->items()[0].stringAt("label"), "MY_OPTION");
+}
 } // namespace
