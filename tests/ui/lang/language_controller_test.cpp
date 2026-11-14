@@ -1441,6 +1441,36 @@ Json tweakAction(const std::string& path, std::string id, const std::string& tit
 // FND-3 (REF-0): Refactor This lists Rename, then the server's refactorings in the defined order
 // (known tweaks first, then the rest in server order); quick fixes and source actions stay with
 // Alt+Enter. Choosing a tweak executes it on the server; nothing edits text locally.
+TEST(LanguageControllerRefactoring, TweakAdmissionPredatesCodeActionAndRefusesStaleSelectionBeforeExecute) {
+    FeatureServer server;
+    const auto path = workPath("main.cpp");
+    std::atomic<int> captures = 0;
+    std::atomic<bool> current = true;
+    server.on("textDocument/codeAction", [&](const Json&) {
+        EXPECT_EQ(captures.load(), 1);
+        current = false; // Models the captured document version changing while the query is in flight.
+        return Json::array({tweakAction(path, "ExtractVariable", "Extract subexpression to variable")});
+    });
+    FakeHost host("int f(){return 2+3;}", path);
+    Rig rig(server, host);
+    rig.controller.setCppSemanticEditFactory([&]() -> frost::Result<LanguageController::SemanticApply> {
+        ++captures;
+        return LanguageController::SemanticApply{[&](const fl::WorkspaceEdit&) -> frost::Result<void> {
+            if (!current)
+                return frost::fail(frost::ErrorCode::Busy, "captured version changed");
+            return {};
+        }};
+    });
+    std::vector<QString> status;
+    QObject::connect(&rig.controller, &LanguageController::statusMessage,
+                     [&](const auto& message) { status.push_back(message); });
+    rig.controller.extractVariable();
+    ASSERT_TRUE(pumpUntil([&] { return !status.empty(); }));
+    EXPECT_TRUE(status.back().contains(QStringLiteral("captured version changed")));
+    EXPECT_TRUE(server.paramsOf("workspace/executeCommand").empty());
+    EXPECT_TRUE(rig.applier.edits.empty());
+}
+
 TEST(LanguageControllerRefactoring, RefactorThisListsRenameThenServerActionsInOrder) {
     FeatureServer server;
     const std::string path = workPath("main.cpp");
@@ -1509,7 +1539,7 @@ TEST(LanguageControllerRefactoring, NamedCommandsRunClangdTweaksOrReportTheirEpi
         const char* id;
         const char* epic;
     };
-    for (const Disabled& d : {Disabled{"refactor.inline", "REF-6"}, Disabled{"refactor.changeSignature", "REF-6"},
+    for (const Disabled& d : {Disabled{"refactor.changeSignature", "REF-6"},
                               Disabled{"refactor.extractConstant", "REF-7"}, Disabled{"refactor.extractField", "REF-7"},
                               Disabled{"refactor.extractParameter", "REF-7"}, Disabled{"refactor.move", "REF-8"},
                               Disabled{"refactor.safeDelete", "REF-8"}, Disabled{"code.overrideMethods", "REF-9"}}) {
@@ -1519,15 +1549,14 @@ TEST(LanguageControllerRefactoring, NamedCommandsRunClangdTweaksOrReportTheirEpi
         EXPECT_NE(registry.info(*action).description.find(d.epic), std::string::npos) << d.id;
     }
 
-    rig.controller.inlineSymbol();
     rig.controller.changeSignature();
     rig.controller.moveSymbol();
     rig.controller.safeDelete();
     rig.controller.extractField();
-    ASSERT_EQ(status.size(), 5U);
+    ASSERT_EQ(status.size(), 4U);
     EXPECT_TRUE(status[0].contains(QStringLiteral("REF-6")));
-    EXPECT_TRUE(status[2].contains(QStringLiteral("REF-8")));
-    EXPECT_TRUE(status[4].contains(QStringLiteral("REF-7")));
+    EXPECT_TRUE(status[1].contains(QStringLiteral("REF-8")));
+    EXPECT_TRUE(status[3].contains(QStringLiteral("REF-7")));
     EXPECT_EQ(host.undoSteps, 0);
     EXPECT_TRUE(rig.applier.edits.empty());
 
@@ -1541,8 +1570,8 @@ TEST(LanguageControllerRefactoring, NamedCommandsRunClangdTweaksOrReportTheirEpi
               "MemberwiseConstructor");
     // A tweak clangd does not offer here: a message, no edit.
     rig.controller.extractVariable();
-    ASSERT_TRUE(pumpUntil([&] { return status.size() == 6; }));
-    EXPECT_TRUE(status[5].contains(QStringLiteral("Extract Variable")));
+    ASSERT_TRUE(pumpUntil([&] { return status.size() == 5; }));
+    EXPECT_TRUE(status[4].contains(QStringLiteral("Extract Variable")));
     EXPECT_EQ(server.paramsOf("workspace/executeCommand").size(), 2U);
     EXPECT_EQ(host.undoSteps, 0);
 }

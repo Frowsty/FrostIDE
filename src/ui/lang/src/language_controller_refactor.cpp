@@ -276,6 +276,19 @@ void LanguageController::refactorThis() {
     if (!hasDocument()) {
         return;
     }
+    if (m_cppSemanticCommand) {
+        unavailable(QStringLiteral("Wait for the active semantic command to finish"));
+        return;
+    }
+    std::shared_ptr<SemanticApply> semantic;
+    if (capabilities().clangdTweaks && m_cppSemanticBegin) {
+        auto captured = m_cppSemanticBegin();
+        if (!captured) {
+            report(captured.error(), "Refactor This");
+            return;
+        }
+        semantic = std::make_shared<SemanticApply>(std::move(*captured));
+    }
     const std::string path = m_services.host.documentPath();
     fl::LspRange range{caretPosition(), caretPosition()};
     if (const auto selection = m_services.host.selection()) {
@@ -286,7 +299,7 @@ void LanguageController::refactorThis() {
         [&server = m_services.server, path, range](std::stop_token token) {
             return fl::requestCodeActions(server, path, range, {}, std::move(token));
         },
-        [this](Result<std::vector<fl::CodeActionItem>> serverActions) {
+        [this, semantic](Result<std::vector<fl::CodeActionItem>> serverActions) {
             std::vector<QString> titles;
             std::vector<bool> preferred;
             m_choiceActions.clear();
@@ -300,8 +313,9 @@ void LanguageController::refactorThis() {
                 for (fl::CodeActionItem& item : fl::orderRefactorActions(std::move(*serverActions))) {
                     titles.push_back(qs(item.title));
                     preferred.push_back(false);
-                    m_choiceActions.emplace_back(
-                        [this, action = std::move(item)]() mutable { runCodeAction(std::move(action)); });
+                    m_choiceActions.emplace_back([this, action = std::move(item), semantic]() mutable {
+                        runCodeAction(std::move(action), semantic);
+                    });
                 }
             }
             m_choice->start(QStringLiteral("Refactor This"), titles, m_services.host.caretScreenRect(),
@@ -320,10 +334,18 @@ void LanguageController::extractMethod() {
 }
 
 void LanguageController::extractConstant() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("extract-constant");
+        return;
+    }
     unavailable(QStringLiteral("Extract Constant requires the extract refactorings (REF-7)"));
 }
 
 void LanguageController::extractField() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("extract-field");
+        return;
+    }
     unavailable(QStringLiteral("Extract Field requires the extract refactorings (REF-7)"));
 }
 
@@ -332,10 +354,17 @@ void LanguageController::extractParameter() {
 }
 
 void LanguageController::inlineSymbol() {
-    unavailable(QStringLiteral("Inline requires the inline refactoring (REF-6)"));
+    runClangdTweak(
+        "InlineVariable", QStringLiteral("Inline Variable"),
+        QStringLiteral(
+            "clangd cannot inline this variable; use Inline C++ Call for the supported call-expression profile"));
 }
 
 void LanguageController::changeSignature() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("change-signature");
+        return;
+    }
     unavailable(QStringLiteral("Change Signature requires the change signature refactoring (REF-6)"));
 }
 

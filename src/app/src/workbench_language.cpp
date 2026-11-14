@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <format>
 #include <memory>
+#include <set>
 #include <utility>
 
 namespace frost::app {
@@ -100,7 +101,7 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
                     ErrorCode::Unsupported,
                     "Engine metadata rename requires the read-only combined binding preview and schema regeneration");
         }
-    if (label == "Rename") {
+    if (label == "Rename" || label == "C++ Semantic Refactoring") {
         document::RefactoringPlan plan;
         plan.label = std::string(label);
         const auto positionEncoding = encoding();
@@ -138,9 +139,38 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
         }
         if (plan.buffers.empty() && plan.disk.empty())
             return {};
-        if (std::ranges::any_of(edit.files, [](const auto& file) { return isCFamilySource(file.path); })) {
+        if (label == "Rename" &&
+            std::ranges::any_of(edit.files, [](const auto& file) { return isCFamilySource(file.path); })) {
             if (auto admitted = m_workbench.admitCppRename(edit, plan); !admitted)
                 return std::unexpected(std::move(admitted.error()));
+        }
+        if (label == "C++ Semantic Refactoring") {
+            const auto root = m_workbench.m_projectRoot;
+            const auto server = m_workbench.m_clangd;
+            const auto generation = m_workbench.m_cppRenameGeneration;
+            const auto trust = m_workbench.m_services.trust.snapshot(root);
+            const QPointer<Workbench> self(&m_workbench);
+            std::set<std::string> open;
+            for (const auto& document : m_workbench.m_documents->documents())
+                if (!document->path().empty())
+                    open.insert(lang::documentKey(document->path()));
+            plan.revalidateContext = [self, root, server, generation, trust, open]() -> Result<void> {
+                if (!self || self->m_shutDown || self->m_projectRoot != root || self->m_clangd != server ||
+                    self->m_cppRenameGeneration != generation)
+                    return fail(ErrorCode::Busy, "Semantic preview context changed");
+                const auto current = self->m_services.trust.snapshot(root);
+                if (!current.trusted || current.revision != trust.revision)
+                    return fail(ErrorCode::Untrusted, "Project trust changed");
+                std::set<std::string> now;
+                for (const auto& document : self->m_documents->documents())
+                    if (!document->path().empty())
+                        now.insert(lang::documentKey(document->path()));
+                if (now != open)
+                    return fail(ErrorCode::Busy, "Open document layout changed during preview");
+                return {};
+            };
+            if (!m_workbench.previewCppRefactoring(plan))
+                return fail(ErrorCode::Cancelled, "Semantic refactoring cancelled");
         }
         auto applied = m_workbench.applyRefactoring(plan);
         if (!applied)

@@ -73,15 +73,34 @@ void LanguageController::applyWorkspaceEdit(const fl::WorkspaceEdit& edit, const
 }
 
 void LanguageController::executeServerCommand(std::string commandName, std::vector<fl::Json> arguments,
-                                              const QString& label) {
+                                              const QString& label, std::shared_ptr<SemanticApply> semantic) {
     if (commandName.empty()) {
         return;
     }
+    if (m_cppSemanticCommand) {
+        unavailable(QStringLiteral("A semantic command is still finishing"));
+        return;
+    }
+    if (semantic) {
+        if (auto current = (*semantic)({}); !current) {
+            report(current.error(), label.toStdString());
+            return;
+        }
+        m_cppSemanticCommand = true;
+        m_cppSemanticApply.store(semantic);
+    }
     start<fl::Json>(
-        m_actionSlot,
+        semantic ? m_semanticCommandSlot : m_actionSlot,
         [&server = m_services.server, cmd = std::move(commandName), args = std::move(arguments)](
             std::stop_token token) { return fl::requestExecuteCommand(server, cmd, args, std::move(token)); },
-        [this, label](Result<fl::Json> result) {
+        [this, label, semantic](Result<fl::Json> result) {
+            if (semantic) {
+                m_cppSemanticCommand = false;
+                // Retain a fail-closed tombstone for an invalid late applyEdit after terminal reply.
+                m_cppSemanticApply.store(std::make_shared<SemanticApply>([](const fl::WorkspaceEdit&) -> Result<void> {
+                    return fail(ErrorCode::Busy, "Semantic command already finished; request a new preview");
+                }));
+            }
             if (!result) {
                 report(result.error(), label.toStdString());
                 return;
@@ -91,7 +110,11 @@ void LanguageController::executeServerCommand(std::string commandName, std::vect
                 const fl::Json* editNode = result->find("edit");
                 if (auto parsed = fl::parseWorkspaceEdit(editNode != nullptr ? *editNode : *result);
                     parsed && !parsed->empty()) {
-                    applyWorkspaceEdit(*parsed, label);
+                    if (semantic) {
+                        if (auto applied = (*semantic)(*parsed); !applied)
+                            report(applied.error(), label.toStdString());
+                    } else
+                        applyWorkspaceEdit(*parsed, label);
                 }
             }
         });

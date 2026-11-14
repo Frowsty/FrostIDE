@@ -43,9 +43,10 @@ struct ClangdTweakInfo {
 };
 
 // The tweaks the named commands use, in Refactor This order.
-inline constexpr std::array<ClangdTweakInfo, 7> kTweaks{{
+inline constexpr std::array<ClangdTweakInfo, 8> kTweaks{{
     {"ExtractVariable", "Extract subexpression to variable"},
     {"ExtractFunction", "Extract to function"},
+    {"InlineVariable", "Inline variable"},
     {"DefineInline", "Move function body to declaration"},
     {"DefineOutline", "Move function body to out-of-line"},
     {"MemberwiseConstructor", "Define constructor"},

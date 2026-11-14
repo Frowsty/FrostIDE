@@ -209,6 +209,7 @@ Result<document::RefactoringOutcome> Workbench::resumeRefactoring() {
 }
 
 void Workbench::registerRefactoringActions() {
+    registerCppRefactoringActions();
     for (const bool redo : {false, true}) {
         input::ActionSpec spec;
         spec.id = redo ? "editor.redo" : "editor.undo";

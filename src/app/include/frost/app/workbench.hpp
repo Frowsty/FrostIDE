@@ -80,6 +80,7 @@
 #include "frost/io/reactor.hpp"
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/cmake_compile_commands.hpp"
+#include "frost/lang/cpp_refactoring_plan.hpp"
 #include "frost/lang/diagnostics.hpp"
 #include "frost/lang/frost_engine_assets.hpp"
 #include "frost/lang/inspection.hpp"
@@ -617,6 +618,10 @@ public:
     // REF-1: all source/project participants settle before views are notified. PendingRecovery is
     // committed work, not an unapplied failure; callers must not resubmit it. UI thread only.
     [[nodiscard]] Result<document::RefactoringOutcome> applyRefactoring(const document::RefactoringPlan& plan);
+    // Captures the active project/database/dirty documents and asynchronously prepares one atomic
+    // AST proposal. No mutation; consumer previews before calling applyRefactoring. Owner thread.
+    void prepareCppRefactoring(lang::CppRefactoringRequest request, std::stop_token cancel,
+                               std::function<void(Result<document::RefactoringPlan>)> done);
     [[nodiscard]] Result<document::RefactoringOutcome> undoRefactoring();
     [[nodiscard]] Result<document::RefactoringOutcome> redoRefactoring();
     [[nodiscard]] Result<document::RefactoringOutcome> resumeRefactoring();
@@ -773,6 +778,10 @@ private:
     // Construction steps.
     void registerActions();
     void registerRefactoringActions();
+    void registerCppRefactoringActions();
+    void showCppRefactoring(std::string operation);
+    [[nodiscard]] Result<std::function<Result<void>(const lang::WorkspaceEdit&)>> beginCppProviderRefactoring();
+    [[nodiscard]] bool previewCppRefactoring(const document::RefactoringPlan& plan);
     void publishRefactoringOutcome(const document::RefactoringOutcome& outcome);
     [[nodiscard]] bool refactoringTrusted(TransactionId token) const;
     [[nodiscard]] Result<document::RefactoringOutcome> runRefactoringHistory(TransactionId token, bool redo);
