@@ -194,6 +194,20 @@ static class ProjectFileEdits
      */
     internal static void CheckConfiguration(Project project, FileEditRequest edit)
     {
+        // Check the requested pair in both evaluations (including the import-fenced pass).
+        // A hook supplied by Directory.Build.props is not visible in the main project's XML.
+        if (String.Equals(project.GetPropertyValue("Configuration"), edit.Configuration, StringComparison.OrdinalIgnoreCase) &&
+            String.Equals(project.GetPropertyValue("Platform"), edit.Platform, StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (string name in new[] { "ForceImportAfterCppProps", "ForceImportAfterCppTargets" })
+            {
+                var requested = edit.Properties.FirstOrDefault(p => String.Equals(p.Key, "Prop." + name, StringComparison.OrdinalIgnoreCase));
+                if (requested.Key == null) continue;
+                string current = project.GetPropertyValue(name);
+                if (!String.IsNullOrWhiteSpace(current) && !String.Equals(current, requested.Value, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Refusing to overwrite evaluated import hook " + name + "; preserve its existing import chain manually");
+            }
+        }
         string directory = Path.GetDirectoryName(edit.ProjectPath);
         var byPath = new Dictionary<string, List<ProjectItem>>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in project.Items.Where(i => IsFileItemType(i.ItemType)))

@@ -281,6 +281,29 @@ TEST_F(ProjectEditReal, PropertyPagesEditMetadataInOneConfigurationAndRefreshCla
     expectBuilds(scratch, "Generated.sln");
 }
 
+TEST_F(ProjectEditReal, NativeDependencyPropertiesRefuseHooksFromDirectoryBuildPropsWithoutWriting) {
+    EditScratch scratch("native dependency imported hook refusal");
+    ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
+    writeFile(scratch.join("existing-hook.props"), "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\"/>\n");
+    writeFile(scratch.join("existing-hook.targets"), "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\"/>\n");
+    writeFile(scratch.join("Directory.Build.props"),
+        "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\"><PropertyGroup>"
+        "<ForceImportAfterCppProps>$(MSBuildThisFileDirectory)existing-hook.props</ForceImportAfterCppProps>"
+        "<ForceImportAfterCppTargets>$(MSBuildThisFileDirectory)existing-hook.targets</ForceImportAfterCppTargets>"
+        "</PropertyGroup></Project>\n");
+    const auto projectBefore = io::realFileSystem().readFile(scratch.join("App/App.vcxproj"));
+    ASSERT_TRUE(projectBefore);
+    for (const auto* hook : {"ForceImportAfterCppProps", "ForceImportAfterCppTargets"}) {
+        auto edit = fileEdit(scratch, ProjectEditKind::SetProperties, "App/App.vcxproj");
+        edit.configuration = "Debug"; edit.platform = "x64"; edit.earlyProperties = true;
+        edit.propertyUpdates = {{std::string("Prop.") + hook, scratch.join("replacement.props")}};
+        auto refused = test::runEdit(hostPath(), m_msbuild, edit);
+        ASSERT_FALSE(refused) << hook;
+        EXPECT_NE(refused.error().message().find("evaluated import hook"), std::string::npos) << refused.error().describe();
+        EXPECT_NE(refused.error().message().find(hook), std::string::npos);
+        EXPECT_EQ(io::realFileSystem().readFile(scratch.join("App/App.vcxproj")).value_or(""), *projectBefore);
+    }
+}
 TEST_F(ProjectEditReal, AddRenameAndRemoveChangeOnlyTheirElementsAndTheSolutionStillBuilds) {
     EditScratch scratch("sln6 file edits");
     ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
