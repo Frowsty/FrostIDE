@@ -370,6 +370,16 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
         {"refactor.rename", "Rename", "Refactor", &LanguageController::rename, true},
         {"refactor.this", "Refactor This...", "Refactor", &LanguageController::refactorThis, true, A::Always,
          "Rename and the refactorings the language server offers at the caret"},
+        {"refactor.convert", "Convert C++ Selection...", "Refactor", &LanguageController::convertCode, true,
+         A::ClangdTweaks, "REF-10: applicable rewrite actions returned by clangd"},
+        {"code.createFromUsage", "Create from Usage...", "Code", &LanguageController::createFromUsage, true,
+         A::ClangdTweaks, "REF-9: actual provider create/declaration fixes; missing fixes are reported"},
+        {"code.fixPublishedDiagnostics", "Fix Published Diagnostics in Project...", "Code",
+         &LanguageController::fixPublishedDiagnostics, true, A::ClangdTweaks,
+         "REF-10: conflict-checked actual quickfix union over the captured project diagnostic scope"},
+        {"code.fixInScope", "Fix in Scope (clang-tidy)...", "Code", &LanguageController::fixInScope, true,
+         A::AstOperations,
+         "REF-10: actual exported module/project replacements through the captured inspection transaction"},
         {"refactor.extractVariable", "Extract Variable...", "Refactor", &LanguageController::extractVariable, true,
          A::ClangdTweaks, "C++: clangd's Extract Variable; other languages require REF-7"},
         {"refactor.extractConstant", "Extract Constant...", "Refactor", &LanguageController::extractConstant, true,
@@ -382,7 +392,7 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
          A::ClangdTweaks, "C++: clangd's Extract to Function; other languages require REF-7"},
         {"refactor.inline", "Inline...", "Refactor", &LanguageController::inlineSymbol, true, A::ClangdTweaks,
          "REF-6: actual clangd InlineVariable; use Inline C++ Call for the bounded AST call profile"},
-        {"refactor.changeSignature", "Change Signature...", "Refactor", &LanguageController::changeSignature, true,
+        {"refactor.changeSignature", "Reorder Parameters...", "Refactor", &LanguageController::changeSignature, true,
          A::AstOperations, "REF-6: captured AST parameter permutation with direct-call updates"},
         {"refactor.safeDelete", "Safe Delete...", "Refactor", &LanguageController::safeDelete, true, A::AstOperations,
          "Requires the safe delete refactoring (REF-8)"},
@@ -478,6 +488,10 @@ QString LanguageController::emptyResultMessage(const QString& none) const {
 
 void LanguageController::runCodeAction(fl::CodeActionItem action, std::shared_ptr<SemanticApply> semantic) {
     const QString title = qs(action.title);
+    if (!action.disabledReason.empty()) {
+        report(Error(ErrorCode::Unsupported, action.disabledReason), action.title);
+        return;
+    }
     if (semantic) {
         if (auto current = (*semantic)({}); !current) {
             report(current.error(), action.title);

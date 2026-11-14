@@ -782,6 +782,7 @@ private:
     void registerCppRefactoringActions();
     void showCppRefactoring(std::string operation);
     void moveCppProjectSource();
+    void showCppPublishedFixes();
     [[nodiscard]] Result<std::function<Result<void>(const lang::WorkspaceEdit&)>> beginCppProviderRefactoring();
     [[nodiscard]] bool previewCppRefactoring(const document::RefactoringPlan& plan);
     void publishRefactoringOutcome(const document::RefactoringOutcome& outcome);

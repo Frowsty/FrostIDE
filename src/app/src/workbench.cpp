@@ -246,6 +246,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     });
     m_language->setCppAstRefactoring([this](std::string operation) { showCppRefactoring(std::move(operation)); });
     m_language->setCppSemanticEditFactory([this] { return beginCppProviderRefactoring(); });
+    m_language->setCppPublishedScopeFix([this] { showCppPublishedFixes(); });
     if (auto registered = m_language->registerActions(m_registry); !registered) {
         log::warn(kLog, "language actions: {}", registered.error().describe());
     }

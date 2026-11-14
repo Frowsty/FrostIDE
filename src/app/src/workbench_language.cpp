@@ -109,7 +109,13 @@ void Workbench::syncJsonDocument(DocumentEditorView& view) {
 
 lang::IWorkspaceEditApplier& LanguageBridge::applier() noexcept { return *this; }
 
-Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_view label) {
+Result<void> LanguageBridge::validateRefactoringTargets(const lang::WorkspaceEdit& edit) {
+    for (const auto& file : edit.files)
+        if (const auto state = find(file.path); state && state->changedOnDisk)
+            return fail(ErrorCode::Busy, "Resolve the external source change before refactoring: " + file.path);
+    for (const auto& file : edit.files)
+        if (const auto* view = m_workbench.m_editors->find(file.path); view && view->editor().isReadOnly())
+            return fail(ErrorCode::PermissionDenied, "Refactoring target is read-only: " + file.path);
     if (m_workbench.m_engineBindings)
         for (const auto& file : edit.files)
             if (m_workbench.m_engineBindings->protectsGeneratedResource(file.path))
@@ -131,6 +137,12 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
                     ErrorCode::Unsupported,
                     "Engine metadata rename requires the read-only combined binding preview and schema regeneration");
         }
+    return {};
+}
+
+Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_view label) {
+    if (auto targets = validateRefactoringTargets(edit); !targets)
+        return targets;
     if (label == "Rename" || label == "C++ Semantic Refactoring") {
         document::RefactoringPlan plan;
         plan.label = std::string(label);
