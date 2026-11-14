@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 frost_add_test(lang_lua_refactoring_tests
-    SOURCES lua_refactoring_test.cpp ../syntax/syntax_test_support.cpp
+    SOURCES lua_refactoring_test.cpp lua_module_rename_test.cpp ../syntax/syntax_test_support.cpp
     DEPS frost::lang frost::syntax frost::sched frost::text
     LABELS unit)
 target_include_directories(lang_lua_refactoring_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/syntax/src)

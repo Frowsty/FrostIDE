@@ -2,8 +2,27 @@
 // Project actual named Lua AST nodes and their real grammar fields with finite ownership limits.
 #include "frost/syntax/syntax_tree.hpp"
 #include "tree_state.hpp"
+#include "language_state.hpp"
+#include "parse.hpp"
 #include <utility>
 namespace frost::syntax {
+Result<LuaAstProjection> projectLuaSnapshot(text::Snapshot snapshot,const LuaAstLimits& limits) {
+    if(snapshot.size().value()>limits.maxBytes || limits.maxBytes>8*1024*1024)
+        return fail(ErrorCode::OutOfRange,"Lua source exceeds the AST byte budget");
+    if(limits.stop.stop_requested()) return fail(ErrorCode::Cancelled,"Lua parse cancelled");
+    LanguageRegistry registry; auto language=registry.get(LanguageId::Lua);
+    if(!language) return std::unexpected(language.error());
+    detail::ParserPtr parser(ts_parser_new());
+    if(!parser||!ts_parser_set_language(parser.get(),(*language)->grammar)) return fail(ErrorCode::Unsupported,"Pinned Lua grammar is unavailable");
+    detail::ParseJob job(std::move(parser),snapshot,nullptr);
+    const auto deadline=limits.budget>IClock::Duration::zero()?std::optional(systemClock().steadyNow()+limits.budget):std::nullopt;
+    auto parsed=detail::runParse(job,systemClock(),deadline,&limits.stop,nullptr);
+    if(parsed.status==detail::ParseStatus::Stopped) return fail(ErrorCode::Cancelled,"Lua parse cancelled");
+    if(parsed.status==detail::ParseStatus::Deadline) return fail(ErrorCode::Timeout,"Lua parse budget exceeded");
+    if(parsed.status!=detail::ParseStatus::Done) return fail(ErrorCode::Corrupt,"Lua parse failed");
+    auto tree=detail::makeTree(std::move(parsed.tree),*language,snapshot,snapshot.version());
+    return tree.luaAstProjection(limits);
+}
 Result<LuaAstProjection> SyntaxTree::luaAstProjection(const LuaAstLimits& limits) const {
     if(empty() || language()!=LanguageId::Lua) return fail(ErrorCode::Unsupported,"A real Lua syntax tree is required");
     if(stale()) return fail(ErrorCode::Busy,"Wait for the current Lua parse before refactoring");

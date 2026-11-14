@@ -23,6 +23,9 @@ sched::Task<void> prepareLuaAst(syntax::SyntaxTree tree,std::string operation,te
 QString displayLua(std::string_view text) { return QString::fromUtf8(text.data(),static_cast<qsizetype>(text.size())); }
 }
 void Workbench::registerLuaRefactoringActions() {
+    input::ActionSpec rename;rename.id="refactor.lua.renameModule";rename.name="Rename Lua Module and Require Users…";rename.group="Refactor";
+    rename.context.all=input::ContextKeys{input::ContextKey::EditorFocus};rename.context.none=input::ContextKeys{input::ContextKey::EditorReadOnly,input::ContextKey::DialogFocus};
+    rename.handler=[this](const input::ActionContext&,const input::InvokeInfo&){renameLuaModule();};(void)m_registry.add(std::move(rename));
     for(const auto& [operation,label]:{std::pair{"inline","Inline Lua Local…"},std::pair{"extract","Extract Lua Function…"}}) {
         input::ActionSpec action; action.id="refactor.lua."+std::string(operation);action.name=label;action.group="Refactor";
         action.context.all=input::ContextKeys{input::ContextKey::EditorFocus};

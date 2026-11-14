@@ -36,4 +36,7 @@ struct LuaAstLimits {
     IClock::Duration budget=std::chrono::milliseconds(250);
     std::stop_token stop;
 };
+// Worker-only one-shot parse of a captured immutable image through the SAME pinned grammar and
+// cancellable ParseJob as editor syntax. Owns the projection; no registry/tree lifetime escapes.
+[[nodiscard]] Result<LuaAstProjection> projectLuaSnapshot(text::Snapshot, const LuaAstLimits& = {});
 }
