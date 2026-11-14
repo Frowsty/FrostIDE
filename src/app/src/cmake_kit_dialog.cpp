@@ -120,7 +120,7 @@ void showCMakeKitDialog(io::IFileSystem& fs, settings::SettingsStore& store, bui
     const auto chain = toolchain->text().toStdString();
     const auto now = fs.readFile(*path);
     const bool unchanged = (before && now && *before == *now) || (!before && !now && now.error().code() == ErrorCode::NotFound);
-    if (!validName || (!cxx.empty() && !io::isAbsolutePath(cxx)) || (!chain.empty() && !io::isAbsolutePath(chain)) ||
+    if (!validName || generator->currentText().trimmed().isEmpty() || (!cxx.empty() && !io::isAbsolutePath(cxx)) || (!chain.empty() && !io::isAbsolutePath(chain)) ||
         !unchanged || service.sourceDirectory() != root || service.profileGeneration() != generation || service.state() != build::BuildState::Idle) {
         QMessageBox::warning(&parent, QObject::tr("CMake Kit"), QObject::tr("Use a unique name of letters, digits, dash or underscore and absolute compiler/toolchain paths. Reopen if the project or presets changed."));
         return;
@@ -130,6 +130,17 @@ void showCMakeKitDialog(io::IFileSystem& fs, settings::SettingsStore& store, bui
             QMessageBox::warning(&parent, QObject::tr("CMake Kit"), QObject::tr("A profile already uses this name."));
             return;
         }
+    const auto presets = project::loadCMakePresets(fs, root);
+    if (!presets) {
+        QMessageBox::warning(&parent, QObject::tr("CMake Kit"), QString::fromStdString(presets.error().message()));
+        return;
+    }
+    if (*presets)
+        for (const auto& existing : (**presets).configurePresets)
+            if (existing.name == kitName.toStdString()) {
+                QMessageBox::warning(&parent, QObject::tr("CMake Kit"), QObject::tr("A configure preset already uses this name, including hidden presets."));
+                return;
+            }
     QJsonObject cache{{"CMAKE_BUILD_TYPE", type->currentText()}};
     if (!cxx.empty()) cache.insert("CMAKE_CXX_COMPILER", QString::fromStdString(cxx));
     QJsonObject preset{{"name", kitName}, {"generator", generator->currentText()},

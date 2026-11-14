@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // CMakeToolWindow: the content of the CMake tool window (ADR 0046), CLion's "CMake" tab: a row with
-// the profile selector, Reload and Stop, a progress row, an error banner, and tabs for configure output, presets, File API targets and typed cache edits. It binds to a CMakeController; the W1 workbench docks
+// the profile selector, Reload and Stop, a progress row, an error banner, and tabs for configure
+// output, presets, File API targets and typed cache edits. It binds to a CMakeController; the W1 workbench docks
 // it with its ToolWindowManager.
 /*
  * Behaviour: each configure clears the output and then streams cmake's lines (status lines from
