@@ -755,6 +755,7 @@ private:
 
     // Construction steps.
     void registerActions();
+    void showDependencies();
     void createBuildService();
     void createRunService();
     // Run configurations (RUN-2/RUN-3, workbench_run_configurations.cpp): the generated ones of the

@@ -65,6 +65,8 @@ void Workbench::registerActions() {
             log::warn(kLog, "action {}: {}", id, added.error().describe());
         }
     };
+    add("project.dependencies", "Install or Restore Dependencies...", [this] { showDependencies(); },
+        [this] { return hasProject() && !anyDebugSessionActive(); });
     input::ActionSpec checkUpdate;
     checkUpdate.id = "help.checkForUpdates";
     checkUpdate.name = "Check for Updates...";
@@ -91,7 +93,7 @@ void Workbench::registerActions() {
             return;
         }
         QDialog viewer(m_window);
-        viewer.setWindowTitle(QStringLiteral("MSBuild Binary Log — %1").arg(selected));
+        viewer.setWindowTitle(QStringLiteral("MSBuild Binary Log ï¿½ %1").arg(selected));
         viewer.resize(1000, 700);
         auto* layout = new QVBoxLayout(&viewer);
         ui::BuildController replayController;
