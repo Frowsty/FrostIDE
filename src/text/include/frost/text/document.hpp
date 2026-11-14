@@ -55,6 +55,7 @@
 #pragma once
 
 #include "frost/core/clock.hpp"
+#include "frost/core/transaction_id.hpp"
 #include "frost/core/error.hpp"
 #include "frost/core/strong_type.hpp"
 #include "frost/text/anchor.hpp"
@@ -153,6 +154,9 @@ struct UndoState {
     // current; preedit, no-ops and rejections leave it. Equal values mean equal committed text (the
     // converse does not hold). SaveManager stores it at save for the dirty flag.
     std::uint64_t stateId = 0;
+    TransactionId externalUndo; // Assigned: route Undo through the owning global transaction.
+    TransactionId externalRedo; // Assigned: local redo cannot replay just this document.
+    bool externallyLocked = false;
 };
 
 class Document {
@@ -185,6 +189,18 @@ public:
     [[nodiscard]] std::uint64_t version() const noexcept;
     // O(1).
     [[nodiscard]] UndoState undoState() const noexcept;
+
+    // Owner-thread coordinator lease. Refuses composition/groups/another writer. Normal edits,
+    // composition and local undo/redo return Busy while held. IDs identify a coordinator, not IO authority.
+    [[nodiscard]] Result<void> acquireExternalWrite(TransactionId id) noexcept;
+    void releaseExternalWrite(TransactionId id) noexcept;
+    [[nodiscard]] Result<ChangeSet> replaceExternal(TransactionId id, ByteRange range, std::string_view utf8,
+                                                     const EditContext& context) noexcept;
+    // Marks the current sealed nonroot edge; tombstone survives coordinator destruction. Local
+    // Undo/Redo refuses it until the owning coordinator admits the entire inverse/forward plan.
+    [[nodiscard]] Result<void> markExternalTransaction(TransactionId id) noexcept;
+    [[nodiscard]] Result<ChangeSet> undoExternal(TransactionId id) noexcept;
+    [[nodiscard]] Result<ChangeSet> redoExternal(TransactionId id) noexcept;
 
     // A new registry anchor. Errors, in order: OutOfRange (offset > size); InvalidArgument (inside
     // a UTF-8 sequence; a CRLF-interior offset is allowed); OutOfRange (AnchorSet::kMaxAnchors
@@ -308,6 +324,8 @@ private:
     std::unique_ptr<detail::UndoTree> m_undo; // Pimpl: tree, group and composition state.
     DocumentOptions m_options;
     const IClock* m_clock = nullptr;
+    TransactionId m_externalWriter;
+    TransactionId m_externalPermit;
 };
 
 } // namespace frost::text

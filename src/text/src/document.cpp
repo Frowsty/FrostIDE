@@ -98,6 +98,8 @@ Document& Document::operator=(Document&& other) noexcept {
         m_buffer = std::move(other.m_buffer);
         m_options = other.m_options;
         m_clock = other.m_clock;
+        m_externalWriter = other.m_externalWriter;
+        m_externalPermit = {};
     }
     return *this;
 }
@@ -125,12 +127,65 @@ UndoState Document::undoState() const noexcept {
     state.groupOpen = u.groupDepth > 0;
     state.composing = u.composition.has_value();
     state.stateId = current.stateId;
+    state.externalUndo = current.externalTransaction;
+    if (current.redoChild != kNoNode)
+        state.externalRedo = u.node(current.redoChild).externalTransaction;
+    state.externallyLocked = m_externalWriter.assigned();
     return state;
+}
+
+Result<void> Document::acquireExternalWrite(TransactionId id) noexcept {
+    if (!id.assigned()) return fail(ErrorCode::InvalidArgument, "unassigned transaction writer");
+    if (m_externalWriter.assigned() || m_undo->composition || m_undo->groupDepth != 0)
+        return fail(ErrorCode::Busy, "document has an active writer, group or composition");
+    breakCoalescing();
+    m_externalWriter = id;
+    return {};
+}
+void Document::releaseExternalWrite(TransactionId id) noexcept {
+    if (m_externalWriter == id) { m_externalWriter = {}; m_externalPermit = {}; }
+}
+Result<ChangeSet> Document::replaceExternal(TransactionId id, ByteRange range, std::string_view utf8,
+                                             const EditContext& context) noexcept {
+    if (m_externalWriter != id || !id.assigned())
+        return fail(ErrorCode::Busy, "transaction does not own this document");
+    m_externalPermit = id;
+    auto result = replace(range, utf8, context);
+    m_externalPermit = {};
+    return result;
+}
+Result<void> Document::markExternalTransaction(TransactionId id) noexcept {
+    if (m_externalWriter != id || !id.assigned() || m_undo->current == m_undo->root || m_undo->groupDepth != 0)
+        return fail(ErrorCode::Busy, "no owned sealed document edge to mark");
+    auto& node = m_undo->currentNode();
+    if (node.externalTransaction.assigned() && node.externalTransaction != id)
+        return fail(ErrorCode::Busy, "document edge already belongs to another transaction");
+    breakCoalescing();
+    node.externalTransaction = id;
+    return {};
+}
+Result<ChangeSet> Document::undoExternal(TransactionId id) noexcept {
+    if (!id.assigned() || m_externalWriter != id || undoState().externalUndo != id)
+        return fail(ErrorCode::Busy, "global Undo document lineage changed");
+    m_externalPermit = id;
+    auto result = undo();
+    m_externalPermit = {};
+    return result;
+}
+Result<ChangeSet> Document::redoExternal(TransactionId id) noexcept {
+    if (!id.assigned() || m_externalWriter != id || undoState().externalRedo != id)
+        return fail(ErrorCode::Busy, "global Redo document lineage changed");
+    m_externalPermit = id;
+    auto result = redo();
+    m_externalPermit = {};
+    return result;
 }
 
 const detail::UndoTree& Document::undoTreeForTesting() const noexcept { return *m_undo; }
 
 Result<AnchorId> Document::createAnchor(ByteOffset offset, Bias bias) noexcept {
+    if (m_externalWriter.assigned() && m_externalPermit != m_externalWriter)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     const Snapshot& text = m_buffer.current();
     if (offset > text.size()) {
         return fail(ErrorCode::OutOfRange, std::format("offset {} is beyond the text's {} bytes", offset, text.size()));
@@ -147,6 +202,8 @@ Result<AnchorId> Document::createAnchor(ByteOffset offset, Bias bias) noexcept {
 }
 
 Result<void> Document::releaseAnchor(AnchorId id) noexcept {
+    if (m_externalWriter.assigned() && m_externalPermit != m_externalWriter)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     Result<AnchorSet> anchors = m_anchors.without(id);
     if (!anchors) {
         return std::unexpected(std::move(anchors).error());
@@ -156,6 +213,8 @@ Result<void> Document::releaseAnchor(AnchorId id) noexcept {
 }
 
 Result<ChangeSet> Document::edit(std::span<const Edit> edits, const EditContext& context) noexcept {
+    if (m_externalWriter.assigned() && m_externalPermit != m_externalWriter)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     if (m_undo->composition) {
         return fail(ErrorCode::Busy, "an IME composition is active");
     }
@@ -177,6 +236,8 @@ Result<ChangeSet> Document::edit(std::span<const Edit> edits, const EditContext&
 }
 
 Result<ChangeSet> Document::replace(ByteRange range, std::string_view utf8, const EditContext& context) noexcept {
+    if (m_externalWriter.assigned() && m_externalPermit != m_externalWriter)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     if (m_undo->composition) {
         return fail(ErrorCode::Busy, "an IME composition is active");
     }
@@ -360,6 +421,8 @@ ChangeSet Document::undoNode(std::uint64_t id, ChangeOrigin origin) noexcept {
 }
 
 Result<ChangeSet> Document::undo() noexcept {
+    if (m_externalWriter.assigned() && m_externalPermit != m_externalWriter)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     UndoTree& u = *m_undo;
     if (u.composition) {
         return fail(ErrorCode::Busy, "an IME composition is active");
@@ -370,10 +433,14 @@ Result<ChangeSet> Document::undo() noexcept {
     if (u.current == u.root) {
         return fail(ErrorCode::NotFound, "nothing to undo");
     }
+    if (u.currentNode().externalTransaction.assigned() && u.currentNode().externalTransaction != m_externalPermit)
+        return fail(ErrorCode::Busy, "Undo belongs to a global refactoring transaction");
     return undoNode(u.current, ChangeOrigin::Undo);
 }
 
 Result<ChangeSet> Document::redo(std::optional<std::uint32_t> branch) noexcept {
+    if (m_externalWriter.assigned() && m_externalPermit != m_externalWriter)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     UndoTree& u = *m_undo;
     if (u.composition) {
         return fail(ErrorCode::Busy, "an IME composition is active");
@@ -396,6 +463,8 @@ Result<ChangeSet> Document::redo(std::optional<std::uint32_t> branch) noexcept {
         id = current.redoChild;
     }
     UndoNode& child = u.node(id);
+    if (child.externalTransaction.assigned() && child.externalTransaction != m_externalPermit)
+        return fail(ErrorCode::Busy, "Redo belongs to a global refactoring transaction");
     FROST_ASSERT(child.hasAnchorsAfter); // Reaching the parent took an undo of the child.
     const std::uint64_t baseVersion = m_buffer.version();
     child.anchorsBefore = m_anchors;
@@ -427,6 +496,8 @@ Result<ChangeSet> Document::redo(std::optional<std::uint32_t> branch) noexcept {
 }
 
 Result<void> Document::beginGroup(const EditContext& context) noexcept {
+    if (m_externalWriter.assigned() && m_externalPermit != m_externalWriter)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     UndoTree& u = *m_undo;
     if (u.composition) {
         return fail(ErrorCode::Busy, "an IME composition is active");
@@ -486,6 +557,8 @@ Result<ChangeSet> Document::rollbackGroup() noexcept {
 }
 
 Result<void> Document::beginComposition(ByteOffset at) noexcept {
+    if (m_externalWriter.assigned() && m_externalPermit != m_externalWriter)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     UndoTree& u = *m_undo;
     if (u.composition) {
         return fail(ErrorCode::Busy, "an IME composition is active");
