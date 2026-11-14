@@ -137,7 +137,7 @@ void EngineView::clearAssetUsages(const QString& reason) {
 void EngineView::setAssetUsages(const engine::AssetUsages& usages) {
     clearAssetUsages();
     m_usageStatus->setText(usages.unreadable.empty()
-                               ? tr("Engine snapshot: %1 occurrences in %2 referencing documents for %3")
+                               ? tr("Engine snapshot: %1 occurrences in %2 reference rows for %3")
                                      .arg(usages.occurrences)
                                      .arg(usages.references.size())
                                      .arg(qs(usages.target.path))
