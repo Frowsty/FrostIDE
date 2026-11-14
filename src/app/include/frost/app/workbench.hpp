@@ -825,7 +825,7 @@ private:
     [[nodiscard]] std::string defaultLuaInterpreterPath() const;
     [[nodiscard]] Result<void> prepareStandaloneLua(const run::RunConfiguration& configuration);
     [[nodiscard]] std::function<Result<void>()> luaLaunchAdmissionFor(const run::RunConfiguration& configuration) const;
-    [[nodiscard]] Result<void> startStandaloneLuaDebug(const run::RunConfiguration& configuration);
+    [[nodiscard]] Result<void> startStandaloneLuaDebug(run::RunConfiguration configuration);
     // Projects.
     Result<void> openSolution(const std::string& path);
     /*
