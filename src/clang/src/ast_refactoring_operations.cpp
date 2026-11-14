@@ -185,6 +185,8 @@ public:
 } // namespace
 
 std::optional<std::string> refactorAst(clang::ASTUnit& ast, const llvm::json::Object& request, std::string& error) {
+    if (request.getString("operation") == "safe-delete")
+        return refactorSafeDelete(ast, request, error);
     auto& context = ast.getASTContext();
     auto& sm = ast.getSourceManager();
     Source source{context, sm, sm.getBufferData(sm.getMainFileID())};

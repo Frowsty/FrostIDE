@@ -11,4 +11,6 @@ namespace frost::clang_engine {
 // All source ranges are file tokens; callers reparse every captured configuration before approval.
 [[nodiscard]] std::optional<std::string> refactorAst(clang::ASTUnit& ast, const llvm::json::Object& request,
                                                      std::string& error);
+[[nodiscard]] std::optional<std::string> refactorSafeDelete(clang::ASTUnit& ast, const llvm::json::Object& request,
+                                                            std::string& error);
 } // namespace frost::clang_engine

@@ -369,10 +369,20 @@ void LanguageController::changeSignature() {
 }
 
 void LanguageController::safeDelete() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("safe-delete");
+        return;
+    }
     unavailable(QStringLiteral("Safe Delete requires the safe delete refactoring (REF-8)"));
 }
 
-void LanguageController::moveSymbol() { unavailable(QStringLiteral("Move requires the move refactoring (REF-8)")); }
+void LanguageController::moveSymbol() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("move-file");
+        return;
+    }
+    unavailable(QStringLiteral("Move requires the project transaction integration (REF-8)"));
+}
 
 void LanguageController::copySymbol() { unavailable(QStringLiteral("Copy requires the copy refactoring (REF-8)")); }
 

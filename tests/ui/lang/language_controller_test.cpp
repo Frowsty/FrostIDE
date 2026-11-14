@@ -1470,6 +1470,18 @@ TEST(LanguageControllerRefactoring, TweakAdmissionPredatesCodeActionAndRefusesSt
     EXPECT_TRUE(server.paramsOf("workspace/executeCommand").empty());
     EXPECT_TRUE(rig.applier.edits.empty());
 }
+TEST(LanguageControllerRefactoring, MoveAndSafeDeleteDispatchToTheAppTransactionAndAstOwners) {
+    FeatureServer server;
+    FakeHost host("int main(){int unused; return 0;}", workPath("main.cpp"));
+    Rig rig(server, host);
+    std::vector<std::string> operations;
+    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(std::move(operation)); });
+    rig.controller.moveSymbol();
+    rig.controller.safeDelete();
+    EXPECT_EQ(operations, (std::vector<std::string>{"move-file", "safe-delete"}));
+    EXPECT_TRUE(rig.applier.edits.empty());
+    EXPECT_EQ(host.undoSteps, 0);
+}
 
 TEST(LanguageControllerRefactoring, RefactorThisListsRenameThenServerActionsInOrder) {
     FeatureServer server;

@@ -41,6 +41,12 @@ what is next, blockers and open questions for the user.
 - Added CMake named/install targets and Ninja single-file Build/Compile/Rebuild/Clean from the actual compilation database's unique object output. Build uses cmake --build; object clean uses native Ninja's target clean. Missing/ambiguous/outside outputs and other generators refuse explicitly; personal build wrappers do not silently receive file operations.
 - Authored model/argv, application admission/save-cancellation/rebuild-failure, and native CMake command tests. Independent source review completed. No build, test, external tool, WSL or feature execution ran under the implementation-first override; runtime acceptance remains deferred.
 
+## 2026-11-14: R11 Move and safe-delete source checkpoint
+
+- Normal C++ Move File now invokes the existing source/sidecar/project-membership transaction producer; it performs no separate filesystem move or post-move project write. Symbol move is not claimed by this file operation.
+- Added canonical AST safe-delete for unreferenced automatic scalar locals and single internal free-function definitions. Every supplied compilation configuration is replayed; references, dependent overload candidates, using shadows, initializer effects, attributes, assembly and controlled declaration substatements refuse. File deletion is not simulated by emptying a file.
+- Authored positive/refusal AST goldens and controller owner-dispatch tests. Targeted independent source review passed; only source formatting was performed. Builds, tests and runtime verification remain deferred by user instruction. REF9/10 and broader project signature support continue separately.
+
 ## 2026-11-14: R11 AST refactoring and authoritative clangd transaction checkpoint
 
 - Added a read-only `frost-clang --plan-ast-refactoring` operation dispatcher, reusing the unchanged R8 immutable VFS capture policy and complete supplied compilation-database admission. Proposals carry atomic before/after images, input/absence/directory receipts and reparsed candidate configurations; they never write source.
