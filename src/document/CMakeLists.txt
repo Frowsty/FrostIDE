@@ -16,5 +16,6 @@ frost_add_library(document LAYER document
         src/load_service.cpp
         src/policies.cpp
         src/rewrite.cpp
+        src/refactoring_transaction.cpp
         src/save_manager.cpp
     DEPS frost::io frost::sched frost::text frost::diff frost::storage frost::settings)

@@ -139,7 +139,6 @@ Result<void> Document::acquireExternalWrite(TransactionId id) noexcept {
         return fail(ErrorCode::InvalidArgument, "unassigned transaction writer");
     if (m_externalWriter.assigned() || m_undo->composition || m_undo->groupDepth != 0)
         return fail(ErrorCode::Busy, "document has an active writer, group or composition");
-    breakCoalescing();
     m_externalWriter = id;
     return {};
 }
@@ -168,6 +167,19 @@ Result<void> Document::markExternalTransaction(TransactionId id) noexcept {
     node.externalTransaction = id;
     return {};
 }
+Result<void> Document::recordExternalBarrier(TransactionId id) noexcept {
+    if (!id.assigned() || m_externalWriter != id || m_undo->groupDepth != 0 || m_undo->composition)
+        return fail(ErrorCode::Busy, "document is not leased for an external barrier");
+    breakCoalescing();
+    auto& node = m_undo->createChild(m_undo->current);
+    node.anchorsBefore = m_anchors;
+    node.stateId = ++m_undo->stateCounter;
+    node.externalTransaction = id;
+    m_undo->current = node.id;
+    m_undo->prune(m_options.maxTransactions);
+    return {};
+}
+
 Result<ChangeSet> Document::undoExternal(TransactionId id) noexcept {
     if (!id.assigned() || m_externalWriter != id || undoState().externalUndo != id)
         return fail(ErrorCode::Busy, "global Undo document lineage changed");

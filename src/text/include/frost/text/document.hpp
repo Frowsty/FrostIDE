@@ -194,11 +194,15 @@ public:
     // composition and local undo/redo return Busy while held. IDs identify a coordinator, not IO authority.
     [[nodiscard]] Result<void> acquireExternalWrite(TransactionId id) noexcept;
     void releaseExternalWrite(TransactionId id) noexcept;
+    [[nodiscard]] bool ownsExternalWrite(TransactionId id) const noexcept { return id.assigned() && m_externalWriter == id; }
     [[nodiscard]] Result<ChangeSet> replaceExternal(TransactionId id, ByteRange range, std::string_view utf8,
                                                     const EditContext& context) noexcept;
     // Marks the current sealed nonroot edge; tombstone survives coordinator destruction. Local
     // Undo/Redo refuses it until the owning coordinator admits the entire inverse/forward plan.
     [[nodiscard]] Result<void> markExternalTransaction(TransactionId id) noexcept;
+    // A real zero-region edge for rename/persistence-only effects; never marks an earlier user edit.
+    // Empty selections deliberately preserve each view's carets (Editor::follow/finishHistory map no edits).
+    [[nodiscard]] Result<void> recordExternalBarrier(TransactionId id) noexcept;
     [[nodiscard]] Result<ChangeSet> undoExternal(TransactionId id) noexcept;
     [[nodiscard]] Result<ChangeSet> redoExternal(TransactionId id) noexcept;
 
