@@ -7,6 +7,7 @@
 #include "frost/rpc/framing.hpp"
 
 #include "internal.hpp"
+#include "protocol.hpp"
 
 #include <algorithm>
 #include <array>
@@ -81,6 +82,8 @@ class Engine {
 public:
     explicit Engine(std::function<void(std::string_view, Json)> event) : m_event(std::move(event)) {
         m_output.emit = [this](ULONG mask, std::wstring_view text) {
+            if (m_capturingCommand && (mask & DEBUG_OUTPUT_ERROR) != 0)
+                m_commandError = true;
             if (m_loadingNatvis && (mask & DEBUG_OUTPUT_ERROR) != 0)
                 m_natvisError = true;
             if (auto value = utf8(text); value)
@@ -133,6 +136,8 @@ public:
             return std::unexpected(engineError("source stepping mode", status));
         if (auto initialized = m_models.initialize(m_client.get()); !initialized)
             return initialized;
+        (void)m_client.query(m_memory);
+        (void)m_client.query(m_registers);
         return {};
     }
 
@@ -144,7 +149,8 @@ public:
         const std::string program(arguments.stringAt("program"));
         const std::string dump(arguments.stringAt("dumpFile"));
         const std::string cwd(arguments.stringAt("cwd"));
-        const bool invalidProgram = dump.empty()
+        const bool invalidProgram = arguments.find("processId") ? (!program.empty() && !absoluteLocal(program, true))
+                                    : dump.empty()
                                         ? !absoluteLocal(program, true)
                                         : (!absoluteLocal(dump) || (!program.empty() && !absoluteLocal(program, true)));
         if (invalidProgram || (!cwd.empty() && !absoluteLocal(cwd, true)))
@@ -175,9 +181,21 @@ public:
         if (FAILED(status))
             return std::unexpected(engineError("local symbol paths", status));
         m_symbols->SetSourcePathWide(L"");
+        if (const auto* maps = arguments.find("sourceMap")) {
+            auto configured = sourceMap(*maps);
+            if (!configured)
+                return std::unexpected(std::move(configured.error()));
+        }
         m_dump = !dump.empty();
+        m_attached = arguments.find("processId") != nullptr;
         m_stopOnEntry = arguments.boolAt("stopOnEntry").value_or(false);
-        if (m_dump) {
+        if (m_attached) {
+            const auto pid = arguments.unsignedAt("processId");
+            if (m_dump || !pid || *pid == 0 || *pid > std::numeric_limits<ULONG>::max() ||
+                *pid == GetCurrentProcessId())
+                return fail(ErrorCode::InvalidArgument, "Attach requires a distinct live process ID");
+            status = m_client->AttachProcess(0, static_cast<ULONG>(*pid), DEBUG_ATTACH_DEFAULT);
+        } else if (m_dump) {
             auto path = io::toWide(dump);
             if (!path)
                 return std::unexpected(std::move(path.error()));
@@ -226,7 +244,12 @@ public:
             if (FAILED(status))
                 return std::unexpected(engineError("crash exception context", status));
         }
-        if (const Json* files = arguments.find("natvis"); files != nullptr) {
+        if (!m_models.structured())
+            m_event("output", Json::object()
+                                  .set("category", "console")
+                                  .set("output", "System32 DbgEng structured data model unavailable; native symbols "
+                                                 "remain available, Natvis unavailable.\n"));
+        if (const Json* files = arguments.find("natvis"); files != nullptr && m_models.structured()) {
             if (!files->isArray() || files->size() > 64)
                 return fail(ErrorCode::InvalidArgument, "invalid Natvis file list");
             for (const Json& file : files->items()) {
@@ -248,6 +271,9 @@ public:
                 if (m_natvisError)
                     return fail(ErrorCode::Corrupt,
                                 "DbgEng reported an error loading the Natvis file; see debugger output");
+                if (std::ranges::find(m_natvisLoaded, *file.asString()) == m_natvisLoaded.end())
+                    m_natvisLoaded.push_back(*file.asString());
+                visualizersLoaded();
             }
         }
         if (!m_dump) {
@@ -257,10 +283,19 @@ public:
                                        .set("name", program)
                                        .set("systemProcessId", pid)
                                        .set("isLocalProcess", true)
-                                       .set("startMethod", "launch"));
+                                       .set("startMethod", m_attached ? "attach" : "launch"));
         }
         m_event("capabilities",
-                Json::object().set("capabilities", Json::object().set("supportsTerminateRequest", !m_dump)));
+                Json::object().set("capabilities", Json::object()
+                                                       .set("supportsTerminateRequest", !m_dump)
+                                                       .set("supportsSetVariable", !m_dump)
+                                                       .set("supportsDataBreakpoints", !m_dump)
+                                                       .set("supportsWriteMemoryRequest", !m_dump && bool(m_memory))
+                                                       .set("supportsReadMemoryRequest", bool(m_memory))
+                                                       .set("frostSupportsRegisters", bool(m_registers))
+                                                       .set("frostStructuredNatvis", m_models.structured())
+                                                       .set("frostSupportsNatvisReload", m_models.structured())
+                                                       .set("frostSupportsThreadFreeze", !m_dump)));
         return Json::object();
     }
 
@@ -302,8 +337,12 @@ public:
         if (total > 8192)
             return fail(ErrorCode::OutOfRange, "breakpoint budget exhausted");
         auto& previous = m_breakpoints[key];
-        for (auto& breakpoint : previous)
+        for (auto& breakpoint : previous) {
+            ULONG id = 0;
+            if (SUCCEEDED(breakpoint->GetId(&id)))
+                m_policies.erase(id);
             m_control->RemoveBreakpoint2(breakpoint.get());
+        }
         previous.clear();
         Json result = Json::array();
         for (const Json& request : requested->items()) {
@@ -311,9 +350,12 @@ public:
             const auto line = request.integerAt("line");
             if (line)
                 bound.set("line", *line);
-            if (!request.stringAt("condition").empty() || !request.stringAt("hitCondition").empty() ||
-                !request.stringAt("logMessage").empty()) {
-                result.push(std::move(bound).set("message", "conditional, hit and log breakpoints are unavailable"));
+            if (request.stringAt("condition").size() > 4096 ||
+                request.stringAt("condition").find('\0') != std::string_view::npos ||
+                request.stringAt("logMessage").size() > 16384 ||
+                request.stringAt("logMessage").find('\0') != std::string_view::npos ||
+                !hitMatches(request.stringAt("hitCondition"), 1)) {
+                result.push(std::move(bound).set("message", "Invalid conditional, hit-count or log breakpoint"));
                 continue;
             }
             ComPtr<IDebugBreakpoint2> breakpoint;
@@ -326,7 +368,7 @@ public:
                                  ? E_INVALIDARG
                                  : breakpoint->SetOffsetExpressionWide(wide->c_str());
                 } else {
-                    auto wide = io::toWide(path);
+                    auto wide = io::toWide(mappedSource(path, true));
                     ULONG64 offset = 0;
                     status = !line || *line <= 0 || *line > std::numeric_limits<ULONG>::max() || !wide
                                  ? E_INVALIDARG
@@ -346,6 +388,10 @@ public:
                     if (SUCCEEDED(status)) {
                         const bool resolved = (flags & DEBUG_BREAKPOINT_DEFERRED) == 0;
                         bound.set("id", id).set("verified", resolved);
+                        m_policies.insert_or_assign(id,
+                                                    BreakpointPolicy{std::string(request.stringAt("condition")),
+                                                                     std::string(request.stringAt("hitCondition")),
+                                                                     std::string(request.stringAt("logMessage")), 0});
                         if (!resolved)
                             bound.set("message", "the debugger has not resolved this breakpoint");
                     }
@@ -427,7 +473,7 @@ public:
                 auto convertedFile = utf8(file.data());
                 if (!convertedFile)
                     return std::unexpected(std::move(convertedFile.error()));
-                frame.set("source", Json::object().set("path", std::move(*convertedFile)));
+                frame.set("source", Json::object().set("path", mappedSource(*convertedFile)));
                 frame.set("line", line).set("column", 1);
             } else {
                 frame.set("line", 0).set("column", 0);
@@ -476,8 +522,9 @@ public:
             (arguments.find("start") && !arguments.unsignedAt("start")) ||
             (arguments.find("count") && !arguments.unsignedAt("count")))
             return fail(ErrorCode::InvalidArgument, "invalid variable page");
-        return m_models.children(*reference, static_cast<std::size_t>(start), static_cast<std::size_t>(count),
-                                 arguments.stringAt("filter"));
+        return m_models.children(
+            *reference, static_cast<std::size_t>(start), static_cast<std::size_t>(count), arguments.stringAt("filter"),
+            arguments.find("format") && arguments.find("format")->boolAt("frostRaw").value_or(false));
     }
 
     Result<Json> evaluate(const Json& arguments) {
@@ -493,9 +540,520 @@ public:
         auto context = frame(arguments.integerAt("frameId"));
         if (!context)
             return std::unexpected(std::move(context.error()));
-        return m_models.evaluate(expression, *context);
+        auto result = m_models.evaluate(expression, *context);
+        if (result && result->stringAt("memoryReference").empty()) {
+            auto location = nativeInteger("&(" + std::string(expression) + ")");
+            if (location)
+                result->set("memoryReference", std::format("{:#x}", *location));
+        }
+        return result;
     }
 
+    Result<Json> exceptions(const Json& arguments) {
+        if (!m_loaded || m_running || m_dump)
+            return fail(ErrorCode::Unsupported, "Exception filters require a stopped live target");
+        const auto* filters = arguments.find("filters");
+        if (!filters || !filters->isArray() || filters->size() > 3)
+            return fail(ErrorCode::InvalidArgument, "Invalid exception filters");
+        bool cpp = false, win32 = false;
+        for (const auto& filter : filters->items()) {
+            if (!filter.asString())
+                return fail(ErrorCode::InvalidArgument, "Exception filter must be a string");
+            if (*filter.asString() == "cpp_throw")
+                cpp = true;
+            else if (*filter.asString() == "win32")
+                win32 = true;
+            else
+                return fail(ErrorCode::Unsupported, "Unknown native exception filter");
+        }
+        ULONG events = 0, specific = 0, arbitrary = 0;
+        auto status = m_control->GetNumberEventFilters(&events, &specific, &arbitrary);
+        if (FAILED(status) || specific + arbitrary > 4096)
+            return fail(ErrorCode::OutOfRange, "Native exception filter budget exceeded");
+        std::vector<DEBUG_EXCEPTION_FILTER_PARAMETERS> parameters(specific + arbitrary);
+        if (parameters.empty())
+            return fail(ErrorCode::Unsupported, "System32 engine has no exception filters");
+        status = m_control->GetExceptionFilterParameters(static_cast<ULONG>(parameters.size()), nullptr, events,
+                                                         parameters.data());
+        if (FAILED(status))
+            return std::unexpected(engineError("read native exception filters", status));
+        bool cppPresent = false;
+        for (auto& parameter : parameters) {
+            if (parameter.ExceptionCode == EXCEPTION_BREAKPOINT || parameter.ExceptionCode == EXCEPTION_SINGLE_STEP)
+                continue;
+            const bool cppException = parameter.ExceptionCode == 0xe06d7363;
+            cppPresent |= cppException;
+            parameter.ExecutionOption =
+                (cppException ? cpp : win32) ? DEBUG_FILTER_BREAK : DEBUG_FILTER_SECOND_CHANCE_BREAK;
+        }
+        if (!cppPresent) {
+            DEBUG_EXCEPTION_FILTER_PARAMETERS parameter{};
+            parameter.ExceptionCode = 0xe06d7363;
+            parameter.ExecutionOption = cpp ? DEBUG_FILTER_BREAK : DEBUG_FILTER_SECOND_CHANCE_BREAK;
+            parameter.ContinueOption = DEBUG_FILTER_GO_NOT_HANDLED;
+            parameters.push_back(parameter);
+        }
+        status = m_control->SetExceptionFilterParameters(static_cast<ULONG>(parameters.size()), parameters.data());
+        if (FAILED(status))
+            return std::unexpected(engineError("native exception filters", status));
+        return Json::object();
+    }
+    Result<Json> exceptionInfo() {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        ULONG type = 0, process = 0, thread = 0;
+        DEBUG_LAST_EVENT_INFO_EXCEPTION exception{};
+        std::array<wchar_t, 4096> description{};
+        auto status =
+            m_control->GetLastEventInformationWide(&type, &process, &thread, &exception, sizeof(exception), nullptr,
+                                                   description.data(), static_cast<ULONG>(description.size()), nullptr);
+        if (FAILED(status) || type != DEBUG_EVENT_EXCEPTION)
+            return fail(ErrorCode::NotFound, "Current stop is not an exception");
+        auto text = utf8(description.data());
+        if (!text)
+            return std::unexpected(std::move(text.error()));
+        return Json::object()
+            .set("exceptionId", std::format("{:#x}", exception.ExceptionRecord.ExceptionCode))
+            .set("description", *text)
+            .set("breakMode", exception.FirstChance ? "always" : "unhandled");
+    }
+    Result<Json> dataBreakpointInfo(const Json& arguments) {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        if (m_dump)
+            return fail(ErrorCode::Unsupported, "Crash dumps cannot install watchpoints");
+        const auto name = arguments.stringAt("name");
+        if (name.empty() || name.size() > 4096 || name.find('\0') != name.npos)
+            return fail(ErrorCode::InvalidArgument, "Invalid data expression");
+        // Resolve a real native lvalue and sizeof in the current scope; never guess object layout.
+        Result<ULONG64> a = fail(ErrorCode::NotFound, "No data location"),
+                        size = fail(ErrorCode::NotFound, "No data size");
+        if (arguments.find("variablesReference") && !arguments.integerAt("variablesReference"))
+            return fail(ErrorCode::InvalidArgument, "Invalid data parent reference");
+        if (const auto reference = arguments.integerAt("variablesReference")) {
+            auto location = m_models.location(*reference, name);
+            if (!location)
+                return std::unexpected(std::move(location.error()));
+            a = location->first;
+            size = location->second;
+        } else {
+            a = nativeInteger("&(" + std::string(name) + ")");
+            size = nativeInteger("sizeof(" + std::string(name) + ")");
+        }
+        if (!a || !size || (*size != 1 && *size != 2 && *size != 4 && *size != 8) || *a % *size != 0)
+            return Json::object()
+                .set("dataId", nullptr)
+                .set("description", "Native hardware watchpoints require an aligned 1, 2, 4 or 8 byte lvalue");
+        if (m_dataIds.size() >= 4096)
+            return fail(ErrorCode::OutOfRange, "Data reference budget exhausted");
+        const auto id = std::format("{}:{}:{}", m_dataGeneration, *a, *size);
+        m_dataIds.insert_or_assign(id, std::pair<ULONG64, ULONG>{*a, static_cast<ULONG>(*size)});
+        return Json::object()
+            .set("dataId", id)
+            .set("description", std::string(name))
+            .set("accessTypes", Json::array().push("write").push("readWrite"))
+            .set("canPersist", false);
+    }
+    Result<Json> dataBreakpoints(const Json& arguments) {
+        if (!m_loaded || m_running || m_dump)
+            return fail(ErrorCode::Unsupported, "Data breakpoints require a stopped live target");
+        const auto* requested = arguments.find("breakpoints");
+        if (!requested || !requested->isArray() || requested->size() > 4)
+            return fail(ErrorCode::InvalidArgument, "At most four hardware data breakpoints are supported");
+        for (auto& previous : m_dataBreakpoints)
+            (void)m_control->RemoveBreakpoint2(previous.get());
+        m_dataBreakpoints.clear();
+        Json result = Json::array();
+        for (const auto& request : requested->items()) {
+            auto item = Json::object().set("verified", false);
+            auto found = m_dataIds.find(std::string(request.stringAt("dataId")));
+            const auto access = request.stringAt("accessType");
+            if (found == m_dataIds.end() || (access != "write" && access != "readWrite" && !access.empty()) ||
+                !request.stringAt("condition").empty() || !request.stringAt("hitCondition").empty()) {
+                result.push(std::move(item).set("message", "Expired/unsupported hardware data breakpoint"));
+                continue;
+            }
+            ComPtr<IDebugBreakpoint2> breakpoint;
+            auto status = m_control->AddBreakpoint2(DEBUG_BREAKPOINT_DATA, DEBUG_ANY_ID, breakpoint.put());
+            if (SUCCEEDED(status))
+                status = breakpoint->SetOffset(found->second.first);
+            if (SUCCEEDED(status))
+                status = breakpoint->SetDataParameters(found->second.second, access == "readWrite"
+                                                                                 ? DEBUG_BREAK_READ | DEBUG_BREAK_WRITE
+                                                                                 : DEBUG_BREAK_WRITE);
+            if (SUCCEEDED(status))
+                status = breakpoint->AddFlags(DEBUG_BREAKPOINT_ENABLED);
+            ULONG id = 0;
+            if (SUCCEEDED(status))
+                status = breakpoint->GetId(&id);
+            if (SUCCEEDED(status)) {
+                item.set("verified", true).set("id", id);
+                m_dataBreakpoints.push_back(std::move(breakpoint));
+            } else {
+                if (breakpoint)
+                    (void)m_control->RemoveBreakpoint2(breakpoint.get());
+                item.set("message", engineError("install hardware data breakpoint", status).message());
+            }
+            result.push(std::move(item));
+        }
+        return Json::object().set("breakpoints", std::move(result));
+    }
+    Result<Json> reloadNatvis(const Json& arguments) {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        if (!m_models.structured())
+            return fail(ErrorCode::Unsupported,
+                        "System32 structured Natvis is unavailable; raw native symbols remain available");
+        const auto* files = arguments.find("natvis");
+        if (!files || !files->isArray() || files->size() > 64)
+            return fail(ErrorCode::InvalidArgument, "Invalid Natvis list");
+        for (const auto& file : files->items()) {
+            if (!file.asString() || !absoluteLocal(*file.asString(), true))
+                return fail(ErrorCode::InvalidArgument, "Natvis requires absolute local paths");
+            auto path = io::toWide(*file.asString());
+            if (!path)
+                return std::unexpected(std::move(path.error()));
+            auto attributes = GetFileAttributesW(path->c_str());
+            if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
+                return fail(ErrorCode::NotFound, "Natvis file unavailable");
+            m_natvisError = false;
+            m_loadingNatvis = true;
+            const auto command = L".nvload \"" + *path + L"\"";
+            auto status = m_control->ExecuteWide(DEBUG_OUTCTL_THIS_CLIENT, command.c_str(), DEBUG_EXECUTE_NOT_LOGGED);
+            m_loadingNatvis = false;
+            if (FAILED(status) || m_natvisError)
+                return std::unexpected(engineError("load Natvis", FAILED(status) ? status : E_FAIL));
+            if (std::ranges::find(m_natvisLoaded, *file.asString()) == m_natvisLoaded.end())
+                m_natvisLoaded.push_back(*file.asString());
+            visualizersLoaded();
+        }
+        m_models.clear();
+
+        return Json::object().set("loaded", true).set("files", *files);
+    }
+    Result<Json> writeValue(const Json& arguments) {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        if (m_dump)
+            return fail(ErrorCode::Unsupported, "Crash dump values are read-only");
+        const auto reference = arguments.integerAt("variablesReference");
+        if (!reference || *reference <= 0)
+            return fail(ErrorCode::InvalidArgument, "A current variable reference is required");
+        return m_models.write(*reference, arguments.stringAt("name"), arguments.stringAt("value"));
+    }
+    Result<Json> memory(const Json& arguments, bool write) {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        if (!m_memory)
+            return fail(ErrorCode::Unsupported, "System32 DbgEng memory API unavailable");
+        if (write && m_dump)
+            return fail(ErrorCode::Unsupported, "Crash dump memory is read-only");
+        if (arguments.find("offset") && !arguments.integerAt("offset"))
+            return fail(ErrorCode::InvalidArgument, "Invalid memory offset");
+        auto location = address(arguments.stringAt("memoryReference"), arguments.integerAt("offset").value_or(0));
+        if (!location)
+            return std::unexpected(std::move(location.error()));
+        if (write) {
+            auto bytes = unbase64(arguments.stringAt("data"));
+            if (!bytes)
+                return std::unexpected(std::move(bytes.error()));
+            if (bytes->size() > 1024 * 1024)
+                return fail(ErrorCode::OutOfRange, "Memory write exceeds 1 MiB");
+            if (bytes->empty())
+                return Json::object().set("offset", 0).set("bytesWritten", 0);
+            ULONG written = 0;
+            auto status = m_memory->WriteVirtual(*location, bytes->data(), static_cast<ULONG>(bytes->size()), &written);
+            // A partial native write is never rolled back or reported as an all-or-nothing write.
+            if (FAILED(status) && written == 0)
+                return std::unexpected(engineError("write memory", status));
+            if (written != bytes->size() && !arguments.boolAt("allowPartial").value_or(false))
+                return fail(ErrorCode::IoError,
+                            std::format("Native memory write changed {} of {} bytes", written, bytes->size()));
+            return Json::object().set("offset", 0).set("bytesWritten", written);
+        }
+        const auto count = arguments.unsignedAt("count");
+        if (!count || *count > 1024 * 1024)
+            return fail(ErrorCode::InvalidArgument, "Memory count must be at most 1 MiB");
+        if (*count == 0)
+            return Json::object()
+                .set("address", std::format("{:#x}", *location))
+                .set("data", "")
+                .set("unreadableBytes", 0);
+        std::string bytes(static_cast<std::size_t>(*count), '\0');
+        ULONG read = 0;
+        auto status = m_memory->ReadVirtual(*location, bytes.data(), static_cast<ULONG>(bytes.size()), &read);
+        if (FAILED(status) && read == 0)
+            return std::unexpected(engineError("read memory", status));
+        bytes.resize(read);
+        return Json::object()
+            .set("address", std::format("{:#x}", *location))
+            .set("data", base64(bytes))
+            .set("unreadableBytes", *count - read);
+    }
+    Result<Json> disassemble(const Json& arguments) {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        auto location = address(arguments.stringAt("memoryReference"), arguments.integerAt("offset").value_or(0));
+        if (!location)
+            return std::unexpected(std::move(location.error()));
+        const auto count = arguments.unsignedAt("instructionCount");
+        const auto skip = arguments.integerAt("instructionOffset").value_or(0);
+        if (!count || *count > 4096 || skip > 4096 || skip < -4096)
+            return fail(ErrorCode::InvalidArgument, "Invalid disassembly page");
+        ULONG64 current = *location;
+        if (skip) {
+            auto status = m_control->GetNearInstruction(current, static_cast<LONG>(skip), &current);
+            if (FAILED(status))
+                return std::unexpected(engineError("instruction offset", status));
+        }
+        Json instructions = Json::array();
+        for (std::uint64_t index = 0; index < *count; ++index) {
+            std::array<wchar_t, 4096> text{};
+            ULONG64 next = 0;
+            auto status =
+                m_control->DisassembleWide(current, 0, text.data(), static_cast<ULONG>(text.size()), nullptr, &next);
+            if (FAILED(status) || next <= current)
+                return std::unexpected(engineError("disassemble instruction", FAILED(status) ? status : E_FAIL));
+            auto converted = utf8(text.data());
+            if (!converted)
+                return std::unexpected(std::move(converted.error()));
+            auto item = Json::object().set("address", std::format("{:#x}", current)).set("instruction", *converted);
+            std::array<wchar_t, 4096> name{}, file{};
+            ULONG64 displacement = 0;
+            ULONG line = 0;
+            if (SUCCEEDED(m_symbols->GetNameByOffsetWide(current, name.data(), static_cast<ULONG>(name.size()), nullptr,
+                                                         &displacement)))
+                if (auto value = utf8(name.data()); value)
+                    item.set("symbol", *value);
+            if (SUCCEEDED(m_symbols->GetLineByOffsetWide(current, &line, file.data(), static_cast<ULONG>(file.size()),
+                                                         nullptr, &displacement)))
+                if (auto value = utf8(file.data()); value)
+                    item.set("location", Json::object().set("path", mappedSource(*value)))
+                        .set("line", line)
+                        .set("column", 1);
+            instructions.push(std::move(item));
+            current = next;
+        }
+        return Json::object().set("instructions", std::move(instructions));
+    }
+    Result<Json> registers(const Json& arguments) {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        if (!m_registers)
+            return fail(ErrorCode::Unsupported, "Native registers unavailable");
+        if (arguments.find("threadId")) {
+            const auto thread = arguments.unsignedAt("threadId");
+            if (!thread || *thread > std::numeric_limits<ULONG>::max())
+                return fail(ErrorCode::InvalidArgument, "Invalid thread ID");
+            if (auto selected = selectThread(static_cast<ULONG>(*thread)); !selected)
+                return std::unexpected(std::move(selected.error()));
+        }
+        ULONG count = 0;
+        auto status = m_registers->GetNumberRegisters(&count);
+        if (FAILED(status) || count > 4096)
+            return std::unexpected(engineError("register count", FAILED(status) ? status : E_BOUNDS));
+        Json values = Json::array();
+        for (ULONG index = 0; index < count; ++index) {
+            std::array<wchar_t, 256> name{};
+            DEBUG_REGISTER_DESCRIPTION description{};
+            DEBUG_VALUE value{};
+            status = m_registers->GetDescriptionWide(index, name.data(), static_cast<ULONG>(name.size()), nullptr,
+                                                     &description);
+            if (SUCCEEDED(status))
+                status = m_registers->GetValue(index, &value);
+            if (FAILED(status))
+                return std::unexpected(engineError("native register", status));
+            auto converted = utf8(name.data());
+            if (!converted)
+                return std::unexpected(std::move(converted.error()));
+            std::string text;
+            switch (value.Type) {
+            case DEBUG_VALUE_INT8: text = std::format("{:#x}", value.I8); break;
+            case DEBUG_VALUE_INT16: text = std::format("{:#x}", value.I16); break;
+            case DEBUG_VALUE_INT32: text = std::format("{:#x}", value.I32); break;
+            case DEBUG_VALUE_INT64: text = std::format("{:#x}", value.I64); break;
+            case DEBUG_VALUE_FLOAT32: text = std::format("{}", value.F32); break;
+            case DEBUG_VALUE_FLOAT64: text = std::format("{}", value.F64); break;
+            default: {
+                constexpr char digits[] = "0123456789abcdef";
+                const auto width = value.Type == DEBUG_VALUE_FLOAT80                                           ? 10U
+                                   : value.Type == DEBUG_VALUE_FLOAT82                                         ? 11U
+                                   : value.Type == DEBUG_VALUE_FLOAT128 || value.Type == DEBUG_VALUE_VECTOR128 ? 16U
+                                   : value.Type == DEBUG_VALUE_VECTOR64                                        ? 8U
+                                                                                                               : 0U;
+                if (width == 0)
+                    return fail(ErrorCode::Unsupported, "Unknown native register value width");
+                text = "0x";
+                for (std::size_t index = width; index > 0; --index) {
+                    const auto byte = value.RawBytes[index - 1];
+                    text += digits[byte >> 4];
+                    text += digits[byte & 15];
+                }
+                break;
+            }
+            }
+            values.push(Json::object()
+                            .set("name", *converted)
+                            .set("value", text)
+                            .set("type", value.Type)
+                            .set("typeName", value.Type == DEBUG_VALUE_FLOAT32   ? "float32"
+                                             : value.Type == DEBUG_VALUE_FLOAT64 ? "float64"
+                                             : value.Type <= DEBUG_VALUE_INT64   ? "integer"
+                                                                                 : "native-vector")
+                            .set("index", index));
+        }
+        return Json::object().set("registers", std::move(values));
+    }
+    Result<Json> modules(const Json& arguments) {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        ULONG loaded = 0, unloaded = 0;
+        auto status = m_symbols->GetNumberModules(&loaded, &unloaded);
+        if (FAILED(status) || loaded > 65536)
+            return std::unexpected(engineError("module count", FAILED(status) ? status : E_BOUNDS));
+        const auto start = arguments.unsignedAt("startModule").value_or(0),
+                   count = arguments.unsignedAt("moduleCount").value_or(0);
+        if (start > 65536 || count > 4096)
+            return fail(ErrorCode::InvalidArgument, "Invalid module page");
+        Json result = Json::array();
+        for (auto index = start; index < std::min<std::uint64_t>(loaded, start + (count ? count : 256)); ++index) {
+            ULONG64 base = 0;
+            status = m_symbols->GetModuleByIndex(static_cast<ULONG>(index), &base);
+            if (FAILED(status))
+                return std::unexpected(engineError("module base", status));
+            DEBUG_MODULE_PARAMETERS parameter{};
+            status = m_symbols->GetModuleParameters(1, &base, 0, &parameter);
+            if (FAILED(status))
+                return std::unexpected(engineError("module parameters", status));
+            std::array<wchar_t, 32768> name{}, image{}, symbols{};
+            status = m_symbols->GetModuleNameStringWide(DEBUG_MODNAME_MODULE, DEBUG_ANY_ID, base, name.data(),
+                                                        static_cast<ULONG>(name.size()), nullptr);
+            if (FAILED(status))
+                return std::unexpected(engineError("module name", status));
+            (void)m_symbols->GetModuleNameStringWide(DEBUG_MODNAME_IMAGE, DEBUG_ANY_ID, base, image.data(),
+                                                     static_cast<ULONG>(image.size()), nullptr);
+            (void)m_symbols->GetModuleNameStringWide(DEBUG_MODNAME_SYMBOL_FILE, DEBUG_ANY_ID, base, symbols.data(),
+                                                     static_cast<ULONG>(symbols.size()), nullptr);
+            auto n = utf8(name.data()), p = utf8(image.data()), sym = utf8(symbols.data());
+            if (!n || !p || !sym)
+                return fail(ErrorCode::Corrupt, "Invalid native module names");
+            const auto symbolStatus = parameter.SymbolType == DEBUG_SYMTYPE_DEFERRED ? "Deferred"
+                                      : parameter.SymbolType == DEBUG_SYMTYPE_NONE   ? "Not loaded"
+                                      : parameter.SymbolType == DEBUG_SYMTYPE_EXPORT ? "Exports only"
+                                                                                     : "Loaded";
+            result.push(Json::object()
+                            .set("id", std::format("{:#x}", base))
+                            .set("name", *n)
+                            .set("path", *p)
+                            .set("addressRange", std::format("{:#x}-{:#x}", base, base + parameter.Size))
+                            .set("symbolStatus", symbolStatus)
+                            .set("symbolFilePath", *sym));
+        }
+        return Json::object().set("modules", std::move(result)).set("totalModules", loaded);
+    }
+    Result<Json> freeze(const Json& arguments) {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        if (m_dump)
+            return fail(ErrorCode::Unsupported, "Crash dump threads cannot be frozen");
+        const auto thread = arguments.unsignedAt("threadId");
+        const auto frozen = arguments.boolAt("frozen");
+        if (!thread || *thread > std::numeric_limits<ULONG>::max() || !frozen)
+            return fail(ErrorCode::InvalidArgument, "Freeze requires a thread and boolean operation");
+        if (auto selected = selectThread(static_cast<ULONG>(*thread)); !selected)
+            return std::unexpected(std::move(selected.error()));
+        const auto id = m_threads.at(static_cast<ULONG>(*thread));
+        const auto command = std::format(L"~{}{}", id, *frozen ? L'f' : L'u');
+        m_commandError = false;
+        m_capturingCommand = true;
+        auto status = m_control->ExecuteWide(DEBUG_OUTCTL_THIS_CLIENT, command.c_str(), DEBUG_EXECUTE_NOT_LOGGED);
+        m_capturingCommand = false;
+        if (FAILED(status) || m_commandError)
+            return std::unexpected(engineError("native thread freeze/thaw", FAILED(status) ? status : E_FAIL));
+        return Json::object().set("threadId", *thread).set("commandSucceeded", true).set("operationApplied", true);
+    }
+    Result<Json> symbolPaths(const Json& arguments) {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        const auto* paths = arguments.find("symbolPaths");
+        if (!paths || !paths->isArray() || paths->size() > 64)
+            return fail(ErrorCode::InvalidArgument, "Invalid symbol path list");
+        const bool network = arguments.boolAt("allowSymbolServer").value_or(false);
+        std::wstring joined;
+        for (const auto& path : paths->items()) {
+            if (!path.asString())
+                return fail(ErrorCode::InvalidArgument, "Symbol path must be a string");
+            const std::string_view value = *path.asString();
+            // Symbol-server grammar is explicit, never inherited from the adapter environment.
+            if (!absoluteLocal(value, true)) {
+                if (!network || !value.starts_with("srv*") ||
+                    (value.find_first_of("\r\n\";") != value.npos || value.find('\0') != value.npos))
+                    return fail(ErrorCode::InvalidArgument, "Symbol server requires explicit opt-in");
+                const auto separator = value.find('*', 4);
+                if (separator == value.npos || !absoluteLocal(value.substr(4, separator - 4), true) ||
+                    !value.substr(separator + 1).starts_with("https://") ||
+                    value.find('*', separator + 1) != value.npos)
+                    return fail(ErrorCode::InvalidArgument, "Use srv*absolute-local-cache*https://server");
+            }
+            auto wide = io::toWide(value);
+            if (!wide)
+                return std::unexpected(std::move(wide.error()));
+            if (!joined.empty())
+                joined += L';';
+            joined += *wide;
+        }
+        auto status = network ? m_control->RemoveEngineOptions(DEBUG_ENGOPT_DISALLOW_NETWORK_PATHS)
+                              : m_control->AddEngineOptions(DEBUG_ENGOPT_DISALLOW_NETWORK_PATHS);
+        if (SUCCEEDED(status))
+            status = network ? m_control->AddEngineOptions(DEBUG_ENGOPT_ALLOW_NETWORK_PATHS)
+                             : m_control->RemoveEngineOptions(DEBUG_ENGOPT_ALLOW_NETWORK_PATHS);
+        if (SUCCEEDED(status))
+            status = m_symbols->SetSymbolPathWide(joined.c_str());
+        if (FAILED(status))
+            return std::unexpected(engineError("symbol path configuration", status));
+        return Json::object().set("configured", true).set("symbolServerEnabled", network);
+    }
+    Result<Json> reloadSymbols(const Json& arguments) {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        const auto module = arguments.stringAt("module");
+        if (module.empty() || module.size() > 1024 ||
+            module.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") !=
+                module.npos)
+            return fail(ErrorCode::InvalidArgument, "Reload requires one literal module name");
+        auto wide = io::toWide(module);
+        if (!wide)
+            return std::unexpected(std::move(wide.error()));
+        const auto status = m_symbols->ReloadWide(wide->c_str());
+        if (FAILED(status))
+            return std::unexpected(engineError("reload symbols", status));
+        return Json::object().set("reloaded", true);
+    }
+    Result<Json> sourceMapRequest(const Json& arguments) {
+        if (auto ready = requireStop(); !ready)
+            return std::unexpected(std::move(ready.error()));
+        const auto* maps = arguments.find("sourceMap");
+        if (!maps)
+            return fail(ErrorCode::InvalidArgument, "sourceMap is required");
+        return sourceMap(*maps);
+    }
+    Result<Json> sourceMap(const Json& maps) {
+        if (!maps.isObject() || maps.size() > 64)
+            return fail(ErrorCode::InvalidArgument, "Source map must be a bounded path object");
+        std::vector<std::pair<std::string, std::string>> validated;
+        for (std::size_t index = 0; index < maps.size(); ++index) {
+            const auto* destination = maps.items()[index].asString();
+            if (!destination || !absoluteLocal(maps.keys()[index]) || !absoluteLocal(*destination))
+                return fail(ErrorCode::InvalidArgument, "Source mappings require absolute local roots");
+            auto from = io::normalizePath(maps.keys()[index]), to = io::normalizePath(*destination);
+            if (!from || !to)
+                return fail(ErrorCode::InvalidArgument, "Invalid source mapping roots");
+            validated.emplace_back(*from, *to);
+        }
+        std::ranges::sort(validated, [](const auto& a, const auto& b) { return a.first.size() > b.first.size(); });
+        m_sourceMap = std::move(validated);
+        return Json::object().set("configured", true);
+    }
     Result<Json> resume(std::string_view command, const Json& arguments) {
         if (auto ready = requireStop(); !ready)
             return std::unexpected(std::move(ready.error()));
@@ -507,6 +1065,13 @@ public:
             if (auto selected = selectThread(static_cast<ULONG>(*thread)); !selected)
                 return std::unexpected(std::move(selected.error()));
         }
+        const auto granularity = arguments.stringAt("granularity");
+        if (!granularity.empty() && granularity != "instruction" && granularity != "line" && granularity != "statement")
+            return fail(ErrorCode::InvalidArgument, "Unknown stepping granularity");
+        const auto level =
+            m_control->SetCodeLevel(granularity == "instruction" ? DEBUG_LEVEL_ASSEMBLY : DEBUG_LEVEL_SOURCE);
+        if (FAILED(level))
+            return std::unexpected(engineError("stepping code level", level));
         ULONG execution = DEBUG_STATUS_GO;
         if (command == "next")
             execution = DEBUG_STATUS_STEP_OVER;
@@ -520,6 +1085,7 @@ public:
             if (FAILED(status))
                 return std::unexpected(engineError("step out", status));
             m_running = true;
+            observeExecution();
         } else if (auto executed = execute(execution); !executed) {
             return std::unexpected(std::move(executed.error()));
         }
@@ -540,6 +1106,7 @@ public:
     void poll() {
         if (!m_running)
             return;
+        observeExecution();
         const HRESULT waited = m_control->WaitForEvent(0, 10);
         if (waited == S_FALSE)
             return;
@@ -573,12 +1140,42 @@ public:
             else if (m_lastCommand == "pause" && type == DEBUG_EVENT_EXCEPTION &&
                      exception.ExceptionRecord.ExceptionCode == EXCEPTION_BREAKPOINT)
                 reason = "pause";
+            m_stopBreakpoint.reset();
+            if (type == DEBUG_EVENT_BREAKPOINT) {
+                DEBUG_LAST_EVENT_INFO_BREAKPOINT breakpoint{};
+                if (SUCCEEDED(m_control->GetLastEventInformationWide(
+                        &type, &process, &thread, &breakpoint, sizeof(breakpoint), nullptr, nullptr, 0, nullptr))) {
+                    m_stopBreakpoint = breakpoint.Id;
+                    ComPtr<IDebugBreakpoint2> native;
+                    ULONG breakpointType = 0, processor = 0;
+                    if (SUCCEEDED(m_control->GetBreakpointById2(breakpoint.Id, native.put())) &&
+                        SUCCEEDED(native->GetType(&breakpointType, &processor)) &&
+                        breakpointType == DEBUG_BREAKPOINT_DATA)
+                        reason = "data breakpoint";
+                    auto stop = breakpointStops(breakpoint.Id);
+                    if (stop && !*stop) {
+                        auto continued = execute(DEBUG_STATUS_GO);
+                        if (continued)
+                            return;
+                    } else if (!stop)
+                        m_event("output",
+                                Json::object().set("category", "stderr").set("output", stop.error().message() + "\n"));
+                }
+            }
             auto text = utf8(description.data());
             stopped(reason, text ? *text : "");
         }
     }
 
+    void finish(bool terminate) noexcept {
+        m_terminateAttached = terminate;
+        close();
+    }
     void close() noexcept {
+        m_natvisLoaded.clear();
+        m_dataBreakpoints.clear();
+        m_dataIds.clear();
+        m_policies.clear();
         m_models.shutdown();
         m_frames.clear();
         m_threads.clear();
@@ -586,11 +1183,16 @@ public:
         if (m_client) {
             if (m_loaded) {
                 if (!m_dump)
-                    (void)m_client->TerminateProcesses();
-                (void)m_client->EndSession(m_dump ? DEBUG_END_PASSIVE : DEBUG_END_ACTIVE_TERMINATE);
+                    if (!m_attached || m_terminateAttached)
+                        (void)m_client->TerminateProcesses();
+                (void)m_client->EndSession(m_dump                               ? DEBUG_END_PASSIVE
+                                           : m_attached && !m_terminateAttached ? DEBUG_END_ACTIVE_DETACH
+                                                                                : DEBUG_END_ACTIVE_TERMINATE);
             }
             (void)m_client->SetOutputCallbacksWide(nullptr);
         }
+        m_memory.reset();
+        m_registers.reset();
         m_systems.reset();
         m_symbols.reset();
         m_control.reset();
@@ -603,6 +1205,112 @@ public:
     }
 
 private:
+    void visualizersLoaded() {
+        Json paths = Json::array();
+        for (const auto& path : m_natvisLoaded)
+            paths.push(path);
+        m_event("frost.visualizersLoaded", Json::object().set("paths", std::move(paths)));
+    }
+    bool m_observedRunning = false;
+    void observeExecution() {
+        ULONG status = 0;
+        if (SUCCEEDED(m_control->GetExecutionStatus(&status))) {
+            const auto value = status & DEBUG_STATUS_MASK;
+            if (value != DEBUG_STATUS_BREAK && value != DEBUG_STATUS_NO_DEBUGGEE && !m_observedRunning) {
+                m_observedRunning = true;
+                ULONG thread = 0;
+                Json body = Json::object().set("allThreadsContinued", true);
+                if (SUCCEEDED(m_systems->GetCurrentThreadSystemId(&thread)))
+                    body.set("threadId", thread);
+                m_event("continued", std::move(body));
+            }
+        }
+    }
+    struct BreakpointPolicy {
+        std::string condition, hit, log;
+        std::uint64_t count = 0;
+    };
+    std::map<ULONG, BreakpointPolicy> m_policies;
+    std::map<std::string, std::pair<ULONG64, ULONG>> m_dataIds;
+    std::vector<ComPtr<IDebugBreakpoint2>> m_dataBreakpoints;
+    std::uint64_t m_dataGeneration = 0;
+    Result<ULONG64> nativeInteger(std::string_view expression) {
+        auto wide = io::toWide(expression);
+        if (!wide)
+            return std::unexpected(std::move(wide.error()));
+        const auto syntax = m_control->SetExpressionSyntax(DEBUG_EXPR_CPLUSPLUS);
+        if (FAILED(syntax))
+            return std::unexpected(engineError("C++ expression syntax", syntax));
+        DEBUG_VALUE value{};
+        ULONG remainder = 0;
+        auto status = m_control->EvaluateWide(wide->c_str(), DEBUG_VALUE_INT64, &value, &remainder);
+        if (FAILED(status) || remainder != wide->size())
+            return std::unexpected(engineError("native C++ expression", FAILED(status) ? status : E_INVALIDARG));
+        return value.I64;
+    }
+    Result<bool> breakpointStops(ULONG id) {
+        auto found = m_policies.find(id);
+        if (found == m_policies.end())
+            return true;
+        auto& policy = found->second;
+        if (policy.count != std::numeric_limits<std::uint64_t>::max())
+            ++policy.count;
+        auto hit = hitMatches(policy.hit, policy.count);
+        if (!hit || !*hit)
+            return hit;
+        if (!policy.condition.empty()) {
+            auto value = nativeInteger(policy.condition);
+            if (!value)
+                return std::unexpected(std::move(value.error()));
+            if (!*value)
+                return false;
+        }
+        if (policy.log.empty())
+            return true;
+        std::string message;
+        for (std::size_t index = 0; index < policy.log.size();) {
+            if (policy.log[index] != '{') {
+                message += policy.log[index++];
+                continue;
+            }
+            if (index + 1 < policy.log.size() && policy.log[index + 1] == '{') {
+                message += '{';
+                index += 2;
+                continue;
+            }
+            const auto end = policy.log.find('}', index + 1);
+            if (end == std::string::npos)
+                return fail(ErrorCode::InvalidArgument, "Unclosed logpoint expression");
+            auto value = m_models.evaluate(std::string_view(policy.log).substr(index + 1, end - index - 1),
+                                           FrameContext{currentThread(), 0});
+            if (!value)
+                return std::unexpected(std::move(value.error()));
+            message += value->stringAt("result");
+            index = end + 1;
+        }
+        m_event("output", Json::object().set("category", "console").set("output", message + "\n"));
+        return false;
+    }
+    ULONG currentThread() {
+        ULONG id = 0;
+        (void)m_systems->GetCurrentThreadId(&id);
+        return id;
+    }
+    std::string mappedSource(std::string_view input, bool reverse = false) const {
+        auto normalized = io::normalizePath(input);
+        const std::string path = normalized ? *normalized : std::string(input);
+        for (const auto& pair : m_sourceMap) {
+            const auto& from = reverse ? pair.second : pair.first;
+            const auto& to = reverse ? pair.first : pair.second;
+            if (path.size() >= from.size() && _strnicmp(path.data(), from.c_str(), from.size()) == 0 &&
+                (path.size() == from.size() || path[from.size()] == '/' || path[from.size()] == '\\'))
+                return to + std::string(path.substr(from.size()));
+        }
+        return std::string(path);
+    }
+    std::optional<ULONG> m_stopBreakpoint;
+    bool m_capturingCommand = false;
+    bool m_commandError = false;
     struct EnvironmentLess {
         bool operator()(const std::wstring& a, const std::wstring& b) const {
             return _wcsicmp(a.c_str(), b.c_str()) < 0;
@@ -692,16 +1400,22 @@ private:
         if (FAILED(result))
             return std::unexpected(engineError("resume target", result));
         m_running = true;
+        observeExecution();
         return {};
     }
     void stopped(std::string_view reason, std::string_view description) {
         m_running = false;
+        m_observedRunning = false;
+        m_dataIds.clear();
+        ++m_dataGeneration;
         m_lastCommand.clear();
         m_models.clear();
         m_frames.clear();
         m_threads.clear();
         ULONG systemThread = 0;
         Json body = Json::object().set("reason", reason).set("allThreadsStopped", true);
+        if (m_stopBreakpoint)
+            body.set("hitBreakpointIds", Json::array().push(*m_stopBreakpoint));
         if (!description.empty())
             body.set("description", description);
         if (SUCCEEDED(m_systems->GetCurrentThreadSystemId(&systemThread)))
@@ -716,6 +1430,12 @@ private:
     ComPtr<IDebugControl4> m_control;
     ComPtr<IDebugSymbols3> m_symbols;
     ComPtr<IDebugSystemObjects4> m_systems;
+    ComPtr<IDebugDataSpaces> m_memory;
+    ComPtr<IDebugRegisters2> m_registers;
+    bool m_attached = false;
+    bool m_terminateAttached = false;
+    std::vector<std::pair<std::string, std::string>> m_sourceMap;
+    std::vector<std::string> m_natvisLoaded;
     ModelStore m_models;
     std::map<std::string, std::vector<ComPtr<IDebugBreakpoint2>>> m_breakpoints;
     std::map<ULONG, ULONG> m_threads;
@@ -932,11 +1652,36 @@ private:
                                           .set("supportsEvaluateForHovers", true)
                                           .set("supportsTerminateRequest", true)
                                           .set("supportsDelayedStackTraceLoading", true)
-                                          .set("supportsSetVariable", false)
+                                          .set("supportsSetVariable", true)
+                                          .set("supportsConditionalBreakpoints", true)
+                                          .set("supportsHitConditionalBreakpoints", true)
+                                          .set("supportsLogPoints", true)
+                                          .set("supportsDataBreakpoints", true)
+                                          .set("supportsReadMemoryRequest", true)
+                                          .set("supportsWriteMemoryRequest", true)
+                                          .set("supportsDisassembleRequest", true)
+                                          .set("supportsSteppingGranularity", true)
+                                          .set("supportsModulesRequest", true)
+                                          .set("supportsExceptionInfoRequest", true)
+                                          .set("frostSupportsRegisters", true)
+                                          .set("frostSupportsSymbolControl", true)
+                                          .set("frostSupportsSourceMap", true)
+                                          .set("frostSupportsRawView", true)
+                                          .set("frostSupportsThreadFreeze", true)
+                                          .set("exceptionBreakpointFilters",
+                                               Json::array()
+                                                   .push(Json::object()
+                                                             .set("filter", "cpp_throw")
+                                                             .set("label", "C++ Throw")
+                                                             .set("default", false))
+                                                   .push(Json::object()
+                                                             .set("filter", "win32")
+                                                             .set("label", "Win32 first-chance exceptions")
+                                                             .set("default", false)))
                                           .set("supportsRestartRequest", false));
                 } else if (!initialized) {
                     respond(*request, fail(ErrorCode::InvalidArgument, "initialize must precede target requests"));
-                } else if (command == "launch") {
+                } else if (command == "launch" || command == "attach") {
                     auto launched = engine.launch(*arguments);
                     const bool success = launched.has_value();
                     respond(*request, std::move(launched));
@@ -950,13 +1695,35 @@ private:
                     respond(*request, engine.breakpoints(*arguments, false));
                 else if (command == "setFunctionBreakpoints")
                     respond(*request, engine.breakpoints(*arguments, true));
-                else if (command == "setExceptionBreakpoints") {
-                    const Json* filters = arguments->find("filters");
-                    respond(*request,
-                            filters && filters->isArray() && filters->size() == 0
-                                ? Result<Json>(Json::object())
-                                : Result<Json>(fail(ErrorCode::Unsupported, "exception filters are unavailable")));
-                } else if (command == "threads")
+                else if (command == "setExceptionBreakpoints")
+                    respond(*request, engine.exceptions(*arguments));
+                else if (command == "exceptionInfo")
+                    respond(*request, engine.exceptionInfo());
+                else if (command == "setVariable")
+                    respond(*request, engine.writeValue(*arguments));
+                else if (command == "readMemory" || command == "writeMemory")
+                    respond(*request, engine.memory(*arguments, command == "writeMemory"));
+                else if (command == "disassemble")
+                    respond(*request, engine.disassemble(*arguments));
+                else if (command == "modules")
+                    respond(*request, engine.modules(*arguments));
+                else if (command == "frost.registers")
+                    respond(*request, engine.registers(*arguments));
+                else if (command == "frost.setThreadFrozen")
+                    respond(*request, engine.freeze(*arguments));
+                else if (command == "frost.setSymbolPaths")
+                    respond(*request, engine.symbolPaths(*arguments));
+                else if (command == "frost.reloadSymbols")
+                    respond(*request, engine.reloadSymbols(*arguments));
+                else if (command == "frost.reloadNatvis")
+                    respond(*request, engine.reloadNatvis(*arguments));
+                else if (command == "frost.setSourceMap")
+                    respond(*request, engine.sourceMapRequest(*arguments));
+                else if (command == "dataBreakpointInfo")
+                    respond(*request, engine.dataBreakpointInfo(*arguments));
+                else if (command == "setDataBreakpoints")
+                    respond(*request, engine.dataBreakpoints(*arguments));
+                else if (command == "threads")
                     respond(*request, engine.threads());
                 else if (command == "stackTrace")
                     respond(*request, engine.stack(*arguments));
@@ -974,7 +1741,7 @@ private:
                     if (command == "terminate" && engine.readOnly())
                         respond(*request, fail(ErrorCode::Unsupported, "a crash dump has no process to terminate"));
                     else {
-                        engine.close();
+                        engine.finish(command == "terminate" || arguments->boolAt("terminateDebuggee").value_or(false));
                         respond(*request, Json::object());
                         event("terminated", Json::object());
                     }
