@@ -96,7 +96,17 @@ class IFileSystem;
 
 namespace frost::run {
 
-enum class RunType : std::uint8_t { Native, CMakeTarget, MSBuild, Compound, Attach, FrostEditor, FrostPlayer };
+enum class RunType : std::uint8_t {
+    Native,
+    CMakeTarget,
+    MSBuild,
+    Compound,
+    Attach,
+    FrostEditor,
+    FrostPlayer,
+    LuaScript,
+    LuaRepl
+};
 
 // JSON spelling, including "frost-editor" and "frost-player" (RUN-11).
 [[nodiscard]] std::string_view toString(RunType type) noexcept;
@@ -161,6 +171,11 @@ struct RunConfiguration {
     std::string engineProjectPath{};
     EngineDebugMode engineDebugMode = EngineDebugMode::Lua; // Other run types must keep the default.
 
+    // LUA-10: program is the explicit selected Lua executable for BOTH Run and Debug; target
+    // is the absolute script for LuaScript, empty for LuaRepl. Interpreter argv precedes the
+    // script (lua-debug arg0); arguments remain script argv (lua-debug arg), never a shell string.
+    std::vector<std::string> interpreterArguments{};
+
     friend bool operator==(const RunConfiguration&, const RunConfiguration&) = default;
 };
 
@@ -185,7 +200,10 @@ struct RunConfiguration {
 
 // The store's newest format version; files with a higher one are refused (Unsupported). Stores
 // retain version 1 or 2 when no RUN-11 types are present (header comment, "Version 3").
-inline constexpr int kRunConfigurationsVersion = 4;
+// Version5 adds standalone Lua script/REPL types and interpreterArguments; older configurations
+// keep their existing version and round-trip unchanged. No LuaLS runtime setting is an executable.
+inline constexpr int kRunConfigurationsVersion = 5;
+[[nodiscard]] bool isLuaRunType(RunType type) noexcept;
 
 // Whether this is a RUN-11 editor/player configuration. Pure, constant time.
 [[nodiscard]] bool isFrostEngineRunType(RunType type) noexcept;

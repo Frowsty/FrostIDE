@@ -129,9 +129,21 @@ Result<LaunchPlan> launchPlanFor(const RunConfiguration& configuration) {
         // Engine EditorOptions and RuntimeOptions both accept a directory or .frostproj here.
         arguments.insert(arguments.begin(), {"--project", configuration.engineProjectPath});
     }
+    if (isLuaRunType(configuration.type)) {
+        arguments = configuration.interpreterArguments;
+        if (configuration.type == RunType::LuaRepl)
+            arguments.push_back("-i");
+        else {
+            arguments.push_back(configuration.target);
+            arguments.insert(arguments.end(), configuration.arguments.begin(), configuration.arguments.end());
+        }
+    }
+    const auto workingDirectory = configuration.workingDirectory.empty() && configuration.type == RunType::LuaScript
+                                      ? std::string(io::parentPath(configuration.target))
+                                      : configuration.workingDirectory;
     return normalizePlan(LaunchPlan{.program = configuration.program,
                                     .arguments = std::move(arguments),
-                                    .workingDirectory = configuration.workingDirectory,
+                                    .workingDirectory = workingDirectory,
                                     .environment = configuration.environment});
 }
 
