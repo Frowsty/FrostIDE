@@ -57,6 +57,7 @@ frost_add_library(syntax LAYER syntax
         src/queries.cpp
         src/syntax_session.cpp
         src/syntax_tree.cpp
+        src/lua_ast.cpp
         src/vocabulary.cpp
     DEPS frost::core frost::sched frost::text
     THIRD_PARTY
