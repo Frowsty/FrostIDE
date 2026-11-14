@@ -111,10 +111,9 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
         }
     }
     auto commit = fl::commitCompletion(item, *snapshot, wordStart, end, m_services.server.encoding());
-    // LuaLS uses this editor-local command for signature help after inserting a call snippet.
-    // Arbitrary commands supplied by the server are not executed.
-    const fl::Json* command = item.raw.find("command");
-    const bool triggerParameterHints = command && command->stringAt("command") == "editor.action.triggerParameterHints";
+    // Actual C++ call snippets and LuaLS's whitelisted editor-local hint request both enter
+    // parameter info after selecting the inserted argument. Other server commands are ignored.
+    const bool triggerParameterHints = fl::completionRequestsParameterHints(item);
     // Hiding lookup and applying edits can replace the completion model. Read its item first.
     closeLookup();
     if (!commit) {
@@ -136,7 +135,8 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
             static_cast<void>(nextTabStop());
         }
     }
-    if (triggerParameterHints)
+    const auto serverCapabilities = m_services.server.serverCapabilities();
+    if (triggerParameterHints && serverCapabilities && serverCapabilities->signatureHelp)
         requestSignatureHelp(std::nullopt);
 }
 

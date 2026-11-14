@@ -81,6 +81,7 @@ struct ServerCapabilities {
     bool callHierarchy = false;
     bool typeHierarchy = false;
     bool inlayHint = false;
+    bool legacyClangdInlayHints = false; // Only legacy provider announced, not standard inlayHintProvider.
     // CPP-5 (document_features.hpp): documentLinkProvider, foldingRangeProvider and clangd's astProvider.
     bool documentLink = false;
     bool foldingRange = false;

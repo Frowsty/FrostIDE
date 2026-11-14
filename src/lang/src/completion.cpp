@@ -54,6 +54,14 @@ std::string_view toString(CompletionItemKind kind) noexcept {
 
 bool isIdentifierByte(char c) noexcept { return isIdentifierStartByte(c) || (c >= '0' && c <= '9'); }
 
+bool completionRequestsParameterHints(const CompletionItem& item) {
+    const auto* command = item.raw.find("command");
+    if (command && command->stringAt("command") == "editor.action.triggerParameterHints") return true;
+    const bool call = item.kind == CompletionItemKind::Function || item.kind == CompletionItemKind::Method ||
+        item.kind == CompletionItemKind::Constructor;
+    return call && item.snippet && item.insertText.find('(') != std::string::npos;
+}
+
 CompletionItem parseCompletionItem(const Json& json) {
     CompletionItem item;
     item.label = displayLabel(json.stringAt("label"));
@@ -203,7 +211,10 @@ sched::Task<Result<CompletionItem>> resolveCompletionItem(ILspRequester& server,
     if (!result) {
         co_return std::unexpected(std::move(result.error()));
     }
-    CompletionItem resolved = parseCompletionItem(*result);
+    if (!result->isObject()) co_return fail(ErrorCode::Corrupt, "Completion resolve returned no item");
+    Json merged = item.raw;
+    for (std::size_t i = 0; i < result->keys().size(); ++i) merged.set(result->keys()[i], result->items()[i]);
+    CompletionItem resolved = parseCompletionItem(merged);
     // Keep what the popup sorted and filtered by; take the resolved details.
     resolved.label = std::move(item.label);
     resolved.filterText = std::move(item.filterText);
@@ -262,6 +273,13 @@ void CompletionModel::refilter() {
         return x.label < y.label;
     });
     m_selected = 0;
+    if (!m_entries.empty()) {
+        const auto preferred = std::ranges::find_if(m_entries, [this](const auto& entry) {
+            const auto& item = m_items[entry.item];
+            return item.preselect && !item.deprecated && entry.match.kind == m_entries.front().match.kind;
+        });
+        if (preferred != m_entries.end()) m_selected = static_cast<std::size_t>(preferred - m_entries.begin());
+    }
 }
 
 std::optional<std::size_t> CompletionModel::selected() const noexcept {

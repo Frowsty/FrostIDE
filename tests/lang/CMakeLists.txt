@@ -35,6 +35,7 @@ frost_add_test(lang_unit_tests
         cmake_language_test.cpp
         compile_commands_test.cpp
         completion_test.cpp
+        inlay_hints_test.cpp
         clangd_locator_test.cpp
         diagnostics_test.cpp
         document_features_test.cpp
