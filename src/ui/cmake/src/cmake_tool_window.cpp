@@ -15,6 +15,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QStyledItemDelegate>
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QSignalBlocker>
@@ -33,6 +34,16 @@ namespace frost::ui::cmake {
 namespace {
 
 constexpr std::string_view kContext = "cmake";
+class CacheDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        if (index.column() != 2 || !index.data(Qt::UserRole).toBool())
+            return nullptr;
+        return QStyledItemDelegate::createEditor(parent, option, index);
+    }
+};
+
 constexpr int kOutputLines = 20'000; // The output keeps the newest lines of a long configure.
 
 QString toQString(std::string_view text) { return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())); }
@@ -68,6 +79,12 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
     bar->addWidget(m_profiles);
     bar->addWidget(m_reload);
     bar->addWidget(m_stop);
+    auto* kit = new QToolButton(this);
+    kit->setObjectName(QStringLiteral("cmakeCreateKit"));
+    kit->setText(qtr(kContext, "Create Kit…"));
+    bar->addWidget(kit);
+    connect(kit, &QToolButton::clicked, this, &CMakeToolWindow::createKitRequested);
+    connect(&m_controller, &CMakeController::busyChanged, kit, [kit](bool busy) { kit->setEnabled(!busy); });
     bar->addStretch(1);
     layout->addLayout(bar);
 
@@ -118,6 +135,36 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
     m_presets->setHeaderLabels({qtr(kContext, "Preset"), qtr(kContext, "Display name")});
     m_presets->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     m_tabs->addTab(m_presets, qtr(kContext, "Presets"));
+    m_targets = new QTreeWidget(m_tabs);
+    m_targets->setObjectName(QStringLiteral("cmakeTargets"));
+    m_targets->setHeaderLabels({qtr(kContext, "Target"), qtr(kContext, "Source directory")});
+    m_tabs->addTab(m_targets, qtr(kContext, "Targets"));
+    auto* cachePage = new QWidget(m_tabs);
+    auto* cacheLayout = new QVBoxLayout(cachePage);
+    auto* cacheHelp = new QLabel(qtr(kContext, "Edits are pending until Apply reconfigures successfully. Presets are unchanged; a later Reload may restore preset values."), cachePage);
+    cacheHelp->setWordWrap(true);
+    cacheLayout->addWidget(cacheHelp);
+    m_cache = new QTreeWidget(cachePage);
+    m_cache->setObjectName(QStringLiteral("cmakeCache"));
+    m_cache->setHeaderLabels({qtr(kContext, "Variable"), qtr(kContext, "Type"), qtr(kContext, "Value")});
+    m_cache->setItemDelegate(new CacheDelegate(m_cache));
+    cacheLayout->addWidget(m_cache);
+    m_applyCache = new QToolButton(cachePage);
+    m_applyCache->setObjectName(QStringLiteral("cmakeApplyCache"));
+    m_applyCache->setText(qtr(kContext, "Apply and Reconfigure"));
+    cacheLayout->addWidget(m_applyCache);
+    m_tabs->addTab(cachePage, qtr(kContext, "Cache"));
+    connect(m_applyCache, &QToolButton::clicked, this, [this] {
+        std::vector<project::CMakeCacheVariable> edits;
+        for (int row = 0; row < m_cache->topLevelItemCount(); ++row) {
+            const auto* item = m_cache->topLevelItem(row);
+            if (item->data(2, Qt::UserRole).toBool() && item->text(2) != item->data(2, Qt::UserRole + 1).toString())
+                edits.push_back({item->text(0).toStdString(), item->text(1).toStdString(), item->text(2).toStdString()});
+        }
+        if (!edits.empty())
+            m_controller.applyCache(std::move(edits));
+    });
+    connect(&m_controller, &CMakeController::modelChanged, this, &CMakeToolWindow::refreshModel);
     layout->addWidget(m_tabs, 1);
 
     connect(m_reload, &QToolButton::clicked, &m_controller, &CMakeController::reload);
@@ -139,9 +186,30 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
     connect(&m_controller, &CMakeController::configureOutput, this,
             [this](int, const QString& line) { m_output->appendPlainText(line); });
 
+    refreshModel();
     refreshProfiles();
     refreshPresets();
     refreshProblem(m_controller.problem());
+    refreshBusy(m_controller.busy());
+}
+
+void CMakeToolWindow::refreshModel() {
+    m_targets->clear();
+    m_cache->clear();
+    const auto& model = m_controller.model();
+    if (model) {
+        for (const auto& target : model->targets)
+            (void)new QTreeWidgetItem(m_targets, {toQString(target.name), toQString(target.sourceDirectory)});
+        for (const auto& entry : model->cache) {
+            auto* item = new QTreeWidgetItem(m_cache, {toQString(entry.name), toQString(entry.type), toQString(entry.value)});
+            const bool editable = entry.name != "CMAKE_EXPORT_COMPILE_COMMANDS" &&
+                (entry.type == "BOOL" || entry.type == "STRING" || entry.type == "PATH" || entry.type == "FILEPATH");
+            item->setData(2, Qt::UserRole, editable);
+            item->setData(2, Qt::UserRole + 1, toQString(entry.value));
+            if (editable)
+                item->setFlags(item->flags() | Qt::ItemIsEditable);
+        }
+    }
     refreshBusy(m_controller.busy());
 }
 
@@ -162,6 +230,8 @@ void CMakeToolWindow::refreshProblem(const QString& problem) {
 
 void CMakeToolWindow::refreshBusy(bool busy) {
     m_reload->setEnabled(!busy);
+    m_cache->setEnabled(!busy);
+    m_applyCache->setEnabled(!busy && m_controller.model() && m_controller.model()->cacheAvailable);
     m_stop->setEnabled(busy);
     m_profiles->setEnabled(m_controller.profileLabels().size() > 1 && !busy);
     refreshProgress();

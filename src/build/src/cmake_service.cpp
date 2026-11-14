@@ -308,6 +308,31 @@ Result<void> CMakeService::configure() {
     return m_state->startJobLocked(State::JobKind::Configure, false, {}, {CMakeStep::Configure});
 }
 
+Result<void> CMakeService::configureCache(std::vector<project::CMakeCacheVariable> edits) {
+    LockGuard lock(m_state->mutex);
+    if (!m_state->model || !m_state->model->cacheAvailable)
+        return fail(ErrorCode::InvalidArgument, "configure the profile before editing its cache");
+    for (const auto& edit : edits) {
+        const auto& cache = m_state->model->cache;
+        const auto entry = std::ranges::find_if(cache, [&](const auto& value) { return value.name == edit.name; });
+        if (entry == cache.end() || entry->type != edit.type ||
+            (edit.type != "STRING" && edit.type != "BOOL" && edit.type != "PATH" && edit.type != "FILEPATH") ||
+            edit.name.empty() || edit.name.find_first_of("=:\r\n") != std::string::npos ||
+            edit.value.find('\0') != std::string::npos || edit.name == "CMAKE_EXPORT_COMPILE_COMMANDS")
+            return fail(ErrorCode::InvalidArgument, "cache entry is not editable");
+    }
+    auto started = m_state->startJobLocked(State::JobKind::Configure, false, {}, {CMakeStep::Configure});
+    if (!started)
+        return started;
+    // startJobLocked copies the active profile. Never mutate presets or the accepted model.
+    auto& variables = m_state->job->profile.cacheVariables;
+    for (auto& edit : edits) {
+        std::erase_if(variables, [&](const auto& value) { return value.name == edit.name; });
+        variables.push_back(std::move(edit));
+    }
+    return {};
+}
+
 Result<void> CMakeService::configureOwned(std::uint64_t owner) {
     if (!owner)
         return fail(ErrorCode::InvalidArgument, "owned configure requires an owner");

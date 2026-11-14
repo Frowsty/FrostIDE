@@ -57,6 +57,9 @@ public:
     [[nodiscard]] virtual Result<void> selectProfile(std::size_t index) = 0;
     // Stop the running configure or build.
     virtual void cancel() = 0;
+    [[nodiscard]] virtual Result<void> configureCache(std::vector<project::CMakeCacheVariable>) {
+        return fail(ErrorCode::Unsupported, "cache editing is unavailable");
+    }
     // The presets files shown under the CMake node, and why the presets could not be read.
     [[nodiscard]] virtual std::vector<std::string> presetFiles() const = 0;
     [[nodiscard]] virtual std::optional<std::string> presetsError() const = 0;
@@ -85,6 +88,11 @@ public:
         return m_service.setActiveProfile(index);
     }
     void cancel() override { m_service.cancel(); }
+    [[nodiscard]] Result<void> configureCache(std::vector<project::CMakeCacheVariable> edits) override {
+        if (m_allowed && !m_allowed())
+            return fail(ErrorCode::Busy, "a Lua debug launch is pending");
+        return m_service.configureCache(std::move(edits));
+    }
     [[nodiscard]] std::vector<std::string> presetFiles() const override { return m_service.presetFiles(); }
     [[nodiscard]] std::optional<std::string> presetsError() const override { return m_service.presetsError(); }
     [[nodiscard]] project::CMakePresetListing presetListing() const override { return m_service.presetListing(); }
@@ -123,6 +131,8 @@ public:
     [[nodiscard]] QString progressText() const;
     // The folder's presets as `cmake --list-presets=all` lists them, read when the profiles change.
     [[nodiscard]] const project::CMakePresetListing& presetListing() const noexcept { return m_presetListing; }
+
+    void applyCache(std::vector<project::CMakeCacheVariable> edits);
 
 public slots:
     void reload();

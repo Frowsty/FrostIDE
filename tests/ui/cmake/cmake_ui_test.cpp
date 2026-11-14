@@ -145,6 +145,11 @@ public:
         selected.push_back(index);
         return fail(ErrorCode::Busy, "the profile cannot change while a CMake job is in progress");
     }
+    Result<void> configureCache(std::vector<project::CMakeCacheVariable> edits) override {
+        cacheEdits = std::move(edits);
+        return {};
+    }
+    std::vector<project::CMakeCacheVariable> cacheEdits;
     void cancel() override { ++cancels; }
     std::vector<std::string> presetFiles() const override { return {at("CMakePresets.json")}; }
     std::optional<std::string> presetsError() const override { return std::nullopt; }
@@ -155,6 +160,43 @@ public:
     int cancels = 0;
     std::vector<std::size_t> selected;
 };
+
+TEST(CMakeToolWindow, CacheApplyRequestsConfigureAndWaitsForAReply) {
+    FakeBackend backend;
+    CMakeController controller;
+    controller.setBackend(&backend);
+    CMakeToolWindow window(controller);
+    auto model = std::make_shared<project::CMakeProject>(*sampleProject());
+    model->cacheAvailable = true;
+    model->cache = {{"OPTION", "BOOL", "OFF"}, {"HIDDEN", "INTERNAL", "secret"}};
+    const auto callbacks = controller.callbacks();
+    callbacks.onModelChanged(model);
+    ASSERT_TRUE(pumpUntil([&] { return controller.model() != nullptr; }));
+    auto* targets = window.findChild<QTreeWidget*>(QStringLiteral("cmakeTargets"));
+    auto* cache = window.findChild<QTreeWidget*>(QStringLiteral("cmakeCache"));
+    auto* apply = window.findChild<QToolButton*>(QStringLiteral("cmakeApplyCache"));
+    ASSERT_NE(targets, nullptr);
+    ASSERT_NE(cache, nullptr);
+    ASSERT_NE(apply, nullptr);
+    EXPECT_EQ(targets->topLevelItemCount(), 2);
+    ASSERT_EQ(cache->topLevelItemCount(), 2);
+    EXPECT_FALSE(cache->topLevelItem(1)->flags().testFlag(Qt::ItemIsEditable));
+    cache->topLevelItem(0)->setText(2, QStringLiteral("ON"));
+    apply->click();
+    ASSERT_EQ(backend.cacheEdits.size(), 1u);
+    EXPECT_EQ(backend.cacheEdits.front(), (project::CMakeCacheVariable{"OPTION", "BOOL", "ON"}));
+    EXPECT_EQ(controller.model()->cache.front().value, "OFF");
+    // A failed configure leaves the pending edit visible and the accepted model untouched.
+    build::CMakeConfigureOutcome failed;
+    callbacks.onConfigureFinished(failed);
+    ASSERT_TRUE(pumpUntil([&] { return !window.errorBanner()->text().isEmpty(); }));
+    EXPECT_EQ(cache->topLevelItem(0)->text(2), QStringLiteral("ON"));
+    EXPECT_EQ(controller.model()->cache.front().value, "OFF");
+    callbacks.onModelChanged(nullptr);
+    ASSERT_TRUE(pumpUntil([&] { return controller.model() == nullptr; }));
+    EXPECT_EQ(cache->topLevelItemCount(), 0);
+    EXPECT_FALSE(apply->isEnabled());
+}
 
 TEST(CMakeToolWindow, FollowsTheServiceEvents) {
     FakeBackend backend;

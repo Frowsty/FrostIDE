@@ -211,6 +211,43 @@ protected:
     std::unique_ptr<CMakeService> service;
 };
 
+TEST_F(CMakeServiceTest, CacheEditsUseTheConfigureTrustGateAndKeepAcceptedModel) {
+    installReply();
+    start();
+    ASSERT_TRUE(service->openFolder(folder()));
+    waitIdle();
+    ASSERT_NE(service->model(), nullptr);
+    const auto accepted = service->model();
+    EXPECT_FALSE(service->configureCache({{"NOT_A_CACHE_ENTRY", "STRING", "value"}}));
+    EXPECT_FALSE(service->configureCache({{"CMAKE_BUILD_TYPE", "INTERNAL", "Release"}}));
+    ASSERT_TRUE(service->configureCache({{"CMAKE_BUILD_TYPE", "STRING", "Release"}}));
+    EXPECT_EQ(service->state(), BuildState::NeedsTrust);
+    EXPECT_TRUE(launcher.launches().empty());
+    EXPECT_EQ(service->model(), accepted);
+    service->cancel();
+    waitIdle();
+    EXPECT_EQ(service->model(), accepted);
+    EXPECT_TRUE(launcher.launches().empty());
+}
+
+TEST_F(CMakeServiceTest, CacheEditsBecomeTypedConfigureArgumentsWithoutMutatingTheProfile) {
+    ASSERT_TRUE(trustStore->trust(folder()));
+    installReply();
+    auto opts = options();
+    opts.configureOnOpen = false;
+    start(opts);
+    ASSERT_TRUE(service->openFolder(folder()));
+    waitIdle();
+    const auto profile = service->activeProfile();
+    expectFirstConfigure();
+    ASSERT_TRUE(service->configureCache({{"CMAKE_BUILD_TYPE", "STRING", "Release"}}));
+    waitIdle();
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 2u);
+    EXPECT_NE(std::ranges::find(launches.back().spec.arguments, "-DCMAKE_BUILD_TYPE:STRING=Release"), launches.back().spec.arguments.end());
+    EXPECT_EQ(service->activeProfile(), profile);
+}
+
 TEST_F(CMakeServiceTest, DeferredWatcherReloadWaitsForExternalAdmission) {
     std::atomic<bool> blocked{false};
     std::atomic<int> held{0};
