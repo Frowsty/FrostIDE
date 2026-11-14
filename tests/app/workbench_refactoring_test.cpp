@@ -142,5 +142,56 @@ TEST(WorkbenchRefactoring, EditorUndoRoutesTheWholeGlobalBoundary) {
     EXPECT_EQ(dir.read("workspace/b.cpp"), "old\n");
     EXPECT_TRUE(rig.workbench->canRedoRefactoring());
 }
+
+TEST(WorkbenchRefactoring, GeneratedSourceAutoOpenEditorUndoRedoIncludesProjectMembership) {
+    WorkDir dir("create-editor-global-history");
+    dir.write("workspace/sources.txt", "existing.cpp\n");
+    WorkbenchRig rig(dir, optionsFor(dir));
+    ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace")));
+    document::RefactoringPlan plan;
+    plan.label = "Create source";
+    plan.creates = {{dir.join("workspace/generated.cpp"), "int generated;\n"}};
+    plan.disk = {{dir.join("workspace/sources.txt"), "existing.cpp\n", "existing.cpp\ngenerated.cpp\n"}};
+    const auto applied = rig.workbench->applyRefactoring(plan);
+    ASSERT_TRUE(applied) << applied.error().describe();
+    ASSERT_EQ(applied->status, document::RefactoringStatus::Applied);
+    // Same ordering as templates: publish/open only after the whole operation settles.
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/generated.cpp")));
+    auto* view = rig.view();
+    ASSERT_NE(view, nullptr);
+    EXPECT_FALSE(view->document().dirty());
+    EXPECT_EQ(view->editor().document().undoState().externalUndo, applied->token);
+    rig.show();
+    auto* editor = &view->editor();
+    editor->setFocus();
+    QApplication::processEvents();
+    sendKey(editor, Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_FALSE(io::realFileSystem().exists(dir.join("workspace/generated.cpp")).value_or(true));
+    EXPECT_EQ(dir.read("workspace/sources.txt"), "existing.cpp\n");
+    EXPECT_EQ(view->document().diskState(), document::DiskState::Deleted);
+    EXPECT_EQ(editor->document().text().text(), "int generated;\n");
+    EXPECT_EQ(editor->document().undoState().externalRedo, applied->token);
+    EXPECT_FALSE(view->document().dirty());
+    sendKey(editor, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(dir.read("workspace/generated.cpp"), "int generated;\n");
+    EXPECT_EQ(dir.read("workspace/sources.txt"), "existing.cpp\ngenerated.cpp\n");
+    EXPECT_EQ(view->document().diskState(), document::DiskState::InSync);
+    EXPECT_FALSE(view->document().dirty());
+}
+
+TEST(WorkbenchRefactoring, UntrustedCreationDoesNotPublishGeneratedFiles) {
+    WorkDir dir("create-untrusted");
+    dir.write("workspace/sources.txt", "existing.cpp\n");
+    WorkbenchRig rig(dir, optionsFor(dir));
+    document::RefactoringPlan plan;
+    plan.creates = {{dir.join("workspace/generated.cpp"), "int generated;\n"}};
+    auto refused = rig.workbench->applyRefactoring(plan);
+    ASSERT_FALSE(refused);
+    EXPECT_EQ(refused.error().code(), ErrorCode::Untrusted);
+    EXPECT_FALSE(io::realFileSystem().exists(dir.join("workspace/generated.cpp")).value_or(true));
+    EXPECT_EQ(dir.read("workspace/sources.txt"), "existing.cpp\n");
+}
+
 } // namespace
 } // namespace frost::app::test
