@@ -88,6 +88,7 @@ Result<InspectionScopeFixProposal> runInspectionScopeFixes(io::IProcessLauncher&
     io::ProcessSpec spec;
     spec.executable = std::move(helper);
     spec.arguments = {"--decode-tidy-fixes"};
+    spec.stdinMode = io::Stdio::Pipe;
     spec.killOnClose = true;
     auto child = launcher.launch(spec);
     if (!child)
