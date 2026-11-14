@@ -50,6 +50,7 @@
 #include <map>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -157,6 +158,7 @@ struct VcxprojOptions {
     // Where $(Name) references the property table does not define are looked up (see above);
     // empty uses processEnvironmentVariable. Values are used literally, never expanded again.
     EnvironmentLookup environment{};
+    std::stop_token stop; // Cooperative between item/scan steps; cannot preempt a single filesystem read/XML parse.
 };
 
 // One <Filter Include="Source Files\Core"> of a .filters file.

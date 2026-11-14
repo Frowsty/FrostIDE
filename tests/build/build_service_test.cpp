@@ -172,7 +172,8 @@ protected:
         auto opened = project::TrustStore::open(tree.fs, MemTree::path("data/trusted-roots.txt"));
         ASSERT_TRUE(opened.has_value()) << opened.error().describe();
         trustStore = std::move(*opened);
-        auto loaded = project::SolutionModel::load(tree.fs, MemTree::path("Game/Game.sln"));
+        auto loaded = project::SolutionModel::load(tree.fs, MemTree::path("Game/Game.sln"),
+                                                   {.mode = project::SolutionModelMode::NativeStatic});
         ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
         solution = std::make_shared<const project::SolutionModel>(std::move(*loaded));
     }
@@ -766,7 +767,8 @@ TEST_F(ServiceTest, StateChangesArriveInPipelineOrderOnTheServiceThread) {
 TEST(BuildServiceNames, SolutionProjectNamesIncludeTheFolders) {
     MemTree tree;
     writeGame(tree);
-    auto loaded = project::SolutionModel::load(tree.fs, MemTree::path("Game/Game.sln"));
+    auto loaded = project::SolutionModel::load(tree.fs, MemTree::path("Game/Game.sln"),
+                                               {.mode = project::SolutionModelMode::NativeStatic});
     ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
     std::vector<std::string> names;
     for (std::uint32_t i = 0; i < loaded->projects().size(); ++i) {

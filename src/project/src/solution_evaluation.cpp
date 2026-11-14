@@ -97,27 +97,32 @@ void SolutionEvaluation::publish(const std::function<void(SolutionEvaluationStat
 bool SolutionEvaluation::storeResult(EvaluatedProjectItems items, std::optional<ProjectClCommandLines> lines) {
     const std::string key = detail::pathKey(items.projectPath);
     bool changed = false;
-    auto existing = std::ranges::find_if(
-        m_results, [&key](const EvaluatedProjectItems& r) { return detail::pathKey(r.projectPath) == key; });
-    if (existing == m_results.end()) {
+    const auto existing = m_resultIndex.find(key);
+    if (existing == m_resultIndex.end()) {
+        m_resultIndex.emplace(key, m_results.size());
         m_results.push_back(std::move(items));
         changed = true;
-    } else if (!sameItems(*existing, items)) {
-        *existing = std::move(items);
+    } else if (!sameItems(m_results[existing->second], items)) {
+        m_results[existing->second] = std::move(items);
         changed = true;
     }
-    auto line = std::ranges::find_if(
-        m_clCommandLines, [&key](const ProjectClCommandLines& r) { return detail::pathKey(r.projectPath) == key; });
+    const auto line = m_commandIndex.find(key);
     if (lines) {
-        if (line == m_clCommandLines.end()) {
+        if (line == m_commandIndex.end()) {
+            m_commandIndex.emplace(key, m_clCommandLines.size());
             m_clCommandLines.push_back(std::move(*lines));
             changed = true;
-        } else if (!(*line == *lines)) {
-            *line = std::move(*lines);
+        } else if (!(m_clCommandLines[line->second] == *lines)) {
+            m_clCommandLines[line->second] = std::move(*lines);
             changed = true;
         }
-    } else if (line != m_clCommandLines.end()) {
-        m_clCommandLines.erase(line);
+    } else if (line != m_commandIndex.end()) {
+        const auto removed = line->second;
+        m_clCommandLines.erase(m_clCommandLines.begin() + static_cast<std::ptrdiff_t>(removed));
+        m_commandIndex.erase(line);
+        // Removal is uncommon; retain the observable order and repair only its shifted suffix.
+        for (std::size_t i = removed; i < m_clCommandLines.size(); ++i)
+            m_commandIndex[detail::pathKey(m_clCommandLines[i].projectPath)] = i;
         changed = true;
     }
     return changed;

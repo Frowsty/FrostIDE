@@ -58,6 +58,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -334,6 +335,9 @@ private:
     SolutionEvaluationStatus m_status FROST_GUARDED_BY(m_mutex);
     std::vector<EvaluatedProjectItems> m_results FROST_GUARDED_BY(m_mutex);
     std::vector<ProjectClCommandLines> m_clCommandLines FROST_GUARDED_BY(m_mutex);
+    // Stable publication order, indexed replacement instead of a scan per evaluated project.
+    std::unordered_map<std::string, std::size_t> m_resultIndex FROST_GUARDED_BY(m_mutex);
+    std::unordered_map<std::string, std::size_t> m_commandIndex FROST_GUARDED_BY(m_mutex);
     std::optional<io::ProcessId> m_hostPid FROST_GUARDED_BY(m_mutex);
     std::jthread m_worker; // Its stop token also ends a running MSBuild.exe of the fallback.
 };

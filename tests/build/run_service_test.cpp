@@ -253,7 +253,8 @@ protected:
         ASSERT_TRUE(opened.has_value()) << opened.error().describe();
         trustStore = std::move(*opened);
         ASSERT_TRUE(trustStore->trust(MemTree::path("Run")).has_value());
-        auto loaded = project::SolutionModel::load(tree.fs, MemTree::path("Run/Run.sln"));
+        auto loaded = project::SolutionModel::load(tree.fs, MemTree::path("Run/Run.sln"),
+                                                   {.mode = project::SolutionModelMode::NativeStatic});
         ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
         solution = std::make_shared<const project::SolutionModel>(std::move(*loaded));
     }
@@ -746,7 +747,7 @@ TEST_F(RunServiceTest, ProjectEditExcludesNoBuildRunDuringPropertyResolution) {
     ASSERT_NE(at, std::string::npos);
     sln->erase(at, buildLine.size());
     ASSERT_TRUE(tree.fs.writeFileAtomic(slnPath, *sln));
-    auto loaded = project::SolutionModel::load(tree.fs, slnPath);
+    auto loaded = project::SolutionModel::load(tree.fs, slnPath, {.mode = project::SolutionModelMode::NativeStatic});
     ASSERT_TRUE(loaded);
     solution = std::make_shared<const project::SolutionModel>(std::move(*loaded));
     auto buildService = BuildService::create(tree.fs, launcher, *trustStore, {});
