@@ -580,6 +580,22 @@ struct BuildService::State : std::enable_shared_from_this<BuildService::State> {
                                      .properties = {},
                                      .uiLanguage = {},
                                      .selectedFiles = {}};
+            request.loggerAssembly = options.loggerAssembly;
+            if (!options.binaryLogDirectory.empty()) {
+                if (auto made = fs.createDirectories(options.binaryLogDirectory); !made) {
+                    failLocked(std::move(made.error()));
+                    return;
+                }
+                auto log = io::joinPath(
+                    options.binaryLogDirectory,
+                    std::format("build-{}-{}.binlog", std::chrono::system_clock::now().time_since_epoch().count(), id));
+                if (!log) {
+                    failLocked(std::move(log.error()));
+                    return;
+                }
+                request.binaryLogPath = *log;
+                emitOutput(BuildOutputKind::Status, "Binary log: " + *log);
+            }
             if (target.action == BuildAction::Compile) {
                 // The project file itself in its mapped configuration, as Visual Studio compiles one file.
                 request.projectName.clear();
@@ -1016,6 +1032,10 @@ Result<void> BuildService::build(BuildAction action, std::optional<project::Proj
     if (!s.solution) {
         return fail(ErrorCode::InvalidArgument, "no solution is open");
     }
+    if (s.solution->approximate()) {
+        if (auto allowed = s.solution->requireExecution(); !allowed)
+            return std::unexpected(allowed.error());
+    }
     if (!s.active) {
         return fail(ErrorCode::InvalidArgument, std::format("{} has no solution configurations", s.solution->name()));
     }
@@ -1103,6 +1123,10 @@ Result<void> BuildService::compile(std::string_view filePath, BuildCompletion on
     }
     if (!s.solution) {
         return fail(ErrorCode::InvalidArgument, "no solution is open");
+    }
+    if (s.solution->approximate()) {
+        if (auto allowed = s.solution->requireExecution(); !allowed)
+            return std::unexpected(allowed.error());
     }
     if (!s.active) {
         return fail(ErrorCode::InvalidArgument, std::format("{} has no solution configurations", s.solution->name()));

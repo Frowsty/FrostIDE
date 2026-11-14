@@ -14,6 +14,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="VsProbe.cs" />
+    <Compile Include="FrostBuildLogger.cs" />
     <Compile Include="ProjectEvaluator.cs" />
     <Compile Include="ProjectFileEdits.cs" />
     <Compile Include="SolutionEdits.cs" />

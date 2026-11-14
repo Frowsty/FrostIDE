@@ -32,6 +32,7 @@ frost_add_test(lang_unit_tests
         cpp_rename_plan_test.cpp
         clangd_actions_test.cpp
         cmake_compile_commands_unit_test.cpp
+        cmake_language_test.cpp
         compile_commands_test.cpp
         completion_test.cpp
         clangd_locator_test.cpp
@@ -42,6 +43,7 @@ frost_add_test(lang_unit_tests
         engine_discovery_process_test.cpp
         features_test.cpp
         fuzzy_snippet_test.cpp
+        json_schema_test.cpp
         json_test.cpp
         jsonrpc_test.cpp
         lsp_client_test.cpp

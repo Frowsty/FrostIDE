@@ -614,6 +614,11 @@ Result<std::string> applySlnxConfigurationEdits(std::string_view content, const 
 
 Result<void> writeSolutionConfigurationEdits(io::IFileSystem& fs, const SolutionModel& model,
                                              std::span<const ConfigurationMappingEdit> edits) {
+    if (!edits.empty() && model.approximate()) {
+        if (auto allowed = model.requireProjectMutation(); !allowed)
+            return std::unexpected(allowed.error());
+    }
+
     auto original = fs.readFile(model.path());
     if (!original) {
         return std::unexpected(std::move(original.error()));

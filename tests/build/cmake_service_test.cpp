@@ -211,6 +211,84 @@ protected:
     std::unique_ptr<CMakeService> service;
 };
 
+TEST_F(CMakeServiceTest, CacheEditsUseTheConfigureTrustGateAndKeepAcceptedModel) {
+    installReply();
+    start();
+    ASSERT_TRUE(service->openFolder(folder()));
+    waitIdle();
+    ASSERT_NE(service->model(), nullptr);
+    const auto accepted = service->model();
+    EXPECT_FALSE(service->configureCache({{"NOT_A_CACHE_ENTRY", "STRING", "value"}}));
+    EXPECT_FALSE(service->configureCache({{"CMAKE_BUILD_TYPE", "INTERNAL", "Release"}}));
+    ASSERT_TRUE(service->configureCache({{"CMAKE_BUILD_TYPE", "STRING", "Release"}}));
+    EXPECT_EQ(service->state(), BuildState::NeedsTrust);
+    EXPECT_TRUE(launcher.launches().empty());
+    EXPECT_EQ(service->model(), accepted);
+    service->cancel();
+    waitIdle();
+    EXPECT_EQ(service->model(), accepted);
+    EXPECT_TRUE(launcher.launches().empty());
+}
+
+TEST_F(CMakeServiceTest, CacheEditsBecomeTypedConfigureArgumentsWithoutMutatingTheProfile) {
+    ASSERT_TRUE(trustStore->trust(folder()));
+    installReply();
+    auto opts = options();
+    opts.configureOnOpen = false;
+    start(opts);
+    ASSERT_TRUE(service->openFolder(folder()));
+    waitIdle();
+    const auto profile = service->activeProfile();
+    expectFirstConfigure();
+    ASSERT_TRUE(service->configureCache({{"CMAKE_BUILD_TYPE", "STRING", "Release"}}));
+    waitIdle();
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 2u);
+    EXPECT_NE(std::ranges::find(launches.back().spec.arguments, "-DCMAKE_BUILD_TYPE:STRING=Release"),
+              launches.back().spec.arguments.end());
+    EXPECT_EQ(service->activeProfile(), profile);
+}
+
+TEST_F(CMakeServiceTest, DebugReloadUsesConfigurePipelineAndSavesBeforeLaunch) {
+    auto opts = options();
+    opts.configureOnOpen = false;
+    ASSERT_TRUE(trustStore->trust(folder()));
+    expectFirstConfigure({.neverExits = true});
+    start(std::move(opts));
+    ASSERT_TRUE(service->openFolder(folder()));
+    std::atomic<bool> saved{false};
+    std::promise<void> connected;
+    service->setSaveAllHook([&](auto done) {
+        saved = true;
+        done(Result<void>{});
+    });
+    ASSERT_TRUE(service->configureDebug("private-debug-endpoint", [&] { connected.set_value(); }));
+    ASSERT_EQ(connected.get_future().wait_for(kWait), std::future_status::ready);
+    ASSERT_TRUE(saved);
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 2U);
+    const auto& args = launches.back().spec.arguments;
+    EXPECT_NE(std::ranges::find(args, "--debugger"), args.end());
+    EXPECT_NE(std::ranges::find(args, "--debugger-pipe"), args.end());
+    EXPECT_NE(std::ranges::find(args, "private-debug-endpoint"), args.end());
+    service->cancel();
+    waitIdle();
+}
+
+TEST_F(CMakeServiceTest, DebugReloadWaitsForTrustAndCannotRunCallbackEarly) {
+    auto opts = options();
+    opts.configureOnOpen = false;
+    start(std::move(opts));
+    ASSERT_TRUE(service->openFolder(folder()));
+    std::atomic<bool> ready{false};
+    ASSERT_TRUE(service->configureDebug("private-debug-endpoint", [&] { ready = true; }));
+    EXPECT_EQ(service->state(), BuildState::NeedsTrust);
+    EXPECT_TRUE(launcher.launches().empty());
+    EXPECT_FALSE(ready);
+    service->cancel();
+    waitIdle();
+}
+
 TEST_F(CMakeServiceTest, DeferredWatcherReloadWaitsForExternalAdmission) {
     std::atomic<bool> blocked{false};
     std::atomic<int> held{0};
@@ -1081,6 +1159,56 @@ TEST_F(CMakeServiceTest, BuildsCleansAndRebuildsTargets) {
     EXPECT_EQ(events.builds.size(), 3U);
     EXPECT_NE(std::ranges::find(events.buildLines, "../src/core.c:1:30: error: use of undeclared identifier 'y'"),
               events.buildLines.end());
+}
+
+TEST_F(CMakeServiceTest, NamedInstallAndSingleFileUseTheNativeBuildPipeline) {
+    ASSERT_TRUE(trustStore->trust(folder()));
+    installReply();
+    start();
+    expectFirstConfigure();
+    ASSERT_TRUE(service->openFolder(folder()));
+    waitIdle();
+    int saves = 0;
+    service->setSaveAllHook([&](SaveAllCompletion done) {
+        ++saves;
+        done({});
+    });
+    tree.write("tiny/cmake-build-debug/compile_commands.json", R"([
+      {"directory":".","file":"../src/core.c","arguments":["cc","-o","CMakeFiles/core.dir/src/core.c.o","-c","../src/core.c"]}
+    ])");
+    ASSERT_TRUE(service->canCompileFile(MemTree::path("tiny/src/core.c")));
+    launcher.expect({.expectExecutable = cmake()});
+    ASSERT_TRUE(service->compileFile(MemTree::path("tiny/src/core.c")));
+    waitIdle();
+    ASSERT_EQ(launcher.launches().size(), 3u);
+    EXPECT_EQ(launcher.launches().back().spec.arguments,
+              (std::vector<std::string>{"--build", buildDir(), "--target", "CMakeFiles/core.dir/src/core.c.o"}));
+    launcher.expect({.expectExecutable = cmake()});
+    ASSERT_TRUE(service->buildNamedTarget("install"));
+    waitIdle();
+    EXPECT_EQ(launcher.launches().back().spec.arguments,
+              (std::vector<std::string>{"--build", buildDir(), "--target", "install"}));
+    launcher.expect({.expectExecutable = ninja()});
+    ASSERT_TRUE(service->buildFile(BuildAction::Clean, MemTree::path("tiny/src/core.c")));
+    waitIdle();
+    EXPECT_EQ(launcher.launches().back().spec.arguments,
+              (std::vector<std::string>{"-C", buildDir(), "-t", "clean", "CMakeFiles/core.dir/src/core.c.o"}));
+    launcher.expect({.expectExecutable = ninja()});
+    launcher.expect({.expectExecutable = cmake(), .exitCode = 1, .stderrBytes = "compiler failed\n"});
+    ASSERT_TRUE(service->buildFile(BuildAction::Rebuild, MemTree::path("tiny/src/core.c")));
+    waitIdle();
+    const auto rebuildLaunches = launcher.launches();
+    EXPECT_EQ(rebuildLaunches[rebuildLaunches.size() - 2].spec.executable, ninja());
+    EXPECT_EQ(rebuildLaunches.back().spec.arguments,
+              (std::vector<std::string>{"--build", buildDir(), "--target", "CMakeFiles/core.dir/src/core.c.o"}));
+    {
+        LockGuard lock(events.mutex);
+        ASSERT_FALSE(events.builds.empty());
+        EXPECT_FALSE(events.builds.back().succeeded());
+    }
+    EXPECT_EQ(saves, 4);
+    EXPECT_FALSE(service->buildNamedTarget("--verbose"));
+    EXPECT_TRUE(launcher.launches().back().spec.killOnClose);
 }
 
 TEST_F(CMakeServiceTest, ReconfiguresWhenACMakeFileChanges) {

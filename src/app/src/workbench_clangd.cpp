@@ -34,6 +34,7 @@
 #include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "standalone_build_backend.hpp"
 #include "unity_control.hpp"
 #include "workbench_project_helpers.hpp"
 #include <QCoreApplication>
@@ -141,6 +142,8 @@ void Workbench::startProjectEvaluation(const std::string& root) {
             m_explorer->setSolution(m_solution);
     }
     stopProjectEvaluation();
+    if (m_solution && m_solution->approximate())
+        return; // Trust does not make Linux static parsing into an MSBuild evaluation.
     const auto admission = m_services.trust.snapshot(root);
     m_projectTrustRevision = admission.revision;
     std::string configuration;
@@ -316,6 +319,12 @@ void Workbench::startClangd(const std::string& root) {
                 return current ? current->activeBuildDirectory() : std::string();
             });
         }
+    } else if (m_standalone && m_standalone->model().database) {
+        // An explicit standalone model pins clangd to the discovered database, rather than a
+        // stale database in another conventional build directory. This provider rereads existence.
+        const std::string directory(io::parentPath(*m_standalone->model().database));
+        m_compileCommands = std::make_shared<lang::BuildDirectoryCompileCommandsProvider>(
+            m_services.fs, [directory] { return directory; });
     } else if (m_solution && cache) {
         lang::MsBuildProviderOptions options;
         options.retirement = m_commandsRetirement;
@@ -731,6 +740,11 @@ void Workbench::refreshLiveProblems() {
         auto managed = m_managed->diagnostics().problems();
         live.insert(live.end(), std::make_move_iterator(managed.begin()), std::make_move_iterator(managed.end()));
     }
+    if (m_bridge)
+        for (const auto* view : m_editors->uniqueDocumentViews()) {
+            auto json = m_bridge->jsonDiagnostics(view->path());
+            live.insert(live.end(), std::make_move_iterator(json.begin()), std::make_move_iterator(json.end()));
+        }
     rows.reserve(live.size());
     for (lang::LiveDiagnostic& d : live) {
         build::BuildDiagnostic row;

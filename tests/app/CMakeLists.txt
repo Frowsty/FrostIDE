@@ -24,7 +24,7 @@
 
 frost_add_test(app_tests QT
     SOURCES command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp stall_hooks_test.cpp
-            workbench_project_helpers_test.cpp
+            workbench_project_helpers_test.cpp cmake_kit_test.cpp standalone_build_backend_test.cpp
     DEPS frost::app frost::diag frost::io)
 # tests/support/scratch_dir.hpp (the persistent services' data directory).
 target_include_directories(app_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

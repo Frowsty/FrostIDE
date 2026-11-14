@@ -16,6 +16,7 @@
 #pragma once
 
 #include "frost/core/error.hpp"
+#include "frost/lang/cmake_language.hpp"
 #include "frost/lang/lsp_client.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/ui/lang/editor_language_host.hpp"
@@ -57,6 +58,8 @@ public:
     void setManagedServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setManagedServer(std::move(server)); }
     void setActivePath(std::string_view path) { m_server.setActivePath(path); }
 
+    void closeJsonDocument(std::string_view path) { m_json->removeDocument(path); }
+    [[nodiscard]] std::vector<lang::LiveDiagnostic> jsonDiagnostics(std::string_view path) const;
     // ILspRequester: the server for the document.
     [[nodiscard]] sched::Task<Result<lang::Json>> request(std::string method, lang::Json params,
                                                           std::stop_token token = {}) override;
@@ -99,6 +102,8 @@ private:
 
     Workbench& m_workbench;
     StableLspRequester m_server;
+    std::shared_ptr<lang::JsonSchemaService> m_json = std::make_shared<lang::JsonSchemaService>();
+    std::shared_ptr<lang::CMakeLanguageService> m_cmakeLanguage;
     lang::WorkspaceEditApplier m_applier;
 };
 

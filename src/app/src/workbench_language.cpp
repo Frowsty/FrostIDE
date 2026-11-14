@@ -20,6 +20,7 @@
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 
+#include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
 #include "language_bridge.hpp"
 #include <QCoreApplication>
@@ -72,9 +73,38 @@ ByteOffset mapThrough(ByteOffset offset, std::span<const lang::ByteEdit> edits) 
 
 LanguageBridge::LanguageBridge(Workbench& workbench)
     : m_workbench(workbench), m_applier(static_cast<lang::IWorkspaceDocuments&>(*this), workbench.m_services.fs,
-                                        lang::PositionEncoding::Utf16) {}
+                                        lang::PositionEncoding::Utf16) {
+    m_server.setJsonServer(m_json);
+    // Borrowed services outlive the workbench; its pool drains outstanding requests on shutdown.
+    m_cmakeLanguage = std::make_shared<lang::CMakeLanguageService>(
+        *workbench.m_pool, [fs = &workbench.m_services.fs](std::string_view path, std::size_t limit) {
+            return fs->readFileSnapshot(path, limit);
+        });
+    m_server.setCMakeServer(m_cmakeLanguage);
+}
 
 LanguageBridge::~LanguageBridge() = default;
+std::vector<lang::LiveDiagnostic> LanguageBridge::jsonDiagnostics(std::string_view path) const {
+    if (!lang::hasBundledJsonSchema(path))
+        return {};
+    const auto* view = m_workbench.m_editors->find(path);
+    if (!view)
+        return {};
+    m_json->updateDocument(std::string(path), view->editor().editor().text());
+    return m_json->diagnostics(path);
+}
+void Workbench::syncJsonDocument(DocumentEditorView& view) {
+    if (!m_bridge || !lang::hasBundledJsonSchema(view.path()))
+        return;
+    lang::FileDiagnostics set;
+    set.file = view.path();
+    set.diagnostics = m_bridge->jsonDiagnostics(view.path());
+    set.textVersion = view.editor().editor().text().version();
+    for (auto* peer : m_editors->views())
+        if (lang::documentKey(peer->path()) == lang::documentKey(view.path()))
+            peer->editor().setDiagnostics(ui::EditorDiagnosticSource::Live, ui::lang::toEditorDiagnostics(set));
+    refreshLiveProblems();
+}
 
 lang::IWorkspaceEditApplier& LanguageBridge::applier() noexcept { return *this; }
 
@@ -157,6 +187,24 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
 // --- ILspRequester ---
 
 sched::Task<Result<lang::Json>> LanguageBridge::request(std::string method, lang::Json params, std::stop_token token) {
+    if (const auto* doc = params.find("textDocument")) {
+        auto path = lang::uriToPath(doc->stringAt("uri"));
+        if (path && lang::isCMakeSource(*path)) {
+            lang::CMakeLanguageInput input;
+            input.path = *path;
+            for (const auto& [openPath, text] : openDocuments()) {
+                if (lang::documentKey(openPath) == lang::documentKey(*path))
+                    input.source = text;
+                else if (lang::isCMakeSource(openPath))
+                    input.openInputs.emplace_back(openPath, text);
+            }
+            if (m_workbench.m_cmake)
+                input.model = m_workbench.m_cmake->shownModel();
+            // Capture snapshots/model only. Bounded file reads and flattening run on the pool.
+            m_cmakeLanguage->setInput(std::move(input));
+            return m_cmakeLanguage->request(std::move(method), std::move(params), token);
+        }
+    }
     return m_server.request(std::move(method), std::move(params), std::move(token));
 }
 
@@ -183,12 +231,19 @@ std::optional<text::Snapshot> LanguageBridge::snapshot() const {
     if (editor == nullptr) {
         return std::nullopt;
     }
-    return editor->editor().text();
+    auto text = editor->editor().text();
+    if (lang::hasBundledJsonSchema(documentPath()))
+        m_json->updateDocument(documentPath(), text);
+    return text;
 }
 
 std::int64_t LanguageBridge::documentVersion() const {
     const lang::ClangdService* clangd = m_workbench.m_clangd.get();
     const std::string path = documentPath();
+    if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path)) {
+        const auto text = snapshot();
+        return text ? static_cast<std::int64_t>(text->version()) : 0;
+    }
     if (isManagedSource(path))
         return m_workbench.m_managed ? m_workbench.m_managed->documentVersion(path).value_or(0) : 0;
     if (isLuaSource(path))
@@ -471,6 +526,8 @@ sched::Task<void> readCompileDatabaseTask(io::IFileSystem* fs, std::string datab
 
 ui::lang::ServerReadiness Workbench::languageReadiness(std::string_view path) {
     using Readiness = ui::lang::ServerReadiness;
+    if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path))
+        return Readiness::Unknown;
     if (isLuaSource(path))
         return m_lua && m_lua->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;
     if (isManagedSource(path))

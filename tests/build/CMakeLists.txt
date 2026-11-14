@@ -33,6 +33,7 @@ frost_add_test(build_unit_tests
         build_session_test.cpp
         cmake_service_test.cpp
         cmake_toolchain_test.cpp
+        dependencies_test.cpp
         diagnostic_test.cpp
         json_test.cpp
         line_splitter_test.cpp
@@ -129,3 +130,14 @@ if(WIN32)
         FROST_TEST_CMAKE="${CMAKE_COMMAND}"
         FROST_TEST_NINJA="${CMAKE_MAKE_PROGRAM}")
 endif()
+
+
+# Authored local-feed acceptance; provision tools explicitly. Missing tools fail, never skip.
+frost_add_test(build_dependencies_real_tests
+    SOURCES dependencies_real_test.cpp
+    DEPS frost::build frost::project frost::io
+    LABELS integration dependencies
+    TIMEOUT 1800)
+target_compile_definitions(build_dependencies_real_tests PRIVATE
+    FROST_DEPENDENCY_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/dependencies"
+    FROST_DEPENDENCY_WORK_PATH="${CMAKE_CURRENT_BINARY_DIR}/dependency-work")

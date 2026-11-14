@@ -857,6 +857,10 @@ Result<RunId> RunService::State::startRun(std::optional<project::ProjectId> proj
     if (!solution) {
         return fail(ErrorCode::InvalidArgument, "no solution is open");
     }
+    if (solution->approximate()) {
+        if (auto allowed = solution->requireExecution(); !allowed)
+            return std::unexpected(allowed.error());
+    }
     if (!options.msbuildRunSupported) {
         return fail(ErrorCode::Unsupported,
                     "running MSBuild projects needs Windows; running CMake projects comes with a later milestone");

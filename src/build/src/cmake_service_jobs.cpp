@@ -3,6 +3,8 @@
 // CMakeService (see frost/build/cmake_service.hpp): the job execution pipeline (trust, Save All,
 // tool and MSVC environment discovery, configure/clean/build steps, and outcome publication).
 
+#include "frost/project/standalone_project.hpp"
+
 #include "cmake_service_internal.hpp"
 
 #include <algorithm>
@@ -68,6 +70,9 @@ Result<void> CMakeService::State::startJobLocked(JobKind kind, bool automatic, C
             wrapper = candidate;
         }
         if (wrapper) {
+            if (!request.file.empty())
+                return fail(ErrorCode::Unsupported,
+                            "single-file compilation is unavailable through a personal build wrapper");
             if (!model)
                 return fail(ErrorCode::InvalidArgument,
                             "configure the selected profile before using its build wrapper");
@@ -228,6 +233,12 @@ void CMakeService::State::prepare(std::uint64_t id) {
     {
         LockGuard lock(mutex);
         if (!isCurrentLocked(id)) {
+            return;
+        }
+        if (!job->debuggerEndpoint.empty() && !job->debuggerSaved) {
+            job->debuggerSaved = true;
+            setStateLocked(BuildState::SavingDocuments);
+            post([this, id] { saveDocuments(id); });
             return;
         }
         admission = job->admission;
@@ -418,6 +429,11 @@ void CMakeService::State::runNextStepLocked() {
             return;
         }
         spec.arguments = std::move(*arguments);
+        if (!job->debuggerEndpoint.empty()) {
+            spec.arguments.emplace_back("--debugger");
+            spec.arguments.emplace_back("--debugger-pipe");
+            spec.arguments.push_back(job->debuggerEndpoint);
+        }
         spec.workingDirectory = job->sourceDir;
         emit([this, profile = job->profile.name] {
             if (callbacks.onConfigureStarted) {
@@ -450,12 +466,58 @@ void CMakeService::State::runNextStepLocked() {
         emitWrapperOutputLocked(BuildOutputKind::Status,
                                 std::format("{} started with the configured wrapper", toString(step)));
     } else {
+        if (!job->request.file.empty()) {
+            auto database = io::joinPath(job->profile.buildDirectory, "compile_commands.json");
+            if (!database) {
+                finishJobLocked(database.error());
+                return;
+            }
+            auto status = fs.status(*database);
+            if (!status) {
+                finishJobLocked(status.error());
+                return;
+            }
+            if (status->size > 64 * 1024 * 1024) {
+                finishJobLocked(Error(ErrorCode::OutOfRange, "compilation database exceeds 64 MiB"));
+                return;
+            }
+            auto bytes = fs.readFile(*database);
+            if (!bytes) {
+                finishJobLocked(bytes.error());
+                return;
+            }
+            if (bytes->size() > 64 * 1024 * 1024) {
+                finishJobLocked(Error(ErrorCode::OutOfRange, "compilation database exceeds 64 MiB"));
+                return;
+            }
+            auto target =
+                project::compilationDatabaseObjectTarget(*bytes, job->profile.buildDirectory, job->request.file);
+            if (!target) {
+                finishJobLocked(target.error());
+                return;
+            }
+            job->request.targetName = std::move(*target);
+        }
         std::vector<std::string> targets;
         if (!job->request.targetName.empty()) {
             targets.push_back(job->request.targetName);
         }
-        spec.arguments = project::cmakeBuildArguments(job->profile, targets, step == CMakeStep::Clean,
+        auto buildProfile = job->profile;
+        if (!job->request.file.empty())
+            buildProfile.buildCleanFirst = false;
+        spec.arguments = project::cmakeBuildArguments(buildProfile, targets, step == CMakeStep::Clean,
                                                       static_cast<int>(options.buildJobs));
+        if (!job->request.file.empty() && step == CMakeStep::Clean) {
+            if (job->tools.ninja.empty()) {
+                finishJobLocked(Error(ErrorCode::NotFound, "Ninja unavailable for single-file clean"));
+                return;
+            }
+            spec.executable = job->tools.ninja;
+            spec.arguments = {"-C", job->profile.buildDirectory, "-t", "clean", job->request.targetName};
+            if (project::isMultiConfigGenerator(job->profile.generator))
+                spec.arguments.insert(spec.arguments.begin() + 2,
+                                      {"-f", "build-" + job->profile.effectiveConfiguration() + ".ninja"});
+        }
         spec.workingDirectory = job->profile.buildDirectory;
         // Without a chosen target the profile's build preset decides (its "targets").
         std::string what = std::format("target {}", job->request.targetName);
@@ -524,6 +586,11 @@ void CMakeService::State::runNextStepLocked() {
     BuildSessionOptions sessionOptions;
     sessionOptions.parser =
         configure ? OutputParserFactory(&makeCMakeOutputParser) : OutputParserFactory(&makeCompilerOutputParser);
+    const auto launchTrust = trustStore.snapshot(job->sourceDir);
+    if (!launchTrust.trusted || launchTrust.revision != job->trustRevision) {
+        finishJobLocked(Error(ErrorCode::Cancelled, "project trust changed before CMake process launch"));
+        return;
+    }
     auto session = BuildSession::start(launcher, spec, true, std::move(sessionCallbacks), systemClock(),
                                        std::move(sessionOptions));
     if (!session) {
@@ -531,6 +598,8 @@ void CMakeService::State::runNextStepLocked() {
         return;
     }
     job->session = std::move(*session);
+    if (configure && job->debuggerReady)
+        emit(std::move(job->debuggerReady));
     setStateLocked(BuildState::Running);
 }
 

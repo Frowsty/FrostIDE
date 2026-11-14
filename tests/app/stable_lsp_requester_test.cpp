@@ -162,4 +162,31 @@ TEST(StableLspRequester, FormattingRoutesAcrossMixedLanguageTabs) {
     EXPECT_EQ(hierarchy->asInteger(), 3);
 }
 
+TEST(StableLspRequester, OfflineJsonAndCMakeKeepTheirOwnRouteAcrossTabSwitch) {
+    frost::app::StableLspRequester requester;
+    requester.setServer(std::make_shared<TestServer>(1));
+    requester.setJsonServer(std::make_shared<TestServer>(3));
+    requester.setCMakeServer(std::make_shared<TestServer>(4));
+#ifdef _WIN32
+    const std::string base = "C:/project/";
+#else
+    const std::string base = "/project/";
+#endif
+    auto params = [&](std::string_view name) {
+        return frost::lang::Json::object().set(
+            "textDocument",
+            frost::lang::Json::object().set("uri", frost::lang::pathToUri(base + std::string(name)).value()));
+    };
+    requester.setActivePath(base + "CMakePresets.json");
+    auto json = requester.request("textDocument/completion", params("CMakePresets.json"));
+    requester.setActivePath(base + "CMakeLists.txt");
+    const auto cmake = frost::sched::syncWait(requester.request("textDocument/completion", params("CMakeLists.txt")));
+    const auto jsonResult = frost::sched::syncWait(std::move(json));
+    ASSERT_TRUE(jsonResult);
+    ASSERT_TRUE(cmake);
+    EXPECT_EQ(jsonResult->asInteger(), 3);
+    EXPECT_EQ(cmake->asInteger(), 4);
+    EXPECT_FALSE(frost::sched::syncWait(requester.request("textDocument/completion", params("arbitrary.json"))));
+}
+
 } // namespace

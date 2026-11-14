@@ -39,6 +39,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace frost::project {
@@ -51,6 +52,7 @@ enum class ProjectEditKind : unsigned char {
     RenameFiles,   // Changes the Include of file items in both (the files were renamed on disk).
     AddProject,    // Adds a .vcxproj to a .sln or .slnx, at the solution root.
     RemoveProject, // Removes a project from a .sln or .slnx (and the other projects' dependencies on it).
+    SetProperties, // Configuration-scoped property pages via MSBuild construction API.
 };
 
 // One edit. Paths are absolute.
@@ -61,8 +63,10 @@ struct ProjectEdit {
     // AddFiles/RemoveFiles: the files; RenameFiles: their old paths.
     std::vector<std::string> files = {};
     std::vector<std::string> renamedTo = {}; // RenameFiles: the new paths, pairwise with `files`.
-    std::string filter = {};                 // AddFiles: a filter the .filters file defines; "" for none.
-    std::string project = {};                // AddProject/RemoveProject: the project file.
+    bool earlyProperties = false;            // Property group before Microsoft.Cpp.props (toolchain/dependency hooks).
+    std::vector<std::pair<std::string, std::string>> propertyUpdates = {}; // Prop.Name or ItemType.Metadata.
+    std::string filter = {};  // AddFiles: a filter the .filters file defines; "" for none.
+    std::string project = {}; // AddProject/RemoveProject: the project file.
     // File edits: the project configuration the solution's active configuration maps to; the
     // helper evaluates every configuration the project declares in any case.
     std::string configuration = {};

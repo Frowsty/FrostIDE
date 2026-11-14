@@ -9,12 +9,15 @@
 
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
+#include "frost/debug/cmake_dap.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/project/standalone_project.hpp"
 #include "frost/settings/keys.hpp"
+#include "frost/ui/debug_controller.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
@@ -34,11 +37,14 @@
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "project_edit_process.hpp"
+#include "standalone_build_backend.hpp"
 #include "unity_control.hpp"
 #include "workbench_project_helpers.hpp"
+#include "workbench_source_rename_preview.hpp"
 #include <QDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QPointer>
 #include <QTimer>
 
 #include <algorithm>
@@ -85,6 +91,8 @@ Result<void> Workbench::openCMakeProject(std::string_view path) {
 }
 
 Result<void> Workbench::openPath(std::string_view path, FileLocation at) {
+    if (m_solutionLoading || m_shutDown)
+        return fail(ErrorCode::Busy, "A solution is loading or the Workbench is closing");
     // The registry's canonical spelling (one document per file), the lexical form for a missing one.
     const std::string canonical = m_documentRegistry->canonicalize(path);
     Result<io::FileStatus> status = m_services.fs.status(canonical);
@@ -96,6 +104,10 @@ Result<void> Workbench::openPath(std::string_view path, FileLocation at) {
         return openFolder(canonical);
     }
     if (extensionOf(canonical) == ".frostproj")
+        return openFolder(std::string(io::parentPath(canonical)), false, canonical);
+    const auto marker = io::fileName(canonical);
+    if (!hasProject() &&
+        (marker == "compile_commands.json" || marker == "Makefile" || marker == "makefile" || marker == "GNUmakefile"))
         return openFolder(std::string(io::parentPath(canonical)), false, canonical);
     if (isSolutionFile(canonical)) {
         return openSolution(canonical);
@@ -126,8 +138,13 @@ Result<void> Workbench::openExternalProject(std::string_view path) {
         return std::unexpected(std::move(status.error()));
     if (status->type == io::FileType::Regular && extensionOf(canonical) == ".frostproj")
         return openPath(canonical);
+    const auto marker = io::fileName(canonical);
+    if (status->type == io::FileType::Regular &&
+        (marker == "compile_commands.json" || marker == "Makefile" || marker == "makefile" || marker == "GNUmakefile"))
+        return openFolder(std::string(io::parentPath(canonical)), false, canonical);
     if (status->type != io::FileType::Directory)
-        return fail(ErrorCode::InvalidArgument, "--project requires a directory or .frostproj file");
+        return fail(ErrorCode::InvalidArgument,
+                    "--project requires a directory, .frostproj, Makefile or compile_commands.json");
     auto entries = m_services.fs.listDirectory(canonical);
     if (!entries)
         return std::unexpected(std::move(entries.error()));
@@ -148,14 +165,27 @@ Result<void> Workbench::openExternalProject(std::string_view path) {
 }
 
 Result<void> Workbench::openSolution(const std::string& path) {
+    if (m_solutionLoading || m_shutDown)
+        return fail(ErrorCode::Busy, "A solution is loading or the Workbench is closing");
     if (m_solution && lang::documentKey(m_solution->path()) == lang::documentKey(path)) {
         transitionLauncherToMainWindow();
         offerProjectTrust();
         return {}; // Already the project.
     }
-    Result<project::SolutionModel> loaded = project::SolutionModel::load(
-        m_services.fs, path, {.cppHierarchy = m_cppHierarchyMode, .unloadedProjectPaths = m_unloadedProjectPaths});
+    QPointer<Workbench> owner(this);
+    m_solutionLoading = true;
+    m_solutionLoadStop = std::stop_source{};
+    auto loaded = loadSolutionInBackground(
+        m_window, m_services.fs, path,
+        {.cppHierarchy = m_cppHierarchyMode, .unloadedProjectPaths = m_unloadedProjectPaths}, m_solutionLoadStop);
+    if (!owner)
+        return fail(ErrorCode::Cancelled, "Workbench closed while reading the solution");
+    m_solutionLoading = false;
+    if (m_shutDown)
+        return fail(ErrorCode::Cancelled, "Workbench shut down while reading the solution");
     if (!loaded) {
+        if (loaded.error().code() == ErrorCode::Cancelled)
+            return std::unexpected(std::move(loaded.error()));
         notify(text("Cannot open %1").arg(qs(path)), qs(loaded.error().message()), ui::NotificationKind::Error);
         return std::unexpected(std::move(loaded.error()));
     }
@@ -164,6 +194,9 @@ Result<void> Workbench::openSolution(const std::string& path) {
     }
     auto model = std::make_shared<const project::SolutionModel>(std::move(*loaded));
     m_solution = model;
+    if (model->approximate())
+        notify(text("Approximate solution"), qs(std::string(model->approximationNotice())),
+               ui::NotificationKind::Warning);
     if (auto opened = m_build->openSolution(model); !opened) {
         // The explorer still shows the solution; building is unavailable.
         notify(text("The build service cannot open %1").arg(qs(model->name())), qs(opened.error().message()),
@@ -207,6 +240,8 @@ Result<void> Workbench::openSolution(const std::string& path) {
 }
 
 Result<void> Workbench::openFolder(const std::string& path, bool discoverSolution, std::string recentPath) {
+    if (m_solutionLoading || m_shutDown)
+        return fail(ErrorCode::Busy, "A solution is loading or the Workbench is closing");
     // A folder with one solution opens that solution (.sln before .slnx of the same name).
     if (Result<std::vector<io::DirEntry>> entries = m_services.fs.listDirectory(path); discoverSolution && entries) {
         std::vector<std::string> solutions;
@@ -228,7 +263,7 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
     }
     if (recentPath.empty())
         recentPath = path;
-    if (m_projectRoot == path && !m_solution) {
+    if (m_projectRoot == path && !m_solution && (recentPath == path || m_projectIdentity == recentPath)) {
         // The same directory may have been opened by a folder or a .frostproj. Preserve the
         // caller's explicit choice for Open Recent and the next process's session restore.
         if (auto added = addRecentProject(m_services.settings, recentPath); !added) {
@@ -248,7 +283,12 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
         return fail(ErrorCode::Cancelled, "the current project could not be closed");
     }
     const auto lists = io::joinPath(path, "CMakeLists.txt");
-    if (m_window && lists && m_services.fs.exists(*lists).value_or(false)) {
+    // CMK-17: ordinary folders remain lightweight. No Make recipe is evaluated by opening one.
+    // CMake wins for folder discovery; explicit Make/database markers select the standalone model.
+    const bool explicitStandalone = io::fileName(recentPath) == "compile_commands.json" ||
+                                    io::fileName(recentPath) == "Makefile" || io::fileName(recentPath) == "makefile" ||
+                                    io::fileName(recentPath) == "GNUmakefile";
+    if (m_window && !explicitStandalone && lists && m_services.fs.exists(*lists).value_or(false)) {
         m_cmake = std::make_unique<CMakeIntegration>(
             m_services.fs, m_services.launcher, m_services.trust, m_services.settings, *m_build, *m_buildService,
             *m_window, *m_runWindow, *m_runManager, m_options.cmakeStatePath,
@@ -263,9 +303,39 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
                     restartClangdIfCMakeStateChanged();
             });
         connectCMakeRunConfigurations(); // RUN-2/RUN-3: the targets' run configurations.
+        m_cmake->setConfigureDebugger([this](std::string endpoint, std::string root,
+                                             std::function<void()> cancel) -> Result<void> {
+            if (!m_debug)
+                return fail(ErrorCode::Unsupported, "Debugger UI is unavailable");
+            debug::DebugTarget target;
+            target.name = "CMake configure";
+            target.program = io::joinPath(root, "CMakeLists.txt").value_or("");
+            target.trustRoots = {root};
+            auto admission = [trust = &m_services.trust, root] { return trust->requireTrusted(root); };
+            return m_debug->startAdapterTarget(target, debug::cmakeDapFactory(std::move(endpoint), std::move(cancel)),
+                                               rpc::Json::object(), "cmake", debug::DebugTargetMode::Launch, false,
+                                               std::move(admission));
+        });
         if (auto opened = m_cmake->open(path); !opened) {
             m_cmake.reset();
             return std::unexpected(std::move(opened.error()));
+        }
+    }
+    if (!m_cmake) {
+        auto standalone = project::readStandaloneProject(m_services.fs, path, false);
+        if (!standalone)
+            return std::unexpected(standalone.error());
+        if (*standalone) {
+            const auto marker = io::fileName(recentPath);
+            if (marker == "Makefile" || marker == "makefile" || marker == "GNUmakefile")
+                (**standalone).makefile = recentPath;
+            m_standalone = std::make_unique<StandaloneBuildBackend>(
+                std::move(**standalone), m_services.fs, m_services.launcher, m_services.trust, *m_buildService);
+            const QPointer<StandaloneBuildBackend> identity(m_standalone.get());
+            m_standalone->setCallbacks(m_build->serviceCallbacks([identity] { return !identity.isNull(); }));
+            m_build->setBackend(m_standalone.get());
+            if (m_window)
+                m_standalone->attachMenu(*m_window);
         }
     }
     if (m_nav) {
@@ -483,6 +553,10 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
 }
 
 bool Workbench::closeForOpen() {
+    if (m_solutionLoading) {
+        m_solutionLoadStop.request_stop();
+        return false; // Do not replace/close the current project while the modal worker owns its inputs.
+    }
     if (m_projectEditWaitingForReaders || (m_projectEdit && m_projectEdit->busy())) {
         notify(text("The project stays open"), text("Wait for the project edit to finish."),
                ui::NotificationKind::Warning);
@@ -510,7 +584,8 @@ bool Workbench::closeForOpen() {
     // Keep the current project and its tabs intact until the user stops the build or run.
     if (anyDebugSessionActive() ||
         (m_solution && (m_buildService->state() != build::BuildState::Idle || !m_runService->activeRuns().empty())) ||
-        (m_cmake && (m_cmake->service().state() != build::BuildState::Idle || m_cmake->running()))) {
+        (m_cmake && (m_cmake->service().state() != build::BuildState::Idle || m_cmake->running())) ||
+        (m_standalone && m_standalone->state() != build::BuildState::Idle)) {
         notify(text("The project stays open"), text("Stop the build and running programs before closing the project."),
                ui::NotificationKind::Warning);
         return false;
@@ -558,6 +633,10 @@ bool Workbench::closeForOpen() {
     if (m_cmake) {
         m_build->setBackend(m_buildBackend.get());
         m_cmake.reset();
+    }
+    if (m_standalone) {
+        m_build->setBackend(m_buildBackend.get());
+        m_standalone.reset();
     }
     if (m_solution) {
         if (m_buildService->projectEditInProgress())
@@ -618,10 +697,16 @@ bool Workbench::restoreLastProject() {
 }
 
 Result<void> Workbench::openProjectIdentity(const std::string& path) {
+    const auto marker = io::fileName(path);
+    if (marker == "compile_commands.json" || marker == "Makefile" || marker == "makefile" || marker == "GNUmakefile")
+        return openFolder(std::string(io::parentPath(path)), false, path);
     return io::fileName(path) == "CMakeLists.txt" ? openCMakeProject(path) : openPath(path);
 }
 
 Result<void> Workbench::reopenRoot(const std::string& root) {
+    const auto marker = io::fileName(root);
+    if (marker == "compile_commands.json" || marker == "Makefile" || marker == "makefile" || marker == "GNUmakefile")
+        return openProjectIdentity(root);
     if (io::fileName(root) == "CMakeLists.txt")
         return openCMakeProject(root);
     if (isSolutionFile(root) || extensionOf(root) == ".frostproj")
@@ -630,7 +715,9 @@ Result<void> Workbench::reopenRoot(const std::string& root) {
     const std::string key = lang::documentKey(root);
     for (const std::string& recent : recentProjects(*m_services.settings.snapshot())) {
         const std::string recentRoot =
-            isSolutionFile(recent) || extensionOf(recent) == ".frostproj" || io::fileName(recent) == "CMakeLists.txt"
+            isSolutionFile(recent) || extensionOf(recent) == ".frostproj" || io::fileName(recent) == "CMakeLists.txt" ||
+                    io::fileName(recent) == "compile_commands.json" || io::fileName(recent) == "Makefile" ||
+                    io::fileName(recent) == "makefile" || io::fileName(recent) == "GNUmakefile"
                 ? std::string(io::parentPath(recent))
                 : m_documentRegistry->canonicalize(recent);
         if (lang::documentKey(m_documentRegistry->canonicalize(recentRoot)) == key) {

@@ -174,6 +174,7 @@ struct CMakeBuildRequest {
     std::optional<std::size_t> target{}; // Index into the model's targets; empty: the profile's default (all).
     std::string targetName{};            // Its name, or "".
     std::string profile{};               // The profile's name.
+    std::string file{};                  // Compile: captured absolute source; resolved on the job worker.
 };
 
 // An explicitly configured personal command for one project root and profile.
@@ -345,6 +346,11 @@ public:
     // Reload: configures the active profile in the background. Errors: InvalidArgument (no folder,
     // an unusable profile: CMakeProfile::problem), Busy.
     [[nodiscard]] Result<void> configure();
+    // Session-only overrides; only a new successful File API reply confirms the values.
+    [[nodiscard]] Result<void> configureCache(std::vector<project::CMakeCacheVariable> edits);
+    // Explicit debug reload. Uses the same profile, tool/environment preparation, Save All,
+    // trust gate and File API refresh as configure(). Ready runs after actual process launch.
+    [[nodiscard]] Result<void> configureDebug(std::string endpoint, std::function<void()> ready);
     [[nodiscard]] Result<void> configureOwned(std::uint64_t owner);
     // Retry a deferred automatic configure after an external admission lease is released.
     void admissionAvailable();
@@ -364,8 +370,22 @@ public:
     [[nodiscard]] Result<void> build(BuildAction action, std::optional<std::size_t> target = std::nullopt,
                                      CMakeBuildCompletion done = {},
                                      const std::shared_ptr<const project::CMakeProject>& expectedModel = {});
+    // Literal native target, including generator-provided targets such as install. Same trust,
+    // Save All, wrapper/admission and contained execution pipeline as build(). No shell parsing.
+    [[nodiscard]] Result<void> buildNamedTarget(std::string target);
+    // CMK-12: Ninja object compilation through cmake --build, using the actual compilation
+    // database's unique object output. Other generators/missing or ambiguous outputs refuse
+    // explicitly; no compiler command or object path is synthesized. Database read is on the job worker.
+    [[nodiscard]] bool canCompileFile(std::string_view path) const;
+    [[nodiscard]] Result<void> compileFile(std::string_view path);
+    // Build/Compile/Rebuild/Clean one recorded Ninja object. Cleaning uses that generator's
+    // native `ninja -t clean <object>`; building uses cmake --build. No whole-project clean.
+    [[nodiscard]] Result<void> buildFile(BuildAction action, std::string_view path);
     // Cancels the job in progress (BuildService::cancel). Idempotent.
-    void cancel();
+    // With a debugger endpoint, cancel only that exact configure job; stale sessions cannot
+    // cancel a later build or configure. Empty retains the ordinary Stop behavior.
+    void cancel(std::string_view debuggerEndpoint = {});
+    [[nodiscard]] bool debugConfigureCurrent(std::string_view endpoint) const;
     // Trusts `root` and lets a job waiting in NeedsTrust go on; once the folder is trusted and has no
     // configured model yet, configures it (configureOnOpen). Errors: those of TrustStore::trust.
     [[nodiscard]] Result<void> trust(std::string_view root);

@@ -25,7 +25,10 @@
 #include "language_bridge.hpp"
 #include "project_properties_dialog.hpp"
 #include "unity_control.hpp"
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFileDialog>
+#include <QVBoxLayout>
 
 #include <array>
 #include <cstring>
@@ -63,6 +66,9 @@ void Workbench::registerActions() {
             log::warn(kLog, "action {}: {}", id, added.error().describe());
         }
     };
+    add(
+        "project.dependencies", "Install or Restore Dependencies...", [this] { showDependencies(); },
+        [this] { return hasProject() && !anyDebugSessionActive(); });
     input::ActionSpec checkUpdate;
     checkUpdate.id = "help.checkForUpdates";
     checkUpdate.name = "Check for Updates...";
@@ -73,6 +79,91 @@ void Workbench::registerActions() {
     if (auto added = m_registry.add(std::move(checkUpdate)); !added)
         log::warn(kLog, "update action: {}", added.error().describe());
     // Save All, Save, Reload All from Disk and Close Project are the navigation workbench's.
+    add(
+        "build.openBinaryLog", "Open MSBuild Binary Log...",
+        [this] {
+            if (!m_window || !m_services.trust.isTrusted(m_projectRoot))
+                return;
+            const QString selected = QFileDialog::getOpenFileName(m_window, QStringLiteral("Open MSBuild Binary Log"),
+                                                                  {}, QStringLiteral("MSBuild Binary Logs (*.binlog)"));
+            if (selected.isEmpty())
+                return;
+            // Recheck after the modal file dialog; trust may have changed in another window.
+            if (!m_services.trust.isTrusted(m_projectRoot) || m_build->state() != build::BuildState::Idle)
+                return;
+            auto tools = projectEditTools();
+            if (!tools) {
+                notify(QStringLiteral("Binary Log"), QString::fromStdString(tools.error().message()),
+                       ui::NotificationKind::Error);
+                return;
+            }
+            QDialog viewer(m_window);
+            viewer.setWindowTitle(QStringLiteral("MSBuild Binary Log — %1").arg(selected));
+            viewer.resize(1000, 700);
+            auto* layout = new QVBoxLayout(&viewer);
+            ui::BuildController replayController;
+            auto* problems = new ui::ProblemsView(&viewer);
+            auto* output = new ui::BuildOutputPane(&viewer);
+            problems->setController(&replayController);
+            output->setController(&replayController);
+            connect(problems, &ui::ProblemsView::openLocation, this, &Workbench::openLocation);
+            connect(output, &ui::BuildOutputPane::openLocation, this, &Workbench::openLocation);
+            layout->addWidget(problems, 2);
+            layout->addWidget(output, 1);
+            auto* close = new QDialogButtonBox(QDialogButtonBox::Close, &viewer);
+            connect(close, &QDialogButtonBox::rejected, &viewer, &QDialog::reject);
+            layout->addWidget(close);
+            io::ProcessSpec spec;
+            spec.executable = tools->first;
+            spec.arguments = {std::string(io::parentPath(tools->second)), "--replay-binlog", selected.toStdString()};
+            spec.workingDirectory = m_projectRoot;
+            spec.stdinMode = io::Stdio::Null;
+            spec.stdoutMode = io::Stdio::Pipe;
+            spec.stderrMode = io::Stdio::Pipe;
+            spec.killOnClose = true;
+            auto callbacks = replayController.serviceCallbacks();
+            if (callbacks.onDiagnosticsCleared)
+                callbacks.onDiagnosticsCleared();
+            auto resolver = std::make_shared<build::DiagnosticResolver>(m_services.fs, m_projectRoot);
+            auto started = build::BuildSession::start(
+                m_services.launcher, spec, m_services.trust.isTrusted(m_projectRoot),
+                {.onLine =
+                     [callbacks](build::OutputStream stream, std::string_view line) {
+                         if (callbacks.onOutput)
+                             callbacks.onOutput(stream == build::OutputStream::Stdout ? build::BuildOutputKind::Stdout
+                                                                                      : build::BuildOutputKind::Stderr,
+                                                line);
+                     },
+                 .onDiagnostic =
+                     [callbacks, resolver](const build::Diagnostic& diagnostic) {
+                         if (callbacks.onDiagnostic)
+                             callbacks.onDiagnostic(resolver->resolve(diagnostic));
+                     },
+                 .onFinished =
+                     [callbacks](const build::BuildResult& result) {
+                         if (callbacks.onOutput)
+                             callbacks.onOutput(build::BuildOutputKind::Status, result.success
+                                                                                    ? "Binary log replay complete"
+                                                                                    : "Binary log replay failed");
+                     }},
+                systemClock(), {.parser = build::makeStructuredMsBuildOutputParser});
+            if (!started) {
+                problems->setController(nullptr);
+                output->setController(nullptr);
+                notify(QStringLiteral("Binary Log"), QString::fromStdString(started.error().message()),
+                       ui::NotificationKind::Error);
+                return;
+            }
+            viewer.exec();
+            // Closing the modal viewer cancels and joins replay before its relay or views disappear.
+            started->reset();
+            problems->setController(nullptr);
+            output->setController(nullptr);
+        },
+        [this] {
+            return m_window && m_build && m_build->state() == build::BuildState::Idle && !m_projectRoot.empty() &&
+                   m_services.trust.isTrusted(m_projectRoot);
+        });
     add(wa::kNewProject, "New Project...", [this] { showNewProjectDialog(); });
     add(wa::kOpenFolder, "Open Folder...", [this] { showOpenDialog(IWorkbenchPrompts::OpenKind::Folder); });
     add("file.settings", "Settings...", [this] { showSettings(); }, [this] { return m_window != nullptr; });
@@ -171,12 +262,48 @@ void Workbench::registerActions() {
             std::string activeCfg = "Debug|x64";
             if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
                 activeCfg = m_build->configurations()[*idx].name();
-            showProjectPropertiesDialog(m_window, m_services.fs, projPath, activeCfg, [this] {
-                refreshSolutionExplorerForFsChange();
-                startProjectEvaluation(m_projectRoot);
-                if (m_clangd)
-                    restartClangd();
-            });
+            const auto propertiesSolution = m_solution;
+            showProjectPropertiesDialog(
+                m_window, m_services.fs, projPath, activeCfg,
+                [this] {
+                    refreshSolutionExplorerForFsChange();
+                    startProjectEvaluation(m_projectRoot);
+                    if (m_clangd)
+                        restartClangd();
+                },
+                [this, propertyProject = projPath](std::string_view configuration,
+                                                   const ProjectPropertyMap& updates) -> Result<void> {
+                    if (updates.empty()) {
+                        if (auto blocked = projectEditBlocked(propertyProject))
+                            return fail(ErrorCode::Untrusted, blocked->toStdString());
+                        return {};
+                    }
+                    const auto bar = configuration.find('|');
+                    if (bar == std::string_view::npos)
+                        return fail(ErrorCode::InvalidArgument, "Choose one Configuration|Platform pair.");
+                    project::ProjectEdit edit;
+                    edit.kind = project::ProjectEditKind::SetProperties;
+                    edit.definition = propertyProject;
+                    edit.configuration = std::string(configuration.substr(0, bar));
+                    edit.platform = std::string(configuration.substr(bar + 1));
+                    edit.propertyUpdates.assign(updates.begin(), updates.end());
+                    if (auto refused = submitProjectEdit(std::move(edit), QStringLiteral("Project Properties")))
+                        return fail(ErrorCode::InvalidArgument, refused->toStdString());
+                    return {};
+                },
+                [this, propertyProject = projPath, root = m_projectRoot,
+                 solution = m_solution->path()](std::string_view configuration, const std::vector<std::string>& keys,
+                                                std::stop_token stop) -> Result<ProjectPropertyMap> {
+                    auto evaluated = evaluatePropertyPage(propertyProject, root, solution, configuration, keys, stop);
+                    if (!evaluated)
+                        return std::unexpected(std::move(evaluated.error()));
+                    return std::move(evaluated->properties);
+                },
+                [this, propertiesSolution]() -> Result<void> {
+                    if (m_shutDown || m_solution != propertiesSolution)
+                        return fail(ErrorCode::Busy, "Solution changed while property pages were open");
+                    return propertiesSolution->requireProjectMutation();
+                });
         },
         [this] { return m_window != nullptr && m_solution != nullptr; });
     add(

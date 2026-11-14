@@ -96,7 +96,7 @@ struct Walker {
     }
 
     void walk(const std::string& dir, std::size_t i, bool top) {
-        if (truncated) {
+        if (truncated || limits.stop.stop_requested()) {
             return;
         }
         if (++directories > limits.maxDirectories) {
@@ -116,6 +116,8 @@ struct Walker {
             walk(dir, i + 1, false); // "**" spanning no directory.
         }
         for (const io::DirEntry& entry : *entries) {
+            if (limits.stop.stop_requested())
+                return;
             auto child = io::joinPath(dir, entry.name);
             if (!child) {
                 continue;
@@ -330,6 +332,8 @@ Result<WildcardExpansion> expandWildcard(io::IFileSystem& fs, const PathPattern&
     }
     Walker walker(fs, pattern.components(), limits);
     walker.walk(pattern.directory(), 0, true);
+    if (limits.stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "project wildcard expansion cancelled");
     out.paths.reserve(walker.files.size());
     for (auto& [key, path] : walker.files) {
         out.paths.push_back(std::move(path));

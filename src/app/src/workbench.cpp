@@ -58,8 +58,10 @@
 #include "multi_session_debug.hpp"
 #include "project_edit_process.hpp"
 #include "settings_dialog.hpp"
+#include "standalone_build_backend.hpp"
 #include "unity_control.hpp"
 #include <QApplication>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -218,6 +220,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     m_language = std::make_unique<ui::lang::LanguageController>(
         ui::lang::LanguageServices{*m_bridge, *m_pool, *m_bridge, m_bridge->applier(), m_services.fs,
                                    [this](std::string_view path) -> std::vector<lang::LiveDiagnostic> {
+                                       if (lang::hasBundledJsonSchema(path))
+                                           return m_bridge->jsonDiagnostics(path);
                                        std::optional<lang::FileDiagnostics> set;
                                        if (isManagedSource(path) && m_managed)
                                            set = m_managed->diagnostics().forFile(path);
@@ -456,9 +460,19 @@ void Workbench::createBuildService() {
     options.stateFilePath = m_options.buildStatePath;
     options.msbuildPath = !m_options.msbuildPath.empty() ? m_options.msbuildPath : snapshot->get(key::toolsMsbuildPath);
     options.maxCpuCount = static_cast<unsigned>(std::max<std::int64_t>(0, snapshot->get(key::buildMsbuildMaxCpuCount)));
+    const std::string logger = QDir(QCoreApplication::applicationDirPath())
+                                   .filePath(QStringLiteral("project-host/ProjectHostVsProbe.exe"))
+                                   .toStdString();
+    if (m_services.fs.exists(logger).value_or(false))
+        options.loggerAssembly = logger;
+    if (!m_options.buildStatePath.empty()) {
+        if (auto logs = io::joinPath(io::parentPath(m_options.buildStatePath), "build-logs"))
+            options.binaryLogDirectory = *logs;
+    }
     options.startBuild = m_options.startBuild;
-    m_buildService = build::BuildService::create(m_services.fs, m_services.launcher, m_services.trust, options,
-                                                 m_build->serviceCallbacks([this] { return !m_cmake; }));
+    m_buildService =
+        build::BuildService::create(m_services.fs, m_services.launcher, m_services.trust, options,
+                                    m_build->serviceCallbacks([this] { return !m_cmake && !m_standalone; }));
     m_buildBackend = std::make_unique<ui::BuildServiceBackend>(*m_buildService);
     m_build->setBackend(m_buildBackend.get());
     m_build->setSaveAllHandler(this);
@@ -708,6 +722,11 @@ void Workbench::onSettingsChanged() {
 }
 
 bool Workbench::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::Close && m_solutionLoading && m_window && watched == m_window.data()) {
+        m_solutionLoadStop.request_stop();
+        event->ignore(); // Worker/dialog must settle before closing the owning window.
+        return true;
+    }
     // general.confirmExit: closing the IDE window (title bar, Alt+F4, File > Exit) asks first. This
     // application-wide filter runs before the navigation workbench's own close handling. Closes the
     // IDE starts itself (update restart, version switch) set m_exitConfirmed and are not asked.
@@ -835,6 +854,7 @@ bool Workbench::anyDebugSessionActive() const {
 }
 
 void Workbench::shutdown() {
+    m_solutionLoadStop.request_stop();
     if (m_shutDown) {
         return;
     }
@@ -892,6 +912,10 @@ void Workbench::shutdown() {
     if (m_unity)
         m_unity->shutdown();
     stopTerminal();
+    if (m_standalone) {
+        m_build->setBackend(m_buildBackend.get());
+        m_standalone.reset(); // Cancels and joins its contained session before services disappear.
+    }
     if (m_cmake)
         m_cmake->shutdown();
     if (m_nav) {

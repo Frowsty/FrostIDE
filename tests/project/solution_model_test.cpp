@@ -576,5 +576,118 @@ TEST(SolutionModel, SupportsCppHierarchyModesFiltersAndFoldersAndPhysicalFolders
               "Hierarchy[App[include[engine.h],src[core[engine.cpp]],main.cpp]]");
 }
 
+// Generated scale fixture asserts actual model work/counts, not an unmeasured timing claim.
+void writeScaleSolution(MemTree& tree, std::size_t count) {
+    std::string solution = R"(<Solution><Configurations><BuildType Name="Debug" />
+<BuildType Name="Release" /><Platform Name="x64" /></Configurations>)";
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto directory = "p" + std::to_string(i);
+        solution += "<Project Path=\"" + directory + "/p.vcxproj\" />";
+        std::string project = R"(<Project><ItemGroup><ClCompile Include="main.cpp" />)";
+        if (i)
+            project += "<ProjectReference Include=\"../p" + std::to_string(i - 1) + "/p.vcxproj\" />";
+        project += "</ItemGroup></Project>";
+        tree.write(directory + "/p.vcxproj", project);
+    }
+    tree.write("Scale.slnx", solution + "</Solution>");
+}
+
+TEST(SolutionScale, FiveHundredProjectsPublishCompleteIndexedTreeAndConfigurationProfile) {
+    MemTree tree;
+    writeScaleSolution(tree, 500);
+    std::vector<SolutionLoadProgress> progress;
+    auto model =
+        SolutionModel::load(tree.fs, MemTree::path("Scale.slnx"),
+                            {.progress = [&](const SolutionLoadProgress& value) { progress.push_back(value); }});
+    ASSERT_TRUE(model) << model.error().describe();
+    ASSERT_EQ(model->projects().size(), 500U);
+    EXPECT_EQ(model->configurations().size(), 2U);
+    EXPECT_EQ(model->loadProfile().projects, 500U);
+    EXPECT_EQ(model->loadProfile().cppProjectsRead, 500U);
+    EXPECT_EQ(model->loadProfile().managedDirectoryLists, 0U);
+    ASSERT_EQ(progress.size(), 501U);
+    EXPECT_EQ(progress.front().completedProjects, 0U);
+    EXPECT_EQ(progress.back().completedProjects, 500U);
+    for (std::size_t i = 0; i < 500; ++i) {
+        const auto directory = "p" + std::to_string(i);
+        const auto id = model->findProjectByPath(MemTree::path(directory + "/p.vcxproj"));
+        ASSERT_TRUE(id);
+        EXPECT_EQ(id->value(), i);
+        EXPECT_TRUE(model->findFileNode(MemTree::path(directory + "/main.cpp")));
+        EXPECT_TRUE(model->projectConfiguration(*id, 0));
+        if (i) {
+            ASSERT_EQ(model->project(*id).dependencies.size(), 1U);
+            EXPECT_EQ(model->project(*id).dependencies.front().value(), i - 1);
+        }
+    }
+}
+
+TEST(SolutionScale, UnloadedProjectsKeepTheirIdentityWithoutReadingTheirProjectFiles) {
+    MemTree tree;
+    writeScaleSolution(tree, 500);
+    SolutionLoadOptions options;
+    for (std::size_t i = 0; i < 50; ++i)
+        options.unloadedProjectPaths.push_back(MemTree::path("p" + std::to_string(i) + "/p.vcxproj"));
+    auto model = SolutionModel::load(tree.fs, MemTree::path("Scale.slnx"), std::move(options));
+    ASSERT_TRUE(model);
+    EXPECT_EQ(model->projects().size(), 500U);
+    EXPECT_EQ(model->loadProfile().cppProjectsRead, 450U);
+    EXPECT_EQ(model->project(ProjectId{0}).nodeKind, NodeKind::UnavailableProject);
+    EXPECT_TRUE(model->findProjectByPath(MemTree::path("p0/p.vcxproj")));
+    EXPECT_FALSE(model->findFileNode(MemTree::path("p0/main.cpp")));
+}
+
+TEST(SolutionScale, CancellationDiscardsPartialTreeAndLaterLoadIsIndependent) {
+    MemTree tree;
+    writeScaleSolution(tree, 500);
+    std::stop_source stop;
+    std::size_t completed = 0;
+    auto cancelled = SolutionModel::load(tree.fs, MemTree::path("Scale.slnx"),
+                                         {.stop = stop.get_token(), .progress = [&](const SolutionLoadProgress& value) {
+                                              completed = value.completedProjects;
+                                              if (completed == 37)
+                                                  stop.request_stop();
+                                          }});
+    ASSERT_FALSE(cancelled);
+    EXPECT_EQ(cancelled.error().code(), ErrorCode::Cancelled);
+    EXPECT_EQ(completed, 37U);
+    auto retry = SolutionModel::load(tree.fs, MemTree::path("Scale.slnx"));
+    ASSERT_TRUE(retry);
+    EXPECT_EQ(retry->projects().size(), 500U);
+    // An already-stopped request wins even over an invalid/nonexistent input.
+    auto beforeRead = SolutionModel::load(tree.fs, "not-an-absolute-solution", {.stop = stop.get_token()});
+    ASSERT_FALSE(beforeRead);
+    EXPECT_EQ(beforeRead.error().code(), ErrorCode::Cancelled);
+}
+
+TEST(SolutionModel, ExplicitApproximationIsReadOnlyEvenWhenEvaluatedItemsAreOffered) {
+    MemTree tree;
+    tree.write("Approx.slnx", R"(<Solution><Project Path="p/p.vcxproj" /></Solution>)");
+    tree.write("p/p.vcxproj", R"(<Project><Import Project="unavailable.props" />
+<ItemGroup Condition="false"><ClCompile Include="literal.cpp" /></ItemGroup></Project>)");
+    auto model =
+        SolutionModel::load(tree.fs, MemTree::path("Approx.slnx"), {.mode = SolutionModelMode::ApproximateReadOnly});
+    ASSERT_TRUE(model);
+    EXPECT_TRUE(model->approximate());
+    EXPECT_FALSE(model->approximationNotice().empty());
+    EXPECT_TRUE(model->findFileNode(MemTree::path("p/literal.cpp"))); // Literal, not condition evaluation.
+    auto mutation = model->requireProjectMutation();
+    auto execution = model->requireExecution();
+    ASSERT_FALSE(mutation);
+    ASSERT_FALSE(execution);
+    EXPECT_EQ(mutation.error().code(), ErrorCode::Unsupported);
+    EXPECT_EQ(execution.error().code(), ErrorCode::Unsupported);
+    auto evaluated =
+        SolutionModel::load(tree.fs, MemTree::path("Approx.slnx"),
+                            {.evaluated = {EvaluatedProjectItems{}}, .mode = SolutionModelMode::ApproximateReadOnly});
+    ASSERT_FALSE(evaluated);
+    EXPECT_EQ(evaluated.error().code(), ErrorCode::Unsupported);
+#ifndef _WIN32
+    auto defaultModel = SolutionModel::load(tree.fs, MemTree::path("Approx.slnx"));
+    ASSERT_TRUE(defaultModel);
+    EXPECT_TRUE(defaultModel->approximate());
+#endif
+}
+
 } // namespace
 } // namespace frost::project

@@ -51,6 +51,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QProcess>
@@ -3321,5 +3322,140 @@ TEST(Workbench, NoActionPretendsToDebugOneTestOrOpenAServicesWindow) {
     sendKey(rig.window.get(), Qt::Key_8, Qt::AltModifier);
     EXPECT_FALSE(rig.window->toolWindows().isVisible(frost::app::kUnitTestsToolWindow));
 }
+
+TEST(Workbench, SolutionLoadPumpsEventsRejectsReentryAndCancelKeepsPreviousProject) {
+    WorkDir dir("solution-load-cancel", "tiny_sln");
+    WorkbenchRig rig(dir);
+    const auto current = dir.join("current");
+    ASSERT_TRUE(frost::io::realFileSystem().createDirectories(current));
+    ASSERT_TRUE(rig.workbench->openPath(current));
+    const auto previousTitle = rig.window->windowTitle();
+    bool eventServiced = false;
+    QTimer::singleShot(0, rig.window.get(), [&] {
+        eventServiced = true;
+        auto nested = rig.workbench->openPath(dir.join("Tiny.sln"));
+        ASSERT_FALSE(nested);
+        EXPECT_EQ(nested.error().code(), frost::ErrorCode::Busy);
+        EXPECT_FALSE(rig.workbench->closeProject()); // Cancels without closing the old project.
+        EXPECT_EQ(rig.window->windowTitle(), previousTitle);
+        EXPECT_EQ(rig.workbench->solution(), nullptr); // No partial tree was published.
+    });
+    auto cancelled = rig.workbench->openPath(dir.join("Tiny.sln"));
+    ASSERT_TRUE(eventServiced);
+    ASSERT_FALSE(cancelled);
+    EXPECT_EQ(cancelled.error().code(), frost::ErrorCode::Cancelled);
+    EXPECT_EQ(rig.window->windowTitle(), previousTitle);
+    EXPECT_EQ(rig.workbench->solution(), nullptr);
+    // The synchronous API still returns the complete final outcome on the next request.
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_NE(rig.workbench->solution(), nullptr);
+    EXPECT_EQ(rig.workbench->solution()->projects().size(), 2U);
+#ifndef _WIN32
+    EXPECT_TRUE(rig.workbench->solution()->approximate());
+    EXPECT_FALSE(rig.workbench->solution()->requireProjectMutation());
+    EXPECT_FALSE(rig.workbench->solution()->requireExecution());
+#endif
+}
+
+TEST(Workbench, ApproximateAuthorityRefusesManagedXmlAndCppUserPropertyWrites) {
+    WorkDir dir("approximate-property-authority", "tiny_sln");
+    dir.write("Managed.csproj",
+              "<Project><PropertyGroup><AssemblyName>Before</AssemblyName></PropertyGroup></Project>");
+    WorkbenchRig rig(dir);
+    auto approximate =
+        frost::project::SolutionModel::load(frost::io::realFileSystem(), dir.join("Tiny.sln"),
+                                            {.mode = frost::project::SolutionModelMode::ApproximateReadOnly});
+    ASSERT_TRUE(approximate);
+    for (const bool managed : {true, false}) {
+        const auto path = dir.join(managed ? "Managed.csproj" : "App/App.vcxproj");
+        const auto before = frost::io::realFileSystem().readFile(path);
+        const auto userBefore = dir.read("App/App.vcxproj.user");
+        ASSERT_TRUE(before);
+        int admissions = 0;
+        bool saved = false;
+        inspectModal(rig.window.get(), QStringLiteral("projectPropertiesDialog"), [&](QDialog& dialog) {
+            auto* field = dialog.findChild<QLineEdit*>(managed ? QStringLiteral("prop_Prop.AssemblyName")
+                                                               : QStringLiteral("prop_Prop.LocalDebuggerCommand"));
+            ASSERT_NE(field, nullptr);
+            field->setText(QStringLiteral("must-not-be-written"));
+            // The rejected save reports its reason in a nested modal; close it without accepting
+            // the property dialog. The same gate covers C# XML and the C++ .user-only route.
+            QTimer::singleShot(0, &dialog, [&dialog] {
+                auto* warning = dialog.findChild<QMessageBox*>();
+                ASSERT_NE(warning, nullptr);
+                warning->accept();
+            });
+            clickOk(dialog);
+            EXPECT_TRUE(dialog.isVisible());
+        });
+        frost::app::showProjectPropertiesDialog(
+            rig.window.get(), frost::io::realFileSystem(), path, "Debug|x64", [&] { saved = true; }, {}, {},
+            [&]() -> frost::Result<void> {
+                ++admissions;
+                return approximate->requireProjectMutation();
+            });
+        EXPECT_EQ(admissions, 1);
+        EXPECT_FALSE(saved);
+        const auto after = frost::io::realFileSystem().readFile(path);
+        ASSERT_TRUE(after);
+        EXPECT_EQ(*after, *before);
+        EXPECT_EQ(dir.read("App/App.vcxproj.user"), userBefore);
+    }
+}
+
+#ifndef _WIN32
+TEST(Workbench, ApproximateSolutionRefusesMembershipRenameButSourceTextRemainsEditable) {
+    WorkDir dir("approximate-membership-rename", "tiny_sln");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    const auto projectBefore = dir.read("App/App.vcxproj");
+    const auto sourceBefore = dir.read("App/main.cpp");
+    auto renamed = rig.workbench->renameItem(dir.join("App/main.cpp"), "renamed.cpp");
+    ASSERT_FALSE(renamed);
+    EXPECT_EQ(renamed.error().code(), frost::ErrorCode::Unsupported);
+    EXPECT_EQ(dir.read("App/App.vcxproj"), projectBefore);
+    EXPECT_EQ(dir.read("App/main.cpp"), sourceBefore);
+    EXPECT_FALSE(frost::io::realFileSystem().exists(dir.join("App/renamed.cpp")).value_or(true));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("App/main.cpp")));
+    auto* view = rig.view();
+    ASSERT_NE(view, nullptr);
+    auto edited = view->editor().document().replace({0, 0}, "// ordinary source edit\n", {});
+    ASSERT_TRUE(edited);
+    EXPECT_TRUE(view->editor().followExternalChange(*edited));
+    EXPECT_TRUE(view->document().dirty());
+}
+#endif
+
+#ifndef _WIN32
+TEST(Workbench, ApproximateExplorerPropertyActionCannotWriteManagedDefinition) {
+    WorkDir dir("approximate-explorer-properties");
+    dir.write("Managed.slnx", "<Solution><Project Path=\"App.csproj\" /></Solution>");
+    dir.write("App.csproj", "<Project><PropertyGroup><AssemblyName>Before</AssemblyName></PropertyGroup></Project>");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Managed.slnx")));
+    const auto before = dir.read("App.csproj");
+    bool refused = false;
+    inspectModal(rig.window.get(), QStringLiteral("projectPropertiesDialog"), [&](QDialog& dialog) {
+        auto* field = dialog.findChild<QLineEdit*>(QStringLiteral("prop_Prop.AssemblyName"));
+        ASSERT_NE(field, nullptr);
+        field->setText(QStringLiteral("must-not-be-written"));
+        QTimer::singleShot(0, &dialog, [&dialog, &refused] {
+            auto* warning = dialog.findChild<QMessageBox*>();
+            ASSERT_NE(warning, nullptr);
+            refused = true;
+            warning->accept();
+        });
+        clickOk(dialog);
+        EXPECT_TRUE(dialog.isVisible());
+    });
+    auto* explorer = rig.workbench->solutionExplorer();
+    ASSERT_NE(explorer, nullptr);
+    ASSERT_TRUE(QMetaObject::invokeMethod(explorer, "projectPropertiesRequested", Qt::DirectConnection,
+                                          Q_ARG(QString, QString::fromStdString(dir.join("App.csproj")))));
+    EXPECT_TRUE(refused);
+    EXPECT_EQ(dir.read("App.csproj"), before);
+}
+#endif
 
 } // namespace

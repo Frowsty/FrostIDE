@@ -303,4 +303,79 @@ Result<Json> parseJson(std::string_view text) {
     return out;
 }
 
+Result<std::string> normalizeJsonComments(std::string_view text) {
+    std::string result(text);
+    bool quoted = false, escaped = false;
+    for (std::size_t i = 0; i < result.size(); ++i) {
+        const char ch = result[i];
+        if (quoted) {
+            if (escaped)
+                escaped = false;
+            else if (ch == '\\')
+                escaped = true;
+            else if (ch == '"')
+                quoted = false;
+            continue;
+        }
+        if (ch == '"') {
+            quoted = true;
+            continue;
+        }
+        if (ch != '/' || i + 1 == result.size())
+            continue;
+        if (result[i + 1] == '/') {
+            while (i < result.size() && result[i] != '\n' && result[i] != '\r')
+                result[i++] = ' ';
+            if (i == result.size())
+                break;
+        } else if (result[i + 1] == '*') {
+            result[i++] = ' ';
+            result[i++] = ' ';
+            bool closed = false;
+            while (i < result.size()) {
+                if (result[i] == '*' && i + 1 < result.size() && result[i + 1] == '/') {
+                    result[i++] = ' ';
+                    result[i] = ' ';
+                    closed = true;
+                    break;
+                }
+                if (result[i] != '\n' && result[i] != '\r')
+                    result[i] = ' ';
+                ++i;
+            }
+            if (!closed)
+                return fail(ErrorCode::Corrupt, "Unterminated JSON comment");
+        }
+    }
+    quoted = false;
+    escaped = false;
+    for (std::size_t i = 0; i < result.size(); ++i) {
+        const char ch = result[i];
+        if (quoted) {
+            if (escaped)
+                escaped = false;
+            else if (ch == '\\')
+                escaped = true;
+            else if (ch == '"')
+                quoted = false;
+        } else if (ch == '"')
+            quoted = true;
+        else if (ch == ',') {
+            auto next = i + 1;
+            while (next < result.size() &&
+                   (result[next] == ' ' || result[next] == '\t' || result[next] == '\r' || result[next] == '\n'))
+                ++next;
+            auto previous = i;
+            while (previous > 0 && (result[previous - 1] == ' ' || result[previous - 1] == '\t' ||
+                                    result[previous - 1] == '\r' || result[previous - 1] == '\n'))
+                --previous;
+            if (previous > 0 && result[previous - 1] != '{' && result[previous - 1] != '[' &&
+                result[previous - 1] != ',' && result[previous - 1] != ':' && next < result.size() &&
+                (result[next] == '}' || result[next] == ']'))
+                result[i] = ' ';
+        }
+    }
+    return result;
+}
+
 } // namespace frost::rpc

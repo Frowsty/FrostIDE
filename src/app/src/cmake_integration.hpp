@@ -26,6 +26,7 @@ class QLabel;
 class QAction;
 class QComboBox;
 class QLineEdit;
+class QMenu;
 
 namespace frost::ui {
 class BuildController;
@@ -99,9 +100,14 @@ public:
     void selectRunTarget(const std::string& name);
     // The Run/Debug target's name, or "" (no model, no executable target).
     [[nodiscard]] std::string runTargetName() const;
+    using ConfigureDebugger =
+        std::function<Result<void>(std::string endpoint, std::string root, std::function<void()> cancel)>;
+    void setConfigureDebugger(ConfigureDebugger start) { m_configureDebugger = std::move(start); }
+    [[nodiscard]] Result<void> debugConfigure();
 
 private:
     ui::BuildController& m_build;
+    ConfigureDebugger m_configureDebugger;
     build::BuildService& m_sharedAdmission;
     std::shared_ptr<void> m_runAdmission;
     ui::ShellWindow& m_window;
@@ -136,6 +142,7 @@ private:
     QPointer<QAction> m_profileAction;
     QPointer<QAction> m_targetAction;
     QPointer<QAction> m_wrapperAction;
+    QPointer<QMenu> m_buildMenu;
     bool m_solutionActionVisible = false;
     bool m_runActionVisible = false;
     QStringList m_expandedKeys;

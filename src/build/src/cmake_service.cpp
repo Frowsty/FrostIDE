@@ -308,6 +308,43 @@ Result<void> CMakeService::configure() {
     return m_state->startJobLocked(State::JobKind::Configure, false, {}, {CMakeStep::Configure});
 }
 
+Result<void> CMakeService::configureCache(std::vector<project::CMakeCacheVariable> edits) {
+    LockGuard lock(m_state->mutex);
+    if (!m_state->model || !m_state->model->cacheAvailable)
+        return fail(ErrorCode::InvalidArgument, "configure the profile before editing its cache");
+    for (const auto& edit : edits) {
+        const auto& cache = m_state->model->cache;
+        const auto entry = std::ranges::find_if(cache, [&](const auto& value) { return value.name == edit.name; });
+        if (entry == cache.end() || entry->type != edit.type ||
+            (edit.type != "STRING" && edit.type != "BOOL" && edit.type != "PATH" && edit.type != "FILEPATH") ||
+            edit.name.empty() || edit.name.find_first_of("=:\r\n") != std::string::npos ||
+            edit.value.find('\0') != std::string::npos || edit.name == "CMAKE_EXPORT_COMPILE_COMMANDS")
+            return fail(ErrorCode::InvalidArgument, "cache entry is not editable");
+    }
+    auto started = m_state->startJobLocked(State::JobKind::Configure, false, {}, {CMakeStep::Configure});
+    if (!started)
+        return started;
+    // startJobLocked copies the active profile. Never mutate presets or the accepted model.
+    auto& variables = m_state->job->profile.cacheVariables;
+    for (auto& edit : edits) {
+        std::erase_if(variables, [&](const auto& value) { return value.name == edit.name; });
+        variables.push_back(std::move(edit));
+    }
+    return {};
+}
+
+Result<void> CMakeService::configureDebug(std::string endpoint, std::function<void()> ready) {
+    if (endpoint.empty() || endpoint.find('\0') != std::string::npos || !ready)
+        return fail(ErrorCode::InvalidArgument, "CMake debug reload requires a local endpoint and session callback");
+    LockGuard lock(m_state->mutex);
+    auto started = m_state->startJobLocked(State::JobKind::Configure, false, {}, {CMakeStep::Configure});
+    if (!started)
+        return started;
+    m_state->job->debuggerEndpoint = std::move(endpoint);
+    m_state->job->debuggerReady = std::move(ready);
+    return {};
+}
+
 Result<void> CMakeService::configureOwned(std::uint64_t owner) {
     if (!owner)
         return fail(ErrorCode::InvalidArgument, "owned configure requires an owner");
@@ -375,9 +412,62 @@ Result<void> CMakeService::build(BuildAction action, std::optional<std::size_t> 
     return s.startJobLocked(State::JobKind::Build, false, std::move(request), std::move(steps), std::move(done));
 }
 
-void CMakeService::cancel() {
+bool CMakeService::debugConfigureCurrent(std::string_view endpoint) const {
+    LockGuard lock(m_state->mutex);
+    return m_state->job && !endpoint.empty() && m_state->job->debuggerEndpoint == endpoint &&
+           m_state->state == BuildState::Running;
+}
+
+Result<void> CMakeService::buildNamedTarget(std::string target) {
+    if (target.empty() || target.front() == '-' || target.find_first_of("\r\n\0", 0, 3) != std::string::npos)
+        return fail(ErrorCode::InvalidArgument, "a CMake target must be a literal nonempty name");
     State& s = *m_state;
     LockGuard lock(s.mutex);
+    CMakeBuildRequest request{.action = BuildAction::Build, .targetName = std::move(target)};
+    std::vector<CMakeStep> steps;
+    if (!s.model || s.stale)
+        steps.push_back(CMakeStep::Configure);
+    steps.push_back(CMakeStep::Build);
+    return s.startJobLocked(State::JobKind::Build, false, std::move(request), std::move(steps));
+}
+
+bool CMakeService::canCompileFile(std::string_view path) const {
+    State& s = *m_state;
+    LockGuard lock(s.mutex);
+    if (!s.model || s.stale || !s.model->generator.starts_with("Ninja"))
+        return false;
+    for (const auto& target : s.model->targets)
+        for (const auto& source : target.sources)
+            if (source.compileGroup && documentKey(source.path) == documentKey(path))
+                return true;
+    return false;
+}
+
+Result<void> CMakeService::compileFile(std::string_view path) { return buildFile(BuildAction::Compile, path); }
+
+Result<void> CMakeService::buildFile(BuildAction action, std::string_view path) {
+    State& s = *m_state;
+    LockGuard lock(s.mutex);
+    if (!s.model || s.stale || !s.model->generator.starts_with("Ninja"))
+        return fail(ErrorCode::Unsupported,
+                    "single-file CMake compilation requires a current Ninja model and compilation database");
+    auto source = io::normalizePath(path);
+    if (!source)
+        return std::unexpected(source.error());
+    CMakeBuildRequest request{.action = action, .file = std::move(*source)};
+    std::vector<CMakeStep> steps;
+    if (action == BuildAction::Clean || action == BuildAction::Rebuild)
+        steps.push_back(CMakeStep::Clean);
+    if (action != BuildAction::Clean)
+        steps.push_back(CMakeStep::Build);
+    return s.startJobLocked(State::JobKind::Build, false, std::move(request), std::move(steps));
+}
+
+void CMakeService::cancel(std::string_view debuggerEndpoint) {
+    State& s = *m_state;
+    LockGuard lock(s.mutex);
+    if (!debuggerEndpoint.empty() && (!s.job || s.job->debuggerEndpoint != debuggerEndpoint))
+        return;
     s.reloadPending = false;
     switch (s.state) {
     case BuildState::Idle:

@@ -1,0 +1,2 @@
+[requires]
+frost-local/1.0.0

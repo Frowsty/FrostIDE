@@ -26,4 +26,7 @@ struct CMakeSyntaxCommand {
 // text's unchanged bytes. Complex arguments remain opaque. O(text.size()); malformed input is
 // Unsupported. Thread-safe; returned values own their strings.
 [[nodiscard]] Result<std::vector<CMakeSyntaxCommand>> scanCMakeSyntax(std::string_view text);
+// Editor analysis only: commands completed before the first malformed/incomplete construct.
+// Never use for membership mutations, which require the strict whole-document scan above.
+[[nodiscard]] std::vector<CMakeSyntaxCommand> scanCMakeSyntaxPrefix(std::string_view text);
 } // namespace frost::project

@@ -159,6 +159,9 @@ void Workbench::editorOpened(DocumentEditorView& view) {
         m_debugSessions->attachEditor(&view.editor());
     else if (m_debug)
         m_debug->attachEditor(&view.editor());
+    syncJsonDocument(view);
+    connect(&view.editor(), &ui::EditorView::textChanged, this,
+            [this, current = &view] { syncJsonDocument(*current); });
     refreshMarkers(view);
     if (m_documentRegistry->viewCount(view.path()) == 1) {
         syncClangdDocument(view);
@@ -356,6 +359,10 @@ void Workbench::editorClosed(DocumentEditorView& view) {
     if (m_lua && isLuaSource(path))
         (void)m_lua->closeDocument(path);
     m_language->editorChanged();
+    if (lang::hasBundledJsonSchema(path) && m_bridge) {
+        m_bridge->closeJsonDocument(path);
+        QMetaObject::invokeMethod(this, [this] { refreshLiveProblems(); }, Qt::QueuedConnection);
+    }
     m_liveMarkers.erase(lang::documentKey(path));
     // A dirty document whose close the user confirmed closes unsaved; otherwise the registry closes
     // a clean document when its last view goes and keeps a dirty one journaled.

@@ -181,6 +181,7 @@ struct ManagedSourceSnapshot;
 
 class LanguageBridge;
 class CMakeIntegration;
+class StandaloneBuildBackend;
 class ProjectEditProcess;
 class EngineIntegration;
 class EngineLuaDebugCoordinator;
@@ -779,6 +780,7 @@ private:
     void checkCppRename(std::string path, lang::LspPosition position, std::string newName, lang::WorkspaceEdit required,
                         lang::WorkspaceEdit offered, std::stop_token cancel, std::function<void(Result<void>)> done);
     [[nodiscard]] Result<void> admitCppRename(const lang::WorkspaceEdit& selected, document::RefactoringPlan& plan);
+    void showDependencies();
     void createBuildService();
     void createRunService();
     // Run configurations (RUN-2/RUN-3, workbench_run_configurations.cpp): the generated ones of the
@@ -834,6 +836,9 @@ private:
     [[nodiscard]] std::optional<QString> projectEditBlocked(const std::string& project);
     // The ProjectHost helper and MSBuild.exe a project edit runs with, or the reason they are missing.
     [[nodiscard]] Result<std::pair<std::string, std::string>> projectEditTools();
+    [[nodiscard]] Result<project::HostEvaluation>
+    evaluatePropertyPage(const std::string& projectPath, const std::string& root, const std::string& solution,
+                         std::string_view configuration, const std::vector<std::string>& keys, std::stop_token stop);
     // Whether the solution root holds a project edit journal (an interrupted edit); errors read as true.
     [[nodiscard]] bool projectEditJournalPresent();
     // Reloads the solution after a committed edit and publishes it to the build, run and explorer.
@@ -871,6 +876,7 @@ private:
     void startLua(const std::string& root);
     void stopLua();
     void syncLuaDocument(DocumentEditorView& view);
+    void syncJsonDocument(DocumentEditorView& view);
     void onLuaDiagnostics(const std::string& file);
     void onLuaFilesChanged(const io::FileChangeBatch& batch);
     void onLuaSettingsChanged();
@@ -1052,6 +1058,7 @@ private:
     // Declared before m_cmake, which runs through it, so it is destroyed after it (RUN-1).
     std::unique_ptr<run::RunManager> m_runManager;
     std::unique_ptr<CMakeIntegration> m_cmake;
+    std::unique_ptr<StandaloneBuildBackend> m_standalone;
     // RUN-3: a CMake target chosen in the run configuration combo that the targets window could not
     // take yet (it showed an older model); connectCMakeRunConfigurations applies it. "" for none.
     std::string m_pendingCMakeTarget;
@@ -1212,6 +1219,8 @@ private:
     std::vector<std::string> m_discarded;
     std::optional<lang::AssetReferenceReport> m_lastAssetReferenceReport;
     bool m_suppressNewFileNotice = false;
+    bool m_solutionLoading = false;
+    std::stop_source m_solutionLoadStop;
     bool m_shutDown = false;
 };
 

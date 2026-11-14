@@ -49,6 +49,27 @@ std::map<std::string, std::string> members(const std::string& line) {
     return out;
 }
 
+TEST(ProjectEditProtocol, PropertyPagesPreserveExpressionsAsJsonStrings) {
+    auto edit = fileEdit(ProjectEditKind::SetProperties);
+    edit.files.clear();
+    edit.earlyProperties = true;
+    edit.propertyUpdates = {
+        {"ClCompile.AdditionalIncludeDirectories", "$(ProjectDir)include;%(AdditionalIncludeDirectories)"},
+        {"Prop.NMakeBuildCommandLine", "tool \"quoted\"\nnext line"}};
+    auto line = projectEditRequest(edit);
+    ASSERT_TRUE(line) << line.error().describe();
+    const auto got = members(*line);
+    EXPECT_EQ(got.at("Set:ClCompile.AdditionalIncludeDirectories"), edit.propertyUpdates[0].second);
+    EXPECT_EQ(got.at("Set:Prop.NMakeBuildCommandLine"), edit.propertyUpdates[1].second);
+    EXPECT_EQ(got.at("EarlyProperties"), "true");
+    EXPECT_FALSE(got.contains("Add"));
+    EXPECT_EQ(got.at("Configuration"), "Debug");
+    edit.propertyUpdates = {{"Prop.Bad.Name", "value"}};
+    EXPECT_FALSE(projectEditRequest(edit));
+    edit.propertyUpdates.clear();
+    EXPECT_FALSE(projectEditRequest(edit));
+}
+
 TEST(ProjectEditProtocol, FileEditsNameTheProjectTheirFilesAndTheConfiguration) {
     auto add = fileEdit(ProjectEditKind::AddFiles);
     add.files.push_back(MemTree::path("App/sub dir/b \"quoted\".h"));

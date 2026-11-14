@@ -185,7 +185,7 @@ std::string normalizeFilterPath(std::string_view filter) {
 template<class Warn>
 std::vector<std::string> resolveInclude(io::IFileSystem& fs, std::string_view directory, std::string_view entry,
                                         const Scope& scope, std::vector<std::string>& unresolved, bool& wildcard,
-                                        const Warn& warn) {
+                                        const Warn& warn, std::stop_token stop = {}) {
     wildcard = false;
     auto expanded = expandProperties(entry, scope);
     if (!expanded) {
@@ -199,7 +199,7 @@ std::vector<std::string> resolveInclude(io::IFileSystem& fs, std::string_view di
             warn(std::format("Include '{}' skipped: {}", entry, pattern.error().message()));
             return {};
         }
-        auto expansion = detail::expandWildcard(fs, *pattern);
+        auto expansion = detail::expandWildcard(fs, *pattern, {.stop = stop});
         if (!expansion) {
             warn(std::format("Include '{}' skipped: {}", entry, expansion.error().message()));
             return {};
@@ -220,11 +220,13 @@ std::vector<std::string> resolveInclude(io::IFileSystem& fs, std::string_view di
 class VcxprojParser {
 public:
     VcxprojParser(io::IFileSystem& fs, VcxProject& project, const VcxprojOptions& options)
-        : m_fs(fs), m_project(project), m_scope{project.properties, options.environment} {}
+        : m_fs(fs), m_project(project), m_stop(options.stop), m_scope{project.properties, options.environment} {}
 
     // Walks a <Project>, <When> or <Otherwise> element.
     void walk(const pugi::xml_node& parent) {
         for (pugi::xml_node child = parent.first_child(); child; child = child.next_sibling()) {
+            if (m_stop.stop_requested())
+                return;
             if (isElement(child, "PropertyGroup")) {
                 propertyGroup(child);
             } else if (isElement(child, "ItemGroup")) {
@@ -284,6 +286,8 @@ private:
         const std::string_view groupCondition = trim(attribute(group, "Condition"));
         const auto configuration = groupCondition.empty() ? std::nullopt : configurationCondition(groupCondition);
         for (pugi::xml_node property = group.first_child(); property; property = property.next_sibling()) {
+            if (m_stop.stop_requested())
+                return;
             if (property.type() != pugi::node_element) {
                 continue;
             }
@@ -323,6 +327,8 @@ private:
     void itemDefinitionGroup(const pugi::xml_node& group) {
         const std::string_view groupCondition = trim(attribute(group, "Condition"));
         for (pugi::xml_node item = group.first_child(); item; item = item.next_sibling()) {
+            if (m_stop.stop_requested())
+                return;
             if (item.type() != pugi::node_element || !iequals(localName(item), "ClCompile")) {
                 continue;
             }
@@ -355,6 +361,8 @@ private:
 
     void itemGroup(const pugi::xml_node& group) {
         for (pugi::xml_node item = group.first_child(); item; item = item.next_sibling()) {
+            if (m_stop.stop_requested())
+                return;
             if (item.type() != pugi::node_element) {
                 continue;
             }
@@ -399,8 +407,9 @@ private:
         const std::string guid = detail::normalizeGuid(elementText(detail::childElement(item, "Project")));
         for (std::string_view entry : detail::splitTrimmed(attribute(item, "Include"), ';')) {
             bool wildcard = false;
-            auto paths = resolveInclude(m_fs, m_project.directory, entry, m_scope, m_project.unresolvedIncludes,
-                                        wildcard, [this](std::string message) { warn(std::move(message)); });
+            auto paths = resolveInclude(
+                m_fs, m_project.directory, entry, m_scope, m_project.unresolvedIncludes, wildcard,
+                [this](std::string message) { warn(std::move(message)); }, m_stop);
             for (std::string& path : paths) {
                 if (m_references.insert(detail::pathKey(path)).second) {
                     m_project.references.push_back(
@@ -428,8 +437,9 @@ private:
         }
         for (std::string_view entry : detail::splitTrimmed(include, ';')) {
             bool wildcard = false;
-            auto paths = resolveInclude(m_fs, m_project.directory, entry, m_scope, m_project.unresolvedIncludes,
-                                        wildcard, [this](std::string message) { warn(std::move(message)); });
+            auto paths = resolveInclude(
+                m_fs, m_project.directory, entry, m_scope, m_project.unresolvedIncludes, wildcard,
+                [this](std::string message) { warn(std::move(message)); }, m_stop);
             for (std::string& path : paths) {
                 bool excluded = false;
                 for (const detail::PathPattern& exclude : excludes) {
@@ -449,6 +459,7 @@ private:
 
     io::IFileSystem& m_fs;
     VcxProject& m_project;
+    std::stop_token m_stop;
     const Scope m_scope; // The project's property table, then the environment.
     std::vector<std::pair<std::string, PerConfiguration>> m_perConfiguration;
     std::unordered_set<std::string> m_items;      // Path keys of m_project.items.
@@ -555,6 +566,8 @@ Result<VcxProject> parseVcxproj(io::IFileSystem& fs, std::string_view content, s
     seedProperties(project, options);
     VcxprojParser parser(fs, project, options);
     parser.walk(doc.document_element());
+    if (options.stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "project parsing cancelled");
     parser.finish();
     return project;
 }
@@ -622,6 +635,8 @@ Result<std::map<std::string, std::string, std::less<>>> parseConfigurationProper
 }
 
 Result<VcxProject> readVcxproj(io::IFileSystem& fs, std::string_view projectPath, const VcxprojOptions& options) {
+    if (options.stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "project read cancelled");
     auto content = fs.readFile(projectPath);
     if (!content) {
         return std::unexpected(std::move(content.error()));
@@ -647,6 +662,8 @@ Result<FiltersFile> parseVcxprojFilters(io::IFileSystem& fs, std::string_view co
             continue;
         }
         for (pugi::xml_node item = group.first_child(); item; item = item.next_sibling()) {
+            if (options.stop.stop_requested())
+                return fail(ErrorCode::Cancelled, "project filters cancelled");
             if (item.type() != pugi::node_element) {
                 continue;
             }
@@ -664,7 +681,8 @@ Result<FiltersFile> parseVcxprojFilters(io::IFileSystem& fs, std::string_view co
             const std::string filter = normalizeFilterPath(elementText(detail::childElement(item, "Filter")));
             for (std::string_view entry : detail::splitTrimmed(include, ';')) {
                 bool wildcard = false;
-                auto paths = resolveInclude(fs, project.directory, entry, scope, unresolved, wildcard, warn);
+                auto paths =
+                    resolveInclude(fs, project.directory, entry, scope, unresolved, wildcard, warn, options.stop);
                 for (std::string& itemPath : paths) {
                     if (itemKeys.insert(detail::pathKey(itemPath)).second) {
                         out.assignments.push_back({.itemPath = std::move(itemPath), .filter = filter});
@@ -676,10 +694,14 @@ Result<FiltersFile> parseVcxprojFilters(io::IFileSystem& fs, std::string_view co
     for (const std::string& entry : unresolved) {
         out.warnings.push_back(std::format("Include '{}' names an unknown property", entry));
     }
+    if (options.stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "project filters cancelled");
     return out;
 }
 
 Result<FiltersFile> readVcxprojFilters(io::IFileSystem& fs, const VcxProject& project, const VcxprojOptions& options) {
+    if (options.stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "project read cancelled");
     auto content = fs.readFile(project.path + ".filters");
     if (!content) {
         if (content.error().code() == ErrorCode::NotFound) {

@@ -103,6 +103,9 @@ inline constexpr Key<RecordList> cmakeBuildWrappers{"cmake.buildWrappers"};
 
 // Tool paths: Application-only `executes` keys; empty means "detect" or "bundled".
 inline constexpr Key<std::string> toolsMsbuildPath{"tools.msbuild.path"};
+inline constexpr Key<std::string> toolsVcpkgPath{"tools.vcpkg.path"};
+inline constexpr Key<std::string> toolsConanPath{"tools.conan.path"};
+inline constexpr Key<std::string> toolsNugetPath{"tools.nuget.path"};
 inline constexpr Key<std::string> toolsCmakePath{"tools.cmake.path"};
 inline constexpr Key<std::string> toolsNinjaPath{"tools.ninja.path"};
 inline constexpr Key<std::string> toolsGitPath{"tools.git.path"};

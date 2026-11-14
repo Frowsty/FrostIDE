@@ -227,9 +227,11 @@ TEST(GeneratedSolution, EvaluatedItemsReplaceTheStaticOnesAndFollowTheFilters) {
     add(ItemType::ClCompile, "ClCompile", "Core/src/a.cpp"); // Listed twice, shown once.
     add(ItemType::ClInclude, "ClInclude", "shared/config.h");
     add(ItemType::Text, "Text", "Core/unlisted.txt");
-    auto model = SolutionModel::load(
-        io::realFileSystem(), generated("Generated.sln"),
-        {.cppHierarchy = CppHierarchyMode::Filters, .unloadedProjectPaths = {}, .evaluated = {core}});
+    auto model = SolutionModel::load(io::realFileSystem(), generated("Generated.sln"),
+                                     {.cppHierarchy = CppHierarchyMode::Filters,
+                                      .unloadedProjectPaths = {},
+                                      .evaluated = {core},
+                                      .mode = SolutionModelMode::NativeStatic});
     ASSERT_TRUE(model.has_value()) << model.error().describe();
     const auto id = model->findProjectByPath(generated("Core/Core.vcxproj"));
     ASSERT_TRUE(id.has_value());

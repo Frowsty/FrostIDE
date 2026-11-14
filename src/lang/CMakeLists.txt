@@ -26,12 +26,14 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FROST_SOURCE_D
 
 frost_add_library(lang LAYER lang
     SOURCES
+        src/json_schema.cpp
         src/cl_command_lines_provider.cpp
         src/clangd_actions.cpp
         src/clangd_locator.cpp
         src/clangd_service.cpp
         src/cmake_compile_commands.cpp
         src/cpp_rename_plan.cpp
+        src/cmake_language.cpp
         src/code_assist.cpp
         src/code_vision.cpp
         src/compile_commands.cpp

@@ -126,6 +126,10 @@ void Workbench::addProjectFiles(const QString& projectName, const std::vector<st
 }
 
 std::optional<QString> Workbench::projectEditBlocked(const std::string& projectPath) {
+    if (m_solution) {
+        if (auto allowed = m_solution->requireProjectMutation(); !allowed)
+            return q(allowed.error().message());
+    }
 #ifndef _WIN32
     static_cast<void>(projectPath);
     return QStringLiteral("Project-definition edits are currently available on Windows only.");
@@ -141,6 +145,10 @@ std::optional<QString> Workbench::projectEditBlocked(const std::string& projectP
 }
 
 Result<std::pair<std::string, std::string>> Workbench::projectEditTools() {
+    if (m_solution) {
+        if (auto allowed = m_solution->requireProjectMutation(); !allowed)
+            return std::unexpected(allowed.error());
+    }
     std::string executable = m_options.projectEditHostPath;
     if (executable.empty())
         executable = utf8(QDir(QCoreApplication::applicationDirPath())
@@ -161,6 +169,37 @@ Result<std::pair<std::string, std::string>> Workbench::projectEditTools() {
     if (auto made = m_services.fs.createDirectories(m_options.projectEditStateDirectory); !made)
         return std::unexpected(std::move(made.error()));
     return std::pair{std::move(executable), std::move(msbuild)};
+}
+
+Result<project::HostEvaluation> Workbench::evaluatePropertyPage(const std::string& projectPath, const std::string& root,
+                                                                const std::string& solution,
+                                                                std::string_view configuration,
+                                                                const std::vector<std::string>& keys,
+                                                                std::stop_token stop) {
+    const auto bar = configuration.find('|');
+    if (bar == std::string_view::npos)
+        return fail(ErrorCode::InvalidArgument, "Choose one project configuration.");
+    if (!m_services.trust.isTrusted(root) || !m_services.trust.isTrusted(projectPath))
+        return fail(ErrorCode::Untrusted, "Project evaluation requires a trusted solution.");
+    auto tools = projectEditTools();
+    if (!tools)
+        return std::unexpected(std::move(tools.error()));
+    // Locate tools before the final trust check: only trusted projects may start the helper.
+    if (!m_services.trust.isTrusted(root) || !m_services.trust.isTrusted(projectPath))
+        return fail(ErrorCode::Untrusted, "Project trust changed before evaluation.");
+    auto client = project::ProjectHostClient::start(m_services.launcher,
+                                                    {.hostPath = tools->first, .msbuildPath = tools->second}, stop);
+    if (!client)
+        return std::unexpected(std::move(client.error()));
+    if (!m_services.trust.isTrusted(root) || !m_services.trust.isTrusted(projectPath))
+        return fail(ErrorCode::Untrusted, "Project trust changed before evaluation.");
+    return (*client)->evaluate({.projectPath = projectPath,
+                                .configuration = std::string(configuration.substr(0, bar)),
+                                .platform = std::string(configuration.substr(bar + 1)),
+                                .solutionPath = solution,
+                                .itemTypes = {"_FrostPropertyPages"},
+                                .properties = keys},
+                               stop);
 }
 
 bool Workbench::projectEditJournalPresent() {
@@ -218,7 +257,8 @@ std::optional<QString> Workbench::submitProjectEdit(project::ProjectEdit edit, c
     const auto projectIt = std::ranges::find_if(solution->projects(), [&](const auto& item) {
         return lang::documentKey(item.path) == lang::documentKey(projectPath);
     });
-    if (projectIt == solution->projects().end() || !projectIt->vcxproj || edit.files.empty())
+    if (projectIt == solution->projects().end() || !projectIt->vcxproj ||
+        (edit.files.empty() && edit.kind != project::ProjectEditKind::SetProperties))
         return QStringLiteral("The file does not belong to a loaded C++ project.");
     const auto listed = [&](const std::string& path) {
         return std::ranges::any_of(projectIt->vcxproj->items, [&](const project::ProjectItem& item) {
@@ -249,14 +289,22 @@ std::optional<QString> Workbench::submitProjectEdit(project::ProjectEdit edit, c
             (edit.renamedTo.size() != edit.files.size() ||
              !std::ranges::all_of(edit.renamedTo, [&](const auto& path) { return m_services.trust.isTrusted(path); })))
             return QStringLiteral("The renamed files are not inside the trusted solution.");
-    } else {
-        return QStringLiteral("Only file edits of a C++ project are available here.");
+    } else if (edit.kind != project::ProjectEditKind::SetProperties) {
+        return QStringLiteral("Only file and property edits of a C++ project are available here.");
     }
     const auto active = m_build->activeConfigurationIndex();
     if (!active || *active >= projectIt->configurationMap.size() || !projectIt->configurationMap[*active])
         return QStringLiteral("The project has no active configuration.");
-    edit.configuration = projectIt->configurationMap[*active]->configuration;
-    edit.platform = projectIt->configurationMap[*active]->platform;
+    if (edit.kind != project::ProjectEditKind::SetProperties) {
+        edit.configuration = projectIt->configurationMap[*active]->configuration;
+        edit.platform = projectIt->configurationMap[*active]->platform;
+    } else {
+        const auto pair = edit.configuration + "|" + edit.platform;
+        if (!std::ranges::any_of(projectIt->configurationMap, [&](const auto& mapped) {
+                return mapped && mapped->configuration + "|" + mapped->platform == pair;
+            }))
+            return QStringLiteral("Choose a project configuration mapped by the solution.");
+    }
     const std::string filters = projectPath + ".filters";
     const auto definitionsClosed = [this, projectPath, filters] {
         return !m_documentRegistry->find(projectPath) && !m_documentRegistry->find(filters);
