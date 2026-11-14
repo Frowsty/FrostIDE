@@ -12,6 +12,8 @@
 #pragma once
 
 #include "frost/debug/breakpoints.hpp"
+#include "frost/debug/dap_types.hpp"
+#include <vector>
 
 #include <QDialog>
 #include <QString>
@@ -93,6 +95,7 @@ private:
     void buildBreakpointsTab();
     void buildMemoryAndDisassemblyTab();
     void wireControllerSignals();
+    void restorePinnedWatches();
     void updateActions();
     void updateThreads();
     void updateBreakpointsList();
@@ -139,8 +142,13 @@ private:
     QPushButton* m_readMemoryButton = nullptr;
     QTreeWidget* m_disassemblyTree = nullptr;
     QPlainTextEdit* m_memoryView = nullptr;
+    std::vector<debug::dap::DisassembledInstruction> m_disassembledInstructions;
+    std::int64_t m_instructionOffset = 0;
+    std::int64_t m_memoryOffset = 0;
+    std::uint64_t m_disassemblyEpoch = 0;
     std::uint64_t m_disassemblyRequest = 0;
     std::uint64_t m_memoryRequest = 0;
+    bool m_restoringWatches = false;
     bool m_fillingThreads = false;
     bool m_fillingBreakpoints = false;
     bool m_editingBreakpoint = false; // Inside the list's itemChanged: rebuild it later.

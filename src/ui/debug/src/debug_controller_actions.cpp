@@ -409,7 +409,40 @@ Result<debug::BreakpointId> DebugController::addFunctionBreakpoint(const QString
     return m_breakpoints.addFunction(name.trimmed().toStdString());
 }
 
-void DebugController::disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done) {
+bool DebugController::navigateInstruction(const debug::dap::DisassembledInstruction& instruction) {
+    if (!m_session || !paused() || m_session->state() != debug::DebugState::Stopped || !m_editorPresentation || !instruction.location || instruction.line <= 0 || instruction.line > 2147483647)
+        return report(fail(ErrorCode::NotFound, "This instruction has no source location"), QStringLiteral("Open instruction source"));
+    const auto& source = *instruction.location;
+    debug::DebugFrame frame;
+    frame.name = instruction.symbol; frame.path = source.path; frame.sourceName = source.name;
+    frame.sourceReference = source.sourceReference; frame.line = instruction.line;
+    if (m_coreClrFrameAllowed && !m_coreClrFrameAllowed(frame))
+        return report(fail(ErrorCode::Unsupported, "Instruction source is outside verified managed sources"), QStringLiteral("Open instruction source"));
+    if (source.sourceReference > 0) {
+        clearLoadedSource();
+        const auto sourceEpoch = m_sourceEpoch;
+        const auto epoch = m_session->inspectionGeneration();
+        const auto generation = m_generation;
+        const auto relay = m_relay;
+        const auto name = QString::fromStdString(source.name);
+        const auto line = static_cast<int>(instruction.line);
+        m_session->source(source.sourceReference, [relay, generation, epoch, sourceEpoch, name, line](Result<std::string> body) {
+            relay->post(generation, [epoch, sourceEpoch, name, line, body = std::move(body)](DebugController* self) {
+                if (!self->m_session || !self->paused() || self->m_session->inspectionGeneration() != epoch ||
+                    self->m_sourceEpoch != sourceEpoch) return;
+                if (!body) { self->report(std::unexpected(body.error()), QStringLiteral("Open instruction source")); return; }
+                emit self->loadedSourceChanged(name, QString::fromStdString(*body), line);
+            });
+        });
+        return true;
+    }
+    if (!m_editorPresentation || !m_hooks.openSource || !io::isAbsolutePath(source.path))
+        return report(fail(ErrorCode::NotFound, "Instruction source file is unavailable"), QStringLiteral("Open instruction source"));
+    m_hooks.openSource(QString::fromStdString(source.path), static_cast<int>(instruction.line));
+    return true;
+}
+
+void DebugController::disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done, std::int64_t offset) {
     if (!m_session) {
         return;
     }
@@ -429,10 +462,10 @@ void DebugController::disassemble(const QString& memoryReference, int instructio
                     done(std::move(res));
                 }
             });
-        });
+        }, offset);
 }
 
-void DebugController::readMemory(const QString& memoryReference, int count, ReadMemoryDone done) {
+void DebugController::readMemory(const QString& memoryReference, int count, ReadMemoryDone done, std::int64_t offset) {
     if (!m_session) {
         return;
     }
@@ -451,7 +484,7 @@ void DebugController::readMemory(const QString& memoryReference, int count, Read
                                       done(std::move(res));
                                   }
                               });
-                          });
+                          }, offset);
 }
 
 // --- Breakpoints ---

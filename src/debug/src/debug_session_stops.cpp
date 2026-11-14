@@ -674,7 +674,7 @@ Result<void> DebugSession::State::resume(const std::string& command, rpc::Json e
         oldFrames = frames;
         oldFrame = currentFrame;
         state = DebugState::Running;
-        stepInPhase = command == "stepIn" && extra.stringAt("granularity") != "instruction"
+        stepInPhase = command == "stepIn" && extra.find("targetId") == nullptr && extra.stringAt("granularity") != "instruction"
                           ? StepInPhase::Stepping : StepInPhase::None;
         thunkHops = 0;
         stepInOrigin.reset();

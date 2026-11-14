@@ -276,6 +276,7 @@ void VariablesModel::addWatch(const QString& expression) {
     if (m_mode != Mode::Watches || trimmed.isEmpty()) {
         return;
     }
+    if (std::ranges::any_of(m_root->children, [&](const auto& watch) { return watch->name == trimmed; })) return;
     auto node = std::make_unique<Node>();
     node->kind = Node::Kind::Watch;
     node->name = trimmed;
@@ -284,8 +285,10 @@ void VariablesModel::addWatch(const QString& expression) {
     Node* raw = adopt(std::move(node));
     raw->parent = m_root.get();
     m_root->children.emplace_back(raw);
+    const auto id = raw->id;
+    const QPointer<VariablesModel> self(this);
     endInsertRows();
-    evaluateWatch(*raw);
+    if (self) if (auto* current = self->find(id)) self->evaluateWatch(*current);
 }
 
 void VariablesModel::removeWatch(int row) {

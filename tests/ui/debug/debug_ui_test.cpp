@@ -197,6 +197,84 @@ TEST_F(DebugUiTest, SelectedGdbRoutesLaunchAndAttachThroughVersionAdmission) {
     EXPECT_EQ(launcher.launches().size(), 2U);
 }
 #endif
+TEST_F(DebugUiTest, LowLevelPagingPreservesOpaqueBaseAndNavigatesOnlyAdapterSource) {
+    ASSERT_TRUE(breakpoints.add(source, 10));
+    debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .codeLines = {10}});
+    adapter.on("initialize", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("supportsConfigurationDoneRequest", true)
+            .set("supportsDisassembleRequest", true).set("supportsReadMemoryRequest", true)}; });
+    adapter.on("disassemble", [this](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("instructions", rpc::Json::array({rpc::Json::object().set("address", "0x1040")
+            .set("instruction", "mov eax, 42").set("location", rpc::Json::object().set("path", source))
+            .set("line", 12)}))}; });
+    adapter.on("readMemory", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("address", "0x1100").set("data", "QQ==").set("unreadableBytes", 255)}; });
+    DebugToolWindow window(*controller);
+    ASSERT_TRUE(controller->startTarget(target()));
+    ASSERT_TRUE(spinUntil([&] { return controller->paused() && controller->selectedFrame().has_value(); }));
+    window.memoryAddressInput()->setText(QStringLiteral("opaque:code/block-7"));
+    QPushButton* nextCode = nullptr; QPushButton* nextMemory = nullptr;
+    for (auto* button : window.findChildren<QPushButton*>()) {
+        if (button->text() == QStringLiteral("Instructions +64")) nextCode = button;
+        if (button->text() == QStringLiteral("Memory +256 bytes")) nextMemory = button;
+    }
+    ASSERT_NE(nextCode, nullptr); ASSERT_NE(nextMemory, nullptr);
+    nextCode->click();
+    ASSERT_TRUE(spinUntil([&] { return window.disassemblyView()->topLevelItemCount() == 1; }));
+    const auto code = adapter.argumentsOf("disassemble").back();
+    EXPECT_EQ(code.stringAt("memoryReference"), "opaque:code/block-7");
+    EXPECT_EQ(code.integerAt("instructionOffset"), 64);
+    EXPECT_EQ(code.integerAt("instructionCount"), 64);
+    const auto openedBefore = opened.size();
+    window.disassemblyView()->itemActivated(window.disassemblyView()->topLevelItem(0), 0);
+    ASSERT_EQ(opened.size(), openedBefore + 1);
+    EXPECT_EQ(opened.back().first, QString::fromStdString(source)); EXPECT_EQ(opened.back().second, 12);
+    nextMemory->click();
+    ASSERT_TRUE(spinUntil([&] { return !window.memoryView()->toPlainText().isEmpty(); }));
+    const auto memory = adapter.argumentsOf("readMemory").back();
+    EXPECT_EQ(memory.stringAt("memoryReference"), "opaque:code/block-7");
+    EXPECT_EQ(memory.integerAt("offset"), 256);
+    EXPECT_EQ(memory.integerAt("count"), 256);
+    stopSession();
+    EXPECT_EQ(window.disassemblyView()->topLevelItemCount(), 0);
+    EXPECT_TRUE(window.memoryView()->toPlainText().isEmpty());
+}
+
+TEST_F(DebugUiTest, DuplicatePinnedWatchThenNewWatchNeverInvalidatesInsertingNode) {
+    ASSERT_TRUE(controller->setWorkspaceRoot(workPath("Trusted")));
+    DebugToolWindow window(*controller);
+    window.watchesModel()->addWatch(QStringLiteral("A"));
+    window.watchesModel()->addWatch(QStringLiteral("A"));
+    window.watchesModel()->addWatch(QStringLiteral("B"));
+    ASSERT_TRUE(spinUntil([&] { return controller->pinnedWatches() == QStringList{QStringLiteral("A"), QStringLiteral("B")}; }));
+    EXPECT_EQ(window.watchesModel()->watches(), (QStringList{QStringLiteral("A"), QStringLiteral("B")}));
+    EXPECT_EQ(window.watchesModel()->rowCount(), 2);
+}
+
+TEST_F(DebugUiTest, PinnedWatchesReopenFromPersonalWorkspaceWithoutASession) {
+    ASSERT_TRUE(controller->setWorkspaceRoot(workPath("Trusted")));
+    {
+        DebugToolWindow window(*controller);
+        window.watchesModel()->addWatch(QStringLiteral("obj.count"));
+        window.watchesModel()->addWatch(QStringLiteral("values[7]"));
+        // Close before the queued persistence turn; the destructor must flush the last edit.
+    }
+    EXPECT_EQ(controller->pinnedWatches(), (QStringList{QStringLiteral("obj.count"), QStringLiteral("values[7]")}));
+    controller.reset();
+    controller = makeController(breakpoints);
+    ASSERT_TRUE(controller->setWorkspaceRoot(workPath("Trusted")));
+    {
+        DebugToolWindow reopened(*controller);
+        EXPECT_EQ(reopened.watchesModel()->watches(), (QStringList{QStringLiteral("obj.count"), QStringLiteral("values[7]")}));
+        reopened.watchesModel()->removeWatch(0);
+        ASSERT_TRUE(spinUntil([&] { return controller->pinnedWatches().size() == 1; }));
+    }
+    controller.reset(); controller = makeController(breakpoints);
+    ASSERT_TRUE(controller->setWorkspaceRoot(workPath("Trusted")));
+    EXPECT_EQ(controller->pinnedWatches(), (QStringList{QStringLiteral("values[7]")}));
+    EXPECT_TRUE(adapter.argumentsOf("evaluate").empty());
+}
+
 // R9 fixture: LLDB returns register groups whose children hold the actual register values.
 // A flat first-level register pane would show only "General Purpose Registers" and fail here.
 TEST_F(DebugUiTest, RegisterGroupsLoadActualRegistersOnlyWhenExpanded) {

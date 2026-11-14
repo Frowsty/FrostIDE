@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "frost/debug/pinned_watches.hpp"
 //
 // DebugController (see frost/ui/debug_controller.hpp): session lifecycle, Debug run and attach
 // hand-off, and the relay from session callbacks to the GUI thread.
@@ -108,7 +109,9 @@ void DebugController::setConsole(RunConsole* console) {
 RunConsole* DebugController::console() const noexcept { return m_console.data(); }
 
 Result<void> DebugController::setWorkspaceRoot(std::string root) {
-    m_root.clear(); // Suppress persistence while the old set is cleared and the new set loaded.
+    m_root.clear(); // Suppress persistence while old state is cleared and new state is loaded.
+    m_pinnedWatches.clear();
+    emit pinnedWatchesChanged(m_pinnedWatches);
     if (root.empty()) {
         m_breakpoints.clear();
         return {};
@@ -116,9 +119,33 @@ Result<void> DebugController::setWorkspaceRoot(std::string root) {
     if (m_options.fs == nullptr)
         return {};
     auto loaded = m_breakpoints.load(*m_options.fs, root);
-    if (loaded)
+    if (loaded) {
         m_root = std::move(root);
+        auto watches = debug::loadPinnedWatches(*m_options.fs, m_root);
+        if (!watches) return std::unexpected(watches.error());
+        for (const auto& watch : *watches) m_pinnedWatches.push_back(QString::fromStdString(watch));
+        emit pinnedWatchesChanged(m_pinnedWatches);
+    }
     return loaded;
+}
+
+void DebugController::setPinnedWatches(const QStringList& expressions) {
+    QStringList normalized;
+    for (const auto& expression : expressions) {
+        const auto trimmed = expression.trimmed();
+        if (!trimmed.isEmpty() && !normalized.contains(trimmed)) normalized.push_back(trimmed);
+    }
+    if (normalized == m_pinnedWatches) return;
+    std::vector<std::string> stored;
+    for (const auto& expression : normalized) stored.push_back(expression.toStdString());
+    if (!m_root.empty() && m_options.fs) {
+        if (auto saved = debug::savePinnedWatches(*m_options.fs, m_root, stored); !saved) {
+            report(std::unexpected(saved.error()), QStringLiteral("Save pinned watches"));
+            return;
+        }
+    }
+    m_pinnedWatches = std::move(normalized);
+    emit pinnedWatchesChanged(m_pinnedWatches);
 }
 
 void DebugController::save() {
@@ -414,6 +441,14 @@ Result<void> DebugController::startSession(std::string title, std::string progra
                     emit self->stateChanged();
                 });
             },
+        .onVisualizersChanged =
+            [relay, generation](const std::vector<std::string>& paths) {
+                relay->post(generation, [paths](DebugController* self) {
+                    self->m_visualizers.clear();
+                    for (const auto& path : paths) self->m_visualizers.push_back(QString::fromStdString(path));
+                    emit self->visualizersChanged(self->m_visualizers);
+                });
+            },
     };
     m_breakpoints.resetStatus(debug::BreakpointStatus::Pending);
     auto session = starter(std::move(callbacks));
@@ -644,6 +679,7 @@ void DebugController::endSession() {
     m_currentFrameVariables.clear();
     m_frameScopeReferences.clear();
     m_hoverCache.clear();
+    m_visualizers.clear();
     m_coreClrFrameAllowed = {};
     m_coreClrAllowedSources.clear();
     m_coreClrBreakpointValidator = {};
@@ -661,6 +697,7 @@ void DebugController::endSession() {
     ended.reset(); // Joins the client's threads (the adapter has exited or was killed).
     m_breakpoints.resetStatus(debug::BreakpointStatus::Unknown);
     showExecutionPoint();
+    emit visualizersChanged(m_visualizers);
     emit threadsChanged();
     emit framesChanged();
     emit stateChanged();

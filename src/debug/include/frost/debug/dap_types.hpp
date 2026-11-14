@@ -61,6 +61,7 @@ struct Capabilities {
     bool frostSupportsNatvisReload = false;
     bool frostSupportsRegisters = false;
     bool frostSupportsRawView = false;
+    std::optional<bool> frostStructuredNatvis;
     std::vector<ExceptionFilter> exceptionBreakpointFilters{};
 };
 

@@ -41,6 +41,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 
 #include <chrono>
@@ -294,7 +295,10 @@ public:
     void variables(std::int64_t reference, std::int64_t start, std::int64_t count, VariablesDone done);
     // Evaluates in the selected frame.
     void evaluate(const QString& expression, const QString& context, EvaluateDone done);
+    [[nodiscard]] const QStringList& pinnedWatches() const noexcept { return m_pinnedWatches; }
+    void setPinnedWatches(const QStringList& expressions);
     void setRawValues(bool enabled) { m_rawValues = enabled; emit valuesFormatChanged(); }
+    [[nodiscard]] const QStringList& visualizers() const noexcept { return m_visualizers; }
     [[nodiscard]] bool rawValues() const noexcept { return m_rawValues; }
     void setHexadecimalValues(bool enabled) { m_hexadecimalValues = enabled; emit valuesFormatChanged(); }
     [[nodiscard]] bool hexadecimalValues() const noexcept { return m_hexadecimalValues; }
@@ -306,11 +310,14 @@ public:
     bool setExceptionFilterEnabled(std::string_view filter, bool enabled);
     // Adds a function breakpoint by name. Errors: InvalidArgument (empty, or more than one line).
     [[nodiscard]] Result<debug::BreakpointId> addFunctionBreakpoint(const QString& name);
-    void disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done);
-    void readMemory(const QString& memoryReference, int count, ReadMemoryDone done);
+    bool navigateInstruction(const debug::dap::DisassembledInstruction& instruction);
+    void disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done, std::int64_t offset = 0);
+    void readMemory(const QString& memoryReference, int count, ReadMemoryDone done, std::int64_t offset = 0);
 
 signals:
     void valuesFormatChanged();
+    void pinnedWatchesChanged(const QStringList& expressions);
+    void visualizersChanged(const QStringList& paths);
     // The session console's user Stop button, before stop(). Automatic cleanup calls stop directly.
     void userStopRequested();
     // Adapter-confirmed termination, tagged with the session that emitted it.
@@ -419,6 +426,8 @@ private:
     std::vector<debug::dap::Variable> m_currentFrameVariables;
     std::vector<std::int64_t> m_frameScopeReferences; // The scopes those come from.
     bool m_editorPresentation = true;
+    QStringList m_pinnedWatches;
+    QStringList m_visualizers;
     bool m_rawValues = false;
     bool m_hexadecimalValues = false;
     bool m_nativeSession = false; // The session is lldb-dap's (launch or attach).

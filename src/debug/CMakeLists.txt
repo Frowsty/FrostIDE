@@ -27,6 +27,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FROST_SOURCE_D
 
 frost_add_library(debug LAYER debug
     SOURCES
+        src/pinned_watches.cpp
         src/breakpoints.cpp
         src/coreclr_dap.cpp
         src/dap_client.cpp

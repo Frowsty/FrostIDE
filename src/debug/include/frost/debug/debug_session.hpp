@@ -253,6 +253,8 @@ struct DebugSessionCallbacks {
     std::function<void()> onContinued{};
     // A genuine announced adapter stop, excluding restoration after a refused resume request.
     std::function<void()> onAdapterStopped{};
+    // Actual adapter-reported loaded Natvis paths, never inferred from requested launch options.
+    std::function<void(const std::vector<std::string>&)> onVisualizersChanged{};
 };
 
 // How a session starts (DebugSession::start).

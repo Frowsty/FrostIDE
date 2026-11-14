@@ -386,6 +386,16 @@ void DebugSession::State::event(std::string_view name, const rpc::Json& body) {
         capabilitiesChanged(body);
     } else if (name == "module") {
         moduleEvent(body);
+    } else if (name == "frost.visualizersLoaded") {
+        const auto* paths = body.find("paths");
+        if (!paths || !paths->isArray() || paths->size() > 64) return;
+        std::vector<std::string> loaded;
+        for (const auto& path : paths->items()) {
+            const auto* value = path.asString();
+            if (!value || value->empty() || value->size() > 8192 || value->find('\0') != std::string::npos) return;
+            loaded.push_back(*value);
+        }
+        emit([&] { if (callbacks.onVisualizersChanged) callbacks.onVisualizersChanged(loaded); });
     } else if (name == "process") {
         const dap::ProcessEvent process = dap::parseProcessEvent(body);
         {
