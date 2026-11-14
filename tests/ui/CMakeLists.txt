@@ -295,6 +295,7 @@ if(TARGET frost_ui_lang)
             lang/lang_widgets_internal_test.cpp
             lang/lang_widgets_test.cpp
             lang/language_controller_test.cpp
+            lang/refactoring_preview_test.cpp
         DEPS frost::ui_lang frost::ui_editor frost::lang frost::build frost::input frost::text frost::sched frost::io
              frost_ui_test_support)
     _frost_ui_test_wiring(ui_lang_tests)

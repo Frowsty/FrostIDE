@@ -5,12 +5,14 @@
 // through clangd's tweaks, and the refactorings without a correct engine yet, which only report
 // the epic that owns them. No refactoring here computes an edit from line text.
 
+#include "frost/io/file_system.hpp"
 #include "frost/lang/clangd_actions.hpp"
 #include "frost/lang/code_assist.hpp"
 #include "frost/lang/navigation.hpp"
 #include "frost/lang/refactoring.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/ui/lang/language_controller.hpp"
+#include "frost/ui/lang/refactoring_preview.hpp"
 
 #include "language_controller_internal.hpp"
 
@@ -183,21 +185,26 @@ void LanguageController::onRenameAccepted(const QString& name) {
                 }
             }
             if (preview) {
-                std::vector<fl::Location> locs;
-                for (const fl::FileEdit& fe : edit->files) {
-                    for (const fl::TextEdit& te : fe.edits) {
-                        locs.push_back(fl::Location{.path = fe.path, .uri = fe.uri, .range = te.range});
+                const QPointer<LanguageController> guard(this);
+                auto read = [guard](std::string_view path) -> Result<std::string> {
+                    if (!guard) {
+                        return fail(ErrorCode::Cancelled, "The editor was closed");
                     }
-                }
-                m_usages->setUsages(QStringLiteral("Rename preview '%1' -> '%2'").arg(qs(oldName), qs(newName)),
-                                    fl::groupUsages(locs, {}, m_services.server.encoding()));
-                emit usagesReady();
-                m_choiceActions = {
-                    [this, finalEdit = *edit] { applyWorkspaceEdit(finalEdit, QStringLiteral("Rename")); }, [] {}};
-                m_choice->start(
-                    QStringLiteral("Preview Rename"),
-                    {QStringLiteral("Apply Rename (%1 occurrences)").arg(edit->editCount()), QStringLiteral("Cancel")},
-                    m_services.host.caretScreenRect(), {true, false});
+                    for (const auto& [openPath, snap] : guard->m_services.host.openDocuments()) {
+                        if (fl::documentKey(openPath) == fl::documentKey(path)) {
+                            return snap.text();
+                        }
+                    }
+                    return guard->m_services.fs.readFile(path);
+                };
+                auto* dialog = new RefactoringPreview(std::move(*edit), m_services.server.encoding(),
+                                                       std::move(read), m_services.host.editorWidget());
+                dialog->setWindowTitle(QStringLiteral("Rename '%1' to '%2'").arg(qs(oldName), qs(newName)));
+                dialog->setAttribute(Qt::WA_DeleteOnClose);
+                connect(dialog, &QDialog::accepted, this, [this, dialog] {
+                    applyWorkspaceEdit(dialog->selectedEdit(), QStringLiteral("Rename"));
+                });
+                dialog->open();
                 return;
             }
             applyWorkspaceEdit(*edit, QStringLiteral("Rename"));
