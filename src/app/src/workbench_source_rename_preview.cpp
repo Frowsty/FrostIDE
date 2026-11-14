@@ -29,7 +29,7 @@ public:
         setWindowTitle(solution ? text("Open solution") : text("Prepare source rename"));
         setWindowModality(Qt::ApplicationModal);
         auto* layout = new QVBoxLayout(this);
-        m_label = new QLabel(solution ? text("Reading solution projects…")
+        m_label = new QLabel(solution ? text("Reading solution projectsâ€¦")
                                       : text("Checking project memberships. No files have been changed."),
                              this);
         layout->addWidget(m_label);

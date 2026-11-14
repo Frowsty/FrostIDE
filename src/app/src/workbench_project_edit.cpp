@@ -126,6 +126,10 @@ void Workbench::addProjectFiles(const QString& projectName, const std::vector<st
 }
 
 std::optional<QString> Workbench::projectEditBlocked(const std::string& projectPath) {
+    if (m_solution) {
+        if (auto allowed = m_solution->requireProjectMutation(); !allowed)
+            return q(allowed.error().message());
+    }
 #ifndef _WIN32
     static_cast<void>(projectPath);
     return QStringLiteral("Project-definition edits are currently available on Windows only.");

@@ -447,7 +447,8 @@ void buildPropertyPagesUi(const std::vector<PageSpec>& specs, QTreeWidget* tree,
 void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std::string& projectPath,
                                  const std::string& activeConfigPlatform, std::function<void()> onSaved,
                                  std::function<Result<void>(std::string_view, const ProjectPropertyMap&)> saveProperties,
-                                 std::function<Result<ProjectPropertyMap>(std::string_view, const std::vector<std::string>&, std::stop_token)> evaluatedProperties) {
+                                 std::function<Result<ProjectPropertyMap>(std::string_view, const std::vector<std::string>&, std::stop_token)> evaluatedProperties,
+                                 std::function<Result<void>()> authorizeWrite) {
     auto readRes = fs.readFile(projectPath);
     if (!readRes) {
         QMessageBox::warning(parent, QStringLiteral("Project Properties"),
@@ -533,7 +534,7 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
         if (isCpp && evaluatedProperties && cfg.find('|') != std::string::npos) {
             std::vector<std::string> keys;
             for (const auto& binding : bindings) keys.push_back(binding.key);
-            evaluationStatus->setText(QStringLiteral("Evaluating imported property values…"));
+            evaluationStatus->setText(QStringLiteral("Evaluating imported property values..."));
             evaluationWorker = std::jthread([&, cfg, keys = std::move(keys), generation](std::stop_token stop) {
                 auto evaluated = evaluatedProperties(cfg, keys, stop);
                 if (stop.stop_requested()) return;
@@ -570,6 +571,13 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
         ++evaluationGeneration;
         evaluationWorker.request_stop();
         if (evaluationWorker.joinable()) evaluationWorker.join();
+        if (authorizeWrite) {
+            if (auto allowed = authorizeWrite(); !allowed) {
+                QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"),
+                                     toQs(allowed.error().message()));
+                return false;
+            }
+        }
         const std::string cfg = cfgCombo ? cfgCombo->currentText().toStdString() : std::string();
         if (isCpp) {
             auto admitted = saveProperties ? saveProperties(cfg, {})

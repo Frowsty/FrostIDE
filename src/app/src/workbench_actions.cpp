@@ -92,7 +92,7 @@ void Workbench::registerActions() {
             return;
         }
         QDialog viewer(m_window);
-        viewer.setWindowTitle(QStringLiteral("MSBuild Binary Log — %1").arg(selected));
+        viewer.setWindowTitle(QStringLiteral("MSBuild Binary Log â€” %1").arg(selected));
         viewer.resize(1000, 700);
         auto* layout = new QVBoxLayout(&viewer);
         ui::BuildController replayController;
@@ -245,6 +245,7 @@ void Workbench::registerActions() {
             std::string activeCfg = "Debug|x64";
             if (const auto idx = m_build->activeConfigurationIndex(); idx && *idx < m_build->configurations().size())
                 activeCfg = m_build->configurations()[*idx].name();
+            const auto propertiesSolution = m_solution;
             showProjectPropertiesDialog(m_window, m_services.fs, projPath, activeCfg, [this] {
                 refreshSolutionExplorerForFsChange();
                 startProjectEvaluation(m_projectRoot);
@@ -273,6 +274,10 @@ void Workbench::registerActions() {
             auto evaluated = evaluatePropertyPage(propertyProject, root, solution, configuration, keys, stop);
             if (!evaluated) return std::unexpected(std::move(evaluated.error()));
             return std::move(evaluated->properties);
+        }, [this, propertiesSolution]() -> Result<void> {
+            if (m_shutDown || m_solution != propertiesSolution)
+                return fail(ErrorCode::Busy, "Solution changed while property pages were open");
+            return propertiesSolution->requireProjectMutation();
         });
         },
         [this] { return m_window != nullptr && m_solution != nullptr; });

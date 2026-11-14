@@ -100,10 +100,13 @@ struct NuGetPackageEntry {
                                                          std::span<const std::string> filePaths);
 
 // Modal dialogs with custom frameless Rider chrome (`ui::installDialogChrome`).
+// Workbench supplies authorizeWrite to revalidate its current model before any changed property
+// (including C# XML and .user settings) is persisted. Plain source editors do not use this gate.
 void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std::string& projectPath,
                                  const std::string& activeConfigPlatform, std::function<void()> onSaved,
                                  std::function<Result<void>(std::string_view, const ProjectPropertyMap&)> saveProperties = {},
-                                 std::function<Result<ProjectPropertyMap>(std::string_view, const std::vector<std::string>&, std::stop_token)> evaluatedProperties = {});
+                                 std::function<Result<ProjectPropertyMap>(std::string_view, const std::vector<std::string>&, std::stop_token)> evaluatedProperties = {},
+                                 std::function<Result<void>()> authorizeWrite = {});
 
 // Startup project (applied through `onSetStartup` on OK) and a read-only view of each project's
 // dependencies as loaded in `solution`. Editing project references is refused until SLN-6, so the
