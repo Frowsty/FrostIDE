@@ -229,7 +229,13 @@ sched::Task<Result<ResultData>> perform(Capture capture, std::shared_ptr<Graph> 
             ~ProjectionLease() { for (const auto& path : paths) (void)provider->closeDocument(path); }
         } projections{capture.lua, {}};
         std::vector<engine::BindingEmbeddedLuaCapture> chunks;
+        if (graph->embeddedLua.size() > 1024)
+            co_return fail(ErrorCode::OutOfRange, "The bounded binding profile supports at most 1024 embedded Lua chunks");
+        std::size_t projectedBytes = 0;
         for (const auto& literal : graph->embeddedLua) {
+            if (literal.decodedValue.size() > 16U * 1024U * 1024U - projectedBytes)
+                co_return fail(ErrorCode::OutOfRange, "The embedded Lua profile exceeds its 16 MiB projection bound");
+            projectedBytes += literal.decodedValue.size();
             if (!capture.current())
                 co_return fail(ErrorCode::Cancelled, "Embedded Lua capture was cancelled");
             auto text = text::TextBuffer::fromUtf8(literal.decodedValue);

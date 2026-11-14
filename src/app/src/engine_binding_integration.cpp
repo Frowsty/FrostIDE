@@ -134,7 +134,7 @@ struct EngineBindingIntegration::Impl {
                 return;
             if (present) {
                 impl.workbench.refreshLuaConfiguration();
-                impl.setStatus("Binding sources settled; metadata regenerated from actual engine schema");
+                impl.setStatus("Actual engine schema refreshed; Lua metadata configuration refresh requested");
             } else {
                 impl.setStatus("Binding sources settled. Actual engine schema is stale or unavailable; rebuild the engine and refresh Lua configuration");
             }

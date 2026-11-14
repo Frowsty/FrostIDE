@@ -445,8 +445,9 @@ Result<std::shared_ptr<Graph>> buildGraph(const Capture& capture) {
         if (!report->mappings.empty() && report->sourceInputs.empty())
             return fail(ErrorCode::Unsupported, "The binding tool did not report actual parsed source-input digests");
         graph->embeddedLuaProfileVerified &= report->embeddedLuaProfileVerified;
-        graph->embeddedLuaRefusals.insert(graph->embeddedLuaRefusals.end(),
-            report->embeddedLuaRefusals.begin(), report->embeddedLuaRefusals.end());
+        for (const auto& exclusion : report->embeddedLuaRefusals)
+            if (std::ranges::find(graph->embeddedLuaRefusals, exclusion) == graph->embeddedLuaRefusals.end())
+                graph->embeddedLuaRefusals.push_back(exclusion);
         for (const auto& chunk : report->embeddedLua)
             if (std::ranges::find(graph->embeddedLua, chunk) == graph->embeddedLua.end())
                 graph->embeddedLua.push_back(chunk);
