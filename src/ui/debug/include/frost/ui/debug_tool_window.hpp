@@ -35,6 +35,7 @@ class QVBoxLayout;
 namespace frost::ui {
 
 class DebugController;
+class DebugDepthPanel;
 class FramesModel;
 class RunConsole;
 class VariablesModel;
@@ -76,6 +77,7 @@ public:
 
     // Copies the value of the Variables or Watches row with focus to the clipboard.
     void copySelectedValue();
+    void watchHardwareAccess(VariablesModel* model, const QModelIndex& index);
     [[nodiscard]] bool readOnlySession() const;
     // Prompts to modify the value of the selected variable row.
     void promptSetVariableValue(QTreeView* view, VariablesModel* model, const QModelIndex& index);
@@ -103,6 +105,7 @@ private:
     void onFrameActivated(int row);
 
     DebugController& m_controller;
+    DebugDepthPanel* m_depth = nullptr;
     QToolBar* m_toolbar = nullptr;
     QAction* m_resume = nullptr;
     QAction* m_pause = nullptr;

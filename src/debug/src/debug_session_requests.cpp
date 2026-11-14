@@ -12,10 +12,119 @@
 
 namespace frost::debug {
 
+// All opaque references below belong to one stop and selection. A delayed answer must not
+// populate a newer frame or a new stop that happens to reuse the adapter's numeric IDs.
+std::int64_t DebugSession::State::inspect(std::string command, rpc::Json arguments, DebugSession::InspectionDone done) {
+    std::uint64_t epoch = 0;
+    std::optional<std::int64_t> frame, thread;
+    bool stopped = false;
+    {
+        LockGuard lock(mutex);
+        stopped = state == DebugState::Stopped;
+        epoch = generation;
+        if (currentFrame) frame = currentFrame->id;
+        thread = currentThread;
+    }
+    if (!stopped) { done(fail(ErrorCode::Busy, "Inspection needs a paused session")); return 0; }
+    return send(command, std::move(arguments),
+        [weak = weak(), epoch, frame, thread, done = std::move(done)](Result<rpc::Json> body) {
+            auto self = weak.lock();
+            bool current = false;
+            if (self) {
+                LockGuard lock(self->mutex);
+                current = self->state == DebugState::Stopped && self->generation == epoch &&
+                          self->currentThread == thread &&
+                          (self->currentFrame ? std::optional(self->currentFrame->id) : std::nullopt) == frame;
+            }
+            if (!current) done(fail(ErrorCode::Cancelled, "Inspection reference expired"));
+            else done(std::move(body));
+        });
+}
+
 Result<void> DebugSession::continueRun() { return m_state->resume("continue"); }
 Result<void> DebugSession::next() { return m_state->resume("next"); }
 Result<void> DebugSession::stepIn() { return m_state->resume("stepIn"); }
 Result<void> DebugSession::stepOut() { return m_state->resume("stepOut"); }
+
+Result<void> DebugSession::stepIntoTarget(std::int64_t targetId) {
+    std::uint64_t generation = 0;
+    std::int64_t frame = 0;
+    {
+        LockGuard lock(m_state->mutex);
+        if (!m_state->caps.supportsStepInTargetsRequest || m_state->readOnly)
+            return fail(ErrorCode::Unsupported, "Targeted stepping is unavailable");
+        if (m_state->state != DebugState::Stopped || !m_state->currentFrame ||
+            m_state->stepTargetsGeneration != m_state->generation ||
+            m_state->stepTargetsFrame != m_state->currentFrame->id ||
+            m_state->stepTargetsThread != m_state->currentThread || !m_state->stepTargets.contains(targetId))
+            return fail(ErrorCode::InvalidArgument, "Step target expired; refresh the call targets");
+        generation = m_state->generation;
+        frame = m_state->currentFrame->id;
+    }
+    return m_state->resume("stepIn", rpc::Json::object().set("targetId", targetId), generation, frame);
+}
+
+std::int64_t DebugSession::stepInTargets(InspectionDone done) {
+    std::uint64_t generation = 0;
+    std::int64_t frame = 0;
+    std::optional<Error> error;
+    {
+        LockGuard lock(m_state->mutex);
+        if (!m_state->caps.supportsStepInTargetsRequest || m_state->readOnly)
+            error = Error{ErrorCode::Unsupported, "Adapter does not support call targets"};
+        else if (m_state->state != DebugState::Stopped || !m_state->currentFrame)
+            error = Error{ErrorCode::Busy, "Call targets need a selected paused frame"};
+        else {
+            generation = m_state->generation;
+            frame = m_state->currentFrame->id;
+            m_state->stepTargets.clear();
+        }
+    }
+    if (error) { done(std::unexpected(*error)); return 0; }
+    return m_state->send("stepInTargets", rpc::Json::object().set("frameId", frame),
+        [weak = std::weak_ptr<State>(m_state), generation, frame, done = std::move(done)](Result<rpc::Json> body) {
+            auto state = weak.lock();
+            bool valid = false;
+            if (state) {
+                LockGuard lock(state->mutex);
+                valid = state->state == DebugState::Stopped && state->generation == generation &&
+                        state->currentFrame && state->currentFrame->id == frame;
+                if (valid && body) {
+                    state->stepTargets.clear();
+                    if (const auto* targets = body->find("targets"))
+                        for (const auto& target : targets->items())
+                            if (auto id = target.integerAt("id")) state->stepTargets.insert(*id);
+                    state->stepTargetsGeneration = generation;
+                    state->stepTargetsFrame = frame;
+                    state->stepTargetsThread = state->currentThread;
+                }
+            }
+            if (!valid) done(fail(ErrorCode::Cancelled, "Call targets expired"));
+            else done(std::move(body));
+        });
+}
+
+std::int64_t DebugSession::dataBreakpointInfo(std::int64_t reference, std::string name, InspectionDone done) {
+    bool supported = false, stopped = false;
+    { LockGuard lock(m_state->mutex);
+      supported = m_state->caps.supportsDataBreakpoints && !m_state->readOnly;
+      stopped = m_state->state == DebugState::Stopped; }
+    if (!supported) { done(fail(ErrorCode::Unsupported, "Hardware data breakpoints are unavailable")); return 0; }
+    if (!stopped || reference <= 0 || name.empty()) {
+        done(fail(ErrorCode::InvalidArgument, "Choose a variable in a paused session")); return 0;
+    }
+    return m_state->inspect("dataBreakpointInfo", rpc::Json::object().set("variablesReference", reference).set("name", std::move(name)), std::move(done));
+}
+
+std::int64_t DebugSession::setDataBreakpoints(rpc::Json breakpoints, InspectionDone done) {
+    bool supported = false, stopped = false;
+    { LockGuard lock(m_state->mutex);
+      supported = m_state->caps.supportsDataBreakpoints && !m_state->readOnly;
+      stopped = m_state->state == DebugState::Stopped; }
+    if (!supported) { done(fail(ErrorCode::Unsupported, "Hardware data breakpoints are unavailable")); return 0; }
+    if (!stopped) { done(fail(ErrorCode::Busy, "Data breakpoint changes need a paused session")); return 0; }
+    return m_state->send("setDataBreakpoints", rpc::Json::object().set("breakpoints", std::move(breakpoints)), std::move(done));
+}
 
 Result<void> DebugSession::pause() {
     if (m_state->readOnly)
@@ -181,8 +290,10 @@ std::int64_t DebugSession::scopes(std::int64_t frameId, ScopesDone done) {
 }
 
 std::int64_t DebugSession::variables(std::int64_t variablesReference, std::int64_t start, std::int64_t count,
-                                     VariablesDone done) {
+                                     VariablesDone done, bool hexadecimal) {
     rpc::Json arguments = rpc::Json::object().set("variablesReference", variablesReference);
+    if (hexadecimal && capabilities().supportsValueFormattingOptions)
+        arguments.set("format", rpc::Json::object().set("hex", true));
     if (count > 0) {
         arguments.set("start", start).set("count", count);
     }
@@ -202,8 +313,10 @@ std::int64_t DebugSession::variables(std::int64_t variablesReference, std::int64
 }
 
 std::int64_t DebugSession::evaluate(std::string expression, std::optional<std::int64_t> frameId, std::string context,
-                                    EvaluateDone done) {
+                                    EvaluateDone done, bool hexadecimal) {
     rpc::Json arguments = rpc::Json::object().set("expression", expression).set("context", std::move(context));
+    if (hexadecimal && capabilities().supportsValueFormattingOptions)
+        arguments.set("format", rpc::Json::object().set("hex", true));
     if (frameId) {
         arguments.set("frameId", *frameId);
     }
@@ -250,7 +363,15 @@ std::int64_t DebugSession::setExceptionBreakpoints(const std::vector<std::string
 
 std::int64_t DebugSession::disassemble(std::string_view memoryReference, std::int64_t instructionCount,
                                        DisassembleDone done, std::int64_t instructionOffset) {
-    return m_state->send("disassemble", dap::disassembleArguments(memoryReference, instructionCount, instructionOffset),
+    if (!capabilities().supportsDisassembleRequest) {
+        if (done) done(fail(ErrorCode::Unsupported, "Adapter does not support disassembly"));
+        return 0;
+    }
+    if (memoryReference.empty() || instructionCount <= 0 || instructionCount > 4096) {
+        if (done) done(fail(ErrorCode::InvalidArgument, "Disassembly needs a reference and 1..4096 instructions"));
+        return 0;
+    }
+    return m_state->inspect("disassemble", dap::disassembleArguments(memoryReference, instructionCount, instructionOffset),
                          [done = std::move(done)](Result<rpc::Json> body) {
                              if (!done) {
                                  return;
@@ -265,7 +386,15 @@ std::int64_t DebugSession::disassemble(std::string_view memoryReference, std::in
 
 std::int64_t DebugSession::readMemory(std::string_view memoryReference, std::int64_t count, ReadMemoryDone done,
                                       std::int64_t offset) {
-    return m_state->send("readMemory", dap::readMemoryArguments(memoryReference, count, offset),
+    if (!capabilities().supportsReadMemoryRequest) {
+        if (done) done(fail(ErrorCode::Unsupported, "Adapter does not support reading memory"));
+        return 0;
+    }
+    if (memoryReference.empty() || count <= 0 || count > 65536) {
+        if (done) done(fail(ErrorCode::InvalidArgument, "Memory reads need a reference and 1..65536 bytes"));
+        return 0;
+    }
+    return m_state->inspect("readMemory", dap::readMemoryArguments(memoryReference, count, offset),
                          [done = std::move(done)](Result<rpc::Json> body) {
                              if (!done) {
                                  return;

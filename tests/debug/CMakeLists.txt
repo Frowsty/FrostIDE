@@ -24,6 +24,7 @@ frost_add_test(debug_unit_tests
         dap_client_test.cpp
         dap_private_test.cpp
         dbgeng_dap_test.cpp
+        debug_depth_test.cpp
         debug_session_test.cpp
         debug_session_multi_test.cpp
         debug_terminate_test.cpp

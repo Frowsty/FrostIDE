@@ -66,6 +66,7 @@ enum class StepInPhase : std::uint8_t {
 [[nodiscard]] inline DebugFrame toFrame(const dap::StackFrame& frame) {
     DebugFrame out;
     out.id = frame.id;
+    out.instructionPointerReference = frame.instructionPointerReference;
     out.name = frame.name;
     if (frame.source) {
         out.path = frame.source->path;
@@ -191,6 +192,10 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     std::map<std::int64_t, FrameList> frames FROST_GUARDED_BY(mutex);
     std::set<std::int64_t> loading FROST_GUARDED_BY(mutex);
     std::optional<DebugFrame> currentFrame FROST_GUARDED_BY(mutex);
+    std::set<std::int64_t> stepTargets FROST_GUARDED_BY(mutex);
+    std::uint64_t stepTargetsGeneration FROST_GUARDED_BY(mutex) = 0;
+    std::int64_t stepTargetsFrame FROST_GUARDED_BY(mutex) = 0;
+    std::optional<std::int64_t> stepTargetsThread FROST_GUARDED_BY(mutex);
     std::uint64_t generation FROST_GUARDED_BY(mutex) = 0; // Bumped by each stop and resume.
     std::map<std::string, std::vector<BreakpointLine>> breakpoints FROST_GUARDED_BY(mutex);
     std::vector<FunctionBreakpointLine> functionBreakpoints FROST_GUARDED_BY(mutex);
@@ -362,7 +367,9 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     void requestThreads(std::uint64_t gen, std::optional<std::string> then);
     void loadFrames(std::int64_t threadId, std::uint64_t gen, bool select);
     void framesAnswered(std::int64_t threadId, std::uint64_t gen, bool select, Result<rpc::Json> body);
-    Result<void> resume(const std::string& command);
+    std::int64_t inspect(std::string command, rpc::Json arguments, DebugSession::InspectionDone done);
+    Result<void> resume(const std::string& command, rpc::Json extra = rpc::Json::object(), std::optional<std::uint64_t> expectedGeneration = std::nullopt,
+                        std::optional<std::int64_t> expectedFrame = std::nullopt);
     void continued();
 };
 

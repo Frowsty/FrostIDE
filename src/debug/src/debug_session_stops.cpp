@@ -651,7 +651,9 @@ void DebugSession::State::framesAnswered(std::int64_t threadId, std::uint64_t ge
 // --- Resuming ---
 
 // Sends `command` for the current thread after switching to Running.
-Result<void> DebugSession::State::resume(const std::string& command) {
+Result<void> DebugSession::State::resume(const std::string& command, rpc::Json extra,
+                                         std::optional<std::uint64_t> expectedGeneration,
+                                         std::optional<std::int64_t> expectedFrame) {
     if (readOnly)
         return fail(ErrorCode::Unsupported, "A dump session cannot execute a process");
     std::int64_t thread = 0;
@@ -664,6 +666,9 @@ Result<void> DebugSession::State::resume(const std::string& command) {
         if (state != DebugState::Stopped) {
             return fail(ErrorCode::Busy, std::format("{} needs a paused program", command));
         }
+        if (expectedGeneration && (generation != *expectedGeneration || !currentFrame ||
+                                   currentFrame->id != expectedFrame))
+            return fail(ErrorCode::Cancelled, "Step target expired");
         thread = currentThread.value_or(threads.empty() ? 1 : threads.front().id);
         oldStop = stop;
         oldFrames = frames;
@@ -685,7 +690,7 @@ Result<void> DebugSession::State::resume(const std::string& command) {
         if (callbacks.onStateChanged)
             callbacks.onStateChanged(DebugState::Running);
     });
-    send(command, rpc::Json::object().set("threadId", thread),
+    send(command, std::move(extra.set("threadId", thread)),
          [weak = weak(), command, commandGeneration, thread, oldStop = std::move(oldStop),
           oldFrames = std::move(oldFrames), oldFrame = std::move(oldFrame)](Result<rpc::Json> answer) mutable {
              const auto self = weak.lock();

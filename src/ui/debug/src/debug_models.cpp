@@ -140,6 +140,7 @@ VariablesModel::VariablesModel(DebugController& controller, Mode mode, QObject* 
     : QAbstractItemModel(parent), m_controller(controller), m_mode(mode), m_root(std::make_unique<Node>()) {
     m_root->kind = Node::Kind::Root;
     connect(&m_controller, &DebugController::frameSelected, this, &VariablesModel::reload);
+    connect(&m_controller, &DebugController::valuesFormatChanged, this, &VariablesModel::reload);
     connect(&m_controller, &DebugController::stateChanged, this, [this] {
         if (!m_controller.paused()) {
             ++m_generation;

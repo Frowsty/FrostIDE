@@ -323,7 +323,7 @@ void DebugController::variables(std::int64_t reference, std::int64_t start, std:
                 }
                 done(list);
             });
-        });
+        }, m_hexadecimalValues);
 }
 
 void DebugController::evaluate(const QString& expression, const QString& context, EvaluateDone done) {
@@ -337,7 +337,7 @@ void DebugController::evaluate(const QString& expression, const QString& context
                         [relay, generation, done = std::move(done)](Result<debug::dap::Variable> result) {
                             relay->post(generation,
                                         [done, result = std::move(result)](DebugController*) { done(result); });
-                        });
+                        }, m_hexadecimalValues);
 }
 
 void DebugController::submitConsoleInput(const QString& line) {

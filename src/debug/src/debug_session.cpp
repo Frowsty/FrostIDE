@@ -550,6 +550,11 @@ std::optional<std::int64_t> DebugSession::processId() const {
 }
 
 DebugTargetMode DebugSession::targetMode() const noexcept { return m_state->targetMode; }
+std::uint64_t DebugSession::inspectionGeneration() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->generation;
+}
+
 bool DebugSession::readOnly() const noexcept { return m_state->readOnly; }
 std::string_view DebugSession::adapterId() const noexcept { return m_state->adapterId; }
 std::optional<std::uint64_t> DebugSession::sentMessageCount() const {

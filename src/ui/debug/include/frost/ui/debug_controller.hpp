@@ -288,6 +288,8 @@ public:
     void variables(std::int64_t reference, std::int64_t start, std::int64_t count, VariablesDone done);
     // Evaluates in the selected frame.
     void evaluate(const QString& expression, const QString& context, EvaluateDone done);
+    void setHexadecimalValues(bool enabled) { m_hexadecimalValues = enabled; emit valuesFormatChanged(); }
+    [[nodiscard]] bool hexadecimalValues() const noexcept { return m_hexadecimalValues; }
     void submitConsoleInput(const QString& line);
     void setVariableValue(std::int64_t variablesReference, const QString& name, const QString& value,
                           EvaluateDone done = {});
@@ -300,6 +302,7 @@ public:
     void readMemory(const QString& memoryReference, int count, ReadMemoryDone done);
 
 signals:
+    void valuesFormatChanged();
     // The session console's user Stop button, before stop(). Automatic cleanup calls stop directly.
     void userStopRequested();
     // Adapter-confirmed termination, tagged with the session that emitted it.
@@ -408,6 +411,7 @@ private:
     std::vector<debug::dap::Variable> m_currentFrameVariables;
     std::vector<std::int64_t> m_frameScopeReferences; // The scopes those come from.
     bool m_editorPresentation = true;
+    bool m_hexadecimalValues = false;
     bool m_nativeSession = false; // The session is lldb-dap's (launch or attach).
     bool m_nativeOsThreadIdsVerified = false;
     std::map<std::string, std::string, std::less<>> m_hoverCache;

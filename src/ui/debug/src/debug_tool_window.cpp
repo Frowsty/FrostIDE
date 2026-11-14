@@ -4,6 +4,7 @@
 // enabled states and the wiring between the views, the models and the controller.
 
 #include "frost/ui/debug_tool_window.hpp"
+#include "frost/ui/debug_depth_panel.hpp"
 
 #include "frost/core/log.hpp"
 #include "frost/debug/msvc_throw.hpp"
@@ -124,6 +125,8 @@ QTreeView* makeVariablesView(QWidget* parent, VariablesModel* model, DebugToolWi
                 model->isVariableRow(index)) {
                 QAction* setVal = menu.addAction(QStringLiteral("Set Value..."));
                 setVal->setShortcut(QKeySequence(Qt::Key_F2));
+                menu.addAction(QStringLiteral("Watch Hardware Access..."), owner,
+                    [owner, model, index] { owner->watchHardwareAccess(model, index); });
                 QObject::connect(setVal, &QAction::triggered, owner,
                                  [owner, view, model, index] { owner->promptSetVariableValue(view, model, index); });
             }
@@ -183,6 +186,7 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
 
     buildBreakpointsTab();
     buildMemoryAndDisassemblyTab();
+    m_tabs->addTab(m_depth = new DebugDepthPanel(controller, m_tabs), QStringLiteral("Calls, Registers && Watchpoints"));
     wireControllerSignals();
     updateBreakpointsList();
     updateActions();
@@ -492,10 +496,12 @@ void DebugToolWindow::updateActions() {
     m_runToCursor->setEnabled(executable);
     m_evaluate->setEnabled(executable);
     if (m_disassembleButton != nullptr) {
-        m_disassembleButton->setEnabled(paused);
+        m_disassembleButton->setEnabled(paused && m_controller.session() && m_controller.session()->capabilities().supportsDisassembleRequest);
+        m_disassembleButton->setToolTip(QStringLiteral("Requires adapter disassembly support"));
     }
     if (m_readMemoryButton != nullptr) {
-        m_readMemoryButton->setEnabled(paused);
+        m_readMemoryButton->setEnabled(paused && m_controller.session() && m_controller.session()->capabilities().supportsReadMemoryRequest);
+        m_readMemoryButton->setToolTip(QStringLiteral("Requires adapter memory-read support"));
     }
     if (live && !paused) {
         m_reason->setText(m_controller.statusText());
@@ -830,6 +836,12 @@ void DebugToolWindow::onFrameActivated(int row) {
     if (id.isValid() && id.toLongLong() >= 0) {
         m_controller.selectFrame(id.toLongLong());
     }
+}
+
+void DebugToolWindow::watchHardwareAccess(VariablesModel* model, const QModelIndex& index) {
+    if (!m_depth || !m_controller.paused() || m_controller.readOnlySession()) return;
+    m_depth->chooseVariable(model->parentReferenceAt(index), model->nameAt(index));
+    m_tabs->setCurrentWidget(m_depth);
 }
 
 void DebugToolWindow::copySelectedValue() {
