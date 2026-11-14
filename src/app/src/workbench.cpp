@@ -218,6 +218,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     m_language = std::make_unique<ui::lang::LanguageController>(
         ui::lang::LanguageServices{*m_bridge, *m_pool, *m_bridge, m_bridge->applier(), m_services.fs,
                                    [this](std::string_view path) -> std::vector<lang::LiveDiagnostic> {
+                                       if (lang::hasBundledJsonSchema(path)) return m_bridge->jsonDiagnostics(path);
                                        std::optional<lang::FileDiagnostics> set;
                                        if (isManagedSource(path) && m_managed)
                                            set = m_managed->diagnostics().forFile(path);

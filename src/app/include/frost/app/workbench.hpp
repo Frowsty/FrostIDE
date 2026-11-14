@@ -871,6 +871,7 @@ private:
     void startLua(const std::string& root);
     void stopLua();
     void syncLuaDocument(DocumentEditorView& view);
+    void syncJsonDocument(DocumentEditorView& view);
     void onLuaDiagnostics(const std::string& file);
     void onLuaFilesChanged(const io::FileChangeBatch& batch);
     void onLuaSettingsChanged();

@@ -57,6 +57,8 @@ public:
     void setManagedServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setManagedServer(std::move(server)); }
     void setActivePath(std::string_view path) { m_server.setActivePath(path); }
 
+    void closeJsonDocument(std::string_view path) { m_json->removeDocument(path); }
+    [[nodiscard]] std::vector<lang::LiveDiagnostic> jsonDiagnostics(std::string_view path) const;
     // ILspRequester: the server for the document.
     [[nodiscard]] sched::Task<Result<lang::Json>> request(std::string method, lang::Json params,
                                                           std::stop_token token = {}) override;
@@ -99,6 +101,7 @@ private:
 
     Workbench& m_workbench;
     StableLspRequester m_server;
+    std::shared_ptr<lang::JsonSchemaService> m_json = std::make_shared<lang::JsonSchemaService>();
     lang::WorkspaceEditApplier m_applier;
 };
 

@@ -731,6 +731,11 @@ void Workbench::refreshLiveProblems() {
         auto managed = m_managed->diagnostics().problems();
         live.insert(live.end(), std::make_move_iterator(managed.begin()), std::make_move_iterator(managed.end()));
     }
+    if (m_bridge)
+        for (const auto* view : m_editors->uniqueDocumentViews()) {
+            auto json = m_bridge->jsonDiagnostics(view->path());
+            live.insert(live.end(), std::make_move_iterator(json.begin()), std::make_move_iterator(json.end()));
+        }
     rows.reserve(live.size());
     for (lang::LiveDiagnostic& d : live) {
         build::BuildDiagnostic row;
