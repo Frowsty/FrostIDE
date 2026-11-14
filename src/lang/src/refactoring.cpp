@@ -349,11 +349,15 @@ sched::Task<Result<WorkspaceEdit>> requestOptimizeIncludes(ILspRequester& server
             co_return std::unexpected(std::move(spanActions.error()));
         }
         for (const CodeActionItem& action : *spanActions) {
+            if (!action.disabledReason.empty())
+                continue;
             if (toLowerAsciiString(action.title) == "fix all includes" && !action.edit.empty()) {
                 co_return action.edit;
             }
         }
         for (const CodeActionItem& action : *spanActions) {
+            if (!action.disabledReason.empty())
+                continue;
             const std::string title = toLowerAsciiString(action.title);
             if ((title == "remove all unused includes" || title == "add all missing includes") &&
                 !action.edit.empty()) {
