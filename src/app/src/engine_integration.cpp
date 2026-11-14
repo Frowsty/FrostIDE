@@ -5,6 +5,7 @@
 #include "frost/lang/frost_engine_lua.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/ui/debug_controller.hpp"
+#include "frost/ui/debug_session_registry.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
@@ -14,6 +15,7 @@
 #include "frost/ui/toolwindows/problems.hpp"
 
 #include "engine_integration_internal.hpp"
+#include "engine_native_host_internal.hpp"
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
@@ -60,6 +62,7 @@ bool EngineIntegration::Impl::admitted(std::uint64_t expectedEpoch, std::string_
 }
 
 void EngineIntegration::Impl::invalidate(bool stopOwned) {
+    testsSourceRevision->fetch_add(1);
     ++epoch;
     physicalAdmission->store(false);
     physicalAdmission = std::make_shared<std::atomic<bool>>(true);
@@ -74,8 +77,13 @@ void EngineIntegration::Impl::invalidate(bool stopOwned) {
     awaitingOwnedEndpoint = false;
     awaitingOwnedAuthentication = false;
     ownedProcessStarted = false;
-    if (stopOwned && ownedRun && workbench.m_runManager)
-        workbench.m_runManager->stop(*ownedRun);
+    if (stopOwned)
+        stopOwnedHost();
+    if (nativeHost) {
+        nativeHost->active.store(false);
+        nativeHost->discardRaw.store(true);
+    }
+    nativeHost.reset();
     ownedRun.reset();
     ownedPid = 0;
     runAdmission.reset();
@@ -196,6 +204,7 @@ Result<void> EngineIntegration::Impl::refresh() {
                 if (!impl.admitted(currentEpoch, expectedRoot, revision) || generation != impl.discoveryGeneration)
                     return;
                 impl.discoveryBusy = false;
+                impl.testsSourceRevision->fetch_add(1);
                 impl.installations = editors ? std::move(*editors) : std::vector<EngineInstallation>{};
                 impl.instances = found ? std::move(*found) : std::vector<EngineInstanceRecord>{};
                 impl.picker->clear();
@@ -235,8 +244,8 @@ void EngineIntegration::Impl::updateControls() {
     if (refreshButton)
         refreshButton->setEnabled(ready && !discoveryBusy);
     if (pairButton)
-        pairButton->setEnabled(ready && !discoveryBusy && !ownedRun && picker && picker->currentIndex() >= 0 &&
-                               !picker->currentData().toString().isEmpty());
+        pairButton->setEnabled(ready && !discoveryBusy && !ownedRun && !nativeHost && picker &&
+                               picker->currentIndex() >= 0 && !picker->currentData().toString().isEmpty());
     if (startButton)
         startButton->setEnabled(ready && !installations.empty() && !ownedRun && !runAdmission);
     if (disconnectButton)
@@ -245,6 +254,9 @@ void EngineIntegration::Impl::updateControls() {
         identity.has_value() && session && session->connected() && admitted(epoch, root, trustRevision);
     if (cancelButton)
         cancelButton->setEnabled(connected && !requests.empty());
+    if (debugLuaButton)
+        debugLuaButton->setEnabled(ready && connected && identity && identity->scriptDebugAvailable &&
+                                   identity->scriptDebugProtocolVersion == 1 && !policy->nativePaused.load());
     for (const auto& button : commandButtons)
         if (button)
             button->setEnabled(connected);
@@ -252,17 +264,14 @@ void EngineIntegration::Impl::updateControls() {
         console->setConnected(connected);
         console->setPlaying(connected && state && state->playing);
     }
+    if (identity && session && session->connected())
+        nativeBoundBinding = nativeDebug ? nativeDebug->binding() : std::nullopt;
+    owner.updateNativeDebuggerPause();
     if (!workbench.m_window)
         return;
     if (!available) {
         workbench.m_window->mainToolbar().setEngineState(std::nullopt);
         return;
-    }
-    if (identity && session && session->connected()) {
-        if (nativeDebug && nativeDebug->matched() && workbench.m_debug)
-            nativeBoundDebugGeneration = workbench.m_debug->sessionGeneration();
-        else
-            nativeBoundDebugGeneration.reset();
     }
     ui::EngineControlState controls;
     controls.connected = connected && state.has_value();
@@ -343,6 +352,13 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
         if (auto result = startEditor(); !result)
             m_impl->setStatus(qs(result.error().message()));
     });
+    impl.debugLuaButton = button(QStringLiteral("Debug Lua"), "engineDebugLuaButton", [this] {
+        const bool startPlay = m_impl->identity && m_impl->identity->role == "editor";
+        if (auto result = m_impl->workbench.startEngineLuaDebug(startPlay); !result)
+            m_impl->setStatus(qs(result.error().message()));
+    });
+    impl.debugLuaButton->setToolTip(
+        QStringLiteral("Debug Lua in the authenticated engine. Externally started hosts remain externally owned."));
     impl.disconnectButton = button(QStringLiteral("Disconnect"), "engineDisconnectButton", [this] { disconnect(); });
     button(QStringLiteral("Locate Editor..."), "engineLocateEditorButton", [this] {
         const QString file = QFileDialog::getOpenFileName(m_impl->panel, QStringLiteral("Locate FrostEditor"));
@@ -484,9 +500,9 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
     connect(impl.startupWatch, &QTimer::timeout, this, [this] { m_impl->checkOwnedStartup(); });
     connect(impl.picker, &QComboBox::currentIndexChanged, this, [this] { m_impl->updateControls(); });
     connect(&workbench, &Workbench::projectChanged, this, [this](const QString&) { m_impl->projectChanged(); });
-    if (workbench.m_debug) {
+    if (workbench.m_debugSessions) {
         impl.nativeDebug = std::make_unique<EngineNativeDebugAdapter>(
-            *workbench.m_debug,
+            *workbench.m_debugSessions,
             [this]() -> std::optional<EngineNativeDebugTarget> {
                 auto& current = *m_impl;
                 if (!current.nativeTarget || !current.admitted(current.epoch, current.root, current.trustRevision))
@@ -495,11 +511,18 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
                     return current.nativeTarget;
                 // A native all-stop can suspend the heartbeat thread. Retain only the DAP session
                 // that was already stopped on this authenticated PID when transport was lost.
-                if (!current.retainedDebugGeneration || !current.workbench.m_debug ||
-                    current.workbench.m_debug->sessionGeneration() != *current.retainedDebugGeneration ||
-                    !current.workbench.m_debug->nativeSession())
+                const auto* registry = current.workbench.m_debugSessions.get();
+                if (!current.retainedNativeBinding || !registry ||
+                    current.retainedNativeBinding->target != *current.nativeTarget)
                     return std::nullopt;
-                const auto* debugSession = current.workbench.m_debug->session();
+                const auto& binding = *current.retainedNativeBinding;
+                const auto* controller = registry->controller(binding.registrySessionId);
+                const auto unique = registry->nativeForPid(binding.target.pid);
+                if (!controller || controller != binding.controller || unique.id != binding.registrySessionId ||
+                    unique.controller != controller || controller->sessionGeneration() != binding.debugGeneration ||
+                    !controller->nativeSession())
+                    return std::nullopt;
+                const auto* debugSession = controller->session();
                 if (!debugSession || debugSession->processId() != current.nativeTarget->pid ||
                     (debugSession->state() != debug::DebugState::Stopped &&
                      debugSession->state() != debug::DebugState::Running))

@@ -33,6 +33,7 @@ import test_symbolize as symbol_fixtures
 
 _FROST_GUID = bytes(range(16, 32))
 _APP_GUID = bytes(range(32, 48))
+_DBGENG_GUID = bytes(range(48, 64))
 
 
 @contextlib.contextmanager
@@ -216,6 +217,12 @@ class StageScriptTest(TempDirTestCase):
         (bin_dir / "frost.pdb").write_bytes(symbol_fixtures.msf_bytes(_FROST_GUID))
         (bin_dir / "frost_app.dll").write_bytes(symbol_fixtures.pe_bytes(_APP_GUID, 1, "frost_app.pdb"))
         (bin_dir / "frost_app.pdb").write_bytes(symbol_fixtures.msf_bytes(_APP_GUID))
+        (bin_dir / "frost-dbgeng-dap.exe").write_bytes(
+            symbol_fixtures.pe_bytes(_DBGENG_GUID, 1, "frost-dbgeng-dap.pdb"))
+        (bin_dir / "frost-dbgeng-dap.pdb").write_bytes(symbol_fixtures.msf_bytes(_DBGENG_GUID))
+        # Even stale SDK/debugger DLLs in the build directory are not redistributed.
+        (bin_dir / "dbgeng.dll").write_bytes(b"MZ-NOT-FOR-REDISTRIBUTION")
+        (bin_dir / "dbgmodel.dll").write_bytes(b"MZ-NOT-FOR-REDISTRIBUTION")
         (bin_dir / "platforms" / "qoffscreend.dll").write_bytes(b"MZ")
         (bin_dir / "resources" / "themes" / "dark.json").write_text("{}", encoding="utf-8")
         return build
@@ -386,8 +393,11 @@ class StageScriptTest(TempDirTestCase):
         self.assertIn(f"symbols {archive}", result.stdout)
         with zipfile.ZipFile(archive) as packed:
             self.assertEqual(sorted(packed.namelist()),
-                             ["frost.exe", "frost.pdb", "frost_app.dll", "frost_app.pdb", "symbols.json"])
+                             ["frost-dbgeng-dap.exe", "frost-dbgeng-dap.pdb", "frost.exe", "frost.pdb",
+                              "frost_app.dll", "frost_app.pdb", "symbols.json"])
             self.assertEqual(packed.read("frost_app.pdb"), (build / "src/app/Debug/frost_app.pdb").read_bytes())
+            self.assertEqual(packed.read("frost-dbgeng-dap.pdb"),
+                             (build / "src/app/Debug/frost-dbgeng-dap.pdb").read_bytes())
         shutil.rmtree(destination)
         refused = self._stage(build, destination)
         self.assertEqual(refused.returncode, 1, "an existing archive needs -Force like the folder")
@@ -406,6 +416,23 @@ class StageScriptTest(TempDirTestCase):
         self.assertIn("have no matching PDBs", result.stdout)
         self.assertFalse(destination.exists(), "no partial stage is left behind")
         self.assertFalse((self.tmp / "stale-symbols.zip").exists())
+
+    def test_a_missing_or_stale_dbgeng_pdb_fails_before_staging(self) -> None:
+        for missing in (False, True):
+            with self.subTest(missing=missing):
+                build = self._fake_build()
+                pdb = build / "src/app/Debug/frost-dbgeng-dap.pdb"
+                if missing:
+                    pdb.unlink()
+                else:
+                    pdb.write_bytes(symbol_fixtures.msf_bytes(_DBGENG_GUID, dbi_age=2))
+                destination = self.tmp / "bad-dbgeng-pdb"
+                result = self._stage(build, destination)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("FAIL   frost-dbgeng-dap.exe:", result.stdout)
+                self.assertIn("have no matching PDBs", result.stdout)
+                self.assertFalse(destination.exists())
+                self.assertFalse((self.tmp / "bad-dbgeng-pdb-symbols.zip").exists())
 
     def _stage_with_failing_deploy(self, build: Path, destination: Path) -> subprocess.CompletedProcess:
         """Stages with a windeployqt that fails (step 4, after FrostIDE's files are copied)."""
@@ -475,6 +502,7 @@ class StageScriptTest(TempDirTestCase):
 
     def test_input_checks_run_before_the_destination_is_touched(self) -> None:
         cases = {"no ProjectHost": "build/src/app/Debug/project-host/ProjectHostVsProbe.exe.config",
+                 "no frost-dbgeng-dap.exe": "build/src/app/Debug/frost-dbgeng-dap.exe",
                  "no resources": "build/src/app/Debug/resources",
                  "no HTTPS backend": "build/src/app/Debug/tls/qschannelbackendd.dll",
                  "missing upstream libsodium copyright notice": "installed/x64-fixture/share/libsodium/copyright",
@@ -500,6 +528,7 @@ class StageScriptTest(TempDirTestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("stage: ok", result.stdout)
         for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe", "frost.pdb", "Qt6Cored.dll",
+                     "frost-dbgeng-dap.exe", "frost-dbgeng-dap.pdb",
                      "platforms/qwindowsd.dll", "platforms/qoffscreend.dll", "resources/themes/dark.json",
                      "tls/qschannelbackendd.dll",
                      "project-host/ProjectHostVsProbe.exe", "project-host/ProjectHostVsProbe.exe.config",
@@ -508,6 +537,10 @@ class StageScriptTest(TempDirTestCase):
         self.assertEqual((destination / "tls/qschannelbackendd.dll").read_bytes(), b"MZ-TLS-fixture")
         self.assertFalse((destination / "generic").exists(), "optional Qt plugins must not be deployed")
         self.assertFalse((destination / "Qt6Svgd.dll").exists(), "SVG belongs to the icon baker only")
+        self.assertFalse((destination / "dbgeng.dll").exists(), "DbgEng is loaded only from System32")
+        self.assertFalse((destination / "dbgmodel.dll").exists(), "no debugger DLL redistribution")
+        self.assertEqual((destination / "frost-dbgeng-dap.exe").read_bytes(),
+                         (build / "src/app/Debug/frost-dbgeng-dap.exe").read_bytes())
         self.assertEqual((destination / "licenses/libsodium-copyright.txt").read_bytes(),
                          b"Upstream ISC copyright fixture\n")
 
@@ -557,15 +590,18 @@ class StageScriptTest(TempDirTestCase):
         self.assertFalse((destination / "old.txt").exists())
         self.assertTrue((destination / "frost.exe").is_file())
 
-    def test_corrupted_staged_conpty_fails(self) -> None:
-        build = self._fake_build()
-        deploy = self.tmp / "tamper-deploy.cmd"
-        deploy.write_text(_FAKE_WINDEPLOYQT.replace("exit /b 0", 'echo changed>"%DEST%\\conpty.dll"\nexit /b 0'),
-                          encoding="ascii", newline="\r\n")
-        result = run_powershell(TOOLS / "stage.ps1", "-Destination", str(self.tmp / "corrupt-out"),
-                                "-Config", "Debug", "-BuildDir", str(build), "-WinDeployQt", str(deploy), "-SkipBuild")
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("staged conpty.dll differs", result.stdout)
+    def test_corrupted_staged_conpty_or_dbgeng_adapter_fails(self) -> None:
+        for name in ("conpty.dll", "frost-dbgeng-dap.exe"):
+            with self.subTest(image=name):
+                build = self._fake_build()
+                deploy = self.tmp / "tamper-deploy.cmd"
+                deploy.write_text(_FAKE_WINDEPLOYQT.replace(
+                    "exit /b 0", f'echo changed>"%DEST%\\{name}"\nexit /b 0'),
+                    encoding="ascii", newline="\r\n")
+                result = run_powershell(TOOLS / "stage.ps1", "-Destination", str(self.tmp / "corrupt-out"),
+                                        "-Config", "Debug", "-BuildDir", str(build), "-WinDeployQt", str(deploy), "-SkipBuild")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(f"staged {name} differs", result.stdout)
 
     def test_missing_conpty_pair_fails(self) -> None:
         for missing in ("conpty.dll", "OpenConsole.exe"):

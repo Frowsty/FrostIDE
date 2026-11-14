@@ -56,6 +56,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace frost::io {
@@ -92,6 +93,14 @@ struct LanguageServices {
     // Why the server may have answered nothing for `path`, for navigation messages. Unset: only a
     // server that is not running is told apart (ServerReadiness::Unknown otherwise).
     std::function<ServerReadiness(std::string_view path)> readiness{};
+    // FEC-13 composition hook. True owns the request asynchronously; false uses ordinary usages.
+    // GUI thread only. The application must use semantic binding evidence, never token spelling.
+    std::function<bool()> combinedBindingUsages{};
+    // Bound Lua rename is preview-only in R7. The owning app may defer and invoke the captured,
+    // guarded ordinary continuation only after actual semantic evidence proves it is unbound.
+    std::function<bool(std::string path, ::frost::lang::LspPosition position, std::string newName,
+                       std::function<void()> ordinary)>
+        combinedBindingRename{};
 };
 
 class LanguageController final : public QObject {
@@ -118,6 +127,12 @@ public:
     void gotoImplementation();
     void gotoRelatedFile();
     void findUsages();
+    void setCombinedBindingUsagesHandler(std::function<bool()> handler) {
+        m_services.combinedBindingUsages = std::move(handler);
+    }
+    void setCombinedBindingRenameHandler(decltype(LanguageServices::combinedBindingRename) handler) {
+        m_services.combinedBindingRename = std::move(handler);
+    }
     void highlightUsages();
     void showFileStructure();
     void gotoClass();
@@ -261,6 +276,8 @@ private:
                               const QString& label);
     void initServiceHooks();
     void onRenameAccepted(const QString& name);
+    void performAcceptedRename(std::string path, ::frost::lang::LspPosition position, std::string oldName,
+                               std::string newName, bool searchComments, bool preview);
     void findUsagesAt(std::string path, ::frost::lang::LspPosition position);
     void gotoDeclarationAtPosition(::frost::lang::LspPosition position);
     void requestStructure();

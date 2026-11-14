@@ -14,20 +14,30 @@
 namespace frost::app {
 namespace {
 
-std::optional<std::string> canonicalFile(io::IFileSystem& fs, std::string_view path) {
+std::optional<std::string> canonicalFile(io::IFileSystem& fs, std::string_view path,
+                                         io::FileStatus* observed = nullptr) {
     auto canonical = fs.canonicalPath(path);
     if (!canonical)
         return std::nullopt;
     auto info = fs.status(*canonical);
     if (!info || info->type != io::FileType::Regular)
         return std::nullopt;
+    if (observed)
+        *observed = *info;
     return std::move(*canonical);
 }
 
 std::optional<EngineInstallation> installation(io::IFileSystem& fs, std::string path, std::string root,
                                                std::string preset) {
-    auto cli = canonicalFile(fs, path);
+    io::FileStatus cliStatus;
+    auto cli = canonicalFile(fs, path, &cliStatus);
     if (!cli)
+        return std::nullopt;
+    auto physicalCli = fs.physicalPath(*cli);
+    if (!physicalCli)
+        return std::nullopt;
+    auto physicalStatus = fs.status(*physicalCli);
+    if (!physicalStatus || *physicalStatus != cliStatus)
         return std::nullopt;
     std::string gui = *cli;
 #ifdef _WIN32
@@ -45,7 +55,8 @@ std::optional<EngineInstallation> installation(io::IFileSystem& fs, std::string 
     if (auto playerPath = io::joinPath(io::parentPath(gui), playerName))
         if (auto existing = canonicalFile(fs, *playerPath))
             player = std::move(*existing);
-    return EngineInstallation{std::move(gui), std::move(*cli), std::move(root), std::move(preset), std::move(player)};
+    return EngineInstallation{std::move(gui),    std::move(*cli),   std::move(root),
+                              std::move(preset), std::move(player), cliStatus, std::move(*physicalCli)};
 }
 
 } // namespace

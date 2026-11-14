@@ -12,9 +12,16 @@
 
 frost_add_library(engine LAYER engine
     SOURCES
+        src/binding_index.cpp
+        src/binding_preview.cpp
+        src/binding_queries.cpp
         src/command_policy.cpp
+        src/crash_artifact.cpp
+        src/crash_artifact_source.cpp
         src/engine_cli.cpp
         src/engine_lua.cpp
+        src/engine_test_parsers.cpp
+        src/engine_test_provider.cpp
         src/handle.cpp
         src/project_content.cpp
         src/schema.cpp

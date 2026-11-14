@@ -360,6 +360,8 @@ public:
     }
 
     Result<ProcessResult> communicate(std::string_view stdinData, IClock::Duration timeout) override;
+    Result<ProcessResult> communicateUntil(std::string_view stdinData,
+                                           std::optional<IClock::Duration> timeout) override;
 
 private:
     // A blocking read that abandonOutput() ends: it polls the pipe together with the wake pipe.
@@ -421,16 +423,20 @@ private:
  * pipes) cannot deadlock us.
  */
 Result<ProcessResult> PosixProcess::communicate(std::string_view stdinData, IClock::Duration timeout) {
+    return communicateUntil(stdinData, timeout);
+}
+Result<ProcessResult> PosixProcess::communicateUntil(std::string_view stdinData,
+                                                     std::optional<IClock::Duration> timeout) {
     if (!stdinData.empty() && !m_in.valid()) {
         return fail(ErrorCode::InvalidArgument, "communicate: stdin data given but stdin is not an open pipe");
     }
-    const auto deadline = detail::deadlineAfter(timeout);
+    const auto deadline = timeout ? std::optional(detail::deadlineAfter(*timeout)) : std::nullopt;
     const auto timedOut = [&]() -> Result<ProcessResult> {
         static_cast<void>(terminate());
         static_cast<void>(wait(kReapGrace));
         return fail(ErrorCode::Timeout,
                     std::format("process {} did not finish within {} ms and was terminated", m_pid,
-                                std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count()));
+                                std::chrono::duration_cast<std::chrono::milliseconds>(*timeout).count()));
     };
 
     ProcessResult result;
@@ -481,11 +487,11 @@ Result<ProcessResult> PosixProcess::communicate(std::string_view stdinData, IClo
             inIndex = static_cast<int>(count);
             entries[count++] = pollfd{m_in.get(), POLLOUT, 0};
         }
-        const auto left = deadline - std::chrono::steady_clock::now();
-        if (left <= IClock::Duration::zero()) {
+        const auto left = deadline ? std::optional(*deadline - std::chrono::steady_clock::now()) : std::nullopt;
+        if (left && *left <= IClock::Duration::zero()) {
             return timedOut();
         }
-        const int ready = ::poll(entries.data(), count, toPollMs(left));
+        const int ready = ::poll(entries.data(), count, left ? toPollMs(*left) : -1);
         if (ready < 0) {
             if (errno == EINTR) {
                 continue;
@@ -533,7 +539,7 @@ Result<ProcessResult> PosixProcess::communicate(std::string_view stdinData, IClo
         }
     }
 
-    auto status = wait(deadline - std::chrono::steady_clock::now());
+    auto status = wait(deadline ? std::optional(*deadline - std::chrono::steady_clock::now()) : std::nullopt);
     if (!status) {
         if (status.error().code() == ErrorCode::Timeout) {
             return timedOut();

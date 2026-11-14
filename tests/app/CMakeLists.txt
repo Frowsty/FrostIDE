@@ -96,19 +96,53 @@ set(_frost_workbench_definitions
     FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/workbench-work")
 frost_add_test(app_workbench_tests QT
     SOURCES workbench_test.cpp workbench_terminal_test.cpp engine_locator_test.cpp engine_native_debug_test.cpp workbench_find_test.cpp project_edit_process_test.cpp update_check_test.cpp update_readiness_test.cpp update_state_test.cpp
+            multi_session_debug_test.cpp engine_unit_tests_window_test.cpp
+            engine_unit_tests_source_test.cpp engine_run_debug_test.cpp
+            engine_dump_controller_test.cpp engine_crash_observer_test.cpp engine_mixed_debug_test.cpp
+            workbench_binding_test.cpp
+            workbench_engine_mixed_test.cpp
+            engine_crash_cleanup_test.cpp engine_native_host_test.cpp engine_tests_lifetime_test.cpp
     DEPS frost::app frost::build frost::io frost::ui_find
     THIRD_PARTY Qt6::Network)
-target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_tests PRIVATE ${_frost_workbench_definitions})
+
+# FEC-13 drives actual Workbench binding navigation/usages/preview widgets against the locked
+# mapper, clangd and LuaLS. Disposable preview application/build evidence lives in the engine target.
+include("${FROST_SOURCE_DIR}/tests/support/EngineCorpus.cmake")
+frost_add_test(app_binding_corpus_tests QT
+    SOURCES workbench_binding_corpus_test.cpp
+    DEPS frost::app frost::engine frost::build frost::lang frost::sched frost::text frost::io frost::rpc frost::core
+    LABELS integration corpus clangd luals
+    TIMEOUT 18000)
+frost_configure_engine_corpus_target(app_binding_corpus_tests)
+target_include_directories(app_binding_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/src/app/src)
+target_compile_definitions(app_binding_corpus_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+    FROST_BINDING_CORPORA_SCRIPT="${FROST_SOURCE_DIR}/tools/corpora.py"
+    FROST_BINDING_REPO_ROOT="${FROST_SOURCE_DIR}"
+    FROST_BINDING_CORPUS_ARTIFACTS="${CMAKE_BINARY_DIR}/binding-corpus-artifacts")
+add_dependencies(app_binding_corpus_tests frost-clang)
+
+# DBG-10 real lldb sessions use actual source/stack/variable responses, separately from doubles.
+frost_add_test(app_multi_session_debug_real_tests QT
+    SOURCES multi_session_debug_real_test.cpp
+    DEPS frost::app frost::ui_debug frost::debug frost::io
+    LABELS integration lldb)
+target_include_directories(app_multi_session_debug_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_multi_session_debug_real_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_SCENARIOS_PATH="$<TARGET_FILE:debug_test_scenarios>"
+    FROST_SCENARIOS_SOURCE="${FROST_SOURCE_DIR}/tests/debug/fixtures/dap_scenarios.cpp")
+add_dependencies(app_multi_session_debug_real_tests debug_test_scenarios)
 # Persistent engine regressions use real loopback sockets; serialize them with the other
 # integration cases. Filesystem-only discovery and protocol doubles remain in the unit target.
 frost_add_test(app_engine_session_tests QT
-    SOURCES workbench_engine_test.cpp
+    SOURCES workbench_engine_test.cpp workbench_engine_lua_debug_test.cpp
     DEPS frost::app frost::build frost::io frost::ui_find
     THIRD_PARTY Qt6::Network unofficial-sodium::sodium
     LABELS integration)
-target_include_directories(app_engine_session_tests PRIVATE ${FROST_SOURCE_DIR}/tests
-    ${FROST_SOURCE_DIR}/src/app/src)
+target_include_directories(app_engine_session_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_engine_session_tests PRIVATE ${_frost_workbench_definitions})
 # Exercise the release floor across independent processes, including a stale reader.
 if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{FROST_SDK}/py/Scripts/python.exe")

@@ -52,6 +52,32 @@ frost_add_library(app LAYER app
         src/engine_integration_events.cpp
         src/engine_integration_commands.cpp
         src/engine_integration_run.cpp
+        src/engine_integration_run_debug.cpp
+        src/engine_integration_native_pause.cpp
+        src/engine_integration_native_host.cpp
+        src/engine_native_host.hpp
+        src/engine_native_host_internal.hpp
+        src/engine_mixed_launch.cpp
+        src/engine_mixed_launch.hpp
+        src/engine_integration_crash.cpp
+        src/engine_integration_tests.cpp
+        src/engine_dump_controller.cpp
+        src/engine_dump_controller.hpp
+        src/engine_crash_observer.cpp
+        src/engine_crash_observer.hpp
+        src/engine_crash_cleanup.cpp
+        src/engine_binding_integration.cpp
+        src/engine_binding_integration.hpp
+        src/engine_binding_work.hpp
+        src/engine_binding_capture.cpp
+        src/engine_binding_query.cpp
+        src/engine_run_debug.cpp
+        src/engine_run_debug.hpp
+        src/engine_unit_tests_window.cpp
+        src/engine_unit_tests_window.hpp
+        src/engine_test_retirement.cpp
+        src/multi_session_debug.cpp
+        src/multi_session_debug.hpp
         src/engine_locator.cpp
         src/engine_locator.hpp
         src/update_check.cpp
@@ -97,6 +123,7 @@ frost_add_library(app LAYER app
         src/workbench_clone.cpp
         src/workbench_prompts.cpp
         src/workbench_run.cpp
+        src/workbench_multi_debug.cpp
         src/workbench_run_configurations.cpp
         src/workbench_tool_windows.cpp
         src/workbench_update.cpp
@@ -105,6 +132,11 @@ frost_add_library(app LAYER app
         src/workbench_documents.cpp
         src/workbench_engine.cpp
         src/workbench_engine_debug.cpp
+        src/workbench_engine_lua_debug.cpp
+        src/workbench_engine_lua_debug.hpp
+        src/workbench_bindings.cpp
+        src/engine_mixed_debug.hpp
+        src/workbench_mixed_debug.cpp
         src/engine_native_debug.hpp
         src/workbench_language.cpp
         src/workbench_save_actions.cpp
@@ -220,6 +252,7 @@ if(FROST_ASAN_RUNTIME_DLL)
 endif()
 # Building frost builds the DLL it loads.
 add_dependencies(frost frost_app_shared)
+add_dependencies(frost frost-dbgeng-dap)
 # The Windows helper uses the locally installed VS MSBuild assemblies at runtime. Build it with
 # the pinned .NET SDK in a private profile; it does not redistribute those VS assemblies.
 add_custom_target(frost_project_host

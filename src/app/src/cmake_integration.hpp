@@ -70,6 +70,10 @@ public:
     void filesChanged(const io::FileChangeBatch& batch) { m_service->filesChanged(batch); }
     [[nodiscard]] Result<build::RunId> run();
     [[nodiscard]] Result<void> debug(std::function<void(Result<debug::DebugTarget>)> done);
+    // A compound job supplies its captured member: later configuration edits cannot change this
+    // build's launch inputs. The actual built artifact remains the default program.
+    [[nodiscard]] Result<void> debug(const run::RunConfiguration& frozen,
+                                     std::function<void(Result<debug::DebugTarget>)> done);
     [[nodiscard]] Result<build::RunId> rerun();
     [[nodiscard]] bool running() const { return m_pending || m_running; }
     void stop();
@@ -154,6 +158,9 @@ private:
     std::vector<std::string> m_runArguments;
     std::string m_runRoot;
     std::function<void(Result<debug::DebugTarget>)> m_debugDone;
+    std::optional<run::RunConfiguration> m_debugConfiguration;
+    [[nodiscard]] Result<void> debugPrepared(std::optional<run::RunConfiguration> frozen,
+                                             std::function<void(Result<debug::DebugTarget>)> done);
     bool m_pending = false;
     bool m_running = false;
     bool m_rerun = false;

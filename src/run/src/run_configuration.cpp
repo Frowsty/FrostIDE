@@ -67,6 +67,8 @@ void writeConfiguration(std::string& out, const RunConfiguration& configuration,
     member("program", rpc::Json(configuration.program).dump());
     if (isFrostEngineRunType(configuration.type)) {
         member("engineProjectPath", rpc::Json(configuration.engineProjectPath).dump());
+        if (configuration.engineDebugMode != EngineDebugMode::Lua)
+            member("engineDebugMode", rpc::Json(toString(configuration.engineDebugMode)).dump());
     }
     std::string arguments;
     writeStringArray(arguments, configuration.arguments);
@@ -218,6 +220,14 @@ Result<RunConfiguration> readConfiguration(const rpc::Json& object, std::size_t 
         }
         *field = std::move(*value);
     }
+    if (const auto* mode = object.find("engineDebugMode")) {
+        if (!mode->isString())
+            return corrupt(index, "'engineDebugMode' is not a string");
+        const auto parsed = parseEngineDebugMode(*mode->asString());
+        if (!parsed)
+            return corrupt(index, "unknown engine Debug mode");
+        configuration.engineDebugMode = *parsed;
+    }
     if (const rpc::Json* arguments = object.find("arguments"); arguments != nullptr) {
         if (!arguments->isArray()) {
             return corrupt(index, "'arguments' is not an array");
@@ -344,6 +354,21 @@ std::optional<BeforeLaunch> parseBeforeLaunch(std::string_view text) noexcept {
     return std::nullopt;
 }
 
+std::string_view toString(EngineDebugMode mode) noexcept {
+    switch (mode) {
+    case EngineDebugMode::Lua: return "lua";
+    case EngineDebugMode::NativeAndLua: return "native-and-lua";
+    }
+    return "unknown";
+}
+std::optional<EngineDebugMode> parseEngineDebugMode(std::string_view text) noexcept {
+    if (text == "lua")
+        return EngineDebugMode::Lua;
+    if (text == "native-and-lua")
+        return EngineDebugMode::NativeAndLua;
+    return std::nullopt;
+}
+
 Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
     if (configuration.id.empty() || configuration.id.size() > kMaxIdLength ||
         !std::ranges::all_of(configuration.id, idCharacter)) {
@@ -352,6 +377,11 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
     if (configuration.name.empty() || hasNul(configuration.name)) {
         return invalid(configuration, "the name is empty or contains NUL");
     }
+    if (configuration.engineDebugMode != EngineDebugMode::Lua &&
+        configuration.engineDebugMode != EngineDebugMode::NativeAndLua)
+        return invalid(configuration, "unknown engine Debug mode");
+    if (!isFrostEngineRunType(configuration.type) && configuration.engineDebugMode != EngineDebugMode::Lua)
+        return invalid(configuration, "only a FrostEngine configuration has an engine Debug mode");
     if (isFrostEngineRunType(configuration.type)) {
         if (!io::normalizePath(configuration.engineProjectPath)) {
             return invalid(configuration,
@@ -510,6 +540,8 @@ Result<std::vector<RunConfiguration>> parseRunConfigurations(std::string_view js
         if (!configuration) {
             return std::unexpected(std::move(configuration.error()));
         }
+        if (configuration->engineDebugMode == EngineDebugMode::NativeAndLua && *version < 4)
+            return corrupt(index, "native-and-lua Debug requires store version 4");
         if (!ids.insert(configuration->id).second) {
             return corrupt(index, std::format("the id '{}' is used twice", configuration->id));
         }
@@ -548,8 +580,9 @@ bool attachTargetMatches(std::string_view target, std::string_view executablePat
 std::string serializeRunConfigurations(std::span<const RunConfiguration> configurations) {
     const bool engine = std::ranges::any_of(
         configurations, [](const RunConfiguration& configuration) { return isFrostEngineRunType(configuration.type); });
-    const int version =
-        engine ? kRunConfigurationsVersion : (std::ranges::any_of(configurations, usesRun5Features) ? 2 : 1);
+    const bool mixed = std::ranges::any_of(
+        configurations, [](const auto& c) { return c.engineDebugMode == EngineDebugMode::NativeAndLua; });
+    const int version = mixed ? 4 : engine ? 3 : (std::ranges::any_of(configurations, usesRun5Features) ? 2 : 1);
     std::string out = std::format("{{\n  \"version\": {},\n  \"configurations\": [", version);
     if (configurations.empty()) {
         out += "]\n}\n";

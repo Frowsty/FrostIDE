@@ -481,9 +481,28 @@ bool consoleContains(frost::ui::EngineConsole& console, const QString& text) {
 
 // This is a protocol fixture reply, independent from the explicit state event below.
 EngineJson peerPlayReceipt() {
-    return EngineJson::object().set("state", "Play").set("mode", "Play").set("paused", false).set("frames", 7);
+    return EngineJson::object()
+        .set("state", "Edit")
+        .set("mode", "Edit")
+        .set("paused", false)
+        .set("frames", 0)
+        .set("accepted", true)
+        .set("pending", true)
+        .set("startedNow", false)
+        .set("operationId", std::string(32, 'd'))
+        .set("phase", "pending")
+        .set("playGeneration", "");
 }
-void publishPeerPlay(EngineSessionPeer& peer) { peer.state("Play", false, 7); }
+void publishPeerPlay(EngineSessionPeer& peer) {
+    peer.event("play.state", EngineJson::object()
+                                 .set("state", "Play")
+                                 .set("mode", "Play")
+                                 .set("paused", false)
+                                 .set("frames", 7)
+                                 .set("operationId", std::string(32, 'd'))
+                                 .set("phase", "playing")
+                                 .set("playGeneration", std::string(32, 'e')));
+}
 
 void exercisePeerPlay(WorkbenchRig& rig, EngineSessionPeer& peer) {
     const auto receipt = peerPlayReceipt();
@@ -505,6 +524,7 @@ void exercisePeerPlay(WorkbenchRig& rig, EngineSessionPeer& peer) {
     ASSERT_NE(console, nullptr);
     ASSERT_TRUE(waitFor([&] { return consoleContains(*console, QStringLiteral("play.start")); }, 20s));
     EXPECT_EQ(replied.stringAt("state"), "Edit");
+    EXPECT_TRUE(replied.stringAt("playGeneration").empty());
     ASSERT_TRUE(rig.window->mainToolbar().engineState());
     EXPECT_FALSE(rig.window->mainToolbar().engineState()->playing);
     const auto sequence = replied.unsignedAt("eventSequence").value_or(0);
@@ -513,7 +533,9 @@ void exercisePeerPlay(WorkbenchRig& rig, EngineSessionPeer& peer) {
         [&] {
             const auto state = rig.workbench->engineState();
             return state.unsignedAt("eventSequence").value_or(0) > sequence && state.stringAt("state") == "Play" &&
-                   state.boolAt("playing") == true;
+                   state.boolAt("playing") == true &&
+                   state.stringAt("operationId") == receipt.stringAt("operationId") &&
+                   state.stringAt("phase") == "playing" && state.stringAt("playGeneration") == std::string(32, 'e');
         },
         10s));
     EXPECT_TRUE(rig.window->mainToolbar().engineState()->playing);

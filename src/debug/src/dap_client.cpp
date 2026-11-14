@@ -36,15 +36,21 @@ constexpr auto kExitCodeWait = std::chrono::seconds(2);
 
 class ProcessTransport final : public IDapTransport {
 public:
-    explicit ProcessTransport(std::unique_ptr<io::IProcess> process) : m_process(std::move(process)) {
+    explicit ProcessTransport(std::unique_ptr<io::IProcess> process, DapProcessOutput output)
+        : m_process(std::move(process)) {
         io::IProcess* raw = m_process.get();
-        m_stderr = std::thread([raw] {
+        m_stderr = std::thread([raw, output = std::move(output)] {
             std::array<char, 4096> buffer{};
             std::string line;
             for (;;) {
                 auto read = raw->readStderr(buffer);
                 if (!read || *read == 0) {
                     break;
+                }
+                if (output.privateOutput) {
+                    if (output.onStderrChunk)
+                        output.onStderrChunk(std::string_view(buffer.data(), *read));
+                    continue; // No line accumulation or default log path for private bytes.
                 }
                 line.append(buffer.data(), *read);
                 for (std::size_t end = line.find('\n'); end != std::string::npos; end = line.find('\n')) {
@@ -129,8 +135,8 @@ struct ClientState {
         IDebugAdapterClient::Completion done;
     };
 
-    ClientState(std::unique_ptr<IDapTransport> stream, DapHandlers callbacks)
-        : transport(std::move(stream)), handlers(std::move(callbacks)) {}
+    ClientState(std::unique_ptr<IDapTransport> stream, DapHandlers callbacks, std::int64_t firstSequence)
+        : transport(std::move(stream)), handlers(std::move(callbacks)), nextSeq(firstSequence) {}
 
     std::unique_ptr<IDapTransport> transport;
     const DapHandlers handlers;
@@ -141,21 +147,26 @@ struct ClientState {
     std::set<std::int64_t> cancelled FROST_GUARDED_BY(mutex); // Their late responses are dropped.
     bool closed FROST_GUARDED_BY(mutex) = false;
     std::atomic<bool> closeRequested{false};
+    std::atomic<std::uint64_t> successfulWrites{0};
     std::atomic<bool> supportsCancel{false};
 
     Mutex queueMutex;
     std::condition_variable queueChanged;
-    std::deque<std::string> outgoing FROST_GUARDED_BY(queueMutex);
+    struct Outgoing {
+        std::string frame, command;
+        std::optional<std::int64_t> requestSequence;
+    };
+    std::deque<Outgoing> outgoing FROST_GUARDED_BY(queueMutex);
     bool writerStop FROST_GUARDED_BY(queueMutex) = false;
 
     std::thread reader;
     std::thread writer;
 
     void report(const Error& problem) const {
-        log::warn("debug", "DAP: {}", problem.message());
-        if (handlers.onProtocolError) {
-            handlers.onProtocolError(problem);
-        }
+        const auto safe = handlers.privateSession ? Error(problem.code(), "private DAP protocol failure") : problem;
+        log::warn("debug", "DAP: {}", safe.message());
+        if (handlers.onProtocolError)
+            handlers.onProtocolError(safe);
     }
 
     // Queues one message (the seq is filled in here, in queue order). Returns the seq, 0 when closed.
@@ -174,7 +185,8 @@ struct ClientState {
             }
             // Queued under `mutex` too, so the frames reach the adapter in seq order.
             LockGuard queue(queueMutex);
-            outgoing.push_back(rpc::encodeFrame(message.dump()));
+            outgoing.push_back({rpc::encodeFrame(message.dump()), std::string(message.stringAt("command")),
+                                request ? std::optional<std::int64_t>(seq) : std::nullopt});
         }
         queueChanged.notify_all();
         return seq;
@@ -182,7 +194,7 @@ struct ClientState {
 
     void writerLoop() {
         for (;;) {
-            std::string frame;
+            Outgoing outgoingMessage;
             {
                 UniqueLock lock(queueMutex);
                 while (outgoing.empty() && !writerStop) {
@@ -191,14 +203,39 @@ struct ClientState {
                 if (writerStop) {
                     return;
                 }
-                frame = std::move(outgoing.front());
+                outgoingMessage = std::move(outgoing.front());
                 outgoing.pop_front();
             }
-            if (auto written = transport->write(frame); !written) {
-                log::warn("debug", "DAP: writing to the adapter failed: {}", written.error().message());
+            if (handlers.beforeWrite) {
+                auto admitted = handlers.beforeWrite(outgoingMessage.command);
+                if (!admitted) {
+                    IDebugAdapterClient::Completion done;
+                    {
+                        LockGuard lock(mutex);
+                        const auto found = outgoingMessage.requestSequence
+                                               ? pending.find(*outgoingMessage.requestSequence)
+                                               : pending.end();
+                        if (found != pending.end()) {
+                            done = std::move(found->second.done);
+                            pending.erase(found);
+                        }
+                    }
+                    if (done)
+                        done(handlers.privateSession
+                                 ? Result<rpc::Json>(
+                                       fail(admitted.error().code(), "private DAP transmission admission was revoked"))
+                                 : Result<rpc::Json>(std::unexpected(admitted.error())));
+                    continue;
+                }
+            }
+            if (auto written = transport->write(outgoingMessage.frame); !written) {
+                log::warn("debug", "DAP: writing to the adapter failed: {}",
+                          handlers.privateSession ? std::string_view("private DAP transport write failed")
+                                                  : std::string_view(written.error().message()));
                 transport->close(); // The reader sees EOF and ends the connection.
                 return;
             }
+            ++successfulWrites;
         }
     }
 
@@ -233,8 +270,10 @@ struct ClientState {
         if (message.boolAt("success").value_or(false)) {
             entry.done(body != nullptr ? *body : empty);
         } else {
-            entry.done(std::unexpected(
-                dap::responseError(entry.command, message.stringAt("message"), body != nullptr ? *body : empty)));
+            auto error =
+                dap::responseError(entry.command, message.stringAt("message"), body != nullptr ? *body : empty);
+            entry.done(
+                std::unexpected(handlers.privateSession ? Error(error.code(), "private DAP request failed") : error));
         }
     }
 
@@ -257,7 +296,8 @@ struct ClientState {
                 response.set("body", std::move(*answer));
             }
         } else {
-            response.set("message", answer.error().message());
+            response.set("message", handlers.privateSession ? "private DAP reverse request was refused"
+                                                            : answer.error().message());
         }
         static_cast<void>(send(std::move(response), std::nullopt));
     }
@@ -316,6 +356,7 @@ struct ClientState {
     }
 
     void finish(const Error& why) {
+        const auto safe = handlers.privateSession ? Error(why.code(), "private DAP connection ended") : why;
         std::map<std::int64_t, Pending> orphans;
         {
             LockGuard lock(mutex);
@@ -325,19 +366,21 @@ struct ClientState {
         }
         stopWriter();
         for (auto& [seq, entry] : orphans) {
-            entry.done(fail(ErrorCode::IoError, std::format("{}: the connection ended before the answer ({})",
-                                                            entry.command, why.message())));
+            entry.done(fail(ErrorCode::IoError, handlers.privateSession
+                                                    ? std::string("private DAP connection ended before the answer")
+                                                    : std::format("{}: the connection ended before the answer ({})",
+                                                                  entry.command, safe.message())));
         }
         if (handlers.onClosed) {
-            handlers.onClosed(why);
+            handlers.onClosed(safe);
         }
     }
 };
 
 class DapClient final : public IDebugAdapterClient {
 public:
-    DapClient(std::unique_ptr<IDapTransport> transport, DapHandlers handlers)
-        : m_state(std::make_shared<ClientState>(std::move(transport), std::move(handlers))) {
+    DapClient(std::unique_ptr<IDapTransport> transport, DapHandlers handlers, std::int64_t firstSequence)
+        : m_state(std::make_shared<ClientState>(std::move(transport), std::move(handlers), firstSequence)) {
         ClientState* raw = m_state.get();
         m_state->writer = std::thread([raw] { raw->writerLoop(); });
         m_state->reader = std::thread([raw] { raw->readerLoop(); });
@@ -366,7 +409,9 @@ public:
         std::string name = command;
         const std::int64_t seq = m_state->send(std::move(message), std::pair{std::move(command), done});
         if (seq == 0) {
-            done(fail(ErrorCode::IoError, std::format("{}: the debug adapter connection is closed", name)));
+            done(fail(ErrorCode::IoError, m_state->handlers.privateSession
+                                              ? std::string("private DAP connection is closed")
+                                              : std::format("{}: the debug adapter connection is closed", name)));
         }
         return seq;
     }
@@ -392,7 +437,9 @@ public:
                                                 .set("arguments", rpc::Json::object().set("requestId", seq)),
                                             std::pair{std::string("cancel"), Completion([](Result<rpc::Json>) {})}));
         }
-        done(fail(ErrorCode::Cancelled, std::format("{} was cancelled", command)));
+        done(fail(ErrorCode::Cancelled, m_state->handlers.privateSession
+                                            ? std::string("private DAP request was cancelled")
+                                            : std::format("{} was cancelled", command)));
     }
 
     void setSupportsCancel(bool supported) noexcept override { m_state->supportsCancel.store(supported); }
@@ -407,6 +454,7 @@ public:
         return m_state->closed;
     }
 
+    std::optional<std::uint64_t> sentMessageCount() const noexcept override { return m_state->successfulWrites.load(); }
     std::size_t pendingRequests() const override {
         LockGuard lock(m_state->mutex);
         return m_state->pending.size();
@@ -422,12 +470,14 @@ std::unique_ptr<IDapTransport> loopbackTransport(std::unique_ptr<io::LoopbackStr
     return std::make_unique<LoopbackTransport>(std::move(stream));
 }
 
-std::unique_ptr<IDapTransport> processTransport(std::unique_ptr<io::IProcess> process) {
-    return std::make_unique<ProcessTransport>(std::move(process));
+std::unique_ptr<IDapTransport> processTransport(std::unique_ptr<io::IProcess> process, DapProcessOutput output) {
+    return std::make_unique<ProcessTransport>(std::move(process), std::move(output));
 }
 
-std::unique_ptr<IDebugAdapterClient> makeDapClient(std::unique_ptr<IDapTransport> transport, DapHandlers handlers) {
-    return std::make_unique<DapClient>(std::move(transport), std::move(handlers));
+std::unique_ptr<IDebugAdapterClient> makeDapClient(std::unique_ptr<IDapTransport> transport, DapHandlers handlers,
+                                                   std::int64_t firstSequence) {
+    FROST_PRE(firstSequence > 0);
+    return std::make_unique<DapClient>(std::move(transport), std::move(handlers), firstSequence);
 }
 
 } // namespace frost::debug

@@ -104,6 +104,11 @@ void DebugSession::State::initialized(Result<rpc::Json> body) {
         });
         const char* const command = targetMode == DebugTargetMode::Attach ? "attach" : "launch";
         send(command, launchArguments, [weak = weak()](Result<rpc::Json> answer) {
+            if (const auto self = weak.lock(); self && answer && self->targetMode == DebugTargetMode::Attach) {
+                LockGuard lock(self->mutex);
+                if (!self->stopRequested && self->state != DebugState::Ended)
+                    self->attachAcknowledged = true;
+            }
             if (const auto self = weak.lock(); self && !answer) {
                 self->fatal(self->targetMode == DebugTargetMode::Attach
                                 ? self->attachFailure(answer.error())
@@ -153,15 +158,17 @@ void DebugSession::State::configure() {
             }
             configurationDone = caps.supportsConfigurationDoneRequest;
         }
-        for (const std::string& path : paths) {
-            sendBreakpoints(path);
+        if (!readOnly) {
+            for (const std::string& path : paths)
+                sendBreakpoints(path);
+            sendFunctionBreakpoints(true);
+            sendExceptionFilters(true);
         }
-        sendFunctionBreakpoints(true);
-        sendExceptionFilters(true);
         if (!configurationDone) {
             afterStartup([weak = weak()] {
-                if (const auto self = weak.lock())
-                    self->becomeRunning();
+                if (const auto self = weak.lock()) {
+                    self->configurationAccepted();
+                }
             });
             return;
         }
@@ -173,13 +180,27 @@ void DebugSession::State::configure() {
                                                                             : std::move(answer.error()));
                     return;
                 }
-                self->becomeRunning();
+                self->configurationAccepted();
             }
         });
         // lldb-dap's first threads reply is the cached launch-time list (ADR 0049). Consume it
         // now so a later stopped event queries the actual stopped threads.
         send("threads", rpc::Json(), [](Result<rpc::Json>) {});
     });
+}
+
+void DebugSession::State::configurationAccepted() {
+    {
+        LockGuard lock(mutex);
+        if (state == DebugState::Ended || stopRequested)
+            return;
+        configurationAcknowledged = true;
+    }
+    emit([&] {
+        if (callbacks.onConfigured)
+            callbacks.onConfigured();
+    });
+    becomeRunning();
 }
 
 // Starting -> Running (a stop that came first wins).
@@ -201,15 +222,17 @@ void DebugSession::State::becomeRunning() {
 // --- The end ---
 
 void DebugSession::State::disconnect(bool terminateDebuggee) {
+    auto completed = std::make_shared<std::promise<Result<void>>>();
     {
         LockGuard lock(mutex);
         if (disconnectSent || state == DebugState::Ended) {
             return;
         }
         disconnectSent = true;
+        disconnectResult = completed->get_future().share();
     }
     send("disconnect", rpc::Json::object().set("terminateDebuggee", terminateDebuggee).set("restart", false),
-         [weak = weak()](Result<rpc::Json> response) {
+         [weak = weak(), completed](Result<rpc::Json> response) {
              if (const auto self = weak.lock()) {
                  {
                      LockGuard lock(self->mutex);
@@ -225,9 +248,13 @@ void DebugSession::State::disconnect(bool terminateDebuggee) {
                              self->fatalError = Error(ErrorCode::IoError, detail);
                      }
                  }
+                 completed->set_value(response ? Result<void>{} : Result<void>(std::unexpected(response.error())));
                  if (IDebugAdapterClient* const client = self->adapter.load()) {
                      client->close();
                  }
+             } else {
+                 completed->set_value(
+                     fail(ErrorCode::Cancelled, "The debugger disappeared before detach confirmation"));
              }
          });
 }
@@ -236,11 +263,14 @@ void DebugSession::State::disconnect(bool terminateDebuggee) {
 void DebugSession::State::fatal(Error error) {
     {
         LockGuard lock(mutex);
+        if (stopRequested || state == DebugState::Ended)
+            return; // A late startup reply cannot turn an explicit cancelled detach into group failure.
         if (!fatalError) {
-            fatalError = std::move(error);
+            fatalError =
+                privateSession ? Error(error.code(), "The private native debug operation failed") : std::move(error);
         }
     }
-    disconnect(targetMode == DebugTargetMode::Launch);
+    disconnect(!readOnly && targetMode == DebugTargetMode::Launch);
 }
 
 void DebugSession::State::closed(const Error& why) {
@@ -412,6 +442,31 @@ std::unique_ptr<DebugSession> DebugSession::start(AdapterFactory factory, rpc::J
                     self->afterStartup([self, why] { self->closed(why); });
                 }
             },
+        .privateSession = state->privateSession,
+        .beforeWrite = [weak](std::string_view command) -> Result<void> {
+            const auto self = weak.lock();
+            if (!self)
+                return fail(ErrorCode::Cancelled, "The debug session ended before transmission");
+            if (command != "launch")
+                return {};
+            {
+                LockGuard lock(self->mutex);
+                if (self->stopRequested || self->state == DebugState::Ended)
+                    return fail(ErrorCode::Cancelled, "The debug launch was cancelled before transmission");
+            }
+            if (!self->launchAdmission)
+                return self->privateSession
+                           ? Result<void>(fail(ErrorCode::PermissionDenied, "Private launch admission is missing"))
+                           : Result<void>{};
+            if (auto admitted = self->launchAdmission(); !admitted)
+                return admitted;
+            {
+                LockGuard lock(self->mutex);
+                if (self->stopRequested || self->state == DebugState::Ended)
+                    return fail(ErrorCode::Cancelled, "The debug launch was cancelled during admission");
+            }
+            return {};
+        },
     };
     auto client = factory ? factory(std::move(handlers))
                           : Result<std::unique_ptr<IDebugAdapterClient>>(
@@ -495,15 +550,23 @@ std::optional<std::int64_t> DebugSession::processId() const {
 }
 
 DebugTargetMode DebugSession::targetMode() const noexcept { return m_state->targetMode; }
+bool DebugSession::readOnly() const noexcept { return m_state->readOnly; }
+std::string_view DebugSession::adapterId() const noexcept { return m_state->adapterId; }
+std::optional<std::uint64_t> DebugSession::sentMessageCount() const {
+    LockGuard lock(m_state->mutex);
+    return m_state->client ? m_state->client->sentMessageCount() : std::nullopt;
+}
 
 bool DebugSession::canTerminateDebuggee() const {
     LockGuard lock(m_state->mutex);
-    return (m_state->state == DebugState::Running || m_state->state == DebugState::Stopped) &&
+    return !m_state->readOnly && (m_state->state == DebugState::Running || m_state->state == DebugState::Stopped) &&
            !m_state->stopRequested && !m_state->terminateRequested && m_state->processId.has_value() &&
            (m_state->caps.supportsTerminateRequest || m_state->targetMode == DebugTargetMode::Launch);
 }
 
 Result<void> DebugSession::terminateDebuggee(std::int64_t expectedPid, TerminateDone done) {
+    if (m_state->readOnly)
+        return fail(ErrorCode::Unsupported, "A dump session cannot terminate a process");
     Result<void> admitted;
     m_state->withStartup([&] {
         bool terminateRequest = false;
@@ -566,6 +629,10 @@ Result<void> DebugSession::terminateDebuggee(std::int64_t expectedPid, Terminate
 }
 
 Result<void> DebugSession::restart() {
+    if (m_state->privateSession)
+        return fail(ErrorCode::Unsupported, "A private engine session needs a fresh authenticated launch");
+    if (m_state->readOnly)
+        return fail(ErrorCode::Unsupported, "A dump session cannot restart a process");
     {
         LockGuard lock(m_state->mutex);
         if (m_state->state == DebugState::Ended || m_state->stopRequested) {
@@ -611,6 +678,27 @@ Result<void> DebugSession::restart() {
     return {};
 }
 
+Result<void> DebugSession::detachForShutdown(std::chrono::milliseconds grace) {
+    if (m_state->targetMode != DebugTargetMode::Attach && !m_state->readOnly)
+        return fail(ErrorCode::Unsupported, "Only an attached or dump session may detach during shutdown");
+    {
+        LockGuard lock(m_state->mutex);
+        if (m_state->disconnectConfirmed)
+            return {};
+        if (m_state->state == DebugState::Ended)
+            return fail(ErrorCode::IoError, "The debugger ended without confirming its detach");
+    }
+    stop();
+    std::shared_future<Result<void>> result;
+    {
+        LockGuard lock(m_state->mutex);
+        result = m_state->disconnectResult;
+    }
+    if (!result.valid() || result.wait_for(grace) != std::future_status::ready)
+        return fail(ErrorCode::Timeout, "The debugger detach was not confirmed before shutdown");
+    return result.get();
+}
+
 void DebugSession::stop() {
     m_state->withStartup([&] {
         {
@@ -620,8 +708,30 @@ void DebugSession::stop() {
             m_state->ordinaryStopRequested = true;
             m_state->stopRequested = true;
         }
-        m_state->disconnect(m_state->targetMode == DebugTargetMode::Launch);
+        m_state->disconnect(!m_state->readOnly && m_state->targetMode == DebugTargetMode::Launch);
     });
+}
+
+Result<void> DebugSession::cancelAttachedPreparation() {
+    if (m_state->targetMode != DebugTargetMode::Attach)
+        return fail(ErrorCode::Unsupported, "Only an unfinished attached adapter may be cancelled locally");
+    Result<void> result;
+    m_state->withStartup([&] {
+        {
+            LockGuard lock(m_state->mutex);
+            if (m_state->state == DebugState::Ended)
+                return;
+            if (m_state->attachAcknowledged && m_state->configurationAcknowledged) {
+                result = fail(ErrorCode::Busy, "The attached debugger is already configured; use ordinary detach");
+                return;
+            }
+            m_state->ordinaryStopRequested = true;
+            m_state->stopRequested = true;
+        }
+        if (IDebugAdapterClient* const client = m_state->adapter.load())
+            client->close();
+    });
+    return result;
 }
 
 void DebugSession::kill() {

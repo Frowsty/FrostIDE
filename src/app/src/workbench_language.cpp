@@ -5,6 +5,7 @@
 // reason the language features give for an empty answer (ServerReadiness, R0 follow-up 4).
 
 #include "frost/app/workbench.hpp"
+#include "frost/engine/engine_lua.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/document_sync.hpp"
@@ -18,6 +19,7 @@
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 
+#include "engine_binding_integration.hpp"
 #include "language_bridge.hpp"
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -76,6 +78,27 @@ LanguageBridge::~LanguageBridge() = default;
 lang::IWorkspaceEditApplier& LanguageBridge::applier() noexcept { return *this; }
 
 Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_view label) {
+    if (m_workbench.m_engineBindings)
+        for (const auto& file : edit.files)
+            if (m_workbench.m_engineBindings->protectsGeneratedResource(file.path))
+                return fail(ErrorCode::Unsupported,
+                            "Engine metadata edits require explicit schema regeneration, not a generic workspace edit");
+    // Generated engine declarations belong to schema regeneration. Even when a combined provider
+    // is unavailable, generic Lua rename cannot turn a library/cache edit into a user-source write.
+    std::string stateDirectory = m_workbench.m_options.luaStateDirectory;
+    if (stateDirectory.empty())
+        if (auto file = project::TrustStore::defaultStorePath())
+            stateDirectory = io::joinPath(io::parentPath(*file), "luals").value_or("");
+    if (auto root = io::joinPath(stateDirectory, "host-meta"))
+        for (const auto& file : edit.files) {
+            const auto parent = io::parentPath(file.path);
+            if (io::fileName(file.path) == engine::kEngineLuaStubFileName &&
+                io::fileName(parent).starts_with("FrostEngine-") &&
+                lang::documentKey(io::parentPath(parent)) == lang::documentKey(*root))
+                return fail(
+                    ErrorCode::Unsupported,
+                    "Engine metadata rename requires the read-only combined binding preview and schema regeneration");
+        }
     // Applying edits is on the GUI thread; encoding may change on a clangd restart.
     m_applier.setEncoding(encoding());
     return m_applier.apply(edit, label);

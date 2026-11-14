@@ -1169,6 +1169,8 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # "msvc"; DBG-2b, DBG-4a), and in trees with the UI app_workbench_clangd_tests and
         # ui_screenshot_tests; app_workbench_configuration_tests (Windows only; tags "msbuild" and
         # "clangd"; SLN-7).
+        # R7 registers exact native multi/mixed, Lua endpoint/corpus, DbgEng and binding corpus
+        # suites below. Their kind and desktop-lock assertions apply through the same loop.
         kinds = {"unit", "integration", "stress", "perf"}
         tagged = {"msbuild": ("integration", ("MsBuildDiscovery.", "MsBuildBuild.", "MsBuildRun.",
                                               "MsBuildCompile.", "MsBuildEvaluationE2E.", "WorkbenchMsBuild.",
@@ -1182,7 +1184,8 @@ class BuildTreeLabelsTest(unittest.TestCase):
                                               "CodeVisionCorpus.", "WorkbenchInspection.",
                                               "WorkbenchClangd.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
                                               "CMakeCompileCommands.", "ClCommandLinesClangd.",
-                                              "WorkbenchConfigurationManager.")),
+                                              "WorkbenchConfigurationManager.", "BindingQueriesCorpus.",
+                                              "WorkbenchBindingCorpus.")),
                   "cmake": ("integration", ("CMakeRealBuild.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
                                             "CMakeCompileCommands.", "AutomationEndpoint.", "WorkbenchRun.",
                                             "CMakePresetsOracle.", "Fixtures/CMakePresetsOracle.",
@@ -1193,8 +1196,11 @@ class BuildTreeLabelsTest(unittest.TestCase):
                                            "Runtimes/MsvcThrowFilter.", "Builds/MsvcStepInto.")),
                   "git": ("integration", ("GitE2E.", "GitUiE2E.", "WorkbenchGit.")),
                   "lldb": ("integration", ("LldbDapE2E.", "LldbDebugSession.", "DapReal.", "CorpusFrostEditor.",
-                                           "UnitTestsWindow.",
+                                           "UnitTestsWindow.", "MultiSessionReal.", "EngineMixedRealCorpus.",
                                            "MsvcDebug.", "Runtimes/MsvcThrowFilter.", "Builds/MsvcStepInto.")),
+                  "lua": ("integration", ("LuaDebugEndpoint.", "RealLuaCorpus.", "EngineMixedRealCorpus.")),
+                  "luals": ("integration", ("BindingQueriesCorpus.", "WorkbenchBindingCorpus.")),
+                  "dbgeng": ("integration", ("DbgEngReal.", "DbgEngTransportReal.")),
                   "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",
                                           "GoldenComparator."))}
         wrong, seen = [], dict.fromkeys(tagged, 0)

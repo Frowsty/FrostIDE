@@ -106,6 +106,7 @@
 #include "frost/debug/dap_types.hpp"
 #include "frost/rpc/json.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -142,6 +143,8 @@ struct StopInfo {
     // The thrown C++ type of an MSVC cpp_throw stop ("std::runtime_error"; header comment, "Thrown
     // types"); "" when it was not read.
     std::string exceptionType{};
+    // Authenticated FrostEngine extension; never synthesized from DAP threadId or a timeout.
+    std::optional<dap::ScriptPauseIdentity> scriptPause;
 
     // A crash or an unhandled exception: reason "exception" or "signal", not an exception filter's stop.
     [[nodiscard]] bool isCrash() const noexcept;
@@ -240,6 +243,14 @@ struct DebugSessionCallbacks {
     std::function<void(const dap::Capabilities& capabilities)> onCapabilities{};
     // Actual process identity events, outside session locks; 0 means the adapter withdrew the PID.
     std::function<void(std::int64_t processId)> onProcess{};
+    // Actual configuration barrier: configurationDone succeeded, or the adapter does not use it.
+    // A stopped event alone never implies this barrier completed.
+    std::function<void()> onConfigured{};
+    // Only the adapter's actual continued event, including when command submission already
+    // changed the presentation state. Never emitted for an outgoing resume or its ACK.
+    std::function<void()> onContinued{};
+    // A genuine announced adapter stop, excluding restoration after a refused resume request.
+    std::function<void()> onAdapterStopped{};
 };
 
 // How a session starts (DebugSession::start).
@@ -253,6 +264,10 @@ struct DebugSessionOptions {
     std::vector<FunctionBreakpointLine> functionBreakpoints{};
     std::vector<std::string> exceptionFilters{}; // Filter ids to stop on from the start.
     std::vector<std::string> throwTypes{};       // Header comment, "Thrown types"; empty: every type.
+    bool readOnly = false;       // Dump inspection: no execution, mutation, restart or debuggee termination.
+    bool privateSession = false; // Native engine bootstrap: protocol diagnostics never contain payloads.
+    // Worker-safe exact launch admission, checked by the real DAP writer immediately before launch.
+    std::function<Result<void>()> launchAdmission{};
 };
 
 /*
@@ -305,6 +320,10 @@ public:
     // The debuggee's process id from the adapter's process event; nullopt before it (or when 0).
     [[nodiscard]] std::optional<std::int64_t> processId() const;
     [[nodiscard]] DebugTargetMode targetMode() const noexcept;
+    [[nodiscard]] bool readOnly() const noexcept;
+    [[nodiscard]] std::string_view adapterId() const noexcept;
+    // Actual successful DAP frame writes; nullopt means the adapter does not expose this oracle.
+    [[nodiscard]] std::optional<std::uint64_t> sentMessageCount() const;
     // True when explicit termination is supported, or launch ownership permits standard DAP
     // disconnect(terminateDebuggee=true). An ordinary attached-session stop remains a detach.
     [[nodiscard]] bool canTerminateDebuggee() const;
@@ -391,8 +410,15 @@ public:
     using StopPlayDone = std::function<void(Result<rpc::Json>)>;
     std::int64_t stopPlay(StopPlayDone done);
 
+    // Final teardown only: sends/joins the ordinary DAP detach of an attached/read-only session.
+    // Blocks at most grace for its real ACK; never sends terminateDebuggee=true. Errors report
+    // refusal/uncertainty, not a fabricated detach success. The caller still owns adapter cleanup.
+    [[nodiscard]] Result<void> detachForShutdown(std::chrono::milliseconds grace);
     // Ends the session politely; an attached debuggee is not terminated. Idempotent.
     void stop();
+    // Cancels an unfinished attached adapter locally. Sends no disconnect, grants no host
+    // termination and records no detach ACK. Refuses once attach and configuration both succeeded.
+    [[nodiscard]] Result<void> cancelAttachedPreparation();
     // Ends the adapter's process tree now. Idempotent.
     void kill();
 

@@ -120,7 +120,8 @@ QTreeView* makeVariablesView(QWidget* parent, VariablesModel* model, DebugToolWi
             const QString value = model->valueAt(index.siblingAtColumn(1));
             QMenu menu(view);
             menu.addAction(QStringLiteral("Copy Value"), view, [value] { QApplication::clipboard()->setText(value); });
-            if (owner != nullptr && model->parentReferenceAt(index) > 0 && model->isVariableRow(index)) {
+            if (owner != nullptr && !owner->readOnlySession() && model->parentReferenceAt(index) > 0 &&
+                model->isVariableRow(index)) {
                 QAction* setVal = menu.addAction(QStringLiteral("Set Value..."));
                 setVal->setShortcut(QKeySequence(Qt::Key_F2));
                 QObject::connect(setVal, &QAction::triggered, owner,
@@ -161,7 +162,7 @@ QTreeView* makeVariablesView(QWidget* parent, VariablesModel* model, DebugToolWi
 
 DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
     : QWidget(parent), m_controller(controller), m_reason(new QLabel(this)), m_tabs(new QTabWidget(this)),
-      m_console(new RunConsole(m_tabs)) {
+      m_console(controller.console() ? controller.console() : new RunConsole(m_tabs)) {
     setObjectName(QStringLiteral("debugToolWindow"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -176,6 +177,7 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
     layout->addWidget(m_tabs, 1);
 
     buildThreadsAndVariablesTab();
+    m_console->setParent(m_tabs);
     m_tabs->addTab(m_console, QStringLiteral("Console"));
     m_controller.setConsole(m_console);
 
@@ -187,6 +189,7 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
 }
 
 DebugToolWindow::~DebugToolWindow() = default;
+bool DebugToolWindow::readOnlySession() const { return m_controller.readOnlySession(); }
 
 void DebugToolWindow::buildToolbar(QVBoxLayout* layout) {
     m_toolbar = new QToolBar(this);
@@ -479,14 +482,15 @@ void DebugToolWindow::wireControllerSignals() {
 void DebugToolWindow::updateActions() {
     const bool live = m_controller.debugging();
     const bool paused = m_controller.paused();
-    m_resume->setEnabled(paused);
-    m_pause->setEnabled(live && m_controller.state() == debug::DebugState::Running);
+    const bool executable = paused && !m_controller.readOnlySession();
+    m_resume->setEnabled(executable);
+    m_pause->setEnabled(live && !m_controller.readOnlySession() && m_controller.state() == debug::DebugState::Running);
     m_stop->setEnabled(live);
-    m_stepOver->setEnabled(paused);
-    m_stepInto->setEnabled(paused);
-    m_stepOut->setEnabled(paused);
-    m_runToCursor->setEnabled(paused);
-    m_evaluate->setEnabled(paused);
+    m_stepOver->setEnabled(executable);
+    m_stepInto->setEnabled(executable);
+    m_stepOut->setEnabled(executable);
+    m_runToCursor->setEnabled(executable);
+    m_evaluate->setEnabled(executable);
     if (m_disassembleButton != nullptr) {
         m_disassembleButton->setEnabled(paused);
     }
@@ -670,6 +674,8 @@ void DebugToolWindow::requestMemoryDump() {
 }
 
 void DebugToolWindow::promptSetVariableValue(QTreeView* view, VariablesModel* model, const QModelIndex& index) {
+    if (m_controller.readOnlySession())
+        return;
     if (!m_controller.paused() || model == nullptr || !index.isValid()) {
         return;
     }

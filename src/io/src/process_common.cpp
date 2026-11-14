@@ -254,8 +254,19 @@ Result<void> IProcess::releaseContainer() {
 
 void IProcess::abandonOutput() noexcept {}
 
+Result<ProcessResult> IProcess::communicateUntil(std::string_view stdinData, std::optional<IClock::Duration> timeout) {
+    if (timeout)
+        return communicate(stdinData, *timeout);
+    return fail(ErrorCode::Unsupported,
+                "This process implementation does not support an unbounded communicate deadline");
+}
 Result<ProcessResult> runToCompletion(IProcessLauncher& launcher, const ProcessSpec& spec, std::string_view stdinData,
                                       IClock::Duration timeout, std::stop_token stop) {
+    return runToCompletionUntil(launcher, spec, stdinData, timeout, stop);
+}
+Result<ProcessResult> runToCompletionUntil(IProcessLauncher& launcher, const ProcessSpec& spec,
+                                           std::string_view stdinData, std::optional<IClock::Duration> timeout,
+                                           std::stop_token stop) {
     if (stop.stop_requested()) {
         return fail(ErrorCode::Cancelled, "process launch cancelled: '" + spec.executable + "'");
     }
@@ -272,7 +283,7 @@ Result<ProcessResult> runToCompletion(IProcessLauncher& launcher, const ProcessS
             if (!terminated)
                 terminationFailure = std::move(terminated.error());
         });
-        return (*process)->communicate(stdinData, timeout);
+        return (*process)->communicateUntil(stdinData, timeout);
     }();
     if (terminationFailure) {
         return std::unexpected(

@@ -14,6 +14,7 @@
 #include <deque>
 #include <format>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <optional>
@@ -149,14 +150,17 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     State(rpc::Json arguments, std::map<std::string, std::vector<BreakpointLine>> lines,
           DebugSessionCallbacks sessionCallbacks, DebugSessionOptions options)
         : callbacks(std::move(sessionCallbacks)), launchArguments(std::move(arguments)),
+          privateSession(options.privateSession), launchAdmission(std::move(options.launchAdmission)),
           adapterId(std::move(options.adapterId)), attachHint(std::move(options.attachHint)),
           breakpoints(std::move(lines)), functionBreakpoints(std::move(options.functionBreakpoints)),
           exceptionFilters(std::move(options.exceptionFilters)), throwTypes(std::move(options.throwTypes)),
           breakOnAbort(options.breakOnAbort), msvcExceptions(options.msvcExceptions),
-          stepOutOfNoDebug(options.stepOutOfNoDebug), targetMode(options.targetMode) {}
+          stepOutOfNoDebug(options.stepOutOfNoDebug), targetMode(options.targetMode), readOnly(options.readOnly) {}
 
     const DebugSessionCallbacks callbacks;
     const rpc::Json launchArguments;
+    const bool privateSession;
+    const std::function<Result<void>()> launchAdmission;
     const std::string adapterId;
     const std::string attachHint;
     std::atomic<IDebugAdapterClient*> adapter{nullptr};
@@ -172,11 +176,14 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     DebugState state FROST_GUARDED_BY(mutex) = DebugState::Starting;
     dap::Capabilities caps FROST_GUARDED_BY(mutex);
     bool configured FROST_GUARDED_BY(mutex) = false;
+    bool configurationAcknowledged FROST_GUARDED_BY(mutex) = false;
+    bool attachAcknowledged FROST_GUARDED_BY(mutex) = false;
     bool stopRequested FROST_GUARDED_BY(mutex) = false;
     bool terminateRequested FROST_GUARDED_BY(mutex) = false;
     bool ordinaryStopRequested FROST_GUARDED_BY(mutex) = false;
     bool disconnectSent FROST_GUARDED_BY(mutex) = false;
     bool disconnectConfirmed FROST_GUARDED_BY(mutex) = false;
+    std::shared_future<Result<void>> disconnectResult FROST_GUARDED_BY(mutex);
     bool terminatedSeen FROST_GUARDED_BY(mutex) = false;
     std::optional<StopInfo> stop FROST_GUARDED_BY(mutex);
     std::vector<DebugThread> threads FROST_GUARDED_BY(mutex);
@@ -201,6 +208,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     const bool msvcExceptions;
     const bool stepOutOfNoDebug;
     const DebugTargetMode targetMode;
+    const bool readOnly;
     std::optional<std::int64_t> abortBreakpointId FROST_GUARDED_BY(mutex);
     std::optional<std::int64_t> throwBreakpointId FROST_GUARDED_BY(mutex); // _CxxThrowException's adapter id.
     std::optional<std::int64_t> processId FROST_GUARDED_BY(mutex);
@@ -276,6 +284,19 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
 
     // Even an adapter that completes inline cannot invoke session callbacks under startMutex.
     std::int64_t send(std::string command, rpc::Json arguments, IDebugAdapterClient::Completion done) {
+        if (readOnly && command == "disconnect")
+            arguments.set("terminateDebuggee", false);
+        if (readOnly && command != "initialize" && command != "launch" && command != "attach" &&
+            command != "configurationDone" && command != "threads" && command != "stackTrace" && command != "scopes" &&
+            command != "variables" && command != "readMemory" && command != "disassemble" && command != "source" &&
+            command != "cancel" && command != "disconnect" &&
+            !(command == "evaluate" && arguments.stringAt("context") != "repl")) {
+            afterStartup([done = std::move(done)]() mutable {
+                if (done)
+                    done(fail(ErrorCode::Unsupported, "This dump session permits inspection only"));
+            });
+            return 0;
+        }
         auto safeDone = [weak = weak(), done = std::move(done)](Result<rpc::Json> result) mutable {
             if (const auto self = weak.lock()) {
                 self->afterStartup(
@@ -306,6 +327,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     [[nodiscard]] Error attachFailure(const Error& why) const;
     void capabilitiesChanged(const rpc::Json& body);
     void configure();
+    void configurationAccepted();
     void becomeRunning();
     void disconnect(bool terminateDebuggee);
     void fatal(Error error);

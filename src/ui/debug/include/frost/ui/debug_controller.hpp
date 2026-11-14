@@ -65,6 +65,7 @@ namespace frost::ui {
 
 class EditorView;
 class RunConsole;
+class DebugRetirementBatch;
 
 struct DebugControllerHooks {
     // Opens `path` (absolute) at 1-based `line` and returns its editor (the workbench's open path);
@@ -94,6 +95,10 @@ struct DebugControllerOptions {
     std::function<std::pair<std::string, std::string>()> sourceMapSetting{};
     // Overrides lldb-dap (tests: the fake-dap double). Empty: lldb-dap through `launcher`.
     debug::AdapterFactory adapterFactory{};
+    bool allowRerun = true; // A registry-created session has no independent configuration/build resolver.
+    // Workspace-owned lifetime barrier, required for asynchronous acknowledged attach shutdown.
+    // Drain after GUI teardown and before the services captured by transport admission die.
+    std::shared_ptr<DebugRetirementBatch> retirements;
 };
 
 // The DebugTarget a Debug run's hand-off describes (header comment, "Debug"). Pure.
@@ -131,6 +136,21 @@ public:
     // InvalidArgument (no trust store), NotFound (lldb-dap is missing), Untrusted (no adapter
     // started), the adapter factory's.
     [[nodiscard]] Result<void> startTarget(const debug::DebugTarget& target);
+    using PrivateOutput = std::function<void(std::string_view category, std::string_view text)>;
+    // Built-in default pinned LLDB only. Raw output goes exclusively to private worker-safe
+    // consumers before the generic console/log path. Final launch admission runs on the writer.
+    [[nodiscard]] Result<void> startNativeEngineTarget(const debug::DebugTarget& target, PrivateOutput output,
+                                                       std::function<void(std::string_view)> adapterStderr,
+                                                       std::function<Result<void>()> launchAdmission);
+    // Generic explicitly selected adapter (FER-9/FER-16). Factory/arguments remain caller-owned
+    // admission decisions, but every trust root is rechecked here before the factory starts.
+    // readOnly disables execution/mutation and disconnects without terminating a host.
+    [[nodiscard]] Result<void> startAdapterTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
+                                                  rpc::Json arguments, std::string adapterId,
+                                                  debug::DebugTargetMode mode = debug::DebugTargetMode::Launch,
+                                                  bool readOnly = false,
+                                                  std::function<Result<void>()> launchAdmission = {});
+    [[nodiscard]] bool readOnlySession() const noexcept { return m_session && m_session->readOnly(); }
     // The caller must finish the trusted managed build and verify assembly/PDB/source revisions.
     // Starts the supplied adapter through the same UI and session lifetime as native debugging.
     [[nodiscard]] Result<void>
@@ -170,6 +190,15 @@ public:
     // Changes on every session start and end; use to reject stale asynchronous work.
     [[nodiscard]] std::uint64_t sessionGeneration() const noexcept { return m_generation; }
     [[nodiscard]] bool paused() const noexcept { return m_state == debug::DebugState::Stopped; }
+    // Actual adapter stop evidence persists across outgoing resume/step commands until the real
+    // continued event or session end. Use for native all-stop heartbeat admission, never paused().
+    [[nodiscard]] bool adapterStoppedEvidence() const noexcept {
+        return m_session && m_adapterStopped && m_session->state() != debug::DebugState::Ended;
+    }
+    [[nodiscard]] std::uint64_t adapterEvidenceSequence() const noexcept { return m_adapterEvidenceSequence; }
+    [[nodiscard]] bool configured() const {
+        return m_session && m_configured && m_session->state() != debug::DebugState::Ended;
+    }
     [[nodiscard]] const std::optional<debug::StopInfo>& stopInfo() const noexcept { return m_stop; }
     /*
      * How the last Debug run ended, as its console's closing line says: the debuggee's exit code
@@ -185,8 +214,13 @@ public:
     [[nodiscard]] const debug::FrameList& frames() const noexcept { return m_frames; }
     [[nodiscard]] const std::optional<debug::DebugFrame>& selectedFrame() const noexcept { return m_frame; }
     [[nodiscard]] debug::DebugSession* session() const noexcept { return m_session.get(); }
-    // Native lldb-DAP only; managed and embedded Lua sessions never bind an engine PID overlay.
+    // Native live adapters only; managed, embedded Lua and dump sessions never bind an engine PID overlay.
     [[nodiscard]] bool nativeSession() const noexcept { return m_session != nullptr && m_nativeSession; }
+    // Captured during default pinned LLDB resolution only; configured/custom factories remain
+    // unverified. Never recomputed from mutable settings after this session starts.
+    [[nodiscard]] bool nativeOsThreadIdsVerified() const noexcept {
+        return nativeSession() && m_nativeOsThreadIdsVerified;
+    }
     // GUI thread, O(1). Explicit engine Stop must match both the observed OS PID and current debug
     // generation. Refusal never starts the ordinary stop() kill timeout. done is GUI-thread scoped
     // to that session; actual state changes continue to come only from DAP events.
@@ -206,6 +240,10 @@ public:
     bool runToCursor();
     // Jumps execution to the current editor's caret line via DAP gotoTargets + goto.
     bool setNextStatement();
+    // Optional exact-owned-operation Stop, scoped to the current controller generation. It must
+    // report only actual admission and retain its own asynchronous cleanup ownership. No default
+    // disconnect/kill timer follows this handler; ordinary attaches never install it. Empty clears.
+    void setStopHandler(std::function<Result<void>()> handler);
     // Ends the session (header comment). Idempotent.
     void stop();
 
@@ -231,6 +269,11 @@ public:
     // Connects `view` (header comment); it detaches itself when destroyed.
     void attachEditor(EditorView* view);
     void detachEditor(EditorView* view);
+    // A registry selects exactly one controller to present shared editor decorations/navigation.
+    // Inactive controllers retain their actual frames and source data but never overwrite another
+    // session's execution point, inline values, gutter verification or hover provider. GUI thread.
+    void setEditorPresentationEnabled(bool enabled);
+    [[nodiscard]] bool editorPresentationEnabled() const noexcept { return m_editorPresentation; }
 
     // Data for the tool window's models; results arrive on the GUI thread (dropped after the session
     // ends). `done` gets Cancelled when the session ended first.
@@ -255,10 +298,15 @@ public:
     void readMemory(const QString& memoryReference, int count, ReadMemoryDone done);
 
 signals:
+    // The session console's user Stop button, before stop(). Automatic cleanup calls stop directly.
+    void userStopRequested();
     // Adapter-confirmed termination, tagged with the session that emitted it.
     void adapterTerminated(std::uint64_t generation);
+    void adapterContinued(std::uint64_t generation);
     // Started, paused, resumed or ended (the toolbar's enabled states).
     void stateChanged();
+    // configurationDone ACK (or adapter without that request), generation-scoped like all events.
+    void configuredChanged();
     // A stop: its summary, and whether it is a crash or an unhandled exception.
     void stopped(const QString& summary, bool crash);
     void threadsChanged();
@@ -302,10 +350,15 @@ private:
     void save();
     bool validateCoreClrPath(std::string path, std::function<void(DebugController&)> approved);
 
-    [[nodiscard]] Result<debug::AdapterFactory> adapterFactory();
+    [[nodiscard]] Result<debug::AdapterFactory> adapterFactory(bool* nativeOsThreadIdsVerified = nullptr,
+                                                               debug::DapProcessOutput output = {});
+    [[nodiscard]] Result<void> startNativeTarget(const debug::DebugTarget& target, PrivateOutput output,
+                                                 debug::DapProcessOutput processOutput,
+                                                 std::optional<debug::NativeDebugPrivacy> privacy);
     using SessionStarter = std::function<Result<std::unique_ptr<debug::DebugSession>>(debug::DebugSessionCallbacks)>;
     [[nodiscard]] Result<void> startSession(std::string title, std::string program, std::string adapterName,
-                                            const SessionStarter& starter, bool attach = false);
+                                            const SessionStarter& starter, bool attach = false,
+                                            PrivateOutput privateOutput = {});
     bool report(Result<void> result, const QString& what);
     void endSession();
 
@@ -328,6 +381,11 @@ private:
     bool m_lastCoreClrSession = false;
     bool m_alternatePending = false;
     bool m_shutdown = false;
+    bool m_configured = false;
+    bool m_adapterStopped = false;
+    std::uint64_t m_adapterEvidenceSequence = 0;
+    std::uint64_t m_stopHandlerGeneration = 0;
+    std::function<Result<void>()> m_stopHandler;
     bool m_rerunPending = false;
     bool m_rerunAllowed = true;
     QTimer m_rerunTimer;
@@ -347,7 +405,9 @@ private:
     // child's members never count, as they would name an unrelated identifier on a line.
     std::vector<debug::dap::Variable> m_currentFrameVariables;
     std::vector<std::int64_t> m_frameScopeReferences; // The scopes those come from.
-    bool m_nativeSession = false;                     // The session is lldb-dap's (launch or attach).
+    bool m_editorPresentation = true;
+    bool m_nativeSession = false; // The session is lldb-dap's (launch or attach).
+    bool m_nativeOsThreadIdsVerified = false;
     std::map<std::string, std::string, std::less<>> m_hoverCache;
     QTimer m_killTimer;
 

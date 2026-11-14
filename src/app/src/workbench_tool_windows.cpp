@@ -27,6 +27,7 @@
 
 #include "cmake_integration.hpp"
 #include "engine_integration.hpp"
+#include "engine_unit_tests_window.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "project_edit_process.hpp"
@@ -38,6 +39,8 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QPointer>
+#include <QTabWidget>
 
 #include <algorithm>
 #include <cstring>
@@ -391,31 +394,64 @@ void Workbench::attachToolWindows() {
     unitTestsSpec.title = text("Unit Tests");
     unitTestsSpec.side = ui::ToolWindowSide::Bottom;
     unitTestsSpec.iconId = std::string(ui::icons::kRunRun);
-    unitTestsSpec.createContent = [this]() -> QWidget* {
+    unitTestsSpec.createContent = [owner = QPointer<Workbench>(this)]() -> QWidget* {
+        if (!owner || owner->m_shutDown || !owner->m_window)
+            return new QWidget();
         // ctest's tests of the open CMake folder (RUN-7/RUN-10).
         UnitTestsWindowContext context;
-        context.launcher = &m_services.launcher;
-        context.fs = &m_services.fs;
-        context.trust = &m_services.trust;
-        context.cmake = [this]() -> build::CMakeService* { return m_cmake ? &m_cmake->service() : nullptr; };
-        context.solutionOpen = [this] { return m_solution != nullptr; };
-        context.openLocation = [this](const std::string& path, int line) { openLocation(qs(path), line, 1); };
-        context.debugTest = [this](const run::SingleTestLaunch& launch) -> Result<void> {
-            if (!m_debug)
+        context.launcher = &owner->m_services.launcher;
+        context.fs = &owner->m_services.fs;
+        context.trust = &owner->m_services.trust;
+        context.cmake = [owner]() -> build::CMakeService* {
+            return owner && !owner->m_shutDown && owner->m_cmake ? &owner->m_cmake->service() : nullptr;
+        };
+        context.solutionOpen = [owner] { return owner && !owner->m_shutDown && owner->m_solution != nullptr; };
+        context.openLocation = [owner](const std::string& path, int line) {
+            if (owner && !owner->m_shutDown)
+                owner->openLocation(qs(path), line, 1);
+        };
+        context.debugTest = [owner](const run::SingleTestLaunch& launch) -> Result<void> {
+            if (!owner || owner->m_shutDown || !owner->m_debug)
                 return fail(ErrorCode::NotFound, "The debugger is unavailable");
             debug::DebugTarget target;
             target.name = launch.displayName;
             target.program = launch.program;
             target.arguments = launch.arguments;
             target.workingDirectory = launch.workingDirectory;
-            target.trustRoots = {m_cmake ? m_cmake->service().sourceDirectory() : m_projectRoot};
+            target.trustRoots = {owner->m_cmake ? owner->m_cmake->service().sourceDirectory() : owner->m_projectRoot};
             for (const auto& [name, value] : launch.environment)
                 if (value)
                     target.environment.emplace_back(name, *value);
-            return m_debug->startTarget(target);
+            return owner->m_debug->startTarget(target);
         };
-        context.testsChanged = [this] { refreshAllMarkers(); };
-        return createUnitTestsToolWindowWidget(m_window, std::move(context));
+        context.testsChanged = [owner] {
+            if (owner && !owner->m_shutDown)
+                owner->refreshAllMarkers();
+        };
+        auto* providers = new QTabWidget(owner->m_window);
+        providers->setObjectName(QStringLiteral("unitTestsProviders"));
+        providers->addTab(createUnitTestsToolWindowWidget(providers, std::move(context)), text("CTest"));
+        EngineUnitTestsWindowContext engine;
+        engine.fs = &owner->m_services.fs;
+        engine.launcher = &owner->m_services.launcher;
+        engine.retirements = owner->m_engineTestsRetirements;
+        engine.source = [owner]() -> Result<EngineUnitTestsSource> {
+            if (!owner || owner->m_shutDown || !owner->m_engine)
+                return fail(ErrorCode::NotFound, "FrostEngine project services are unavailable");
+            return owner->m_engine->captureEngineUnitTestsSource();
+        };
+        engine.openLocation = [owner](const std::string& path, int line) {
+            if (owner && !owner->m_shutDown)
+                owner->openLocation(qs(path), line, 1);
+        };
+        engine.debugScene = [owner](const auto& options, const auto& scene) {
+            if (!owner || owner->m_shutDown)
+                return;
+            if (auto result = owner->debugEngineTestScene(options, scene); !result)
+                owner->notify(text("Debug Engine Scene"), qs(result.error().message()), ui::NotificationKind::Error);
+        };
+        providers->addTab(createEngineUnitTestsProviderWidget(providers, std::move(engine)), text("FrostEngine"));
+        return providers;
     };
     if (auto added = windows.add(std::move(unitTestsSpec)); !added) {
         log::warn(kLog, "unit tests tool window: {}", added.error().describe());

@@ -2,8 +2,11 @@
 // The application composition over a real trusted CMake project.
 
 #include "frost/build/cmake_service.hpp"
+#include "frost/debug/fake_debug_adapter.hpp"
 #include "frost/debug/lldb_dap.hpp"
+#include "frost/run/run_types.hpp"
 #include "frost/ui/cmake/cmake_tree_model.hpp"
+#include "frost/ui/debug_session_registry.hpp"
 #include "frost/ui/debug_tool_window.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/run_controller.hpp"
@@ -567,6 +570,118 @@ TEST(WorkbenchCMake, DebugBuildsStopsInspectsStepsAndStops) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     EXPECT_FALSE(debug->debugging());
     EXPECT_FALSE(debug->rerunPending());
+}
+
+void compoundCMakeUsesCapturedInputs(bool customId) {
+    WorkDir dir(customId ? "cmake-compound-custom-freeze" : "cmake-compound-freeze");
+    std::string compiler = FROST_TEST_C_COMPILER;
+    std::ranges::replace(compiler, '\\', '/');
+    dir.write("CMakeLists.txt",
+              "cmake_minimum_required(VERSION 3.21)\nset(CMAKE_C_COMPILER \"" + compiler +
+                  "\" CACHE FILEPATH \"\" FORCE)\nproject(Frozen C)\nadd_executable(debuggee main.c)\n");
+    dir.write("main.c", "int main(void) { return 0; }\n");
+    dir.write("captured/.keep", "");
+    dir.write("later/.keep", "");
+    frost::debug::FakeDebugAdapter peer;
+    frost::debug::scriptProgram(peer, frost::debug::FakeProgram{.runsForever = true});
+    RigOptions options;
+    options.workbench.debugAdapterFactory = [&](frost::debug::DapHandlers handlers) {
+        return frost::debug::makeDapClient(peer.transport(), std::move(handlers));
+    };
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(displayedTarget(rig, QStringLiteral("debuggee")));
+    auto* service = rig.workbench->cmakeService();
+    auto* controller = rig.workbench->runController();
+    auto generated = frost::run::cmakeRunConfigurations(*service->model(), dir.path());
+    ASSERT_EQ(generated.size(), 1U);
+    const auto generatedId = generated.front().id;
+    auto member = generated.front();
+    if (customId)
+        member.id = "custom.cmake.member";
+    member.name = "Captured member";
+    member.arguments = customId ? std::vector<std::string>{} : std::vector<std::string>{"captured", "a b"};
+    member.workingDirectory = dir.join("captured");
+    member.environment = {{"FROST_CAPTURED_CMAKE", "original"}, {"PATH", std::nullopt}};
+    auto* arguments = rig.window->findChild<QLineEdit*>(QStringLiteral("cmakeRunArguments"));
+    ASSERT_NE(arguments, nullptr);
+    arguments->setText(QStringLiteral("--target-default \"default value\""));
+    frost::run::RunConfiguration compound;
+    compound.id = "compound.frozen";
+    compound.name = "Frozen CMake";
+    compound.type = frost::run::RunType::Compound;
+    compound.configurations = {member.id};
+    ASSERT_TRUE(controller->replaceConfigurations({member, compound}));
+    ASSERT_TRUE(controller->selectConfiguration(compound.id));
+    std::mutex mutex;
+    frost::build::SaveAllCompletion held;
+    service->setSaveAllHook([&](frost::build::SaveAllCompletion done) {
+        std::lock_guard guard(mutex);
+        held = std::move(done);
+    });
+    ASSERT_EQ(rig.window->invoke("run.debug"), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            std::lock_guard guard(mutex);
+            return static_cast<bool>(held);
+        },
+        30s));
+    EXPECT_TRUE(peer.argumentsOf("launch").empty());
+    auto later = member;
+    later.arguments = {"later"};
+    later.workingDirectory = dir.join("later");
+    later.environment = {{"FROST_CAPTURED_CMAKE", "changed"}};
+    // Also edit the generated ID: the old live configurator looked this up even for a custom
+    // member. Neither lookup can substitute inputs after this compound job has been admitted.
+    auto liveGenerated = later;
+    liveGenerated.id = generatedId;
+    std::vector<frost::run::RunConfiguration> edited{later, compound};
+    if (customId)
+        edited.push_back(liveGenerated);
+    ASSERT_TRUE(controller->replaceConfigurations(edited));
+    frost::build::SaveAllCompletion release;
+    {
+        std::lock_guard guard(mutex);
+        release = std::move(held);
+    }
+    release({});
+    ASSERT_TRUE(waitFor([&] { return !peer.argumentsOf("launch").empty(); }, 120s));
+    const auto launch = peer.argumentsOf("launch").front();
+    EXPECT_EQ(launch.stringAt("cwd"), dir.join("captured"));
+    const auto* args = launch.find("args");
+    ASSERT_NE(args, nullptr);
+    const auto expected = customId ? std::vector<std::string>{"--target-default", "default value"}
+                                   : std::vector<std::string>{"captured", "a b"};
+    ASSERT_EQ(args->size(), expected.size());
+    for (std::size_t i = 0; i < expected.size(); ++i)
+        EXPECT_EQ(args->items()[i].asString() ? *args->items()[i].asString() : "", expected[i]);
+    const auto* environment = launch.find("env");
+    ASSERT_NE(environment, nullptr);
+    EXPECT_TRUE(std::ranges::any_of(environment->items(), [](const auto& value) {
+        return value.asString() && *value.asString() == "FROST_CAPTURED_CMAKE=original";
+    }));
+    EXPECT_FALSE(std::ranges::any_of(environment->items(), [](const auto& value) {
+        return value.asString() && QString::fromStdString(*value.asString()).startsWith("PATH=", Qt::CaseInsensitive);
+    }));
+    const auto* commands = launch.find("initCommands");
+    ASSERT_NE(commands, nullptr);
+    EXPECT_TRUE(std::ranges::any_of(commands->items(), [](const auto& value) {
+        return value.asString() && *value.asString() == "settings set target.inherit-env false";
+    }));
+    const auto model = service->model();
+    const auto target = std::ranges::find(model->targets, "debuggee", &frost::project::CMakeTarget::name);
+    ASSERT_NE(target, model->targets.end());
+    const auto actualProgram = frost::run::cmakeTargetProgram(*target);
+    ASSERT_TRUE(actualProgram);
+    EXPECT_EQ(launch.stringAt("program"), *actualProgram);
+    rig.workbench->debugSessions()->stopAll();
+    ASSERT_TRUE(waitFor([&] { return !rig.workbench->debugSessions()->anyDebugging(); }, 30s));
+}
+
+TEST(WorkbenchCMake, CompoundFreezesEditedMemberWhileBuildPreparationIsHeld) { compoundCMakeUsesCapturedInputs(false); }
+TEST(WorkbenchCMake, CompoundCustomIdFreezesTargetDefaultsWhileBuildPreparationIsHeld) {
+    compoundCMakeUsesCapturedInputs(true);
 }
 
 TEST(WorkbenchCMake, DebugRejectsCompletionAfterProfileSwitch) {

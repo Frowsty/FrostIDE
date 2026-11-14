@@ -16,7 +16,9 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/process.hpp"
 #include "frost/lang/lua_host.hpp"
+#include "frost/text/positions.hpp"
 
+#include <cstddef>
 #include <map>
 #include <optional>
 #include <string>
@@ -28,6 +30,34 @@ namespace frost::engine {
 // File name used for the generated `schema.export` LuaLS meta definitions inside FrostIDE's
 // per-user host-meta directory.
 inline constexpr std::string_view kEngineLuaStubFileName = "frost_schema.lua";
+
+// Exact identity/range recorded while this schema entry is emitted, never recovered by searching
+// the output text. Offsets are UTF-8 bytes in GeneratedEngineLuaMetadata::text. Duplicate schema
+// identities or generated Lua declaration collisions are flagged, not resolved by first match.
+struct EngineLuaDeclaration {
+    std::size_t schemaEntryIndex = 0;
+    std::string qualifiedName;
+    std::string emittedIdentity;
+    text::ByteRange selection;
+    bool ambiguous = false;
+};
+struct GeneratedEngineLuaMetadata {
+    std::string text;
+    std::vector<EngineLuaDeclaration> declarations;
+};
+
+struct EngineLuaSchemaCapture {
+    SchemaDocument schema;
+    std::string engineRoot;
+    std::string program; // Actual cache-producing editor binary; empty only for explicit fixed-schema providers.
+    IClock::SystemTime programMtime{};
+};
+
+// Owning, pure metadata generation; safe concurrently with immutable schema inputs. The caller
+// binds these byte ranges to the exact output URI/snapshot/provider generation before querying
+// LuaLS. Entries that do not emit a declaration have no anchor; there is no lexical fallback.
+// O(output bytes + entries^2), including collision detection.
+[[nodiscard]] GeneratedEngineLuaMetadata generateEngineLuaMetadata(const SchemaDocument& schema);
 
 // Generates deterministic LuaLS `---@meta` definitions from a validated `SchemaDocument`:
 //   - `@alias` unions from `schema.luaAliases` (`ComponentName`, `FrostPropertyType`)
@@ -84,6 +114,10 @@ public:
 
     // Returns the cached or freshly exported `SchemaDocument` for `folder`, if available.
     [[nodiscard]] std::optional<SchemaDocument> schemaForWorkspace(io::IFileSystem& fs, std::string_view folder) const;
+    // Reads an already exported cache only; NEVER starts a process. Blocking path/status discovery
+    // belongs on a worker. Returns nullopt while warmup is absent/stale. Thread-safe; O(path I/O + schema copy).
+    [[nodiscard]] std::optional<EngineLuaSchemaCapture> cachedSchemaCapture(io::IFileSystem& fs,
+                                                                            std::string_view folder) const;
 
     // Returns true when `folder` belongs to a FrostEngine workspace with a built FrostEditor binary
     // whose schema.export has not yet been cached for its current mtime.

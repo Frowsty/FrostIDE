@@ -130,13 +130,13 @@ class EngineOracle:
     def __exit__(self, *_: Any) -> None:
         self.socket.close()
 
-    def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def request(self, method: str, params: dict[str, Any], timeout: float = 15) -> dict[str, Any]:
         self.next_id += 1
         packet: dict[str, Any] = {"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params}
         if self.identity:
             packet["session"] = self.identity
-        deadline = time.monotonic() + 15
-        self.socket.settimeout(15)
+        deadline = time.monotonic() + timeout
+        self.socket.settimeout(timeout)
         self.socket.sendall(json.dumps(packet, separators=(",", ":")).encode() + b"\n")
         while True:
             while b"\n" not in self.buffer:

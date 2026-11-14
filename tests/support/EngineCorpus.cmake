@@ -28,6 +28,8 @@ function(frost_configure_engine_corpus_target target)
     if(NOT engine_sha MATCHES "^[0-9a-f]+$")
         message(FATAL_ERROR "${corpus_lock_file} has no pinned FrostEngine SHA")
     endif()
+    # Consumers with separate Debug/Release/Dist binaries can reuse the exact locked Debug name.
+    set_property(TARGET ${target} PROPERTY FROST_ENGINE_CORPUS_PRESET "${engine_preset}")
     string(JSON vc_tools GET "${sdk_lock}" msvc vcToolsVersion)
     if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK})
         set(Python3_EXECUTABLE "$ENV{FROST_SDK}/py/Scripts/python.exe")

@@ -24,8 +24,10 @@
  *     scripted exit status.
  *   - A script with `neverExits` models a hung child: wait(timeout) and
  *     communicate() fail with Timeout immediately (no sleeping), wait()
- *     without a timeout fails with Internal instead of blocking forever, and
- *     after terminate() the process reports kTerminatedExitCode (and SIGKILL
+ *     without a timeout fails with Internal instead of blocking forever. Explicit
+ *     communicateUntil(..., nullopt) waits until terminate() or cancellation through
+ *     runToCompletionUntil(), with no execution deadline. After terminate()
+ *     the process reports kTerminatedExitCode (and SIGKILL
  *     on POSIX).
  *   - launchAsync() returns an IAsyncProcess over the same script, on
  *     context.scheduler (the reactor is not used, so a SimExecutor works and

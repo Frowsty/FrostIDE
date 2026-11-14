@@ -178,6 +178,20 @@ public:
         m_state->records[m_index].outputAbandoned = true;
     }
 
+    Result<ProcessResult> communicateUntil(std::string_view stdinData,
+                                           std::optional<IClock::Duration> timeout) override {
+        if (timeout)
+            return communicate(stdinData, *timeout);
+        {
+            UniqueLock lock(m_mutex);
+            if (!stdinData.empty() && !m_stdinOpen)
+                return fail(ErrorCode::InvalidArgument, "communicate: stdin is not open");
+            while (m_neverExits && !m_terminated && !m_childTerminated)
+                m_changed.wait(lock.native());
+        }
+        return communicate(stdinData, IClock::Duration::zero());
+    }
+
     Result<ProcessResult> communicate(std::string_view stdinData, IClock::Duration timeout) override {
         bool stdinOpen = false;
         {

@@ -31,6 +31,10 @@ public:
             observation.identity.instanceId = value.identity.instanceId;
             observation.identity.generation = value.identity.generation;
             observation.state = value.state;
+            observation.mode = value.mode;
+            observation.playGeneration = value.playGeneration;
+            observation.operationId = value.operationId;
+            observation.phase = value.phase;
             observation.playing = value.playing;
             observation.paused = value.paused;
             observation.frame = value.frame;
@@ -86,10 +90,33 @@ public:
                                        [&](const EngineState& pushed) {
                                            return pushed.state == oracle.stringAt("state") &&
                                                   pushed.paused == oracle.boolAt("paused").value_or(false) &&
+                                                  pushed.operationId == oracle.stringAt("operationId") &&
+                                                  pushed.phase == oracle.stringAt("phase") &&
+                                                  pushed.playGeneration == oracle.stringAt("playGeneration") &&
                                                   pushed.identity.instanceId == identity->instanceId &&
                                                   pushed.identity.generation == identity->generation;
                                        });
         });
+    }
+
+    Result<EngineState> committedPlay(std::size_t after, const Json& receipt) {
+        std::optional<EngineState> committed;
+        const bool observed = wait([&] {
+            for (std::size_t i = after; i < states.size(); ++i) {
+                const auto& pushed = states[i];
+                if (pushed.operationId == receipt.stringAt("operationId") && pushed.phase == "playing" &&
+                    pushed.state == "Play" && pushed.mode == "Play" && pushed.playing &&
+                    !pushed.playGeneration.empty() && pushed.identity.instanceId == identity->instanceId &&
+                    pushed.identity.generation == identity->generation) {
+                    committed = pushed;
+                    return true;
+                }
+            }
+            return false;
+        });
+        if (!observed)
+            return fail(ErrorCode::Timeout, "accepted Play operation did not publish its actual committed generation");
+        return std::move(*committed);
     }
 
     std::mutex mutex;
@@ -161,9 +188,19 @@ TEST_F(RealSessionCorpus, TwentyPauseResumeCyclesAndStepAreAcknowledgedByPushThe
     ASSERT_TRUE(seen.wait([&] { return seen.identity.has_value(); }));
     ASSERT_TRUE(seen.wait([&] { return !seen.states.empty(); }));
     auto after = seen.cursor();
-    auto playing = seen.command(**session, "play.start");
+    const auto requestedAt = std::chrono::steady_clock::now();
+    auto receipt = seen.command(**session, "play.start");
+    ASSERT_TRUE(receipt) << receipt.error().describe();
+    EXPECT_LT(std::chrono::steady_clock::now() - requestedAt, 5s);
+    ASSERT_EQ(receipt->boolAt("accepted"), true);
+    ASSERT_EQ(receipt->boolAt("pending"), true);
+    ASSERT_EQ(receipt->boolAt("startedNow"), false);
+    ASSERT_EQ(receipt->stringAt("state"), "Edit");
+    ASSERT_EQ(receipt->stringAt("phase"), "pending");
+    ASSERT_TRUE(receipt->stringAt("playGeneration").empty());
+    ASSERT_EQ(receipt->stringAt("operationId").size(), 32U);
+    auto playing = seen.committedPlay(after, *receipt);
     ASSERT_TRUE(playing) << playing.error().describe();
-    ASSERT_TRUE(seen.pushedState(after, *playing));
     for (int cycle = 0; cycle < 20; ++cycle) {
         SCOPED_TRACE(cycle);
         for (bool pause : {true, false}) {
@@ -183,12 +220,21 @@ TEST_F(RealSessionCorpus, TwentyPauseResumeCyclesAndStepAreAcknowledgedByPushThe
     ASSERT_TRUE(stepped) << stepped.error().describe();
     ASSERT_TRUE(seen.wait([&] {
         return std::ranges::any_of(
-            seen.states.begin() + static_cast<std::ptrdiff_t>(after), seen.states.end(),
-            [&](const EngineState& state) { return state.paused && state.frame > *beforeFrame; });
+            seen.states.begin() + static_cast<std::ptrdiff_t>(after), seen.states.end(), [&](const EngineState& state) {
+                return state.paused && state.frame > *beforeFrame && state.operationId == playing->operationId &&
+                       state.playGeneration == playing->playGeneration;
+            });
     }));
     after = seen.cursor();
-    auto stopped = seen.command(**session, "play.stop");
+    auto stopped = seen.command(**session, "play.stop",
+                                Json::object()
+                                    .set("expectedOperationId", playing->operationId)
+                                    .set("expectedPlayGeneration", playing->playGeneration));
     ASSERT_TRUE(stopped) << stopped.error().describe();
+    ASSERT_EQ(stopped->stringAt("operationId"), playing->operationId);
+    ASSERT_EQ(stopped->stringAt("state"), "Edit");
+    ASSERT_EQ(stopped->stringAt("phase"), "completed");
+    ASSERT_TRUE(stopped->stringAt("playGeneration").empty());
     ASSERT_TRUE(seen.pushedState(after, *stopped));
     const auto killedAt = std::chrono::steady_clock::now();
     ASSERT_TRUE(editor.kill());

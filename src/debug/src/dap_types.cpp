@@ -196,6 +196,10 @@ StoppedEvent parseStoppedEvent(const rpc::Json& body) {
     event.threadId = body.integerAt("threadId");
     event.text = text(body, "text");
     event.allThreadsStopped = flag(body, "allThreadsStopped");
+    const auto vm = body.unsignedAt("vmGeneration"), osThread = body.unsignedAt("osThreadId"),
+               pause = body.unsignedAt("stopGeneration");
+    if (vm && *vm > 0 && osThread && *osThread > 0 && pause && *pause > 0)
+        event.scriptPause = ScriptPauseIdentity{*vm, *osThread, *pause};
     if (const rpc::Json* ids = body.find("hitBreakpointIds"); ids != nullptr && ids->isArray()) {
         for (const rpc::Json& id : ids->items()) {
             if (const auto value = id.asInteger()) {

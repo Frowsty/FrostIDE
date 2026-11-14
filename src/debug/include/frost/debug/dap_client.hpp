@@ -15,7 +15,8 @@
  * Completions. Each request's completion runs exactly once: on the reader thread with the response
  * (the body on success; dap::responseError on failure), on the thread calling cancel() with
  * Cancelled, or with IoError when the stream ends first (on the reader thread) or when request() is
- * called after the client closed (inline, before request() returns). Callers must therefore not hold
+ * called after the client closed (inline, before request() returns). Final beforeWrite admission
+ * refusal completes on the writer thread. Callers must therefore not hold
  * a lock the completion takes while they call request().
  *
  * Robustness. A malformed frame is reported through onProtocolError and the decoder resynchronises;
@@ -78,7 +79,13 @@ protected:
  * terminates the process's container (its whole tree: the debuggee too). Precondition: `process`
  * has those three pipes.
  */
-[[nodiscard]] std::unique_ptr<IDapTransport> processTransport(std::unique_ptr<io::IProcess> process);
+struct DapProcessOutput {
+    bool privateOutput = false;
+    // Private chunk sink only. With privateOutput true, absence discards bytes without logging.
+    std::function<void(std::string_view)> onStderrChunk;
+};
+[[nodiscard]] std::unique_ptr<IDapTransport> processTransport(std::unique_ptr<io::IProcess> process,
+                                                              DapProcessOutput output = {});
 
 // Takes a non-null, already connected duplex loopback stream. Closing it never terminates the remote host.
 [[nodiscard]] std::unique_ptr<IDapTransport> loopbackTransport(std::unique_ptr<io::LoopbackStream> stream);
@@ -98,6 +105,10 @@ struct DapHandlers {
     // The stream ended; runs once, after every pending request completed. `why` is IoError (EOF,
     // with the adapter's exit code when known, or a read or write error) or Cancelled (close()).
     std::function<void(const Error& why)> onClosed{};
+    bool privateSession = false;
+    // Thread-safe, fast final admission on the real writer thread; refusal sends zero bytes and
+    // completes that request once on the writer thread. Never destroy the client in an I/O callback.
+    std::function<Result<void>(std::string_view command)> beforeWrite{};
 };
 
 /*
@@ -130,13 +141,17 @@ public:
     [[nodiscard]] virtual bool closed() const noexcept = 0;
     // Requests still waiting for their response.
     [[nodiscard]] virtual std::size_t pendingRequests() const = 0;
+    // Fully successful transport writes, not queued commands or inferred peer execution. nullopt
+    // means this client has no factual instrumentation; never substitute an invented zero.
+    [[nodiscard]] virtual std::optional<std::uint64_t> sentMessageCount() const noexcept { return std::nullopt; }
 
 protected:
     IDebugAdapterClient() = default;
 };
 
 // The client over `transport`, reading and writing on two threads of its own (header comment).
+// firstSequence must be positive; use the next unused sequence after a private transport handshake.
 [[nodiscard]] std::unique_ptr<IDebugAdapterClient> makeDapClient(std::unique_ptr<IDapTransport> transport,
-                                                                 DapHandlers handlers);
+                                                                 DapHandlers handlers, std::int64_t firstSequence = 1);
 
 } // namespace frost::debug

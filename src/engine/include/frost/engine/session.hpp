@@ -3,12 +3,16 @@
 #pragma once
 
 #include "frost/core/error.hpp"
+#include "frost/engine/crash_artifact_source.hpp"
+#include "frost/engine/native_debugger_pause.hpp"
+#include "frost/engine/script_debug_bootstrap.hpp"
 #include "frost/rpc/json.hpp"
 
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -25,6 +29,11 @@ struct EngineIdentity {
     std::uint64_t connectionGeneration = 0;
     // Authenticated server.info process ID; 0 means omitted/unknown, never discovery authority.
     std::int64_t processId = 0;
+    // Actual authenticated live source facts for a later local filesystem observer; not a crash event.
+    std::optional<CrashArtifactSource> crashArtifactSource;
+    // Actual authenticated server.info metadata; absent/false means no private Lua DAP bootstrap.
+    bool scriptDebugAvailable = false;
+    std::uint32_t scriptDebugProtocolVersion = 0;
     std::vector<std::string> capabilities;
     std::vector<std::string> availableCommands;
     // Bootstrap payloads are populated for connected() and policy admission only; events omit
@@ -35,6 +44,10 @@ struct EngineIdentity {
 struct EngineState {
     EngineIdentity identity;
     std::string state, mode;
+    // Opaque actual host play generation; empty when absent, Edit or invalidated by VM replacement.
+    std::string playGeneration;
+    // Actual remote-start operation observations; empty on hosts without this additive contract.
+    std::string operationId, phase, operationError;
     bool playing = false, paused = false;
     std::uint64_t frame = 0, sequence = 0;
     rpc::Json data;
@@ -53,10 +66,12 @@ struct EngineDiagnostic {
     std::uint64_t line = 0, column = 0, eventSequence = 0;
     rpc::Json data;
 };
+enum class EngineDisconnectCause : std::uint8_t { Unexpected, ProjectChanged, ServerShutdown, TrustRevoked, Shutdown };
 struct EngineDisconnect {
     EngineIdentity identity;
     Error error{ErrorCode::IoError, "engine disconnected"};
     bool reconnecting = false;
+    EngineDisconnectCause cause = EngineDisconnectCause::Unexpected;
 };
 struct EngineSessionCallbacks {
     std::function<void(const EngineIdentity&)> connected;
@@ -94,6 +109,12 @@ struct EngineSessionOptions {
  * transmitted cancellation or timeout reports uncertainty and cannot roll back an engine
  * operation. Destruction joins workers.
  */
+struct EngineCommandObservation {
+    rpc::Json data;
+    // Last authoritative event-envelope cursor processed before the actual command reply on the
+    // serialized session worker. GUI publication may lag this cursor; no state is synthesized.
+    std::uint64_t stateSequenceAtReply = 0;
+};
 class EngineSession {
 public:
     using Reply = std::function<void(Result<rpc::Json>)>;
@@ -112,6 +133,26 @@ public:
      */
     [[nodiscard]] Result<std::uint64_t> request(std::string command, rpc::Json params, Reply reply,
                                                 std::stop_token stop = {});
+    using ObservedReply = std::function<void(Result<EngineCommandObservation>)>;
+    [[nodiscard]] Result<std::uint64_t> requestObserved(std::string command, rpc::Json params, ObservedReply reply,
+                                                        std::stop_token stop = {});
+    using ScriptDebugReply = std::function<void(Result<ScriptDebugBootstrap>)>;
+    // Private integration path, never exposed by command()/Console or public JSON snapshots.
+    // Captures the exact selected connection; rechecks identity, actual capability, trust and
+    // caller admission on the worker immediately before send. Typed completion runs once on the
+    // worker and owns the one-use credential. No credential-bearing generic Reply is invoked.
+    [[nodiscard]] Result<std::uint64_t>
+    bootstrapScriptDebug(const EngineIdentity& expected, std::function<Result<void>(const EngineIdentity&)> admission,
+                         ScriptDebugReply reply, std::stop_token stop = {});
+    // Revoked when this exact authenticated connection fails or shuts down. Use alongside project
+    // and session cancellation to close a blocked DAP stream; never grants independent authority.
+    [[nodiscard]] Result<std::stop_token> debugConnectionStopToken(const EngineIdentity& expected) const;
+    // One immutable native registry/controller/PID binding per current authenticated connection.
+    // Caller must prove the native adapter uniquely belongs to this exact trusted engine before
+    // registering. Lease affects heartbeat expiry only; EOF/trust/errors/write/request deadlines
+    // still revoke. Reconnect requires a new lease and fresh actual native evidence.
+    [[nodiscard]] Result<NativePauseLease> bindNativeDebuggerPause(const EngineIdentity& expected,
+                                                                   NativeDebuggerBinding binding);
     void cancel(std::uint64_t requestId);
     // Idempotent; call from the owner, after preventing concurrent shutdown/destruction.
     void shutdown() noexcept;

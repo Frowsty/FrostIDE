@@ -25,6 +25,7 @@
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
+#include "engine_binding_integration.hpp"
 #include "language_bridge.hpp"
 #include <QMetaObject>
 
@@ -247,6 +248,9 @@ bool isLuaSource(std::string_view path) noexcept {
            (ext[3] == 'a' || ext[3] == 'A');
 }
 lang::LuaHostRegistry& Workbench::luaHosts() { return luaState(m_luaState, m_services.launcher).hosts; }
+std::shared_ptr<engine::EngineLuaHostProvider> Workbench::engineLuaHostProvider() const {
+    return m_luaState ? m_luaState->engineHost : nullptr;
+}
 std::vector<std::string> Workbench::luaRefreshesHandled() const {
     return m_luaState ? m_luaState->refreshes : std::vector<std::string>{};
 }
@@ -378,6 +382,8 @@ void Workbench::startLua(const std::string& root) {
                     [self, generation] {
                         if (!self)
                             return;
+                        if (self->m_luaState && self->m_luaState->generation == generation && self->m_engineBindings)
+                            self->m_engineBindings->cancel();
                         // A server that ended mid-progress never sends its end: its tasks end here.
                         if (self->m_luaState && self->m_luaState->generation == generation &&
                             (!self->m_lua || self->m_lua->state() != lang::LuaState::Running))
@@ -460,6 +466,8 @@ void Workbench::startLua(const std::string& root) {
     launchWithPlan(std::move(*arguments), std::move(plan), std::move(overridePath));
 }
 void Workbench::refreshLuaConfiguration() {
+    if (m_engineBindings)
+        m_engineBindings->cancel();
     if (!m_lua || m_projectRoot.empty())
         return;
     WorkbenchLuaState& state = luaState(m_luaState, m_services.launcher);
@@ -510,6 +518,8 @@ void Workbench::refreshLuaConfiguration() {
         log::warn("workbench", "LuaLS didChangeConfiguration: {}", sent.error().describe());
 }
 void Workbench::onLuaSettingsChanged() {
+    if (m_engineBindings)
+        m_engineBindings->cancel();
     const auto snapshot = m_services.settings.snapshot();
     const auto luaPath = snapshot->get(settings::key::toolsLuaLanguageServerPath);
     const auto luaRuntime = snapshot->get(settings::key::luaRuntimeVersion);
@@ -609,6 +619,8 @@ void Workbench::onLuaRefresh(std::uint64_t generation, const std::string& method
         binding->refreshSemanticTokens();
 }
 void Workbench::stopLua() {
+    if (m_engineBindings)
+        m_engineBindings->cancel();
     if (m_luaTrustDialog) {
         m_luaTrustDialog->close();
         m_luaTrustDialog.clear();

@@ -133,6 +133,7 @@ public:
     explicit MemFs(const IClock& clock, PathStyle style = kNativePathStyle);
 
     Result<std::string> readFile(std::string_view path) override;
+    Result<std::string> readFileSnapshot(std::string_view path, std::size_t maxBytes) override;
     Result<void> writeFileAtomic(std::string_view path, std::string_view data) override;
     Result<FileStatus> status(std::string_view path) override;
     Result<std::vector<DirEntry>> listDirectory(std::string_view path) override;

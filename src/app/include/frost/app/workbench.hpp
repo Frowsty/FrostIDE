@@ -105,6 +105,7 @@
 #include "frost/term/shell.hpp"
 #include "frost/ui/appearance_manager.hpp"
 #include "frost/ui/debug_controller.hpp"
+#include "frost/ui/debug_session_registry.hpp"
 #include "frost/ui/editor/editor_actions.hpp"
 #include "frost/ui/nav/document_registry.hpp"
 #include "frost/ui/nav/session.hpp"
@@ -149,7 +150,14 @@ class QWidget;
 namespace frost::build {
 class CMakeService;
 }
+namespace frost::engine {
+class EngineLuaHostProvider;
+struct EngineTestProviderOptions;
+struct EngineSceneTest;
+} // namespace frost::engine
 namespace frost::ui {
+class DebugRetirementBatch;
+struct MixedDebugSnapshot;
 class RunController;
 class TrustPrompter;
 class FindFeature;
@@ -166,6 +174,7 @@ class QTemporaryFile;
 
 namespace frost::app {
 class ManagedDebugPreparation;
+class MultiSessionDebugCoordinator;
 struct ManagedSnapshotJob;
 struct ManagedSourceSnapshot;
 
@@ -173,6 +182,17 @@ class LanguageBridge;
 class CMakeIntegration;
 class ProjectEditProcess;
 class EngineIntegration;
+class EngineLuaDebugCoordinator;
+class EngineRunDebugCoordinator;
+class EngineMixedLaunchCoordinator;
+class EngineMixedDebugCoordinator;
+class EngineBindingIntegration;
+struct EngineBindingRetirement;
+class EngineTestsRetirementBatch;
+class EngineTestsValidation;
+class EngineDumpWorkBatch;
+class EngineDumpController;
+class EngineCrashObserver;
 class UnityControlIntegration;
 class GitIntegration;
 struct GitClone;
@@ -377,6 +397,12 @@ struct WorkbenchOptions {
     // Test seam: the FrostIDE executable that provides the isolated discovery helper.
     // Empty uses this application's own executable.
     std::string engineDiscoveryHelperPath;
+    // Absolute binding extractor override; empty locates frost-clang beside the application.
+    std::string engineBindingToolPath;
+    // Local read-only dump adapter override and existing private IDE cache base.
+    // Empty adapter locates the staged helper beside FrostIDE; an empty cache disables opening.
+    std::string engineDumpAdapterPath;
+    std::string engineDumpCacheDirectory;
     // FrostEditor CLI executable (absolute); "" discovers <engine>/build/<preset>/bin/FrostEditor(.exe)
     // when the project sits inside a FrostEngine checkout.
     std::string frostEditorPath;
@@ -471,6 +497,15 @@ public:
     [[nodiscard]] Result<build::RunId> startEngineEditor();
     [[nodiscard]] Result<void> validateEngineScript();
     [[nodiscard]] Result<void> cancelEngineRequest();
+    // Paired-engine Lua debugging never grants ownership of an external host process.
+    [[nodiscard]] Result<void> startEngineLuaDebug(bool startPlay = true);
+    [[nodiscard]] ui::MixedDebugSnapshot mixedDebugSnapshot() const;
+    [[nodiscard]] Result<void> captureEngineNativeStack();
+    [[nodiscard]] Result<void> resumeEngineMixedDebug();
+    // GUI-thread dispatch of an exact engine-listed scene through the authenticated Lua debugger.
+    // Revalidates the captured test source and current trust before preparing the session.
+    [[nodiscard]] Result<void> debugEngineTestScene(const engine::EngineTestProviderOptions& options,
+                                                    const engine::EngineSceneTest& scene);
 
     // --- Projects and files ---
 
@@ -587,6 +622,10 @@ public:
     // The RunManager (RUN-1) that runs run configurations; CMake target runs go through it.
     [[nodiscard]] run::RunManager* runManager() noexcept { return m_runManager.get(); }
     [[nodiscard]] ui::DebugController* debugController() noexcept { return m_debug.get(); }
+    // GUI-thread session selection and lifecycle. The primary controller above remains stable.
+    [[nodiscard]] ui::DebugSessionRegistry* debugSessions() noexcept { return m_debugSessions.get(); }
+    // Includes preparation, so project edits/closure cannot race a not-yet-launched child.
+    [[nodiscard]] bool anyDebugSessionActive() const;
     [[nodiscard]] ui::AppearanceManager* appearance() noexcept { return m_appearance.get(); }
     [[nodiscard]] lang::LuaService* lua() noexcept { return m_lua.get(); }
     // LUA-3/LUA-13 (workbench_lua.cpp): the Lua host providers (FrostEngine's is registered at
@@ -617,6 +656,13 @@ public:
     // FEC-10b: resolves the Lua symbol at the active editor's caret against the FrostEngine
     // schema.export document and opens the C++ source_location file and line.
     [[nodiscard]] Result<void> gotoCppBinding();
+    // GUI-thread starts for semantic C++/Lua binding queries. Results publish asynchronously
+    // only while the captured project, tool providers, source and trust remain current.
+    [[nodiscard]] Result<void> refreshEngineBindings();
+    [[nodiscard]] Result<void> findEngineBindingUsages();
+    [[nodiscard]] Result<void> previewEngineBindingRename(std::string newLuaName, bool renameNative = false);
+    [[nodiscard]] lang::Json engineBindingState() const;
+    [[nodiscard]] std::shared_ptr<engine::EngineLuaHostProvider> engineLuaHostProvider() const;
     [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
     [[nodiscard]] lang::ClangdService* clangd() noexcept { return m_clangd.get(); }
     [[nodiscard]] sched::ResourceGovernor* resourceGovernor() const noexcept { return m_resourceGovernor.get(); }
@@ -693,6 +739,7 @@ protected:
 private:
     friend class LanguageBridge;
     friend class EngineIntegration;
+    friend class EngineBindingIntegration;
     [[nodiscard]] bool canStartLuaDebug() const;
     friend class UnityControlIntegration;
     friend class GitIntegration;
@@ -725,7 +772,13 @@ private:
     void attachNavigationBar();
     void attachToolbar();
     void attachRun();
+    [[nodiscard]] Result<void> startCompoundDebug(const run::RunConfiguration& configuration);
+    [[nodiscard]] Result<void> startSelectedDebugConfiguration();
     void attachLanguage();
+    void attachEngineBindings();
+    // GUI retirement is nonblocking; the destructor drains after feature teardown, before services.
+    void retireEngineBindingWork(std::shared_ptr<EngineBindingRetirement> retirement);
+    void cancelEngineTestDebugPreparation();
     void attachTerminal();
     void attachFind();
     void cancelFind();
@@ -937,6 +990,19 @@ private:
     std::unique_ptr<ui::BuildController> m_build;
     std::unique_ptr<build::BuildService> m_buildService;
     std::unique_ptr<EngineIntegration> m_engine;
+    std::unique_ptr<EngineLuaDebugCoordinator> m_engineLuaDebug;
+    std::unique_ptr<EngineRunDebugCoordinator> m_engineRunDebug;
+    std::unique_ptr<EngineMixedLaunchCoordinator> m_engineMixedLaunch;
+    std::unique_ptr<EngineMixedDebugCoordinator> m_engineMixedDebug;
+    std::unique_ptr<EngineBindingIntegration> m_engineBindings;
+    std::vector<std::shared_ptr<EngineBindingRetirement>> m_retiredEngineBindings;
+    std::shared_ptr<EngineTestsRetirementBatch> m_engineTestsRetirements;
+    std::shared_ptr<EngineTestsValidation> m_engineTestValidation;
+    QTimer m_engineTestValidationTimer;
+    bool m_engineTestDebugPending = false;
+    std::shared_ptr<EngineDumpWorkBatch> m_engineDumpWork;
+    std::unique_ptr<EngineDumpController> m_engineDumps;
+    std::unique_ptr<EngineCrashObserver> m_engineCrashObserver;
     std::unique_ptr<UnityControlIntegration> m_unity;
     std::unique_ptr<GitIntegration> m_git;
     std::unique_ptr<ui::BuildServiceBackend> m_buildBackend;
@@ -952,6 +1018,9 @@ private:
     std::unique_ptr<build::RunService> m_runService;
     debug::BreakpointManager m_breakpoints;
     std::unique_ptr<ui::DebugController> m_debug;
+    std::unique_ptr<ui::DebugSessionRegistry> m_debugSessions;
+    std::unique_ptr<MultiSessionDebugCoordinator> m_compoundDebug;
+    std::shared_ptr<ui::DebugRetirementBatch> m_debugRetirements;
     std::unique_ptr<ManagedDebugPreparation> m_managedDebugPreparation;
     std::shared_ptr<ManagedSourceSnapshot> m_managedDebugSnapshot;
     QPointer<QDialog> m_managedSourceDialog;

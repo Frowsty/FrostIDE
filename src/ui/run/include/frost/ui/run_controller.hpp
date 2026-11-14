@@ -116,6 +116,9 @@ struct RunControllerHooks {
     std::function<void(const run::RunStatus&)> engineProcessStarted{};
     std::function<void(run::RunId, run::OutputStream, std::string_view)> engineProcessOutput{};
     std::function<void(const run::RunResult&)> engineProcessFinished{};
+    // GUI explicit Stop/rerun only, before stopping the captured actual engine RunId. Automatic
+    // manager cleanup/destruction does not call it (FER-16 historical crash observation).
+    std::function<void(run::RunId)> engineStopRequested{};
     // The generated configurations of the open workspace, asked on every refresh(); empty: none.
     std::function<std::vector<run::RunConfiguration>()> generatedConfigurations{};
     // Persists the configurations the store keeps (RunConfigurationSet::stored) after an edit.
@@ -176,6 +179,13 @@ public:
     [[nodiscard]] Result<build::RunId> run(std::optional<project::ProjectId> project = std::nullopt);
     // Runs configuration `id` (header comment). Errors: NotFound, those of run().
     [[nodiscard]] Result<build::RunId> runConfiguration(const std::string& id);
+    // GUI-only R7 transient engine launch through the same RUN-11 validation, trust, before-tasks,
+    // session hooks and owned RunManager. Never stores the transient environment. Refuses an active
+    // configuration (no implicit rerun or process-ownership transfer). As an independent R7 Debug
+    // launch it skips the ordinary single-debug Run veto, retaining mayRunConfiguration and final
+    // engine admission. Errors: InvalidArgument,
+    // Busy, the ordinary run/admission errors. O(configuration size).
+    [[nodiscard]] Result<run::RunId> runEngineConfiguration(const run::RunConfiguration& configuration);
     // Reruns the current tab's run (else run()).
     [[nodiscard]] Result<build::RunId> rerun();
     // Stops the current tab's run; with none active there, every run.
@@ -206,6 +216,7 @@ private:
         run::RunId id = 0;
         QPointer<RunConsole> console;
         bool rerunPending = false;
+        bool engine = false; // Captured accepted type, including the GUI relay gap after actual exit.
     };
 
     void onStarted(const build::RunInfo& info);
@@ -220,6 +231,7 @@ private:
     [[nodiscard]] Result<build::RunId> runNative(const run::RunConfiguration& configuration);
     [[nodiscard]] Result<build::RunId> runCompound(const run::RunConfiguration& configuration);
     void nativeFinished(const std::string& id, const run::RunResult& result);
+    void notifyExplicitEngineStop(run::RunId id);
     [[nodiscard]] std::optional<project::ProjectId> projectOf(const run::RunConfiguration& configuration) const;
     [[nodiscard]] RunConsole* openServiceTab(const build::RunInfo& info);
 

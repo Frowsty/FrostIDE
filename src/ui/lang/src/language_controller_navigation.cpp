@@ -444,6 +444,8 @@ void LanguageController::gotoRelatedFile() {
 }
 
 void LanguageController::findUsages() {
+    if (m_services.combinedBindingUsages && m_services.combinedBindingUsages())
+        return;
     if (hasDocument()) {
         findUsagesAt(m_services.host.documentPath(), caretPosition());
     }

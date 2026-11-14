@@ -51,6 +51,66 @@ std::optional<std::string> relativeTo(std::string_view root, std::string_view pa
 
 } // namespace
 
+void BreakpointManager::replaceLogicalFrom(const BreakpointManager& source) {
+    if (&source == this)
+        return;
+    const auto logicalLine = [](LineBreakpoint value) {
+        value.status = BreakpointStatus::Unknown;
+        value.message.clear();
+        return value;
+    };
+    const auto logicalFunction = [](FunctionBreakpointEntry value) {
+        value.status = BreakpointStatus::Unknown;
+        value.message.clear();
+        return value;
+    };
+    std::set<std::string> changed;
+    for (const auto& [id, old] : m_byId) {
+        const auto found = source.m_byId.find(id);
+        if (found == source.m_byId.end() || logicalLine(old) != logicalLine(found->second))
+            changed.insert(old.path);
+    }
+    std::map<BreakpointId, LineBreakpoint> lines;
+    for (const auto& [id, definition] : source.m_byId) {
+        auto next = logicalLine(definition);
+        const auto old = m_byId.find(id);
+        if (old != m_byId.end() && logicalLine(old->second) == next) {
+            next.status = old->second.status;
+            next.message = old->second.message;
+        } else {
+            changed.insert(definition.path);
+        }
+        lines.emplace(id, std::move(next));
+    }
+    bool functionsChanged = m_functions.size() != source.m_functions.size();
+    std::map<BreakpointId, FunctionBreakpointEntry> functions;
+    for (const auto& [id, definition] : source.m_functions) {
+        auto next = logicalFunction(definition);
+        const auto old = m_functions.find(id);
+        if (old != m_functions.end() && logicalFunction(old->second) == next) {
+            next.status = old->second.status;
+            next.message = old->second.message;
+        } else {
+            functionsChanged = true;
+        }
+        functions.emplace(id, std::move(next));
+    }
+    if (m_muted != source.m_muted) {
+        for (const auto& [id, definition] : source.m_byId)
+            changed.insert(definition.path);
+        functionsChanged = true;
+    }
+    m_byId = std::move(lines);
+    m_functions = std::move(functions);
+    m_displayPath = source.m_displayPath;
+    m_nextId = std::max(m_nextId, source.m_nextId);
+    m_muted = source.m_muted;
+    for (const auto& path : changed)
+        notify(path, Change::Lines);
+    if (functionsChanged)
+        notify({}, Change::Functions);
+}
+
 std::string BreakpointManager::key(std::string_view path) const {
     std::string out(path);
     if (m_style == io::PathStyle::Windows) {

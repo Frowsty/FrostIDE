@@ -5,6 +5,7 @@
 
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
+#include "frost/ui/debug_retirement.hpp"
 #include "frost/ui/run_console.hpp"
 
 #include "debug_controller_internal.hpp"
@@ -130,6 +131,15 @@ void DebugController::shutdown() {
     if (m_shutdown)
         return;
     m_shutdown = true;
+    if (m_session && (m_session->targetMode() == debug::DebugTargetMode::Attach || m_session->readOnly()) &&
+        !m_options.retirements) {
+        // Legacy standalone callers must keep the controller and borrowed services alive until
+        // the normal detach callback ends it. Never insert a blocking GUI wait as a fallback.
+        m_rerunPending = false;
+        m_rerunTimer.stop();
+        m_session->stop();
+        return;
+    }
     m_rerunPending = false;
     m_rerunTimer.stop();
     ++m_generation;
@@ -140,7 +150,10 @@ void DebugController::shutdown() {
         m_hooks.stopAlternate();
     m_alternatePending = false;
     m_killTimer.stop();
-    m_session.reset();
+    if (m_session && (m_session->targetMode() == debug::DebugTargetMode::Attach || m_session->readOnly()))
+        m_options.retirements->retire(std::move(m_session), kStopTimeout);
+    else
+        m_session.reset();
     m_state = debug::DebugState::Ended;
     m_stop.reset();
     m_frame.reset();
@@ -195,7 +208,19 @@ Result<void> DebugController::terminateTarget(std::int64_t expectedPid, std::uin
         });
 }
 
+void DebugController::setStopHandler(std::function<Result<void>()> handler) {
+    if (readOnlySession() && handler)
+        return;
+    m_stopHandler = std::move(handler);
+    m_stopHandlerGeneration = m_generation;
+}
+
 void DebugController::stop() {
+    if (m_session && !readOnlySession() && m_stopHandler && m_stopHandlerGeneration == m_generation) {
+        const auto handler = m_stopHandler;
+        static_cast<void>(report(handler(), QStringLiteral("Stop owned debug operation")));
+        return;
+    }
     ++m_coreClrValidationEpoch;
     m_rerunPending = false;
     m_rerunTimer.stop();
@@ -487,6 +512,8 @@ void DebugController::attachEditor(EditorView* view) {
     attached->tracker = std::make_unique<debug::DocumentBreakpointTracker>(m_breakpoints, view->document(), *path);
     Attached* raw = attached.get();
     attached->connections.push_back(connect(view, &EditorView::breakpointToggleRequested, this, [this, raw](int line) {
+        if (!m_editorPresentation)
+            return;
         if (raw->tracker) {
             raw->tracker->sync();
         }
@@ -498,11 +525,45 @@ void DebugController::attachEditor(EditorView* view) {
         }
     }));
     attached->connections.push_back(connect(view, &QObject::destroyed, this, [this, view] { m_editors.erase(view); }));
-    view->setBreakpointGutterEnabled(true);
-    view->setDebugHoverProvider([this](std::string_view expr, LineIndex line) { return debugHoverFor(expr, line); });
+    if (m_editorPresentation) {
+        view->setBreakpointGutterEnabled(true);
+        view->setDebugHoverProvider(
+            [this](std::string_view expr, LineIndex line) { return debugHoverFor(expr, line); });
+    }
     m_editors.emplace(view, std::move(attached));
     refreshMarkers(*view);
     showExecutionPoint();
+}
+
+void DebugController::setEditorPresentationEnabled(bool enabled) {
+    if (m_editorPresentation == enabled)
+        return;
+    if (!enabled) {
+        for (auto& [view, attached] : m_editors) {
+            if (attached->view) {
+                view->setExecutionPoint(std::nullopt);
+                view->setInlineDebuggerValues({});
+                view->setBreakpointMarkers({});
+                view->setDebugHoverProvider({});
+            }
+        }
+    }
+    m_editorPresentation = enabled;
+    if (enabled) {
+        for (auto& [view, attached] : m_editors) {
+            if (attached->view) {
+                view->setBreakpointGutterEnabled(true);
+                view->setDebugHoverProvider(
+                    [this](std::string_view expr, LineIndex line) { return debugHoverFor(expr, line); });
+                refreshMarkers(*view);
+            }
+        }
+        if (m_frame && m_frame->hasSource() && m_frame->sourceReference == 0 && m_hooks.openSource) {
+            if (auto* view = m_hooks.openSource(QString::fromStdString(m_frame->path), static_cast<int>(m_frame->line)))
+                attachEditor(view);
+        }
+        showExecutionPoint();
+    }
 }
 
 void DebugController::detachEditor(EditorView* view) {
@@ -513,7 +574,7 @@ void DebugController::detachEditor(EditorView* view) {
     for (const QMetaObject::Connection& connection : it->second->connections) {
         disconnect(connection);
     }
-    if (it->second->view) {
+    if (m_editorPresentation && it->second->view) {
         it->second->view->setBreakpointMarkers({});
         it->second->view->setExecutionPoint(std::nullopt);
         it->second->view->setInlineDebuggerValues({});
@@ -524,19 +585,24 @@ void DebugController::detachEditor(EditorView* view) {
 }
 
 void DebugController::refreshMarkers(EditorView& view) {
+    if (!m_editorPresentation)
+        return;
     const auto it = m_editors.find(&view);
     if (it == m_editors.end()) {
         return;
     }
     std::vector<BreakpointMarker> markers;
     for (const debug::LineBreakpoint& breakpoint : m_breakpoints.inFile(it->second->path)) {
-        const bool unverified = breakpoint.status == debug::BreakpointStatus::Unverified;
+        const bool pending = debugging() && (breakpoint.status == debug::BreakpointStatus::Unknown ||
+                                             breakpoint.status == debug::BreakpointStatus::Pending);
+        const bool unverified = pending || breakpoint.status == debug::BreakpointStatus::Unverified;
         markers.push_back(BreakpointMarker{
             .line = LineIndex(static_cast<std::uint32_t>(breakpoint.line - 1)),
             .kind = unverified ? BreakpointKind::Unverified : BreakpointKind::Verified,
-            .message = unverified ? (breakpoint.message.empty() ? std::string("The breakpoint is not bound to code")
-                                                                : breakpoint.message)
-                                  : std::string()});
+            .message = pending      ? std::string("Waiting for this session's adapter to verify the breakpoint")
+                       : unverified ? (breakpoint.message.empty() ? std::string("The breakpoint is not bound to code")
+                                                                  : breakpoint.message)
+                                    : std::string()});
     }
     view.setBreakpointMarkers(std::move(markers));
 }
@@ -558,14 +624,15 @@ void DebugController::onBreakpointsChanged(std::string_view path, debug::Breakpo
         }
         save();
     } else if (change == debug::BreakpointManager::Change::Functions) {
-        if (m_session && m_nativeSession) {
+        if (m_session && !m_session->readOnly()) {
             m_session->setFunctionBreakpoints(m_breakpoints.sessionFunctions());
         }
         save();
     } else if (change == debug::BreakpointManager::Change::Exceptions) {
-        if (m_session && m_nativeSession) {
+        if (m_session && !m_session->readOnly()) {
             m_session->setExceptionFilters(m_breakpoints.sessionExceptionFilters());
-            m_session->setThrowTypes(m_breakpoints.sessionThrowTypes());
+            if (m_session->msvcExceptions())
+                m_session->setThrowTypes(m_breakpoints.sessionThrowTypes());
         }
         save();
     }
@@ -581,6 +648,8 @@ void DebugController::clearLoadedSource() {
 }
 
 void DebugController::showExecutionPoint() {
+    if (!m_editorPresentation)
+        return;
     for (auto& [view, attached] : m_editors) {
         if (!attached->view) {
             continue;
@@ -596,6 +665,8 @@ void DebugController::showExecutionPoint() {
 }
 
 void DebugController::refreshInlineDebuggerValues() {
+    if (!m_editorPresentation)
+        return;
     const bool active = paused() && m_frame && m_frame->hasSource() && !m_currentFrameVariables.empty() &&
                         (m_coreClrSession || m_frame->sourceReference == 0);
     for (auto& [view, attached] : m_editors) {

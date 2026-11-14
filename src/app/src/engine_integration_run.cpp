@@ -8,6 +8,7 @@
 #include "frost/ui/workbench/workbench.hpp"
 
 #include "engine_integration_internal.hpp"
+#include "engine_native_host_internal.hpp"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -348,8 +349,7 @@ void EngineIntegration::Impl::endpointFromOutput() {
         if (record.stringAt("host") != "127.0.0.1" || !port || *port < 1 || *port > 65535 ||
             !io::isAbsolutePath(record.stringAt("projectPath"))) {
             setStatus(QStringLiteral("FrostEngine startup reported an invalid endpoint"));
-            if (ownedRun)
-                workbench.m_runManager->stop(*ownedRun);
+            stopOwnedHost();
             awaitingOwnedEndpoint = false;
             return;
         }
@@ -357,15 +357,34 @@ void EngineIntegration::Impl::endpointFromOutput() {
             record.set("token", ownedSecret);
         awaitingOwnedEndpoint = false;
         ownedOutput.clear();
+        if (nativeHost) {
+            // The canonical --project target was fixed by worker launch admission. Reject any
+            // different wire root here; EngineSession revalidates physical identity on its worker.
+            if (lang::documentKey(record.stringAt("projectPath")) != projectKey) {
+                setStatus(QStringLiteral("Native engine startup reported a different project"));
+                stopOwnedHost();
+                return;
+            }
+            nativeHost->endpoint = std::make_shared<EngineInstanceRecord>(
+                EngineInstanceRecord{std::string(record.stringAt("instanceId")), physicalRoot,
+                                     static_cast<std::uint16_t>(*port), std::move(record)});
+            auto connected = connectInstance(*nativeHost->endpoint);
+            if (!connected) {
+                setStatus(qs(connected.error().message()));
+                stopOwnedHost();
+            }
+            return;
+        }
         const auto currentEpoch = epoch;
         const auto expectedRoot = root;
         const auto originalKey = projectKey;
         const auto admission = physicalAdmission;
         const auto revision = trustRevision;
         const auto runId = ownedRun;
+        const auto nativeLease = nativeHost;
         auto* fs = &workbench.m_services.fs;
         QPointer<EngineIntegration> self(&owner);
-        background([self, fs, currentEpoch, expectedRoot, originalKey, admission, revision, runId,
+        background([self, fs, currentEpoch, expectedRoot, originalKey, admission, revision, runId, nativeLease,
                     port = static_cast<std::uint16_t>(*port), record = std::move(record)]() mutable {
             if (!retainEngineProjectIdentity(*fs, expectedRoot, originalKey, admission))
                 return;
@@ -379,18 +398,19 @@ void EngineIntegration::Impl::endpointFromOutput() {
                 return;
             QMetaObject::invokeMethod(
                 self.data(),
-                [self, currentEpoch, expectedRoot, revision, runId, instance = std::move(instance)]() mutable {
+                [self, currentEpoch, expectedRoot, revision, runId, nativeLease,
+                 instance = std::move(instance)]() mutable {
                     if (!self)
                         return;
                     auto& impl = *self->m_impl;
-                    if (!impl.admitted(currentEpoch, expectedRoot, revision) || impl.ownedRun != runId)
+                    if (!impl.admitted(currentEpoch, expectedRoot, revision) || impl.ownedRun != runId ||
+                        impl.nativeHost != nativeLease || (nativeLease && !nativeLease->active.load()))
                         return;
                     auto connected =
                         instance ? impl.connectInstance(*instance) : Result<void>(std::unexpected(instance.error()));
                     if (!connected) {
                         impl.setStatus(qs(connected.error().message()));
-                        if (impl.ownedRun)
-                            impl.workbench.m_runManager->stop(*impl.ownedRun);
+                        impl.stopOwnedHost();
                     }
                 },
                 Qt::QueuedConnection);
@@ -406,8 +426,7 @@ void EngineIntegration::Impl::checkOwnedStartup() {
     }
     if (!admitted(epoch, root, trustRevision) || workbench.m_services.clock.steadyNow() >= startupDeadline) {
         setStatus(QStringLiteral("FrostEngine did not advertise an authenticated session in time"));
-        if (ownedRun)
-            workbench.m_runManager->stop(*ownedRun);
+        stopOwnedHost();
         awaitingOwnedEndpoint = false;
         awaitingOwnedAuthentication = false;
         ownedOutput.clear();
@@ -420,6 +439,14 @@ void EngineIntegration::processFinished(const run::RunResult& result) {
     if ((!impl.ownedRun || *impl.ownedRun != result.id) &&
         !(result.id == 0 && impl.runAdmission && impl.runAdmission->id == result.configurationId))
         return;
+    const auto crashLease = impl.crashSessions->snapshot();
+    const bool preserveCrash = preserveEngineCrashObservation(crashLease, static_cast<std::int64_t>(impl.ownedPid),
+                                                              result.stopped, result.exitCode);
+    const bool observedExit = preserveCrash && crashLease->live() && !result.stopped && result.exitCode.has_value();
+    if (observedExit) {
+        (void)impl.crashSessions->lost(crashLease->identity(), true);
+        impl.observedCrashLoss(crashLease->identity());
+    }
     if (impl.runAdmission)
         impl.runAdmission->active.store(false);
     impl.runAdmission.reset();
@@ -431,7 +458,7 @@ void EngineIntegration::processFinished(const run::RunResult& result) {
     impl.awaitingOwnedEndpoint = false;
     impl.awaitingOwnedAuthentication = false;
     impl.startupWatch->stop();
-    impl.clearSession(false);
+    impl.clearSession(false, preserveCrash);
     impl.setStatus(result.error ? qs(result.error->message()) : QStringLiteral("Owned engine process exited"));
     impl.updateControls();
 }
