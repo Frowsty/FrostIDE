@@ -292,13 +292,17 @@ Result<SingleTestLaunch> buildSingleTestLaunch(const CTestSetup& setup, const Di
             if (!isDoctestReporterArg((*selected)[i]))
                 launch.arguments.push_back((*selected)[i]);
         }
-    } else if ((framework == TestCaseFramework::Catch2 || framework == TestCaseFramework::BoostTest) && !caseName.empty()) {
+    } else if ((framework == TestCaseFramework::Catch2 || framework == TestCaseFramework::BoostTest) &&
+               !caseName.empty()) {
         const std::array<std::string, 1> cases{std::string(caseName)};
-        auto arguments = frameworkArguments(framework == TestCaseFramework::Catch2 ? FrameworkProfile::Catch2Xml3 : FrameworkProfile::BoostTest185,
-            test.command, cases, {}, false);
-        if (!arguments) return std::unexpected(arguments.error());
+        auto arguments = frameworkArguments(framework == TestCaseFramework::Catch2 ? FrameworkProfile::Catch2Xml3
+                                                                                   : FrameworkProfile::BoostTest185,
+                                            test.command, cases, {}, false);
+        if (!arguments)
+            return std::unexpected(arguments.error());
         launch.arguments = std::move(*arguments);
-        if (framework == TestCaseFramework::BoostTest) launch.environment.emplace_back("BOOST_TEST_RUN_FILTERS", std::nullopt);
+        if (framework == TestCaseFramework::BoostTest)
+            launch.environment.emplace_back("BOOST_TEST_RUN_FILTERS", std::nullopt);
     } else if (framework == TestCaseFramework::GoogleTest && !caseName.empty()) {
         const std::array<std::string, 1> cases{std::string(caseName)};
         launch.arguments = gtestRunArguments(baseArgs, cases, {});

@@ -3,11 +3,21 @@
 #pragma once
 #include "frost/lang/cpp_rename_plan.hpp"
 namespace frost::lang {
+// One explicit row; absent oldIndex adds a parameter. Empty type/name keeps the existing spelling.
+// Added rows require caller-supplied type, name and call expression. Omitted old rows are removed.
+struct CppSignatureParameter {
+    std::optional<unsigned> oldIndex;
+    std::string type, name, argument;
+};
 struct CppRefactoringRequest {
     CppRenameRequest context;
     std::string operation; // Whitelisted signature/inline/extract/safe-delete and generate-* operations.
     std::uint64_t endOffset = 0;
+    std::string usageReturnType;          // Empty requests actual contextual type inference; never a guessed return.
+    std::string usageBody;                // Explicit user implementation statements, reparsed in every configuration.
     std::vector<unsigned> parameterOrder; // Complete existing-parameter permutation, not arbitrary source text.
+    bool editParameters = false;
+    std::vector<CppSignatureParameter> parameters;
 };
 [[nodiscard]] Json cppRefactoringRequestJson(const CppRefactoringRequest& request);
 // Does not apply or write source. Caller captures/rechecks all original images, namespace probes,

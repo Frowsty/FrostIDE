@@ -152,22 +152,39 @@ TEST(ProjectEditPlan, CancellationBeforeLaunchStartsNothingAndDirtyDefinitionRef
 namespace frost::project {
 namespace {
 TEST(ProjectEditPlan, PreCreatePlanHasItsOwnModeAndCannotReachTheCommittingPath) {
-    auto request=edit(); request.kind=ProjectEditKind::AddFiles; request.renamedTo.clear(); request.beforeFileMove=false; request.beforeFileCreate=true;
-    auto line=projectEditRequest(request); ASSERT_TRUE(line);
-    EXPECT_NE(line->find("\"BeforeFileCreate\":\"true\""),std::string::npos);
-    auto response=answer(); const auto mode=response.find("BeforeFileMoveRename"); ASSERT_NE(mode,std::string::npos);
-    response.replace(mode,std::string_view("BeforeFileMoveRename").size(),"BeforeFileCreateAdd");
-    io::ScriptedProcessLauncher processes; processes.expect({.stdoutBytes=response+"\n",.outputHeld=true});
-    auto plan=runProjectEditPlan(processes,launch(),request); ASSERT_TRUE(plan) << plan.error().describe();
-    EXPECT_EQ(plan->mode,"BeforeFileCreateAdd");
-    EXPECT_EQ(processes.launches().front().stdinBytes.find("Decision"),std::string::npos);
-    request.commit=true; EXPECT_FALSE(projectEditRequest(request));
-    request.commit=false; request.beforeFileMove=true; EXPECT_FALSE(projectEditRequest(request));
+    auto request = edit();
+    request.kind = ProjectEditKind::AddFiles;
+    request.renamedTo.clear();
+    request.beforeFileMove = false;
+    request.beforeFileCreate = true;
+    auto line = projectEditRequest(request);
+    ASSERT_TRUE(line);
+    EXPECT_NE(line->find("\"BeforeFileCreate\":\"true\""), std::string::npos);
+    auto response = answer();
+    const auto mode = response.find("BeforeFileMoveRename");
+    ASSERT_NE(mode, std::string::npos);
+    response.replace(mode, std::string_view("BeforeFileMoveRename").size(), "BeforeFileCreateAdd");
+    io::ScriptedProcessLauncher processes;
+    processes.expect({.stdoutBytes = response + "\n", .outputHeld = true});
+    auto plan = runProjectEditPlan(processes, launch(), request);
+    ASSERT_TRUE(plan) << plan.error().describe();
+    EXPECT_EQ(plan->mode, "BeforeFileCreateAdd");
+    EXPECT_EQ(processes.launches().front().stdinBytes.find("Decision"), std::string::npos);
+    request.commit = true;
+    EXPECT_FALSE(projectEditRequest(request));
+    request.commit = false;
+    request.beforeFileMove = true;
+    EXPECT_FALSE(projectEditRequest(request));
 }
 TEST(ProjectEditPlan, APreMoveResponseCannotSubstituteForAPreCreateReceipt) {
-    auto request=edit(); request.kind=ProjectEditKind::AddFiles; request.renamedTo.clear(); request.beforeFileMove=false; request.beforeFileCreate=true;
-    io::ScriptedProcessLauncher processes; processes.expect({.stdoutBytes=answer()+"\n",.outputHeld=true});
-    EXPECT_FALSE(runProjectEditPlan(processes,launch(),request));
+    auto request = edit();
+    request.kind = ProjectEditKind::AddFiles;
+    request.renamedTo.clear();
+    request.beforeFileMove = false;
+    request.beforeFileCreate = true;
+    io::ScriptedProcessLauncher processes;
+    processes.expect({.stdoutBytes = answer() + "\n", .outputHeld = true});
+    EXPECT_FALSE(runProjectEditPlan(processes, launch(), request));
 }
-}
-}
+} // namespace
+} // namespace frost::project

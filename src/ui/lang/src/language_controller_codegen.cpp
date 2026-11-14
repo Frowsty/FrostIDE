@@ -393,19 +393,25 @@ bool LanguageController::tryExpandPostfixCompletion() {
     const bool csharp = capabilities().languageId == "csharp";
     // Statement templates replace the operand with a statement: only when it starts the statement.
     const bool statementStart = trimView(std::string_view(beforeCaret).substr(0, exprStart)).empty();
-    const bool statementSuffix = suffix == "for" || suffix == "var" || suffix == "const" || suffix == "if" || suffix == "notnull" ||
-                                 suffix == "null" || suffix == "return" || suffix == "foreach";
+    const bool statementSuffix = suffix == "for" || suffix == "var" || suffix == "const" || suffix == "if" ||
+                                 suffix == "notnull" || suffix == "null" || suffix == "return" || suffix == "foreach";
     if (statementSuffix && !statementStart) {
         return false;
     }
     if (!csharp) {
-        const std::string key = std::string(capabilities().languageId) + ".postfix." + std::string(suffix == "foreach" ? "for" : suffix);
+        const std::string key =
+            std::string(capabilities().languageId) + ".postfix." + std::string(suffix == "foreach" ? "for" : suffix);
         const auto* definition = fl::findTemplate(key);
-        if (!definition) return false;
+        if (!definition)
+            return false;
         auto expansion = fl::expandTemplate(definition->body, {{"EXPR", expr}});
-        if (!expansion) { report(expansion.error(), "Postfix Template"); return false; }
+        if (!expansion) {
+            report(expansion.error(), "Postfix Template");
+            return false;
+        }
         closeLookup();
-        insertAuthoredTemplateAt(text::ByteRange{ByteOffset{lineInfo->content.begin.value() + exprStart}, caret}, definition->body, {{"EXPR",expr}}, "Postfix Template");
+        insertAuthoredTemplateAt(text::ByteRange{ByteOffset{lineInfo->content.begin.value() + exprStart}, caret},
+                                 definition->body, {{"EXPR", expr}}, "Postfix Template");
         return true;
     }
     std::string snippet;

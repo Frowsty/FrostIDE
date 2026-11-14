@@ -2,6 +2,7 @@
 #pragma once
 #include "frost/core/error.hpp"
 #include "frost/run/test_model.hpp"
+
 #include <span>
 namespace frost::run {
 // Explicit protocol profiles, not framework guesses based on binary names or source macros.
@@ -17,11 +18,13 @@ struct FrameworkCase {
 // Framework arguments, excluding program. Existing report/list controls are replaced. Selection
 // is literal or refused; unsupported wildcard names never widen the requested test set.
 [[nodiscard]] Result<std::vector<std::string>> frameworkArguments(FrameworkProfile profile,
-    const std::vector<std::string>& command, std::span<const std::string> cases,
-    std::string_view report, bool listing);
+                                                                  const std::vector<std::string>& command,
+                                                                  std::span<const std::string> cases,
+                                                                  std::string_view report, bool listing);
 // Only complete upstream reports produce outcomes. A crash/truncated document is a tool error.
 // Selected-case reports must name exactly the requested cases. No exit-code-based assumed pass.
 [[nodiscard]] Result<TestResult> parseFrameworkRun(FrameworkProfile profile, std::string_view name,
-    std::string_view report, std::string_view log, std::span<const std::string> selected,
-    int exitCode, std::string_view output);
-}
+                                                   std::string_view report, std::string_view log,
+                                                   std::span<const std::string> selected, int exitCode,
+                                                   std::string_view output);
+} // namespace frost::run

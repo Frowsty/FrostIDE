@@ -585,13 +585,16 @@ Result<std::vector<CompileCommand>> loadCompileCommands(io::IFileSystem& fs,
     if (!contents) {
         return std::unexpected(std::move(contents.error()));
     }
-    auto parsed = parseJson(*contents);
+    return parseInspectionCompileCommands(*contents);
+}
+
+Result<std::vector<CompileCommandEntry>> parseInspectionCompileCommands(std::string_view bytes) {
+    auto parsed = parseJson(bytes);
     if (!parsed) {
-        return fail(ErrorCode::Corrupt,
-                    std::format("compile commands '{}' are invalid JSON: {}", target, parsed.error().message()));
+        return fail(ErrorCode::Corrupt, std::string("Invalid compilation database: ") + parsed.error().message());
     }
     if (!parsed->isArray()) {
-        return fail(ErrorCode::Corrupt, std::format("compile commands '{}' must be a JSON array", target));
+        return fail(ErrorCode::Corrupt, "Compilation database must be a JSON array");
     }
     std::vector<CompileCommand> commands;
     commands.reserve(parsed->size());
@@ -850,6 +853,19 @@ Result<InspectionReport> runClangTidyInspection(io::IProcessLauncher& launcher, 
         args.push_back("--checks=" + checks);
     }
     args.emplace_back("--quiet");
+    if (!request.exportFixesPath.empty()) {
+        auto path = io::normalizePath(request.exportFixesPath);
+        if (!path)
+            return std::unexpected(path.error());
+        if (!io::isAbsolutePath(*path))
+            return fail(ErrorCode::InvalidArgument, "Exported fixes require an absolute owned path");
+        auto exists = fs.exists(*path);
+        if (!exists)
+            return std::unexpected(exists.error());
+        if (*exists)
+            return fail(ErrorCode::AlreadyExists, "clang-tidy replacement export must use a fresh owned file");
+        args.push_back("--export-fixes=" + *path);
+    }
 
     if (commandsUseMsvcPch(commands)) {
         const bool hasYMinus = std::ranges::any_of(
@@ -871,6 +887,7 @@ Result<InspectionReport> runClangTidyInspection(io::IProcessLauncher& launcher, 
     spec.executable = clangTidyPath;
     spec.arguments = args;
     spec.workingDirectory = compileCommandsDir;
+    spec.killOnClose = true;
     auto child = launcher.launch(spec);
     if (!child) {
         return fail(child.error().code(), child.error().message());

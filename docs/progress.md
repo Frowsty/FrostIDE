@@ -3,6 +3,19 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-14: R11 implementation integrated; runtime acceptance deferred
+
+- Integrated atomic generated-file creation with project membership and retained Undo/Redo/recovery, shared live/file/module templates, actual C++ AST and clangd refactoring producers, class/header generation, explicit project-scoped signature editing, and recovered-AST Create from Usage. Create uses actual argument types, user-supplied implementation/return type where needed, captured header destinations, and strict candidate reparsing; unsupported profiles refuse explicitly.
+- Integrated scoped clang-tidy export-fix previews against captured input overlays, separate published-diagnostic fixes, semantic completion/signature/inlay improvements, and actual Catch2/Boost.Test discovery/results with selected Run/Debug and gutter routes. Existing snapshot, trust, target, cancellation and transaction admission remain authoritative.
+- GPT-6.1 Sol implementations and the final combined source joins received independent GPT-6 Astra source review. Meaningful test sources include real compiler/framework fixtures and a ten-operation AST-to-Workbench Undo/Redo component journey. Builds, tests, feature executions, WSL, performance measurements and engine-corpus acceptance remain deferred by the user. Source formatting and isolated encoding repairs were performed; no binary/version release was produced. Repository clang-format has no C# profile, so the changed C# source was retained without formatter rewriting.
+- This checkpoint completes the R11 implementation phase within the explicit supported profiles documented by its producers; it does not claim runtime exit criteria passed. R12 Lua implementation and R13 C++ analysis continue, with independent R14 engine-asset work starting. Continue through the remaining roadmap rather than stopping at this merge.
+
+## 2026-11-14: R11 explicit project-scoped Change Signature
+
+- A composed component-fixture test now obtains ten actual AST proposals (signature, inline, extraction, safe delete and generators), applies each through the existing Workbench transaction API, and checks complete Undo/Redo history against exact images. It is authored and source-reviewed only; the PLAN engine-corpus journey and runtime acceptance remain deferred.
+- Change Signature now accepts explicit parameter names, types, ordering, additions with caller-provided call expressions, and unused removals. The AST planner updates captured header declarations, source definitions and direct calls across all compilation-database configurations, then reparses and checks call bindings. Ordinary unique free functions and nonvirtual methods without bases are supported; defaults, overload/dependent contexts, address escapes, macro spelling, name/type capture and effectful existing arguments refuse with a reason. External callers remain outside the captured preview scope.
+- The ordinary action opens a parameter-row editor; the simpler permutation action remains separately named Reorder Parameters. Multi-TU/header/member and semantic refusal regressions are authored. Independent Astra source review cleared the implementation, including type-name and declaration/reference macro guards. No builds, tests, helper execution or runtime acceptance occurred under implementation-first.
+
 ## 2026-11-14: R11 implementation continuing after R10
 
 - R10 source is on `main` at `a51d9b99`. The remaining roadmap continues through R19; a round merge is a checkpoint, not a request to stop. Work remains implementation-first with bounded concurrent Sol implementers and focused independent Astra source reviews. Builds, tests, feature execution, WSL and performance runs remain off.

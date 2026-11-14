@@ -2,6 +2,7 @@
 // Spelling from installed OS dictionaries, never a fabricated bundled word list.
 #pragma once
 #include "frost/core/error.hpp"
+
 #include <cstdint>
 #include <string>
 #include <string_view>

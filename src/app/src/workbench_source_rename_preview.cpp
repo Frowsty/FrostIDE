@@ -81,7 +81,8 @@ prepareSourceRenameInBackground(QWidget* ownerWindow,
                                 std::string title) {
     std::stop_source cancellation;
     RenamePlanningDialog dialog(cancellation);
-    if (!title.empty()) dialog.setWindowTitle(QString::fromUtf8(title.data(),static_cast<qsizetype>(title.size())));
+    if (!title.empty())
+        dialog.setWindowTitle(QString::fromUtf8(title.data(), static_cast<qsizetype>(title.size())));
     if (ownerWindow)
         QObject::connect(ownerWindow, &QObject::destroyed, &dialog, [&] { dialog.reject(); });
     std::optional<Result<document::RefactoringPlan>> completed;
@@ -100,8 +101,9 @@ prepareSourceRenameInBackground(QWidget* ownerWindow,
     cancellation.request_stop();
     worker.join();
     if (!completed || cancelled)
-        return fail(ErrorCode::Cancelled, title.empty() ? "Project rename preparation was cancelled; no file was moved" :
-            "Project template preparation was cancelled; no files were created");
+        return fail(ErrorCode::Cancelled, title.empty()
+                                              ? "Project rename preparation was cancelled; no file was moved"
+                                              : "Project template preparation was cancelled; no files were created");
     return std::move(*completed);
 }
 

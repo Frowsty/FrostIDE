@@ -2,7 +2,9 @@
 // AST operations over the same immutable VFS and complete command admission as R8 rename.
 #include "ast_refactoring_plan.hpp"
 
+#include "ast_create_from_usage.hpp"
 #include "ast_refactoring_operations.hpp"
+#include "ast_signature.hpp"
 #include "semantic_snapshot.hpp"
 namespace frost::clang_engine {
 namespace {
@@ -25,10 +27,10 @@ const clang::NamedDecl* projectCanonical(const clang::NamedDecl* declaration) {
     return clang::tooling::getCanonicalSymbolDeclaration(declaration);
 }
 
-std::unique_ptr<clang::ASTUnit> projectAST(const clang::tooling::CompileCommand& command,
-                                           llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs,
-                                           const std::map<std::string, std::string>& changes,
-                                           Diagnostics& diagnostics) {
+template<class DiagnosticSink>
+std::unique_ptr<clang::ASTUnit>
+projectAST(const clang::tooling::CompileCommand& command, llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs,
+           const std::map<std::string, std::string>& changes, DiagnosticSink& diagnostics, bool recovery = false) {
     ProjectCommand database(command);
     std::vector<std::string> files{command.Filename};
     clang::tooling::ClangTool tool(database, files, std::make_shared<clang::PCHContainerOperations>(), fs);
@@ -37,7 +39,8 @@ std::unique_ptr<clang::ASTUnit> projectAST(const clang::tooling::CompileCommand&
     for (const auto& [path, bytes] : changes)
         tool.mapVirtualFile(path, bytes);
     std::vector<std::unique_ptr<clang::ASTUnit>> units;
-    if (tool.buildASTs(units) || diagnostics.failed || units.size() != 1)
+    const auto built = tool.buildASTs(units);
+    if ((!recovery && (built || diagnostics.failed)) || units.size() != 1)
         return {};
     return std::move(units[0]);
 }
@@ -90,6 +93,7 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
     auto commands = database->getAllCompileCommands();
     if (commands.empty() || commands.size() > 16384)
         return refuse("unsupported", "Compilation database is empty or exceeds16384 configurations");
+    const bool creation = input.getString("operation").value_or("") == "create-from-usage";
     bool hasSeed = seed.empty();
     llvm::json::Array pch;
     for (auto& command : commands) {
@@ -148,6 +152,10 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
         args.push_back("-resource-dir=" + resource.str());
         args.push_back("-fno-implicit-modules");
         args.push_back("-fno-implicit-module-maps");
+        if (creation) {
+            args.insert(args.end(),
+                        {"-Xclang", "-frecovery-ast", "-Xclang", "-frecovery-ast-type", "-Werror=return-type"});
+        }
         command.CommandLine = std::move(args);
     }
     if (!hasSeed)
@@ -175,38 +183,85 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
     llvm::IntrusiveRefCntPtr<SnapshotFileSystem> frozen(
         new SnapshotFileSystem(physical, 32768, 512ULL * 1024 * 1024, 64ULL * 1024 * 1024));
     const bool generation = input.getString("operation").value_or("").starts_with("generate-");
-    if (!generation && (seed != anchor || seed.empty()))
+    const auto operation = input.getString("operation").value_or("");
+    const bool signature = operation == "change-signature" || operation == "edit-signature";
+    SignaturePlanner signatures(input, root, anchor, static_cast<unsigned>(input.getInteger("offset").value_or(0)));
+    if (!generation && !signature && (seed != anchor || seed.empty()))
         return refuse("unsupported", "AST operations require a selected source translation unit, not a header");
     std::map<std::string, std::string> candidates;
     bool selected = false;
     for (const auto& command : commands) {
         Diagnostics diagnostics;
-        auto ast = projectAST(command, frozen, {}, diagnostics);
-        if (!ast || !frozen->error.empty())
-            return refuse("parse-error", "Original compilation configuration failed");
+        CreateUsageDiagnostics recovered(anchor, root, static_cast<unsigned>(*offset));
+        auto ast =
+            creation ? projectAST(command, frozen, {}, recovered, true) : projectAST(command, frozen, {}, diagnostics);
+        if (!ast || !frozen->error.empty() || (creation && recovered.unrelated))
+            return refuse("parse-error", creation
+                                             ? "Original configuration has errors outside the selected unresolved use"
+                                             : "Original compilation configuration failed");
+        if (signature) {
+            if (!signatures.discover(*ast, error))
+                return refuse("unsupported", error);
+            continue;
+        }
         if (!generation && command.Filename != anchor)
             continue;
-        auto candidate = generation ? refactorGenerate(*ast, input, error) : refactorAst(*ast, input, error);
+        std::optional<std::string> candidate;
+        std::string target = anchor;
+        if (creation) {
+            if (!recovered.selectedError)
+                return refuse("unsupported", "The selected identifier has no exact unresolved-use compiler diagnostic");
+            auto created = createFromUsage(*ast, input, error);
+            if (created) {
+                target = std::move(created->path);
+                candidate = std::move(created->after);
+            }
+        } else
+            candidate = generation ? refactorGenerate(*ast, input, error) : refactorAst(*ast, input, error);
         if (!candidate && generation && error == "not-applicable")
             continue;
         selected = true;
         if (!candidate)
             return refuse("unsupported", error);
-        if (!frozen->inputs.contains(anchor))
+        if (!frozen->inputs.contains(target))
             return refuse("unsupported", "Selected file has no exact captured source receipt");
-        auto [position, inserted] = candidates.emplace(anchor, *candidate);
+        auto [position, inserted] = candidates.emplace(target, *candidate);
         if (!inserted && position->second != *candidate)
             return refuse("conflict", "AST operation differs between compilation configurations");
     }
-    if (!selected || candidates.empty())
+    if (!signature && (!selected || candidates.empty()))
         return refuse("unsupported", "Selected translation unit has no captured compile command");
     if (!frozen->capturePositiveProbes())
         return refuse("unsupported", frozen->error);
     frozen->frozen = true;
+    if (signature) {
+        if (!signatures.found())
+            return refuse("unsupported", "Selected function has no captured declaration");
+        for (const auto& command : commands) {
+            Diagnostics diagnostics;
+            auto ast = projectAST(command, frozen, {}, diagnostics);
+            if (!ast || !frozen->error.empty())
+                return refuse("conflict", "Original signature replay failed");
+            if (!signatures.collect(*ast, error))
+                return refuse("unsupported", error);
+        }
+        std::map<std::string, std::shared_ptr<const std::string>> inputs;
+        for (const auto& [path, entry] : frozen->inputs)
+            inputs.emplace(path, entry.bytes);
+        auto planned = signatures.candidates(inputs, error);
+        if (!planned)
+            return refuse("unsupported", error);
+        candidates = std::move(*planned);
+    }
+    std::size_t configuration = 0;
     for (const auto& command : commands) {
         Diagnostics diagnostics;
-        if (!projectAST(command, frozen, candidates, diagnostics) || !frozen->error.empty())
+        auto ast = projectAST(command, frozen, candidates, diagnostics);
+        if (!ast || !frozen->error.empty())
             return refuse("conflict", "Candidate fails a frozen compilation configuration");
+        if (signature && !signatures.validate(*ast, configuration, error))
+            return refuse("conflict", error);
+        ++configuration;
     }
     llvm::json::Array files, dependencies, missing, directories;
     std::size_t outputBytes = 0;
