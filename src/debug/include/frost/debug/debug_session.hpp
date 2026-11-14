@@ -272,6 +272,8 @@ struct DebugSessionOptions {
     bool privateSession = false; // Native engine bootstrap: protocol diagnostics never contain payloads.
     // Worker-safe exact launch admission, checked by the real DAP writer immediately before launch.
     std::function<Result<void>()> launchAdmission{};
+    // Recheck captured trust roots at the actual writer for symbol/source/visualizer configuration.
+    std::function<Result<void>()> inspectionAdmission{};
 };
 
 /*

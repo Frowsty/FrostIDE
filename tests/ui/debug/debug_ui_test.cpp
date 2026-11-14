@@ -17,6 +17,7 @@
 #include "frost/ui/debug_controller.hpp"
 #include "frost/ui/debug_models.hpp"
 #include "frost/ui/debug_tool_window.hpp"
+#include "frost/ui/debug_symbols_window.hpp"
 #include "frost/ui/run_console.hpp"
 #include "frost/ui/shell/shell_settings.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
@@ -197,6 +198,97 @@ TEST_F(DebugUiTest, SelectedGdbRoutesLaunchAndAttachThroughVersionAdmission) {
     EXPECT_EQ(launcher.launches().size(), 2U);
 }
 #endif
+TEST_F(DebugUiTest, SymbolsWindowDisablesUnsupportedActionsWithoutOptionalRequests) {
+    ASSERT_TRUE(breakpoints.add(source, 10));
+    DebugSymbolsWindow symbols(*controller);
+    startAndStop(debug::FakeProgram{.codeLines = {10}});
+    for (auto* button : symbols.findChildren<QPushButton*>()) EXPECT_FALSE(button->isEnabled());
+    EXPECT_TRUE(adapter.argumentsOf("modules").empty());
+    for (const auto& command : adapter.commands()) EXPECT_FALSE(command.starts_with("frost."));
+    stopSession();
+}
+
+TEST_F(DebugUiTest, InspectionSettingsRecheckRevokedTrustBeforeAnyWireRequest) {
+    ASSERT_TRUE(breakpoints.add(source, 10));
+    debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .codeLines = {10}});
+    adapter.on("initialize", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("supportsConfigurationDoneRequest", true).set("frostSupportsNatvisReload", true)}; });
+    adapter.on("frost.reloadNatvis", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{}; });
+    ASSERT_TRUE(controller->startAdapterTarget(target(), debug::test::fakeFactory(adapter), rpc::Json::object(), "frost-dbgeng"));
+    ASSERT_TRUE(spinUntil([&] { return controller->paused() && controller->selectedFrame().has_value(); }));
+    const auto root = workPath("Trusted");
+    ASSERT_TRUE(trust->untrust(root));
+    bool answered = false;
+    controller->requestInspection("frost.reloadNatvis", rpc::Json::object().set("natvis", rpc::Json::array()),
+        [&](Result<rpc::Json> body) {
+            answered = true; ASSERT_FALSE(body);
+            EXPECT_EQ(body.error().code(), ErrorCode::PermissionDenied);
+            EXPECT_NE(body.error().message().find(root), std::string::npos);
+        });
+    ASSERT_TRUE(spinUntil([&] { return answered; }));
+    EXPECT_TRUE(adapter.argumentsOf("frost.reloadNatvis").empty());
+    stopSession();
+}
+
+TEST_F(DebugUiTest, SymbolsWindowUsesActualModulesAndLoadedVisualizersAndPreservesReloadFailure) {
+    ASSERT_TRUE(breakpoints.add(source, 10));
+    debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .codeLines = {10}});
+    adapter.on("initialize", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("supportsConfigurationDoneRequest", true).set("supportsModulesRequest", true)
+            .set("frostSupportsNatvisReload", true).set("frostStructuredNatvis", false)}; });
+    adapter.on("modules", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("modules", rpc::Json::array({rpc::Json::object().set("id", "module-7")
+            .set("name", "actual.dll").set("path", "actual/module.dll").set("addressRange", "0x1000-0x2000")
+            .set("symbolStatus", "Symbols loaded").set("symbolFilePath", "actual/module.pdb")}))}; });
+    adapter.on("frost.reloadNatvis", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{
+        .success = false, .message = "Natvis parser rejected fixture"}; });
+    DebugSymbolsWindow symbols(*controller);
+    ASSERT_TRUE(controller->startAdapterTarget(target(), debug::test::fakeFactory(adapter),
+        rpc::Json::object().set("natvis", rpc::Json::array({"requested-but-not-loaded.natvis"})), "frost-dbgeng"));
+    ASSERT_TRUE(spinUntil([&] { return controller->paused() && controller->selectedFrame().has_value(); }));
+    auto* refresh = symbols.findChild<QPushButton*>(QStringLiteral("debugRefreshModules"));
+    auto* modules = symbols.findChild<QTreeWidget*>(QStringLiteral("debugModules"));
+    auto* files = symbols.findChild<QPlainTextEdit*>(QStringLiteral("debugNatvisFiles"));
+    auto* reload = symbols.findChild<QPushButton*>(QStringLiteral("debugReloadNatvis"));
+    auto* status = symbols.findChild<QLabel*>(QStringLiteral("debugSymbolsStatus"));
+    ASSERT_NE(refresh, nullptr); ASSERT_NE(modules, nullptr); ASSERT_NE(files, nullptr);
+    ASSERT_NE(reload, nullptr); ASSERT_NE(status, nullptr);
+    EXPECT_TRUE(files->toPlainText().isEmpty());
+    refresh->click();
+    ASSERT_TRUE(spinUntil([&] { return modules->topLevelItemCount() == 1; }));
+    const auto* row = modules->topLevelItem(0);
+    EXPECT_EQ(row->text(0), QStringLiteral("actual.dll")); EXPECT_EQ(row->text(1), QStringLiteral("actual/module.dll"));
+    EXPECT_EQ(row->text(2), QStringLiteral("0x1000-0x2000")); EXPECT_EQ(row->text(3), QStringLiteral("Symbols loaded"));
+    EXPECT_EQ(row->text(4), QStringLiteral("actual/module.pdb"));
+    const auto actual = workPath("Trusted/actual.natvis");
+    adapter.sendEvent("frost.visualizersLoaded", rpc::Json::object().set("paths", rpc::Json::array({actual})));
+    ASSERT_TRUE(spinUntil([&] { return files->toPlainText() == QString::fromStdString(actual); }));
+    reload->click();
+    ASSERT_TRUE(spinUntil([&] { return status->text().contains(QStringLiteral("Natvis parser rejected fixture")); }));
+    EXPECT_FALSE(status->text().contains(QStringLiteral("reload completed")));
+    stopSession();
+}
+
+TEST_F(DebugUiTest, InstructionLoadedSourceNeverSubstitutesCurrentDiskBytes) {
+    ASSERT_TRUE(breakpoints.add(source, 10));
+    DebugToolWindow window(*controller);
+    startAndStop(debug::FakeProgram{.codeLines = {10}});
+    adapter.on("source", [](const rpc::Json&) { return debug::FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("content", "// captured revision\nint captured = 7;\n")}; });
+    debug::dap::DisassembledInstruction instruction;
+    instruction.address = "0x1234"; instruction.instruction = "mov eax, 7"; instruction.line = 2;
+    instruction.location = debug::dap::Source{.path = source, .sourceReference = 99};
+    const auto openedBefore = opened.size();
+    ASSERT_TRUE(controller->navigateInstruction(instruction));
+    auto* loaded = window.findChild<QPlainTextEdit*>(QStringLiteral("debugLoadedSource"));
+    ASSERT_NE(loaded, nullptr);
+    ASSERT_TRUE(spinUntil([&] { return loaded->toPlainText().contains(QStringLiteral("captured = 7")); }));
+    EXPECT_TRUE(loaded->isReadOnly());
+    EXPECT_EQ(opened.size(), openedBefore);
+    EXPECT_EQ(adapter.argumentsOf("source").back().integerAt("sourceReference"), 99);
+    stopSession();
+}
+
 TEST_F(DebugUiTest, LowLevelPagingPreservesOpaqueBaseAndNavigatesOnlyAdapterSource) {
     ASSERT_TRUE(breakpoints.add(source, 10));
     debug::scriptProgram(adapter, debug::FakeProgram{.sourcePath = source, .codeLines = {10}});

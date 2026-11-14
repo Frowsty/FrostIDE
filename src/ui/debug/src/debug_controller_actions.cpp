@@ -424,7 +424,7 @@ bool DebugController::navigateInstruction(const debug::dap::DisassembledInstruct
         const auto epoch = m_session->inspectionGeneration();
         const auto generation = m_generation;
         const auto relay = m_relay;
-        const auto name = QString::fromStdString(source.name);
+        const auto name = source.name.empty() ? QStringLiteral("(loaded source)") : QString::fromStdString(source.name);
         const auto line = static_cast<int>(instruction.line);
         m_session->source(source.sourceReference, [relay, generation, epoch, sourceEpoch, name, line](Result<std::string> body) {
             relay->post(generation, [epoch, sourceEpoch, name, line, body = std::move(body)](DebugController* self) {

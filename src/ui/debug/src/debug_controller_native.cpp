@@ -193,7 +193,8 @@ Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& targe
     const auto display = adapterId;
     auto started = startSession(
         target.name, target.program, display,
-        [this, factory = std::move(factory), arguments = std::move(arguments), adapterId, actualMode, readOnly,
+        [this, trust = m_options.trust, trustRoots = std::move(roots), factory = std::move(factory),
+         arguments = std::move(arguments), adapterId, actualMode, readOnly,
          launchAdmission = std::move(launchAdmission)](
             debug::DebugSessionCallbacks callbacks) mutable -> Result<std::unique_ptr<debug::DebugSession>> {
             debug::DebugSessionOptions options;
@@ -201,6 +202,12 @@ Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& targe
             options.targetMode = actualMode;
             options.readOnly = readOnly;
             options.launchAdmission = std::move(launchAdmission);
+            options.inspectionAdmission = [trust, trustRoots]() -> Result<void> {
+                if (!trust || trustRoots.empty()) return fail(ErrorCode::Untrusted, "Debugger inspection requires trusted roots");
+                for (const auto& root : trustRoots)
+                    if (auto admitted = trust->requireTrusted(root); !admitted) return admitted;
+                return {};
+            };
             if (!readOnly) {
                 options.functionBreakpoints = m_breakpoints.sessionFunctions();
                 options.exceptionFilters = m_breakpoints.sessionExceptionFilters();

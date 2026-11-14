@@ -457,6 +457,24 @@ std::unique_ptr<DebugSession> DebugSession::start(AdapterFactory factory, rpc::J
             const auto self = weak.lock();
             if (!self)
                 return fail(ErrorCode::Cancelled, "The debug session ended before transmission");
+            const bool inspectionConfiguration = command == "frost.setSymbolPaths" || command == "frost.reloadSymbols" ||
+                command == "frost.setSourceMap" || command == "frost.reloadNatvis";
+            if (inspectionConfiguration) {
+                {
+                    LockGuard lock(self->mutex);
+                    if (self->stopRequested || self->state != DebugState::Stopped)
+                        return fail(ErrorCode::Busy, "Debugger inspection settings require a current stop");
+                }
+                if (!self->inspectionAdmission)
+                    return fail(ErrorCode::PermissionDenied, "Debugger inspection trust admission is missing");
+                if (auto admitted = self->inspectionAdmission(); !admitted) return admitted;
+                {
+                    LockGuard lock(self->mutex);
+                    if (self->stopRequested || self->state != DebugState::Stopped)
+                        return fail(ErrorCode::Busy, "Debugger resumed during inspection admission");
+                }
+                return {};
+            }
             if (command != "launch" && command != "attach")
                 return {};
             {

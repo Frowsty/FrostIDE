@@ -391,6 +391,14 @@ std::int64_t DebugSession::evaluate(std::string expression, std::optional<std::i
 
 std::int64_t DebugSession::setVariable(std::int64_t variablesReference, std::string_view name, std::string_view value,
                                        SetVariableDone done) {
+    if (!capabilities().supportsSetVariable || m_state->readOnly) {
+        if (done) done(fail(ErrorCode::Unsupported, "Adapter does not support setting values"));
+        return 0;
+    }
+    if (state() != DebugState::Stopped || variablesReference <= 0 || name.empty()) {
+        if (done) done(fail(ErrorCode::Busy, "Choose a variable in a paused session"));
+        return 0;
+    }
     std::string varName(name);
     return m_state->send("setVariable", dap::setVariableArguments(variablesReference, name, value),
                          [done = std::move(done), varName = std::move(varName)](Result<rpc::Json> body) {

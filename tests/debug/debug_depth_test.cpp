@@ -55,6 +55,10 @@ TEST(DebugDepthSession, MissingCapabilitiesRefuseWithoutSendingOptionalRequests)
             ASSERT_FALSE(result); EXPECT_EQ(result.error().code(), ErrorCode::Unsupported);
         });
     EXPECT_TRUE(adapter.argumentsOf("evaluate").empty());
+    session->setVariable(100, "counter", "7", [&](Result<dap::Variable> result) {
+        ASSERT_FALSE(result); EXPECT_EQ(result.error().code(), ErrorCode::Unsupported);
+    });
+    EXPECT_TRUE(adapter.argumentsOf("setVariable").empty());
     session->readMemory("opaque", 16, [&](Result<dap::ReadMemoryResult> result) {
         ASSERT_FALSE(result); EXPECT_EQ(result.error().code(), ErrorCode::Unsupported);
     });

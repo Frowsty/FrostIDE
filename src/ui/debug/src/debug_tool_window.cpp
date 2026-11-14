@@ -5,6 +5,7 @@
 
 #include "frost/ui/debug_tool_window.hpp"
 #include "frost/ui/debug_depth_panel.hpp"
+#include "frost/ui/debug_symbols_window.hpp"
 
 #include "frost/core/log.hpp"
 #include "frost/debug/msvc_throw.hpp"
@@ -131,6 +132,8 @@ QTreeView* makeVariablesView(QWidget* parent, VariablesModel* model, DebugToolWi
             if (owner != nullptr && !owner->readOnlySession() && model->parentReferenceAt(index) > 0 &&
                 model->isVariableRow(index)) {
                 QAction* setVal = menu.addAction(QStringLiteral("Set Value..."));
+                setVal->setEnabled(owner->canSetValues());
+                setVal->setToolTip(QStringLiteral("Requires debugger support for setting values"));
                 setVal->setShortcut(QKeySequence(Qt::Key_F2));
                 menu.addAction(QStringLiteral("Watch Hardware Access..."), owner,
                     [owner, model, index] { owner->watchHardwareAccess(model, index); });
@@ -204,6 +207,7 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
     buildBreakpointsTab();
     buildMemoryAndDisassemblyTab();
     m_tabs->addTab(m_depth = new DebugDepthPanel(controller, m_tabs), QStringLiteral("Calls, Registers && Watchpoints"));
+    m_tabs->addTab(new DebugSymbolsWindow(controller, m_tabs), QStringLiteral("Modules && Visualizers"));
     wireControllerSignals();
     updateBreakpointsList();
     updateActions();
@@ -215,6 +219,10 @@ DebugToolWindow::~DebugToolWindow() {
     if (m_watches) m_controller.setPinnedWatches(m_watches->watches());
 }
 bool DebugToolWindow::readOnlySession() const { return m_controller.readOnlySession(); }
+bool DebugToolWindow::canSetValues() const {
+    return m_controller.paused() && !m_controller.readOnlySession() && m_controller.session() &&
+           m_controller.session()->capabilities().supportsSetVariable;
+}
 
 void DebugToolWindow::buildToolbar(QVBoxLayout* layout) {
     m_toolbar = new QToolBar(this);
@@ -782,11 +790,12 @@ void DebugToolWindow::requestMemoryDump() {
 }
 
 void DebugToolWindow::promptSetVariableValue(QTreeView* view, VariablesModel* model, const QModelIndex& index) {
-    if (m_controller.readOnlySession())
-        return;
+    if (!canSetValues()) return;
     if (!m_controller.paused() || model == nullptr || !index.isValid()) {
         return;
     }
+    const auto sessionGeneration = m_controller.sessionGeneration();
+    const auto stopEpoch = m_controller.session()->inspectionGeneration();
     const std::int64_t parentRef = model->parentReferenceAt(index);
     const QString name = model->nameAt(index);
     const QString currentVal = model->valueAt(index);
@@ -810,11 +819,13 @@ void DebugToolWindow::promptSetVariableValue(QTreeView* view, VariablesModel* mo
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
+    if (!canSetValues() || m_controller.sessionGeneration() != sessionGeneration ||
+        m_controller.session()->inspectionGeneration() != stopEpoch) return;
     const QString newValue = valueEdit->text();
     QPointer<VariablesModel> safeModel(model);
-    m_controller.setVariableValue(parentRef, name, newValue, [safeModel, index](Result<debug::dap::Variable> updated) {
+    m_controller.setVariableValue(parentRef, name, newValue, [safeModel](Result<debug::dap::Variable> updated) {
         if (safeModel && updated) {
-            safeModel->updateValueAt(index, qs(updated->value), qs(updated->type));
+            safeModel->reload(); // Refresh child and memory references after a pointer/value change.
         }
     });
 }
