@@ -28,6 +28,7 @@ set(frost_build_sources
     src/cmake_service_profiles.cpp
     src/cmake_toolchain.cpp
     src/diagnostic.cpp
+    src/dependencies.cpp
     src/json.cpp
     src/line_splitter.cpp
     src/managed_project.cpp
