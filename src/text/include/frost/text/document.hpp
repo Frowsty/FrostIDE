@@ -194,7 +194,9 @@ public:
     // composition and local undo/redo return Busy while held. IDs identify a coordinator, not IO authority.
     [[nodiscard]] Result<void> acquireExternalWrite(TransactionId id) noexcept;
     void releaseExternalWrite(TransactionId id) noexcept;
-    [[nodiscard]] bool ownsExternalWrite(TransactionId id) const noexcept { return id.assigned() && m_externalWriter == id; }
+    [[nodiscard]] bool ownsExternalWrite(TransactionId id) const noexcept {
+        return id.assigned() && m_externalWriter == id;
+    }
     [[nodiscard]] Result<ChangeSet> replaceExternal(TransactionId id, ByteRange range, std::string_view utf8,
                                                     const EditContext& context) noexcept;
     // Marks the current sealed nonroot edge; tombstone survives coordinator destruction. Local

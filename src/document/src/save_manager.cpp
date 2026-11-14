@@ -88,7 +88,8 @@ FileDocument::FileDocument(std::string path, std::string key, text::Document doc
 bool FileDocument::dirty() const noexcept { return m_formatDirty || m_document.undoState().stateId != m_savedStateId; }
 
 void FileDocument::convertTo(text::Encoding encoding, bool bom) noexcept {
-    if (m_document.undoState().externallyLocked) return; // Owned transaction refuses formatting changes.
+    if (m_document.undoState().externallyLocked)
+        return; // Owned transaction refuses formatting changes.
     const text::DocumentEncoding converted = m_encoding.convertedTo(encoding, bom);
     if (converted.format != m_encoding.format) {
         m_formatDirty = true;
@@ -98,7 +99,8 @@ void FileDocument::convertTo(text::Encoding encoding, bool bom) noexcept {
 }
 
 void FileDocument::setLineSeparator(text::LineSeparator separator) noexcept {
-    if (m_document.undoState().externallyLocked) return;
+    if (m_document.undoState().externallyLocked)
+        return;
     if (m_encoding.format.lineSeparator != separator) {
         m_encoding.format.lineSeparator = separator;
         m_formatDirty = true;

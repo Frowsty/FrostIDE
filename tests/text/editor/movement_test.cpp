@@ -237,21 +237,26 @@ TEST(History, ASecondEditorFollowsTheChanges) {
 
 TEST(History, GlobalRenameOnlyBarrierPreservesCaretsInEveryFollowingEditor) {
     EditorFixture fixture("ab|cd");
-    Editor peer(fixture.document(),fixture.shaper());
+    Editor peer(fixture.document(), fixture.shaper());
     peer.setState(frost::text::EditorState::caretAt(ByteOffset{3}));
-    std::array<std::byte,16> identity{};identity[0]=std::byte{8};
+    std::array<std::byte, 16> identity{};
+    identity[0] = std::byte{8};
     const frost::TransactionId token(identity);
-    auto& document=fixture.document();
+    auto& document = fixture.document();
     ASSERT_TRUE(document.acquireExternalWrite(token));
     ASSERT_TRUE(document.recordExternalBarrier(token));
-    auto undone=document.undoExternal(token);ASSERT_TRUE(undone);
-    ASSERT_TRUE(fixture.editor().follow(*undone));ASSERT_TRUE(peer.follow(*undone));
-    EXPECT_EQ(fixture.editor().state().primary().head,ByteOffset{2});
-    EXPECT_EQ(peer.state().primary().head,ByteOffset{3});
-    auto redone=document.redoExternal(token);ASSERT_TRUE(redone);
-    ASSERT_TRUE(fixture.editor().follow(*redone));ASSERT_TRUE(peer.follow(*redone));
-    EXPECT_EQ(fixture.editor().state().primary().head,ByteOffset{2});
-    EXPECT_EQ(peer.state().primary().head,ByteOffset{3});
+    auto undone = document.undoExternal(token);
+    ASSERT_TRUE(undone);
+    ASSERT_TRUE(fixture.editor().follow(*undone));
+    ASSERT_TRUE(peer.follow(*undone));
+    EXPECT_EQ(fixture.editor().state().primary().head, ByteOffset{2});
+    EXPECT_EQ(peer.state().primary().head, ByteOffset{3});
+    auto redone = document.redoExternal(token);
+    ASSERT_TRUE(redone);
+    ASSERT_TRUE(fixture.editor().follow(*redone));
+    ASSERT_TRUE(peer.follow(*redone));
+    EXPECT_EQ(fixture.editor().state().primary().head, ByteOffset{2});
+    EXPECT_EQ(peer.state().primary().head, ByteOffset{3});
     document.releaseExternalWrite(token);
 }
 

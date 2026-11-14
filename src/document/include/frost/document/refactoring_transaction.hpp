@@ -4,6 +4,7 @@
 #include "frost/core/error.hpp"
 #include "frost/core/transaction_id.hpp"
 #include "frost/document/save_manager.hpp"
+
 #include <functional>
 #include <memory>
 #include <optional>
@@ -30,9 +31,12 @@ struct BufferReplacement {
 struct ReadDependency {
     std::string path;
     std::optional<std::string> expectedBytes; // nullopt means observed absence, not unreadable.
-    bool directory = false; // True requires null expectedBytes and an observed actual directory.
+    bool directory = false;                   // True requires null expectedBytes and an observed actual directory.
 };
-struct BufferDependency { std::string path; std::string expectedText; };
+struct BufferDependency {
+    std::string path;
+    std::string expectedText;
+};
 struct RefactoringPlan {
     std::string label;
     std::vector<DiskReplacement> disk;
@@ -95,6 +99,7 @@ public:
     // Explicit startup/lazy admission before a new operation. Rebuilds only undecided/unfinished
     // owned journal entries; corrupt/foreign layouts remain reported PendingRecovery conflicts.
     [[nodiscard]] Result<std::vector<RefactoringOutcome>> recoverPending();
+
 private:
     struct State;
     std::unique_ptr<State> m_state;
