@@ -21,6 +21,7 @@ frost_add_test(debug_unit_tests
     SOURCES
         breakpoints_test.cpp
         coreclr_dap_test.cpp
+        standalone_lua_dap_test.cpp
         cmake_dap_test.cpp
         dap_client_test.cpp
         dap_private_test.cpp
