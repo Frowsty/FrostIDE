@@ -17,6 +17,7 @@
 
 #include "frost/core/error.hpp"
 #include "frost/lang/lsp_client.hpp"
+#include "frost/lang/cmake_language.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/ui/lang/editor_language_host.hpp"
 
@@ -102,6 +103,7 @@ private:
     Workbench& m_workbench;
     StableLspRequester m_server;
     std::shared_ptr<lang::JsonSchemaService> m_json = std::make_shared<lang::JsonSchemaService>();
+    std::shared_ptr<lang::CMakeLanguageService> m_cmakeLanguage;
     lang::WorkspaceEditApplier m_applier;
 };
 

@@ -21,6 +21,7 @@
 #include "frost/ui/shell/editor_tabs.hpp"
 
 #include "engine_binding_integration.hpp"
+#include "cmake_integration.hpp"
 #include "language_bridge.hpp"
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -74,6 +75,8 @@ LanguageBridge::LanguageBridge(Workbench& workbench)
     : m_workbench(workbench), m_applier(static_cast<lang::IWorkspaceDocuments&>(*this), workbench.m_services.fs,
                                         lang::PositionEncoding::Utf16) {
     m_server.setJsonServer(m_json);
+    m_cmakeLanguage = std::make_shared<lang::CMakeLanguageService>();
+    m_server.setCMakeServer(m_cmakeLanguage);
 }
 
 LanguageBridge::~LanguageBridge() = default;
@@ -177,6 +180,28 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
 // --- ILspRequester ---
 
 sched::Task<Result<lang::Json>> LanguageBridge::request(std::string method, lang::Json params, std::stop_token token) {
+    if (const auto* doc = params.find("textDocument")) {
+        auto path = lang::uriToPath(doc->stringAt("uri"));
+        if (path && lang::isCMakeSource(*path)) {
+            lang::CMakeLanguageInput input;
+            input.path = *path;
+            for (const auto& [openPath, text] : openDocuments()) {
+                if (lang::documentKey(openPath) == lang::documentKey(*path)) input.source = text;
+                else if (lang::isCMakeSource(openPath)) input.inputs.emplace_back(openPath, text.text());
+            }
+            if (m_workbench.m_cmake) input.model = m_workbench.m_cmake->shownModel();
+            if (input.model) for (const auto& file : input.model->projectInputs()) {
+                if (lang::documentKey(file) == lang::documentKey(*path) ||
+                    std::ranges::any_of(input.inputs, [&](const auto& item) {
+                        return lang::documentKey(item.first) == lang::documentKey(file);
+                    })) continue;
+                if (auto text = m_workbench.m_services.fs.readFile(file)) input.inputs.emplace_back(file, *text);
+            }
+            // Capture the immutable text before a lazy request leaves the GUI thread.
+            m_cmakeLanguage->setInput(std::move(input));
+            return m_cmakeLanguage->request(std::move(method), std::move(params), token);
+        }
+    }
     return m_server.request(std::move(method), std::move(params), std::move(token));
 }
 
@@ -211,7 +236,7 @@ std::optional<text::Snapshot> LanguageBridge::snapshot() const {
 std::int64_t LanguageBridge::documentVersion() const {
     const lang::ClangdService* clangd = m_workbench.m_clangd.get();
     const std::string path = documentPath();
-    if (lang::hasBundledJsonSchema(path)) {
+    if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path)) {
         const auto text = snapshot();
         return text ? static_cast<std::int64_t>(text->version()) : 0;
     }
@@ -497,7 +522,7 @@ sched::Task<void> readCompileDatabaseTask(io::IFileSystem* fs, std::string datab
 
 ui::lang::ServerReadiness Workbench::languageReadiness(std::string_view path) {
     using Readiness = ui::lang::ServerReadiness;
-    if (lang::hasBundledJsonSchema(path)) return Readiness::Unknown;
+    if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path)) return Readiness::Unknown;
     if (isLuaSource(path))
         return m_lua && m_lua->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;
     if (isManagedSource(path))

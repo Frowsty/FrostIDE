@@ -32,6 +32,7 @@ frost_add_test(lang_unit_tests
         cpp_rename_plan_test.cpp
         clangd_actions_test.cpp
         cmake_compile_commands_unit_test.cpp
+        cmake_language_test.cpp
         compile_commands_test.cpp
         completion_test.cpp
         clangd_locator_test.cpp
