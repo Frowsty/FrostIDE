@@ -99,6 +99,9 @@ void Workbench::createRunService() {
     hooks.mayRunConfiguration = [this](const run::RunConfiguration& configuration) {
         return mayRunConfiguration(configuration);
     };
+    hooks.launchAdmissionFor = [this](const run::RunConfiguration& configuration) {
+        return luaLaunchAdmissionFor(configuration);
+    };
     hooks.prepareEngineConfiguration =
         [this](const run::RunConfiguration& configuration) -> Result<run::RunConfiguration> {
         if (!m_engine)
@@ -211,8 +214,8 @@ void Workbench::createRunService() {
         const auto type = selectedType();
         if (type && run::isFrostEngineRunType(*type))
             return m_engineRunDebug != nullptr;
-        return m_cmake != nullptr || type == run::RunType::Native || type == run::RunType::Attach ||
-               type == run::RunType::Compound;
+        return m_cmake != nullptr || type == run::RunType::Native || (type && run::isLuaRunType(*type)) ||
+               type == run::RunType::Attach || type == run::RunType::Compound;
     };
     /*
      * RUN-5: an attach configuration attaches to the one running process whose executable it names
@@ -223,6 +226,8 @@ void Workbench::createRunService() {
         const auto type = selectedType();
         if (type && run::isFrostEngineRunType(*type))
             return startSelectedDebugConfiguration();
+        if (type && run::isLuaRunType(*type))
+            return startStandaloneLuaDebug(*m_runController->selectedConfiguration());
         if (type == run::RunType::Compound) {
             return startCompoundDebug(*m_runController->selectedConfiguration());
         }
@@ -506,6 +511,10 @@ void Workbench::editRunConfigurations() {
     const run::RunConfiguration* selected = m_runController->selectedConfiguration();
     ui::RunConfigurationsDialog dialog(m_runController->configurations(), selected ? selected->id : std::string(),
                                        hasProject(), m_window);
+    std::string luaScript;
+    if (auto* view = currentView(); view && io::fileName(view->document().path()).ends_with(".lua"))
+        luaScript = view->document().path();
+    dialog.setLuaDefaults(defaultLuaInterpreterPath(), std::move(luaScript), m_projectRoot);
     dialog.setImportHandler([this](const std::string& path,
                                    std::span<const run::RunConfiguration> current) -> Result<run::RunImportReport> {
         auto bytes = m_services.fs.readFileSnapshot(path, 4U * 1024U * 1024U);

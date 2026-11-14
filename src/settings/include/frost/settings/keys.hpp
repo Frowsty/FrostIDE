@@ -112,6 +112,8 @@ inline constexpr Key<std::string> toolsGitPath{"tools.git.path"};
 inline constexpr Key<std::string> luaRuntimeVersion{"lua.runtimeVersion"};
 inline constexpr Key<std::string> toolsManagedDotnetPath{"tools.managed.dotnetPath"};
 inline constexpr Key<std::string> toolsManagedServerPath{"tools.managed.serverAssembly"};
+inline constexpr Key<std::string> toolsLuaInterpreterPath{"tools.luaInterpreter.path"};
+inline constexpr Key<std::string> toolsLuaDebugAdapterPath{"tools.luaDebugAdapter.path"};
 inline constexpr Key<std::string> toolsLuaLanguageServerPath{"tools.luaLanguageServer.path"};
 inline constexpr Key<std::string> toolsClangdPath{"tools.clangd.path"};
 inline constexpr Key<std::string> toolsClangFormatPath{"tools.clangFormat.path"};

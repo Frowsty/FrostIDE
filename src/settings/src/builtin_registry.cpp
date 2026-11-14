@@ -416,6 +416,11 @@ struct Entry {
         toolPath("tools.git.path", "Git", "The git executable; empty uses the detected one."),
         toolPath("tools.managed.dotnetPath", "Managed .NET SDK", "Absolute dotnet executable for C# language service."),
         toolPath("tools.managed.serverAssembly", "C# language server", "Absolute csharp-ls server assembly path."),
+        toolPath("tools.luaInterpreter.path", "Lua 5.4 interpreter",
+                 "Absolute interpreter copied into new standalone Lua configurations; empty uses staged lua54/lua."),
+        toolPath("tools.luaDebugAdapter.path", "Standalone Lua debugger",
+                 "Absolute installed lua-debug executable (MIT); keep its complete extension tree. Empty disables "
+                 "standalone Debug."),
         toolPath("tools.luaLanguageServer.path", "Lua language server",
                  "Absolute LuaLS executable path; empty searches PATH."),
         toolPath("tools.clangd.path", "clangd", "The clangd executable; empty uses the bundled one."),
