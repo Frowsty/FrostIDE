@@ -850,6 +850,17 @@ Result<InspectionReport> runClangTidyInspection(io::IProcessLauncher& launcher, 
         args.push_back("--checks=" + checks);
     }
     args.emplace_back("--quiet");
+    if (!request.exportFixesPath.empty()) {
+        auto path = io::normalizePath(request.exportFixesPath);
+        if (!path)
+            return std::unexpected(path.error());
+        auto exists = fs.exists(*path);
+        if (!exists)
+            return std::unexpected(exists.error());
+        if (*exists)
+            return fail(ErrorCode::AlreadyExists, "clang-tidy replacement export must use a fresh owned file");
+        args.push_back("--export-fixes=" + *path);
+    }
 
     if (commandsUseMsvcPch(commands)) {
         const bool hasYMinus = std::ranges::any_of(

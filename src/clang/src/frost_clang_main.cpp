@@ -45,6 +45,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "local_rename_plan.hpp"
+#include "tidy_fixes_decode.hpp"
 
 #include <cstdlib>
 #include <memory>
@@ -330,6 +331,9 @@ int main(int argc, char* argv[]) {
         return frost::clang_engine::checkLocalRenamePlanner(detectClangResourceDir());
     }
 #endif
+    if (argc == 2 && std::string_view(argv[1]) == "--decode-tidy-fixes") {
+        return frost::clang_engine::runTidyFixesDecode();
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--plan-project-rename") {
         return frost::clang_engine::runProjectRenamePlan(detectClangResourceDir());
     }
