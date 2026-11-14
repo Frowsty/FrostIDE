@@ -418,8 +418,10 @@ TEST(WorkbenchBindingCorpus, ActualWidgetsAndGenericLuaActionsMatchRawProvidersA
     EXPECT_EQ(preview->stringAt("previousIdentity"), "Application.GetFrameCount");
     EXPECT_EQ(preview->stringAt("renamedIdentity"), "Application.GetFrameCountWorkbenchPreview");
     EXPECT_EQ(preview->boolAt("nativeRenameRequested"), false);
-    EXPECT_EQ(preview->boolAt("embeddedLanguageReferencesVerified"), false);
-    EXPECT_EQ(preview->boolAt("applicationSafe"), false);
+    EXPECT_EQ(preview->boolAt("embeddedLanguageReferencesVerified"), true);
+    EXPECT_EQ(preview->boolAt("applicationSafe"), true);
+    EXPECT_NE(preview->find("coverageExclusions"), nullptr);
+    EXPECT_TRUE(previewWidget->toPlainText().contains(QStringLiteral("Apply scope:")));
     EXPECT_TRUE(previewWidget->isReadOnly());
     EXPECT_TRUE(previewWidget->toPlainText().contains(QStringLiteral("Embedded Lua")));
     bool registrationEdit = false, signatureEdit = false;

@@ -22,9 +22,11 @@
 #include "lang/feature_server.hpp"
 #include <QApplication>
 #include <QCheckBox>
+#include <QDialog>
 #include <QEvent>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPushButton>
 #include <QScopeGuard>
 #include <QShortcut>
 #include <QThread>
@@ -60,6 +62,10 @@ struct LanguageControllerTestAccess {
 namespace {
 
 namespace fl = frost::lang;
+TEST(LanguageControllerRefactoring, ModuleAndCudaPathsUseCppSemanticAdmission) {
+    for (const auto path : {"module.cppm", "module.ixx", "kernel.cu", "MODULE.CPPM"})
+        EXPECT_EQ(frost::ui::lang::languageIdForPath(path), "cpp");
+}
 using frost::ByteOffset;
 using frost::lang::Json;
 using frost::test::FeatureServer;
@@ -188,6 +194,69 @@ public:
     bool refuse = false;
 };
 
+// Models renegotiating encoding after a server restart while retaining real scripted requests.
+class RestartableEncodingRequester final : public fl::ILspRequester {
+public:
+    explicit RestartableEncodingRequester(fl::ILspRequester& server) : m_server(server) {}
+    frost::sched::Task<frost::Result<Json>> request(std::string method, Json params,
+                                                    std::stop_token token = {}) override {
+        return m_server.request(std::move(method), std::move(params), token);
+    }
+    fl::PositionEncoding encoding() const override { return current; }
+    std::optional<fl::ServerCapabilities> serverCapabilities() const override { return m_server.serverCapabilities(); }
+    fl::PositionEncoding current = fl::PositionEncoding::Utf8;
+
+private:
+    fl::ILspRequester& m_server;
+};
+
+TEST(LanguageControllerRefactoring, EncodingChangeWhilePreviewOpenCannotApplyOldRanges) {
+    FeatureServer server;
+    const std::string path = workPath("main.cpp");
+    server.on("textDocument/prepareRename", [](const Json&) { return rangeJson(0, 3, 6); });
+    server.on("textDocument/rename", [&](const Json&) {
+        return Json::object().set(
+            "changes",
+            Json::object().set(
+                uriOf(path), Json::array({Json::object().set("range", rangeJson(0, 3, 6)).set("newText", "renamed")})));
+    });
+    FakeHost host("\xc3\xa9 old\n");
+    host.caretAfter("o");
+    frost::io::MemFs fs(frost::systemClock());
+    RecordingApplier applier;
+    RestartableEncodingRequester requester(server.client());
+    LanguageController controller({.server = requester,
+                                   .scheduler = server.scheduler(),
+                                   .host = host,
+                                   .applier = applier,
+                                   .fs = fs,
+                                   .diagnostics = {}});
+    controller.rename();
+    auto& input = controller.renameInput();
+    ASSERT_TRUE(pumpUntil([&] { return input.isVisible(); }));
+    input.previewUsagesCheckbox()->setChecked(true);
+    emit input.accepted(QStringLiteral("renamed"));
+    QPointer<QDialog> preview;
+    ASSERT_TRUE(pumpUntil([&] {
+        for (auto* widget : QApplication::topLevelWidgets()) {
+            if (widget->objectName() == QStringLiteral("refactoringPreview")) {
+                preview = qobject_cast<QDialog*>(widget);
+                return !preview.isNull();
+            }
+        }
+        return false;
+    }));
+    const auto close = qScopeGuard([&] {
+        if (preview)
+            preview->reject();
+    });
+    requester.current = fl::PositionEncoding::Utf16;
+    preview->accept();
+    EXPECT_TRUE(applier.edits.empty());
+    EXPECT_EQ(host.text(), "\xc3\xa9 old\n");
+    EXPECT_TRUE(preview->isVisible());
+}
+
 // A controller over `server`, `host` and `applier`.
 struct Rig {
     Rig(FeatureServer& server, FakeHost& host)
@@ -204,6 +273,60 @@ struct Rig {
     std::vector<fl::LiveDiagnostic> diagnostics;
     LanguageController controller;
 };
+
+TEST(LanguageControllerRefactoring, PreviewAppearsBeforeSemanticCheckAndCancelStopsIt) {
+    FeatureServer server;
+    const std::string path = workPath("main.cpp");
+    server.on("textDocument/prepareRename", [](const Json&) { return rangeJson(0, 4, 7); });
+    server.on("textDocument/rename", [&](const Json&) {
+        return Json::object().set(
+            "changes",
+            Json::object().set(
+                uriOf(path), Json::array({Json::object().set("range", rangeJson(0, 4, 7)).set("newText", "newName")})));
+    });
+    FakeHost host("int old;\n");
+    host.caretAfter("int o");
+    Rig rig(server, host);
+    std::stop_token cancellation;
+    std::function<void(frost::Result<void>)> complete;
+    rig.controller.setCppRenameCheck([&](std::string selectedPath, fl::LspPosition, std::string name,
+                                         fl::WorkspaceEdit required, fl::WorkspaceEdit offered, std::stop_token stop,
+                                         std::function<void(frost::Result<void>)> done) {
+        EXPECT_EQ(selectedPath, path);
+        EXPECT_EQ(name, "newName");
+        EXPECT_EQ(required, offered);
+        cancellation = stop;
+        complete = std::move(done);
+    });
+    rig.controller.rename();
+    auto& input = rig.controller.renameInput();
+    ASSERT_TRUE(pumpUntil([&] { return input.isVisible(); }));
+    input.previewUsagesCheckbox()->setChecked(false); // C++ still gets a review while checking.
+    emit input.accepted(QStringLiteral("newName"));
+    QPointer<QDialog> preview;
+    ASSERT_TRUE(pumpUntil([&] {
+        for (auto* widget : QApplication::topLevelWidgets()) {
+            if (widget->objectName() == QStringLiteral("refactoringPreview")) {
+                preview = qobject_cast<QDialog*>(widget);
+                return preview && preview->isVisible() && static_cast<bool>(complete);
+            }
+        }
+        return false;
+    }));
+    const auto close = qScopeGuard([&] {
+        if (preview)
+            preview->reject();
+    });
+    const auto* apply = preview->findChild<QPushButton*>(QStringLiteral("applyRefactoring"));
+    ASSERT_NE(apply, nullptr);
+    EXPECT_FALSE(apply->isEnabled());
+    EXPECT_TRUE(rig.applier.edits.empty());
+    preview->reject();
+    EXPECT_TRUE(cancellation.stop_requested());
+    complete(frost::fail(frost::ErrorCode::Cancelled, "cancelled"));
+    EXPECT_TRUE(rig.applier.edits.empty());
+    EXPECT_EQ(host.text(), "int old;\n");
+}
 
 TEST(LanguageControllerRequests, CapturingFactorySurvivesDeferredStartSuspensionAndCancellation) {
     FeatureServer server;

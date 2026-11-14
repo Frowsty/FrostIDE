@@ -69,6 +69,7 @@
 #include "frost/core/error.hpp"
 #include "frost/debug/breakpoints.hpp"
 #include "frost/document/autosave.hpp"
+#include "frost/document/refactoring_transaction.hpp"
 #include "frost/document/save_manager.hpp"
 #include "frost/input/action.hpp"
 #include "frost/input/keymap_service.hpp"
@@ -197,6 +198,7 @@ class UnityControlIntegration;
 class GitIntegration;
 struct GitClone;
 struct CompileDatabaseState; // workbench_language.cpp
+struct CppRenameAdmission;   // workbench_cpp_rename.cpp
 struct WorkbenchLuaState;    // workbench_lua.cpp
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
@@ -360,6 +362,8 @@ struct ManagedDebugSelection {
 struct WorkbenchOptions {
     // Per-user project edit lineage directory (absolute); empty disables project edits.
     std::string projectEditStateDirectory;
+    // Owner-private refactoring recovery/store preference; actual stores follow target volumes.
+    std::string refactoringStateDirectory;
     // Packaged Windows ProjectHost executable; empty uses project-host beside the application.
     std::string projectEditHostPath;
     // This process's hot-exit journal and the recovery scan (absolute); "" disables hot exit.
@@ -610,6 +614,15 @@ public:
     [[nodiscard]] input::ActionRegistry& registry() noexcept { return m_registry; }
     [[nodiscard]] input::KeymapService& keymap() noexcept { return *m_keymap; }
     [[nodiscard]] document::SaveManager& documents() noexcept { return *m_documents; }
+    // REF-1: all source/project participants settle before views are notified. PendingRecovery is
+    // committed work, not an unapplied failure; callers must not resubmit it. UI thread only.
+    [[nodiscard]] Result<document::RefactoringOutcome> applyRefactoring(const document::RefactoringPlan& plan);
+    [[nodiscard]] Result<document::RefactoringOutcome> undoRefactoring();
+    [[nodiscard]] Result<document::RefactoringOutcome> redoRefactoring();
+    [[nodiscard]] Result<document::RefactoringOutcome> resumeRefactoring();
+    [[nodiscard]] bool canUndoRefactoring() const noexcept;
+    [[nodiscard]] bool canRedoRefactoring() const noexcept;
+    [[nodiscard]] bool refactoringPending() const noexcept;
     [[nodiscard]] ui::nav::DocumentRegistry& documentRegistry() noexcept { return *m_documentRegistry; }
     // The real editors (one view per tab, inside the registry's banner view).
     [[nodiscard]] DocumentEditorFactory& editors() noexcept { return *m_editors; }
@@ -661,6 +674,7 @@ public:
     [[nodiscard]] Result<void> refreshEngineBindings();
     [[nodiscard]] Result<void> findEngineBindingUsages();
     [[nodiscard]] Result<void> previewEngineBindingRename(std::string newLuaName, bool renameNative = false);
+    [[nodiscard]] Result<document::RefactoringOutcome> applyEngineBindingRename();
     [[nodiscard]] lang::Json engineBindingState() const;
     [[nodiscard]] std::shared_ptr<engine::EngineLuaHostProvider> engineLuaHostProvider() const;
     [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
@@ -730,6 +744,9 @@ public:
     [[nodiscard]] DocumentEditorView* currentView() const;
 
 signals:
+    // Emitted only after whole-transaction settlement (including resumed decisions and Undo/Redo).
+    // Direct UI-thread consumers may regenerate derived caches for a token they own.
+    void refactoringSettled(const frost::document::RefactoringOutcome& outcome);
     // A project opened (`name` non-empty) or closed (empty).
     void projectChanged(const QString& name);
 
@@ -755,6 +772,13 @@ private:
 
     // Construction steps.
     void registerActions();
+    void registerRefactoringActions();
+    void publishRefactoringOutcome(const document::RefactoringOutcome& outcome);
+    [[nodiscard]] bool refactoringTrusted(TransactionId token) const;
+    [[nodiscard]] Result<document::RefactoringOutcome> runRefactoringHistory(TransactionId token, bool redo);
+    void checkCppRename(std::string path, lang::LspPosition position, std::string newName, lang::WorkspaceEdit required,
+                        lang::WorkspaceEdit offered, std::stop_token cancel, std::function<void(Result<void>)> done);
+    [[nodiscard]] Result<void> admitCppRename(const lang::WorkspaceEdit& selected, document::RefactoringPlan& plan);
     void createBuildService();
     void createRunService();
     // Run configurations (RUN-2/RUN-3, workbench_run_configurations.cpp): the generated ones of the
@@ -926,6 +950,9 @@ private:
     void closeDeletedDocuments(const std::string& deletedPath, bool directory);
     void refreshSolutionExplorerForFsChange(std::string_view selectPath = {});
     void renameSourceInCMakeLists(const std::string& oldPath, const std::string& newPath, bool directory);
+    // Source, optional .fmeta and all project memberships are prepared before any effect.
+    [[nodiscard]] Result<document::RefactoringPlan> prepareProjectSourceRename(const std::string& oldPath,
+                                                                               const std::string& newPath);
     void removeSourceFromCMakeLists(const std::string& deletedPath, bool directory);
     // Writes `after` over `before` in `canonicalLists` only after a confirmed preview (`change`
     // describes it in the declined notice); Cancelled when declined.
@@ -978,6 +1005,21 @@ private:
     std::optional<storage::HotExitJournal> m_journal;
     std::optional<storage::LocalHistory> m_history;
     std::unique_ptr<document::SaveManager> m_documents;
+    std::unique_ptr<document::RefactoringCoordinator> m_refactoring;
+    struct RefactoringPaths {
+        TransactionId token;
+        std::vector<document::FileRename> renames;
+        std::vector<std::string> mutationPaths;
+        bool applied = false;
+    };
+    std::vector<RefactoringPaths> m_refactoringPaths;
+    TransactionId m_pendingRefactoring;
+    bool m_refactoringRecoveryChecked = false;
+    TransactionId m_refactoringAdmissionToken;
+    std::shared_ptr<CppRenameAdmission> m_cppRenameAdmission;
+    std::stop_source m_cppRenameStop;
+    std::uint64_t m_cppRenameGeneration = 0;
+    std::optional<std::uint64_t> m_cppRenameTrustRevision;
     std::unique_ptr<document::AutosaveController> m_autosave;
     std::unique_ptr<ui::nav::SessionStore> m_sessions;
     std::unique_ptr<ui::nav::DocumentRegistry> m_documentRegistry;

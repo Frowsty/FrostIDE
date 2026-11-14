@@ -79,8 +79,8 @@ inline constexpr std::array<LanguageCapabilities, 4> kLanguageCapabilities{{
         ext[i] = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
     }
     const std::string_view e(ext, raw.size());
-    constexpr std::array<std::string_view, 15> kCpp{"c",   "cc",  "cpp", "cxx", "c++", "h", "hh", "hpp",
-                                                    "hxx", "h++", "inl", "ipp", "tpp", "m", "mm"};
+    constexpr std::array<std::string_view, 18> kCpp{"c",   "cc",  "cpp", "cxx", "c++", "h",  "hh",   "hpp", "hxx",
+                                                    "h++", "inl", "ipp", "tpp", "m",   "mm", "cppm", "ixx", "cu"};
     for (std::string_view candidate : kCpp) {
         if (e == candidate) {
             return "cpp";

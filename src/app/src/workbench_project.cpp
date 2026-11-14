@@ -444,6 +444,9 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
     if (m_engineMixedLaunch)
         m_engineMixedLaunch->cancel();
     cancelFind();
+    m_cppRenameStop.request_stop();
+    ++m_cppRenameGeneration;
+    m_cppRenameAdmission.reset();
     if (!m_resourceGovernor)
         m_resourceGovernor = std::make_shared<sched::ResourceGovernor>();
     m_cppInspectionStop.request_stop();
@@ -536,6 +539,9 @@ bool Workbench::closeForOpen() {
         }
     }
     m_closingSolution = true;
+    m_cppRenameStop.request_stop();
+    ++m_cppRenameGeneration;
+    m_cppRenameAdmission.reset();
     m_cppInspectionStop.request_stop();
     ++m_cppInspectionGeneration;
     m_lastCppInspectionReport.reset();

@@ -101,6 +101,12 @@ struct LanguageServices {
     std::function<bool(std::string path, ::frost::lang::LspPosition position, std::string newName,
                        std::function<void()> ordinary)>
         combinedBindingRename{};
+    // REF-4: background semantic admission for C++ rename. The two edits are the mandatory
+    // server rename and the offered edit including optional comment/string occurrences. Callback
+    // returns on the UI thread; the app retains the admitted dependencies for transactional Apply.
+    std::function<void(std::string, ::frost::lang::LspPosition, std::string, ::frost::lang::WorkspaceEdit,
+                       ::frost::lang::WorkspaceEdit, std::stop_token, std::function<void(Result<void>)>)>
+        cppRenameCheck{};
 };
 
 class LanguageController final : public QObject {
@@ -109,6 +115,9 @@ class LanguageController final : public QObject {
 public:
     explicit LanguageController(LanguageServices services, QObject* parent = nullptr);
     ~LanguageController() override;
+    void setCppRenameCheck(decltype(LanguageServices::cppRenameCheck) check) {
+        m_services.cppRenameCheck = std::move(check);
+    }
     LanguageController(const LanguageController&) = delete ("owns popups and request slots");
     LanguageController& operator=(const LanguageController&) = delete ("owns popups and request slots");
 

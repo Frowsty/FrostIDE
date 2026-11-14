@@ -79,6 +79,7 @@ struct Region {
 
 // One text state and the transaction into it.
 struct UndoNode {
+    TransactionId externalTransaction; // Global boundary/tombstone, never locally replayed.
     std::uint64_t id = 0;
     std::uint64_t parent = kNoNode;
     std::vector<std::uint64_t> children; // In creation order.

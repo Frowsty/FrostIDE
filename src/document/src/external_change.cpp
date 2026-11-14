@@ -114,6 +114,10 @@ ExternalChange SaveManager::markOutOfDate(FileDocument& document, Error reason) 
 
 ExternalChange SaveManager::checkDisk(FileDocument& document) {
     ExternalChange none{&document, ExternalChangeKind::None, std::nullopt};
+    if (m_refactoringPending.assigned() || document.document().undoState().externallyLocked) {
+        m_deferredDiskChecks.insert(document.instanceId());
+        return none;
+    }
     if (document.untitled()) {
         return none;
     }
@@ -256,6 +260,8 @@ void SaveManager::adoptTheirs(FileDocument& document, PendingMerge& merge) {
 }
 
 Result<void> SaveManager::resolveExternalChange(FileDocument& document, MergeDecision decision) {
+    if (m_refactoringPending.assigned() || document.document().undoState().externallyLocked)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     if (!document.m_pendingMerge) {
         return fail(ErrorCode::NotFound, std::format("no external change of '{}' is pending", document.path()));
     }

@@ -36,6 +36,7 @@
 #include <chrono>
 #include <functional>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -68,6 +69,9 @@ struct ProjectEdit {
     std::string platform = {};
     std::string transactionId = {}; // A GUID, "8-4-4-4-12" hexadecimal; names the journal and its record.
     bool commit = true;             // False: plan and check only, nothing is written.
+    // R8 plan-only rename before the source move. Never valid with commit=true; the returned
+    // definition bytes join the same native/document transaction as the physical rename.
+    bool beforeFileMove = false;
 };
 
 /*
@@ -126,5 +130,27 @@ struct ProjectEditLaunch {
 [[nodiscard]] Result<void> runProjectEdit(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch,
                                           const ProjectEdit& edit,
                                           const std::function<bool(std::string_view digest)>& admit);
+
+struct ProjectEditInputBytes {
+    std::string path;
+    std::string bytes;
+};
+struct ProjectEditPlan {
+    std::string projectPath;
+    std::string projectBefore;
+    std::string projectAfter;
+    std::optional<std::string> filtersBefore;
+    std::optional<std::string> filtersAfter;
+    std::vector<ProjectEditInputBytes> imports;
+    std::vector<std::string> configurations;
+    std::string environment;
+};
+// Decodes the versioned, bounded Commit=false response, including exact inverse/input bytes.
+[[nodiscard]] Result<ProjectEditPlan> parseProjectEditPlan(std::string_view line);
+// Blocking worker-only plan. Refuses committing/non-rename requests; cancellation ends the owned
+// helper. No Ready/approval round trip, source move, journal or definition write is permitted.
+[[nodiscard]] Result<ProjectEditPlan> runProjectEditPlan(io::IProcessLauncher& launcher,
+                                                         const ProjectEditLaunch& launch, const ProjectEdit& edit,
+                                                         std::stop_token stop = {});
 
 } // namespace frost::project

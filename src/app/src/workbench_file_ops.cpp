@@ -10,6 +10,7 @@
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/project/project_edit.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 #include "frost/ui/toolwindows/solution_explorer.hpp"
@@ -28,6 +29,7 @@
 #include <QGuiApplication>
 #include <QInputDialog>
 #include <QMimeData>
+#include <QPointer>
 #include <QUrl>
 
 #include <array>
@@ -144,7 +146,24 @@ Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_
     }
     if (!isDir) {
         checkFrostEngineAssetReferences(canonicalOld, "Renaming");
+        QPointer<Workbench> owner(this);
+        auto transaction = prepareProjectSourceRename(canonicalOld, *targetJoined);
+        if (!owner)
+            return fail(ErrorCode::Cancelled, "Workbench closed during rename preparation");
+        if (!transaction) {
+            notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(transaction.error().message()),
+                   ui::NotificationKind::Error);
+            return std::unexpected(transaction.error());
+        }
+        auto outcome = applyRefactoring(*transaction);
+        if (!outcome)
+            return std::unexpected(outcome.error());
+        if (outcome->status == document::RefactoringStatus::PendingRecovery)
+            return fail(ErrorCode::Busy, "Rename was committed and is awaiting recovery; do not retry the rename");
+        // Refactoring settlement/Undo/Redo owns all open-document, tab, LSP and navigation rebinds.
+        return m_documentRegistry->canonicalize(*targetJoined);
     }
+    // Directory renames retain the existing folder path; native REF-1 currently covers files.
     if (auto renamed = moveWithSidecar(*movePlan); !renamed) {
         notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(renamed.error().message()),
                ui::NotificationKind::Error);
@@ -152,9 +171,7 @@ Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_
     }
     std::string canonicalNew = m_documentRegistry->canonicalize(*targetJoined);
 
-    if (!isDir) {
-        rebindRenamedDocument(canonicalOld, canonicalNew);
-    } else {
+    {
         const std::string oldDirKey = lang::documentKey(canonicalOld);
         std::vector<std::pair<std::string, std::string>> docRenames;
         for (const auto& doc : m_documents->documents()) {
@@ -433,6 +450,46 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
         }
         if (!isDir) {
             checkFrostEngineAssetReferences(canonicalOld, "Moving");
+            // A drop requiring an additional destination-project membership is not a rename of
+            // an existing item. Never fall back to a second post-move project-file mutation.
+            if (!projectPath.empty() && projectPath.ends_with(".vcxproj")) {
+                if (!m_solution) {
+                    notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))),
+                           text("The destination project is no longer loaded; no file was moved."),
+                           ui::NotificationKind::Warning);
+                    continue;
+                }
+                const auto changes =
+                    project::projectEditsForPathChange(*m_solution, canonicalOld, *targetJoined, false);
+                if (!std::ranges::any_of(changes, [&](const auto& change) {
+                        return lang::documentKey(change.project) == lang::documentKey(projectPath);
+                    })) {
+                    notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))),
+                           text("Add this file to the destination project before moving it; no file was moved."),
+                           ui::NotificationKind::Warning);
+                    continue;
+                }
+            }
+            QPointer<Workbench> owner(this);
+            auto transaction = prepareProjectSourceRename(canonicalOld, *targetJoined);
+            if (!owner)
+                return;
+            if (!transaction) {
+                notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))), qs(transaction.error().message()),
+                       ui::NotificationKind::Error);
+                continue;
+            }
+            auto outcome = applyRefactoring(*transaction);
+            if (!outcome) {
+                notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))), qs(outcome.error().message()),
+                       ui::NotificationKind::Error);
+                continue;
+            }
+            if (outcome->status == document::RefactoringStatus::PendingRecovery)
+                return; // Committed, retained token; root coordinator owns recovery and publication.
+            oldParents.push_back(oldParent);
+            lastMoved = m_documentRegistry->canonicalize(*targetJoined);
+            continue;
         }
         if (auto renamed = moveWithSidecar(*movePlan); !renamed) {
             notify(text("Cannot move %1").arg(qs(io::fileName(canonicalOld))), qs(renamed.error().message()),
@@ -444,9 +501,7 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
         lastMoved = canonicalNew;
         movedFiles.push_back(canonicalNew);
 
-        if (!isDir) {
-            rebindRenamedDocument(canonicalOld, canonicalNew);
-        } else {
+        {
             const std::string oldDirKey = lang::documentKey(canonicalOld);
             std::vector<std::pair<std::string, std::string>> docRenames;
             for (const auto& doc : m_documents->documents()) {

@@ -1379,6 +1379,11 @@ std::optional<std::string> EngineLuaHostProvider::engineRootForWorkspace(io::IFi
     return std::nullopt;
 }
 
+void EngineLuaHostProvider::invalidateSchemaCache() {
+    LockGuard lock(m_mutex);
+    m_cache.clear();
+}
+
 bool EngineLuaHostProvider::needsSchemaWarmup(io::IFileSystem& fs, std::string_view folder) const {
     if (m_fixedSchema || m_launcher == nullptr) {
         return false;

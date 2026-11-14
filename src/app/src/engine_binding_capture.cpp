@@ -3,8 +3,8 @@
 #include "frost/engine/engine_cli.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/spawn_log.hpp"
-#include "frost/lang/lua_host.hpp"
 #include "frost/lang/lsp_types.hpp"
+#include "frost/lang/lua_host.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/text/text_buffer.hpp"
 
@@ -45,7 +45,8 @@ Result<void> rememberPhysical(Graph& graph, std::string spelling, const std::str
 } // namespace
 
 Result<void> captureOpenDocumentReceipts(io::IFileSystem& fs, Graph& graph,
-                                         std::span<const engine::BindingDocumentCapture> openDocuments, std::stop_token stop) {
+                                         std::span<const engine::BindingDocumentCapture> openDocuments,
+                                         std::stop_token stop) {
     std::map<std::string, std::string, std::less<>> openIdentities;
     for (const auto& document : openDocuments) {
         if (stop.stop_requested())
@@ -62,8 +63,8 @@ Result<void> captureOpenDocumentReceipts(io::IFileSystem& fs, Graph& graph,
 }
 
 Result<void> captureDocumentSnapshot(io::IFileSystem& fs, Graph& graph,
-                                     std::span<const engine::BindingDocumentCapture> openDocuments,
-                                     std::string path, std::size_t& bytes) {
+                                     std::span<const engine::BindingDocumentCapture> openDocuments, std::string path,
+                                     std::size_t& bytes) {
     auto resolved = resolveDocumentPath(fs, graph.physicalRoot, graph.engineRoot, graph.metadataPath, path);
     if (!resolved)
         return std::unexpected(resolved.error());
@@ -117,6 +118,31 @@ Result<void> captureDocumentSnapshot(io::IFileSystem& fs, Graph& graph,
     return {};
 }
 
+Result<void> admitBindingProjectionPath(io::IFileSystem& fs, std::span<const engine::BindingDocumentCapture> documents,
+                                        std::string_view path) {
+    const auto normalized = io::normalizePath(path);
+    if (!normalized || !io::isAbsolutePath(path))
+        return fail(ErrorCode::InvalidArgument, "A projection needs an absolute path");
+    const auto key = lang::documentKey(*normalized);
+    if (std::ranges::any_of(documents, [&](const auto& document) { return lang::documentKey(document.path) == key; }))
+        return fail(ErrorCode::AlreadyExists, "A projection would shadow a captured document");
+    auto exists = fs.exists(*normalized);
+    if (!exists)
+        return std::unexpected(exists.error());
+    if (*exists)
+        return fail(ErrorCode::AlreadyExists, "A projection would shadow an existing filesystem path");
+    // exists/status follow links. The directory entry check also rejects dangling links.
+    auto entries = fs.listDirectory(io::parentPath(*normalized));
+    if (!entries)
+        return std::unexpected(entries.error());
+    for (const auto& entry : *entries) {
+        const auto candidate = io::joinPath(io::parentPath(*normalized), entry.name);
+        if (!candidate || lang::documentKey(*candidate) == key)
+            return fail(ErrorCode::AlreadyExists, "A projection would shadow a filesystem directory entry");
+    }
+    return {};
+}
+
 bool luaSource(std::string_view path) noexcept {
     if (path.size() < 4)
         return false;
@@ -157,9 +183,11 @@ bool expectsEngineMetadata(const rpc::Json& configuration, std::string_view meta
 
 Result<RenameDefinitionAdmission> admitRenameDefinitions(io::IFileSystem& fs, const rpc::Json& definitions,
                                                          std::string_view metadata,
-                                                         std::string_view expectedPhysicalMetadata, bool metadataRequired) {
+                                                         std::string_view expectedPhysicalMetadata,
+                                                         bool metadataRequired) {
     auto generated = fs.physicalPath(metadata);
-    if (!generated && (metadataRequired || !expectedPhysicalMetadata.empty() || generated.error().code() != ErrorCode::NotFound))
+    if (!generated &&
+        (metadataRequired || !expectedPhysicalMetadata.empty() || generated.error().code() != ErrorCode::NotFound))
         return std::unexpected(generated.error());
     if (!expectedPhysicalMetadata.empty() &&
         lang::documentKey(*generated) != lang::documentKey(expectedPhysicalMetadata))
@@ -224,8 +252,7 @@ const engine::BindingDocumentCapture* Graph::generatedDocument() const {
         return nullptr;
     const engine::BindingDocumentCapture* found = nullptr;
     for (const auto& document : documents)
-        if (document.role == engine::BindingDocumentRole::GeneratedEngineMetadata &&
-            !document.physicalPath.empty() &&
+        if (document.role == engine::BindingDocumentRole::GeneratedEngineMetadata && !document.physicalPath.empty() &&
             lang::documentKey(document.physicalPath) == lang::documentKey(expected->second)) {
             if (found)
                 return nullptr;
@@ -265,13 +292,13 @@ bool Graph::verify(const Capture& capture) const {
     const auto commands = database ? capture.fs->readFileSnapshot(*database, 32U * 1024U * 1024U)
                                    : Result<std::string>(fail(ErrorCode::NotFound));
     const auto executable = capture.fs->physicalPath(program);
-    const auto binary = executable ? capture.fs->status(*executable)
-                                   : Result<io::FileStatus>(fail(ErrorCode::NotFound));
+    const auto binary =
+        executable ? capture.fs->status(*executable) : Result<io::FileStatus>(fail(ErrorCode::NotFound));
     if (!root || lang::documentKey(*root) != lang::documentKey(physicalRoot) || !engine ||
         lang::documentKey(*engine) != lang::documentKey(engineRoot) || !database ||
         lang::documentKey(*database) != lang::documentKey(databasePath) || !commands || *commands != databaseBytes ||
-        !executable || lang::documentKey(*executable) != lang::documentKey(physicalProgram) ||
-        !binary || binary->mtime != programMtime)
+        !executable || lang::documentKey(*executable) != lang::documentKey(physicalProgram) || !binary ||
+        binary->mtime != programMtime)
         return false;
     if (!verifyReceipts(*capture.fs))
         return false;
@@ -398,6 +425,13 @@ Result<std::shared_ptr<Graph>> buildGraph(const Capture& capture) {
     auto created = capture.fs->createDirectories(capture.stateDirectory);
     if (!created)
         return std::unexpected(created.error());
+    // Embedded calls can live outside registration TUs. Analyze every admitted CDB TU,
+    // including those with no registration entries, before granting the bounded profile.
+    for (const auto& [key, path] : translationUnits) {
+        static_cast<void>(key);
+        if (inside(graph->engineRoot, path))
+            groups.try_emplace(path);
+    }
     std::vector<engine::NativeBindingMapping> mappings;
     std::size_t sequence = 0;
     for (const auto& [translationUnit, entries] : groups) {
@@ -437,6 +471,13 @@ Result<std::shared_ptr<Graph>> buildGraph(const Capture& capture) {
             return std::unexpected(report.error());
         if (!report->mappings.empty() && report->sourceInputs.empty())
             return fail(ErrorCode::Unsupported, "The binding tool did not report actual parsed source-input digests");
+        graph->embeddedLuaProfileVerified &= report->embeddedLuaProfileVerified;
+        for (const auto& exclusion : report->embeddedLuaRefusals)
+            if (std::ranges::find(graph->embeddedLuaRefusals, exclusion) == graph->embeddedLuaRefusals.end())
+                graph->embeddedLuaRefusals.push_back(exclusion);
+        for (const auto& chunk : report->embeddedLua)
+            if (std::ranges::find(graph->embeddedLua, chunk) == graph->embeddedLua.end())
+                graph->embeddedLua.push_back(chunk);
         for (const auto& input : report->sourceInputs) {
             if (!inside(graph->engineRoot, input.path))
                 return fail(ErrorCode::PermissionDenied, "The AST source manifest escaped its admitted checkout");
@@ -472,7 +513,8 @@ Result<std::shared_ptr<Graph>> buildGraph(const Capture& capture) {
     for (const auto& document : capture.openDocuments)
         files.push_back(document.path);
     files.push_back(graph->metadataPath);
-    if (auto admitted = captureOpenDocumentReceipts(*capture.fs, *graph, capture.openDocuments, capture.stop); !admitted)
+    if (auto admitted = captureOpenDocumentReceipts(*capture.fs, *graph, capture.openDocuments, capture.stop);
+        !admitted)
         return std::unexpected(admitted.error());
     for (const auto& file : files) {
         if (!languageFile(file) && !graph->inputHashes.contains(file))

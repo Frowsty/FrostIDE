@@ -560,5 +560,162 @@ TEST(CMakeViewModel, GroupsTargetSourcesByFolder) {
     EXPECT_EQ(empty.node(0).label, "Nothing");
 }
 
+TEST(CMakeMembershipRename, PreservesTokensCommentsVisibilityAndUtf8CrLf) {
+    auto model = editableProject();
+    const auto definition = source("sub/CMakeLists.txt");
+    const std::string text = "# unchanged\r\nadd_library(core STATIC base.cpp) # retain\r\n"
+                             "target_sources(core PRIVATE \"dir/a b.cpp\") # unchanged\r\n";
+    const std::array inputs{
+        CMakeInputSnapshot{source("CMakeLists.txt"),
+                           "cmake_minimum_required(VERSION 3.20)\nproject(Test)\nadd_subdirectory(sub)\n"},
+        CMakeInputSnapshot{definition, text}};
+    auto plan = planCMakeSourceRename(model, 0, source("sub/dir/a b.cpp"), source("sub/dir/\xC3\xA4 new.cpp"),
+                                      definition, inputs);
+    ASSERT_TRUE(plan) << plan.error().describe();
+    EXPECT_EQ(plan->original, text);
+    EXPECT_EQ(plan->replacement, "# unchanged\r\nadd_library(core STATIC base.cpp) # retain\r\n"
+                                 "target_sources(core PRIVATE \"dir/\xC3\xA4 new.cpp\") # unchanged\r\n");
+}
+
+TEST(CMakeMembershipRename, KeepsOptionLookingLeafInSourceRole) {
+    auto model = editableProject();
+    model.targets[0].sources[0].path = source("sub/old.cpp");
+    const auto definition = source("sub/CMakeLists.txt");
+    const std::array inputs{
+        CMakeInputSnapshot{source("CMakeLists.txt"),
+                           "cmake_minimum_required(VERSION 3.20)\nproject(Test)\nadd_subdirectory(sub)\n"},
+        CMakeInputSnapshot{definition,
+                           "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE old.cpp)\n"}};
+    auto plan = planCMakeSourceRename(model, 0, source("sub/old.cpp"), source("sub/PRIVATE"), definition, inputs);
+    ASSERT_TRUE(plan) << plan.error().describe();
+    EXPECT_EQ(plan->replacement,
+              "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"./PRIVATE\")\n");
+}
+
+TEST(CMakeMembershipRename, RefusesOtherTargetDestinationDuplicateAndIndirectMembership) {
+    auto model = editableProject();
+    const auto definition = source("sub/CMakeLists.txt");
+    std::array inputs{
+        CMakeInputSnapshot{source("CMakeLists.txt"),
+                           "cmake_minimum_required(VERSION 3.20)\nproject(Test)\nadd_subdirectory(sub)\n"},
+        CMakeInputSnapshot{
+            definition, "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/a b.cpp\")\n"}};
+    auto rename = [&] {
+        return planCMakeSourceRename(model, 0, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), definition,
+                                     inputs);
+    };
+    model.targets.push_back(model.targets[0]);
+    EXPECT_FALSE(rename());
+    model.targets.pop_back();
+    auto destination = model.targets[0].sources[0];
+    destination.path = source("sub/dir/new.cpp");
+    model.targets[0].sources.push_back(destination);
+    EXPECT_EQ(rename().error().code(), ErrorCode::AlreadyExists);
+    model.targets[0].sources.pop_back();
+    inputs[1].contents += "target_sources(core PRIVATE \"dir/a b.cpp\")\n";
+    EXPECT_FALSE(rename());
+    inputs[1].contents = "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE ${SOURCES})\n";
+    EXPECT_FALSE(rename());
+    EXPECT_FALSE(
+        planCMakeSourceRename(model, 0, source("sub/dir/a b.cpp"), source("else/new.cpp"), definition, inputs));
+}
+
+TEST(CMakeMembershipRename, RefusesDotTrailingSlashAndNonNormalizedDestinations) {
+    const auto model = editableProject();
+    const auto definition = source("sub/CMakeLists.txt");
+    const std::array inputs{
+        CMakeInputSnapshot{source("CMakeLists.txt"),
+                           "cmake_minimum_required(VERSION 3.20)\nproject(Test)\nadd_subdirectory(sub)\n"},
+        CMakeInputSnapshot{
+            definition, "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/a b.cpp\")\n"}};
+    const auto parent = source("sub/dir");
+    for (const auto& suffix : {"/.", "/", "/..", "/./new.cpp", "//new.cpp"}) {
+        auto plan = planCMakeSourceRename(model, 0, source("sub/dir/a b.cpp"), parent + suffix, definition, inputs);
+        ASSERT_FALSE(plan) << suffix;
+        EXPECT_EQ(plan.error().code(), ErrorCode::InvalidArgument) << suffix;
+    }
+}
+
+TEST(CMakeMembershipRename, AggregatesSharedDefinitionFromOriginalBytesAcrossTargets) {
+    auto model = editableProject();
+    auto other = model.targets[0];
+    other.name = "other";
+    other.backtrace[0].line = 4;
+    other.sources[0].backtraces[0][0].line = 4;
+    other.sources[0].backtraces[0][0].command = "add_library";
+    model.targets.push_back(other);
+    const auto definition = source("sub/CMakeLists.txt");
+    const std::string text = "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/a "
+                             "b.cpp\")\nadd_library(other STATIC \"dir/a b.cpp\")\n";
+    const std::array inputs{
+        CMakeInputSnapshot{source("CMakeLists.txt"),
+                           "cmake_minimum_required(VERSION 3.20)\nproject(Test)\nadd_subdirectory(sub)\n"},
+        CMakeInputSnapshot{definition, text}};
+    auto plans = planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs);
+    ASSERT_TRUE(plans) << plans.error().describe();
+    ASSERT_EQ(plans->size(), 1U);
+    EXPECT_EQ((*plans)[0].original, text);
+    EXPECT_EQ((*plans)[0].replacement, "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE "
+                                       "\"dir/new.cpp\")\nadd_library(other STATIC \"dir/new.cpp\")\n");
+    model.targets.back().sources[0].generated = true;
+    EXPECT_FALSE(planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs));
+}
+
+TEST(CMakeMembershipRename, RefusesCurrentTargetMembershipMissingFromPublishedModel) {
+    const auto model = editableProject();
+    const auto definition = source("sub/CMakeLists.txt");
+    const std::array inputs{
+        CMakeInputSnapshot{source("CMakeLists.txt"),
+                           "cmake_minimum_required(VERSION 3.20)\nproject(Test)\nadd_subdirectory(sub)\n"},
+        CMakeInputSnapshot{definition, "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/a "
+                                       "b.cpp\")\nadd_library(new_target STATIC \"dir/a b.cpp\")\n"}};
+    auto result = planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::Unsupported);
+}
+
+TEST(CMakeMembershipRename, AggregateProvesStaticMembershipAcrossMultiConfigModels) {
+    auto model = editableProject();
+    model.multiConfig = true;
+    model.configuration = "Debug";
+    model.configurations = {"Debug", "Release"};
+    const auto definition = source("sub/CMakeLists.txt");
+    std::array inputs{
+        CMakeInputSnapshot{source("CMakeLists.txt"),
+                           "cmake_minimum_required(VERSION 3.20)\nproject(Test)\nadd_subdirectory(sub)\n"},
+        CMakeInputSnapshot{
+            definition, "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/a b.cpp\")\n"}};
+    auto result = planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs);
+    ASSERT_TRUE(result) << result.error().describe();
+    ASSERT_EQ(result->size(), 1U);
+    inputs[1].contents = "# keep\nadd_library(core STATIC base.cpp)\nif(CMAKE_BUILD_TYPE STREQUAL "
+                         "Debug)\ntarget_sources(core PRIVATE \"dir/a b.cpp\")\nendif()\n";
+    EXPECT_FALSE(planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs));
+}
+
+TEST(CMakeMembershipRename, CurrentDirtyDestinationMembershipIsNotAdoptedFromStaleModel) {
+    auto model = editableProject();
+    auto other = model.targets[0];
+    other.name = "other";
+    other.sources[0].path = source("sub/base.cpp");
+    other.sources[0].backtraces[0][0].line = 4;
+    other.sources[0].backtraces[0][0].command = "add_library";
+    model.targets.push_back(other);
+    const auto definition = source("sub/CMakeLists.txt");
+    std::array inputs{
+        CMakeInputSnapshot{source("CMakeLists.txt"),
+                           "cmake_minimum_required(VERSION 3.20)\nproject(Test)\nadd_subdirectory(sub)\n"},
+        CMakeInputSnapshot{definition, "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/a "
+                                       "b.cpp\")\nadd_library(other STATIC base.cpp dir/new.cpp)\n"}};
+    auto result = planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::AlreadyExists);
+    inputs[1].contents = "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/a b.cpp\" "
+                         "dir/new.cpp)\nadd_library(other STATIC base.cpp)\n";
+    result = planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::AlreadyExists);
+}
+
 } // namespace
 } // namespace frost::project

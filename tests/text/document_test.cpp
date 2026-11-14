@@ -12,6 +12,7 @@
 #include "undo_tree.hpp"
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <format>
@@ -960,3 +961,44 @@ TEST(DocumentSnapshot, ResolvesAnchorsInLaterSnapshots) {
 }
 
 } // namespace
+
+TEST(DocumentExternalTransaction, LocalUndoAndRedoCannotSplitGlobalBoundary) {
+    auto value = Document::fromUtf8("before");
+    ASSERT_TRUE(value);
+    std::array<std::byte, 16> identity{};
+    identity[0] = std::byte{1};
+    const frost::TransactionId id(identity);
+    ASSERT_TRUE(value->acquireExternalWrite(id));
+    ASSERT_FALSE(value->replace(range(0, 6), "wrong writer", EditContext{}));
+    ASSERT_TRUE(value->replaceExternal(id, range(0, 6), "after", EditContext{}));
+    ASSERT_TRUE(value->markExternalTransaction(id));
+    value->releaseExternalWrite(id);
+    EXPECT_EQ(value->undoState().externalUndo, id);
+    EXPECT_FALSE(value->undo());
+    EXPECT_EQ(text(*value), "after");
+    ASSERT_TRUE(value->acquireExternalWrite(id));
+    ASSERT_TRUE(value->undoExternal(id));
+    value->releaseExternalWrite(id);
+    EXPECT_EQ(text(*value), "before");
+    EXPECT_FALSE(value->redo());
+    ASSERT_TRUE(value->acquireExternalWrite(id));
+    ASSERT_TRUE(value->redoExternal(id));
+    value->releaseExternalWrite(id);
+    EXPECT_EQ(text(*value), "after");
+}
+
+TEST(DocumentExternalTransaction, CompositionAndAnotherCoordinatorRefuseWithoutChanges) {
+    auto value = Document::fromUtf8("a");
+    ASSERT_TRUE(value);
+    std::array<std::byte, 16> bytes{};
+    bytes[0] = std::byte{7};
+    const frost::TransactionId id(bytes);
+    ASSERT_TRUE(value->beginComposition(ByteOffset{0}));
+    EXPECT_FALSE(value->acquireExternalWrite(id));
+    ASSERT_TRUE(value->cancelComposition());
+    ASSERT_TRUE(value->acquireExternalWrite(id));
+    EXPECT_FALSE(value->acquireExternalWrite(id));
+    EXPECT_FALSE(value->beginComposition(ByteOffset{0}));
+    value->releaseExternalWrite(id);
+    EXPECT_EQ(text(*value), "a");
+}

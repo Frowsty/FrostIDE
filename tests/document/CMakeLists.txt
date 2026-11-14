@@ -35,9 +35,10 @@ endif()
 frost_add_test(document_integration_tests
     SOURCES
         real_disk_test.cpp
+        refactoring_transaction_test.cpp
     DEPS frost::document
     LABELS integration)
-target_include_directories(document_integration_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_include_directories(document_integration_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/io/src)
 target_compile_definitions(document_integration_tests PRIVATE
     FROST_DOCUMENT_TEST_CHILD="$<TARGET_FILE:document_test_child>")
 add_dependencies(document_integration_tests document_test_child)

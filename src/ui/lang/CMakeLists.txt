@@ -22,6 +22,7 @@ frost_add_library(ui_lang LAYER ui
         src/language_controller_codegen.cpp
         src/language_controller_hierarchy.cpp
         src/language_controller_refactor.cpp
+        src/refactoring_preview.cpp
         src/resolve_context.cpp
     DEPS frost::ui_editor frost::lang frost::build frost::input frost::text frost::sched frost::io frost::core
     THIRD_PARTY Qt6::Widgets)

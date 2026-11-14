@@ -384,6 +384,7 @@ public:
     [[nodiscard]] const LoadService& loadService() const noexcept { return m_loader; }
 
 private:
+    friend class RefactoringCoordinator;
     [[nodiscard]] Result<std::string> normalize(std::string_view path) const;
     [[nodiscard]] FileDocument& adopt(std::string path, std::string key, LoadedDocument loaded);
     [[nodiscard]] std::int64_t generationOf(FileDocument& document);
@@ -422,6 +423,8 @@ private:
     std::function<Result<void>(std::string_view)> m_writeGuard;
     std::function<SaveTransform(const FileDocument&, SaveReason)> m_saveTransform;
     std::set<std::string, std::less<>> m_sweptDirectories;
+    std::set<std::uint64_t> m_deferredDiskChecks;
+    TransactionId m_refactoringPending; // Source saves/close are barred until committed settlement.
     std::int64_t m_nextGeneration = 0;
     std::uint64_t m_nextUntitled = 0;
     std::optional<IClock::SteadyTime> m_lastPrune;
