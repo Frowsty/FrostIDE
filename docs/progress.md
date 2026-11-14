@@ -5,6 +5,7 @@ what is next, blockers and open questions for the user.
 
 ## 2026-11-14: R11 explicit project-scoped Change Signature
 
+- A composed component-fixture test now obtains ten actual AST proposals (signature, inline, extraction, safe delete and generators), applies each through the existing Workbench transaction API, and checks complete Undo/Redo history against exact images. It is authored and source-reviewed only; the PLAN engine-corpus journey and runtime acceptance remain deferred.
 - Change Signature now accepts explicit parameter names, types, ordering, additions with caller-provided call expressions, and unused removals. The AST planner updates captured header declarations, source definitions and direct calls across all compilation-database configurations, then reparses and checks call bindings. Ordinary unique free functions and nonvirtual methods without bases are supported; defaults, overload/dependent contexts, address escapes, macro spelling, name/type capture and effectful existing arguments refuse with a reason. External callers remain outside the captured preview scope.
 - The ordinary action opens a parameter-row editor; the simpler permutation action remains separately named Reorder Parameters. Multi-TU/header/member and semantic refusal regressions are authored. Independent Astra source review cleared the implementation, including type-name and declaration/reference macro guards. No builds, tests, helper execution or runtime acceptance occurred under implementation-first.
 
