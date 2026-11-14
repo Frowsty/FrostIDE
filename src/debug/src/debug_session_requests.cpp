@@ -115,6 +115,7 @@ std::int64_t DebugSession::stepInTargets(InspectionDone done) {
 std::int64_t DebugSession::requestInspection(std::string command, rpc::Json arguments, InspectionDone done) {
     const auto caps = capabilities();
     const bool supported = (command == "modules" && caps.supportsModulesRequest) ||
+        (command == "frost.registers" && caps.frostSupportsRegisters) ||
         ((command == "frost.setSymbolPaths" || command == "frost.reloadSymbols") && caps.frostSupportsSymbolControl) ||
         (command == "frost.setSourceMap" && caps.frostSupportsSourceMap) ||
         (command == "frost.reloadNatvis" && caps.frostSupportsNatvisReload);
@@ -122,7 +123,7 @@ std::int64_t DebugSession::requestInspection(std::string command, rpc::Json argu
     if (!arguments.isObject() || arguments.dump().size() > 65536) {
         done(fail(ErrorCode::InvalidArgument, "Inspection arguments must be a bounded object")); return 0;
     }
-    if (command == "modules") return m_state->inspect(std::move(command), std::move(arguments), std::move(done));
+    if (command == "modules" || command == "frost.registers") return m_state->inspect(std::move(command), std::move(arguments), std::move(done));
     // Symbol paths/maps/visualizer reload change adapter inspection configuration. Their successful
     // ACK stays authoritative across frame selection, unlike frame-scoped inspection data.
     if (state() != DebugState::Stopped) { done(fail(ErrorCode::Busy, "Pause before changing debugger inspection settings")); return 0; }
@@ -343,10 +344,15 @@ std::int64_t DebugSession::scopes(std::int64_t frameId, ScopesDone done) {
 }
 
 std::int64_t DebugSession::variables(std::int64_t variablesReference, std::int64_t start, std::int64_t count,
-                                     VariablesDone done, bool hexadecimal) {
+                                     VariablesDone done, bool hexadecimal, bool raw) {
     rpc::Json arguments = rpc::Json::object().set("variablesReference", variablesReference);
     if (hexadecimal && capabilities().supportsValueFormattingOptions)
         arguments.set("format", rpc::Json::object().set("hex", true));
+    if (raw && capabilities().frostSupportsRawView) {
+        auto format = rpc::Json::object().set("frostRaw", true);
+        if (hexadecimal && capabilities().supportsValueFormattingOptions) format.set("hex", true);
+        arguments.set("format", std::move(format));
+    }
     if (count > 0) {
         arguments.set("start", start).set("count", count);
     }

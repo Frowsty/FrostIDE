@@ -59,6 +59,8 @@ struct Capabilities {
     bool frostSupportsSymbolControl = false;
     bool frostSupportsSourceMap = false;
     bool frostSupportsNatvisReload = false;
+    bool frostSupportsRegisters = false;
+    bool frostSupportsRawView = false;
     std::vector<ExceptionFilter> exceptionBreakpointFilters{};
 };
 

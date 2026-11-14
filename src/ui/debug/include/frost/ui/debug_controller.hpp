@@ -290,6 +290,8 @@ public:
     void variables(std::int64_t reference, std::int64_t start, std::int64_t count, VariablesDone done);
     // Evaluates in the selected frame.
     void evaluate(const QString& expression, const QString& context, EvaluateDone done);
+    void setRawValues(bool enabled) { m_rawValues = enabled; emit valuesFormatChanged(); }
+    [[nodiscard]] bool rawValues() const noexcept { return m_rawValues; }
     void setHexadecimalValues(bool enabled) { m_hexadecimalValues = enabled; emit valuesFormatChanged(); }
     [[nodiscard]] bool hexadecimalValues() const noexcept { return m_hexadecimalValues; }
     void submitConsoleInput(const QString& line);
@@ -413,6 +415,7 @@ private:
     std::vector<debug::dap::Variable> m_currentFrameVariables;
     std::vector<std::int64_t> m_frameScopeReferences; // The scopes those come from.
     bool m_editorPresentation = true;
+    bool m_rawValues = false;
     bool m_hexadecimalValues = false;
     bool m_nativeSession = false; // The session is lldb-dap's (launch or attach).
     bool m_nativeOsThreadIdsVerified = false;

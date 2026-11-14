@@ -294,7 +294,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
         if (readOnly && command != "initialize" && command != "launch" && command != "attach" &&
             command != "configurationDone" && command != "threads" && command != "stackTrace" && command != "scopes" &&
             command != "variables" && command != "readMemory" && command != "disassemble" && command != "source" &&
-            command != "modules" && command != "frost.setSymbolPaths" && command != "frost.reloadSymbols" &&
+            command != "modules" && command != "frost.registers" && command != "frost.setSymbolPaths" && command != "frost.reloadSymbols" &&
             command != "frost.setSourceMap" && command != "frost.reloadNatvis" &&
             command != "cancel" && command != "disconnect" &&
             !(command == "evaluate" && arguments.stringAt("context") != "repl")) {

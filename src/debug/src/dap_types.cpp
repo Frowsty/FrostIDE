@@ -106,6 +106,8 @@ Capabilities mergeCapabilities(Capabilities caps, const rpc::Json& body) {
     mergeFlag(caps.frostSupportsSymbolControl, source, "frostSupportsSymbolControl");
     mergeFlag(caps.frostSupportsSourceMap, source, "frostSupportsSourceMap");
     mergeFlag(caps.frostSupportsNatvisReload, source, "frostSupportsNatvisReload");
+    mergeFlag(caps.frostSupportsRegisters, source, "frostSupportsRegisters");
+    mergeFlag(caps.frostSupportsRawView, source, "frostSupportsRawView");
 
 
     if (const rpc::Json* filters = source.find("exceptionBreakpointFilters");

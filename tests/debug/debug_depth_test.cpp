@@ -154,5 +154,27 @@ TEST(DebugDepthSession, FreezeReceiptDoesNotInventPersistentThreadState) {
     EXPECT_EQ(adapter.argumentsOf("frost.setThreadFrozen").size(), 1U);
 }
 
+TEST(DebugDepthSession, RawAndHexFormattingUseNegotiatedIndependentFields) {
+    FakeDebugAdapter adapter;
+    const auto path = test::workPath("raw.cpp");
+    scriptProgram(adapter, FakeProgram{.sourcePath = path, .codeLines = {10}});
+    adapter.on("initialize", [](const rpc::Json&) { return FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("supportsConfigurationDoneRequest", true)
+            .set("supportsValueFormattingOptions", true).set("frostSupportsRawView", true)}; });
+    auto session = DebugSession::start(test::fakeFactory(adapter), rpc::Json::object(), {{path, {{1, 10}}}}, {});
+    ASSERT_TRUE(waitUntil([&] { return session->selectedFrame().has_value(); }));
+    std::promise<Result<VariableList>> promise;
+    auto result = promise.get_future();
+    session->variables(100, 0, 16, [&](Result<VariableList> body) { promise.set_value(std::move(body)); }, true, true);
+    ASSERT_EQ(result.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    ASSERT_TRUE(result.get());
+    const auto arguments = adapter.argumentsOf("variables").back();
+    const auto* format = arguments.find("format"); ASSERT_NE(format, nullptr);
+    EXPECT_EQ(format->boolAt("hex"), true);
+    EXPECT_EQ(format->boolAt("frostRaw"), true);
+    EXPECT_EQ(arguments.integerAt("start"), 0);
+    EXPECT_EQ(arguments.integerAt("count"), 16);
+}
+
 }
 }

@@ -279,7 +279,7 @@ std::int64_t DebugController::requestInspection(std::string command, rpc::Json a
     const auto relay = m_relay;
     const auto generation = m_generation;
     const auto epoch = m_session->inspectionGeneration();
-    const bool modules = command == "modules";
+    const bool modules = command == "modules" || command == "frost.registers";
     return m_session->requestInspection(std::move(command), std::move(arguments),
         [relay, generation, epoch, modules, done = std::move(done)](Result<rpc::Json> body) {
             relay->post(generation, [epoch, modules, done, body = std::move(body)](DebugController* self) mutable {
@@ -338,7 +338,7 @@ void DebugController::variables(std::int64_t reference, std::int64_t start, std:
                 }
                 done(list);
             });
-        }, m_hexadecimalValues);
+        }, m_hexadecimalValues, m_rawValues);
 }
 
 void DebugController::evaluate(const QString& expression, const QString& context, EvaluateDone done) {

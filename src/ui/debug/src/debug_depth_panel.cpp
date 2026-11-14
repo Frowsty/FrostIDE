@@ -55,6 +55,9 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     auto* hex = new QCheckBox(QStringLiteral("Hexadecimal values"), this);
     hex->setChecked(controller.hexadecimalValues());
     connect(hex, &QCheckBox::toggled, &controller, &DebugController::setHexadecimalValues);
+    auto* raw = new QCheckBox(QStringLiteral("Raw values (bypass visualizers)"), this);
+    raw->setChecked(controller.rawValues());
+    connect(raw, &QCheckBox::toggled, &controller, &DebugController::setRawValues);
     auto* status = new QLabel(this);
     status->setWordWrap(true);
     auto* calls = new QComboBox(this);
@@ -105,17 +108,20 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     form->addRow(QStringLiteral("Access"), access);
     layout->addWidget(status);
     layout->addWidget(hex);
+    layout->addWidget(raw);
     layout->addWidget(refresh); layout->addWidget(calls); layout->addWidget(step);
     layout->addWidget(instruction);
     layout->addWidget(freeze); layout->addWidget(thaw);
     layout->addWidget(loadRegisters); layout->addWidget(registers, 1);
     layout->addLayout(form); layout->addWidget(info); layout->addWidget(install); layout->addWidget(clear);
-    auto update = [&controller, status, refresh, calls, step, loadRegisters, registers, info, install, clear, access, dataId, selection, reference, name, hex, instruction, freeze, thaw, registerEpoch] {
+    auto update = [&controller, status, refresh, calls, step, loadRegisters, registers, info, install, clear, access, dataId, selection, reference, name, hex, raw, instruction, freeze, thaw, registerEpoch] {
         ++*registerEpoch;
         ++*selection; reference->clear(); name->clear();
         calls->clear(); registers->clear(); access->clear(); dataId->clear();
         const auto* session = controller.session();
         const auto caps = session ? session->capabilities() : debug::dap::Capabilities{};
+        raw->setEnabled(caps.frostSupportsRawView);
+        raw->setToolTip(QStringLiteral("Requires debugger raw value support"));
         hex->setEnabled(caps.supportsValueFormattingOptions);
         hex->setToolTip(QStringLiteral("Requires debugger value formatting support"));
         const bool stopped = session && controller.paused();
@@ -186,6 +192,23 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
             if (!controller.selectedFrame()) return;
             const auto epoch = ++*registerEpoch;
             registers->clear();
+            if (controller.session() && controller.session()->capabilities().frostSupportsRegisters) {
+                auto arguments = rpc::Json::object();
+                if (controller.selectedThread()) arguments.set("threadId", *controller.selectedThread());
+                controller.requestInspection("frost.registers", std::move(arguments), deliver(controller, this,
+                    [status, registerEpoch, epoch, populateRegisters](Result<rpc::Json> body) {
+                        if (*registerEpoch != epoch) return;
+                        if (!body) { status->setText(QString::fromStdString(body.error().message())); return; }
+                        debug::VariableList values;
+                        if (const auto* registers = body->find("registers")) for (const auto& entry : registers->items()) {
+                            auto value = debug::dap::parseVariable(entry);
+                            if (value.type.empty()) value.type = std::string(entry.stringAt("typeName"));
+                            values.push_back(std::move(value));
+                        }
+                        populateRegisters(nullptr, values);
+                    }));
+                return;
+            }
             controller.scopes(controller.selectedFrame()->id, deliver<debug::ScopeList>(controller, this,
                 [this, &controller, status, registerEpoch, epoch, populateRegisters](Result<debug::ScopeList> scopes) {
                     if (*registerEpoch != epoch) return;
