@@ -10,6 +10,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QPointer>
 namespace frost::app {
 std::string Workbench::defaultLuaInterpreterPath() const {
     const auto configured = m_services.settings.snapshot()->get(settings::key::toolsLuaInterpreterPath);
@@ -54,12 +55,16 @@ Result<void> Workbench::prepareStandaloneLua(const run::RunConfiguration& config
         return fail(ErrorCode::InvalidArgument, "open a trusted workspace for standalone Lua");
     if (auto valid = run::validateRunConfiguration(configuration); !valid)
         return valid;
+    const QPointer<Workbench> owner(this);
     const auto root = m_projectRoot;
+    const auto generation = m_luaRuntimeStop.get_token();
     if (m_services.settings.snapshot()->get(settings::key::buildSaveAllBeforeBuild)) {
         const auto saved = saveAllDocuments(); // Same Save All policy/owner as the existing build/run hook.
         if (!saved.failed.empty())
             return std::unexpected(saved.failed.front().error);
     }
+    if (!owner || generation.stop_requested())
+        return fail(ErrorCode::Cancelled, "Lua workspace lifetime changed while saving");
     if (root != m_projectRoot || m_shutDown)
         return fail(ErrorCode::Cancelled, "Lua workspace changed while saving");
     auto admission = luaLaunchAdmissionFor(configuration);
@@ -67,7 +72,8 @@ Result<void> Workbench::prepareStandaloneLua(const run::RunConfiguration& config
         return fail(ErrorCode::Untrusted, "Lua has no admitted workspace");
     return admission();
 }
-Result<void> Workbench::startStandaloneLuaDebug(const run::RunConfiguration& configuration) {
+// NOLINTNEXTLINE(performance-unnecessary-value-param): Immutable selection survives reentrant Save All.
+Result<void> Workbench::startStandaloneLuaDebug(run::RunConfiguration configuration) {
     if (configuration.type != run::RunType::LuaScript)
         return fail(ErrorCode::Unsupported, "Lua REPL is interactive Run only; debug a Lua script configuration");
     if (!m_debug)
