@@ -11,6 +11,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QHeaderView>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -21,6 +22,7 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QTabWidget>
+#include <QTableWidget>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -132,7 +134,10 @@ void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, std::
     auto capture = std::make_shared<Capture>();
     request.context.projectRoot = m_projectRoot;
     request.context.seedTranslationUnit =
-        request.operation.starts_with("generate-") ? std::string{} : request.context.path;
+        (request.operation.starts_with("generate-") || request.operation == "change-signature" ||
+         request.operation == "edit-signature")
+            ? std::string{}
+            : request.context.path;
     request.context.overlays.clear();
     const auto bundled =
         QDir(QCoreApplication::applicationDirPath())
@@ -246,8 +251,8 @@ void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, std::
 void Workbench::registerCppRefactoringActions() {
     for (const auto& [operation, label] : std::array{
              std::pair{"change-signature", "Reorder C++ Parameters…"},
-             std::pair{"inline-variable", "Inline C++ Variable…"}, std::pair{"inline-function", "Inline C++ Call…"},
-             std::pair{"extract-variable", "Extract C++ Variable…"},
+             std::pair{"edit-signature", "Change C++ Signature…"}, std::pair{"inline-variable", "Inline C++ Variable…"},
+             std::pair{"inline-function", "Inline C++ Call…"}, std::pair{"extract-variable", "Extract C++ Variable…"},
              std::pair{"extract-constant", "Extract C++ Constant…"}, std::pair{"extract-method", "Extract C++ Method…"},
              std::pair{"extract-field", "Extract C++ Field…"}}) {
         input::ActionSpec action;
@@ -306,6 +311,68 @@ void Workbench::showCppRefactoring(std::string operation) {
         if (!accepted)
             return;
         request.context.newName = name.toStdString();
+    } else if (operation == "edit-signature") {
+        QDialog dialog(m_window);
+        dialog.setWindowTitle(QStringLiteral("Change C++ signature"));
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* explanation = new QLabel(
+            QStringLiteral(
+                "Each row is one parameter in the new order. Existing index is zero based; blank adds a parameter. "
+                "Blank type/name preserves an existing parameter. Omit an old index to remove it. "
+                "New parameters need type, name and an explicit expression inserted at every captured call. "
+                "All captured project declarations, definitions and direct calls are previewed; external callers are "
+                "outside this scope."),
+            &dialog);
+        explanation->setWordWrap(true);
+        layout->addWidget(explanation);
+        auto* reference = new QPlainTextEdit(&dialog);
+        reference->setReadOnly(true);
+        reference->setPlainText(display(selectedText.text().substr(0, 64 * 1024)));
+        reference->setMaximumHeight(140);
+        layout->addWidget(reference);
+        auto* table = new QTableWidget(0, 4, &dialog);
+        table->setHorizontalHeaderLabels({QStringLiteral("Existing index"), QStringLiteral("Type"),
+                                          QStringLiteral("Name"), QStringLiteral("New call expression")});
+        table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        layout->addWidget(table);
+        auto* add = new QPushButton(QStringLiteral("Add parameter row"), &dialog);
+        connect(add, &QPushButton::clicked, &dialog, [table] { table->insertRow(table->rowCount()); });
+        layout->addWidget(add);
+        auto* remove = new QPushButton(QStringLiteral("Remove selected row"), &dialog);
+        connect(remove, &QPushButton::clicked, &dialog, [table] {
+            if (table->currentRow() >= 0)
+                table->removeRow(table->currentRow());
+        });
+        layout->addWidget(remove);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        dialog.resize(900, 450);
+        if (dialog.exec() != QDialog::Accepted)
+            return;
+        request.editParameters = true;
+        const auto cell = [table](int row, int column) {
+            return table->item(row, column) ? table->item(row, column)->text().trimmed() : QString{};
+        };
+        for (int row = 0; row < table->rowCount(); ++row) {
+            lang::CppSignatureParameter parameter;
+            const auto index = cell(row, 0);
+            if (!index.isEmpty()) {
+                bool valid = false;
+                const auto parsed = index.toUInt(&valid);
+                if (!valid) {
+                    QMessageBox::warning(m_window, QStringLiteral("Change signature"),
+                                         QStringLiteral("Existing indices must be nonnegative integers."));
+                    return;
+                }
+                parameter.oldIndex = parsed;
+            }
+            parameter.type = cell(row, 1).toStdString();
+            parameter.name = cell(row, 2).toStdString();
+            parameter.argument = cell(row, 3).toStdString();
+            request.parameters.push_back(std::move(parameter));
+        }
     } else if (operation == "change-signature") {
         bool accepted = false;
         const auto order = QInputDialog::getText(
@@ -359,9 +426,14 @@ void Workbench::showCppRefactoring(std::string operation) {
             dialog->setWindowTitle(display(plan->label));
             auto* layout = new QVBoxLayout(dialog);
             const QString profile =
-                operation == "change-signature"
-                    ? QStringLiteral("Profile: one defined internal non-overloaded free function; permute all existing "
-                                     "arithmetic parameters and side-effect-free direct call arguments.")
+                (operation == "change-signature" || operation == "edit-signature")
+                    ? QStringLiteral(
+                          "Profile: one unique ordinary function or nonvirtual method without bases, across captured "
+                          "project declarations/definitions/direct calls. "
+                          "Reorder, rename, type edits, additions and unused removals are explicit. Defaults, macros, "
+                          "address escapes, overloaded/dependent contexts and effectful existing arguments refuse. "
+                          "Type/add/remove edits intentionally change semantics; external callers are outside the "
+                          "captured scope.")
                 : operation == "inline-function"
                     ? QStringLiteral("Profile: one direct call to an internal arithmetic function with a single pure "
                                      "return expression; every argument must be a non-volatile value or literal.")

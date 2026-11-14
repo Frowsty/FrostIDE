@@ -362,7 +362,7 @@ void LanguageController::inlineSymbol() {
 
 void LanguageController::changeSignature() {
     if (capabilities().clangdTweaks && m_cppAstRefactoring) {
-        m_cppAstRefactoring("change-signature");
+        m_cppAstRefactoring("edit-signature");
         return;
     }
     unavailable(QStringLiteral("Change Signature requires the change signature refactoring (REF-6)"));

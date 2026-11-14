@@ -30,6 +30,21 @@ TEST(CppRefactoringPlan, SerializesExactByteSelectionAndParameterPermutation) {
     ASSERT_EQ(json.find("parameterOrder")->items().size(), 3u);
     EXPECT_EQ(json.find("parameterOrder")->items()[0].asUnsigned(), 2u);
 }
+TEST(CppRefactoringPlan, ExplicitSignatureRowsKeepUserTypesNamesAndNewCallExpressions) {
+    frost::lang::CppRefactoringRequest request;
+    request.operation = "edit-signature";
+    request.editParameters = true;
+    request.parameters = {{1, "long", "amount", {}}, {std::nullopt, "int", "bias", "4"}};
+    const auto json = frost::lang::cppRefactoringRequestJson(request);
+    EXPECT_EQ(json.stringAt("operation"), "edit-signature");
+    ASSERT_EQ(json.find("parameters")->items().size(), 2u);
+    const auto& old = json.find("parameters")->items()[0];
+    EXPECT_EQ(old.find("oldIndex")->asUnsigned(), 1u);
+    EXPECT_EQ(old.stringAt("type"), "long");
+    const auto& added = json.find("parameters")->items()[1];
+    EXPECT_EQ(added.find("oldIndex"), nullptr);
+    EXPECT_EQ(added.stringAt("argument"), "4");
+}
 TEST(CppRefactoringPlan, UnknownOperationsCannotStartArbitraryHelperModes) {
     auto reactor = frost::io::Reactor::create();
     ASSERT_TRUE(reactor);
