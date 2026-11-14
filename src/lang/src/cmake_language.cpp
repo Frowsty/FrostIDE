@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <map>
+#include <set>
 namespace frost::lang {
 namespace {
 bool word(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' || c == ':' || c == '.'; }
@@ -126,14 +127,49 @@ Result<Json> queryCMakeLanguage(const CMakeLanguageInput& input, std::string_vie
 }
 sched::Task<Result<Json>> CMakeLanguageService::request(std::string method, Json params, std::stop_token stop) {
     LockGuard lock(m_mutex);
-    return answer(m_input, std::move(method), std::move(params), stop);
+    return answer(m_scheduler, m_reader, m_input, std::move(method), std::move(params), stop);
 }
 void CMakeLanguageService::setInput(CMakeLanguageInput input) {
     LockGuard lock(m_mutex);
     m_input = std::move(input);
 }
-sched::Task<Result<Json>> CMakeLanguageService::answer(CMakeLanguageInput input, std::string method, Json params,
+sched::Task<Result<Json>> CMakeLanguageService::answer(sched::IScheduler& scheduler, InputReader reader,
+                                                    CMakeLanguageInput input, std::string method, Json params,
                                                     std::stop_token stop) {
+    co_await scheduler.schedule(sched::Lane::Background);
+    const auto cancelled = [&] { return stop.stop_requested() || scheduler.stopToken().stop_requested(); };
+    if (cancelled()) co_return fail(ErrorCode::Cancelled, "CMake input loading cancelled");
+    std::size_t bytes = 0;
+    std::size_t visited = 0;
+    std::set<std::string> seen{documentKey(input.path)};
+    for (const auto& [path, text] : input.inputs) {
+        if (text.size() > kMaxInputBytes || text.size() > kMaxTotalInputBytes - bytes)
+            co_return fail(ErrorCode::OutOfRange, "CMake input snapshot exceeds analysis budget");
+        seen.insert(documentKey(path));
+        bytes += text.size();
+    }
+    for (const auto& [path, snapshot] : input.openInputs) {
+        if (cancelled()) co_return fail(ErrorCode::Cancelled, "CMake input loading cancelled");
+        if (++visited > kMaxInputs || bytes >= kMaxTotalInputBytes) break;
+        if (!seen.insert(documentKey(path)).second) continue;
+        // Open documents remain authoritative even when too large to include in analysis.
+        if (snapshot.size().value() > kMaxInputBytes || snapshot.size().value() > kMaxTotalInputBytes - bytes) continue;
+        auto text = snapshot.text();
+        bytes += text.size();
+        input.inputs.emplace_back(path, std::move(text));
+    }
+    if (input.model && reader) for (const auto& file : input.model->inputs) {
+        if (cancelled()) co_return fail(ErrorCode::Cancelled, "CMake input loading cancelled");
+        if (file.generated || file.external) continue;
+        if (++visited > kMaxInputs || bytes >= kMaxTotalInputBytes) break;
+        if (!seen.insert(documentKey(file.path)).second) continue;
+        const auto limit = std::min(kMaxInputBytes, kMaxTotalInputBytes - bytes);
+        auto text = reader(file.path, limit);
+        if (cancelled()) co_return fail(ErrorCode::Cancelled, "CMake input loading cancelled");
+        if (!text || text->size() > limit) continue;
+        bytes += text->size();
+        input.inputs.emplace_back(file.path, std::move(*text));
+    }
     co_return queryCMakeLanguage(input, method, params, stop);
 }
 std::optional<ServerCapabilities> CMakeLanguageService::serverCapabilities() const {

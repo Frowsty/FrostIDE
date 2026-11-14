@@ -75,7 +75,11 @@ LanguageBridge::LanguageBridge(Workbench& workbench)
     : m_workbench(workbench), m_applier(static_cast<lang::IWorkspaceDocuments&>(*this), workbench.m_services.fs,
                                         lang::PositionEncoding::Utf16) {
     m_server.setJsonServer(m_json);
-    m_cmakeLanguage = std::make_shared<lang::CMakeLanguageService>();
+    // Borrowed services outlive the workbench; its pool drains outstanding requests on shutdown.
+    m_cmakeLanguage = std::make_shared<lang::CMakeLanguageService>(*workbench.m_pool,
+        [fs = &workbench.m_services.fs](std::string_view path, std::size_t limit) {
+            return fs->readFileSnapshot(path, limit);
+        });
     m_server.setCMakeServer(m_cmakeLanguage);
 }
 
@@ -187,17 +191,10 @@ sched::Task<Result<lang::Json>> LanguageBridge::request(std::string method, lang
             input.path = *path;
             for (const auto& [openPath, text] : openDocuments()) {
                 if (lang::documentKey(openPath) == lang::documentKey(*path)) input.source = text;
-                else if (lang::isCMakeSource(openPath)) input.inputs.emplace_back(openPath, text.text());
+                else if (lang::isCMakeSource(openPath)) input.openInputs.emplace_back(openPath, text);
             }
             if (m_workbench.m_cmake) input.model = m_workbench.m_cmake->shownModel();
-            if (input.model) for (const auto& file : input.model->projectInputs()) {
-                if (lang::documentKey(file) == lang::documentKey(*path) ||
-                    std::ranges::any_of(input.inputs, [&](const auto& item) {
-                        return lang::documentKey(item.first) == lang::documentKey(file);
-                    })) continue;
-                if (auto text = m_workbench.m_services.fs.readFile(file)) input.inputs.emplace_back(file, *text);
-            }
-            // Capture the immutable text before a lazy request leaves the GUI thread.
+            // Capture snapshots/model only. Bounded file reads and flattening run on the pool.
             m_cmakeLanguage->setInput(std::move(input));
             return m_cmakeLanguage->request(std::move(method), std::move(params), token);
         }
