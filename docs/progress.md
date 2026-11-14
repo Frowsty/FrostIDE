@@ -3,6 +3,13 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-14: R5/R6 merged; implementation-first continuation
+
+- R5/R6 source was merged and pushed to `main` as `6d101b16` at the user's explicit instruction. Engine R6 source `37cc258b` is published on `codex/r6-contract`; the corpus lock now selects it. The worktree was clean and GitHub's main ref matched the local merge. No build or test ran for the merge.
+- Final combined Windows acceptance remains incomplete. Linux testing was cancelled and waived by the user after 40 passing cases; this is not a full pass. All verification processes were stopped. No new release was built.
+- The user now requests implementation-first progress through the remaining rounds: write tests for later, use source review to assess correctness, commit incrementally and push implementation rounds to main. Builds, feature execution, test runs and verification-runner work remain off. The temporary override is recorded in `CLAUDE.md`; existing tests, budgets and architecture remain intact.
+- Next: recover and finish the existing R7 IDE/engine source, then R8 refactoring transactions and producers. GPT-6.1 Sol agents implement; GPT-6 Astra reviews source. Runtime acceptance is deferred, not passed.
+
 ## 2026-11-14: User-authorized compilation limit removal and continued verification
 
 - The user explicitly instructed that compilation must not be cancelled or failed automatically at 45 minutes because they are using the PC. The active wrapper had already loaded its deadlines into memory and had no live override mechanism. No manual cancellation, debugger patch or fabricated phase transition was performed. Its existing watchdog fired after build step 2,375/3,174; no test phase ran. The completed objects were retained. Final source, cache/tool/SDK, input and owned cleanup checks passed. This failed attempt remains recorded at `C:/FrostWork/builds/r6-engine/runs/linux-full-c905-33a240e1c8cb4839a6663685616167aa/`.
