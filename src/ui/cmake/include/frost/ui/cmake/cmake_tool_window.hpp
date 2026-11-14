@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // CMakeToolWindow: the content of the CMake tool window (ADR 0046), CLion's "CMake" tab: a row with
-// the profile selector, Reload and Stop, a progress row, an error banner, and two tabs: the
-// configure output and the folder's presets. It binds to a CMakeController; the W1 workbench docks
+// the profile selector, Reload and Stop, a progress row, an error banner, and tabs for configure output, presets, File API targets and typed cache edits. It binds to a CMakeController; the W1 workbench docks
 // it with its ToolWindowManager.
 /*
  * Behaviour: each configure clears the output and then streams cmake's lines (status lines from
@@ -21,6 +20,7 @@
  *
  * Children carry object names for tests and styling: cmakeProfiles, cmakeReload, cmakeStop,
  * cmakeProgress, cmakeProgressLabel, cmakeErrorBanner, cmakeTabs, cmakeOutput, cmakePresets.
+ * Cache values become accepted only through a successful configure and new File API reply.
  * Threads: UI thread only. The controller must outlive the window.
  */
 #pragma once
@@ -59,7 +59,11 @@ public:
     // display name).
     [[nodiscard]] QTreeWidget* presets() const noexcept { return m_presets; }
 
+signals:
+    void createKitRequested();
+
 private:
+    void refreshModel();
     void refreshProfiles();
     void refreshProblem(const QString& problem);
     void refreshBusy(bool busy);
@@ -78,6 +82,9 @@ private:
     QTabWidget* m_tabs = nullptr;
     QPlainTextEdit* m_output = nullptr;
     QTreeWidget* m_presets = nullptr;
+    QTreeWidget* m_targets = nullptr;
+    QTreeWidget* m_cache = nullptr;
+    QToolButton* m_applyCache = nullptr;
     bool m_updatingProfiles = false;
 };
 

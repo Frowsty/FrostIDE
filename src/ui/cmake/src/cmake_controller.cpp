@@ -135,6 +135,16 @@ void CMakeController::cancel() {
     }
 }
 
+void CMakeController::applyCache(std::vector<project::CMakeCacheVariable> edits) {
+    if (!m_backend) {
+        setProblem(qtr(kContext, "No CMake folder is open"));
+        return;
+    }
+    auto result = m_backend->configureCache(std::move(edits));
+    if (!result)
+        setProblem(toQString(result.error().message()));
+}
+
 void CMakeController::applyModel(std::shared_ptr<const project::CMakeProject> model,
                                  std::shared_ptr<const project::CMakeViewModel> view) {
     m_model = std::move(model);
