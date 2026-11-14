@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -103,6 +104,15 @@ struct ScreenPos {
     friend constexpr auto operator<=>(const ScreenPos&, const ScreenPos&) = default;
 };
 
+// OSC 133 shell markers, reported only when emitted by the child. Rows are absolute scrollback
+// sequence positions; views must clip marks that scrolled out. No shell command text is executed.
+struct ShellMark {
+    enum class Kind : std::uint8_t { Prompt, Command, Output, Finished };
+    Kind kind = Kind::Prompt;
+    std::uint64_t line = 0;
+    std::optional<int> exitCode{};
+};
+
 // What happened since the last takeEvents().
 struct ScreenEvents {
     bool changed = false;      // Cells, the cursor or a mode changed.
@@ -129,6 +139,9 @@ public:
 
     // --- The grid ---
 
+    // At most 2048 genuine OSC 133 marks; shell-supplied OSC 7 URI is metadata, never a file read.
+    [[nodiscard]] const std::vector<ShellMark>& shellMarks() const noexcept { return m_shellMarks; }
+    [[nodiscard]] const std::string& shellDirectoryUri() const noexcept { return m_shellDirectoryUri; }
     [[nodiscard]] PtySize size() const noexcept { return m_size; }
     [[nodiscard]] int rows() const noexcept { return m_size.rows; }
     [[nodiscard]] int columns() const noexcept { return m_size.columns; }
@@ -188,6 +201,8 @@ private:
     struct Impl;
     friend struct Impl;
 
+    std::vector<ShellMark> m_shellMarks;
+    std::string m_shellDirectoryUri;
     PtySize m_size;
     std::size_t m_scrollbackLimit;
     CursorState m_cursor;
