@@ -53,6 +53,31 @@ std::unique_ptr<GitController> controllerFor(const TempRepo& repo) {
     return controller;
 }
 
+TEST(GitUiE2E, ReentrantReviewCannotSubstituteUnreviewedCheckOrMessage) {
+    FROST_REQUIRE_OFFSCREEN();
+    TempRepo repo("ui-commit-review-snapshot");
+    repo.init();
+    repo.write("a.txt", "initial\n");
+    repo.commitAll("initial");
+    repo.write("a.txt", "changed\n");
+    auto controller = controllerFor(repo);
+    CommitToolWindow window(*controller);
+    window.setMessage(QStringLiteral("reviewed message"));
+    window.setCommitChecks({{.name = "Reviewed version", .executable = repo.runner().gitPath(), .arguments = {"--version"}}});
+    window.setConfirmHandler([&](const QString&, const QString& review) {
+        EXPECT_TRUE(review.contains("Reviewed version"));
+        window.setCommitChecks({{.name = "Unreviewed failing command", .executable = repo.runner().gitPath(),
+            .arguments = {"rev-parse", "--verify", "refs/heads/nonexistent-review-test"}}});
+        window.setMessage(QStringLiteral("unreviewed replacement"));
+        return true;
+    });
+    ASSERT_TRUE(window.commit());
+    ASSERT_TRUE(controller->waitForIdle(kWait));
+    ASSERT_TRUE(controller->lastResult());
+    EXPECT_TRUE(controller->lastResult()->succeeded());
+    EXPECT_EQ(trimmed(repo.git({"log", "-1", "--format=%s"})), "reviewed message");
+}
+
 TEST(GitUiE2E, CommitChecksReviewIsRequiredAndFailureKeepsMessageAndSelection) {
     FROST_REQUIRE_OFFSCREEN();
     TempRepo repo("ui-commit-check");

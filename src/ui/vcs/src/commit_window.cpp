@@ -408,7 +408,12 @@ bool CommitToolWindow::startCommit(bool push) {
     }
     const std::vector<std::string> paths = m_model->checkedPaths();
     const bool amend = m_amend->isChecked();
-    if (message().trimmed().isEmpty()) {
+    const auto approvedChecks = m_checks;
+    const auto approvedMessage = message();
+    const auto confirm = m_confirm;
+    const QPointer<CommitToolWindow> self(this);
+    const QPointer<GitController> controller(m_controller);
+    if (approvedMessage.trimmed().isEmpty()) {
         m_result->setText(tr("Enter a commit message."));
         return false;
     }
@@ -416,21 +421,23 @@ bool CommitToolWindow::startCommit(bool push) {
         m_result->setText(tr("Select the files to commit."));
         return false;
     }
-    if (!m_checks.empty()) {
+    if (!approvedChecks.empty()) {
         QString review = tr("Run these checks in %1 before committing? A failure or changed selected file blocks the commit.\n")
             .arg(qs(m_controller->info().workTree));
-        for (const auto& check : m_checks) {
+        for (const auto& check : approvedChecks) {
             review += "\n" + qs(check.name) + "\n" + qs(check.executable);
             for (const auto& argument : check.arguments) review += "\n    " + qs(argument);
         }
-        const bool approved = m_confirm ? m_confirm(tr("Review Commit Checks"), review)
+        const bool approved = confirm ? confirm(tr("Review Commit Checks"), review)
             : QMessageBox::question(this, tr("Review Commit Checks"), review) == QMessageBox::Yes;
         if (!approved) return false;
     }
+    if (!self || !controller || self->m_controller != controller || self->m_committing || controller->busy())
+        return false;
     m_committing = true;
     m_result->setText(push ? tr("Committing and pushing...") : tr("Committing..."));
     updateButtons();
-    m_controller->commit(paths, message(), amend, push, m_checks, !m_checks.empty());
+    controller->commit(paths, approvedMessage, amend, push, approvedChecks, !approvedChecks.empty());
     return true;
 }
 

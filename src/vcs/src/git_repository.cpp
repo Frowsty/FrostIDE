@@ -484,6 +484,20 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
     std::map<std::string, std::optional<std::string>> checkedFiles;
     std::optional<std::optional<std::string>> checkedIndex;
     std::optional<std::string> checkedHead;
+    std::optional<std::set<std::string>> checkedSelection;
+    const auto expandedSelection = [&](const GitStatus& selectedStatus) -> Result<std::set<std::string>> {
+        std::set<std::string> selected;
+        for (const auto& path : request.paths) {
+            auto relative = relativePath(path);
+            if (!relative) return std::unexpected(std::move(relative.error()));
+            const auto* entry = selectedStatus.find(*relative);
+            if (entry && entry->kind == GitEntryKind::RenamedOrCopied) {
+                selected.insert(entry->path);
+                selected.insert(entry->originalPath);
+            } else selected.insert(std::move(*relative));
+        }
+        return selected;
+    };
     const auto checkFilesUnchanged = [&]() -> Result<void> {
         for (const auto& [path, bytes] : checkedFiles) {
             auto after = m_fs->readFile(path);
@@ -496,9 +510,13 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
     if (!request.checks.empty()) {
         if (!request.checksReviewed)
             return fail(ErrorCode::InvalidArgument, "Review the configured commit-check commands before committing");
-        for (const auto& path : request.paths) {
-            if (auto relative = relativePath(path); !relative)
-                return std::unexpected(std::move(relative.error()));
+        auto selectionStatus = status(control.stop);
+        if (!selectionStatus) return std::unexpected(std::move(selectionStatus.error()));
+        auto selection = expandedSelection(*selectionStatus);
+        if (!selection) return std::unexpected(std::move(selection.error()));
+        checkedSelection = std::move(*selection);
+        for (const auto& relative : *checkedSelection) {
+            const auto path = absolutePath(relative);
             auto bytes = m_fs->readFile(path);
             if (!bytes && bytes.error().code() != ErrorCode::NotFound)
                 return std::unexpected(std::move(bytes.error()));
@@ -553,6 +571,12 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
         if ((!indexAfter && indexAfter.error().code() != ErrorCode::NotFound) ||
             (indexAfter ? std::optional<std::string>(*indexAfter) : std::nullopt) != *checkedIndex)
             return fail(ErrorCode::Busy, "The Git index changed during commit checks; review staged changes again");
+        auto finalStatus = status(control.stop);
+        if (!finalStatus) return std::unexpected(std::move(finalStatus.error()));
+        auto finalSelection = expandedSelection(*finalStatus);
+        if (!finalSelection) return std::unexpected(std::move(finalSelection.error()));
+        if (*finalSelection != *checkedSelection)
+            return fail(ErrorCode::Busy, "Selected rename/copy paths changed during checks; review the commit again");
         if (auto unchanged = checkFilesUnchanged(); !unchanged)
             return std::unexpected(std::move(unchanged.error()));
     }
@@ -663,6 +687,8 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
             addPath(std::move(*relative));
         }
     }
+    if (checkedSelection && std::set<std::string>(paths.begin(), paths.end()) != *checkedSelection)
+        return fail(ErrorCode::Busy, "Selected rename/copy paths changed after checks; review the commit again");
     if (!untracked.empty()) {
         std::vector<std::string> add = {"add", "--"};
         add.insert(add.end(), untracked.begin(), untracked.end());

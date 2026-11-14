@@ -84,6 +84,23 @@ std::string fixturePath(std::string_view relative) {
     return frost::io::normalizePath(std::string(FROST_VCS_FIXTURE_DIR) + "/" + std::string(relative)).value();
 }
 
+TEST(GitCommitChecks, SelectingRenameSourceChecksDestinationBytesToo) {
+    TempRepo repo("commit-check-rename");
+    repo.init();
+    repo.write("old.txt", "initial\n");
+    const auto head = repo.commitAll("initial");
+    repo.git({"mv", "old.txt", "new.txt"});
+    repo.write("new.txt", "changed destination\n");
+    CommitRequest request{.paths = {repo.path("old.txt")}, .message = "rename"};
+    request.checksReviewed = true;
+    request.checks = {{.name = "Changes rename destination", .executable = repo.runner().gitPath(),
+        .arguments = {"restore", "--worktree", "--", "new.txt"}}};
+    auto changed = repo.repository().commit(request);
+    ASSERT_FALSE(changed);
+    EXPECT_EQ(changed.error().code(), ErrorCode::Busy);
+    EXPECT_EQ(trimmed(repo.git({"rev-parse", "HEAD"})), head);
+}
+
 TEST(GitCommitChecks, RequireReviewAndBlockActualFailedCheckWithoutChangingHead) {
     TempRepo repo("commit-checks");
     repo.init();
