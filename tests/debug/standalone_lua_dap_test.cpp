@@ -42,5 +42,22 @@ TEST(StandaloneLuaDap, RejectsMissingRuntimeAndRelativeScriptBeforeStartingAdapt
     auto factory = standaloneLuaAdapterFactory(launcher, "lua-debug");
     EXPECT_FALSE(factory({}));
 }
+
+TEST(StandaloneLuaDap, InstalledAdapterUsesNoArgumentsAndOwnedStdioWithNoInterpreterSubstitution) {
+    io::ScriptedProcessLauncher launcher;
+    const auto adapter = test::workPath("installed-lua-debug/bin/lua-debug");
+    launcher.expect({.expectExecutable = adapter, .launchError = Error(ErrorCode::IoError, "authored start refusal")});
+    auto started = standaloneLuaAdapterFactory(launcher, adapter)({});
+    EXPECT_FALSE(started);
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1U);
+    EXPECT_EQ(launches.front().spec.executable, adapter);
+    EXPECT_TRUE(launches.front().spec.arguments.empty());
+    EXPECT_EQ(launches.front().spec.stdinMode, io::Stdio::Pipe);
+    EXPECT_EQ(launches.front().spec.stdoutMode, io::Stdio::Pipe);
+    EXPECT_EQ(launches.front().spec.stderrMode, io::Stdio::Pipe);
+    EXPECT_TRUE(launches.front().spec.killOnClose);
+}
+
 } // namespace
 } // namespace frost::debug
