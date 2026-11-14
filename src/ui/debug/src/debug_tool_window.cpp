@@ -9,7 +9,9 @@
 #include "frost/debug/msvc_throw.hpp"
 #include "frost/io/path.hpp"
 #include "frost/ui/debug_controller.hpp"
+#include "frost/ui/debug_depth_panel.hpp"
 #include "frost/ui/debug_models.hpp"
+#include "frost/ui/debug_symbols_window.hpp"
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/frost_style.hpp"
 #include "frost/ui/icon_ids.hpp"
@@ -20,6 +22,7 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
+#include <QCompleter>
 #include <QDialogButtonBox>
 #include <QFontDatabase>
 #include <QFormLayout>
@@ -43,8 +46,10 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <charconv>
 #include <format>
+#include <limits>
 
 namespace frost::ui {
 
@@ -64,15 +69,21 @@ QString formatHexDump(const debug::dap::ReadMemoryResult& mem) {
     if (addrStr.starts_with("0x") || addrStr.starts_with("0X")) {
         addrStr.remove_prefix(2);
     }
-    std::from_chars(addrStr.data(), addrStr.data() + addrStr.size(), baseAddr, 16);
+    const auto parsed = std::from_chars(addrStr.data(), addrStr.data() + addrStr.size(), baseAddr, 16);
+    const bool addressKnown = parsed.ec == std::errc{} && parsed.ptr == addrStr.data() + addrStr.size();
 
     const std::string& bytes = mem.decodedBytes;
     if (bytes.empty()) {
-        return QStringLiteral("(0 bytes read at %1)").arg(qs(mem.address));
+        return QStringLiteral("(0 bytes read at %1; %2 unreadable bytes)")
+            .arg(qs(mem.address))
+            .arg(mem.unreadableBytes);
     }
     std::string out;
     for (std::size_t offset = 0; offset < bytes.size(); offset += 16) {
-        out += std::format("0x{:016X} | ", baseAddr + offset);
+        if (addressKnown && baseAddr <= std::numeric_limits<std::uint64_t>::max() - offset)
+            out += std::format("0x{:016X} | ", baseAddr + offset);
+        else
+            out += std::format("{}+{} | ", mem.address.empty() ? "(unknown address)" : mem.address, offset);
         std::string ascii;
         for (std::size_t i = 0; i < 16; ++i) {
             if (offset + i < bytes.size()) {
@@ -86,6 +97,8 @@ QString formatHexDump(const debug::dap::ReadMemoryResult& mem) {
         }
         out += std::format("| {}\n", ascii);
     }
+    if (mem.unreadableBytes > 0)
+        out += std::format("({} unreadable bytes)\n", mem.unreadableBytes);
     return qs(out);
 }
 
@@ -123,9 +136,23 @@ QTreeView* makeVariablesView(QWidget* parent, VariablesModel* model, DebugToolWi
             if (owner != nullptr && !owner->readOnlySession() && model->parentReferenceAt(index) > 0 &&
                 model->isVariableRow(index)) {
                 QAction* setVal = menu.addAction(QStringLiteral("Set Value..."));
+                setVal->setEnabled(owner->canSetValues());
+                setVal->setToolTip(QStringLiteral("Requires debugger support for setting values"));
                 setVal->setShortcut(QKeySequence(Qt::Key_F2));
+                menu.addAction(QStringLiteral("Watch Hardware Access..."), owner,
+                               [owner, model, index] { owner->watchHardwareAccess(model, index); });
                 QObject::connect(setVal, &QAction::triggered, owner,
                                  [owner, view, model, index] { owner->promptSetVariableValue(view, model, index); });
+            }
+            if (owner && !isWatchesView && !model->expressionAt(index).isEmpty()) {
+                const QString expression = model->expressionAt(index);
+                menu.addAction(QStringLiteral("Pin as Watch"), owner,
+                               [owner, expression] { owner->watchesModel()->addWatch(expression); });
+            }
+            if (owner && !model->memoryReferenceAt(index).isEmpty()) {
+                const QString reference = model->memoryReferenceAt(index);
+                menu.addAction(QStringLiteral("View Memory"), owner,
+                               [owner, reference] { owner->inspectMemoryReference(reference); });
             }
             if (isWatchesView && model->isWatchRoot(index)) {
                 const int row = index.row();
@@ -183,13 +210,25 @@ DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
 
     buildBreakpointsTab();
     buildMemoryAndDisassemblyTab();
+    m_tabs->addTab(m_depth = new DebugDepthPanel(controller, m_tabs),
+                   QStringLiteral("Calls, Registers && Watchpoints"));
+    m_tabs->addTab(new DebugSymbolsWindow(controller, m_tabs), QStringLiteral("Modules && Visualizers"));
     wireControllerSignals();
     updateBreakpointsList();
     updateActions();
 }
 
-DebugToolWindow::~DebugToolWindow() = default;
+DebugToolWindow::~DebugToolWindow() {
+    disconnect(&m_controller, nullptr, this, nullptr);
+    m_restoringWatches = true;
+    if (m_watches)
+        m_controller.setPinnedWatches(m_watches->watches());
+}
 bool DebugToolWindow::readOnlySession() const { return m_controller.readOnlySession(); }
+bool DebugToolWindow::canSetValues() const {
+    return m_controller.paused() && !m_controller.readOnlySession() && m_controller.session() &&
+           m_controller.session()->capabilities().supportsSetVariable;
+}
 
 void DebugToolWindow::buildToolbar(QVBoxLayout* layout) {
     m_toolbar = new QToolBar(this);
@@ -230,6 +269,11 @@ void DebugToolWindow::buildThreadsAndVariablesTab() {
     auto* framesLayout = new QVBoxLayout(framesPane);
     framesLayout->setContentsMargins(0, 0, 0, 0);
     m_threads = new QComboBox(framesPane);
+    m_threads->setEditable(true);
+    m_threads->setInsertPolicy(QComboBox::NoInsert);
+    m_threads->setToolTip(QStringLiteral("Search threads by name or ID"));
+    m_threads->completer()->setFilterMode(Qt::MatchContains);
+    m_threads->completer()->setCompletionMode(QCompleter::PopupCompletion);
     framesLayout->addWidget(m_threads);
     m_frames = new FramesModel(m_controller, this);
     m_framesView = new QListView(framesPane);
@@ -387,6 +431,38 @@ void DebugToolWindow::buildMemoryAndDisassemblyTab() {
     topBar->addWidget(m_disassembleButton);
     topBar->addWidget(m_readMemoryButton);
     lowLayout->addLayout(topBar);
+    auto* paging = new QHBoxLayout;
+    auto page = [this, paging, lowPane](const QString& label, bool disassembly, std::int64_t delta) {
+        auto* button = new QPushButton(label, lowPane);
+        paging->addWidget(button);
+        connect(button, &QPushButton::clicked, this, [this, disassembly, delta] {
+            if (!m_controller.paused())
+                return;
+            if (disassembly) {
+                m_instructionOffset =
+                    std::clamp(m_instructionOffset + delta, std::int64_t{-1048576}, std::int64_t{1048576});
+                requestDisassembly();
+            } else {
+                m_memoryOffset = std::clamp(m_memoryOffset + delta, std::int64_t{-16777216}, std::int64_t{16777216});
+                requestMemoryDump();
+            }
+        });
+        connect(&m_controller, &DebugController::stateChanged, button, [this, button, disassembly] {
+            const auto* session = m_controller.session();
+            button->setEnabled(m_controller.paused() && session &&
+                               (disassembly ? session->capabilities().supportsDisassembleRequest
+                                            : session->capabilities().supportsReadMemoryRequest));
+        });
+        const auto* session = m_controller.session();
+        button->setEnabled(m_controller.paused() && session &&
+                           (disassembly ? session->capabilities().supportsDisassembleRequest
+                                        : session->capabilities().supportsReadMemoryRequest));
+    };
+    page(QStringLiteral("Instructions -64"), true, -64);
+    page(QStringLiteral("Instructions +64"), true, 64);
+    page(QStringLiteral("Memory -256 bytes"), false, -256);
+    page(QStringLiteral("Memory +256 bytes"), false, 256);
+    lowLayout->addLayout(paging);
 
     auto* lowSplitter = new QSplitter(Qt::Horizontal, lowPane);
     m_disassemblyTree = new QTreeWidget(lowSplitter);
@@ -415,13 +491,48 @@ void DebugToolWindow::buildMemoryAndDisassemblyTab() {
 
     connect(m_disassembleButton, &QPushButton::clicked, this, &DebugToolWindow::requestDisassembly);
     connect(m_readMemoryButton, &QPushButton::clicked, this, &DebugToolWindow::requestMemoryDump);
+    connect(m_memoryAddressInput, &QLineEdit::textEdited, this, [this] {
+        m_instructionOffset = 0;
+        m_memoryOffset = 0;
+        ++m_disassemblyRequest;
+        ++m_memoryRequest;
+        m_disassemblyTree->clear();
+        m_memoryView->clear();
+        m_disassembledInstructions.clear();
+    });
+    connect(m_disassemblyTree, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* item, int) {
+        if (!m_controller.session() || m_controller.session()->inspectionGeneration() != m_disassemblyEpoch)
+            return;
+        const auto row = item->data(0, Qt::UserRole).toULongLong();
+        if (row < m_disassembledInstructions.size())
+            m_controller.navigateInstruction(m_disassembledInstructions[row]);
+    });
     connect(m_memoryAddressInput, &QLineEdit::returnPressed, this, [this] {
         requestDisassembly();
         requestMemoryDump();
     });
 }
 
+void DebugToolWindow::restorePinnedWatches() {
+    if (m_watches->watches() == m_controller.pinnedWatches())
+        return;
+    m_restoringWatches = true;
+    while (m_watches->rowCount() > 0)
+        m_watches->removeWatch(0);
+    for (const auto& expression : m_controller.pinnedWatches())
+        m_watches->addWatch(expression);
+    m_restoringWatches = false;
+}
+
 void DebugToolWindow::wireControllerSignals() {
+    connect(&m_controller, &DebugController::pinnedWatchesChanged, this, [this] { restorePinnedWatches(); });
+    auto saveWatches = [this](const QModelIndex& parent, int, int) {
+        if (!parent.isValid() && !m_restoringWatches)
+            m_controller.setPinnedWatches(m_watches->watches());
+    };
+    connect(m_watches, &QAbstractItemModel::rowsInserted, this, saveWatches, Qt::QueuedConnection);
+    connect(m_watches, &QAbstractItemModel::rowsRemoved, this, saveWatches, Qt::QueuedConnection);
+    restorePinnedWatches();
     connect(&m_controller, &DebugController::loadedSourceChanged, this,
             [this](const QString& name, const QString& content, int line) {
                 const bool available = !name.isEmpty();
@@ -455,6 +566,17 @@ void DebugToolWindow::wireControllerSignals() {
         }
     });
     connect(&m_controller, &DebugController::frameSelected, this, [this] {
+        ++m_disassemblyRequest;
+        ++m_memoryRequest;
+        m_instructionOffset = 0;
+        m_memoryOffset = 0;
+        m_disassembledInstructions.clear();
+        if (m_memoryAddressInput && m_controller.selectedFrame())
+            m_memoryAddressInput->setText(qs(m_controller.selectedFrame()->instructionPointerReference));
+        if (m_disassemblyTree)
+            m_disassemblyTree->clear();
+        if (m_memoryView)
+            m_memoryView->clear();
         const int row = m_frames->selectedRow();
         if (row >= 0) {
             const QSignalBlocker blocker(m_framesView->selectionModel());
@@ -492,10 +614,25 @@ void DebugToolWindow::updateActions() {
     m_runToCursor->setEnabled(executable);
     m_evaluate->setEnabled(executable);
     if (m_disassembleButton != nullptr) {
-        m_disassembleButton->setEnabled(paused);
+        m_disassembleButton->setEnabled(paused && m_controller.session() &&
+                                        m_controller.session()->capabilities().supportsDisassembleRequest);
+        m_disassembleButton->setToolTip(QStringLiteral("Requires adapter disassembly support"));
     }
     if (m_readMemoryButton != nullptr) {
-        m_readMemoryButton->setEnabled(paused);
+        m_readMemoryButton->setEnabled(paused && m_controller.session() &&
+                                       m_controller.session()->capabilities().supportsReadMemoryRequest);
+        m_readMemoryButton->setToolTip(QStringLiteral("Requires adapter memory-read support"));
+    }
+    if (!paused) {
+        ++m_disassemblyRequest;
+        ++m_memoryRequest;
+        m_disassembledInstructions.clear();
+        if (m_disassemblyTree)
+            m_disassemblyTree->clear();
+        if (m_memoryView)
+            m_memoryView->clear();
+        if (m_memoryAddressInput)
+            m_memoryAddressInput->clear();
     }
     if (live && !paused) {
         m_reason->setText(m_controller.statusText());
@@ -508,9 +645,11 @@ void DebugToolWindow::updateThreads() {
     m_threads->clear();
     int current = -1;
     for (const debug::DebugThread& thread : m_controller.threads()) {
-        const QString name = thread.name.empty()
-                                 ? QStringLiteral("Thread %1").arg(thread.id)
-                                 : QStringLiteral("%1 (%2)").arg(QString::fromStdString(thread.name)).arg(thread.id);
+        QString name = thread.name.empty()
+                           ? QStringLiteral("Thread %1").arg(thread.id)
+                           : QStringLiteral("%1 (%2)").arg(QString::fromStdString(thread.name)).arg(thread.id);
+        if (thread.frozen.has_value())
+            name += *thread.frozen ? QStringLiteral(" [frozen]") : QStringLiteral(" [thawed]");
         m_threads->addItem(name, QVariant::fromValue<qlonglong>(thread.id));
         if (m_controller.selectedThread() == thread.id) {
             current = m_threads->count() - 1;
@@ -631,25 +770,38 @@ void DebugToolWindow::requestDisassembly() {
         return;
     }
     QPointer<DebugToolWindow> self(this);
-    m_controller.disassemble(ref, 64, [self](Result<std::vector<debug::dap::DisassembledInstruction>> res) {
-        if (!self || self->m_disassemblyTree == nullptr) {
-            return;
-        }
-        self->m_disassemblyTree->clear();
-        if (!res) {
-            auto* errItem = new QTreeWidgetItem(self->m_disassemblyTree);
-            errItem->setText(2, qs(res.error().message()));
-            return;
-        }
-        for (const debug::dap::DisassembledInstruction& inst : *res) {
-            auto* item = new QTreeWidgetItem(self->m_disassemblyTree);
-            item->setText(0, qs(inst.address));
-            item->setText(1, qs(inst.instructionBytes));
-            item->setText(2, inst.symbol.empty()
-                                 ? qs(inst.instruction)
-                                 : QStringLiteral("<%1> %2").arg(qs(inst.symbol), qs(inst.instruction)));
-        }
-    });
+    const auto request = ++m_disassemblyRequest;
+    const auto epoch = m_controller.session() ? m_controller.session()->inspectionGeneration() : 0;
+    m_controller.disassemble(
+        ref, 64,
+        [self, request, epoch](Result<std::vector<debug::dap::DisassembledInstruction>> res) {
+            if (!self || self->m_disassemblyRequest != request || self->m_disassemblyTree == nullptr) {
+                return;
+            }
+            self->m_disassemblyTree->clear();
+            self->m_disassembledInstructions.clear();
+            if (!res) {
+                auto* errItem = new QTreeWidgetItem(self->m_disassemblyTree);
+                errItem->setText(2, qs(res.error().message()));
+                return;
+            }
+            self->m_disassembledInstructions = *res;
+            self->m_disassemblyEpoch = epoch;
+            std::size_t row = 0;
+            for (const debug::dap::DisassembledInstruction& inst : *res) {
+                auto* item = new QTreeWidgetItem(self->m_disassemblyTree);
+                item->setData(0, Qt::UserRole, QVariant::fromValue<qulonglong>(row++));
+                item->setToolTip(2, inst.location && inst.line > 0
+                                        ? QStringLiteral("Activate to open instruction source")
+                                        : QStringLiteral("No source location supplied"));
+                item->setText(0, qs(inst.address));
+                item->setText(1, qs(inst.instructionBytes));
+                item->setText(2, inst.symbol.empty()
+                                     ? qs(inst.instruction)
+                                     : QStringLiteral("<%1> %2").arg(qs(inst.symbol), qs(inst.instruction)));
+            }
+        },
+        m_instructionOffset);
 }
 
 void DebugToolWindow::requestMemoryDump() {
@@ -661,24 +813,30 @@ void DebugToolWindow::requestMemoryDump() {
         return;
     }
     QPointer<DebugToolWindow> self(this);
-    m_controller.readMemory(ref, 256, [self](Result<debug::dap::ReadMemoryResult> res) {
-        if (!self || self->m_memoryView == nullptr) {
-            return;
-        }
-        if (!res) {
-            self->m_memoryView->setPlainText(qs(res.error().message()));
-            return;
-        }
-        self->m_memoryView->setPlainText(formatHexDump(*res));
-    });
+    const auto request = ++m_memoryRequest;
+    m_controller.readMemory(
+        ref, 256,
+        [self, request](Result<debug::dap::ReadMemoryResult> res) {
+            if (!self || self->m_memoryRequest != request || self->m_memoryView == nullptr) {
+                return;
+            }
+            if (!res) {
+                self->m_memoryView->setPlainText(qs(res.error().message()));
+                return;
+            }
+            self->m_memoryView->setPlainText(formatHexDump(*res));
+        },
+        m_memoryOffset);
 }
 
 void DebugToolWindow::promptSetVariableValue(QTreeView* view, VariablesModel* model, const QModelIndex& index) {
-    if (m_controller.readOnlySession())
+    if (!canSetValues())
         return;
     if (!m_controller.paused() || model == nullptr || !index.isValid()) {
         return;
     }
+    const auto sessionGeneration = m_controller.sessionGeneration();
+    const auto stopEpoch = m_controller.session()->inspectionGeneration();
     const std::int64_t parentRef = model->parentReferenceAt(index);
     const QString name = model->nameAt(index);
     const QString currentVal = model->valueAt(index);
@@ -702,11 +860,14 @@ void DebugToolWindow::promptSetVariableValue(QTreeView* view, VariablesModel* mo
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
+    if (!canSetValues() || m_controller.sessionGeneration() != sessionGeneration ||
+        m_controller.session()->inspectionGeneration() != stopEpoch)
+        return;
     const QString newValue = valueEdit->text();
     QPointer<VariablesModel> safeModel(model);
-    m_controller.setVariableValue(parentRef, name, newValue, [safeModel, index](Result<debug::dap::Variable> updated) {
+    m_controller.setVariableValue(parentRef, name, newValue, [safeModel](Result<debug::dap::Variable> updated) {
         if (safeModel && updated) {
-            safeModel->updateValueAt(index, qs(updated->value), qs(updated->type));
+            safeModel->reload(); // Refresh child and memory references after a pointer/value change.
         }
     });
 }
@@ -830,6 +991,24 @@ void DebugToolWindow::onFrameActivated(int row) {
     if (id.isValid() && id.toLongLong() >= 0) {
         m_controller.selectFrame(id.toLongLong());
     }
+}
+
+void DebugToolWindow::inspectMemoryReference(const QString& reference) {
+    if (!m_controller.paused() || reference.isEmpty())
+        return;
+    m_instructionOffset = 0;
+    m_memoryOffset = 0;
+    m_memoryAddressInput->setText(reference);
+    if (m_memoryView && m_memoryView->parentWidget())
+        m_tabs->setCurrentWidget(m_memoryView->parentWidget()->parentWidget());
+    requestMemoryDump();
+}
+
+void DebugToolWindow::watchHardwareAccess(VariablesModel* model, const QModelIndex& index) {
+    if (!m_depth || !m_controller.paused() || m_controller.readOnlySession())
+        return;
+    m_depth->chooseVariable(model->parentReferenceAt(index), model->nameAt(index));
+    m_tabs->setCurrentWidget(m_depth);
 }
 
 void DebugToolWindow::copySelectedValue() {

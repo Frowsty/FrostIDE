@@ -7,6 +7,8 @@
 
 #include "frost/debug/lldb_dap.hpp"
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,11 +22,13 @@ struct DbgEngTarget {
     std::vector<std::string> localSymbolPaths;
     // Absolute local minidump path. Nonempty selects a read-only postmortem session, never launch.
     std::string dumpFile;
+    // Explicit live attach; may omit program. Ordinary disconnect detaches this process.
+    std::optional<std::uint32_t> processId;
 };
 
 // Pure validation/serialization: all paths absolute, bounded string lists, no embedded NUL or
-// command separators in debugger path lists. Errors: InvalidArgument; Unsupported (source map).
-// Trust is the caller's.
+// command separators in debugger path lists. Errors: InvalidArgument. SourceMap is already trust-admitted by its
+// constructor. Trust is the caller's.
 [[nodiscard]] Result<rpc::Json> dbgEngDapLaunchArguments(const DbgEngTarget& target);
 // Adapter executable must be absolute and staged by FrostIDE. Stdio is piped; inherited symbol
 // server environment is removed. Launch validation and errors belong to IProcessLauncher.

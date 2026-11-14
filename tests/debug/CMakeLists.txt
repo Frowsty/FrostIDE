@@ -24,11 +24,15 @@ frost_add_test(debug_unit_tests
         dap_client_test.cpp
         dap_private_test.cpp
         dbgeng_dap_test.cpp
+        pinned_watches_test.cpp
+        debug_depth_test.cpp
+        natvis_discovery_test.cpp
         debug_session_test.cpp
         debug_session_multi_test.cpp
         debug_terminate_test.cpp
         debug_session_breakpoints_test.cpp
         lldb_dap_test.cpp
+        gdb_dap_test.cpp
         mono_dap_test.cpp
         msvc_throw_test.cpp
         mono_wire_test.cpp
@@ -188,6 +192,28 @@ add_dependencies(debug_dap_real_tests debug_test_scenarios)
 if(WIN32)
     file(READ "${FROST_SOURCE_DIR}/sdk/sdk.lock.json" _frost_debug_msvc_lock)
     string(JSON _frost_debug_msvc_tools GET "${_frost_debug_msvc_lock}" msvc vcToolsVersion)
+    frost_add_test(debug_natvis_pack_tests
+        SOURCES natvis_pack_real_test.cpp
+        DEPS frost::debug frost::build frost::io
+        LABELS integration dbgeng msvc)
+    target_include_directories(debug_natvis_pack_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(debug_natvis_pack_tests PRIVATE
+        FROST_PINNED_VC_TOOLS="${_frost_debug_msvc_tools}"
+        FROST_DBGENG_ADAPTER_PATH="$<TARGET_FILE:frost-dbgeng-dap>"
+        FROST_VISUALIZER_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/visualizer_types.cpp"
+        FROST_VISUALIZER_PACK="${FROST_SOURCE_DIR}/assets/visualizers/FrostCommon.natvis")
+    add_dependencies(debug_natvis_pack_tests frost-dbgeng-dap)
+    frost_add_test(debug_dbgeng_depth_tests
+        SOURCES dbgeng_native_depth_test.cpp
+        DEPS frost::debug frost::build frost::rpc frost::io frost::core
+        LABELS integration dbgeng msvc
+        TIMEOUT 180)
+    target_include_directories(debug_dbgeng_depth_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(debug_dbgeng_depth_tests PRIVATE
+        FROST_DBGENG_ADAPTER_PATH="$<TARGET_FILE:frost-dbgeng-dap>"
+        FROST_DBGENG_DEPTH_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/dbgeng_native_depth.cpp"
+        FROST_PINNED_VC_TOOLS="${_frost_debug_msvc_tools}")
+    add_dependencies(debug_dbgeng_depth_tests frost-dbgeng-dap)
     frost_add_test(debug_msvc_tests
         SOURCES msvc_debug_test.cpp
         DEPS frost::debug frost::build frost::io
@@ -234,4 +260,19 @@ if(WIN32)
         FROST_CORPUS_FROSTENGINE_PRESET="${_frost_debug_engine_preset}"
         FROST_PINNED_VC_TOOLS="${_frost_debug_vc_tools}"
         FROST_TEST_CMAKE="${CMAKE_COMMAND}")
+endif()
+
+
+# User-installed GDB >=16 with Python/DAP; no downloaded GPL binary. Fails when not provisioned.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    frost_add_test(debug_gdb_tests
+        SOURCES gdb_dap_real_test.cpp
+        DEPS frost::debug frost::project frost::io
+        LABELS integration gdb)
+    target_include_directories(debug_gdb_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(debug_gdb_tests PRIVATE
+        FROST_DEBUGGEE_PATH="$<TARGET_FILE:debug_test_debuggee>"
+        FROST_DEBUGGEE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/debuggee.cpp"
+        FROST_GDB_TRUST_PATH="${CMAKE_CURRENT_BINARY_DIR}/gdb-trusted-roots.txt")
+    add_dependencies(debug_gdb_tests debug_test_debuggee)
 endif()

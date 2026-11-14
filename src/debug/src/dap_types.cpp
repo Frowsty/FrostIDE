@@ -96,6 +96,21 @@ Capabilities mergeCapabilities(Capabilities caps, const rpc::Json& body) {
     mergeFlag(caps.supportsSetVariable, source, "supportsSetVariable");
     mergeFlag(caps.supportsRestartRequest, source, "supportsRestartRequest");
     mergeFlag(caps.supportsDisassembleRequest, source, "supportsDisassembleRequest");
+    mergeFlag(caps.supportsReadMemoryRequest, source, "supportsReadMemoryRequest");
+    mergeFlag(caps.supportsStepInTargetsRequest, source, "supportsStepInTargetsRequest");
+    mergeFlag(caps.supportsDataBreakpoints, source, "supportsDataBreakpoints");
+    mergeFlag(caps.supportsSingleThreadExecutionRequests, source, "supportsSingleThreadExecutionRequests");
+    mergeFlag(caps.supportsValueFormattingOptions, source, "supportsValueFormattingOptions");
+    mergeFlag(caps.frostSupportsThreadFreeze, source, "frostSupportsThreadFreeze");
+    mergeFlag(caps.supportsModulesRequest, source, "supportsModulesRequest");
+    mergeFlag(caps.frostSupportsSymbolControl, source, "frostSupportsSymbolControl");
+    mergeFlag(caps.frostSupportsSourceMap, source, "frostSupportsSourceMap");
+    mergeFlag(caps.frostSupportsNatvisReload, source, "frostSupportsNatvisReload");
+    mergeFlag(caps.frostSupportsRegisters, source, "frostSupportsRegisters");
+    mergeFlag(caps.frostSupportsRawView, source, "frostSupportsRawView");
+    if (const auto value = source.boolAt("frostStructuredNatvis"))
+        caps.frostStructuredNatvis = *value;
+
     if (const rpc::Json* filters = source.find("exceptionBreakpointFilters");
         filters != nullptr && filters->isArray()) {
         caps.exceptionBreakpointFilters = parseExceptionFilters(*filters);
@@ -141,7 +156,9 @@ Breakpoint parseBreakpoint(const rpc::Json& json) {
     return breakpoint;
 }
 
-Thread parseThread(const rpc::Json& json) { return Thread{.id = integer(json, "id"), .name = text(json, "name")}; }
+Thread parseThread(const rpc::Json& json) {
+    return Thread{.id = integer(json, "id"), .name = text(json, "name"), .frozen = json.boolAt("frostFrozen")};
+}
 
 StackFrame parseStackFrame(const rpc::Json& json) {
     StackFrame frame;
@@ -176,7 +193,8 @@ Variable parseVariable(const rpc::Json& json) {
                     .evaluateName = text(json, "evaluateName"),
                     .variablesReference = integer(json, "variablesReference"),
                     .namedVariables = integer(json, "namedVariables"),
-                    .indexedVariables = integer(json, "indexedVariables")};
+                    .indexedVariables = integer(json, "indexedVariables"),
+                    .memoryReference = text(json, "memoryReference")};
 }
 
 Variable parseEvaluateResult(const rpc::Json& body, std::string_view expression) {
@@ -186,7 +204,8 @@ Variable parseEvaluateResult(const rpc::Json& body, std::string_view expression)
                     .evaluateName = std::string(expression),
                     .variablesReference = integer(body, "variablesReference"),
                     .namedVariables = integer(body, "namedVariables"),
-                    .indexedVariables = integer(body, "indexedVariables")};
+                    .indexedVariables = integer(body, "indexedVariables"),
+                    .memoryReference = text(body, "memoryReference")};
 }
 
 StoppedEvent parseStoppedEvent(const rpc::Json& body) {

@@ -27,17 +27,21 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FROST_SOURCE_D
 
 frost_add_library(debug LAYER debug
     SOURCES
+        src/pinned_watches.cpp
         src/breakpoints.cpp
         src/coreclr_dap.cpp
         src/dap_client.cpp
         src/dap_types.cpp
         src/dbgeng_dap.cpp
+        src/natvis_discovery.cpp
         src/debug_session.cpp
         src/debug_session_breakpoints.cpp
         src/debug_session_requests.cpp
         src/debug_session_stops.cpp
         src/fake_debug_adapter.cpp
         src/lldb_dap.cpp
+        src/gdb_dap.cpp
+        src/gdb_transport.cpp
         src/msvc_throw.cpp
         src/mono_dap.cpp
         src/mono_wire.cpp

@@ -118,6 +118,8 @@ struct VariablesModel::Node {
     QString name;
     QString value;
     QString type;
+    QString evaluateName;
+    QString memoryReference;
     bool error = false;
     std::int64_t reference = 0;
     std::int64_t indexed = 0;
@@ -140,6 +142,7 @@ VariablesModel::VariablesModel(DebugController& controller, Mode mode, QObject* 
     : QAbstractItemModel(parent), m_controller(controller), m_mode(mode), m_root(std::make_unique<Node>()) {
     m_root->kind = Node::Kind::Root;
     connect(&m_controller, &DebugController::frameSelected, this, &VariablesModel::reload);
+    connect(&m_controller, &DebugController::valuesFormatChanged, this, &VariablesModel::reload);
     connect(&m_controller, &DebugController::stateChanged, this, [this] {
         if (!m_controller.paused()) {
             ++m_generation;
@@ -273,6 +276,8 @@ void VariablesModel::addWatch(const QString& expression) {
     if (m_mode != Mode::Watches || trimmed.isEmpty()) {
         return;
     }
+    if (std::ranges::any_of(m_root->children, [&](const auto& watch) { return watch->name == trimmed; }))
+        return;
     auto node = std::make_unique<Node>();
     node->kind = Node::Kind::Watch;
     node->name = trimmed;
@@ -281,8 +286,12 @@ void VariablesModel::addWatch(const QString& expression) {
     Node* raw = adopt(std::move(node));
     raw->parent = m_root.get();
     m_root->children.emplace_back(raw);
+    const auto id = raw->id;
+    const QPointer<VariablesModel> self(this);
     endInsertRows();
-    evaluateWatch(*raw);
+    if (self)
+        if (auto* current = self->find(id))
+            self->evaluateWatch(*current);
 }
 
 void VariablesModel::removeWatch(int row) {
@@ -308,6 +317,7 @@ void VariablesModel::evaluateWatch(Node& node) {
     node.fetched = false;
     node.fetching = false;
     node.reference = 0;
+    node.memoryReference.clear();
     if (!m_controller.paused()) {
         node.value = m_controller.debugging() ? QStringLiteral("(the program is running)")
                                               : QStringLiteral("(no debug session)");
@@ -333,6 +343,8 @@ void VariablesModel::evaluateWatch(Node& node) {
         if (result) {
             target->value = QString::fromStdString(result->value);
             target->type = QString::fromStdString(result->type);
+            target->evaluateName = QString::fromStdString(result->evaluateName);
+            target->memoryReference = QString::fromStdString(result->memoryReference);
             target->reference = result->variablesReference;
             target->indexed = result->indexedVariables;
             target->error = false;
@@ -393,6 +405,8 @@ void VariablesModel::addChildren(std::uint64_t id, Result<debug::VariableList> l
             child->name = QString::fromStdString(variable.name);
             child->value = QString::fromStdString(variable.value);
             child->type = QString::fromStdString(variable.type);
+            child->evaluateName = QString::fromStdString(variable.evaluateName);
+            child->memoryReference = QString::fromStdString(variable.memoryReference);
             child->reference = variable.variablesReference;
             child->indexed = variable.indexedVariables;
             rows.push_back(std::move(child));
@@ -433,6 +447,13 @@ bool VariablesModel::isLoadMoreRow(const QModelIndex& index) const {
 
 QString VariablesModel::valueAt(const QModelIndex& index) const {
     return index.isValid() ? nodeFor(index)->value : QString();
+}
+
+QString VariablesModel::expressionAt(const QModelIndex& index) const {
+    return index.isValid() ? nodeFor(index)->evaluateName : QString();
+}
+QString VariablesModel::memoryReferenceAt(const QModelIndex& index) const {
+    return index.isValid() ? nodeFor(index)->memoryReference : QString();
 }
 
 QString VariablesModel::nameAt(const QModelIndex& index) const {

@@ -518,7 +518,7 @@ void DebugSession::State::requestThreads(std::uint64_t gen, std::optional<std::s
         if (const rpc::Json* threads = body->find("threads"); threads != nullptr) {
             for (const rpc::Json& thread : threads->items()) {
                 const dap::Thread parsed = dap::parseThread(thread);
-                list.push_back(DebugThread{parsed.id, parsed.name});
+                list.push_back(DebugThread{parsed.id, parsed.name, parsed.frozen});
             }
         }
         std::optional<std::int64_t> selected;
@@ -651,7 +651,9 @@ void DebugSession::State::framesAnswered(std::int64_t threadId, std::uint64_t ge
 // --- Resuming ---
 
 // Sends `command` for the current thread after switching to Running.
-Result<void> DebugSession::State::resume(const std::string& command) {
+Result<void> DebugSession::State::resume(const std::string& command, rpc::Json extra,
+                                         std::optional<std::uint64_t> expectedGeneration,
+                                         std::optional<std::int64_t> expectedFrame) {
     if (readOnly)
         return fail(ErrorCode::Unsupported, "A dump session cannot execute a process");
     std::int64_t thread = 0;
@@ -664,12 +666,18 @@ Result<void> DebugSession::State::resume(const std::string& command) {
         if (state != DebugState::Stopped) {
             return fail(ErrorCode::Busy, std::format("{} needs a paused program", command));
         }
+        if (expectedGeneration &&
+            (generation != *expectedGeneration || !currentFrame || currentFrame->id != expectedFrame))
+            return fail(ErrorCode::Cancelled, "Step target expired");
         thread = currentThread.value_or(threads.empty() ? 1 : threads.front().id);
         oldStop = stop;
         oldFrames = frames;
         oldFrame = currentFrame;
         state = DebugState::Running;
-        stepInPhase = command == "stepIn" ? StepInPhase::Stepping : StepInPhase::None;
+        stepInPhase =
+            command == "stepIn" && extra.find("targetId") == nullptr && extra.stringAt("granularity") != "instruction"
+                ? StepInPhase::Stepping
+                : StepInPhase::None;
         thunkHops = 0;
         stepInOrigin.reset();
         if (const auto top = frames.find(thread); top != frames.end() && !top->second.frames.empty()) {
@@ -685,7 +693,7 @@ Result<void> DebugSession::State::resume(const std::string& command) {
         if (callbacks.onStateChanged)
             callbacks.onStateChanged(DebugState::Running);
     });
-    send(command, rpc::Json::object().set("threadId", thread),
+    send(command, std::move(extra.set("threadId", thread)),
          [weak = weak(), command, commandGeneration, thread, oldStop = std::move(oldStop),
           oldFrames = std::move(oldFrames), oldFrame = std::move(oldFrame)](Result<rpc::Json> answer) mutable {
              const auto self = weak.lock();

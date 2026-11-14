@@ -130,6 +130,9 @@ struct DebugTarget {
     bool stopOnEntry = false; // Stop before the program's first instruction runs (reason "entry").
 };
 
+// Shared trust admission for native debugger backends; checks before starting any adapter.
+[[nodiscard]] Result<void> validateDebugTargetTrust(const project::TrustStore& trust, const DebugTarget& target);
+
 // The lldb commands of the header comment ("Values on Linux"), for a libstdc++ program. Pure.
 [[nodiscard]] std::vector<std::string> lldbDapLibstdcxxCommands();
 // The lldb command of the header comment ("Stepping on Windows").

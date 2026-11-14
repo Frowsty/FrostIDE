@@ -41,6 +41,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 
 #include <chrono>
@@ -88,10 +89,15 @@ struct DebugControllerHooks {
 
 // Where the controller gets its adapter and services; every pointer must outlive the controller.
 struct DebugControllerOptions {
-    const project::TrustStore* trust = nullptr;    // Required: no session starts without it.
-    io::IFileSystem* fs = nullptr;                 // For lldb-dap discovery and workspace.json.
-    io::IProcessLauncher* launcher = nullptr;      // Starts lldb-dap.
-    std::function<std::string()> lldbDapSetting{}; // tools.lldbDap.path; empty: "".
+    const project::TrustStore* trust = nullptr;          // Required: no session starts without it.
+    io::IFileSystem* fs = nullptr;                       // For lldb-dap discovery and workspace.json.
+    io::IProcessLauncher* launcher = nullptr;            // Starts lldb-dap.
+    std::function<std::string()> lldbDapSetting{};       // tools.lldbDap.path; empty: "".
+    std::function<std::string()> nativeBackendSetting{}; // lldb-dap (default), gdb (Linux), frost-dbgeng (Windows).
+    std::function<std::string()> dbgEngPathSetting{};
+    // GUI-only discovery admits project/dependency/user Natvis files before starting the adapter.
+    std::function<Result<std::vector<std::string>>(const debug::DebugTarget&)> natvisFiles{};
+    std::function<std::string()> gdbSetting{}; // absolute user-installed GDB >=16.
     std::function<std::pair<std::string, std::string>()> sourceMapSetting{};
     // Overrides lldb-dap (tests: the fake-dap double). Empty: lldb-dap through `launcher`.
     debug::AdapterFactory adapterFactory{};
@@ -149,7 +155,8 @@ public:
                                                   rpc::Json arguments, std::string adapterId,
                                                   debug::DebugTargetMode mode = debug::DebugTargetMode::Launch,
                                                   bool readOnly = false,
-                                                  std::function<Result<void>()> launchAdmission = {});
+                                                  std::function<Result<void>()> launchAdmission = {},
+                                                  const std::function<bool()>& ownerAdmission = {});
     [[nodiscard]] bool readOnlySession() const noexcept { return m_session && m_session->readOnly(); }
     // The caller must finish the trusted managed build and verify assembly/PDB/source revisions.
     // Starts the supplied adapter through the same UI and session lifetime as native debugging.
@@ -282,10 +289,25 @@ public:
     using EvaluateDone = std::function<void(Result<debug::dap::Variable>)>;
     using DisassembleDone = std::function<void(Result<std::vector<debug::dap::DisassembledInstruction>>)>;
     using ReadMemoryDone = std::function<void(Result<debug::dap::ReadMemoryResult>)>;
+    using InspectionDone = debug::DebugSession::InspectionDone;
+    std::int64_t requestInspection(std::string command, rpc::Json arguments, InspectionDone done);
     void scopes(std::int64_t frameId, ScopesDone done);
     void variables(std::int64_t reference, std::int64_t start, std::int64_t count, VariablesDone done);
     // Evaluates in the selected frame.
     void evaluate(const QString& expression, const QString& context, EvaluateDone done);
+    [[nodiscard]] const QStringList& pinnedWatches() const noexcept { return m_pinnedWatches; }
+    void setPinnedWatches(const QStringList& expressions);
+    void setRawValues(bool enabled) {
+        m_rawValues = enabled;
+        emit valuesFormatChanged();
+    }
+    [[nodiscard]] const QStringList& visualizers() const noexcept { return m_visualizers; }
+    [[nodiscard]] bool rawValues() const noexcept { return m_rawValues; }
+    void setHexadecimalValues(bool enabled) {
+        m_hexadecimalValues = enabled;
+        emit valuesFormatChanged();
+    }
+    [[nodiscard]] bool hexadecimalValues() const noexcept { return m_hexadecimalValues; }
     void submitConsoleInput(const QString& line);
     void setVariableValue(std::int64_t variablesReference, const QString& name, const QString& value,
                           EvaluateDone done = {});
@@ -294,10 +316,15 @@ public:
     bool setExceptionFilterEnabled(std::string_view filter, bool enabled);
     // Adds a function breakpoint by name. Errors: InvalidArgument (empty, or more than one line).
     [[nodiscard]] Result<debug::BreakpointId> addFunctionBreakpoint(const QString& name);
-    void disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done);
-    void readMemory(const QString& memoryReference, int count, ReadMemoryDone done);
+    bool navigateInstruction(const debug::dap::DisassembledInstruction& instruction);
+    void disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done,
+                     std::int64_t offset = 0);
+    void readMemory(const QString& memoryReference, int count, ReadMemoryDone done, std::int64_t offset = 0);
 
 signals:
+    void valuesFormatChanged();
+    void pinnedWatchesChanged(const QStringList& expressions);
+    void visualizersChanged(const QStringList& paths);
     // The session console's user Stop button, before stop(). Automatic cleanup calls stop directly.
     void userStopRequested();
     // Adapter-confirmed termination, tagged with the session that emitted it.
@@ -351,7 +378,8 @@ private:
     bool validateCoreClrPath(std::string path, std::function<void(DebugController&)> approved);
 
     [[nodiscard]] Result<debug::AdapterFactory> adapterFactory(bool* nativeOsThreadIdsVerified = nullptr,
-                                                               debug::DapProcessOutput output = {});
+                                                               debug::DapProcessOutput output = {},
+                                                               std::string_view backendOverride = {});
     [[nodiscard]] Result<void> startNativeTarget(const debug::DebugTarget& target, PrivateOutput output,
                                                  debug::DapProcessOutput processOutput,
                                                  std::optional<debug::NativeDebugPrivacy> privacy);
@@ -406,6 +434,10 @@ private:
     std::vector<debug::dap::Variable> m_currentFrameVariables;
     std::vector<std::int64_t> m_frameScopeReferences; // The scopes those come from.
     bool m_editorPresentation = true;
+    QStringList m_pinnedWatches;
+    QStringList m_visualizers;
+    bool m_rawValues = false;
+    bool m_hexadecimalValues = false;
     bool m_nativeSession = false; // The session is lldb-dap's (launch or attach).
     bool m_nativeOsThreadIdsVerified = false;
     std::map<std::string, std::string, std::less<>> m_hoverCache;

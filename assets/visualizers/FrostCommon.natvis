@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Original layout-based visualizers. No debugger binaries or third-party visualizer code. -->
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+  <Type Priority="Low" Name="glm::vec&lt;2,*,*&gt;"><DisplayString>({x}, {y})</DisplayString><Expand><Item Name="X">x</Item><Item Name="Y">y</Item></Expand></Type>
+  <Type Priority="Low" Name="glm::vec&lt;3,*,*&gt;"><DisplayString>({x}, {y}, {z})</DisplayString><Expand><Item Name="X">x</Item><Item Name="Y">y</Item><Item Name="Z">z</Item></Expand></Type>
+  <Type Priority="Low" Name="glm::vec&lt;4,*,*&gt;"><DisplayString>({x}, {y}, {z}, {w})</DisplayString><Expand><Item Name="X">x</Item><Item Name="Y">y</Item><Item Name="Z">z</Item><Item Name="W">w</Item></Expand></Type>
+  <Type Priority="Low" Name="glm::qua&lt;*,*&gt;"><DisplayString>({w}; {x}, {y}, {z})</DisplayString><Expand><Item Name="W">w</Item><Item Name="X">x</Item><Item Name="Y">y</Item><Item Name="Z">z</Item></Expand></Type>
+  <Type Priority="Low" Name="ImVec2"><DisplayString>({x}, {y})</DisplayString><Expand><Item Name="X">x</Item><Item Name="Y">y</Item></Expand></Type>
+  <Type Priority="Low" Name="ImVec4"><DisplayString>({x}, {y}, {z}, {w})</DisplayString><Expand><Item Name="X">x</Item><Item Name="Y">y</Item><Item Name="Z">z</Item><Item Name="W">w</Item></Expand></Type>
+</AutoVisualizer>

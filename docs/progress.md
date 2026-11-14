@@ -3,6 +3,14 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-14: R9 debugger implementation integrated; R10 in progress
+
+- Added selectable Linux GDB native DAP with asynchronous version/transport preparation and Windows DbgEng launch/attach selection. The DbgEng adapter now implements conditional/hit/log/exception breakpoints, native value assignment and watchpoints, memory/register/disassembly/modules inspection, symbols/source maps, and thread command receipts. It preserves System32-only loading, read-only dump restrictions and a native-value fallback when the structured model is unavailable.
+- Integrated capability-driven debugger views, register-group expansion, memory/disassembly paging and source navigation, persistent pinned watches, stale-stop/frame guards and final writer trust admission. Native thread commands report actual completion without inventing a persistent frozen-state observation. Exact call-target stepping is offered only by adapters that advertise it.
+- Added bounded project/user/dependency Natvis discovery, original glm/ImVec visualizers, installed-STL/project-engine visualizer discovery, accepted-event-based reload watching, and Modules/symbol/source-map controls. Unsupported structured visualization remains visible; loaded state comes from the adapter. Symbol-server access requires the session's explicit opt-in.
+- GPT-6 Astra source reviews covered the GPT-6.1 Sol implementations and their final integrated API/protocol/build-source joins. Tests were authored for real native launch/attach/watchpoint/value behavior, GDB sessions and visualizer projections, plus focused UI and failure-path regressions. No builds, tests, debugger sessions, WSL or performance runs were executed. The large-PDB latency/RSS target, 20-type visualization oracle and platform acceptance remain unverified; no beta binary was produced.
+- R8 was pushed to `main` at `55b33a50`. Independent R10 implementations now cover CMake configuration/language/debugging, standalone projects, MSBuild properties/logging, solution scale, dependency managers and JSON/run-configuration support; those changes remain on their implementation branches until integrated source review.
+
 ## 2026-11-14: R8 implementation integrated; runtime acceptance deferred
 
 - Implemented the shared refactoring transaction owner for disk edits, dirty buffers, source moves and project membership, with global Undo/Redo, retained native recovery records and retryable journal settlement. A failed dirty-buffer journal leaves the transaction pending; Resume retries durability without applying the text edit twice. Workbench actions publish views and language-service updates after settlement.

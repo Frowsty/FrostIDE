@@ -167,6 +167,7 @@ struct FunctionBreakpointLine {
 struct DebugThread {
     std::int64_t id = 0;
     std::string name;
+    std::optional<bool> frozen;
 
     friend bool operator==(const DebugThread&, const DebugThread&) = default;
 };
@@ -181,7 +182,8 @@ struct DebugFrame {
     std::int64_t line = 0;            // 1-based; 0 without a source position.
     std::int64_t column = 0;
     std::string module;
-    bool subtle = false; // presentationHint "subtle" or "label".
+    std::string instructionPointerReference; // Exact adapter reference for low-level navigation.
+    bool subtle = false;                     // presentationHint "subtle" or "label".
 
     [[nodiscard]] bool hasSource() const noexcept { return (!path.empty() || sourceReference > 0) && line > 0; }
 };
@@ -251,6 +253,8 @@ struct DebugSessionCallbacks {
     std::function<void()> onContinued{};
     // A genuine announced adapter stop, excluding restoration after a refused resume request.
     std::function<void()> onAdapterStopped{};
+    // Actual adapter-reported loaded Natvis paths, never inferred from requested launch options.
+    std::function<void(const std::vector<std::string>&)> onVisualizersChanged{};
 };
 
 // How a session starts (DebugSession::start).
@@ -268,6 +272,8 @@ struct DebugSessionOptions {
     bool privateSession = false; // Native engine bootstrap: protocol diagnostics never contain payloads.
     // Worker-safe exact launch admission, checked by the real DAP writer immediately before launch.
     std::function<Result<void>()> launchAdmission{};
+    // Recheck captured trust roots at the actual writer for symbol/source/visualizer configuration.
+    std::function<Result<void>()> inspectionAdmission{};
 };
 
 /*
@@ -310,6 +316,7 @@ public:
 
     [[nodiscard]] DebugState state() const;
     [[nodiscard]] dap::Capabilities capabilities() const;
+    [[nodiscard]] std::uint64_t inspectionGeneration() const;
     // The last stop; empty while running.
     [[nodiscard]] std::optional<StopInfo> stopInfo() const;
     [[nodiscard]] std::vector<DebugThread> threads() const;
@@ -357,6 +364,19 @@ public:
     [[nodiscard]] Result<void> continueRun();
     [[nodiscard]] Result<void> next();
     [[nodiscard]] Result<void> stepIn();
+    // A target ID must come from stepInTargets for this stop and selected frame.
+    [[nodiscard]] Result<void> stepInstruction(bool into = true);
+    [[nodiscard]] Result<void> stepIntoTarget(std::int64_t targetId);
+    using InspectionDone = std::function<void(Result<rpc::Json>)>;
+    // Capability-gated stopped inspection; references expire on resume, stop or selection change.
+    std::int64_t stepInTargets(InspectionDone done);
+    // Bounded, explicit inspection allowlist; command-specific capabilities still govern admission.
+    std::int64_t requestInspection(std::string command, rpc::Json arguments, InspectionDone done);
+    std::int64_t setThreadFrozen(std::int64_t threadId, bool frozen, InspectionDone done);
+    std::int64_t dataBreakpointInfo(std::int64_t reference, std::string name, InspectionDone done);
+    // Replaces the complete adapter data-breakpoint set, following DAP semantics.
+    std::int64_t setDataBreakpoints(rpc::Json breakpoints, InspectionDone done);
+
     [[nodiscard]] Result<void> stepOut();
     [[nodiscard]] Result<void> pause();
     // Continues to `line` of `path` through a temporary breakpoint (header comment). Errors: as next().
@@ -383,11 +403,12 @@ public:
     // The scopes of frame `frameId`. Returns the request's seq (for cancel), 0 when not sent.
     std::int64_t scopes(std::int64_t frameId, ScopesDone done);
     // The children of `variablesReference`; `count` 0 asks for all, else `start`.. `start + count`.
-    std::int64_t variables(std::int64_t variablesReference, std::int64_t start, std::int64_t count, VariablesDone done);
+    std::int64_t variables(std::int64_t variablesReference, std::int64_t start, std::int64_t count, VariablesDone done,
+                           bool hexadecimal = false, bool raw = false);
     // Evaluates `expression` in `frameId` (none: the global context) for `context` ("watch", "repl",
     // "hover"); the result is a Variable named after the expression.
     std::int64_t evaluate(std::string expression, std::optional<std::int64_t> frameId, std::string context,
-                          EvaluateDone done);
+                          EvaluateDone done, bool hexadecimal = false);
     // Modifies variable `name` inside `variablesReference` via DAP `setVariable`.
     std::int64_t setVariable(std::int64_t variablesReference, std::string_view name, std::string_view value,
                              SetVariableDone done = {});

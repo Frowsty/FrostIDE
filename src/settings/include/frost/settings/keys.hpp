@@ -115,6 +115,9 @@ inline constexpr Key<std::string> toolsClangFormatPath{"tools.clangFormat.path"}
 inline constexpr Key<std::string> toolsClangTidyPath{"tools.clangTidy.path"};
 inline constexpr Key<StringList> toolsClangTidyPlugins{"tools.clangTidy.plugins"};
 inline constexpr Key<std::string> toolsDebuggerPath{"tools.debugger.path"};
+inline constexpr Key<std::string> debugNativeBackend{"debug.nativeBackend"};
+inline constexpr Key<std::string> toolsDbgEngPath{"tools.dbgEng.path"};
+inline constexpr Key<std::string> toolsGdbPath{"tools.gdb.path"};
 inline constexpr Key<std::string> toolsLldbDapPath{"tools.lldbDap.path"};
 inline constexpr Key<std::string> debugSourceMapFrom{"debug.sourceMap.from"};
 inline constexpr Key<std::string> debugSourceMapTo{"debug.sourceMap.to"};

@@ -145,6 +145,8 @@ $binDir = Join-Path $BuildDir "src\app\$Config"
 foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $binDir $name))) { Fail "the build tree has no $name in $binDir" }
 }
+$visualizers = Join-Path $binDir 'visualizers'
+if (-not (Test-Path -LiteralPath (Join-Path $visualizers 'FrostCommon.natvis') -PathType Leaf)) { Fail 'the built visualizer pack is missing' }
 $projectHost = Join-Path $binDir 'project-host'
 foreach ($name in @('ProjectHostVsProbe.exe', 'ProjectHostVsProbe.exe.config')) {
     if (-not (Test-Path -LiteralPath (Join-Path $projectHost $name))) { Fail "the build tree has no ProjectHost $name" }
@@ -272,6 +274,12 @@ foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crash
 if ($asanRuntime) {
     Copy-Item -LiteralPath $asanRuntime -Destination $Destination
 }
+
+$stagedVisualizers = Join-Path $Destination 'visualizers'
+New-Item -ItemType Directory -Force -Path $stagedVisualizers | Out-Null
+Copy-Item -LiteralPath (Join-Path $visualizers 'FrostCommon.natvis') -Destination $stagedVisualizers
+if ((Get-FileHash -LiteralPath (Join-Path $visualizers 'FrostCommon.natvis')).Hash -ne
+    (Get-FileHash -LiteralPath (Join-Path $stagedVisualizers 'FrostCommon.natvis')).Hash) { Fail 'the staged visualizer pack differs from the build output' }
 $projectHostDestination = Join-Path $Destination 'project-host'
 New-Item -ItemType Directory -Force -Path $projectHostDestination | Out-Null
 foreach ($name in @('ProjectHostVsProbe.exe', 'ProjectHostVsProbe.exe.config')) {

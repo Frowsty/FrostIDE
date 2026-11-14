@@ -8,8 +8,10 @@
 
 frost_add_library(ui_debug LAYER ui
     SOURCES
+        src/debug_depth_panel.cpp
         src/debug_actions.cpp
         src/debug_controller.cpp
+        src/debug_controller_native.cpp
         src/debug_controller_actions.cpp
         src/debug_models.cpp
         src/debug_retirement.cpp
@@ -17,6 +19,7 @@ frost_add_library(ui_debug LAYER ui
         src/debug_sessions_window.cpp
         src/mixed_debug_window.cpp
         src/debug_tool_window.cpp
+        src/debug_symbols_window.cpp
     DEPS frost::ui_run frost::ui_editor frost::ui_shell frost::debug frost::build frost::input frost::core
     THIRD_PARTY Qt6::Widgets)
 # The Q_OBJECT classes live in public headers; moc runs on them through AUTOMOC.
