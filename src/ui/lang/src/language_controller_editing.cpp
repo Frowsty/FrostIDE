@@ -185,12 +185,17 @@ void LanguageController::showIntentions() {
                     preferred.push_back(action.preferred);
                     m_choiceActions.emplace_back([this, path, requestedSnapshot, title = qs(action.title),
                                                   edit = std::move(action.edit), cmd = std::move(action.commandName),
-                                                  args = std::move(action.commandArguments)]() mutable {
+                                                  args = std::move(action.commandArguments),
+                                                  disabled = std::move(action.disabledReason)]() mutable {
                         const auto currentSnapshot = m_services.host.snapshot();
                         if (!hasDocument() || m_services.host.documentPath() != path || !requestedSnapshot ||
                             !currentSnapshot || !currentSnapshot->sharesStorageWith(*requestedSnapshot) ||
                             currentSnapshot->version() != requestedSnapshot->version()) {
                             emit statusMessage(QStringLiteral("The document changed; request the action again"));
+                            return;
+                        }
+                        if (!disabled.empty()) {
+                            report(Error(ErrorCode::Unsupported, disabled), title.toStdString());
                             return;
                         }
                         if (!edit.empty()) {

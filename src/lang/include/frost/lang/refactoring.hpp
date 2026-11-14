@@ -58,12 +58,14 @@ struct CodeActionItem {
     WorkspaceEdit edit;
     std::string commandName;
     std::vector<Json> commandArguments;
+    std::string disabledReason; // Actual server refusal or unsupported resource operation; never partially applied.
 };
 
 // A diagnostic as LSP sends it (range, severity, code, source, message), for codeAction's context.
 [[nodiscard]] Json diagnosticToJson(const LiveDiagnostic& diagnostic);
 
-// The code actions of an answer (see the header comment for which are kept and their order).
+// The code actions of an answer (see the header comment for their order). Unsupported resource
+// edits remain visible with disabledReason, never a partially decoded/applicable text action.
 [[nodiscard]] std::vector<CodeActionItem> parseCodeActions(const Json& json);
 
 // textDocument/codeAction for `range` with `diagnostics` (those overlapping the range).
@@ -71,6 +73,16 @@ struct CodeActionItem {
 [[nodiscard]] sched::Task<Result<std::vector<CodeActionItem>>>
 requestCodeActions(ILspRequester& server, std::string path, LspRange range, std::vector<LiveDiagnostic> diagnostics,
                    std::stop_token token = {});
+struct ScopeFixes {
+    WorkspaceEdit edit;
+    std::vector<std::string> chosenActions;
+    std::vector<std::string> unresolved;
+};
+// Caller captures all scope before-images and server/document versions BEFORE this request.
+// Chooses only unique or uniquely preferred direct quickfix edits. Ambiguous fixes, commands and
+// unsupported resources remain unresolved; conflicting ranges/versions fail the complete union.
+[[nodiscard]] sched::Task<Result<ScopeFixes>>
+requestFixesInScope(ILspRequester& server, std::vector<FileDiagnostics> scope, std::stop_token token = {});
 
 // workspace/executeCommand for `command` with `arguments`. Errors: InvalidArgument (empty command),
 // request's.

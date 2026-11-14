@@ -151,7 +151,8 @@ void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, std::
             request.context.overlays.push_back({path, view->editor().document().text().text()});
     }
     capture->request = std::move(request);
-    capture->plan.label = "C++ " + capture->request.operation;
+    capture->plan.label = capture->request.operation == "change-signature" ? "C++ Reorder Parameters"
+                                                                           : "C++ " + capture->request.operation;
     capture->database = database->file;
     capture->trustRevision = permission.revision;
     m_cppRenameTrustRevision = permission.revision;
@@ -244,7 +245,7 @@ void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, std::
 
 void Workbench::registerCppRefactoringActions() {
     for (const auto& [operation, label] : std::array{
-             std::pair{"change-signature", "Change C++ Signature…"},
+             std::pair{"change-signature", "Reorder C++ Parameters…"},
              std::pair{"inline-variable", "Inline C++ Variable…"}, std::pair{"inline-function", "Inline C++ Call…"},
              std::pair{"extract-variable", "Extract C++ Variable…"},
              std::pair{"extract-constant", "Extract C++ Constant…"}, std::pair{"extract-method", "Extract C++ Method…"},
@@ -307,7 +308,7 @@ void Workbench::showCppRefactoring(std::string operation) {
     } else if (operation == "change-signature") {
         bool accepted = false;
         const auto order = QInputDialog::getText(
-            m_window, QStringLiteral("Change signature"),
+            m_window, QStringLiteral("Reorder parameters"),
             QStringLiteral("Existing parameter indices in new order (zero based, comma separated):"), QLineEdit::Normal,
             {}, &accepted);
         if (!accepted)
@@ -316,7 +317,7 @@ void Workbench::showCppRefactoring(std::string operation) {
             bool valid = false;
             const auto index = part.trimmed().toUInt(&valid);
             if (!valid) {
-                QMessageBox::warning(m_window, QStringLiteral("Change signature"),
+                QMessageBox::warning(m_window, QStringLiteral("Reorder parameters"),
                                      QStringLiteral("Enter a complete numeric permutation."));
                 return;
             }

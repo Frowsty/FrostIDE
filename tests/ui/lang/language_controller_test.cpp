@@ -1482,6 +1482,47 @@ TEST(LanguageControllerRefactoring, MoveAndSafeDeleteDispatchToTheAppTransaction
     EXPECT_TRUE(rig.applier.edits.empty());
     EXPECT_EQ(host.undoSteps, 0);
 }
+TEST(LanguageControllerRefactoring, ConversionsShowOnlyActualApplicableProviderActions) {
+    FeatureServer server;
+    const auto path = workPath("main.cpp");
+    server.on("textDocument/codeAction", [&](const Json&) {
+        return Json::array({tweakAction(path, "SwapBinaryOperands", "Swap operands to +"),
+                            tweakAction(path, "ExtractVariable", "Extract subexpression to variable")});
+    });
+    server.on("workspace/executeCommand", [](const Json&) { return Json{}; });
+    FakeHost host("int f(int a,int b){return a+b;}", path);
+    Rig rig(server, host);
+    unsigned captures = 0;
+    rig.controller.setCppSemanticEditFactory([&]() -> frost::Result<LanguageController::SemanticApply> {
+        ++captures;
+        return LanguageController::SemanticApply{[](const fl::WorkspaceEdit&) -> frost::Result<void> { return {}; }};
+    });
+    rig.controller.convertCode();
+    auto& choice = rig.controller.choicePopup();
+    ASSERT_TRUE(pumpUntil([&] { return choice.isVisible(); }));
+    ASSERT_EQ(choice.list()->count(), 1);
+    EXPECT_EQ(choice.list()->item(0)->text(), QStringLiteral("Swap operands to +"));
+    EXPECT_EQ(captures, 1u);
+    emit choice.chosen(0);
+    ASSERT_TRUE(pumpUntil([&] { return server.paramsOf("workspace/executeCommand").size() == 1; }));
+    EXPECT_EQ(server.paramsOf("workspace/executeCommand")[0].find("arguments")->items()[0].stringAt("tweakID"),
+              "SwapBinaryOperands");
+    EXPECT_TRUE(rig.applier.edits.empty());
+}
+TEST(LanguageControllerRefactoring, PublishedAndModuleFixScopeHaveDifferentExplicitOwners) {
+    FeatureServer server;
+    FakeHost host("int main(){return 0;}", workPath("main.cpp"));
+    Rig rig(server, host);
+    std::vector<std::string> operations;
+    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(operation); });
+    unsigned published = 0;
+    rig.controller.setCppPublishedScopeFix([&] { ++published; });
+    rig.controller.fixPublishedDiagnostics();
+    rig.controller.fixInScope();
+    EXPECT_EQ(published, 1u);
+    EXPECT_EQ(operations, (std::vector<std::string>{"fix-in-scope"}));
+    EXPECT_TRUE(rig.applier.edits.empty());
+}
 
 TEST(LanguageControllerRefactoring, RefactorThisListsRenameThenServerActionsInOrder) {
     FeatureServer server;

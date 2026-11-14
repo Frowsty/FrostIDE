@@ -184,6 +184,11 @@ public:
     void extractMethod();
     void inlineSymbol();
     void changeSignature();
+    void convertCode();
+    void createFromUsage();
+    void fixPublishedDiagnostics();
+    void fixInScope();
+    void setCppPublishedScopeFix(std::function<void()> handler) { m_cppPublishedScopeFix = std::move(handler); }
     void safeDelete();
     void moveSymbol();
     void copySymbol();
@@ -310,6 +315,7 @@ private:
     void runClangdTweak(std::string_view tweakId, const QString& label, const QString& none);
     // A server code action: its edit through the applier, then its command on the server.
     void runCodeAction(::frost::lang::CodeActionItem action, std::shared_ptr<SemanticApply> semantic = {});
+    void showProviderTransformations(bool creation);
     // A command without a correct engine for the active document: `reason` names the owning epic.
     void unavailable(const QString& reason);
     // `none` plus why the server may have found nothing (ServerReadiness).
@@ -323,6 +329,7 @@ private:
     LanguageServices m_services;
     std::function<void(std::string)> m_cppAstRefactoring;
     SemanticBegin m_cppSemanticBegin;
+    std::function<void()> m_cppPublishedScopeFix;
     std::atomic<std::shared_ptr<SemanticApply>> m_cppSemanticApply;
     bool m_cppSemanticCommand = false; // GUI-thread serialization until the terminal command response.
     std::unique_ptr<CompletionPopup> m_completion;
