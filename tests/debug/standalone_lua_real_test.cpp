@@ -84,6 +84,30 @@ TEST(StandaloneLuaReal, PinnedClangInterpreterRunsScriptAndActualInputEvaluatesI
     EXPECT_NE(evaluated.out.find("REAL_REPL_VALUE"), std::string::npos);
     EXPECT_NE(evaluated.out.find("42"), std::string::npos);
 }
+TEST(StandaloneLuaReal, UnicodeScriptAndRequiredModuleUseSelectedInterpreter) {
+    auto& fs = io::realFileSystem();
+    ASSERT_TRUE(io::isAbsolutePath(FROST_TEST_LUA_INTERPRETER));
+    ASSERT_TRUE(fs.status(FROST_TEST_LUA_INTERPRETER));
+    frost::test::ScratchDir scratch("lua-unicode");
+    const auto directory = scratch.join("räksmörgås-日本語");
+    ASSERT_TRUE(fs.createDirectories(directory));
+    const auto module = directory + "/modul_å.lua";
+    const auto script = directory + "/test_日本語.lua";
+    ASSERT_TRUE(fs.writeFileAtomic(module, "return 42\n"));
+    ASSERT_TRUE(fs.writeFileAtomic(script, "assert(require('modul_å') == 42); print('UNICODE_MODULE_OK', arg[1])\n"));
+    auto config = scriptConfiguration(directory);
+    config.target = script;
+    config.arguments = {"värde-日本語"};
+    auto manager = run::RunManager::create(io::realProcessLauncher());
+    frost::test::RunCollector collector;
+    ASSERT_TRUE(manager->start(config, collector.handlers()));
+    auto result = collector.waitFinished();
+    ASSERT_TRUE(result.result);
+    EXPECT_FALSE(result.result->error);
+    EXPECT_EQ(result.result->exitCode, 0);
+    EXPECT_NE(result.out.find("UNICODE_MODULE_OK"), std::string::npos);
+    EXPECT_NE(result.out.find("värde-日本語"), std::string::npos);
+}
 TEST(StandaloneLuaReal, SameInterpreterBreakpointsLocalsUpvaluesTablesMutationStepsAndNewCoroutine) {
     ASSERT_TRUE(io::isAbsolutePath(FROST_TEST_LUA_INTERPRETER));
     ASSERT_TRUE(io::isAbsolutePath(FROST_TEST_LUA_DEBUG_ADAPTER))
