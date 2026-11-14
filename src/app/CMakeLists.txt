@@ -152,6 +152,7 @@ frost_add_library(app LAYER app
         src/workbench_cpp_published_fixes.cpp
         src/workbench_save_actions.cpp
         src/workbench_lua.cpp
+        src/workbench_lua_refactoring.cpp
         src/workbench_inspection.cpp
         src/workbench_managed.cpp
         src/managed_debug_preparation.cpp

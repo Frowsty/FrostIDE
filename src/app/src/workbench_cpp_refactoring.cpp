@@ -474,7 +474,7 @@ bool Workbench::previewCppRefactoring(const document::RefactoringPlan& plan) {
     QDialog dialog(m_window);
     dialog.setWindowTitle(display(plan.label));
     auto* layout = new QVBoxLayout(&dialog);
-    layout->addWidget(new QLabel(QStringLiteral("Actual clangd WorkspaceEdit. Apply is atomic and rechecks captured "
+    layout->addWidget(new QLabel(QStringLiteral("Captured source proposal. Apply is atomic and rechecks captured "
                                                 "before-images. Preview images are capped at 1 MiB."),
                                  &dialog));
     auto* tabs = new QTabWidget(&dialog);
