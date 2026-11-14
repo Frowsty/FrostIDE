@@ -145,6 +145,9 @@ struct InspectionRequest {
     std::vector<std::string> extraArgs;
     std::chrono::milliseconds timeout{120'000};
     std::stop_token stopToken{};
+    // Optional fresh caller-owned output path. The tool exports replacements only, never -fix.
+    // Caller captures source images before execution and decodes the actual YAML separately.
+    std::string exportFixesPath;
 };
 
 struct InspectionReport {
