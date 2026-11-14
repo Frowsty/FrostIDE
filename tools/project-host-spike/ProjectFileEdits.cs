@@ -58,6 +58,8 @@ sealed class FileEditRequest
     public string[] RenamedFrom = new string[0];
     public string[] RenamedTo = new string[0];
     public bool BeforeFileMove;
+    public bool BeforeFileCreate;
+    public bool PlanningBeforeFiles { get { return BeforeFileMove || BeforeFileCreate; } }
     public bool Adding { get { return Added.Length != 0; } }
     // The files the project lists now and must list exactly once (Remove, RenameFrom).
     public IEnumerable<string> Existing { get { return Removed.Concat(RenamedFrom); } }
@@ -121,6 +123,11 @@ static class ProjectFileEdits
         if (edit.BeforeFileMove && (edit.RenamedFrom.Length == 0 ||
             (request.TryGetValue("Commit", out commit) && commit == "true")))
             throw new InvalidOperationException("BeforeFileMove requires a non-committing rename plan");
+        string beforeCreate;
+        edit.BeforeFileCreate = request.TryGetValue("BeforeFileCreate", out beforeCreate) && beforeCreate == "true";
+        if (edit.BeforeFileCreate && (edit.BeforeFileMove || edit.Added.Length == 0 || edit.Added.Length > 64 || edit.Removed.Length != 0 ||
+            edit.RenamedFrom.Length != 0 || (request.TryGetValue("Commit", out commit) && commit == "true")))
+            throw new InvalidOperationException("BeforeFileCreate requires an exclusive non-committing AddFiles plan");
         string filter;
         if (request.TryGetValue("Filter", out filter) && filter != null)
         {
@@ -634,6 +641,8 @@ static class ProjectFileEdits
                     { path = edit.RenamedTo[i]; break; }
             result.Add(item.ItemType + "\u0001" + path);
         }
+        if (renamed && edit.BeforeFileCreate)
+            foreach (string path in edit.Added) result.Add(ItemTypeFor(path) + "\u0001" + path);
         result.Sort(StringComparer.OrdinalIgnoreCase);
         return result;
     }
@@ -687,8 +696,11 @@ static class ProjectFileEdits
             fences.Add(TransactionProbe.FenceEvaluation(rootPath, edit.ProjectPath));
             foreach (string file in edit.Incoming)
             {
-                if (edit.BeforeFileMove)
+                if (edit.PlanningBeforeFiles)
                 {
+                    if (edit.BeforeFileCreate && (!file.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) ||
+                        !Directory.Exists(Path.GetDirectoryName(file))))
+                        throw new InvalidOperationException("Generated source needs an existing directory inside the trusted root");
                     if (File.Exists(file) || Directory.Exists(file))
                         throw new InvalidOperationException("The rename destination already exists: " + file);
                     continue;
@@ -709,7 +721,7 @@ static class ProjectFileEdits
                         fences.Add(TransactionProbe.FenceEvaluation(rootPath, file));
                 }
             byte[] snapshot = File.ReadAllBytes(edit.ProjectPath);
-            if (edit.BeforeFileMove && snapshot.Length > 8 * 1024 * 1024)
+            if (edit.PlanningBeforeFiles && snapshot.Length > 8 * 1024 * 1024)
                 throw new InvalidOperationException("Project exceeds the plan input limit");
             string environment = EnvironmentFingerprint.Current();
             string[] configurations;
@@ -764,7 +776,7 @@ static class ProjectFileEdits
                 string filtersPath = edit.ProjectPath + ".filters";
                 byte[] filters = edit.Properties.Count == 0 && File.Exists(filtersPath) ? File.ReadAllBytes(filtersPath) : null;
                 byte[] filtersAfter = filters == null ? null : Plan(filters, edit, true);
-                if (edit.BeforeFileMove)
+                if (edit.PlanningBeforeFiles)
                 {
                     if (filters != null && filters.Length > 8 * 1024 * 1024)
                         throw new InvalidOperationException("Filters exceed the plan input limit");
@@ -790,7 +802,7 @@ static class ProjectFileEdits
                         Entries = entries.ToArray()
                     }, digest => approve(transactionId, digest));
                 }
-                if (!edit.BeforeFileMove)
+                if (!edit.PlanningBeforeFiles)
                     return new { Items = (object)null, Error = (string)null, Edit = new {
                         Project = Convert.ToBase64String(projectAfter),
                         Filters = filtersAfter == null ? null : Convert.ToBase64String(filtersAfter),
@@ -807,12 +819,12 @@ static class ProjectFileEdits
                     if (planBytes > 36 * 1024 * 1024) throw new InvalidOperationException("Combined project plan inputs exceed the publication limit");
                     return new { Path = pair.Key, Before = Convert.ToBase64String(content) };
                 }).ToArray();
-                if (edit.BeforeFileMove && (!snapshot.SequenceEqual(File.ReadAllBytes(edit.ProjectPath)) ||
+                if (edit.PlanningBeforeFiles && (!snapshot.SequenceEqual(File.ReadAllBytes(edit.ProjectPath)) ||
                     (filters == null ? File.Exists(filtersPath) : !File.Exists(filtersPath) || !filters.SequenceEqual(File.ReadAllBytes(filtersPath))) ||
                     environment != EnvironmentFingerprint.Current()))
                     throw new InvalidOperationException("Project inputs changed before plan publication");
                 return new { Items = (object)null, Error = (string)null, Edit = new {
-                    PlanVersion = 1, Mode = edit.BeforeFileMove ? "BeforeFileMoveRename" : "LegacyEdit",
+                    PlanVersion = 1, Mode = edit.BeforeFileCreate ? "BeforeFileCreateAdd" : "BeforeFileMoveRename",
                     ProjectPath = edit.ProjectPath, ProjectBefore = Convert.ToBase64String(snapshot),
                     FiltersBefore = filters == null ? null : Convert.ToBase64String(filters), InputBytes = inputBytes,
                     Project = Convert.ToBase64String(projectAfter),

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Provenance-bound, byte-preserving CMake membership planning; no filesystem writes.
 #include "frost/project/cmake_membership.hpp"
+#include "frost/project/generated_sources.hpp"
 
 #include "frost/io/path.hpp"
 #include "frost/project/cmake_syntax.hpp"
@@ -105,6 +106,17 @@ bool safeGeneratedCommands(const std::vector<CMakeSyntaxCommand>& commands) {
             return false;
     }
     return true;
+}
+
+bool languageStandardSetting(const CMakeSyntaxCommand& command) {
+    if(command.name!="set" || command.arguments.size()!=2 || !command.arguments[0].isLiteral || !command.arguments[1].isLiteral) return false;
+    const auto& name=command.arguments[0].literal;
+    const auto& value=command.arguments[1].literal;
+    if(name=="CMAKE_CXX_STANDARD" || name=="CMAKE_C_STANDARD")
+        return value=="98" || value=="11" || value=="14" || value=="17" || value=="20" || value=="23" || value=="26" || value=="90" || value=="99";
+    if(name=="CMAKE_CXX_STANDARD_REQUIRED" || name=="CMAKE_CXX_EXTENSIONS" || name=="CMAKE_C_STANDARD_REQUIRED" || name=="CMAKE_C_EXTENSIONS")
+        return value=="ON" || value=="OFF" || value=="TRUE" || value=="FALSE" || value=="1" || value=="0";
+    return false;
 }
 
 Result<void> validateInvocationGraph(const CMakeProject& model, std::span<const CMakeInputSnapshot> inputs) {
@@ -408,7 +420,7 @@ Result<CMakeMembershipPlan> planCMakeMembership(const CMakeProject& model, std::
                 command.name == "add_subdirectory" || command.name == "if" || command.name == "elseif" ||
                 command.name == "else" || command.name == "endif" || command.name == "target_include_directories" ||
                 command.name == "target_compile_definitions" || command.name == "target_compile_options" ||
-                command.name == "target_compile_features";
+                command.name == "target_compile_features" || languageStandardSetting(command);
             if (!sourceCommand) {
                 if (!safeOther)
                     return fail(ErrorCode::Unsupported, "Cannot prove source ownership through this command");
@@ -733,5 +745,77 @@ Result<std::vector<CMakeMembershipPlan>> planCMakeSourceRenameAllTargets(const C
         result.push_back(std::move(plan));
     }
     return result;
+}
+Result<CMakeMembershipPlan> planCMakeTemplateTarget(const CMakeProject& model, std::string_view name,
+    bool library, std::span<const std::string> paths, std::span<const CMakeInputSnapshot> inputs) {
+    if (name.empty() || name.size()>128 || paths.empty() || paths.size()>64 || !model.inputsAvailable || !model.cacheAvailable)
+        return fail(ErrorCode::InvalidArgument,"Select a configured CMake project and a bounded target template");
+    for (char c:name) if (!((c>='a'&&c<='z') || (c>='A'&&c<='Z') || (c>='0'&&c<='9') || c=='_'))
+        return fail(ErrorCode::InvalidArgument,"Template target names use letters, digits and underscores");
+    if (model.findTarget(name)) return fail(ErrorCode::AlreadyExists,"A configured target already has that name");
+    std::vector<std::string> required;
+    for (const auto& file:model.inputs) if(!file.cmake) {
+        if(file.external || (file.generated && !knownGeneratedInput(model,file))) return fail(ErrorCode::Unsupported,"Uncaptured external CMake input");
+        if(std::ranges::none_of(required,[&](const auto& path){return equalPath(path,file.path);})) required.push_back(file.path);
+    }
+    if(required.size()!=inputs.size() || inputs.size()>512) return fail(ErrorCode::Busy,"Capture the complete current CMake input graph");
+    for(const auto& path:required) if(std::ranges::count_if(inputs,[&](const auto& input){return equalPath(input.path,path);})!=1)
+        return fail(ErrorCode::Busy,"Missing or duplicate CMake input snapshot");
+    if(auto graph=validateInvocationGraph(model,inputs);!graph) return std::unexpected(graph.error());
+    std::vector<std::string> declared;
+    const CMakeInputSnapshot* root=nullptr;
+    const auto rootPath=io::joinPath(model.sourceDirectory,"CMakeLists.txt");
+    if(!rootPath) return std::unexpected(rootPath.error());
+    for(const auto& input:inputs) {
+        if(input.contents.size()>8*1024*1024) return fail(ErrorCode::OutOfRange,"CMake template input limit exceeded");
+        auto commands=scanCMakeSyntax(input.contents); if(!commands) return std::unexpected(commands.error());
+        const auto descriptor=std::ranges::find_if(model.inputs,[&](const auto& file){return equalPath(file.path,input.path);});
+        if(descriptor!=model.inputs.end() && descriptor->generated) {
+            if(!safeGeneratedCommands(*commands)) return fail(ErrorCode::Unsupported,"Unmodeled generated compiler input");
+            continue;
+        }
+        if(equalPath(input.path,*rootPath)) root=&input;
+        for(const auto& command:*commands) {
+            const bool declaration=command.name=="add_executable" || command.name=="add_library";
+            const bool source=declaration || command.name=="target_sources";
+            const bool safe=source || command.name=="project" || command.name=="cmake_minimum_required" || command.name=="add_subdirectory" ||
+                command.name=="target_include_directories" || command.name=="target_compile_features" ||
+                command.name=="target_compile_options" || command.name=="target_compile_definitions" || languageStandardSetting(command);
+            if(!safe || command.scopeDepth || command.nestedArguments) return fail(ErrorCode::Unsupported,"Use a literal top-level CMake graph for this target template");
+            if(source) {
+                if(command.arguments.empty() || !command.arguments.front().isLiteral) return fail(ErrorCode::Unsupported,"Dynamic target identity");
+                const auto& target=command.arguments.front().literal;
+                if(target==name) return fail(ErrorCode::AlreadyExists,"Current CMake input already declares this target");
+                if(!model.findTarget(target)) return fail(ErrorCode::Busy,"CMake targets changed; configure before generating a target");
+                if(declaration) {
+                    if(std::ranges::find(declared,target)!=declared.end()) return fail(ErrorCode::Unsupported,"Duplicate target declaration");
+                    declared.push_back(target);
+                }
+                auto arguments=sourceArguments(command,target); if(!arguments) return std::unexpected(arguments.error());
+                for(const auto* argument:arguments->sources) for(const auto& path:paths)
+                    if(sourceMatches(argument->literal,path,io::parentPath(input.path),true))
+                        return fail(ErrorCode::AlreadyExists,"A current CMake declaration already names a generated destination");
+            }
+        }
+    }
+    for(const auto& target:model.targets) if(!target.generatorProvided && target.type!=CMakeTargetType::Utility &&
+        std::ranges::find(declared,target.name)==declared.end()) return fail(ErrorCode::Busy,"Configured target declaration is no longer current");
+    if(!root) return fail(ErrorCode::Busy,"Root CMakeLists input is missing");
+    std::string addition="\n"+std::string(library?"add_library(":"add_executable(")+std::string(name)+(library?" STATIC":"");
+    for(const auto& path:paths) {
+        for(const auto& target:model.targets) for(const auto& source:target.sources) if(equalPath(source.path,path))
+            return fail(ErrorCode::AlreadyExists,"A generated target file is already declared by an existing target");
+        auto normalized=io::normalizePath(path);
+        if(!normalized || !io::isAbsolutePath(path)) return fail(ErrorCode::InvalidArgument,"Generated target file path is invalid");
+        std::replace(normalized->begin(),normalized->end(),'\\','/');
+        if(!safeLiteral(*normalized)) return fail(ErrorCode::InvalidArgument,"Generated target file path is not a CMake literal");
+        // Absolute quoted paths have no dependence on a guessed invocation directory.
+        addition+="\n    \""+*normalized+"\"";
+    }
+    addition+="\n)\ntarget_compile_features("+std::string(name)+" PRIVATE cxx_std_20)\n";
+    if(root->contents.find("\r\n")!=std::string::npos) {
+        std::string crlf; for(char c:addition) { if(c=='\n') crlf+='\r'; crlf+=c; } addition=std::move(crlf);
+    }
+    return CMakeMembershipPlan{root->path,root->contents,root->contents+addition};
 }
 } // namespace frost::project

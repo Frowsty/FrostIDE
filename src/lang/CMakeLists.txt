@@ -66,6 +66,7 @@ frost_add_library(lang LAYER lang
         src/snippet.cpp
         src/spelling.cpp
         src/templates.cpp
+        src/file_templates.cpp
         src/symbols.cpp
         src/uri.cpp
         src/workspace_edit.cpp
