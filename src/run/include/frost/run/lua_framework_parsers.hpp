@@ -6,7 +6,8 @@
 namespace frost::run {
 enum class LuaTestProfile : std::uint8_t { Busted220, LuaUnit35 };
 // Pure planner. Preserves interpreter/script/environment identity, refuses conflicting report
-// controls. Discovery bridge is an absolute installed FrostIDE asset, not a project module.
+// controls. An empty report on a run plans Debug with its normal console reporter. Discovery bridge is an absolute
+// installed FrostIDE asset, not a project module.
 [[nodiscard]] Result<RunConfiguration> luaFrameworkConfiguration(LuaTestProfile profile, RunConfiguration configuration,
                                                                  std::span<const std::string> cases,
                                                                  std::string_view report, bool listing,

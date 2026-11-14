@@ -409,7 +409,7 @@ endif()
 # workbench configures with the pinned cmake and Ninja; its ctest is the oracle, and a stub ctest
 # (tests/run's run_ctest_stub) gives the tool-error case (label integration, tag cmake).
 frost_add_test(app_unit_tests_window_tests QT
-    SOURCES unit_tests_window_test.cpp
+    SOURCES unit_tests_window_test.cpp lua_unit_tests_window_test.cpp
     DEPS frost::app frost::build frost::debug frost::io frost::ui_run
     LABELS integration cmake lldb)
 target_include_directories(app_unit_tests_window_tests PRIVATE ${FROST_SOURCE_DIR}/tests
@@ -425,3 +425,10 @@ if(FROST_BUILD_FRAMEWORK_ACCEPTANCE)
     target_compile_definitions(app_unit_tests_window_tests PRIVATE FROST_RUN_CATCH_FIXTURE="$<TARGET_FILE:run_catch_fixture>")
     add_dependencies(app_unit_tests_window_tests run_catch_fixture)
 endif()
+
+# Explicit Lua framework inputs; missing supported modules/interpreter fail future real cases.
+file(TO_CMAKE_PATH "${FROST_LUA54_EXECUTABLE}" _frost_ui_lua)
+target_compile_definitions(app_unit_tests_window_tests PRIVATE
+    FROST_TEST_LUA_INTERPRETER="${_frost_ui_lua}"
+    FROST_LUA_DISCOVERY_BRIDGE="${FROST_SOURCE_DIR}/tools/luaunit-discovery.lua"
+    FROST_LUA_FRAMEWORK_FIXTURES="${FROST_SOURCE_DIR}/tests/run/fixtures/lua")

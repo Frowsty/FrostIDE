@@ -104,6 +104,8 @@ frost_add_library(app LAYER app
         src/project_run_dialogs.cpp
         src/project_tool_dialogs.cpp
         src/project_unit_tests.cpp
+        src/lua_unit_tests_window.cpp
+        src/lua_unit_tests_window.hpp
         src/unit_tests_window.cpp
         src/unit_tests_window.hpp
         src/project_properties_xml.cpp
@@ -199,6 +201,15 @@ if(WIN32)
     frost_add_executable(frost_held_read LAYER app SOURCES src/mono_held_read_main.cpp)
 endif()
 
+function(frost_stage_lua_test_bridge target)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/lua-tests"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FROST_SOURCE_DIR}/tools/luaunit-discovery.lua"
+            "$<TARGET_FILE_DIR:${target}>/lua-tests/luaunit-discovery.lua"
+        VERBATIM)
+endfunction()
+
 if(NOT WIN32)
     frost_add_executable(frost LAYER app
         SOURCES src/main.cpp
@@ -215,6 +226,9 @@ if(NOT WIN32)
             ${FROST_SOURCE_DIR}/assets/visualizers $<TARGET_FILE_DIR:frost>/visualizers
         VERBATIM)
     add_dependencies(frost frost_visualizers)
+    frost_stage_lua_test_bridge(frost)
+    include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
+    frost_stage_lua_runtime(frost)
     return()
 endif()
 
@@ -309,3 +323,5 @@ add_dependencies(frost frost_visualizers)
 # Optional locally built standalone Lua; no download or recipe execution during the IDE build.
 include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
 frost_stage_lua_runtime(frost)
+
+frost_stage_lua_test_bridge(frost)

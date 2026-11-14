@@ -5,6 +5,7 @@
 // location it shows came from ctest's, Google Test's or doctest's output through frost::run's parsers.
 
 #include "unit_tests_window.hpp"
+#include "lua_unit_tests_window.hpp"
 
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
@@ -919,10 +920,15 @@ QWidget* createUnitTestsToolWindowWidget(QWidget* parent, UnitTestsWindowContext
 std::vector<run::GutterTestCase> unitTestsGutterCasesForFile(QWidget* unitTestsWidget, std::string_view filePath,
                                                              std::string_view content) {
     auto* window = ctestProvider(unitTestsWidget);
-    return window ? window->gutterCasesForFile(filePath, content) : std::vector<run::GutterTestCase>{};
+    auto cases = window ? window->gutterCasesForFile(filePath, content) : std::vector<run::GutterTestCase>{};
+    auto lua = luaUnitTestsGutterCases(unitTestsWidget, filePath);
+    cases.insert(cases.end(), lua.begin(), lua.end());
+    return cases;
 }
 
 Result<void> runGutterTestCase(QWidget* unitTestsWidget, const run::GutterTestCase& testCase) {
+    if (testCase.framework == run::TestCaseFramework::Busted || testCase.framework == run::TestCaseFramework::LuaUnit)
+        return runLuaGutterCase(unitTestsWidget, testCase, false);
     auto* window = ctestProvider(unitTestsWidget);
     if (!window)
         return fail(ErrorCode::NotFound, "Unit Tests window is not created");
@@ -930,6 +936,8 @@ Result<void> runGutterTestCase(QWidget* unitTestsWidget, const run::GutterTestCa
 }
 
 Result<void> debugGutterTestCase(QWidget* unitTestsWidget, const run::GutterTestCase& testCase) {
+    if (testCase.framework == run::TestCaseFramework::Busted || testCase.framework == run::TestCaseFramework::LuaUnit)
+        return runLuaGutterCase(unitTestsWidget, testCase, true);
     auto* window = ctestProvider(unitTestsWidget);
     if (!window)
         return fail(ErrorCode::NotFound, "Unit Tests window is not created");
