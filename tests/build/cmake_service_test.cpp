@@ -226,7 +226,7 @@ TEST_F(CMakeServiceTest, DebugReloadUsesConfigurePipelineAndSavesBeforeLaunch) {
     ASSERT_TRUE(saved);
     const auto launches = launcher.launches();
     ASSERT_EQ(launches.size(), 2U);
-    const auto& args = launches.back().arguments;
+    const auto& args = launches.back().spec.arguments;
     EXPECT_NE(std::ranges::find(args, "--debugger"), args.end());
     EXPECT_NE(std::ranges::find(args, "--debugger-pipe"), args.end());
     EXPECT_NE(std::ranges::find(args, "private-debug-endpoint"), args.end());
