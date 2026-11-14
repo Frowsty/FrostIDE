@@ -44,6 +44,7 @@ frost_add_test(lang_unit_tests
         engine_discovery_process_test.cpp
         features_test.cpp
         fuzzy_snippet_test.cpp
+        templates_test.cpp
         json_schema_test.cpp
         json_test.cpp
         jsonrpc_test.cpp

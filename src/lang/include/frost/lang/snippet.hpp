@@ -33,6 +33,9 @@ struct SnippetTabStop {
 struct ParsedSnippet {
     std::string text;
     std::vector<SnippetTabStop> tabStops; // By index (1, 2, ...), then $0.
+    // Hostile/malformed nested syntax exceeds a linear work or 64-level depth budget: the
+    // original snippet is returned literally with no stops, rather than exponential reparsing.
+    bool budgetExceeded = false;
     // Where the caret goes after insertion: the first tab stop's begin, else $0, else the end.
     [[nodiscard]] std::uint32_t caret() const noexcept;
 };

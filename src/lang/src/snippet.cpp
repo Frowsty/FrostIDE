@@ -6,6 +6,7 @@
 #include "frost/lang/snippet.hpp"
 
 #include <algorithm>
+#include <limits>
 
 namespace frost::lang {
 namespace {
@@ -18,10 +19,12 @@ namespace {
 
 class Parser {
 public:
-    explicit Parser(std::string_view snippet) : m_s(snippet) {}
+    explicit Parser(std::string_view snippet) : m_s(snippet),
+        m_budget(std::min(snippet.size(), (std::numeric_limits<std::size_t>::max()-64)/8)*8+64) {}
 
     ParsedSnippet run() {
         parseAny(false);
+        if (m_exhausted) return ParsedSnippet{std::string(m_s),{},true};
         ParsedSnippet out;
         out.text = std::move(m_out);
         out.tabStops = std::move(m_stops);
@@ -33,6 +36,10 @@ public:
     }
 
 private:
+    bool work() {
+        if (!m_budget) { m_exhausted = true; return false; }
+        --m_budget; return true;
+    }
     struct Mark {
         std::size_t position;
         std::size_t outSize;
@@ -50,7 +57,10 @@ private:
 
     // Text and constructs up to the end, or (nested) up to an unescaped '}' left unconsumed.
     void parseAny(bool nested) {
-        while (m_i < m_s.size()) {
+        if (m_depth > 64) { m_exhausted = true; return; }
+        ++m_depth;
+        struct Depth { std::size_t& value; ~Depth() { --value; } } depth{m_depth};
+        while (m_i < m_s.size() && !m_exhausted && work()) {
             const char c = m_s[m_i];
             if (c == '\\' && m_i + 1 < m_s.size() &&
                 (m_s[m_i + 1] == '$' || m_s[m_i + 1] == '}' || m_s[m_i + 1] == '\\')) {
@@ -71,7 +81,7 @@ private:
 
     [[nodiscard]] std::uint32_t parseNumber() {
         std::uint32_t value = 0;
-        while (m_i < m_s.size() && isDigit(m_s[m_i])) {
+        while (m_i < m_s.size() && isDigit(m_s[m_i]) && work()) {
             value = std::min<std::uint32_t>(value * 10 + static_cast<std::uint32_t>(m_s[m_i] - '0'), 1'000'000);
             ++m_i;
         }
@@ -79,7 +89,7 @@ private:
     }
 
     void skipVariableName() {
-        while (m_i < m_s.size() && isVariableChar(m_s[m_i])) {
+        while (m_i < m_s.size() && isVariableChar(m_s[m_i]) && work()) {
             ++m_i;
         }
     }
@@ -149,7 +159,7 @@ private:
                 }
             } else if (at('/')) {
                 // A transform: skip to its closing brace (the variable resolves to nothing).
-                while (m_i < m_s.size() && m_s[m_i] != '}') {
+                while (m_i < m_s.size() && m_s[m_i] != '}' && work()) {
                     m_i += (m_s[m_i] == '\\' && m_i + 1 < m_s.size()) ? 2 : 1;
                 }
                 if (at('}')) {
@@ -166,7 +176,7 @@ private:
     bool parseChoice(std::uint32_t index) {
         const std::uint32_t begin = here();
         bool first = true;
-        while (m_i < m_s.size()) {
+        while (m_i < m_s.size() && work()) {
             const char c = m_s[m_i];
             if (c == '\\' && m_i + 1 < m_s.size()) {
                 if (first) {
@@ -197,6 +207,9 @@ private:
     std::size_t m_i = 0;
     std::string m_out;
     std::vector<SnippetTabStop> m_stops;
+    std::size_t m_budget = 0;
+    std::size_t m_depth = 0;
+    bool m_exhausted = false;
 };
 
 } // namespace
