@@ -45,7 +45,7 @@ struct WorkbenchLuaState {
     std::vector<std::string> folderKeys; // documentKeys of the running LuaLS's extra folders, sorted.
     std::vector<std::string> inputKeys;  // documentKeys of the host providers' inputs.
     lang::LuaInputIndex inputIndex;
-    bool configurationRefreshQueued = false;
+    std::optional<std::uint64_t> configurationRefreshQueued;
     std::string provider = "luals";
     void setInputs(std::vector<std::string> inputs) {
         inputKeys = std::move(inputs);
@@ -589,6 +589,7 @@ void Workbench::onLuaFilesChanged(const io::FileChangeBatch& batch) {
     else if (*sent > 0)
         log::debug("workbench", "LuaLS didChangeWatchedFiles: {} changes", *sent);
     // A host's own files changed (the engine wrote its reference or definitions): compose again.
+<<<<<<< HEAD
     if (hostInputs && !m_luaState->configurationRefreshQueued) {
         auto state = m_luaState;
         state->configurationRefreshQueued = true;
@@ -596,6 +597,16 @@ void Workbench::onLuaFilesChanged(const io::FileChangeBatch& batch) {
         QTimer::singleShot(75, this, [this, state, generation] {
             state->configurationRefreshQueued = false;
             if (m_luaState == state && state->generation == generation && m_lua)
+=======
+    if (hostInputs && m_luaState->configurationRefreshQueued != m_luaState->generation) {
+        auto state = m_luaState;
+        const auto generation = state->generation;
+        state->configurationRefreshQueued = generation;
+        QTimer::singleShot(75, this, [this, state, generation] {
+            if (state->configurationRefreshQueued == generation)
+                state->configurationRefreshQueued.reset();
+            if (m_luaState == state && state->generation == generation && m_lua)
+>>>>>>> c1ac5eaf (fix(lua): keep refresh queues scoped to server generation)
                 refreshLuaConfiguration();
         });
     }
