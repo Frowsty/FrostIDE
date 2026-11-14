@@ -76,7 +76,7 @@ Result<void> EngineIntegration::Impl::findAssetUsages(std::string relative, engi
                             lenses.push_back(
                                 {.line = LineIndex{0},
                                  .symbolOffset = ByteOffset{0},
-                                 .label = std::to_string(*count) + " asset usage documents",
+                                 .label = std::to_string(*count) + " asset usage rows",
                                  .actionId = "engine.assetUsages",
                                  .tooltip = "Engine query snapshot (not live): " + std::to_string(parsed->occurrences) +
                                             " occurrences. Includes unsaved FrostEditor scenes; click to refresh."});

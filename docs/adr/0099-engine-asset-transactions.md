@@ -9,8 +9,8 @@ An immutable AssetIndex owns the validated ProjectContent and maps exact unsigne
 native path identity keys to engine-reported assets. Refresh replaces the snapshot as a whole.
 FEC-5 queries the selected authenticated session's actual assets.find-references command, using
 its existing command policy and physical project/trust/session admission. Reply targets and source
-identities must agree with the retained index. Counts distinguish referencing documents from total
-occurrences. Code Vision uses the document count matching the CLI top-level count. Unsaved FrostEditor scenes and project/import settings remain explicit. Unregistered unsaved
+identities must agree with the retained index. Counts distinguish reference rows (including separate settings in one document) from total
+occurrences. Code Vision uses the reference-row count matching the CLI top-level count. Unsaved FrostEditor scenes and project/import settings remain explicit. Unregistered unsaved
 scenes have no invented registry handle or disk-content navigation; the UI identifies their
 live-editor-only state. Project settings open through the text-document navigation workbench,
 with physical project containment checked, so the application cannot switch projects. Unreadable
