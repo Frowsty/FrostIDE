@@ -15,6 +15,9 @@ namespace frost::clang_engine {
  */
 [[nodiscard]] int runLocalRenamePlan(int argc, char* argv[], std::string_view resourceDirectory);
 
+// Complete compilation-database, class/global/member rename; JSON request on stdin, no writes.
+[[nodiscard]] int runProjectRenamePlan(std::string_view resourceDirectory);
+
 #ifdef FROST_CLANG_PLAN_TESTS
 // Test-build-only deterministic VFS/budget diagnostics. Uses only private in-memory inputs;
 // prints observed check results, returns nonzero on any failure, and never starts child tools.

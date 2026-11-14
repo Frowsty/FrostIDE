@@ -325,6 +325,9 @@ int main(int argc, char* argv[]) {
         return frost::clang_engine::checkLocalRenamePlanner(detectClangResourceDir());
     }
 #endif
+    if (argc == 2 && std::string_view(argv[1]) == "--plan-project-rename") {
+        return frost::clang_engine::runProjectRenamePlan(detectClangResourceDir());
+    }
     if (argc >= 2 && std::string_view(argv[1]) == "--plan-local-rename") {
         return frost::clang_engine::runLocalRenamePlan(argc, argv, detectClangResourceDir());
     }
