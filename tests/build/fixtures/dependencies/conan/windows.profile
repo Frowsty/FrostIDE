@@ -1,0 +1,7 @@
+[settings]
+os=Windows
+arch=x86_64
+compiler=msvc
+compiler.version=194
+compiler.runtime=dynamic
+build_type=Debug
