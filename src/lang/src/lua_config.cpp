@@ -22,6 +22,13 @@
 #endif
 
 namespace frost::lang {
+Result<std::vector<std::string>> emmyLuaArguments(std::string_view stateDirectory) {
+    auto directory=io::normalizePath(stateDirectory);
+    if(!directory || !io::isAbsolutePath(*directory)) return fail(ErrorCode::InvalidArgument,"EmmyLua resources require an absolute private state directory");
+    auto resources=io::joinPath(*directory,"emmylua"); if(!resources) return std::unexpected(resources.error());
+    // Pinned source cmd_args.rs: stdio default; no log file; generated resources outside source.
+    return std::vector<std::string>{"--communication","stdio","--resources-path",std::move(*resources),"--log-path","none"};
+}
 namespace {
 #ifdef _WIN32
 constexpr std::string_view kName = "lua-language-server.exe";

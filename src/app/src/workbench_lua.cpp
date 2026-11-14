@@ -46,6 +46,7 @@ struct WorkbenchLuaState {
     std::vector<std::string> inputKeys;  // documentKeys of the host providers' inputs.
     lang::LuaInputIndex inputIndex;
     bool configurationRefreshQueued = false;
+    std::string provider = "luals";
     void setInputs(std::vector<std::string> inputs) {
         inputKeys = std::move(inputs);
         inputIndex.reset(inputKeys);
@@ -302,11 +303,12 @@ void Workbench::startLua(const std::string& root) {
         return;
     stopLua();
     WorkbenchLuaState& state = luaState(m_luaState, m_services.launcher);
+    state.provider=m_services.settings.snapshot()->get(settings::key::luaLanguageProvider);
     state.titles.clear();
     state.refreshes.clear();
     m_luaUnavailable.clear();
     m_luaObservedTrust = m_services.trust.isTrusted(root);
-    m_luaConfiguredPath = m_services.settings.snapshot()->get(settings::key::toolsLuaLanguageServerPath);
+    m_luaConfiguredPath = m_services.settings.snapshot()->get(state.provider=="emmylua"?settings::key::toolsEmmyLuaPath:settings::key::toolsLuaLanguageServerPath);
     m_luaRuntimeVersion = m_services.settings.snapshot()->get(settings::key::luaRuntimeVersion);
     if (!m_luaObservedTrust) {
         for (auto* view : m_editors->views())
@@ -318,8 +320,11 @@ void Workbench::startLua(const std::string& root) {
     }
     auto snapshot = m_services.settings.snapshot();
     lang::LuaSearch search = m_options.luaSearch ? *m_options.luaSearch : lang::defaultLuaSearch();
-    search.configuredPath = snapshot->get(settings::key::toolsLuaLanguageServerPath);
-    auto found = lang::findLuaLanguageServer(m_services.fs, search);
+    const bool experimental=state.provider=="emmylua";
+    search.configuredPath = m_luaConfiguredPath;
+    auto found = experimental&&search.configuredPath.empty()
+        ? Result<std::string>(fail(ErrorCode::NotFound,"Experimental EmmyLua requires an explicit absolute executable in Settings"))
+        : lang::findLuaLanguageServer(m_services.fs, search);
     // LuaLS writes its log and generated meta files under the user profile, never into its
     // (possibly read-only, staged) installation directory; host meta files go there too.
     std::string stateDirectory = m_options.luaStateDirectory;
@@ -344,7 +349,7 @@ void Workbench::startLua(const std::string& root) {
             notifyLuaUnavailable();
         return;
     }
-    auto arguments = lang::luaLanguageServerArguments(stateDirectory);
+    auto arguments = experimental ? lang::emmyLuaArguments(stateDirectory) : lang::luaLanguageServerArguments(stateDirectory);
     if (!arguments) {
         m_luaUnavailable = "no per-user directory for the LuaLS log and meta files: " + arguments.error().message();
         notifyLuaUnavailable();
@@ -371,6 +376,7 @@ void Workbench::startLua(const std::string& root) {
         options.workspaceRoot = root;
         options.arguments = std::move(args);
         options.trusted = true;
+        options.displayName=st.provider=="emmylua"?"EmmyLua Rust (experimental)":"LuaLS";
         options.configuration = std::move(plan.configuration);
         options.folders = plan.folders;
         st.folderKeys = sortedFolderKeys(plan.folders);
@@ -444,6 +450,15 @@ void Workbench::startLua(const std::string& root) {
     // When a built FrostEditor binary's schema.export is not yet cached, warm it and write the
     // generated meta files on a background worker so the GUI thread never stalls waiting for a
     // child process (FND-9b).
+    if(experimental) {
+        // Emmy reads its own native configuration. Do not pass LuaLS CLI flags, runtime values,
+        // generated host overrides or pretend the two providers share configuration schemas.
+        LuaPlan plan; plan.configuration=lang::Json::object();
+        for(const auto* file:{".emmyrc.json",".emmyrc.lua",".luarc.json"})
+            if(auto path=io::joinPath(root,file)) plan.inputKeys.push_back(lang::documentKey(*path));
+        launchWithPlan(std::move(*arguments),std::move(plan),std::nullopt);
+        return;
+    }
     if (state.engineHost && state.engineHost->needsSchemaWarmup(m_services.fs, root)) {
         QPointer<Workbench> self(this);
         std::vector<std::string> args = std::move(*arguments);
@@ -471,6 +486,7 @@ void Workbench::refreshLuaConfiguration() {
     if (!m_lua || m_projectRoot.empty())
         return;
     WorkbenchLuaState& state = luaState(m_luaState, m_services.launcher);
+    if(state.provider=="emmylua") { startLua(m_projectRoot); return; }
     m_luaRuntimeVersion = m_services.settings.snapshot()->get(settings::key::luaRuntimeVersion);
     std::string stateDirectory = m_options.luaStateDirectory;
     if (stateDirectory.empty()) {
@@ -521,13 +537,14 @@ void Workbench::onLuaSettingsChanged() {
     if (m_engineBindings)
         m_engineBindings->cancel();
     const auto snapshot = m_services.settings.snapshot();
-    const auto luaPath = snapshot->get(settings::key::toolsLuaLanguageServerPath);
+    const auto provider=snapshot->get(settings::key::luaLanguageProvider);
+    const auto luaPath = snapshot->get(provider=="emmylua"?settings::key::toolsEmmyLuaPath:settings::key::toolsLuaLanguageServerPath);
     const auto luaRuntime = snapshot->get(settings::key::luaRuntimeVersion);
-    if (m_projectRoot.empty() || (luaPath == m_luaConfiguredPath && luaRuntime == m_luaRuntimeVersion))
+    if (m_projectRoot.empty() || (m_luaState && provider==m_luaState->provider && luaPath == m_luaConfiguredPath && luaRuntime == m_luaRuntimeVersion))
         return;
     // Another server is a restart; another runtime version reaches the running LuaLS live
     // (didChangeConfiguration, LUA-3), so its diagnostics follow without losing its state.
-    if (luaPath != m_luaConfiguredPath || !m_lua)
+    if (!m_luaState || provider!=m_luaState->provider || luaPath != m_luaConfiguredPath || !m_lua)
         startLua(m_projectRoot);
     else
         refreshLuaConfiguration();
