@@ -187,4 +187,68 @@ TEST_F(ProjectRename, MsvcYuPchIsReplayedFromItsCapturedHeaderWithoutArtifacts) 
     EXPECT_FALSE(std::filesystem::exists(scratch.join("unread.pch")));
 }
 #endif
+
+TEST_F(ProjectRename, InteriorCaretMapsToRenamedTokenForBothShorteningAndGrowth) {
+    const std::string code = "int longIdentifier=1; int read(){return longIdentifier;}";
+    for (const auto& name : {"x", "muchLongerIdentifier"}) {
+        auto result = plan({{"one.cpp", code}}, {"one.cpp"}, "one.cpp", code.find("longIdentifier") + 8, name);
+        ASSERT_EQ(result.stringAt("status"), "ready");
+        const auto* changed = image(result, "one.cpp");
+        ASSERT_NE(changed, nullptr);
+        EXPECT_NE(changed->stringAt("after").find(name), std::string_view::npos);
+    }
+}
+TEST_F(ProjectRename, ReorderedTranslationUnitsKeepTheEntireVirtualChain) {
+    const std::string header = "#pragma once\nstruct A{virtual int tick(){return 1;}}; struct B:A{int tick() "
+                               "override{return 2;}}; struct C:B{int tick() override{return 3;}};\n";
+    auto result = plan({{"chain.h", header},
+                        {"last.cpp", "#include \"chain.h\"\nint last(C& c){return c.tick();}"},
+                        {"first.cpp", "#include \"chain.h\"\nint first(A& a){return a.tick();}"},
+                        {"middle.cpp", "#include \"chain.h\"\nint middle(B& b){return b.tick();}"}},
+                       {"last.cpp", "first.cpp", "middle.cpp"}, "chain.h", header.find("tick"), "next");
+    ASSERT_EQ(result.stringAt("status"), "ready");
+    for (const auto& name : {"chain.h", "last.cpp", "first.cpp", "middle.cpp"}) {
+        const auto* changed = image(result, name);
+        ASSERT_NE(changed, nullptr);
+        EXPECT_EQ(changed->stringAt("after").find("tick"), std::string_view::npos);
+    }
+}
+TEST_F(ProjectRename, MixedValueAndStringizedMacroArgumentCannotSilentlyChangeStringOutput) {
+    const std::string code = "#define USE(x) ((x), #x)\nint target=1; const char* text=USE(target);\n";
+    auto result = plan({{"one.cpp", code}}, {"one.cpp"}, "one.cpp", code.find("target"), "renamed");
+    EXPECT_EQ(result.stringAt("status"), "unsupported");
+    ASSERT_NE(result.find("files"), nullptr);
+    EXPECT_TRUE(result.find("files")->items().empty());
+}
+TEST_F(ProjectRename, PositiveHasIncludeProbeBecomesAReadReceiptEvenWithoutOpeningHeader) {
+    const std::string code = "#if __has_include(\"optional.h\")\n#define NUMBER 7\n#else\n#define NUMBER "
+                             "3\n#endif\nint target(){return NUMBER;}\n";
+    auto result = plan({{"one.cpp", code}, {"optional.h", "// existence affects preprocessing only\n"}}, {"one.cpp"},
+                       "one.cpp", code.find("target"), "renamed");
+    ASSERT_EQ(result.stringAt("status"), "ready");
+    const auto* dependencies = result.find("dependencies");
+    ASSERT_NE(dependencies, nullptr);
+    bool found = false;
+    for (const auto& dependency : dependencies->items())
+        if (dependency.stringAt("path") == scratch.join("optional.h")) {
+            found = true;
+            EXPECT_EQ(dependency.stringAt("sha256"), frost::io::sha256Hex("// existence affects preprocessing only\n"));
+        }
+    EXPECT_TRUE(found);
+}
+TEST_F(ProjectRename, PositiveDirectoryProbesAreTypedAndNeverClaimedAsMissingFiles) {
+    ASSERT_TRUE(frost::io::realFileSystem().createDirectories(scratch.join("kind")));
+    const std::string code = "#if __has_include(\"kind\")\n#define NUMBER 7\n#else\n#define NUMBER 3\n#endif\nint "
+                             "target(){return NUMBER;}\n";
+    auto result = plan({{"one.cpp", code}}, {"one.cpp"}, "one.cpp", code.find("target"), "renamed");
+    ASSERT_EQ(result.stringAt("status"), "ready");
+    const auto* directories = result.find("directoryDependencies");
+    ASSERT_NE(directories, nullptr);
+    bool found = false;
+    for (const auto& path : directories->items())
+        if (path.asString() && *path.asString() == scratch.join("kind"))
+            found = true;
+    EXPECT_TRUE(found);
+}
+
 } // namespace

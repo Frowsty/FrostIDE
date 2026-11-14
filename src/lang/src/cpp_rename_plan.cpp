@@ -108,6 +108,17 @@ Result<CppRenameProposal> parseCppRenameProposal(std::string_view bytes) {
             return fail(ErrorCode::InvalidArgument, "Conflicting missing-path dependency");
         result.missingDependencies.push_back(*item.asString());
     }
+    const auto* directories = parsed->find("directoryDependencies");
+    if (!directories || directories->kind() != Json::Kind::Array)
+        return fail(ErrorCode::InvalidArgument, "Directory read dependencies missing");
+    for (const auto& item : directories->items()) {
+        if (!item.asString() || !io::isAbsolutePath(*item.asString()) ||
+            !dependencyPaths.insert(*item.asString()).second)
+            return fail(ErrorCode::InvalidArgument, "Conflicting directory read dependency");
+        result.directoryDependencies.push_back(*item.asString());
+    }
+    if (dependencyPaths.size() > 32768)
+        return fail(ErrorCode::InvalidArgument, "Rename read dependency budget exceeded");
     return result;
 }
 sched::Task<Result<CppRenameProposal>> requestCppRenamePlan(io::IProcessLauncher& launcher, io::AsyncContext context,
