@@ -45,3 +45,24 @@ Primary contract sources are the designated safe engine checkout: Automation/Com
 (actual reference semantics including unsaved scenes/settings), ComponentCommands.cpp (reflected JSON
 and validated component.set), and Core/Reflection metadata. No private backend or live developer
 workspace is queried or executed during implementation.
+
+## Serialized properties
+
+The FEC-6 inspector chooses an actual engine-listed scene, an explicit entity name/ID, and a
+component name from the authenticated runtime schema. component.get supplies the serialized
+fields and exact entity identity; subsequent edits use that ID rather than resolving a name again.
+Only changed fields are sent, leaving unchanged/read-only values out of the patch. The engine
+still performs all reflection/range/read-only/invariant checks. No frontend serializer predicts
+success or writes the scene file. A successful component.set is followed by a real component.get;
+the editor shows the returned normalized values and reports concurrent changes honestly.
+
+The additive optional component.set expected parameter contains the complete actual Before
+fields. The engine compares it on the same main-thread command immediately before ApplyFieldsStrict;
+a mismatch fails before mutations/Undo entries. Older engines without this described parameter
+remain readable but read-only. Dialog requests retain exact session/project/trust/index lifetime,
+cancel only their own request IDs, and cannot move a stale inspector to a replacement session.
+The live scene's save and Undo remain engine-owned; this single-component inspector does not
+claim an IDE REF1 disk transaction or global Undo. Native engine tests and real paired-engine UI
+roundtrip/stale-Before tests are authored only. Actual command producer policies explicitly admit
+read queries and descriptor reads, and restrict component writes to Edit plus mutation permission;
+no wildcard or IDE-side policy bypass is introduced.
