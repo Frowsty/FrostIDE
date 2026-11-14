@@ -29,6 +29,7 @@ frost_add_test(debug_unit_tests
         debug_terminate_test.cpp
         debug_session_breakpoints_test.cpp
         lldb_dap_test.cpp
+        gdb_dap_test.cpp
         mono_dap_test.cpp
         msvc_throw_test.cpp
         mono_wire_test.cpp
@@ -234,4 +235,19 @@ if(WIN32)
         FROST_CORPUS_FROSTENGINE_PRESET="${_frost_debug_engine_preset}"
         FROST_PINNED_VC_TOOLS="${_frost_debug_vc_tools}"
         FROST_TEST_CMAKE="${CMAKE_COMMAND}")
+endif()
+
+
+# User-installed GDB >=16 with Python/DAP; no downloaded GPL binary. Fails when not provisioned.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    frost_add_test(debug_gdb_tests
+        SOURCES gdb_dap_real_test.cpp
+        DEPS frost::debug frost::project frost::io
+        LABELS integration gdb)
+    target_include_directories(debug_gdb_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(debug_gdb_tests PRIVATE
+        FROST_DEBUGGEE_PATH="$<TARGET_FILE:debug_test_debuggee>"
+        FROST_DEBUGGEE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/debuggee.cpp"
+        FROST_GDB_TRUST_PATH="${CMAKE_CURRENT_BINARY_DIR}/gdb-trusted-roots.txt")
+    add_dependencies(debug_gdb_tests debug_test_debuggee)
 endif()
