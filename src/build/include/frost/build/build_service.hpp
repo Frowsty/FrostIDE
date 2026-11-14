@@ -183,6 +183,9 @@ struct BuildServiceOptions {
     std::string msbuildPath{};        // Absolute MSBuild.exe; "" finds one with vswhere at the first build.
     std::string vsInstanceId{};       // The Visual Studio instance vswhere picks (MsBuildDiscoveryOptions).
     unsigned maxCpuCount = 0;         // MsBuildRequest::maxCpuCount.
+    std::string loggerAssembly{}; // Packaged FrostBuildLogger; empty retains console parser.
+    std::string binaryLogDirectory{}; // Private absolute artifact directory; one binlog per build.
+
     BuildStarter startBuild{};        // "" uses startMsBuild.
     CompileItemSource compileItems{}; // "" uses queryCompileItems.
 };

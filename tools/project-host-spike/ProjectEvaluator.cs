@@ -102,7 +102,19 @@ static class ProjectEvaluator
                 var imports = project.Imports.Select(i => i.ImportedProject.FullPath).Where(seen.Add).ToArray();
                 var values2 = new Dictionary<string, string>();
                 foreach (string name in properties)
-                    values2[name] = project.GetPropertyValue(name);
+                {
+                    // Property-page keys keep the UI's Prop.Name / ItemType.Metadata identity.
+                    int dot = name.IndexOf('.');
+                    if (dot <= 0) values2[name] = project.GetPropertyValue(name);
+                    else if (name.StartsWith("Prop.", StringComparison.Ordinal))
+                        values2[name] = project.GetPropertyValue(name.Substring(5));
+                    else
+                    {
+                        ProjectItemDefinition definition;
+                        values2[name] = project.ItemDefinitions.TryGetValue(name.Substring(0, dot), out definition)
+                            ? definition.GetMetadataValue(name.Substring(dot + 1)) : "";
+                    }
+                }
                 var configurations = project.GetItems("ProjectConfiguration").Select(i => i.EvaluatedInclude).ToArray();
                 var globSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var globs = project.GetAllGlobs().SelectMany(g => g.IncludeGlobs).Where(globSeen.Add).ToArray();
@@ -141,6 +153,29 @@ static class ProjectEvaluator
             try
             {
                 var project = collection.LoadProject(path);
+                // Makefile projects expose NMake IntelliSense properties (VS nmake.xml).
+                // Building still uses MSBuild's MakeFile targets and its evaluated NMake commands.
+                if (String.Equals(project.GetPropertyValue("ConfigurationType"), "Makefile", StringComparison.OrdinalIgnoreCase))
+                {
+                    string command = "/c " + project.GetPropertyValue("AdditionalOptions");
+                    foreach (var setting in new[] {
+                        new[] { "NMakeIncludeSearchPath", "/I" },
+                        new[] { "NMakePreprocessorDefinitions", "/D" },
+                        new[] { "NMakeForcedIncludes", "/FI" }
+                    })
+                        foreach (string value in Split(project.GetPropertyValue(setting[0])))
+                            command += " " + setting[1] + QuoteArgument(value);
+                    var nmakeValues = new Dictionary<string, string>();
+                    foreach (string name in properties) nmakeValues[name] = project.GetPropertyValue(name);
+                    return new {
+                        Op = "ClCommandLines", Id = id, Error = (string)null, Project = project.FullPath,
+                        Configuration = globals["Configuration"], Platform = globals["Platform"],
+                        CommandLines = project.GetItems("ClCompile").Select(item => new {
+                            CommandLine = command, Files = item.GetMetadataValue("FullPath"),
+                            WorkingDirectory = Path.GetDirectoryName(project.FullPath), ConfigurationOptions = "true"
+                        }).ToArray(), Properties = nmakeValues
+                    };
+                }
                 var instance = project.CreateProjectInstance();
                 var errors = new ErrorCollector();
                 IDictionary<string, TargetResult> outputs;
@@ -171,6 +206,22 @@ static class ProjectEvaluator
                 collection.UnloadAllProjects();
             }
         }
+    }
+
+    // MSVC argv quoting (including a trailing backslash before the closing quote).
+    static string QuoteArgument(string value)
+    {
+        var result = new System.Text.StringBuilder("\"");
+        int slashes = 0;
+        foreach (char c in value)
+        {
+            if (c == '\\') { slashes++; continue; }
+            result.Append('\\', c == '\"' ? slashes * 2 + 1 : slashes);
+            slashes = 0;
+            result.Append(c);
+        }
+        result.Append('\\', slashes * 2);
+        return result.Append('\"').ToString();
     }
 
     // Collects the build's error messages for the answer (nothing else is logged).

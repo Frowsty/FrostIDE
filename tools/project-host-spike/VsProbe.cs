@@ -18,7 +18,7 @@ static class VsProbe
     {
         Console.InputEncoding = new UTF8Encoding(false, true);
         Console.OutputEncoding = new UTF8Encoding(false, true);
-        if (args.Length != 1 || !Path.IsPathRooted(args[0]))
+        if ((args.Length != 1 && args.Length != 3) || !Path.IsPathRooted(args[0]))
             throw new ArgumentException("Pass the absolute VS MSBuild assembly directory");
         string directory = args[0];
         RegisterInstance(directory);
@@ -31,8 +31,18 @@ static class VsProbe
                 if (candidate != null && File.Exists(candidate)) return Assembly.LoadFrom(candidate);
             return null;
         };
+        if (args.Length == 3)
+        {
+            if (args[1] != "--replay-binlog" || !Path.IsPathRooted(args[2]))
+                throw new ArgumentException("Expected --replay-binlog and an absolute log path");
+            Replay(args[2]);
+            return;
+        }
         Run(directory);
     }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void Replay(string path) { FrostBuildLogger.Replay(path); }
 
     /* What MSBuildLocator's RegisterMSBuildPath does for a Visual Studio instance on .NET Framework
      * (microsoft/MSBuildLocator, MIT; ProjectEvaluator.cs explains why the host does it itself):
@@ -86,6 +96,14 @@ static class VsProbe
                         Console.WriteLine(json.Serialize(ProjectEvaluator.Hello(msbuildDirectory)));
                     else if (op == "Evaluate")
                         Console.WriteLine(json.Serialize(ProjectEvaluator.Evaluate(request)));
+                    else if (op == "ReplayBinlog")
+                    {
+                        string log;
+                        if (!request.TryGetValue("Path", out log) || !Path.IsPathRooted(log))
+                            throw new InvalidOperationException("Absolute binary log path required");
+                        FrostBuildLogger.Replay(log);
+                        Console.WriteLine(json.Serialize(new { Op = op, Id = opId, Error = (string)null }));
+                    }
                     else if (op == "ClCommandLines")
                         Console.WriteLine(json.Serialize(ProjectEvaluator.ClCommandLines(request)));
                     else

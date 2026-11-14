@@ -580,6 +580,20 @@ struct BuildService::State : std::enable_shared_from_this<BuildService::State> {
                                      .properties = {},
                                      .uiLanguage = {},
                                      .selectedFiles = {}};
+            request.loggerAssembly = options.loggerAssembly;
+            if (!options.binaryLogDirectory.empty()) {
+                if (auto made = fs.createDirectories(options.binaryLogDirectory); !made) {
+                    failLocked(std::move(made.error()));
+                    return;
+                }
+                auto log = io::joinPath(options.binaryLogDirectory, std::format("build-{}-{}.binlog", std::chrono::system_clock::now().time_since_epoch().count(), id));
+                if (!log) {
+                    failLocked(std::move(log.error()));
+                    return;
+                }
+                request.binaryLogPath = *log;
+                emitOutput(BuildOutputKind::Status, "Binary log: " + *log);
+            }
             if (target.action == BuildAction::Compile) {
                 // The project file itself in its mapped configuration, as Visual Studio compiles one file.
                 request.projectName.clear();

@@ -199,6 +199,19 @@ Result<io::ProcessSpec> msbuildProcessSpec(const MsBuildRequest& request) {
     spec.arguments.push_back(std::format("-v:{}", verbosityName(request.verbosity)));
     spec.arguments.emplace_back("-clp:NoSummary;ForceNoAlign;DisableConsoleColor");
 
+    if (!request.loggerAssembly.empty()) {
+        auto logger = absolute(request.loggerAssembly, "logger assembly");
+        if (!logger || logger->find_first_of(";,\r\n") != std::string::npos)
+            return fail(ErrorCode::InvalidArgument, "logger assembly must be an absolute path without switch separators");
+        spec.arguments.push_back("-logger:FrostBuildLogger," + *logger);
+        // Canonical console output remains readable; only event records create diagnostics.
+    }
+    if (!request.binaryLogPath.empty()) {
+        auto log = absolute(request.binaryLogPath, "binary log path");
+        if (!log || log->find_first_of(";\r\n") != std::string::npos)
+            return fail(ErrorCode::InvalidArgument, "binary log must be an absolute path without switch separators");
+        spec.arguments.push_back("-bl:" + *log + ";ProjectImports=None");
+    }
     spec.workingDirectory = std::string(io::parentPath(file, kWindows));
     const std::string language = request.uiLanguage.empty() ? std::string(kEnglish) : request.uiLanguage;
     spec.environment = {
@@ -235,7 +248,8 @@ Result<std::unique_ptr<BuildSession>> startMsBuild(io::IProcessLauncher& launche
         "_MSPDBSRV_ENDPOINT_",
         std::format("FrostIDE-{}-{}", GetCurrentProcessId(), g_buildCounter.fetch_add(1, std::memory_order_relaxed)));
     return BuildSession::start(launcher, *spec, request.trusted, std::move(callbacks), clock,
-                               {.infrastructureImages = msbuildInfrastructureImages()});
+                               {.infrastructureImages = msbuildInfrastructureImages(),
+                                .parser = request.loggerAssembly.empty() ? OutputParserFactory{} : makeStructuredMsBuildOutputParser});
 #else
     static_cast<void>(launcher);
     static_cast<void>(callbacks);

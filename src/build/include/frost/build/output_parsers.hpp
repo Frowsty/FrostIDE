@@ -51,6 +51,8 @@
 #include <string_view>
 
 namespace frost::build {
+// SLN-10 event records emitted by FrostBuildLogger (also binary-log replay).
+[[nodiscard]] std::optional<Diagnostic> parseStructuredMsBuildLine(std::string_view line);
 
 // Receives each diagnostic a parser recognised.
 using DiagnosticSink = std::function<void(Diagnostic diagnostic)>;
@@ -80,6 +82,7 @@ using OutputParserFactory = std::function<std::unique_ptr<IOutputParser>()>;
 [[nodiscard]] std::optional<Diagnostic> parseCompilerDiagnosticLine(std::string_view line);
 
 // parseDiagnosticLine per line: the MSBuild driver's parser.
+[[nodiscard]] std::unique_ptr<IOutputParser> makeStructuredMsBuildOutputParser();
 [[nodiscard]] std::unique_ptr<IOutputParser> makeMsBuildOutputParser();
 // parseCompilerDiagnosticLine per line: `cmake --build` with any compiler.
 [[nodiscard]] std::unique_ptr<IOutputParser> makeCompilerOutputParser();

@@ -49,6 +49,10 @@ sealed class FileEditRequest
     public string ProjectPath;
     public string[] Added = new string[0];
     public string Filter = "";
+    public bool EarlyProperties;
+    public string Configuration;
+    public string Platform;
+    public Dictionary<string, string> Properties = new Dictionary<string, string>();
     public string[] Removed = new string[0];
     public string[] RenamedFrom = new string[0];
     public string[] RenamedTo = new string[0];
@@ -116,7 +120,24 @@ static class ProjectFileEdits
             if (filter.IndexOfAny(Special) >= 0) throw new InvalidOperationException("Invalid filter name");
             edit.Filter = filter;
         }
-        int kinds = (edit.Added.Length != 0 ? 1 : 0) + (edit.Removed.Length != 0 ? 1 : 0) + (edit.RenamedFrom.Length != 0 ? 1 : 0);
+        foreach (var pair in request.Where(p => p.Key.StartsWith("Set:", StringComparison.Ordinal)))
+        {
+            string key = pair.Key.Substring(4);
+            string[] parts = key.Split('.');
+            if (parts.Length != 2) throw new InvalidOperationException("Invalid property key");
+            foreach (string part in parts) XmlConvert.VerifyNCName(part);
+            edit.Properties.Add(key, pair.Value ?? "");
+        }
+        if (edit.Properties.Count != 0)
+        {
+            string early;
+            edit.EarlyProperties = request.TryGetValue("EarlyProperties", out early) && early == "true";
+            edit.Configuration = request["Configuration"];
+            edit.Platform = request["Platform"];
+            if (new[] { edit.Configuration, edit.Platform }.Any(v => String.IsNullOrEmpty(v) || v.IndexOfAny(new[] { '\'', '$', '|', '\r', '\n' }) >= 0))
+                throw new InvalidOperationException("Choose a literal configuration and platform");
+        }
+        int kinds = (edit.Properties.Count != 0 ? 1 : 0) + (edit.Added.Length != 0 ? 1 : 0) + (edit.Removed.Length != 0 ? 1 : 0) + (edit.RenamedFrom.Length != 0 ? 1 : 0);
         if (kinds != 1 || edit.RenamedFrom.Length != edit.RenamedTo.Length || (edit.Filter.Length != 0 && !edit.Adding))
             throw new InvalidOperationException("Choose exactly one edit: add, remove or rename");
         var all = edit.Existing.Concat(edit.Incoming).ToArray();
@@ -231,6 +252,54 @@ static class ProjectFileEdits
             using (var reader = XmlReader.Create(new StringReader(text), settings))
                 root = ProjectRootElement.Create(reader, collection, true);
             var expected = Signature(root);
+            if (!filters && edit.Properties.Count != 0)
+            {
+                string condition = "'$(Configuration)|$(Platform)'=='" + edit.Configuration + "|" + edit.Platform + "'";
+                // Selectors must exist before the imports that consume them. Insert after existing
+                // configuration groups, not before them, so this edit is the final local value.
+                var groups = new Dictionary<string, ProjectPropertyGroupElement>();
+                foreach (var pair in edit.Properties.Where(p => p.Key.StartsWith("Prop.", StringComparison.Ordinal)))
+                {
+                    string name = pair.Key.Substring(5);
+                    string phase = edit.EarlyProperties ? "Microsoft.Cpp.props" : "";
+                    if (new[] { "WindowsTargetPlatformVersion", "WindowsSDKVersion" }.Contains(name, StringComparer.OrdinalIgnoreCase))
+                        phase = "Microsoft.Cpp.Default.props";
+                    else if (new[] { "ConfigurationType", "PlatformToolset", "CharacterSet", "WholeProgramOptimization" }.Contains(name, StringComparer.OrdinalIgnoreCase))
+                        phase = "Microsoft.Cpp.props";
+                    ProjectPropertyGroupElement group;
+                    if (!groups.TryGetValue(phase, out group))
+                    {
+                        group = root.AddPropertyGroup();
+                        group.Condition = condition;
+                        group.Label = "FrostIDE Property Pages";
+                        if (phase.Length != 0)
+                        {
+                            var import = root.Imports.FirstOrDefault(i => i.Parent == root &&
+                                i.Project.Replace('/', '\\').EndsWith("\\" + phase, StringComparison.OrdinalIgnoreCase));
+                            if (import == null)
+                                throw new InvalidOperationException("Property edit requires a direct " + phase + " import");
+                            root.RemoveChild(group);
+                            root.InsertBeforeChild(group, import);
+                        }
+                        groups.Add(phase, group);
+                    }
+                    group.AddProperty(name, pair.Value);
+                }
+                var definitions = root.AddItemDefinitionGroup();
+                definitions.Condition = condition;
+                definitions.Label = "FrostIDE Property Pages";
+                foreach (var pair in edit.Properties)
+                {
+                    string[] key = pair.Key.Split('.');
+                    if (key[0] != "Prop")
+                    {
+                        var definition = definitions.ItemDefinitions.FirstOrDefault(d => d.ItemType == key[0])
+                                         ?? definitions.AddItemDefinition(key[0]);
+                        definition.AddMetadata(key[1], pair.Value);
+                    }
+                }
+                if (definitions.Count == 0) root.RemoveChild(definitions);
+            }
             var elements = root.Items.Where(i => !InTarget(i)).ToList();
             Func<string, List<ProjectItemElement>> listing = path => elements.Where(i => Literal(i.Include) &&
                 String.Equals(FullPathOf(directory, i.Include), path, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -408,7 +477,7 @@ static class ProjectFileEdits
                     throw new InvalidOperationException("Evaluation inputs changed");
                 byte[] projectAfter = Plan(snapshot, edit, false);
                 string filtersPath = edit.ProjectPath + ".filters";
-                byte[] filters = File.Exists(filtersPath) ? File.ReadAllBytes(filtersPath) : null;
+                byte[] filters = edit.Properties.Count == 0 && File.Exists(filtersPath) ? File.ReadAllBytes(filtersPath) : null;
                 byte[] filtersAfter = filters == null ? null : Plan(filters, edit, true);
                 if (filters == null && edit.Filter.Length != 0)
                     throw new InvalidOperationException("The project has no .filters file to place the file in");
