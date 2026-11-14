@@ -82,7 +82,7 @@ struct BindingUsage {
     text::Snapshot capturedSnapshot;
 };
 
-enum class BindingPreviewOrigin : std::uint8_t { LanguageServer, RegistrationLiteral };
+enum class BindingPreviewOrigin : std::uint8_t { LanguageServer, RegistrationLiteral, EmbeddedLuaLiteral };
 
 struct BindingPreviewEdit {
     BindingProviderCapture provider;
@@ -139,16 +139,24 @@ struct BindingGeneratedResourcePreview {
     std::vector<BindingPreviewEdit> observedServerEdits;
     std::string observedLanguageServerText; // May omit nonsemantic derived Same as documentation updates.
 };
+struct BindingEmbeddedLuaCapture {
+    BindingNameLiteral literal; // Exact AST decoded bytes and whole original C++ token.
+    BindingDocumentCapture projection; // A unique temporary LuaLS document holding decoded bytes.
+};
+
 struct BindingSelectedRenamePreview {
     std::vector<BindingPreviewFile> sourceFiles;
     BindingGeneratedResourcePreview generatedResource; // Regeneration intent; never an arbitrary cache-file write.
     std::string previousLuaIdentity;
     std::string renamedLuaIdentity;
     bool nativeRenameRequested = false;
-    // These language servers do not semantically index embedded Lua inside native string literals.
-    // R7 exposes an immutable provider-scoped preview, never application-safe/exhaustive coverage.
+    // Apply admission is producer-owned: exact AST chunks must be projected through the Lua provider.
+    // The engine query alone never grants application authority or exhaustive dynamic-Lua coverage.
     bool embeddedLanguageReferencesVerified = false;
     bool applicationSafe = false;
+    std::string applicationRefusal;
+    std::string supportedProfile;
+    std::vector<std::string> coverageExclusions;
 };
 
 // Must check captured project/schema/doc/provider generations and current trust. Invoked before
@@ -176,13 +184,15 @@ queryBindingRenamePreview(std::vector<BindingRenameRequest> requests, std::vecto
 // declaration projection (or full regenerated text). Runtime-pointer-derived sameAs relation
 // documentation is regenerated separately without renaming aliases or claiming LuaLS changed
 // comments. Unknown/external edits, computed names and structural type renames refuse the preview.
-// Callable edits also require exact AST ScriptDoc.Signature token evidence. No apply/cache writes.
+// Callable edits also require exact AST ScriptDoc.Signature token evidence. Embedded projections
+// map actual provider edits back through whole AST string tokens. No apply/cache writes.
 // Inputs own their lifetime; caller admission checks the captured index revision as well as trust,
 // project/doc/provider generations. Errors retain actual provider/decoder/refusal explanations.
 [[nodiscard]] sched::Task<Result<BindingSelectedRenamePreview>>
 querySelectedBindingRenamePreview(std::shared_ptr<const BindingIndex> index, SelectedLuaBindingRename selected,
                                   std::vector<BindingRenameRequest> nativeRenames,
                                   std::vector<BindingDocumentCapture> documents, BindingQueryAdmission stillCurrent,
-                                  std::stop_token stop = {});
+                                  std::stop_token stop = {},
+                                  std::vector<BindingEmbeddedLuaCapture> embeddedLua = {});
 
 } // namespace frost::engine

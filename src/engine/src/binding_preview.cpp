@@ -242,7 +242,7 @@ sched::Task<Result<BindingSelectedRenamePreview>>
 querySelectedBindingRenamePreview(std::shared_ptr<const BindingIndex> index, SelectedLuaBindingRename selected,
                                   std::vector<BindingRenameRequest> nativeRenames,
                                   std::vector<BindingDocumentCapture> documents, BindingQueryAdmission current,
-                                  std::stop_token stop) {
+                                  std::stop_token stop, std::vector<BindingEmbeddedLuaCapture> embeddedLua) {
     if (!index)
         co_return fail(ErrorCode::InvalidArgument, "A selected binding preview requires its captured schema graph");
     const auto* binding = index->findLua(selected.target.seed.luaQualifiedName);
@@ -263,6 +263,30 @@ querySelectedBindingRenamePreview(std::shared_ptr<const BindingIndex> index, Sel
         co_return std::unexpected(edits.error());
     edits->insert(edits->end(), plan->registrations.begin(), plan->registrations.end());
     auto files = binding_detail::combineCapturedPreview(*edits, documents, true);
+    if (!files)
+        co_return std::unexpected(files.error());
+    // Convert provider edits in decoded chunks back through their exact AST string tokens.
+    // Never apply edits in the temporary projection or infer byte offsets through C++ escapes.
+    std::vector<BindingPreviewEdit> sourceEdits;
+    for (const auto& file : *files) {
+        const auto chunk = std::ranges::find_if(embeddedLua, [&](const auto& item) {
+            return lang::documentKey(item.projection.path) == lang::documentKey(file.path);
+        });
+        if (chunk == embeddedLua.end()) {
+            sourceEdits.insert(sourceEdits.end(), file.edits.begin(), file.edits.end());
+            continue;
+        }
+        if (chunk->projection.snapshot.text() != chunk->literal.decodedValue ||
+            !chunk->projection.snapshot.sharesStorageWith(file.snapshot) ||
+            chunk->projection.snapshot.version() != file.snapshot.version())
+            co_return fail(ErrorCode::Busy, "Embedded Lua projection lost its AST decoded-text identity");
+        auto edit = literalEdit(chunk->literal, file.preview, selected.target.seed.provider, documents);
+        if (!edit)
+            co_return std::unexpected(edit.error());
+        edit->origin = BindingPreviewOrigin::EmbeddedLuaLiteral;
+        sourceEdits.push_back(std::move(*edit));
+    }
+    files = binding_detail::combineCapturedPreview(sourceEdits, documents, true);
     if (!files)
         co_return std::unexpected(files.error());
     BindingSelectedRenamePreview result;

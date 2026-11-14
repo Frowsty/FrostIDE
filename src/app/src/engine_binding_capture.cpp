@@ -398,6 +398,13 @@ Result<std::shared_ptr<Graph>> buildGraph(const Capture& capture) {
     auto created = capture.fs->createDirectories(capture.stateDirectory);
     if (!created)
         return std::unexpected(created.error());
+    // Embedded calls can live outside registration TUs. Analyze every admitted CDB TU,
+    // including those with no registration entries, before granting the bounded profile.
+    for (const auto& [key, path] : translationUnits) {
+        static_cast<void>(key);
+        if (inside(graph->engineRoot, path))
+            groups.try_emplace(path);
+    }
     std::vector<engine::NativeBindingMapping> mappings;
     std::size_t sequence = 0;
     for (const auto& [translationUnit, entries] : groups) {
@@ -437,6 +444,12 @@ Result<std::shared_ptr<Graph>> buildGraph(const Capture& capture) {
             return std::unexpected(report.error());
         if (!report->mappings.empty() && report->sourceInputs.empty())
             return fail(ErrorCode::Unsupported, "The binding tool did not report actual parsed source-input digests");
+        graph->embeddedLuaProfileVerified &= report->embeddedLuaProfileVerified;
+        graph->embeddedLuaRefusals.insert(graph->embeddedLuaRefusals.end(),
+            report->embeddedLuaRefusals.begin(), report->embeddedLuaRefusals.end());
+        for (const auto& chunk : report->embeddedLua)
+            if (std::ranges::find(graph->embeddedLua, chunk) == graph->embeddedLua.end())
+                graph->embeddedLua.push_back(chunk);
         for (const auto& input : report->sourceInputs) {
             if (!inside(graph->engineRoot, input.path))
                 return fail(ErrorCode::PermissionDenied, "The AST source manifest escaped its admitted checkout");

@@ -281,5 +281,46 @@ TEST(BindingSelectedPreview, PhysicalAstLiteralJoinsLexicalAliasWithoutChangingI
     EXPECT_EQ(std::ranges::count(preview->sourceFiles, physical, &BindingPreviewFile::path), 0);
 }
 
+TEST(BindingSelectedPreview, EmbeddedLuaProviderEditsMapThroughWholeEscapedAstLiteral) {
+    Rig rig;
+    const std::string spelling = "\"Cast()\\nlocal Cast = function() end; Cast()\"";
+    const auto nativePath = path("Calls.cpp");
+    const auto projectedPath = path(".binding-projection.lua");
+    const std::string decoded = "Cast()\nlocal Cast = function() end; Cast()";
+    rig.documents.push_back({nativePath, snapshot("execute(" + spelling + ");"), {}, BindingDocumentRole::UserSource});
+    BindingDocumentCapture projection{projectedPath, snapshot(decoded), 29, BindingDocumentRole::UserSource};
+    rig.documents.push_back(projection);
+    BindingEmbeddedLuaCapture chunk{{{nativePath, {ByteOffset{8}, ByteOffset{8 + spelling.size()}}}, decoded, spelling}, projection};
+    auto changes = *rig.lua.edits.find("documentChanges");
+    changes.push(fileEdit(projection, {ByteOffset{0}, ByteOffset{4}}, lang::PositionEncoding::Utf16, "Trace"));
+    rig.lua.edits.set("documentChanges", std::move(changes));
+    auto result = sched::syncWait(querySelectedBindingRenamePreview(rig.index, rig.selected, {}, rig.documents,
+        [](const auto&) { return true; }, {}, {chunk}));
+    ASSERT_TRUE(result) << result.error().message();
+    const auto file = std::ranges::find(result->sourceFiles, nativePath, &BindingPreviewFile::path);
+    ASSERT_NE(file, result->sourceFiles.end());
+    EXPECT_EQ(file->preview, "execute(\"Trace()\\nlocal Cast = function() end; Cast()\");");
+    EXPECT_EQ(file->edits.front().origin, BindingPreviewOrigin::EmbeddedLuaLiteral);
+    EXPECT_EQ(file->edits.front().before, spelling);
+    EXPECT_EQ(std::ranges::count(result->sourceFiles, projectedPath, &BindingPreviewFile::path), 0);
+    // Semantic response chooses only the global call. Projection does not rename same-name locals.
+    EXPECT_FALSE(result->applicationSafe); // The app must still supply full captured-profile admission.
+}
+TEST(BindingSelectedPreview, EmbeddedLuaAstSpellingMismatchRefusesWholePreview) {
+    Rig rig;
+    BindingDocumentCapture projection{path(".binding-projection.lua"), snapshot("Cast()"), 29,
+        BindingDocumentRole::UserSource};
+    rig.documents.push_back({path("Calls.cpp"), snapshot("\"Other()\""), {}, BindingDocumentRole::UserSource});
+    rig.documents.push_back(projection);
+    BindingEmbeddedLuaCapture chunk{{{path("Calls.cpp"), {ByteOffset{0}, ByteOffset{8}}}, "Cast()", "\"Cast()\""}, projection};
+    auto changes = *rig.lua.edits.find("documentChanges");
+    changes.push(fileEdit(projection, {ByteOffset{0}, ByteOffset{4}}, lang::PositionEncoding::Utf16, "Trace"));
+    rig.lua.edits.set("documentChanges", std::move(changes));
+    auto result = sched::syncWait(querySelectedBindingRenamePreview(rig.index, rig.selected, {}, rig.documents,
+        [](const auto&) { return true; }, {}, {chunk}));
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::Busy);
+}
+
 } // namespace
 } // namespace frost::engine

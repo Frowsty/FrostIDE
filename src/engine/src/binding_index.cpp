@@ -134,6 +134,27 @@ Result<BindingMapReport> parseBindingMapReport(const Json& request, const Json& 
             return fail(ErrorCode::Corrupt, "Invalid or duplicated binding request identity");
     }
     BindingMapReport report;
+    if (response.stringAt("embeddedLuaProfile") == "Frost::ScriptEngine::ExecuteString/v1") {
+        const auto* chunks = response.find("embeddedLua");
+        const auto* refusals = response.find("embeddedLuaRefusals");
+        if (!chunks || !chunks->isArray() || !refusals || !refusals->isArray())
+            return fail(ErrorCode::Corrupt, "Missing AST embedded Lua coverage");
+        report.embeddedLuaProfileVerified = parsed->asBool() == true;
+        for (const auto& chunk : chunks->items()) {
+            auto range = readRange(chunk.find("range"));
+            const auto* decoded = chunk.find("decodedValue");
+            const auto* spelling = chunk.find("spelling");
+            if (!range || !decoded || !decoded->isString() || !spelling || !spelling->isString() ||
+                spelling->asString()->size() != range->bytes.size())
+                return fail(ErrorCode::Corrupt, "Malformed AST embedded Lua literal");
+            report.embeddedLua.push_back({*range, *decoded->asString(), *spelling->asString()});
+        }
+        for (const auto& refusal : refusals->items()) {
+            if (!refusal.isString())
+                return fail(ErrorCode::Corrupt, "Malformed AST embedded Lua refusal");
+            report.embeddedLuaRefusals.push_back(*refusal.asString());
+        }
+    }
     if (const auto* inputs = response.find("sourceInputs")) {
         if (!inputs->isArray())
             return fail(ErrorCode::Corrupt, "AST source inputs must be an array");

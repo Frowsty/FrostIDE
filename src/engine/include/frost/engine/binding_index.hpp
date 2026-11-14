@@ -70,6 +70,9 @@ struct BindingMapReport {
         std::string path;
         std::string sha256; // Actual parsed SourceManager buffer digest, not a post-parse disk reread.
     };
+    bool embeddedLuaProfileVerified = false;
+    std::vector<BindingNameLiteral> embeddedLua;
+    std::vector<std::string> embeddedLuaRefusals;
     std::vector<NativeBindingMapping> mappings;
     std::vector<BindingMappingIssue> issues;
     std::vector<SourceInput> sourceInputs;

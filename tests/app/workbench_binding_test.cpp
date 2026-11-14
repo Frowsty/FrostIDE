@@ -42,6 +42,9 @@ TEST(WorkbenchBindings, UntrustedQueriesRefuseWithZeroToolLaunchesAndNoInventedP
     auto refresh = rig.workbench->refreshEngineBindings();
     auto usages = rig.workbench->findEngineBindingUsages();
     auto rename = rig.workbench->previewEngineBindingRename("Renamed");
+    auto apply = rig.workbench->applyEngineBindingRename();
+    ASSERT_FALSE(apply);
+    EXPECT_EQ(apply.error().code(), ErrorCode::Busy);
     ASSERT_FALSE(refresh);
     ASSERT_FALSE(usages);
     ASSERT_FALSE(rename);

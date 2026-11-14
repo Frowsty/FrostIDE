@@ -121,6 +121,8 @@ public:
 
     // Returns true when `folder` belongs to a FrostEngine workspace with a built FrostEditor binary
     // whose schema.export has not yet been cached for its current mtime.
+    void invalidateSchemaCache();
+
     [[nodiscard]] bool needsSchemaWarmup(io::IFileSystem& fs, std::string_view folder) const;
 
 private:

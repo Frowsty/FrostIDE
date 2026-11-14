@@ -97,6 +97,8 @@ struct Request {
     std::map<std::string, std::string> sourceInputs;
     bool sourceInputsComplete = true;
     BindingCompileContext compileContext;
+    std::vector<NameLiteral> embeddedLua;
+    std::vector<std::string> embeddedLuaRefusals;
 };
 
 std::optional<std::string> physicalPath(llvm::StringRef input) {
@@ -444,6 +446,29 @@ public:
 
     bool shouldVisitTemplateInstantiations() const { return true; }
 
+    // Only this actual engine API promises that argument zero is a complete Lua chunk.
+    bool VisitCallExpr(clang::CallExpr* call) {
+        const auto* callee = call->getDirectCallee();
+        if (!callee || callee->getQualifiedNameAsString() != "Frost::ScriptEngine::ExecuteString")
+            return true;
+        const auto& sm = m_context.getSourceManager();
+        const auto location = sm.getExpansionLoc(call->getExprLoc());
+        const auto path = physicalPath(sm.getFilename(location));
+        if (!path || !insideRoot(m_request.root, *path))
+            return true;
+        const auto* literal = call->getNumArgs() ? literalName(call->getArg(0)) : nullptr;
+        Candidate candidate;
+        if (literal)
+            captureNameLiteral(*literal, m_context, m_request.root, candidate);
+        if (!candidate.nameLiteral) {
+            m_request.embeddedLuaRefusals.push_back(*path + ":" +
+                std::to_string(sm.getExpansionLineNumber(location)) + ": computed/macro/concatenated Lua chunk");
+        } else {
+            m_request.embeddedLua.push_back(std::move(*candidate.nameLiteral));
+        }
+        return true;
+    }
+
     bool VisitCXXMemberCallExpr(clang::CXXMemberCallExpr* call) {
         const auto* method = call->getMethodDecl();
         if (!method)
@@ -721,8 +746,16 @@ void report(const Request& request, bool parsed, llvm::StringRef failure) {
     llvm::json::Array sourceInputs;
     for (const auto& [path, digest] : request.sourceInputs)
         sourceInputs.push_back(llvm::json::Object{{"path", path}, {"sha256", digest}});
+    llvm::json::Array embeddedLua, embeddedLuaRefusals;
+    for (const auto& chunk : request.embeddedLua)
+        embeddedLua.push_back(nameLiteralJson(chunk));
+    for (const auto& reason : request.embeddedLuaRefusals)
+        embeddedLuaRefusals.push_back(reason);
     printJson({{"schemaVersion", 1},
                {"translationUnitParsed", parsed},
+               {"embeddedLuaProfile", "Frost::ScriptEngine::ExecuteString/v1"},
+               {"embeddedLua", std::move(embeddedLua)},
+               {"embeddedLuaRefusals", std::move(embeddedLuaRefusals)},
                {"sourceInputs", std::move(sourceInputs)},
                {"compilationContext", bindingCompileContextJson(request.compileContext)},
                {"results", std::move(rows)}});
