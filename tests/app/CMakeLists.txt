@@ -127,6 +127,18 @@ target_compile_definitions(app_binding_corpus_tests PRIVATE ${_frost_workbench_d
     FROST_BINDING_CORPUS_ARTIFACTS="${CMAKE_BINARY_DIR}/binding-corpus-artifacts")
 add_dependencies(app_binding_corpus_tests frost-clang)
 
+# Authored R11 composition using the existing Workbench rig and real AST proposal engine.
+frost_add_test(app_cpp_refactoring_journey_tests QT
+    SOURCES workbench_cpp_refactoring_journey_test.cpp
+    DEPS frost::app frost::build frost::lang frost::rpc frost::io
+    LABELS integration clangd
+    TIMEOUT 600)
+target_include_directories(app_cpp_refactoring_journey_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_cpp_refactoring_journey_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+add_dependencies(app_cpp_refactoring_journey_tests frost-clang)
+
 # DBG-10 real lldb sessions use actual source/stack/variable responses, separately from doubles.
 frost_add_test(app_multi_session_debug_real_tests QT
     SOURCES multi_session_debug_real_test.cpp
