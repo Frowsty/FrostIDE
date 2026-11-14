@@ -125,6 +125,7 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
         report(applied.error(), "Completion");
         return;
     }
+    m_liveTemplate.reset();
     m_tabStops = std::move(commit->tabStops);
     if (!m_tabStops.empty()) {
         const std::optional<text::Snapshot> after = m_services.host.snapshot();
@@ -141,6 +142,7 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
 }
 
 bool LanguageController::nextTabStop() {
+    if (m_liveTemplate && !m_tabStops.empty()) return advanceLiveTemplate();
     const std::optional<text::Snapshot> snapshot = m_services.host.snapshot();
     if (m_tabStops.empty() || !snapshot) {
         m_tabStops.clear();

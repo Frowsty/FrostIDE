@@ -135,20 +135,7 @@ void LanguageController::insertSnippetAt(text::ByteRange replaceRange, std::stri
         report(applied.error(), undoLabel);
         return;
     }
-    m_tabStops.clear();
-    for (const fl::SnippetTabStop& stop : parsed.tabStops) {
-        m_tabStops.push_back(text::ByteRange{.begin = ByteOffset{base.value() + stop.begin},
-                                             .end = ByteOffset{base.value() + stop.end}});
-    }
-    if (!m_tabStops.empty()) {
-        const std::optional<text::Snapshot> after = m_services.host.snapshot();
-        m_tabStopsDocumentSize = after ? after->size().value() : 0;
-        if (m_tabStops.size() == 1 && m_tabStops.front().empty()) {
-            m_tabStops.clear();
-        } else {
-            static_cast<void>(nextTabStop());
-        }
-    }
+    beginLiveTemplate(parsed, base);
 }
 
 void LanguageController::showIntentions() {

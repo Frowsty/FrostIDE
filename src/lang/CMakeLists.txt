@@ -64,6 +64,7 @@ frost_add_library(lang LAYER lang
         src/save_actions.cpp
         src/semantic_tokens.cpp
         src/snippet.cpp
+        src/spelling.cpp
         src/templates.cpp
         src/symbols.cpp
         src/uri.cpp
@@ -73,5 +74,5 @@ target_compile_definitions(frost_lang PRIVATE FROST_PINNED_LLVM_VERSION="${_fros
     FROST_PINNED_LUALS_VERSION="${_frost_luals_version}")
 if(WIN32)
     # advapi32: RegGetValueW (the Windows SDK root); shell32: SHGetFolderPathW (vswhere's folder).
-    target_link_libraries(frost_lang PRIVATE advapi32 shell32)
+    target_link_libraries(frost_lang PRIVATE advapi32 shell32 ole32)
 endif()

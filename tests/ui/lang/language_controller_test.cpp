@@ -30,6 +30,8 @@
 #include <QScopeGuard>
 #include <QShortcut>
 #include <QThread>
+#include <QTimer>
+#include <QInputDialog>
 #include <QTreeWidget>
 #include <QWidget>
 #include <gtest/gtest.h>
@@ -1731,7 +1733,7 @@ TEST(LanguageControllerRefactoring, LiveAndPostfixTemplatesFollowTheLanguage) {
         host.caretAfter("items.size().if");
         Rig rig(server, host);
         EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
-        EXPECT_EQ(host.text(), "void f() {\n    if (items.size()) {\n    \n}\n}\n");
+        EXPECT_EQ(host.text(), "void f() {\n    if (items.size()) {\n        \n    }\n}\n");
     }
     {
         // Not at the start of a statement: the old whole-line expansion produced
@@ -1926,3 +1928,59 @@ TEST(LanguageControllerNavigation, TypeHierarchyPopulatesSupertypesAndSubtypesAn
 }
 
 } // namespace
+
+namespace frost::ui::lang {
+namespace {
+TEST(LanguageControllerTemplates, SharedLoopPlaceholderEditsMirrorBeforeAdvancing) {
+    FeatureServer server;
+    FakeHost host("void f() {\n    \n}\n", workPath("main.cpp"));
+    host.caretAfter("{\n    "); Rig rig(server,host);
+    rig.controller.insertLiveTemplate();
+    auto& choice=rig.controller.choicePopup(); ASSERT_TRUE(choice.isVisible());
+    choice.chosen(0); // The catalogue's actual first C++ item is the index loop.
+    ASSERT_TRUE(host.selected); const auto active=*host.selected;
+    fl::ByteEdit edit{active,"index"};
+    ASSERT_TRUE(host.applyEdits(std::span(&edit,1),"Edit placeholder",ByteOffset{active.begin.value()+5}));
+    EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab,Qt::NoModifier));
+    EXPECT_NE(host.text().find("std::size_t index = 0; index < count; ++index"),std::string::npos);
+    ASSERT_TRUE(host.selected);
+    EXPECT_EQ(host.snapshot()->text(*host.selected),"count");
+}
+TEST(LanguageControllerTemplates, CMakePostfixAndLiveSetsUseCurrentEditorText) {
+    FeatureServer server;
+    FakeHost host("    items.for",workPath("CMakeLists.txt")); host.caretAfter("items.for");
+    Rig rig(server,host);
+    EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab,Qt::NoModifier));
+    EXPECT_EQ(host.text(),"    foreach(item IN LISTS items)\n        \n    endforeach()");
+    rig.controller.insertLiveTemplate();
+    auto& choices=rig.controller.choicePopup(); ASSERT_TRUE(choices.isVisible());
+    bool function=false; for(int i=0;i<choices.list()->count();++i) function |= choices.list()->item(i)->text().startsWith("function");
+    EXPECT_TRUE(function);
+}
+TEST(LanguageControllerTemplates, StalePopupCannotInsertIntoChangedDocument) {
+    FeatureServer server; FakeHost host("",workPath("main.cpp")); Rig rig(server,host);
+    rig.controller.insertLiveTemplate(); ASSERT_TRUE(rig.controller.choicePopup().isVisible());
+    host.type("changed"); rig.controller.choicePopup().chosen(0);
+    EXPECT_EQ(host.text(),"changed");
+}
+} // namespace
+} // namespace frost::ui::langnamespace frost::ui::lang {
+namespace {
+TEST(LanguageControllerTemplates, ClosingControllerDuringAuthorPromptDoesNotApplyATemplate) {
+    FeatureServer server; FakeHost host("",workPath("main.cpp"));
+    auto rig=std::make_unique<Rig>(server,host);
+    rig->controller.insertLiveTemplate();
+    auto& popup=rig->controller.choicePopup();
+    std::size_t selected=static_cast<std::size_t>(popup.list()->count());
+    for(int row=0;row<popup.list()->count();++row) if(popup.list()->item(row)->text().startsWith("Doxygen")) selected=static_cast<std::size_t>(row);
+    ASSERT_LT(selected,static_cast<std::size_t>(popup.list()->count()));
+    QTimer::singleShot(0,[&] {
+        auto* dialog=qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+        rig.reset();
+        if(dialog) dialog->reject();
+    });
+    popup.chosen(selected);
+    EXPECT_FALSE(rig); EXPECT_TRUE(host.text().empty());
+}
+}
+}
