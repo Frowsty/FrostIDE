@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <future>
 #include <string>
 
 namespace {
@@ -159,6 +160,74 @@ TEST(WorkbenchGit, ThreeWayApplyRefusesDiskChangesSinceDialogOpened) {
     });
     ASSERT_EQ(rig.window->invoke(ui::git_actions::kResolveConflicts), input::InvokeResult::Ran);
     EXPECT_FALSE(repo.git({"ls-files", "--unmerged"}).stdoutBytes.empty());
+}
+
+TEST(WorkbenchGit, ConsecutiveDiffAppliesUseTheExactLatestSaveReceipt) {
+    TempRepo repo("app-diff-two-applies");
+    GitConfig config(repo);
+    repo.init();
+    repo.write("a.cpp", "int value;\n");
+    repo.commitAll("initial");
+    WorkDir dir("git-two-applies");
+    app::test::RigOptions options;
+    options.workbench.git = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(repo.work()));
+    ASSERT_TRUE(rig.workbench->openPath(repo.work()));
+    ASSERT_TRUE(rig.workbench->openPath(repo.path("a.cpp")));
+    rig.show();
+    ASSERT_TRUE(waitFor([&] { return controller(rig) && controller(rig)->snapshot(); }, 20s));
+    ASSERT_EQ(rig.window->invoke(ui::git_actions::kCompareWithHead), input::InvokeResult::Ran);
+    auto* diff = qobject_cast<ui::DiffViewer*>(rig.window->toolWindows().content("gitDiff"));
+    ASSERT_NE(diff, nullptr);
+    ASSERT_TRUE(waitFor([&] { return diff->rightText().contains("int value;"); }, 10s));
+    ASSERT_TRUE(diff->rightPane()->typeText("// first\n"));
+    ASSERT_TRUE(diff->applyWorkingCopy());
+    // No event-loop turn: the 300ms comparison refresh cannot repair a stale callback receipt.
+    ASSERT_TRUE(diff->rightPane()->typeText("// second\n"));
+    auto second = diff->applyWorkingCopy();
+    ASSERT_TRUE(second) << second.error().describe();
+    EXPECT_NE(repo.read("a.cpp").find("// first"), std::string::npos);
+    EXPECT_NE(repo.read("a.cpp").find("// second"), std::string::npos);
+}
+
+TEST(WorkbenchGit, AsyncDiffReloadCannotDiscardEditsMadeWhileBaseReadWasQueued) {
+    TempRepo repo("app-diff-queued-read");
+    GitConfig config(repo);
+    repo.init();
+    repo.write("a.cpp", "int value;\n");
+    repo.commitAll("initial");
+    WorkDir dir("git-queued-read");
+    app::test::RigOptions options;
+    options.workbench.git = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(repo.work()));
+    ASSERT_TRUE(rig.workbench->openPath(repo.work()));
+    ASSERT_TRUE(rig.workbench->openPath(repo.path("a.cpp")));
+    rig.show();
+    ASSERT_TRUE(waitFor([&] { return controller(rig) && controller(rig)->snapshot(); }, 20s));
+    ASSERT_EQ(rig.window->invoke(ui::git_actions::kCompareWithHead), input::InvokeResult::Ran);
+    auto* diff = qobject_cast<ui::DiffViewer*>(rig.window->toolWindows().content("gitDiff"));
+    ASSERT_NE(diff, nullptr);
+    ASSERT_TRUE(waitFor([&] { return diff->rightText().contains("int value;"); }, 10s));
+    auto entered = std::make_shared<std::promise<void>>();
+    auto release = std::make_shared<std::promise<void>>();
+    auto enteredFuture = entered->get_future();
+    auto releaseFuture = release->get_future().share();
+    bool released = false;
+    const auto unblock = qScopeGuard([&] { if (!released) release->set_value(); });
+    controller(rig)->service().readHeadContent(repo.path("a.cpp"), [entered, releaseFuture](auto) {
+        entered->set_value();
+        releaseFuture.wait();
+    });
+    ASSERT_EQ(enteredFuture.wait_for(10s), std::future_status::ready);
+    ASSERT_EQ(rig.window->invoke(ui::git_actions::kCompareWithHead), input::InvokeResult::Ran);
+    ASSERT_TRUE(diff->rightPane()->typeText("// comparison edit\n"));
+    released = true;
+    release->set_value();
+    ASSERT_TRUE(controller(rig)->waitForIdle(20s));
+    EXPECT_TRUE(diff->rightText().contains("// comparison edit"));
+    EXPECT_TRUE(diff->hasWorkingEdits());
 }
 
 TEST(WorkbenchGit, NestedProjectShowsDirtyBufferDiffAndCommitsSelectedFile) {

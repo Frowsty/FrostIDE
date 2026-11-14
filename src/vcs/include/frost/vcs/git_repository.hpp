@@ -129,7 +129,7 @@ struct CommitRequest {
     std::vector<std::string> paths; // Absolute paths of the selected files (a rename: either path).
     std::string message;
     bool amend = false;
-    std::vector<CommitCheck> checks;
+    std::vector<CommitCheck> checks = {};
     bool checksReviewed = false; // Caller reviewed these exact commands for this commit.
 };
 

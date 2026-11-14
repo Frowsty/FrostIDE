@@ -8,6 +8,7 @@
 #include "frost/document/load_service.hpp"
 #include "frost/io/path.hpp"
 #include "frost/sched/lane.hpp"
+#include "frost/storage/fingerprint.hpp"
 #include "frost/text/text_shaper.hpp"
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/icon_ids.hpp"
@@ -651,15 +652,16 @@ void GitIntegration::showDiff(const std::string& path, bool index) {
     }
     const auto expectedDisk = m_workbench.m_services.fs.readFile(path);
     if (!expectedDisk && expectedDisk.error().code() != ErrorCode::NotFound) return;
-    const std::optional<std::string> diskBytes = expectedDisk ? std::optional<std::string>(*expectedDisk) : std::nullopt;
+    std::optional<storage::DiskBase> diskReceipt;
+    if (expectedDisk) diskReceipt = storage::DiskBase{.size = expectedDisk->size(), .fingerprint = storage::xxh3Hash128(*expectedDisk)};
     const auto projectGeneration = m_projectGeneration;
     const QPointer<ui::DiffViewer> viewer(m_diff);
     const QPointer<GitIntegration> self(this);
     const auto generation = ++m_diffGeneration;
     readBaseText(path, index,
-                 [self, viewer, generation, index, path, diskBytes, projectGeneration,
+                 [self, viewer, generation, index, path, diskReceipt, projectGeneration,
                   working = std::move(working)](Result<std::optional<std::string>> head) mutable {
-                     if (!self || self->m_diffGeneration != generation || !viewer || !head)
+                     if (!self || self->m_diffGeneration != generation || !viewer || !head || viewer->hasWorkingEdits())
                          return;
                      auto diff = vcs::SideBySideDiff::compute(head->value_or(std::string()), std::move(working));
                      if (diff) {
@@ -670,7 +672,7 @@ void GitIntegration::showDiff(const std::string& path, bool index) {
                                          QObject::tr("Working copy"));
                          viewer->leftPane()->setPath(path);
                          viewer->rightPane()->setPath(path);
-                         viewer->setApplyHandler([self, path, diskBytes, projectGeneration](std::string_view expected, std::string_view result) -> Result<void> {
+                         viewer->setApplyHandler([self, path, diskReceipt, projectGeneration](std::string_view expected, std::string_view result) mutable -> Result<void> {
                              if (!self || self->m_projectGeneration != projectGeneration)
                                  return fail(ErrorCode::Cancelled, "The comparison's project changed");
                              if (!self->m_controller || self->m_controller->busy() || self->m_shutdown ||
@@ -688,7 +690,8 @@ void GitIntegration::showDiff(const std::string& path, bool index) {
                                  return fail(ErrorCode::Untrusted, "The comparison target is not trusted");
                              auto disk = fs.readFile(path);
                              if ((!disk && disk.error().code() != ErrorCode::NotFound) ||
-                                 (disk ? std::optional<std::string>(*disk) : std::nullopt) != diskBytes)
+                                 static_cast<bool>(disk) != diskReceipt.has_value() ||
+                                 (disk && (disk->size() != diskReceipt->size || storage::xxh3Hash128(*disk) != diskReceipt->fingerprint)))
                                  return fail(ErrorCode::Busy, "The file changed on disk; reopen the comparison before applying");
                              auto opened = self->m_workbench.m_documents->open(path);
                              if (!opened) return std::unexpected(std::move(opened.error()));
@@ -703,6 +706,9 @@ void GitIntegration::showDiff(const std::string& path, bool index) {
                                  if (auto* view = self->m_workbench.m_editors->find(document)) view->reloadFromDocument();
                                  return std::unexpected(std::move(saved.error()));
                              }
+                             // SaveManager's receipt describes the exact encoded bytes it wrote; never
+                             // adopt a later independent disk read as the baseline for another Apply.
+                             diskReceipt = document.disk();
                              if (auto* view = self->m_workbench.m_editors->find(document)) { view->reloadFromDocument(); view->markSaved(); }
                              self->documentChanged();
                              return {};
