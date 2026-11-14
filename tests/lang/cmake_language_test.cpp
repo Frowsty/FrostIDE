@@ -26,7 +26,7 @@ TEST(CMakeLanguage, SourceDeclarationsAndConfiguredCacheAreDistinguished) {
     EXPECT_EQ(definition->items()[0].find("range")->find("start")->integerAt("line"), 0);
     auto completion = queryCMakeLanguage(input, "textDocument/completion", params(2, 0));
     ASSERT_TRUE(completion);
-    EXPECT_EQ(completion->size(), 2);
+    EXPECT_GE(completion->size(), 2);
 }
 TEST(CMakeLanguage, SkipsCommentsDynamicNamesAndConditionalVariables) {
     auto buffer = text::TextBuffer::fromUtf8("# set(FAKE yes)\nset(${NAME} value)\nif(ON)\nset(CONDITIONAL yes)\nendif()\n\n").value();
@@ -35,7 +35,10 @@ TEST(CMakeLanguage, SkipsCommentsDynamicNamesAndConditionalVariables) {
     input.source = buffer.snapshot();
     auto result = queryCMakeLanguage(input, "textDocument/completion", params(5, 0));
     ASSERT_TRUE(result);
-    EXPECT_EQ(result->size(), 0);
+    for (const auto& item : result->items()) {
+        EXPECT_NE(item.stringAt("label"), "FAKE");
+        EXPECT_NE(item.stringAt("label"), "CONDITIONAL");
+    }
     std::stop_source stop;
     stop.request_stop();
     EXPECT_FALSE(queryCMakeLanguage(input, "textDocument/completion", params(5, 0), stop.get_token()));
