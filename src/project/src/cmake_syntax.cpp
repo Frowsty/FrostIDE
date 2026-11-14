@@ -13,7 +13,8 @@ public:
     Result<std::vector<CMakeSyntaxCommand>> scan(bool prefix = false) {
         std::vector<CMakeSyntaxCommand> commands;
         const auto reject = [&](std::string message) -> Result<std::vector<CMakeSyntaxCommand>> {
-            if (prefix) return commands;
+            if (prefix)
+                return commands;
             return fail(ErrorCode::Unsupported, std::move(message));
         };
         std::vector<std::string> scopes;

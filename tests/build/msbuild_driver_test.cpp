@@ -37,8 +37,10 @@ TEST(MsBuildLogging, AddsStructuredLoggerAndBinlogWithoutImportEmbedding) {
     request.binaryLogPath = R"(C:\FrostIDE state\logs\build.binlog)";
     auto spec = frost::build::msbuildProcessSpec(request);
     ASSERT_TRUE(spec) << spec.error().describe();
-    EXPECT_NE(std::ranges::find(spec->arguments, "-logger:FrostBuildLogger," + request.loggerAssembly), spec->arguments.end());
-    EXPECT_NE(std::ranges::find(spec->arguments, "-bl:" + request.binaryLogPath + ";ProjectImports=None"), spec->arguments.end());
+    EXPECT_NE(std::ranges::find(spec->arguments, "-logger:FrostBuildLogger," + request.loggerAssembly),
+              spec->arguments.end());
+    EXPECT_NE(std::ranges::find(spec->arguments, "-bl:" + request.binaryLogPath + ";ProjectImports=None"),
+              spec->arguments.end());
     request.binaryLogPath = "relative.binlog";
     EXPECT_FALSE(frost::build::msbuildProcessSpec(request));
     request.binaryLogPath = R"(C:\logs\bad;ProjectImports=Embed.binlog)";

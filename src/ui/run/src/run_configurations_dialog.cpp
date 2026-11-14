@@ -12,15 +12,15 @@
 #include "frost/run/run_types.hpp"
 
 #include <QComboBox>
-#include <QFileDialog>
-#include <QMessageBox>
 #include <QDialogButtonBox>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -153,13 +153,19 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     m_import->setEnabled(false);
     left->addWidget(m_import);
     connect(m_import, &QPushButton::clicked, this, [this] {
-        const auto file = QFileDialog::getOpenFileName(this, tr("Import Visual Studio configurations"), {},
-            tr("Visual Studio configurations (launch.vs.json tasks.vs.json)"));
-        if (file.isEmpty()) return;
+        const auto file =
+            QFileDialog::getOpenFileName(this, tr("Import Visual Studio configurations"), {},
+                                         tr("Visual Studio configurations (launch.vs.json tasks.vs.json)"));
+        if (file.isEmpty())
+            return;
         auto result = importFile(utf8(file));
-        if (!result) { m_error->setText(qs(result.error().message())); return; }
-        QString message = tr("Imported %1 configurations into this dialog. Save with OK; Cancel discards them. No command was executed.")
-            .arg(result->configurations.size());
+        if (!result) {
+            m_error->setText(qs(result.error().message()));
+            return;
+        }
+        QString message = tr("Imported %1 configurations into this dialog. Save with OK; Cancel discards them. No "
+                             "command was executed.")
+                              .arg(result->configurations.size());
         for (const auto& issue : result->skipped)
             message += QStringLiteral("\n") + qs(issue.entry + ": " + issue.reason);
         QMessageBox::information(this, tr("Import result"), message);
@@ -291,12 +297,14 @@ Result<run::RunImportReport> RunConfigurationsDialog::importFile(const std::stri
         return fail(ErrorCode::Unsupported, "Import requires an open workspace");
     storeFields();
     auto result = m_importHandler(path, m_configurations);
-    if (!result) return std::unexpected(result.error());
+    if (!result)
+        return std::unexpected(result.error());
     for (const auto& config : result->configurations)
         m_configurations.push_back(config);
     refreshList();
     m_row = -1;
-    if (!result->configurations.empty()) m_list->setCurrentRow(static_cast<int>(m_configurations.size() - 1));
+    if (!result->configurations.empty())
+        m_list->setCurrentRow(static_cast<int>(m_configurations.size() - 1));
     return result;
 }
 

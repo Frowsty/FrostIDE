@@ -9,16 +9,17 @@
 
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
+#include "frost/debug/cmake_dap.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/project/standalone_project.hpp"
 #include "frost/settings/keys.hpp"
+#include "frost/ui/debug_controller.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/run_controller.hpp"
-#include "frost/ui/debug_controller.hpp"
-#include "frost/debug/cmake_dap.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
@@ -29,8 +30,6 @@
 #include "frost/ui/tr.hpp"
 
 #include "cmake_integration.hpp"
-#include "standalone_build_backend.hpp"
-#include "frost/project/standalone_project.hpp"
 #include "engine_binding_integration.hpp"
 #include "engine_integration.hpp"
 #include "engine_mixed_launch.hpp"
@@ -38,6 +37,7 @@
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "project_edit_process.hpp"
+#include "standalone_build_backend.hpp"
 #include "unity_control.hpp"
 #include "workbench_project_helpers.hpp"
 #include "workbench_source_rename_preview.hpp"
@@ -106,7 +106,8 @@ Result<void> Workbench::openPath(std::string_view path, FileLocation at) {
     if (extensionOf(canonical) == ".frostproj")
         return openFolder(std::string(io::parentPath(canonical)), false, canonical);
     const auto marker = io::fileName(canonical);
-    if (!hasProject() && (marker == "compile_commands.json" || marker == "Makefile" || marker == "makefile" || marker == "GNUmakefile"))
+    if (!hasProject() &&
+        (marker == "compile_commands.json" || marker == "Makefile" || marker == "makefile" || marker == "GNUmakefile"))
         return openFolder(std::string(io::parentPath(canonical)), false, canonical);
     if (isSolutionFile(canonical)) {
         return openSolution(canonical);
@@ -138,11 +139,12 @@ Result<void> Workbench::openExternalProject(std::string_view path) {
     if (status->type == io::FileType::Regular && extensionOf(canonical) == ".frostproj")
         return openPath(canonical);
     const auto marker = io::fileName(canonical);
-    if (status->type == io::FileType::Regular && (marker == "compile_commands.json" || marker == "Makefile" ||
-        marker == "makefile" || marker == "GNUmakefile"))
+    if (status->type == io::FileType::Regular &&
+        (marker == "compile_commands.json" || marker == "Makefile" || marker == "makefile" || marker == "GNUmakefile"))
         return openFolder(std::string(io::parentPath(canonical)), false, canonical);
     if (status->type != io::FileType::Directory)
-        return fail(ErrorCode::InvalidArgument, "--project requires a directory, .frostproj, Makefile or compile_commands.json");
+        return fail(ErrorCode::InvalidArgument,
+                    "--project requires a directory, .frostproj, Makefile or compile_commands.json");
     auto entries = m_services.fs.listDirectory(canonical);
     if (!entries)
         return std::unexpected(std::move(entries.error()));
@@ -284,8 +286,8 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
     // CMK-17: ordinary folders remain lightweight. No Make recipe is evaluated by opening one.
     // CMake wins for folder discovery; explicit Make/database markers select the standalone model.
     const bool explicitStandalone = io::fileName(recentPath) == "compile_commands.json" ||
-        io::fileName(recentPath) == "Makefile" || io::fileName(recentPath) == "makefile" ||
-        io::fileName(recentPath) == "GNUmakefile";
+                                    io::fileName(recentPath) == "Makefile" || io::fileName(recentPath) == "makefile" ||
+                                    io::fileName(recentPath) == "GNUmakefile";
     if (m_window && !explicitStandalone && lists && m_services.fs.exists(*lists).value_or(false)) {
         m_cmake = std::make_unique<CMakeIntegration>(
             m_services.fs, m_services.launcher, m_services.trust, m_services.settings, *m_build, *m_buildService,
@@ -301,16 +303,18 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
                     restartClangdIfCMakeStateChanged();
             });
         connectCMakeRunConfigurations(); // RUN-2/RUN-3: the targets' run configurations.
-        m_cmake->setConfigureDebugger([this](std::string endpoint, std::string root, std::function<void()> cancel)
-            -> Result<void> {
-            if (!m_debug) return fail(ErrorCode::Unsupported, "Debugger UI is unavailable");
+        m_cmake->setConfigureDebugger([this](std::string endpoint, std::string root,
+                                             std::function<void()> cancel) -> Result<void> {
+            if (!m_debug)
+                return fail(ErrorCode::Unsupported, "Debugger UI is unavailable");
             debug::DebugTarget target;
             target.name = "CMake configure";
             target.program = io::joinPath(root, "CMakeLists.txt").value_or("");
             target.trustRoots = {root};
             auto admission = [trust = &m_services.trust, root] { return trust->requireTrusted(root); };
             return m_debug->startAdapterTarget(target, debug::cmakeDapFactory(std::move(endpoint), std::move(cancel)),
-                rpc::Json::object(), "cmake", debug::DebugTargetMode::Launch, false, std::move(admission));
+                                               rpc::Json::object(), "cmake", debug::DebugTargetMode::Launch, false,
+                                               std::move(admission));
         });
         if (auto opened = m_cmake->open(path); !opened) {
             m_cmake.reset();
@@ -319,17 +323,19 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
     }
     if (!m_cmake) {
         auto standalone = project::readStandaloneProject(m_services.fs, path, false);
-        if (!standalone) return std::unexpected(standalone.error());
+        if (!standalone)
+            return std::unexpected(standalone.error());
         if (*standalone) {
             const auto marker = io::fileName(recentPath);
             if (marker == "Makefile" || marker == "makefile" || marker == "GNUmakefile")
                 (**standalone).makefile = recentPath;
-            m_standalone = std::make_unique<StandaloneBuildBackend>(std::move(**standalone), m_services.fs,
-                m_services.launcher, m_services.trust, *m_buildService);
+            m_standalone = std::make_unique<StandaloneBuildBackend>(
+                std::move(**standalone), m_services.fs, m_services.launcher, m_services.trust, *m_buildService);
             const QPointer<StandaloneBuildBackend> identity(m_standalone.get());
             m_standalone->setCallbacks(m_build->serviceCallbacks([identity] { return !identity.isNull(); }));
             m_build->setBackend(m_standalone.get());
-            if (m_window) m_standalone->attachMenu(*m_window);
+            if (m_window)
+                m_standalone->attachMenu(*m_window);
         }
     }
     if (m_nav) {

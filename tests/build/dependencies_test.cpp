@@ -4,7 +4,9 @@
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
+
 #include <gtest/gtest.h>
+
 #include <algorithm>
 
 namespace frost::build {
@@ -34,9 +36,13 @@ protected:
         ASSERT_TRUE(trust->trust(path("profiles")));
     }
     DependencyRequest request() {
-        return {.manager = DependencyManager::Vcpkg, .root = path("project"), .executable = path("sdk/vcpkg"),
-            .input = path("project/vcpkg.json"), .outputDirectory = ".frost/dependencies/vcpkg",
-            .localFeed = path("feed"), .triplet = "x64-windows"};
+        return {.manager = DependencyManager::Vcpkg,
+                .root = path("project"),
+                .executable = path("sdk/vcpkg"),
+                .input = path("project/vcpkg.json"),
+                .outputDirectory = ".frost/dependencies/vcpkg",
+                .localFeed = path("feed"),
+                .triplet = "x64-windows"};
     }
     ManualClock clock;
     io::MemFs fs{clock};
@@ -91,24 +97,33 @@ TEST_F(DependenciesTest, ConsentedInvocationReachesActualProcessContractAndCance
 TEST_F(DependenciesTest, ConanUsesTwoExplicitProfilesAndNoRemotes) {
     ASSERT_TRUE(fs.writeFileAtomic(path("project/conanfile.txt"), "[generators]\n"));
     auto input = request();
-    input.manager = DependencyManager::Conan; input.executable = path("sdk/conan");
-    input.input = path("project/conanfile.txt"); input.hostProfile = path("profiles/host"); input.buildProfile = path("profiles/build");
+    input.manager = DependencyManager::Conan;
+    input.executable = path("sdk/conan");
+    input.input = path("project/conanfile.txt");
+    input.hostProfile = path("profiles/host");
+    input.buildProfile = path("profiles/build");
     auto plan = planDependencies(fs, input);
     ASSERT_TRUE(plan);
     EXPECT_NE(std::ranges::find(plan->process.arguments, "--no-remote"), plan->process.arguments.end());
-    EXPECT_NE(std::ranges::find(plan->process.arguments, "--profile:host=" + input.hostProfile), plan->process.arguments.end());
-    EXPECT_NE(std::ranges::find(plan->process.arguments, "--profile:build=" + input.buildProfile), plan->process.arguments.end());
+    EXPECT_NE(std::ranges::find(plan->process.arguments, "--profile:host=" + input.hostProfile),
+              plan->process.arguments.end());
+    EXPECT_NE(std::ranges::find(plan->process.arguments, "--profile:build=" + input.buildProfile),
+              plan->process.arguments.end());
 }
 TEST_F(DependenciesTest, NativeNugetRequiresExistingPackagesConfigAndExplicitLocalSource) {
-    auto input = request(); input.manager = DependencyManager::NativeNuget; input.executable = path("sdk/nuget.exe");
+    auto input = request();
+    input.manager = DependencyManager::NativeNuget;
+    input.executable = path("sdk/nuget.exe");
     ASSERT_TRUE(fs.writeFileAtomic(path("project/packages.config"), "<packages/>"));
-    input.input = path("project/packages.config"); input.outputDirectory = "packages";
+    input.input = path("project/packages.config");
+    input.outputDirectory = "packages";
     auto plan = planDependencies(fs, input);
     ASSERT_TRUE(plan);
     EXPECT_NE(std::ranges::find(plan->process.arguments, "-NonInteractive"), plan->process.arguments.end());
     input.localFeed.clear();
     EXPECT_FALSE(planDependencies(fs, input));
-    input = request(); input.outputDirectory = "../outside";
+    input = request();
+    input.outputDirectory = "../outside";
     EXPECT_FALSE(planDependencies(fs, input));
 }
 } // namespace

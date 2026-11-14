@@ -3,8 +3,9 @@
 // CMakeService (see frost/build/cmake_service.hpp): the job execution pipeline (trust, Save All,
 // tool and MSVC environment discovery, configure/clean/build steps, and outcome publication).
 
-#include "cmake_service_internal.hpp"
 #include "frost/project/standalone_project.hpp"
+
+#include "cmake_service_internal.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -70,7 +71,8 @@ Result<void> CMakeService::State::startJobLocked(JobKind kind, bool automatic, C
         }
         if (wrapper) {
             if (!request.file.empty())
-                return fail(ErrorCode::Unsupported, "single-file compilation is unavailable through a personal build wrapper");
+                return fail(ErrorCode::Unsupported,
+                            "single-file compilation is unavailable through a personal build wrapper");
             if (!model)
                 return fail(ErrorCode::InvalidArgument,
                             "configure the selected profile before using its build wrapper");
@@ -466,19 +468,34 @@ void CMakeService::State::runNextStepLocked() {
     } else {
         if (!job->request.file.empty()) {
             auto database = io::joinPath(job->profile.buildDirectory, "compile_commands.json");
-            if (!database) { finishJobLocked(database.error()); return; }
+            if (!database) {
+                finishJobLocked(database.error());
+                return;
+            }
             auto status = fs.status(*database);
-            if (!status) { finishJobLocked(status.error()); return; }
+            if (!status) {
+                finishJobLocked(status.error());
+                return;
+            }
             if (status->size > 64 * 1024 * 1024) {
-                finishJobLocked(Error(ErrorCode::OutOfRange, "compilation database exceeds 64 MiB")); return;
+                finishJobLocked(Error(ErrorCode::OutOfRange, "compilation database exceeds 64 MiB"));
+                return;
             }
             auto bytes = fs.readFile(*database);
-            if (!bytes) { finishJobLocked(bytes.error()); return; }
-            if (bytes->size() > 64 * 1024 * 1024) {
-                finishJobLocked(Error(ErrorCode::OutOfRange, "compilation database exceeds 64 MiB")); return;
+            if (!bytes) {
+                finishJobLocked(bytes.error());
+                return;
             }
-            auto target = project::compilationDatabaseObjectTarget(*bytes, job->profile.buildDirectory, job->request.file);
-            if (!target) { finishJobLocked(target.error()); return; }
+            if (bytes->size() > 64 * 1024 * 1024) {
+                finishJobLocked(Error(ErrorCode::OutOfRange, "compilation database exceeds 64 MiB"));
+                return;
+            }
+            auto target =
+                project::compilationDatabaseObjectTarget(*bytes, job->profile.buildDirectory, job->request.file);
+            if (!target) {
+                finishJobLocked(target.error());
+                return;
+            }
             job->request.targetName = std::move(*target);
         }
         std::vector<std::string> targets;
@@ -486,18 +503,20 @@ void CMakeService::State::runNextStepLocked() {
             targets.push_back(job->request.targetName);
         }
         auto buildProfile = job->profile;
-        if (!job->request.file.empty()) buildProfile.buildCleanFirst = false;
+        if (!job->request.file.empty())
+            buildProfile.buildCleanFirst = false;
         spec.arguments = project::cmakeBuildArguments(buildProfile, targets, step == CMakeStep::Clean,
                                                       static_cast<int>(options.buildJobs));
         if (!job->request.file.empty() && step == CMakeStep::Clean) {
             if (job->tools.ninja.empty()) {
-                finishJobLocked(Error(ErrorCode::NotFound, "Ninja unavailable for single-file clean")); return;
+                finishJobLocked(Error(ErrorCode::NotFound, "Ninja unavailable for single-file clean"));
+                return;
             }
             spec.executable = job->tools.ninja;
             spec.arguments = {"-C", job->profile.buildDirectory, "-t", "clean", job->request.targetName};
             if (project::isMultiConfigGenerator(job->profile.generator))
                 spec.arguments.insert(spec.arguments.begin() + 2,
-                    {"-f", "build-" + job->profile.effectiveConfiguration() + ".ninja"});
+                                      {"-f", "build-" + job->profile.effectiveConfiguration() + ".ninja"});
         }
         spec.workingDirectory = job->profile.buildDirectory;
         // Without a chosen target the profile's build preset decides (its "targets").
@@ -579,7 +598,8 @@ void CMakeService::State::runNextStepLocked() {
         return;
     }
     job->session = std::move(*session);
-    if (configure && job->debuggerReady) emit(std::move(job->debuggerReady));
+    if (configure && job->debuggerReady)
+        emit(std::move(job->debuggerReady));
     setStateLocked(BuildState::Running);
 }
 

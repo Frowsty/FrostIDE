@@ -110,8 +110,7 @@ struct MsBuildRequest {
     // -p:SelectedFiles list. Required (non-empty) for Compile, refused for the other actions.
     std::vector<std::string> selectedFiles{};
     std::string loggerAssembly{}; // Shipped ProjectHostVsProbe.exe containing FrostBuildLogger; absolute.
-    std::string binaryLogPath{}; // Absolute artifact path; empty disables binary logging.
-
+    std::string binaryLogPath{};  // Absolute artifact path; empty disables binary logging.
 };
 
 // The target name MSBuild gives a project of a solution: `name` with each of % $ @ ; . ( ) '

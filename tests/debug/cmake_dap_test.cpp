@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/debug/cmake_dap.hpp"
+
 #include <gtest/gtest.h>
 namespace frost::debug {
 TEST(CMakeDap, InvalidEndpointNeverConnectsAndCancelsOwnedConfigure) {

@@ -5,7 +5,9 @@
 #include "frost/io/path.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/project/vcxproj.hpp"
+
 #include <gtest/gtest.h>
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -27,13 +29,15 @@ protected:
     std::string copyFixture(std::string_view name) {
         const auto source = io::joinPath(FROST_DEPENDENCY_FIXTURES, name).value();
         const auto destination = io::joinPath(root, name).value();
-        std::filesystem::copy(io::toStdPath(source).value(), io::toStdPath(destination).value(), std::filesystem::copy_options::recursive);
+        std::filesystem::copy(io::toStdPath(source).value(), io::toStdPath(destination).value(),
+                              std::filesystem::copy_options::recursive);
         return destination;
     }
     Result<DependencyConsent> consent(const DependencyPlan& plan) {
         // Explicit fixture-test consent, scoped to this exact plan and its local input folders.
         for (const auto& folder : plan.trustRoots)
-            if (auto grant = trust->trust(folder); !grant) return std::unexpected(std::move(grant.error()));
+            if (auto grant = trust->trust(folder); !grant)
+                return std::unexpected(std::move(grant.error()));
         return consentDependencies(plan, *trust);
     }
     void configureBuildRun(const DependencyPlan& plan, const std::string& source) {
@@ -43,8 +47,10 @@ protected:
         const auto ninja = tool("FROST_TEST_NINJA");
         ASSERT_TRUE(io::isAbsolutePath(ninja)) << "set FROST_TEST_NINJA";
         const auto binary = io::joinPath(root, "cmake-build").value();
-        cmake.arguments = {"-S", source, "-B", binary, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug", "-DCMAKE_MAKE_PROGRAM=" + ninja};
-        for (const auto& variable : plan.cmakeCache) cmake.arguments.push_back("-D" + variable);
+        cmake.arguments = {
+            "-S", source, "-B", binary, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug", "-DCMAKE_MAKE_PROGRAM=" + ninja};
+        for (const auto& variable : plan.cmakeCache)
+            cmake.arguments.push_back("-D" + variable);
         auto configured = io::runToCompletion(io::realProcessLauncher(), cmake, {}, std::chrono::minutes(5));
         ASSERT_TRUE(configured) << configured.error().describe();
         ASSERT_EQ(configured->exitCode, 0) << configured->stdoutBytes << configured->stderrBytes;
@@ -75,20 +81,26 @@ TEST_F(DependenciesReal, PhysicalOutputLinksAndRetargetedExecutablesRefuseBefore
     for (const auto& sdk : {sdkA, sdkB}) {
         ASSERT_TRUE(fs.createDirectories(io::joinPath(sdk, "scripts/buildsystems").value()));
         ASSERT_TRUE(fs.writeFileAtomic(io::joinPath(sdk, "vcpkg").value(), "fixture tool"));
-        ASSERT_TRUE(fs.writeFileAtomic(io::joinPath(sdk, "scripts/buildsystems/vcpkg.cmake").value(), "# fixture toolchain"));
+        ASSERT_TRUE(
+            fs.writeFileAtomic(io::joinPath(sdk, "scripts/buildsystems/vcpkg.cmake").value(), "# fixture toolchain"));
     }
     const auto alias = io::joinPath(root, "sdk-alias").value();
     std::error_code error;
     std::filesystem::create_directory_symlink(io::toStdPath(sdkA).value(), io::toStdPath(alias).value(), error);
     ASSERT_FALSE(error) << "Directory-link privilege is required: " << error.message();
-    DependencyRequest request{.manager = DependencyManager::Vcpkg, .root = project,
-        .executable = io::joinPath(alias, "vcpkg").value(), .input = io::joinPath(project, "vcpkg.json").value(),
-        .outputDirectory = "escape/installed", .triplet = "x64-windows"};
-    std::filesystem::create_directory_symlink(io::toStdPath(outside).value(), io::toStdPath(io::joinPath(project, "escape").value()).value(), error);
+    DependencyRequest request{.manager = DependencyManager::Vcpkg,
+                              .root = project,
+                              .executable = io::joinPath(alias, "vcpkg").value(),
+                              .input = io::joinPath(project, "vcpkg.json").value(),
+                              .outputDirectory = "escape/installed",
+                              .triplet = "x64-windows"};
+    std::filesystem::create_directory_symlink(io::toStdPath(outside).value(),
+                                              io::toStdPath(io::joinPath(project, "escape").value()).value(), error);
     ASSERT_FALSE(error);
     EXPECT_FALSE(planDependencies(fs, request));
     const auto dangling = io::joinPath(project, "dangling").value();
-    std::filesystem::create_directory_symlink(io::toStdPath(io::joinPath(root, "missing").value()).value(), io::toStdPath(dangling).value(), error);
+    std::filesystem::create_directory_symlink(io::toStdPath(io::joinPath(root, "missing").value()).value(),
+                                              io::toStdPath(dangling).value(), error);
     ASSERT_FALSE(error);
     request.outputDirectory = "dangling/installed";
     EXPECT_FALSE(planDependencies(fs, request));
@@ -118,16 +130,21 @@ public:
 #ifdef _WIN32
         _putenv_s("CONAN_HOME", previous.value_or("").c_str());
 #else
-        if (previous) setenv("CONAN_HOME", previous->c_str(), 1); else unsetenv("CONAN_HOME");
+        if (previous)
+            setenv("CONAN_HOME", previous->c_str(), 1);
+        else
+            unsetenv("CONAN_HOME");
 #endif
     }
+
 private:
     std::optional<std::string> previous;
 };
 TEST_F(DependenciesReal, ConanCachedLocalRecipeGeneratesToolchainAndBuildsConsumer) {
     const auto fixture = copyFixture("conan");
     const auto cache = tool("FROST_TEST_CONAN_HOME");
-    ASSERT_TRUE(io::isAbsolutePath(cache)) << "Set a dedicated preseeded FROST_TEST_CONAN_HOME; fixture recipe is provided";
+    ASSERT_TRUE(io::isAbsolutePath(cache))
+        << "Set a dedicated preseeded FROST_TEST_CONAN_HOME; fixture recipe is provided";
     ScopedConanHome cacheScope(cache);
     const auto client = io::joinPath(fixture, "client").value();
 #ifdef _WIN32
@@ -137,9 +154,13 @@ TEST_F(DependenciesReal, ConanCachedLocalRecipeGeneratesToolchainAndBuildsConsum
 #endif
     auto host = tool("FROST_TEST_CONAN_HOST_PROFILE");
     auto build = tool("FROST_TEST_CONAN_BUILD_PROFILE");
-    DependencyRequest request{.manager = DependencyManager::Conan, .root = client, .executable = tool("FROST_TEST_CONAN"),
-        .input = io::joinPath(client, "conanfile.txt").value(), .outputDirectory = ".frost/generated",
-        .hostProfile = host.empty() ? defaultProfile : host, .buildProfile = build.empty() ? defaultProfile : build};
+    DependencyRequest request{.manager = DependencyManager::Conan,
+                              .root = client,
+                              .executable = tool("FROST_TEST_CONAN"),
+                              .input = io::joinPath(client, "conanfile.txt").value(),
+                              .outputDirectory = ".frost/generated",
+                              .hostProfile = host.empty() ? defaultProfile : host,
+                              .buildProfile = build.empty() ? defaultProfile : build};
     auto plan = planDependencies(fs, request);
     ASSERT_TRUE(plan) << plan.error().describe();
     auto allowed = consent(*plan);
@@ -157,8 +178,12 @@ TEST_F(DependenciesReal, VcpkgFilesystemRegistryInstallsAndConfiguresActualConsu
 #else
     const auto triplet = "x64-linux";
 #endif
-    DependencyRequest request{.manager = DependencyManager::Vcpkg, .root = project, .executable = tool("FROST_TEST_VCPKG"),
-        .input = io::joinPath(project, "vcpkg.json").value(), .outputDirectory = ".frost/installed", .triplet = triplet};
+    DependencyRequest request{.manager = DependencyManager::Vcpkg,
+                              .root = project,
+                              .executable = tool("FROST_TEST_VCPKG"),
+                              .input = io::joinPath(project, "vcpkg.json").value(),
+                              .outputDirectory = ".frost/installed",
+                              .triplet = triplet};
     auto plan = planDependencies(fs, request);
     ASSERT_TRUE(plan) << plan.error().describe();
     auto allowed = consent(*plan);
@@ -173,9 +198,12 @@ TEST_F(DependenciesReal, VcpkgFilesystemRegistryInstallsAndConfiguresActualConsu
 #ifdef _WIN32
 TEST_F(DependenciesReal, NativeNugetRestoresLocalArchiveAndMsbuildConsumesItsTargets) {
     const auto project = copyFixture("native");
-    DependencyRequest request{.manager = DependencyManager::NativeNuget, .root = project, .executable = tool("FROST_TEST_NUGET"),
-        .input = io::joinPath(project, "client/packages.config").value(), .outputDirectory = "packages",
-        .localFeed = io::joinPath(project, "feed").value()};
+    DependencyRequest request{.manager = DependencyManager::NativeNuget,
+                              .root = project,
+                              .executable = tool("FROST_TEST_NUGET"),
+                              .input = io::joinPath(project, "client/packages.config").value(),
+                              .outputDirectory = "packages",
+                              .localFeed = io::joinPath(project, "feed").value()};
     auto plan = planDependencies(fs, request);
     ASSERT_TRUE(plan) << plan.error().describe();
     auto allowed = consent(*plan);
@@ -187,7 +215,8 @@ TEST_F(DependenciesReal, NativeNugetRestoresLocalArchiveAndMsbuildConsumesItsTar
     io::ProcessSpec build;
     build.executable = tool("FROST_TEST_MSBUILD");
     ASSERT_TRUE(io::isAbsolutePath(build.executable));
-    build.arguments = {io::joinPath(project, "client/client.vcxproj").value(), "/t:Build", "/p:Configuration=Debug", "/p:Platform=x64", "/nologo"};
+    build.arguments = {io::joinPath(project, "client/client.vcxproj").value(), "/t:Build", "/p:Configuration=Debug",
+                       "/p:Platform=x64", "/nologo"};
     auto result = io::runToCompletion(io::realProcessLauncher(), build, {}, std::chrono::minutes(5));
     ASSERT_TRUE(result);
     EXPECT_EQ(result->exitCode, 0) << result->stdoutBytes << result->stderrBytes;

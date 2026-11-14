@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // CMK-17 read-only folder recognition and literal Make planning; no external process needed.
-#include "frost/project/standalone_project.hpp"
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
+#include "frost/project/standalone_project.hpp"
+
 #include <gtest/gtest.h>
 
 namespace frost::project {
@@ -14,7 +15,8 @@ TEST(StandaloneProject, RelativeDatabaseDirectoriesAndDuplicateTranslationUnits)
     auto result = compilationDatabaseSources(R"([
       {"directory":"../src","file":"one.cpp","arguments":["c++","-c","one.cpp"]},
       {"directory":"../src","file":"one.cpp","command":"c++ -DOTHER -c one.cpp"}
-    ])", at("build"));
+    ])",
+                                             at("build"));
     ASSERT_TRUE(result) << result.error().describe();
     ASSERT_EQ(result->size(), 1u);
     EXPECT_EQ(result->front(), at("src/one.cpp"));
@@ -23,7 +25,8 @@ TEST(StandaloneProject, DoesNotInferCompilerCommandsFromMalformedEntries) {
     EXPECT_FALSE(compilationDatabaseSources(R"({"file":"one.cpp"})", at()));
     EXPECT_FALSE(compilationDatabaseSources(R"([{"directory":".","file":"one.cpp"}])", at()));
     EXPECT_FALSE(compilationDatabaseSources(R"([{"directory":".","file":"one.cpp","arguments":[7]}])", at()));
-    EXPECT_FALSE(compilationDatabaseSources(R"([{"directory":".","file":"one.cpp","file":"two.cpp","command":"c++"}])", at()));
+    EXPECT_FALSE(
+        compilationDatabaseSources(R"([{"directory":".","file":"one.cpp","file":"two.cpp","command":"c++"}])", at()));
 }
 TEST(StandaloneProject, DatabaseOnlyCannotInventBuildOrRunProducts) {
     StandaloneProject model{.root = at(), .database = at("compile_commands.json")};
@@ -62,16 +65,19 @@ TEST(StandaloneProject, DiscoveryIsReadOnlyAndUsesGnuMakePrecedence) {
 TEST(StandaloneProject, NinjaObjectTargetComesFromActualOutput) {
     auto target = compilationDatabaseObjectTarget(R"([
       {"directory":".","file":"../main.cpp","arguments":["c++","-o","CMakeFiles/app.dir/main.cpp.o","-c","../main.cpp"]}
-    ])", at("build"), at("main.cpp"));
+    ])",
+                                                  at("build"), at("main.cpp"));
     ASSERT_TRUE(target) << target.error().describe();
     EXPECT_EQ(*target, "CMakeFiles/app.dir/main.cpp.o");
     EXPECT_FALSE(compilationDatabaseObjectTarget(R"([
       {"directory":".","file":"../main.cpp","output":"../outside.o","command":"c++"}
-    ])", at("build"), at("main.cpp")));
+    ])",
+                                                 at("build"), at("main.cpp")));
     EXPECT_FALSE(compilationDatabaseObjectTarget(R"([
       {"directory":".","file":"../main.cpp","output":"one.o","command":"c++"},
       {"directory":".","file":"../main.cpp","output":"two.o","command":"c++"}
-    ])", at("build"), at("main.cpp")));
+    ])",
+                                                 at("build"), at("main.cpp")));
 }
 } // namespace
 } // namespace frost::project

@@ -39,8 +39,8 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
-#include <vector>
 #include <utility>
+#include <vector>
 
 namespace frost::project {
 
@@ -63,10 +63,10 @@ struct ProjectEdit {
     // AddFiles/RemoveFiles: the files; RenameFiles: their old paths.
     std::vector<std::string> files = {};
     std::vector<std::string> renamedTo = {}; // RenameFiles: the new paths, pairwise with `files`.
-    bool earlyProperties = false; // Property group before Microsoft.Cpp.props (toolchain/dependency hooks).
+    bool earlyProperties = false;            // Property group before Microsoft.Cpp.props (toolchain/dependency hooks).
     std::vector<std::pair<std::string, std::string>> propertyUpdates = {}; // Prop.Name or ItemType.Metadata.
-    std::string filter = {};                 // AddFiles: a filter the .filters file defines; "" for none.
-    std::string project = {};                // AddProject/RemoveProject: the project file.
+    std::string filter = {};  // AddFiles: a filter the .filters file defines; "" for none.
+    std::string project = {}; // AddProject/RemoveProject: the project file.
     // File edits: the project configuration the solution's active configuration maps to; the
     // helper evaluates every configuration the project declares in any case.
     std::string configuration = {};

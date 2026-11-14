@@ -142,9 +142,9 @@ Result<std::string> projectEditRequest(const ProjectEdit& edit) {
         for (const auto& [key, value] : edit.propertyUpdates) {
             const auto dot = key.find('.');
             const auto valid = [](std::string_view name) {
-                return !name.empty() && std::ranges::all_of(name, [](unsigned char c) {
-                    return std::isalnum(c) != 0 || c == '_';
-                }) && (std::isalpha(static_cast<unsigned char>(name.front())) != 0 || name.front() == '_');
+                return !name.empty() &&
+                       std::ranges::all_of(name, [](unsigned char c) { return std::isalnum(c) != 0 || c == '_'; }) &&
+                       (std::isalpha(static_cast<unsigned char>(name.front())) != 0 || name.front() == '_');
             };
             if (dot == std::string::npos || !valid(std::string_view(key).substr(0, dot)) ||
                 !valid(std::string_view(key).substr(dot + 1)))

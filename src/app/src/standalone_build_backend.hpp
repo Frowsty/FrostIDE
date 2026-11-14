@@ -3,13 +3,18 @@
 #pragma once
 #include "frost/project/standalone_project.hpp"
 #include "frost/ui/toolwindows/build_controller.hpp"
+
 #include <QObject>
 #include <QPointer>
 class QMenu;
 class QWidget;
-namespace frost::ui { class ShellWindow; }
+namespace frost::ui {
+class ShellWindow;
+}
 
-namespace frost::project { class TrustStore; }
+namespace frost::project {
+class TrustStore;
+}
 namespace frost::app {
 
 // Lives on the GUI thread. Session callbacks marshal through QObject, so destruction discards late

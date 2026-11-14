@@ -172,8 +172,11 @@ TEST(StableLspRequester, OfflineJsonAndCMakeKeepTheirOwnRouteAcrossTabSwitch) {
 #else
     const std::string base = "/project/";
 #endif
-    auto params = [&](std::string_view name) { return frost::lang::Json::object().set("textDocument",
-        frost::lang::Json::object().set("uri", frost::lang::pathToUri(base + std::string(name)).value())); };
+    auto params = [&](std::string_view name) {
+        return frost::lang::Json::object().set(
+            "textDocument",
+            frost::lang::Json::object().set("uri", frost::lang::pathToUri(base + std::string(name)).value()));
+    };
     requester.setActivePath(base + "CMakePresets.json");
     auto json = requester.request("textDocument/completion", params("CMakePresets.json"));
     requester.setActivePath(base + "CMakeLists.txt");

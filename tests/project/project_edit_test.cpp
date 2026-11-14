@@ -53,8 +53,9 @@ TEST(ProjectEditProtocol, PropertyPagesPreserveExpressionsAsJsonStrings) {
     auto edit = fileEdit(ProjectEditKind::SetProperties);
     edit.files.clear();
     edit.earlyProperties = true;
-    edit.propertyUpdates = {{"ClCompile.AdditionalIncludeDirectories", "$(ProjectDir)include;%(AdditionalIncludeDirectories)"},
-                            {"Prop.NMakeBuildCommandLine", "tool \"quoted\"\nnext line"}};
+    edit.propertyUpdates = {
+        {"ClCompile.AdditionalIncludeDirectories", "$(ProjectDir)include;%(AdditionalIncludeDirectories)"},
+        {"Prop.NMakeBuildCommandLine", "tool \"quoted\"\nnext line"}};
     auto line = projectEditRequest(edit);
     ASSERT_TRUE(line) << line.error().describe();
     const auto got = members(*line);

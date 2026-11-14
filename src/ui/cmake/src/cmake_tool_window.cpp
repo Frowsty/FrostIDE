@@ -15,10 +15,10 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
-#include <QStyledItemDelegate>
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QSignalBlocker>
+#include <QStyledItemDelegate>
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolButton>
@@ -37,7 +37,8 @@ constexpr std::string_view kContext = "cmake";
 class CacheDelegate final : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
-    QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+    QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem& option,
+                          const QModelIndex& index) const override {
         if (index.column() != 2 || !index.data(Qt::UserRole).toBool())
             return nullptr;
         return QStyledItemDelegate::createEditor(parent, option, index);
@@ -81,7 +82,7 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
     bar->addWidget(m_stop);
     auto* kit = new QToolButton(this);
     kit->setObjectName(QStringLiteral("cmakeCreateKit"));
-    kit->setText(qtr(kContext, "Create Kit…"));
+    kit->setText(qtr(kContext, "Create Kitâ€¦"));
     bar->addWidget(kit);
     connect(kit, &QToolButton::clicked, this, &CMakeToolWindow::createKitRequested);
     connect(&m_controller, &CMakeController::busyChanged, kit, [kit](bool busy) { kit->setEnabled(!busy); });
@@ -141,7 +142,9 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
     m_tabs->addTab(m_targets, qtr(kContext, "Targets"));
     auto* cachePage = new QWidget(m_tabs);
     auto* cacheLayout = new QVBoxLayout(cachePage);
-    auto* cacheHelp = new QLabel(qtr(kContext, "Edits are pending until Apply reconfigures successfully. Presets are unchanged; a later Reload may restore preset values."), cachePage);
+    auto* cacheHelp = new QLabel(qtr(kContext, "Edits are pending until Apply reconfigures successfully. Presets are "
+                                               "unchanged; a later Reload may restore preset values."),
+                                 cachePage);
     cacheHelp->setWordWrap(true);
     cacheLayout->addWidget(cacheHelp);
     m_cache = new QTreeWidget(cachePage);
@@ -159,7 +162,8 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
         for (int row = 0; row < m_cache->topLevelItemCount(); ++row) {
             const auto* item = m_cache->topLevelItem(row);
             if (item->data(2, Qt::UserRole).toBool() && item->text(2) != item->data(2, Qt::UserRole + 1).toString())
-                edits.push_back({item->text(0).toStdString(), item->text(1).toStdString(), item->text(2).toStdString()});
+                edits.push_back(
+                    {item->text(0).toStdString(), item->text(1).toStdString(), item->text(2).toStdString()});
         }
         if (!edits.empty())
             m_controller.applyCache(std::move(edits));
@@ -201,8 +205,10 @@ void CMakeToolWindow::refreshModel() {
         for (const auto& target : model->targets)
             (void)new QTreeWidgetItem(m_targets, {toQString(target.name), toQString(target.sourceDirectory)});
         for (const auto& entry : model->cache) {
-            auto* item = new QTreeWidgetItem(m_cache, {toQString(entry.name), toQString(entry.type), toQString(entry.value)});
-            const bool editable = entry.name != "CMAKE_EXPORT_COMPILE_COMMANDS" &&
+            auto* item =
+                new QTreeWidgetItem(m_cache, {toQString(entry.name), toQString(entry.type), toQString(entry.value)});
+            const bool editable =
+                entry.name != "CMAKE_EXPORT_COMPILE_COMMANDS" &&
                 (entry.type == "BOOL" || entry.type == "STRING" || entry.type == "PATH" || entry.type == "FILEPATH");
             item->setData(2, Qt::UserRole, editable);
             item->setData(2, Qt::UserRole + 1, toQString(entry.value));

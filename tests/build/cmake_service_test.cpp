@@ -244,7 +244,8 @@ TEST_F(CMakeServiceTest, CacheEditsBecomeTypedConfigureArgumentsWithoutMutatingT
     waitIdle();
     const auto launches = launcher.launches();
     ASSERT_EQ(launches.size(), 2u);
-    EXPECT_NE(std::ranges::find(launches.back().spec.arguments, "-DCMAKE_BUILD_TYPE:STRING=Release"), launches.back().spec.arguments.end());
+    EXPECT_NE(std::ranges::find(launches.back().spec.arguments, "-DCMAKE_BUILD_TYPE:STRING=Release"),
+              launches.back().spec.arguments.end());
     EXPECT_EQ(service->activeProfile(), profile);
 }
 
@@ -257,7 +258,10 @@ TEST_F(CMakeServiceTest, DebugReloadUsesConfigurePipelineAndSavesBeforeLaunch) {
     ASSERT_TRUE(service->openFolder(folder()));
     std::atomic<bool> saved{false};
     std::promise<void> connected;
-    service->setSaveAllHook([&](auto done) { saved = true; done(Result<void>{}); });
+    service->setSaveAllHook([&](auto done) {
+        saved = true;
+        done(Result<void>{});
+    });
     ASSERT_TRUE(service->configureDebug("private-debug-endpoint", [&] { connected.set_value(); }));
     ASSERT_EQ(connected.get_future().wait_for(kWait), std::future_status::ready);
     ASSERT_TRUE(saved);
@@ -1165,7 +1169,10 @@ TEST_F(CMakeServiceTest, NamedInstallAndSingleFileUseTheNativeBuildPipeline) {
     ASSERT_TRUE(service->openFolder(folder()));
     waitIdle();
     int saves = 0;
-    service->setSaveAllHook([&](SaveAllCompletion done) { ++saves; done({}); });
+    service->setSaveAllHook([&](SaveAllCompletion done) {
+        ++saves;
+        done({});
+    });
     tree.write("tiny/cmake-build-debug/compile_commands.json", R"([
       {"directory":".","file":"../src/core.c","arguments":["cc","-o","CMakeFiles/core.dir/src/core.c.o","-c","../src/core.c"]}
     ])");
@@ -1175,17 +1182,17 @@ TEST_F(CMakeServiceTest, NamedInstallAndSingleFileUseTheNativeBuildPipeline) {
     waitIdle();
     ASSERT_EQ(launcher.launches().size(), 3u);
     EXPECT_EQ(launcher.launches().back().spec.arguments,
-        (std::vector<std::string>{"--build", buildDir(), "--target", "CMakeFiles/core.dir/src/core.c.o"}));
+              (std::vector<std::string>{"--build", buildDir(), "--target", "CMakeFiles/core.dir/src/core.c.o"}));
     launcher.expect({.expectExecutable = cmake()});
     ASSERT_TRUE(service->buildNamedTarget("install"));
     waitIdle();
     EXPECT_EQ(launcher.launches().back().spec.arguments,
-        (std::vector<std::string>{"--build", buildDir(), "--target", "install"}));
+              (std::vector<std::string>{"--build", buildDir(), "--target", "install"}));
     launcher.expect({.expectExecutable = ninja()});
     ASSERT_TRUE(service->buildFile(BuildAction::Clean, MemTree::path("tiny/src/core.c")));
     waitIdle();
     EXPECT_EQ(launcher.launches().back().spec.arguments,
-        (std::vector<std::string>{"-C", buildDir(), "-t", "clean", "CMakeFiles/core.dir/src/core.c.o"}));
+              (std::vector<std::string>{"-C", buildDir(), "-t", "clean", "CMakeFiles/core.dir/src/core.c.o"}));
     launcher.expect({.expectExecutable = ninja()});
     launcher.expect({.expectExecutable = cmake(), .exitCode = 1, .stderrBytes = "compiler failed\n"});
     ASSERT_TRUE(service->buildFile(BuildAction::Rebuild, MemTree::path("tiny/src/core.c")));
@@ -1193,7 +1200,7 @@ TEST_F(CMakeServiceTest, NamedInstallAndSingleFileUseTheNativeBuildPipeline) {
     const auto rebuildLaunches = launcher.launches();
     EXPECT_EQ(rebuildLaunches[rebuildLaunches.size() - 2].spec.executable, ninja());
     EXPECT_EQ(rebuildLaunches.back().spec.arguments,
-        (std::vector<std::string>{"--build", buildDir(), "--target", "CMakeFiles/core.dir/src/core.c.o"}));
+              (std::vector<std::string>{"--build", buildDir(), "--target", "CMakeFiles/core.dir/src/core.c.o"}));
     {
         LockGuard lock(events.mutex);
         ASSERT_FALSE(events.builds.empty());

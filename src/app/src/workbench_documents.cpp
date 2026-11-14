@@ -160,7 +160,8 @@ void Workbench::editorOpened(DocumentEditorView& view) {
     else if (m_debug)
         m_debug->attachEditor(&view.editor());
     syncJsonDocument(view);
-    connect(&view.editor(), &ui::EditorView::textChanged, this, [this, current = &view] { syncJsonDocument(*current); });
+    connect(&view.editor(), &ui::EditorView::textChanged, this,
+            [this, current = &view] { syncJsonDocument(*current); });
     refreshMarkers(view);
     if (m_documentRegistry->viewCount(view.path()) == 1) {
         syncClangdDocument(view);

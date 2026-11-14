@@ -586,7 +586,9 @@ struct BuildService::State : std::enable_shared_from_this<BuildService::State> {
                     failLocked(std::move(made.error()));
                     return;
                 }
-                auto log = io::joinPath(options.binaryLogDirectory, std::format("build-{}-{}.binlog", std::chrono::system_clock::now().time_since_epoch().count(), id));
+                auto log = io::joinPath(
+                    options.binaryLogDirectory,
+                    std::format("build-{}-{}.binlog", std::chrono::system_clock::now().time_since_epoch().count(), id));
                 if (!log) {
                     failLocked(std::move(log.error()));
                     return;

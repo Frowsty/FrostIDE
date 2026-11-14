@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "frost/lang/lsp_client.hpp"
-#include "frost/lang/diagnostics.hpp"
 #include "frost/core/mutex.hpp"
+#include "frost/lang/diagnostics.hpp"
+#include "frost/lang/lsp_client.hpp"
+
 #include <map>
 namespace frost::lang {
 // Offline structural profiles, deliberately separate from engine content.validate (FEC-7).
@@ -15,9 +16,11 @@ public:
     void updateDocument(std::string path, text::Snapshot snapshot);
     void removeDocument(std::string_view path);
     [[nodiscard]] std::vector<LiveDiagnostic> diagnostics(std::string_view path) const;
-    [[nodiscard]] sched::Task<Result<Json>> request(std::string method, Json params, std::stop_token token = {}) override;
+    [[nodiscard]] sched::Task<Result<Json>> request(std::string method, Json params,
+                                                    std::stop_token token = {}) override;
     [[nodiscard]] PositionEncoding encoding() const override { return PositionEncoding::Utf16; }
     [[nodiscard]] std::optional<ServerCapabilities> serverCapabilities() const override;
+
 private:
     mutable Mutex m_mutex;
     std::map<std::string, text::Snapshot, std::less<>> m_documents;

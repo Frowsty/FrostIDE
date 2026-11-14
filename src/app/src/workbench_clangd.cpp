@@ -30,11 +30,11 @@
 #include "frost/ui/tr.hpp"
 
 #include "cmake_integration.hpp"
-#include "standalone_build_backend.hpp"
 #include "engine_binding_integration.hpp"
 #include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "standalone_build_backend.hpp"
 #include "unity_control.hpp"
 #include "workbench_project_helpers.hpp"
 #include <QCoreApplication>
@@ -323,8 +323,8 @@ void Workbench::startClangd(const std::string& root) {
         // An explicit standalone model pins clangd to the discovered database, rather than a
         // stale database in another conventional build directory. This provider rereads existence.
         const std::string directory(io::parentPath(*m_standalone->model().database));
-        m_compileCommands = std::make_shared<lang::BuildDirectoryCompileCommandsProvider>(m_services.fs,
-            [directory] { return directory; });
+        m_compileCommands = std::make_shared<lang::BuildDirectoryCompileCommandsProvider>(
+            m_services.fs, [directory] { return directory; });
     } else if (m_solution && cache) {
         lang::MsBuildProviderOptions options;
         options.retirement = m_commandsRetirement;

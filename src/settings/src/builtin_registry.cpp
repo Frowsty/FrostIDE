@@ -405,9 +405,12 @@ struct Entry {
 
         // Tool paths (Application-only executes keys).
         toolPath("tools.msbuild.path", "MSBuild", "MSBuild.exe to build solutions with; empty finds it with vswhere."),
-        toolPath("tools.vcpkg.path", "vcpkg", "Absolute user-installed vcpkg executable; dependency operations require explicit consent."),
-        toolPath("tools.conan.path", "Conan 2", "Absolute user-installed Conan 2 executable; dependency operations require explicit consent."),
-        toolPath("tools.nuget.path", "NuGet", "Absolute user-installed NuGet.exe for native packages.config restore from a local feed."),
+        toolPath("tools.vcpkg.path", "vcpkg",
+                 "Absolute user-installed vcpkg executable; dependency operations require explicit consent."),
+        toolPath("tools.conan.path", "Conan 2",
+                 "Absolute user-installed Conan 2 executable; dependency operations require explicit consent."),
+        toolPath("tools.nuget.path", "NuGet",
+                 "Absolute user-installed NuGet.exe for native packages.config restore from a local feed."),
         toolPath("tools.cmake.path", "CMake", "The cmake executable; empty uses the detected one."),
         toolPath("tools.ninja.path", "Ninja", "The ninja executable; empty uses the detected one."),
         toolPath("tools.git.path", "Git", "The git executable; empty uses the detected one."),

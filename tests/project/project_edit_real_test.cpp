@@ -8,8 +8,8 @@
 // own evaluation (msbuild_oracle.hpp: the items change exactly as intended) and MSBuild's build of
 // the edited solution, which must pass. The pinned fixture itself is never edited.
 
-#include "frost/io/file_system.hpp"
 #include "frost/build/output_parsers.hpp"
+#include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/project/project_edit.hpp"
 #include "frost/project/project_host.hpp"
@@ -197,9 +197,11 @@ TEST_F(ProjectEditReal, BinaryLogReplayPreservesStructuredBuildErrors) {
     ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
     writeFile(scratch.join("App/main.cpp"), "#error FROST_BINLOG_ERROR\n");
     const auto log = scratch.join("failure.binlog");
-    const auto built = test::msbuild(m_msbuild, {scratch.join("App/App.vcxproj"), "-t:ClCompile",
-        "-p:Configuration=Debug", "-p:Platform=x64", "-logger:FrostBuildLogger," + hostPath(),
-        "-bl:" + log + ";ProjectImports=None"}, scratch.root());
+    const auto built =
+        test::msbuild(m_msbuild,
+                      {scratch.join("App/App.vcxproj"), "-t:ClCompile", "-p:Configuration=Debug", "-p:Platform=x64",
+                       "-logger:FrostBuildLogger," + hostPath(), "-bl:" + log + ";ProjectImports=None"},
+                      scratch.root());
     ASSERT_NE(built.exitCode, 0);
     ASSERT_TRUE(exists(log));
     const auto collect = [](const std::string& output) {
@@ -226,16 +228,24 @@ TEST_F(ProjectEditReal, BinaryLogReplayPreservesStructuredBuildErrors) {
 TEST_F(ProjectEditReal, NMakeProjectsBuildAndExposeEvaluatedIntelligence) {
     EditScratch scratch("r10 nmake");
     ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("nmake_project")));
-    auto client = ProjectHostClient::start(io::realProcessLauncher(), {.hostPath = hostPath(), .msbuildPath = m_msbuild});
+    auto client =
+        ProjectHostClient::start(io::realProcessLauncher(), {.hostPath = hostPath(), .msbuildPath = m_msbuild});
     ASSERT_TRUE(client) << client.error().describe();
-    auto lines = (*client)->clCommandLines({.projectPath = scratch.join("NMake.vcxproj"), .configuration = "Debug", .platform = "x64"});
+    auto lines = (*client)->clCommandLines(
+        {.projectPath = scratch.join("NMake.vcxproj"), .configuration = "Debug", .platform = "x64"});
     ASSERT_TRUE(lines) << lines.error().describe();
     const auto commands = clangdCommands(*lines);
     ASSERT_EQ(commands.size(), 1U);
-    EXPECT_TRUE(std::ranges::any_of(commands[0].arguments, [](const auto& argument) { return argument == "/DFROST_NMAKE=7"; }));
-    EXPECT_TRUE(std::ranges::any_of(commands[0].arguments, [](const auto& argument) { return argument.starts_with("/I") && argument.find("include") != std::string::npos; }));
-    EXPECT_TRUE(std::ranges::any_of(commands[0].arguments, [](const auto& argument) { return argument.starts_with("/FI") && argument.find("forced.h") != std::string::npos; }));
-    EXPECT_TRUE(std::ranges::any_of(commands[0].arguments, [](const auto& argument) { return argument == "/std:c++20"; }));
+    EXPECT_TRUE(
+        std::ranges::any_of(commands[0].arguments, [](const auto& argument) { return argument == "/DFROST_NMAKE=7"; }));
+    EXPECT_TRUE(std::ranges::any_of(commands[0].arguments, [](const auto& argument) {
+        return argument.starts_with("/I") && argument.find("include") != std::string::npos;
+    }));
+    EXPECT_TRUE(std::ranges::any_of(commands[0].arguments, [](const auto& argument) {
+        return argument.starts_with("/FI") && argument.find("forced.h") != std::string::npos;
+    }));
+    EXPECT_TRUE(
+        std::ranges::any_of(commands[0].arguments, [](const auto& argument) { return argument == "/std:c++20"; }));
     expectBuilds(scratch, "NMake.vcxproj");
     EXPECT_TRUE(exists(scratch.join("main.obj")));
 }
@@ -244,20 +254,27 @@ TEST_F(ProjectEditReal, PropertyPagesEditMetadataInOneConfigurationAndRefreshCla
     EditScratch scratch("r10 property pages");
     ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
     auto edit = fileEdit(scratch, ProjectEditKind::SetProperties, "App/App.vcxproj");
-    edit.propertyUpdates = {{"Prop.CharacterSet", "Unicode"}, {"ClCompile.AdditionalIncludeDirectories", "$(ProjectDir)page-includes;%(AdditionalIncludeDirectories)"},
-                            {"ClCompile.PreprocessorDefinitions", "FROST_PROPERTY_PAGE=1;%(PreprocessorDefinitions)"}};
+    edit.propertyUpdates = {
+        {"Prop.CharacterSet", "Unicode"},
+        {"ClCompile.AdditionalIncludeDirectories", "$(ProjectDir)page-includes;%(AdditionalIncludeDirectories)"},
+        {"ClCompile.PreprocessorDefinitions", "FROST_PROPERTY_PAGE=1;%(PreprocessorDefinitions)"}};
     const auto filtersBefore = io::realFileSystem().readFile(scratch.join("App/App.vcxproj.filters"));
     auto edited = test::runEdit(hostPath(), m_msbuild, edit);
     ASSERT_TRUE(edited) << edited.error().describe();
-    EXPECT_EQ(io::realFileSystem().readFile(scratch.join("App/App.vcxproj.filters")).value_or(""), filtersBefore.value_or(""));
-    auto client = ProjectHostClient::start(io::realProcessLauncher(), {.hostPath = hostPath(), .msbuildPath = m_msbuild});
+    EXPECT_EQ(io::realFileSystem().readFile(scratch.join("App/App.vcxproj.filters")).value_or(""),
+              filtersBefore.value_or(""));
+    auto client =
+        ProjectHostClient::start(io::realProcessLauncher(), {.hostPath = hostPath(), .msbuildPath = m_msbuild});
     ASSERT_TRUE(client) << client.error().describe();
     ProjectEvaluationRequest request{.projectPath = edit.definition, .configuration = "Debug", .platform = "x64"};
-    request.properties = {"ClCompile.AdditionalIncludeDirectories", "ClCompile.PreprocessorDefinitions", "Prop.ConfigurationType"};
+    request.properties = {"ClCompile.AdditionalIncludeDirectories", "ClCompile.PreprocessorDefinitions",
+                          "Prop.ConfigurationType"};
     auto evaluated = (*client)->evaluate(request);
     ASSERT_TRUE(evaluated) << evaluated.error().describe();
-    EXPECT_NE(evaluated->properties.at("ClCompile.AdditionalIncludeDirectories").find("page-includes"), std::string::npos);
-    EXPECT_NE(evaluated->properties.at("ClCompile.PreprocessorDefinitions").find("FROST_PROPERTY_PAGE=1"), std::string::npos);
+    EXPECT_NE(evaluated->properties.at("ClCompile.AdditionalIncludeDirectories").find("page-includes"),
+              std::string::npos);
+    EXPECT_NE(evaluated->properties.at("ClCompile.PreprocessorDefinitions").find("FROST_PROPERTY_PAGE=1"),
+              std::string::npos);
     auto commands = (*client)->clCommandLines(request);
     ASSERT_TRUE(commands) << commands.error().describe();
     const auto planned = io::realFileSystem().readFile(edit.definition);
@@ -284,9 +301,12 @@ TEST_F(ProjectEditReal, PropertyPagesEditMetadataInOneConfigurationAndRefreshCla
 TEST_F(ProjectEditReal, NativeDependencyPropertiesRefuseHooksFromDirectoryBuildPropsWithoutWriting) {
     EditScratch scratch("native dependency imported hook refusal");
     ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
-    writeFile(scratch.join("existing-hook.props"), "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\"/>\n");
-    writeFile(scratch.join("existing-hook.targets"), "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\"/>\n");
-    writeFile(scratch.join("Directory.Build.props"),
+    writeFile(scratch.join("existing-hook.props"),
+              "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\"/>\n");
+    writeFile(scratch.join("existing-hook.targets"),
+              "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\"/>\n");
+    writeFile(
+        scratch.join("Directory.Build.props"),
         "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\"><PropertyGroup>"
         "<ForceImportAfterCppProps>$(MSBuildThisFileDirectory)existing-hook.props</ForceImportAfterCppProps>"
         "<ForceImportAfterCppTargets>$(MSBuildThisFileDirectory)existing-hook.targets</ForceImportAfterCppTargets>"
@@ -295,11 +315,14 @@ TEST_F(ProjectEditReal, NativeDependencyPropertiesRefuseHooksFromDirectoryBuildP
     ASSERT_TRUE(projectBefore);
     for (const auto* hook : {"ForceImportAfterCppProps", "ForceImportAfterCppTargets"}) {
         auto edit = fileEdit(scratch, ProjectEditKind::SetProperties, "App/App.vcxproj");
-        edit.configuration = "Debug"; edit.platform = "x64"; edit.earlyProperties = true;
+        edit.configuration = "Debug";
+        edit.platform = "x64";
+        edit.earlyProperties = true;
         edit.propertyUpdates = {{std::string("Prop.") + hook, scratch.join("replacement.props")}};
         auto refused = test::runEdit(hostPath(), m_msbuild, edit);
         ASSERT_FALSE(refused) << hook;
-        EXPECT_NE(refused.error().message().find("evaluated import hook"), std::string::npos) << refused.error().describe();
+        EXPECT_NE(refused.error().message().find("evaluated import hook"), std::string::npos)
+            << refused.error().describe();
         EXPECT_NE(refused.error().message().find(hook), std::string::npos);
         EXPECT_EQ(io::realFileSystem().readFile(scratch.join("App/App.vcxproj")).value_or(""), *projectBefore);
     }

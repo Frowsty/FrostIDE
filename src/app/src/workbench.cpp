@@ -43,7 +43,6 @@
 #include "frost/vcs/git_locator.hpp"
 
 #include "cmake_integration.hpp"
-#include "standalone_build_backend.hpp"
 #include "engine_binding_integration.hpp"
 #include "engine_crash_observer.hpp"
 #include "engine_dump_controller.hpp"
@@ -59,12 +58,13 @@
 #include "multi_session_debug.hpp"
 #include "project_edit_process.hpp"
 #include "settings_dialog.hpp"
+#include "standalone_build_backend.hpp"
 #include "unity_control.hpp"
 #include <QApplication>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
-#include <QCoreApplication>
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
@@ -220,7 +220,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     m_language = std::make_unique<ui::lang::LanguageController>(
         ui::lang::LanguageServices{*m_bridge, *m_pool, *m_bridge, m_bridge->applier(), m_services.fs,
                                    [this](std::string_view path) -> std::vector<lang::LiveDiagnostic> {
-                                       if (lang::hasBundledJsonSchema(path)) return m_bridge->jsonDiagnostics(path);
+                                       if (lang::hasBundledJsonSchema(path))
+                                           return m_bridge->jsonDiagnostics(path);
                                        std::optional<lang::FileDiagnostics> set;
                                        if (isManagedSource(path) && m_managed)
                                            set = m_managed->diagnostics().forFile(path);
@@ -460,7 +461,8 @@ void Workbench::createBuildService() {
     options.msbuildPath = !m_options.msbuildPath.empty() ? m_options.msbuildPath : snapshot->get(key::toolsMsbuildPath);
     options.maxCpuCount = static_cast<unsigned>(std::max<std::int64_t>(0, snapshot->get(key::buildMsbuildMaxCpuCount)));
     const std::string logger = QDir(QCoreApplication::applicationDirPath())
-        .filePath(QStringLiteral("project-host/ProjectHostVsProbe.exe")).toStdString();
+                                   .filePath(QStringLiteral("project-host/ProjectHostVsProbe.exe"))
+                                   .toStdString();
     if (m_services.fs.exists(logger).value_or(false))
         options.loggerAssembly = logger;
     if (!m_options.buildStatePath.empty()) {
@@ -468,8 +470,9 @@ void Workbench::createBuildService() {
             options.binaryLogDirectory = *logs;
     }
     options.startBuild = m_options.startBuild;
-    m_buildService = build::BuildService::create(m_services.fs, m_services.launcher, m_services.trust, options,
-        m_build->serviceCallbacks([this] { return !m_cmake && !m_standalone; }));
+    m_buildService =
+        build::BuildService::create(m_services.fs, m_services.launcher, m_services.trust, options,
+                                    m_build->serviceCallbacks([this] { return !m_cmake && !m_standalone; }));
     m_buildBackend = std::make_unique<ui::BuildServiceBackend>(*m_buildService);
     m_build->setBackend(m_buildBackend.get());
     m_build->setSaveAllHandler(this);

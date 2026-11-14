@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/lang/cmake_language.hpp"
-#include "frost/text/text_buffer.hpp"
 #include "frost/sched/sim_executor.hpp"
+#include "frost/text/text_buffer.hpp"
+
 #include <gtest/gtest.h>
 namespace {
 using namespace frost;
@@ -30,7 +31,9 @@ TEST(CMakeLanguage, SourceDeclarationsAndConfiguredCacheAreDistinguished) {
     EXPECT_GE(completion->size(), 2);
 }
 TEST(CMakeLanguage, SkipsCommentsDynamicNamesAndConditionalVariables) {
-    auto buffer = text::TextBuffer::fromUtf8("# set(FAKE yes)\nset(${NAME} value)\nif(ON)\nset(CONDITIONAL yes)\nendif()\n\n").value();
+    auto buffer =
+        text::TextBuffer::fromUtf8("# set(FAKE yes)\nset(${NAME} value)\nif(ON)\nset(CONDITIONAL yes)\nendif()\n\n")
+            .value();
     CMakeLanguageInput input;
     input.path = "C:/project/CMakeLists.txt";
     input.source = buffer.snapshot();
@@ -67,7 +70,8 @@ TEST(CMakeLanguage, ConfiguredInputReadsAreDeferredToBackgroundAndOpenSnapshotsW
     CMakeLanguageInput input;
     input.path = "CMakeLists.txt";
     input.source = text::TextBuffer::fromUtf8("message(${FROM_").value().snapshot();
-    input.openInputs.emplace_back("open.cmake", text::TextBuffer::fromUtf8("set(FROM_OPEN unsaved)").value().snapshot());
+    input.openInputs.emplace_back("open.cmake",
+                                  text::TextBuffer::fromUtf8("set(FROM_OPEN unsaved)").value().snapshot());
     auto model = std::make_shared<project::CMakeProject>();
     model->inputs = {{.path = "open.cmake"}, {.path = "disk.cmake"}};
     input.model = model;
@@ -95,7 +99,8 @@ TEST(CMakeLanguage, ConfiguredInputReadsHonorAggregateBudgetAndCancellation) {
     CMakeLanguageInput input;
     input.path = "CMakeLists.txt";
     auto model = std::make_shared<project::CMakeProject>();
-    for (unsigned i = 0; i < 100; ++i) model->inputs.push_back({.path = "input" + std::to_string(i) + ".cmake"});
+    for (unsigned i = 0; i < 100; ++i)
+        model->inputs.push_back({.path = "input" + std::to_string(i) + ".cmake"});
     input.model = model;
     service.setInput(input);
     auto job = scheduler.spawn(sched::Lane::Interactive, service.request("textDocument/completion", params(0, 0)));
@@ -110,7 +115,7 @@ TEST(CMakeLanguage, ConfiguredInputReadsHonorAggregateBudgetAndCancellation) {
     });
     cancelled.setInput(std::move(input));
     auto stopped = scheduler.spawn(sched::Lane::Interactive,
-        cancelled.request("textDocument/completion", params(0, 0), stop.get_token()));
+                                   cancelled.request("textDocument/completion", params(0, 0), stop.get_token()));
     auto result = stopped.join();
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error().code(), ErrorCode::Cancelled);

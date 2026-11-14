@@ -338,7 +338,8 @@ Result<void> CMakeService::configureDebug(std::string endpoint, std::function<vo
         return fail(ErrorCode::InvalidArgument, "CMake debug reload requires a local endpoint and session callback");
     LockGuard lock(m_state->mutex);
     auto started = m_state->startJobLocked(State::JobKind::Configure, false, {}, {CMakeStep::Configure});
-    if (!started) return started;
+    if (!started)
+        return started;
     m_state->job->debuggerEndpoint = std::move(endpoint);
     m_state->job->debuggerReady = std::move(ready);
     return {};
@@ -424,7 +425,8 @@ Result<void> CMakeService::buildNamedTarget(std::string target) {
     LockGuard lock(s.mutex);
     CMakeBuildRequest request{.action = BuildAction::Build, .targetName = std::move(target)};
     std::vector<CMakeStep> steps;
-    if (!s.model || s.stale) steps.push_back(CMakeStep::Configure);
+    if (!s.model || s.stale)
+        steps.push_back(CMakeStep::Configure);
     steps.push_back(CMakeStep::Build);
     return s.startJobLocked(State::JobKind::Build, false, std::move(request), std::move(steps));
 }
@@ -432,35 +434,40 @@ Result<void> CMakeService::buildNamedTarget(std::string target) {
 bool CMakeService::canCompileFile(std::string_view path) const {
     State& s = *m_state;
     LockGuard lock(s.mutex);
-    if (!s.model || s.stale || !s.model->generator.starts_with("Ninja")) return false;
+    if (!s.model || s.stale || !s.model->generator.starts_with("Ninja"))
+        return false;
     for (const auto& target : s.model->targets)
         for (const auto& source : target.sources)
-            if (source.compileGroup && documentKey(source.path) == documentKey(path)) return true;
+            if (source.compileGroup && documentKey(source.path) == documentKey(path))
+                return true;
     return false;
 }
 
-Result<void> CMakeService::compileFile(std::string_view path) {
-    return buildFile(BuildAction::Compile, path);
-}
+Result<void> CMakeService::compileFile(std::string_view path) { return buildFile(BuildAction::Compile, path); }
 
 Result<void> CMakeService::buildFile(BuildAction action, std::string_view path) {
     State& s = *m_state;
     LockGuard lock(s.mutex);
     if (!s.model || s.stale || !s.model->generator.starts_with("Ninja"))
-        return fail(ErrorCode::Unsupported, "single-file CMake compilation requires a current Ninja model and compilation database");
+        return fail(ErrorCode::Unsupported,
+                    "single-file CMake compilation requires a current Ninja model and compilation database");
     auto source = io::normalizePath(path);
-    if (!source) return std::unexpected(source.error());
+    if (!source)
+        return std::unexpected(source.error());
     CMakeBuildRequest request{.action = action, .file = std::move(*source)};
     std::vector<CMakeStep> steps;
-    if (action == BuildAction::Clean || action == BuildAction::Rebuild) steps.push_back(CMakeStep::Clean);
-    if (action != BuildAction::Clean) steps.push_back(CMakeStep::Build);
+    if (action == BuildAction::Clean || action == BuildAction::Rebuild)
+        steps.push_back(CMakeStep::Clean);
+    if (action != BuildAction::Clean)
+        steps.push_back(CMakeStep::Build);
     return s.startJobLocked(State::JobKind::Build, false, std::move(request), std::move(steps));
 }
 
 void CMakeService::cancel(std::string_view debuggerEndpoint) {
     State& s = *m_state;
     LockGuard lock(s.mutex);
-    if (!debuggerEndpoint.empty() && (!s.job || s.job->debuggerEndpoint != debuggerEndpoint)) return;
+    if (!debuggerEndpoint.empty() && (!s.job || s.job->debuggerEndpoint != debuggerEndpoint))
+        return;
     s.reloadPending = false;
     switch (s.state) {
     case BuildState::Idle:

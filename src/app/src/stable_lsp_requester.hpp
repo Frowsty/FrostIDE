@@ -3,9 +3,9 @@
 #pragma once
 
 #include "frost/core/mutex.hpp"
+#include "frost/lang/json_schema.hpp"
 #include "frost/lang/lsp_client.hpp"
 #include "frost/lang/uri.hpp"
-#include "frost/lang/json_schema.hpp"
 
 #include <memory>
 #include <utility>
@@ -28,10 +28,12 @@ public:
             m_lua->setApplyEditHandler(m_applyEditHandler);
     }
     void setJsonServer(std::shared_ptr<lang::ILspRequester> server) {
-        LockGuard lock(m_mutex); m_json = std::move(server);
+        LockGuard lock(m_mutex);
+        m_json = std::move(server);
     }
     void setCMakeServer(std::shared_ptr<lang::ILspRequester> server) {
-        LockGuard lock(m_mutex); m_cmake = std::move(server);
+        LockGuard lock(m_mutex);
+        m_cmake = std::move(server);
     }
     void setManagedServer(std::shared_ptr<lang::ILspRequester> server) {
         LockGuard lock(m_mutex);
@@ -110,7 +112,12 @@ private:
     }
     [[nodiscard]] std::shared_ptr<lang::ILspRequester> server() const {
         LockGuard lock(m_mutex);
-        return m_hasActive ? (m_activeLua ? m_lua : m_activeManaged ? m_managed : m_activeJson ? m_json : m_activeCMake ? m_cmake : m_server) : nullptr;
+        return m_hasActive ? (m_activeLua       ? m_lua
+                              : m_activeManaged ? m_managed
+                              : m_activeJson    ? m_json
+                              : m_activeCMake   ? m_cmake
+                                                : m_server)
+                           : nullptr;
     }
     [[nodiscard]] std::shared_ptr<lang::ILspRequester> serverFor(const lang::Json& params) const {
         const auto* doc = params.find("textDocument");
@@ -122,7 +129,12 @@ private:
             if (!path)
                 return nullptr;
             LockGuard lock(m_mutex);
-            return isLua(*path) ? m_lua : isCSharp(*path) ? m_managed : lang::hasBundledJsonSchema(*path) ? m_json : isCMake(*path) ? m_cmake : isCpp(*path) ? m_server : nullptr;
+            return isLua(*path)                        ? m_lua
+                   : isCSharp(*path)                   ? m_managed
+                   : lang::hasBundledJsonSchema(*path) ? m_json
+                   : isCMake(*path)                    ? m_cmake
+                   : isCpp(*path)                      ? m_server
+                                                       : nullptr;
         }
         if (auto active = server())
             return active;

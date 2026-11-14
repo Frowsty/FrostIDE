@@ -171,28 +171,35 @@ Result<std::pair<std::string, std::string>> Workbench::projectEditTools() {
     return std::pair{std::move(executable), std::move(msbuild)};
 }
 
-Result<project::HostEvaluation> Workbench::evaluatePropertyPage(const std::string& projectPath,
-    const std::string& root, const std::string& solution, std::string_view configuration,
-    const std::vector<std::string>& keys, std::stop_token stop) {
+Result<project::HostEvaluation> Workbench::evaluatePropertyPage(const std::string& projectPath, const std::string& root,
+                                                                const std::string& solution,
+                                                                std::string_view configuration,
+                                                                const std::vector<std::string>& keys,
+                                                                std::stop_token stop) {
     const auto bar = configuration.find('|');
     if (bar == std::string_view::npos)
         return fail(ErrorCode::InvalidArgument, "Choose one project configuration.");
     if (!m_services.trust.isTrusted(root) || !m_services.trust.isTrusted(projectPath))
         return fail(ErrorCode::Untrusted, "Project evaluation requires a trusted solution.");
     auto tools = projectEditTools();
-    if (!tools) return std::unexpected(std::move(tools.error()));
+    if (!tools)
+        return std::unexpected(std::move(tools.error()));
     // Locate tools before the final trust check: only trusted projects may start the helper.
     if (!m_services.trust.isTrusted(root) || !m_services.trust.isTrusted(projectPath))
         return fail(ErrorCode::Untrusted, "Project trust changed before evaluation.");
     auto client = project::ProjectHostClient::start(m_services.launcher,
-        {.hostPath = tools->first, .msbuildPath = tools->second}, stop);
-    if (!client) return std::unexpected(std::move(client.error()));
+                                                    {.hostPath = tools->first, .msbuildPath = tools->second}, stop);
+    if (!client)
+        return std::unexpected(std::move(client.error()));
     if (!m_services.trust.isTrusted(root) || !m_services.trust.isTrusted(projectPath))
         return fail(ErrorCode::Untrusted, "Project trust changed before evaluation.");
     return (*client)->evaluate({.projectPath = projectPath,
-        .configuration = std::string(configuration.substr(0, bar)),
-        .platform = std::string(configuration.substr(bar + 1)), .solutionPath = solution,
-        .itemTypes = {"_FrostPropertyPages"}, .properties = keys}, stop);
+                                .configuration = std::string(configuration.substr(0, bar)),
+                                .platform = std::string(configuration.substr(bar + 1)),
+                                .solutionPath = solution,
+                                .itemTypes = {"_FrostPropertyPages"},
+                                .properties = keys},
+                               stop);
 }
 
 bool Workbench::projectEditJournalPresent() {
@@ -250,7 +257,8 @@ std::optional<QString> Workbench::submitProjectEdit(project::ProjectEdit edit, c
     const auto projectIt = std::ranges::find_if(solution->projects(), [&](const auto& item) {
         return lang::documentKey(item.path) == lang::documentKey(projectPath);
     });
-    if (projectIt == solution->projects().end() || !projectIt->vcxproj || (edit.files.empty() && edit.kind != project::ProjectEditKind::SetProperties))
+    if (projectIt == solution->projects().end() || !projectIt->vcxproj ||
+        (edit.files.empty() && edit.kind != project::ProjectEditKind::SetProperties))
         return QStringLiteral("The file does not belong to a loaded C++ project.");
     const auto listed = [&](const std::string& path) {
         return std::ranges::any_of(projectIt->vcxproj->items, [&](const project::ProjectItem& item) {

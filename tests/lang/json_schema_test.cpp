@@ -2,9 +2,11 @@
 #include "frost/lang/json_schema.hpp"
 #include "frost/lang/lsp_types.hpp"
 #include "frost/lang/uri.hpp"
-#include "frost/text/text_buffer.hpp"
 #include "frost/sched/scheduler.hpp"
+#include "frost/text/text_buffer.hpp"
+
 #include <gtest/gtest.h>
+
 #include <algorithm>
 namespace frost::lang {
 namespace {
@@ -16,8 +18,9 @@ const std::string root = "/offline/";
 text::Snapshot snapshot(std::string source) { return text::TextBuffer::fromUtf8(std::move(source)).value().snapshot(); }
 Result<Json> complete(JsonSchemaService& service, const std::string& path, const text::Snapshot& text, ByteOffset at) {
     service.updateDocument(path, text);
-    return sched::syncWait(service.request("textDocument/completion", textDocumentPosition(path,
-        toLspPosition(text, at, PositionEncoding::Utf16)).value()));
+    return sched::syncWait(
+        service.request("textDocument/completion",
+                        textDocumentPosition(path, toLspPosition(text, at, PositionEncoding::Utf16)).value()));
 }
 TEST(JsonSchema, NestedPresetErrorsUseExactCapturedValueRanges) {
     JsonSchemaService service;
@@ -39,8 +42,10 @@ TEST(JsonSchema, IncompleteNestedObjectCompletesPropertiesOffline) {
     const auto result = complete(service, path, text, text.size());
     ASSERT_TRUE(result);
     ASSERT_TRUE(result->isArray());
-    EXPECT_TRUE(std::ranges::any_of(result->items(), [](const auto& item) { return item.stringAt("label") == "binaryDir"; }));
-    EXPECT_TRUE(std::ranges::none_of(result->items(), [](const auto& item) { return item.stringAt("label") == "configurePresets"; }));
+    EXPECT_TRUE(
+        std::ranges::any_of(result->items(), [](const auto& item) { return item.stringAt("label") == "binaryDir"; }));
+    EXPECT_TRUE(std::ranges::none_of(result->items(),
+                                     [](const auto& item) { return item.stringAt("label") == "configurePresets"; }));
 }
 TEST(JsonSchema, LuaRuntimeEnumsReplaceWholeLiteralAndJsoncCommentsStayInert) {
     JsonSchemaService service;
@@ -48,7 +53,8 @@ TEST(JsonSchema, LuaRuntimeEnumsReplaceWholeLiteralAndJsoncCommentsStayInert) {
     const auto text = snapshot("{/* docs */\"runtime.version\":\"Lua 5.\",}");
     const auto result = complete(service, path, text, ByteOffset{text.size().value() - 3});
     ASSERT_TRUE(result);
-    EXPECT_TRUE(std::ranges::any_of(result->items(), [](const auto& item) { return item.stringAt("label") == "\"Lua 5.4\""; }));
+    EXPECT_TRUE(
+        std::ranges::any_of(result->items(), [](const auto& item) { return item.stringAt("label") == "\"Lua 5.4\""; }));
     service.updateDocument(path, snapshot("{/*docs*/\"runtime.version\":\"Lua 5.4\",}"));
     EXPECT_TRUE(service.diagnostics(path).empty());
 }
@@ -57,7 +63,8 @@ TEST(JsonSchema, EngineProfilesValidateKnownFieldsWithoutInventingUnknownCompone
     const auto path = root + "Game.frostproj";
     service.updateDocument(path, snapshot(R"({"General":{"Name":42},"CustomFutureEngineSetting":{"anything":true}})"));
     EXPECT_EQ(service.diagnostics(path).size(), 1U);
-    service.updateDocument(path, snapshot(R"({"General":{"Name":"Game"},"CustomFutureEngineSetting":{"anything":true}})"));
+    service.updateDocument(path,
+                           snapshot(R"({"General":{"Name":"Game"},"CustomFutureEngineSetting":{"anything":true}})"));
     EXPECT_TRUE(service.diagnostics(path).empty());
     service.removeDocument(path);
     EXPECT_TRUE(service.diagnostics(path).empty());
@@ -69,12 +76,13 @@ TEST(JsonSchema, InvalidPositionAndCancellationRefuseWithoutClampingIntoAnotherV
     JsonSchemaService service;
     const auto path = root + "CMakePresets.json";
     service.updateDocument(path, snapshot("{}"));
-    auto params = textDocumentPosition(path, LspPosition{999,0}).value();
+    auto params = textDocumentPosition(path, LspPosition{999, 0}).value();
     EXPECT_FALSE(sched::syncWait(service.request("textDocument/completion", params)));
-    std::stop_source cancelled; cancelled.request_stop();
+    std::stop_source cancelled;
+    cancelled.request_stop();
     auto result = sched::syncWait(service.request("textDocument/completion", params, cancelled.get_token()));
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error().code(), ErrorCode::Cancelled);
 }
-}
-}
+} // namespace
+} // namespace frost::lang

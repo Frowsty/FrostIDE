@@ -202,7 +202,8 @@ Result<io::ProcessSpec> msbuildProcessSpec(const MsBuildRequest& request) {
     if (!request.loggerAssembly.empty()) {
         auto logger = absolute(request.loggerAssembly, "logger assembly");
         if (!logger || logger->find_first_of(";,\r\n") != std::string::npos)
-            return fail(ErrorCode::InvalidArgument, "logger assembly must be an absolute path without switch separators");
+            return fail(ErrorCode::InvalidArgument,
+                        "logger assembly must be an absolute path without switch separators");
         spec.arguments.push_back("-logger:FrostBuildLogger," + *logger);
         // Canonical console output remains readable; only event records create diagnostics.
     }
@@ -247,9 +248,10 @@ Result<std::unique_ptr<BuildSession>> startMsBuild(io::IProcessLauncher& launche
     spec->environment.emplace_back(
         "_MSPDBSRV_ENDPOINT_",
         std::format("FrostIDE-{}-{}", GetCurrentProcessId(), g_buildCounter.fetch_add(1, std::memory_order_relaxed)));
-    return BuildSession::start(launcher, *spec, request.trusted, std::move(callbacks), clock,
-                               {.infrastructureImages = msbuildInfrastructureImages(),
-                                .parser = request.loggerAssembly.empty() ? OutputParserFactory{} : makeStructuredMsBuildOutputParser});
+    return BuildSession::start(
+        launcher, *spec, request.trusted, std::move(callbacks), clock,
+        {.infrastructureImages = msbuildInfrastructureImages(),
+         .parser = request.loggerAssembly.empty() ? OutputParserFactory{} : makeStructuredMsBuildOutputParser});
 #else
     static_cast<void>(launcher);
     static_cast<void>(callbacks);

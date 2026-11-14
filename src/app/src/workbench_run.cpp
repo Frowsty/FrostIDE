@@ -8,12 +8,12 @@
 // configuration and refuses a compound one (DBG-10).
 
 #include "frost/app/workbench.hpp"
-#include "frost/run/vs_import.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/run/run_configuration.hpp"
 #include "frost/run/run_manager.hpp"
 #include "frost/run/run_types.hpp"
+#include "frost/run/vs_import.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/debug_actions.hpp"
 #include "frost/ui/debug_retirement.hpp"
@@ -506,10 +506,11 @@ void Workbench::editRunConfigurations() {
     const run::RunConfiguration* selected = m_runController->selectedConfiguration();
     ui::RunConfigurationsDialog dialog(m_runController->configurations(), selected ? selected->id : std::string(),
                                        hasProject(), m_window);
-    dialog.setImportHandler([this](const std::string& path, std::span<const run::RunConfiguration> current)
-        -> Result<run::RunImportReport> {
+    dialog.setImportHandler([this](const std::string& path,
+                                   std::span<const run::RunConfiguration> current) -> Result<run::RunImportReport> {
         auto bytes = m_services.fs.readFileSnapshot(path, 4U * 1024U * 1024U);
-        if (!bytes) return std::unexpected(bytes.error());
+        if (!bytes)
+            return std::unexpected(bytes.error());
         return run::importVisualStudioConfigurations(*bytes, io::fileName(path), m_projectRoot, current);
     });
     ui::installDialogChrome(&dialog, true);

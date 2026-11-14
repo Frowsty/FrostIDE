@@ -4,6 +4,7 @@
 // block reader and the per-stream parser objects BuildSession runs.
 
 #include "frost/build/output_parsers.hpp"
+
 #include "json.hpp"
 
 #include <charconv>
@@ -380,12 +381,16 @@ std::optional<Diagnostic> parseStructuredMsBuildLine(std::string_view line) {
         int value = 0;
         if (!member || member->kind != detail::JsonValue::Kind::Number)
             return 0;
-        const auto [end, error] = std::from_chars(member->text.data(), member->text.data() + member->text.size(), value);
+        const auto [end, error] =
+            std::from_chars(member->text.data(), member->text.data() + member->text.size(), value);
         return error == std::errc{} && end == member->text.data() + member->text.size() && value >= 0 ? value : 0;
     };
     return Diagnostic{.severity = severity == "error" ? Severity::Error : Severity::Warning,
-                      .code = event->stringMember("Code"), .message = event->stringMember("Message"),
-                      .file = event->stringMember("File"), .line = number("Line"), .column = number("Column"),
+                      .code = event->stringMember("Code"),
+                      .message = event->stringMember("Message"),
+                      .file = event->stringMember("File"),
+                      .line = number("Line"),
+                      .column = number("Column"),
                       .project = event->stringMember("Project")};
 }
 

@@ -2,7 +2,6 @@
 // CMake folder composition for the workbench.
 
 #include "cmake_integration.hpp"
-#include "cmake_kit_dialog.hpp"
 
 #include "frost/build/run_target.hpp"
 #include "frost/core/mutex.hpp"
@@ -24,30 +23,31 @@
 #include "frost/ui/shell/tool_window_manager.hpp"
 
 #include "cmake_build_backend.hpp"
+#include "cmake_kit_dialog.hpp"
 #include <QAction>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
+#include <QFileDialog>
 #include <QFormLayout>
+#include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
-#include <QInputDialog>
-#include <QFileDialog>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPlainTextEdit>
 #include <QProcessEnvironment>
 #include <QSignalBlocker>
-#include <QTreeView>
-#include <QVBoxLayout>
-#include <QWidget>
-#include <QDir>
 #include <QTemporaryDir>
 #include <QToolButton>
+#include <QTreeView>
 #include <QUuid>
+#include <QVBoxLayout>
+#include <QWidget>
 
 #include <algorithm>
 #include <cctype>
@@ -158,24 +158,29 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     connect(m_buildMenu->addAction(tr("Build named target…")), &QAction::triggered, this, [this] {
         bool accepted = false;
         const auto target = QInputDialog::getText(&m_window, tr("CMake target"), tr("Literal target name:"),
-                                                 QLineEdit::Normal, {}, &accepted);
-        if (!accepted) return;
+                                                  QLineEdit::Normal, {}, &accepted);
+        if (!accepted)
+            return;
         auto started = m_service->buildNamedTarget(target.toStdString());
-        if (!started) QMessageBox::warning(&m_window, tr("Build target"), QString::fromStdString(started.error().message()));
+        if (!started)
+            QMessageBox::warning(&m_window, tr("Build target"), QString::fromStdString(started.error().message()));
     });
     connect(m_buildMenu->addAction(tr("Install")), &QAction::triggered, this, [this] {
         auto started = m_service->buildNamedTarget("install");
-        if (!started) QMessageBox::warning(&m_window, tr("Install"), QString::fromStdString(started.error().message()));
+        if (!started)
+            QMessageBox::warning(&m_window, tr("Install"), QString::fromStdString(started.error().message()));
     });
     for (const auto& [label, action] : {std::pair{tr("Build file…"), build::BuildAction::Build},
-                                     std::pair{tr("Rebuild file…"), build::BuildAction::Rebuild},
-                                     std::pair{tr("Clean file…"), build::BuildAction::Clean}}) {
+                                        std::pair{tr("Rebuild file…"), build::BuildAction::Rebuild},
+                                        std::pair{tr("Clean file…"), build::BuildAction::Clean}}) {
         connect(m_buildMenu->addAction(label), &QAction::triggered, this, [this, action] {
             const auto source = QFileDialog::getOpenFileName(&m_window, tr("Source file"),
-                QString::fromStdString(m_service->sourceDirectory()));
-            if (source.isEmpty()) return;
+                                                             QString::fromStdString(m_service->sourceDirectory()));
+            if (source.isEmpty())
+                return;
             auto started = m_service->buildFile(action, source.toStdString());
-            if (!started) QMessageBox::warning(&m_window, tr("File build"), QString::fromStdString(started.error().message()));
+            if (!started)
+                QMessageBox::warning(&m_window, tr("File build"), QString::fromStdString(started.error().message()));
         });
     }
     connect(m_profiles, &QComboBox::activated, this, [this](int index) { m_controller->selectProfile(index); });
@@ -341,7 +346,8 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     auto* debugReload = new QToolButton(tool);
     debugReload->setObjectName(QStringLiteral("cmakeDebugReload"));
     debugReload->setText(tr("Debug Reload CMake Project"));
-    if (tool->layout()) tool->layout()->addWidget(debugReload);
+    if (tool->layout())
+        tool->layout()->addWidget(debugReload);
     connect(debugReload, &QToolButton::clicked, this, [this] {
         if (auto started = debugConfigure(); !started)
             console().appendOutput(build::RunOutputKind::System, started.error().message());
@@ -350,27 +356,32 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
 }
 
 Result<void> CMakeIntegration::debugConfigure() {
-    if (!m_configureDebugger) return fail(ErrorCode::Unsupported, "CMake configure debugger is unavailable");
+    if (!m_configureDebugger)
+        return fail(ErrorCode::Unsupported, "CMake configure debugger is unavailable");
     const std::string root = m_service->sourceDirectory();
-    if (auto allowed = m_trust.requireTrusted(root); !allowed) return allowed;
+    if (auto allowed = m_trust.requireTrusted(root); !allowed)
+        return allowed;
     if (m_service->state() != build::BuildState::Idle)
         return fail(ErrorCode::Busy, "A CMake job is already running");
     auto directory = std::make_shared<QTemporaryDir>(QDir::tempPath() + QStringLiteral("/frost-cmake-XXXXXX"));
-    if (!directory->isValid()) return fail(ErrorCode::IoError, "Cannot create a private CMake debugger directory");
+    if (!directory->isValid())
+        return fail(ErrorCode::IoError, "Cannot create a private CMake debugger directory");
 #ifdef _WIN32
-    const std::string endpoint = "\\\\.\\pipe\\FrostIDE-CMake-" +
-        QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+    const std::string endpoint =
+        "\\\\.\\pipe\\FrostIDE-CMake-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
 #else
     const std::string endpoint = directory->filePath(QStringLiteral("dap.sock")).toStdString();
 #endif
     std::weak_ptr<build::CMakeService> weakService = m_service;
     const auto cancel = [weakService, directory, endpoint] {
-        if (auto service = weakService.lock()) service->cancel(endpoint);
+        if (auto service = weakService.lock())
+            service->cancel(endpoint);
     };
     auto relay = m_runRelay;
     return m_service->configureDebug(endpoint, [relay, endpoint, root, cancel] {
         relay->post([endpoint, root, cancel](CMakeIntegration& self) {
-            if (!self.m_service->debugConfigureCurrent(endpoint)) return;
+            if (!self.m_service->debugConfigureCurrent(endpoint))
+                return;
             if (auto started = self.m_configureDebugger(endpoint, root, cancel); !started) {
                 cancel();
                 self.console().appendOutput(build::RunOutputKind::System, started.error().message());

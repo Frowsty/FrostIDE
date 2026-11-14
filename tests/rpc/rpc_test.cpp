@@ -178,7 +178,8 @@ TEST(RpcJson, IntegersAbove2To53RoundTripExactly) {
 }
 
 TEST(JsonComments, StringsAndByteRangesSurviveCommentAndTrailingCommaNormalization) {
-    const std::string source = R"json({/* comment */"url":"https://example/a//b", "escaped":"quote\"//still-string", "list":[1,2,],})json";
+    const std::string source =
+        R"json({/* comment */"url":"https://example/a//b", "escaped":"quote\"//still-string", "list":[1,2,],})json";
     const auto normalized = frost::rpc::normalizeJsonComments(source);
     ASSERT_TRUE(normalized);
     EXPECT_EQ(normalized->size(), source.size());

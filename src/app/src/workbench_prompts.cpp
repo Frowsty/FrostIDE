@@ -60,7 +60,8 @@ std::string DialogWorkbenchPrompts::chooseOpenPath(QWidget* parent, OpenKind kin
             : QFileDialog::getOpenFileName(
                   parent, text("Open"), QString(),
                   text("Projects and files (*.sln *.slnx CMakeLists.txt *);;Solutions (*.sln *.slnx);;"
-                       "CMake project (CMakeLists.txt);;Standalone C++ project (compile_commands.json GNUmakefile makefile Makefile);;"
+                       "CMake project (CMakeLists.txt);;Standalone C++ project (compile_commands.json GNUmakefile "
+                       "makefile Makefile);;"
                        "All files (*)"));
     return QDir::toNativeSeparators(chosen).toStdString();
 }

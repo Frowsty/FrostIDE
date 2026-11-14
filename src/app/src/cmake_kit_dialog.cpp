@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "cmake_kit_dialog.hpp"
+
 #include "frost/build/cmake_service.hpp"
 #include "frost/build/cmake_toolchain.hpp"
 #include "frost/io/file_system.hpp"
@@ -8,6 +9,7 @@
 #include "frost/settings/keys.hpp"
 #include "frost/settings/store.hpp"
 #include "frost/ui/dialog_chrome.hpp"
+
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -30,7 +32,8 @@ Result<std::string> appendCMakeKitPreset(std::string original, std::string_view 
     // Strict JSON validation matches CMake. Parse only for validation; preserve the actual bytes.
     auto parsed = QJsonDocument::fromJson(QByteArray::fromStdString(original));
     if (!parsed.isObject() || parsed.object().value("version").toInt() < 3)
-        return fail(ErrorCode::InvalidArgument, "CMakeUserPresets.json must be a valid JSON object with preset version 3 or newer");
+        return fail(ErrorCode::InvalidArgument,
+                    "CMakeUserPresets.json must be a valid JSON object with preset version 3 or newer");
     auto document = settings::SettingsDocument::parse(original);
     if (!document)
         return std::unexpected(document.error());
@@ -42,15 +45,18 @@ Result<std::string> appendCMakeKitPreset(std::string original, std::string_view 
         for (const auto& entry : array.toArray())
             if (entry.toObject().value("name") == preset.object().value("name"))
                 return fail(ErrorCode::InvalidArgument, "a configure preset already uses that kit name");
-        original.insert(member->valueEnd - 1, std::string(array.toArray().isEmpty() ? "" : ",") + std::string(presetJson));
+        original.insert(member->valueEnd - 1,
+                        std::string(array.toArray().isEmpty() ? "" : ",") + std::string(presetJson));
     } else {
         const auto close = original.find_last_of('}');
-        original.insert(close, std::string(document->members().empty() ? "" : ",") + "\n  \"configurePresets\": [" + std::string(presetJson) + "]\n");
+        original.insert(close, std::string(document->members().empty() ? "" : ",") + "\n  \"configurePresets\": [" +
+                                   std::string(presetJson) + "]\n");
     }
     return original;
 }
 
-void showCMakeKitDialog(io::IFileSystem& fs, settings::SettingsStore& store, build::CMakeService& service, QWidget& parent, std::function<bool()> stillCurrent) {
+void showCMakeKitDialog(io::IFileSystem& fs, settings::SettingsStore& store, build::CMakeService& service,
+                        QWidget& parent, std::function<bool()> stillCurrent) {
     const auto root = service.sourceDirectory();
     const auto generation = service.profileGeneration();
     if (root.empty() || service.state() != build::BuildState::Idle)
@@ -75,10 +81,16 @@ void showCMakeKitDialog(io::IFileSystem& fs, settings::SettingsStore& store, bui
     dialog.setObjectName(QStringLiteral("cmakeKitDialog"));
     dialog.setWindowTitle(QObject::tr("Create CMake Kit"));
     auto* layout = new QVBoxLayout(&dialog);
-    auto* note = new QLabel(QObject::tr("Creates a personal configure preset. Select it in the profile selector, then Reload to configure through the project trust gate."), &dialog);
+    auto* note = new QLabel(QObject::tr("Creates a personal configure preset. Select it in the profile selector, then "
+                                        "Reload to configure through the project trust gate."),
+                            &dialog);
     note->setWordWrap(true);
     layout->addWidget(note);
-    auto* discovered = new QLabel(tools ? QObject::tr("CMake: %1\nNinja: %2").arg(QString::fromStdString(tools->cmake), QString::fromStdString(tools->ninja)) : QString::fromStdString(tools.error().message()), &dialog);
+    auto* discovered =
+        new QLabel(tools ? QObject::tr("CMake: %1\nNinja: %2")
+                               .arg(QString::fromStdString(tools->cmake), QString::fromStdString(tools->ninja))
+                         : QString::fromStdString(tools.error().message()),
+                   &dialog);
     discovered->setTextFormat(Qt::PlainText);
     layout->addWidget(discovered);
     auto* form = new QFormLayout;
@@ -115,14 +127,19 @@ void showCMakeKitDialog(io::IFileSystem& fs, settings::SettingsStore& store, bui
     // A kit name is also a build-directory component. Never allow it to escape the project.
     bool validName = !kitName.isEmpty();
     for (const auto ch : kitName)
-        validName = validName && ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_');
+        validName = validName && ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+                                  ch == '-' || ch == '_');
     const auto cxx = compiler->currentText().toStdString();
     const auto chain = toolchain->text().toStdString();
     const auto now = fs.readFile(*path);
-    const bool unchanged = (before && now && *before == *now) || (!before && !now && now.error().code() == ErrorCode::NotFound);
-    if (!validName || generator->currentText().trimmed().isEmpty() || (!cxx.empty() && !io::isAbsolutePath(cxx)) || (!chain.empty() && !io::isAbsolutePath(chain)) ||
-        !unchanged || service.sourceDirectory() != root || service.profileGeneration() != generation || service.state() != build::BuildState::Idle) {
-        QMessageBox::warning(&parent, QObject::tr("CMake Kit"), QObject::tr("Use a unique name of letters, digits, dash or underscore and absolute compiler/toolchain paths. Reopen if the project or presets changed."));
+    const bool unchanged =
+        (before && now && *before == *now) || (!before && !now && now.error().code() == ErrorCode::NotFound);
+    if (!validName || generator->currentText().trimmed().isEmpty() || (!cxx.empty() && !io::isAbsolutePath(cxx)) ||
+        (!chain.empty() && !io::isAbsolutePath(chain)) || !unchanged || service.sourceDirectory() != root ||
+        service.profileGeneration() != generation || service.state() != build::BuildState::Idle) {
+        QMessageBox::warning(&parent, QObject::tr("CMake Kit"),
+                             QObject::tr("Use a unique name of letters, digits, dash or underscore and absolute "
+                                         "compiler/toolchain paths. Reopen if the project or presets changed."));
         return;
     }
     for (const auto& profile : service.profiles())
@@ -138,14 +155,20 @@ void showCMakeKitDialog(io::IFileSystem& fs, settings::SettingsStore& store, bui
     if (*presets)
         for (const auto& existing : (**presets).configurePresets)
             if (existing.name == kitName.toStdString()) {
-                QMessageBox::warning(&parent, QObject::tr("CMake Kit"), QObject::tr("A configure preset already uses this name, including hidden presets."));
+                QMessageBox::warning(
+                    &parent, QObject::tr("CMake Kit"),
+                    QObject::tr("A configure preset already uses this name, including hidden presets."));
                 return;
             }
     QJsonObject cache{{"CMAKE_BUILD_TYPE", type->currentText()}};
-    if (!cxx.empty()) cache.insert("CMAKE_CXX_COMPILER", QString::fromStdString(cxx));
-    QJsonObject preset{{"name", kitName}, {"generator", generator->currentText()},
-                       {"binaryDir", QStringLiteral("${sourceDir}/cmake-build-") + kitName}, {"cacheVariables", cache}};
-    if (!chain.empty()) preset.insert("toolchainFile", QString::fromStdString(chain));
+    if (!cxx.empty())
+        cache.insert("CMAKE_CXX_COMPILER", QString::fromStdString(cxx));
+    QJsonObject preset{{"name", kitName},
+                       {"generator", generator->currentText()},
+                       {"binaryDir", QStringLiteral("${sourceDir}/cmake-build-") + kitName},
+                       {"cacheVariables", cache}};
+    if (!chain.empty())
+        preset.insert("toolchainFile", QString::fromStdString(chain));
     const auto json = QJsonDocument(preset).toJson(QJsonDocument::Compact).toStdString();
     const auto updated = appendCMakeKitPreset(before ? *before : std::string(), json);
     if (!updated) {

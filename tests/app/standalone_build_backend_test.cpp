@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Make's real application backend over scripted children: admission, Save All and failure outcomes.
-#include "../../src/app/src/standalone_build_backend.hpp"
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/project/trust_store.hpp"
+
+#include "../../src/app/src/standalone_build_backend.hpp"
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QThread>
@@ -57,8 +58,8 @@ TEST(StandaloneBuildBackend, FailedRebuildSecondStepCannotReportCleanSuccess) {
     std::optional<build::BuildOutcome> outcome;
     build::BuildServiceCallbacks callbacks;
     callbacks.onFinished = [&](const auto& value) { outcome = value; };
-    StandaloneBuildBackend backend({.root = path(), .makefile = path("Makefile")}, fs, launcher, **trust,
-        *admission, callbacks, []() -> Result<std::string> { return path("make"); });
+    StandaloneBuildBackend backend({.root = path(), .makefile = path("Makefile")}, fs, launcher, **trust, *admission,
+                                   callbacks, []() -> Result<std::string> { return path("make"); });
     ASSERT_TRUE(backend.build(build::BuildAction::Rebuild, {}));
     ASSERT_TRUE(pumpUntil([&] { return outcome.has_value(); }));
     EXPECT_FALSE(outcome->succeeded());
