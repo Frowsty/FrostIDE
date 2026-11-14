@@ -206,8 +206,9 @@ ServerCapabilities parseInitializeResult(const Json& result) {
     out.rangeFormatting = hasProvider(*capabilities, "documentRangeFormattingProvider");
     out.callHierarchy = hasProvider(*capabilities, "callHierarchyProvider");
     out.typeHierarchy = hasProvider(*capabilities, "typeHierarchyProvider");
-    out.inlayHint =
-        hasProvider(*capabilities, "inlayHintProvider") || hasProvider(*capabilities, "clangdInlayHintsProvider");
+    const bool standardInlayHints = hasProvider(*capabilities, "inlayHintProvider");
+    out.legacyClangdInlayHints = !standardInlayHints && hasProvider(*capabilities, "clangdInlayHintsProvider");
+    out.inlayHint = standardInlayHints || out.legacyClangdInlayHints;
     out.documentLink = hasProvider(*capabilities, "documentLinkProvider");
     out.foldingRange = hasProvider(*capabilities, "foldingRangeProvider");
     out.ast = hasProvider(*capabilities, "astProvider");

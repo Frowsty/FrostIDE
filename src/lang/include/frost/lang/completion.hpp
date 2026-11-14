@@ -14,7 +14,8 @@
  * the typed prefix are hidden. The rest are sorted by match kind (exact, prefix, prefix ignoring
  * case, word starts, fuzzy: fuzzy.hpp), then deprecated items last, then for word-start and
  * fuzzy matches the higher fuzzy score, then the server's sortText (clangd ranks with it), then
- * the shorter and then the alphabetically smaller label. The first entry is selected.
+ * the shorter and then the alphabetically smaller label. The server preselect is honored within the best
+ * non-deprecated match class; otherwise the first entry is selected.
  *
  * Commit (commitCompletion). The main edit replaces [range start, caret): the item's textEdit
  * range (stretched to the caret, since the user may have typed on) or the identifier before the
@@ -96,6 +97,9 @@ struct CompletionItem {
     bool resolved = false; // completionItem/resolve already ran.
     Json raw;              // The item as received, for completionItem/resolve.
 };
+
+// Call snippets use actual server item kind/text; arbitrary server commands are never executed.
+[[nodiscard]] bool completionRequestsParameterHints(const CompletionItem& item);
 
 struct CompletionList {
     bool isIncomplete = false;

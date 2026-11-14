@@ -508,6 +508,24 @@ TEST(LanguageControllerCompletion, CtrlSpaceShowsTheLookupAndEnterCommits) {
     EXPECT_FALSE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
 }
 
+TEST(LanguageControllerCompletion, CppCallSnippetRequestsParameterHintsWithoutAnEditorCommand) {
+    FeatureServer server;
+    server.on("textDocument/completion", [](const Json&) {
+        return Json::array({completionItem("foo(count)", 3, "1", "foo(${1:count})$0", true)});
+    });
+    server.on("textDocument/signatureHelp", [](const Json&) {
+        return Json::object().set("signatures", Json::array({Json::object().set("label", "foo(int count)")}));
+    });
+    FakeHost host("fo"); host.caretAfter("fo"); Rig rig(server, host);
+    rig.controller.completeCode();
+    ASSERT_TRUE(pumpUntil([&] { return rig.controller.completionPopup().isVisible(); }));
+    ASSERT_TRUE(rig.controller.keyPress(Qt::Key_Return, Qt::NoModifier));
+    EXPECT_EQ(host.text(), "foo(count)"); ASSERT_TRUE(host.selected);
+    EXPECT_EQ(host.text().substr(host.selected->begin.value(), host.selected->size()), "count");
+    ASSERT_TRUE(pumpUntil([&] { return rig.controller.parameterInfoPopup().isVisible(); }));
+    EXPECT_EQ(server.paramsOf("textDocument/signatureHelp").size(), 1U);
+}
+
 TEST(LanguageControllerCompletion, CallSnippetRequestsParameterHintsAfterSelectingArgument) {
     FeatureServer server;
     server.on("textDocument/completion", [](const Json&) {

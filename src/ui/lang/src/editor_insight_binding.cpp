@@ -600,12 +600,13 @@ void EditorInsightBinding::refreshInlayHints() {
     if (!m_view || !m_serverAvailable) {
         return;
     }
+    const auto capabilities = m_services.server.serverCapabilities();
+    if (!capabilities || !capabilities->inlayHint) return;
     const text::Snapshot snapshot = m_view->editor().text();
     const std::uint64_t version = snapshot.version();
-    const std::uint32_t lastLine = snapshot.lineCount() > 0 ? snapshot.lineCount() - 1 : 0;
-    const fl::LspRange fullRange{fl::LspPosition{0, 0}, fl::LspPosition{lastLine + 1, 0}};
+    const auto encoding = m_services.server.encoding();
+    const fl::LspRange fullRange{fl::LspPosition{0, 0}, fl::toLspPosition(snapshot, snapshot.size(), encoding)};
     const sched::LatestWins::Ticket ticket = m_inlaySlot.next();
-    const fl::PositionEncoding encoding = m_services.server.encoding();
     auto work = fl::requestInlayHints(m_services.server, m_path, fullRange, ticket.token);
     const QPointer<EditorInsightBinding> self(this);
     auto deliver = [](sched::Task<Result<std::vector<fl::LspInlayHint>>> task, QPointer<EditorInsightBinding> binding,
