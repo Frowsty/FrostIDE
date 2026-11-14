@@ -169,8 +169,13 @@ public:
                     error = "A namespace probe has no proven file or absence result";
                     return false;
                 }
-            } else if (observed->isRegularFile() && !inputs.contains(path))
-                paths.push_back(path);
+            } else if (observed->isRegularFile()) {
+                if (!inputs.contains(path))
+                    paths.push_back(path);
+            } else if (!observed->isDirectory()) {
+                error = "A namespace probe observed an unsupported non-file/non-directory kind";
+                return false;
+            }
         }
         for (const auto& path : paths) {
             auto file = openFileForRead(path);
