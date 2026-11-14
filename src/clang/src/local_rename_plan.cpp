@@ -9,10 +9,15 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/TypeLoc.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Lex/PreprocessingRecord.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Tooling/ArgumentsAdjusters.h"
+#include "clang/Tooling/JSONCompilationDatabase.h"
+#include "clang/Tooling/Refactoring/Rename/RenamingAction.h"
+#include "clang/Tooling/Refactoring/Rename/USRFindingAction.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/ConvertUTF.h"
@@ -27,6 +32,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -143,8 +149,17 @@ private:
  */
 class SnapshotFileSystem final : public llvm::vfs::ProxyFileSystem {
 public:
-    explicit SnapshotFileSystem(llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> base)
-        : ProxyFileSystem(std::move(base)) {}
+    explicit SnapshotFileSystem(llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> base, std::size_t files = kFiles,
+                                std::size_t bytes = kDependencyBytes)
+        : ProxyFileSystem(std::move(base)), m_fileLimit(files), m_byteLimit(bytes) {}
+    std::vector<std::string> missingInputs() const {
+        std::vector<std::string> result;
+        for (const auto& [path, status] : m_status)
+            if (!status && (status.getError() == std::errc::no_such_file_or_directory ||
+                            status.getError() == std::errc::not_a_directory))
+                result.push_back(path);
+        return result;
+    }
     std::map<std::string, FrozenInput> inputs;
     std::string error;
     bool frozen = false;
@@ -157,7 +172,8 @@ public:
         if (const auto it = m_status.find(key); it != m_status.end()) {
             return it->second;
         }
-        if (frozen || !slotFits(m_status.size(), kFiles * 4) || !addWithin(m_namespaceBytes, key.size(), kMainBytes)) {
+        if (frozen || !slotFits(m_status.size(), m_fileLimit * 4) ||
+            !addWithin(m_namespaceBytes, key.size(), kMainBytes)) {
             error = "new candidate namespace observation or namespace limit exceeded";
             return std::make_error_code(std::errc::permission_denied);
         }
@@ -172,7 +188,7 @@ public:
             output.assign(it->second.second.begin(), it->second.second.end());
             return it->second.first;
         }
-        if (frozen || !slotFits(m_realPaths.size(), kFiles * 4)) {
+        if (frozen || !slotFits(m_realPaths.size(), m_fileLimit * 4)) {
             error = "new candidate realpath observation or namespace limit exceeded";
             return std::make_error_code(std::errc::permission_denied);
         }
@@ -216,7 +232,10 @@ public:
             error = "dependency identity changed after namespace observation";
             return std::make_error_code(std::errc::io_error);
         }
-        if (!info->isRegularFile() || !dependencyFits(inputs.size(), m_bytes, info->getSize())) {
+        if (!info->isRegularFile() || !(m_fileLimit == kFiles && m_byteLimit == kDependencyBytes
+                                            ? dependencyFits(inputs.size(), m_bytes, info->getSize())
+                                            : slotFits(inputs.size(), m_fileLimit) && m_bytes <= m_byteLimit &&
+                                                  info->getSize() <= m_byteLimit - m_bytes)) {
             error = "dependency resource/type limit exceeded";
             return std::make_error_code(std::errc::file_too_large);
         }
@@ -241,6 +260,8 @@ public:
     }
 
 private:
+    std::size_t m_fileLimit;
+    std::size_t m_byteLimit;
     std::size_t m_bytes = 0;
     std::size_t m_namespaceBytes = 0;
     std::map<std::string, llvm::ErrorOr<llvm::vfs::Status>> m_status;
@@ -842,6 +863,527 @@ llvm::json::Object makePlan(Request& request, llvm::StringRef resource
     return result;
 }
 
+// Project rename streams ASTs one translation unit/configuration at a time. All opened
+// inputs are frozen before replacement collection; no compiler output action or writes exist.
+class ProjectCommand final : public clang::tooling::CompilationDatabase {
+public:
+    clang::tooling::CompileCommand command;
+    explicit ProjectCommand(clang::tooling::CompileCommand value) : command(std::move(value)) {}
+    std::vector<clang::tooling::CompileCommand> getCompileCommands(llvm::StringRef) const override { return {command}; }
+    std::vector<std::string> getAllFiles() const override { return {command.Filename}; }
+};
+
+const clang::NamedDecl* projectCanonical(const clang::NamedDecl* declaration) {
+    if (const auto* templ = llvm::dyn_cast<clang::ClassTemplateDecl>(declaration))
+        declaration = templ->getTemplatedDecl();
+    if (const auto* templ = llvm::dyn_cast<clang::FunctionTemplateDecl>(declaration))
+        declaration = templ->getTemplatedDecl();
+    if (const auto* specialization = llvm::dyn_cast<clang::ClassTemplateSpecializationDecl>(declaration))
+        declaration = specialization->getSpecializedTemplate()->getTemplatedDecl();
+    return clang::tooling::getCanonicalSymbolDeclaration(declaration);
+}
+
+class ProjectSelection final : public clang::RecursiveASTVisitor<ProjectSelection> {
+    clang::ASTContext& context;
+    std::string file;
+    unsigned offset;
+
+public:
+    const clang::NamedDecl* declaration = nullptr;
+    bool ambiguous = false;
+    ProjectSelection(clang::ASTContext& ctx, std::string path, unsigned position)
+        : context(ctx), file(std::move(path)), offset(position) {}
+    void consider(const clang::NamedDecl* candidate, clang::SourceLocation location) {
+        auto& sm = context.getSourceManager();
+        if (!candidate || !location.isFileID() || absolute(sm.getFilename(location), "") != file)
+            return;
+        const auto start = sm.getFileOffset(location);
+        if (offset < start || offset - start >= clang::Lexer::MeasureTokenLength(location, sm, context.getLangOpts()))
+            return;
+        candidate = projectCanonical(candidate);
+        if (!candidate || !candidate->getIdentifier())
+            return;
+        if (declaration && clang::tooling::getUSRsForDeclaration(declaration, context) !=
+                               clang::tooling::getUSRsForDeclaration(candidate, context))
+            ambiguous = true;
+        declaration = candidate;
+    }
+    bool VisitNamedDecl(clang::NamedDecl* d) {
+        consider(d, d->getLocation());
+        return true;
+    }
+    bool VisitDeclRefExpr(clang::DeclRefExpr* e) {
+        consider(e->getDecl(), e->getLocation());
+        return true;
+    }
+    bool VisitMemberExpr(clang::MemberExpr* e) {
+        consider(e->getMemberDecl(), e->getMemberLoc());
+        return true;
+    }
+    bool VisitTagTypeLoc(clang::TagTypeLoc t) {
+        consider(t.getDecl(), t.getNameLoc());
+        return true;
+    }
+    bool VisitTypedefTypeLoc(clang::TypedefTypeLoc t) {
+        consider(t.getTypedefNameDecl(), t.getNameLoc());
+        return true;
+    }
+    bool VisitTemplateSpecializationTypeLoc(clang::TemplateSpecializationTypeLoc t) {
+        consider(t.getTypePtr()->getTemplateName().getAsTemplateDecl(), t.getTemplateNameLoc());
+        return true;
+    }
+};
+
+class ProjectMethods final : public clang::RecursiveASTVisitor<ProjectMethods> {
+    clang::ASTContext& context;
+
+public:
+    std::vector<std::pair<std::vector<std::string>, std::vector<std::string>>> edges;
+    explicit ProjectMethods(clang::ASTContext& ctx) : context(ctx) {}
+    bool VisitCXXMethodDecl(clang::CXXMethodDecl* method) {
+        for (const auto* base : method->overridden_methods())
+            edges.emplace_back(clang::tooling::getUSRsForDeclaration(method, context),
+                               clang::tooling::getUSRsForDeclaration(base, context));
+        return true;
+    }
+};
+
+class ProjectOccurrences final : public clang::RecursiveASTVisitor<ProjectOccurrences> {
+    clang::ASTContext& context;
+    const std::set<std::string>& family;
+    std::string spelling;
+
+public:
+    std::map<std::string, std::set<unsigned>> tokens;
+    bool unsupportedMacro = false;
+    ProjectOccurrences(clang::ASTContext& ctx, const std::set<std::string>& ids, std::string name)
+        : context(ctx), family(ids), spelling(std::move(name)) {}
+    void consider(const clang::NamedDecl* declaration, clang::SourceLocation location) {
+        if (!declaration || location.isInvalid())
+            return;
+        declaration = projectCanonical(declaration);
+        if (!declaration || declaration->isImplicit())
+            return;
+        auto ids = clang::tooling::getUSRsForDeclaration(declaration, context);
+        if (std::ranges::none_of(ids, [&](const auto& id) { return family.contains(id); }))
+            return;
+        auto& sm = context.getSourceManager();
+        if (location.isMacroID()) {
+            if (!sm.isMacroArgExpansion(location)) {
+                unsupportedMacro = true;
+                return;
+            }
+            location = sm.getSpellingLoc(location);
+        }
+        if (!location.isFileID()) {
+            unsupportedMacro = true;
+            return;
+        }
+        bool invalid = false;
+        const char* data = sm.getCharacterData(location, &invalid);
+        if (invalid) {
+            unsupportedMacro = true;
+            return;
+        }
+        if (*data == '~')
+            location = location.getLocWithOffset(1);
+        if (clang::Lexer::MeasureTokenLength(location, sm, context.getLangOpts()) != spelling.size())
+            return;
+        tokens[absolute(sm.getFilename(location), "")].insert(sm.getFileOffset(location));
+    }
+    bool VisitNamedDecl(clang::NamedDecl* d) {
+        consider(d, d->getLocation());
+        return true;
+    }
+    bool VisitDeclRefExpr(clang::DeclRefExpr* e) {
+        consider(e->getDecl(), e->getLocation());
+        return true;
+    }
+    bool VisitMemberExpr(clang::MemberExpr* e) {
+        consider(e->getMemberDecl(), e->getMemberLoc());
+        return true;
+    }
+    bool VisitTagTypeLoc(clang::TagTypeLoc t) {
+        consider(t.getDecl(), t.getNameLoc());
+        return true;
+    }
+    bool VisitTypedefTypeLoc(clang::TypedefTypeLoc t) {
+        consider(t.getTypedefNameDecl(), t.getNameLoc());
+        return true;
+    }
+    bool VisitTemplateSpecializationTypeLoc(clang::TemplateSpecializationTypeLoc t) {
+        consider(t.getTypePtr()->getTemplateName().getAsTemplateDecl(), t.getTemplateNameLoc());
+        return true;
+    }
+};
+
+std::unique_ptr<clang::ASTUnit> projectAST(const clang::tooling::CompileCommand& command,
+                                           llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs,
+                                           const std::map<std::string, std::string>& changes,
+                                           Diagnostics& diagnostics) {
+    ProjectCommand database(command);
+    std::vector<std::string> files{command.Filename};
+    clang::tooling::ClangTool tool(database, files, std::make_shared<clang::PCHContainerOperations>(), fs);
+    tool.setDiagnosticConsumer(&diagnostics);
+    tool.appendArgumentsAdjuster(clang::tooling::getClangStripDependencyFileAdjuster());
+    for (const auto& [path, bytes] : changes)
+        tool.mapVirtualFile(path, bytes);
+    std::vector<std::unique_ptr<clang::ASTUnit>> units;
+    if (tool.buildASTs(units) || diagnostics.failed || units.size() != 1)
+        return {};
+    return std::move(units[0]);
+}
+
+llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef resource) {
+    llvm::json::Object result{{"kind", "cpp-rename-plan"},
+                              {"schemaVersion", 1},
+                              {"status", "invalid-input"},
+                              {"atomic", true},
+                              {"files", llvm::json::Array{}}};
+    auto refuse = [&](llvm::StringRef status, const std::string& why) {
+        result["status"] = status;
+        result["diagnostics"] = llvm::json::Array{why};
+        result["files"] = llvm::json::Array{};
+        return std::move(result);
+    };
+    if (resource.empty())
+        return refuse("unsupported", "Pinned LLVM resource directory unavailable");
+    const auto rootValue = input.getString("projectRoot"), seedValue = input.getString("seedTranslationUnit"),
+               anchorValue = input.getString("path"), newValue = input.getString("newName"),
+               databaseValue = input.getString("compilationDatabase");
+    const auto offset = input.getInteger("offset");
+    if (!rootValue || !seedValue || !anchorValue || !newValue || !databaseValue || !offset || *offset < 0 ||
+        *offset > std::numeric_limits<unsigned>::max())
+        return refuse("invalid-input", "Missing project, compile commands, seed or selection");
+    const std::string root = absolute(*rootValue, ""),
+                      seed = seedValue->empty() ? std::string{} : absolute(*seedValue, root),
+                      anchor = absolute(*anchorValue, root), newName = newValue->str();
+    if (root.find('\0') != std::string::npos || seed.find('\0') != std::string::npos ||
+        anchor.find('\0') != std::string::npos)
+        return refuse("invalid-input", "NUL in project path");
+    if (!llvm::sys::path::is_absolute(root) || newName.empty() ||
+        !((newName[0] >= 'A' && newName[0] <= 'Z') || (newName[0] >= 'a' && newName[0] <= 'z') || newName[0] == '_') ||
+        std::ranges::any_of(newName, [](unsigned char ch) {
+            return !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_');
+        }))
+        return refuse("invalid-input", "New name must be one C++ identifier");
+    auto inside = [&](llvm::StringRef path) {
+        return path == root || (path.starts_with(root) && path.size() > root.size() &&
+                                (llvm::sys::path::is_separator(root.back()) || llvm::sys::path::is_separator(path[root.size()])));
+    };
+    if (!inside(anchor) || (!seed.empty() && !inside(seed)))
+        return refuse("unsupported", "Selection must belong to the captured project");
+    std::string error;
+    auto database = clang::tooling::JSONCompilationDatabase::loadFromBuffer(
+        *databaseValue, error, clang::tooling::JSONCommandLineSyntax::AutoDetect);
+    if (!database)
+        return refuse("invalid-input", error);
+    auto commands = database->getAllCompileCommands();
+    if (commands.empty() || commands.size() > 16384)
+        return refuse("unsupported", "Compilation database is empty or exceeds16384 configurations");
+    bool hasSeed = seed.empty();
+    llvm::json::Array pch;
+    for (auto& command : commands) {
+        command.Directory = absolute(command.Directory, root);
+        command.Filename = absolute(command.Filename, command.Directory);
+        if (!inside(command.Filename) || command.CommandLine.empty())
+            return refuse("unsupported", "Compilation database contains an unowned source or empty command");
+        if (command.Directory.find('\0') != std::string::npos || command.Filename.find('\0') != std::string::npos)
+            return refuse("invalid-input", "NUL in compilation path");
+        hasSeed |= command.Filename == seed;
+        std::vector<std::string> args;
+        const auto driverName = llvm::sys::path::filename(command.CommandLine[0]);
+        const bool cl =
+            driverName == "cl.exe" || driverName == "cl" || driverName == "clang-cl.exe" || driverName == "clang-cl";
+        const bool c = driverName == "clang" || driverName == "clang.exe" || driverName == "gcc" ||
+                       driverName == "gcc.exe" || driverName == "cc";
+        if (!cl && !c && driverName != "clang++" && driverName != "clang++.exe" && driverName != "g++" &&
+            driverName != "g++.exe" && driverName != "c++")
+            return refuse("unsupported", "Compilation command uses an unsupported compiler wrapper");
+        llvm::SmallString<256> driver(resource);
+        for (int i = 0; i != 3; ++i)
+            llvm::sys::path::remove_filename(driver);
+        llvm::sys::path::append(driver, "bin", cl ? "clang-cl" : c ? "clang" : "clang++");
+#ifdef _WIN32
+        driver += ".exe";
+#endif
+        args.push_back(driver.str().str());
+        for (std::size_t i = 1; i < command.CommandLine.size(); ++i) {
+            llvm::StringRef arg(command.CommandLine[i]);
+            if (arg.contains('\0'))
+                return refuse("invalid-input", "NUL in compiler argument");
+            if (arg.starts_with("@") || arg == "-Xclang" || arg.starts_with("-fplugin") ||
+                arg.starts_with("-fmodule") || arg.starts_with("/clang:") || arg == "-include-pch")
+                return refuse("unsupported", "Response/plugin/module or opaque PCH actions are not admitted");
+            if (cl && (arg.starts_with("/Yu") || arg.starts_with("/Yc"))) {
+                auto header = arg.drop_front(3).str();
+                if (header.empty()) {
+                    if (++i == command.CommandLine.size())
+                        return refuse("unsupported", "PCH header missing");
+                    header = command.CommandLine[i];
+                }
+                if (header.empty() || header[0] == '/' || header[0] == '-')
+                    return refuse("unsupported", "Default opaque PCH context has no source header");
+                args.push_back("/FI" + header);
+                pch.push_back(llvm::json::Object{
+                    {"translationUnit", command.Filename}, {"header", header}, {"mode", "textual-reparse"}});
+                continue;
+            }
+            if (cl && arg.starts_with("/Fp")) {
+                if (arg.size() == 3 && ++i == command.CommandLine.size())
+                    return refuse("invalid-input", "Missing PCH output operand");
+                continue;
+            }
+            args.push_back(arg.str());
+        }
+        args.push_back("-resource-dir=" + resource.str());
+        args.push_back("-fno-implicit-modules");
+        args.push_back("-fno-implicit-module-maps");
+        command.CommandLine = std::move(args);
+    }
+    if (!hasSeed)
+        return refuse("invalid-input", "Seed translation unit is absent from complete compilation database");
+    std::stable_sort(commands.begin(), commands.end(),
+                     [&](const auto& a, const auto& b) { return (a.Filename == seed) > (b.Filename == seed); });
+    llvm::IntrusiveRefCntPtr<llvm::vfs::OverlayFileSystem> physical(new llvm::vfs::OverlayFileSystem(
+        llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem>(llvm::vfs::createPhysicalFileSystem().release())));
+    llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> overlays(new llvm::vfs::InMemoryFileSystem);
+    std::set<std::string> overlayPaths;
+    if (const auto* supplied = input.getArray("overlays"))
+        for (const auto& value : *supplied) {
+            const auto* object = value.getAsObject();
+            if (!object)
+                return refuse("invalid-input", "Invalid overlay");
+            auto path = object->getString("path"), bytes = object->getString("contents");
+            if (!path || !bytes)
+                return refuse("invalid-input", "Invalid overlay snapshot");
+            auto name = absolute(*path, root);
+            if (!inside(name) || !overlayPaths.insert(name).second || !valueFits(bytes->size(), kMainBytes) ||
+                !overlays->addFile(name, 0, llvm::MemoryBuffer::getMemBufferCopy(*bytes)))
+                return refuse("invalid-input", "Duplicate, external or oversized overlay");
+        }
+    physical->pushOverlay(overlays);
+    llvm::IntrusiveRefCntPtr<SnapshotFileSystem> frozen(new SnapshotFileSystem(physical, 65536, 1024ULL * 1024 * 1024));
+    std::set<std::string> family;
+    std::string oldName;
+    std::string chosenSeed = seed;
+    std::vector<std::pair<std::vector<std::string>, std::vector<std::string>>> methodEdges;
+    for (const auto& command : commands) {
+        Diagnostics diagnostics;
+        auto ast = projectAST(command, frozen, {}, diagnostics);
+        if (!ast || !frozen->error.empty())
+            return refuse("parse-error",
+                          frozen->error.empty() ? "Original compilation configuration failed" : frozen->error);
+        if (seed.empty() || command.Filename == seed) {
+            ProjectSelection selected(ast->getASTContext(), anchor, static_cast<unsigned>(*offset));
+            selected.TraverseDecl(ast->getASTContext().getTranslationUnitDecl());
+            if (!selected.declaration || selected.ambiguous) {
+                if (!seed.empty())
+                    return refuse("unsupported", "Selection has no unique canonical AST declaration");
+            } else {
+                auto ids = clang::tooling::getUSRsForDeclaration(selected.declaration, ast->getASTContext());
+                if (ids.empty())
+                    return refuse("unsupported", "Selected symbol has no stable USR");
+                if (oldName.empty()) {
+                    oldName = selected.declaration->getNameAsString();
+                    chosenSeed = command.Filename;
+                    family.insert(ids.begin(), ids.end());
+                } else if (oldName != selected.declaration->getNameAsString() ||
+                           std::ranges::none_of(ids, [&](const auto& id) { return family.contains(id); }))
+                    return refuse("conflict", "Selected symbol differs between compilation configurations");
+            }
+        }
+        ProjectMethods methods(ast->getASTContext());
+        methods.TraverseDecl(ast->getASTContext().getTranslationUnitDecl());
+        methodEdges.insert(methodEdges.end(), methods.edges.begin(), methods.edges.end());
+    }
+    if (oldName.empty() || oldName == newName)
+        return refuse("invalid-input", "No changed symbol selected");
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& [left, right] : methodEdges) {
+            if (std::ranges::any_of(left, [&](const auto& id) { return family.contains(id); }) ||
+                std::ranges::any_of(right, [&](const auto& id) { return family.contains(id); })) {
+                for (const auto& id : left)
+                    changed |= family.insert(id).second;
+                for (const auto& id : right)
+                    changed |= family.insert(id).second;
+            }
+        }
+    }
+    std::stable_sort(commands.begin(), commands.end(), [&](const auto& a, const auto& b) {
+        return (a.Filename == chosenSeed) > (b.Filename == chosenSeed);
+    });
+    frozen->frozen = true;
+    std::vector<std::string> newNames{newName}, oldNames{oldName};
+    std::vector<std::vector<std::string>> ids{std::vector<std::string>(family.begin(), family.end())};
+    std::map<std::string, clang::tooling::Replacements> replacements;
+    std::map<std::string, std::set<unsigned>> requiredTokens;
+    for (const auto& command : commands) {
+        Diagnostics diagnostics;
+        auto ast = projectAST(command, frozen, {}, diagnostics);
+        if (!ast || !frozen->error.empty())
+            return refuse("conflict", "Frozen original configuration cannot be replayed");
+        ProjectOccurrences occurrences(ast->getASTContext(), family, oldName);
+        occurrences.TraverseDecl(ast->getASTContext().getTranslationUnitDecl());
+        if (occurrences.unsupportedMacro)
+            return refuse("unsupported", "A target occurrence depends on a macro body, token paste or stringization");
+        for (const auto& [path, tokens] : occurrences.tokens)
+            requiredTokens[path].insert(tokens.begin(), tokens.end());
+        clang::tooling::RenamingAction action(newNames, oldNames, ids, replacements);
+        auto consumer = action.newASTConsumer();
+        consumer->Initialize(ast->getASTContext());
+        consumer->HandleTranslationUnit(ast->getASTContext());
+    }
+    std::map<std::string, std::string> candidates;
+    std::size_t editCount = 0;
+    for (const auto& [path, edits] : replacements) {
+        auto name = absolute(path, root);
+        auto captured = frozen->inputs.find(name);
+        if (!inside(name) || captured == frozen->inputs.end())
+            return refuse("unsupported", "Rename would edit an external/uncaptured file");
+        for (const auto& edit : edits) {
+            if (++editCount > kEdits || edit.getOffset() > captured->second.bytes->size() ||
+                edit.getLength() > captured->second.bytes->size() - edit.getOffset() ||
+                captured->second.bytes->substr(edit.getOffset(), edit.getLength()) != oldName)
+                return refuse("unsupported", "Macro/token spelling or replacement budget cannot be proved");
+        }
+        auto after = clang::tooling::applyAllReplacements(*captured->second.bytes, edits);
+        if (!after) {
+            llvm::consumeError(after.takeError());
+            return refuse("conflict", "Overlapping or invalid semantic replacements");
+        }
+        candidates.emplace(name, std::move(*after));
+    }
+    if (candidates.empty())
+        return refuse("unsupported", "No semantic rename occurrences found");
+    for (const auto& [path, tokens] : requiredTokens)
+        for (const auto offset : tokens) {
+            bool covered = false;
+            for (const auto& [file, edits] : replacements)
+                if (absolute(file, root) == path)
+                    for (const auto& edit : edits)
+                        covered |= edit.getOffset() == offset && edit.getLength() == oldName.size();
+            if (!covered)
+                return refuse("unsupported", "A semantic target occurrence has no proven token replacement");
+        }
+
+    auto mappedOffset = [&](unsigned original) {
+        std::int64_t delta = 0;
+        for (const auto& [path, edits] : replacements)
+            if (absolute(path, root) == anchor)
+                for (const auto& edit : edits)
+                    if (edit.getOffset() < original)
+                        delta += static_cast<std::int64_t>(edit.getReplacementText().size()) - edit.getLength();
+        return static_cast<unsigned>(static_cast<std::int64_t>(original) + delta);
+    };
+    std::set<std::string> reverseFamily;
+    std::map<std::string, clang::tooling::Replacements> reverse;
+    for (const auto& command : commands) {
+        Diagnostics diagnostics;
+        auto ast = projectAST(command, frozen, candidates, diagnostics);
+        if (!ast || !frozen->error.empty())
+            return refuse("conflict", "Candidate fails a captured compilation configuration");
+        if (command.Filename == chosenSeed) {
+            ProjectSelection selected(ast->getASTContext(), anchor, mappedOffset(static_cast<unsigned>(*offset)));
+            selected.TraverseDecl(ast->getASTContext().getTranslationUnitDecl());
+            if (!selected.declaration || selected.ambiguous || selected.declaration->getNameAsString() != newName)
+                return refuse("conflict", "Renamed declaration identity was captured or lost");
+            auto found = clang::tooling::getUSRsForDeclaration(selected.declaration, ast->getASTContext());
+            reverseFamily.insert(found.begin(), found.end());
+        }
+        // Collect candidate override families before the reverse occurrence pass.
+        ProjectMethods methods(ast->getASTContext());
+        methods.TraverseDecl(ast->getASTContext().getTranslationUnitDecl());
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (const auto& [left, right] : methods.edges)
+                if (std::ranges::any_of(left, [&](const auto& id) { return reverseFamily.contains(id); }) ||
+                    std::ranges::any_of(right, [&](const auto& id) { return reverseFamily.contains(id); })) {
+                    for (const auto& id : left)
+                        changed |= reverseFamily.insert(id).second;
+                    for (const auto& id : right)
+                        changed |= reverseFamily.insert(id).second;
+                }
+        }
+    }
+    std::vector<std::vector<std::string>> reverseIDs{
+        std::vector<std::string>(reverseFamily.begin(), reverseFamily.end())};
+    for (const auto& command : commands) {
+        Diagnostics diagnostics;
+        auto ast = projectAST(command, frozen, candidates, diagnostics);
+        if (!ast)
+            return refuse("conflict", "Candidate semantic replay failed");
+        clang::tooling::RenamingAction action(oldNames, newNames, reverseIDs, reverse);
+        auto consumer = action.newASTConsumer();
+        consumer->Initialize(ast->getASTContext());
+        consumer->HandleTranslationUnit(ast->getASTContext());
+    }
+    // A valid parse alone misses name capture/overload changes. Reverse AST-bound edits must
+    // restore every edited buffer exactly, and must not capture any previously unrelated file.
+    if (reverse.size() != candidates.size())
+        return refuse("conflict", "Rename changes unrelated symbol bindings");
+    for (const auto& [path, edits] : reverse) {
+        auto name = absolute(path, root);
+        auto candidate = candidates.find(name);
+        auto original = frozen->inputs.find(name);
+        if (candidate == candidates.end() || original == frozen->inputs.end())
+            return refuse("conflict", "Candidate captures an unrelated symbol");
+        auto restored = clang::tooling::applyAllReplacements(candidate->second, edits);
+        if (!restored) {
+            llvm::consumeError(restored.takeError());
+            return refuse("conflict", "Reverse replacements overlap");
+        }
+        if (*restored != *original->second.bytes)
+            return refuse("conflict", "Semantic round trip detects capture or changed overload resolution");
+    }
+    llvm::json::Array files, dependencies, missing;
+    std::size_t outputBytes = 0;
+    auto charge = [&](std::size_t bytes) {
+        constexpr std::size_t limit = 64 * 1024 * 1024;
+        if (outputBytes > limit || bytes > (limit - outputBytes) / 6)
+            return false;
+        outputBytes += bytes * 6;
+        return true;
+    };
+    for (const auto& [path, bytes] : candidates) {
+        const auto& before = *frozen->inputs.at(path).bytes;
+        if (!llvm::json::isUTF8(before) || !llvm::json::isUTF8(bytes) || !charge(before.size()) ||
+            !charge(bytes.size()))
+            return refuse("unsupported", "UTF-8/output budget exceeded");
+        files.push_back(llvm::json::Object{{"path", path},
+                                           {"before", before},
+                                           {"after", bytes},
+                                           {"beforeSha256", sha256(before)},
+                                           {"afterSha256", sha256(bytes)},
+                                           {"overlay", overlayPaths.contains(path)}});
+    }
+    for (const auto& [path, entry] : frozen->inputs) {
+        if (!charge(path.size() + 160))
+            return refuse("unsupported", "Dependency receipt output budget exceeded");
+        dependencies.push_back(llvm::json::Object{{"path", path},
+                                                  {"sha256", sha256(*entry.bytes)},
+                                                  {"bytes", entry.bytes->size()},
+                                                  {"overlay", overlayPaths.contains(path)}});
+    }
+    for (const auto& path : frozen->missingInputs()) {
+        if (!charge(path.size()))
+            return refuse("unsupported", "Namespace receipt budget exceeded");
+        missing.push_back(path);
+    }
+    result["status"] = "ready";
+    result["files"] = std::move(files);
+    result["dependencies"] = std::move(dependencies);
+    result["missingDependencies"] = std::move(missing);
+    result["oldName"] = oldName;
+    result["newName"] = newName;
+    result["translationUnitConfigurations"] = commands.size();
+    result["pch"] = std::move(pch);
+    result["compilationDatabaseSha256"] = sha256(*databaseValue);
+    result["coverage"] = "all supplied compilation-database configurations; frozen dependencies; semantic round trip";
+    return result;
+}
+
 } // namespace
 
 #ifdef FROST_CLANG_PLAN_TESTS
@@ -1040,6 +1582,33 @@ int runLocalRenamePlan(int argc, char* argv[], std::string_view resourceDirector
         return 1;
     }
     llvm::outs() << serialized << '\n';
+    return ready ? 0 : 1;
+}
+
+int runProjectRenamePlan(std::string_view resourceDirectory) {
+    std::string request;
+    char chunk[4096];
+    while (std::cin) {
+        std::cin.read(chunk, sizeof(chunk));
+        const auto count = static_cast<std::size_t>(std::cin.gcount());
+        if (request.size() > 32 * 1024 * 1024 - count) {
+            llvm::outs() << "{\"kind\":\"cpp-rename-plan\",\"status\":\"invalid-input\",\"files\":[],\"diagnostics\":["
+                            "\"request exceeds32MiB\"]}\n";
+            return 1;
+        }
+        request.append(chunk, count);
+    }
+    auto parsed = llvm::json::parse(request);
+    llvm::json::Object result;
+    if (!parsed) {
+        llvm::consumeError(parsed.takeError());
+        result = {{"kind", "cpp-rename-plan"}, {"status", "invalid-input"}, {"files", llvm::json::Array{}}};
+    } else if (const auto* object = parsed->getAsObject())
+        result = projectPlan(*object, resourceDirectory);
+    else
+        result = {{"kind", "cpp-rename-plan"}, {"status", "invalid-input"}, {"files", llvm::json::Array{}}};
+    const bool ready = result.getString("status") == "ready";
+    llvm::outs() << llvm::json::Value(std::move(result)) << '\n';
     return ready ? 0 : 1;
 }
 
