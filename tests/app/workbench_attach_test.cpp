@@ -265,6 +265,16 @@ std::string uniqueChildCopy(const WorkDir& dir, std::string_view tag) {
     std::filesystem::copy_file(std::filesystem::path(frost::test::childPath()), std::filesystem::path(copy),
                                std::filesystem::copy_options::overwrite_existing, error);
     EXPECT_FALSE(error) << copy << ": " << error.message();
+#if defined(_WIN32) && __has_feature(address_sanitizer)
+    // A relocated instrumented child needs its pinned build-side runtime beside it.
+    const auto runtime =
+        std::filesystem::path(frost::test::childPath()).parent_path() / "clang_rt.asan_dynamic-x86_64.dll";
+    std::filesystem::copy_file(runtime, std::filesystem::path(copy).parent_path() / runtime.filename(),
+                               std::filesystem::copy_options::overwrite_existing, error);
+    EXPECT_FALSE(error) << "copy required ASan runtime: " << error.message();
+    if (error)
+        return {};
+#endif
     return copy;
 }
 

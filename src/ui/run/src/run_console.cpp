@@ -68,15 +68,14 @@ QString runFinishedLine(const build::RunOutcome& outcome) {
     return QStringLiteral("Process finished");
 }
 
-RunConsole::RunConsole(QWidget* parent) : QWidget(parent) {
-    m_title = new QLabel(this);
+RunConsole::RunConsole(QWidget* parent)
+    : QWidget(parent), m_title(new QLabel(this)), m_rerun(new QToolButton(this)), m_stop(new QToolButton(this)),
+      m_output(new QPlainTextEdit(this)), m_input(new QLineEdit(this)) {
     m_title->setObjectName(QStringLiteral("runConsoleTitle"));
-    m_rerun = new QToolButton(this);
     m_rerun->setObjectName(QStringLiteral("runConsoleRerun"));
     m_rerun->setText(tr("Rerun"));
     m_rerun->setToolTip(tr("Rerun (stops the program first)"));
     m_rerun->setAutoRaise(true);
-    m_stop = new QToolButton(this);
     m_stop->setObjectName(QStringLiteral("runConsoleStop"));
     m_stop->setText(tr("Stop"));
     m_stop->setToolTip(tr("Stop the program and everything it started"));
@@ -96,8 +95,9 @@ RunConsole::RunConsole(QWidget* parent) : QWidget(parent) {
     clearBtn->setText(tr("Clear"));
     clearBtn->setToolTip(tr("Clear All"));
     clearBtn->setAutoRaise(true);
-
-    m_output = new QPlainTextEdit(this);
+    // The toolbar controls precede the output/input fields in the existing keyboard order.
+    setTabOrder(m_stop, wrapBtn);
+    setTabOrder(wrapBtn, clearBtn);
     m_output->setObjectName(QStringLiteral("runConsoleOutput"));
     m_output->setFrameShape(QFrame::NoFrame);
     m_output->setReadOnly(true);
@@ -105,8 +105,6 @@ RunConsole::RunConsole(QWidget* parent) : QWidget(parent) {
     m_output->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_output->setMaximumBlockCount(kMaxLines);
     m_output->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-
-    m_input = new QLineEdit(this);
     m_input->setObjectName(QStringLiteral("runConsoleInput"));
     m_input->setPlaceholderText(tr("Input to the program; Enter sends the line"));
     m_input->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));

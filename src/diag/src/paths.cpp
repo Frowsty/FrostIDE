@@ -132,11 +132,11 @@ Result<DiagnosticsDirectories> diagnosticsDirectories(std::string_view cacheRoot
         out = std::move(*joined);
         return {};
     };
-    for (auto [base, name, out] : {std::tuple{&directories.cacheRoot, "crashes", &directories.crashes},
-                                   std::tuple{&directories.crashes, "crashpad", &directories.crashpadDatabase},
-                                   std::tuple{&directories.crashes, "freezes", &directories.freezes},
-                                   std::tuple{&directories.cacheRoot, "logs", &directories.logs},
-                                   std::tuple{&directories.cacheRoot, "traces", &directories.traces}}) {
+    for (const auto& [base, name, out] : {std::tuple{&directories.cacheRoot, "crashes", &directories.crashes},
+                                          std::tuple{&directories.crashes, "crashpad", &directories.crashpadDatabase},
+                                          std::tuple{&directories.crashes, "freezes", &directories.freezes},
+                                          std::tuple{&directories.cacheRoot, "logs", &directories.logs},
+                                          std::tuple{&directories.cacheRoot, "traces", &directories.traces}}) {
         if (auto joined = join(*base, name, *out); !joined) {
             return std::unexpected(std::move(joined.error()));
         }

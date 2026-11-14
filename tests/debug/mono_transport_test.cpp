@@ -97,7 +97,7 @@ TEST(MonoTransport, RejectsPeerBeforeAnyProtocolBytes) {
     bool called = false;
     auto stream = BinaryLoopback::connect(
         listener.port, std::chrono::steady_clock::now() + 3s, {},
-        [&](std::uint16_t local, std::uint16_t remote, MonoDeadline, std::stop_token) -> Result<void> {
+        [&](std::uint16_t local, std::uint16_t remote, MonoDeadline, const std::stop_token&) -> Result<void> {
             called = local != 0 && remote == listener.port;
             return fail(ErrorCode::PermissionDenied, "unverified peer");
         });
@@ -119,13 +119,13 @@ TEST(MonoTransport, RechecksPeerBeforeWritingAndClosesOnFailure) {
         closeSocket(peer);
     });
     int calls = 0;
-    auto stream =
-        BinaryLoopback::connect(listener.port, std::chrono::steady_clock::now() + 3s, {},
-                                [&](std::uint16_t, std::uint16_t, MonoDeadline, std::stop_token) -> Result<void> {
-                                    if (++calls > 1)
-                                        return fail(ErrorCode::PermissionDenied, "peer changed");
-                                    return {};
-                                });
+    auto stream = BinaryLoopback::connect(
+        listener.port, std::chrono::steady_clock::now() + 3s, {},
+        [&](std::uint16_t, std::uint16_t, MonoDeadline, const std::stop_token&) -> Result<void> {
+            if (++calls > 1)
+                return fail(ErrorCode::PermissionDenied, "peer changed");
+            return {};
+        });
     ASSERT_TRUE(stream);
     const std::array<std::uint8_t, 1> byte{42};
     EXPECT_FALSE((*stream)->write(byte));
@@ -154,7 +154,7 @@ TEST(MonoTransport, IdlePollKeepsConnectionUsableAcrossDeadlineRenewal) {
         closeSocket(peer);
     });
     auto stream = BinaryLoopback::connect(listener.port, std::chrono::steady_clock::now() + 3s, {},
-                                          [](auto, auto, auto, auto) -> Result<void> { return {}; });
+                                          [](auto, auto, auto, const auto&) -> Result<void> { return {}; });
     ASSERT_TRUE(stream);
     auto idle = (*stream)->pollReadable(std::chrono::steady_clock::now() + 20ms);
     ASSERT_TRUE(idle);
@@ -182,7 +182,7 @@ TEST(MonoTransport, IdlePollRevocationClosesConnection) {
     });
     bool valid = true;
     auto stream = BinaryLoopback::connect(listener.port, std::chrono::steady_clock::now() + 3s, {},
-                                          [&](auto, auto, auto, auto) -> Result<void> {
+                                          [&](auto, auto, auto, const auto&) -> Result<void> {
                                               if (!valid)
                                                   return fail(ErrorCode::PermissionDenied, "revoked");
                                               return {};
@@ -205,7 +205,7 @@ TEST(MonoTransport, IdleVerificationTimeoutDoesNotCloseStream) {
     });
     int calls = 0;
     auto stream = BinaryLoopback::connect(listener.port, std::chrono::steady_clock::now() + 3s, {},
-                                          [&](auto, auto, auto deadline, auto) -> Result<void> {
+                                          [&](auto, auto, auto deadline, const auto&) -> Result<void> {
                                               if (++calls == 2) {
                                                   std::this_thread::sleep_until(deadline);
                                                   return fail(ErrorCode::Timeout, "idle budget expired");
@@ -226,12 +226,12 @@ TEST(MonoTransport, RejectsMissingVerifierAndInvalidPort) {
 }
 TEST(MonoTransport, ExpiredDeadlineRejectsBeforeConnect) {
     bool called = false;
-    auto result =
-        BinaryLoopback::connect(1234, std::chrono::steady_clock::now() - 1s, {},
-                                [&](std::uint16_t, std::uint16_t, MonoDeadline, std::stop_token) -> Result<void> {
-                                    called = true;
-                                    return {};
-                                });
+    auto result = BinaryLoopback::connect(
+        1234, std::chrono::steady_clock::now() - 1s, {},
+        [&](std::uint16_t, std::uint16_t, MonoDeadline, const std::stop_token&) -> Result<void> {
+            called = true;
+            return {};
+        });
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error().code(), ErrorCode::Timeout);
     EXPECT_FALSE(called);
@@ -285,14 +285,14 @@ TEST(MonoTransport, WindowsPeerBindsEstablishedTupleToHeldProcess) {
             std::this_thread::yield();
         closeSocket(peer);
     });
-    auto stream = BinaryLoopback::connect(
-        listener.port, std::chrono::steady_clock::now() + 3s, {},
-        [&](std::uint16_t local, std::uint16_t remote, MonoDeadline deadline, std::stop_token stop) -> Result<void> {
-            const auto end = std::chrono::steady_clock::now() + 2s;
-            while (!accepted && std::chrono::steady_clock::now() < end)
-                std::this_thread::yield();
-            return (*peerVerifier)->verify(local, remote, deadline, stop);
-        });
+    auto stream = BinaryLoopback::connect(listener.port, std::chrono::steady_clock::now() + 3s, {},
+                                          [&](std::uint16_t local, std::uint16_t remote, MonoDeadline deadline,
+                                              const std::stop_token& stop) -> Result<void> {
+                                              const auto end = std::chrono::steady_clock::now() + 2s;
+                                              while (!accepted && std::chrono::steady_clock::now() < end)
+                                                  std::this_thread::yield();
+                                              return (*peerVerifier)->verify(local, remote, deadline, stop);
+                                          });
     ASSERT_TRUE(stream);
     const std::array<std::uint8_t, 1> sent{42};
     const auto written = (*stream)->write(sent);
@@ -314,7 +314,7 @@ TEST(MonoTransport, ExchangesBinaryBytesWithVerifiedLoopbackPeer) {
     });
     auto stream = BinaryLoopback::connect(
         listener.port, std::chrono::steady_clock::now() + 3s, {},
-        [](std::uint16_t, std::uint16_t, MonoDeadline, std::stop_token) -> Result<void> { return {}; });
+        [](std::uint16_t, std::uint16_t, MonoDeadline, const std::stop_token&) -> Result<void> { return {}; });
     ASSERT_TRUE(stream);
     const std::array<std::uint8_t, 1> sent{0};
     ASSERT_TRUE((*stream)->write(sent));
@@ -337,13 +337,13 @@ TEST(MonoTransport, CancellationDuringPostSendVerificationDoesNotReportSuccess) 
     });
     std::stop_source stop;
     int calls = 0;
-    auto stream =
-        BinaryLoopback::connect(listener.port, std::chrono::steady_clock::now() + 3s, stop.get_token(),
-                                [&](std::uint16_t, std::uint16_t, MonoDeadline, std::stop_token) -> Result<void> {
-                                    if (++calls == 4)
-                                        stop.request_stop();
-                                    return {};
-                                });
+    auto stream = BinaryLoopback::connect(
+        listener.port, std::chrono::steady_clock::now() + 3s, stop.get_token(),
+        [&](std::uint16_t, std::uint16_t, MonoDeadline, const std::stop_token&) -> Result<void> {
+            if (++calls == 4)
+                stop.request_stop();
+            return {};
+        });
     ASSERT_TRUE(stream);
     const std::array<std::uint8_t, 1> byte{42};
     const auto result = (*stream)->write(byte);
@@ -363,13 +363,13 @@ TEST(MonoTransport, CancellationDuringPostReceiveVerificationDiscardsResult) {
     });
     std::stop_source stop;
     int calls = 0;
-    auto stream =
-        BinaryLoopback::connect(listener.port, std::chrono::steady_clock::now() + 3s, stop.get_token(),
-                                [&](std::uint16_t, std::uint16_t, MonoDeadline, std::stop_token) -> Result<void> {
-                                    if (++calls == 3)
-                                        stop.request_stop();
-                                    return {};
-                                });
+    auto stream = BinaryLoopback::connect(
+        listener.port, std::chrono::steady_clock::now() + 3s, stop.get_token(),
+        [&](std::uint16_t, std::uint16_t, MonoDeadline, const std::stop_token&) -> Result<void> {
+            if (++calls == 3)
+                stop.request_stop();
+            return {};
+        });
     ASSERT_TRUE(stream);
     std::array<std::uint8_t, 1> buffer{};
     const auto result = (*stream)->read(buffer);

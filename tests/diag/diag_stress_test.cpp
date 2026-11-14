@@ -16,7 +16,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <format>
+#include <map>
 #include <memory>
+#include <string>
 #include <thread>
 
 #ifdef _WIN32
@@ -66,19 +69,35 @@ TEST(ThreadSampler, NeverDeadlocksUnderHeapAndLoaderChurn) {
     }
     ASSERT_NE(sampler, nullptr);
     std::size_t ok = 0;
+    std::map<std::string, std::pair<std::size_t, std::string>> failures;
     frost::diag::StackSample sample;
     for (int i = 0; i < 5000; ++i) {
-        if (sampler->sample(sample)) {
+        const auto attempted = sampler->sample(sample);
+        if (attempted && sample.captured()) {
             ++ok;
             // Module lookups take the loader lock, but only after the target was resumed.
             if (i % 100 == 0) {
                 (void)frost::diag::moduleForAddress(sample.frames[0]);
             }
+        } else {
+            const std::string key = attempted ? std::format("outcome {}", static_cast<unsigned>(sample.outcome))
+                                              : attempted.error().message();
+            auto& failure = failures[key];
+            ++failure.first;
+            if (failure.second.empty() && !attempted) {
+                failure.second = attempted.error().describe();
+            }
         }
     }
     stop = true;
     target.join();
-    EXPECT_GT(ok, 4500u);
+    std::string diagnostics;
+    for (const auto& [reason, failure] : failures) {
+        diagnostics += std::format("\n{}: {} ({})", reason, failure.first, failure.second);
+    }
+    RecordProperty("captured", std::to_string(ok));
+    RecordProperty("capture_failures", diagnostics);
+    EXPECT_GT(ok, 4500u) << diagnostics;
 }
 
 // A sampler that never touches a real thread.
@@ -87,6 +106,7 @@ public:
     frost::Result<void> sample(frost::diag::StackSample& out) noexcept override {
         out.count = 1;
         out.frames[0] = 0x1000;
+        out.outcome = frost::diag::StackSample::Outcome::Captured;
         return {};
     }
     [[nodiscard]] std::uint64_t threadId() const noexcept override { return 1; }

@@ -27,8 +27,6 @@ namespace frost::storage {
 
 namespace {
 
-using detail::Blob;
-
 constexpr std::uint32_t kHistoryApplicationId = 0x46724C48; // 'FrLH'
 
 // Schema v1. tests/storage/goldens/local_history.v1.schema.txt pins it: change it only with a
@@ -142,9 +140,11 @@ Result<LocalHistory> LocalHistory::openInMemory(IClock& clock) {
     return LocalHistory(std::move(*db), clock, std::nullopt);
 }
 
-Result<RecordOutcome> LocalHistory::record(std::string_view pathKey, std::string_view path, RevisionKind kind,
-                                           std::string_view label, std::span<const std::string_view> content,
-                                           std::stop_token stop) {
+Result<RecordOutcome> LocalHistory::record(
+    std::string_view pathKey, std::string_view path, RevisionKind kind, std::string_view label,
+    std::span<const std::string_view> content,
+    // NOLINTNEXTLINE(performance-unnecessary-value-param): retain cancellation identity across SQLite callbacks.
+    std::stop_token stop) {
     if (pathKey.empty()) {
         return fail(ErrorCode::InvalidArgument, "local history: empty path key");
     }
@@ -304,8 +304,10 @@ Result<std::vector<RevisionInfo>> LocalHistory::revisions(std::string_view pathK
     return out;
 }
 
-Result<void> LocalHistory::content(std::int64_t revisionId, frost::function_ref<Result<void>(std::string_view)> sink,
-                                   std::stop_token stop) {
+Result<void> LocalHistory::content(
+    std::int64_t revisionId, frost::function_ref<Result<void>(std::string_view)> sink,
+    // NOLINTNEXTLINE(performance-unnecessary-value-param): a reentrant sink may replace its caller's token.
+    std::stop_token stop) {
     if (stop.stop_requested()) {
         return cancelled();
     }
@@ -426,6 +428,7 @@ Result<void> deleteInBatches(Database& db, std::string_view sql, const std::vect
 
 } // namespace
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param): own stable cancellation identity across clock/SQLite callbacks.
 Result<PruneStats> LocalHistory::prune(const RetentionPolicy& policy, std::stop_token stop) {
     if (policy.maxAge <= IClock::Duration::zero() || policy.maxTotalBytes == 0) {
         return fail(ErrorCode::InvalidArgument, "local history prune: maxAge and maxTotalBytes must be positive");

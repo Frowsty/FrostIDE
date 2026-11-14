@@ -159,7 +159,7 @@ std::optional<std::vector<std::string>> loggedCommand(const Log& log, std::strin
     std::optional<std::vector<std::string>> found;
     for (std::size_t i = 0; i + 2 < lines.size(); ++i) {
         if (lines[i].find("ASTWorker building file") != std::string::npos &&
-            lines[i].find(std::string(file)) != std::string::npos && lines[i + 1].starts_with("[")) {
+            lines[i].find(std::string(file)) != std::string::npos && lines[i + 1].starts_with('[')) {
             found = parseClangdArgv(lines[i + 2]);
         }
     }

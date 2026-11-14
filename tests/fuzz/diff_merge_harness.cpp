@@ -204,7 +204,7 @@ Result<void> fuzzMerge(const LineSequence& base, const LineSequence& ours, const
 void initialize() { frost::test::disableCrashDialogs(); }
 
 Result<void> runInput(std::span<const std::uint8_t> data) {
-    const std::uint8_t mode = data.size() > 0 ? data[0] : 0;
+    const std::uint8_t mode = !data.empty() ? data[0] : 0;
     const std::uint8_t limit = data.size() > 1 ? data[1] : 0xFF;
     const std::uint8_t content = data.size() > 2 ? data[2] : 0;
     const std::vector<std::string> texts =

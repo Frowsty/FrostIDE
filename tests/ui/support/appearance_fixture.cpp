@@ -86,7 +86,7 @@ std::unique_ptr<MemResources> mirrorResources(std::initializer_list<std::string_
         std::ifstream in(entry.path(), std::ios::binary);
         const std::string bytes{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
         const std::string target = mem->path(relative);
-        if (auto made = mem->fs.createDirectories(std::string(io::parentPath(target))); !made) {
+        if (auto made = mem->fs.createDirectories(io::parentPath(target)); !made) {
             ADD_FAILURE() << made.error().describe();
             return nullptr;
         }

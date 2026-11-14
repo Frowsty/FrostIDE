@@ -7,7 +7,6 @@
 #include "frost/io/path.hpp"
 
 #include <algorithm>
-#include <array>
 #include <format>
 #include <utility>
 
@@ -21,13 +20,6 @@ public:
 private:
     std::unique_ptr<io::LoopbackStream> m_socket;
 };
-// The commands the IDE sends. script.debug.* is not here: the engine's Lua debug endpoint is on no
-// branch, and FER-8 reimplements it (PLAN.md D34).
-bool allowed(std::string_view method) {
-    static constexpr std::array methods{"play.start", "play.stop", "play.state",  "script.validate",
-                                        "test.run",   "log.get",   "editor.focus"};
-    return std::ranges::find(methods, method) != methods.end();
-}
 // The engine's JSON-RPC error as an Error carrying its own code and message (redactEngineMessage).
 Error engineError(const Json& error, std::string_view secret) {
     const auto code = error.integerAt("code");
@@ -128,7 +120,7 @@ std::optional<std::chrono::milliseconds> engineMethodTimeout(std::string_view me
 
 EngineConnect loopbackEngineConnector() {
     return [](std::uint16_t port, auto deadline, std::stop_token stop) -> Result<std::unique_ptr<IEngineConnection>> {
-        auto socket = io::LoopbackStream::connect(port, deadline, stop);
+        auto socket = io::LoopbackStream::connect(port, deadline, std::move(stop));
         if (!socket)
             return std::unexpected(std::move(socket.error()));
         return std::unique_ptr<IEngineConnection>(new SocketConnection(std::move(*socket)));
@@ -138,10 +130,14 @@ EngineConnect loopbackEngineConnector() {
 Result<Json> runEngineCommand(const Json& discovery, std::string_view projectRoot, std::string_view method, Json params,
                               const std::function<bool(std::string_view, std::string_view)>& sameProject,
                               const std::function<bool()>& stillTrusted, const EngineConnect& connect,
-                              std::chrono::steady_clock::time_point deadline, std::stop_token stop) {
-    if (!allowed(method) || !params.isObject() || params.find("token") || !io::isAbsolutePath(projectRoot) ||
+                              std::chrono::steady_clock::time_point deadline,
+                              // NOLINTNEXTLINE(performance-unnecessary-value-param): Own cancellation across callbacks.
+                              std::stop_token stop, const EngineCommandAdmission& admit) {
+    if (method.empty() || !params.isObject() || params.find("token") || !io::isAbsolutePath(projectRoot) ||
         !sameProject || !stillTrusted || !connect)
         return fail(ErrorCode::InvalidArgument, "invalid engine command");
+    if (!admit)
+        return fail(ErrorCode::PermissionDenied, "engine command policy is unavailable");
     if (!stillTrusted())
         return fail(ErrorCode::Untrusted, "project is not trusted");
     const auto port = discovery.integerAt("port");
@@ -176,6 +172,16 @@ Result<Json> runEngineCommand(const Json& discovery, std::string_view projectRoo
         return std::unexpected(std::move(projectInfo.error()));
     if (!sameProject(projectRoot, projectInfo->stringAt("directory")))
         return fail(ErrorCode::PermissionDenied, "running engine has a different project open");
+    if (stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "engine request cancelled");
+    if (!stillTrusted())
+        return fail(ErrorCode::Untrusted, "project is no longer trusted");
+    auto schema = call(**connection, id++, "schema.export", Json::object(), secret);
+    if (!schema)
+        return std::unexpected(std::move(schema.error()));
+    auto admitted = admit(method, params, *schema, *info, *projectInfo);
+    if (!admitted)
+        return std::unexpected(std::move(admitted.error()));
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "engine request cancelled");
     if (!stillTrusted())

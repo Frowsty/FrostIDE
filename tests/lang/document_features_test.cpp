@@ -10,6 +10,7 @@
 #include "frost/lang/lsp_client.hpp"
 #include "frost/lang/save_actions.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/sched/sim_executor.hpp"
 #include "frost/sched/thread_pool.hpp"
 
 #include <gtest/gtest.h>
@@ -17,9 +18,11 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace {
 
@@ -186,6 +189,40 @@ TEST(SaveActionWait, TheResultArrivesAndATimeoutCancelsTheRequest) {
     }
     EXPECT_TRUE(cancelled->load()) << "the timed-out request was not stopped";
     pool.shutdown();
+}
+
+TEST(SaveActionWait, CapturingFactorySurvivesTimeoutUntilDeferredCoroutineCompletes) {
+    std::weak_ptr<std::string> payloadLifetime;
+    std::string capturedBytes;
+    bool sawCancellation = false;
+    frost::sched::SimExecutor executor;
+    {
+        auto payload = std::make_shared<std::string>("unsaved document bytes");
+        payloadLifetime = payload;
+        auto coroutine = [payload = std::move(payload), &capturedBytes,
+                          &sawCancellation](std::weak_ptr<std::string> lifetime,
+                                            std::stop_token token) -> frost::sched::Task<frost::Result<int>> {
+            // This frame-owned guard lets the unfixed path drain safely without reading dead captures.
+            if (lifetime.expired()) {
+                co_return frost::fail(frost::ErrorCode::Internal, "capturing factory was destroyed");
+            }
+            capturedBytes = *payload;
+            sawCancellation = token.stop_requested();
+            co_return 42;
+        };
+        auto factory = std::bind_front(std::move(coroutine), payloadLifetime);
+        auto result = fl::waitForResult<int>(executor, std::move(factory), 0ms);
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().code(), frost::ErrorCode::Timeout);
+    }
+    // Only waitForResult's retained factory can own the payload after the caller's scope ends.
+    EXPECT_FALSE(payloadLifetime.expired());
+    EXPECT_TRUE(capturedBytes.empty());
+    EXPECT_EQ(executor.dispatches(), 0U);
+    EXPECT_GT(executor.runUntilIdle(), 0U);
+    EXPECT_EQ(capturedBytes, "unsaved document bytes");
+    EXPECT_TRUE(sawCancellation);
+    EXPECT_TRUE(payloadLifetime.expired());
 }
 
 } // namespace

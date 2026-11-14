@@ -25,8 +25,11 @@
 namespace frost::ui {
 namespace {
 
-const std::filesystem::path kSourceDir(FROST_SOURCE_DIR);
-const std::filesystem::path kFixtures = kSourceDir / "tests" / "ui" / "fixtures" / "icons";
+const std::filesystem::path& fixturesDir() {
+    static const std::filesystem::path path =
+        std::filesystem::path(FROST_SOURCE_DIR) / "tests" / "ui" / "fixtures" / "icons";
+    return path;
+}
 
 io::ProcessResult runBaker(std::vector<std::string> arguments) {
     io::ProcessSpec spec;
@@ -59,7 +62,7 @@ struct Workspace {
         std::filesystem::create_directories(src);
         std::filesystem::create_directories(out);
         for (const char* group : {"good", "bad"}) {
-            for (const auto& entry : std::filesystem::directory_iterator(kFixtures / group)) {
+            for (const auto& entry : std::filesystem::directory_iterator(fixturesDir() / group)) {
                 std::filesystem::copy_file(entry.path(), src / entry.path().filename());
             }
         }
@@ -259,15 +262,15 @@ TEST(IconBakerCli, RejectsInvalidInputs) {
         EXPECT_EQ(ws.atlasCount(), 0U) << "nothing is written on failure";
     }
     // A missing output directory is reported after baking, still before writing anything.
-    std::filesystem::copy_file(kFixtures / "good" / "icons.json", ws.src / "icons.json",
+    std::filesystem::copy_file(fixturesDir() / "good" / "icons.json", ws.src / "icons.json",
                                std::filesystem::copy_options::overwrite_existing);
     EXPECT_EQ(ws.bake(ws.out / "missing").exitCode, 1);
 }
 
 TEST(IconBakerCli, UsageErrors) {
     Workspace ws;
-    const std::string manifest = (kFixtures / "good" / "icons.json").string();
-    const std::string src = (kFixtures / "good").string();
+    const std::string manifest = (fixturesDir() / "good" / "icons.json").string();
+    const std::string src = (fixturesDir() / "good").string();
     const std::string out = ws.out.string();
     EXPECT_EQ(runBaker({}).exitCode, 2);
     EXPECT_EQ(runBaker({"--manifest", manifest, "--source-dir", src}).exitCode, 2) << "no --out-dir";

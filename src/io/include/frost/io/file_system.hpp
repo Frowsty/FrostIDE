@@ -269,6 +269,18 @@ public:
      */
     [[nodiscard]] virtual Result<std::string> canonicalPath(std::string_view path);
 
+    /*
+     * Resolves an existing absolute file or directory through all parent/final symlinks, junctions,
+     * subst drives and short names. Unlike canonicalPath this is physical admission/containment,
+     * never document spelling. Thread-safe, blocking, O(path length) plus filesystem lookup.
+     * The result is a current path observation, not a retained handle or a race-free identity lease;
+     * hard-linked names need not compare equal. Recheck at each admission boundary.
+     * Errors: InvalidArgument (relative path), NotFound (missing/dangling target), PermissionDenied,
+     * Busy, IoError (including link cycles), Unsupported (default for unimplemented test doubles).
+     * No lexical fallback is permitted on a resolution failure.
+     */
+    [[nodiscard]] virtual Result<std::string> physicalPath(std::string_view path);
+
 protected:
     constexpr IFileSystem() noexcept = default;
     constexpr IFileSystem(const IFileSystem&) noexcept = default;

@@ -40,7 +40,8 @@ QString toQString(std::string_view text) { return QString::fromUtf8(text.data(),
 } // namespace
 
 CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
-    : QWidget(parent), m_controller(controller) {
+    : QWidget(parent), m_controller(controller), m_profiles(new QComboBox(this)), m_reload(new QToolButton(this)),
+      m_stop(new QToolButton(this)) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
@@ -48,16 +49,13 @@ CMakeToolWindow::CMakeToolWindow(CMakeController& controller, QWidget* parent)
     auto* bar = new QHBoxLayout();
     bar->setContentsMargins(6, 3, 6, 3);
     bar->setSpacing(4);
-    m_profiles = new QComboBox(this);
     m_profiles->setObjectName(QStringLiteral("cmakeProfiles"));
     m_profiles->setToolTip(qtr(kContext, "CMake profile"));
     m_profiles->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-    m_reload = new QToolButton(this);
     m_reload->setObjectName(QStringLiteral("cmakeReload"));
     m_reload->setText(qtr(kContext, "Reload CMake Project"));
     m_reload->setAutoRaise(true);
     m_reload->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    m_stop = new QToolButton(this);
     m_stop->setObjectName(QStringLiteral("cmakeStop"));
     m_stop->setText(qtr(kContext, "Stop"));
     m_stop->setAutoRaise(true);

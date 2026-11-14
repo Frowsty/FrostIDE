@@ -557,7 +557,9 @@ void VtScreen::feed(std::string_view bytes) {
     const std::size_t complete = completeUtf8Prefix(bytes);
     m_impl->pendingUtf8.assign(bytes.substr(complete));
     if (complete > 0) {
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): libvterm consumes the explicit byte count.
         static_cast<void>(vterm_input_write(m_impl->observer, bytes.data(), complete));
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): libvterm consumes the explicit byte count.
         static_cast<void>(vterm_input_write(m_impl->vt, bytes.data(), complete));
     }
 }
@@ -684,7 +686,7 @@ void VtScreen::sendKey(TermKey key, KeyMods mods) {
         break;
     case TermKey::Escape:
         if (!mods.none()) {
-            m_impl->output += "\x1b";
+            m_impl->output += '\x1b';
             return;
         }
         break;

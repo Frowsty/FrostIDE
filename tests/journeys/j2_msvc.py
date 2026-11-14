@@ -18,7 +18,7 @@
 #   --solution r2a: a shallow scratch clone of the pinned Notepad++ clone (R2a,
 #     tests/corpus/corpora.lock.json); the pinned clone is only read.
 #
-# The steps (synthetic; r2a runs 1, 2, 4-6 and builds one project in 7):
+# The steps (synthetic; r2a runs 1, 2, 4-6, Lexilla rebuild and full Notepad++ build/debug below):
 #   1. open the solution before trust (.slnx first on synthetic): it opens, its root is untrusted;
 #   2. trust it: ProjectHost evaluates every project, and the Solution Explorer's files per project
 #      equal the distinct FullPath values `MSBuild.exe <project> -getItem:<every file item type>`
@@ -41,9 +41,9 @@
 #      (the values main.cpp builds; lldb-dap's replies); continuing ends the program with the exit
 #      code it has when it runs alone (the oracle runs it);
 #   9. no UI-thread stall over 250 ms in the run (FND-9b; the freeze reports frost wrote).
-# R2a has no debug step: Notepad++ does not link at the pinned commit on this machine (MSBuild
-# reports AboutDlg.cpp's C2065 errors, R2aBuild in tests/build/build_corpus_test.cpp), so there is no
-# program to debug; the evidence says so ("debug": "not run").
+# R2a also performs an untouched full Debug|x64 solution Build, including its upstream version-header
+# prebuild event, then F5 stops in the actual Notepad++ source and Stop ends the exact owned native
+# session. Selected-file ClCompile diagnostics do not establish whether the full Build can link.
 #
 # The evidence (one JSON file per run, under --evidence), as j1_cmake's. Run by ctest
 # (tests/journeys/CMakeLists.txt; Windows only, Visual Studio's MSBuild required):
@@ -54,6 +54,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+from ctypes import wintypes
 import json
 import os
 import re
@@ -62,6 +64,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any, Callable
@@ -300,6 +303,8 @@ class Journey(j1.Journey):
         self.restore: list[tuple[Path, bytes]] = []
         self.created: list[Path] = []
         self.scratch: Path | None = None
+        self.native_desktop = None
+        self.desktop_api = None
 
     def _main(self) -> int:
         args = self.args
@@ -359,7 +364,7 @@ class Journey(j1.Journey):
             self.evidence.data["solution"] = {"kind": "r2a", "sha": entry["sha"], "pinned": str(pinned),
                                               "path": str(solution)}
             self.clone, self.clone_status = clone, self._git_status(clone)
-            self._launch(clone)
+            self._launch(clone, startupinfo=self._private_desktop_startup())
             self._r2a(clone, solution)
         self._quit()
         return 0 if all(step["ok"] for step in self.evidence.data["steps"]) else 1
@@ -814,8 +819,8 @@ class Journey(j1.Journey):
                 "" if ok else "the error list differs from MSBuild's record of the Rebuild"
 
         self.run_step("Rebuild of Lexilla: the error list equals MSBuild's record", rebuild_project)
-        self.evidence.data["debug"] = ("not run: Notepad++ does not link at the pinned commit on this machine "
-                                       "(MSBuild's C2065 errors in AboutDlg.cpp; R2aBuild)")
+        if not self._build_and_debug_r2a(clone, solution):
+            return
 
         def clone_unchanged() -> tuple[bool, Any, Any, str]:
             self._restore_files()
@@ -826,6 +831,219 @@ class Journey(j1.Journey):
 
     # -- Cleanup ---------------------------------------------------------------------------------------
 
+    def _private_desktop_startup(self) -> Any:
+        self.desktop_api = ctypes.WinDLL("user32", use_last_error=True)
+        self.desktop_api.CreateDesktopW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_void_p,
+                                                   wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+        self.desktop_api.CreateDesktopW.restype = wintypes.HANDLE
+        self.desktop_api.CloseDesktop.argtypes = [wintypes.HANDLE]
+        self.desktop_api.CloseDesktop.restype = wintypes.BOOL
+        name = "frost-j2-r2a-" + uuid.uuid4().hex
+        # Read objects, create windows/menus and write objects, as the existing C++ PrivateDesktop.
+        self.native_desktop = self.desktop_api.CreateDesktopW(name, None, None, 0, 0x0087, None)
+        if not self.native_desktop:
+            raise ctypes.WinError(ctypes.get_last_error())
+        info = subprocess.STARTUPINFO()
+        info.lpDesktop = name
+        self.evidence.data["nativeDesktop"] = name
+        return info
+
+    def _build_and_debug_r2a(self, clone: Path, solution: Path) -> bool:
+        ep = self.endpoint
+        program = solution.parent / "x64" / "Debug" / "notepad++.exe"
+        pdb = program.with_name("notepadPlus.pdb")
+        source = clone / "PowerEditor" / "src" / "winmain.cpp"
+
+        def full_build() -> tuple[bool, Any, Any, str]:
+            ep.call("solution.configuration", name=DEBUG_X64)
+            selected = self.evaluated(solution, DEBUG_X64)
+            before = len(spawn_records(self.spawn_dir))
+            ep.call("solution.build", action="build")
+            state = self.build_finished("Build", before)
+            code, diagnostics = msbuild_logged(self.msbuild, [str(solution), "-t:Build", "-p:Configuration=Debug",
+                                                             "-p:Platform=x64"], solution.parent,
+                                               self.scratch / "oracle-notepad-full-build")
+            ok = (selected.get("active") == DEBUG_X64 and (state.get("lastBuild") or {}).get("succeeded") is True
+                  and code == 0 and program.is_file() and pdb.is_file())
+            observed = {"lastBuild": state.get("lastBuild"), "oracleExit": code, "diagnostics": diagnostics,
+                        "executable": str(program), "pdb": str(pdb),
+                        "generatedVersionHeader": (clone / "PowerEditor" / "src" / "NppLibsVersion.h").is_file()}
+            if ok:
+                observed.update(executableSha256=j1.sha256_file(program), pdbSha256=j1.sha256_file(pdb))
+            return ok and observed["generatedVersionHeader"], {"configuration": DEBUG_X64, "fullBuildSucceeded": True}, observed, ""
+
+        if not self.run_step("full untouched pinned Notepad++ Debug|x64 Build produces its real executable and PDB",
+                             full_build):
+            self.evidence.data["debug"] = {"status": "not started", "reason": "the actual full Build gate failed"}
+            return False
+
+        profile = self.scratch / "notepad-profile"
+        for directory in ("settings", "appdata", "localappdata", "userprofile"):
+            (profile / directory).mkdir(parents=True, exist_ok=False)
+        user = solution.parent / "notepadPlus.vcxproj.user"
+        if user.exists():
+            raise RuntimeError("refusing to overwrite existing Notepad++ debugger user settings")
+        ns = "http://schemas.microsoft.com/developer/msbuild/2003"
+        document = ElementTree.Element("Project", xmlns=ns)
+        properties = ElementTree.SubElement(document, "PropertyGroup", Condition="'$(Configuration)|$(Platform)'=='Debug|x64'")
+        arguments = ["-multiInst", "-nosession", "-noPlugin", "-settingsDir=" + str(profile / "settings")]
+        ElementTree.SubElement(properties, "LocalDebuggerCommandArguments").text = subprocess.list2cmdline(arguments)
+        ElementTree.SubElement(properties, "LocalDebuggerEnvironment").text = "\n".join(
+            f"{name}={profile / directory}" for name, directory in
+            (("APPDATA", "appdata"), ("LOCALAPPDATA", "localappdata"), ("USERPROFILE", "userprofile")))
+        ElementTree.ElementTree(document).write(user, encoding="utf-8", xml_declaration=True)
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                     ctypes.POINTER(wintypes.DWORD)]
+        kernel.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+                                           ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+                                           ctypes.POINTER(wintypes.FILETIME)]
+        kernel.GetProcessTimes.restype = wintypes.BOOL
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel.TerminateProcess.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        owned_handles: list[Any] = []
+
+        def handle_identity(handle: Any) -> dict:
+            image, length = ctypes.create_unicode_buffer(32768), wintypes.DWORD(32768)
+            created, exited, system, user = (wintypes.FILETIME() for _ in range(4))
+            if not kernel.QueryFullProcessImageNameW(handle, 0, image, ctypes.byref(length)) or not \
+                    kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                           ctypes.byref(system), ctypes.byref(user)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return {"image": image.value, "createdFileTime": (created.dwHighDateTime << 32) | created.dwLowDateTime}
+
+        def process_identity(pid: int) -> dict | None:
+            handle = kernel.OpenProcess(0x100000 | 0x1000, False, pid)
+            if not handle:
+                return None
+            try:
+                identity = handle_identity(handle)
+                script = (f"$p=Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}'; if($p){{"
+                          "[pscustomobject]@{pid=$p.ProcessId;parent=$p.ParentProcessId} | ConvertTo-Json -Compress}")
+                powershell = j1.system_tool(r"WindowsPowerShell\v1.0\powershell.exe")
+                result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+                                        capture_output=True, text=True, errors="replace", check=False, timeout=30)
+                if result.returncode:
+                    raise RuntimeError("cannot identify the native debugger process: " + result.stderr)
+                # The retained process must still be alive after the PID query, preventing reuse
+                # between the native identity snapshot and the CIM parent lookup.
+                if kernel.WaitForSingleObject(handle, 0) != 0x00000102 or not result.stdout.strip():
+                    return None
+                identity.update(json.loads(result.stdout))
+                return identity
+            finally:
+                kernel.CloseHandle(handle)
+
+        def adopt_process(identity: dict) -> None:
+            handle = kernel.OpenProcess(0x100000 | 0x1000 | 0x0001, False, identity["pid"])
+            if not handle:
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:
+                current = handle_identity(handle)
+                if current["createdFileTime"] != identity["createdFileTime"] or \
+                        not same_path(current["image"], identity["image"]):
+                    raise RuntimeError("native process identity changed before ownership was retained")
+            except BaseException:
+                kernel.CloseHandle(handle)
+                raise
+            owned_handles.append(handle)
+
+        facts: dict[str, Any] = {}
+
+        def stopped_at_entry() -> tuple[bool, Any, Any, str]:
+            ep.call("solution.startup", project="Notepad++")
+            ep.call("debug.breakpoint", path=str(source), line=641)
+            before = len(spawn_records(self.spawn_dir))
+            ep.call("run.debug")
+            state = self.poll("debug.state", lambda value: value.get("state") == "Stopped" or
+                              (value.get("outcome") or {}).get("buildFailed") is True, 240)
+            frames = (state.get("stop") or {}).get("frames") or []
+            top = frames[0] if frames else {}
+            verified = any(same_path(point.get("path", ""), source) and point.get("line") == 641
+                           and point.get("status") == "verified" for point in state.get("breakpoints", []))
+            pid = state.get("processId")
+            child = process_identity(pid) if isinstance(pid, int) and pid > 0 else None
+            adapter = process_identity(child["parent"]) if child else None
+            starts = [record for record in spawn_records(self.spawn_dir)[before:]
+                      if record.get("event") == "start" and adapter and record.get("pid") == adapter["pid"]
+                      and same_path(record.get("executable", ""), adapter.get("image", ""))]
+            ok = (state.get("state") == "Stopped" and (state.get("stop") or {}).get("reason") == "breakpoint"
+                  and verified and same_path(top.get("path", ""), source)
+                  and top.get("line") == 641 and "wWinMain" in top.get("name", "") and child is not None
+                  and same_path(child.get("image", ""), program) and adapter is not None
+                  and Path(adapter.get("image") or "").name.lower() == "lldb-dap.exe" and bool(starts))
+            facts.update(state=state, child=child, adapter=adapter)
+            if child and same_path(child.get("image", ""), program):
+                adopt_process(child)
+                if adapter and Path(adapter.get("image") or "").name.lower() == "lldb-dap.exe" and starts:
+                    adopt_process(adapter)
+            self.evidence.data["debug"] = {"state": state, "child": child, "adapter": adapter,
+                                            "arguments": arguments, "settings": str(profile / "settings")}
+            return ok, {"verifiedSource": str(source), "line": 641, "ownedProgram": str(program)}, facts.copy(), ""
+
+        try:
+            if not self.run_step("F5 stops in actual pinned Notepad++ with its exact owned debuggee and adapter",
+                                 stopped_at_entry):
+                return False
+
+            def locals_and_continue() -> tuple[bool, Any, Any, str]:
+                variables = ep.call("debug.locals")["variables"]
+                argument = next((item for item in variables if item.get("name") == "pCmdLine"), None)
+                if not argument or "multiInst" not in argument.get("value", ""):
+                    return False, {"pCmdLineContains": "multiInst"}, {"variables": variables}, ""
+                ep.call("debug.continue")
+                state = self.poll("debug.state", lambda value: value.get("state") in ("Running", "Ended"), 120)
+                child = process_identity(facts["child"]["pid"])
+                ok = (state.get("session") is True and state.get("state") == "Running" and child is not None
+                      and child.get("createdFileTime") == facts["child"]["createdFileTime"]
+                      and same_path(child.get("image", ""), program))
+                return ok, {"pCmdLineContains": "multiInst", "sameNativeProcessRunning": True}, {
+                    "argument": argument, "state": state, "child": child}, ""
+
+            if not self.run_step("Locals shows real Notepad++ arguments and Continue runs the same owned instance",
+                                 locals_and_continue):
+                return False
+
+            def stopped_owned_processes() -> tuple[bool, Any, Any, str]:
+                ep.call("debug.stop")
+                state = self.poll("debug.state", lambda value: not value.get("session"), 120)
+                waits = [kernel.WaitForSingleObject(handle, 10000) for handle in owned_handles]
+                ok = not state.get("session") and len(waits) == 2 and all(status == 0 for status in waits)
+                return ok, {"ownedProcessesExited": True}, {"state": state, "ownedHandleWaits": waits}, ""
+
+            return self.run_step("Stop ends the exact Notepad++ debuggee and its owned adapter", stopped_owned_processes)
+        finally:
+            try:
+                self._end_debug()
+            finally:
+                # Handles are adopted only after image and creation identity checks. They cannot
+                # become unrelated processes through PID reuse, including if DAP Stop failed.
+                cleanup_failures = []
+                for handle in owned_handles:
+                    try:
+                        status = kernel.WaitForSingleObject(handle, 10000)
+                        if status == 0x00000102:
+                            terminated = bool(kernel.TerminateProcess(handle, 99))
+                            status = kernel.WaitForSingleObject(handle, 10000)
+                            if not terminated:
+                                cleanup_failures.append("TerminateProcess failed for an owned native handle")
+                        if status != 0:
+                            cleanup_failures.append(f"owned native process cleanup wait returned {status}")
+                    finally:
+                        if not kernel.CloseHandle(handle):
+                            cleanup_failures.append("CloseHandle failed for an owned native process")
+                if cleanup_failures:
+                    self.evidence.step("owned native cleanup", ok=False, observed=cleanup_failures)
+                    raise RuntimeError("; ".join(cleanup_failures))
+
     def _restore_files(self) -> None:
         for path, original in self.restore:
             if path.is_file() and path.read_bytes() != original:
@@ -833,6 +1051,12 @@ class Journey(j1.Journey):
 
     def _cleanup(self) -> None:
         super()._cleanup()  # frost and its tree end first, so nothing holds the files below.
+        desktop_error = None
+        if self.native_desktop:
+            if not self.desktop_api.CloseDesktop(self.native_desktop):
+                desktop_error = str(ctypes.WinError(ctypes.get_last_error()))
+                self.evidence.step("native desktop cleanup", ok=False, note=desktop_error)
+            self.native_desktop = None
         self._restore_files()
         for created in self.created:
             shutil.rmtree(created, ignore_errors=True)
@@ -840,6 +1064,11 @@ class Journey(j1.Journey):
         if self.scratch is not None:
             shutil.rmtree(self.scratch, ignore_errors=True)
             self.scratch = None
+        if desktop_error:
+            # j1.main has already computed its return value before running cleanup. Persist and
+            # raise here so cleanup failure cannot leave a successful journey exit code.
+            self.evidence.write()
+            raise RuntimeError(desktop_error)
 
 
 def main() -> int:

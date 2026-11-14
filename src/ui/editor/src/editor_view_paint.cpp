@@ -173,8 +173,10 @@ std::optional<EditorCodeVisionLens> EditorView::codeVisionLensAt(QPointF at) con
     text::TextWidth x = 0;
     for (const text::RowSegment& segment : row.segments) {
         if (segment.kind != text::SegmentKind::Text) {
-            for (const char c : segment.text) {
-                x += m_shaper->advance(static_cast<unsigned char>(c), x);
+            for (std::size_t segmentAt = 0; segmentAt < segment.text.size();) {
+                const text::DecodedChar ch = text::decodeUtf8(std::string_view(segment.text).substr(segmentAt));
+                x += m_shaper->advance(ch.cp, x);
+                segmentAt += ch.bytes;
             }
             continue;
         }
@@ -189,15 +191,6 @@ std::optional<EditorCodeVisionLens> EditorView::codeVisionLensAt(QPointF at) con
     }
     double pillX = textOriginX() + toPixels(x) + 2.0 * cell;
     const double pad = 4.0 * zoom;
-    for (const EditorInlayHint& hint : m_inlayHints) {
-        if (hint.offset < row.buffer.begin || hint.offset > row.buffer.end) {
-            continue;
-        }
-        const QString label = QString::fromStdString(hint.label);
-        if (!label.isEmpty()) {
-            pillX += static_cast<double>(label.size()) * cell + 2.0 * pad + 0.75 * cell;
-        }
-    }
     for (const EditorCodeVisionLens& lens : m_codeVisionLenses) {
         if (lens.line != row.line) {
             continue;
@@ -501,11 +494,18 @@ EditorDisplayList EditorView::buildDisplayList() {
             if (segment.kind != text::SegmentKind::Text) {
                 const QString placeholder =
                     QString::fromUtf8(segment.text.data(), static_cast<qsizetype>(segment.text.size()));
-                list.text.push_back(DisplayText{QPointF(origin + toPixels(x), baseline), placeholder,
-                                                m_colors.foreground, false, std::nullopt, segment.buffer, std::nullopt,
-                                                false});
-                for (const char c : segment.text)
-                    x += m_shaper->advance(static_cast<unsigned char>(c), x);
+                const auto hint = segment.kind == text::SegmentKind::Inlay
+                                      ? std::ranges::find(m_inlayHints, segment.buffer.begin, &EditorInlayHint::offset)
+                                      : m_inlayHints.end();
+                const bool isTypeHint = hint != m_inlayHints.end() && hint->kind == InlayHintKind::Type;
+                const QColor ink = segment.kind == text::SegmentKind::Inlay ? m_colors.lineNumber : m_colors.foreground;
+                list.text.push_back(DisplayText{QPointF(origin + toPixels(x), baseline), placeholder, ink, isTypeHint,
+                                                std::nullopt, segment.buffer, std::nullopt, false});
+                for (std::size_t at = 0; at < segment.text.size();) {
+                    const text::DecodedChar ch = text::decodeUtf8(std::string_view(segment.text).substr(at));
+                    x += m_shaper->advance(ch.cp, x);
+                    at += ch.bytes;
+                }
                 paintedBytes += segment.text.size();
                 continue;
             }
@@ -588,26 +588,6 @@ EditorDisplayList EditorView::buildDisplayList() {
         if (row.endsLine && (!m_inlayHints.empty() || !m_codeVisionLenses.empty() || !m_inlineDebuggerValues.empty())) {
             double pillX = origin + toPixels(x) + 2.0 * cell;
             const double pad = 4.0 * zoom;
-            for (const EditorInlayHint& hint : m_inlayHints) {
-                if (hint.offset < row.buffer.begin || hint.offset > row.buffer.end) {
-                    continue;
-                }
-                const QString label = QString::fromStdString(hint.label);
-                if (label.isEmpty()) {
-                    continue;
-                }
-                const double textW = static_cast<double>(label.size()) * cell;
-                const QRectF pillRect(pillX, top + 1.0 * zoom, textW + 2.0 * pad, m_lineHeight - 2.0 * zoom);
-                QColor pillBg = m_colors.currentLine;
-                pillBg.setAlpha(185);
-                list.decorations.push_back(DisplayDecoration{pillRect, baseline, DecorationStyle::Background, pillBg,
-                                                             1.0, text::ByteRange{hint.offset, hint.offset},
-                                                             std::nullopt, QString::fromStdString(hint.tooltip)});
-                list.text.push_back(DisplayText{QPointF(pillX + pad, baseline), label, m_colors.lineNumber,
-                                                hint.kind == InlayHintKind::Type, std::nullopt,
-                                                text::ByteRange{hint.offset, hint.offset}, std::nullopt, false});
-                pillX += pillRect.width() + 0.75 * cell;
-            }
             for (const EditorCodeVisionLens& lens : m_codeVisionLenses) {
                 if (lens.line != row.line) {
                     continue;

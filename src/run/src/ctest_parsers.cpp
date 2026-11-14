@@ -243,7 +243,7 @@ std::optional<CTestProgressLine> parseCTestProgressLine(std::string_view line) {
     const auto hash = text.find('#', test);
     const auto colon = text.find(": ", test);
     if (hash == std::string_view::npos || colon == std::string_view::npos || colon < hash ||
-        trim(text.substr(test + 6, hash - test - 6)) != "")
+        !trim(text.substr(test + 6, hash - test - 6)).empty())
         return std::nullopt;
     const auto number = parseSize(text.substr(hash + 1, colon - hash - 1));
     if (!number)

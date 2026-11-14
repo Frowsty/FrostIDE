@@ -76,8 +76,11 @@ template<class T>
         std::mutex mutex;
         std::condition_variable done;
         std::optional<Result<T>> result;
+        std::function<sched::Task<Result<T>>(std::stop_token)> make;
     };
     auto state = std::make_shared<State>();
+    state->make = std::move(make); // A timed-out coroutine may still use its factory's captures.
+
     std::stop_source stop;
     auto relay = [](sched::Task<Result<T>> task, std::shared_ptr<State> shared) -> sched::Task<void> {
         Result<T> value = co_await std::move(task);
@@ -85,7 +88,7 @@ template<class T>
         shared->result.emplace(std::move(value));
         shared->done.notify_all();
     };
-    scheduler.spawn(sched::Lane::Interactive, relay(make(stop.get_token()), state)).detach();
+    scheduler.spawn(sched::Lane::Interactive, relay(state->make(stop.get_token()), state)).detach();
     std::unique_lock lock(state->mutex);
     if (!state->done.wait_for(lock, timeout, [&] { return state->result.has_value(); })) {
         stop.request_stop();

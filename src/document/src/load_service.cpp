@@ -16,7 +16,7 @@
 namespace frost::document {
 
 LoadService::LoadService(io::IFileSystem& fs, LoadServiceOptions options, text::ITextCodecProvider& codecs) noexcept
-    : m_fs(&fs), m_options(std::move(options)), m_codecs(&codecs) {
+    : m_fs(&fs), m_options(options), m_codecs(&codecs) {
     FROST_PRE(m_options.maxFileBytes >= 1);
     m_options.text.maxFileBytes = m_options.maxFileBytes - 1;
 }

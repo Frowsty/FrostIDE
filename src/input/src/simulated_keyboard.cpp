@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <iterator>
+#include <ranges>
 
 namespace frost::input {
 
@@ -279,8 +280,8 @@ std::vector<KeyEvent> SimulatedKeyboard::chord(std::initializer_list<Code> held,
     }
     const std::vector<KeyEvent> tapped = tap(key);
     events.insert(events.end(), tapped.begin(), tapped.end());
-    for (auto it = std::rbegin(held); it != std::rend(held); ++it) {
-        const std::vector<KeyEvent> up = release(*it);
+    for (const Code heldKey : held | std::views::reverse) {
+        const std::vector<KeyEvent> up = release(heldKey);
         events.insert(events.end(), up.begin(), up.end());
     }
     return events;

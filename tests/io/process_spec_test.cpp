@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <optional>
 #include <random>
 #include <string>
@@ -443,5 +444,23 @@ TEST(WindowsQuoting, RoundTripsThroughCommandLineToArgvW) {
     }
 }
 #endif
+
+TEST(ProcessSpec, ResidentMemoryLimitIsOptionalAndPlatformSpecific) {
+    ProcessSpec spec;
+    spec.executable = "C:/tools/child.exe";
+    EXPECT_FALSE(spec.residentMemoryLimitBytes.has_value());
+    EXPECT_TRUE(frost::io::validateProcessSpec(spec, true).has_value());
+    spec.residentMemoryLimitBytes = 0;
+    const auto invalid = frost::io::validateProcessSpec(spec, true);
+    ASSERT_FALSE(invalid.has_value());
+    EXPECT_EQ(invalid.error().code(), ErrorCode::InvalidArgument);
+    spec.executable = "/bin/child";
+    for (const auto requested : {std::uint64_t{0}, std::uint64_t{128 * 1024 * 1024}}) {
+        spec.residentMemoryLimitBytes = requested;
+        const auto unsupported = frost::io::validateProcessSpec(spec, false);
+        ASSERT_FALSE(unsupported.has_value());
+        EXPECT_EQ(unsupported.error().code(), ErrorCode::Unsupported);
+    }
+}
 
 } // namespace

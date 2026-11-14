@@ -112,8 +112,8 @@ TEST(BuildSession, StreamsLinesAndDiagnosticsAndReportsTheResult) {
         (stream == OutputStream::Stdout ? out : err).push_back(line);
     }
     EXPECT_EQ(out, (std::vector<std::string>{"", "  main.cpp",
-                                             "C:\\s\\main.cpp(7,27): error C2065: 'x': undeclared identifier "
-                                             "[C:\\s\\App.vcxproj]",
+                                             ("C:\\s\\main.cpp(7,27): error C2065: 'x': undeclared identifier "
+                                              "[C:\\s\\App.vcxproj]"),
                                              "C:\\s\\lib.h(3): warning C4244: conversion [C:\\s\\App.vcxproj]",
                                              "C:\\s\\lib.h(3): warning C4244: conversion [C:\\s\\App.vcxproj]",
                                              "no newline at the end"}));

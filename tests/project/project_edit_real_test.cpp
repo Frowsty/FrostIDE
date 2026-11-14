@@ -53,7 +53,7 @@ std::string key(const std::string& path) { return detail::pathKey(io::normalizeP
 bool exists(const std::string& path) { return io::realFileSystem().exists(path).value_or(false); }
 
 void writeFile(const std::string& path, std::string_view content) {
-    ASSERT_TRUE(io::realFileSystem().createDirectories(std::string(io::parentPath(path))).has_value()) << path;
+    ASSERT_TRUE(io::realFileSystem().createDirectories(io::parentPath(path)).has_value()) << path;
     ASSERT_TRUE(io::realFileSystem().writeFileAtomic(path, content).has_value()) << path;
 }
 
@@ -159,7 +159,7 @@ TEST_F(ProjectEditReal, RefusesItemsTheEditCannotMeanExactlyAndWritesNothing) {
     writeFile(scratch.join("App/zeta.cpp"), "int zeta() { return 3; }\n");
     ASSERT_NO_FATAL_FAILURE(scratch.commit());
     const auto refused = [&](ProjectEdit edit, std::string_view reason, ErrorCode code = ErrorCode::IoError) {
-        auto result = test::runEdit(hostPath(), m_msbuild, edit);
+        auto result = test::runEdit(hostPath(), m_msbuild, std::move(edit));
         ASSERT_FALSE(result) << reason;
         EXPECT_EQ(result.error().code(), code) << result.error().describe();
         EXPECT_NE(result.error().message().find(reason), std::string::npos) << result.error().describe();

@@ -59,7 +59,7 @@ public:
     [[nodiscard]] const std::string& path() const noexcept { return m_path; }
     [[nodiscard]] QPlainTextEdit* pane(nav::MergePane pane) const { return m_panes[static_cast<std::size_t>(pane)]; }
     [[nodiscard]] QListWidget* chunkList() const noexcept { return m_chunks; }
-    [[nodiscard]] const nav::MergePanes& layout() const { return *m_layout; }
+    [[nodiscard]] const nav::MergePanes& mergePanes() const { return *m_layout; }
 
 signals:
     // The merge was settled with `decision`; the view closes.

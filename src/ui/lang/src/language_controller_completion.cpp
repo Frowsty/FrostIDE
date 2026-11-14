@@ -19,10 +19,6 @@ namespace fl = ::frost::lang;
 
 namespace {
 
-using detail::fileName;
-using detail::lowerAscii;
-using detail::qs;
-
 bool allIdentifierBytes(std::string_view text) {
     return !text.empty() && std::ranges::all_of(text, [](char c) { return fl::isIdentifierByte(c); });
 }
@@ -51,7 +47,7 @@ void LanguageController::requestCompletion(fl::CompletionTrigger trigger) {
     const fl::LspPosition position = positionAt(caret);
     start<fl::CompletionList>(
         m_completionSlot,
-        [&server = m_services.server, path, position, trigger](std::stop_token token) {
+        [&server = m_services.server, path, position, trigger = std::move(trigger)](std::stop_token token) {
             return fl::requestCompletion(server, path, position, trigger, std::move(token));
         },
         [this, path](Result<fl::CompletionList> list) {
@@ -105,7 +101,7 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
         closeLookup();
         return;
     }
-    const fl::CompletionItem item = items[itemIndex];
+    const fl::CompletionItem& item = items[itemIndex];
     const ByteOffset wordStart = *m_lookupWordStart;
     ByteOffset end = snapshot->clip(m_services.host.caretOffset());
     if (replaceWord) {
@@ -114,8 +110,13 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
             end = ByteOffset{end.value() + 1};
         }
     }
-    closeLookup();
     auto commit = fl::commitCompletion(item, *snapshot, wordStart, end, m_services.server.encoding());
+    // LuaLS uses this editor-local command for signature help after inserting a call snippet.
+    // Arbitrary commands supplied by the server are not executed.
+    const fl::Json* command = item.raw.find("command");
+    const bool triggerParameterHints = command && command->stringAt("command") == "editor.action.triggerParameterHints";
+    // Hiding lookup and applying edits can replace the completion model. Read its item first.
+    closeLookup();
     if (!commit) {
         report(commit.error(), "Completion");
         return;
@@ -124,10 +125,6 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
         report(applied.error(), "Completion");
         return;
     }
-    // LuaLS and other servers use this editor-local command to request signature help after
-    // inserting a call snippet. Do not execute arbitrary commands supplied by a server.
-    const fl::Json* command = item.raw.find("command");
-    const bool triggerParameterHints = command && command->stringAt("command") == "editor.action.triggerParameterHints";
     m_tabStops = std::move(commit->tabStops);
     if (!m_tabStops.empty()) {
         const std::optional<text::Snapshot> after = m_services.host.snapshot();

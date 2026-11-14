@@ -223,7 +223,7 @@ TEST(DoctestRunner, RunsCasesDirectlyWithTheTestsDirectoryEnvironmentAndArgument
     whole.test = fixture.test("Doctest.Math");
     frost::run::TestRunner::DoctestRunRequest exits;
     exits.test = fixture.test("Doctest.Exit");
-    exits.cases = {"passes first", "exits, the process"};
+    exits.cases = {"passes first", "exits the process"};
     std::vector<std::string> started;
     std::vector<std::string> finished;
     frost::run::TestRunHandlers handlers;
@@ -264,8 +264,9 @@ TEST(DoctestRunner, RunsCasesDirectlyWithTheTestsDirectoryEnvironmentAndArgument
     EXPECT_EQ(exit.cases[0].outcome, TestOutcome::Passed);
     EXPECT_EQ(exit.cases[1].name, "exits the process");
     EXPECT_EQ(exit.cases[1].outcome, TestOutcome::Failed);
-    // The selected cases, escaped as doctest reads them.
-    EXPECT_NE(exit.output.find("--test-case=passes first,exits\\, the process --reporters=xml"), std::string::npos)
+    // The selected identities equal the cases in the captured report. Literal comma/backslash
+    // escaping is covered by TestRunnerDoctestSelection.SingleLaunchReplacesAllCaseAndSensitivityAliases.
+    EXPECT_NE(exit.output.find("--test-case=passes first,exits the process --reporters=xml"), std::string::npos)
         << exit.output;
     EXPECT_TRUE(fixture.runner->waitForIdle(60s));
     EXPECT_TRUE(leftovers(fixture.setup).empty());
@@ -286,6 +287,34 @@ TEST(DoctestRunner, AProgramWithoutAReportGivesAnErrorAndNoResultTheOthersKeepTh
     EXPECT_NE(report->error->message().find("wrote no doctest report"), std::string::npos) << report->error->message();
     ASSERT_EQ(report->results.size(), 1u);
     EXPECT_EQ(report->results[0].name, "Doctest.Math");
+}
+
+TEST(DoctestRunner, IncompleteReportsRejectUnexpectedCasesAndReportsWithoutExecutionEvidence) {
+    Fixture fixture("run10-incomplete-report");
+    ASSERT_FALSE(fixture.tests.empty());
+    frost::run::TestRunner::DoctestRunRequest request;
+    request.test = fixture.test("Doctest.Exit");
+    request.cases = {"passes first"};
+    // The real captured report also opens "exits the process", outside this selection.
+    const auto unexpected = fixture.run({request});
+    ASSERT_TRUE(unexpected.has_value());
+    ASSERT_TRUE(unexpected->error.has_value());
+    EXPECT_TRUE(unexpected->results.empty());
+    EXPECT_TRUE(unexpected->error->message().contains("only selected cases from"));
+
+    auto& fs = frost::io::realFileSystem();
+    const auto captured = fs.readFile(fixtures() + "/doctest/run_exit.xml");
+    ASSERT_TRUE(captured.has_value());
+    const auto beforeCases = captured->find("<TestSuite");
+    ASSERT_NE(beforeCases, std::string::npos);
+    const std::string emptyReport = fixture.scratch.join("before-cases.xml");
+    ASSERT_TRUE(fs.writeFileAtomic(emptyReport, captured->substr(0, beforeCases)).has_value());
+    request.test.command.push_back("--stub-run=" + emptyReport);
+    const auto empty = fixture.run({request});
+    ASSERT_TRUE(empty.has_value());
+    ASSERT_TRUE(empty->error.has_value());
+    EXPECT_TRUE(empty->results.empty());
+    EXPECT_TRUE(empty->error->message().contains("no executed cases"));
 }
 
 TEST(DoctestRunner, ACTestRunOfAFailedDoctestSuiteNamesItsFailedCasesFromTheConsole) {
@@ -331,9 +360,15 @@ TEST(DoctestRunner, StopEndsTheRunningProgram) {
     const std::string stub = copies.join(image);
     std::error_code copyError;
     std::filesystem::create_directories(frost::io::toStdPath(copies.path()).value(), copyError);
-    std::filesystem::copy_file(frost::io::toStdPath(FROST_RUN_DOCTEST_STUB).value(), frost::io::toStdPath(stub).value(),
-                               copyError);
+    const auto builtStub = frost::io::toStdPath(FROST_RUN_DOCTEST_STUB).value();
+    std::filesystem::copy_file(builtStub, frost::io::toStdPath(stub).value(), copyError);
     ASSERT_FALSE(copyError) << copyError.message();
+#if defined(_WIN32) && __has_feature(address_sanitizer)
+    // The copy remains ASan-instrumented and needs the exact runtime staged by its build.
+    const auto runtime = builtStub.parent_path() / "clang_rt.asan_dynamic-x86_64.dll";
+    std::filesystem::copy_file(runtime, frost::io::toStdPath(copies.path()).value() / runtime.filename(), copyError);
+    ASSERT_FALSE(copyError) << "copy required ASan runtime: " << copyError.message();
+#endif
 #ifndef _WIN32
     std::filesystem::permissions(frost::io::toStdPath(stub).value(), std::filesystem::perms::owner_exec,
                                  std::filesystem::perm_options::add);

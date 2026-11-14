@@ -6,7 +6,7 @@
 # both PowerShell scripts must parse, and every ctest call keeps error boxes off (checked against a real
 # ctest). On Linux tools/verify.sh must pass `bash -n`, and its parse_args, ctest_counts, join_items,
 # run_tsan_quick and run_tidy functions are cut out of the script and run in a child bash
-# (tidy and the TSan quick leg are off unless switched on, ADR 0027 decision 9). The two sides share the
+# (default-on tidy/TSan Quick and explicit overrides, ADR 0078 decision 10). The two sides share the
 # tables in tests/tools/fixtures/verify (ctest outputs, summary items, WSL paths), so the PowerShell and
 # bash halves of the gate are checked against the same expectations.
 
@@ -56,12 +56,57 @@ foreach ($name in $names) {
     $text += $fn.Extent.Text + "`n"
 }
 . ([scriptblock]::Create($text))
+# Bind the production parameter block without running any verification body.
+$bind = [scriptblock]::Create($ast.ParamBlock.Extent.Text + @'
+
+@{
+    Tidy = [bool]$Tidy
+    TsanQuick = [bool]$TsanQuick
+    Full = [bool]$Full
+    WindowsOnly = [bool]$WindowsOnly
+    WslArgs = (Get-WslArgs -Script '/mnt/e/r/tools/verify.sh' -Jobs $Jobs -Base $Base -ChangedList $null `
+        -Mirror $WslMirror -Full ([bool]$Full) -Tidy ([bool]$Tidy) -TsanQuick ([bool]$TsanQuick))
+}
+'@)
 $cases = Get-Content -Raw -Encoding UTF8 -Path $CasesFile | ConvertFrom-Json
 $out = New-Object System.Collections.Generic.List[string]
 foreach ($case in $cases) {
     if ($case.fn -eq 'Get-CtestCounts') { $value = Get-CtestCounts ([string[]]@($case.arg)) }
     elseif ($case.fn -eq 'Get-CtestFailures') { $value = Get-CtestFailures ([string[]]@($case.arg)) }
     elseif ($case.fn -eq 'Split-WslSummary') { $value = Split-WslSummary $case.arg }
+    elseif ($case.fn -eq 'Bind-VerifyParameters') {
+        $named = @{}
+        foreach ($p in $case.arg.PSObject.Properties) { $named[$p.Name] = $p.Value }
+        if ($case.literalFalse) { $value = & $bind -Tidy:$false -TsanQuick:$false }
+        else { $value = & $bind @named }
+    }
+    elseif ($case.fn -eq 'Run-Tidy') {
+        $blocks = @($ast.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.IfStatementAst] -and
+            $n.Extent.Text -match '^if\s*\(\s*-not\s+\$Tidy\s*\)\s*\{'
+        }, $true))
+        if ($blocks.Count -ne 1) { throw 'Expected one production tidy block' }
+        $value = & {
+            param($fixture, [string]$block)
+            $Tidy = $true; $Full = $false; $failed = $false
+            $checks = New-Object System.Collections.Generic.List[string]
+            $script:debugBuilt = $true; $script:debugDir = 'fixture-debug'
+            $changedOk = $true; $changedList = 'fixture-changes'; $Jobs = 1
+            $repo = 'fixture-repo'; $python = 'fixture-python'; $verifySupport = 'fixture-helper'
+            $env:FROST_LLVM_ROOT = 'C:\fixture-llvm'
+            $fixtureOutput = @($fixture.output); $fixtureExit = [int]$fixture.exit
+            function Get-Command([string]$Name, [string]$CommandType) {
+                [pscustomobject]@{ Source = 'fixture-ninja.exe' }
+            }
+            function Invoke-Native([scriptblock]$Command) {
+                $global:LASTEXITCODE = $fixtureExit
+                return , $fixtureOutput
+            }
+            # Dot-source the real block so its failure flag remains in this test scope.
+            . ([scriptblock]::Create($block))
+            @{ Failed = [bool]$failed; Checks = $checks.ToArray() }
+        } $case.arg $blocks[0].Extent.Text
+    }
     elseif ($case.fn -eq 'Get-WslArgs') {
         # The case's arg is an object of named parameters; JSON null stays $null.
         $named = @{}
@@ -70,7 +115,7 @@ foreach ($case in $cases) {
     }
     else { $value = & $case.fn $case.arg }
     # ConvertTo-Json flattens a one-element array; wrap so every result keeps its shape.
-    $out.Add((ConvertTo-Json -Compress -InputObject @{ v = $value }))
+    $out.Add((ConvertTo-Json -Compress -Depth 5 -InputObject @{ v = $value }))
 }
 [System.IO.File]::WriteAllLines($OutFile, $out, (New-Object System.Text.UTF8Encoding $false))
 """
@@ -126,28 +171,81 @@ class VerifyPs1Test(TempDirTestCase):
             with self.subTest(fixture=name):
                 self.assertEqual(value or [], table[name])
 
-    def test_get_wsl_args_passes_the_switches_and_the_list(self):
-        # -Tidy and -TsanQuick are off by default (ADR 0027 decision 9): without them verify.sh gets no
-        # switch and FROST_CHANGED_FILES stays unset, so it neither tidies nor makes a list.
+    def test_get_wsl_args_passes_effective_switches_and_the_list(self):
         script = "/mnt/e/r/tools/verify.sh"
         base = {"Script": script, "Jobs": 8, "Base": "main", "ChangedList": None, "Mirror": "", "Full": False,
-                "Tidy": False, "TsanQuick": False}
+                "Tidy": True, "TsanQuick": True}
         head = ["-d", "Ubuntu-24.04", "--exec", "env", "FROST_JOBS=8", "FROST_VERIFY_BASE=main"]
         cases = [
-            ({}, head + ["bash", script, "--no-checks"]),
-            ({"ChangedList": "/mnt/e/r/build/verify-changed-1.txt", "Tidy": True, "TsanQuick": True, "Mirror": "~/m"},
+            ({}, head + ["bash", script, "--no-checks", "--tidy", "--tsan-quick"]),
+            ({"ChangedList": "/mnt/e/r/build/verify-changed-1.txt", "Mirror": "~/m"},
              head + ["FROST_CHANGED_FILES=/mnt/e/r/build/verify-changed-1.txt", "FROST_MIRROR=~/m", "bash", script,
                      "--no-checks", "--tidy", "--tsan-quick"]),
-            # The list was asked for but could not be made: an empty value, so verify.sh does not retry.
-            ({"ChangedList": "", "TsanQuick": True}, head + ["FROST_CHANGED_FILES=", "bash", script, "--no-checks",
-                                                             "--tsan-quick"]),
-            ({"Full": True, "Tidy": True, "Jobs": 4}, head[:4] + ["FROST_JOBS=4", "FROST_VERIFY_BASE=main", "bash",
-                                                                  script, "--no-checks", "--full", "--tidy"]),
+            # An empty list means discovery failed; verify.sh must not recompute it.
+            ({"ChangedList": "", "Tidy": False}, head + ["FROST_CHANGED_FILES=", "bash", script, "--no-checks",
+                                                       "--no-tidy", "--tsan-quick"]),
+            ({"TsanQuick": False}, head + ["bash", script, "--no-checks", "--tidy", "--no-tsan-quick"]),
+            ({"Tidy": False, "TsanQuick": False},
+             head + ["bash", script, "--no-checks", "--no-tidy", "--no-tsan-quick"]),
+            ({"Full": True, "Jobs": 4}, head[:4] + ["FROST_JOBS=4", "FROST_VERIFY_BASE=main", "bash", script,
+                                                  "--no-checks", "--full", "--tidy", "--tsan-quick"]),
+            ({"Full": True, "TsanQuick": False},
+             head + ["bash", script, "--no-checks", "--full", "--tidy", "--no-tsan-quick"]),
         ]
         got = self._call([{"fn": "Get-WslArgs", "arg": {**base, **delta}} for delta, _ in cases])
         for (delta, expected), value in zip(cases, got):
             with self.subTest(case=delta):
                 self.assertEqual(value, expected)
+
+    def test_actual_parameter_binding_defaults_on_and_preserves_explicit_false(self):
+        cases = [
+            ({}, True, True, False, False),
+            ({"Quick": True}, True, True, False, False),
+            ({"Full": True}, True, True, True, False),
+            ({"WindowsOnly": True}, True, True, False, True),
+            ({"Tidy": False}, False, True, False, False),
+            ({"TsanQuick": False}, True, False, False, False),
+            ({"Tidy": False, "TsanQuick": False}, False, False, False, False),
+            ({"Full": True, "TsanQuick": False}, True, False, True, False),
+            ({"Tidy": True, "TsanQuick": True}, True, True, False, False),
+        ]
+        got = self._call([{"fn": "Bind-VerifyParameters", "arg": args} for args, *_ in cases] +
+                         [{"fn": "Bind-VerifyParameters", "arg": {}, "literalFalse": True}])
+        head = ["-d", "Ubuntu-24.04", "--exec", "env", "FROST_JOBS=8", "FROST_VERIFY_BASE=main",
+                "bash", "/mnt/e/r/tools/verify.sh", "--no-checks"]
+        for (args, tidy, tsan, full, windows_only), value in zip(cases, got):
+            with self.subTest(args=args):
+                self.assertEqual(value["Tidy"], tidy)
+                self.assertEqual(value["TsanQuick"], tsan)
+                self.assertEqual(value["Full"], full)
+                self.assertEqual(value["WindowsOnly"], windows_only)
+                expected = head + (["--full"] if full else [])
+                expected += ["--tidy" if tidy else "--no-tidy", "--tsan-quick" if tsan else "--no-tsan-quick"]
+                self.assertEqual(value["WslArgs"], expected)
+        # This case uses literal PowerShell -Tidy:$false/-TsanQuick:$false syntax in the harness.
+        self.assertFalse(got[-1]["Tidy"])
+        self.assertFalse(got[-1]["TsanQuick"])
+        self.assertEqual(got[-1]["WslArgs"], head + ["--no-tidy", "--no-tsan-quick"])
+
+    def test_production_tidy_block_rejects_missing_and_failed_zero_exit_summaries(self):
+        cases = [
+            (0, ["tidy ok (1 TUs)"], False, "tidy ok (1 TUs)"),
+            (0, ["tidy ok (0 TUs: no C/C++ changes)"], False, "tidy ok (0 TUs: no C/C++ changes)"),
+            (0, ["tidy ok (0 TUs; 1 skipped)"], False, "tidy ok (0 TUs; 1 skipped)"),
+            (0, ["tidy ok (2 TUs; all files: fixture)"], False, "tidy ok (2 TUs; all files: fixture)"),
+            (0, [], True, "tidy FAILED (exit 0 without a summary)"),
+            (0, ["tidy: 0 TUs with -j 1"], True, "tidy FAILED (exit 0 without a summary)"),
+            (0, ["tidy FAILED (fixture finding)"], True, "tidy FAILED (fixture finding)"),
+            (9, [], True, "tidy FAILED (exit 9 without a summary)"),
+            (7, ["tidy FAILED (fixture finding)"], True, "tidy FAILED (fixture finding)"),
+            (7, ["tidy ok (1 TUs)"], True, "tidy ok (1 TUs)"),
+        ]
+        got = self._call([{"fn": "Run-Tidy", "arg": {"exit": code, "output": output}}
+                          for code, output, _, _ in cases])
+        for (code, output, failed, summary), value in zip(cases, got):
+            with self.subTest(exit=code, output=output):
+                self.assertEqual(value["Failed"], failed)
+                self.assertEqual(value["Checks"], [summary])
 
     def test_scripts_parse_and_declare_their_parameters(self):
         script = r"""
@@ -300,15 +398,15 @@ class VerifyShTest(TempDirTestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, row["line"])
 
-    def test_run_tsan_quick_selects_by_module_label(self):
+    def test_default_tsan_quick_selects_by_module_label_and_propagates_selection_failure(self):
         # run_config is replaced by a stub that prints its arguments; the selection itself is the real
         # tools/verify_support.py, found relative to the working directory as in the mirror.
         stub = 'run_config() { printf "run_config"; printf " [%s]" "$@"; echo; }\n'
-        script = (stub + _bash_function("run_tsan_quick") +
-                  'summary=(); status=0; TSAN_QUICK=1; changed_list="$1"; changed_reason="$2"\n'
+        script = (stub + _bash_function("parse_args") + _bash_function("run_tsan_quick") +
+                  'parse_args\nsummary=(); status=0; changed_list="$1"; changed_reason="$2"\n'
                   'run_tsan_quick\n'
                   'printf "summary [%s]\\n" "${summary[@]+"${summary[@]}"}"\n'
-                  'echo "status $status"\n')
+                  'echo "status $status"\nexit "$status"\n')
         cases = [
             (["src/io/src/process_posix.cpp"],
              r"run_config [tsan-quick] [linux-clang-tsan] [linux-clang-tsan] [-LE] [^stress$] [-L] [^mod\.(io|text)$]"),
@@ -334,24 +432,33 @@ class VerifyShTest(TempDirTestCase):
         bad = self.tmp / "bad.txt"
         bad.write_text("/abs/path.cpp\n", encoding="utf-8")
         result = self._bash(script, str(bad), "", cwd=REPO)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("summary [tsan-quick FAILED (selection)]", result.stdout)
         self.assertIn("status 1", result.stdout)
-        # Without --tsan-quick (the default, ADR 0027 decision 9) nothing is selected or built.
+        # Only an explicit disable request avoids the targeted selector.
         listing = self.tmp / "changed.txt"
         listing.write_text("src/io/src/process_posix.cpp\n", encoding="utf-8")
-        result = self._bash(script.replace("TSAN_QUICK=1", "TSAN_QUICK=0"), str(listing), "", cwd=REPO)
+        result = self._bash(script.replace("parse_args\n", "parse_args --no-tsan-quick\n"), str(listing), "", cwd=REPO)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("run_config", result.stdout)
-        self.assertIn("summary [tsan-quick not-run (off by default)]", result.stdout)
+        self.assertIn("summary [tsan-quick not-run (disabled by request)]", result.stdout)
         self.assertIn("status 0", result.stdout)
 
-    def test_parse_args_leaves_tidy_and_tsan_quick_off_by_default(self):
+    def test_parse_args_defaults_on_and_honors_narrow_overrides(self):
         script = _bash_function("parse_args") + 'parse_args "$@"\necho "$FULL $CHECKS $TIDY $TSAN_QUICK"\n'
         cases = [
-            ([], "0 1 0 0"),
+            ([], "0 1 1 1"),
+            (["--quick"], "0 1 1 1"),
+            (["--full"], "1 1 1 1"),
+            (["--no-checks"], "0 0 1 1"),
             (["--tidy", "--tsan-quick"], "0 1 1 1"),
             (["-Full", "-Tidy", "-TsanQuick", "--no-checks"], "1 0 1 1"),
-            (["--full", "--quick"], "0 1 0 0"),
+            (["--full", "--quick"], "0 1 1 1"),
+            (["--no-tidy"], "0 1 0 1"),
+            (["--no-tsan-quick"], "0 1 1 0"),
+            (["--no-tidy", "--no-tsan-quick"], "0 1 0 0"),
+            (["--no-tidy", "--tidy", "--no-tsan-quick", "--tsan-quick"], "0 1 1 1"),
+            (["-Tidy", "--no-tidy", "-TsanQuick", "--no-tsan-quick"], "0 1 0 0"),
         ]
         for args, expected in cases:
             with self.subTest(args=args):
@@ -362,17 +469,98 @@ class VerifyShTest(TempDirTestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("usage: verify.sh", result.stderr)
 
-    def test_run_tidy_reports_off_without_the_switch(self):
-        script = (_bash_function("run_tidy") +
-                  'summary=(); status=0; TIDY=0; debug_built=1\n'
+    def test_run_tidy_reports_explicit_disable(self):
+        script = (_bash_function("parse_args") + _bash_function("run_tidy") +
+                  'parse_args --no-tidy\nsummary=(); status=0; debug_built=1\n'
                   'run_tidy\n'
                   'printf "summary [%s]\\n" "${summary[@]}"\n'
                   'echo "status $status"\n')
         result = self._bash(script, cwd=REPO)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("=== tidy", result.stdout)
-        self.assertIn("summary [tidy not-run (off by default)]", result.stdout)
+        self.assertIn("summary [tidy not-run (disabled by request)]", result.stdout)
         self.assertIn("status 0", result.stdout)
+
+    def test_default_tidy_selects_changed_or_all_and_propagates_failures(self):
+        stub = r"""
+ninja() { :; }
+python3() {
+    printf '%s\n' "$@" > "$calls"
+    printf '%s\n' "$stub_output"
+    return "$stub_exit"
+}
+"""
+        script = (stub + _bash_function("parse_args") + _bash_function("run_tidy") + r"""
+calls="$1"; stub_exit="$2"; stub_output="$3"; changed_list="$4"; changed_reason="$5"
+shift 5
+parse_args "$@"
+summary=(); status=0; debug_built=1; fuzz_built=1
+MIRROR='/fixture mirror'; FROST_LLVM_ROOT='/fixture llvm'; JOBS=2
+run_tidy
+printf 'summary [%s]\n' "${summary[@]}"
+echo "status $status"
+exit "$status"
+""")
+        cases = [
+            ("changed", [], "changes.txt", "", 0, "tidy ok (1 TUs)", 0, "tidy ok (1 TUs)"),
+            ("fallback", [], "", "changed-list fixture failed", 0, "tidy ok (1 TUs)", 0, "tidy ok (1 TUs)"),
+            ("full", ["--full"], "changes.txt", "", 0, "tidy ok (1 TUs)", 0, "tidy ok (1 TUs)"),
+            ("finding", [], "changes.txt", "", 7, "tidy FAILED (fixture finding)",
+             1, "tidy FAILED (fixture finding)"),
+            ("missing summary", [], "changes.txt", "", 9, "", 1, "tidy FAILED (exit 9 without a summary)"),
+            ("zero exit missing summary", [], "changes.txt", "", 0, "", 1, "tidy FAILED (exit 0 without a summary)"),
+            ("zero exit progress only", [], "changes.txt", "", 0, "tidy: 0 TUs with -j 1",
+             1, "tidy FAILED (exit 0 without a summary)"),
+            ("zero exit failure", [], "changes.txt", "", 0, "tidy FAILED (fixture finding)",
+             1, "tidy FAILED (fixture finding)"),
+            ("no changes", [], "changes.txt", "", 0, "tidy ok (0 TUs: no C/C++ changes)",
+             0, "tidy ok (0 TUs: no C/C++ changes)"),
+            ("skipped header", [], "changes.txt", "", 0, "tidy ok (0 TUs; 1 skipped)", 0, "tidy ok (0 TUs; 1 skipped)"),
+            ("all reason", [], "changes.txt", "", 0, "tidy ok (2 TUs; all files: fixture)",
+             0, "tidy ok (2 TUs; all files: fixture)"),
+            ("nonzero with success", [], "changes.txt", "", 7, "tidy ok (1 TUs)", 1, "tidy ok (1 TUs)"),
+        ]
+        for name, options, listing, reason, exit_code, output, expected_exit, summary in cases:
+            with self.subTest(case=name):
+                calls = self.tmp / "tidy-arguments.txt"
+                result = self._bash(script, str(calls), str(exit_code), output, listing, reason, *options)
+                self.assertEqual(result.returncode, expected_exit, result.stdout + result.stderr)
+                self.assertIn("=== tidy", result.stdout)
+                arguments = calls.read_text(encoding="utf-8").splitlines()
+                self.assertEqual(arguments[:3], ["-I", "tools/verify_support.py", "tidy"])
+                if name == "full":
+                    self.assertIn("--all", arguments)
+                    self.assertNotIn("--changed", arguments)
+                    self.assertEqual(arguments[arguments.index("--extra-build-dir") + 1],
+                                     "/fixture mirror/build/linux-clang-fuzz")
+                    self.assertEqual(arguments[arguments.index("--extra-config") + 1], "RelWithDebInfo")
+                elif not listing:
+                    self.assertIn("--all", arguments)
+                    self.assertNotIn("--changed", arguments)
+                    self.assertEqual(arguments[arguments.index("--reason") + 1], "no changed-file list: " + reason)
+                else:
+                    self.assertNotIn("--all", arguments)
+                    self.assertEqual(arguments[arguments.index("--changed") + 1], listing)
+                self.assertIn("summary [" + summary + "]", result.stdout)
+
+    def test_full_keeps_all_sanitizer_legs_when_targeted_tsan_is_disabled(self):
+        text = (TOOLS / "verify.sh").read_text(encoding="utf-8")
+        # Execute the production Full dispatch block with a recorder in place of build/test processes.
+        blocks = re.findall(r"(?ms)^if \[\[ \$FULL -eq 1 \]\]; then\n    run_config asan .*?^fi\n", text)
+        self.assertEqual(len(blocks), 1)
+        stub = ('run_config() { printf "run_config"; printf " [%s]" "$@"; echo; }\n'
+                'run_tsan_quick() { echo "unexpected targeted TSan leg"; }\n')
+        script = stub + _bash_function("parse_args") + 'parse_args "$@"\n' + blocks[0]
+        expected = [
+            "run_config [asan] [linux-clang-asan] [linux-clang-asan] [-LE] [^corpus$]",
+            "run_config [tsan] [linux-clang-tsan] [linux-clang-tsan] [-LE] [^corpus$]",
+            "run_config [fuzz] [linux-clang-fuzz] [linux-clang-fuzz] [-L] [^fuzz$]",
+        ]
+        for options in (["--full"], ["--full", "--no-tsan-quick"]):
+            with self.subTest(options=options):
+                result = self._bash(script, *options)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), expected)
 
     def test_ctest_label_filters_are_anchored(self):
         text = (TOOLS / "verify.sh").read_text(encoding="utf-8")

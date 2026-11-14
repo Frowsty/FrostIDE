@@ -119,7 +119,7 @@ struct StreamedProjectContext {
 // Publishes whole project records in evaluation order. A cache is never reused across generations.
 class StreamedProjectContexts {
 public:
-    StreamedProjectContexts(std::shared_ptr<GeneratedCommandsRetirement> retirement,
+    StreamedProjectContexts(const std::shared_ptr<GeneratedCommandsRetirement>& retirement,
                             std::shared_ptr<const project::SolutionModel> model);
     void publish(StreamedProjectContext record);
     void clear();
@@ -186,8 +186,9 @@ class MsBuildCompileCommandsProvider final : public ICompileCommandsProvider {
 public:
     // `launcher`, `fs` and `model` must outlive the provider. Commands go to `cacheDirectory`.
     MsBuildCompileCommandsProvider(io::IProcessLauncher& launcher, io::IFileSystem& fs,
-                                   std::shared_ptr<const project::SolutionModel> model, std::string cacheDirectory,
-                                   MsBuildProviderOptions options, std::string cleanupBoundary = {},
+                                   std::shared_ptr<const project::SolutionModel> model,
+                                   const std::string& cacheDirectory, MsBuildProviderOptions options,
+                                   const std::string& cleanupBoundary = {},
                                    std::vector<std::string> cleanupParents = {});
 
     // See the header comment. Errors: the configuration's (NotFound, InvalidArgument), those of
@@ -218,7 +219,7 @@ private:
 class IndependentProjectEvaluation final : public ICompileCommandsProvider {
 public:
     IndependentProjectEvaluation(io::IProcessLauncher& launcher, io::IFileSystem& fs,
-                                 std::shared_ptr<const project::SolutionModel> model, std::string cacheDirectory,
+                                 std::shared_ptr<const project::SolutionModel> model, const std::string& cacheDirectory,
                                  MsBuildProviderOptions options);
     ~IndependentProjectEvaluation() override;
     void requestStop();

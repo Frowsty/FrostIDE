@@ -186,7 +186,7 @@ struct ProjectHostLaunch {
  * and waits for its answer. A reader thread collects stdout lines and a second one drains stderr
  * (its last lines go into the error when the helper ends). Destruction ends the helper's process
  * tree and joins both threads. One caller at a time for evaluate(); pid() and running() from any
- * thread.
+ * thread. Each public request owns its cancellation snapshot across reentrant launcher calls.
  */
 class ProjectHostClient {
 public:
@@ -219,9 +219,9 @@ private:
     struct Shared;
     ProjectHostClient() = default;
     // The next stdout line, waiting until the deadline. Errors: IoError (ended), Timeout, Cancelled.
-    [[nodiscard]] Result<std::string> nextLine(IClock::Duration timeout, std::stop_token stop);
+    [[nodiscard]] Result<std::string> nextLine(IClock::Duration timeout, const std::stop_token& stop);
     // Sends one request line and returns its answer line. Errors: as nextLine; IoError (ended).
-    [[nodiscard]] Result<std::string> exchange(const std::string& line, std::stop_token stop);
+    [[nodiscard]] Result<std::string> exchange(const std::string& line, const std::stop_token& stop);
 
     std::unique_ptr<io::IProcess> m_process;
     std::shared_ptr<Shared> m_shared;
@@ -322,7 +322,7 @@ public:
 
 private:
     void run(std::stop_token stop);
-    void publish(std::function<void(SolutionEvaluationStatus&)> change);
+    void publish(const std::function<void(SolutionEvaluationStatus&)>& change);
     // Adds or replaces (by project path) one project's result; returns whether anything changed.
     bool storeResult(EvaluatedProjectItems items, std::optional<ProjectClCommandLines> lines) FROST_REQUIRES(m_mutex);
 

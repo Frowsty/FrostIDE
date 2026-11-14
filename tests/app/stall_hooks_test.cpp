@@ -33,7 +33,7 @@ namespace {
 using namespace std::chrono_literals;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
-const std::string kFreezes = kWindows ? "C:\\cache\\crashes\\freezes" : "/cache/crashes/freezes";
+constexpr const char* kFreezes = kWindows ? "C:\\cache\\crashes\\freezes" : "/cache/crashes/freezes";
 
 // Busy for `duration` on the calling thread (no event processing).
 void spin(std::chrono::milliseconds duration) {

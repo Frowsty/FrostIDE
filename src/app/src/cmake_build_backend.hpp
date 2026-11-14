@@ -7,9 +7,11 @@
 
 namespace frost::app {
 
+// NOLINTNEXTLINE(cppcoreguidelines-virtual-class-destructor): Final concrete owner; base destruction is protected.
 class CMakeBuildBackend final : public ui::IBuildBackend {
 public:
     explicit CMakeBuildBackend(build::CMakeService& service) : m_service(service) {}
+    ~CMakeBuildBackend() = default;
     Result<void> openSolution(std::shared_ptr<const project::SolutionModel>) override {
         return fail(ErrorCode::Unsupported, "a CMake folder is open");
     }

@@ -648,6 +648,59 @@ class PlanTest(TempDirTestCase):
         self.assertTrue(os.path.isabs(pool.file))
         self.assertEqual(vs._norm(pool.file), vs._norm(self.root / "src/sched/src/pool.cpp"))
 
+    def test_pinned_vendor_units_are_excluded_without_excluding_owned_sources(self):
+        vendor = ["third_party/tree-sitter/lib/src/lib.c", "third_party/grammars/cpp/src/parser.c",
+                  "third_party/libvterm/src/vterm.c"]
+        owned = ["src/syntax/src/c/frost_tree_sitter.c", "src/third_party/grammars/parser.c",
+                 "third_party/grammars-owned/parser.c", "third_party/own_adapter/adapter.cpp"]
+        entries = []
+        for rel in vendor + owned:
+            file = str(self.root / rel)
+            entries.append({"directory": str(self.build), "file": file,
+                            "arguments": ["clang", "-c", file],
+                            "output": str(self.build / "Debug" / (rel.replace("/", "_") + ".obj"))})
+        db_file = self.tmp / "vendor-db.json"
+        db_file.write_text(json.dumps(entries), encoding="utf-8")
+        db = vs.load_compile_db(db_file, "Debug")
+        for changed in (None, vendor + owned, [".clang-tidy"]):
+            with self.subTest(changed=changed):
+                plan = vs.plan_tidy(self.root, db, {}, changed, db_dir="DB")
+                self.assertEqual([u.rel for u in plan.units], sorted(owned))
+                self.assertEqual(plan.skipped, [])
+        # Release-only sources from the extra database use the same scope boundaries.
+        plan = vs.plan_tidy(self.root, {}, {}, None, extra_db=db, extra_db_dir="EXTRA")
+        self.assertEqual([u.rel for u in plan.units], sorted(owned))
+        self.assertEqual({u.db_dir for u in plan.units}, {"EXTRA"})
+        plan = vs.plan_tidy(self.root, {}, {}, vendor + owned, extra_db=db, extra_db_dir="EXTRA")
+        self.assertEqual([u.rel for u in plan.units], sorted(owned))
+        self.assertEqual({u.db_dir for u in plan.units}, {"EXTRA"})
+
+    def test_vendor_units_cannot_cover_owned_changed_headers(self):
+        wrapper = "src/syntax/src/c/frost_tree_sitter.c"
+        vendor = ["third_party/tree-sitter/lib/src/lib.c", "third_party/grammars/cpp/src/scanner.c",
+                  "third_party/libvterm/src/vterm.c"]
+        shared_header = "src/syntax/include/shared.hpp"
+        vendor_only_header = "src/syntax/include/vendor_only.hpp"
+        entries = []
+        deps = {}
+        for rel in vendor + [wrapper]:
+            file = str(self.root / rel)
+            output = str(self.build / "Debug" / (rel.replace("/", "_") + ".obj"))
+            entries.append({"directory": str(self.build), "file": file,
+                            "arguments": ["clang", "-c", file], "output": output})
+            headers = {vs._norm(self.root / shared_header)}
+            if rel in vendor:
+                headers.add(vs._norm(self.root / vendor_only_header))
+            deps[vs._norm(output)] = headers
+        db_file = self.tmp / "vendor-includers-db.json"
+        db_file.write_text(json.dumps(entries), encoding="utf-8")
+        db = vs.load_compile_db(db_file, "Debug")
+        plan = vs.plan_tidy(self.root, db, deps,
+                            [shared_header, vendor_only_header, "third_party/grammars/cpp/src/tree_sitter/parser.h"])
+        self.assertEqual([u.rel for u in plan.units], [wrapper])
+        self.assertEqual(plan.covered, {shared_header: wrapper})
+        self.assertEqual(plan.skipped, [(vendor_only_header, "no TU includes it")])
+
     def test_config_changes_switch_to_all_files(self):
         for path in ("src/app/.clang-tidy", ".clang-tidy", "sdk/sdk.lock.json", "cmake/FrostCompilerOptions.cmake",
                      "cmake/toolchains/win-clangcl.cmake", "CMakePresets.json"):
@@ -1099,15 +1152,19 @@ class BuildTreeLabelsTest(unittest.TestCase):
         # exactly one kind label; the tagged suites are build_msbuild_tests,
         # app_workbench_msbuild_tests, project_msbuild_tests, project_edit_msbuild_tests (SLN-6),
         # project_corpus_tests and build_corpus_tests (Windows only; tag "msbuild"; SLN-2, SLN-9),
-        # lang_clangd_tests, lang_msbuild_tests (Windows only; both tags), lang_cmake_tests (both tags;
+        # lang_clangd_tests (including CPP-6 navigation and REF-3/REF-11 refactoring),
+        # lang_code_vision_real_tests and lang_code_vision_corpus_tests (CPP-9),
+        # app_workbench_cpp_editor_tests (including CPP-10 inspections),
+        # lang_msbuild_tests (Windows only; both tags), lang_cmake_tests (both tags;
         # CMK-4), build_cmake_tests,
         # project_cmake_tests, app_automation_endpoint_tests and app_workbench_run_tests (tag "cmake"),
-        # run_test_runner_tests and app_unit_tests_window_tests (tag "cmake"; RUN-7),
-        # run_doctest_runner_tests (tag "cmake"; RUN-8),
+        # run_test_runner_tests and app_unit_tests_window_tests (including RUN-10 exact-case selection;
+        # tag "cmake"; RUN-7), run_doctest_runner_tests (tag "cmake"; RUN-8),
         # build_msvc_env_tests and build_toolchain_tests (Windows only; tag "msvc"; ADR 0046, SLN-14),
         # vcs_git_tests, ui_vcs_git_tests
         # and app_workbench_git_tests (tag "git"; ADR 0048 and 0067), sdk_lldb_tests,
-        # debug_lldb_tests, debug_dap_real_tests and debug_corpus_tests (Windows only; also tag
+        # debug_lldb_tests, debug_dap_real_tests, app_unit_tests_window_tests (RUN-10 debug),
+        # and debug_corpus_tests (Windows only; also tag
         # "corpus") (tag "lldb"; ADR 0049, DBG-1), debug_msvc_tests (Windows only; tags "lldb" and
         # "msvc"; DBG-2b, DBG-4a), and in trees with the UI app_workbench_clangd_tests and
         # ui_screenshot_tests; app_workbench_configuration_tests (Windows only; tags "msbuild" and
@@ -1121,6 +1178,8 @@ class BuildTreeLabelsTest(unittest.TestCase):
                                               "ClCommandLinesClangd.", "WorkbenchConfigurationManager.",
                                               "ProjectEditReal.", "R2aBuild.")),
                   "clangd": ("integration", ("ClangdE2E.", "ClangdEncoding.", "MsBuildEvaluationE2E.",
+                                              "Navigation.", "RefactoringTest.", "CodeVisionRealClangd.",
+                                              "CodeVisionCorpus.", "WorkbenchInspection.",
                                               "WorkbenchClangd.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
                                               "CMakeCompileCommands.", "ClCommandLinesClangd.",
                                               "WorkbenchConfigurationManager.")),
@@ -1129,11 +1188,12 @@ class BuildTreeLabelsTest(unittest.TestCase):
                                             "CMakePresetsOracle.", "Fixtures/CMakePresetsOracle.",
                                             "Fixtures/CMakePresetsRefusedOracle.", "TestRunnerCTest.",
                                             "TestRunnerCancel.", "TestRunnerStub.", "UnitTestsWindow.",
-                                            "DoctestRunner.")),
+                                            "DoctestRunner.", "TestRunnerDoctestSelection.")),
                   "msvc": ("integration", ("MsvcEnvironmentCapture.", "RealToolchain.", "MsvcDebug.",
                                            "Runtimes/MsvcThrowFilter.", "Builds/MsvcStepInto.")),
                   "git": ("integration", ("GitE2E.", "GitUiE2E.", "WorkbenchGit.")),
                   "lldb": ("integration", ("LldbDapE2E.", "LldbDebugSession.", "DapReal.", "CorpusFrostEditor.",
+                                           "UnitTestsWindow.",
                                            "MsvcDebug.", "Runtimes/MsvcThrowFilter.", "Builds/MsvcStepInto.")),
                   "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",
                                           "GoldenComparator."))}

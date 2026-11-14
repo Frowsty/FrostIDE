@@ -50,8 +50,9 @@ bool semver(std::string_view v) {
         if (begin == pos || (pos - begin > 1 && v[begin] == '0'))
             return false;
         if (part < 2) {
-            if (pos == v.size() || v[pos++] != '.')
+            if (pos == v.size() || v[pos] != '.')
                 return false;
+            ++pos;
         } else if (part == 2) {
             if (pos < v.size() && v[pos] == '.') {
                 ++pos;

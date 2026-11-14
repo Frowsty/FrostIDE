@@ -13,14 +13,14 @@
  *     nested collapsed ranges remain registered while their ancestor is collapsed.
  *   - Soft-wrap layer: folded lines -> wrap rows. Greedy wrapping at a width (by column or in
  *     shaper units), measured with an ITextShaper (text_shaper.hpp).
- *   - Inlay layer: inline text inside wrap rows; it never adds rows. An identity layer until M15.
+ *   - Inlay layer: provider text anchored at buffer offsets inside wrap rows; it shifts display
+ *     columns without adding rows or changing buffer offsets.
  *   - Block-decoration layer: whole rows inserted above or below buffer lines (the compare and
  *     merge views' alignment fillers), anchored so that they follow edits.
  *
  * Coordinates. A DisplayRow counts every display row, block rows included. A DisplayColumn is a
- * byte offset into the row's display text: the concatenation of its segments (RowSegment), which
- * with the identity layers is just the row's buffer bytes. x positions (TextWidth) come from the
- * shaper; every row lays out from x = 0.
+ * byte offset into the row's display text: the concatenation of its segments (RowSegment), including
+ * inline inlay text. x positions (TextWidth) come from the shaper; every row lays out from x = 0.
  *
  * Soft-wrap boundaries. The end of a soft-wrapped row and the start of the row after it are the
  * same buffer offset. Bias picks the row: Bias::Left is the end of the upper row, Bias::Right the
@@ -38,7 +38,6 @@
  * block plus runs), B = 8.
  */
 #pragma once
-
 #include "frost/core/error.hpp"
 #include "frost/core/strong_type.hpp"
 #include "frost/text/anchor.hpp"
@@ -130,8 +129,8 @@ struct BlockInfo {
 enum class RowKind : std::uint8_t { Text, Block };
 enum class SegmentKind : std::uint8_t {
     Text,            // Buffer bytes, read from the snapshot.
-    FoldPlaceholder, // The placeholder of a folded range (M15).
-    Inlay,           // Inline text that is not in the buffer (M15).
+    FoldPlaceholder, // The placeholder of a folded range.
+    Inlay,           // Inline provider text that is not in the buffer.
 };
 
 // One piece of a text row's display text, in order.
@@ -216,6 +215,17 @@ struct FoldInfo {
     ByteRange range;
 };
 
+// An inline inlay (e.g. a type or parameter hint) anchored at buffer `offset` with `bias`.
+struct DisplayInlay {
+    ByteOffset offset;
+    std::string text;
+    Bias bias = Bias::Left;
+
+    friend bool operator==(const DisplayInlay&, const DisplayInlay&) = default;
+};
+
+using Inlay = DisplayInlay;
+
 class DisplayMap;
 
 // A forward cursor over display rows (DisplayMap::rows). It borrows the map: valid until the map
@@ -246,6 +256,8 @@ private:
  */
 class DisplayMap {
 public:
+    using Inlay = DisplayInlay;
+
     // The map of `text`, wrapped by `wrap` and measured by `shaper`, with no blocks. O(text) when
     // wrapping, O(1) otherwise. Precondition: `shaper` outlives the map (or is replaced first).
     DisplayMap(Snapshot text, const ITextShaper& shaper, WrapSettings wrap = {}) noexcept;
@@ -312,6 +324,13 @@ public:
     // The first registered fold starting in a closed range, or none.
     [[nodiscard]] std::optional<FoldInfo> firstFoldStartingIn(ByteRange range) const noexcept;
     [[nodiscard]] std::optional<FoldInfo> foldAtBoundary(ByteOffset offset, bool start) const noexcept;
+
+    // Inline inlays (UX-4).
+
+    // Replaces all inline inlays and projects them into their wrap rows.
+    void setInlays(std::vector<Inlay> inlays) noexcept;
+    // Currently held inline inlays, sorted by (offset, bias) preserving insertion order for ties.
+    [[nodiscard]] const std::vector<Inlay>& inlays() const noexcept;
 
     // Block decorations.
 

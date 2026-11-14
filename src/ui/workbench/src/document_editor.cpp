@@ -23,7 +23,6 @@ namespace frost::ui {
 
 using workbench_detail::fromUtf8;
 using workbench_detail::text;
-using workbench_detail::themedIcon;
 
 namespace workbench_detail {
 

@@ -103,7 +103,7 @@ void FileDocument::setLineSeparator(text::LineSeparator separator) noexcept {
 // --- SaveManager ---
 
 SaveManager::SaveManager(SaveManagerServices services, SaveManagerOptions options, SavePolicies policies)
-    : m_services(services), m_options(std::move(options)), m_policies(policies),
+    : m_services(services), m_options(options), m_policies(policies),
       m_loader(*services.fs, m_options.load, services.codecs != nullptr ? *services.codecs : text::platformCodecs()) {
     FROST_PRE(services.fs != nullptr && services.clock != nullptr);
 }

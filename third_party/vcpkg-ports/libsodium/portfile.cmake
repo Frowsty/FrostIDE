@@ -104,6 +104,63 @@ else()
         # Do not pass lld-link's /vctoolsdir syntax to clang-cl via libtool escapes.
         function(frost_sodium_configure_flags config)
             set(link_flags "${VCPKG_COMBINED_SHARED_LINKER_FLAGS_${config}}")
+            if("${VCPKG_COMBINED_C_FLAGS_${config}}" MATCHES "(^|[ \t])-fsanitize=address($|[ \t])")
+                if(NOT VCPKG_CRT_LINKAGE STREQUAL "dynamic" OR
+                   NOT VCPKG_DETECTED_CMAKE_C_COMPILER_ID STREQUAL "Clang" OR
+                   NOT VCPKG_DETECTED_CMAKE_C_COMPILER MATCHES "[/\\\\]clang-cl\\.exe$")
+                    message(FATAL_ERROR "Unexpected ASan compiler or CRT for libsodium")
+                endif()
+                get_filename_component(llvm_bin "${VCPKG_DETECTED_CMAKE_C_COMPILER}" DIRECTORY)
+                get_filename_component(llvm_root "${llvm_bin}" DIRECTORY)
+                string(REGEX MATCH "^[0-9]+" llvm_major "${VCPKG_DETECTED_CMAKE_C_COMPILER_VERSION}")
+                if(NOT llvm_major)
+                    message(FATAL_ERROR "Missing detected LLVM version for ASan libsodium")
+                endif()
+                set(asan_dir "${llvm_root}/lib/clang/${llvm_major}/lib/windows")
+                if(NOT EXISTS "${asan_dir}/clang_rt.asan_dynamic-x86_64.dll")
+                    message(FATAL_ERROR "Pinned LLVM ASan runtime DLL is required for libsodium configure probes")
+                endif()
+                # vcpkg's isolated PATH omits the compiler runtime directory. Autoconf executes
+                # instrumented conftests here, so their native loader must find the pinned DLL.
+                # vcpkg_make_configure backs up PATH before this callback and restores it after.
+                vcpkg_add_to_path(PREPEND "${asan_dir}")
+                set(asan_block "\"${asan_dir}/clang_rt.asan_dynamic-x86_64.lib\" \"/INCLUDE:__asan_seh_interceptor\" \"/WHOLEARCHIVE:${asan_dir}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib\"")
+                # CMake links directly with lld-link and needs this explicit block.
+                # This make port links through clang-cl, which supplies the same
+                # inputs from the ASan CFLAGS retained in the response file below.
+                # Autoconf's unquoted expansion otherwise preserves literal quotes.
+                string(FIND "${link_flags}" "${asan_block}" asan_at)
+                if(asan_at LESS 0)
+                    message(FATAL_ERROR "Unexpected ASan linker block for libsodium")
+                endif()
+                string(LENGTH "${asan_block}" asan_length)
+                math(EXPR asan_end "${asan_at} + ${asan_length}")
+                string(SUBSTRING "${link_flags}" 0 ${asan_at} before_asan)
+                string(SUBSTRING "${link_flags}" ${asan_end} -1 after_asan)
+                if(NOT "${before_asan}" MATCHES "(^$|[ \t\r\n]$)" OR
+                   NOT "${after_asan}" MATCHES "(^$|^[ \t\r\n])")
+                    message(FATAL_ERROR "Unexpected ASan linker block boundaries for libsodium")
+                endif()
+                set(link_flags "${before_asan}${after_asan}")
+                # Keep linker policy opaque to Autoconf's shell expansion and libtool's
+                # MSVC flag rewriting. LDFLAGS supplies it only for link invocations.
+                set(tailmerge_option "\"/OPT:NOLLDTAILMERGE\"")
+                string(FIND "${link_flags}" "${tailmerge_option}" tailmerge_at)
+                if(tailmerge_at LESS 0)
+                    message(FATAL_ERROR "Missing ASan tail-merging policy for libsodium")
+                endif()
+                string(LENGTH "${tailmerge_option}" tailmerge_length)
+                math(EXPR tailmerge_end "${tailmerge_at} + ${tailmerge_length}")
+                string(SUBSTRING "${link_flags}" 0 ${tailmerge_at} before_tailmerge)
+                string(SUBSTRING "${link_flags}" ${tailmerge_end} -1 after_tailmerge)
+                if(NOT "${before_tailmerge}" MATCHES "(^$|[ \t\r\n]$)" OR
+                   NOT "${after_tailmerge}" MATCHES "(^$|^[ \t\r\n])")
+                    message(FATAL_ERROR "Unexpected ASan tail-merging option boundaries for libsodium")
+                endif()
+                set(link_policy_file "${CURRENT_BUILDTREES_DIR}/frost-link-policy-${config}.rsp")
+                file(WRITE "${link_policy_file}" "-Xlinker /OPT:NOLLDTAILMERGE\n")
+                set(link_flags "${before_tailmerge}@${link_policy_file}${after_tailmerge}")
+            endif()
             foreach(pin IN ITEMS vctoolsdir winsdkdir)
                 string(REGEX MATCH "[/-]${pin}:\"([^\"]+)\"" match "${link_flags}")
                 if(NOT match)

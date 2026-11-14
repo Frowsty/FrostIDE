@@ -306,7 +306,8 @@ int restartThroughShortLink(const std::wstring& self, const std::wstring& extend
     SetErrorMode(launcherErrorMode);
     if (started == FALSE) {
         reportFailure(L"cannot restart frost through its short link " + link->imagePath() + L": " +
-                          win32Message(error) + L" (win32 error " + std::to_wstring(error) + L")",
+                          win32Message(error) + L" (win32 error " + std::to_wstring(error) +
+                          L"). Install FrostIDE in a directory whose frost.exe path is shorter than 260 UTF-16 units.",
                       commandLineMode);
         return 4;
     }

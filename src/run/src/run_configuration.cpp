@@ -65,6 +65,9 @@ void writeConfiguration(std::string& out, const RunConfiguration& configuration,
     member("type", rpc::Json(toString(configuration.type)).dump());
     member("target", rpc::Json(configuration.target).dump());
     member("program", rpc::Json(configuration.program).dump());
+    if (isFrostEngineRunType(configuration.type)) {
+        member("engineProjectPath", rpc::Json(configuration.engineProjectPath).dump());
+    }
     std::string arguments;
     writeStringArray(arguments, configuration.arguments);
     member("arguments", arguments);
@@ -103,7 +106,7 @@ void writeConfiguration(std::string& out, const RunConfiguration& configuration,
         member("configurations", ids, true);
     }
     indent(out, depth);
-    out += "}";
+    out += '}';
 }
 
 // ---- The reader.
@@ -207,7 +210,8 @@ Result<RunConfiguration> readConfiguration(const rpc::Json& object, std::size_t 
     }
     configuration.type = *parsedType;
     for (auto [key, field] : {std::pair{"target", &configuration.target}, std::pair{"program", &configuration.program},
-                              std::pair{"workingDirectory", &configuration.workingDirectory}}) {
+                              std::pair{"workingDirectory", &configuration.workingDirectory},
+                              std::pair{"engineProjectPath", &configuration.engineProjectPath}}) {
         auto value = stringMember(object, key, false, index);
         if (!value) {
             return std::unexpected(std::move(value.error()));
@@ -312,13 +316,15 @@ std::string_view toString(RunType type) noexcept {
     case RunType::MSBuild: return "msbuild";
     case RunType::Compound: return "compound";
     case RunType::Attach: return "attach";
+    case RunType::FrostEditor: return "frost-editor";
+    case RunType::FrostPlayer: return "frost-player";
     }
     return "native";
 }
 
 std::optional<RunType> parseRunType(std::string_view text) noexcept {
-    for (const RunType type :
-         {RunType::Native, RunType::CMakeTarget, RunType::MSBuild, RunType::Compound, RunType::Attach}) {
+    for (const RunType type : {RunType::Native, RunType::CMakeTarget, RunType::MSBuild, RunType::Compound,
+                               RunType::Attach, RunType::FrostEditor, RunType::FrostPlayer}) {
         if (toString(type) == text) {
             return type;
         }
@@ -346,16 +352,33 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
     if (configuration.name.empty() || hasNul(configuration.name)) {
         return invalid(configuration, "the name is empty or contains NUL");
     }
+    if (isFrostEngineRunType(configuration.type)) {
+        if (!io::normalizePath(configuration.engineProjectPath)) {
+            return invalid(configuration,
+                           "a FrostEngine configuration needs an absolute project directory or .frostproj");
+        }
+        // The typed project field is authoritative. Both hosts parse this CLI switch, so allowing
+        // another copy in user arguments could silently run a different project.
+        for (const std::string& argument : configuration.arguments) {
+            if (argument == "--project" || argument.starts_with("--project=")) {
+                return invalid(configuration, "set the engine project field instead of a --project argument");
+            }
+        }
+    } else if (!configuration.engineProjectPath.empty()) {
+        return invalid(configuration, "only a FrostEngine configuration has an engine project");
+    }
     switch (configuration.type) {
+    case RunType::FrostEditor:
+    case RunType::FrostPlayer:
     case RunType::Native:
         if (configuration.program.empty()) {
-            return invalid(configuration, "a native configuration needs a program");
+            return invalid(configuration, "this executable configuration needs a program");
         }
         if (!configuration.target.empty()) {
-            return invalid(configuration, "a native configuration has no target");
+            return invalid(configuration, "this executable configuration has no target");
         }
         if (configuration.beforeLaunch == BeforeLaunch::Build) {
-            return invalid(configuration, "a native configuration has nothing to build");
+            return invalid(configuration, "this executable configuration has nothing to build");
         }
         break;
     case RunType::CMakeTarget:
@@ -495,6 +518,10 @@ Result<std::vector<RunConfiguration>> parseRunConfigurations(std::string_view js
     return configurations;
 }
 
+bool isFrostEngineRunType(RunType type) noexcept {
+    return type == RunType::FrostEditor || type == RunType::FrostPlayer;
+}
+
 bool usesRun5Features(const RunConfiguration& configuration) noexcept {
     return configuration.type == RunType::Compound || configuration.type == RunType::Attach ||
            !configuration.beforeLaunchTasks.empty() || !configuration.configurations.empty();
@@ -519,13 +546,16 @@ bool attachTargetMatches(std::string_view target, std::string_view executablePat
 }
 
 std::string serializeRunConfigurations(std::span<const RunConfiguration> configurations) {
-    const int version = std::ranges::any_of(configurations, usesRun5Features) ? kRunConfigurationsVersion : 1;
+    const bool engine = std::ranges::any_of(
+        configurations, [](const RunConfiguration& configuration) { return isFrostEngineRunType(configuration.type); });
+    const int version =
+        engine ? kRunConfigurationsVersion : (std::ranges::any_of(configurations, usesRun5Features) ? 2 : 1);
     std::string out = std::format("{{\n  \"version\": {},\n  \"configurations\": [", version);
     if (configurations.empty()) {
         out += "]\n}\n";
         return out;
     }
-    out += "\n";
+    out += '\n';
     for (std::size_t i = 0; i < configurations.size(); ++i) {
         writeConfiguration(out, configurations[i], 2);
         out += i + 1 < configurations.size() ? ",\n" : "\n";

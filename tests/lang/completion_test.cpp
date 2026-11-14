@@ -45,7 +45,7 @@ Json item(std::string_view label, std::string_view filter, std::string_view sort
         .set("textEdit", Json::object().set("range", range(0, 0, 0)).set("newText", filter));
 }
 
-CompletionItem plain(std::string label, std::string sort = {}, bool deprecated = false) {
+CompletionItem plain(const std::string& label, const std::string& sort = {}, bool deprecated = false) {
     CompletionItem out;
     out.label = label;
     out.filterText = label;

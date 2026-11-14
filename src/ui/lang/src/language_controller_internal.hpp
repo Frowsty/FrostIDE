@@ -47,7 +47,11 @@ inline bool isCSharpPath(std::string_view path) {
 template<class T>
 sched::Task<void> deliverTaskResult(sched::Task<Result<T>> task, QPointer<LanguageController> self,
                                     sched::LatestWins* slot, sched::LatestWins::Ticket ticket,
-                                    std::function<void(Result<T>)> done) {
+                                    std::function<void(Result<T>)> done,
+                                    std::shared_ptr<std::function<sched::Task<Result<T>>(std::stop_token)>> factory) {
+    // Coroutine lambdas can borrow their closure. Retain the owning factory through task completion.
+    const auto retainedFactory = std::move(factory);
+    static_cast<void>(retainedFactory);
     auto result = std::make_shared<Result<T>>(co_await std::move(task));
     QCoreApplication* app = QCoreApplication::instance();
     if (app == nullptr) {
@@ -93,11 +97,14 @@ template<class T>
 void LanguageController::start(sched::LatestWins& slot, std::function<sched::Task<Result<T>>(std::stop_token)> make,
                                std::function<void(Result<T>)> done) {
     const sched::LatestWins::Ticket ticket = slot.next();
-    sched::Task<Result<T>> task = make(ticket.token);
+    // Pin the closure before invoking it: moving an already-invoked SBO callable could relocate
+    // the closure that a coroutine lambda's frame references.
+    auto factory = std::make_shared<std::function<sched::Task<Result<T>>(std::stop_token)>>(std::move(make));
+    sched::Task<Result<T>> task = (*factory)(ticket.token);
     m_services.scheduler
         .spawn(sched::Lane::Interactive,
                detail::deliverTaskResult<T>(std::move(task), QPointer<LanguageController>(this), &slot, ticket,
-                                            std::move(done)))
+                                            std::move(done), std::move(factory)))
         .detach();
 }
 

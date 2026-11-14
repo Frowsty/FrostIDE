@@ -88,69 +88,54 @@ sched::Task<Result<HierarchyQueryResult>> runCallHierarchyTask(fl::ILspRequester
     HierarchyQueryResult out;
     out.rootName = qs(fallbackName);
     auto prepared = co_await fl::requestPrepareCallHierarchy(server, path, position, token);
-    if (prepared && !prepared->empty()) {
-        const fl::CallHierarchyItem& rootItem = prepared->front();
-        out.rootName = qs(rootItem.name);
-        HierarchyPopup::Entry rootNode{
-            .label = qs(rootItem.name),
-            .detail =
-                QStringLiteral("%1:%2").arg(qs(fileName(rootItem.path))).arg(rootItem.selectionRange.start.line + 1),
-            .kind = rootItem.kind,
-            .path = rootItem.path,
-            .position = rootItem.selectionRange.start,
-            .children = {}};
-        if (outgoing) {
-            if (auto calls = co_await fl::requestOutgoingCalls(server, rootItem, token); calls) {
-                for (const fl::CallHierarchyOutgoingCall& call : *calls) {
-                    rootNode.children.push_back(
-                        HierarchyPopup::Entry{.label = qs(call.to.name),
-                                              .detail = QStringLiteral("%1:%2")
-                                                            .arg(qs(fileName(call.to.path)))
-                                                            .arg(call.to.selectionRange.start.line + 1),
-                                              .kind = call.to.kind,
-                                              .path = call.to.path,
-                                              .position = call.to.selectionRange.start,
-                                              .children = {}});
-                }
-            }
-        } else {
-            if (auto calls = co_await fl::requestIncomingCalls(server, rootItem, token); calls) {
-                for (const fl::CallHierarchyIncomingCall& call : *calls) {
-                    rootNode.children.push_back(
-                        HierarchyPopup::Entry{.label = qs(call.from.name),
-                                              .detail = QStringLiteral("%1:%2")
-                                                            .arg(qs(fileName(call.from.path)))
-                                                            .arg(call.from.selectionRange.start.line + 1),
-                                              .kind = call.from.kind,
-                                              .path = call.from.path,
-                                              .position = call.from.selectionRange.start,
-                                              .children = {}});
-                }
-            }
-        }
-        out.entries.push_back(std::move(rootNode));
+    if (!prepared) {
+        co_return std::unexpected(std::move(prepared.error()));
+    }
+    if (prepared->empty()) {
         co_return out;
     }
-    HierarchyPopup::Entry fallbackRoot{.label = qs(fallbackName),
-                                       .detail = QStringLiteral("%1:%2").arg(qs(fileName(path))).arg(position.line + 1),
-                                       .kind = fl::SymbolKind::Function,
-                                       .path = path,
-                                       .position = position,
-                                       .children = {}};
-    if (!outgoing) {
-        if (auto refs = co_await fl::requestReferences(server, path, position, false, token); refs) {
-            for (const fl::Location& loc : *refs) {
-                fallbackRoot.children.push_back(HierarchyPopup::Entry{
-                    .label = QStringLiteral("Call at %1:%2").arg(qs(fileName(loc.path))).arg(loc.range.start.line + 1),
-                    .detail = qs(fileName(loc.path)),
-                    .kind = fl::SymbolKind::Function,
-                    .path = loc.path,
-                    .position = loc.range.start,
-                    .children = {}});
-            }
+    const fl::CallHierarchyItem& rootItem = prepared->front();
+    out.rootName = qs(rootItem.name);
+    HierarchyPopup::Entry rootNode{
+        .label = qs(rootItem.name),
+        .detail = QStringLiteral("%1:%2").arg(qs(fileName(rootItem.path))).arg(rootItem.selectionRange.start.line + 1),
+        .kind = rootItem.kind,
+        .path = rootItem.path,
+        .position = rootItem.selectionRange.start,
+        .children = {}};
+    if (outgoing) {
+        auto calls = co_await fl::requestOutgoingCalls(server, rootItem, token);
+        if (!calls) {
+            co_return std::unexpected(std::move(calls.error()));
+        }
+        for (const fl::CallHierarchyOutgoingCall& call : *calls) {
+            rootNode.children.push_back(HierarchyPopup::Entry{
+                .label = qs(call.to.name),
+                .detail =
+                    QStringLiteral("%1:%2").arg(qs(fileName(call.to.path))).arg(call.to.selectionRange.start.line + 1),
+                .kind = call.to.kind,
+                .path = call.to.path,
+                .position = call.to.selectionRange.start,
+                .children = {}});
+        }
+    } else {
+        auto calls = co_await fl::requestIncomingCalls(server, rootItem, token);
+        if (!calls) {
+            co_return std::unexpected(std::move(calls.error()));
+        }
+        for (const fl::CallHierarchyIncomingCall& call : *calls) {
+            rootNode.children.push_back(
+                HierarchyPopup::Entry{.label = qs(call.from.name),
+                                      .detail = QStringLiteral("%1:%2")
+                                                    .arg(qs(fileName(call.from.path)))
+                                                    .arg(call.from.selectionRange.start.line + 1),
+                                      .kind = call.from.kind,
+                                      .path = call.from.path,
+                                      .position = call.from.selectionRange.start,
+                                      .children = {}});
         }
     }
-    out.entries.push_back(std::move(fallbackRoot));
+    out.entries.push_back(std::move(rootNode));
     co_return out;
 }
 
@@ -160,57 +145,36 @@ sched::Task<Result<HierarchyQueryResult>> runTypeHierarchyTask(fl::ILspRequester
     HierarchyQueryResult out;
     out.rootName = qs(fallbackName);
     auto prepared = co_await fl::requestPrepareTypeHierarchy(server, path, position, token);
-    if (prepared && !prepared->empty()) {
-        const fl::TypeHierarchyItem& rootItem = prepared->front();
-        out.rootName = qs(rootItem.name);
-        HierarchyPopup::Entry rootNode{
-            .label = qs(rootItem.name),
-            .detail =
-                QStringLiteral("%1:%2").arg(qs(fileName(rootItem.path))).arg(rootItem.selectionRange.start.line + 1),
-            .kind = rootItem.kind,
-            .path = rootItem.path,
-            .position = rootItem.selectionRange.start,
-            .children = {}};
-        auto related = subtypes ? co_await fl::requestSubtypes(server, rootItem, token)
-                                : co_await fl::requestSupertypes(server, rootItem, token);
-        if (related) {
-            for (const fl::TypeHierarchyItem& item : *related) {
-                rootNode.children.push_back(HierarchyPopup::Entry{
-                    .label = qs(item.name),
-                    .detail =
-                        QStringLiteral("%1:%2").arg(qs(fileName(item.path))).arg(item.selectionRange.start.line + 1),
-                    .kind = item.kind,
-                    .path = item.path,
-                    .position = item.selectionRange.start,
-                    .children = {}});
-            }
-        }
-        out.entries.push_back(std::move(rootNode));
+    if (!prepared) {
+        co_return std::unexpected(std::move(prepared.error()));
+    }
+    if (prepared->empty()) {
         co_return out;
     }
-    HierarchyPopup::Entry fallbackRoot{.label = qs(fallbackName),
-                                       .detail = QStringLiteral("%1:%2").arg(qs(fileName(path))).arg(position.line + 1),
-                                       .kind = fl::SymbolKind::Class,
-                                       .path = path,
-                                       .position = position,
-                                       .children = {}};
-    if (subtypes) {
-        if (auto impls =
-                co_await fl::requestLocations(server, fl::NavigationTarget::Implementation, path, position, token);
-            impls) {
-            for (const fl::Location& loc : *impls) {
-                fallbackRoot.children.push_back(HierarchyPopup::Entry{
-                    .label =
-                        QStringLiteral("Subtype at %1:%2").arg(qs(fileName(loc.path))).arg(loc.range.start.line + 1),
-                    .detail = qs(fileName(loc.path)),
-                    .kind = fl::SymbolKind::Class,
-                    .path = loc.path,
-                    .position = loc.range.start,
-                    .children = {}});
-            }
-        }
+    const fl::TypeHierarchyItem& rootItem = prepared->front();
+    out.rootName = qs(rootItem.name);
+    HierarchyPopup::Entry rootNode{
+        .label = qs(rootItem.name),
+        .detail = QStringLiteral("%1:%2").arg(qs(fileName(rootItem.path))).arg(rootItem.selectionRange.start.line + 1),
+        .kind = rootItem.kind,
+        .path = rootItem.path,
+        .position = rootItem.selectionRange.start,
+        .children = {}};
+    auto related = subtypes ? co_await fl::requestSubtypes(server, rootItem, token)
+                            : co_await fl::requestSupertypes(server, rootItem, token);
+    if (!related) {
+        co_return std::unexpected(std::move(related.error()));
     }
-    out.entries.push_back(std::move(fallbackRoot));
+    for (const fl::TypeHierarchyItem& item : *related) {
+        rootNode.children.push_back(HierarchyPopup::Entry{
+            .label = qs(item.name),
+            .detail = QStringLiteral("%1:%2").arg(qs(fileName(item.path))).arg(item.selectionRange.start.line + 1),
+            .kind = item.kind,
+            .path = item.path,
+            .position = item.selectionRange.start,
+            .children = {}});
+    }
+    out.entries.push_back(std::move(rootNode));
     co_return out;
 }
 
@@ -340,24 +304,33 @@ void LanguageController::refreshCallHierarchy(bool outgoing) {
                 report(res.error(), "Call hierarchy");
                 return;
             }
+            if (res->entries.empty()) {
+                m_hierarchy->hide();
+                emit statusMessage(emptyResultMessage(QStringLiteral("No call hierarchy found")));
+                return;
+            }
             const QString modePrefix =
                 outgoing ? QStringLiteral("Outgoing calls from '%1'") : QStringLiteral("Incoming calls to '%1'");
-            m_hierarchy->setEntries(modePrefix.arg(res->rootName), std::move(res->entries));
+            m_hierarchy->setEntries(modePrefix.arg(res->rootName), res->entries);
             if (!m_hierarchy->isVisible()) {
                 m_hierarchy->popup(m_services.host.editorWidget());
             }
         });
 }
 
-void LanguageController::typeHierarchy() {
+void LanguageController::typeHierarchy() { showTypeHierarchy(false); }
+
+void LanguageController::typeImplementations() { showTypeHierarchy(true); }
+
+void LanguageController::showTypeHierarchy(bool subtypes) {
     if (!hasDocument()) {
         return;
     }
     m_hierarchyPath = m_services.host.documentPath();
     m_hierarchyPosition = caretPosition();
     m_hierarchyIsType = true;
-    m_hierarchy->configureModes(QStringLiteral("Supertypes"), QStringLiteral("Subtypes"), false);
-    refreshTypeHierarchy(false);
+    m_hierarchy->configureModes(QStringLiteral("Supertypes"), QStringLiteral("Subtypes"), subtypes);
+    refreshTypeHierarchy(subtypes);
 }
 
 void LanguageController::refreshTypeHierarchy(bool subtypes) {
@@ -376,9 +349,14 @@ void LanguageController::refreshTypeHierarchy(bool subtypes) {
                 report(res.error(), "Type hierarchy");
                 return;
             }
+            if (res->entries.empty()) {
+                m_hierarchy->hide();
+                emit statusMessage(emptyResultMessage(QStringLiteral("No type hierarchy found")));
+                return;
+            }
             const QString modePrefix =
                 subtypes ? QStringLiteral("Subtypes of '%1'") : QStringLiteral("Supertypes of '%1'");
-            m_hierarchy->setEntries(modePrefix.arg(res->rootName), std::move(res->entries));
+            m_hierarchy->setEntries(modePrefix.arg(res->rootName), res->entries);
             if (!m_hierarchy->isVisible()) {
                 m_hierarchy->popup(m_services.host.editorWidget());
             }

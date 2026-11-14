@@ -190,7 +190,7 @@ void GitIntegration::openProject(const std::string& root) {
     m_configuredGit = configured;
     auto* fs = &m_workbench.m_services.fs;
     auto* launcher = &m_workbench.m_services.launcher;
-    m_discovery = std::jthread([this, fs, launcher, root, configured, generation](std::stop_token stop) {
+    m_discovery = std::jthread([this, fs, launcher, root, configured, generation](const std::stop_token& stop) {
         const std::string gitRoot = containingGitRoot(*fs, root);
         if (gitRoot.empty() || stop.stop_requested())
             return;

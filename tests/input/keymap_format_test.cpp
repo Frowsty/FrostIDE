@@ -382,7 +382,7 @@ Keymap randomKeymap(std::mt19937_64& rng) {
                 used.push_back(sequence);
                 text += (used.size() == 1 ? " " : " | ") + formatSequence(sequence);
             }
-            text += "\n";
+            text += '\n';
         }
     }
     auto keymap = parseKeymap(text);

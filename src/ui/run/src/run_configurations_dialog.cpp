@@ -35,6 +35,8 @@ std::string utf8(const QString& text) { return text.toUtf8().toStdString(); }
 QString typeLabel(run::RunType type) {
     switch (type) {
     case run::RunType::Native: return QObject::tr("Native executable");
+    case run::RunType::FrostEditor: return QObject::tr("FrostEngine Editor");
+    case run::RunType::FrostPlayer: return QObject::tr("FrostEngine Player");
     case run::RunType::CMakeTarget: return QObject::tr("CMake application");
     case run::RunType::MSBuild: return QObject::tr("MSBuild project");
     case run::RunType::Compound: return QObject::tr("Compound (runs several configurations)");
@@ -118,7 +120,14 @@ std::vector<run::EnvironmentEntry> parseRunEnvironment(const QString& text) {
 
 RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet& set, const std::string& selectedId,
                                                  bool canAddNative, QWidget* parent)
-    : QDialog(parent), m_set(set), m_configurations(set.all()), m_canAddNative(canAddNative) {
+    : QDialog(parent), m_set(set), m_configurations(set.all()), m_canAddNative(canAddNative),
+      m_add(new QPushButton(tr("Add"), this)), m_copy(new QPushButton(tr("Copy"), this)),
+      m_remove(new QPushButton(tr("Remove"), this)), m_list(new QListWidget(this)), m_name(new QLineEdit(this)),
+      m_type(new QLabel(this)), m_target(new QLabel(this)), m_program(new QLineEdit(this)),
+      m_engineProject(new QLineEdit(this)), m_arguments(new QLineEdit(this)), m_workingDirectory(new QLineEdit(this)),
+      m_environment(new QPlainTextEdit(this)), m_beforeLaunch(new QLabel(this)), m_tasks(new QPlainTextEdit(this)),
+      m_members(new QListWidget(this)), m_process(new QLineEdit(this)), m_note(new QLabel(this)),
+      m_error(new QLabel(this)) {
     setObjectName(QStringLiteral("editRunConfigurationsDialog"));
     setWindowTitle(tr("Run/Debug Configurations"));
     setModal(true);
@@ -128,66 +137,53 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     auto* body = new QHBoxLayout();
     auto* left = new QVBoxLayout();
     auto* buttons = new QHBoxLayout();
-    m_add = new QPushButton(tr("Add"), this);
     m_add->setObjectName(QStringLiteral("runConfigurationAdd"));
     m_add->setToolTip(tr("Add a native executable configuration"));
-    m_copy = new QPushButton(tr("Copy"), this);
     m_copy->setObjectName(QStringLiteral("runConfigurationCopy"));
-    m_remove = new QPushButton(tr("Remove"), this);
     m_remove->setObjectName(QStringLiteral("runConfigurationRemove"));
     buttons->addWidget(m_add);
     buttons->addWidget(m_copy);
     buttons->addWidget(m_remove);
     left->addLayout(buttons);
-    m_list = new QListWidget(this);
     m_list->setObjectName(QStringLiteral("runConfigurationList"));
     left->addWidget(m_list, 1);
     body->addLayout(left, 2);
 
     auto* form = new QFormLayout();
     m_form = form;
-    m_name = new QLineEdit(this);
     m_name->setObjectName(QStringLiteral("runConfigurationName"));
-    m_type = new QLabel(this);
     m_type->setObjectName(QStringLiteral("runConfigurationType"));
-    m_target = new QLabel(this);
     m_target->setObjectName(QStringLiteral("runConfigurationTarget"));
     m_target->setWordWrap(true);
-    m_program = new QLineEdit(this);
     m_program->setObjectName(QStringLiteral("runConfigurationProgram"));
-    m_arguments = new QLineEdit(this);
+    m_engineProject->setObjectName(QStringLiteral("runConfigurationEngineProject"));
+    m_engineProject->setPlaceholderText(tr("Absolute project directory or .frostproj file"));
     m_arguments->setObjectName(QStringLiteral("runConfigurationArguments"));
     m_arguments->setToolTip(tr("Program arguments with Windows command-line quoting; no shell runs them."));
-    m_workingDirectory = new QLineEdit(this);
     m_workingDirectory->setObjectName(QStringLiteral("runConfigurationWorkingDirectory"));
     m_workingDirectory->setPlaceholderText(tr("The program's folder"));
-    m_environment = new QPlainTextEdit(this);
     m_environment->setObjectName(QStringLiteral("runConfigurationEnvironment"));
     m_environment->setToolTip(tr("One NAME=VALUE per line; a line with just NAME removes the variable."));
     m_environment->setMaximumHeight(110);
-    m_beforeLaunch = new QLabel(this);
     m_beforeLaunch->setObjectName(QStringLiteral("runConfigurationBeforeLaunch"));
-    m_tasks = new QPlainTextEdit(this);
     m_tasks->setObjectName(QStringLiteral("runConfigurationTasks"));
     m_tasks->setToolTip(tr("Programs to run before launch, one per line: the absolute program, then its arguments "
                            "(Windows quoting). A task that exits with a code other than 0 stops the launch."));
     m_tasks->setPlaceholderText(tr("None"));
     m_tasks->setMaximumHeight(80);
-    m_members = new QListWidget(this);
     m_members->setObjectName(QStringLiteral("runConfigurationMembers"));
     m_members->setToolTip(tr("The configurations this compound starts together, in this order."));
     m_members->setMaximumHeight(140);
-    m_process = new QLineEdit(this);
     m_process->setObjectName(QStringLiteral("runConfigurationProcess"));
     m_process->setPlaceholderText(tr("Executable name (FrostEditor.exe) or absolute path"));
     m_process->setToolTip(tr("Debug attaches to the one running process whose executable this names."));
-    m_note = new QLabel(this);
     m_note->setObjectName(QStringLiteral("runConfigurationNote"));
     m_note->setWordWrap(true);
     form->addRow(tr("Name:"), m_name);
     form->addRow(tr("Type:"), m_type);
     form->addRow(tr("Target:"), m_target);
     form->addRow(tr("Program:"), m_program);
+    form->addRow(tr("Engine project:"), m_engineProject);
     form->addRow(tr("Program arguments:"), m_arguments);
     form->addRow(tr("Working directory:"), m_workingDirectory);
     form->addRow(tr("Environment variables:"), m_environment);
@@ -214,10 +210,14 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     m_addAttach->setToolTip(tr("A configuration that attaches the debugger to a running process by its executable"));
     compoundLayout->addWidget(m_addCompound);
     compoundLayout->addWidget(m_addAttach);
+    m_addFrostEditor = new QPushButton(tr("Add FrostEditor..."), compound);
+    m_addFrostEditor->setObjectName(QStringLiteral("frostEditorConfigurationButton"));
+    m_addFrostPlayer = new QPushButton(tr("Add FrostEngine Player..."), compound);
+    m_addFrostPlayer->setObjectName(QStringLiteral("frostPlayerConfigurationButton"));
+    compoundLayout->addWidget(m_addFrostEditor);
+    compoundLayout->addWidget(m_addFrostPlayer);
     compoundLayout->addStretch(1);
     outer->addWidget(compound);
-
-    m_error = new QLabel(this);
     m_error->setObjectName(QStringLiteral("runConfigurationError"));
     m_error->setWordWrap(true);
     m_error->setStyleSheet(QStringLiteral("color: #d9534f;"));
@@ -237,6 +237,8 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     connect(m_remove, &QPushButton::clicked, this, [this] { removeSelected(); });
     connect(m_addCompound, &QPushButton::clicked, this, [this] { addCompound(); });
     connect(m_addAttach, &QPushButton::clicked, this, [this] { addAttach(); });
+    connect(m_addFrostEditor, &QPushButton::clicked, this, [this] { addFrostEditor(); });
+    connect(m_addFrostPlayer, &QPushButton::clicked, this, [this] { addFrostPlayer(); });
     // The list follows the name as it is typed.
     connect(m_name, &QLineEdit::textEdited, this, [this](const QString& name) {
         if (m_row >= 0 && m_row < m_list->count()) {
@@ -279,6 +281,8 @@ void RunConfigurationsDialog::showConfiguration(int row) {
     m_add->setEnabled(m_canAddNative);
     m_addCompound->setEnabled(m_canAddNative);
     m_addAttach->setEnabled(m_canAddNative);
+    m_addFrostEditor->setEnabled(m_canAddNative);
+    m_addFrostPlayer->setEnabled(m_canAddNative);
     const run::RunType shownType = valid ? m_configurations[static_cast<std::size_t>(row)].type : run::RunType::Native;
     const bool compoundType = shownType == run::RunType::Compound;
     const bool attachType = shownType == run::RunType::Attach;
@@ -287,6 +291,8 @@ void RunConfigurationsDialog::showConfiguration(int row) {
                                                           m_environment, m_beforeLaunch, m_tasks}) {
         m_form->setRowVisible(field, launches);
     }
+    m_form->setRowVisible(m_engineProject, run::isFrostEngineRunType(shownType));
+    m_engineProject->setEnabled(valid);
     m_form->setRowVisible(m_members, compoundType);
     m_form->setRowVisible(m_process, attachType);
     if (!valid) {
@@ -294,6 +300,7 @@ void RunConfigurationsDialog::showConfiguration(int row) {
         m_type->clear();
         m_target->clear();
         m_program->clear();
+        m_engineProject->clear();
         m_arguments->clear();
         m_workingDirectory->clear();
         m_environment->clear();
@@ -315,13 +322,14 @@ void RunConfigurationsDialog::showConfiguration(int row) {
                               : typeLabel(configuration.type));
     m_target->setText(configuration.target.empty() ? tr("(none)") : qs(configuration.target));
     m_program->setText(qs(configuration.program));
+    m_engineProject->setText(qs(configuration.engineProjectPath));
     m_arguments->setText(formatRunArguments(configuration.arguments));
     m_workingDirectory->setText(qs(configuration.workingDirectory));
     m_environment->setPlainText(formatRunEnvironment(configuration.environment));
     m_remove->setEnabled(!generated);
     m_remove->setToolTip(generated ? tr("Generated from the project; it comes back with the next generation.")
                                    : tr("Remove this configuration"));
-    const bool native = configuration.type == run::RunType::Native;
+    const bool native = configuration.type == run::RunType::Native || run::isFrostEngineRunType(configuration.type);
     const bool msbuild = configuration.type == run::RunType::MSBuild;
     m_program->setReadOnly(!native);
     m_program->setPlaceholderText(native ? tr("Absolute path of the program")
@@ -348,6 +356,10 @@ void RunConfigurationsDialog::showConfiguration(int row) {
                            "and .vcxproj.user LocalDebugger* properties). Edit them on the project's Properties, "
                            "Debugging page, which saves them to its .vcxproj.user file as Visual Studio does "
                            "(SLN-11)."));
+    } else if (run::isFrostEngineRunType(configuration.type)) {
+        m_note->setText(tr("Choose the executable from the engine build configuration to run. The project is passed "
+                           "with --project. These runs establish an authenticated live session; Stop ends only the "
+                           "process started by this configuration."));
     } else if (configuration.type == run::RunType::CMakeTarget) {
         m_note->setText(tr("The target is built first, then its executable runs. When the arguments here are empty, "
                            "the CMake Targets window's Run/Debug arguments for the active profile apply."));
@@ -369,8 +381,11 @@ void RunConfigurationsDialog::storeFields() {
     }
     run::RunConfiguration& configuration = m_configurations[static_cast<std::size_t>(m_row)];
     configuration.name = utf8(m_name->text().trimmed());
-    if (configuration.type == run::RunType::Native) {
+    if (configuration.type == run::RunType::Native || run::isFrostEngineRunType(configuration.type)) {
         configuration.program = utf8(m_program->text().trimmed());
+    }
+    if (run::isFrostEngineRunType(configuration.type)) {
+        configuration.engineProjectPath = utf8(m_engineProject->text().trimmed());
     }
     if (configuration.type == run::RunType::Compound) {
         configuration.configurations.clear();
@@ -455,7 +470,8 @@ std::string RunConfigurationsDialog::copySelected() {
         return {};
     }
     const run::RunConfiguration source = m_configurations[static_cast<std::size_t>(row)];
-    if (source.type == run::RunType::Compound || source.type == run::RunType::Attach) {
+    if (source.type == run::RunType::Compound || source.type == run::RunType::Attach ||
+        run::isFrostEngineRunType(source.type)) {
         run::RunConfiguration same = source;
         same.name = utf8(tr("%1 (copy)").arg(qs(source.name)));
         same.id = run::uniqueRunConfigurationId(run::runConfigurationIdFor(run::toString(source.type), same.name),
@@ -482,6 +498,10 @@ std::string RunConfigurationsDialog::addCompound() { return addOfType(run::RunTy
 
 std::string RunConfigurationsDialog::addAttach() { return addOfType(run::RunType::Attach); }
 
+std::string RunConfigurationsDialog::addFrostEditor() { return addOfType(run::RunType::FrostEditor); }
+
+std::string RunConfigurationsDialog::addFrostPlayer() { return addOfType(run::RunType::FrostPlayer); }
+
 std::string RunConfigurationsDialog::addOfType(run::RunType type) {
     if (!m_canAddNative) {
         return {};
@@ -489,7 +509,9 @@ std::string RunConfigurationsDialog::addOfType(run::RunType type) {
     storeFields();
     run::RunConfiguration configuration;
     configuration.type = type;
-    configuration.name = utf8(type == run::RunType::Compound ? tr("Unnamed compound") : tr("Unnamed attach"));
+    configuration.name = utf8(run::isFrostEngineRunType(type)  ? typeLabel(type)
+                              : type == run::RunType::Compound ? tr("Unnamed compound")
+                                                               : tr("Unnamed attach"));
     configuration.id = run::uniqueRunConfigurationId(
         run::runConfigurationIdFor(run::toString(type), configuration.name), m_configurations);
     m_configurations.push_back(std::move(configuration));

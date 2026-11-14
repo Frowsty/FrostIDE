@@ -213,6 +213,25 @@ corpus replay runs in every test tree.
 
 ### Static initialisers
 `io_no_static_init` (Windows COFF, Debug and Release; Linux ELF, Debug) prints the observed set every run.
+The COFF checker also recognizes the exact optimized LLVM 23.1.4 x64 lowering of Asio 1.32.0's
+already permitted `winsock_init_instance`. Release inlines its constructor: an atomic increment returns
+the previous Winsock use count, and only a previous count of zero branches to `WSAStartup`; both paths
+register the same Asio destructor through `atexit`. The earlier `.CRT$XCL` manual guard increments that
+same counter and is never destroyed, so this cold branch cannot execute. Debug leaves these operations
+inside the named Asio initializer. A data relocation in this code is not an additional initializer callee.
+
+`tests/cmake/static_init_coff.py` recognizes this lowering only by its complete instruction bytes,
+offsets and relocation sequence, scoped to the archive member and initializer function. It requires
+exactly one `.CRT$XCU` pointer to the initializer, after exactly one reactor `.CRT$XCL` pointer to the
+actual `startWinsockManually` function. The guard's complete optimized body must increment the identical
+counter, store a zero result on its first use, and perform no other work. A changed branch, counter,
+destructor, import, extra instruction or relocation, missing guard, or earlier initializer is not accepted.
+Nonmatching bodies retain the existing callee inspection; recognizer errors fail the gate. The negative
+fixtures in `tests/cmake/test_static_init_coff.py` cover those changes. This adds no general permission for
+`WSAStartup`, `atexit`, or arbitrary data references, changes no production optimization flags, and retains
+the separate `FileWatcherWindows.WinsockIsNeverLoaded` runtime assertion. A compiler or Asio update that
+changes the lowering requires inspecting its new machine code before updating this closed signature.
+
 Observed in Debug on both platforms:
 - Windows: 17 initialiser callees, all in asio objects: 8 service ids (scheduler, win_iocp_io_context,
   null_reactor, strand_executor_service, strand_service, win_iocp_handle_service, win_object_handle_service and

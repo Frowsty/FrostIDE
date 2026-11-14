@@ -9,6 +9,8 @@
 #include <QPainterPath>
 
 #include <algorithm>
+#include <cmath>
+#include <cstddef>
 
 namespace frost::ui::detail {
 
@@ -27,10 +29,13 @@ void strokeWave(QPainter& painter, double left, double right, double y, double w
     const double amplitude = waveAmplitude(width);
     QPainterPath path(QPointF(left, y));
     bool up = true;
-    for (double x = left; x < right; x += step) {
-        const double next = std::min(x + step, right);
-        path.lineTo(next, up ? y - amplitude : y + amplitude);
-        up = !up;
+    if (step > 0.0 && left < right) {
+        const double segments = std::ceil((right - left) / step);
+        for (std::size_t segment = 0; static_cast<double>(segment) < segments; ++segment) {
+            const double next = std::min(left + (static_cast<double>(segment) + 1.0) * step, right);
+            path.lineTo(next, up ? y - amplitude : y + amplitude);
+            up = !up;
+        }
     }
     painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));

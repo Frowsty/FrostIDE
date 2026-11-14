@@ -35,6 +35,7 @@
 
 #include "frost/build/build_diagnostics.hpp"
 #include "frost/core/error.hpp"
+#include "frost/lang/code_vision.hpp"
 #include "frost/lang/diagnostics.hpp"
 #include "frost/lang/document_features.hpp"
 #include "frost/lang/lsp_client.hpp"
@@ -111,12 +112,19 @@ toUsageHighlights(std::span<const ::frost::lang::DocumentHighlight> highlights, 
  */
 [[nodiscard]] std::vector<text::ByteRange> toFoldCandidates(std::span<const ::frost::lang::FoldingRange> ranges,
                                                             const text::Snapshot& snapshot);
-// Code Vision lenses for top-level classes, structs and functions: the Git author of the
-// declaration line (authorForLine; none without it). Counts arrive with CPP-9 (see the .cpp).
+// Git author lenses for top-level classes, structs and functions (authorForLine; none without it).
 [[nodiscard]] std::vector<EditorCodeVisionLens>
 toCodeVisionLenses(std::span<const ::frost::lang::DocumentSymbol> symbols, const text::Snapshot& snapshot,
                    ::frost::lang::PositionEncoding encoding,
                    const std::function<std::string(int line)>& authorForLine = {});
+
+struct CodeVisionCountEntry {
+    ByteOffset offset;
+    LineIndex line;
+    ::frost::lang::CodeVisionCounts counts;
+};
+// Converts only counts supplied by a provider into clickable declaration lenses.
+[[nodiscard]] std::vector<EditorCodeVisionLens> toCodeVisionCountLenses(std::span<const CodeVisionCountEntry> entries);
 
 // What the binding talks to (see the lifetime rules above).
 struct InsightServices {

@@ -25,7 +25,7 @@ namespace {
 Result<QString> stateDirectory(const QString& directory) {
     if (directory.isEmpty() || !QDir::isAbsolutePath(directory) || !QDir().mkpath(directory))
         return fail(ErrorCode::IoError, "Cannot create update state directory");
-    const auto canonical = QFileInfo(directory).canonicalFilePath();
+    auto canonical = QFileInfo(directory).canonicalFilePath();
     if (canonical.isEmpty())
         return fail(ErrorCode::IoError, "Cannot resolve update state directory");
 #ifdef _WIN32

@@ -59,16 +59,15 @@ QPlainTextEdit* listEdit(const QString& name, const QString& placeholder, QWidge
 SettingsLuaPage::SettingsLuaPage(io::IFileSystem& fs, std::string projectRoot, std::function<void()> dirtyChanged,
                                  std::function<void()> applied, QWidget* parent)
     : QWidget(parent), m_fs(fs), m_root(std::move(projectRoot)), m_dirtyChanged(std::move(dirtyChanged)),
-      m_applied(std::move(applied)) {
+      m_applied(std::move(applied)), m_path(new QLabel(this)), m_status(new QLabel(this)),
+      m_version(new QComboBox(this)) {
     setObjectName(QStringLiteral("settingsLuaPage"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    m_path = new QLabel(this);
     m_path->setObjectName(QStringLiteral("luarc.rcPath"));
     m_path->setWordWrap(true);
     layout->addWidget(m_path);
     auto* form = new QFormLayout();
-    m_version = new QComboBox(this);
     m_version->setObjectName(QStringLiteral("luarc.runtimeVersion"));
     m_version->addItem(text("Not set (Tools > Lua runtime version applies)"), QString());
     for (const std::string_view runtime : kRuntimes)
@@ -85,7 +84,6 @@ SettingsLuaPage::SettingsLuaPage(io::IFileSystem& fs, std::string projectRoot, s
         listEdit(QStringLiteral("luarc.disabledDiagnostics"), text("LuaLS diagnostic codes, one per line"), this);
     form->addRow(text("Disabled diagnostics"), m_disabled);
     layout->addLayout(form);
-    m_status = new QLabel(this);
     m_status->setObjectName(QStringLiteral("luarc.rcStatus"));
     m_status->setWordWrap(true);
     layout->addWidget(m_status);

@@ -24,6 +24,14 @@
 
 namespace frost::io::detail {
 
+#ifdef _WIN32
+// Tests only: a one-shot, calling-thread-local fault after suspended creation. The callback may
+// duplicate the real process/stdout handles to verify termination and inherited-pipe EOF on failure.
+enum class ResidentMemoryLaunchFault { None, SetLimit, ReadLimit, WrongLimit, WrongFlags, Resume };
+using ResidentMemoryLaunchTestHook = ResidentMemoryLaunchFault (*)(HANDLE process, HANDLE stdoutPipe);
+void setResidentMemoryLaunchHookForTesting(ResidentMemoryLaunchTestHook hook) noexcept;
+#endif
+
 /*
  * A started child before an IProcess or IAsyncProcess owns it. Windows: the process handle, the job
  * (valid with killOnClose; closing it ends the tree) and the parent's overlapped pipe ends. POSIX: the pid

@@ -26,6 +26,11 @@ public:
 };
 using EngineConnect = std::function<Result<std::unique_ptr<IEngineConnection>>(
     std::uint16_t, std::chrono::steady_clock::time_point, std::stop_token)>;
+// A higher layer applies its schema policy to these actual replies. Absence refuses the request
+// before connecting. The callback runs on the request worker after live project validation and
+// schema.export, immediately before the final trust check; it must not retain these references.
+using EngineCommandAdmission = std::function<Result<void>(
+    std::string_view method, const Json& params, const Json& schema, const Json& serverInfo, const Json& projectInfo)>;
 // Connects only to 127.0.0.1, never to a host named by a discovery document.
 [[nodiscard]] EngineConnect loopbackEngineConnector();
 
@@ -47,8 +52,7 @@ inline constexpr std::size_t kEngineMessageLimit = 512;
 [[nodiscard]] std::optional<std::chrono::milliseconds> engineMethodTimeout(std::string_view method) noexcept;
 
 /*
- * Runs one allowlisted command (play.start/stop/state, script.validate, test.run, log.get,
- * editor.focus; script.debug.* is FER-8's) after authenticating and checking the live
+ * Runs one policy-admitted legacy-contract command after authenticating and checking the live
  * project.info directory. `sameProject` resolves and compares physical paths; `stillTrusted` is
  * called immediately before connecting and before the command. Call from a worker, never the GUI
  * thread. The shared deadline (time_point::max() for none) and stop token cover the whole
@@ -56,11 +60,14 @@ inline constexpr std::size_t kEngineMessageLimit = 512;
  * "FrostEngine error <code>: <message>", the message passed through redactEngineMessage with the
  * discovery token, so a server that echoes the secret cannot reveal it; -32601 maps to Unsupported,
  * -32600/-32602 to InvalidArgument, the rest to IoError. Timeout after a command was sent does not
- * imply that it did not execute; callers must not automatically retry mutating commands.
+ * imply that it did not execute; callers must not automatically retry mutating commands. The
+ * admission callback is mandatory: its absence denies before connecting. This compatibility API
+ * uses contract-v1 authentication; the application's contract-v2 HMAC path is EngineSession.
  */
 [[nodiscard]] Result<Json> runEngineCommand(const Json& discovery, std::string_view projectRoot,
                                             std::string_view method, Json params,
                                             const std::function<bool(std::string_view, std::string_view)>& sameProject,
                                             const std::function<bool()>& stillTrusted, const EngineConnect& connect,
-                                            std::chrono::steady_clock::time_point deadline, std::stop_token stop = {});
+                                            std::chrono::steady_clock::time_point deadline, std::stop_token stop = {},
+                                            const EngineCommandAdmission& admit = {});
 } // namespace frost::lang

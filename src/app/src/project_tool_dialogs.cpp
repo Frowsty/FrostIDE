@@ -45,7 +45,7 @@ QString referenceEditsUnavailable() {
 } // namespace
 
 void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
-                                   const std::string& projectPath, std::function<void()> onSaved) {
+                                   const std::string& projectPath, const std::function<void()>& onSaved) {
     QDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("addProjectReferenceDialog"));
     dialog.setWindowTitle(QStringLiteral("Add Project Reference"));
@@ -91,9 +91,8 @@ void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const p
 
 QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
                                      std::function<const project::SolutionModel*()> solutionProvider,
-                                     std::string initialCsprojPath, std::function<void()> onSaved) {
+                                     std::string initialCsprojPath, const std::function<void()>&) {
     // Read-only until LTR-7: nothing here writes a project file.
-    static_cast<void>(onSaved);
     auto* root = new QWidget(parent);
     root->setObjectName(QStringLiteral("nugetToolWindowWidget"));
     auto* outer = new QVBoxLayout(root);
@@ -144,7 +143,8 @@ QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
         return initialCsprojPath;
     };
 
-    const auto refreshProjects = [=] {
+    const auto refreshProjects = [=, solutionProvider = std::move(solutionProvider),
+                                  initialCsprojPath = std::move(initialCsprojPath)] {
         const QString prev = projCombo->currentData().toString();
         projCombo->blockSignals(true);
         projCombo->clear();
@@ -208,7 +208,7 @@ QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
 }
 
 void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const std::string& csprojPath,
-                                   std::function<void()> onSaved) {
+                                   const std::function<void()>& onSaved) {
     QDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("nugetPackageManagerDialog"));
     dialog.setWindowTitle(QStringLiteral("NuGet Packages — %1").arg(QFileInfo(toQs(csprojPath)).completeBaseName()));
@@ -216,7 +216,7 @@ void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const s
     dialog.resize(640, 420);
 
     auto* outer = new QVBoxLayout(&dialog);
-    outer->addWidget(createNuGetToolWindowWidget(&dialog, fs, {}, csprojPath, std::move(onSaved)), 1);
+    outer->addWidget(createNuGetToolWindowWidget(&dialog, fs, {}, csprojPath, onSaved), 1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -226,6 +226,7 @@ void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const s
 }
 
 QWidget* createAsmViewerToolWindowWidget(QWidget* parent,
+                                         // NOLINTNEXTLINE(performance-unnecessary-value-param): Qt callback snapshot.
                                          std::function<std::pair<std::string, int>()> activeFileAndLineProvider) {
     /*
      * Disabled until it can be real (ADR 0078 truth rule, FND-3). The previous view compiled the

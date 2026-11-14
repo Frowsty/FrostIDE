@@ -114,8 +114,10 @@ std::vector<std::string> checkoutBlockers(std::string_view stderrText) {
     return files;
 }
 
-Result<std::optional<RepositoryInfo>> discoverRepository(const GitRunner& runner, std::string_view path,
-                                                         std::stop_token stop) {
+Result<std::optional<RepositoryInfo>>
+discoverRepository(const GitRunner& runner, std::string_view path,
+                   // NOLINTNEXTLINE(performance-unnecessary-value-param): Own cancellation across reentrant callbacks.
+                   std::stop_token stop) {
     auto normalized = io::normalizePath(path);
     if (!normalized) {
         return std::unexpected(std::move(normalized.error()));
@@ -214,9 +216,9 @@ Result<void> GitRepository::requireTrust(std::string_view what) const {
 
 Result<GitStatus> GitRepository::status(std::stop_token stop) const {
     if (!m_runner->trusted())
-        return restrictedStatus(stop);
+        return restrictedStatus(std::move(stop));
     // Normal porcelain status may run configured clean/process filters; recheck trust at launch.
-    auto output = git(statusArguments(), RunControl{stop, {}}, kLocalTimeout, true, true);
+    auto output = git(statusArguments(), RunControl{std::move(stop), {}}, kLocalTimeout, true, true);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }
@@ -305,6 +307,7 @@ Result<GitStatus> GitRepository::restrictedStatus(std::stop_token stop) const {
             auto line = trimGitText(counts->stdoutBytes);
             auto separator = line.find('\t');
             if (separator != std::string_view::npos) {
+                // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): from_chars takes an explicit range.
                 std::from_chars(line.data(), line.data() + separator, result.branch.ahead);
                 std::from_chars(line.data() + separator + 1, line.data() + line.size(), result.branch.behind);
             }
@@ -382,8 +385,10 @@ Result<GitStatus> GitRepository::restrictedStatus(std::stop_token stop) const {
     return result;
 }
 
-Result<std::optional<std::string>> GitRepository::fileContent(std::string_view absolutePath, std::string_view rev,
-                                                              std::stop_token stop) const {
+Result<std::optional<std::string>> GitRepository::fileContent(
+    std::string_view absolutePath, std::string_view rev,
+    // NOLINTNEXTLINE(performance-unnecessary-value-param): Own cancellation across reentrant callbacks.
+    std::stop_token stop) const {
     auto relative = relativePath(absolutePath);
     if (!relative) {
         return std::unexpected(std::move(relative.error()));
@@ -411,14 +416,15 @@ Result<std::optional<std::string>> GitRepository::fileContent(std::string_view a
 
 Result<std::optional<std::string>> GitRepository::headContent(std::string_view absolutePath,
                                                               std::stop_token stop) const {
-    return fileContent(absolutePath, "HEAD", stop);
+    return fileContent(absolutePath, "HEAD", std::move(stop));
 }
 
 Result<std::optional<std::string>> GitRepository::indexContent(std::string_view absolutePath,
                                                                std::stop_token stop) const {
-    return fileContent(absolutePath, "", stop);
+    return fileContent(absolutePath, "", std::move(stop));
 }
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param): Own cancellation across reentrant callbacks.
 Result<std::string> GitRepository::lastCommitMessage(std::stop_token stop) const {
     auto head = git({"rev-parse", "-q", "--verify", "HEAD"}, RunControl{stop, {}}, kLocalTimeout, true);
     if (!head) {
@@ -437,6 +443,7 @@ Result<std::string> GitRepository::lastCommitMessage(std::stop_token stop) const
     return std::string(trimGitText(output->stdoutBytes));
 }
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param): Own cancellation across reentrant callbacks.
 Result<std::vector<std::string>> GitRepository::recentCommitMessages(std::size_t count, std::stop_token stop) const {
     std::vector<std::string> messages;
     auto head = git({"rev-parse", "-q", "--verify", "HEAD"}, RunControl{stop, {}}, kLocalTimeout, true);
@@ -742,7 +749,7 @@ Result<std::vector<GitBranch>> GitRepository::branches(std::stop_token stop) con
     auto output = git({"for-each-ref",
                        "--format=%(HEAD)%00%(refname)%00%(refname:short)%00%(upstream:short)%00%(objectname:short)",
                        "refs/heads", "refs/remotes"},
-                      RunControl{stop, {}}, kLocalTimeout, true);
+                      RunControl{std::move(stop), {}}, kLocalTimeout, true);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }
@@ -988,7 +995,7 @@ Result<std::vector<GitCommitEntry>> GitRepository::log(std::size_t maxCount, std
     } else {
         arguments.emplace_back("--all");
     }
-    auto output = git(std::move(arguments), RunControl{stop, {}}, kLocalTimeout, true);
+    auto output = git(std::move(arguments), RunControl{std::move(stop), {}}, kLocalTimeout, true);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }
@@ -1028,8 +1035,8 @@ Result<std::vector<GitCommitFileChange>> GitRepository::commitFiles(std::string_
     if (commitHash.empty()) {
         return fail(ErrorCode::InvalidArgument, "commit hash is empty");
     }
-    auto output =
-        git({"show", "--name-status", "--format=", std::string(commitHash)}, RunControl{stop, {}}, kLocalTimeout, true);
+    auto output = git({"show", "--name-status", "--format=", std::string(commitHash)}, RunControl{std::move(stop), {}},
+                      kLocalTimeout, true);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }
@@ -1237,7 +1244,7 @@ Result<GitOutput> GitRepository::stashPush(std::string_view message, bool includ
 }
 
 Result<std::vector<GitStashEntry>> GitRepository::stashList(std::stop_token stop) const {
-    auto output = git({"stash", "list"}, RunControl{stop, {}}, kLocalTimeout, true);
+    auto output = git({"stash", "list"}, RunControl{std::move(stop), {}}, kLocalTimeout, true);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }
@@ -1314,7 +1321,7 @@ Result<std::vector<GitBlameLine>> GitRepository::blame(std::string_view relative
     if (auto rel = relativeGitPath(m_info.workTree, relativeOrAbsolutePath)) {
         targetPath = std::move(*rel);
     }
-    auto output = git({"blame", "--porcelain", "--", targetPath}, RunControl{stop, {}}, kLocalTimeout, true);
+    auto output = git({"blame", "--porcelain", "--", targetPath}, RunControl{std::move(stop), {}}, kLocalTimeout, true);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }

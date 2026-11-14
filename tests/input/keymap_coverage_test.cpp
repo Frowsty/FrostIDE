@@ -22,6 +22,11 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32) && (defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer))
+#define FROST_WINDOWS_ASAN_IMPORT_TEST 1
+#include <windows.h>
+#endif
+
 namespace {
 
 /*
@@ -56,6 +61,24 @@ std::map<std::string, std::set<std::string>> boundIds() {
     }
     return out;
 }
+
+#if defined(FROST_WINDOWS_ASAN_IMPORT_TEST)
+// This test executable imports Qt DLLs, whose CRT startup can allocate before ASan hooks
+// exist, so it checks that the ASan runtime import comes first (frost_prepend_asan_runtime).
+TEST(KeymapCoverage, AddressSanitizerRuntimeIsFirstImport) {
+    const auto* image = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
+    ASSERT_NE(image, nullptr);
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+    ASSERT_EQ(dos->e_magic, IMAGE_DOS_SIGNATURE);
+    const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS64*>(image + dos->e_lfanew);
+    ASSERT_EQ(headers->Signature, IMAGE_NT_SIGNATURE);
+    const auto& imports = headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    ASSERT_NE(imports.VirtualAddress, 0U);
+    const auto* first = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(image + imports.VirtualAddress);
+    ASSERT_NE(first->Name, 0U);
+    EXPECT_STREQ(reinterpret_cast<const char*>(image + first->Name), "clang_rt.asan_dynamic-x86_64.dll");
+}
+#endif
 
 TEST(KeymapCoverage, EveryBuiltinBindingResolvesToARegisteredAction) {
     ASSERT_TRUE(std::ranges::is_sorted(kKnownGaps));

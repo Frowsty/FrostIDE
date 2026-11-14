@@ -124,8 +124,13 @@ Result<LaunchPlan> launchPlanFor(const RunConfiguration& configuration) {
         return fail(ErrorCode::InvalidArgument,
                     std::format("run configuration '{}' has no program yet", configuration.name));
     }
+    std::vector<std::string> arguments = configuration.arguments;
+    if (isFrostEngineRunType(configuration.type)) {
+        // Engine EditorOptions and RuntimeOptions both accept a directory or .frostproj here.
+        arguments.insert(arguments.begin(), {"--project", configuration.engineProjectPath});
+    }
     return normalizePlan(LaunchPlan{.program = configuration.program,
-                                    .arguments = configuration.arguments,
+                                    .arguments = std::move(arguments),
                                     .workingDirectory = configuration.workingDirectory,
                                     .environment = configuration.environment});
 }
@@ -394,6 +399,9 @@ struct RunManager::State : std::enable_shared_from_this<RunManager::State> {
                 raw->post([raw, id, index, exit] { raw->taskExited(id, index, exit); });
             }
         };
+        if (!admitLaunch(id)) {
+            return;
+        }
         const std::string commandLine = taskCommandLine(task);
         auto started =
             build::RunSession::start(launcher, taskSpecFor(task, plan), std::move(callbacks), clock, options.session);
@@ -470,8 +478,58 @@ struct RunManager::State : std::enable_shared_from_this<RunManager::State> {
         runTask(id, index + 1);
     }
 
+    // Called without the run-table lock. A revoked queued run starts no further child.
+    bool admitLaunch(RunId id) {
+        std::shared_ptr<const RunHandlers> handlers;
+        bool stopped = false;
+        {
+            LockGuard lock(mutex);
+            const auto it = runs.find(id);
+            if (it == runs.end()) {
+                return false;
+            }
+            handlers = it->second.handlers;
+            stopped = it->second.stopRequested;
+        }
+        if (stopped) {
+            if (auto run = extract(id)) {
+                finishWithout(std::move(*run), std::nullopt, false);
+            }
+            return false;
+        }
+        if (handlers && handlers->launchAdmission) {
+            if (auto allowed = handlers->launchAdmission(); !allowed) {
+                if (auto run = extract(id)) {
+                    finishWithout(std::move(*run), std::move(allowed.error()), false);
+                }
+                return false;
+            }
+            // Admission can perform worker I/O. Stop may arrive while it runs; success must not
+            // launch a child whose stop request was already accepted during that work.
+            {
+                LockGuard lock(mutex);
+                const auto it = runs.find(id);
+                if (it == runs.end()) {
+                    return false;
+                }
+                stopped = it->second.stopRequested;
+            }
+            if (stopped) {
+                if (auto run = extract(id)) {
+                    finishWithout(std::move(*run), std::nullopt, false);
+                }
+                return false;
+            }
+        }
+        return true;
+    }
+
     void launch(RunId id) {
+        if (!admitLaunch(id)) {
+            return;
+        }
         LaunchPlan plan;
+        std::shared_ptr<const RunHandlers> launchHandlers;
         {
             LockGuard lock(mutex);
             const auto it = runs.find(id);
@@ -479,6 +537,32 @@ struct RunManager::State : std::enable_shared_from_this<RunManager::State> {
                 return;
             }
             plan = *it->second.plan;
+            launchHandlers = it->second.handlers;
+        }
+        if (launchHandlers && launchHandlers->transformLaunchPlan) {
+            auto transformed = launchHandlers->transformLaunchPlan(std::move(plan));
+            if (transformed) {
+                transformed = normalizePlan(std::move(*transformed));
+            }
+            if (!transformed) {
+                if (auto run = extract(id)) {
+                    finishWithout(std::move(*run), std::move(transformed.error()), false);
+                }
+                return;
+            }
+            plan = std::move(*transformed);
+            {
+                LockGuard lock(mutex);
+                const auto it = runs.find(id);
+                if (it == runs.end()) {
+                    return;
+                }
+                it->second.plan = plan;
+            }
+            // Resolution may involve worker I/O. Revocation or Stop during it prevents launch.
+            if (!admitLaunch(id)) {
+                return;
+            }
         }
         const std::weak_ptr<State> weak = weak_from_this();
         build::RunSessionCallbacks callbacks;

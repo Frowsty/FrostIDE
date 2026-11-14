@@ -43,30 +43,6 @@ std::string directoryName(std::string_view path) {
     return slash == std::string_view::npos ? std::string(".") : std::string(path.substr(0, slash));
 }
 
-bool isWriteUsage(const fl::Usage& usage) noexcept {
-    const std::string_view text = usage.lineText;
-    const std::size_t end = std::min<std::size_t>(usage.highlightEnd, text.size());
-    std::size_t after = end;
-    while (after < text.size() && (text[after] == ' ' || text[after] == '\t')) {
-        ++after;
-    }
-    const std::string_view tail = text.substr(after);
-    if (tail.starts_with("++") || tail.starts_with("--") || tail.starts_with("+=") || tail.starts_with("-=") ||
-        tail.starts_with("*=") || tail.starts_with("/=") || tail.starts_with("%=") || tail.starts_with("&=") ||
-        tail.starts_with("|=") || tail.starts_with("^=") || tail.starts_with("<<=") || tail.starts_with(">>=")) {
-        return true;
-    }
-    if (tail.starts_with('=') && !tail.starts_with("==")) {
-        return true;
-    }
-    std::size_t before = std::min<std::size_t>(usage.highlightBegin, text.size());
-    while (before > 0 && (text[before - 1] == ' ' || text[before - 1] == '\t')) {
-        --before;
-    }
-    const std::string_view head = text.substr(0, before);
-    return head.ends_with("++") || head.ends_with("--");
-}
-
 bool isFieldOrVariableKind(fl::SymbolKind kind) noexcept {
     using K = fl::SymbolKind;
     return kind == K::Field || kind == K::Property || kind == K::Variable || kind == K::Constant ||
@@ -105,7 +81,7 @@ std::vector<fl::DocumentSymbol> filterAndSortStructureSymbols(const std::vector<
 
 // --- FindUsagesPanel ---
 
-FindUsagesPanel::FindUsagesPanel(QWidget* parent) : QWidget(parent) {
+FindUsagesPanel::FindUsagesPanel(QWidget* parent) : QWidget(parent), m_title(new QLabel(this)) {
     setObjectName(QStringLiteral("findUsagesPanel"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -114,7 +90,6 @@ FindUsagesPanel::FindUsagesPanel(QWidget* parent) : QWidget(parent) {
     auto* headerRow = new QHBoxLayout();
     headerRow->setContentsMargins(6, 2, 6, 2);
     headerRow->setSpacing(4);
-    m_title = new QLabel(this);
     m_groupByDirButton =
         makeToggleToolButton(this, QStringLiteral("Dir"), QStringLiteral("Group by Directory / File"), false);
     if (const FrostStyle* style = FrostStyle::current(); style != nullptr) {
@@ -122,12 +97,8 @@ FindUsagesPanel::FindUsagesPanel(QWidget* parent) : QWidget(parent) {
             m_groupByDirButton->setIcon(folderIcon);
         }
     }
-    m_showReadButton = makeToggleToolButton(this, QStringLiteral("R"), QStringLiteral("Show Read Access"), true);
-    m_showWriteButton = makeToggleToolButton(this, QStringLiteral("W"), QStringLiteral("Show Write Access"), true);
     headerRow->addWidget(m_title, 1);
     headerRow->addWidget(m_groupByDirButton);
-    headerRow->addWidget(m_showReadButton);
-    headerRow->addWidget(m_showWriteButton);
     layout->addLayout(headerRow);
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
@@ -146,8 +117,6 @@ FindUsagesPanel::FindUsagesPanel(QWidget* parent) : QWidget(parent) {
     layout->addWidget(m_splitter, 1);
 
     connect(m_groupByDirButton, &QToolButton::toggled, this, [this] { rebuildTree(); });
-    connect(m_showReadButton, &QToolButton::toggled, this, [this] { rebuildTree(); });
-    connect(m_showWriteButton, &QToolButton::toggled, this, [this] { rebuildTree(); });
     connect(m_tree, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* current, QTreeWidgetItem*) { updatePreview(current); });
     connect(m_tree, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* item, int) { onActivated(item); });
@@ -165,8 +134,6 @@ void FindUsagesPanel::rebuildTree() {
     m_tree->clear();
     m_preview->clear();
     m_count = 0;
-    const bool showRead = m_showReadButton->isChecked();
-    const bool showWrite = m_showWriteButton->isChecked();
     const bool byDir = m_groupByDirButton->isChecked();
     std::map<std::string, QTreeWidgetItem*> dirNodes;
     QTreeWidgetItem* firstUsageItem = nullptr;
@@ -175,10 +142,7 @@ void FindUsagesPanel::rebuildTree() {
         const fl::UsageGroup& group = m_groups[g];
         std::vector<std::size_t> matchingIndices;
         for (std::size_t u = 0; u < group.usages.size(); ++u) {
-            const bool write = isWriteUsage(group.usages[u]);
-            if ((write && showWrite) || (!write && showRead)) {
-                matchingIndices.push_back(u);
-            }
+            matchingIndices.push_back(u);
         }
         if (matchingIndices.empty()) {
             continue;
@@ -285,11 +249,6 @@ QString FindUsagesPanel::title() const { return m_title->text(); }
 
 void FindUsagesPanel::setGroupByDirectory(bool enabled) { m_groupByDirButton->setChecked(enabled); }
 bool FindUsagesPanel::groupByDirectory() const noexcept { return m_groupByDirButton->isChecked(); }
-void FindUsagesPanel::setShowReadAccess(bool show) { m_showReadButton->setChecked(show); }
-bool FindUsagesPanel::showReadAccess() const noexcept { return m_showReadButton->isChecked(); }
-void FindUsagesPanel::setShowWriteAccess(bool show) { m_showWriteButton->setChecked(show); }
-bool FindUsagesPanel::showWriteAccess() const noexcept { return m_showWriteButton->isChecked(); }
-
 void FindUsagesPanel::activate(std::size_t group, std::size_t index) {
     if (group < m_groups.size() && index < m_groups[group].usages.size()) {
         const fl::Location& location = m_groups[group].usages[index].location;
@@ -307,7 +266,7 @@ void FindUsagesPanel::onActivated(QTreeWidgetItem* item) {
 
 // --- StructurePanel ---
 
-StructurePanel::StructurePanel(QWidget* parent) : QWidget(parent) {
+StructurePanel::StructurePanel(QWidget* parent) : QWidget(parent), m_search(new QLineEdit(this)) {
     setObjectName(QStringLiteral("structurePanel"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
@@ -315,7 +274,6 @@ StructurePanel::StructurePanel(QWidget* parent) : QWidget(parent) {
     auto* topRow = new QHBoxLayout();
     topRow->setContentsMargins(0, 0, 0, 0);
     topRow->setSpacing(2);
-    m_search = new QLineEdit(this);
     m_search->setObjectName(QStringLiteral("structureSearch"));
     m_search->setPlaceholderText(QStringLiteral("Filter symbols"));
     m_search->setClearButtonEnabled(true);

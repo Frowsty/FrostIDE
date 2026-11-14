@@ -56,7 +56,7 @@ TEST(CoreClrDap, UntrustedProjectCannotStartTheAdapter) {
                          .assembly = test::workPath("project/App.dll"),
                          .workingDirectory = test::workPath("project")};
     int calls = 0;
-    AdapterFactory factory = [&calls](DapHandlers) -> Result<std::unique_ptr<IDebugAdapterClient>> {
+    AdapterFactory factory = [&calls](const DapHandlers&) -> Result<std::unique_ptr<IDebugAdapterClient>> {
         ++calls;
         return fail(ErrorCode::Unknown, "unexpected adapter start");
     };
@@ -66,7 +66,7 @@ TEST(CoreClrDap, UntrustedProjectCannotStartTheAdapter) {
     EXPECT_EQ(calls, 0);
     ASSERT_TRUE(fs.createDirectories(test::workPath("other")));
     ASSERT_TRUE((*trust)->trust(test::workPath("other")));
-    AdapterFactory secondFactory = [&calls](DapHandlers) -> Result<std::unique_ptr<IDebugAdapterClient>> {
+    AdapterFactory secondFactory = [&calls](const DapHandlers&) -> Result<std::unique_ptr<IDebugAdapterClient>> {
         ++calls;
         return fail(ErrorCode::Unknown, "unexpected adapter start");
     };

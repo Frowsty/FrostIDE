@@ -205,7 +205,7 @@ struct StallWatchdog::Impl {
 
     void takeSample(IClock::SteadyTime now) {
         StackSample& sample = samples[sampleCount];
-        if (sampler->sample(sample)) {
+        if (sampler->sample(sample) && sample.captured()) {
             sampleTimes[sampleCount] = now;
             ++sampleCount;
         }
@@ -356,7 +356,7 @@ struct StallWatchdog::Impl {
             const IClock::SteadyTime now = clock.steadyNow();
             try {
                 poll(now);
-            } catch (...) {
+            } catch (...) { // NOLINT(bugprone-empty-catch): a failed best-effort report must not stop the watchdog.
                 // Out of memory while writing a report: drop it and keep watching.
             }
             if (const auto idle = idleFor(now); idle.has_value() && *idle >= options.parkAfter) {

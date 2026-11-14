@@ -150,8 +150,9 @@ void BuildController::setBackend(IBuildBackend* backend) {
     if (m_backend != nullptr) {
         std::shared_ptr<Relay> relay = m_relay;
         m_backend->setSaveAllHook([relay](build::SaveAllCompletion done) {
-            if (!relay->post([done](BuildController& c) { c.runSaveAll(done); })) {
-                done(fail(ErrorCode::Cancelled, "the build tool windows are closed"));
+            auto completion = std::move(done);
+            if (!relay->post([completion](BuildController& c) { c.runSaveAll(completion); })) {
+                completion(fail(ErrorCode::Cancelled, "the build tool windows are closed"));
             }
         });
     }

@@ -23,10 +23,13 @@ std::vector<std::uint8_t> toVector(std::span<const std::byte> bytes) {
     return {data, data + bytes.size()};
 }
 
-const std::filesystem::path kCorpusRoot = std::filesystem::path(FROST_SOURCE_DIR) / "tests" / "fuzz" / "corpus";
+const std::filesystem::path& corpusRoot() {
+    static const std::filesystem::path path = std::filesystem::path(FROST_SOURCE_DIR) / "tests" / "fuzz" / "corpus";
+    return path;
+}
 
 TEST(UiFuzzReplay, ThemeBlob) {
-    auto seeds = fuzz::readCorpus(kCorpusRoot / "theme_blob");
+    auto seeds = fuzz::readCorpus(corpusRoot() / "theme_blob");
     EXPECT_GE(seeds.size(), 4U) << "the four compiled Glacier themes are committed as seeds";
     test::SplitMix64 rng(31);
     for (int i = 0; i < 4; ++i) {
@@ -36,7 +39,7 @@ TEST(UiFuzzReplay, ThemeBlob) {
 }
 
 TEST(UiFuzzReplay, IconAtlas) {
-    auto seeds = fuzz::readCorpus(kCorpusRoot / "icon_atlas");
+    auto seeds = fuzz::readCorpus(corpusRoot() / "icon_atlas");
     EXPECT_GE(seeds.size(), 1U) << "atlases baked from the synthetic icon fixtures are committed as seeds";
     // A small generated atlas with every cell kind (tinted, untinted, dark variant).
     test::SplitMix64 rng(37);

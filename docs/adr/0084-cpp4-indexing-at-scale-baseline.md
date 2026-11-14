@@ -35,14 +35,39 @@ working set and pagefile commit past the 31.9 GiB host limit.
   - `queryProcessRssBytes(pid)` and `currentProcessRssBytes()` read live process working set / RSS
     (`K32GetProcessMemoryInfo` `WorkingSetSize` on Windows; `/proc/[pid]/status` `State`/`VmRSS` and `/proc/[pid]/statm`
     on Linux).
+  - `queryProcessPeakRssBytes(pid)` separately reads the OS lifetime high-water mark (`PeakWorkingSetSize` on
+    Windows, `VmHWM` on Linux). An unavailable or zero peak is reported as an error.
 - **Governed `clangd` flags and build concurrency:**
-  - `clangdJobs()`: scales with logical cores and available memory (`min(logicalCores / 2, maxClangdJobs)` with default
-    `maxClangdJobs = 8`, bounded by `availablePhysicalGiB` and `availableCommitGiB` at ~1 GiB per worker). When a
-    `HeavyLegKind::Build` or `HeavyLegKind::Inspection` leg is active, `clangdJobs()` throttles down to
-    `throttledClangdJobs` (default `2`, or `8` on the 24-thread host in the corpus indexing benchmark) and drops to `1`
-    if either the per-process `clangd` RSS cap or combined RSS cap is exceeded.
-  - `backgroundIndexPriority()`: `"background"` (`--background-index-priority=background`), keeping OS indexer thread
-    priority below interactive LSP requests and UI work.
+  - `clangdJobs()` computes a launch admission estimate bounded by logical cores, `maxClangdJobs` (default `8`),
+    available physical/commit memory and the configured per-process RSS cap. From the minimum known host availability
+    and configured cap it reserves `2 GiB` on Windows and `1 GiB` on Linux for shared index and foreground work,
+    then allows one worker per remaining
+    `512 MiB`. Unknown host availability leaves the configured cap in force. A budget at or below the reserve admits
+    one worker. The default `4 GiB` cap therefore admits at most four workers on Windows and six on Linux.
+    The host low-memory limits also apply.
+    The Windows owned-child residency candidate uses `clangdJobs(true)` only when its launch specification requires
+    a verified pre-execution hard resident ceiling. With known host availability, this budgets workers against that
+    availability instead of the per-process RSS estimate, retaining the `2 GiB` host reserve and `512 MiB` worker
+    allowance. It can admit the default maximum of eight workers. Unknown host availability retains the four-worker
+    estimate. Linux retains six-worker estimated admission and receives no Windows resident-limit request.
+    An active `HeavyLegKind::Build` or `HeavyLegKind::Inspection` further bounds the decision by
+    `throttledClangdJobs` (default `2`, or `8` in the corpus indexing benchmark) and `logicalCores / 4`. A sampled
+    per-process or combined RSS cap violation reduces a subsequent admission decision to `1`.
+    The reserve and worker allowance estimate demand. The real corpus gates verify actual peak RSS and elapsed time.
+    `ClangdService` applies this decision on governed launch/restart, when `jobs == 0`. Explicit job requests retain
+    their existing override semantics, subject to the service's build/inspection and combined-cap checks.
+    Extra tool arguments remain passed through as before. A governed worker decision describes the generated `-j`
+    argument; it does not reinterpret an explicit job setting or the tool's handling of additional arguments.
+  - `backgroundIndexPriority()` returns `"low"` on Windows and `"background"` on Linux. In pinned LLVM 23.1.4,
+    Windows `Low` and `Background` both use `THREAD_MODE_BACKGROUND_BEGIN`, keeping background scheduling.
+    `Background` additionally requests execution-speed throttling through EcoQoS. `Low` does not explicitly request
+    EcoQoS, leaving that choice to Windows. This retains background scheduling while testing whether avoiding the
+    explicit energy-efficiency request improves cold-index throughput with fewer workers.
+    The implementation is LLVM's `llvm/lib/Support/Windows/Threading.inc` at `llvmorg-23.1.4`.
+    The larger Windows reserve is a conservative admission estimate prompted by a full raw-CDB six-worker cold run
+    exceeding `4 GiB` and its existing 20-minute completion wait. It does not establish a measured shared allocation
+    or a successful memory/time result. The full cold CPP-6 and the unchanged CPP-4 baseline gates must validate this
+    candidate policy. The historical measurements below retain their original policy and values.
   - `pchStorageDisk()`: `true` (`--pch-storage=disk`), keeping precompiled headers on disk rather than in RAM.
   - `buildJobs()`: scales with logical cores and available RAM (`min(logicalCores / 2, maxBuildJobs)`), halving when
     `HeavyLegKind::BackgroundIndex` is active and dropping to `1` if the combined RSS cap is exceeded.
@@ -57,14 +82,41 @@ working set and pagefile commit past the 31.9 GiB host limit.
   - Default `combinedRssCapBytes` (`BackgroundIndex` + `Build` + `Inspection`): `8,192 MiB` (`8 GiB`).
   - `sampleProcessRss(pid, leg)` and `recordProcessRss(pid, rssBytes, leg)` update current and high-water-mark peak RSS
     per PID, per `HeavyLegKind`, and across all active legs.
+    Process/leg peaks incorporate OS high-water marks, including resident spikes between samples. Combined RSS
+    remains the maximum contemporaneous sum of current samples. Historical process peaks are never summed as
+    concurrent usage. `sampleProcessRss` returns current RSS and requires both current and OS peak queries to succeed.
+    A failed peak query still records the available current sample and returns an error.
+  - Sampling records actual usage and cap violations. An existing child's `-j` stays fixed. The service currently
+    has no RSS-triggered termination or restart, so a changed governor decision affects a future launch only.
+  - The Windows owned-clangd candidate requests `ProcessSpec::residentMemoryLimitBytes` on every launch/restart.
+    It subtracts `16 MiB` of headroom from the unchanged configured cap and rounds down to the native page size.
+    The default ceiling is `4,080 MiB`, strictly below the `4,096 MiB` gate. Caps at or below the headroom request
+    zero and fail native validation; other undersized or invalid page-aligned requests also fail launch.
+    The launcher must suspend the initial thread, install and read back continuous `HARDWS_MAX` enforcement with
+    hard-minimum enforcement disabled, and resume only after successful verification. Setup/resume failure must
+    terminate and reap the child. Production launch decorators preserve the complete specification.
+    The API contract is [SetProcessWorkingSetSizeEx](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-setprocessworkingsetsizeex).
+    This ceiling bounds resident pages. Committed/private allocations can remain larger, and paging can worsen
+    performance. No periodic working-set emptying is used. The Windows corpus diagnostics independently report
+    current and kernel peak residency, current/peak private commit, page-fault count, applied quota flags, index
+    duration and wall time since the attempt started. The unchanged cold CPP-6 and CPP-4 gates must validate this
+    contingency before acceptance. Linux has no equivalent enforcement claimed by this candidate.
 
 ### 2. `ClangdService` integration and `IndexMetrics` (`CPP-4`)
 `frost::lang::ClangdService` (`src/lang/include/frost/lang/clangd_service.hpp`,
 `src/lang/src/clangd_service.cpp`) integrates with `frost::sched::ResourceGovernor` via
 `frost::lang::setResourceGovernor(service, governor)` and `frost::lang::indexMetrics(service)` (wired from
 `frost::app::Workbench` in `src/app/src/workbench_clangd.cpp`):
-- `processSpec()` applies the governor's `-j=<N>`, `--background-index-priority=background`, and
+- `processSpec()` applies the governor's `-j=<N>`, platform background-index priority, and
   `--pch-storage=disk` flags whenever `ClangdLaunchOptions` leaves `jobs == 0`.
+- `IndexMetrics::residentMemoryLimitBytes` records the current process round's ceiling only after the successful
+  launcher contract has verified it. It is empty before launch, after launch failure and when the child is removed.
+  A later governor change does not relabel the existing child's verified ceiling as the new configured cap.
+- `indexMetrics()` synchronously refreshes the live process's current and OS peak measurement, including after
+  foreground queries. `peakRssSampleValid` and `peakRssSampleError` expose the latest observation's availability.
+  Missing samples retain the historical maximum for diagnosis, while the corpus memory gates require a successful
+  latest observation and a positive peak. A new process round/governor invalidates sample availability. Historical
+  cap breaches survive restarts, and samples from an older round cannot validate a newer process.
 - `ClangdService` tracks `clangd`'s `$/progress` (`backgroundIndexProgress`) token lifecycle (`begin`, `report`, `end`)
   even when no UI progress callback is installed:
   - On `begin`: activates `HeavyLegKind::BackgroundIndex` on `ResourceGovernor`, records the start timestamp, and

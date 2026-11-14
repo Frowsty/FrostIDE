@@ -195,7 +195,7 @@ Result<void> LocalIpcOwner::start(Handler handler) {
     if (pipe.value == INVALID_HANDLE_VALUE)
         return fail(ErrorCode::IoError, "cannot create IPC pipe");
     HANDLE raw = std::exchange(pipe.value, nullptr);
-    m_impl->thread = std::jthread([raw, handler = std::move(handler)](std::stop_token stop) {
+    m_impl->thread = std::jthread([raw, handler = std::move(handler)](const std::stop_token& stop) {
         Handle pipeHandle(raw);
         while (!stop.stop_requested()) {
             Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));

@@ -282,6 +282,7 @@ Result<void> registerGitActions(input::ActionRegistry& registry, GitController& 
 
 Result<void> registerGitActions(input::ActionRegistry& registry, std::function<GitController*()> git,
                                 GitActionTargets targets) {
+    const auto supplier = std::move(git);
     const auto shared = std::make_shared<const GitActionTargets>(std::move(targets));
     const auto confirm = [shared](const QString& title, const QString& question) {
         return shared->confirm && shared->confirm(title, question);
@@ -292,8 +293,8 @@ Result<void> registerGitActions(input::ActionRegistry& registry, std::function<G
     };
 
     std::vector<GitActionSpec> specs;
-    appendRemoteAndCommitSpecs(specs, git, shared, confirm, file);
-    appendViewAndHistorySpecs(specs, git, shared, file, viewer);
+    appendRemoteAndCommitSpecs(specs, supplier, shared, confirm, file);
+    appendViewAndHistorySpecs(specs, supplier, shared, file, viewer);
 
     for (GitActionSpec& entry : specs) {
         input::ActionSpec spec;
@@ -307,11 +308,11 @@ Result<void> registerGitActions(input::ActionRegistry& registry, std::function<G
         spec.priority = entry.context == kAnywhere ? 0 : 1;
         // Hooks, merges and credential helpers run project code: the registry's trust gate (Untrusted).
         spec.executesProjectCode = entry.needsTrust;
-        spec.enabled = [git, enabled = entry.enabled](const input::ActionContext&) {
-            return git && git() && (!enabled || enabled());
+        spec.enabled = [supplier, enabled = entry.enabled](const input::ActionContext&) {
+            return supplier && supplier() && (!enabled || enabled());
         };
-        spec.handler = [git, run = entry.run](const input::ActionContext&, const input::InvokeInfo&) {
-            if (git && git()) {
+        spec.handler = [supplier, run = entry.run](const input::ActionContext&, const input::InvokeInfo&) {
+            if (supplier && supplier()) {
                 run();
             }
         };

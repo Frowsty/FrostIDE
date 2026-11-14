@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <format>
+#include <ranges>
 #include <utility>
 
 namespace frost::settings {
@@ -273,8 +274,7 @@ SettingsChange SettingsStore::republish() {
         const KeySpec& spec = m_registry->at(i);
         SettingsSnapshot::Entry entry{.value = spec.defaultValue, .source = Scope::Default};
         // Highest scope first: project-personal, project-shared, application.
-        for (auto it = kFileScopes.rbegin(); it != kFileScopes.rend(); ++it) {
-            const Scope scope = *it;
+        for (const Scope scope : std::views::reverse(kFileScopes)) {
             const Layer& layer = state.layers[*layerIndex(scope)];
             if (i >= layer.values.size() || !layer.values[i] || !spec.scopes.has(scope)) {
                 continue;

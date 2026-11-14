@@ -55,7 +55,8 @@ public:
      * model, and refines every replaced block by words. Errors: those of LineSequence::fromBytes
      * and diff::diffLines (OutOfRange, Cancelled). O(diff + refinement).
      */
-    [[nodiscard]] static Result<SideBySideDiff> compute(std::string left, std::string right, std::stop_token stop = {});
+    [[nodiscard]] static Result<SideBySideDiff> compute(std::string left, std::string right,
+                                                        const std::stop_token& stop = {});
 
     [[nodiscard]] const diff::LineSequence& left() const noexcept { return m_left; }
     [[nodiscard]] const diff::LineSequence& right() const noexcept { return m_right; }

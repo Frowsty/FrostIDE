@@ -209,7 +209,7 @@ std::int64_t FakeDebugAdapter::sendReverseRequest(std::string command, rpc::Json
 
 void FakeDebugAdapter::crash(int exitCode) { m_state->end(exitCode); }
 
-void FakeDebugAdapter::sendRaw(std::string bytes) {
+void FakeDebugAdapter::sendRaw(const std::string& bytes) {
     {
         LockGuard lock(m_state->mutex);
         m_state->inbound += bytes;

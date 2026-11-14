@@ -447,7 +447,7 @@ Result<int> TerminalToolWindow::newTabWithShell(const std::string& shellExecutab
     Tab tab;
     tab.splitter = splitter;
     tab.view = view;
-    tab.panes.push_back(view);
+    tab.panes.emplace_back(view);
     tab.defaultName = m_nextNumber == 1 ? text("Local") : text("Local (%1)").arg(m_nextNumber);
     ++m_nextNumber;
     m_tabState.push_back(std::move(tab));
@@ -472,7 +472,7 @@ Result<TerminalView*> TerminalToolWindow::splitTab(int index, const std::string&
         return std::unexpected(std::move(created.error()));
     }
     TerminalView* pane = *created;
-    tab.panes.push_back(pane);
+    tab.panes.emplace_back(pane);
     setCurrentIndex(index);
     pane->setFocus(Qt::OtherFocusReason);
     emit tabsChanged();

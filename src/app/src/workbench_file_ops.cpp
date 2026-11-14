@@ -100,7 +100,7 @@ Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_
         notify(text("Cannot rename"), qs(validName.error().message()), ui::NotificationKind::Error);
         return std::unexpected(std::move(validName.error()));
     }
-    const std::string canonicalOld = m_documentRegistry->canonicalize(oldPath);
+    std::string canonicalOld = m_documentRegistry->canonicalize(oldPath);
     if (!m_projectRoot.empty() && lang::documentKey(canonicalOld) == lang::documentKey(m_projectRoot)) {
         Error err(ErrorCode::InvalidArgument, "cannot rename the project root folder");
         notify(text("Cannot rename"), qs(err.message()), ui::NotificationKind::Error);
@@ -150,7 +150,7 @@ Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_
                ui::NotificationKind::Error);
         return std::unexpected(std::move(renamed.error()));
     }
-    const std::string canonicalNew = m_documentRegistry->canonicalize(*targetJoined);
+    std::string canonicalNew = m_documentRegistry->canonicalize(*targetJoined);
 
     if (!isDir) {
         rebindRenamedDocument(canonicalOld, canonicalNew);

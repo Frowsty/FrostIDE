@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Use the pinned LLVM Windows ASan dispatcher before Crashpad's user filter.
+# Keep ADDRESS_SANITIZER guards excluding the incompatible vectored heap handler.
+--- a/client/crashpad_client_win.cc
++++ b/client/crashpad_client_win.cc
+@@ -120,17 +120,11 @@
+   return startup_state;
+ }
+ 
+-#if defined(ADDRESS_SANITIZER)
+-extern "C" LONG __asan_unhandled_exception_filter(EXCEPTION_POINTERS* info);
+-#endif
+-
+ LONG WINAPI UnhandledExceptionHandler(EXCEPTION_POINTERS* exception_pointers) {
+-#if defined(ADDRESS_SANITIZER)
+-  // In ASan builds, delegate to the ASan exception filter.
+-  LONG status = __asan_unhandled_exception_filter(exception_pointers);
+-  if (status != EXCEPTION_CONTINUE_SEARCH)
+-    return status;
+-#endif
++  // LLVM's SetUnhandledExceptionFilter interceptor already selects the exceptions
++  // ASan owns before invoking this user filter. Its exported report function is
++  // unconditional, so calling it here would override that dispatcher and its flags.
++  // Pinned LLVM 23.1.4 compiler-rt/lib/asan/asan_win.cpp, SEHHandler().
+ 
+   if (BlockUntilHandlerStartedOrFailed() == StartupState::kFailed) {
+     // If we know for certain that the handler has failed to start, then abort

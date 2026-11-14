@@ -160,27 +160,22 @@ QTreeView* makeVariablesView(QWidget* parent, VariablesModel* model, DebugToolWi
 } // namespace
 
 DebugToolWindow::DebugToolWindow(DebugController& controller, QWidget* parent)
-    : QWidget(parent), m_controller(controller) {
+    : QWidget(parent), m_controller(controller), m_reason(new QLabel(this)), m_tabs(new QTabWidget(this)),
+      m_console(new RunConsole(m_tabs)) {
     setObjectName(QStringLiteral("debugToolWindow"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
     buildToolbar(layout);
-
-    m_reason = new QLabel(this);
     m_reason->setObjectName(QStringLiteral("debugReason"));
     m_reason->setContentsMargins(8, 2, 8, 2);
     m_reason->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(m_reason);
-
-    m_tabs = new QTabWidget(this);
     m_tabs->setDocumentMode(true);
     layout->addWidget(m_tabs, 1);
 
     buildThreadsAndVariablesTab();
-
-    m_console = new RunConsole(m_tabs);
     m_tabs->addTab(m_console, QStringLiteral("Console"));
     m_controller.setConsole(m_console);
 
@@ -852,13 +847,12 @@ void DebugToolWindow::openEvaluate(const QString& expression) {
 // --- EvaluateDialog ---
 
 EvaluateDialog::EvaluateDialog(DebugController& controller, const QString& expression, QWidget* parent)
-    : QDialog(parent) {
+    : QDialog(parent), m_expression(new QLineEdit(expression, this)),
+      m_result(new VariablesModel(controller, VariablesModel::Mode::Watches, this)) {
     setWindowTitle(QStringLiteral("Evaluate"));
     auto* layout = new QVBoxLayout(this);
-    m_expression = new QLineEdit(expression, this);
     m_expression->setPlaceholderText(QStringLiteral("Expression to evaluate in the selected frame"));
     layout->addWidget(m_expression);
-    m_result = new VariablesModel(controller, VariablesModel::Mode::Watches, this);
     m_result->setEvaluateContext(QStringLiteral("repl"));
     // A new stop does not evaluate the dialog's expression again by itself: only Evaluate does.
     disconnect(&controller, &DebugController::frameSelected, m_result, nullptr);

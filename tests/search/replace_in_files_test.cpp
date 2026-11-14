@@ -10,6 +10,7 @@
 #include "frost/document/save_manager.hpp"
 #include "frost/search/find_in_files.hpp"
 #include "frost/search/replace_in_files.hpp"
+#include "frost/search/search_scope.hpp"
 #include "frost/storage/local_history.hpp"
 
 #include "search_test_util.hpp"
@@ -167,6 +168,54 @@ TEST_F(ReplaceTest, OpenDocumentTakesOneUndoStepAndStaysUnsaved) {
     EXPECT_FALSE(document.dirty());
     EXPECT_FALSE(document.document().undoState().canUndo);
 }
+
+#ifdef _WIN32
+TEST_F(ReplaceTest, WindowsSearchSpellingsKeepReplacementInTheMatchedOpenDocument) {
+    const std::string original = "old value\n";
+    const std::string file = tree.write("notes.txt", original);
+    for (const bool forwardSeparators : {false, true}) {
+        SCOPED_TRACE(forwardSeparators ? "case and separator variant" : "case variant");
+        std::string spelling = io::joinPath(tree.root(), "NOTES.TXT").value();
+        if (forwardSeparators)
+            std::ranges::replace(spelling, '\\', '/');
+        auto opened = manager().open(spelling);
+        ASSERT_TRUE(opened) << opened.error().describe();
+        document::FileDocument& document = **opened;
+        ASSERT_NE(file, document.path());
+        ASSERT_EQ(pathKey(file), pathKey(document.path()));
+        ASSERT_EQ(manager().find(document.path()), &document);
+        ASSERT_EQ(manager().find(file), nullptr);
+
+        FindRun run = search("old");
+        ASSERT_TRUE(run.summary);
+        ASSERT_EQ(run.files.size(), 1U);
+        EXPECT_TRUE(run.files.front().openDocument);
+        EXPECT_EQ(run.files.front().path, document.path());
+        std::size_t notified = 0;
+        auto summary = replaceInFiles(manager(), planOf(run, "old", "new"),
+                                      [&](document::FileDocument& edited, const text::ChangeSet& change) {
+                                          EXPECT_EQ(&edited, &document);
+                                          EXPECT_EQ(change.edits.size(), 1U);
+                                          ++notified;
+                                      });
+        ASSERT_TRUE(summary) << summary.error().describe();
+        EXPECT_TRUE(summary->skipped.empty());
+        EXPECT_EQ(summary->replacements, 1U);
+        ASSERT_EQ(summary->replaced.size(), 1U);
+        EXPECT_TRUE(summary->replaced.front().openDocument);
+        EXPECT_EQ(notified, 1U);
+        EXPECT_EQ(document.document().committedText().text(), "new value\n");
+        EXPECT_TRUE(document.dirty());
+        EXPECT_EQ(tree.read(file), original);
+        ASSERT_TRUE(document.document().undo());
+        EXPECT_EQ(document.document().committedText().text(), original);
+        EXPECT_FALSE(document.dirty());
+        EXPECT_FALSE(document.document().undoState().canUndo);
+        EXPECT_EQ(tree.read(file), original);
+        ASSERT_TRUE(manager().close(document));
+    }
+}
+#endif
 
 TEST_F(ReplaceTest, ExcludedMatchesAreNotReplaced) {
     const std::string first = tree.write("a.txt", "one two one\n");

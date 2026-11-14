@@ -358,7 +358,7 @@ void Workbench::refreshTodoItems() {
 
     auto runScan = [root = m_root](io::IFileSystem& fs, const std::vector<std::string>& paths,
                                    const std::map<std::string, std::string, std::less<>>& buffers,
-                                   std::stop_token token) -> std::vector<TodoEntry> {
+                                   const std::stop_token& token) -> std::vector<TodoEntry> {
         std::vector<TodoEntry> entries;
         for (const std::string& path : paths) {
             if (token.stop_requested() || entries.size() >= kMaxTodoItems) {

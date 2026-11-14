@@ -2,7 +2,7 @@
 //
 // ResourceGovernor (FND-18, PLAN.md Appendix C): hardware probing (logical cores, physical and
 // commit RAM, per-process working set / RSS), governed clangd and build concurrency flags
-// (-j=<N>, --background-index-priority=background, --pch-storage=disk), one-heavy-leg-at-a-time
+// (-j=<N>, platform background-index priority, --pch-storage=disk), one-heavy-leg-at-a-time
 // coordination with an in-process lock and cross-process file lock (compatible with the corpus
 // build lock), and peak RSS tracking with cap enforcement.
 #pragma once
@@ -40,6 +40,10 @@ struct HostResources {
 // Queries the resident set size (working set on Windows, VmRSS on Linux) of child/external `pid`.
 // Errors: InvalidArgument (`pid <= 0`), NotFound (no such running process), PermissionDenied, IoError.
 [[nodiscard]] Result<std::uint64_t> queryProcessRssBytes(std::int64_t pid) noexcept;
+
+// Queries the OS lifetime high-water mark (PeakWorkingSetSize on Windows, VmHWM on Linux).
+// Errors as above, plus Unsupported when the OS cannot provide a peak. Never substitutes current RSS.
+[[nodiscard]] Result<std::uint64_t> queryProcessPeakRssBytes(std::int64_t pid) noexcept;
 
 enum class HeavyLegKind : std::uint8_t {
     Build = 0,
@@ -128,8 +132,17 @@ public:
     void setHostResourcesForTesting(std::optional<HostResources> overrideResources);
 
     // Governed clangd launch flags and build concurrency.
-    [[nodiscard]] unsigned clangdJobs() const noexcept;
-    [[nodiscard]] std::string_view backgroundIndexPriority() const noexcept { return "background"; }
+    // Windows may use the host budget when the caller requires a verified pre-exec resident limit.
+    // The launcher must fail if that policy cannot be installed. Other platforms retain estimation.
+    [[nodiscard]] unsigned clangdJobs(bool residentLimitRequired = false) const noexcept;
+    [[nodiscard]] std::string_view backgroundIndexPriority() const noexcept {
+#ifdef _WIN32
+        // LLVM's Low keeps Windows background mode without Background's forced EcoQoS.
+        return "low";
+#else
+        return "background";
+#endif
+    }
     [[nodiscard]] bool pchStorageDisk() const noexcept { return true; }
     [[nodiscard]] std::vector<std::string> clangdFlags() const;
     [[nodiscard]] unsigned buildJobs() const noexcept;
@@ -149,7 +162,10 @@ public:
     [[nodiscard]] unsigned activeLegCount() const noexcept;
 
     // Process RSS sampling and cap enforcement.
-    void recordProcessRss(std::int64_t pid, std::uint64_t rssBytes, HeavyLegKind leg = HeavyLegKind::BackgroundIndex);
+    // Optional OS high-water marks update peaks only; combined usage sums current samples.
+    void recordProcessRss(std::int64_t pid, std::uint64_t rssBytes, HeavyLegKind leg = HeavyLegKind::BackgroundIndex,
+                          std::optional<std::uint64_t> osPeakBytes = std::nullopt);
+    // Returns current RSS. An unavailable OS peak is an error, with current usage still recorded.
     Result<std::uint64_t> sampleProcessRss(std::int64_t pid, HeavyLegKind leg = HeavyLegKind::BackgroundIndex);
     void unregisterProcess(std::int64_t pid);
     void resetRssTracking();

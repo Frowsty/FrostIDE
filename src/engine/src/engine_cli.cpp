@@ -82,16 +82,19 @@ Result<EngineCliOutcome> runEngineCliCommand(io::IProcessLauncher& launcher, std
     spec.executable = std::string(program);
     spec.arguments = {request.command, "--params", request.params.dump(), "--log-level", "error"};
     if (!request.project.empty()) {
-        spec.arguments.push_back("--project");
+        spec.arguments.emplace_back("--project");
         spec.arguments.push_back(request.project);
     }
     spec.workingDirectory = request.workingDirectory;
-    auto run = io::runToCompletion(launcher, spec, {}, request.timeout);
+    auto run = io::runToCompletion(launcher, spec, {}, request.timeout, request.stopToken);
     if (!run) {
         return std::unexpected(std::move(run.error()));
     }
     // The contract: one JSON object on stdout, whatever the exit code.
     auto printed = rpc::parseJson(run->stdoutBytes);
+    if (request.stopToken.stop_requested()) {
+        return fail(ErrorCode::Cancelled, "engine CLI command was cancelled");
+    }
     if (!printed || !printed->isObject() || !printed->boolAt("ok").has_value()) {
         return fail(ErrorCode::Corrupt,
                     std::format("FrostEditor {} printed no result object (exit code {}): {}", request.command,
@@ -131,6 +134,9 @@ Result<rpc::Json> runEngineCliResult(io::IProcessLauncher& launcher, std::string
     if (outcome->error) {
         return fail(errorCodeFor(outcome->error->code), std::format("FrostEngine {} failed ({}): {}", request.command,
                                                                     outcome->error->code, outcome->error->message));
+    }
+    if (request.stopToken.stop_requested()) {
+        return fail(ErrorCode::Cancelled, "engine CLI command was cancelled");
     }
     return std::move(*outcome->result);
 }

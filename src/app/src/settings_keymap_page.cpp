@@ -32,13 +32,13 @@ QString actionName(const input::ActionInfo& info) { return str(info.name); }
 } // namespace
 SettingsKeymapPage::SettingsKeymapPage(const input::ActionRegistry& registry, input::KeymapService& keymap,
                                        std::function<void()> changed, QWidget* parent)
-    : QWidget(parent), m_registry(registry), m_keymap(keymap), m_changed(std::move(changed)) {
+    : QWidget(parent), m_registry(registry), m_keymap(keymap), m_changed(std::move(changed)),
+      m_actions(new QTreeWidget(this)), m_shortcut(new QLineEdit(this)), m_message(new QLabel(this)) {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     auto* help = new QLabel(text("Select an action to edit its shortcuts. Separate alternatives with |."), this);
     help->setWordWrap(true);
     layout->addWidget(help);
-    m_actions = new QTreeWidget(this);
     m_actions->setObjectName(QStringLiteral("keymapActions"));
     m_actions->setAccessibleName(text("Actions and shortcuts"));
     m_actions->setColumnCount(3);
@@ -50,7 +50,6 @@ SettingsKeymapPage::SettingsKeymapPage(const input::ActionRegistry& registry, in
     layout->addWidget(m_actions, 1);
     auto* entry = new QHBoxLayout();
     auto* label = new QLabel(text("Shortcut:"), this);
-    m_shortcut = new QLineEdit(this);
     m_shortcut->setObjectName(QStringLiteral("keymapShortcut"));
     m_shortcut->setAccessibleName(text("Shortcut"));
     m_shortcut->setPlaceholderText(text("For example Ctrl+K, Ctrl+C"));
@@ -70,7 +69,6 @@ SettingsKeymapPage::SettingsKeymapPage(const input::ActionRegistry& registry, in
     buttons->addWidget(reset);
     buttons->addStretch();
     layout->addLayout(buttons);
-    m_message = new QLabel(this);
     m_message->setObjectName(QStringLiteral("keymapMessage"));
     m_message->setWordWrap(true);
     layout->addWidget(m_message);

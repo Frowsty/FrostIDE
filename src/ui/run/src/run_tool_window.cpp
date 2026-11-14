@@ -26,9 +26,8 @@ build::RunOutcome runOutcomeFor(const run::RunResult& result) {
     return outcome;
 }
 
-RunToolWindow::RunToolWindow(QWidget* parent) : QWidget(parent) {
+RunToolWindow::RunToolWindow(QWidget* parent) : QWidget(parent), m_tabs(new QTabWidget(this)) {
     setObjectName(QStringLiteral("runToolWindow"));
-    m_tabs = new QTabWidget(this);
     m_tabs->setObjectName(QStringLiteral("runTabs"));
     m_tabs->setDocumentMode(true);
     m_tabs->setTabsClosable(true);

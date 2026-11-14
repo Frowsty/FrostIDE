@@ -155,11 +155,11 @@ TEST(DiffProperty, EditsAreSortedAndNonAdjacent) {
         for (std::size_t k = 1; k < edits.size(); ++k) {
             ASSERT_LT(edits[k - 1].range.end.value(), edits[k].range.begin.value());
         }
-        for (std::size_t k = 0; k < edits.size(); ++k) {
+        for (const auto& edit : edits) {
             // Views into b's bytes.
-            ASSERT_TRUE(edits[k].text.empty() ||
-                        (edits[k].text.data() >= b.bytes().data() &&
-                         edits[k].text.data() + edits[k].text.size() <= b.bytes().data() + b.bytes().size()));
+            ASSERT_TRUE(edit.text.empty() ||
+                        (edit.text.data() >= b.bytes().data() &&
+                         edit.text.data() + edit.text.size() <= b.bytes().data() + b.bytes().size()));
         }
     }
 }

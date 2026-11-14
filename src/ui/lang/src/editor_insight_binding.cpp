@@ -6,6 +6,7 @@
 #include "frost/ui/lang/editor_insight_binding.hpp"
 
 #include "frost/lang/clangd.hpp"
+#include "frost/lang/code_vision.hpp"
 #include "frost/lang/document_sync.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/ui/editor/editor_view.hpp"
@@ -15,6 +16,7 @@
 #include <QMetaObject>
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <utility>
 
@@ -36,7 +38,7 @@ void post(QPointer<EditorInsightBinding> self, Fn fn) {
     }
     QMetaObject::invokeMethod(
         app,
-        [self, fn = std::move(fn)]() mutable {
+        [self = std::move(self), fn = std::move(fn)]() mutable {
             if (self) {
                 fn(*self);
             }
@@ -49,6 +51,55 @@ struct TokensOutcome {
     fl::SemanticTokensData data;
     std::vector<fl::SemanticToken> tokens;
 };
+
+struct CodeVisionOutcome {
+    std::vector<fl::DocumentSymbol> symbols;
+    std::vector<CodeVisionCountEntry> counts;
+};
+
+// Executes Code Vision requests against clangd's index and maps their exact declarations to the
+// document snapshot used for this request. Each metric is omitted if the server has no answer.
+sched::Task<Result<CodeVisionOutcome>> codeVisionCountsTask(fl::ILspRequester& server, std::string path,
+                                                            text::Snapshot snapshot, fl::PositionEncoding encoding,
+                                                            bool cppCounts, std::stop_token token) {
+    auto symbols = co_await fl::requestDocumentSymbols(server, path, token);
+    if (!symbols) {
+        co_return std::unexpected(std::move(symbols.error()));
+    }
+    if (!cppCounts) {
+        co_return CodeVisionOutcome{std::move(*symbols), {}};
+    }
+    const auto rows = fl::flattenSymbols(*symbols);
+    fl::CppCodeVisionProvider provider;
+    std::vector<CodeVisionCountEntry> entries;
+    for (const fl::SymbolRow& row : rows) {
+        if (!row.symbol) {
+            continue;
+        }
+        const fl::DocumentSymbol& symbol = *row.symbol;
+        const bool type = symbol.kind == fl::SymbolKind::Class || symbol.kind == fl::SymbolKind::Struct ||
+                          symbol.kind == fl::SymbolKind::Interface;
+        const bool callable = symbol.kind == fl::SymbolKind::Function || symbol.kind == fl::SymbolKind::Method ||
+                              symbol.kind == fl::SymbolKind::Constructor;
+        if (!type && !callable) {
+            continue;
+        }
+        auto offset = fl::fromLspPosition(snapshot, symbol.selectionRange.start, encoding);
+        if (!offset) {
+            continue;
+        }
+        auto counts = co_await provider.counts(server, path,
+                                               fl::CodeVisionSymbol{symbol.selectionRange.start, symbol.kind}, token);
+        if (!counts) {
+            if (token.stop_requested()) {
+                co_return std::unexpected(std::move(counts.error()));
+            }
+            continue; // Keep any Git author lenses; a failed index metric is simply unavailable.
+        }
+        entries.push_back(CodeVisionCountEntry{*offset, snapshot.lineAt(*offset), *counts});
+    }
+    co_return CodeVisionOutcome{std::move(*symbols), std::move(entries)};
+}
 
 // Requests and decodes off the UI thread (the snapshot is the one the request was made for).
 sched::Task<Result<TokensOutcome>> tokensTask(fl::ILspRequester& server, std::string path,
@@ -270,8 +321,8 @@ std::vector<text::ByteRange> toFoldCandidates(std::span<const fl::FoldingRange> 
 
 /*
  * Code Vision (FND-3, ADR 0078): only lenses from real data. The Git author of the declaration line
- * (authorForLine, from git blame) is shown; usage, override and implementation counts need the
- * index and arrive with CPP-9, so no count is guessed from the text and no fixed label is shown.
+ * (authorForLine, from git blame) and the usage, override and implementation counts from clangd's
+ * workspace index are shown; no count is guessed from source text.
  */
 std::vector<EditorCodeVisionLens> toCodeVisionLenses(std::span<const fl::DocumentSymbol> symbols,
                                                      const text::Snapshot& snapshot, fl::PositionEncoding encoding,
@@ -308,6 +359,35 @@ std::vector<EditorCodeVisionLens> toCodeVisionLenses(std::span<const fl::Documen
                 .actionId = "vcs.annotate",
                 .tooltip = "Last modified by " + author + " (click to annotate)",
             });
+        }
+    }
+    return out;
+}
+
+std::vector<EditorCodeVisionLens> toCodeVisionCountLenses(std::span<const CodeVisionCountEntry> entries) {
+    std::vector<EditorCodeVisionLens> out;
+    const auto append = [&](const CodeVisionCountEntry& entry, std::size_t count, std::string noun,
+                            std::string action) {
+        if (count != 1) {
+            noun.push_back('s');
+        }
+        out.push_back(EditorCodeVisionLens{
+            .line = entry.line,
+            .symbolOffset = entry.offset,
+            .label = std::to_string(count) + " " + noun,
+            .actionId = std::move(action),
+            .tooltip = "Count from clangd's workspace index",
+        });
+    };
+    for (const CodeVisionCountEntry& entry : entries) {
+        if (entry.counts.usages) {
+            append(entry, *entry.counts.usages, "usage", "navigate.findUsages");
+        }
+        if (entry.counts.overrides) {
+            append(entry, *entry.counts.overrides, "override", "navigate.implementation");
+        }
+        if (entry.counts.implementations) {
+            append(entry, *entry.counts.implementations, "implementation", "navigate.typeImplementations");
         }
     }
     return out;
@@ -415,11 +495,18 @@ void EditorInsightBinding::setServerAvailable(bool available) {
         (void)m_codeVisionSlot.next();
         if (m_view) {
             m_view->setAnalyzing(false);
+            m_view->setCodeVisionLenses({});
         }
     }
 }
 
-void EditorInsightBinding::setCodeVisionEnabled(bool enabled) { m_codeVisionEnabled = enabled; }
+void EditorInsightBinding::setCodeVisionEnabled(bool enabled) {
+    m_codeVisionEnabled = enabled;
+    if (!enabled && m_view) {
+        (void)m_codeVisionSlot.next();
+        m_view->setCodeVisionLenses({});
+    }
+}
 
 void EditorInsightBinding::setAuthorProvider(std::function<std::string(int line)> provider) {
     m_authorProvider = std::move(provider);
@@ -432,6 +519,10 @@ void EditorInsightBinding::setDebounce(std::chrono::milliseconds delay) {
 void EditorInsightBinding::edited() {
     if (!m_serverAvailable) {
         return;
+    }
+    if (m_view && m_codeVisionEnabled) {
+        (void)m_codeVisionSlot.next();
+        m_view->setCodeVisionLenses({});
     }
     if (m_view && (m_clangd != nullptr || m_liveSeen)) {
         m_view->setAnalyzing(true); // Until the server's diagnostics of the new text arrive.
@@ -606,27 +697,33 @@ void EditorInsightBinding::refreshFoldingRanges() {
 }
 
 void EditorInsightBinding::refreshCodeVision() {
-    if (!m_view || !m_serverAvailable || !capabilitiesForPath(m_path).codeVision) {
+    if (!m_view || !m_serverAvailable || !m_codeVisionEnabled || !capabilitiesForPath(m_path).codeVision) {
         return;
     }
     const text::Snapshot snapshot = m_view->editor().text();
     const sched::LatestWins::Ticket ticket = m_codeVisionSlot.next();
     const fl::PositionEncoding encoding = m_services.server.encoding();
     const auto authorFn = m_authorProvider;
-    auto work = fl::requestDocumentSymbols(m_services.server, m_path, ticket.token);
+    auto work = codeVisionCountsTask(m_services.server, m_path, snapshot, encoding, languageIdForPath(m_path) == "cpp",
+                                     ticket.token);
     const QPointer<EditorInsightBinding> self(this);
-    auto deliver = [](sched::Task<Result<std::vector<fl::DocumentSymbol>>> task, QPointer<EditorInsightBinding> binding,
+    auto deliver = [](sched::Task<Result<CodeVisionOutcome>> task, QPointer<EditorInsightBinding> binding,
                       sched::LatestWins* slot, sched::LatestWins::Ticket current, text::Snapshot snap,
                       fl::PositionEncoding enc,
                       std::function<std::string(int line)> authorProvider) -> sched::Task<void> {
-        auto result = std::make_shared<Result<std::vector<fl::DocumentSymbol>>>(co_await std::move(task));
+        auto result = std::make_shared<Result<CodeVisionOutcome>>(co_await std::move(task));
         if (!*result) {
             co_return;
         }
         auto lenses = std::make_shared<std::vector<EditorCodeVisionLens>>(
-            toCodeVisionLenses(**result, snap, enc, authorProvider));
-        post(binding, [slot, current, lenses](EditorInsightBinding& target) {
+            toCodeVisionLenses((*result)->symbols, snap, enc, authorProvider));
+        std::vector<EditorCodeVisionLens> counts = toCodeVisionCountLenses((*result)->counts);
+        lenses->insert(lenses->end(), std::make_move_iterator(counts.begin()), std::make_move_iterator(counts.end()));
+        post(binding, [slot, current, lenses, textVersion = snap.version()](EditorInsightBinding& target) {
             if (!slot->isCurrent(current) || !target.m_view) {
+                return;
+            }
+            if (target.m_view->editor().text().version() != textVersion) {
                 return;
             }
             target.m_view->setCodeVisionLenses(std::move(*lenses));

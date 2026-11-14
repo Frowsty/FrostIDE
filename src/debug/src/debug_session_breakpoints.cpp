@@ -281,7 +281,7 @@ void DebugSession::State::sendExceptionFilters(bool initial) {
          });
 }
 
-void DebugSession::setBreakpoints(std::string path, std::vector<BreakpointLine> lines) {
+void DebugSession::setBreakpoints(const std::string& path, std::vector<BreakpointLine> lines) {
     {
         LockGuard lock(m_state->mutex);
         if (lines.empty()) {

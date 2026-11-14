@@ -70,6 +70,7 @@ public:
 private:
     // Processes events until `done` or `timeout`; returns the evaluation that ended the wait.
     template<typename Done>
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): Repeated lvalue calls preserve the predicate.
     static bool pump(Done&& done, std::chrono::milliseconds timeout) {
         const QDeadlineTimer deadline(timeout);
         for (;;) {

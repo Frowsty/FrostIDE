@@ -46,7 +46,7 @@
 # below; ADR 0078 decision 6) and prints "ratchet ok (...)", "ratchet FAILED (...)" or
 # "ratchet not-run (...)" last.
 #
-#   python tools/frost_lint.py skips --log <build>/Testing/Temporary/LastTest.log [--log ...]
+#   python tools/frost_lint.py skips --log <build>/Testing/Temporary/LastTest.log [--junit <ctest.xml>]
 #
 # lists every skipped test of those ctest runs with its reason and prints "skips ok (...)" or, when
 # a reason names a pinned tool (FND-6), "skips FAILED (...)" last (exit 1); the verify scripts run it
@@ -72,6 +72,7 @@ import re
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -102,10 +103,12 @@ CLOSED_MILESTONES: frozenset[int] = frozenset({0})
 DATA_GLOBS = ("tests/**/fixtures/**", "tests/**/goldens/**", "tests/fuzz/corpus/**")
 
 # Vendored third-party sources, byte-identical to their pins in third_party/vendor.lock.json
-# (ADR 0023; libvterm, ADR 0051): our header and code rules do not apply to them, only REUSE
-# coverage (REUSE.toml names their upstream copyright and licence). Mirrors the `-text` entries in
+# (ADR 0023; libvterm, ADR 0051), plus the test-only fastjsonschema wheel source (ADR 0086):
+# our header and code rules do not apply to them, only REUSE coverage. Their regular package
+# checks still enforce the pinned source hashes and licence. Mirrors the `-text` entries in
 # .gitattributes.
-VENDORED_GLOBS = ("third_party/tree-sitter/**", "third_party/grammars/**", "third_party/libvterm/**")
+VENDORED_GLOBS = ("third_party/tree-sitter/**", "third_party/grammars/**", "third_party/libvterm/**",
+                  "tools/_vendor/fastjsonschema/**")
 
 # Directories exempt from the banned-C++26 rule only (every other rule still applies):
 #   src/compat/**                   the compat layer may wrap or probe C++26 library
@@ -259,6 +262,8 @@ RESULT_TYPES: tuple[ResultType, ...] = (
     # settings::Diagnostic, theme_compiler::Diagnostic and io::IgnoreDiagnostic are FrostIDE's
     # own validators reporting on its own inputs, never a tool's result.
     ResultType("LiveDiagnostic", "diagnostic", ("src/lang/src/diagnostics.cpp",)),
+    # FER-7: fields decoded from authenticated, identity-bound engine diagnostic push events.
+    ResultType("EngineDiagnostic", "diagnostic", ("src/engine/src/session.cpp",)),
     ResultType("BuildDiagnostic", "diagnostic", ("src/build/src/**",)),
     ResultType("Diagnostic", "diagnostic",
                ("src/build/src/**", "src/settings/src/**", "src/ui/theme_compiler/**")),
@@ -314,11 +319,22 @@ SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
     # Reviewed real site: the Problems window's live rows adapt LSP LiveDiagnostics (clangd, LuaLS,
     # the managed server) into BuildDiagnostic rows field by field.
     SiteAllowance("src/app/src/workbench_clangd.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
-                  "adapter of lang::LiveDiagnostic from publishDiagnostics", context="row.diagnostic.message = d.message;"),
+                  "adapter of lang::LiveDiagnostic from publishDiagnostics", context="row.diagnostic.message = std::move(d.message);"),
+    # CPP-10: adapt the parsed clang-tidy findings to Problems without synthesizing diagnostics.
+    SiteAllowance("src/app/src/workbench_inspection.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+                  "adapter of InspectionFinding parsed from the clang-tidy process output",
+                  context="row.diagnostic.message = finding.message;"),
+    SiteAllowance("src/app/src/engine_integration_events.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+                  "adapter of EngineDiagnostic decoded from authenticated engine push events",
+                  context="row.diagnostic.message = entry.message;"),
     # Reviewed real site: the author lens shows git blame's author (VcsService through authorForLine).
     SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
                   "out.push_back(EditorCodeVisionLens{", "git blame author from VcsService (authorForLine)",
                   context=".label = author,"),
+    # CPP-9: display the reference/implementation/type-hierarchy counts returned by clangd.
+    SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
+                  "out.push_back(EditorCodeVisionLens{", "adapter of CppCodeVisionProvider LSP result counts",
+                  context='.label = std::to_string(count) + " " + noun,'),
 )
 
 # Synthesized tool output: literals that imitate a tool's own output lines. Outside the files
@@ -1839,6 +1855,21 @@ _GTEST_SKIP_AT = re.compile(r"(?:\(\d+\)|:\d+): Skipped$")
 _UNITTEST_SKIP = re.compile(r"skipped '(.*)'$", re.M)
 
 
+def skip_reasons(output: str) -> list[str]:
+    """Only explicit GTest/unittest skip reasons, never unrelated tool names in test output."""
+    reasons = []
+    output = output.replace("\r\n", "\n")
+    lines = output.split("\n")
+    for i, line in enumerate(lines):
+        if _GTEST_SKIP_AT.search(line.rstrip()):
+            for following in lines[i + 1:]:
+                if not following.strip() or following.startswith("[  SKIPPED ]"):
+                    break
+                reasons.append(following.strip())
+    reasons += _UNITTEST_SKIP.findall(output)
+    return list(dict.fromkeys(reasons))
+
+
 def ctest_skips(log_text: str) -> list[tuple[str, str]]:
     """(test name, reason) of every test ctest ran as skipped in `log_text` (LastTest.log): gtest's
     "file(line): Skipped" message, or unittest's "skipped '...'" reasons; "" when none is printed."""
@@ -1849,21 +1880,30 @@ def ctest_skips(log_text: str) -> list[tuple[str, str]]:
         block = text[start.end():starts[k + 1].start() if k + 1 < len(starts) else len(text)]
         if not _CTEST_SKIPPED.search(block):
             continue
-        reasons = []
-        lines = block.split("\n")
-        for i, line in enumerate(lines):
-            if _GTEST_SKIP_AT.search(line.rstrip()):
-                for following in lines[i + 1:]:
-                    if not following.strip() or following.startswith("[  SKIPPED ]"):
-                        break
-                    reasons.append(following.strip())
-        reasons += _UNITTEST_SKIP.findall(block)
+        reasons = skip_reasons(block)
         if start.group(1).strip() not in {name for name, _ in out}:
             out.append((start.group(1).strip(), " ".join(dict.fromkeys(reasons))))
     return out
 
 
-def skips_main(logs: list[Path]) -> int:
+def junit_skips(path: Path) -> list[tuple[str, str]]:
+    """CTest's actual skipped outcomes, including return-code skips LastTest can call passed.
+    Disabled tests stay separate. Raises OSError/ParseError for an explicitly requested bad report."""
+    found = []
+    for case in ET.parse(path).getroot().iter("testcase"):
+        skipped = case.find("skipped")
+        if skipped is None or case.get("status", "").lower() == "disabled":
+            continue
+        message = skipped.get("message", "")
+        if message.lower() == "disabled":
+            continue
+        output = "\n".join(node.text or "" for tag in ("system-out", "system-err") for node in case.findall(tag))
+        reason = " ".join(skip_reasons(output)) or (skipped.text or "").strip() or message
+        found.append((case.get("name", ""), reason))
+    return found
+
+
+def skips_main(logs: list[Path], junits: list[Path] | None = None) -> int:
     """Prints every skipped test of the ctest `logs` with its reason, then one summary item last:
     "skips ok (...)", "skips FAILED (...)" (a reason names a pinned tool: exit 1) or "skips not-run (...)"."""
     found: list[tuple[str, str]] = []
@@ -1872,7 +1912,21 @@ def skips_main(logs: list[Path]) -> int:
             found += ctest_skips(log.read_text(encoding="utf-8", errors="replace"))
         except OSError as error:
             print(f"skips not-run (cannot read {log}: {error.strerror or error})")
-            return 0
+            return 2 if junits else 0
+    if junits:
+        # Match exact CTest identities; merge reasons so neither source hides a pinned-tool skip.
+        by_name: dict[str, list[str]] = {}
+        try:
+            for report in junits:
+                found += junit_skips(report)
+        except (OSError, ET.ParseError) as error:
+            print(f"skips FAILED (cannot read JUnit {report}: {error})")
+            return 2
+        for name, reason in found:
+            reasons = by_name.setdefault(name, [])
+            if reason and reason not in reasons:
+                reasons.append(reason)
+        found = [(name, " ".join(reasons)) for name, reasons in by_name.items()]
     flagged = [(name, reason) for name, reason in found if PINNED_TOOL_WORDS.search(reason)]
     for name, reason in found:
         mark = "MISSING TOOL" if (name, reason) in flagged else "environment"
@@ -1984,6 +2038,8 @@ def main(argv: list[str] | None = None) -> int:
                              "skipped tests of the ctest logs given with --log, failing on a missing pinned tool")
     parser.add_argument("--log", action="append", type=Path, default=[],
                         help="skips: a ctest log (<build>/Testing/Temporary/LastTest.log); repeatable")
+    parser.add_argument("--junit", action="append", type=Path, default=[],
+                        help="skips: optional CTest --output-junit report; merges exact test names with --log; repeatable")
     parser.add_argument("--base", default="main", help="ratchet: the base whose merge base with HEAD starts the slice")
     parser.add_argument("--git-dir", default=None, help="ratchet: passed to git as --git-dir (verify.sh)")
     parser.add_argument("--work-tree", default=None, help="ratchet: passed to git as --work-tree (verify.sh)")
@@ -1995,7 +2051,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ratchet":
         return ratchet_main(repo, args.base, args.git_dir, args.work_tree)
     if args.command == "skips":
-        return skips_main(args.log)
+        return skips_main(args.log, args.junit)
     # A failing git or an unreadable tree is an environment error, not a violation.
     try:
         files = list_repo_files(repo)

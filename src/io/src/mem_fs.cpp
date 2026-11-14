@@ -600,6 +600,18 @@ Result<bool> MemFs::exists(std::string_view path) {
     return isDirectory(*key) || find(*key) != nullptr;
 }
 
+Result<std::string> MemFs::physicalPath(std::string_view path) {
+    LockGuard lock(m_mutex);
+    auto key = resolve(path, "physicalPath", /*entryTarget=*/false);
+    if (!key)
+        return std::unexpected(key.error());
+    if (auto fault = takeFault(FsOp::Exists, *key, path); !fault)
+        return std::unexpected(fault.error());
+    if (!isDirectory(*key) && !find(*key))
+        return std::unexpected(notFound("physicalPath", path));
+    return key;
+}
+
 Result<std::string> MemFs::canonicalPath(std::string_view path) {
     // MemFs is case-sensitive, so the normalised key is the identity (in this MemFs's style).
     auto normalized = normalize(path);

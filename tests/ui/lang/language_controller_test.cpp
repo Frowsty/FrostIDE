@@ -14,12 +14,15 @@
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/sched/sim_executor.hpp"
 #include "frost/text/text_buffer.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 
+#include "../../../src/ui/lang/src/language_controller_internal.hpp"
 #include "lang/feature_server.hpp"
 #include <QApplication>
 #include <QCheckBox>
+#include <QEvent>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QScopeGuard>
@@ -34,9 +37,25 @@
 #include <chrono>
 #include <functional>
 #include <future>
+#include <memory>
+#include <optional>
+#include <stop_token>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
+
+namespace frost::ui::lang {
+
+struct LanguageControllerTestAccess {
+    static void startInteger(LanguageController& controller, sched::LatestWins& slot,
+                             std::function<sched::Task<Result<int>>(std::stop_token)> factory,
+                             std::function<void(Result<int>)> done) {
+        controller.start<int>(slot, std::move(factory), std::move(done));
+    }
+};
+
+} // namespace frost::ui::lang
 
 namespace {
 
@@ -186,7 +205,102 @@ struct Rig {
     LanguageController controller;
 };
 
-Json completionItem(std::string label, int kind, std::string sort, std::string insert = {}, bool snippet = false) {
+TEST(LanguageControllerRequests, CapturingFactorySurvivesDeferredStartSuspensionAndCancellation) {
+    FeatureServer server;
+    FakeHost host("int value;");
+    frost::io::MemFs fs(frost::systemClock());
+    RecordingApplier applier;
+    const std::string expected = "document snapshot held by the request factory";
+    for (const bool cancel : {false, true}) {
+        SCOPED_TRACE(cancel ? "cancel suspended request" : "complete suspended request");
+        struct Observations {
+            std::string beforeSuspension;
+            std::string afterSuspension;
+            bool sawCancellation = false;
+        } observed;
+        std::optional<frost::Result<int>> delivered;
+        int finished = 0;
+        std::weak_ptr<std::string> payloadLifetime;
+        frost::sched::LatestWins slot;
+        frost::sched::SimExecutor executor;
+        LanguageController controller(frost::ui::lang::LanguageServices{.server = server.client(),
+                                                                        .scheduler = executor,
+                                                                        .host = host,
+                                                                        .applier = applier,
+                                                                        .fs = fs,
+                                                                        .diagnostics = {}});
+        const auto drain = qScopeGuard([&] {
+            slot.cancel();
+            executor.shutdown();
+            QCoreApplication::sendPostedEvents(QCoreApplication::instance(), QEvent::MetaCall);
+        });
+        QObject::connect(&controller, &LanguageController::requestFinished, [&] { ++finished; });
+        {
+            auto payload = std::make_shared<std::string>(expected);
+            payloadLifetime = payload;
+            auto coroutine = [payload =
+                                  std::move(payload)](std::weak_ptr<std::string> lifetime,
+                                                      frost::sched::IScheduler& scheduler, Observations& observations,
+                                                      std::stop_token token) -> frost::sched::Task<frost::Result<int>> {
+                // Frame-owned arguments guard every capture read, so a destroyed factory fails safely.
+                if (lifetime.expired()) {
+                    co_return frost::fail(frost::ErrorCode::Internal, "factory expired before task start");
+                }
+                observations.beforeSuspension = *payload;
+                const bool elapsed = co_await scheduler.sleepFor(std::chrono::seconds(1), token);
+                if (lifetime.expired()) {
+                    co_return frost::fail(frost::ErrorCode::Internal, "factory expired while task was suspended");
+                }
+                observations.afterSuspension = *payload;
+                observations.sawCancellation = token.stop_requested();
+                if (!elapsed) {
+                    co_return frost::fail(frost::ErrorCode::Cancelled, "request cancelled while suspended");
+                }
+                co_return static_cast<int>(payload->size());
+            };
+            auto factory =
+                std::bind_front(std::move(coroutine), payloadLifetime, std::ref(executor), std::ref(observed));
+            frost::ui::lang::LanguageControllerTestAccess::startInteger(
+                controller, slot, std::move(factory),
+                [&](frost::Result<int> result) { delivered.emplace(std::move(result)); });
+        }
+        // The caller's closure is gone. Only the production request path can retain its payload.
+        EXPECT_FALSE(payloadLifetime.expired());
+        EXPECT_EQ(executor.dispatches(), 0U);
+        EXPECT_TRUE(observed.beforeSuspension.empty());
+        ASSERT_TRUE(executor.step());
+        ASSERT_EQ(observed.beforeSuspension, expected);
+        EXPECT_EQ(executor.timerCount(), 1U);
+        EXPECT_FALSE(payloadLifetime.expired());
+        EXPECT_TRUE(observed.afterSuspension.empty());
+        EXPECT_FALSE(delivered.has_value());
+        EXPECT_EQ(finished, 0);
+        if (cancel) {
+            slot.cancel();
+            EXPECT_FALSE(payloadLifetime.expired());
+            EXPECT_TRUE(observed.afterSuspension.empty());
+        }
+        EXPECT_GT(executor.runUntilIdle(), 0U);
+        EXPECT_EQ(observed.afterSuspension, expected);
+        EXPECT_EQ(observed.sawCancellation, cancel);
+        EXPECT_TRUE(payloadLifetime.expired());
+        // Task completion is queued to Qt. The cancelled ticket must never publish its result.
+        EXPECT_FALSE(delivered.has_value());
+        QCoreApplication::sendPostedEvents(QCoreApplication::instance(), QEvent::MetaCall);
+        if (cancel) {
+            EXPECT_FALSE(delivered.has_value());
+            EXPECT_EQ(finished, 0);
+        } else {
+            ASSERT_TRUE(delivered.has_value());
+            ASSERT_TRUE(delivered->has_value());
+            EXPECT_EQ(delivered->value(), static_cast<int>(expected.size()));
+            EXPECT_EQ(finished, 1);
+        }
+    }
+}
+
+Json completionItem(const std::string& label, int kind, std::string sort, const std::string& insert = {},
+                    bool snippet = false) {
     return Json::object()
         .set("label", " " + label)
         .set("filterText", label)
@@ -1187,7 +1301,7 @@ TEST(LanguageControllerNavigation, GotoDeclarationGoesToHeaderAndGotoImplementat
 }
 
 // A clangd tweak action as clangd 23 sends it (command clangd.applyTweak with {file, selection, tweakID}).
-Json tweakAction(const std::string& path, std::string id, std::string title, std::string kind = "refactor") {
+Json tweakAction(const std::string& path, std::string id, const std::string& title, std::string kind = "refactor") {
     Json argument = Json::object()
                         .set("file", uriOf(path))
                         .set("selection", fl::toJson(fl::LspRange{{0, 0}, {0, 0}}))
@@ -1506,6 +1620,145 @@ TEST(LanguageControllerRefactoring, RenameInCommentsAndStringsLeavesCodeAlone) {
             EXPECT_GT(edit.range.start.character, 40U); // Inside the string, not "int value".
         }
     }
+}
+
+TEST(LanguageControllerNavigation, CallHierarchyPopulatesIncomingAndOutgoingAndNeverFabricatesOnEmpty) {
+    FeatureServer server;
+    const std::string path = workPath("main.cpp");
+    bool returnEmpty = false;
+    server.on("textDocument/prepareCallHierarchy", [&](const Json&) {
+        if (returnEmpty) {
+            return Json::array();
+        }
+        return Json::array({Json::object()
+                                .set("name", "BeginScene")
+                                .set("kind", 12)
+                                .set("uri", uriOf(path))
+                                .set("range", rangeJson(1, 0, 20))
+                                .set("selectionRange", rangeJson(1, 5, 15))});
+    });
+    server.on("callHierarchy/incomingCalls", [&](const Json&) {
+        return Json::array({Json::object()
+                                .set("from", Json::object()
+                                                 .set("name", "OnUpdate")
+                                                 .set("kind", 6)
+                                                 .set("uri", uriOf(path))
+                                                 .set("range", rangeJson(5, 0, 25))
+                                                 .set("selectionRange", rangeJson(5, 5, 13)))
+                                .set("fromRanges", Json::array({rangeJson(6, 4, 14)}))});
+    });
+    server.on("callHierarchy/outgoingCalls", [&](const Json&) {
+        return Json::array({Json::object()
+                                .set("to", Json::object()
+                                               .set("name", "ResetStats")
+                                               .set("kind", 12)
+                                               .set("uri", uriOf(path))
+                                               .set("range", rangeJson(0, 0, 18))
+                                               .set("selectionRange", rangeJson(0, 5, 15)))
+                                .set("fromRanges", Json::array({rangeJson(2, 4, 14)}))});
+    });
+
+    FakeHost host("void ResetStats() {}\nvoid BeginScene() {\n    ResetStats();\n}\n", path);
+    host.caretAfter("void Begin");
+    Rig rig(server, host);
+
+    QTreeWidget* tree = rig.controller.hierarchyPopup().tree();
+    ASSERT_NE(tree, nullptr);
+    rig.controller.callHierarchy();
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1 && tree->topLevelItem(0)->childCount() == 1; }));
+    EXPECT_TRUE(tree->topLevelItem(0)->text(0).contains(QStringLiteral("BeginScene")));
+    EXPECT_TRUE(tree->topLevelItem(0)->child(0)->text(0).contains(QStringLiteral("OnUpdate")));
+
+    // Switch to Outgoing Calls mode (secondaryMode = true).
+    emit rig.controller.hierarchyPopup().modeChanged(true);
+    ASSERT_TRUE(pumpUntil([&] {
+        return tree->topLevelItemCount() == 1 && tree->topLevelItem(0)->childCount() == 1 &&
+               tree->topLevelItem(0)->child(0)->text(0).contains(QStringLiteral("ResetStats"));
+    }));
+
+    // Empty prepareCallHierarchy response must emit a status message and never fabricate a root node (ADR 0078).
+    returnEmpty = true;
+    std::vector<QString> status;
+    QObject::connect(&rig.controller, &LanguageController::statusMessage,
+                     [&](const QString& message) { status.push_back(message); });
+    rig.controller.callHierarchy();
+    ASSERT_TRUE(pumpUntil([&] { return !status.empty(); }));
+    EXPECT_TRUE(status[0].contains(QStringLiteral("No call hierarchy found"))) << status[0].toStdString();
+}
+
+TEST(LanguageControllerNavigation, TypeHierarchyPopulatesSupertypesAndSubtypesAndNeverFabricatesOnEmpty) {
+    FeatureServer server;
+    const std::string path = workPath("layer.hpp");
+    bool returnEmpty = false;
+    int supertypeRequests = 0;
+    int subtypeRequests = 0;
+    server.on("textDocument/prepareTypeHierarchy", [&](const Json&) {
+        if (returnEmpty) {
+            return Json::array();
+        }
+        return Json::array({Json::object()
+                                .set("name", "EditorLayer")
+                                .set("kind", 5)
+                                .set("uri", uriOf(path))
+                                .set("range", rangeJson(1, 0, 30))
+                                .set("selectionRange", rangeJson(1, 6, 17))});
+    });
+    server.on("typeHierarchy/subtypes", [&](const Json&) {
+        ++subtypeRequests;
+        return Json::array({Json::object()
+                                .set("name", "SandboxEditorLayer")
+                                .set("kind", 5)
+                                .set("uri", uriOf(path))
+                                .set("range", rangeJson(2, 0, 40))
+                                .set("selectionRange", rangeJson(2, 6, 24))});
+    });
+    server.on("typeHierarchy/supertypes", [&](const Json&) {
+        ++supertypeRequests;
+        return Json::array({Json::object()
+                                .set("name", "Layer")
+                                .set("kind", 5)
+                                .set("uri", uriOf(path))
+                                .set("range", rangeJson(0, 0, 15))
+                                .set("selectionRange", rangeJson(0, 6, 11))});
+    });
+
+    FakeHost host("class Layer {};\nclass EditorLayer : public Layer {};\n", path);
+    host.caretAfter("class Editor");
+    Rig rig(server, host);
+
+    QTreeWidget* tree = rig.controller.hierarchyPopup().tree();
+    ASSERT_NE(tree, nullptr);
+    rig.controller.typeHierarchy();
+    ASSERT_TRUE(pumpUntil([&] { return tree->topLevelItemCount() == 1 && tree->topLevelItem(0)->childCount() == 1; }));
+    EXPECT_TRUE(tree->topLevelItem(0)->text(0).contains(QStringLiteral("EditorLayer")));
+    EXPECT_TRUE(tree->topLevelItem(0)->child(0)->text(0).contains(QStringLiteral("Layer")));
+
+    // Switch from the primary Supertypes mode to secondary Subtypes mode.
+    emit rig.controller.hierarchyPopup().modeChanged(true);
+    ASSERT_TRUE(pumpUntil([&] {
+        return tree->topLevelItemCount() == 1 && tree->topLevelItem(0)->childCount() == 1 &&
+               tree->topLevelItem(0)->child(0)->text(0).contains(QStringLiteral("SandboxEditorLayer"));
+    }));
+
+    // A Code Vision implementation count opens its matching subtype results immediately.
+    const int previousSupertypes = supertypeRequests;
+    const int previousSubtypes = subtypeRequests;
+    rig.controller.typeImplementations();
+    ASSERT_TRUE(pumpUntil([&] { return subtypeRequests > previousSubtypes; }));
+    ASSERT_TRUE(pumpUntil([&] {
+        return tree->topLevelItemCount() == 1 && tree->topLevelItem(0)->childCount() == 1 &&
+               tree->topLevelItem(0)->child(0)->text(0) == QStringLiteral("SandboxEditorLayer");
+    }));
+    EXPECT_EQ(supertypeRequests, previousSupertypes);
+
+    // Empty prepareTypeHierarchy response must emit a status message and never fabricate a root node (ADR 0078).
+    returnEmpty = true;
+    std::vector<QString> status;
+    QObject::connect(&rig.controller, &LanguageController::statusMessage,
+                     [&](const QString& message) { status.push_back(message); });
+    rig.controller.typeHierarchy();
+    ASSERT_TRUE(pumpUntil([&] { return !status.empty(); }));
+    EXPECT_TRUE(status[0].contains(QStringLiteral("No type hierarchy found"))) << status[0].toStdString();
 }
 
 } // namespace

@@ -72,7 +72,7 @@ public:
     template<typename HandlerT>
     void bindRawMethod(llvm::StringLiteral method, HandlerT* self,
                        void (HandlerT::*handler)(const JSON&, Callback<JSON>)) {
-        m_raw.MethodHandlers[method] = [self, handler](JSON rawParams, Callback<JSON> reply) {
+        m_raw.MethodHandlers[method] = [self, handler](const JSON& rawParams, Callback<JSON> reply) {
             (self->*handler)(rawParams, std::move(reply));
         };
     }

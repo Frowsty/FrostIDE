@@ -10,17 +10,21 @@
 //   - a stub ctest that exits 1 and prints nothing gives that tool error and no test or result.
 
 #include "frost/build/cmake_service.hpp"
+#include "frost/debug/debug_session.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
+#include "frost/ui/debug_controller.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/test_results_tree.hpp"
 
+#include "unit_tests_window.hpp"
 #include "workbench_rig.hpp"
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
 
 #include <chrono>
+#include <format>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -38,16 +42,31 @@ using frost::app::test::WorkbenchRig;
 using frost::app::test::WorkDir;
 
 // The fixture project, and presets whose test preset leaves out its 1 s timeout test.
-void writeFixture(const WorkDir& dir) {
+void writeFixture(const WorkDir& dir, bool withGTest = false, bool withCombinedGTest = false) {
     std::ifstream in(std::string(FROST_RUN_FIXTURES) + "/ctest_project/CMakeLists.txt", std::ios::binary);
     ASSERT_TRUE(in) << FROST_RUN_FIXTURES;
     std::ostringstream text;
     text << in.rdbuf();
+    if (withCombinedGTest)
+        text << "\nadd_test(NAME combined COMMAND ${FROST_GTEST_FIXTURE} "
+                "--gtest_filter=Fixture.Passes:Fixture.Skips)\n";
     dir.write("CMakeLists.txt", text.str());
-    dir.write("CMakePresets.json", R"({"version": 3,
+    std::string presets = R"({"version": 3,
         "configurePresets": [{"name": "fixture", "generator": "Ninja", "binaryDir": "${sourceDir}/build"}],
         "testPresets": [{"name": "fixture", "configurePreset": "fixture",
-                         "filter": {"exclude": {"name": "^slow$"}}}]})");
+                         "filter": {"exclude": {"name": "^slow$"}}}]})";
+    if (withGTest) {
+        constexpr std::string_view marker = "\"binaryDir\": \"${sourceDir}/build\"";
+        const std::size_t at = presets.find(marker);
+        ASSERT_NE(at, std::string::npos);
+        std::string gtestPath = FROST_RUN_GTEST_FIXTURE;
+        for (char& c : gtestPath)
+            if (c == '\\')
+                c = '/';
+        presets.insert(at + marker.size(),
+                       std::format(", \"cacheVariables\": {{\"FROST_GTEST_FIXTURE\": \"{}\"}}", gtestPath));
+    }
+    dir.write("CMakePresets.json", std::move(presets));
 }
 
 // Starts ctest through a launcher that sends every ctest(.exe) to the RUN-7 stub.
@@ -262,6 +281,110 @@ TEST(UnitTestsWindow, AStubCTestThatExitsOneGivesTheToolErrorAndNoResults) {
     EXPECT_TRUE(w.tree->testNames().empty());
     EXPECT_EQ(w.tree->counts().passed + w.tree->counts().failed + w.tree->counts().skipped, 0U);
     EXPECT_EQ(w.tree->topLevelItemCount(), 0);
+}
+
+TEST(UnitTestsWindow, GutterRunsExactlyOneRealGoogleTestCaseAndDebugStopsAtItsBreakpoint) {
+    WorkDir dir("unit-tests-window-gtest");
+    writeFixture(dir, true);
+    WorkbenchRig rig(dir);
+    rig.show();
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_FALSE(configuredCTest(rig).empty());
+
+    Window w = showWindow(rig);
+    ASSERT_NE(w.tree, nullptr);
+    ASSERT_NE(w.summary, nullptr);
+    ASSERT_TRUE(waitFor([&] { return w.tree->test("Fixture.Passes") != nullptr; }, 60s))
+        << w.summary->text().toStdString();
+
+    const std::string sourcePath = frost::io::normalizePath(FROST_RUN_GTEST_SOURCE).value();
+    std::ifstream sourceFile(sourcePath, std::ios::binary);
+    ASSERT_TRUE(sourceFile) << sourcePath;
+    std::ostringstream sourceText;
+    sourceText << sourceFile.rdbuf();
+    const auto cases = frost::app::unitTestsGutterCasesForFile(w.root, sourcePath, sourceText.str());
+    const auto testCase = std::ranges::find_if(cases, [](const auto& item) {
+        return item.test.name == "Fixture.Passes" && item.caseName == "Fixture.Passes";
+    });
+    ASSERT_NE(testCase, cases.end()) << "the real ctest list's exact Google Test filter backs this gutter case";
+
+    ASSERT_TRUE(frost::app::runGutterTestCase(w.root, *testCase).has_value());
+    ASSERT_TRUE(waitFor([&] { return w.runAll->isEnabled(); }, 60s)) << w.summary->text().toStdString();
+    const frost::run::TestResult* result = w.tree->result("Fixture.Passes");
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(result->outcome, frost::run::TestOutcome::Passed);
+    ASSERT_EQ(result->cases.size(), 1U);
+    EXPECT_EQ(result->cases.front().name, "Fixture.Passes");
+    EXPECT_TRUE(w.details->toPlainText().contains(QStringLiteral("--gtest_filter=Fixture.Passes")))
+        << w.details->toPlainText().toStdString();
+
+    auto* debug = rig.workbench->debugController();
+    ASSERT_NE(debug, nullptr);
+    debug->toggleBreakpoint(sourcePath, testCase->line - 1);
+    ASSERT_TRUE(debug->breakpoints().at(sourcePath, testCase->line).has_value());
+    ASSERT_TRUE(frost::app::debugGutterTestCase(w.root, *testCase).has_value());
+    ASSERT_TRUE(waitFor([&] { return debug->state() == frost::debug::DebugState::Stopped; }, 60s))
+        << "the pinned lldb-dap should stop on the test's source breakpoint";
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto frame = debug->selectedFrame();
+            return frame && frost::io::normalizePath(frame->path).value_or(frame->path) == sourcePath &&
+                   frame->line == testCase->line;
+        },
+        30s))
+        << "the selected DAP frame must be the chosen test declaration " << sourcePath << ":" << testCase->line;
+    debug->stop();
+    EXPECT_TRUE(waitFor([&] { return !debug->debugging(); }, 30s));
+
+    ASSERT_TRUE(rig.trust->untrust(dir.path()).has_value());
+    EXPECT_TRUE(frost::app::unitTestsGutterCasesForFile(w.root, sourcePath, sourceText.str()).empty())
+        << "cached gutter actions are invalid as soon as project trust changes";
+    EXPECT_FALSE(frost::app::runGutterTestCase(w.root, *testCase).has_value());
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    EXPECT_TRUE(frost::app::unitTestsGutterCasesForFile(w.root, sourcePath, sourceText.str()).empty())
+        << "a new trust grant requires fresh discovery before cached gutter cases become runnable";
+    EXPECT_FALSE(frost::app::runGutterTestCase(w.root, *testCase).has_value());
+}
+
+TEST(UnitTestsWindow, CombinedCTestFilterRunsEachExactGutterCaseIndividually) {
+    WorkDir dir("unit-tests-window-combined-gtest");
+    writeFixture(dir, true, true);
+    WorkbenchRig rig(dir);
+    rig.show();
+    ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
+    ASSERT_FALSE(configuredCTest(rig).empty());
+    Window w = showWindow(rig);
+    ASSERT_NE(w.tree, nullptr);
+    ASSERT_NE(w.runAll, nullptr);
+    ASSERT_TRUE(waitFor([&] { return w.tree->test("combined") != nullptr; }, 60s));
+
+    const std::string sourcePath = frost::io::normalizePath(FROST_RUN_GTEST_SOURCE).value();
+    std::ifstream sourceFile(sourcePath, std::ios::binary);
+    ASSERT_TRUE(sourceFile);
+    std::ostringstream source;
+    source << sourceFile.rdbuf();
+    const auto cases = frost::app::unitTestsGutterCasesForFile(w.root, sourcePath, source.str());
+    std::vector<frost::run::GutterTestCase> combined;
+    for (const auto& testCase : cases)
+        if (testCase.test.name == "combined")
+            combined.push_back(testCase);
+    ASSERT_EQ(combined.size(), 2u);
+    for (const auto& testCase : combined) {
+        ASSERT_TRUE(frost::app::runGutterTestCase(w.root, testCase).has_value()) << testCase.caseName;
+        ASSERT_TRUE(waitFor([&] { return w.runAll->isEnabled(); }, 60s));
+        const auto* result = w.tree->result("combined");
+        ASSERT_NE(result, nullptr);
+        ASSERT_EQ(result->cases.size(), 1u);
+        EXPECT_EQ(result->cases.front().name, testCase.caseName);
+    }
+    auto unsupported = combined.front();
+    for (const std::string name : {"Fixture.*", "Fixture.Passes:Fixture.Skips", "Fixture.Passes-Fixture.Skips"}) {
+        unsupported.caseName = name;
+        EXPECT_FALSE(frost::app::runGutterTestCase(w.root, unsupported).has_value());
+        EXPECT_FALSE(frost::app::debugGutterTestCase(w.root, unsupported).has_value());
+    }
 }
 
 } // namespace

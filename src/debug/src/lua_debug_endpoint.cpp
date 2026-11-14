@@ -35,7 +35,7 @@ Result<LuaDebugPlayConnection> connectEndpoint(std::uint16_t port, std::string_v
                                                std::stop_token stop, bool requireGeneration) {
     if (token.size() < 32 || token.size() > 1024)
         return fail(ErrorCode::InvalidArgument, "invalid Lua debug token length");
-    auto stream = io::LoopbackStream::connect(port, deadline, stop);
+    auto stream = io::LoopbackStream::connect(port, deadline, std::move(stop));
     if (!stream)
         return std::unexpected(std::move(stream.error()));
     const std::string request = rpc::Json::object().set("token", token).dump();
@@ -87,14 +87,15 @@ Result<LuaDebugPlayConnection> connectEndpoint(std::uint16_t port, std::string_v
 Result<LuaDebugPlayConnection> connectLuaDebugPlayEndpoint(std::uint16_t port, std::string_view token,
                                                            io::LoopbackStream::Deadline deadline,
                                                            std::stop_token stop) {
-    return connectEndpoint(port, token, deadline, true, true, stop, true);
+    return connectEndpoint(port, token, deadline, true, true, std::move(stop), true);
 }
 
 Result<std::unique_ptr<io::LoopbackStream>> connectLuaDebugEndpoint(std::uint16_t port, std::string_view token,
                                                                     io::LoopbackStream::Deadline deadline,
                                                                     bool armPause, std::stop_token stop,
                                                                     std::uint64_t* connectionGeneration) {
-    auto result = connectEndpoint(port, token, deadline, armPause, false, stop, connectionGeneration != nullptr);
+    auto result =
+        connectEndpoint(port, token, deadline, armPause, false, std::move(stop), connectionGeneration != nullptr);
     if (!result)
         return std::unexpected(std::move(result.error()));
     if (connectionGeneration)

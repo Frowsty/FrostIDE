@@ -36,9 +36,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <windows.h>
@@ -59,6 +61,55 @@ constexpr DWORD_PTR kProcThreadAttributePseudoConsole = 0x00020016;
 constexpr DWORD kPipeBufferBytes = 64 * 1024;
 // How long communicate() waits for a terminated process to disappear before returning Timeout.
 constexpr DWORD kReapGraceMs = 5000;
+
+thread_local detail::ResidentMemoryLaunchTestHook g_residentMemoryLaunchHook = nullptr;
+
+Result<SIZE_T> residentMemoryLimit(std::uint64_t bytes) {
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    const std::uint64_t page = system.dwPageSize;
+    if (page == 0 || bytes < 20 * page || bytes % page != 0 || bytes >= std::numeric_limits<SIZE_T>::max()) {
+        return fail(ErrorCode::InvalidArgument,
+                    "residentMemoryLimitBytes must be page-aligned, at least 20 pages, and below SIZE_T_MAX");
+    }
+    return static_cast<SIZE_T>(bytes);
+}
+
+Result<void> setResidentMemoryLimit(HANDLE process, SIZE_T maximum, detail::ResidentMemoryLaunchFault fault) {
+    using enum detail::ResidentMemoryLaunchFault;
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    const SIZE_T minimum = static_cast<SIZE_T>(system.dwPageSize) * 20;
+    // A hard maximum and a soft minimum avoid pinning resident pages. No EmptyWorkingSet calls.
+    // https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-setprocessworkingsetsizeex
+    if (fault == SetLimit) {
+        return std::unexpected(win32Error(ERROR_ACCESS_DENIED, "SetProcessWorkingSetSizeEx (test fault)"));
+    }
+    if (SetProcessWorkingSetSizeEx(process, minimum, maximum,
+                                   QUOTA_LIMITS_HARDWS_MAX_ENABLE | QUOTA_LIMITS_HARDWS_MIN_DISABLE) == FALSE) {
+        return std::unexpected(lastWin32Error("SetProcessWorkingSetSizeEx"));
+    }
+    SIZE_T actualMinimum = 0;
+    SIZE_T actualMaximum = 0;
+    DWORD flags = 0;
+    if (fault == ReadLimit) {
+        return std::unexpected(win32Error(ERROR_ACCESS_DENIED, "GetProcessWorkingSetSizeEx (test fault)"));
+    }
+    if (GetProcessWorkingSetSizeEx(process, &actualMinimum, &actualMaximum, &flags) == FALSE) {
+        return std::unexpected(lastWin32Error("GetProcessWorkingSetSizeEx"));
+    }
+    if (fault == WrongLimit) {
+        actualMaximum = maximum - system.dwPageSize;
+    }
+    if (fault == WrongFlags) {
+        flags &= ~static_cast<DWORD>(QUOTA_LIMITS_HARDWS_MAX_ENABLE);
+    }
+    if (actualMaximum != maximum || (flags & QUOTA_LIMITS_HARDWS_MAX_ENABLE) == 0 ||
+        (flags & QUOTA_LIMITS_HARDWS_MAX_DISABLE) != 0) {
+        return fail(ErrorCode::IoError, "Windows did not retain the exact resident-memory hard maximum");
+    }
+    return {};
+}
 
 // Milliseconds for one Wait* call: rounded up, at most detail::maxWaitSliceMs() (2^30 ms by default, far
 // below INFINITE); callers loop until their deadline.
@@ -824,8 +875,17 @@ Result<ProcessResult> WindowsProcess::communicate(std::string_view stdinData, IC
  * the streams, the job, the inherited-handle list and CreateProcessW with the 8.3 working-directory retry.
  */
 Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
+    const auto memoryHook = std::exchange(g_residentMemoryLaunchHook, nullptr);
     if (auto valid = validateProcessSpec(spec, /*windowsRules=*/true); !valid) {
         return std::unexpected(std::move(valid.error()));
+    }
+    SIZE_T memoryMaximum = 0;
+    if (spec.residentMemoryLimitBytes) {
+        auto limit = residentMemoryLimit(*spec.residentMemoryLimitBytes);
+        if (!limit) {
+            return std::unexpected(std::move(limit.error()));
+        }
+        memoryMaximum = *limit;
     }
     auto executable = normalizePath(spec.executable, PathStyle::Windows);
     if (!executable) {
@@ -989,6 +1049,9 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
     startup.StartupInfo.lpDesktop = desktop.empty() ? nullptr : desktop.data();
     startup.lpAttributeList = attributes;
     DWORD flags = CREATE_UNICODE_ENVIRONMENT | (attributes != nullptr ? EXTENDED_STARTUPINFO_PRESENT : 0);
+    if (spec.residentMemoryLimitBytes) {
+        flags |= CREATE_SUSPENDED;
+    }
     if (spec.newConsole) {
         flags |= CREATE_NEW_CONSOLE;
     } else if (spec.pseudoTerminal) {
@@ -1029,12 +1092,61 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
         }
         return std::unexpected(win32Error(error, "launch", spec.executable));
     }
-    CloseHandle(info.hThread);
+    UniqueHandle process(info.hProcess);
+    const UniqueHandle thread(info.hThread);
+    if (spec.residentMemoryLimitBytes) {
+        // Both handles are owned before any fallible setup. JOB_LIST already contains this child.
+        // Every error below kills and waits for this exact process, independently of killOnClose.
+        const auto abortSuspended = [&](Error launchError) -> Result<detail::SpawnedChild> {
+            DWORD cleanupError = ERROR_SUCCESS;
+            bool terminationRequested = false;
+            for (;;) {
+                if (!terminationRequested) {
+                    terminationRequested = TerminateProcess(process.get(), 1) != FALSE;
+                    if (!terminationRequested && cleanupError == ERROR_SUCCESS) {
+                        cleanupError = GetLastError();
+                    }
+                }
+                // A failed launch cannot discard its last owner while the child is still alive.
+                // Keep these exact handles until exit, including after an OS error or slow kill.
+                const DWORD waited = WaitForSingleObject(process.get(), kReapGraceMs);
+                if (waited == WAIT_OBJECT_0) {
+                    break;
+                }
+                if (waited == WAIT_FAILED) {
+                    if (cleanupError == ERROR_SUCCESS) {
+                        cleanupError = GetLastError();
+                    }
+                    Sleep(1); // An unexpected wait failure must not spin while retaining ownership.
+                }
+            }
+            if (cleanupError != ERROR_SUCCESS) {
+                launchError.withContext(win32Error(cleanupError, "suspended-child cleanup before exit").describe());
+            }
+            return std::unexpected(std::move(launchError));
+        };
+        const auto fault =
+            memoryHook ? memoryHook(process.get(), out->parent.get()) : detail::ResidentMemoryLaunchFault::None;
+        if (auto set = setResidentMemoryLimit(process.get(), memoryMaximum, fault); !set) {
+            return abortSuspended(std::move(set.error()));
+        }
+        DWORD previousCount = static_cast<DWORD>(-1);
+        if (fault == detail::ResidentMemoryLaunchFault::Resume) {
+            SetLastError(ERROR_ACCESS_DENIED);
+        } else {
+            previousCount = ResumeThread(thread.get());
+        }
+        if (previousCount == static_cast<DWORD>(-1)) {
+            return abortSuspended(lastWin32Error("ResumeThread"));
+        }
+        if (previousCount != 1) {
+            return abortSuspended(Error(ErrorCode::IoError, "unexpected initial thread suspend count"));
+        }
+    }
     // The child ends (in/out/err .child) close when this function returns, so EOF arrives
     // as soon as the child and its descendants close theirs.
-    return detail::SpawnedChild{
-        UniqueHandle(info.hProcess), std::move(job),         static_cast<ProcessId>(info.dwProcessId),
-        std::move(in->parent),       std::move(out->parent), std::move(err.parent)};
+    return detail::SpawnedChild{std::move(process),    std::move(job),         static_cast<ProcessId>(info.dwProcessId),
+                                std::move(in->parent), std::move(out->parent), std::move(err.parent)};
 }
 
 class WindowsProcessLauncher final : public IProcessLauncher {
@@ -1098,6 +1210,10 @@ std::optional<std::wstring> detail::shortWorkingDirectory(const std::string& nor
 
 void detail::setRefuseLongWorkingDirectoryForTesting(bool refuse) noexcept {
     g_refuseLongWorkingDirectory.store(refuse, std::memory_order_relaxed);
+}
+
+void detail::setResidentMemoryLaunchHookForTesting(ResidentMemoryLaunchTestHook hook) noexcept {
+    g_residentMemoryLaunchHook = hook;
 }
 
 } // namespace frost::io

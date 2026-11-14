@@ -66,7 +66,7 @@ GitController::GitController(vcs::GitRunner runner, io::IFileSystem& fs, vcs::Re
     const auto gate = m_gate;
     vcs::GitServiceCallbacks callbacks;
     callbacks.onStatusChanged = [this, gate](std::shared_ptr<const vcs::GitStatusSnapshot> snapshot) {
-        postTo(this, gate, [this, snapshot] { onStatus(snapshot); }, Qt::QueuedConnection);
+        postTo(this, gate, [this, snapshot = std::move(snapshot)] { onStatus(snapshot); }, Qt::QueuedConnection);
     };
     callbacks.onStatusFailed = [this, gate](const Error& error) {
         postTo(this, gate, [this, message = qs(error.message())] { emit statusFailed(message); }, Qt::QueuedConnection);

@@ -251,7 +251,7 @@ struct DirectoryRoles::State {
 DirectoryRoles::DirectoryRoles(std::unique_ptr<State> state) noexcept : m_state(std::move(state)) {}
 DirectoryRoles::~DirectoryRoles() = default;
 
-Result<std::shared_ptr<const DirectoryRoles>> DirectoryRoles::create(io::IFileSystem& fs, std::string root,
+Result<std::shared_ptr<const DirectoryRoles>> DirectoryRoles::create(io::IFileSystem& fs, const std::string& root,
                                                                      Options options) {
     auto normalized = normalizedDirectory(root);
     if (!normalized)
@@ -284,6 +284,7 @@ Result<std::shared_ptr<const DirectoryRoles>> DirectoryRoles::create(io::IFileSy
     return std::shared_ptr<const DirectoryRoles>(new DirectoryRoles(std::move(state)));
 }
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param): Own root snapshot across filesystem callbacks.
 Result<std::shared_ptr<const DirectoryRoles>> DirectoryRoles::load(io::IFileSystem& fs, std::string root,
                                                                    std::vector<DirectoryRoleOverride> overrides) {
     Options options;
@@ -300,7 +301,7 @@ Result<std::shared_ptr<const DirectoryRoles>> DirectoryRoles::load(io::IFileSyst
             }
         }
     }
-    auto roles = create(fs, std::move(root), std::move(options));
+    auto roles = create(fs, root, std::move(options));
     if (roles)
         const_cast<State&>(*(*roles)->m_state).presetsProblem = std::move(problem); // Not yet shared.
     return roles;

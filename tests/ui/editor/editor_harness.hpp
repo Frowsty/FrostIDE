@@ -76,7 +76,7 @@ struct HarnessOptions {
  * destroyed first, then the routing, the document and the executor.
  */
 struct EditorHarness {
-    explicit EditorHarness(std::string_view text, HarnessOptions options = {})
+    explicit EditorHarness(std::string_view text, const HarnessOptions& options = {})
         : document(text::TextBuffer::fromUtf8(std::string(text)).value()) {
         ensureEditorFonts();
         auto routing = EditorKeyRouting::createStandalone(

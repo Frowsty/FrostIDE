@@ -40,11 +40,46 @@
 #include "frost/core/error.hpp"
 #include "frost/run/test_model.hpp"
 
+#include <chrono>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace frost::run {
+
+/*
+ * A Google Test filter value that names `cases` (`Suite.Case`, joined with ':'). Pure.
+ */
+[[nodiscard]] std::string gtestFilterValue(std::span<const std::string> cases);
+
+/*
+ * The arguments that run `cases` (all when empty) of a Google Test program whose base arguments are
+ * `baseArgs`, writing a JSON report to `jsonReportPath` when non-empty: `baseArgs` without
+ * competing `--gtest_output=` / `--gtest_list_tests` / `--gtest_repeat=` (and without
+ * `--gtest_filter=` when `cases` is non-empty), then `[--gtest_filter=<cases>]` and
+ * `[--gtest_output=json:<jsonReportPath>]`. Pure.
+ */
+[[nodiscard]] std::vector<std::string> gtestRunArguments(std::span<const std::string> baseArgs,
+                                                         std::span<const std::string> cases,
+                                                         std::string_view jsonReportPath);
+
+// How the Google Test process of a direct run ended (RUN-10).
+struct GTestProcessEnd {
+    int exitCode = 0;
+    bool stopped = false;
+    std::optional<std::chrono::microseconds> duration{};
+    std::string output{};
+};
+
+/*
+ * The result of the ctest test `testName` that a direct Google Test run gave, from its JSON
+ * report's cases and how its process ended, with the report's cases as `cases`. nullopt when
+ * `cases` is an error, or when stopped with no finished cases. Pure.
+ */
+[[nodiscard]] std::optional<TestResult>
+gtestRunResult(const std::string& testName, const Result<std::vector<TestResult>>& cases, const GTestProcessEnd& end);
 
 /*
  * The cases of a `--gtest_list_tests` output, in the program's order. Errors: Corrupt (a case line

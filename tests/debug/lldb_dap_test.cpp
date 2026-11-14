@@ -30,7 +30,10 @@ namespace {
 using test::kWindows;
 using test::workPath;
 
-const std::string kExe = kWindows ? "lldb-dap.exe" : "lldb-dap";
+const std::string& kExe() {
+    static const std::string value = kWindows ? "lldb-dap.exe" : "lldb-dap";
+    return value;
+}
 
 // The initCommands lldbDapLaunchArguments adds on this platform after `first` (lldb_dap.hpp).
 std::string expectedInitCommands(std::vector<std::string> first) {
@@ -56,7 +59,7 @@ bool removes(const io::ProcessSpec& spec, std::string_view name) {
 
 TEST(LldbDap, ThePinnedPathFollowsTheSdkLock) {
     EXPECT_FALSE(pinnedLldbVersion().empty());
-    const std::string expected = workPath(std::format("sdk/lldb-{}/bin/{}", pinnedLldbVersion(), kExe));
+    const std::string expected = workPath(std::format("sdk/lldb-{}/bin/{}", pinnedLldbVersion(), kExe()));
     EXPECT_EQ(pinnedLldbDapPath(workPath("sdk")).value(), expected);
     const LldbDapSearch search = defaultLldbDapSearch("X");
     EXPECT_EQ(search.configured, "X");
@@ -82,7 +85,7 @@ TEST(LldbDap, FindsTheConfiguredOrThePinnedCopyAndNamesWhatItTried) {
     EXPECT_NE(missing.error().message().find("tools.lldbDap.path"), std::string::npos);
 
     const std::string pinned = pinnedLldbDapPath(workPath("sdk2")).value();
-    ASSERT_TRUE(fs.createDirectories(std::string(io::parentPath(pinned))).has_value());
+    ASSERT_TRUE(fs.createDirectories(io::parentPath(pinned)).has_value());
     ASSERT_TRUE(fs.writeFileAtomic(pinned, "MZ").has_value());
     EXPECT_EQ(findLldbDap(fs, empty).value(), pinned) << "the first SDK root that has it";
 
@@ -102,8 +105,8 @@ TEST(LldbDap, FindsTheConfiguredOrThePinnedCopyAndNamesWhatItTried) {
 }
 
 TEST(LldbDap, TheProcessSpecReadsNoLldbinitAndDropsSymbolServers) {
-    const io::ProcessSpec spec = lldbDapProcessSpec(workPath("sdk/" + kExe));
-    EXPECT_EQ(spec.executable, workPath("sdk/" + kExe));
+    const io::ProcessSpec spec = lldbDapProcessSpec(workPath("sdk/" + kExe()));
+    EXPECT_EQ(spec.executable, workPath("sdk/" + kExe()));
     EXPECT_EQ(spec.arguments, (std::vector<std::string>{"--no-lldbinit"}));
     for (const std::string_view name : {"_NT_SYMBOL_PATH", "_NT_ALT_SYMBOL_PATH", "DEBUGINFOD_URLS"}) {
         EXPECT_TRUE(removes(spec, name)) << name;
@@ -165,7 +168,7 @@ TEST(LldbDap, LibstdcxxCommandsCoverThePythonBackedContainersQuietly) {
         })) << type;
     }
     for (const std::string& command : commands) {
-        EXPECT_TRUE(command.starts_with("?")) << command; // Echoed only when it fails.
+        EXPECT_TRUE(command.starts_with('?')) << command; // Echoed only when it fails.
         EXPECT_EQ(command.find("size="), std::string::npos) << "a summary never claims a size";
     }
     DebugTarget target{.program = workPath("App/App.exe")};
@@ -220,7 +223,7 @@ TEST(LldbDap, SessionOptionsFitThePlatform) {
 
 TEST(LldbDap, TheFactoryStartsLldbDapThroughTheLauncher) {
     io::ScriptedProcessLauncher launcher;
-    const std::string exe = workPath("sdk/" + kExe);
+    const std::string exe = workPath("sdk/" + kExe());
     launcher.expect({.expectExecutable = exe});
     AdapterFactory factory = lldbDapAdapterFactory(launcher, exe);
     std::atomic<bool> closed = false;
@@ -296,7 +299,8 @@ TEST_F(DebugTrust, SourceMapRequiresAbsolutePrefixAndTrustedExistingDebugRoot) {
 TEST_F(DebugTrust, AnUntrustedRootIsRefusedBeforeAnyAdapterStarts) {
     io::ScriptedProcessLauncher launcher;
     DebugTarget target{.program = workPath("Untrusted/x64/Debug/App.exe")};
-    auto refused = startDebugSession(*trust, target, lldbDapAdapterFactory(launcher, workPath("sdk/" + kExe)), {}, {});
+    auto refused =
+        startDebugSession(*trust, target, lldbDapAdapterFactory(launcher, workPath("sdk/" + kExe())), {}, {});
     ASSERT_FALSE(refused.has_value());
     EXPECT_EQ(refused.error().code(), ErrorCode::Untrusted);
     EXPECT_NE(refused.error().message().find(workPath("Untrusted/x64/Debug")), std::string::npos);

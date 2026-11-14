@@ -145,6 +145,8 @@ public:
     Result<bool> exists(std::string_view path) override;
     // normalizePath in this MemFs's style; NotFound for a missing path.
     Result<std::string> canonicalPath(std::string_view path) override;
+    // Existing modeled target, including POSIX parent traversal; MemFs has no link nodes.
+    Result<std::string> physicalPath(std::string_view path) override;
 
     // Makes the next `count` `op` operations on `path` fail with `code` (see above). `path` must be
     // absolute (or empty for "any path") and `count` at least 1; anything else is a contract violation.

@@ -31,7 +31,10 @@ using test::waitUntil;
 using test::workPath;
 using Reply = FakeDebugAdapter::Reply;
 
-const std::string kSource = workPath("App/main.cpp");
+const std::string& kSource() {
+    static const std::string value = workPath("App/main.cpp");
+    return value;
+}
 
 rpc::Json launchArguments() {
     return rpc::Json::object()
@@ -70,7 +73,7 @@ class SessionBreakpointsTest : public ::testing::Test {
 protected:
     // Scripts a program that keeps running after configurationDone until the test sends events.
     void script() {
-        scriptProgram(adapter, FakeProgram{.sourcePath = kSource, .codeLines = {10}, .runsForever = true});
+        scriptProgram(adapter, FakeProgram{.sourcePath = kSource(), .codeLines = {10}, .runsForever = true});
         adapter.on("initialize", [](const rpc::Json&) { return Reply{.body = lldbCapabilities()}; });
         adapter.on("configurationDone", [](const rpc::Json&) { return Reply{}; });
         adapter.on("setFunctionBreakpoints", [](const rpc::Json& arguments) {
@@ -163,20 +166,21 @@ TEST_F(SessionBreakpointsTest, MsvcThrowStopSkipsTheImportThunkAndNamesTheFilter
     script();
     // Frame 0 is the runtime's function (no source), frame 1 the thrower.
     adapter.on("stackTrace", [](const rpc::Json&) {
-        return Reply{.body = rpc::Json::object()
-                                 .set("stackFrames",
-                                      rpc::Json::array({rpc::Json::object()
-                                                            .set("id", 1000)
-                                                            .set("name", "_CxxThrowException")
-                                                            .set("line", 0)
-                                                            .set("instructionPointerReference", "0x1000"),
-                                                        rpc::Json::object()
-                                                            .set("id", 1001)
-                                                            .set("name", "thrower")
-                                                            .set("line", 10)
-                                                            .set("instructionPointerReference", "0x2000")
-                                                            .set("source", rpc::Json::object().set("path", kSource))}))
-                                 .set("totalFrames", 2)};
+        return Reply{.body =
+                         rpc::Json::object()
+                             .set("stackFrames",
+                                  rpc::Json::array({rpc::Json::object()
+                                                        .set("id", 1000)
+                                                        .set("name", "_CxxThrowException")
+                                                        .set("line", 0)
+                                                        .set("instructionPointerReference", "0x1000"),
+                                                    rpc::Json::object()
+                                                        .set("id", 1001)
+                                                        .set("name", "thrower")
+                                                        .set("line", 10)
+                                                        .set("instructionPointerReference", "0x2000")
+                                                        .set("source", rpc::Json::object().set("path", kSource()))}))
+                             .set("totalFrames", 2)};
     });
     auto disassembled = std::make_shared<std::atomic<int>>(0);
     adapter.on("disassemble", [disassembled](const rpc::Json&) {
@@ -224,7 +228,7 @@ protected:
             if (onThunk->load()) {
                 frame.set("name", "0x1000").set("line", 0);
             } else {
-                frame.set("name", "callee").set("line", 10).set("source", rpc::Json::object().set("path", kSource));
+                frame.set("name", "callee").set("line", 10).set("source", rpc::Json::object().set("path", kSource()));
             }
             return Reply{
                 .body =
@@ -284,7 +288,7 @@ TEST_F(SessionBreakpointsTest, AStepInThroughAThunkIntoAStdFunctionStepsOutAndOn
         rpc::Json frame =
             rpc::Json::object().set("id", 1000 + stage->load()).set("instructionPointerReference", "0x1000");
         const auto sourced = [&](const char* name, std::int64_t line) {
-            frame.set("name", name).set("line", line).set("source", rpc::Json::object().set("path", kSource));
+            frame.set("name", name).set("line", line).set("source", rpc::Json::object().set("path", kSource()));
         };
         switch (stage->load()) {
         case 0:
@@ -401,7 +405,7 @@ TEST_F(SessionBreakpointsTest, APauseOnAThreadWithoutSourceSelectsOneWithSource)
                                    .set("sourceReference", 9)
                                    .set("presentationHint", "deemphasize"));
         } else {
-            frame.set("name", "spin").set("source", rpc::Json::object().set("path", kSource));
+            frame.set("name", "spin").set("source", rpc::Json::object().set("path", kSource()));
         }
         return Reply{
             .body = rpc::Json::object().set("stackFrames", rpc::Json::array({std::move(frame)})).set("totalFrames", 1)};
@@ -494,7 +498,7 @@ TEST_F(SessionBreakpointsTest, WithStepOutOfNoDebugAStepInLeavesAFunctionWithout
         rpc::Json frame =
             rpc::Json::object().set("id", 1000 + stage->load()).set("instructionPointerReference", "0x1000");
         const auto sourced = [&](const char* name, std::int64_t line) {
-            frame.set("name", name).set("line", line).set("source", rpc::Json::object().set("path", kSource));
+            frame.set("name", name).set("line", line).set("source", rpc::Json::object().set("path", kSource()));
         };
         switch (stage->load()) {
         case 0:
@@ -625,21 +629,21 @@ protected:
     void startThrowing(std::vector<std::string> types) {
         script();
         adapter.on("stackTrace", [](const rpc::Json&) {
-            return Reply{.body =
-                             rpc::Json::object()
-                                 .set("stackFrames",
-                                      rpc::Json::array({rpc::Json::object()
-                                                            .set("id", 1000)
-                                                            .set("name", "_CxxThrowException")
-                                                            .set("line", 0)
-                                                            .set("instructionPointerReference", "0x7ff800001000"),
-                                                        rpc::Json::object()
-                                                            .set("id", 1001)
-                                                            .set("name", "thrower")
-                                                            .set("line", 10)
-                                                            .set("instructionPointerReference", "0x140001234")
-                                                            .set("source", rpc::Json::object().set("path", kSource))}))
-                                 .set("totalFrames", 2)};
+            return Reply{
+                .body = rpc::Json::object()
+                            .set("stackFrames",
+                                 rpc::Json::array({rpc::Json::object()
+                                                       .set("id", 1000)
+                                                       .set("name", "_CxxThrowException")
+                                                       .set("line", 0)
+                                                       .set("instructionPointerReference", "0x7ff800001000"),
+                                                   rpc::Json::object()
+                                                       .set("id", 1001)
+                                                       .set("name", "thrower")
+                                                       .set("line", 10)
+                                                       .set("instructionPointerReference", "0x140001234")
+                                                       .set("source", rpc::Json::object().set("path", kSource()))}))
+                            .set("totalFrames", 2)};
         });
         adapter.on("disassemble", [](const rpc::Json&) {
             return Reply{.body = rpc::Json::object().set(
@@ -648,7 +652,7 @@ protected:
                                                                    .set("instruction", "movq %rdx, 0x10(%rsp)")}))};
         });
         adapter.on("evaluate", [this](const rpc::Json& arguments) {
-            evaluated->push_back(std::string(arguments.stringAt("expression")));
+            evaluated->emplace_back(arguments.stringAt("expression"));
             return Reply{.body = rpc::Json::object().set("result", std::format("0x{:016X}", next->load()))};
         });
         adapter.on("modules", [](const rpc::Json&) {
@@ -660,7 +664,8 @@ protected:
                          rpc::Json::object().set("name", "vcruntime140d.dll").set("addressRange", "0x7ff800000000")}))};
         });
         adapter.on("readMemory", [this](const rpc::Json& arguments) { return image.read(arguments); });
-        start(DebugSessionOptions{.msvcExceptions = true, .exceptionFilters = {"cpp_throw"}, .throwTypes = types});
+        start(DebugSessionOptions{
+            .msvcExceptions = true, .exceptionFilters = {"cpp_throw"}, .throwTypes = std::move(types)});
         ASSERT_TRUE(waitUntil([&] { return session->state() == DebugState::Running; }));
     }
 

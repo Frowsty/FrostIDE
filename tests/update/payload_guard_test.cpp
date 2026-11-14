@@ -157,7 +157,7 @@ TEST_F(UpdatePayloadFile, OccupiedAncestorRejectsAttributeOnlyJunctionConversion
     ASSERT_TRUE(std::filesystem::create_directory(destination));
     ASSERT_TRUE(std::filesystem::create_directory(empty));
     const auto substitute = L"\\??\\" + destination.native();
-    const auto display = destination.native();
+    const auto& display = destination.native();
     struct Header {
         DWORD tag;
         WORD length, reserved, substituteOffset, substituteLength, printOffset, printLength;

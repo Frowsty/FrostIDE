@@ -120,9 +120,7 @@ int vfsFullPathname(sqlite3_vfs*, const char* name, int size, char* out) {
 }
 void* vfsDlOpen(sqlite3_vfs*, const char* name) { return g_real->xDlOpen(g_real, name); }
 void vfsDlError(sqlite3_vfs*, int size, char* out) { g_real->xDlError(g_real, size, out); }
-void (*vfsDlSym(sqlite3_vfs*, void* handle, const char* symbol))(void) {
-    return g_real->xDlSym(g_real, handle, symbol);
-}
+void (*vfsDlSym(sqlite3_vfs*, void* handle, const char* symbol))() { return g_real->xDlSym(g_real, handle, symbol); }
 void vfsDlClose(sqlite3_vfs*, void* handle) { g_real->xDlClose(g_real, handle); }
 int vfsRandomness(sqlite3_vfs*, int size, char* out) { return g_real->xRandomness(g_real, size, out); }
 int vfsSleep(sqlite3_vfs*, int microseconds) { return g_real->xSleep(g_real, microseconds); }

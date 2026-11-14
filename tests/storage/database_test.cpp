@@ -357,6 +357,7 @@ TEST(Database, MovedDatabaseKeepsStatementsValid) {
     ASSERT_TRUE(transaction.has_value());
     const frost::storage::InterruptHandle handle = first.interruptHandle();
     Database second = std::move(first);
+    // NOLINTNEXTLINE(bugprone-use-after-move): Assert the moved-from closed state.
     EXPECT_FALSE(first.isOpen());
     auto row = statement->step();
     ASSERT_TRUE(row.has_value() && *row);

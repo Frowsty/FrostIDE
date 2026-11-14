@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -145,6 +146,56 @@ TEST(JsonRpcConnection, RequestCompletesWithItsResult) {
     EXPECT_EQ(received[0].integerAt("id"), 1);
     EXPECT_EQ(received[0].stringAt("method"), "test/echo");
     EXPECT_EQ(client.connection->pendingRequests(), 0U);
+}
+
+TEST(JsonRpcConnection, DeferredServerRequestCanBeAnsweredAfterReaderReturns) {
+    LangEnv env;
+    MemoryPipe pipe(env.pool());
+    FakeServer server(pipe, [](FakeServer& s, const Json& message) {
+        if (message.stringAt("method") == "test/trigger") {
+            s.requestClient(77, "client/deferred", Json::object());
+            s.respond(*message.find("id"), Json::object());
+        }
+        return true;
+    });
+
+    struct Deferred {
+        std::mutex mutex;
+        std::function<void(std::expected<Json, frost::lang::ResponseError>)> reply;
+    };
+    auto deferred = std::make_shared<Deferred>();
+    ConnectionHandlers handlers;
+    handlers.onAsyncRequest = [deferred](std::string_view method, const Json&,
+                                         std::function<void(std::expected<Json, frost::lang::ResponseError>)> done) {
+        if (method != "client/deferred") {
+            return false;
+        }
+        std::lock_guard lock(deferred->mutex);
+        deferred->reply = std::move(done);
+        return true;
+    };
+    JsonRpcConnection connection(pipe.clientStream(), env.pool(), std::move(handlers));
+    auto result = env.run(connection.request("test/trigger", Json::object()));
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+
+    auto received = server.received();
+    EXPECT_FALSE(std::ranges::any_of(received, [](const Json& message) {
+        return message.find("id") != nullptr && message.find("id")->asInteger() == 77;
+    }));
+    std::function<void(std::expected<Json, frost::lang::ResponseError>)> reply;
+    {
+        std::lock_guard lock(deferred->mutex);
+        reply = std::move(deferred->reply);
+    }
+    ASSERT_TRUE(reply);
+    reply(Json::object().set("applied", true));
+    ASSERT_TRUE(eventually([&] {
+        const auto messages = server.received();
+        return std::ranges::any_of(messages, [](const Json& message) {
+            return message.find("id") != nullptr && message.find("id")->asInteger() == 77 &&
+                   message.find("result") != nullptr && message.find("result")->boolAt("applied").value_or(false);
+        });
+    }));
 }
 
 TEST(JsonRpcConnection, OutOfOrderResponsesReachTheirRequests) {

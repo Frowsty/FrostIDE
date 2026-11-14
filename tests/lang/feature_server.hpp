@@ -27,10 +27,11 @@ public:
     using Handler = std::function<lang::Json(const lang::Json& params)>;
 
     explicit FeatureServer(lang::Json capabilities = defaultCapabilities())
-        : m_pipe(m_env.pool()), m_server(m_pipe,
-                                         [this, capabilities](FakeServer& server, const lang::Json& message) {
-                                             return serve(server, message, capabilities);
-                                         }),
+        : m_pipe(m_env.pool()),
+          m_server(m_pipe,
+                   [this, capabilities = std::move(capabilities)](FakeServer& server, const lang::Json& message) {
+                       return serve(server, message, capabilities);
+                   }),
           m_client(m_pipe.clientStream(), m_env.pool(), initOptions(), {}) {
         auto initialized = m_env.run(m_client.initialize());
         EXPECT_TRUE(initialized.has_value()) << initialized.error().describe();

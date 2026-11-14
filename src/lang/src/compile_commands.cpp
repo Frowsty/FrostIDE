@@ -27,6 +27,7 @@
 
 namespace frost::lang {
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param): Virtual locate() may reenter and replace the caller's token.
 Result<std::optional<CompileCommandsLocation>> ICompileCommandsProvider::locate(std::stop_token stop) {
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "compile commands lookup cancelled");
@@ -71,7 +72,7 @@ void sortByName(std::vector<io::DirEntry>& entries) { std::ranges::sort(entries,
 
 GeneratedCommandsLease::GeneratedCommandsLease(io::IFileSystem& fs, std::string boundary, std::string directory,
                                                std::vector<std::string> ownedParents,
-                                               std::shared_ptr<GeneratedCommandsRetirement> retirement,
+                                               const std::shared_ptr<GeneratedCommandsRetirement>& retirement,
                                                std::function<void()> beforeDeleteForTesting,
                                                PendingProbe pendingForTesting)
     : m_fs(&fs == &io::realFileSystem() ? &fs : nullptr), m_boundary(std::move(boundary)),

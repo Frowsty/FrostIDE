@@ -19,9 +19,15 @@
 namespace {
 
 #ifdef _WIN32
-const std::string kEngine = "C:\\engine";
+const std::string& kEngine() {
+    static const std::string value = "C:\\engine";
+    return value;
+}
 #else
-const std::string kEngine = "/engine";
+const std::string& kEngine() {
+    static const std::string value = "/engine";
+    return value;
+}
 #endif
 
 // A reference shaped like the engine's ScriptApiDocs::GenerateMarkdown() output.
@@ -80,7 +86,7 @@ Global tables of functions, properties and constants.
 ### string
 )";
 
-std::string join(std::string_view relative) { return frost::io::joinPath(kEngine, relative).value(); }
+std::string join(std::string_view relative) { return frost::io::joinPath(kEngine(), relative).value(); }
 
 void write(frost::io::MemFs& fs, std::string_view relative, std::string_view content) {
     const std::string path = join(relative);
@@ -114,7 +120,7 @@ TEST(FrostEngineLua, AnEngineCheckoutFindsItsReferenceAndItsProjectsGeneratedDef
     write(fs, "Samples/Bare/Bare.frostproj", "{}"); // No generated definitions: not listed.
     write(fs, "TestProject/TestProject.feproject", "version = 1\n");
     write(fs, "TestProject/.frost/lua-api/frost.lua", "---@meta\n");
-    const auto profile = frost::lang::discoverFrostEngineLua(fs, kEngine);
+    const auto profile = frost::lang::discoverFrostEngineLua(fs, kEngine());
     EXPECT_TRUE(profile.frostEngine);
     EXPECT_FALSE(profile.projectRoot);
     EXPECT_EQ(profile.reference, join("Docs/ScriptingAPI.md"));
@@ -137,7 +143,7 @@ TEST(FrostEngineLua, AProjectWithoutTheEngineReferenceClaimsNoGlobalsAndSaysWhy)
     frost::io::MemFs fs(frost::systemClock());
     write(fs, "Game.frostproj", "{}");
     write(fs, "Docs/ScriptingAPI.md", "# Hand-written notes\n");
-    const auto profile = frost::lang::discoverFrostEngineLua(fs, kEngine);
+    const auto profile = frost::lang::discoverFrostEngineLua(fs, kEngine());
     EXPECT_TRUE(profile.frostEngine);
     EXPECT_TRUE(profile.api.globals.empty());
     EXPECT_NE(profile.problem.find("generated scripting reference"), std::string::npos) << profile.problem;
@@ -152,7 +158,7 @@ TEST(FrostEngineLua, TheConfigurationCarriesTheEnginesGlobalsVersionAndLibrary) 
     write(fs, "Docs/ScriptingAPI.md", kReference);
     write(fs, "Samples/Game/Game.frostproj", "{}");
     write(fs, "Samples/Game/.frost/lua-api/frost.lua", "---@meta\n");
-    const auto profile = frost::lang::discoverFrostEngineLua(fs, kEngine);
+    const auto profile = frost::lang::discoverFrostEngineLua(fs, kEngine());
     const frost::lang::Json configuration = frost::lang::frostEngineLuaDefaults("Lua 5.1", profile);
     const frost::lang::Json globals = frost::lang::luaConfigurationSection(configuration, "Lua.diagnostics.globals");
     ASSERT_TRUE(globals.isArray());

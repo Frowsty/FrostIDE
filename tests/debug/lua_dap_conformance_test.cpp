@@ -118,8 +118,7 @@ std::string adapterErrorMessage(const Error& error, std::string_view command) {
 // Loopback server speaking the current experimental FrostEngine Lua debug wire protocol.
 class LoopbackLuaEngineServer {
 public:
-    LoopbackLuaEngineServer() {
-        m_listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    LoopbackLuaEngineServer() : m_listener(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) {
         EXPECT_NE(m_listener, kInvalid);
         sockaddr_in address{};
         address.sin_family = AF_INET;

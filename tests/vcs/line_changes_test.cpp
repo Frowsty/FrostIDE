@@ -32,11 +32,14 @@ std::string applied(std::string text, const LineRollback& edit) {
     return text;
 }
 
-const std::string kBase = "one\ntwo\nthree\nfour\nfive\nsix\n";
+const std::string& baseText() {
+    static const std::string value("one\ntwo\nthree\nfour\nfive\nsix\n");
+    return value;
+}
 
 TEST(LineChanges, AddedModifiedAndDeletedLines) {
     const std::string current = "zero\none\ntwo\nTHREE\nfour\nsix\n";
-    const LineSequence base = lsp(kBase);
+    const LineSequence base = lsp(baseText());
     const LineSequence buffer = lsp(current);
     auto changes = computeLineChanges(base, buffer);
     ASSERT_TRUE(changes.has_value()) << changes.error().describe();
@@ -56,14 +59,14 @@ TEST(LineChanges, AddedModifiedAndDeletedLines) {
     EXPECT_EQ(changeAtLine(*changes, LineIndex{5}), &(*changes)[2]);
     EXPECT_EQ(changeAtLine(*changes, LineIndex{6}), nullptr);
 
-    auto same = computeLineChanges(base, lsp(kBase));
+    auto same = computeLineChanges(base, lsp(baseText()));
     ASSERT_TRUE(same.has_value());
     EXPECT_TRUE(same->empty());
 }
 
 TEST(LineChanges, RollbackRestoresEachChange) {
     const std::string current = "zero\none\ntwo\nTHREE\nfour\nsix\n";
-    const LineSequence base = lsp(kBase);
+    const LineSequence base = lsp(baseText());
     const LineSequence buffer = lsp(current);
     auto changes = computeLineChanges(base, buffer);
     ASSERT_TRUE(changes.has_value()) << changes.error().describe();
@@ -77,7 +80,7 @@ TEST(LineChanges, RollbackRestoresEachChange) {
     for (auto it = changes->rbegin(); it != changes->rend(); ++it) {
         text = applied(text, rollbackEdit(base, buffer, *it));
     }
-    EXPECT_EQ(text, kBase);
+    EXPECT_EQ(text, baseText());
 }
 
 TEST(LineChanges, DeletionAtTheEndAndAMissingFinalBreak) {

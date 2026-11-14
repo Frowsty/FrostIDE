@@ -138,7 +138,7 @@ Result<Merge3> merge3(const LineSequence& base, const LineSequence& ours, const 
     // Equal halves of what interning left, so that both diffs see the same cap.
     const std::uint64_t half = budget.remaining() / 2;
     detail::WorkBudget budgetA(half, stop);
-    detail::WorkBudget budgetB(half, stop);
+    detail::WorkBudget budgetB(half, std::move(stop));
     const detail::FlagDiff diffA =
         detail::diffIds(ids[0], ids[1], idCount, options.diff.algorithm, options.diff.sliders, budgetA);
     if (budgetA.cancelled()) {

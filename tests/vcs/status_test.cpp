@@ -24,7 +24,10 @@ using frost::ErrorCode;
 using namespace frost::vcs;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
-const std::string kWork = kWindows ? "C:\\repo" : "/repo";
+const std::string& workPath() {
+    static const std::string value(kWindows ? "C:\\repo" : "/repo");
+    return value;
+}
 
 std::string nul(std::initializer_list<std::string_view> records) {
     std::string out;
@@ -35,11 +38,13 @@ std::string nul(std::initializer_list<std::string_view> records) {
     return out;
 }
 
-const std::string kZero = "0000000000000000000000000000000000000000";
-const std::string kOid = "1111111111111111111111111111111111111111";
+const std::string& testOid() {
+    static const std::string value("1111111111111111111111111111111111111111");
+    return value;
+}
 
 std::string ordinary(std::string_view xy, std::string_view path) {
-    return std::format("1 {} N... 100644 100644 100644 {} {} {}", xy, kOid, kOid, path);
+    return std::format("1 {} N... 100644 100644 100644 {} {} {}", xy, testOid(), testOid(), path);
 }
 
 TEST(GitStatusParse, EveryStateAndTheBranchHeaders) {
@@ -55,12 +60,12 @@ TEST(GitStatusParse, EveryStateAndTheBranchHeaders) {
         ordinary(".D", "gone.cpp"),
         ordinary("D.", "removed.cpp"),
         ordinary("AD", "added-then-deleted.cpp"),
-        std::format("2 R. N... 100644 100644 100644 {} {} R100 new name.cpp", kOid, kOid),
+        std::format("2 R. N... 100644 100644 100644 {} {} R100 new name.cpp", testOid(), testOid()),
         "old name.cpp",
-        std::format("2 C. N... 100644 100644 100644 {} {} C75 copy.cpp", kOid, kOid),
+        std::format("2 C. N... 100644 100644 100644 {} {} C75 copy.cpp", testOid(), testOid()),
         "source.cpp",
-        std::format("u UU N... 100644 100644 100644 100644 {} {} {} both.cpp", kOid, kOid, kOid),
-        std::format("1 .M S.M. 160000 160000 160000 {} {} third_party/sub", kOid, kOid),
+        std::format("u UU N... 100644 100644 100644 100644 {} {} {} both.cpp", testOid(), testOid(), testOid()),
+        std::format("1 .M S.M. 160000 160000 160000 {} {} third_party/sub", testOid(), testOid()),
         "? untracked dir/new.txt",
         "! build/out.o",
     });
@@ -113,7 +118,7 @@ TEST(GitStatusParse, UnbornAndDetachedHeads) {
     EXPECT_EQ(unborn->branch.head, "main");
     EXPECT_FALSE(unborn->branch.upstream.has_value());
 
-    auto detached = parsePorcelainV2(nul({"# branch.oid " + kOid, "# branch.head (detached)"}));
+    auto detached = parsePorcelainV2(nul({"# branch.oid " + testOid(), "# branch.head (detached)"}));
     ASSERT_TRUE(detached.has_value()) << detached.error().describe();
     EXPECT_TRUE(detached->branch.detached());
     EXPECT_TRUE(detached->entries.empty());
@@ -127,7 +132,7 @@ TEST(GitStatusParse, RejectsBrokenRecords) {
     EXPECT_EQ(parsePorcelainV2(nul({"1 .M N... 100644"})).error().code(), ErrorCode::Corrupt);
     EXPECT_EQ(parsePorcelainV2(nul({"x what"})).error().code(), ErrorCode::Corrupt);
     // A rename whose source record is missing.
-    const std::string rename = std::format("2 R. N... 100644 100644 100644 {} {} R100 b.cpp", kOid, kOid);
+    const std::string rename = std::format("2 R. N... 100644 100644 100644 {} {} R100 b.cpp", testOid(), testOid());
     EXPECT_EQ(parsePorcelainV2(rename + '\0').error().code(), ErrorCode::Corrupt);
 }
 
@@ -142,17 +147,17 @@ TEST(GitStatusParse, StatusArgumentsAskForPorcelainV2) {
 }
 
 TEST(VcsStatusMap, AnswersInsideTheWorkTreeOnly) {
-    auto parsed =
-        parsePorcelainV2(nul({ordinary(".M", "src/a.cpp"), "? notes.txt",
-                              std::format("2 R. N... 100644 100644 100644 {} {} R100 b2.cpp", kOid, kOid), "b.cpp"}));
+    auto parsed = parsePorcelainV2(
+        nul({ordinary(".M", "src/a.cpp"), "? notes.txt",
+             std::format("2 R. N... 100644 100644 100644 {} {} R100 b2.cpp", testOid(), testOid()), "b.cpp"}));
     ASSERT_TRUE(parsed.has_value()) << parsed.error().describe();
-    const VcsStatusMap map(kWork, *parsed, 7);
+    const VcsStatusMap map(workPath(), *parsed, 7);
     EXPECT_EQ(map.generation(), 7U);
     EXPECT_EQ(map.size(), 3U);
-    EXPECT_EQ(map.statusOf(absoluteGitPath(kWork, "src/a.cpp")), VcsFileStatus::Modified);
-    EXPECT_EQ(map.statusOf(absoluteGitPath(kWork, "notes.txt")), VcsFileStatus::Untracked);
-    EXPECT_EQ(map.statusOf(absoluteGitPath(kWork, "b2.cpp")), VcsFileStatus::Renamed);
-    EXPECT_EQ(map.statusOf(absoluteGitPath(kWork, "src/clean.cpp")), VcsFileStatus::Unmodified);
+    EXPECT_EQ(map.statusOf(absoluteGitPath(workPath(), "src/a.cpp")), VcsFileStatus::Modified);
+    EXPECT_EQ(map.statusOf(absoluteGitPath(workPath(), "notes.txt")), VcsFileStatus::Untracked);
+    EXPECT_EQ(map.statusOf(absoluteGitPath(workPath(), "b2.cpp")), VcsFileStatus::Renamed);
+    EXPECT_EQ(map.statusOf(absoluteGitPath(workPath(), "src/clean.cpp")), VcsFileStatus::Unmodified);
     EXPECT_EQ(map.statusOf(kWindows ? "C:\\other\\a.cpp" : "/other/a.cpp"), std::nullopt);
     EXPECT_EQ(map.statusOf(kWindows ? "C:\\repository\\a.cpp" : "/repository/a.cpp"), std::nullopt);
     EXPECT_EQ(map.statusOf("relative.cpp"), std::nullopt);
@@ -161,15 +166,16 @@ TEST(VcsStatusMap, AnswersInsideTheWorkTreeOnly) {
     }
     const auto entries = map.entries();
     ASSERT_EQ(entries.size(), 3U);
-    EXPECT_EQ(entries.front().first, absoluteGitPath(kWork, "b2.cpp"));
-    EXPECT_EQ(VcsStatusMap().statusOf(absoluteGitPath(kWork, "src/a.cpp")), std::nullopt);
+    EXPECT_EQ(entries.front().first, absoluteGitPath(workPath(), "b2.cpp"));
+    EXPECT_EQ(VcsStatusMap().statusOf(absoluteGitPath(workPath(), "src/a.cpp")), std::nullopt);
 }
 
 TEST(VcsStatusMap, PathHelpersConvertBetweenGitAndNativePaths) {
-    EXPECT_EQ(absoluteGitPath(kWork, "src/a.cpp"), kWindows ? "C:\\repo\\src\\a.cpp" : "/repo/src/a.cpp");
-    EXPECT_EQ(relativeGitPath(kWork, absoluteGitPath(kWork, "src/a.cpp")), std::optional<std::string>("src/a.cpp"));
-    EXPECT_EQ(relativeGitPath(kWork, kWork), std::nullopt);
-    EXPECT_EQ(relativeGitPath(kWork, kWindows ? "C:\\repo2\\a.cpp" : "/repo2/a.cpp"), std::nullopt);
+    EXPECT_EQ(absoluteGitPath(workPath(), "src/a.cpp"), kWindows ? "C:\\repo\\src\\a.cpp" : "/repo/src/a.cpp");
+    EXPECT_EQ(relativeGitPath(workPath(), absoluteGitPath(workPath(), "src/a.cpp")),
+              std::optional<std::string>("src/a.cpp"));
+    EXPECT_EQ(relativeGitPath(workPath(), workPath()), std::nullopt);
+    EXPECT_EQ(relativeGitPath(workPath(), kWindows ? "C:\\repo2\\a.cpp" : "/repo2/a.cpp"), std::nullopt);
 }
 
 TEST(GitMessages, CheckoutBlockersNameTheFiles) {

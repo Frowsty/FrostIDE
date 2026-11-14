@@ -5,12 +5,12 @@
 # PLAN.md section 6.4). Run inside WSL:
 #
 #   wsl -d Ubuntu-24.04 --exec bash /mnt/e/dev/FrostIDE/tools/verify.sh [--quick | --full] [--no-checks]
-#       [--tidy] [--tsan-quick] [--corpus]
+#       [--tidy | --no-tidy] [--tsan-quick | --no-tsan-quick] [--corpus]
 #
 # It mirrors the working tree onto ext4 (building on the /mnt/e 9P mount is
 # several times slower), then configures, builds and tests:
 #   --quick       (default) linux-clang Debug (clang + libstdc++ 14, the Linux floor)
-#   --tsan-quick  with --quick, the TSan quick leg: the linux-clang-tsan tree's tests of the
+#   --tsan-quick  enabled by default with --quick, the TSan quick leg: the linux-clang-tsan tree's tests of the
 #                 modules the changed files affect (io, rpc, sched, text and their dependents;
 #                 tools/verify_support.py tsan, ADR 0027 decision 5), or "tsan-quick not-needed"
 #                 when none is affected
@@ -31,7 +31,7 @@
 #
 # Tests labelled `stress` (long concurrency runs) are skipped in the Debug
 # configuration and run in the --full configurations. Tests labelled `corpus` run only in the
-# --corpus tier. Afterwards, with --tidy, clang-tidy checks
+# --corpus tier. Afterwards, clang-tidy checks by default
 # the changed files' translation units over the Debug compile database (every TU under --full,
 # with the fuzz tree's own TUs, or when there is no changed-file list), and the licence
 # check inspects the Linux build trees and Qt. Both run even with --no-checks, because they
@@ -41,9 +41,9 @@
 # has already checked the same tree. A standalone passing run (without --no-checks) records its
 # summary as a verify-stamp of the source tree for the commit-msg hook (FND-2, tools/hooks).
 #
-# --tidy and --tsan-quick are off by default during the feature-first phase (ADR 0031; ADR 0027
-# decision 9); without them the summary says "tidy not-run (off by default)" and, in --quick,
-# "tsan-quick not-run (off by default)", and no changed-file list is made.
+# Tidy and targeted TSan Quick are enabled by default (ADR 0078 decision 10). Explicit
+# --no-tidy or --no-tsan-quick disables that check and reports "disabled by request".
+# Full always runs full TSan, including with --no-tsan-quick. Repeated options use the last value.
 #
 # Before anything runs, the PATH loses the Windows directories (/mnt/<drive>/...) that WSL
 # appends: every CMake find_* search also probes them over 9P (ADR 0027 decision 4).
@@ -55,7 +55,7 @@
 #   FROST_JOBS           build and tidy parallelism (default: nproc), to stay inside the WSL memory cap.
 #   FROST_SDK            SDK root whose env.sh is sourced (default: ~/sdk).
 #   FROST_CHANGED_FILES  the changed-file list (repository-relative paths, one per line), used
-#                        only with --tidy or --tsan-quick in --quick:
+#                        in --quick when tidy or targeted TSan Quick is enabled:
 #                        unset, verify.sh computes it from the source tree's git; set and empty,
 #                        there is no list (verify.ps1 could not make one) and none is computed,
 #                        so tidy checks every TU and the TSan quick leg covers every module;
@@ -64,8 +64,7 @@
 #                        verify.sh computes the list (default: main).
 #
 # The last line of output is the summary for the commit verification footer,
-# e.g. "wsl: debug 62/63 (1 skipped), tsan-quick 40/40, tidy ok (2 TUs), licensecheck ok" (with
-# --tsan-quick and --tidy).
+# e.g. "wsl: debug 62/63 (1 skipped), tsan-quick 40/40, tidy ok (2 TUs), licensecheck ok".
 # Items are joined with ", " and never contain ", " outside parentheses. Skipped tests are
 # never counted as passed. Exit status is non-zero if any configuration fails to build, has
 # a failing test, tidy finds something, or a check fails; 2 for a usage error or a missing tool.
@@ -81,8 +80,8 @@ set -euo pipefail
 parse_args() {
     FULL=0
     CHECKS=1
-    TIDY=0
-    TSAN_QUICK=0
+    TIDY=1
+    TSAN_QUICK=1
     CORPUS=0
     local arg
     for arg in "$@"; do
@@ -91,9 +90,11 @@ parse_args() {
             --quick | -Quick | -quick) FULL=0 ;;
             --no-checks) CHECKS=0 ;;
             --tidy | -Tidy) TIDY=1 ;;
+            --no-tidy) TIDY=0 ;;
             --tsan-quick | -TsanQuick) TSAN_QUICK=1 ;;
+            --no-tsan-quick) TSAN_QUICK=0 ;;
             --corpus | -Corpus) CORPUS=1 ;;
-            *) echo "usage: verify.sh [--quick | --full] [--no-checks] [--tidy] [--tsan-quick] [--corpus]" >&2; exit 2 ;;
+            *) echo "usage: verify.sh [--quick | --full] [--no-checks] [--tidy | --no-tidy] [--tsan-quick | --no-tsan-quick] [--corpus]" >&2; exit 2 ;;
         esac
     done
 }
@@ -275,8 +276,9 @@ run_config() {
     if [[ "$label" == debug ]]; then debug_built=1; fi
     if [[ "$label" == fuzz ]]; then fuzz_built=1; fi
     echo "=== $label: test ($preset)"
-    local out counts
-    out="$(ctest --preset "$preset" "$@" 2>&1)" || status=1
+    local out counts skip_junit="$PWD/build/$configure/skip-audit.xml"
+    rm -f -- "$skip_junit"
+    out="$(ctest --preset "$preset" --output-junit "$skip_junit" "$@" 2>&1)" || status=1
     echo "$out" | tail -15
     counts="$(ctest_counts <<< "$out")"
     if [[ -z "$counts" ]]; then
@@ -286,7 +288,7 @@ run_config() {
     # The skip audit (FND-6): every skipped test with its reason; a skip for a missing pinned tool
     # fails the run ("<label> skips FAILED (...)"), environment skips are only listed.
     local audit audit_rc=0
-    audit="$(python3 -I tools/frost_lint.py skips --log "build/$configure/Testing/Temporary/LastTest.log" 2>&1)" ||
+    audit="$(python3 -I tools/frost_lint.py skips --log "build/$configure/Testing/Temporary/LastTest.log" --junit "$skip_junit" 2>&1)" ||
         audit_rc=$?
     echo "$audit"
     if ((audit_rc != 0)); then
@@ -295,13 +297,13 @@ run_config() {
     fi
 }
 
-# The TSan quick leg (PLAN.md 6.4 step 3; ADR 0027 decision 5), with --tsan-quick only (decision
-# 9): the TSan tree's tests of the modules the changed files affect, by their mod.* labels. Without
+# The TSan quick leg (PLAN.md 6.4 step 3; ADR 0027 decision 5), enabled by default (ADR 0078
+# decision 10): the TSan tree's tests of affected modules, by their mod.* labels. Without
 # a list every module runs. The tree builds incrementally, so the first run in a fresh mirror builds
 # all of it. A selection that matches no test fails as "no-results" (the presets set noTestsAction
 # to error).
 run_tsan_quick() {
-    if [[ $TSAN_QUICK -ne 1 ]]; then summary+=("tsan-quick not-run (off by default)"); return; fi
+    if [[ $TSAN_QUICK -ne 1 ]]; then summary+=("tsan-quick not-run (disabled by request)"); return; fi
     local args=(--all) out modules regex
     if [[ -n "$changed_list" ]]; then
         args=(--changed "$changed_list")
@@ -391,12 +393,12 @@ run_check() {
     if python3 -I "tools/$name.py" --repo "$MIRROR" 2>&1; then summary+=("$name ok"); else summary+=("$name FAILED"); status=1; fi
 }
 
-# clang-tidy over the Debug compile database (ADR 0027 decision 1), with --tidy only (decision 9):
+# clang-tidy over the Debug compile database (ADR 0027 decision 1), enabled by default (ADR 0078 decision 10):
 # the changed files' TUs with a list (Budget: B28), every TU without one or under --full (plus the
 # fuzz tree's own TUs). Appends the summary line tools/verify_support.py prints last
-# ("tidy ok (2 TUs)", "tidy FAILED (...)"), or "tidy not-run (off by default)".
+# ("tidy ok (2 TUs)", "tidy FAILED (...)"), or "tidy not-run (disabled by request)".
 run_tidy() {
-    if [[ $TIDY -ne 1 ]]; then summary+=("tidy not-run (off by default)"); return; fi
+    if [[ $TIDY -ne 1 ]]; then summary+=("tidy not-run (disabled by request)"); return; fi
     echo "=== tidy"
     if [[ $debug_built -ne 1 ]]; then summary+=("tidy not-run (debug build failed)"); return; fi
     local args=(--repo "$MIRROR" --build-dir "$MIRROR/build/linux-clang" --config Debug
@@ -417,7 +419,7 @@ run_tidy() {
     line="$(grep -E '^tidy ' <<< "$out" | tail -1 || true)"
     if [[ -z "$line" ]]; then line="tidy FAILED (exit $rc without a summary)"; fi
     summary+=("$line")
-    if ((rc != 0)); then status=1; fi
+    if ((rc != 0)) || [[ "$line" =~ ^tidy\ FAILED([[:space:]]|$) ]]; then status=1; fi
 }
 
 # The source-to-test line ratchet of this slice against the merge base with FROST_VERIFY_BASE (FND-5,

@@ -196,7 +196,7 @@ TEST(RunManager, OneRunPerConfigurationAndStopEndsIt) {
 TEST(RunManager, ABeforeLaunchHandlerResolvesTheProgram) {
     std::vector<std::jthread> builds;
     RunManagerOptions options;
-    options.beforeLaunch = [&](const RunConfiguration& configuration, std::stop_token, BeforeLaunchDone done) {
+    options.beforeLaunch = [&](const RunConfiguration& configuration, const std::stop_token&, BeforeLaunchDone done) {
         // The "build" finishes on another thread and names the program, as RUN-2's CMake type will.
         builds.emplace_back([configuration, done = std::move(done)] {
             const LaunchPlan plan{.program = test::childPath(),

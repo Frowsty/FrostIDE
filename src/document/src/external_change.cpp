@@ -219,7 +219,7 @@ ExternalChange SaveManager::reloadClean(FileDocument& document, LoadedDocument t
     return ExternalChange{&document, ExternalChangeKind::Reloaded, std::nullopt};
 }
 
-ExternalChange SaveManager::prepareMerge(FileDocument& document, Theirs theirs) {
+ExternalChange SaveManager::prepareMerge(FileDocument& document, const Theirs& theirs) {
     const text::Snapshot& theirsText = theirs.text;
     auto base = diff::LineSequence::fromSnapshot(document.m_baseText);
     auto ours = diff::LineSequence::fromSnapshot(document.m_document.committedText());
@@ -265,7 +265,7 @@ Result<void> SaveManager::resolveExternalChange(FileDocument& document, MergeDec
         if (document.m_document.version() != merge.oursVersion) {
             // The buffer moved on: rebuild the merge against it (from copies: the old merge goes).
             Theirs theirs{merge.theirs, merge.theirsEncoding, merge.theirsDisk, merge.theirsReadOnly};
-            static_cast<void>(prepareMerge(document, std::move(theirs)));
+            static_cast<void>(prepareMerge(document, theirs));
             return fail(ErrorCode::Busy,
                         "the buffer changed after the merge was built; it was rebuilt, resolve it again");
         }

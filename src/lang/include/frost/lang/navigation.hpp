@@ -116,6 +116,9 @@ private:
     std::map<std::string, std::optional<text::Snapshot>> m_files; // documentKey -> text (nullopt: unreadable).
 };
 
+// LSP references provide locations, not access semantics. Do not infer a kind from source text.
+enum class UsageKind : std::uint8_t { Reference };
+
 struct Usage {
     Location location;
     std::uint32_t line = 0;           // 1-based.
@@ -123,6 +126,7 @@ struct Usage {
     std::string lineText;             // Without leading indentation.
     std::uint32_t highlightBegin = 0; // Byte range of the usage in lineText.
     std::uint32_t highlightEnd = 0;
+    UsageKind kind = UsageKind::Reference;
 };
 
 struct UsageGroup {
@@ -133,6 +137,15 @@ struct UsageGroup {
 // The locations grouped by file (see the header comment). O(n log n) plus the line reads.
 [[nodiscard]] std::vector<UsageGroup> groupUsages(std::span<const Location> locations, const LineSource& lines,
                                                   PositionEncoding encoding);
+
+// Flattens grouped usages back into their ordered Location list (for oracle comparison and
+// callers that need a flat list in group order).
+[[nodiscard]] std::vector<Location> flattenUsageLocations(std::span<const UsageGroup> groups);
+
+// textDocument/references grouped by file with their authoritative locations.
+[[nodiscard]] sched::Task<Result<std::vector<UsageGroup>>>
+findUsages(ILspRequester& server, std::string path, LspPosition position, const LineSource& lines = {},
+           bool includeDeclaration = true, std::stop_token token = {});
 
 // LSP DocumentHighlightKind; the numbers are the protocol's.
 enum class HighlightKind : std::uint8_t { Text = 1, Read = 2, Write = 3 };
@@ -209,5 +222,24 @@ requestPrepareTypeHierarchy(ILspRequester& server, std::string path, LspPosition
 requestSupertypes(ILspRequester& server, TypeHierarchyItem item, std::stop_token token = {});
 [[nodiscard]] sched::Task<Result<std::vector<TypeHierarchyItem>>>
 requestSubtypes(ILspRequester& server, TypeHierarchyItem item, std::stop_token token = {});
+
+struct CallHierarchySnapshot {
+    CallHierarchyItem root;
+    std::vector<CallHierarchyIncomingCall> incoming;
+    std::vector<CallHierarchyOutgoingCall> outgoing;
+};
+
+struct TypeHierarchySnapshot {
+    TypeHierarchyItem root;
+    std::vector<TypeHierarchyItem> supertypes;
+    std::vector<TypeHierarchyItem> subtypes;
+};
+
+// Prepares call/type hierarchy at `position` and fetches both directions for the first root item
+// (nullopt when the server reports no item at `position`).
+[[nodiscard]] sched::Task<Result<std::optional<CallHierarchySnapshot>>>
+queryCallHierarchy(ILspRequester& server, std::string path, LspPosition position, std::stop_token token = {});
+[[nodiscard]] sched::Task<Result<std::optional<TypeHierarchySnapshot>>>
+queryTypeHierarchy(ILspRequester& server, std::string path, LspPosition position, std::stop_token token = {});
 
 } // namespace frost::lang

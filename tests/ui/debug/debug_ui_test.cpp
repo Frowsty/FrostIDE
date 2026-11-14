@@ -293,7 +293,7 @@ TEST_F(DebugUiTest, ManagedAttachUsesMonoIdentityAndVerifiedBreakpointSet) {
     auto allowed = std::vector<std::string>{source};
     auto started = controller->attachManagedTarget(
         target(), std::move(factory), [](const debug::DebugFrame&) { return true; }, allowed, lines,
-        [](std::string, std::function<void(bool)> done) { done(true); }, [] { return true; });
+        [](const std::string&, const std::function<void(bool)>& done) { done(true); }, [] { return true; });
     ASSERT_TRUE(started);
     ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
     const auto initialized = adapter.argumentsOf("initialize");
@@ -319,7 +319,7 @@ TEST_F(DebugUiTest, ManagedAttachRejectsBreakpointOutsideAdmittedSources) {
     std::map<std::string, std::vector<debug::BreakpointLine>> lines{{workPath("Trusted/other.cpp"), {{1, 7}}}};
     auto started = controller->attachManagedTarget(
         target(), std::move(factory), [](const debug::DebugFrame&) { return true; }, {source}, lines,
-        [](std::string, std::function<void(bool)> done) { done(true); }, [] { return true; });
+        [](const std::string&, const std::function<void(bool)>& done) { done(true); }, [] { return true; });
     EXPECT_FALSE(started);
     EXPECT_TRUE(adapter.argumentsOf("initialize").empty());
 }
@@ -589,7 +589,7 @@ TEST_F(DebugUiTest, CoreClrNeverSendsBreakpointsForUnverifiedSources) {
     std::vector<std::function<void(bool)>> pending;
     ASSERT_TRUE(controller->startCoreClrTarget(
         target, {workPath("Trusted")}, std::move(factory), [](const debug::DebugFrame&) { return true; }, {source},
-        [&pending](std::string, std::function<void(bool)> done) { pending.push_back(std::move(done)); }));
+        [&pending](const std::string&, std::function<void(bool)> done) { pending.push_back(std::move(done)); }));
     ASSERT_TRUE(spinUntil([&] { return controller->paused(); }));
     const auto before = adapter.argumentsOf("setBreakpoints");
     ASSERT_EQ(before.size(), 1U);
@@ -965,7 +965,7 @@ TEST_F(DebugUiTest, EvaluateShowsAnExpandableResult) {
     EvaluateDialog dialog(*controller, QStringLiteral("p"));
     EXPECT_EQ(dialog.expression()->text(), QStringLiteral("p"));
     dialog.evaluate();
-    VariablesModel& result = *dialog.result();
+    VariablesModel& result = *dialog.resultModel();
     ASSERT_TRUE(spinUntil([&] { return result.rowCount() == 1 && result.pendingRequests() == 0; }));
     const QModelIndex root = result.index(0, 0);
     EXPECT_EQ(result.data(root.siblingAtColumn(1), Qt::DisplayRole).toString(), QStringLiteral("{x:1, y:2}"));

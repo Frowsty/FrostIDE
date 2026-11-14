@@ -27,6 +27,7 @@
 
 #include "support/crash_dialogs.hpp"
 #include "support/engine_lock.hpp"
+#include "unit_tests_window.hpp"
 #include "workbench_rig.hpp"
 #include <QLabel>
 #include <QPushButton>
@@ -61,7 +62,7 @@ std::string pinnedCorpus() {
         return {};
     }
     const std::string sha = FROST_CORPUS_FROSTENGINE_SHA;
-    const std::string corpus = frost::io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
+    std::string corpus = frost::io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
     const auto head = frost::io::realFileSystem().readFile(corpus + "/.git/HEAD");
     if (!head || head->substr(0, 40) != sha) {
         ADD_FAILURE() << corpus << " is missing or not detached at its pin (python tools/corpora.py verify)";
@@ -285,7 +286,7 @@ TEST(CorpusFrostEngine, TheUnitTestsWindowListsRunsAndLocatesTheEnginesDoctestCa
         std::vector<std::future<std::pair<std::vector<std::string>, std::string>>> oracles;
         std::size_t next = 0;
         const auto start = [&] {
-            const frost::run::DiscoveredTest test = suites[next];
+            const frost::run::DiscoveredTest& test = suites[next];
             const std::string listPath = scratch.join(std::format("list-{}.txt", next++));
             oracles.push_back(std::async(std::launch::async, [test, listPath] {
                 std::string error;
@@ -400,6 +401,21 @@ TEST(CorpusFrostEngine, TheUnitTestsWindowListsRunsAndLocatesTheEnginesDoctestCa
     refresh->click();
     ASSERT_TRUE(waitFor([&] { return listedDoctest() && tree->itemFor(suite.name, injectedCase) != nullptr; }, 30min))
         << summary->text().toStdString();
+
+    // The real doctest listing and its source location must produce one concrete gutter action;
+    // clicking it runs only the injected case through FrostTests itself.
+    const auto currentSource = frost::io::realFileSystem().readFile(sourcePath);
+    ASSERT_TRUE(currentSource.has_value()) << sourcePath;
+    const auto gutterCases = frost::app::unitTestsGutterCasesForFile(window, sourcePath, *currentSource);
+    const auto gutterCase = std::ranges::find(gutterCases, injectedCase, &frost::run::GutterTestCase::caseName);
+    ASSERT_NE(gutterCase, gutterCases.end()) << "the real doctest case listing should back this gutter marker";
+    ASSERT_TRUE(frost::app::runGutterTestCase(window, *gutterCase).has_value());
+    awaitRun(15min);
+    result = tree->result(suite.name);
+    ASSERT_NE(result, nullptr);
+    ASSERT_EQ(result->cases.size(), 1u) << "one doctest gutter action runs exactly its selected case";
+    EXPECT_EQ(result->cases.front().name, injectedCase);
+    EXPECT_EQ(result->cases.front().outcome, TestOutcome::Failed);
 
     runCases({injectedCase});
     result = tree->result(suite.name);

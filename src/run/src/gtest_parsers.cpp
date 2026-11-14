@@ -258,4 +258,84 @@ void attachGTestReports(std::vector<TestResult>& results, const std::vector<Disc
     }
 }
 
+std::string gtestFilterValue(std::span<const std::string> cases) {
+    std::string out;
+    for (std::size_t i = 0; i < cases.size(); ++i) {
+        if (i > 0)
+            out += ':';
+        out += cases[i];
+    }
+    return out;
+}
+
+std::vector<std::string> gtestRunArguments(std::span<const std::string> baseArgs, std::span<const std::string> cases,
+                                           std::string_view jsonReportPath) {
+    std::vector<std::string> out;
+    for (const std::string& arg : baseArgs) {
+        if (arg.starts_with("--gtest_output=") || arg == "--gtest_list_tests")
+            continue;
+        // Repetition can turn a single-case request into an unbounded run (negative values) or
+        // an empty, green report (zero). A direct test launch always runs each selected case once.
+        if (arg.starts_with("--gtest_repeat="))
+            continue;
+        if (!cases.empty() && arg.starts_with("--gtest_filter="))
+            continue;
+        out.push_back(arg);
+    }
+    if (!cases.empty())
+        out.push_back(std::format("--gtest_filter={}", gtestFilterValue(cases)));
+    if (!jsonReportPath.empty())
+        out.push_back(std::format("--gtest_output=json:{}", jsonReportPath));
+    return out;
+}
+
+std::optional<TestResult> gtestRunResult(const std::string& testName, const Result<std::vector<TestResult>>& cases,
+                                         const GTestProcessEnd& end) {
+    if (!cases)
+        return std::nullopt;
+    if (!end.stopped && cases->empty())
+        return std::nullopt;
+    TestResult result;
+    result.name = testName;
+    result.cases = *cases;
+    result.output = end.output;
+    if (end.stopped) {
+        if (result.cases.empty())
+            return std::nullopt;
+        result.outcome =
+            std::ranges::any_of(result.cases, [](const TestResult& c) { return c.outcome == TestOutcome::Failed; })
+                ? TestOutcome::Failed
+                : TestOutcome::NotRun;
+        result.reason = "Stopped";
+        return result;
+    }
+    result.duration = end.duration;
+    std::size_t passed = 0, failed = 0, skipped = 0, disabled = 0;
+    for (const TestResult& c : result.cases) {
+        switch (c.outcome) {
+        case TestOutcome::Passed: ++passed; break;
+        case TestOutcome::Failed:
+        case TestOutcome::NotRun: ++failed; break;
+        case TestOutcome::Skipped: ++skipped; break;
+        case TestOutcome::Disabled: ++disabled; break;
+        }
+    }
+    if (failed > 0) {
+        result.outcome = TestOutcome::Failed;
+        result.reason = std::format("{} of {} case(s) failed", failed, result.cases.size());
+    } else if (end.exitCode != 0) {
+        result.outcome = TestOutcome::Failed;
+        result.reason = std::format("Exit code {}", end.exitCode);
+    } else if (!result.cases.empty() && passed == 0 && skipped > 0) {
+        result.outcome = TestOutcome::Skipped;
+        result.reason = result.cases.front().reason;
+    } else if (!result.cases.empty() && passed == 0 && disabled == result.cases.size()) {
+        result.outcome = TestOutcome::Disabled;
+        result.reason = "Disabled";
+    } else {
+        result.outcome = TestOutcome::Passed;
+    }
+    return result;
+}
+
 } // namespace frost::run

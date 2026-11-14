@@ -184,7 +184,7 @@ Result<std::string> applyUnified(std::string_view original, std::string_view pat
         bool lastNew = false;
         while (k < lines.size()) {
             const std::string_view body = lines[k].text;
-            if (body.starts_with("\\")) {
+            if (body.starts_with('\\')) {
                 if (!lastOld && !lastNew) {
                     return fail(ErrorCode::InvalidArgument, "misplaced \"\\ No newline at end of file\"");
                 }

@@ -26,9 +26,8 @@ inline DWORD sameFile(HANDLE original, const std::wstring& path) {
         return GetLastError();
     FILE_ID_INFO a{}, b{};
     DWORD error = ERROR_SUCCESS;
-    if (!GetFileInformationByHandleEx(original, FileIdInfo, &a, sizeof(a)))
-        error = GetLastError();
-    else if (!GetFileInformationByHandleEx(named, FileIdInfo, &b, sizeof(b)))
+    if (!GetFileInformationByHandleEx(original, FileIdInfo, &a, sizeof(a)) ||
+        !GetFileInformationByHandleEx(named, FileIdInfo, &b, sizeof(b)))
         error = GetLastError();
     else if (a.VolumeSerialNumber != b.VolumeSerialNumber ||
              std::memcmp(a.FileId.Identifier, b.FileId.Identifier, sizeof(a.FileId.Identifier)) != 0)

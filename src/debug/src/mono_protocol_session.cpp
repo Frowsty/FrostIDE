@@ -146,7 +146,8 @@ Result<std::vector<Packet>> ProtocolSession::feed(std::span<const std::uint8_t> 
     }
     return delivered;
 }
-Result<std::vector<std::uint8_t>> ProtocolSession::prepare(Operation op, Encoder encoder, std::uint32_t requestId) {
+Result<std::vector<std::uint8_t>> ProtocolSession::prepare(Operation op, const Encoder& encoder,
+                                                           std::uint32_t requestId) {
     auto ticket = m_gate.begin(op, requestId);
     if (!ticket)
         return std::unexpected(ticket.error());

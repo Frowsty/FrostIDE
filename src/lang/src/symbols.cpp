@@ -173,4 +173,65 @@ sched::Task<Result<std::vector<WorkspaceSymbol>>> requestWorkspaceSymbols(ILspRe
     co_return rankWorkspaceSymbols(parseWorkspaceSymbols(*result), query);
 }
 
+bool isClassLikeSymbol(SymbolKind kind) noexcept {
+    return kind == SymbolKind::Class || kind == SymbolKind::Struct || kind == SymbolKind::Interface ||
+           kind == SymbolKind::Enum || kind == SymbolKind::Namespace;
+}
+
+std::vector<WorkspaceSymbol> filterWorkspaceClasses(std::vector<WorkspaceSymbol> symbols) {
+    std::erase_if(symbols, [](const WorkspaceSymbol& s) { return !isClassLikeSymbol(s.kind); });
+    return symbols;
+}
+
+sched::Task<Result<std::vector<WorkspaceSymbol>>> requestWorkspaceClasses(ILspRequester& server, std::string query,
+                                                                          std::stop_token token) {
+    auto symbols = co_await requestWorkspaceSymbols(server, std::move(query), std::move(token));
+    if (!symbols) {
+        co_return std::unexpected(std::move(symbols.error()));
+    }
+    co_return filterWorkspaceClasses(std::move(*symbols));
+}
+
+std::vector<WorkspaceFile> rankWorkspaceFiles(std::span<const std::string> paths, std::string_view query) {
+    const bool hasSeparator = query.find('/') != std::string_view::npos || query.find('\\') != std::string_view::npos;
+    std::string normalizedQuery(query);
+    if (hasSeparator) {
+        std::ranges::replace(normalizedQuery, '\\', '/');
+    }
+    std::vector<WorkspaceFile> out;
+    out.reserve(paths.size());
+    for (const std::string& path : paths) {
+        const std::size_t slash = path.find_last_of("/\\");
+        std::string base = slash == std::string::npos ? path : path.substr(slash + 1);
+        if (query.empty()) {
+            out.push_back(WorkspaceFile{.path = path, .fileName = std::move(base), .match = {}});
+            continue;
+        }
+        std::string subject = base;
+        if (hasSeparator) {
+            subject = path;
+            std::ranges::replace(subject, '\\', '/');
+        }
+        if (auto match = fuzzyMatch(normalizedQuery, subject)) {
+            out.push_back(WorkspaceFile{.path = path, .fileName = std::move(base), .match = std::move(*match)});
+        }
+    }
+    std::ranges::stable_sort(out, [emptyQuery = query.empty()](const WorkspaceFile& a, const WorkspaceFile& b) {
+        if (emptyQuery) {
+            return a.path < b.path;
+        }
+        if (a.match.kind != b.match.kind) {
+            return a.match.kind < b.match.kind;
+        }
+        if (a.match.score != b.match.score) {
+            return a.match.score > b.match.score;
+        }
+        if (a.fileName.size() != b.fileName.size()) {
+            return a.fileName.size() < b.fileName.size();
+        }
+        return a.path < b.path;
+    });
+    return out;
+}
+
 } // namespace frost::lang

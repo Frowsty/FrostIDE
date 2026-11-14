@@ -108,7 +108,7 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
 void showSolutionPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
                                   std::optional<project::ProjectId> currentStartup,
                                   std::function<void(project::ProjectId)> onSetStartup,
-                                  std::function<void()> onDependenciesChanged);
+                                  const std::function<void()>& onDependenciesChanged);
 
 // The Configuration Manager (SLN-7, ui::ConfigurationManagerDialog): on OK the edited project
 // configuration mappings are written to the solution file (project::writeSolutionConfigurationEdits,
@@ -153,11 +153,11 @@ void showAttachToProcessDialog(QWidget* parent,
 // Read-only list of the projects `projectPath` references as loaded in `solution`. Adding or
 // removing references requires SLN-6, so nothing is written and `fs` and `onSaved` are unused.
 void showAddProjectReferenceDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
-                                   const std::string& projectPath, std::function<void()> onSaved);
+                                   const std::string& projectPath, const std::function<void()>& onSaved);
 
 // Modal wrapper around createNuGetToolWindowWidget for one project; `onSaved` is unused (read-only).
 void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const std::string& csprojPath,
-                                   std::function<void()> onSaved);
+                                   const std::function<void()>& onSaved);
 
 /*
  * NuGet tool window, read-only: the PackageReference items parsed from the selected C# project
@@ -168,7 +168,7 @@ void showNuGetPackageManagerDialog(QWidget* parent, io::IFileSystem& fs, const s
  */
 [[nodiscard]] QWidget* createNuGetToolWindowWidget(QWidget* parent, io::IFileSystem& fs,
                                                    std::function<const project::SolutionModel*()> solutionProvider,
-                                                   std::string initialCsprojPath, std::function<void()> onSaved);
+                                                   std::string initialCsprojPath, const std::function<void()>& onSaved);
 
 /*
  * ASM / IL tool window, disabled: it shows why the view is unavailable and starts no process.

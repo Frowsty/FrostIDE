@@ -121,7 +121,7 @@ TEST(WorkbenchLuaWorkspace, TheRuntimeSettingIsSentLiveWithoutARestart) {
     const Found lua51 = oracle(*server, dir, "Lua 5.1");
     const Found lua54 = oracle(*server, dir, "Lua 5.4");
     ASSERT_NE(lua51, lua54) << "the oracle must tell the runtimes apart";
-    dir.write("project/main.lua", std::string(kSource));
+    dir.write("project/main.lua", kSource);
     frost::app::test::RigOptions options;
     options.workbench.clangd = false;
     WorkbenchRig rig(dir, options);
@@ -162,7 +162,7 @@ TEST(WorkbenchLuaWorkspace, TheLuaSettingsPageWritesLuarcAndLuaLsFollowsIt) {
     const Found lua51 = oracle(*server, dir, "Lua 5.1");
     const Found lua54 = oracle(*server, dir, "Lua 5.4");
     ASSERT_NE(lua51, lua54);
-    dir.write("project/main.lua", std::string(kSource));
+    dir.write("project/main.lua", kSource);
     dir.write("project/.luarc.json", R"({"$schema":"keep-me","runtime":{"version":"Lua 5.4"}})");
     frost::app::test::RigOptions options;
     options.workbench.clangd = false;

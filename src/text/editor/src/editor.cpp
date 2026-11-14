@@ -107,4 +107,8 @@ std::vector<RowEdit> Editor::setWrap(WrapSettings wrap) noexcept {
 
 std::vector<RowEdit> Editor::setShaper(const ITextShaper& shaper) noexcept { return m_display.setShaper(shaper); }
 
+void Editor::setInlays(std::vector<Inlay> inlays) noexcept { m_display.setInlays(std::move(inlays)); }
+
+const std::vector<Editor::Inlay>& Editor::inlays() const noexcept { return m_display.inlays(); }
+
 } // namespace frost::text

@@ -190,10 +190,9 @@ std::vector<RawEvent> PollingState::diff(const ScanResult& scan) const {
             events.push_back({RawKind::Created, newIt->first, after.type, false, 0});
             skipOld = oldIt->first;
             skipNew = newIt->first;
-        } else if (after.type == FileType::Regular && (before.size != after.size || before.mtime != after.mtime)) {
-            events.push_back({RawKind::Modified, newIt->first, after.type, false, 0});
-        } else if (after.type == FileType::Directory && before.mtime != after.mtime) {
-            // Its children changed, perhaps only between two scans: the consumer re-lists it.
+        } else if ((after.type == FileType::Regular && (before.size != after.size || before.mtime != after.mtime)) ||
+                   (after.type == FileType::Directory && before.mtime != after.mtime)) {
+            // A directory's children may have changed only between scans: the consumer re-lists it.
             events.push_back({RawKind::Modified, newIt->first, after.type, false, 0});
         }
         ++oldIt;
@@ -293,7 +292,8 @@ sched::Task<Result<NativeOutcome>> startPollingWatch(std::shared_ptr<RealFileWat
     co_return NativeOutcome{std::move(state), {}};
 }
 
-NativeOutcome startPollingFromStrand(std::shared_ptr<RealFileWatcher::Impl> owner, std::shared_ptr<WatchQueue> queue) {
+NativeOutcome startPollingFromStrand(const std::shared_ptr<RealFileWatcher::Impl>& owner,
+                                     const std::shared_ptr<WatchQueue>& queue) {
     auto bound = makeBound<PollingState>(owner->reactor, owner, queue);
     if (!bound) {
         queue->close(Error(ErrorCode::Cancelled, "the reactor is shut down"), /*deliverPending=*/false);

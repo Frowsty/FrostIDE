@@ -46,7 +46,7 @@ public:
 
 private:
     using Encoder = std::function<Result<std::vector<std::uint8_t>>(std::string)>;
-    [[nodiscard]] Result<std::vector<std::uint8_t>> prepare(Operation operation, Encoder encoder,
+    [[nodiscard]] Result<std::vector<std::uint8_t>> prepare(Operation operation, const Encoder& encoder,
                                                             std::uint32_t requestId = 0);
     Wire m_wire;
     SessionGate m_gate;

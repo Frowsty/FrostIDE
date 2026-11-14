@@ -106,6 +106,47 @@ TEST(DisplayFold, RejectsCrossingAndSplitCharacters) {
     EXPECT_TRUE(map.folds().empty());
 }
 
+TEST(DisplayInlays, InlineProjectionMapsCaretAndPreservesTextRows) {
+    DisplayMap map(snap("alpha beta"), kCells);
+    map.setInlays({DisplayMap::Inlay{ByteOffset{5}, ": Value", Bias::Right}});
+    ASSERT_EQ(map.rowCount(), 1U);
+    const DisplayRowInfo row = map.rowInfo(DisplayRow{0});
+    ASSERT_EQ(row.segments.size(), 3U);
+    EXPECT_EQ(row.segments[0].kind, frost::text::SegmentKind::Text);
+    EXPECT_EQ(row.segments[0].buffer, range(0, 5));
+    EXPECT_EQ(row.segments[1].kind, frost::text::SegmentKind::Inlay);
+    EXPECT_EQ(row.segments[1].text, ": Value");
+    EXPECT_EQ(row.segments[2].kind, frost::text::SegmentKind::Text);
+    EXPECT_EQ(row.segments[2].buffer, range(5, 10));
+    EXPECT_EQ(map.toDisplayPoint(ByteOffset{5}, Bias::Left), dp(0, 5));
+    EXPECT_EQ(map.toDisplayPoint(ByteOffset{5}, Bias::Right), dp(0, 12));
+    EXPECT_EQ(map.toOffset(dp(0, 8)), ByteOffset{5});
+    ASSERT_TRUE(map.checkInvariants());
+}
+
+TEST(DisplayInlays, MixedBiasReplacementKeepsMappedAnchorsOrdered) {
+    Document doc = Document::fromUtf8("abcdef").value();
+    DisplayMap map(doc.text(), kCells);
+    map.setInlays(
+        {DisplayMap::Inlay{ByteOffset{1}, "right", Bias::Right}, DisplayMap::Inlay{ByteOffset{2}, "left", Bias::Left}});
+
+    const ChangeSet change = doc.replace(range(0, 3), "12345", EditContext{}).value();
+    ASSERT_TRUE(map.apply(change, doc.text()));
+
+    ASSERT_EQ(map.inlays().size(), 2U);
+    EXPECT_EQ(map.inlays()[0].offset, ByteOffset{0});
+    EXPECT_EQ(map.inlays()[0].text, "left");
+    EXPECT_EQ(map.inlays()[1].offset, ByteOffset{5});
+    EXPECT_EQ(map.inlays()[1].text, "right");
+    const DisplayRowInfo row = map.rowInfo(DisplayRow{0});
+    ASSERT_EQ(row.segments.size(), 4U);
+    EXPECT_EQ(row.segments[0].text, "left");
+    EXPECT_EQ(row.segments[1].buffer, range(0, 5));
+    EXPECT_EQ(row.segments[2].text, "right");
+    EXPECT_EQ(row.segments[3].buffer, range(5, 8));
+    ASSERT_TRUE(map.checkInvariants());
+}
+
 TEST(DisplayFold, EditsAndUndoMatchFreshProjection) {
     Document doc = Document::fromUtf8("before\n{\n  alpha\n  beta\n}\nafter\n").value();
     DisplayMap map(doc.text(), kCells, columns(8));

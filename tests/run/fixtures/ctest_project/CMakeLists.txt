@@ -24,6 +24,7 @@ set_tests_properties(slow PROPERTIES TIMEOUT 1)
 if(FROST_GTEST_FIXTURE)
     # The whole program as one test, and one of its cases the way gtest_discover_tests registers it.
     add_test(NAME gtest_program COMMAND ${FROST_GTEST_FIXTURE})
+    add_test(NAME Fixture.Passes COMMAND ${FROST_GTEST_FIXTURE} --gtest_filter=Fixture.Passes)
     add_test(NAME Fixture.Fails COMMAND ${FROST_GTEST_FIXTURE} --gtest_filter=Fixture.Fails)
 endif()
 if(FROST_TREE_PROGRAM)

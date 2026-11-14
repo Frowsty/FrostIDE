@@ -20,6 +20,21 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 The FrostIDE authors"
 SPDX-License-Identifier = "Apache-2.0"
 
+# Byte-exact OASIS SARIF 2.1.0 Errata 01 schema and its reproduction notice; retained unmodified.
+[[annotations]]
+path = ["tests/tools/schemas/sarif-schema-2.1.0.json", "tests/tools/schemas/NOTICE.txt",
+        "LICENSES/LicenseRef-OASIS-SARIF-Errata-01.txt"]
+precedence = "override"
+SPDX-FileCopyrightText = "Copyright © OASIS Open 2023"
+SPDX-License-Identifier = "LicenseRef-OASIS-SARIF-Errata-01"
+
+# Test-only fastjsonschema 2.22.3 source, preserved from its BSD-3-Clause PyPI wheel (ADR 0086).
+[[annotations]]
+path = ["tools/_vendor/fastjsonschema/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "Copyright (c) 2018, Michal Horejsek"
+SPDX-License-Identifier = "BSD-3-Clause"
+
 [[annotations]]
 path = ["resources/**/*.png", "resources/**/*.ico", "resources/icons/frost/**"]
 precedence = "aggregate"
@@ -34,10 +49,11 @@ precedence = "override"
 SPDX-FileCopyrightText = "Microsoft Corporation and vcpkg contributors"
 SPDX-License-Identifier = "MIT"
 
-# The getopt that replaces crashpad's public-domain one is FrostIDE's own code (ADR 0022). Being the
-# last match, this table replaces the vcpkg-ports rule above for that one patch.
+# These FrostIDE-authored Crashpad patches use Apache-2.0: the replacement getopt (ADR 0022) and
+# the ASan SEH dispatch patch. These exact paths replace the copied-vcpkg rule above.
 [[annotations]]
-path = ["third_party/vcpkg-ports/crashpad/frost-getopt.patch"]
+path = ["third_party/vcpkg-ports/crashpad/frost-getopt.patch",
+        "third_party/vcpkg-ports/crashpad/frost-asan-seh-dispatch.patch"]
 precedence = "override"
 SPDX-FileCopyrightText = "2026 The FrostIDE authors"
 SPDX-License-Identifier = "Apache-2.0"

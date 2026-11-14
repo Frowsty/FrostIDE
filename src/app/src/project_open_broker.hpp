@@ -40,7 +40,7 @@ public:
     [[nodiscard]] Result<void> start(); // Call only after first frame.
     void projectChanged();              // Rebind on a project switch; already-owned roots remain unchanged.
 private:
-    [[nodiscard]] Result<std::string> accept(std::string request);
+    [[nodiscard]] Result<std::string> accept(const std::string& request);
     void claimCurrent(unsigned attempts);
     Workbench& m_workbench;
     MainWindow& m_window;

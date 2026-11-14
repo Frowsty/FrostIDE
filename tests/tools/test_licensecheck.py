@@ -422,7 +422,7 @@ class AssetGateTest(TempDirTestCase):
         font = repo / "resources" / "fonts" / "demo" / "Demo-Regular.ttf"
         font.write_bytes(data)
         manifest = repo / "resources" / "assets.lock.json"
-        document = json.loads(manifest.read_text(encoding="utf-8"))
+        document = json.loads(manifest.read_text(encoding="utf-8-sig"))
         document["assets"][0]["files"][0]["sha256"] = hashlib.sha256(data).hexdigest()
         if licence_preamble is not None:
             licence = repo / "resources" / "fonts" / "demo" / "OFL.txt"
@@ -611,6 +611,51 @@ class AssetGateTest(TempDirTestCase):
         self.assertIn("vendored demo: file is not listed in third_party/vendor.lock.json", unlisted[0])
         component["licence"] = "GPL-3.0-only"
         self.assertTrue(any("not on the allowlist" in m for m in messages(listed)))
+
+
+class SarifValidatorPinTest(TempDirTestCase):
+    def _copy_sarif_pin(self) -> Path:
+        repo = self.tmp / "sarif"
+        for relative in (licensecheck.SARIF_VALIDATOR_MANIFEST,
+                         "tests/tools/schemas/sarif-schema-2.1.0.json",
+                         "tests/tools/schemas/NOTICE.txt",
+                         "LICENSES/LicenseRef-OASIS-SARIF-Errata-01.txt",
+                         "docs/adr/0086-sarif-schema-validation-tool.md",
+                         "tools/_vendor/fastjsonschema"):
+            source = REPO / relative
+            target = repo / relative
+            if source.is_dir():
+                shutil.copytree(source, target)
+            else:
+                _write(target, source.read_bytes())
+        return repo
+
+    def test_repository_validator_pin_and_exact_sources_pass(self) -> None:
+        repo = self._copy_sarif_pin()
+        report = licensecheck.Report()
+        licensecheck.check_sarif_validator(repo, report)
+        self.assertEqual(report.violations, [])
+        self.assertEqual(len(report.packages), 1)
+        package = report.packages[0]
+        self.assertEqual((package.name, package.version, package.declared, package.sha256),
+                         ("fastjsonschema", "2.22.3", "BSD-3-Clause",
+                          licensecheck.SARIF_VALIDATOR_WHEEL_SHA256))
+        self.assertIn("LicenseRef-OASIS-SARIF-Errata-01", (REPO / "REUSE.toml").read_text(encoding="utf-8"))
+
+    def test_changed_source_and_pin_metadata_fail(self) -> None:
+        repo = self._copy_sarif_pin()
+        source = next((repo / "tools/_vendor/fastjsonschema").glob("*.py"))
+        source.write_bytes(source.read_bytes() + b"# altered\n")
+        manifest = repo / licensecheck.SARIF_VALIDATOR_MANIFEST
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+        document["validator"]["wheel_url"] = "https://example.invalid/fastjsonschema.whl"
+        manifest.write_text(json.dumps(document), encoding="utf-8")
+        report = licensecheck.Report()
+        licensecheck.check_sarif_validator(repo, report)
+        messages = [v.message for v in report.violations]
+        self.assertTrue(any("SHA-256 differs from the pinned validator source" in m for m in messages), messages)
+        self.assertTrue(any("source, version, wheel SHA-256 or BSD-3-Clause licence differs" in m for m in messages),
+                        messages)
 
 
 class ConPtySdkPinTest(TempDirTestCase):

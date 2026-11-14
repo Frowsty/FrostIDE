@@ -59,6 +59,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -111,6 +112,52 @@ struct CTestSetup {
 [[nodiscard]] std::vector<std::string> ctestDiscoveryArguments(const CTestSetup& setup);
 // An anchored ctest regular expression matching exactly `names` (header comment). Pure.
 [[nodiscard]] std::string ctestExactNameRegex(const std::vector<std::string>& names);
+
+enum class TestCaseFramework : std::uint8_t { CTestWhole, GoogleTest, Doctest };
+
+// Replaces doctest's case filters and case-sensitivity flags with exact, case-sensitive selection.
+// Returns the full command, preserving its option prefix. Errors: InvalidArgument (empty command,
+// empty case name), Unsupported (a case name contains '*' or '?', which doctest cannot escape). Pure.
+[[nodiscard]] Result<std::vector<std::string>> doctestCaseSelectionCommand(const std::vector<std::string>& command,
+                                                                           const std::vector<std::string>& cases);
+
+struct SingleTestLaunch {
+    std::string program{};
+    std::vector<std::string> arguments{};
+    std::string workingDirectory{};
+    std::vector<std::pair<std::string, std::optional<std::string>>> environment{};
+    std::string displayName{};
+};
+
+/*
+ * Builds the direct launch specification for debugging or running a single ctest test or a single
+ * Google Test / doctest case within `test` (RUN-10). Errors: InvalidArgument when `test` has no
+ * absolute program or `setup` has no absolute build directory; Unsupported for a doctest case name
+ * containing '*' or '?', which the tool cannot select literally. Pure.
+ */
+[[nodiscard]] Result<SingleTestLaunch>
+buildSingleTestLaunch(const CTestSetup& setup, const DiscoveredTest& test, std::string_view caseName = {},
+                      TestCaseFramework framework = TestCaseFramework::CTestWhole);
+
+// A test case in a source file resolved to a ctest-discovered test (RUN-10).
+struct GutterTestCase {
+    DiscoveredTest test{};
+    std::string caseName{};
+    TestCaseFramework framework = TestCaseFramework::CTestWhole;
+    int line = 0; // 1-based line in the source file.
+    std::string displayName{};
+};
+
+/*
+ * Maps test definitions in `filePath` (with source text `content`) to concrete runnable and
+ * debuggable ctest-backed test cases (RUN-10, truth rule: only cases backed by `tests` are
+ * returned). Pure.
+ */
+[[nodiscard]] std::vector<GutterTestCase>
+resolveGutterTestCasesInFile(std::string_view filePath, std::string_view content, std::span<const DiscoveredTest> tests,
+                             std::span<const std::pair<std::string, std::vector<DoctestCase>>> doctestCases = {},
+                             std::span<const std::pair<std::string, std::vector<GTestCase>>> gtestCases = {},
+                             std::string_view buildDirectory = {});
 
 // How a run ended (header comment, "Outcome of a run").
 struct TestRunReport {
@@ -198,6 +245,22 @@ public:
     };
     [[nodiscard]] Result<void> runDoctest(const CTestSetup& setup, std::vector<DoctestRunRequest> requests,
                                           TestRunHandlers handlers);
+
+    /*
+     * Runs Google Test cases directly, without ctest (RUN-10): for each request, its test's program
+     * with gtestRunArguments (the request's cases, all of the test's when empty), one process at a
+     * time, in the test's working directory with the setup's environment and its ENVIRONMENT. Each
+     * finished process gives its test's result (gtestRunResult: the cases from Google Test's JSON
+     * report, the run time measured from launch to exit) through onTestFinished and in the report.
+     * A selected-case request must report exactly those cases; an empty or mismatched report is a
+     * tool error, never a pass.
+     */
+    struct GTestRunRequest {
+        DiscoveredTest test{};
+        std::vector<std::string> cases{};
+    };
+    [[nodiscard]] Result<void> runGTest(const CTestSetup& setup, std::vector<GTestRunRequest> requests,
+                                        TestRunHandlers handlers);
 
     // Ends the current job's process tree; the job then finishes as stopped/Cancelled. Idempotent.
     void cancel();

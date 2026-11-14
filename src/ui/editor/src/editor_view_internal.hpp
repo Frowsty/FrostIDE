@@ -29,7 +29,7 @@ inline constexpr const char* kLineCopyMime = "application/x-frostide-line-copy";
 }
 
 // Keep cancellation responsive even when a generated file contains many candidate regions.
-[[nodiscard]] inline bool orderCandidates(std::vector<text::ByteRange>& ranges, std::stop_token stop) {
+[[nodiscard]] inline bool orderCandidates(std::vector<text::ByteRange>& ranges, const std::stop_token& stop) {
     constexpr std::size_t chunk = 64;
     for (std::size_t first = 0; first < ranges.size(); first += chunk) {
         if (stop.stop_requested())
@@ -67,7 +67,8 @@ inline constexpr const char* kLineCopyMime = "application/x-frostide-line-copy";
 }
 
 inline std::uint64_t buildCandidateMax(const std::vector<text::ByteRange>& ranges, std::vector<std::uint64_t>& tree,
-                                       std::size_t node, std::size_t first, std::size_t end, std::stop_token stop) {
+                                       std::size_t node, std::size_t first, std::size_t end,
+                                       const std::stop_token& stop) {
     if (stop.stop_requested())
         return 0;
     if (end - first == 1)

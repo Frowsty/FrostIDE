@@ -78,7 +78,7 @@ std::string checkedCorpus() {
         return {};
     }
     const std::string sha = FROST_CORPUS_FROSTENGINE_SHA;
-    const std::string corpus = frost::io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
+    std::string corpus = frost::io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
     auto& fs = frost::io::realFileSystem();
     const auto head = fs.readFile(corpus + "/.git/HEAD");
     if (!fs.exists(corpus + "/CMakePresets.json").value_or(false) || !head || head->substr(0, 40) != sha) {
@@ -191,6 +191,7 @@ public:
     frost::Result<void> removeDirectory(std::string_view path) override { return inner.removeDirectory(path); }
     frost::Result<bool> exists(std::string_view path) override { return inner.exists(path); }
     frost::Result<std::string> canonicalPath(std::string_view path) override { return inner.canonicalPath(path); }
+    frost::Result<std::string> physicalPath(std::string_view path) override { return inner.physicalPath(path); }
 
     [[nodiscard]] std::vector<std::string> listed() const {
         const std::scoped_lock lock(m_mutex);
@@ -395,7 +396,7 @@ std::set<std::string> undefinedGlobals(frost::lang::LuaService& service, const s
 }
 
 constexpr std::string_view kMisspelled = "Nte"; // The engine's Net namespace, misspelled.
-const std::string kProbeLine = "\nlocal frostIdeProbe = Nte.IsServer()\n";
+constexpr char kProbeLine[] = "\nlocal frostIdeProbe = Nte.IsServer()\n";
 
 /*
  * Starts real LuaLS on `workspace` with `configuration`, opens `file` with `text`, and waits until

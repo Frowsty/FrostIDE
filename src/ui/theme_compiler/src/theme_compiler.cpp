@@ -117,27 +117,25 @@ private:
 
     void compile(std::span<const std::byte> json) {
         if (!isValidThemeId(m_themeId)) {
-            error(std::string(kRoot),
-                  std::format("invalid theme id '{}' (expected [a-z0-9][a-z0-9-]{{0,63}})", m_themeId));
+            error(kRoot, std::format("invalid theme id '{}' (expected [a-z0-9][a-z0-9-]{{0,63}})", m_themeId));
             return;
         }
         if (json.size() > kMaxThemeJsonBytes) {
-            error(std::string(kRoot),
-                  std::format("{} bytes is over the {}-byte theme file limit", json.size(), kMaxThemeJsonBytes));
+            error(kRoot, std::format("{} bytes is over the {}-byte theme file limit", json.size(), kMaxThemeJsonBytes));
             return;
         }
         const std::string_view text(reinterpret_cast<const char*>(json.data()), json.size());
         if (text.starts_with("\xEF\xBB\xBF")) {
-            error(std::string(kRoot), "a UTF-8 byte order mark is not allowed");
+            error(kRoot, "a UTF-8 byte order mark is not allowed");
             return;
         }
         if (!io::isValidUtf8(text)) {
-            error(std::string(kRoot), "the file is not valid UTF-8");
+            error(kRoot, "the file is not valid UTF-8");
             return;
         }
         const detail::PrescanResult scan = detail::prescanJson(text, kMaxThemeJsonDepth, kMaxReportedDuplicates);
         if (scan.depthExceeded) {
-            error(std::string(kRoot), std::format("nesting is deeper than {} levels", kMaxThemeJsonDepth));
+            error(kRoot, std::format("nesting is deeper than {} levels", kMaxThemeJsonDepth));
             return;
         }
         for (const detail::DuplicateMember& duplicate : scan.duplicates) {
@@ -151,13 +149,13 @@ private:
         const QJsonDocument document = QJsonDocument::fromJson(
             QByteArray::fromRawData(text.data(), static_cast<qsizetype>(text.size())), &parseError);
         if (parseError.error != QJsonParseError::NoError || text.empty()) {
-            error(std::string(kRoot), text.empty() ? std::string("malformed JSON: the file is empty")
-                                                   : std::format("malformed JSON at offset {}: {}", parseError.offset,
-                                                                 utf8(parseError.errorString())));
+            error(kRoot, text.empty() ? std::string("malformed JSON: the file is empty")
+                                      : std::format("malformed JSON at offset {}: {}", parseError.offset,
+                                                    utf8(parseError.errorString())));
             return;
         }
         if (!document.isObject()) {
-            error(std::string(kRoot), "the top level must be an object");
+            error(kRoot, "the top level must be an object");
             return;
         }
         m_data.id = std::string(m_themeId);
@@ -168,7 +166,7 @@ private:
         checkUnderlays();
         if (std::ranges::none_of(m_diagnostics, [](const Diagnostic& d) { return d.severity == Diagnostic::Error; })) {
             if (auto valid = Theme::fromData(m_data); !valid) {
-                error(std::string(kRoot), valid.error().message());
+                error(kRoot, valid.error().message());
             }
         }
     }
@@ -230,7 +228,7 @@ private:
             error("dark", "the required field \"dark\" is missing");
         }
         flattenUi(ui, "", "ui");
-        m_compact = compact;
+        m_compact = std::move(compact);
         iconPalette(icons);
     }
 

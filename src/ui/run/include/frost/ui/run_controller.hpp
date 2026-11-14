@@ -10,6 +10,9 @@
  *   - native: through the RunManager (run::RunManager, RUN-1; setRunManager), after
  *     hooks.mayRunConfiguration (the workspace's trust gate). Output, input, Stop (the whole
  *     process tree) and the exit code go to the configuration's tab.
+ *   - frost-editor / frost-player (RUN-11): through RunManager with --project, after trust and
+ *     session preparation. Real process events reach the app session coordinator; raw startup
+ *     output stays private because it carries credentials. Stop ends only this owned process tree.
  *   - cmake-target: hooks.selectCMakeTarget(target), then hooks.alternateRun (the CMake
  *     integration builds the target and starts it through the same RunManager, laying the
  *     configuration's edits over its launch: hooks of the workbench).
@@ -89,6 +92,30 @@ struct RunControllerHooks {
     std::function<void(const std::string& target)> selectCMakeTarget{};
     // The trust gate of a native configuration; an error is reported and nothing starts. Empty: allowed.
     std::function<Result<void>(const run::RunConfiguration& configuration)> mayRunConfiguration{};
+    // RUN-11, GUI thread: called after trust gating, before RunManager accepts an engine run.
+    // The app reserves its session generation and adds authenticated server launch options to a
+    // transient copy (never saved). Missing hook refuses engine runs. Errors prevent launch.
+    std::function<Result<run::RunConfiguration>(const run::RunConfiguration&)> prepareEngineConfiguration{};
+    // GUI-thread factory after prepare: returns final admission for each child (including tasks).
+    // The returned closure validates paths/configuration directories on the dispatcher: thread-safe,
+    // retaining shared trust/session revision state and no QObjects; never waits on the GUI. Empty
+    // closure refuses engine launch. It may run again after final project resolution.
+    std::function<std::function<Result<void>()>(const run::RunConfiguration&)> engineLaunchAdmissionFor{};
+    // GUI-thread factory retaining immutable run identity; the returned closure resolves the exact
+    // project on the dispatcher after admission. Only generated --project argv[1] may change, to an
+    // absolute physical project path. Empty/missing resolver refuses launch. The store is unchanged.
+    std::function<std::function<Result<run::LaunchPlan>(run::LaunchPlan)>(const run::RunConfiguration&)>
+        engineLaunchPlanFor{};
+    // GUI-thread acceptance before queued lifecycle events: supplies the exact reserved run id
+    // even if a before-launch task fails and the engine process never reaches Running.
+    std::function<void(run::RunId, const run::RunConfiguration&)> engineRunAccepted{};
+    // Actual process lifecycle, GUI thread, copied through the relay. Started supplies the real PID;
+    // output discovers the engine endpoint; the app establishes its authenticated persistent session.
+    // A failed handshake must be surfaced by the app and stop this owned RunManager run. Externally
+    // paired instances never enter this lifecycle and Stop cannot terminate their process.
+    std::function<void(const run::RunStatus&)> engineProcessStarted{};
+    std::function<void(run::RunId, run::OutputStream, std::string_view)> engineProcessOutput{};
+    std::function<void(const run::RunResult&)> engineProcessFinished{};
     // The generated configurations of the open workspace, asked on every refresh(); empty: none.
     std::function<std::vector<run::RunConfiguration>()> generatedConfigurations{};
     // Persists the configurations the store keeps (RunConfigurationSet::stored) after an edit.

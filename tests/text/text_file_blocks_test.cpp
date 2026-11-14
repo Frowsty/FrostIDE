@@ -65,7 +65,10 @@ const Encoding kUtf16Le = Encoding::unicode(EncodingForm::Utf16Le);
 const Encoding kUtf16Be = Encoding::unicode(EncodingForm::Utf16Be);
 const Encoding kCp932 = Encoding::legacy(932);
 const Encoding kCp1252 = Encoding::legacy(1252);
-const std::string kFffd(frost::text::kReplacementUtf8);
+const std::string& replacementText() {
+    static const std::string value(frost::text::kReplacementUtf8);
+    return value;
+}
 
 // Options for a load; `blockBytes` 0 keeps the default block.
 LoadOptions options(std::uint16_t legacy, std::optional<Encoding> override = std::nullopt, std::size_t blockBytes = 0) {
@@ -163,7 +166,7 @@ TEST(TextFileBlocks, Utf16LoneHighSurrogateEndsBlock) {
     const std::size_t before = kBlock / 2 - 1;
     const std::string bytes = fromHex("ff fe") + repeat("a\0"sv, before) + fromHex("3d d8") + repeat("c\0"sv, 100);
     ASSERT_EQ(bytes.substr(2 + kBlock - 2, 4), fromHex("3d d8 63 00"));
-    const std::string text = std::string(before, 'a') + kFffd + std::string(100, 'c');
+    const std::string text = std::string(before, 'a') + replacementText() + std::string(100, 'c');
     expectLoad(bytes, options(1252), kUtf16Le, Expect{text, 1, kBlock, before});
 }
 
@@ -178,7 +181,7 @@ TEST(TextFileBlocks, ShiftJisAcrossBlocks) {
     // An invalid pair across a 64-byte block: one 2-byte unit, one U+FFFD.
     const std::string shortHead(63, 'a');
     expectLoad(shortHead + fromHex("85 80") + "z", options(932, kCp932, 64), kCp932,
-               Expect{shortHead + kFffd + "z", 1, 63, 63});
+               Expect{shortHead + replacementText() + "z", 1, 63, 63});
 }
 
 TEST(TextFileBlocks, Utf8LossyAcrossBlocks) {
@@ -193,11 +196,11 @@ TEST(TextFileBlocks, Utf8LossyAcrossBlocks) {
     const Case cases[] = {
         // A 3-byte character straddles the boundary and survives; FF in the second block is lossy.
         {head + fromHex("e6 97 a5") + std::string(100, 'b') + "\xFF" + "c",
-         head + fromU8(u8"日") + std::string(100, 'b') + kFffd + "c", kBlock + 102},
+         head + fromU8(u8"日") + std::string(100, 'b') + replacementText() + "c", kBlock + 102},
         // A truncated 3-byte sequence across the boundary: one U+FFFD for its maximal subpart.
-        {head + fromHex("e6 97") + "b", head + kFffd + "b", kBlock - 1},
+        {head + fromHex("e6 97") + "b", head + replacementText() + "b", kBlock - 1},
         // A 4-byte character split 2 + 2, then FF.
-        {head2 + fromHex("f0 9f 98 80") + "\xFF", head2 + fromU8(u8"\U0001F600") + kFffd, kBlock + 2},
+        {head2 + fromHex("f0 9f 98 80") + "\xFF", head2 + fromU8(u8"\U0001F600") + replacementText(), kBlock + 2},
     };
     for (const Case& c : cases) {
         SCOPED_TRACE(c.at);
@@ -214,7 +217,7 @@ TEST(TextFileBlocks, Utf8BomInvalidAfterFirstBlock) {
     EXPECT_TRUE(d->encoding.format.bom);
     EXPECT_FALSE(d->payloadIsText);
     EXPECT_EQ(d->payloadOffset, 3u);
-    expectLoad(bytes, options(1252), kUtf8, Expect{body + kFffd + "z", 1, 3 + kBlock + 5, kBlock + 5});
+    expectLoad(bytes, options(1252), kUtf8, Expect{body + replacementText() + "z", 1, 3 + kBlock + 5, kBlock + 5});
 }
 
 // --- The buffer limit across blocks (D17) ---------------------------------------------------
@@ -335,7 +338,7 @@ TEST(TextFileBlocks, DecodedTextCapacityIsBounded) {
         {"windows-1252, 1% non-ASCII", repeat(sentence, kBlock / 400), options(1252, kCp1252),
          repeat(sentenceUtf8, kBlock / 400)},
         {"lossy UTF-8", repeat(std::string(999, 'x') + "\xFF", 256), options(1252, kUtf8),
-         repeat(std::string(999, 'x') + kFffd, 256)},
+         repeat(std::string(999, 'x') + replacementText(), 256)},
         /*
          * After FF FE 00 00 the last unit, 00 D8 00 00, is a surrogate as UTF-32LE and a lone high
          * surrogate as UTF-16LE: both candidates are lossy, so UTF-32LE is decoded again (step 3)
@@ -344,7 +347,8 @@ TEST(TextFileBlocks, DecodedTextCapacityIsBounded) {
         {"UTF-32LE, CJK then ASCII, decoded again",
          fromHex("ff fe 00 00") + repeat("\xE5\x65\0\0"sv, 16 * 1024) + repeat("a\0\0\0"sv, 32 * 1024) +
              fromHex("00 d8 00 00"),
-         options(1252, std::nullopt, small), repeat(cjk, 16 * 1024) + std::string(32 * 1024, 'a') + kFffd, true},
+         options(1252, std::nullopt, small), repeat(cjk, 16 * 1024) + std::string(32 * 1024, 'a') + replacementText(),
+         true},
     };
     for (const Case& c : cases) {
         SCOPED_TRACE(c.name);

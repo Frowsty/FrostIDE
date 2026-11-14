@@ -156,6 +156,13 @@ TEST(WorkbenchClangd, FindReplaceUpdatesLiveDiagnostics) {
     frost::test::disableCrashDialogs();
     WorkDir dir("clangd-find");
     dir.write("main.cpp", "int main() { return missing_find_value; }\n");
+    // This scratch project lives below the IDE's build tree. Its own command prevents
+    // clangd from inferring an unrelated multi-config ASan command from a parent database.
+    const std::string main = dir.join("main.cpp");
+    const std::vector<frost::lang::CompileCommand> commands = {frost::lang::CompileCommand{
+        .directory = dir.path(), .file = main, .arguments = {"clang++", "-std=c++20", "-c", main}}};
+    ASSERT_TRUE(
+        frost::lang::writeCompileCommands(frost::io::realFileSystem(), dir.join("build"), commands).has_value());
     RigOptions options;
     options.workbench.clangd = true;
     options.workbench.clangdJobs = 1;
@@ -163,7 +170,16 @@ TEST(WorkbenchClangd, FindReplaceUpdatesLiveDiagnostics) {
     ASSERT_TRUE(rig.workbench->openPath(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("main.cpp")));
     rig.show();
-    ASSERT_TRUE(waitFor([&] { return !liveErrors(*rig.workbench).empty(); }, kPatience));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto errors = liveErrors(*rig.workbench);
+            return std::ranges::any_of(errors, [&](const auto& error) {
+                const auto& diagnostic = error.diagnostic.diagnostic;
+                return diagnostic.file == main && diagnostic.line == 1 &&
+                       diagnostic.message.find("missing_find_value") != std::string::npos;
+            });
+        },
+        kPatience));
     auto* find = rig.window->findChild<frost::ui::FindFeature*>();
     ASSERT_NE(find, nullptr);
     auto* popup = find->showPopup(true);
@@ -175,7 +191,29 @@ TEST(WorkbenchClangd, FindReplaceUpdatesLiveDiagnostics) {
     auto result = find->replace(*popup, true);
     ASSERT_TRUE(result.has_value());
     ASSERT_EQ(result->replacements, 1U);
-    ASSERT_TRUE(waitFor([&] { return liveErrors(*rig.workbench).empty(); }, kPatience));
+    EXPECT_EQ(rig.view()->editor().document().text().text(), "int main() { return 0; }\n");
+    const bool cleared = waitFor([&] { return liveErrors(*rig.workbench).empty(); }, kPatience);
+    std::string evidence;
+    if (!cleared) {
+        const auto* clangd = rig.workbench->clangd();
+        const auto version = clangd->documentVersion(dir.join("main.cpp"));
+        evidence = std::format("buffer=[{}] editorVersion={} clangdVersion={} state={}\n",
+                               rig.view()->editor().document().text().text(), rig.view()->editor().document().version(),
+                               version.value_or(-1), static_cast<int>(clangd->state()));
+        evidence += std::format("viewPath={} documentPath={} expectedPath={}\n", rig.view()->path(),
+                                rig.view()->document().path(), dir.join("main.cpp"));
+        for (const auto& replaced : result->replaced)
+            evidence += std::format("replaced path={} openDocument={} replacements={}\n", replaced.path,
+                                    replaced.openDocument, replaced.replacements);
+        for (const auto& error : liveErrors(*rig.workbench)) {
+            const auto& diagnostic = error.diagnostic.diagnostic;
+            evidence += std::format("live {}:{}:{} {}\n", diagnostic.file, diagnostic.line, diagnostic.column,
+                                    diagnostic.message);
+        }
+        for (const auto& line : clangd->recentStderr())
+            evidence += line + "\n";
+    }
+    ASSERT_TRUE(cleared) << evidence;
     EXPECT_TRUE(rig.view()->document().dirty());
 }
 

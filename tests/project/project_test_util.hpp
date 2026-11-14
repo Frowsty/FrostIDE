@@ -63,7 +63,7 @@ public:
     // Writes root()/<relative>, creating its directories.
     void write(std::string_view relative, std::string_view content) {
         const std::string full = path(relative);
-        EXPECT_TRUE(fs.createDirectories(std::string(io::parentPath(full))).has_value()) << full;
+        EXPECT_TRUE(fs.createDirectories(io::parentPath(full)).has_value()) << full;
         EXPECT_TRUE(fs.writeFileAtomic(full, content).has_value()) << full;
     }
 

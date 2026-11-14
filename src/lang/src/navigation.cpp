@@ -266,10 +266,32 @@ std::vector<UsageGroup> groupUsages(std::span<const Location> locations, const L
         usage.lineText = text.substr(cut);
         usage.highlightBegin = begin - cut;
         usage.highlightEnd = end - cut;
+        usage.kind = UsageKind::Reference;
         usage.location = std::move(location);
         groups.back().usages.push_back(std::move(usage));
     }
     return groups;
+}
+
+std::vector<Location> flattenUsageLocations(std::span<const UsageGroup> groups) {
+    std::vector<Location> out;
+    for (const UsageGroup& group : groups) {
+        for (const Usage& usage : group.usages) {
+            out.push_back(usage.location);
+        }
+    }
+    return out;
+}
+
+sched::Task<Result<std::vector<UsageGroup>>> findUsages(ILspRequester& server, std::string path, LspPosition position,
+                                                        const LineSource& lines, bool includeDeclaration,
+                                                        std::stop_token token) {
+    const PositionEncoding encoding = server.encoding();
+    auto references = co_await requestReferences(server, std::move(path), position, includeDeclaration, token);
+    if (!references) {
+        co_return std::unexpected(std::move(references.error()));
+    }
+    co_return groupUsages(*references, lines, encoding);
 }
 
 std::vector<DocumentHighlight> parseDocumentHighlights(const Json& json) {
@@ -322,10 +344,11 @@ namespace {
 
 template<typename Item>
 [[nodiscard]] Json hierarchyItemToJson(const Item& item) {
+    const std::string uri = !item.uri.empty() ? item.uri : pathToUri(item.path).value_or(std::string());
     Json out = Json::object()
                    .set("name", item.name)
                    .set("kind", static_cast<int>(item.kind))
-                   .set("uri", item.uri)
+                   .set("uri", uri)
                    .set("range", toJson(item.range))
                    .set("selectionRange", toJson(item.selectionRange));
     if (!item.detail.empty()) {
@@ -518,6 +541,50 @@ sched::Task<Result<std::vector<TypeHierarchyItem>>> requestSubtypes(ILspRequeste
         co_return std::unexpected(std::move(result.error()));
     }
     co_return parseTypeHierarchyItems(*result);
+}
+
+sched::Task<Result<std::optional<CallHierarchySnapshot>>>
+queryCallHierarchy(ILspRequester& server, std::string path, LspPosition position, std::stop_token token) {
+    auto prepared = co_await requestPrepareCallHierarchy(server, std::move(path), position, token);
+    if (!prepared) {
+        co_return std::unexpected(std::move(prepared.error()));
+    }
+    if (prepared->empty()) {
+        co_return std::optional<CallHierarchySnapshot>{};
+    }
+    CallHierarchyItem root = std::move(prepared->front());
+    auto incoming = co_await requestIncomingCalls(server, root, token);
+    if (!incoming) {
+        co_return std::unexpected(std::move(incoming.error()));
+    }
+    auto outgoing = co_await requestOutgoingCalls(server, root, std::move(token));
+    if (!outgoing) {
+        co_return std::unexpected(std::move(outgoing.error()));
+    }
+    co_return CallHierarchySnapshot{
+        .root = std::move(root), .incoming = std::move(*incoming), .outgoing = std::move(*outgoing)};
+}
+
+sched::Task<Result<std::optional<TypeHierarchySnapshot>>>
+queryTypeHierarchy(ILspRequester& server, std::string path, LspPosition position, std::stop_token token) {
+    auto prepared = co_await requestPrepareTypeHierarchy(server, std::move(path), position, token);
+    if (!prepared) {
+        co_return std::unexpected(std::move(prepared.error()));
+    }
+    if (prepared->empty()) {
+        co_return std::optional<TypeHierarchySnapshot>{};
+    }
+    TypeHierarchyItem root = std::move(prepared->front());
+    auto supertypes = co_await requestSupertypes(server, root, token);
+    if (!supertypes) {
+        co_return std::unexpected(std::move(supertypes.error()));
+    }
+    auto subtypes = co_await requestSubtypes(server, root, std::move(token));
+    if (!subtypes) {
+        co_return std::unexpected(std::move(subtypes.error()));
+    }
+    co_return TypeHierarchySnapshot{
+        .root = std::move(root), .supertypes = std::move(*supertypes), .subtypes = std::move(*subtypes)};
 }
 
 } // namespace frost::lang

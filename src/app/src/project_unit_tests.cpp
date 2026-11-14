@@ -5,11 +5,21 @@
 // run markers. Tests are listed and run by the Unit Tests window (unit_tests_window.cpp, RUN-7)
 // from ctest's output, never from this scan; a gutter test marker is RUN-10's.
 
+#include "frost/build/cmake_service.hpp"
+#include "frost/project/cmake_presets.hpp"
+#include "frost/project/trust_store.hpp"
+#include "frost/run/run_manager.hpp"
+#include "frost/run/test_runner.hpp"
+
 #include "project_properties_dialog.hpp"
+#include "unit_tests_window.hpp"
 #include <QDir>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QStringList>
+
+#include <algorithm>
+#include <format>
 
 namespace frost::app {
 
@@ -132,6 +142,174 @@ std::vector<DiscoveredTestEntry> discoverTestsAndEntryPointsInFile(std::string_v
         }
     }
     return results;
+}
+
+std::string unitTestsSourceKey(const UnitTestsWindowContext& context) {
+    build::CMakeService* service = context.cmake ? context.cmake() : nullptr;
+    if (!service)
+        return context.solutionOpen && context.solutionOpen() ? "solution" : "none";
+    const auto model = service->model();
+    const auto profile = service->activeProfile();
+    const auto trust = context.trust ? context.trust->snapshot(service->sourceDirectory()) : project::TrustSnapshot{};
+    return std::format("cmake|{}|{}|{}|{}|{}|{}|{}", service->sourceDirectory(),
+                       model ? model->replyIndex : std::string(), model ? model->buildDirectory : std::string(),
+                       profile ? profile->name : std::string(), trust.trusted, service->profileGeneration(),
+                       trust.revision);
+}
+
+UnitTestsSource unitTestsSource(const UnitTestsWindowContext& context) {
+    UnitTestsSource out;
+    build::CMakeService* service = context.cmake ? context.cmake() : nullptr;
+    if (!service) {
+        out.unavailable =
+            context.solutionOpen && context.solutionOpen()
+                ? QStringLiteral("Tests are listed by ctest, from a configured CMake build directory. This "
+                                 "Visual Studio solution has none, so no test is listed.")
+                : QStringLiteral("Open a CMake folder: the Unit Tests window lists the tests ctest finds in "
+                                 "its configured build directory.");
+        return out;
+    }
+    const auto model = service->model();
+    const auto profile = service->activeProfile();
+    if (!model || !profile) {
+        out.unavailable = QStringLiteral("The CMake folder is not configured yet. Its tests are listed once a "
+                                         "configure has written its build directory.");
+        return out;
+    }
+    const auto trust = context.trust ? context.trust->snapshot(service->sourceDirectory()) : project::TrustSnapshot{};
+    if (!trust.trusted) {
+        out.unavailable = QStringLiteral("Trust this folder to list and run its tests: ctest runs the "
+                                         "project's test scripts and test programs.");
+        return out;
+    }
+    const project::CMakeTestPreset* preset = nullptr;
+    auto presets = project::loadCMakePresets(*context.fs, service->sourceDirectory());
+    if (presets && presets->has_value())
+        preset = run::testPresetFor(**presets, *profile);
+    auto setup = run::ctestSetupFor(*model, *profile, preset);
+    if (!setup) {
+        out.unavailable = QStringLiteral("ctest is unavailable: %1").arg(toQs(setup.error().message()));
+        return out;
+    }
+    out.setup = std::move(*setup);
+    out.trustRoot = service->sourceDirectory();
+    out.trustRevision = trust.revision;
+    return out;
+}
+
+std::optional<run::TestLocation> unitTestsLocationOf(const std::string& testName, const std::string& caseName,
+                                                     const run::DiscoveredTest* test, const run::TestResult* result,
+                                                     const std::vector<run::DoctestCase>* doctestCases) {
+    (void)testName;
+    if (!caseName.empty()) {
+        if (result) {
+            for (const run::TestResult& testCase : result->cases) {
+                if (testCase.name != caseName)
+                    continue;
+                for (const run::TestFailure& failure : testCase.failures)
+                    if (failure.location)
+                        return failure.location;
+                if (testCase.definition)
+                    return testCase.definition;
+            }
+        }
+        if (doctestCases) {
+            const auto found = std::ranges::find(*doctestCases, caseName, &run::DoctestCase::name);
+            if (found != doctestCases->end() && found->location)
+                return found->location;
+        }
+        return std::nullopt;
+    }
+    if (result)
+        for (const run::TestFailure& failure : result->failures)
+            if (failure.location)
+                return failure.location;
+    if (test && test->definition)
+        return test->definition;
+    if (test && test->declaration)
+        return test->declaration;
+    return std::nullopt;
+}
+
+UnitTestsSelectionDetails unitTestsDescribeSelection(const std::string& testName, const std::string& caseName,
+                                                     const run::DiscoveredTest* test, const run::TestResult* result,
+                                                     const std::vector<run::DoctestCase>* doctestCases) {
+    UnitTestsSelectionDetails out;
+    QStringList lines;
+    const auto describe = [&](const run::TestResult& r) {
+        lines << QStringLiteral("Status: %1").arg(toQs(run::toString(r.outcome)));
+        if (!r.reason.empty())
+            lines << QStringLiteral("Reason: %1").arg(toQs(r.reason));
+        if (r.duration)
+            lines << QStringLiteral("Duration: %1").arg(toQs(run::formatTestDuration(r.duration)));
+        if (r.interim)
+            lines << QStringLiteral("(from ctest's progress; its report has not been read yet)");
+        for (const run::TestFailure& failure : r.failures) {
+            lines << QString() << QStringLiteral("Failure:") << toQs(failure.message);
+            if (failure.location)
+                out.locations.emplace_back(QStringLiteral("Failure"), *failure.location);
+        }
+    };
+    if (!caseName.empty()) {
+        lines << QStringLiteral("%1 case: %2")
+                     .arg(doctestCases ? QStringLiteral("doctest") : QStringLiteral("Google Test"), toQs(caseName))
+              << QStringLiteral("Runs in: %1").arg(toQs(testName));
+        if (doctestCases) {
+            const auto listed = std::ranges::find(*doctestCases, caseName, &run::DoctestCase::name);
+            if (listed != doctestCases->end() && !listed->suite.empty())
+                lines << QStringLiteral("Test suite: %1").arg(toQs(listed->suite));
+            if (listed != doctestCases->end() && listed->location)
+                out.locations.emplace_back(QStringLiteral("Defined"), *listed->location);
+        }
+        const run::TestResult* caseResult = nullptr;
+        if (result)
+            for (const run::TestResult& c : result->cases)
+                if (c.name == caseName)
+                    caseResult = &c;
+        if (caseResult) {
+            describe(*caseResult);
+            if (caseResult->definition)
+                out.locations.emplace_back(QStringLiteral("Defined"), *caseResult->definition);
+        } else {
+            lines << QStringLiteral("Status: no result yet");
+        }
+        out.text = lines.join(QLatin1Char('\n'));
+        return out;
+    }
+    lines << QStringLiteral("Test: %1").arg(toQs(testName));
+    if (test) {
+        if (!test->command.empty()) {
+            run::LaunchPlan plan;
+            plan.program = test->command.front();
+            plan.arguments.assign(test->command.begin() + 1, test->command.end());
+            lines << QStringLiteral("Command: %1").arg(toQs(run::displayCommandLine(plan)));
+        } else {
+            lines << QStringLiteral("Command: none (ctest found no program for this test)");
+        }
+        if (!test->workingDirectory.empty())
+            lines << QStringLiteral("Working directory: %1").arg(toQs(test->workingDirectory));
+        if (!test->labels.empty()) {
+            QStringList labels;
+            for (const auto& label : test->labels)
+                labels << toQs(label);
+            lines << QStringLiteral("Labels: %1").arg(labels.join(QStringLiteral(", ")));
+        }
+        if (test->disabled)
+            lines << QStringLiteral("DISABLED");
+        if (test->definition)
+            out.locations.emplace_back(QStringLiteral("Defined"), *test->definition);
+        if (test->declaration)
+            out.locations.emplace_back(QStringLiteral("add_test"), *test->declaration);
+    }
+    if (result) {
+        describe(*result);
+        if (!result->output.empty())
+            lines << QString() << QStringLiteral("Output:") << toQs(result->output);
+    } else {
+        lines << QStringLiteral("Status: no result yet");
+    }
+    out.text = lines.join(QLatin1Char('\n'));
+    return out;
 }
 
 } // namespace frost::app

@@ -44,7 +44,6 @@
 
 namespace {
 using namespace std::chrono_literals;
-using frost::app::test::RigOptions;
 using frost::app::test::waitFor;
 using frost::app::test::WorkbenchRig;
 using frost::app::test::WorkDir;
@@ -362,7 +361,7 @@ TEST(WorkbenchRun, AStoreThatCouldNotBeReadIsNeverOverwritten) {
         const auto storePath = run::workspaceRunConfigurationsPath(dir.path());
         ASSERT_TRUE(storePath.has_value());
         auto& fs = io::realFileSystem();
-        ASSERT_TRUE(fs.createDirectories(std::string(io::parentPath(*storePath))).has_value());
+        ASSERT_TRUE(fs.createDirectories(io::parentPath(*storePath)).has_value());
         ASSERT_TRUE(fs.writeFileAtomic(*storePath, damaged).has_value());
         WorkbenchRig rig(dir);
         ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());

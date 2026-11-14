@@ -202,7 +202,7 @@ TEST(WorkbenchMsBuild, StopDropsTheQueuedDebugHandoff) {
     RigOptions options;
     int adaptersStarted = 0;
     options.workbench.debugAdapterFactory =
-        [&](frost::debug::DapHandlers) -> frost::Result<std::unique_ptr<frost::debug::IDebugAdapterClient>> {
+        [&](const frost::debug::DapHandlers&) -> frost::Result<std::unique_ptr<frost::debug::IDebugAdapterClient>> {
         ++adaptersStarted;
         return frost::fail(frost::ErrorCode::IoError, "unexpected adapter launch");
     };
@@ -210,7 +210,7 @@ TEST(WorkbenchMsBuild, StopDropsTheQueuedDebugHandoff) {
     WorkbenchRig rig(dir, std::move(options));
     ASSERT_TRUE(rig.trust->trust(dir.path()).has_value());
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
-    rig.workbench->buildService().setSaveAllHook([](frost::build::SaveAllCompletion done) { done({}); });
+    rig.workbench->buildService().setSaveAllHook([](const frost::build::SaveAllCompletion& done) { done({}); });
     auto* debug = rig.workbench->debugController();
     ASSERT_TRUE(debug->debug().has_value());
     ASSERT_TRUE(rig.workbench->runService()->waitForIdle(std::chrono::seconds(240)));

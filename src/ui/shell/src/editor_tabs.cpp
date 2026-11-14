@@ -733,6 +733,8 @@ EditorTabs::EditorTabs(IEditorFactory& factory, QWidget* parent)
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_root);
+    // makeGroup uses m_groups and m_titleColors, declared after m_active.
+    // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer): Later members must exist first.
     m_active = makeGroup();
     m_root->addWidget(m_active);
     connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* now) {
@@ -914,7 +916,7 @@ bool EditorTabs::restoreLayout(const std::string& layout) {
         const QJsonArray children = childrenValue.toArray();
         if (children.empty() || children.size() > 64)
             return false;
-        for (const QJsonValue& child : children)
+        for (const auto& child : children)
             if (!child.isObject() || !valid(child.toObject(), depth + 1))
                 return false;
         return true;

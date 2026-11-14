@@ -83,7 +83,7 @@ TEST(UpdateParent, RetainedProcessProbe) {
     }
     ASSERT_TRUE(held);
     ASSERT_EQ(held->exited().value(), false);
-    std::cout << "PARENT_GUARD_READY" << std::endl;
+    std::cout << "PARENT_GUARD_READY" << '\n' << std::flush;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < deadline) {
         auto exited = held->exited();

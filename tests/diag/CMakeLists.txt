@@ -69,6 +69,19 @@ set_source_files_properties(thread_sampler_test.cpp PROPERTIES COMPILE_OPTIONS
 if(WIN32)
     # advapi32: the pipe test's SID and SDDL calls; user32: tests/support/private_desktop.hpp.
     target_link_libraries(diag_integration_tests PRIVATE advapi32 user32)
+    # A private image for real loader-lifetime regressions; no test relies on whether a system
+    # DLL happens to have another owner. The sampled function retains its frame in Release.
+    add_library(diag_unload_probe SHARED unload_probe.cpp)
+    frost_apply_compile_options(diag_unload_probe TEST NO_SANITIZE)
+    set_target_properties(diag_unload_probe PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreaded)
+    target_compile_options(diag_unload_probe PRIVATE
+        /clang:-fno-omit-frame-pointer /clang:-fno-optimize-sibling-calls)
+    target_link_options(diag_unload_probe PRIVATE /MANIFEST:NO)
+    target_sources(diag_integration_tests PRIVATE thread_sampler_win_test.cpp)
+    target_include_directories(diag_integration_tests PRIVATE "${FROST_SOURCE_DIR}/src/diag/src")
+    target_compile_definitions(diag_integration_tests PRIVATE
+        FROST_DIAG_UNLOAD_PROBE="$<TARGET_FILE:diag_unload_probe>")
+    add_dependencies(diag_integration_tests diag_unload_probe)
 endif()
 
 frost_add_test(diag_stress_tests

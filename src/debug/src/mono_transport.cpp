@@ -99,9 +99,9 @@ Result<std::unique_ptr<BinaryLoopback>> BinaryLoopback::connect(std::uint16_t po
         return fail(ErrorCode::InvalidArgument, "Mono endpoint and verifier required");
     auto impl = std::make_unique<Impl>();
     impl->deadline = deadline;
-    impl->stop = stop;
+    impl->stop = std::move(stop);
     impl->verify = std::move(verify);
-    if (stop.stop_requested())
+    if (impl->stop.stop_requested())
         return fail(ErrorCode::Cancelled, "Mono transport cancelled");
     if (std::chrono::steady_clock::now() >= deadline)
         return fail(ErrorCode::Timeout, "Mono transport deadline reached before connect");
@@ -162,10 +162,10 @@ Result<std::unique_ptr<BinaryLoopback>> BinaryLoopback::connect(std::uint16_t po
         return fail(ErrorCode::IoError, "Mono connected tuple is invalid");
     impl->localPort = ntohs(local.sin_port);
     impl->remotePort = port;
-    auto verified = impl->verify(impl->localPort, impl->remotePort, deadline, stop);
+    auto verified = impl->verify(impl->localPort, impl->remotePort, deadline, impl->stop);
     if (!verified)
         return std::unexpected(verified.error());
-    if (stop.stop_requested())
+    if (impl->stop.stop_requested())
         return fail(ErrorCode::Cancelled, "Mono connection cancelled during verification");
     if (std::chrono::steady_clock::now() >= deadline)
         return fail(ErrorCode::Timeout, "Mono connection expired during verification");

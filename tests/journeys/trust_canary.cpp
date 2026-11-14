@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
     std::string line = "ran " + imageText;
     for (int i = 1; i < argc; ++i)
         line += std::string(" ") + argv[i];
-    line += "\n";
+    line += '\n';
     std::fwrite(line.data(), 1, line.size(), out);
     std::fclose(out);
     return 0;

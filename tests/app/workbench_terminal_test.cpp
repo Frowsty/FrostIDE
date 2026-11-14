@@ -87,8 +87,7 @@ TEST(WorkbenchTerminal, ExplorerOpensTheSelectedFilesFolder) {
     options.workbench.clangd = false;
     options.workbench.terminalLauncher = &launcher;
     frost::term::ShellProbe probe;
-    const std::string home = dir.path();
-    probe.environment = [home](std::string_view key) -> std::optional<std::string> {
+    probe.environment = [home = dir.path()](std::string_view key) -> std::optional<std::string> {
         return key == "HOME" || key == "USERPROFILE" ? std::optional<std::string>(home) : std::nullopt;
     };
     options.workbench.terminalProbe = std::move(probe);

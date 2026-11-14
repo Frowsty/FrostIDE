@@ -29,9 +29,6 @@ namespace frost::storage {
 
 namespace {
 
-using detail::Blob;
-using detail::Null;
-
 constexpr std::uint32_t kJournalApplicationId = 0x4672484A; // 'FrHJ'
 
 // Schema v1. tests/storage/goldens/hot_exit_journal.v1.schema.txt pins it: change it only with a
@@ -283,8 +280,10 @@ Result<HotExitJournal> HotExitJournal::create(std::string_view directory, IClock
                             kCreateAttempts, lastError ? lastError->message() : std::string()));
 }
 
-Result<PutOutcome> HotExitJournal::put(const DocumentState& state, std::span<const std::string_view> content,
-                                       std::stop_token stop) {
+Result<PutOutcome> HotExitJournal::put(
+    const DocumentState& state, std::span<const std::string_view> content,
+    // NOLINTNEXTLINE(performance-unnecessary-value-param): retain cancellation identity across SQLite callbacks.
+    std::stop_token stop) {
     if (auto valid = checkKey(state.documentKey, state.generation); !valid) {
         return std::unexpected(std::move(valid.error()));
     }
@@ -477,9 +476,10 @@ RecoveredJournal::RecoveredJournal(Database database, bool endedCleanly, bool da
 
 Result<std::vector<JournalEntry>> RecoveredJournal::entries() { return listEntries(m_database); }
 
-Result<void> RecoveredJournal::readContent(std::int64_t entryId,
-                                           frost::function_ref<Result<void>(std::string_view)> sink,
-                                           std::stop_token stop) {
+Result<void> RecoveredJournal::readContent(
+    std::int64_t entryId, frost::function_ref<Result<void>(std::string_view)> sink,
+    // NOLINTNEXTLINE(performance-unnecessary-value-param): a reentrant sink may replace its caller's token.
+    std::stop_token stop) {
     if (stop.stop_requested()) {
         return fail(ErrorCode::Cancelled, "journal read cancelled");
     }

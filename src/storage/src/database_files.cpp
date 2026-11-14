@@ -76,7 +76,7 @@ private:
 // One sqlite3_file opened through a VFS; closed (and so unlocked) on destruction.
 class VfsFile {
 public:
-    VfsFile(sqlite3_vfs* vfs) : m_vfs(vfs) {
+    explicit VfsFile(sqlite3_vfs* vfs) : m_vfs(vfs) {
         const auto words =
             (static_cast<std::size_t>(vfs->szOsFile) + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t);
         m_storage = std::make_unique<std::max_align_t[]>(std::max<std::size_t>(words, 1));

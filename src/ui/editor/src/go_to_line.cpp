@@ -13,7 +13,8 @@
 
 namespace frost::ui {
 
-GoToLinePopup::GoToLinePopup(QWidget* parent) : QFrame(parent) {
+GoToLinePopup::GoToLinePopup(QWidget* parent)
+    : QFrame(parent), m_field(new QLineEdit(this)), m_error(new QLabel(this)) {
     setObjectName(QStringLiteral("frostGoToLine"));
     setFrameShape(QFrame::StyledPanel);
     setAutoFillBackground(true);
@@ -21,9 +22,7 @@ GoToLinePopup::GoToLinePopup(QWidget* parent) : QFrame(parent) {
     layout->setContentsMargins(8, 6, 8, 6);
     layout->setSpacing(4);
     auto* label = new QLabel(QStringLiteral("[Line] [:column]:"), this);
-    m_field = new QLineEdit(this);
     m_field->setMinimumWidth(220);
-    m_error = new QLabel(this);
     m_error->setVisible(false);
     layout->addWidget(label);
     layout->addWidget(m_field);

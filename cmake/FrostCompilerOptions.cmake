@@ -31,6 +31,20 @@ set(FROST_CLANG_WARNINGS
 # Startup hygiene: no code may run before main() or after it returns.
 set(FROST_STARTUP_HYGIENE_WARNINGS -Wglobal-constructors -Wexit-time-destructors)
 
+# CMake's MSVC Ninja link rule places LINK_FLAGS after the response-file libraries.
+# The runtime import must precede Qt and other user DLLs, whose CRT startup can allocate
+# before ASan hooks exist (https://github.com/llvm/llvm-project/issues/61685).
+function(frost_prepend_asan_runtime target)
+    if(WIN32 AND "address" IN_LIST FROST_SANITIZE)
+        get_target_property(target_type ${target} TYPE)
+        if(target_type MATCHES "^(EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)$")
+            get_property(link_libraries TARGET ${target} PROPERTY LINK_LIBRARIES)
+            set_property(TARGET ${target} PROPERTY LINK_LIBRARIES
+                "${FROST_ASAN_RUNTIME_LIBRARY};${link_libraries}")
+        endif()
+    endif()
+endfunction()
+
 function(frost_apply_compile_options target kind)
     cmake_parse_arguments(ARG "NO_SANITIZE" "" "" ${ARGN})
     if(NOT kind MATCHES "^(PRODUCTION|TEST)$")
@@ -42,6 +56,7 @@ function(frost_apply_compile_options target kind)
     if(NOT ARG_NO_SANITIZE)
         target_compile_options(${target} PRIVATE ${FROST_SANITIZE_COMPILE_OPTIONS})
         target_link_options(${target} PRIVATE ${FROST_SANITIZE_LINK_OPTIONS})
+        frost_prepend_asan_runtime(${target})
     endif()
 
     # C++23 baseline compiled in C++26 mode (/std:c++latest or -std=c++26), extensions off.
@@ -94,6 +109,7 @@ function(frost_apply_c_options target kind)
     set_target_properties(${target} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     target_compile_options(${target} PRIVATE ${FROST_SANITIZE_COMPILE_OPTIONS})
     target_link_options(${target} PRIVATE ${FROST_SANITIZE_LINK_OPTIONS})
+    frost_prepend_asan_runtime(${target})
     if(MSVC)
         if(kind STREQUAL "OWN")
             target_compile_options(${target} PRIVATE /W4 /WX -Wconversion -Wshadow /utf-8)

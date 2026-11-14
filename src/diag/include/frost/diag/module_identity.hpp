@@ -28,7 +28,8 @@ struct ModuleIdentity {
 };
 
 /*
- * The module containing `address`. Errors: NotFound (no loaded module contains it). Takes the
+ * The module containing `address`. Errors: NotFound (no loaded module contains it), Unsupported
+ * (Windows: unsupported PE headers). Windows retains a module reference until its data is copied. Takes the
  * loader lock (GetModuleHandleExW / dl_iterate_phdr), so never call it while another thread of
  * this process is suspended.
  */

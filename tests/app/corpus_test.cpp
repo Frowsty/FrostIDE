@@ -266,7 +266,7 @@ struct WritableOnExit {
 // The pinned corpus, checked: present, a git clone, detached at its pin. "" (with a failure added)
 // otherwise: the corpus tier fails instead of skipping.
 std::string checkedCorpus() {
-    const std::string corpus = corpusDirectory();
+    std::string corpus = corpusDirectory();
     if (corpus.empty()) {
         ADD_FAILURE() << "FROST_CORPORA_ROOT is not set; run the corpus tier through tools\\verify.ps1 -Corpus or "
                          "tools/verify.sh --corpus, which set it from tools/corpora.py root";

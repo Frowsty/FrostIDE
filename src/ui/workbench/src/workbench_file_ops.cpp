@@ -282,7 +282,7 @@ Result<std::string> Workbench::createNewFile(std::string_view directory, std::st
         notifyError(text("Cannot create %1").arg(nativePath(target)), written.error());
         return std::unexpected(std::move(written.error()));
     }
-    const std::string canonical = m_services.documents.canonicalize(target);
+    std::string canonical = m_services.documents.canonicalize(target);
     if (!m_root.empty() && isUnder(m_root, canonical)) {
         if (m_fileSystem != nullptr) {
             m_fileSystem->selectWhenAvailable(canonical);
@@ -310,7 +310,7 @@ Result<std::string> Workbench::createNewFolder(std::string_view directory, std::
         notifyError(text("Cannot create %1").arg(nativePath(target)), made.error());
         return std::unexpected(std::move(made.error()));
     }
-    const std::string canonical = m_services.documents.canonicalize(target);
+    std::string canonical = m_services.documents.canonicalize(target);
     if (!m_root.empty() && isUnder(m_root, canonical)) {
         m_shell.toolWindows().show(kFileSystemToolWindow, false);
         if (m_fileSystem != nullptr) {
@@ -365,7 +365,7 @@ Result<std::string> Workbench::renamePath(std::string_view oldPath, std::string_
     if (oldPath.empty()) {
         return fail(ErrorCode::InvalidArgument, "No item is selected to rename.");
     }
-    const std::string canonicalOld = m_services.documents.canonicalize(oldPath);
+    std::string canonicalOld = m_services.documents.canonicalize(oldPath);
     if (!m_root.empty() && canonicalOld == m_root) {
         Error err(ErrorCode::InvalidArgument, "Cannot rename the project root folder.");
         notifyError(text("Cannot rename"), err);
@@ -391,7 +391,7 @@ Result<std::string> Workbench::renamePath(std::string_view oldPath, std::string_
         notifyError(text("Cannot rename %1").arg(nativePath(canonicalOld)), renamed.error());
         return std::unexpected(std::move(renamed.error()));
     }
-    const std::string canonicalNew = m_services.documents.canonicalize(target);
+    std::string canonicalNew = m_services.documents.canonicalize(target);
     if (!isDir) {
         if (document::FileDocument* doc = m_services.documents.find(canonicalOld); doc != nullptr) {
             (void)m_services.saveManager.renameDocument(*doc, canonicalNew);

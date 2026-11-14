@@ -3,9 +3,11 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/lang/json.hpp"
+#include "frost/lang/uri.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 
 #include "../../src/app/src/project_open_broker.hpp"
+#include "support/directory_link.hpp"
 #include "workbench_rig.hpp"
 #include <QComboBox>
 #include <QElapsedTimer>
@@ -58,13 +60,13 @@ TEST(ProjectOpenProcess, OrdinaryAliasProjectReusesDirtyAliasTabForRealProjectRe
     dir.write("project/Game.frostproj", "{}");
     dir.write("project/script.lua", "local first = 1\nlocal second = 2\n");
     ASSERT_TRUE(frost::io::realFileSystem().createDirectories(dir.join("profile")));
-    const auto target = frost::io::toStdPath(dir.join("project"));
-    const auto alias = frost::io::toStdPath(dir.join("alias"));
-    ASSERT_TRUE(target && alias);
-    std::error_code error;
-    std::filesystem::create_directory_symlink(*target, *alias, error);
-    if (error)
-        GTEST_SKIP() << "directory symbolic links unavailable: " << error.message();
+    ASSERT_NO_FATAL_FAILURE(frost::test::makeDirectoryLink(dir.join("alias"), dir.join("project")));
+    const auto aliasRoot = frost::app::externalProjectRoot(dir.join("alias"));
+    const auto physicalRoot = frost::io::realFileSystem().physicalPath(dir.join("project"));
+    ASSERT_TRUE(aliasRoot);
+    ASSERT_TRUE(physicalRoot);
+    EXPECT_EQ(frost::lang::documentKey(*aliasRoot), frost::lang::documentKey(*physicalRoot));
+    EXPECT_EQ(frost::app::externalProjectKey(*aliasRoot), frost::app::externalProjectKey(*physicalRoot));
     WorkbenchRig rig(dir);
     frost::app::ProjectOpenBroker broker(*rig.workbench, *rig.window, {}, {});
     ASSERT_TRUE(broker.start());
@@ -73,6 +75,7 @@ TEST(ProjectOpenProcess, OrdinaryAliasProjectReusesDirtyAliasTabForRealProjectRe
     ASSERT_TRUE(rig.workbench->openPath(dir.join("alias/script.lua")));
     auto* original = rig.workbench->currentView();
     ASSERT_NE(original, nullptr);
+    const std::string originalPath = original->path();
     ASSERT_TRUE(original->editor().typeText("-- unsaved\n"));
     ASSERT_TRUE(original->document().dirty());
 
@@ -96,6 +99,7 @@ TEST(ProjectOpenProcess, OrdinaryAliasProjectReusesDirtyAliasTabForRealProjectRe
     ASSERT_TRUE(result.has_value()) << result.error().describe();
     ASSERT_EQ(result->exitCode, 0) << result->stderrBytes;
     EXPECT_EQ(rig.workbench->currentView(), original);
+    EXPECT_EQ(original->path(), originalPath);
     EXPECT_EQ(original->status().line, 2);
     EXPECT_EQ(original->status().column, 3);
     EXPECT_TRUE(original->document().dirty());
@@ -290,13 +294,13 @@ TEST(ProjectOpenProcess, OrdinaryAliasStartupClaimsRealProjectEndpoint) {
     dir.write("project/Game.frostproj", "{}");
     dir.write("project/script.lua", "return {}\n");
     ASSERT_TRUE(frost::io::realFileSystem().createDirectories(dir.join("profile")));
-    auto target = frost::io::toStdPath(dir.join("project"));
-    auto alias = frost::io::toStdPath(dir.join("alias"));
-    ASSERT_TRUE(target && alias);
-    std::error_code error;
-    std::filesystem::create_directory_symlink(*target, *alias, error);
-    if (error)
-        GTEST_SKIP() << "directory symbolic links unavailable: " << error.message();
+    ASSERT_NO_FATAL_FAILURE(frost::test::makeDirectoryLink(dir.join("alias"), dir.join("project")));
+    const auto aliasRoot = frost::app::externalProjectRoot(dir.join("alias"));
+    const auto physicalRoot = frost::io::realFileSystem().physicalPath(dir.join("project"));
+    ASSERT_TRUE(aliasRoot);
+    ASSERT_TRUE(physicalRoot);
+    EXPECT_EQ(frost::lang::documentKey(*aliasRoot), frost::lang::documentKey(*physicalRoot));
+    EXPECT_EQ(frost::app::externalProjectKey(*aliasRoot), frost::app::externalProjectKey(*physicalRoot));
     auto canonical = frost::app::externalProjectRoot(dir.join("project"));
     ASSERT_TRUE(canonical);
     frost::io::ProcessSpec first;
@@ -356,7 +360,7 @@ TEST(ProjectOpenProcess, Utf16RequestIsRejectedByLegacyOwner) {
     auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(*root));
     ASSERT_TRUE(owner);
     std::atomic<int> requests{0};
-    ASSERT_TRUE((*owner)->start([&](std::string request) -> frost::Result<std::string> {
+    ASSERT_TRUE((*owner)->start([&](const std::string& request) -> frost::Result<std::string> {
         ++requests;
         auto payload = frost::lang::parseJson(request);
         if (!payload || payload->integerAt("line").value_or(-1) < 0)
@@ -588,7 +592,7 @@ TEST(ProjectOpenProcess, UnityEditorDrivesProductionControls) {
     QElapsedTimer stopClock;
     stopClock.start();
     for (auto* combo : panel->findChildren<QComboBox*>())
-        std::cout << "Stop selected editor: " << combo->currentText().toStdString() << std::endl;
+        std::cout << "Stop selected editor: " << combo->currentText().toStdString() << '\n' << std::flush;
     ASSERT_TRUE(click(QStringLiteral("Stop")));
     const auto panelStatus = [&] {
         QStringList values;
@@ -597,14 +601,15 @@ TEST(ProjectOpenProcess, UnityEditorDrivesProductionControls) {
         return values.join(QStringLiteral(" | "));
     };
     QString lastStatus = panelStatus();
-    std::cout << "Stop panel status at " << stopClock.elapsed() << " ms: " << lastStatus.toStdString() << std::endl;
+    std::cout << "Stop panel status at " << stopClock.elapsed() << " ms: " << lastStatus.toStdString() << '\n'
+              << std::flush;
     const bool stoppedStatus = waitFor(
         [&] {
             const QString current = panelStatus();
             if (current != lastStatus) {
                 lastStatus = current;
-                std::cout << "Stop panel status at " << stopClock.elapsed() << " ms: " << current.toStdString()
-                          << std::endl;
+                std::cout << "Stop panel status at " << stopClock.elapsed() << " ms: " << current.toStdString() << '\n'
+                          << std::flush;
             }
             return status(QStringLiteral("Unity stopped"));
         },
@@ -612,7 +617,7 @@ TEST(ProjectOpenProcess, UnityEditorDrivesProductionControls) {
     if (!stoppedStatus) {
         auto diagnostic = observe("stoptimeout");
         if (diagnostic)
-            std::cout << "Stop timeout observer: " << diagnostic->dump() << std::endl;
+            std::cout << "Stop timeout observer: " << diagnostic->dump() << '\n' << std::flush;
     }
     ASSERT_TRUE(stoppedStatus);
     auto stopped = observe("stopped");

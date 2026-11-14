@@ -25,6 +25,9 @@ namespace {
 using namespace std::chrono_literals;
 
 class HotExitTest : public DocumentFixture {
+public:
+    ~HotExitTest() override { crash(); }
+
 protected:
     HotExitTest() { options.load.text.detect.legacyCodePage = 1252; }
 
@@ -56,8 +59,6 @@ protected:
         EXPECT_TRUE(entries) << entries.error().describe();
         return entries ? entries->size() : 0;
     }
-
-    ~HotExitTest() override { crash(); }
 
     std::optional<storage::HotExitJournal> m_journal;
 

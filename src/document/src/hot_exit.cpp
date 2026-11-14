@@ -110,7 +110,7 @@ bool SaveManager::carryOver(const storage::JournalEntry& entry, std::string_view
     return carried;
 }
 
-bool SaveManager::restoreEntry(const storage::JournalEntry& entry, std::string content, RestoreReport& report) {
+bool SaveManager::restoreEntry(const storage::JournalEntry& entry, const std::string& content, RestoreReport& report) {
     const storage::DocumentState& state = entry.state;
     const std::string label = state.path.empty() ? state.documentKey : state.path;
     if (!state.path.empty() && find(state.path) != nullptr) {
@@ -205,7 +205,7 @@ RestoreReport SaveManager::restore(storage::RecoveryScan& scan) {
             report.errors.push_back(std::move(content.error()).withContext(std::format("while restoring {}", key)));
             continue;
         }
-        if (restoreEntry(candidate.entry, std::move(*content), report)) {
+        if (restoreEntry(candidate.entry, *content, report)) {
             keep[index] = true;
         }
     }

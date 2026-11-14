@@ -45,9 +45,6 @@
 
 namespace frost::app {
 
-namespace key = settings::key;
-namespace wa = workbench_actions;
-
 namespace {
 
 constexpr std::string_view kLog = "workbench";
@@ -395,7 +392,7 @@ void Workbench::attachToolWindows() {
     unitTestsSpec.side = ui::ToolWindowSide::Bottom;
     unitTestsSpec.iconId = std::string(ui::icons::kRunRun);
     unitTestsSpec.createContent = [this]() -> QWidget* {
-        // ctest's tests of the open CMake folder (RUN-7); debugging one test is RUN-10's.
+        // ctest's tests of the open CMake folder (RUN-7/RUN-10).
         UnitTestsWindowContext context;
         context.launcher = &m_services.launcher;
         context.fs = &m_services.fs;
@@ -403,6 +400,21 @@ void Workbench::attachToolWindows() {
         context.cmake = [this]() -> build::CMakeService* { return m_cmake ? &m_cmake->service() : nullptr; };
         context.solutionOpen = [this] { return m_solution != nullptr; };
         context.openLocation = [this](const std::string& path, int line) { openLocation(qs(path), line, 1); };
+        context.debugTest = [this](const run::SingleTestLaunch& launch) -> Result<void> {
+            if (!m_debug)
+                return fail(ErrorCode::NotFound, "The debugger is unavailable");
+            debug::DebugTarget target;
+            target.name = launch.displayName;
+            target.program = launch.program;
+            target.arguments = launch.arguments;
+            target.workingDirectory = launch.workingDirectory;
+            target.trustRoots = {m_cmake ? m_cmake->service().sourceDirectory() : m_projectRoot};
+            for (const auto& [name, value] : launch.environment)
+                if (value)
+                    target.environment.emplace_back(name, *value);
+            return m_debug->startTarget(target);
+        };
+        context.testsChanged = [this] { refreshAllMarkers(); };
         return createUnitTestsToolWindowWidget(m_window, std::move(context));
     };
     if (auto added = windows.add(std::move(unitTestsSpec)); !added) {

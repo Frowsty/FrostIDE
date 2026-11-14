@@ -282,7 +282,7 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
             log::write(level, kLogCategory, "{}", message);
         };
         out.onProtocolError = [](const Error& problem) { log::warn(kLogCategory, "protocol: {}", problem.describe()); };
-        out.onApplyEdit = [weak](const Json& params) {
+        out.onApplyEdit = [weak](const Json& params, std::function<void(bool)> done) {
             if (auto self = weak.lock()) {
                 ApplyEditHandler handler;
                 {
@@ -290,10 +290,11 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
                     handler = self->applyEditHandler;
                 }
                 if (handler) {
-                    return handler(params);
+                    handler(params, std::move(done));
+                    return;
                 }
             }
-            return false;
+            done(false);
         };
         out.onNotification = [weak, forRound](std::string_view method, const Json& params) {
             if (method != "$/progress") {

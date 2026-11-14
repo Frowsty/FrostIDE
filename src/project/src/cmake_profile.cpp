@@ -347,7 +347,7 @@ Result<std::vector<std::string>> cmakeConfigureArguments(const CMakeProfile& pro
         }
         arguments.push_back(defineSwitch(variable.name, variable.type, variable.value));
     }
-    arguments.push_back("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON");
+    arguments.emplace_back("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON");
     return arguments;
 }
 
@@ -363,7 +363,7 @@ std::vector<std::string> cmakeBuildArguments(const CMakeProfile& profile, std::s
         const std::span<const std::string> chosen =
             targets.empty() ? std::span<const std::string>(profile.buildTargets) : targets;
         if (!chosen.empty()) {
-            arguments.push_back("--target");
+            arguments.emplace_back("--target");
             arguments.insert(arguments.end(), chosen.begin(), chosen.end());
         }
     }
@@ -378,7 +378,7 @@ std::vector<std::string> cmakeBuildArguments(const CMakeProfile& profile, std::s
         arguments.emplace_back("--verbose");
     }
     if (!clean && !profile.buildToolOptions.empty()) {
-        arguments.push_back("--");
+        arguments.emplace_back("--");
         arguments.insert(arguments.end(), profile.buildToolOptions.begin(), profile.buildToolOptions.end());
     }
     return arguments;

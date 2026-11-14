@@ -201,6 +201,34 @@ TEST(CrashChild, InactiveReporterEndsWithoutAnyReport) {
     EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(database)));
 }
 
+#if defined(_WIN32) && (defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer))
+// These children retain the default ASan exception policy while Crashpad is registered.
+// The existing fatal-path tests independently select native dump handling with handle_segv=0.
+void expectAsanReportWithActiveReporter(std::string_view mode, std::string_view diagnostic) {
+    const ScratchDir scratch("diag-asan-owner");
+    const ChildRun run = frost::test::runChild(crashChild(), {std::string(mode), scratch.join("crashpad")},
+                                               {{"ASAN_OPTIONS", std::nullopt}});
+    ASSERT_TRUE(run.error.empty()) << describe(run);
+    const std::string handler = frost::test::valueAfter(run.output, "ready handler-pid");
+    ASSERT_FALSE(handler.empty()) << describe(run);
+    ASSERT_NE(handler, "0") << describe(run);
+    EXPECT_NE(run.exitCode, 0) << describe(run);
+    EXPECT_TRUE(run.output.contains("ERROR: AddressSanitizer: " + std::string(diagnostic))) << describe(run);
+}
+
+TEST(CrashChild, AddressSanitizerKeepsHeapReportWithActiveReporter) {
+    expectAsanReportWithActiveReporter("asan-heap-overflow", "heap-buffer-overflow");
+}
+
+TEST(CrashChild, AddressSanitizerKeepsGlobalReportWithActiveReporter) {
+    expectAsanReportWithActiveReporter("asan-global-overflow", "global-buffer-overflow");
+}
+
+TEST(CrashChild, AddressSanitizerKeepsNativeFaultReportWithActiveReporter) {
+    expectAsanReportWithActiveReporter("av-main", "access-violation");
+}
+#endif
+
 #ifndef _WIN32
 TEST(Linux, LastChanceHandlerMakesTheProcessNonDumpable) {
     // The last-chance handler (installed before crashpad, so crashpad chains to it) clears the

@@ -632,6 +632,9 @@ private:
         for (const FilterAssignment& a : filters.assignments) {
             assignment.emplace(detail::pathKey(a.itemPath), a.filter);
         }
+        if (!assignment.empty())
+            m_model.m_cppFilterAssignments.emplace(
+                id.value(), std::make_shared<const std::unordered_map<std::string, std::string>>(assignment));
         std::unordered_set<std::string> evaluatedPaths;
         for (const ProjectItem& item : evaluated != nullptr ? evaluated->items : project.items) {
             if (evaluated != nullptr && !evaluatedPaths.insert(detail::pathKey(item.path)).second) {
@@ -934,8 +937,10 @@ private:
     std::unordered_map<std::string, const EvaluatedProjectItems*> m_evaluated;
 };
 
-Result<SolutionModel> SolutionModel::load(io::IFileSystem& fs, std::string_view solutionPath,
-                                          SolutionLoadOptions options) {
+Result<SolutionModel> SolutionModel::load(
+    io::IFileSystem& fs, std::string_view solutionPath,
+    // NOLINTNEXTLINE(performance-unnecessary-value-param): Own option snapshot across filesystem callbacks.
+    SolutionLoadOptions options) {
     auto file = readSolutionFile(fs, solutionPath);
     if (!file) {
         return std::unexpected(std::move(file.error()));
@@ -969,52 +974,13 @@ SolutionModel SolutionModel::withEvaluatedFiles(ProjectId projectId, ItemType ty
             wanted.insert(detail::pathKey(*normalized));
     }
     std::unordered_set<std::string> present;
-    for (std::size_t i = 0; i < out.m_nodes.size(); ++i) {
-        Node& node = out.m_nodes[i];
-        if (node.kind != NodeKind::File || node.project != projectId || node.itemType != type)
-            continue;
-        const auto key = detail::pathKey(node.path);
-        if (wanted.contains(key)) {
-            present.insert(key);
-            continue;
-        }
-        const NodeId id{static_cast<std::uint32_t>(i)};
-        if (node.parent)
-            std::erase(out.m_nodes[node.parent->value()].children, id);
-        out.m_nodesByKey.erase(node.key);
-        auto it = out.m_filesByPath.find(key);
-        if (it != out.m_filesByPath.end()) {
-            std::erase(it->second, id);
-            if (it->second.empty())
-                out.m_filesByPath.erase(it);
-        }
-    }
-    const std::string projectKey = out.node(info.node).key;
-    for (const auto& file : files) {
-        auto normalized = detail::normalizeAbsolute(file);
-        if (!normalized)
-            continue;
-        const auto pathKey = detail::pathKey(*normalized);
-        if (!present.insert(pathKey).second)
-            continue;
-        const NodeId id{static_cast<std::uint32_t>(out.m_nodes.size())};
-        std::string key = projectKey + "/file:" + pathKey;
-        const std::string base = key;
-        for (unsigned n = 2; out.m_nodesByKey.contains(key); ++n)
-            key = std::format("{}#{}", base, n);
-        out.m_nodes.push_back({.kind = NodeKind::File,
-                               .parent = info.node,
-                               .children = {},
-                               .displayName = std::string(io::fileName(*normalized)),
-                               .path = *normalized,
-                               .key = key,
-                               .project = projectId,
-                               .itemType = type,
-                               .filterPath = {}});
-        out.m_nodes[info.node.value()].children.push_back(id);
-        out.m_nodesByKey.emplace(std::move(key), id);
-        auto& matches = out.m_filesByPath[pathKey];
-        matches.push_back(id);
+    std::unordered_set<std::uint32_t> changedParents{info.node.value()};
+    std::unordered_map<std::uint32_t, std::unordered_set<std::uint32_t>> parentEdges;
+    std::unordered_map<std::uint32_t, std::unordered_set<std::uint32_t>> removedEdges;
+    const auto indexFile = [&out](NodeId id, const std::string& key) {
+        auto& matches = out.m_filesByPath[key];
+        if (std::ranges::find(matches, id) == matches.end())
+            matches.push_back(id);
         std::ranges::stable_sort(matches, [&out](NodeId a, NodeId b) {
             const auto left = out.node(a).project;
             const auto right = out.node(b).project;
@@ -1022,17 +988,161 @@ SolutionModel SolutionModel::withEvaluatedFiles(ProjectId projectId, ItemType ty
                 return !left && right.has_value();
             return left->value() < right->value();
         });
+    };
+    for (std::size_t i = 0; i < out.m_nodes.size(); ++i) {
+        Node& node = out.m_nodes[i];
+        if (node.kind != NodeKind::File || node.project != projectId || node.itemType != type)
+            continue;
+        const auto key = detail::pathKey(node.path);
+        const NodeId id{static_cast<std::uint32_t>(i)};
+        if (wanted.contains(key)) {
+            if (!present.insert(key).second)
+                continue;
+            // Removed files retain their arena slot and original hierarchy. A later authoritative
+            // result must restore both the parent edge and lookups, not count a detached slot as visible.
+            if (!node.parent)
+                node.parent = info.node;
+            auto& siblings = out.m_nodes[node.parent->value()].children;
+            auto [edges, firstParent] = parentEdges.try_emplace(node.parent->value());
+            if (firstParent)
+                for (const auto sibling : siblings)
+                    edges->second.insert(sibling.value());
+            if (edges->second.insert(id.value()).second) {
+                siblings.push_back(id);
+                changedParents.insert(node.parent->value());
+            }
+            if (const auto indexed = out.m_nodesByKey.find(node.key);
+                indexed != out.m_nodesByKey.end() && indexed->second != id) {
+                const std::string base = out.node(info.node).key + "/file:" + key;
+                node.key = base;
+                for (unsigned n = 2; out.m_nodesByKey.contains(node.key); ++n)
+                    node.key = std::format("{}#{}", base, n);
+            }
+            out.m_nodesByKey.insert_or_assign(node.key, id);
+            indexFile(id, key);
+            continue;
+        }
+        if (node.parent)
+            removedEdges[node.parent->value()].insert(id.value());
+        if (const auto indexed = out.m_nodesByKey.find(node.key);
+            indexed != out.m_nodesByKey.end() && indexed->second == id)
+            out.m_nodesByKey.erase(indexed);
+        auto it = out.m_filesByPath.find(key);
+        if (it != out.m_filesByPath.end()) {
+            std::erase(it->second, id);
+            if (it->second.empty())
+                out.m_filesByPath.erase(it);
+        }
     }
-    auto& children = out.m_nodes[info.node.value()].children;
-    std::ranges::sort(children, [&out](NodeId a, NodeId b) {
-        const Node& x = out.node(a);
-        const Node& y = out.node(b);
-        if (rank(x.kind) != rank(y.kind))
-            return rank(x.kind) < rank(y.kind);
-        if (const int c = detail::icompare(x.displayName, y.displayName); c != 0)
-            return c < 0;
-        return x.key < y.key;
-    });
+    // Detach a parent's removed children together. Repeated publications must not perform a
+    // linear sibling search/erase for each header in a large flat "Header Files" filter.
+    for (const auto& [parent, removed] : removedEdges)
+        std::erase_if(out.m_nodes[parent].children, [&](NodeId id) { return removed.contains(id.value()); });
+    const std::string projectKey = out.node(info.node).key;
+    const auto folder = [&](NodeId parent, const std::string& prefix, std::string_view name,
+                            const std::string& physicalPath) {
+        const std::string key = projectKey + "/filter:" + detail::toLowerAscii(prefix);
+        if (const auto existing = out.m_nodesByKey.find(key); existing != out.m_nodesByKey.end()) {
+            auto& node = out.m_nodes[existing->second.value()];
+            if (node.path.empty() && !physicalPath.empty())
+                node.path = physicalPath;
+            return existing->second;
+        }
+        const NodeId id{static_cast<std::uint32_t>(out.m_nodes.size())};
+        out.m_nodes.push_back({.kind = NodeKind::Filter,
+                               .parent = parent,
+                               .children = {},
+                               .displayName = std::string(name),
+                               .path = physicalPath,
+                               .key = key,
+                               .project = projectId,
+                               .itemType = ItemType::None,
+                               .filterPath = prefix});
+        out.m_nodes[parent.value()].children.push_back(id);
+        out.m_nodesByKey.emplace(key, id);
+        changedParents.insert(parent.value());
+        return id;
+    };
+    const auto parentFor = [&](const std::string& file) {
+        NodeId parent = info.node;
+        std::string prefix;
+        if (out.m_cppHierarchy != CppHierarchyMode::PhysicalFolders) {
+            const auto receipt = out.m_cppFilterAssignments.find(projectId.value());
+            if (receipt != out.m_cppFilterAssignments.end()) {
+                const auto assignment = receipt->second->find(detail::pathKey(file));
+                if (assignment != receipt->second->end() && !assignment->second.empty()) {
+                    for (const auto component : detail::splitTrimmed(assignment->second, '\\')) {
+                        if (!prefix.empty())
+                            prefix += '\\';
+                        prefix += component;
+                        parent = folder(parent, prefix, component, {});
+                    }
+                    return parent;
+                }
+            }
+        }
+        if (out.m_cppHierarchy == CppHierarchyMode::Filters || !info.vcxproj ||
+            !detail::isSameOrUnder(file, info.vcxproj->directory))
+            return parent;
+        const auto& directory = info.vcxproj->directory;
+        std::string_view relative = io::parentPath(file);
+        if (relative.size() <= directory.size())
+            return parent; // Linked headers outside the project retain their real path at its root.
+        relative.remove_prefix(directory.size());
+        if (!relative.empty() && (relative.front() == '\\' || relative.front() == '/'))
+            relative.remove_prefix(1);
+        std::string physical = directory;
+        for (const auto component : detail::splitTrimmed(relative, detail::kNativeSeparator)) {
+            if (component.empty() || component == "." || component == "..")
+                continue;
+            if (!prefix.empty())
+                prefix += '\\';
+            prefix += component;
+            if (auto joined = io::joinPath(physical, component))
+                physical = detail::normalizeAbsolute(*joined).value_or(*joined);
+            parent = folder(parent, prefix, component, physical);
+        }
+        return parent;
+    };
+    for (const auto& file : files) {
+        auto normalized = detail::normalizeAbsolute(file);
+        if (!normalized)
+            continue;
+        const auto pathKey = detail::pathKey(*normalized);
+        if (!present.insert(pathKey).second)
+            continue;
+        std::string key = projectKey + "/file:" + pathKey;
+        const std::string base = key;
+        for (unsigned n = 2; out.m_nodesByKey.contains(key); ++n)
+            key = std::format("{}#{}", base, n);
+        const NodeId parent = parentFor(*normalized);
+        const NodeId fileId{static_cast<std::uint32_t>(out.m_nodes.size())};
+        out.m_nodes.push_back({.kind = NodeKind::File,
+                               .parent = parent,
+                               .children = {},
+                               .displayName = std::string(io::fileName(*normalized)),
+                               .path = *normalized,
+                               .key = key,
+                               .project = projectId,
+                               .itemType = type,
+                               .filterPath = {}});
+        out.m_nodes[parent.value()].children.push_back(fileId);
+        out.m_nodesByKey.emplace(std::move(key), fileId);
+        indexFile(fileId, pathKey);
+        changedParents.insert(parent.value());
+    }
+    for (const auto parent : changedParents) {
+        auto& children = out.m_nodes[parent].children;
+        std::ranges::sort(children, [&out](NodeId a, NodeId b) {
+            const Node& x = out.node(a);
+            const Node& y = out.node(b);
+            if (rank(x.kind) != rank(y.kind))
+                return rank(x.kind) < rank(y.kind);
+            if (const int c = detail::icompare(x.displayName, y.displayName); c != 0)
+                return c < 0;
+            return x.key < y.key;
+        });
+    }
     return out;
 }
 

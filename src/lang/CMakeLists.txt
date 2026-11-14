@@ -9,7 +9,8 @@
 # semantic tokens (full and delta) and clangd's inactive regions. Qt-free;
 # depends on project, settings and text (and io, sched and core through them). yyjson (MIT, ADR
 # 0021) is linked PRIVATE, so no layer above lang sees yyjson.h.
-# TODO(M3): the inspection registry, SARIF, clang-tidy tiers and the CMake language service join here.
+# CPP-10 adds profiles, scoped clang-tidy inspection and SARIF export. The CMake language service
+# remains a later roadmap slice.
 
 # The LLVM and LuaLS versions pinned in sdk/sdk.lock.json, so findClangd and defaultLuaSearch can
 # name the SDK's and the staged folder's clangd and lua-language-server (ADR 0079).
@@ -31,6 +32,7 @@ frost_add_library(lang LAYER lang
         src/clangd_service.cpp
         src/cmake_compile_commands.cpp
         src/code_assist.cpp
+        src/code_vision.cpp
         src/compile_commands.cpp
         src/completion.cpp
         src/diagnostics.cpp
@@ -41,6 +43,7 @@ frost_add_library(lang LAYER lang
         src/frost_engine_assets.cpp
         src/frost_engine_lua.cpp
         src/fuzzy.cpp
+        src/inspection.cpp
         src/jsonrpc_connection.cpp
         src/jsonrpc_framing.cpp
         src/lsp_client.cpp

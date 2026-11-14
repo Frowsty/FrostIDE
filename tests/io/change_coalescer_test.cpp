@@ -356,7 +356,7 @@ struct Property {
             trace += " " + path + (node.type == FileType::Directory ? "/" : "");
             ids.emplace(path, ++nextId);
         }
-        trace += "\n";
+        trace += '\n';
         beginBatch();
         fs.addObserver(recorder);
         recorder.events().clear();
@@ -620,10 +620,9 @@ struct Property {
             if (it == after.end() || it->second.type != node.type) {
                 events.push_back(RawEvent{RawKind::Removed, path, node.type, false, 0});
                 skipOld = path;
-            } else if (node.type == FileType::Regular &&
-                       (it->second.content != node.content || touched.contains(path))) {
-                events.push_back(RawEvent{RawKind::Modified, path, node.type, false, 0});
-            } else if (node.type == FileType::Directory && touched.contains(path)) {
+            } else if ((node.type == FileType::Regular &&
+                        (it->second.content != node.content || touched.contains(path))) ||
+                       (node.type == FileType::Directory && touched.contains(path))) {
                 events.push_back(RawEvent{RawKind::Modified, path, node.type, false, 0});
             }
         }

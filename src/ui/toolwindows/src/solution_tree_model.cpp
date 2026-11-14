@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <ranges>
 #include <string>
 
 namespace frost::ui {
@@ -193,8 +194,8 @@ std::vector<NodeId> SolutionTreeModel::displayOrder() const {
         stack.pop_back();
         order.push_back(id);
         const auto children = m_solution->children(id);
-        for (auto it = children.rbegin(); it != children.rend(); ++it) {
-            stack.push_back(*it);
+        for (const auto child : std::views::reverse(children)) {
+            stack.push_back(child);
         }
     }
     return order;
@@ -486,7 +487,7 @@ bool SolutionTreeModel::dropMimeData(const QMimeData* data, Qt::DropAction actio
                                     projInfo.kind == project::ProjectKind::CSharp));
     if (isPhysicalTarget) {
         const QString targetDir =
-            targetNode.kind == NodeKind::Filter ? qs(targetNode.path) : qs(std::string(io::parentPath(projInfo.path)));
+            targetNode.kind == NodeKind::Filter ? qs(targetNode.path) : qs(io::parentPath(projInfo.path));
         emit physicalFilesDroppedOnDirectory(targetProjectPath, files, targetDir);
         return true;
     }
@@ -555,7 +556,7 @@ void SolutionItemDelegate::initStyleOption(QStyleOptionViewItem* option, const Q
     const auto* tree = qobject_cast<const QTreeView*>(option->widget);
     if (tree != nullptr && tree->isExpanded(index)) {
         if (QIcon open = m_icons->get(icons::kNodesFolderOpen); !open.isNull()) {
-            option->icon = open;
+            option->icon = std::move(open);
         }
     }
 }

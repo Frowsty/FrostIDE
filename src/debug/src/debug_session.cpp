@@ -306,7 +306,7 @@ void DebugSession::State::moduleEvent(const rpc::Json& body) {
     note += " lldb cannot read a PDB that an incremental MSVC link (LinkIncremental, on for Debug by "
             "default) rewrote in place; a full link (LinkIncremental=false, or a Rebuild) writes one it can read.";
 #endif
-    note += "\n";
+    note += '\n';
     emit([&] {
         if (callbacks.onOutput)
             callbacks.onOutput("important", note);
@@ -358,8 +358,15 @@ void DebugSession::State::event(std::string_view name, const rpc::Json& body) {
         moduleEvent(body);
     } else if (name == "process") {
         const dap::ProcessEvent process = dap::parseProcessEvent(body);
-        LockGuard lock(mutex);
-        processId = process.systemProcessId > 0 ? std::optional<std::int64_t>(process.systemProcessId) : std::nullopt;
+        {
+            LockGuard lock(mutex);
+            processId =
+                process.systemProcessId > 0 ? std::optional<std::int64_t>(process.systemProcessId) : std::nullopt;
+        }
+        emit([&] {
+            if (callbacks.onProcess)
+                callbacks.onProcess(process.systemProcessId > 0 ? process.systemProcessId : 0);
+        });
     }
 }
 
@@ -382,6 +389,7 @@ std::unique_ptr<DebugSession> DebugSession::start(AdapterFactory factory, rpc::J
         DebugSessionOptions{.breakOnAbort = breakOnAbort, .adapterId = std::move(adapterId), .targetMode = targetMode});
 }
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param): Own the callable while its invocation can reenter the caller.
 std::unique_ptr<DebugSession> DebugSession::start(AdapterFactory factory, rpc::Json launchArguments,
                                                   std::map<std::string, std::vector<BreakpointLine>> breakpoints,
                                                   DebugSessionCallbacks callbacks, DebugSessionOptions options) {
@@ -486,6 +494,77 @@ std::optional<std::int64_t> DebugSession::processId() const {
     return m_state->processId;
 }
 
+DebugTargetMode DebugSession::targetMode() const noexcept { return m_state->targetMode; }
+
+bool DebugSession::canTerminateDebuggee() const {
+    LockGuard lock(m_state->mutex);
+    return (m_state->state == DebugState::Running || m_state->state == DebugState::Stopped) &&
+           !m_state->stopRequested && !m_state->terminateRequested && m_state->processId.has_value() &&
+           (m_state->caps.supportsTerminateRequest || m_state->targetMode == DebugTargetMode::Launch);
+}
+
+Result<void> DebugSession::terminateDebuggee(std::int64_t expectedPid, TerminateDone done) {
+    Result<void> admitted;
+    m_state->withStartup([&] {
+        bool terminateRequest = false;
+        {
+            LockGuard lock(m_state->mutex);
+            if (expectedPid <= 0 || m_state->processId != expectedPid) {
+                admitted = fail(ErrorCode::PermissionDenied,
+                                "The observed debuggee PID no longer matches the requested process");
+                return;
+            }
+            if ((m_state->state != DebugState::Running && m_state->state != DebugState::Stopped) ||
+                m_state->stopRequested || m_state->terminateRequested) {
+                admitted = fail(ErrorCode::Busy, "The debugger is not ready for an explicit termination");
+                return;
+            }
+            terminateRequest = m_state->caps.supportsTerminateRequest;
+            if (!terminateRequest && m_state->targetMode != DebugTargetMode::Launch) {
+                admitted = fail(ErrorCode::Unsupported, "The attached debugger does not support DAP terminate");
+                return;
+            }
+            m_state->terminateRequested = true;
+            m_state->stopRequested = true;
+            if (!terminateRequest)
+                m_state->disconnectSent = true;
+        }
+        const auto arguments = terminateRequest
+                                   ? rpc::Json::object().set("restart", false)
+                                   : rpc::Json::object().set("terminateDebuggee", true).set("restart", false);
+        m_state->send(
+            terminateRequest ? "terminate" : "disconnect", arguments,
+            [weak = m_state->weak(), terminateRequest, done = std::move(done)](Result<rpc::Json> response) mutable {
+                const auto self = weak.lock();
+                if (!self)
+                    return;
+                {
+                    LockGuard lock(self->mutex);
+                    if (!response) {
+                        // A refused request leaves the actual stopped/running session available.
+                        // Never turn a DAP refusal into closing/killing the adapter's process tree.
+                        self->terminateRequested = false;
+                        if (!self->ordinaryStopRequested && !self->terminatedSeen && self->state != DebugState::Ended) {
+                            self->stopRequested = false;
+                            if (!terminateRequest)
+                                self->disconnectSent = false;
+                        }
+                    } else if (!terminateRequest) {
+                        self->disconnectConfirmed = true;
+                    }
+                }
+                self->emit([&] {
+                    if (done)
+                        done(response ? Result<void>{} : Result<void>(std::unexpected(response.error())));
+                });
+                if (response && !terminateRequest)
+                    if (auto* client = self->adapter.load())
+                        client->close();
+            });
+    });
+    return admitted;
+}
+
 Result<void> DebugSession::restart() {
     {
         LockGuard lock(m_state->mutex);
@@ -538,6 +617,7 @@ void DebugSession::stop() {
             LockGuard lock(m_state->mutex);
             if (m_state->state == DebugState::Ended)
                 return;
+            m_state->ordinaryStopRequested = true;
             m_state->stopRequested = true;
         }
         m_state->disconnect(m_state->targetMode == DebugTargetMode::Launch);
@@ -548,6 +628,7 @@ void DebugSession::kill() {
     m_state->withStartup([&] {
         {
             LockGuard lock(m_state->mutex);
+            m_state->ordinaryStopRequested = true;
             m_state->stopRequested = true;
         }
         if (IDebugAdapterClient* const client = m_state->adapter.load())

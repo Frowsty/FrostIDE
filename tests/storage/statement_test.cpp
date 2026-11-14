@@ -22,7 +22,6 @@ namespace {
 using frost::ErrorCode;
 using frost::storage::Database;
 using frost::storage::Fingerprint128;
-using frost::storage::Statement;
 using frost::storage::test::fastOptions;
 
 Database memoryDb() {

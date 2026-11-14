@@ -42,7 +42,7 @@ struct Rig {
         EXPECT_TRUE(controller.openSolution(test::loadSdk()).has_value());
     }
     // The service waiting for the user's answer about these folders.
-    void needTrust(std::vector<std::string> roots) {
+    void needTrust(const std::vector<std::string>& roots) {
         backend.currentState = BuildState::NeedsTrust;
         backend.untrusted = roots;
         const build::BuildServiceCallbacks callbacks = controller.serviceCallbacks();

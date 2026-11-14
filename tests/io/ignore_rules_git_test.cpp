@@ -42,9 +42,9 @@ constexpr char kSep = frost::io::kNativePathStyle == frost::io::PathStyle::Windo
 
 std::optional<std::string> gitExecutable() {
 #ifdef _WIN32
-    const std::string candidate = "C:\\Program Files\\Git\\cmd\\git.exe";
+    std::string candidate = "C:\\Program Files\\Git\\cmd\\git.exe";
 #else
-    const std::string candidate = "/usr/bin/git";
+    std::string candidate = "/usr/bin/git";
 #endif
     if (frost::io::realFileSystem().exists(candidate).value_or(false)) {
         return candidate;
@@ -138,8 +138,8 @@ const std::vector<std::string>& treeFiles() {
         "esc  .txt",
         "crlf.txt",
         "[broken",
-        "\xC3\xA4"
-        "bc.txt",
+        ("\xC3\xA4"
+         "bc.txt"), // Delimit the hex escape while retaining one UTF-8 filename entry.
         "z\xC3\xA4.txt",
         "excluded-dir/e.txt",
         "dir.tmp/t.txt",

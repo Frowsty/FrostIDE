@@ -374,6 +374,8 @@ struct AutomationEndpoint::Impl {
             return cmake(method, params);
         if (method.starts_with("run."))
             return runMethod(method, params);
+        if (method.starts_with("engine."))
+            return engineMethod(method, params);
         if (method == "solution" || method.starts_with("solution."))
             return solutionMethod(method, params);
         if (method.starts_with("debug."))
@@ -686,7 +688,8 @@ struct AutomationEndpoint::Impl {
             finish(Json::object().set("variables", std::move(all)));
         };
         // One child request per variable with children; `done` runs after the last reply.
-        const auto expand = [pending, done](QPointer<ui::DebugController> guard, const debug::VariableList& list) {
+        QPointer<ui::DebugController> guard(controller);
+        const auto expand = [pending, done, guard](const debug::VariableList& list) {
             for (std::size_t i = 0; i < list.size(); ++i) {
                 if (list[i].variablesReference <= 0)
                     continue;
@@ -710,7 +713,6 @@ struct AutomationEndpoint::Impl {
             if (pending->waiting == 0)
                 done();
         };
-        QPointer<ui::DebugController> guard(controller);
         controller->scopes(controller->selectedFrame()->id, [guard, pending, finish,
                                                              expand](Result<debug::ScopeList> scopes) {
             if (!scopes || guard.isNull()) {
@@ -737,7 +739,7 @@ struct AutomationEndpoint::Impl {
                                                          .set("type", variable.type)
                                                          .set("reference", variable.variablesReference)
                                                          .set("children", Json::array()));
-                    expand(guard, *list);
+                    expand(*list);
                 });
         });
     }
@@ -826,6 +828,71 @@ struct AutomationEndpoint::Impl {
             .set("workingDirectory", configuration.workingDirectory)
             .set("environment", std::move(environment))
             .set("generated", generated);
+    }
+
+    Result<Json> engineMethod(const std::string& method, const Json& params) {
+        if (method == "engine.state")
+            return workbench.engineState();
+        if (method == "engine.configure") {
+            std::vector<std::string> arguments;
+            if (const auto* list = params.find("editorArguments")) {
+                if (!list->isArray())
+                    return fail(ErrorCode::InvalidArgument, "editorArguments must be an array of strings");
+                for (const auto& item : list->items()) {
+                    const auto* value = item.asString();
+                    if (!value)
+                        return fail(ErrorCode::InvalidArgument, "editorArguments must contain only strings");
+                    arguments.push_back(*value);
+                }
+            }
+            auto configured = workbench.configureEngineTools(
+                std::string(params.stringAt("editorPath")), std::string(params.stringAt("configDirectory")),
+                std::string(params.stringAt("automationDirectory")), std::move(arguments));
+            if (!configured)
+                return std::unexpected(configured.error());
+            return Json::object();
+        }
+        if (method == "engine.refresh") {
+            if (auto refreshed = workbench.refreshEngineInstances(); !refreshed)
+                return std::unexpected(refreshed.error());
+            return Json::object();
+        }
+        if (method == "engine.pair") {
+            if (auto paired = workbench.pairEngineInstance(params.stringAt("instanceId")); !paired)
+                return std::unexpected(paired.error());
+            return Json::object();
+        }
+        if (method == "engine.disconnect") {
+            workbench.disconnectEngineSession();
+            return Json::object();
+        }
+        if (method == "engine.start") {
+            auto started = workbench.startEngineEditor();
+            if (!started)
+                return std::unexpected(started.error());
+            return Json::object().set("runId", *started);
+        }
+        if (method == "engine.validateScript") {
+            if (auto valid = workbench.validateEngineScript(); !valid)
+                return std::unexpected(valid.error());
+            return Json::object();
+        }
+        if (method == "engine.cancel") {
+            if (auto cancelled = workbench.cancelEngineRequest(); !cancelled)
+                return std::unexpected(cancelled.error());
+            return Json::object();
+        }
+        if (method == "engine.command") {
+            auto command = params.stringAt("command");
+            if (command.empty())
+                command = params.stringAt("method");
+            const auto* arguments = params.find("params");
+            auto sent = workbench.sendEngineCommand(std::string(command), arguments ? *arguments : Json::object());
+            if (!sent)
+                return std::unexpected(sent.error());
+            return Json::object().set("requestId", *sent);
+        }
+        return fail(ErrorCode::NotFound, "Unknown engine automation method");
     }
 
     Result<Json> runMethod(const std::string& method, const Json& params) {
@@ -1202,7 +1269,10 @@ struct AutomationEndpoint::Impl {
         if (const ui::ProblemsView* view = workbench.problems(); view != nullptr && view->model() != nullptr) {
             for (const ui::Problem& problem : view->model()->problems())
                 list.push(diagnosticJson(problem.diagnostic,
-                                         problem.source == ui::DiagnosticSource::Build ? "build" : "live"));
+                                         problem.source == ui::DiagnosticSource::Build        ? "build"
+                                         : problem.source == ui::DiagnosticSource::Inspection ? "inspection"
+                                         : problem.source == ui::DiagnosticSource::Engine     ? "engine"
+                                                                                              : "live"));
         }
         return Json::object().set("problems", std::move(list));
     }

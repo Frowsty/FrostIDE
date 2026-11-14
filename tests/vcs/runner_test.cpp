@@ -29,11 +29,14 @@ using frost::io::MemFs;
 using namespace frost::vcs;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
-const std::string kExe = kWindows ? "git.exe" : "git";
+const std::string& executableName() {
+    static const std::string value(kWindows ? "git.exe" : "git");
+    return value;
+}
 const char kSep = kWindows ? ';' : ':';
 
 std::string dir(std::string_view name) { return (kWindows ? "C:\\" : "/") + std::string(name); }
-std::string exeIn(std::string_view name) { return frost::io::joinPath(dir(name), kExe).value(); }
+std::string exeIn(std::string_view name) { return frost::io::joinPath(dir(name), executableName()).value(); }
 
 void place(MemFs& fs, std::string_view name) {
     ASSERT_TRUE(fs.createDirectories(dir(name)).has_value());

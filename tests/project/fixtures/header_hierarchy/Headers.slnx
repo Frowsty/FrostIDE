@@ -1,0 +1,5 @@
+<Solution>
+ <Configurations><BuildType Name="Debug"/><BuildType Name="Release"/><Platform Name="x64"/><Platform Name="Win32"/></Configurations>
+ <Project Path="Library/Library.vcxproj" Id="{12438C03-58B9-4D37-A8EE-731668F03721}"/>
+ <Project Path="HeadersOnly/HeadersOnly.vcxproj" Id="{E5C4081F-DAEE-46B9-8BF0-07D6FC6F1EF3}"/>
+</Solution>

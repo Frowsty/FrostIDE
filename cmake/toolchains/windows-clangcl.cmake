@@ -118,8 +118,9 @@ endif()
 
 # AddressSanitizer link inputs. clang-cl adds these itself only when it drives the
 # link; CMake links with lld-link directly, so they are passed explicitly. These
-# are the same three inputs `clang-cl -fsanitize=address -###` shows for /MD:
-# the runtime import library, the SEH interceptor and the whole-archive thunk.
+# include the three runtime inputs `clang-cl -fsanitize=address -###` shows for /MD.
+# Disable lld string tail merging too: it can place an empty/suffix literal inside another
+# ASan global's redzone (https://github.com/llvm/llvm-project/issues/62078).
 # For FROST_SANITIZE=address the root CMakeLists.txt puts them into
 # FROST_SANITIZE_LINK_OPTIONS, which frost_apply_compile_options adds per target
 # (cmake/FrostCompilerOptions.cmake; frost.exe's launcher opts out, ADR 0012); port
@@ -127,8 +128,10 @@ endif()
 # -fsanitize=address) get them here, including in CMake's own try_compile checks.
 string(REGEX MATCH "^[0-9]+" _frost_llvm_major "${_frost_llvm_version}")
 set(FROST_ASAN_RUNTIME_DIR "${FROST_LLVM_ROOT}/lib/clang/${_frost_llvm_major}/lib/windows")
+set(FROST_ASAN_RUNTIME_LIBRARY "${FROST_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.lib")
 set(FROST_ASAN_LINK_OPTIONS
-    "${FROST_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.lib"
+    "/OPT:NOLLDTAILMERGE"
+    "${FROST_ASAN_RUNTIME_LIBRARY}"
     "/INCLUDE:__asan_seh_interceptor"
     "/WHOLEARCHIVE:${FROST_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib")
 # The static-CRT (/MT) variant and libFuzzer, as `clang-cl -fsanitize=address,fuzzer -MT -###`
@@ -136,9 +139,11 @@ set(FROST_ASAN_LINK_OPTIONS
 # the static thunk, whole-archive. No /INCLUDE:__asan_seh_interceptor: the driver passes it only
 # for /MD, and the static thunk defines the symbol. The driver links libFuzzer whole-archive too.
 # For CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded (the fuzz trees) the root CMakeLists.txt puts the
-# ASan pair into FROST_SANITIZE_LINK_OPTIONS; cmake/FrostFuzz.cmake links FROST_FUZZER_LINK_OPTIONS.
+# runtime inputs and tail-merging policy into FROST_SANITIZE_LINK_OPTIONS;
+# cmake/FrostFuzz.cmake links FROST_FUZZER_LINK_OPTIONS.
 set(FROST_ASAN_STATIC_LINK_OPTIONS
-    "${FROST_ASAN_RUNTIME_DIR}/clang_rt.asan_dynamic-x86_64.lib"
+    "/OPT:NOLLDTAILMERGE"
+    "${FROST_ASAN_RUNTIME_LIBRARY}"
     "/WHOLEARCHIVE:${FROST_ASAN_RUNTIME_DIR}/clang_rt.asan_static_runtime_thunk-x86_64.lib")
 set(FROST_FUZZER_LINK_OPTIONS "/WHOLEARCHIVE:${FROST_ASAN_RUNTIME_DIR}/clang_rt.fuzzer-x86_64.lib")
 if("${VCPKG_C_FLAGS}" MATCHES "-fsanitize=address")

@@ -43,9 +43,6 @@
 
 namespace frost::app {
 
-namespace key = settings::key;
-namespace wa = workbench_actions;
-
 namespace {
 
 QString text(const char* source) { return ui::qtr("frost::app::Workbench", source); }

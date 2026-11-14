@@ -39,7 +39,8 @@ QToolButton* toolButton(QWidget* parent, std::string_view icon, const QString& t
 
 } // namespace
 
-FindToolWindow::FindToolWindow(QWidget* parent) : QWidget(parent) {
+FindToolWindow::FindToolWindow(QWidget* parent)
+    : QWidget(parent), m_tree(new QTreeWidget(this)), m_status(new QLabel(this)) {
     setObjectName(QStringLiteral("findToolWindow"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -57,12 +58,10 @@ FindToolWindow::FindToolWindow(QWidget* parent) : QWidget(parent) {
     bar->addWidget(m_previous);
     bar->addWidget(m_next);
     bar->addWidget(m_stop);
-    m_status = new QLabel(this);
+    setTabOrder(m_stop, m_tree);
     m_status->setObjectName(QStringLiteral("findToolStatus"));
     bar->addWidget(m_status, 1);
     layout->addLayout(bar);
-
-    m_tree = new QTreeWidget(this);
     m_tree->setObjectName(QStringLiteral("findResultTree"));
     m_tree->setHeaderHidden(true);
     m_tree->setColumnCount(1);

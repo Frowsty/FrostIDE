@@ -105,7 +105,7 @@ std::string formatHunks(const HunkList& hunks) {
     for (std::size_t k = 0; k < hunks.size(); ++k) {
         out += std::format("{}({},{},{},{})", k == 0 ? "" : ",", hunks[k][0], hunks[k][1], hunks[k][2], hunks[k][3]);
     }
-    out += "]";
+    out += ']';
     return out;
 }
 

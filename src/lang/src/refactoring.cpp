@@ -5,8 +5,11 @@
 #include "frost/lang/refactoring.hpp"
 
 #include "frost/core/log.hpp"
+#include "frost/lang/clangd_actions.hpp"
+#include "frost/lang/uri.hpp"
 
 #include <algorithm>
+#include <utility>
 
 namespace frost::lang {
 namespace {
@@ -159,6 +162,208 @@ sched::Task<Result<Json>> requestExecuteCommand(LspRequestSender& server, std::s
     }
     Json params = Json::object().set("command", command).set("arguments", std::move(args));
     return server.request("workspace/executeCommand", std::move(params), std::move(token));
+}
+
+namespace {
+
+[[nodiscard]] char asciiLowerChar(char c) noexcept {
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+[[nodiscard]] std::string toLowerAsciiString(std::string_view s) {
+    std::string out(s.size(), '\0');
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        out[i] = asciiLowerChar(s[i]);
+    }
+    return out;
+}
+
+Result<void> mergeTextEditIntoFile(FileEdit& targetFile, const TextEdit& incoming) {
+    for (TextEdit& existing : targetFile.edits) {
+        if (existing.range == incoming.range && existing.newText == incoming.newText) {
+            return {};
+        }
+        const bool samePointInsert = incoming.range.start == incoming.range.end &&
+                                     existing.range.start == existing.range.end &&
+                                     incoming.range.start == existing.range.start;
+        const bool overlap = incoming.range.start < existing.range.end && existing.range.start < incoming.range.end;
+        const bool insertInside = incoming.range.start == incoming.range.end &&
+                                  existing.range.start <= incoming.range.start &&
+                                  incoming.range.start < existing.range.end;
+        const bool existingInsertInside = existing.range.start == existing.range.end &&
+                                          incoming.range.start <= existing.range.start &&
+                                          existing.range.start < incoming.range.end;
+        if (samePointInsert || overlap || insertInside || existingInsertInside) {
+            return fail(ErrorCode::InvalidArgument, "clangd returned overlapping include edits");
+        }
+    }
+    targetFile.edits.push_back(incoming);
+    return {};
+}
+
+Result<void> mergeWorkspaceEdit(WorkspaceEdit& dest, const WorkspaceEdit& src) {
+    for (const FileEdit& srcFile : src.files) {
+        if (srcFile.edits.empty()) {
+            continue;
+        }
+        const std::string key = documentKey(srcFile.path);
+        FileEdit* target = nullptr;
+        for (FileEdit& existingFile : dest.files) {
+            if (documentKey(existingFile.path) == key) {
+                target = &existingFile;
+                break;
+            }
+        }
+        if (target == nullptr) {
+            dest.files.push_back(FileEdit{
+                .path = srcFile.path,
+                .uri = srcFile.uri,
+                .version = srcFile.version,
+                .edits = {},
+            });
+            target = &dest.files.back();
+        } else if (target->version != srcFile.version) {
+            return fail(ErrorCode::InvalidArgument, "clangd returned include edits for different document versions");
+        }
+        for (const TextEdit& edit : srcFile.edits) {
+            if (auto merged = mergeTextEditIntoFile(*target, edit); !merged) {
+                return merged;
+            }
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] int includeActionPriority(const CodeActionItem& action) {
+    if (action.edit.empty()) {
+        return -1;
+    }
+    const std::string lower = toLowerAsciiString(action.title);
+    if (lower == "fix all includes") {
+        return 100;
+    }
+    if (lower == "remove all unused includes" || lower == "add all missing includes") {
+        return 90;
+    }
+    if (lower.starts_with("remove #include")) {
+        return 80;
+    }
+    if (lower.starts_with("#include ") || lower.starts_with("add #include") || lower.starts_with("insert #include")) {
+        return action.preferred ? 75 : 70;
+    }
+    if (action.kind == "source.organizeImports") {
+        return 60;
+    }
+    return -1;
+}
+
+} // namespace
+
+sched::Task<Result<WorkspaceEdit>> requestOptimizeIncludes(ILspRequester& server, std::string path,
+                                                           std::span<const LiveDiagnostic> diagnostics,
+                                                           std::stop_token token) {
+    WorkspaceEdit merged;
+    bool removedAllUnused = false;
+    bool addedAllMissing = false;
+
+    std::vector<LiveDiagnostic> cleanerDiags;
+    for (const LiveDiagnostic& d : diagnostics) {
+        if (isIncludeCleanerDiagnostic(d)) {
+            cleanerDiags.push_back(d);
+        }
+    }
+
+    if (!cleanerDiags.empty()) {
+        LspRange cleanerSpan = cleanerDiags.front().lspRange;
+        for (const LiveDiagnostic& d : cleanerDiags) {
+            if (d.lspRange.start < cleanerSpan.start) {
+                cleanerSpan.start = d.lspRange.start;
+            }
+            if (cleanerSpan.end < d.lspRange.end) {
+                cleanerSpan.end = d.lspRange.end;
+            }
+        }
+        auto spanActions = co_await requestCodeActions(server, path, cleanerSpan, cleanerDiags, token);
+        if (!spanActions) {
+            co_return std::unexpected(std::move(spanActions.error()));
+        }
+        for (const CodeActionItem& action : *spanActions) {
+            if (toLowerAsciiString(action.title) == "fix all includes" && !action.edit.empty()) {
+                co_return action.edit;
+            }
+        }
+        for (const CodeActionItem& action : *spanActions) {
+            const std::string title = toLowerAsciiString(action.title);
+            if ((title == "remove all unused includes" || title == "add all missing includes") &&
+                !action.edit.empty()) {
+                if (auto mergedResult = mergeWorkspaceEdit(merged, action.edit); !mergedResult) {
+                    co_return std::unexpected(std::move(mergedResult.error()));
+                }
+                removedAllUnused = removedAllUnused || title == "remove all unused includes";
+                addedAllMissing = addedAllMissing || title == "add all missing includes";
+            }
+        }
+    }
+
+    for (const LiveDiagnostic& diag : diagnostics) {
+        if (!isIncludeCleanerDiagnostic(diag)) {
+            continue;
+        }
+        if ((diag.code == "unused-includes" && removedAllUnused) ||
+            (diag.code == "missing-includes" && addedAllMissing)) {
+            continue;
+        }
+        auto actions = co_await requestCodeActions(server, path, diag.lspRange, {diag}, token);
+        if (!actions) {
+            co_return std::unexpected(std::move(actions.error()));
+        }
+        const CodeActionItem* best = nullptr;
+        int bestPriority = -1;
+        for (const CodeActionItem& candidate : *actions) {
+            const int prio = includeActionPriority(candidate);
+            if (prio > bestPriority) {
+                bestPriority = prio;
+                best = &candidate;
+            }
+        }
+        if (best != nullptr) {
+            if (auto mergedResult = mergeWorkspaceEdit(merged, best->edit); !mergedResult) {
+                co_return std::unexpected(std::move(mergedResult.error()));
+            }
+        }
+    }
+
+    if (diagnostics.empty()) {
+        auto docActions = co_await requestCodeActions(server, path, LspRange{{0, 0}, {0, 0}}, {}, std::move(token));
+        if (!docActions) {
+            co_return std::unexpected(std::move(docActions.error()));
+        }
+        const CodeActionItem* best = nullptr;
+        int bestPriority = -1;
+        for (const CodeActionItem& candidate : *docActions) {
+            const int priority = includeActionPriority(candidate);
+            if (priority > bestPriority) {
+                best = &candidate;
+                bestPriority = priority;
+            }
+        }
+        if (best != nullptr) {
+            if (auto mergedResult = mergeWorkspaceEdit(merged, best->edit); !mergedResult) {
+                co_return std::unexpected(std::move(mergedResult.error()));
+            }
+        }
+    }
+
+    for (FileEdit& file : merged.files) {
+        std::ranges::stable_sort(file.edits, [](const TextEdit& a, const TextEdit& b) {
+            if (a.range.start != b.range.start) {
+                return b.range.start < a.range.start;
+            }
+            return b.range.end < a.range.end;
+        });
+    }
+
+    co_return merged;
 }
 
 sched::Task<Result<std::vector<CodeActionItem>>> requestCodeActions(ILspRequester& server, std::string path,

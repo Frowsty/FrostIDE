@@ -95,13 +95,21 @@ set(_frost_workbench_definitions
     FROST_BUILD_FIXTURES="${FROST_SOURCE_DIR}/tests/build/fixtures"
     FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/workbench-work")
 frost_add_test(app_workbench_tests QT
-    SOURCES workbench_test.cpp workbench_terminal_test.cpp workbench_engine_test.cpp workbench_find_test.cpp project_edit_process_test.cpp update_check_test.cpp update_readiness_test.cpp update_state_test.cpp
+    SOURCES workbench_test.cpp workbench_terminal_test.cpp engine_locator_test.cpp engine_native_debug_test.cpp workbench_find_test.cpp project_edit_process_test.cpp update_check_test.cpp update_readiness_test.cpp update_state_test.cpp
     DEPS frost::app frost::build frost::io frost::ui_find
-    THIRD_PARTY Qt6::Network unofficial-sodium::sodium)
+    THIRD_PARTY Qt6::Network)
 target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_tests PRIVATE ${_frost_workbench_definitions})
-target_compile_definitions(app_workbench_tests PRIVATE FROST_DISCOVERY_STALL_CHILD="$<TARGET_FILE:engine_discovery_stall_child>")
-add_dependencies(app_workbench_tests engine_discovery_stall_child)
+# Persistent engine regressions use real loopback sockets; serialize them with the other
+# integration cases. Filesystem-only discovery and protocol doubles remain in the unit target.
+frost_add_test(app_engine_session_tests QT
+    SOURCES workbench_engine_test.cpp
+    DEPS frost::app frost::build frost::io frost::ui_find
+    THIRD_PARTY Qt6::Network unofficial-sodium::sodium
+    LABELS integration)
+target_include_directories(app_engine_session_tests PRIVATE ${FROST_SOURCE_DIR}/tests
+    ${FROST_SOURCE_DIR}/src/app/src)
+target_compile_definitions(app_engine_session_tests PRIVATE ${_frost_workbench_definitions})
 # Exercise the release floor across independent processes, including a stale reader.
 if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{FROST_SDK}/py/Scripts/python.exe")
     set(Python3_EXECUTABLE "$ENV{FROST_SDK}/py/Scripts/python.exe")
@@ -125,7 +133,7 @@ target_compile_definitions(app_workbench_git_tests PRIVATE ${_frost_workbench_de
 
 if(WIN32)
     frost_add_test(app_workbench_msbuild_tests QT
-        SOURCES workbench_msbuild_test.cpp workbench_r2a_debug_test.cpp workbench_project_edit_test.cpp
+        SOURCES workbench_msbuild_test.cpp workbench_project_edit_test.cpp
                 workbench_project_host_test.cpp
         DEPS frost::app frost::build frost::io
         LABELS integration msbuild)
@@ -135,6 +143,42 @@ if(WIN32)
     target_compile_definitions(app_workbench_msbuild_tests PRIVATE
         FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe")
     add_dependencies(app_workbench_msbuild_tests frost_project_host)
+    # The real R2a debugger acceptance provisions its disposable pinned clone in Corpus.
+    set(_frost_r2a_lock_file "${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json")
+    set(_frost_r2a_sdk_file "${FROST_SOURCE_DIR}/sdk/sdk.lock.json")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_frost_r2a_lock_file}" "${_frost_r2a_sdk_file}")
+    file(READ "${_frost_r2a_lock_file}" _frost_r2a_lock)
+    string(JSON _frost_r2a_count LENGTH "${_frost_r2a_lock}" corpora)
+    math(EXPR _frost_r2a_last "${_frost_r2a_count} - 1")
+    set(_frost_r2a_sha "")
+    foreach(_frost_r2a_index RANGE ${_frost_r2a_last})
+        string(JSON _frost_r2a_id GET "${_frost_r2a_lock}" corpora ${_frost_r2a_index} id)
+        if(_frost_r2a_id STREQUAL "r2a")
+            string(JSON _frost_r2a_sha GET "${_frost_r2a_lock}" corpora ${_frost_r2a_index} sha)
+        endif()
+    endforeach()
+    if(NOT _frost_r2a_sha MATCHES "^[0-9a-f]+$")
+        message(FATAL_ERROR "${_frost_r2a_lock_file} pins no R2a corpus")
+    endif()
+    file(READ "${_frost_r2a_sdk_file}" _frost_r2a_sdk)
+    string(JSON _frost_r2a_vc GET "${_frost_r2a_sdk}" msvc vcToolsVersion)
+    string(JSON _frost_r2a_winsdk GET "${_frost_r2a_sdk}" msvc windowsSdkVersion)
+    file(TO_CMAKE_PATH "${Python3_EXECUTABLE}" _frost_r2a_python)
+    frost_add_test(app_r2a_debug_corpus_tests QT
+        SOURCES workbench_r2a_debug_test.cpp
+        DEPS frost::app frost::build frost::io frost::vcs
+        LABELS integration corpus msbuild)
+    target_include_directories(app_r2a_debug_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests
+        ${FROST_SOURCE_DIR}/src/project/src)
+    target_link_libraries(app_r2a_debug_corpus_tests PRIVATE user32)
+    target_compile_definitions(app_r2a_debug_corpus_tests PRIVATE ${_frost_workbench_definitions}
+        FROST_PROJECT_HOST="${CMAKE_BINARY_DIR}/src/app/$<CONFIG>/project-host/ProjectHostVsProbe.exe"
+        FROST_CORPUS_R2A_SHA="${_frost_r2a_sha}"
+        FROST_PINNED_VC_TOOLS="${_frost_r2a_vc}" FROST_PINNED_WINSDK="${_frost_r2a_winsdk}"
+        FROST_TEST_PYTHON="${_frost_r2a_python}"
+        FROST_R2A_CORPORA_TOOL="${FROST_SOURCE_DIR}/tools/corpora.py")
+    add_dependencies(app_r2a_debug_corpus_tests frost_project_host)
     # SLN-7: the Configuration Manager switches and remaps configurations; clangd follows on
     # GetClCommandLines (SLN-5) from the shipped ProjectHost. Tags "msbuild" and "clangd".
     frost_add_test(app_workbench_configuration_tests QT
@@ -163,11 +207,22 @@ endif()
 # CPP-5 and REF-12 with the real clangd and clang-format (label integration, tag clangd): clangd's
 # links, folds, inlay hints and AST in the active editor, and the actions on save.
 frost_add_test(app_workbench_cpp_editor_tests QT
-    SOURCES workbench_cpp_editor_test.cpp
+    SOURCES workbench_cpp_editor_test.cpp workbench_inspection_test.cpp
     DEPS frost::app frost::lang frost::io frost::sched
     LABELS integration clangd)
-target_include_directories(app_workbench_cpp_editor_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_include_directories(app_workbench_cpp_editor_tests PRIVATE ${FROST_SOURCE_DIR}/tests
+    ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_cpp_editor_tests PRIVATE ${_frost_workbench_definitions})
+
+# R6 uses mandatory isolated real engines; these cases belong only to the corpus tier.
+include("${FROST_SOURCE_DIR}/tests/support/EngineCorpus.cmake")
+frost_add_test(app_engine_session_acceptance_tests QT
+    SOURCES engine_session_acceptance_test.cpp
+    DEPS frost::app frost::engine frost::build frost::rpc frost::io frost::sched
+    LABELS integration corpus)
+frost_configure_engine_corpus_target(app_engine_session_acceptance_tests)
+target_include_directories(app_engine_session_acceptance_tests PRIVATE ${FROST_SOURCE_DIR}/src/app/src)
+target_compile_definitions(app_engine_session_acceptance_tests PRIVATE ${_frost_workbench_definitions})
 
 frost_add_test(app_workbench_lua_tests QT
     SOURCES workbench_lua_test.cpp workbench_lua_workspace_test.cpp
@@ -233,7 +288,8 @@ frost_add_test(app_workbench_unity_tests QT
 target_include_directories(app_workbench_unity_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_unity_tests PRIVATE ${_frost_workbench_definitions})
 
-frost_add_test(app_workbench_managed_tests QT
+include("${FROST_SOURCE_DIR}/tests/support/ManagedFixtures.cmake")
+frost_add_managed_fixture_test(app_workbench_managed_tests QT
     SOURCES workbench_managed_test.cpp managed_debug_preparation_test.cpp mono_adapter_preparation_test.cpp
     DEPS frost::app frost::lang frost::io
     LABELS integration)
@@ -285,7 +341,7 @@ frost_add_test(app_corpus_tests QT
     DEPS frost::app frost::build frost::diag frost::lang frost::io frost::vcs frost::search frost::ui_nav
          frost::project frost::document frost::ui_run frost::debug
     LABELS integration corpus)
-target_include_directories(app_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_include_directories(app_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_corpus_tests PRIVATE ${_frost_workbench_definitions}
     FROST_CORPUS_FROSTENGINE_SHA="${_frost_engine_sha}" FROST_CORPUS_FROSTENGINE_PRESET="${_frost_engine_preset}"
     FROST_TEST_CMAKE="${CMAKE_COMMAND}")
@@ -312,10 +368,13 @@ endif()
 # (tests/run's run_ctest_stub) gives the tool-error case (label integration, tag cmake).
 frost_add_test(app_unit_tests_window_tests QT
     SOURCES unit_tests_window_test.cpp
-    DEPS frost::app frost::build frost::io frost::ui_run
-    LABELS integration cmake)
-target_include_directories(app_unit_tests_window_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    DEPS frost::app frost::build frost::debug frost::io frost::ui_run
+    LABELS integration cmake lldb)
+target_include_directories(app_unit_tests_window_tests PRIVATE ${FROST_SOURCE_DIR}/tests
+    ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_unit_tests_window_tests PRIVATE ${_frost_workbench_definitions}
     FROST_RUN_FIXTURES="${FROST_SOURCE_DIR}/tests/run/fixtures"
-    FROST_RUN_CTEST_STUB="$<TARGET_FILE:run_ctest_stub>")
-add_dependencies(app_unit_tests_window_tests run_ctest_stub)
+    FROST_RUN_CTEST_STUB="$<TARGET_FILE:run_ctest_stub>"
+    FROST_RUN_GTEST_FIXTURE="$<TARGET_FILE:run_gtest_fixture>"
+    FROST_RUN_GTEST_SOURCE="${FROST_SOURCE_DIR}/tests/run/gtest_fixture.cpp")
+add_dependencies(app_unit_tests_window_tests run_ctest_stub run_gtest_fixture)

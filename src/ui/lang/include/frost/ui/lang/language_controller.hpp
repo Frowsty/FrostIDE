@@ -175,6 +175,8 @@ public:
     void showUsagesPopup();
     void callHierarchy();
     void typeHierarchy();
+    // Opens the type hierarchy in Subtypes mode for a Code Vision implementation lens.
+    void typeImplementations();
     void gotoSuperMethod();
     void gotoTypeDeclaration();
     // Shows real metadata-as-source from the language server for the symbol at the caret, written
@@ -232,6 +234,9 @@ signals:
     void requestFinished();
 
 private:
+    // Exercises the request factory's coroutine lifetime through the production start path.
+    friend struct LanguageControllerTestAccess;
+
     // Runs `make(token)` on the scheduler and `done(result)` on the UI thread when `slot` still
     // holds the ticket and the controller is alive.
     template<class T>
@@ -280,6 +285,7 @@ private:
     void openMetadataLocation(const ::frost::lang::Location& location, const QString& symbol);
     void refreshCallHierarchy(bool outgoing);
     void refreshTypeHierarchy(bool subtypes);
+    void showTypeHierarchy(bool subtypes);
 
     LanguageServices m_services;
     std::unique_ptr<CompletionPopup> m_completion;

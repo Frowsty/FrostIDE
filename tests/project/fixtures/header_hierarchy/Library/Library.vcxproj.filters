@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Layout assignments include imported and linked headers; assignments do not grant membership. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003"><ItemGroup>
+ <Filter Include="Header Files\API"/><Filter Include="Header Files\Shared"/>
+ <ClInclude Include="include/explicit.hpp"><Filter>Header Files\API</Filter></ClInclude>
+ <ClInclude Include="include/imported.hpp"><Filter>Header Files\API</Filter></ClInclude>
+ <ClInclude Include="include/from_targets.hpp"><Filter>Header Files\API</Filter></ClInclude>
+ <ClInclude Include="include/debug.hpp"><Filter>Header Files\API</Filter></ClInclude>
+ <ClInclude Include="include/win32.hpp"><Filter>Header Files\API</Filter></ClInclude>
+ <ClInclude Include="include/glob/nested/glob.hpp"><Filter>Header Files\API</Filter></ClInclude>
+ <ClInclude Include="../Shared/linked.hpp"><Filter>Header Files\Shared</Filter></ClInclude>
+ <ClInclude Include="include/orphan.hpp"><Filter>Header Files\API</Filter></ClInclude>
+</ItemGroup></Project>

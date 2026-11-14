@@ -27,6 +27,14 @@ bool isDeviceNamespace(std::string_view path, bool windowsRules) noexcept {
 } // namespace
 
 Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules) {
+    if (spec.residentMemoryLimitBytes) {
+        if (!windowsRules) {
+            return fail(ErrorCode::Unsupported, "residentMemoryLimitBytes requires Windows HARDWS_MAX");
+        }
+        if (*spec.residentMemoryLimitBytes == 0) {
+            return invalid("residentMemoryLimitBytes must be positive");
+        }
+    }
     const PathStyle style = windowsRules ? PathStyle::Windows : PathStyle::Posix;
     if (hasNul(spec.executable)) {
         return invalid("executable path contains a NUL character");
@@ -247,12 +255,32 @@ Result<void> IProcess::releaseContainer() {
 void IProcess::abandonOutput() noexcept {}
 
 Result<ProcessResult> runToCompletion(IProcessLauncher& launcher, const ProcessSpec& spec, std::string_view stdinData,
-                                      IClock::Duration timeout) {
+                                      IClock::Duration timeout, std::stop_token stop) {
+    if (stop.stop_requested()) {
+        return fail(ErrorCode::Cancelled, "process launch cancelled: '" + spec.executable + "'");
+    }
     auto process = launcher.launch(spec);
     if (!process) {
         return std::unexpected(std::move(process.error()).withContext("while running '" + spec.executable + "'"));
     }
-    auto result = (*process)->communicate(stdinData, timeout);
+    std::optional<Error> terminationFailure;
+    // Register after launch so a stop racing launch immediately terminates the new child. Removing
+    // the callback joins an executing invocation before either terminationFailure or process dies.
+    auto result = [&] {
+        std::stop_callback cancellation(stop, [&] {
+            auto terminated = (*process)->terminate();
+            if (!terminated)
+                terminationFailure = std::move(terminated.error());
+        });
+        return (*process)->communicate(stdinData, timeout);
+    }();
+    if (terminationFailure) {
+        return std::unexpected(
+            std::move(*terminationFailure).withContext("while cancelling '" + spec.executable + "'"));
+    }
+    if (stop.stop_requested()) {
+        return fail(ErrorCode::Cancelled, "process run cancelled: '" + spec.executable + "'");
+    }
     if (!result) {
         return std::unexpected(std::move(result.error()).withContext("while running '" + spec.executable + "'"));
     }

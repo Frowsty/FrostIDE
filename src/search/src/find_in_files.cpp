@@ -98,6 +98,8 @@ FileOutcome searchOne(const SearchContext& context, const std::string& path, con
     const std::size_t cap = context.limits->maxMatches + 1; // One more says "the limit was crossed".
     if (const auto open = context.open->find(pathKey(path)); open != context.open->end()) {
         const text::Snapshot& text = open->second->text;
+        // Replacement must address the same open document whose snapshot was searched.
+        outcome.matches.path = open->second->path;
         outcome.matches.openDocument = true;
         outcome.matches.matches = findInText(*context.pattern, text, context.multiline, *context.limits, cap);
         if (!outcome.matches.matches.empty()) {

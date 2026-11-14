@@ -63,7 +63,7 @@ Result<void> WindowsPeer::verify(std::uint16_t localPort, std::uint16_t remotePo
                                  std::stop_token stop) const {
     if (!localPort || !remotePort)
         return fail(ErrorCode::InvalidArgument, "invalid Mono TCP tuple");
-    const auto check = [deadline, stop]() -> Result<void> {
+    const auto check = [deadline, stop = std::move(stop)]() -> Result<void> {
         if (stop.stop_requested())
             return fail(ErrorCode::Cancelled, "Mono peer verification cancelled");
         if (std::chrono::steady_clock::now() >= deadline)

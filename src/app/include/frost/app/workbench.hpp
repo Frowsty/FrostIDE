@@ -81,6 +81,7 @@
 #include "frost/lang/cmake_compile_commands.hpp"
 #include "frost/lang/diagnostics.hpp"
 #include "frost/lang/frost_engine_assets.hpp"
+#include "frost/lang/inspection.hpp"
 #include "frost/lang/json.hpp"
 #include "frost/lang/lua_host.hpp"
 #include "frost/lang/lua_service.hpp"
@@ -134,6 +135,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -378,6 +380,11 @@ struct WorkbenchOptions {
     // FrostEditor CLI executable (absolute); "" discovers <engine>/build/<preset>/bin/FrostEditor(.exe)
     // when the project sits inside a FrostEngine checkout.
     std::string frostEditorPath;
+    // R6: automation record root and per-run editor configuration directory. Empty uses the
+    // engine/user-profile defaults; absolute overrides isolate real-engine acceptance.
+    std::string engineAutomationDirectory;
+    std::string engineConfigDirectory;
+    std::vector<std::string> engineEditorArguments;
     // Console programs run in an external console window unless the solution chose the Run console.
     bool runExternalConsole = true;
     // MSBuild.exe (absolute); "" uses tools.msbuild.path, else vswhere at the first build.
@@ -418,7 +425,7 @@ class Workbench final : public QObject, private IDocumentEditorListener, private
     Q_OBJECT
 
 public:
-    Workbench(WorkbenchServices services, WorkbenchOptions options = {}, QObject* parent = nullptr);
+    explicit Workbench(WorkbenchServices services, WorkbenchOptions options = {}, QObject* parent = nullptr);
     ~Workbench() override;
     Workbench(const Workbench&) = delete ("the window refers to the workbench's services");
     Workbench& operator=(const Workbench&) = delete ("the window refers to the workbench's services");
@@ -450,6 +457,20 @@ public:
     // Saves the session, autosaves (save.autosave.onFrameDeactivation), closes the journal and stops
     // clangd and every run. Idempotent.
     void shutdown();
+
+    // R6 engine workflows. GUI thread; discovery/CLI/network work runs off it. Snapshots contain
+    // only reported state and public instance metadata, never pairing credentials.
+    [[nodiscard]] lang::Json engineState() const;
+    [[nodiscard]] Result<void> configureEngineTools(std::string editorPath, std::string configDirectory,
+                                                    std::string automationDirectory,
+                                                    std::vector<std::string> arguments = {});
+    [[nodiscard]] Result<void> refreshEngineInstances();
+    [[nodiscard]] Result<void> pairEngineInstance(std::string_view instanceId);
+    void disconnectEngineSession();
+    [[nodiscard]] Result<std::uint64_t> sendEngineCommand(std::string method, lang::Json params);
+    [[nodiscard]] Result<build::RunId> startEngineEditor();
+    [[nodiscard]] Result<void> validateEngineScript();
+    [[nodiscard]] Result<void> cancelEngineRequest();
 
     // --- Projects and files ---
 
@@ -584,6 +605,12 @@ public:
     void inspectLuaCodeAsync(std::string_view scopeDirectory,
                              std::function<void(Result<std::vector<lang::FileDiagnostics>>)> done);
     [[nodiscard]] std::vector<lang::FileDiagnostics> luaInspectedDiagnostics() const;
+    // CPP-10: runs the real clang-tidy over `scopeDirectory` using the open project's compilation
+    // database, publishes reported findings in Problems, and keeps the last report for SARIF export.
+    // GUI-thread entry; completion is posted to the GUI thread. Refuses untrusted projects.
+    void inspectCppCodeAsync(std::string_view scopeDirectory, std::function<void(Result<lang::InspectionReport>)> done);
+    // Writes the most recently completed C++ inspection as validated SARIF 2.1.0. GUI thread.
+    [[nodiscard]] Result<void> exportCppInspectionSarif(std::string_view outputPath);
     // LUA-3/LUA-4: changes the application Lua runtime version setting (triggering a live
     // didChangeConfiguration on a running LuaLS without restarting it).
     [[nodiscard]] Result<void> setLuaRuntimeVersion(std::string_view version);
@@ -736,6 +763,10 @@ private:
     void publishProjectEdit(const std::shared_ptr<const project::SolutionModel>& solution, const QString& title);
     // Starts the next queued edit, if any (after the running one completed).
     void startQueuedProjectEdit();
+    // Reserves the prelaunch phase until all owned project readers have stopped and joined.
+    // launch runs on the GUI thread. Shutdown invalidates it before services are destroyed.
+    void waitForProjectEditReaders(std::function<void()> launch);
+    void resumeProjectEvaluationAfterEdit();
     Result<void> openFolder(const std::string& path, bool discoverSolution = true, std::string recentPath = {});
     void setProject(std::string root, QString name, std::string recentPath);
     // Closes the open project before another opens; false when a tab refused (nothing changed).
@@ -944,6 +975,7 @@ private:
     std::uint64_t m_evaluatedGeneration = 0;
     bool m_closingSolution = false;
     std::vector<sched::JoinHandle<void>> m_retiredProjectEvaluations;
+    bool m_projectEvaluationDeferred = false;
     std::shared_ptr<lang::ManagedService> m_managed;
     std::uint64_t m_managedListener = 0;
     std::vector<sched::JoinHandle<void>> m_retiredManaged;
@@ -971,6 +1003,10 @@ private:
     std::string m_luaUnavailableNotifiedRoot;
     // The Lua host registry, the composed configuration and the progress tasks (workbench_lua.cpp).
     std::shared_ptr<WorkbenchLuaState> m_luaState;
+    std::optional<lang::InspectionReport> m_lastCppInspectionReport;
+    std::optional<std::uint64_t> m_cppInspectionTrustRevision;
+    std::uint64_t m_cppInspectionGeneration = 0;
+    std::stop_source m_cppInspectionStop;
     std::shared_ptr<sched::ResourceGovernor> m_resourceGovernor;
     std::shared_ptr<lang::ClangdService> m_clangd;
     // The root already told that clangd was not found (the notice appears once per project; ADR 0078).
@@ -1047,6 +1083,8 @@ private:
 
     std::shared_ptr<const project::SolutionModel> m_solution;
     std::unique_ptr<ProjectEditProcess> m_projectEdit;
+    bool m_projectEditWaitingForReaders = false;
+    std::uint64_t m_projectEditAdmissionGeneration = 0;
     // Edits waiting for the running one (a move that touches several projects); FIFO.
     std::deque<std::pair<project::ProjectEdit, QString>> m_projectEditQueue;
     std::string m_projectRoot;

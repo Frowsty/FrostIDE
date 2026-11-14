@@ -9,7 +9,9 @@
 #include "project_test_util.hpp"
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace frost::project {
@@ -86,6 +88,169 @@ TEST(SolutionModel, EvaluatedFilesOverlayKeepsFiltersAndOtherItems) {
     ASSERT_TRUE(overlay.findFileNode(generated));
     EXPECT_EQ(overlay.owningProject(generated), core);
     EXPECT_TRUE(overlay.findNode(filterKey));
+}
+
+TEST(SolutionModel, EvaluatedHeadersReturnAfterAnAuthoritativeEmptyResultInTheirOriginalFilter) {
+    auto model = SolutionModel::load(io::realFileSystem(), sdk("SdkApp.sln"));
+    ASSERT_TRUE(model);
+    const ProjectId core = projectNamed(*model, "Core");
+    const std::string header = sdk("Libraries/Core/include/core/core.h");
+    const auto original = model->findFileNode(header);
+    ASSERT_TRUE(original);
+    ASSERT_TRUE(model->parent(*original));
+    const std::string originalParent = model->node(*model->parent(*original)).key;
+    const std::vector<std::string> none;
+    const auto absent = model->withEvaluatedFiles(core, ItemType::ClInclude, none);
+    EXPECT_FALSE(absent.findFileNode(header));
+    const std::vector<std::string> returned{header};
+    const auto restored = absent.withEvaluatedFiles(core, ItemType::ClInclude, returned);
+    const auto found = restored.findFileNode(header);
+    ASSERT_TRUE(found) << "a detached arena node must not suppress a newly authoritative header";
+    ASSERT_TRUE(restored.parent(*found));
+    EXPECT_EQ(restored.node(*restored.parent(*found)).key, originalParent);
+    EXPECT_EQ(restored.node(*found).itemType, ItemType::ClInclude);
+    const auto reachable = restored.projectFilePaths(core);
+    EXPECT_NE(std::ranges::find(reachable, header), reachable.end());
+    EXPECT_TRUE(model->findFileNode(header)); // The immutable original still contains its header.
+    EXPECT_FALSE(absent.findFileNode(header));
+    auto repeated = restored;
+    for (int cycle = 0; cycle != 3; ++cycle) {
+        repeated = repeated.withEvaluatedFiles(core, ItemType::ClInclude, returned);
+        EXPECT_EQ(repeated.nodeCount(), restored.nodeCount());
+        const auto id = repeated.findFileNode(header);
+        ASSERT_TRUE(id);
+        ASSERT_TRUE(repeated.parent(*id));
+        EXPECT_EQ(std::ranges::count(repeated.children(*repeated.parent(*id)), *id), 1);
+        EXPECT_EQ(repeated.projectsContaining(header), std::vector<ProjectId>{core});
+        repeated = repeated.withEvaluatedFiles(core, ItemType::ClInclude, none);
+        EXPECT_FALSE(repeated.findFileNode(header));
+        repeated = repeated.withEvaluatedFiles(core, ItemType::ClInclude, returned);
+        EXPECT_EQ(repeated.nodeCount(), restored.nodeCount());
+    }
+}
+
+TEST(SolutionModel, NewlyEvaluatedHeadersUseDeclaredFiltersOrPhysicalHierarchyWithoutCompileMembership) {
+    MemTree tree;
+    tree.write("Headers.slnx", R"(<Solution><Project Path="App/App.vcxproj" /></Solution>)");
+    tree.write("App/App.vcxproj", R"(<Project><Import Project="headers.props" />
+      <ItemGroup><ClCompile Include="main.cpp" /></ItemGroup></Project>)");
+    tree.write("App/headers.props", R"(<Project><ItemGroup>
+      <ClInclude Include="include/deep/imported.hpp" /></ItemGroup></Project>)");
+    tree.write("App/App.vcxproj.filters", R"(<Project><ItemGroup>
+      <Filter Include="Header Files\API" />
+      <ClInclude Include="include/deep/imported.hpp"><Filter>Header Files\API</Filter></ClInclude>
+      </ItemGroup></Project>)");
+    tree.write("App/main.cpp", "int main() {}\n");
+    tree.write("App/include/deep/imported.hpp", "#pragma once\n");
+    tree.write("App/include/loose/unassigned.hpp", "#pragma once\n");
+    const std::string header = MemTree::path("App/include/deep/imported.hpp");
+    const std::string unassigned = MemTree::path("App/include/loose/unassigned.hpp");
+    for (const auto mode :
+         {CppHierarchyMode::Filters, CppHierarchyMode::FiltersAndFolders, CppHierarchyMode::PhysicalFolders}) {
+        SCOPED_TRACE(static_cast<int>(mode));
+        auto model = SolutionModel::load(tree.fs, MemTree::path("Headers.slnx"), {.cppHierarchy = mode});
+        ASSERT_TRUE(model);
+        EXPECT_FALSE(model->findFileNode(header)); // Imports require real evaluation, never a guessed scan.
+        const auto project = projectNamed(*model, "App");
+        const std::vector<std::string> evaluated{header, unassigned};
+        const auto overlay = model->withEvaluatedFiles(project, ItemType::ClInclude, evaluated);
+        const auto found = overlay.findFileNode(header);
+        ASSERT_TRUE(found);
+        ASSERT_TRUE(overlay.parent(*found));
+        EXPECT_EQ(overlay.node(*overlay.parent(*found)).displayName,
+                  mode == CppHierarchyMode::PhysicalFolders ? "deep" : "API");
+        EXPECT_EQ(overlay.node(*found).itemType, ItemType::ClInclude);
+        EXPECT_TRUE(overlay.findFileNode(MemTree::path("App/main.cpp")));
+        const auto loose = overlay.findFileNode(unassigned);
+        ASSERT_TRUE(loose);
+        ASSERT_TRUE(overlay.parent(*loose));
+        EXPECT_EQ(overlay.node(*overlay.parent(*loose)).displayName,
+                  mode == CppHierarchyMode::Filters ? "App" : "loose");
+        const auto repeated = overlay.withEvaluatedFiles(project, ItemType::ClInclude, evaluated);
+        EXPECT_EQ(repeated.nodeCount(), overlay.nodeCount());
+        EXPECT_EQ(std::ranges::count(repeated.children(*repeated.parent(*found)), *found), 1);
+        EXPECT_EQ(std::ranges::count(repeated.children(*repeated.parent(*loose)), *loose), 1);
+    }
+}
+
+TEST(SolutionModel, HeaderOverlaysPreserveOtherItemKindsAndIndependentSharedHeaderMembership) {
+    MemTree tree;
+    tree.write("Shared.slnx", R"(<Solution><Project Path="One/One.vcxproj" />
+      <Project Path="Two/Two.vcxproj" /></Solution>)");
+    tree.write("One/One.vcxproj", R"(<Project><ItemGroup>
+      <ClInclude Include="../shared/linked.hpp" /><None Include="notes.h" />
+      <CustomBuild Include="generated.h" /></ItemGroup></Project>)");
+    tree.write("Two/Two.vcxproj", R"(<Project><ItemGroup>
+      <ClInclude Include="../shared/linked.hpp" /></ItemGroup></Project>)");
+    tree.write("shared/linked.hpp", "#pragma once\n");
+    tree.write("One/notes.h", "#pragma once\n");
+    tree.write("One/generated.h", "#pragma once\n");
+    auto model = SolutionModel::load(tree.fs, MemTree::path("Shared.slnx"));
+    ASSERT_TRUE(model);
+    const auto one = projectNamed(*model, "One");
+    const auto two = projectNamed(*model, "Two");
+    const std::string linked = MemTree::path("shared/linked.hpp");
+    std::optional<NodeId> twoNode;
+    for (NodeId id : model->children(model->project(two).node)) {
+        if (model->node(id).path == linked)
+            twoNode = id;
+    }
+    ASSERT_TRUE(twoNode);
+    const auto twoParent = model->parent(*twoNode);
+    const std::string twoKey = model->node(*twoNode).key;
+    const std::vector<std::string> none;
+    const auto removed = model->withEvaluatedFiles(one, ItemType::ClInclude, none);
+    EXPECT_EQ(removed.owningProject(linked), two);
+    const std::vector<std::string> returned{linked};
+    const auto restored = removed.withEvaluatedFiles(one, ItemType::ClInclude, returned);
+    const auto oneFiles = restored.projectFilePaths(one);
+    const auto twoFiles = restored.projectFilePaths(two);
+    EXPECT_NE(std::ranges::find(oneFiles, linked), oneFiles.end());
+    EXPECT_NE(std::ranges::find(twoFiles, linked), twoFiles.end());
+    EXPECT_EQ(restored.owningProject(linked), one);
+    EXPECT_EQ(restored.projectsContaining(linked), (std::vector<ProjectId>{one, two}));
+    EXPECT_EQ(restored.parent(*twoNode), twoParent);
+    EXPECT_EQ(restored.node(*twoNode).key, twoKey);
+    EXPECT_EQ(restored.findNode(twoKey), twoNode);
+    EXPECT_EQ(std::ranges::count(restored.children(*twoParent), *twoNode), 1);
+    for (const auto& [file, type] :
+         {std::pair{"One/notes.h", ItemType::None}, std::pair{"One/generated.h", ItemType::CustomBuild}}) {
+        const auto found = restored.findFileNode(MemTree::path(file));
+        ASSERT_TRUE(found);
+        EXPECT_EQ(restored.node(*found).itemType, type);
+    }
+}
+
+TEST(SolutionModel, ReturningHeaderDoesNotOverwriteAnotherActiveItemKindAtTheSamePath) {
+    MemTree tree;
+    tree.write("Kinds.slnx", R"(<Solution><Project Path="App.vcxproj" /></Solution>)");
+    tree.write("App.vcxproj", R"(<Project><ItemGroup><ClInclude Include="api.h" /></ItemGroup></Project>)");
+    tree.write("api.h", "#pragma once\n");
+    auto initial = SolutionModel::load(tree.fs, MemTree::path("Kinds.slnx"));
+    ASSERT_TRUE(initial);
+    const auto project = projectNamed(*initial, "App");
+    const std::vector<std::string> none;
+    const std::vector<std::string> file{MemTree::path("api.h")};
+    auto absent = initial->withEvaluatedFiles(project, ItemType::ClInclude, none);
+    auto other = absent.withEvaluatedFiles(project, ItemType::CustomBuild, file);
+    const auto otherNode = other.findFileNode(file.front());
+    ASSERT_TRUE(otherNode);
+    const std::string otherKey = other.node(*otherNode).key;
+    auto stillAbsent = other.withEvaluatedFiles(project, ItemType::ClInclude, none);
+    EXPECT_EQ(stillAbsent.findNode(otherKey), otherNode);
+    auto returned = stillAbsent.withEvaluatedFiles(project, ItemType::ClInclude, file);
+    EXPECT_EQ(returned.findNode(otherKey), otherNode);
+    EXPECT_EQ(returned.node(*otherNode).itemType, ItemType::CustomBuild);
+    int headers = 0;
+    int custom = 0;
+    for (const auto id : returned.children(returned.project(project).node)) {
+        if (returned.node(id).path == file.front()) {
+            headers += returned.node(id).itemType == ItemType::ClInclude ? 1 : 0;
+            custom += returned.node(id).itemType == ItemType::CustomBuild ? 1 : 0;
+        }
+    }
+    EXPECT_EQ(headers, 1);
+    EXPECT_EQ(custom, 1);
 }
 
 TEST(SolutionModel, BuildsTheSdkTreeFromSln) {

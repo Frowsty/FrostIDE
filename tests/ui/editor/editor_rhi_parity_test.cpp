@@ -155,7 +155,7 @@ struct AllKinds {
             end = &list.text.back();
         }
         if (list.carets.empty()) {
-            list.carets.push_back(QRectF(end->origin.x(), end->origin.y() - 12.0, 2.0, 16.0));
+            list.carets.emplace_back(end->origin.x(), end->origin.y() - 12.0, 2.0, 16.0);
         }
         if (list.overlays.empty()) {
             const double y = end->origin.y() + 2.0;
@@ -296,7 +296,7 @@ TEST(RhiParity, TheAllKindsFrameMatchesRasterPerRowWholeAndInCrops) {
         SCOPED_TRACE(dpr);
         const RhiFrame gpu = renderWithRhi(rhi, list, dpr);
         if (dpr == 1.0) {
-            std::cout << "QRhi " << gpu.backend << " on " << gpu.adapter << std::endl;
+            std::cout << "QRhi " << gpu.backend << " on " << gpu.adapter << '\n' << std::flush;
         }
         EXPECT_EQ(gpu.stats.droppedGlyphs, 0U);
         EXPECT_EQ(gpu.stats.draws, 3U); // Fills; the text area; the gutter, stripe and chrome.

@@ -26,7 +26,7 @@ struct FileTreeFilter {
 // `query` is nonempty and lower case. The caller owns files for the duration.
 // O(nodes + edges + matching cost); checks cancellation between nodes.
 inline std::optional<FileTreeFilter> filterFileTree(const nav::ProjectFiles& files, std::string_view query,
-                                                    std::stop_token token) {
+                                                    const std::stop_token& token) {
     FileTreeFilter result;
     const auto& nodes = files.nodes();
     std::vector<bool> self(nodes.size(), false);

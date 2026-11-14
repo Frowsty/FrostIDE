@@ -316,7 +316,7 @@ Error gitFailure(std::string_view what, const GitOutput& output) {
         message = std::format("{}: {}", message, hint);
     }
     if (!details.empty()) {
-        message += "\n";
+        message += '\n';
         message += details;
     }
     return Error(code, std::move(message));

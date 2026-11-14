@@ -57,7 +57,6 @@
 namespace frost::app {
 
 namespace key = settings::key;
-namespace wa = workbench_actions;
 
 namespace {
 
@@ -95,6 +94,37 @@ void Workbench::createRunService() {
     };
     hooks.mayRunConfiguration = [this](const run::RunConfiguration& configuration) {
         return mayRunConfiguration(configuration);
+    };
+    hooks.prepareEngineConfiguration =
+        [this](const run::RunConfiguration& configuration) -> Result<run::RunConfiguration> {
+        if (!m_engine)
+            return fail(ErrorCode::Unsupported, "FrostEngine integration is unavailable");
+        return m_engine->prepareRun(configuration);
+    };
+    hooks.engineLaunchAdmissionFor =
+        [this](const run::RunConfiguration& configuration) -> std::function<Result<void>()> {
+        return m_engine ? m_engine->launchAdmissionFor(configuration) : std::function<Result<void>()>{};
+    };
+    hooks.engineLaunchPlanFor =
+        [this](const run::RunConfiguration& configuration) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan)> {
+        return m_engine ? m_engine->launchPlanFor(configuration)
+                        : std::function<Result<run::LaunchPlan>(run::LaunchPlan)>{};
+    };
+    hooks.engineRunAccepted = [this](run::RunId id, const run::RunConfiguration& configuration) {
+        if (m_engine)
+            m_engine->runAccepted(id, configuration);
+    };
+    hooks.engineProcessStarted = [this](const run::RunStatus& run) {
+        if (m_engine)
+            m_engine->processStarted(run);
+    };
+    hooks.engineProcessOutput = [this](run::RunId id, run::OutputStream stream, std::string_view bytes) {
+        if (m_engine)
+            m_engine->processOutput(id, stream, bytes);
+    };
+    hooks.engineProcessFinished = [this](const run::RunResult& result) {
+        if (m_engine)
+            m_engine->processFinished(result);
     };
     hooks.generatedConfigurations = [this] { return generatedRunConfigurations(); };
     hooks.saveConfigurations = [this](const std::vector<run::RunConfiguration>& stored) {
@@ -158,6 +188,8 @@ void Workbench::createRunService() {
     const auto nativeSelected = [selectedType] { return selectedType() == run::RunType::Native; };
     debugHooks.alternateAvailable = [this, selectedType] {
         const auto type = selectedType();
+        if (type && run::isFrostEngineRunType(*type))
+            return false; // R7 owns the FrostEngine debug run variants.
         return m_cmake != nullptr || type == run::RunType::Native || type == run::RunType::Attach ||
                type == run::RunType::Compound;
     };
@@ -168,6 +200,8 @@ void Workbench::createRunService() {
      */
     debugHooks.startOverride = [this, selectedType]() -> std::optional<Result<void>> {
         const auto type = selectedType();
+        if (type && run::isFrostEngineRunType(*type))
+            return Result<void>(fail(ErrorCode::Unsupported, "FrostEngine debug run types are available in R7"));
         if (type == run::RunType::Compound) {
             const QString message = text("Debugging a compound configuration is not available yet (DBG-10). Run "
                                          "starts its configurations; debug them one at a time.");
@@ -234,7 +268,7 @@ void Workbench::createRunService() {
         prepared.workingDirectory = target.workingDirectory;
         const QPointer<Workbench> self(this);
         run::RunHandlers handlers;
-        handlers.onFinished = [self, target, done](const run::RunResult& result) {
+        handlers.onFinished = [self, target, done = std::move(done)](const run::RunResult& result) {
             if (!self)
                 return;
             QMetaObject::invokeMethod(

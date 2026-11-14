@@ -262,7 +262,7 @@ public:
     // A notification to the running clangd (CPP-3: workspace/didChangeConfiguration with
     // compilationDatabaseChanges). Never waits on clangd. Errors: Busy (not Running), and those of
     // LspClient::notify.
-    [[nodiscard]] Result<void> notify(std::string method, Json params);
+    [[nodiscard]] Result<void> notify(const std::string& method, Json params);
 
     // A request to the running clangd (completion, definition, ... for the next slice). Errors:
     // Busy (not Running), and those of LspClient::request.

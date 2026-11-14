@@ -77,6 +77,7 @@ bool acceptable(const SearchProgram& program, const Snapshot& text, ByteRange ra
  * current chunk's first ones.
  */
 template<class Visit>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): one mutable visitor is invoked repeatedly as an lvalue.
 void bytesForward(const Snapshot& text, ByteOffset from, std::string_view needle, Visit&& visit) noexcept {
     const std::size_t n = needle.size();
     std::uint64_t allowed = from.value();
@@ -141,6 +142,7 @@ void bytesForward(const Snapshot& text, ByteOffset from, std::string_view needle
  * first ones of the chunks after it.
  */
 template<class Visit>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): one mutable visitor is invoked repeatedly as an lvalue.
 void bytesBackward(const Snapshot& text, ByteOffset before, std::string_view needle, Visit&& visit) noexcept {
     const std::size_t n = needle.size();
     std::string carry; // Up to n - 1 bytes that start where the current chunk ends.
@@ -187,6 +189,7 @@ void bytesBackward(const Snapshot& text, ByteOffset before, std::string_view nee
  */
 template<class Visit>
 Next scanSubject(const SearchProgram& program, std::string_view subject, ByteOffset subjectStart, std::size_t from,
+                 // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): the match visitor is reused as an lvalue.
                  std::size_t limit, std::vector<absl::string_view>& groups, Visit&& visit) noexcept {
     std::size_t pos = from;
     while (pos <= limit) {
@@ -207,6 +210,7 @@ Next scanSubject(const SearchProgram& program, std::string_view subject, ByteOff
 
 // Visits the matches that start at or after `from`, in order (Lines and Whole modes).
 template<class Visit>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): the same visitor is reused across subject lines as an lvalue.
 void regexForward(const SearchProgram& program, const Snapshot& text, ByteOffset from, Visit&& visit) noexcept {
     std::vector<absl::string_view> groups(static_cast<std::size_t>(program.re->NumberOfCapturingGroups() + 1));
     if (program.mode == Mode::Whole) {
@@ -295,7 +299,7 @@ std::string expand(std::string_view replacement, std::span<const absl::string_vi
         }
         if (c == '\\' && i + 1 < replacement.size()) {
             const char d = replacement[i + 1];
-            const char escaped = d == 'n' ? '\n' : d == 'r' ? '\r' : d == 't' ? '\t' : d == '\\' ? '\\' : 0;
+            const char escaped = d == 'n' ? '\n' : d == 'r' ? '\r' : d == 't' ? '\t' : d == '\\' ? '\\' : '\0';
             if (escaped != 0) {
                 out += escaped;
                 ++i;

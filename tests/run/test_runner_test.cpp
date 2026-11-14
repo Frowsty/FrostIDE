@@ -13,6 +13,7 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
+#include "frost/io/scripted_process_launcher.hpp"
 #include "frost/project/cmake_file_api.hpp"
 #include "frost/rpc/json.hpp"
 #include "frost/run/test_runner.hpp"
@@ -419,6 +420,50 @@ TEST_F(TestRunnerCTest, ListedGoogleTestCasesEqualTheProgramsOwnListing) {
     EXPECT_FALSE(notGTest->has_value() && !(*notGTest)->empty()) << "cmake -E lists no Google Test case";
 }
 
+TEST_F(TestRunnerCTest, ADirectGoogleTestRunExecutesAndReportsExactlyTheRequestedCase) {
+    auto tests = discover(*m_runner, m_setup);
+    ASSERT_TRUE(tests.has_value()) << tests.error().describe();
+    const auto test = std::ranges::find(*tests, "gtest_program", &frost::run::DiscoveredTest::name);
+    ASSERT_NE(test, tests->end());
+
+    auto answer = std::make_shared<Answer<frost::run::TestRunReport>>();
+    frost::run::TestRunner::GTestRunRequest request{.test = *test, .cases = {"Fixture.Passes"}};
+    frost::run::TestRunHandlers handlers;
+    handlers.onFinished = [answer](const frost::run::TestRunReport& report) { answer->promise.set_value(report); };
+    ASSERT_TRUE(m_runner->runGTest(m_setup, {std::move(request)}, std::move(handlers)).has_value());
+    auto report = answer->wait();
+    ASSERT_TRUE(report.has_value());
+    ASSERT_FALSE(report->error.has_value()) << report->error->describe();
+    ASSERT_EQ(report->results.size(), 1U);
+    EXPECT_NE(report->commandLine.find("--gtest_filter=Fixture.Passes"), std::string::npos) << report->commandLine;
+    EXPECT_EQ(report->results.front().outcome, TestOutcome::Passed);
+    ASSERT_EQ(report->results.front().cases.size(), 1U);
+    EXPECT_EQ(report->results.front().cases.front().name, "Fixture.Passes");
+    EXPECT_EQ(report->results.front().cases.front().outcome, TestOutcome::Passed);
+    EXPECT_TRUE(m_runner->waitForIdle(60s));
+    EXPECT_TRUE(runnerLeftovers(m_setup).empty());
+}
+
+TEST_F(TestRunnerCTest, AGoogleTestFilterThatMatchesNoCaseCannotReportSuccess) {
+    auto tests = discover(*m_runner, m_setup);
+    ASSERT_TRUE(tests.has_value()) << tests.error().describe();
+    const auto test = std::ranges::find(*tests, "gtest_program", &frost::run::DiscoveredTest::name);
+    ASSERT_NE(test, tests->end());
+
+    auto answer = std::make_shared<Answer<frost::run::TestRunReport>>();
+    frost::run::TestRunner::GTestRunRequest request{.test = *test, .cases = {"Fixture.DoesNotExist"}};
+    frost::run::TestRunHandlers handlers;
+    handlers.onFinished = [answer](const frost::run::TestRunReport& report) { answer->promise.set_value(report); };
+    ASSERT_TRUE(m_runner->runGTest(m_setup, {std::move(request)}, std::move(handlers)).has_value());
+    auto report = answer->wait();
+    ASSERT_TRUE(report.has_value());
+    ASSERT_TRUE(report->error.has_value());
+    EXPECT_TRUE(report->results.empty());
+    EXPECT_NE(report->error->message().find("no executed cases"), std::string::npos) << report->error->describe();
+    EXPECT_TRUE(m_runner->waitForIdle(60s));
+    EXPECT_TRUE(runnerLeftovers(m_setup).empty());
+}
+
 TEST_F(TestRunnerCTest, OneJobAtATime) {
     auto first = std::make_shared<Answer<frost::Result<std::vector<frost::run::DiscoveredTest>>>>();
     ASSERT_TRUE(
@@ -448,9 +493,16 @@ TEST(TestRunnerCancel, CancelEndsCTestAndEveryProcessItStarted) {
 #endif
     const std::string tree = scratch.join(image);
     std::error_code copyError;
-    std::filesystem::copy_file(frost::io::toStdPath(FROST_RUN_TREE_CHILD).value(), frost::io::toStdPath(tree).value(),
-                               copyError);
+    const auto builtTree = frost::io::toStdPath(FROST_RUN_TREE_CHILD).value();
+    std::filesystem::copy_file(builtTree, frost::io::toStdPath(tree).value(), copyError);
     ASSERT_FALSE(copyError) << copyError.message();
+#if defined(_WIN32) && __has_feature(address_sanitizer)
+    // Relocation must retain the instrumented helper's pinned build-side runtime.
+    // The renamed program and every descendant load it from this scratch directory.
+    const auto runtime = builtTree.parent_path() / "clang_rt.asan_dynamic-x86_64.dll";
+    std::filesystem::copy_file(runtime, frost::io::toStdPath(scratch.path()).value() / runtime.filename(), copyError);
+    ASSERT_FALSE(copyError) << "copy required ASan runtime: " << copyError.message();
+#endif
 #ifndef _WIN32
     std::filesystem::permissions(frost::io::toStdPath(tree).value(), std::filesystem::perms::owner_exec,
                                  std::filesystem::perm_options::add);
@@ -492,6 +544,90 @@ TEST(TestRunnerCancel, CancelEndsCTestAndEveryProcessItStarted) {
     EXPECT_EQ(treeProcesses(), 0U) << "cancel left processes of the test's tree running";
     EXPECT_TRUE(runner->waitForIdle(60s));
     EXPECT_TRUE(runnerLeftovers(*setup).empty());
+}
+
+TEST(TestRunnerDoctestSelection, WildcardCaseNamesAreRefusedBeforeAnyLaunch) {
+    frost::test::ScratchDir scratch("run10-doctest-wildcard");
+    frost::run::CTestSetup setup;
+    setup.ctest = FROST_RUN_CTEST_STUB;
+    setup.buildDirectory = scratch.path();
+    frost::io::ScriptedProcessLauncher launcher;
+    auto runner = frost::run::TestRunner::create(launcher, frost::io::realFileSystem());
+    frost::run::DiscoveredTest test;
+    test.name = "doctest";
+    test.command = {FROST_RUN_CTEST_STUB, "--test-case=Old"};
+    for (const std::string name : {"literal*name", "literal?name", "escaped\\*name"}) {
+        SCOPED_TRACE(name);
+        const auto launch =
+            frost::run::buildSingleTestLaunch(setup, test, name, frost::run::TestCaseFramework::Doctest);
+        ASSERT_FALSE(launch.has_value());
+        EXPECT_EQ(launch.error().code(), frost::ErrorCode::Unsupported);
+        // Validate the entire batch before starting even the preceding, representable case.
+        auto run = runner->runDoctest(setup, {{test, {"Foo"}}, {test, {name}}}, {});
+        ASSERT_FALSE(run.has_value());
+        EXPECT_EQ(run.error().code(), frost::ErrorCode::Unsupported);
+        EXPECT_FALSE(runner->busy());
+        EXPECT_TRUE(launcher.launches().empty());
+    }
+}
+
+TEST(TestRunnerDoctestSelection, SingleLaunchReplacesAllCaseAndSensitivityAliases) {
+    frost::test::ScratchDir scratch("run10-doctest-case-sensitive");
+    frost::run::CTestSetup setup;
+    setup.buildDirectory = scratch.path();
+    frost::run::DiscoveredTest test;
+    test.name = "doctest";
+    for (const std::string prefix : {"", "dt-"}) {
+        SCOPED_TRACE(prefix);
+        test.command = {
+            FROST_RUN_CTEST_STUB,     "--test-case=Other", "-tc=Another",    "---dt-tc=Third",
+            "--case-sensitive=false", "-cs=false",         "---dt-cs=false", "--" + prefix + "test-suite=Suite",
+            "--reporters=xml",        "--out=old.xml"};
+        // The existing prefixed aliases require prefixed replacement options, even when the
+        // retained suite uses unprefixed options. Commas and backslashes still escape literally.
+        const auto launch =
+            frost::run::buildSingleTestLaunch(setup, test, "Foo,bar\\baz", frost::run::TestCaseFramework::Doctest);
+        ASSERT_TRUE(launch.has_value()) << launch.error().describe();
+        EXPECT_EQ(launch->arguments,
+                  (std::vector<std::string>{"--" + prefix + "test-suite=Suite", "--dt-case-sensitive=true",
+                                            "--dt-test-case=Foo\\,bar\\\\baz"}));
+    }
+    test.command = {FROST_RUN_CTEST_STUB, "-tc=foo", "-cs=false"};
+    const auto unprefixed =
+        frost::run::buildSingleTestLaunch(setup, test, "Foo", frost::run::TestCaseFramework::Doctest);
+    ASSERT_TRUE(unprefixed.has_value());
+    EXPECT_EQ(unprefixed->arguments, (std::vector<std::string>{"--case-sensitive=true", "--test-case=Foo"}));
+}
+
+TEST(TestRunnerDoctestSelection, DirectRunStartsOnlyTheReplacementExactCaseFilter) {
+    frost::test::ScratchDir scratch("run10-doctest-direct-selection");
+    frost::run::CTestSetup setup;
+    setup.ctest = FROST_RUN_CTEST_STUB;
+    setup.buildDirectory = scratch.path();
+    frost::io::ScriptedProcessLauncher launcher;
+    frost::io::ScriptedProcess script;
+    script.launchError = frost::Error{frost::ErrorCode::NotFound, "capture arguments without starting a program"};
+    launcher.expect(std::move(script));
+    auto runner = frost::run::TestRunner::create(launcher, frost::io::realFileSystem());
+    frost::run::DiscoveredTest test;
+    test.name = "doctest";
+    test.command = {FROST_RUN_CTEST_STUB, "--test-case=Other", "-dt-tc=foo", "-dt-cs=false", "--case-sensitive=false"};
+    auto answer = std::make_shared<Answer<frost::run::TestRunReport>>();
+    frost::run::TestRunHandlers handlers;
+    handlers.onFinished = [answer](const auto& report) { answer->promise.set_value(report); };
+    ASSERT_TRUE(runner->runDoctest(setup, {{test, {"Foo"}}}, std::move(handlers)).has_value());
+    const auto report = answer->wait(10s);
+    ASSERT_TRUE(report.has_value());
+    EXPECT_TRUE(report->error.has_value());
+    EXPECT_TRUE(report->results.empty());
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1U);
+    const auto& args = launches.front().spec.arguments;
+    ASSERT_GE(args.size(), 2U);
+    EXPECT_EQ(args[0], "--dt-case-sensitive=true");
+    EXPECT_EQ(args[1], "--dt-test-case=Foo");
+    EXPECT_FALSE(std::ranges::any_of(
+        args, [](const auto& arg) { return arg.contains("Other") || arg.contains("foo") || arg.contains("false"); }));
 }
 
 TEST(TestRunnerStub, AStubCTestThatExitsOneGivesTheToolErrorAndNoResults) {

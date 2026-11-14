@@ -189,6 +189,7 @@ TEST(EncodingPerf, DetectBounded) {
 
 // MB/s of one decode function over `bytes` (best of 3).
 template<class Fn>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward): Repeat the same decoder without consuming it.
 double throughput(std::string_view bytes, Fn&& decode) {
     double best = 1e9;
     for (int run = 0; run < 3; ++run) {

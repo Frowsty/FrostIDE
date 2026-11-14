@@ -33,7 +33,7 @@ namespace fl = ::frost::lang;
 namespace {
 
 using detail::fileName;
-using detail::lowerAscii;
+
 using detail::qs;
 
 } // namespace
@@ -135,34 +135,53 @@ void LanguageController::initServiceHooks() {
         }
         return std::nullopt;
     });
-    m_services.server.setApplyEditHandler([self = QPointer<LanguageController>(this)](const fl::Json& params) -> bool {
-        if (!self) {
-            return false;
-        }
-        const fl::Json* editJson = params.find("edit");
-        auto parsed = fl::parseWorkspaceEdit(editJson != nullptr ? *editJson : params);
-        if (!parsed || parsed->empty()) {
-            return false;
-        }
-        const QString label =
-            params.find("label") != nullptr ? qs(params.stringAt("label")) : QStringLiteral("Apply Server Edit");
-        if (QThread::currentThread() == self->thread()) {
-            self->applyWorkspaceEdit(*parsed, label);
-            return true;
-        }
-        if (QCoreApplication* app = QCoreApplication::instance()) {
-            QMetaObject::invokeMethod(
-                app,
-                [self, edit = std::move(*parsed), label]() {
-                    if (self) {
-                        self->applyWorkspaceEdit(edit, label);
-                    }
-                },
-                Qt::QueuedConnection);
-            return true;
-        }
-        return false;
-    });
+    m_services.server.setApplyEditHandler(
+        [self = QPointer<LanguageController>(this)](const fl::Json& params, std::function<void(bool)> done) {
+            if (!self) {
+                done(false);
+                return;
+            }
+            const fl::Json* editJson = params.find("edit");
+            auto parsed = fl::parseWorkspaceEdit(editJson != nullptr ? *editJson : params);
+            if (!parsed || parsed->empty()) {
+                done(false);
+                return;
+            }
+            const QString label =
+                params.find("label") != nullptr ? qs(params.stringAt("label")) : QStringLiteral("Apply Server Edit");
+            if (QThread::currentThread() == self->thread()) {
+                if (auto applied = self->m_services.applier.apply(*parsed, label.toStdString()); !applied) {
+                    emit self->statusMessage(QStringLiteral("%1: %2").arg(label, qs(applied.error().message())));
+                    done(false);
+                    return;
+                }
+                done(true);
+                return;
+            }
+            if (QCoreApplication* app = QCoreApplication::instance()) {
+                auto completion = std::make_shared<std::function<void(bool)>>(std::move(done));
+                const bool invoked = QMetaObject::invokeMethod(
+                    app,
+                    [self, edit = std::move(*parsed), label, completion]() mutable {
+                        if (!self) {
+                            (*completion)(false);
+                            return;
+                        }
+                        if (auto result = self->m_services.applier.apply(edit, label.toStdString()); result) {
+                            (*completion)(true);
+                        } else {
+                            emit self->statusMessage(QStringLiteral("%1: %2").arg(label, qs(result.error().message())));
+                            (*completion)(false);
+                        }
+                    },
+                    Qt::QueuedConnection);
+                if (!invoked) {
+                    (*completion)(false);
+                }
+                return;
+            }
+            done(false);
+        });
 }
 
 LanguageController::~LanguageController() {

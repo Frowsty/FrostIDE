@@ -97,8 +97,8 @@ struct NativeOutcome {
                                                                    std::stop_token token);
 // The same without a coroutine, for a backend that degrades on its strand: binds the polling state and
 // spawns its loop (the first scan runs there). Returns null if the reactor is shutting down.
-[[nodiscard]] NativeOutcome startPollingFromStrand(std::shared_ptr<RealFileWatcher::Impl> owner,
-                                                   std::shared_ptr<WatchQueue> queue);
+[[nodiscard]] NativeOutcome startPollingFromStrand(const std::shared_ptr<RealFileWatcher::Impl>& owner,
+                                                   const std::shared_ptr<WatchQueue>& queue);
 
 // The public watch object of RealFileWatcher: stops its producer and closes its queue on destruction.
 class RealDirectoryWatch final : public IDirectoryWatch {

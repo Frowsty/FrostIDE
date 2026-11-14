@@ -4,12 +4,14 @@
 // commands, snippet insertion, intentions (quick fixes) and reformat (split from
 // language_controller.cpp, FND-12a).
 
+#include "frost/lang/clangd_actions.hpp"
 #include "frost/lang/document_features.hpp"
 #include "frost/lang/snippet.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 
 #include "language_controller_internal.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 
@@ -20,7 +22,7 @@ namespace fl = ::frost::lang;
 namespace {
 
 using detail::fileName;
-using detail::lowerAscii;
+
 using detail::qs;
 
 } // namespace
@@ -82,6 +84,15 @@ void LanguageController::executeServerCommand(std::string commandName, std::vect
         [this, label](Result<fl::Json> result) {
             if (!result) {
                 report(result.error(), label.toStdString());
+                return;
+            }
+            if (result->isObject() && (result->find("changes") != nullptr ||
+                                       result->find("documentChanges") != nullptr || result->find("edit") != nullptr)) {
+                const fl::Json* editNode = result->find("edit");
+                if (auto parsed = fl::parseWorkspaceEdit(editNode != nullptr ? *editNode : *result);
+                    parsed && !parsed->empty()) {
+                    applyWorkspaceEdit(*parsed, label);
+                }
             }
         });
 }
@@ -122,6 +133,7 @@ void LanguageController::showIntentions() {
         return;
     }
     const std::string path = m_services.host.documentPath();
+    const std::optional<text::Snapshot> requestedSnapshot = m_services.host.snapshot();
     fl::LspRange range{caretPosition(), caretPosition()};
     if (const auto selection = m_services.host.selection()) {
         range = fl::LspRange{positionAt(selection->begin), positionAt(selection->end)};
@@ -140,7 +152,7 @@ void LanguageController::showIntentions() {
         [&server = m_services.server, path, range, here](std::stop_token token) {
             return fl::requestCodeActions(server, path, range, here, std::move(token));
         },
-        [this](Result<std::vector<fl::CodeActionItem>> actions) {
+        [this, path, all, requestedSnapshot](Result<std::vector<fl::CodeActionItem>> actions) {
             std::vector<QString> titles;
             std::vector<bool> preferred;
             m_choiceActions.clear();
@@ -148,9 +160,16 @@ void LanguageController::showIntentions() {
                 for (fl::CodeActionItem& action : *actions) {
                     titles.push_back(qs(action.title));
                     preferred.push_back(action.preferred);
-                    m_choiceActions.emplace_back([this, title = qs(action.title), edit = std::move(action.edit),
-                                                  cmd = std::move(action.commandName),
+                    m_choiceActions.emplace_back([this, path, requestedSnapshot, title = qs(action.title),
+                                                  edit = std::move(action.edit), cmd = std::move(action.commandName),
                                                   args = std::move(action.commandArguments)]() mutable {
+                        const auto currentSnapshot = m_services.host.snapshot();
+                        if (!hasDocument() || m_services.host.documentPath() != path || !requestedSnapshot ||
+                            !currentSnapshot || !currentSnapshot->sharesStorageWith(*requestedSnapshot) ||
+                            currentSnapshot->version() != requestedSnapshot->version()) {
+                            emit statusMessage(QStringLiteral("The document changed; request the action again"));
+                            return;
+                        }
                         if (!edit.empty()) {
                             applyWorkspaceEdit(edit, title);
                         }
@@ -174,6 +193,38 @@ void LanguageController::showIntentions() {
             addContextAction(QStringLiteral("Quick Documentation"), [this] { showQuickDocumentation(); });
             addContextAction(QStringLiteral("File Structure"), [this] { showFileStructure(); });
             addContextAction(QStringLiteral("Reformat Code"), [this] { reformat(); });
+            const std::optional<fl::ServerCapabilities> serverCaps = m_services.server.serverCapabilities();
+            const bool clangdActive =
+                capabilities().clangdTweaks && ((serverCaps && serverCaps->serverName == "clangd") ||
+                                                std::ranges::any_of(all, fl::isIncludeCleanerDiagnostic));
+            if (clangdActive) {
+                addContextAction(QStringLiteral("Optimize Includes"), [this, path, all, requestedSnapshot]() {
+                    start<fl::WorkspaceEdit>(
+                        m_actionSlot,
+                        [&server = m_services.server, path, all](std::stop_token token) {
+                            return fl::requestOptimizeIncludes(server, path, all, std::move(token));
+                        },
+                        [this, path, requestedSnapshot](Result<fl::WorkspaceEdit> edit) {
+                            if (!edit) {
+                                report(edit.error(), "Optimize Includes");
+                                return;
+                            }
+                            if (edit->empty()) {
+                                emit statusMessage(QStringLiteral("Optimize Includes: no include changes needed"));
+                                return;
+                            }
+                            const auto currentSnapshot = m_services.host.snapshot();
+                            if (!hasDocument() || m_services.host.documentPath() != path || !requestedSnapshot ||
+                                !currentSnapshot || !currentSnapshot->sharesStorageWith(*requestedSnapshot) ||
+                                currentSnapshot->version() != requestedSnapshot->version()) {
+                                emit statusMessage(
+                                    QStringLiteral("The document changed; request Optimize Includes again"));
+                                return;
+                            }
+                            applyWorkspaceEdit(*edit, QStringLiteral("Optimize Includes"));
+                        });
+                });
+            }
             m_choice->start(QStringLiteral("Context Actions"), titles, m_services.host.caretScreenRect(),
                             std::move(preferred));
         });

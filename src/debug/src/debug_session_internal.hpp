@@ -173,6 +173,8 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     dap::Capabilities caps FROST_GUARDED_BY(mutex);
     bool configured FROST_GUARDED_BY(mutex) = false;
     bool stopRequested FROST_GUARDED_BY(mutex) = false;
+    bool terminateRequested FROST_GUARDED_BY(mutex) = false;
+    bool ordinaryStopRequested FROST_GUARDED_BY(mutex) = false;
     bool disconnectSent FROST_GUARDED_BY(mutex) = false;
     bool disconnectConfirmed FROST_GUARDED_BY(mutex) = false;
     bool terminatedSeen FROST_GUARDED_BY(mutex) = false;
@@ -257,7 +259,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
                 LockGuard lock(deferredMutex);
                 ++startupDepth;
             }
-            action();
+            std::forward<F>(action)();
         }
         bool run = false;
         {

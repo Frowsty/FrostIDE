@@ -136,6 +136,7 @@ void UpdateCheck::finish(Result<update::AuthenticatedRelease> result) {
             completion(std::move(result));
     });
 }
+// NOLINTNEXTLINE(performance-unnecessary-value-param): URL snapshot survives readiness callbacks.
 void UpdateCheck::fetch(QUrl url, qsizetype limit, int redirects, Received received) {
     if (m_finished)
         return;

@@ -65,7 +65,7 @@ TEST_F(I18n, PseudoLocalizationKeepsPlaceholdersMnemonicsAndShortcuts) {
     EXPECT_NE(text.find("%1"), std::string::npos) << text;
     EXPECT_NE(text.find("%n"), std::string::npos) << text;
     EXPECT_TRUE(text.ends_with("]\tCtrl+O")) << text;
-    EXPECT_TRUE(text.starts_with("[")) << text;
+    EXPECT_TRUE(text.starts_with('[')) << text;
 }
 
 TEST_F(I18n, PseudoLocalizationOfEmptyTextStillMarksIt) { EXPECT_EQ(pseudoLocalize(""), "[ ~]"); }

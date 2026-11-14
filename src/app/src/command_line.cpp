@@ -62,7 +62,8 @@ Result<CommandLine> parseCommandLine(std::span<const std::string_view> args) {
         if (arg == "--") {
             pathsOnly = true;
         } else if (arg == "--project" || arg == "--line" || arg == "--column") {
-            if (++i >= args.size() || args[i].empty() || args[i].starts_with("--"))
+            ++i;
+            if (i >= args.size() || args[i].empty() || args[i].starts_with("--"))
                 return fail(ErrorCode::InvalidArgument, std::format("option {} needs a value", arg));
             if (arg == "--project") {
                 if (!result.project.empty())

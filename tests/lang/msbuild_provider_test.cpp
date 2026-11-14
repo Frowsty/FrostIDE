@@ -196,7 +196,7 @@ C:\Users\a\E__dev\x.props
 
 TEST(MsBuildEvaluation, CommandLine) {
     const std::string root = kWindows ? "C:\\w" : "/w";
-    const auto in = [&](std::string name) { return frost::io::joinPath(root, name).value(); };
+    const auto in = [&](const std::string& name) { return frost::io::joinPath(root, name).value(); };
     frost::lang::MsBuildEvaluationRequest request{.msbuildPath = in("MSBuild.exe"),
                                                   .projectPath = in("App.vcxproj"),
                                                   .solutionPath = in("My;App.sln"),
@@ -270,7 +270,7 @@ TEST(MsBuildProvider, StreamsFirstSolutionProjectWhileNextEvaluationIsHeld) {
     options.configuration = "Debug|x64";
     options.streamedProjects = streamed;
     frost::lang::MsBuildCompileCommandsProvider provider(launcher, fs, shared, "C:\\cache", options);
-    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(stop); });
+    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(std::move(stop)); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < deadline &&
            (streamed->snapshot().size() < 2 || launcher.launches().size() < 2))
@@ -412,7 +412,7 @@ TEST(MsBuildProvider, FailedProjectKeepsStaticTreeWhileNextIsPending) {
     options.configuration = "Debug|x64";
     options.streamedProjects = streamed;
     frost::lang::MsBuildCompileCommandsProvider provider(launcher, fs, shared, "C:\\cache", options);
-    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(stop); });
+    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(std::move(stop)); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < deadline && launcher.launches().size() < 2)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -446,7 +446,7 @@ TEST(MsBuildProvider, MalformedEvaluationKeepsTheStaticProjectTree) {
     options.configuration = "Debug|x64";
     options.streamedProjects = streamed;
     frost::lang::MsBuildCompileCommandsProvider provider(launcher, fs, shared, "C:\\cache", options);
-    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(stop); });
+    std::jthread worker([&](std::stop_token stop) { (void)provider.locate(std::move(stop)); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < deadline && launcher.launches().size() < 2)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -458,6 +458,34 @@ TEST(MsBuildProvider, MalformedEvaluationKeepsTheStaticProjectTree) {
     EXPECT_EQ(records[0]->state, frost::lang::ProjectEvaluationState::Failed);
     EXPECT_EQ(records[1]->state, frost::lang::ProjectEvaluationState::Pending);
     EXPECT_EQ(overlay, shared);
+}
+
+TEST(MsBuildProvider, StreamedHeaderAbsenceAndAuthoritativeEmptyRemainDistinctAcrossRepublication) {
+    auto loaded = frost::project::SolutionModel::load(frost::io::realFileSystem(),
+                                                      fixture("../../project/fixtures/sdk_solution/SdkApp.sln"));
+    ASSERT_TRUE(loaded);
+    auto base = std::make_shared<const frost::project::SolutionModel>(std::move(*loaded));
+    const std::string project = fixture("../../project/fixtures/sdk_solution/Libraries/Core/Core.vcxproj");
+    const std::string header = fixture("../../project/fixtures/sdk_solution/Libraries/Core/include/core/core.h");
+    frost::sched::ThreadPool pool(frost::sched::ThreadPoolOptions{.workerCount = 1});
+    auto retirement = std::make_shared<frost::lang::GeneratedCommandsRetirement>(pool);
+    frost::lang::StreamedProjectContexts streamed(retirement, base);
+    frost::lang::StreamedProjectContext record{.projectPath = project,
+                                               .configuration = "Debug",
+                                               .platform = "x64",
+                                               .state = frost::lang::ProjectEvaluationState::Evaluated,
+                                               .commands = {}};
+    streamed.publish(record); // No ClInclude result: the static headers remain authoritative fallback.
+    ASSERT_TRUE(streamed.modelSnapshot()->findFileNode(header));
+    record.headers = std::vector<std::string>{};
+    streamed.publish(record); // An actual empty result must remove this project's headers.
+    EXPECT_FALSE(streamed.modelSnapshot()->findFileNode(header));
+    record.headers = std::vector<std::string>{header};
+    streamed.publish(record);
+    ASSERT_TRUE(streamed.modelSnapshot()->findFileNode(header))
+        << "a later successful evaluation must make a previously removed header reachable again";
+    streamed.clear();
+    EXPECT_EQ(streamed.modelSnapshot(), base); // Normal refresh still resets to its static base.
 }
 
 TEST(MsBuildProvider, MissingMsBuildMarksProjectsFailed) {
@@ -506,7 +534,7 @@ TEST(MsBuildProvider, IndependentWorkerOffersFirstDatabaseWhileSecondIsHeld) {
     std::atomic<bool> ready{false};
     std::optional<frost::lang::CompileCommandsLocation> location;
     std::jthread consumer([&](std::stop_token stop) {
-        auto result = evaluation->locate(stop);
+        auto result = evaluation->locate(std::move(stop));
         if (result && *result)
             location = **result;
         ready.store(true);

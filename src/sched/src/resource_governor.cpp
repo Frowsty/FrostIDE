@@ -40,6 +40,12 @@ namespace {
 constexpr std::uintptr_t kInvalidOsHandle = ~static_cast<std::uintptr_t>(0);
 constexpr std::uint64_t kBytesPerMiB = 1024ULL * 1024ULL;
 constexpr std::uint64_t kBytesPerGiB = 1024ULL * 1024ULL * 1024ULL;
+#ifdef _WIN32
+constexpr std::uint64_t kClangdSharedReserveBytes = 2ULL * kBytesPerGiB;
+#else
+constexpr std::uint64_t kClangdSharedReserveBytes = kBytesPerGiB;
+#endif
+constexpr std::uint64_t kClangdWorkerEstimateBytes = 512ULL * kBytesPerMiB;
 
 [[nodiscard]] constexpr std::size_t legIndex(HeavyLegKind kind) noexcept {
     switch (kind) {
@@ -240,7 +246,8 @@ std::uint64_t currentProcessRssBytes() noexcept {
 #endif
 }
 
-Result<std::uint64_t> queryProcessRssBytes(std::int64_t pid) noexcept {
+namespace {
+Result<std::uint64_t> queryProcessMemoryBytes(std::int64_t pid, bool peak) noexcept {
     if (pid <= 0) {
         return fail(ErrorCode::InvalidArgument, "process id must be positive");
     }
@@ -272,7 +279,10 @@ Result<std::uint64_t> queryProcessRssBytes(std::int64_t pid) noexcept {
     if (ok == 0) {
         return fail(ErrorCode::IoError, std::format("GetProcessMemoryInfo({}) failed (Win32 error {})", pid, err));
     }
-    return static_cast<std::uint64_t>(pmc.WorkingSetSize);
+    if (peak && pmc.PeakWorkingSetSize == 0) {
+        return fail(ErrorCode::Unsupported, std::format("process {} OS peak RSS is unavailable", pid));
+    }
+    return static_cast<std::uint64_t>(peak ? pmc.PeakWorkingSetSize : pmc.WorkingSetSize);
 #else
     const std::string statusPath = std::format("/proc/{}/status", pid);
     std::ifstream status(statusPath);
@@ -291,10 +301,17 @@ Result<std::uint64_t> queryProcessRssBytes(std::int64_t pid) noexcept {
                 if (!trimmed.empty() && (trimmed.front() == 'Z' || trimmed.front() == 'X' || trimmed.front() == 'x')) {
                     return fail(ErrorCode::NotFound, std::format("process {} has already exited", pid));
                 }
-            } else if (const auto rss = parseProcKbLine(line, "VmRSS:")) {
+            } else if (const auto rss = parseProcKbLine(line, peak ? "VmHWM:" : "VmRSS:")) {
+                if (peak && *rss == 0) {
+                    return fail(ErrorCode::Unsupported, std::format("process {} OS peak RSS is unavailable", pid));
+                }
                 return *rss;
             }
         }
+    }
+    if (peak) {
+        return fail(status.is_open() ? ErrorCode::Unsupported : ErrorCode::NotFound,
+                    std::format("process {} OS peak RSS is unavailable", pid));
     }
     const std::string statmPath = std::format("/proc/{}/statm", pid);
     std::ifstream statm(statmPath);
@@ -310,6 +327,11 @@ Result<std::uint64_t> queryProcessRssBytes(std::int64_t pid) noexcept {
     return residentPages * static_cast<std::uint64_t>(pageSize > 0 ? pageSize : 4096);
 #endif
 }
+} // namespace
+
+Result<std::uint64_t> queryProcessRssBytes(std::int64_t pid) noexcept { return queryProcessMemoryBytes(pid, false); }
+
+Result<std::uint64_t> queryProcessPeakRssBytes(std::int64_t pid) noexcept { return queryProcessMemoryBytes(pid, true); }
 
 // --- HeavyLegLease & ScopedLegActivity -----------------------------------------------------------
 
@@ -382,7 +404,7 @@ void ResourceGovernor::setHostResourcesForTesting(std::optional<HostResources> o
     m_hostOverride = overrideResources;
 }
 
-unsigned ResourceGovernor::clangdJobs() const noexcept {
+unsigned ResourceGovernor::clangdJobs(bool residentLimitRequired) const noexcept {
     const HostResources host = hostResources();
     const unsigned cores = std::max(1u, host.logicalCores);
     const unsigned maxJobs = std::max(1u, m_options.maxClangdJobs);
@@ -407,7 +429,28 @@ unsigned ResourceGovernor::clangdJobs() const noexcept {
         }
     }
 
-    unsigned jobs = std::clamp(std::min(byCores, byRam), 1u, maxJobs);
+    // Admission estimate for the whole process: shared index and foreground ASTs
+    // need headroom alongside the workers. RSS sampling records actual usage;
+    // a later decision cannot change an already running child's -j argument.
+    std::uint64_t budgetBytes = m_options.clangdRssCapBytes;
+    if (availBytes > 0) {
+        budgetBytes = std::min(budgetBytes, availBytes);
+#ifdef _WIN32
+        if (residentLimitRequired) {
+            // Residency is enforced before execution. Commit/host availability still budgets
+            // shared memory and workers; unknown host availability retains the RSS estimate.
+            budgetBytes = availBytes;
+        }
+#endif
+    }
+#ifndef _WIN32
+    static_cast<void>(residentLimitRequired);
+#endif
+    const std::uint64_t workerBytes =
+        budgetBytes > kClangdSharedReserveBytes ? budgetBytes - kClangdSharedReserveBytes : 0;
+    const unsigned byBudget =
+        static_cast<unsigned>(std::clamp<std::uint64_t>(workerBytes / kClangdWorkerEstimateBytes, 1ULL, maxJobs));
+    unsigned jobs = std::clamp(std::min({byCores, byRam, byBudget}), 1u, maxJobs);
 
     bool heavyBuildOrInspectActive = false;
     bool overCap = false;
@@ -617,7 +660,8 @@ unsigned ResourceGovernor::activeLegCount() const noexcept {
     return count;
 }
 
-void ResourceGovernor::recordProcessRss(std::int64_t pid, std::uint64_t rssBytes, HeavyLegKind leg) {
+void ResourceGovernor::recordProcessRss(std::int64_t pid, std::uint64_t rssBytes, HeavyLegKind leg,
+                                        std::optional<std::uint64_t> osPeakBytes) {
     if (pid <= 0) {
         return;
     }
@@ -626,10 +670,11 @@ void ResourceGovernor::recordProcessRss(std::int64_t pid, std::uint64_t rssBytes
     entry.leg = leg;
     entry.active = true;
     entry.currentBytes = rssBytes;
-    entry.peakBytes = std::max(entry.peakBytes, rssBytes);
+    const auto observedPeak = std::max(rssBytes, osPeakBytes.value_or(0));
+    entry.peakBytes = std::max(entry.peakBytes, observedPeak);
 
     const std::size_t idx = legIndex(leg);
-    m_peakLegRssBytes[idx] = std::max(m_peakLegRssBytes[idx], rssBytes);
+    m_peakLegRssBytes[idx] = std::max(m_peakLegRssBytes[idx], observedPeak);
 
     std::uint64_t currentCombined = 0;
     for (const auto& [otherPid, otherEntry] : m_processRss) {
@@ -645,7 +690,11 @@ Result<std::uint64_t> ResourceGovernor::sampleProcessRss(std::int64_t pid, Heavy
     if (!rss) {
         return std::unexpected(std::move(rss.error()));
     }
-    recordProcessRss(pid, *rss, leg);
+    auto peak = queryProcessPeakRssBytes(pid);
+    recordProcessRss(pid, *rss, leg, peak ? std::optional{*peak} : std::nullopt);
+    if (!peak) {
+        return std::unexpected(std::move(peak.error()));
+    }
     return *rss;
 }
 

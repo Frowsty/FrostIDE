@@ -9,6 +9,7 @@
 #include "frost/input/action.hpp"
 #include "frost/input/keymap_service.hpp"
 #include "frost/ui/model/theme_registry.hpp"
+#include "frost/ui/shell/engine_state.hpp"
 
 #include <QToolBar>
 #include <QToolButton>
@@ -46,7 +47,21 @@ public:
     static constexpr std::string_view kSearch = "search.everywhere";
     static constexpr std::string_view kSettings = "file.settings";
 
-    MainToolbar(Invoker invoke, QWidget* parent = nullptr);
+    static constexpr std::string_view kEnginePlay = "engine.play";
+    static constexpr std::string_view kEnginePause = "engine.pause";
+    static constexpr std::string_view kEngineStep = "engine.step";
+    static constexpr std::string_view kEngineStop = "engine.stop";
+    static constexpr std::string_view kEngineSimulate = "engine.simulate";
+
+    explicit MainToolbar(Invoker invoke, QWidget* parent = nullptr);
+
+    // GUI thread; O(button count). nullopt hides engine controls for a non-engine project.
+    // Actual push state plus schema policy gate actions; clicking never predicts state.
+    void setEngineState(std::optional<EngineControlState> state);
+    // Requested count selected in the Step dropdown (default 1); app submits it to schema policy.
+    // This local command parameter is not an observed engine frame/state value. GUI thread, O(1).
+    [[nodiscard]] int engineStepFrames() const noexcept { return m_engineStepFrames; }
+    [[nodiscard]] const std::optional<EngineControlState>& engineState() const noexcept { return m_engineState; }
 
     // The unified Rider main-menu button on the far left of the header.
     [[nodiscard]] QToolButton* mainMenuButton() const noexcept { return m_mainMenuButton; }
@@ -109,13 +124,17 @@ private:
         std::string iconId;
         std::optional<IconRole> iconRole;
         QToolButton* button = nullptr;
+        bool actionEnabled = false;
     };
 
     void addSlot(std::string_view actionId, std::string_view iconId, std::string_view fallbackText,
                  std::optional<IconRole> iconRole = std::nullopt);
     void updateTabOrder();
+    void applyEngineState();
 
     Invoker m_invoke;
+    std::optional<EngineControlState> m_engineState;
+    int m_engineStepFrames = 1;
     QToolButton* m_mainMenuButton = nullptr;
     QMenu* m_mainMenu = nullptr;
     QToolButton* m_backButton = nullptr;

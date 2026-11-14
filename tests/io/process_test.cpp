@@ -19,6 +19,7 @@
 
 #include "internal.hpp"    // detail::maxWaitSliceMs and its test setter.
 #include "process_env.hpp" // childSpec, pattern, ProcessWatch.
+#include "resident_memory_support.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -641,6 +642,107 @@ TEST(RealProcessLauncher, TimeoutTerminatesTheProcess) {
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code(), ErrorCode::Timeout) << result.error().describe();
     EXPECT_LT(elapsed, 20s);
+}
+
+TEST(RealProcessLauncher, CancellationTerminatesARealContainedChildBeforeItsDeadline) {
+    class ObservedLauncher final : public frost::io::IProcessLauncher {
+    public:
+        std::atomic<frost::io::ProcessId> pid{0};
+        frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const ProcessSpec& spec) override {
+            auto process = frost::io::realProcessLauncher().launch(spec);
+            if (process)
+                pid.store((*process)->pid());
+            return process;
+        }
+        frost::Result<std::unique_ptr<frost::io::IAsyncProcess>> launchAsync(const ProcessSpec&,
+                                                                             const frost::io::AsyncContext&) override {
+            return frost::fail(ErrorCode::Unsupported, "test uses the synchronous process runner");
+        }
+    } launcher;
+    ScratchDir scratch("process-cancellation");
+    const std::string ready = scratch.join("ready");
+    const auto spec = childSpec({"traceable-sleep", "60000", ready});
+    ASSERT_TRUE(spec.killOnClose);
+    std::optional<frost::Result<ProcessResult>> outcome;
+    std::jthread worker(
+        [&](std::stop_token stop) { outcome = frost::io::runToCompletion(launcher, spec, {}, 30s, stop); });
+    // The child itself writes this marker, proving it has started. A failed assertion still
+    // requests stop through jthread destruction before joining, so this test owns its cleanup.
+    const auto readyDeadline = std::chrono::steady_clock::now() + 10s;
+    while ((launcher.pid.load() == 0 || !frost::io::realFileSystem().exists(ready).value_or(false)) &&
+           std::chrono::steady_clock::now() < readyDeadline)
+        std::this_thread::sleep_for(2ms);
+    ASSERT_TRUE(frost::io::realFileSystem().exists(ready).value_or(false));
+    ASSERT_NE(launcher.pid.load(), 0U);
+    const ProcessWatch child(launcher.pid.load());
+    ASSERT_TRUE(child.valid());
+    EXPECT_FALSE(child.exitsWithin(0ms));
+    const auto cancelledAt = std::chrono::steady_clock::now();
+    worker.request_stop();
+    worker.join();
+    ASSERT_TRUE(outcome.has_value());
+    ASSERT_FALSE(outcome->has_value());
+    EXPECT_EQ(outcome->error().code(), ErrorCode::Cancelled) << outcome->error().describe();
+    EXPECT_LT(std::chrono::steady_clock::now() - cancelledAt, 10s);
+    EXPECT_TRUE(child.exitsWithin(0ms)) << "cancelled runner left its child alive";
+}
+
+TEST(RealProcessLauncher, CancellationDiscardsRacingSuccessAndReportsTerminationFailure) {
+    class CancellationProcess final : public frost::io::IProcess {
+    public:
+        CancellationProcess(std::stop_source& stop, bool refuses, int& terminations)
+            : m_stop(stop), m_refuses(refuses), m_terminations(terminations) {}
+        frost::io::ProcessId pid() const noexcept override { return 1; }
+        frost::Result<void> writeStdin(std::string_view) override { return {}; }
+        void closeStdin() noexcept override {}
+        frost::Result<std::size_t> readStdout(std::span<char>) override { return 0; }
+        frost::Result<std::size_t> readStderr(std::span<char>) override { return 0; }
+        frost::Result<frost::io::ExitStatus> wait(std::optional<frost::IClock::Duration>) override {
+            return frost::io::ExitStatus{};
+        }
+        frost::Result<void> terminate() override {
+            ++m_terminations;
+            if (m_refuses)
+                return frost::fail(ErrorCode::PermissionDenied, "termination refused by test process");
+            return {};
+        }
+        frost::Result<ProcessResult> communicate(std::string_view, frost::IClock::Duration) override {
+            m_stop.request_stop();
+            return ProcessResult{.stdoutBytes = "completed concurrently with cancellation"};
+        }
+
+    private:
+        std::stop_source& m_stop;
+        bool m_refuses;
+        int& m_terminations;
+    };
+    class CancellationLauncher final : public frost::io::IProcessLauncher {
+    public:
+        std::stop_source stop;
+        bool refuses = false;
+        int terminations = 0;
+        frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const ProcessSpec&) override {
+            return std::unique_ptr<frost::io::IProcess>(new CancellationProcess(stop, refuses, terminations));
+        }
+        frost::Result<std::unique_ptr<frost::io::IAsyncProcess>> launchAsync(const ProcessSpec&,
+                                                                             const frost::io::AsyncContext&) override {
+            return frost::fail(ErrorCode::Unsupported, "test uses the synchronous process runner");
+        }
+    };
+    for (const bool refuses : {false, true}) {
+        CancellationLauncher launcher;
+        launcher.refuses = refuses;
+        auto result =
+            frost::io::runToCompletion(launcher, childSpec({"sleep", "60000"}), {}, 30s, launcher.stop.get_token());
+        ASSERT_FALSE(result);
+        EXPECT_EQ(launcher.terminations, 1);
+        EXPECT_EQ(result.error().code(), refuses ? ErrorCode::PermissionDenied : ErrorCode::Cancelled);
+        if (refuses) {
+            EXPECT_EQ(result.error().message(), "termination refused by test process");
+            ASSERT_FALSE(result.error().context().empty());
+            EXPECT_NE(result.error().context().back().find("while cancelling"), std::string::npos);
+        }
+    }
 }
 
 TEST(RealProcessLauncher, WaitTimeoutThenTerminate) {
@@ -1449,6 +1551,61 @@ TEST(RealProcessLauncher, ContainedChildrenLeadASessionWithoutATerminal) {
     const auto uncontained = run(shared);
     ASSERT_TRUE(uncontained.has_value()) << uncontained.error().describe();
     EXPECT_TRUE(uncontained->stdoutBytes.starts_with("not session leader\n")) << uncontained->stdoutBytes;
+}
+#endif
+
+#ifdef _WIN32
+TEST(RealProcessLauncher, ResidentMemoryLimitPrecedesChildEntryAndBoundsLifetimePeak) {
+    auto spec = childSpec({"resident-memory", std::to_string(frost::test::kResidentTestQuota),
+                           std::to_string(frost::test::kResidentTestPeakBudget),
+                           std::to_string(frost::test::kResidentTestAllocation)});
+    spec.residentMemoryLimitBytes = frost::test::kResidentTestQuota;
+    const auto result = run(spec);
+    ASSERT_TRUE(result.has_value()) << result.error().describe();
+    frost::test::expectResidentMemoryOracle(*result);
+}
+
+TEST(RealProcessLauncher, ResidentMemorySetupFailuresEndSuspendedChildAndCloseInheritedWriters) {
+    using enum frost::io::detail::ResidentMemoryLaunchFault;
+    for (const auto fault : {SetLimit, ReadLimit, WrongLimit, WrongFlags, Resume}) {
+        for (const bool killOnClose : {false, true}) {
+            SCOPED_TRACE(static_cast<int>(fault));
+            SCOPED_TRACE(killOnClose);
+            frost::test::ResidentMemoryFailureProbe probe(fault);
+            auto spec = childSpec({"print", "child-executed", ""});
+            spec.killOnClose = killOnClose;
+            spec.residentMemoryLimitBytes = frost::test::kResidentTestQuota;
+            const auto process = frost::io::realProcessLauncher().launch(spec);
+            ASSERT_FALSE(process.has_value());
+            const auto expectedCode =
+                fault == WrongLimit || fault == WrongFlags ? ErrorCode::IoError : ErrorCode::PermissionDenied;
+            EXPECT_EQ(process.error().code(), expectedCode) << process.error().describe();
+            probe.expectEndedWithoutExecuting();
+        }
+    }
+}
+
+TEST(RealProcessLauncher, ResidentMemoryLimitRejectsInvalidNativeValuesBeforeCreation) {
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    const std::uint64_t page = system.dwPageSize;
+    for (const auto limit : {std::uint64_t{0}, page * 19, page * 20 + 1, UINT64_MAX}) {
+        frost::test::ResidentMemoryFailureProbe probe(frost::io::detail::ResidentMemoryLaunchFault::None);
+        auto spec = childSpec({"print", "child-executed", ""});
+        spec.residentMemoryLimitBytes = limit;
+        const auto process = frost::io::realProcessLauncher().launch(spec);
+        ASSERT_FALSE(process.has_value()) << limit;
+        EXPECT_EQ(process.error().code(), ErrorCode::InvalidArgument) << limit;
+        EXPECT_FALSE(probe.capturedChild());
+    }
+}
+#else
+TEST(RealProcessLauncher, RequestedResidentMemoryLimitIsUnsupported) {
+    auto spec = childSpec({"print", "child-executed", ""});
+    spec.residentMemoryLimitBytes = 128ULL * 1024 * 1024;
+    const auto process = frost::io::realProcessLauncher().launch(spec);
+    ASSERT_FALSE(process.has_value());
+    EXPECT_EQ(process.error().code(), ErrorCode::Unsupported);
 }
 #endif
 

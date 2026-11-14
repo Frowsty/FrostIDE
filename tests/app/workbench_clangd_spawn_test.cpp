@@ -130,6 +130,7 @@ public:
     frost::Result<void> removeAll(std::string_view path) override { return m_inner.removeAll(path); }
     frost::Result<bool> exists(std::string_view path) override { return m_inner.exists(path); }
     frost::Result<std::string> canonicalPath(std::string_view path) override { return m_inner.canonicalPath(path); }
+    frost::Result<std::string> physicalPath(std::string_view path) override { return m_inner.physicalPath(path); }
 
     void hold() {
         const std::scoped_lock lock(m_mutex);

@@ -95,7 +95,7 @@ TEST(AppearanceManager, EqualResolvedStateNoop) {
     SignalCounter counter(*installed->manager);
     const QStyle* before = QApplication::style();
     // A different settings value that resolves to the same state.
-    AppearanceSettings sync = withTheme(std::string(kSyncWithOs));
+    AppearanceSettings sync = withTheme(kSyncWithOs);
     installed->os.set({ColorScheme::Dark, false});
     ASSERT_TRUE(installed->manager->apply(sync));
     ASSERT_TRUE(installed->manager->apply(withTheme("glacier-dark")));
@@ -127,8 +127,7 @@ TEST(AppearanceManager, FailedLoadKeepsOldTheme) {
 }
 
 TEST(AppearanceManager, SyncWithOsFollowsDouble) {
-    const auto installed =
-        test::install(withTheme(std::string(kSyncWithOs)), nullptr, {}, OsAppearance{ColorScheme::Light, false});
+    const auto installed = test::install(withTheme(kSyncWithOs), nullptr, {}, OsAppearance{ColorScheme::Light, false});
     ASSERT_TRUE(installed);
     EXPECT_EQ(installed->manager->theme().id(), "glacier-light");
     SignalCounter counter(*installed->manager);

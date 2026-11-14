@@ -16,7 +16,7 @@ ColorKey colorKeyFor(syntax::HighlightKind kind) noexcept {
     case K::Keyword: return ColorKey::SyntaxKeyword;
     case K::Directive: return ColorKey::SyntaxDirective;
     case K::Operator: return ColorKey::SyntaxOperator;
-    case K::Punctuation: return ColorKey::SyntaxPunctuation;
+    case K::Punctuation:
     case K::Bracket: return ColorKey::SyntaxPunctuation;
     case K::String: return ColorKey::SyntaxString;
     case K::StringEscape: return ColorKey::SyntaxStringEscape;

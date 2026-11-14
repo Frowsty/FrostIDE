@@ -11,6 +11,7 @@
 #include "frost/engine/handle.hpp"
 #include "frost/engine/schema.hpp"
 #include "frost/io/file_system.hpp"
+#include "frost/io/scripted_process_launcher.hpp"
 
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
@@ -157,7 +158,9 @@ TEST(EngineSchema, NamesTheJsonPathOfTheFirstFault) {
 }
 
 TEST(EngineSchema, RefusesSourcesThatAreNotLinesOfTheCheckout) {
-    const auto withSource = [](Json source) { return [source](Json& d) { luaEntry(d, 0).set("source", source); }; };
+    const auto withSource = [](Json source) {
+        return [source = std::move(source)](Json& d) { luaEntry(d, 0).set("source", source); };
+    };
     const auto at = [](std::string_view file, std::int64_t line) {
         return Json::object().set("file", std::string(file)).set("line", line);
     };
@@ -208,6 +211,20 @@ TEST(EngineCli, AnUnbuiltTreeHasNoProgramAndSaysWhere) {
     request.command = "";
     EXPECT_EQ(runEngineCliCommand(io::realProcessLauncher(), root.join("FrostEditor"), request).error().code(),
               ErrorCode::InvalidArgument);
+}
+
+TEST(EngineCli, CancelledRequestNeverLaunchesOrPublishesAResult) {
+    test::ScratchDir root("engine-cli-cancelled");
+    io::ScriptedProcessLauncher launcher;
+    std::stop_source stop;
+    stop.request_stop();
+    EngineCliRequest request;
+    request.command = "schema.export";
+    request.stopToken = stop.get_token();
+    auto result = runEngineCliResult(launcher, root.join("FrostEditor"), request);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::Cancelled);
+    EXPECT_TRUE(launcher.launches().empty());
 }
 
 TEST(EngineLua, GeneratesMetaStubsGlobalsAndComponentEntryNamesFromSchema) {

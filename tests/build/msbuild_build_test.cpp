@@ -654,7 +654,7 @@ std::string findFileBelow(const std::string& directory, std::string_view name) {
         return {};
     }
     for (const frost::io::DirEntry& entry : *entries) {
-        const std::string path = frost::io::joinPath(directory, entry.name).value_or("");
+        std::string path = frost::io::joinPath(directory, entry.name).value_or("");
         if (entry.type == frost::io::FileType::Directory) {
             if (std::string found = findFileBelow(path, name); !found.empty()) {
                 return found;

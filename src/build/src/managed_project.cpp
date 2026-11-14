@@ -82,7 +82,7 @@ Result<io::ProcessSpec> managedProjectBuildSpec(const ManagedProjectRequest& req
     spec->arguments = {"build",       request.project,         "--configuration",     request.configuration,
                        "--framework", request.targetFramework, "--no-self-contained", "--nologo"};
     if (!request.runtimeIdentifier.empty()) {
-        spec->arguments.push_back("--runtime");
+        spec->arguments.emplace_back("--runtime");
         spec->arguments.push_back(request.runtimeIdentifier);
     }
     return spec;

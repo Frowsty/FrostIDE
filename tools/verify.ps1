@@ -8,7 +8,7 @@
 #              [-Tidy] [-TsanQuick] [-Corpus] [-Base main]
 #
 # Steps:
-#   1. With -Tidy or -TsanQuick (and without -Full): the changed-file list, the files that differ
+#   1. When tidy or targeted TSan Quick is enabled (and without -Full): the files that differ
 #      from the merge base of HEAD and -Base (default main), untracked files included
 #      (tools/verify_support.py changed; ADR 0027 decision 2). It selects what clang-tidy checks
 #      here and in WSL, and which modules WSL's TSan quick leg runs.
@@ -40,20 +40,20 @@
 #      licence check (Windows build trees), the feature-matrix check and the source-to-test
 #      line ratchet against the merge base with -Base (frost_lint.py ratchet; FND-5). A check
 #      whose tool does not exist yet is reported as "not-run", never silently dropped.
-#   5. With -Tidy: clang-tidy (pinned LLVM, the checked-in .clang-tidy files) over the Debug
+#   5. Tidy (enabled by default): pinned clang-tidy and the checked-in .clang-tidy over the Debug
 #      compile database: on the changed files' translation units, a changed header through one
 #      TU that includes it; on every TU when the list could not be made (the reason is printed)
 #      or under -Full, where the fuzz tree's own TUs join. "tidy not-run (debug build failed)"
-#      when there is no database to use; "tidy not-run (off by default)" without -Tidy.
+#      when there is no database to use; explicit -Tidy:$false reports "tidy not-run (disabled by request)".
 #   6. Linux: tools/verify.sh inside WSL (unless -WindowsOnly), with --full under -Full, --tidy
-#      under -Tidy and --tsan-quick under -TsanQuick. It gets the same changed-file list
+#      or --no-tidy for the effective -Tidy value, and --tsan-quick/--no-tsan-quick for -TsanQuick.
+#      It gets the same changed-file list
 #      (FROST_CHANGED_FILES; empty when step 1 failed, so it does not recompute one) and -Base
 #      (FROST_VERIFY_BASE), and --corpus under -Corpus. The tree checks are not repeated there
 #      (same tree); the licence check and tidy are, because they inspect the Linux build trees.
-# -Quick is the default and only names that choice explicitly. -Tidy and -TsanQuick are off by
-# default during the feature-first phase (ADR 0031): they slow the edit-verify loop (the TSan
-# quick leg cost about 32 s per triggering run in B28's measurements) and are meant to be on by
-# default again in the hardening phase (ADR 0027 decision 9).
+# -Quick is the default and only names that choice explicitly. Tidy and targeted TSan Quick are
+# enabled by default (ADR 0078 decision 10). Explicit -Tidy:$false or -TsanQuick:$false in a
+# PowerShell invocation disables that check and is forwarded to WSL. Full still runs full TSan.
 #
 # The final line is the summary for the commit footer, e.g.
 #   "Verified: win debug 63/64 (1 skipped), wsl debug 62/63 (1 skipped), format ok, ..."
@@ -79,10 +79,10 @@ param(
     [int]$Jobs = 8,
     # Parallel ctest jobs on Windows; 0 means -Jobs.
     [int]$TestJobs = 0,
-    # clang-tidy on both sides (off by default in the feature-first phase, ADR 0031).
-    [switch]$Tidy,
-    # WSL's TSan quick leg for the modules the changed files affect (off by default, ADR 0031).
-    [switch]$TsanQuick,
+    # clang-tidy on both sides; explicit -Tidy:$false disables it.
+    [switch]$Tidy = $true,
+    # WSL's targeted TSan quick leg; explicit -TsanQuick:$false disables only the quick leg.
+    [switch]$TsanQuick = $true,
     # The corpus tier (step 3b): the pinned FrostEngine corpora's tests, here and in WSL.
     [switch]$Corpus,
     # The branch or commit whose merge base with HEAD defines the changed files (resolved as
@@ -130,8 +130,8 @@ function Get-WslArgs($Script, [int]$Jobs, [string]$Base, $ChangedList, [string]$
     if ($Mirror) { $wslArgs += "FROST_MIRROR=$Mirror" }
     $wslArgs += @('bash', $Script, '--no-checks')
     if ($Full) { $wslArgs += '--full' }
-    if ($Tidy) { $wslArgs += '--tidy' }
-    if ($TsanQuick) { $wslArgs += '--tsan-quick' }
+    if ($Tidy) { $wslArgs += '--tidy' } else { $wslArgs += '--no-tidy' }
+    if ($TsanQuick) { $wslArgs += '--tsan-quick' } else { $wslArgs += '--no-tsan-quick' }
     if ($Corpus) { $wslArgs += '--corpus' }
     return , $wslArgs
 }
@@ -249,7 +249,9 @@ function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [s
     # (0), so a test that fails to start (0xC0000142, 0xC0000135) or crashes raises a hard-error or
     # WER box on the user's desktop, whatever desktop the test runs on. In mode 0 the tests inherit
     # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX and just fail with their status (ADR 0027).
-    $out = Invoke-Native { ctest --test-dir $Dir -C $Config --output-on-failure --interactive-debug-mode 0 @CtestArgs }
+    $skipJunit = Join-Path (Resolve-Path -LiteralPath $Dir).ProviderPath 'skip-audit.xml'
+    if (Test-Path -LiteralPath $skipJunit) { Remove-Item -LiteralPath $skipJunit }
+    $out = Invoke-Native { ctest --test-dir $Dir -C $Config --output-on-failure --interactive-debug-mode 0 --output-junit $skipJunit @CtestArgs }
     $ok = ($LASTEXITCODE -eq 0)
     $counts = Get-CtestCounts $out
     if (-not $counts) { $counts = 'no-results'; $ok = $false }
@@ -258,7 +260,7 @@ function Test-WindowsConfig([string]$Label, [string]$Preset, [string]$Config, [s
     if (-not $ok) { $script:failed = $true }
     # The skip audit (FND-6): every skipped test with its reason; a skip for a missing pinned tool
     # fails the gate ("win <label> skips FAILED (...)"), environment skips are only listed.
-    $audit = Invoke-Native { & $python -I (Join-Path $PSScriptRoot 'frost_lint.py') skips --log (Join-Path $Dir 'Testing\Temporary\LastTest.log') }
+    $audit = Invoke-Native { & $python -I (Join-Path $PSScriptRoot 'frost_lint.py') skips --log (Join-Path $Dir 'Testing\Temporary\LastTest.log') --junit $skipJunit }
     if ($LASTEXITCODE -ne 0) {
         $auditLine = $audit | Where-Object { $_ -match '^skips ' } | Select-Object -Last 1
         if (-not $auditLine) { $auditLine = "skips FAILED (exit $LASTEXITCODE)" }
@@ -423,10 +425,10 @@ try {
     if ($ratchetCode -ne 0) { $failed = $true }
 
     # 5. clang-tidy over the Debug compile database (PLAN.md 6.4 step 2; ADR 0027 decision 1),
-    # with -Tidy only (decision 9). Budget: B28. -Quick checks only the changed files' TUs; every
+    # enabled by default (ADR 0078 decision 10). Budget: B28. -Quick checks the changed files' TUs; every
     # TU runs only without a list.
     if (-not $Tidy) {
-        $checks.Add('tidy not-run (off by default)')
+        $checks.Add('tidy not-run (disabled by request)')
     } elseif (-not $script:debugBuilt) {
         $checks.Add('tidy not-run (debug build failed)')
     } else {
@@ -447,7 +449,7 @@ try {
         $tidyLine = $out | Where-Object { $_ -match '^tidy ' } | Select-Object -Last 1
         if (-not $tidyLine) { $tidyLine = "tidy FAILED (exit $tidyCode without a summary)" }
         $checks.Add($tidyLine)
-        if ($tidyCode -ne 0) { $failed = $true }
+        if ($tidyCode -ne 0 -or $tidyLine -match '^tidy FAILED(?:\s|$)') { $failed = $true }
     }
 
     # 6. and 7. The Linux leg.

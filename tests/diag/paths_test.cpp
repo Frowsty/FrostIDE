@@ -53,7 +53,7 @@ TEST(DiagnosticsPaths, WindowsCacheRootTable) {
         if (row.expected.empty()) {
             ASSERT_FALSE(root.has_value()) << value << " -> " << *root;
             EXPECT_EQ(root.error().code(), row.error) << value;
-        } else if (row.expected.starts_with("*")) {
+        } else if (row.expected.starts_with('*')) {
             ASSERT_TRUE(root.has_value()) << value << ": " << root.error().describe();
             EXPECT_TRUE(root->ends_with(row.expected.substr(1))) << value << " -> " << *root;
         } else {

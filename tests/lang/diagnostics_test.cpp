@@ -23,11 +23,23 @@ using frost::lang::LiveDiagnostic;
 using frost::lang::PositionEncoding;
 
 #ifdef _WIN32
-const std::string kFile = "C:\\src\\main.cpp";
-const std::string kHeader = "C:\\src\\main.h";
+const std::string& kFile() {
+    static const std::string value = "C:\\src\\main.cpp";
+    return value;
+}
+const std::string& kHeader() {
+    static const std::string value = "C:\\src\\main.h";
+    return value;
+}
 #else
-const std::string kFile = "/src/main.cpp";
-const std::string kHeader = "/src/main.h";
+const std::string& kFile() {
+    static const std::string value = "/src/main.cpp";
+    return value;
+}
+const std::string& kHeader() {
+    static const std::string value = "/src/main.h";
+    return value;
+}
 #endif
 
 Json range(int l1, int c1, int l2, int c2) {
@@ -38,7 +50,7 @@ Json range(int l1, int c1, int l2, int c2) {
 
 Json publish() {
     return Json::object()
-        .set("uri", frost::lang::pathToUri(kFile).value())
+        .set("uri", frost::lang::pathToUri(kFile()).value())
         .set("version", 3)
         .set("diagnostics",
              Json::array({
@@ -51,7 +63,7 @@ Json publish() {
                      .set("relatedInformation",
                           Json::array({Json::object()
                                            .set("location", Json::object()
-                                                                .set("uri", frost::lang::pathToUri(kHeader).value())
+                                                                .set("uri", frost::lang::pathToUri(kHeader()).value())
                                                                 .set("range", range(9, 0, 9, 3)))
                                            .set("message", "declared here")})),
                  Json::object().set("range", range(0, 0, 0, 1)).set("severity", 2).set("code", 42).set("message", "w"),
@@ -63,18 +75,18 @@ Json publish() {
 TEST(Diagnostics, DecodesPublishDiagnostics) {
     auto decoded = frost::lang::decodePublishDiagnostics(publish());
     ASSERT_TRUE(decoded.has_value()) << decoded.error().describe();
-    EXPECT_EQ(decoded->file, kFile);
+    EXPECT_EQ(decoded->file, kFile());
     EXPECT_EQ(decoded->lspVersion, 3);
     ASSERT_EQ(decoded->diagnostics.size(), 3U);
     const LiveDiagnostic& first = decoded->diagnostics[0];
     EXPECT_EQ(first.severity, DiagnosticSeverity::Error);
     EXPECT_EQ(first.code, "undeclared_var_use");
     EXPECT_EQ(first.source, "clang");
-    EXPECT_EQ(first.file, kFile);
+    EXPECT_EQ(first.file, kFile());
     EXPECT_EQ(first.line, 2);
     EXPECT_EQ(first.column, 5);
     ASSERT_EQ(first.related.size(), 1U);
-    EXPECT_EQ(first.related[0].file, kHeader);
+    EXPECT_EQ(first.related[0].file, kHeader());
     EXPECT_EQ(first.related[0].line, 10);
     EXPECT_EQ(first.related[0].message, "declared here");
     EXPECT_EQ(decoded->diagnostics[1].severity, DiagnosticSeverity::Warning);
@@ -119,11 +131,11 @@ TEST(DiagnosticsStoreTest, PublishReplaceClearAndOrder) {
     EXPECT_EQ(problems[0].column, 1);
     EXPECT_EQ(problems[1].column, 3);
     EXPECT_EQ(problems[2].line, 2);
-    ASSERT_TRUE(store.forFile(kFile).has_value());
+    ASSERT_TRUE(store.forFile(kFile()).has_value());
     const std::uint64_t generation = store.generation();
 
     FileDiagnostics empty;
-    empty.file = kFile;
+    empty.file = kFile();
     empty.uri = decoded->uri;
     store.publish(empty); // An empty publish clears the file.
     EXPECT_GT(store.generation(), generation);

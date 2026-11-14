@@ -29,6 +29,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -69,7 +70,7 @@ TerminalEnvironment fakeEnvironment(FakePtyLauncher& launcher, std::optional<Ter
     };
     env.probe.isExecutable = [](const std::string& path) { return path == kShell; };
     if (context) {
-        env.context = [context] { return *context; };
+        env.context = [context = std::move(context)] { return *context; };
     }
     return env;
 }

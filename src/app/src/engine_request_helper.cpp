@@ -2,6 +2,7 @@
 // Filesystem and engine-controlled paths are resolved only in the cancellable helper process.
 #include "engine_request_helper.hpp"
 
+#include "frost/engine/command_policy.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/engine_automation.hpp"
@@ -17,6 +18,7 @@
 #include <optional>
 
 namespace frost::app {
+Result<lang::Json> executeEngineSessionHelper(const lang::Json& input);
 namespace {
 QString qs(std::string_view s) { return QString::fromUtf8(s.data(), static_cast<qsizetype>(s.size())); }
 std::string utf8(const QString& s) { return s.toUtf8().toStdString(); }
@@ -160,7 +162,38 @@ Result<lang::Json> executeEngineHelper(const lang::Json& input, const lang::Engi
     const auto timeout = lang::engineMethodTimeout(method);
     const auto deadline =
         timeout ? std::chrono::steady_clock::now() + *timeout : std::chrono::steady_clock::time_point::max();
-    auto result = lang::runEngineCommand(*record, root, method, *params, sameProject, stillTrusted, connect, deadline);
+    // Explicit legacy/injected transport seam only. Production below uses contract-v2 HMAC.
+    const lang::EngineCommandAdmission admission = [&](std::string_view command, const lang::Json& arguments,
+                                                       const lang::Json& schemaJson, const lang::Json& server,
+                                                       const lang::Json& project) -> Result<void> {
+        auto schema = engine::parseSchemaDocument(schemaJson);
+        if (!schema)
+            return std::unexpected(schema.error());
+        const auto instance = server.stringAt("instanceId");
+        const auto generation = server.stringAt("generation");
+        if (instance.empty() || generation.empty())
+            return fail(ErrorCode::Unsupported, "Legacy engine has no authenticated schema identity");
+        const std::string boundProject = lang::documentKey(utf8(canonicalRoot));
+        const std::string boundSession = std::string(instance) + "/" + std::string(generation);
+        engine::CommandPolicy policy(std::move(*schema), boundProject, boundSession);
+        engine::CommandPolicyContext context;
+        context.connected = context.paired = context.mutationAllowed = true;
+        context.trusted = stillTrusted();
+        context.editorAvailable = server.stringAt("role") == "editor";
+        context.selectedProject = boundProject;
+        context.sessionProject = lang::documentKey(utf8(physical(project.stringAt("directory"))));
+        context.selectedSession = context.sessionId = boundSession;
+        context.state = server.stringAt("state"); // Absence never implies Edit.
+        if (const auto* capabilities = server.find("capabilities"); capabilities && capabilities->isArray())
+            for (const auto& capability : capabilities->items())
+                if (const auto* text = capability.asString())
+                    context.capabilities.push_back(*text);
+        for (const auto& entry : policy.schema().commands)
+            context.availableCommands.push_back(entry.name);
+        return policy.admit(command, arguments, context);
+    };
+    auto result = lang::runEngineCommand(*record, root, method, *params, sameProject, stillTrusted, connect, deadline,
+                                         {}, admission);
     if (!result)
         return std::unexpected(std::move(result.error()));
     auto locations = lang::Json::object();
@@ -169,6 +202,20 @@ Result<lang::Json> executeEngineHelper(const lang::Json& input, const lang::Engi
     return lang::Json::object().set("result", std::move(*result)).set("locations", std::move(locations));
 }
 Result<lang::Json> executeEngineHelper(const lang::Json& input) {
-    return executeEngineHelper(input, lang::loopbackEngineConnector());
+    // Navigation is a local, trust-gated physical-path check; no engine connection is necessary.
+    if (input.stringAt("method") == "navigation.resolve")
+        return executeEngineHelper(input, lang::EngineConnect{});
+    const QString root = physical(input.stringAt("root"));
+    if (root.isEmpty())
+        return fail(ErrorCode::NotFound, "The project directory is unavailable");
+    auto result = executeEngineSessionHelper(input);
+    if (!result)
+        return std::unexpected(result.error());
+    if (physical(input.stringAt("root")) != root)
+        return fail(ErrorCode::PermissionDenied, "The physical project changed while the engine was responding");
+    auto locations = lang::Json::object();
+    std::size_t count = 0;
+    collectLocations(*result, root, locations, count);
+    return lang::Json::object().set("result", std::move(*result)).set("locations", std::move(locations));
 }
 } // namespace frost::app

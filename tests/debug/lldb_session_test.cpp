@@ -103,19 +103,20 @@ TEST(LldbDebugSession, BreaksInAFixtureProgramAndReadsALocal) {
     EXPECT_EQ(frame->line, breakLine);
     EXPECT_NE(frame->name.find("compute"), std::string::npos) << frame->name;
 
-    auto scopes = awaitResult<ScopeList>([&](auto done) { session->scopes(frame->id, done); });
+    auto scopes = awaitResult<ScopeList>([&](const auto& done) { session->scopes(frame->id, done); });
     ASSERT_TRUE(scopes.has_value()) << scopes.error().describe();
     const auto locals = std::ranges::find_if(
         *scopes, [](const dap::Scope& scope) { return scope.presentationHint == "locals" || scope.name == "Locals"; });
     ASSERT_NE(locals, scopes->end());
-    auto variables =
-        awaitResult<VariableList>([&](auto done) { session->variables(locals->variablesReference, 0, 0, done); });
+    auto variables = awaitResult<VariableList>(
+        [&](const auto& done) { session->variables(locals->variablesReference, 0, 0, done); });
     ASSERT_TRUE(variables.has_value()) << variables.error().describe();
     const auto local = std::ranges::find(*variables, std::string("local"), &dap::Variable::name);
     ASSERT_NE(local, variables->end());
     EXPECT_EQ(local->value, "42");
 
-    auto sum = awaitResult<dap::Variable>([&](auto done) { session->evaluate("local + 1", frame->id, "watch", done); });
+    auto sum =
+        awaitResult<dap::Variable>([&](const auto& done) { session->evaluate("local + 1", frame->id, "watch", done); });
     ASSERT_TRUE(sum.has_value()) << sum.error().describe();
     EXPECT_EQ(sum->value, "43");
 

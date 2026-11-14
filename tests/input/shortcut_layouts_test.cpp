@@ -458,7 +458,7 @@ TEST_P(ShortcutLayouts, NamedExamples) {
 // (g) Dead keys compose, and a shortcut after a dead key fires and drops the composition.
 TEST_P(ShortcutLayouts, DeadKeys) {
     MatcherRig rig(truth(), platform());
-    const auto typeSequence = [&](std::vector<std::pair<std::vector<Code>, Code>> keys) {
+    const auto typeSequence = [&](const std::vector<std::pair<std::vector<Code>, Code>>& keys) {
         rig.resetKeyboard();
         std::u32string text;
         for (const auto& [held, code] : keys) {

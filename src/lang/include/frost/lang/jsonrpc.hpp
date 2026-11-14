@@ -20,7 +20,8 @@
  * object, or not a JSON-RPC message is reported and dropped; a response with an unknown id is
  * reported and dropped (late responses to cancelled requests are dropped silently). When the
  * stream ends (EOF, a read error, close()), every pending request completes with IoError and
- * onClosed runs once.
+ * onClosed runs once. Server requests may use onAsyncRequest to defer a response without holding
+ * the reader thread; its completion can run on any thread and is ignored after close/destruction.
  *
  * Lifetime. The connection's state is shared with its coroutines, so destroying the connection
  * never blocks and never leaves a coroutine pointing at freed memory: the destructor closes the
@@ -124,6 +125,11 @@ struct ConnectionHandlers {
     // A server request; the return value is sent as the response. Without a handler, or when it
     // returns kMethodNotFound, the server gets MethodNotFound. Reader thread.
     std::function<std::expected<Json, ResponseError>(std::string_view method, const Json& params)> onRequest;
+    // Optional asynchronous server-request handler. Return true when it owns the request and
+    // will invoke `done` later; false falls through to onRequest. The callback is safe to retain.
+    std::function<bool(std::string_view method, const Json& params,
+                       std::function<void(std::expected<Json, ResponseError>)> done)>
+        onAsyncRequest;
     // A protocol problem (malformed frame or message, unknown response id), for the log.
     std::function<void(const Error& problem)> onProtocolError;
     // The stream ended; runs once, after every pending request was completed. `why` is IoError
@@ -159,7 +165,7 @@ public:
     void cancel(std::int64_t id);
 
     // Queues a notification. Errors: IoError (the connection is closed). O(size of params).
-    [[nodiscard]] Result<void> notify(std::string method, Json params);
+    [[nodiscard]] Result<void> notify(const std::string& method, Json params);
 
     // Stops the reader, closes the stream's write side after the queued messages and completes
     // pending requests with IoError. Idempotent; any thread; never blocks.

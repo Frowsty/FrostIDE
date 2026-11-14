@@ -613,7 +613,7 @@ class Journey:
             git.run("checkout", "--", SEED_FILE, cwd=corpus)
             print(f"{JOURNEY}: restored {SEED_FILE} from the clone's HEAD (an earlier run left it changed)")
 
-    def _launch(self, corpus: Path, *, again: bool = False) -> None:
+    def _launch(self, corpus: Path, *, again: bool = False, startupinfo: Any = None) -> None:
         """Starts frost on a fresh temporary profile; with `again`, on the profile of the last start
         (which must have exited), as a restart of FrostIDE by its user would (j2_run's restart step)."""
         if not again:
@@ -640,7 +640,8 @@ class Journey:
         self.evidence.data["spawnLogDirectory"] = str(self.spawn_dir)
         self.frost_process = subprocess.Popen([os.path.realpath(self.args.frost)], env=env, cwd=str(self.tmp),
                                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                              stderr=subprocess.DEVNULL, start_new_session=not WINDOWS)
+                                              stderr=subprocess.DEVNULL, start_new_session=not WINDOWS,
+                                              startupinfo=startupinfo)
         # The watchdog: past the journey's limit frost is killed, so a blocked read ends with EOF.
         self.watchdog = threading.Timer(JOURNEY_SECONDS, lambda: kill_tree(self.frost_process))
         self.watchdog.daemon = True

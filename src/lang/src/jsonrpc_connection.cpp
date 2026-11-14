@@ -7,6 +7,7 @@
 #include "frost/lang/jsonrpc.hpp"
 #include "frost/sched/lane.hpp"
 
+#include <atomic>
 #include <coroutine>
 #include <deque>
 #include <format>
@@ -41,16 +42,14 @@ struct PendingRequest {
             if (result.has_value()) {
                 return;
             }
-            if (callback) {
-                result.emplace(Json()); // Marks completion; the value goes to the callback.
-            } else {
-                result.emplace(std::move(value));
+            result.emplace(std::move(value));
+            if (!callback) {
                 wake = std::exchange(waiter, {});
                 wakeLane = lane;
             }
         }
         if (callback) {
-            callback(std::move(value));
+            callback(take());
         } else if (wake) {
             scheduler->enqueue(wake, wakeLane);
         }
@@ -163,7 +162,7 @@ struct JsonRpcConnection::State : std::enable_shared_from_this<State> {
     }
 
     // Sends a response frame even while closing (the reader answers until it stops).
-    void sendResponse(Json message) { static_cast<void>(send(encodeFrame(message.dump()))); }
+    void sendResponse(const Json& message) { static_cast<void>(send(encodeFrame(message.dump()))); }
 
     void cancel(std::int64_t id) {
         std::shared_ptr<PendingRequest> request;
@@ -255,11 +254,31 @@ struct JsonRpcConnection::State : std::enable_shared_from_this<State> {
     }
 
     void answer(const Json& id, const std::string& method, const Json& params) {
+        const std::weak_ptr<State> weak = shared_from_this();
+        auto replied = std::make_shared<std::atomic_bool>(false);
+        auto sendOnce = [weak, replied, responseId = id](std::expected<Json, ResponseError> reply) mutable {
+            if (replied->exchange(true)) {
+                return;
+            }
+            if (const std::shared_ptr<State> state = weak.lock()) {
+                state->sendReply(responseId, std::move(reply));
+            }
+        };
+        if (handlers.onAsyncRequest) {
+            const bool deferred = handlers.onAsyncRequest(method, params, sendOnce);
+            if (deferred) {
+                return;
+            }
+        }
         std::expected<Json, ResponseError> reply = std::unexpected(
             ResponseError{.code = rpc_error::kMethodNotFound, .message = "method not found: " + method, .data = {}});
         if (handlers.onRequest) {
             reply = handlers.onRequest(method, params);
         }
+        sendOnce(std::move(reply));
+    }
+
+    void sendReply(const Json& id, std::expected<Json, ResponseError> reply) {
         Json out = Json::object().set("jsonrpc", "2.0").set("id", id);
         if (reply) {
             out.set("result", std::move(*reply));
@@ -270,7 +289,7 @@ struct JsonRpcConnection::State : std::enable_shared_from_this<State> {
             }
             out.set("error", std::move(error));
         }
-        sendResponse(std::move(out));
+        sendResponse(out);
     }
 
     void response(const Json& idValue, const Json& message) {
@@ -424,21 +443,21 @@ sched::Task<Result<Json>> JsonRpcConnection::request(std::string method, Json pa
 
 std::int64_t JsonRpcConnection::request(std::string method, Json params, std::function<void(Result<Json>)> done) {
     auto pending = std::make_shared<PendingRequest>();
-    pending->method = method;
+    pending->method = std::move(method);
     pending->callback = std::move(done);
     pending->scheduler = &m_state->scheduler;
     const std::optional<std::int64_t> id = m_state->registerRequest(pending);
-    if (!id || !m_state->send(requestFrame(*id, method, std::move(params)))) {
+    if (!id || !m_state->send(requestFrame(*id, pending->method, std::move(params)))) {
         if (id) {
             static_cast<void>(m_state->unregister(*id));
         }
-        pending->complete(fail(ErrorCode::IoError, method + ": the connection is closed"));
+        pending->complete(fail(ErrorCode::IoError, pending->method + ": the connection is closed"));
         return 0;
     }
     return *id;
 }
 
-Result<void> JsonRpcConnection::notify(std::string method, Json params) {
+Result<void> JsonRpcConnection::notify(const std::string& method, Json params) {
     if (!m_state->send(notificationFrame(method, std::move(params)))) {
         return fail(ErrorCode::IoError, method + ": the connection is closed");
     }

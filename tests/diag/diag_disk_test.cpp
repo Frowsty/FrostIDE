@@ -162,7 +162,7 @@ TEST(LogBackend, RealFilesOnLongAndNonAsciiRoots) {
     const ScratchDir scratch("diag-logs");
     std::string root = scratch.join("logs \xC3\xA4 \xE6\xB5\x8B ");
     while (frost::io::utf8ToUtf16(root).value().size() < 240) {
-        root += "x";
+        root += 'x';
     }
     ASSERT_TRUE(frost::io::realFileSystem().createDirectories(root).has_value());
     frost::diag::LogBackendOptions options;

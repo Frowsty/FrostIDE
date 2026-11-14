@@ -169,7 +169,7 @@ PeriodicPruner::PeriodicPruner(Setup setup, DiagnosticsDirectories directories, 
                                IActiveFileProbe& probe, const IClock& clock, RetentionPolicy policy,
                                IClock::Duration period)
     : m_state(new State{std::move(setup), std::move(directories), &fs, &probe, &clock, policy, period, {}, {}, {}}) {
-    m_thread = std::jthread([state = m_state.get()](std::stop_token stop) {
+    m_thread = std::jthread([state = m_state.get()](const std::stop_token& stop) {
         nameAndGuardThisThread("frost-diag");
         ICrashReportStore* store = state->setup ? state->setup() : nullptr;
         if (store == nullptr) {

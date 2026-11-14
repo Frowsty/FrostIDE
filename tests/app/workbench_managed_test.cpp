@@ -41,8 +41,9 @@ TEST(WorkbenchManaged, RealConsoleProjectBuildsAndDebugsWithVerifiedSource) {
     const std::string adapter = qgetenv("FROST_TEST_MANAGED_DEBUG_ADAPTER").toStdString();
     const std::string guard = qgetenv("FROST_TEST_MANAGED_DEBUG_GUARD").toStdString();
     const bool useBundle = qgetenv("FROST_TEST_MANAGED_USE_BUNDLE") == "1";
-    if (dotnet.empty() || (!useBundle && (adapter.empty() || guard.empty())))
-        GTEST_SKIP() << "set the isolated SDK, source-built adapter and verifier paths";
+    ASSERT_FALSE(dotnet.empty()) << "Required managed fixture lacks FROST_TEST_CSHARP_DOTNET";
+    ASSERT_TRUE(useBundle || (!adapter.empty() && !guard.empty()))
+        << "Required managed fixture lacks its reviewed adapter and PdbGuard paths";
     WorkDir dir("managed-debug-real");
     const std::vector<QByteArray> names = {"HOME",
                                            "USERPROFILE",
@@ -187,8 +188,8 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
             << "Windows NuGet LocalAppData migration marker is absent; SDK startup would modify the user profile";
     const std::string dotnet = qgetenv("FROST_TEST_CSHARP_DOTNET").toStdString();
     const std::string assembly = qgetenv("FROST_TEST_CSHARP_SERVER").toStdString();
-    if (dotnet.empty() || assembly.empty())
-        GTEST_SKIP() << "pinned managed test tools are unavailable";
+    ASSERT_FALSE(dotnet.empty()) << "Required managed fixture lacks FROST_TEST_CSHARP_DOTNET";
+    ASSERT_FALSE(assembly.empty()) << "Required managed fixture lacks FROST_TEST_CSHARP_SERVER";
     WorkDir dir("managed-workbench");
     const std::vector<QByteArray> profileVariables = {"FROST_DOTNET_CLI_HOME",
                                                       "LOCALAPPDATA",
@@ -478,8 +479,8 @@ TEST(WorkbenchManaged, UnityGenerationReloadReplaysDirtyDocuments) {
         GTEST_SKIP() << "Windows NuGet migration marker is absent";
     const std::string dotnet = qgetenv("FROST_TEST_CSHARP_DOTNET").toStdString();
     const std::string server = qgetenv("FROST_TEST_CSHARP_SERVER").toStdString();
-    if (dotnet.empty() || server.empty())
-        GTEST_SKIP() << "pinned managed test tools are unavailable";
+    ASSERT_FALSE(dotnet.empty()) << "Required managed fixture lacks FROST_TEST_CSHARP_DOTNET";
+    ASSERT_FALSE(server.empty()) << "Required managed fixture lacks FROST_TEST_CSHARP_SERVER";
     WorkDir dir("unity-managed-reload");
     const std::vector<QByteArray> names = {"FROST_DOTNET_CLI_HOME",
                                            "LOCALAPPDATA",

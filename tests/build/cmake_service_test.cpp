@@ -399,6 +399,7 @@ public:
     Result<void> removeDirectory(std::string_view path) override { return m_inner.removeDirectory(path); }
     Result<bool> exists(std::string_view path) override { return m_inner.exists(path); }
     Result<std::string> canonicalPath(std::string_view path) override { return m_inner.canonicalPath(path); }
+    Result<std::string> physicalPath(std::string_view path) override { return m_inner.physicalPath(path); }
 
     // Lets the held reads, and every later one, go on.
     void release() {
@@ -610,7 +611,7 @@ TEST_F(CMakeServiceTest, PersonalWrapperRunsOnlyAfterTrustAndSaveWithSeparateArg
     waitIdle();
     EXPECT_TRUE(launcher.launches().empty());
     int saves = 0;
-    service->setSaveAllHook([&](SaveAllCompletion done) {
+    service->setSaveAllHook([&](const SaveAllCompletion& done) {
         ++saves;
         done({});
     });
@@ -1006,7 +1007,7 @@ TEST_F(CMakeServiceTest, BuildsCleansAndRebuildsTargets) {
     installReply();
     start();
     int saves = 0;
-    service->setSaveAllHook([&saves](SaveAllCompletion done) {
+    service->setSaveAllHook([&saves](const SaveAllCompletion& done) {
         ++saves;
         done({});
     });

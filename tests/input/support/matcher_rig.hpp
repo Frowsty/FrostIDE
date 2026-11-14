@@ -62,7 +62,7 @@ public:
     // registered (test_actions.hpp), plus `extraActions`. Overrides apply to the index.
     explicit MatcherRig(const LayoutTable& truth = simulatedLayout(SimulatedLayoutId::EnUs),
                         KeyPlatform platform = KeyPlatform::Windows, std::string_view keymapText = {},
-                        std::vector<ActionOverride> overrides = {}, std::vector<std::string> extraActions = {});
+                        std::vector<ActionOverride> overrides = {}, const std::vector<std::string>& extraActions = {});
 
     MatcherRig(const MatcherRig&) = delete ("the rig hands out pointers to its members");
     MatcherRig& operator=(const MatcherRig&) = delete ("the rig hands out pointers to its members");

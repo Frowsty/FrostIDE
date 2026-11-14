@@ -31,9 +31,6 @@
 
 namespace frost::app {
 
-namespace key = settings::key;
-namespace wa = workbench_actions;
-
 namespace {
 
 QString text(const char* source) { return ui::qtr("frost::app::Workbench", source); }
@@ -112,7 +109,7 @@ Result<void> Workbench::cloneRepository(const std::string& url, const std::strin
     const std::string configured = vcs::configuredGitPath(*m_services.settings.snapshot());
     io::IFileSystem* fs = &m_services.fs;
     io::IProcessLauncher* launcher = &m_services.launcher;
-    clone->worker = std::jthread([this, fs, launcher, configured, url, directory](std::stop_token stop) {
+    clone->worker = std::jthread([this, fs, launcher, configured, url, directory](const std::stop_token& stop) {
         // Every post is queued to this Workbench; the worker is joined before it is destroyed.
         const auto finish = [this](bool ok, std::string message) {
             QMetaObject::invokeMethod(

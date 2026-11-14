@@ -60,6 +60,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -219,6 +220,26 @@ struct ProcessSpec {
      * child take the terminal as its controlling terminal) and newConsole must not be.
      */
     std::optional<PseudoTerminal> pseudoTerminal{};
+
+    /*
+     * Optional Windows root-process resident working-set maximum policy in bytes. It is installed and read
+     * back while the initial thread is suspended, before any child instruction, using the continuous
+     * OS HARDWS_MAX policy. Successful readback verifies the configured policy. Native verification
+     * has observed kernel lifetime peaks above that maximum despite successful readback. Callers enforcing
+     * a peak-residency budget must request a lower maximum with headroom and independently verify the
+     * actual kernel lifetime peak. This policy applies to the root process, independently of commit and
+     * descendant processes.
+     * The value must be a multiple of the native page size, at least 20 pages, and fit SIZE_T without
+     * its sentinel value. Invalid values return InvalidArgument; OS policy/setup/resume failures end
+     * and wait for the suspended child before returning an error, including with killOnClose=false.
+     * Cleanup retains ownership and waits until actual exit, retrying OS termination failures; callers
+     * should launch on a worker when blocking OS operations are inappropriate on their current thread.
+     * An unrecoverable OS termination/wait failure can delay launch failure reporting indefinitely.
+     * Other platforms return Unsupported when requested. Unset preserves ordinary launch behaviour.
+     * The process may page committed memory larger than the configured maximum. No periodic working-set
+     * trimming is performed. A child with sufficient access can deliberately change its own OS policy afterwards.
+     */
+    std::optional<std::uint64_t> residentMemoryLimitBytes = std::nullopt;
 };
 
 // The most descriptors ProcessSpec::posixInheritedFds may pass.
@@ -270,7 +291,8 @@ struct ContainedProcess {
  *
  * Thread safety: operations on different streams (stdin, stdout, stderr) and
  * wait()/terminate() may run concurrently from different threads; operations
- * on the same stream must not. communicate() must not overlap any other call.
+ * on the same stream must not. communicate() may overlap terminate() (for cancellation),
+ * but must not overlap any other call.
  * containedProcesses(), terminateContained(), releaseContainer() and
  * abandonOutput() may run concurrently with everything but communicate().
  */
@@ -355,8 +377,9 @@ public:
     /*
      * Starts a process. Errors: InvalidArgument (a spec validateProcessSpec rejects; a
      * working directory that is not a directory or, on Windows, too long to be a current
-     * directory; a file that is not an executable image), Unsupported (batch files on
-     * Windows), NotFound (no such executable or working directory), PermissionDenied (not
+     * directory; a file that is not an executable image; invalid native resident-memory limits),
+     * Unsupported (batch files on Windows; requested resident-memory limits on other platforms),
+     * NotFound (no such executable or working directory), PermissionDenied (not
      * executable), Busy (the executable is open for writing, or the system is out of
      * processes), IoError. Thread-safe.
      */
@@ -384,9 +407,14 @@ protected:
 
 // launch() followed by communicate(): the safe way to run a tool and collect its
 // output. Both pipes are drained concurrently, so arbitrarily large output works.
-// Errors: those of launch() and communicate(), with the executable as context.
+// A stopped token prevents launch; stopping after launch terminates the owned child/container
+// while communicate drains/reaps it. The stop callback is removed before the process is destroyed.
+// Cancelled discards output even if exit races cancellation; a termination failure propagates
+// with cancellation context. The original communicate timeout remains the outer bound.
+// Errors: Cancelled, or those of launch(), terminate() and communicate(), with executable context.
 [[nodiscard]] Result<ProcessResult> runToCompletion(IProcessLauncher& launcher, const ProcessSpec& spec,
-                                                    std::string_view stdinData, IClock::Duration timeout);
+                                                    std::string_view stdinData, IClock::Duration timeout,
+                                                    std::stop_token stop = {});
 
 // Whether this platform applies the Windows path and batch-file rules in validateProcessSpec.
 #ifdef _WIN32
@@ -408,7 +436,9 @@ inline constexpr bool kWindowsProcessRules = false;
  * executable; a command line under CreateProcessW's 32,767-unit limit; and
  * well-formed UTF-8 in the command line, the working directory, the
  * environment names and values and the desktop name, which must also be
- * NUL-free (the launcher converts them to UTF-16).
+ * NUL-free (the launcher converts them to UTF-16). A requested residentMemoryLimitBytes is Windows-only
+ * and positive; the real Windows launcher also checks native page alignment, minimum and SIZE_T range
+ * before creating a process.
  * Errors: InvalidArgument, Unsupported.
  */
 [[nodiscard]] Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules = kWindowsProcessRules);

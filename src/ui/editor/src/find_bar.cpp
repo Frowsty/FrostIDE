@@ -43,7 +43,8 @@ QToolButton* plainButton(const QString& text, const QString& tip, QWidget* paren
 
 } // namespace
 
-EditorFindBar::EditorFindBar(QWidget* parent) : QWidget(parent) {
+EditorFindBar::EditorFindBar(QWidget* parent)
+    : QWidget(parent), m_find(new QLineEdit(this)), m_matches(new QLabel(this)) {
     setObjectName(QStringLiteral("frostEditorFindBar"));
     setAutoFillBackground(true);
     auto* rows = new QVBoxLayout(this);
@@ -54,13 +55,11 @@ EditorFindBar::EditorFindBar(QWidget* parent) : QWidget(parent) {
     findRow->setSpacing(4);
     m_expandReplace = plainButton(QStringLiteral("▸"), QStringLiteral("Toggle Replace (Ctrl+R)"), this);
     m_expandReplace->setObjectName(QStringLiteral("findBarToggleReplace"));
-    m_find = new QLineEdit(this);
     m_find->setPlaceholderText(QStringLiteral("Find"));
     m_find->setClearButtonEnabled(true);
     m_case = toggle(QStringLiteral("Cc"), QStringLiteral("Match Case"), this);
     m_word = toggle(QStringLiteral("W"), QStringLiteral("Words"), this);
     m_regex = toggle(QStringLiteral(".*"), QStringLiteral("Regex"), this);
-    m_matches = new QLabel(this);
     m_matches->setMinimumWidth(80);
     m_previous = plainButton(QStringLiteral("↑"), QStringLiteral("Previous Occurrence (Shift+F3)"), this);
     m_next = plainButton(QStringLiteral("↓"), QStringLiteral("Next Occurrence (F3)"), this);

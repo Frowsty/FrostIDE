@@ -201,7 +201,7 @@ TEST(LocalIpc, OwnerElectionStartupRaceAndRestart) {
     frost::Result<std::string> reply = frost::fail(frost::ErrorCode::Unknown, "not called");
     std::jthread client([&] { reply = frost::io::requestLocalIpc(id, "hello", 3s); });
     std::this_thread::sleep_for(100ms);
-    ASSERT_TRUE((*owner)->start([](std::string text) -> frost::Result<std::string> { return text + " world"; }));
+    ASSERT_TRUE((*owner)->start([](const std::string& text) -> frost::Result<std::string> { return text + " world"; }));
     client.join();
     ASSERT_TRUE(reply.has_value()) << reply.error().describe();
     EXPECT_EQ(*reply, "hello world");
@@ -209,7 +209,7 @@ TEST(LocalIpc, OwnerElectionStartupRaceAndRestart) {
     owner->reset();
     auto replacement = frost::io::LocalIpcOwner::claim(id);
     ASSERT_TRUE(replacement.has_value());
-    ASSERT_TRUE((*replacement)->start([](std::string) -> frost::Result<std::string> {
+    ASSERT_TRUE((*replacement)->start([](const std::string&) -> frost::Result<std::string> {
         return frost::fail(frost::ErrorCode::InvalidArgument, "wrong project");
     }));
     auto refused = frost::io::requestLocalIpc(id, "other", 2s);

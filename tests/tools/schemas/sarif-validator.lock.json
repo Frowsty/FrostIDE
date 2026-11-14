@@ -1,0 +1,49 @@
+{
+  "schema": {
+    "path": "sarif-schema-2.1.0.json",
+    "sha256": "c3b4bb2d6093897483348925aaa73af03b3e3f4bd4ca38cef26dcb4212a2682e"
+  },
+  "validator": {
+    "name": "fastjsonschema",
+    "version": "2.22.3",
+    "wheel_url": "https://files.pythonhosted.org/packages/d7/0d/6caab33488dc9d26440c24221fa610c7c8b83c30715ab45d31f0e004308e/fastjsonschema-2.22.3-py3-none-any.whl",
+    "wheel_sha256": "f670b443830b75aca3f00b75949efa20f4b2a80302ec7a21505c28dd54cffd43",
+    "license": "BSD-3-Clause"
+  },
+  "wheel_members": [
+    "fastjsonschema/__init__.py",
+    "fastjsonschema/__main__.py",
+    "fastjsonschema/draft04.py",
+    "fastjsonschema/draft06.py",
+    "fastjsonschema/draft07.py",
+    "fastjsonschema/draft2019.py",
+    "fastjsonschema/exceptions.py",
+    "fastjsonschema/generator.py",
+    "fastjsonschema/indent.py",
+    "fastjsonschema/py.typed",
+    "fastjsonschema/ref_resolver.py",
+    "fastjsonschema/version.py",
+    "fastjsonschema-2.22.3.dist-info/licenses/AUTHORS",
+    "fastjsonschema-2.22.3.dist-info/licenses/LICENSE",
+    "fastjsonschema-2.22.3.dist-info/METADATA",
+    "fastjsonschema-2.22.3.dist-info/WHEEL",
+    "fastjsonschema-2.22.3.dist-info/top_level.txt",
+    "fastjsonschema-2.22.3.dist-info/RECORD"
+  ],
+  "files": {
+    "__init__.py": "23176d66f78c9a3823f391c1a992e453f871be63586ca19e14c4ffb57ed250ee",
+    "__main__.py": "e217dddb7a6bcf199073c5632f47d4b1bb2bbef03bde02761c334f80b2c57402",
+    "AUTHORS": "3325516643a004650c147dd9e220bb579476d89ea4c694883ba1f2dbb0597b8f",
+    "draft04.py": "a2996990106d80f8e4b5d0ad8e997a5684f38f50f23d094dd2c49fd449542dc6",
+    "draft06.py": "c1cfdaedb1870f777d374c2d77d677fa5b433cd1c814028ff57c7646e137de6e",
+    "draft07.py": "9ca0102a7bba3b3ca143eb5fd22a54214dc0648307f44cbcd90325f20b703cd8",
+    "draft2019.py": "28732d8a5b6866e3b86fd9c2a899b328c816d31c28f4f4ce291dd0670ca866a9",
+    "exceptions.py": "ac8a1a81ca495500f0640e2178282bc4221e6622dc5be26e8799d3de83232715",
+    "generator.py": "ca2d520bbdf51849b5ea96417c91785fbfc92077efae10189f19e0d5de9c30cb",
+    "indent.py": "6c2aaac7022acab03838c691440ee042d8cf93dc1ce2906b804f49bdb2aae31b",
+    "LICENSE": "9ccddf69eb3998a60148debe85b94c5afed53691b6474692e78abcc0a0e544f1",
+    "py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ref_resolver.py": "5b7fe9beddf31838810384acee0e7ca90c5f61673969b7e226a9729c929ba10f",
+    "version.py": "ae1042b0ea2cbd5882f716c6647026acb2a274e4fa6477c3c194d52caffa17e4"
+  }
+}

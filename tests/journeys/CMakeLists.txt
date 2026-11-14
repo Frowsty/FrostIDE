@@ -56,6 +56,20 @@ set_tests_properties(journeys.j3_frostengine_lua PROPERTIES
     RESOURCE_LOCK frost_desktop
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
+# j4 requires the Debug-only automation endpoint. A missing engine or failed authentication is a
+# failure, never a skip; it shares the desktop/corpus build lock with the earlier journeys.
+if(FROST_ENABLE_AUTOMATION_ENDPOINT AND (CMAKE_CONFIGURATION_TYPES OR CMAKE_BUILD_TYPE STREQUAL "Debug"))
+    add_test(NAME journeys.j4_engine_session CONFIGURATIONS Debug
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/j4_engine_session.py
+                --frost $<TARGET_FILE:frost> --config $<CONFIG>
+                --evidence ${CMAKE_BINARY_DIR}/journey-evidence)
+    set_tests_properties(journeys.j4_engine_session PROPERTIES
+        LABELS "corpus;integration"
+        TIMEOUT 18000
+        RESOURCE_LOCK frost_desktop
+        ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+endif()
+
 # j2_msvc (FND-7b): open, edit, build and debug an MSVC solution with the real MSBuild and lldb-dap
 # (j2_msvc.py's header). Windows only (Visual Studio's MSBuild) and Debug only (the endpoint and the
 # spawn log). On the synthetic solution (a scratch copy of tests/project/fixtures/msvc_generated) it

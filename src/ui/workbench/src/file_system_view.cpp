@@ -694,7 +694,7 @@ bool FileSystemView::selectedIsDirectory() const {
 std::string FileSystemView::selectedDirectory() const {
     const QModelIndex index = m_tree->currentIndex();
     if (index.isValid()) {
-        const std::string path = toUtf8(index.data(kPathRole).toString());
+        std::string path = toUtf8(index.data(kPathRole).toString());
         if (index.data(kDirectoryRole).toBool()) {
             return path;
         }

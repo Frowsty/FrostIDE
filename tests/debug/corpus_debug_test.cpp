@@ -115,7 +115,7 @@ std::string checkedCorpus() {
         return {};
     }
     const std::string sha = FROST_CORPUS_FROSTENGINE_SHA;
-    const std::string corpus = io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
+    std::string corpus = io::normalizePath(root + "/frostengine-" + sha.substr(0, 12)).value_or("");
     const auto head = io::realFileSystem().readFile(corpus + "/.git/HEAD");
     if (!head || head->substr(0, 40) != sha) {
         ADD_FAILURE() << corpus << " is not the pinned FrostEngine clone (python tools/corpora.py fetch, verify)";
@@ -214,7 +214,7 @@ protected:
 
     // The names in the selected frame's Locals scope.
     std::vector<std::string> localNames() {
-        auto scopes = await<ScopeList>([&](auto done) { m_session->scopes(frame().id, done); });
+        auto scopes = await<ScopeList>([&](const auto& done) { m_session->scopes(frame().id, done); });
         if (!scopes) {
             ADD_FAILURE() << scopes.error().describe();
             return {};
@@ -226,8 +226,8 @@ protected:
             ADD_FAILURE() << "no Locals scope";
             return {};
         }
-        auto list =
-            await<VariableList>([&](auto done) { m_session->variables(locals->variablesReference, 0, 0, done); });
+        auto list = await<VariableList>(
+            [&](const auto& done) { m_session->variables(locals->variablesReference, 0, 0, done); });
         if (!list) {
             ADD_FAILURE() << list.error().describe();
             return {};
@@ -241,7 +241,7 @@ protected:
 
     std::string evalValue(std::string expression) {
         auto value = await<dap::Variable>(
-            [&](auto done) { m_session->evaluate(std::move(expression), frame().id, "watch", done); });
+            [&](const auto& done) { m_session->evaluate(std::move(expression), frame().id, "watch", done); });
         if (!value) {
             ADD_FAILURE() << value.error().describe();
             return {};

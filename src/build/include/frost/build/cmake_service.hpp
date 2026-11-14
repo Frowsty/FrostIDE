@@ -363,7 +363,7 @@ public:
      */
     [[nodiscard]] Result<void> build(BuildAction action, std::optional<std::size_t> target = std::nullopt,
                                      CMakeBuildCompletion done = {},
-                                     std::shared_ptr<const project::CMakeProject> expectedModel = {});
+                                     const std::shared_ptr<const project::CMakeProject>& expectedModel = {});
     // Cancels the job in progress (BuildService::cancel). Idempotent.
     void cancel();
     // Trusts `root` and lets a job waiting in NeedsTrust go on; once the folder is trusted and has no

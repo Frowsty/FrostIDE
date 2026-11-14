@@ -157,7 +157,7 @@ const JsonNode* findInsensitive(const JsonNode& object, std::string_view key) {
  * available (communicate() cannot overlap terminate()). `stop` or the timeout ends its tree.
  */
 Result<io::ProcessResult> runCli(io::IProcessLauncher& launcher, const io::ProcessSpec& spec, IClock::Duration timeout,
-                                 std::stop_token stop) {
+                                 const std::stop_token& stop) {
     if (stop.stop_requested()) {
         return fail(ErrorCode::Cancelled, "MSBuild evaluation cancelled");
     }
@@ -543,6 +543,7 @@ Result<io::ProcessSpec> projectHostSpec(const ProjectHostLaunch& launch) {
 }
 
 Result<std::unique_ptr<ProjectHostClient>>
+// NOLINTNEXTLINE(performance-unnecessary-value-param): Own cancellation across reentrant launchers.
 ProjectHostClient::start(io::IProcessLauncher& launcher, const ProjectHostLaunch& launch, std::stop_token stop) {
     auto spec = projectHostSpec(launch);
     if (!spec) {
@@ -639,7 +640,7 @@ bool ProjectHostClient::running() const {
 
 bool ProjectHostClient::waitUntilEnded(std::stop_token stop) {
     std::unique_lock lock(m_shared->mutex);
-    return m_shared->changed.wait(lock, stop, [this] { return m_shared->ended; });
+    return m_shared->changed.wait(lock, std::move(stop), [this] { return m_shared->ended; });
 }
 
 Error ProjectHostClient::endedError() {
@@ -659,7 +660,7 @@ Error ProjectHostClient::endedError() {
     return Error(ErrorCode::IoError, std::format("ProjectHost ended ({})", how));
 }
 
-Result<std::string> ProjectHostClient::nextLine(IClock::Duration timeout, std::stop_token stop) {
+Result<std::string> ProjectHostClient::nextLine(IClock::Duration timeout, const std::stop_token& stop) {
     std::unique_lock lock(m_shared->mutex);
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     const bool ready = m_shared->changed.wait_until(lock, stop, deadline,
@@ -681,7 +682,7 @@ Result<std::string> ProjectHostClient::nextLine(IClock::Duration timeout, std::s
     return std::unexpected(endedError());
 }
 
-Result<std::string> ProjectHostClient::exchange(const std::string& line, std::stop_token stop) {
+Result<std::string> ProjectHostClient::exchange(const std::string& line, const std::stop_token& stop) {
     if (!running()) {
         return std::unexpected(endedError());
     }
@@ -696,8 +697,10 @@ Result<std::string> ProjectHostClient::exchange(const std::string& line, std::st
     return nextLine(m_requestTimeout, stop);
 }
 
-Result<ProjectClCommandLines> ProjectHostClient::clCommandLines(const ProjectEvaluationRequest& request,
-                                                                std::stop_token stop) {
+Result<ProjectClCommandLines> ProjectHostClient::clCommandLines(
+    const ProjectEvaluationRequest& request,
+    // NOLINTNEXTLINE(performance-unnecessary-value-param): Own cancellation across reentrant process I/O.
+    std::stop_token stop) {
     auto line = projectHostClCommandLinesRequest(request, std::to_string(m_nextId++));
     if (!line) {
         return std::unexpected(std::move(line.error()));
@@ -713,6 +716,7 @@ Result<ProjectClCommandLines> ProjectHostClient::clCommandLines(const ProjectEva
     return parsed;
 }
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param): Own cancellation across reentrant process I/O.
 Result<HostEvaluation> ProjectHostClient::evaluate(const ProjectEvaluationRequest& request, std::stop_token stop) {
     const std::string id = std::to_string(m_nextId++);
     auto line = projectHostEvaluateRequest(request, id);
@@ -740,7 +744,7 @@ Result<HostEvaluation>
 evaluateWithMsBuildCli(io::IProcessLauncher& launcher, std::string_view msbuildPath,
                        const ProjectEvaluationRequest& request,
                        const std::vector<std::pair<std::string, std::optional<std::string>>>& environment,
-                       IClock::Duration timeout, std::stop_token stop) {
+                       IClock::Duration timeout, const std::stop_token& stop) {
     auto spec = msbuildCliEvaluationSpec(msbuildPath, request);
     if (!spec) {
         return std::unexpected(std::move(spec.error()));

@@ -58,7 +58,7 @@ class StripeButton final : public QToolButton {
     Q_OBJECT
 
 public:
-    StripeButton(ToolWindowSide side, QWidget* parent = nullptr);
+    explicit StripeButton(ToolWindowSide side, QWidget* parent = nullptr);
 
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override { return sizeHint(); }

@@ -819,13 +819,14 @@ void DocumentBreakpointTracker::sync() {
     m_manager.move(m_path, lines);
     m_syncing = false;
     // Merged breakpoints lost their entries; drop their anchors.
-    std::erase_if(m_anchors, [&](const auto& entry) {
+    static_cast<void>(std::erase_if(m_anchors, [&](const auto& entry) {
         if (m_manager.find(entry.first)) {
             return false;
         }
-        static_cast<void>(m_document.releaseAnchor(entry.second));
+        const auto released = m_document.releaseAnchor(entry.second);
+        static_cast<void>(released);
         return true;
-    });
+    }));
 }
 
 } // namespace frost::debug

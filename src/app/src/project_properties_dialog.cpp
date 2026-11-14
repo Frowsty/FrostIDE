@@ -608,7 +608,7 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
 void showSolutionPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
                                   std::optional<project::ProjectId> currentStartup,
                                   std::function<void(project::ProjectId)> onSetStartup,
-                                  std::function<void()> onDependenciesChanged) {
+                                  const std::function<void()>& onDependenciesChanged) {
     QDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("solutionPropertiesDialog"));
     dialog.setWindowTitle(QStringLiteral("Solution '%1' Property Pages").arg(toQs(solution.name())));
@@ -690,7 +690,9 @@ void showSolutionPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const pr
 }
 
 void showConfigurationManagerDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,
+                                    // NOLINTNEXTLINE(performance-unnecessary-value-param): Modal callback snapshot.
                                     int activeConfigurationIndex, std::function<void(int)> onActiveConfigurationChanged,
+                                    // NOLINTNEXTLINE(performance-unnecessary-value-param): Modal callback snapshot.
                                     std::function<void()> onSolutionFileModified) {
     bool written = false;
     ui::ConfigurationManagerDialog dialog(
