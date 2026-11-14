@@ -3389,7 +3389,7 @@ TEST(Workbench, ApproximateAuthorityRefusesManagedXmlAndCppUserPropertyWrites) {
             EXPECT_TRUE(dialog.isVisible());
         });
         frost::app::showProjectPropertiesDialog(
-            rig.window.get(), frost::io::realFileSystem(), path, "Debug|x64", [&] { saved = true; },
+            rig.window.get(), frost::io::realFileSystem(), path, "Debug|x64", [&] { saved = true; }, {}, {},
             [&]() -> frost::Result<void> {
                 ++admissions;
                 return approximate->requireProjectMutation();
