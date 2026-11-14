@@ -243,7 +243,7 @@ endif()
 # CPP-5 and REF-12 with the real clangd and clang-format (label integration, tag clangd): clangd's
 # links, folds, inlay hints and AST in the active editor, and the actions on save.
 frost_add_test(app_workbench_cpp_editor_tests QT
-    SOURCES workbench_cpp_editor_test.cpp workbench_inspection_test.cpp
+    SOURCES workbench_cpp_editor_test.cpp workbench_inspection_test.cpp workbench_create_usage_test.cpp
     DEPS frost::app frost::lang frost::io frost::sched
     LABELS integration clangd)
 target_include_directories(app_workbench_cpp_editor_tests PRIVATE ${FROST_SOURCE_DIR}/tests

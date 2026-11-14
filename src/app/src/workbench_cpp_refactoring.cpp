@@ -33,6 +33,7 @@ namespace {
 struct Capture {
     lang::CppRefactoringRequest request;
     document::RefactoringPlan plan;
+    lang::WorkspaceEdit targets;
     std::string database;
     std::set<std::string> openPaths;
     std::uint64_t trustRevision = 0, generation = 0;
@@ -101,6 +102,7 @@ sched::Task<void> prepare(io::IFileSystem* fs, io::IProcessLauncher* launcher, p
     for (const auto& path : proposal->directoryDependencies)
         capture->plan.dependencies.push_back({path, std::nullopt, true});
     for (const auto& file : proposal->files) {
+        lang::FileEdit target; target.path = file.path; capture->targets.files.push_back(std::move(target));
         if (file.overlay)
             capture->plan.buffers.push_back({file.path, file.before, file.after});
         else
@@ -213,7 +215,8 @@ void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, std::
                                             "Disk input aliases an open editor; request an exact snapshot");
                         }
                     }
-                    return {};
+                    if (!self->m_bridge) return fail(ErrorCode::Cancelled, "C++ language bridge ended");
+                    return self->m_bridge->validateRefactoringTargets(capture->targets);
                 };
                 auto current = revalidate();
                 if (!current) {
@@ -306,6 +309,20 @@ void Workbench::showCppRefactoring(std::string operation) {
         if (!accepted)
             return;
         request.context.newName = name.toStdString();
+    } else if (operation == "create-from-usage") {
+        bool accepted = false;
+        const auto returnType = QInputDialog::getText(
+            m_window, QStringLiteral("Create from Usage"),
+            QStringLiteral("C++ return type (leave empty to infer only from a known return/initializer context):"),
+            QLineEdit::Normal, {}, &accepted);
+        if (!accepted) return;
+        const auto body = QInputDialog::getMultiLineText(
+            m_window, QStringLiteral("Create from Usage — implementation"),
+            QStringLiteral("Implementation statements (without outer braces). Parameter names use argument identifiers, "
+                           "otherwise arg1, arg2, ... . Supply real behavior; no throwing/default stub is invented:"),
+            {}, &accepted);
+        if (!accepted) return;
+        request.usageReturnType = returnType.toStdString(); request.usageBody = body.toStdString();
     } else if (operation == "change-signature") {
         bool accepted = false;
         const auto order = QInputDialog::getText(
@@ -362,6 +379,11 @@ void Workbench::showCppRefactoring(std::string operation) {
                 operation == "change-signature"
                     ? QStringLiteral("Profile: one defined internal non-overloaded free function; permute all existing "
                                      "arithmetic parameters and side-effect-free direct call arguments.")
+                : operation == "create-from-usage"
+                    ? QStringLiteral("Profile: selected compiler-reported unresolved ordinary free/object-member call. "
+                                     "Parameter types come from recovered argument QualTypes; implementation is supplied "
+                                     "by you. A source-local free definition or public inline method in its captured "
+                                     "project class/header is inserted. All configurations must reparse without errors.")
                 : operation == "inline-function"
                     ? QStringLiteral("Profile: one direct call to an internal arithmetic function with a single pure "
                                      "return expression; every argument must be a non-volatile value or literal.")

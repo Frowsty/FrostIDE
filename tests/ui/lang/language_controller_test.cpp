@@ -1529,6 +1529,30 @@ TEST(LanguageControllerRefactoring, ConversionsShowOnlyActualApplicableProviderA
               "SwapBinaryOperands");
     EXPECT_TRUE(rig.applier.edits.empty());
 }
+
+TEST(LanguageControllerRefactoring, NativeCreateUsageChoicePreservesPreChoiceSnapshotAdmission) {
+    FeatureServer server;
+    FakeHost host("int f(){return missing(1);}", workPath("main.cpp"));
+    Rig rig(server, host);
+    bool current = true; unsigned captures = 0;
+    rig.controller.setCppSemanticEditFactory([&]() -> frost::Result<LanguageController::SemanticApply> {
+        ++captures;
+        return LanguageController::SemanticApply{[&](const fl::WorkspaceEdit&) -> frost::Result<void> {
+            if (!current) return frost::fail(frost::ErrorCode::Busy, "selection changed before native creation");
+            return {};
+        }};
+    });
+    std::vector<std::string> operations;
+    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(operation); });
+    rig.controller.createFromUsage();
+    auto& choice = rig.controller.choicePopup(); ASSERT_TRUE(choice.isVisible()); ASSERT_EQ(choice.list()->count(), 2);
+    EXPECT_TRUE(choice.list()->item(0)->text().contains(QStringLiteral("native recovered AST")));
+    emit choice.chosen(0);
+    EXPECT_EQ(operations, (std::vector<std::string>{"create-from-usage"})); EXPECT_EQ(captures, 1U);
+    rig.controller.createFromUsage(); current = false; emit choice.chosen(0);
+    EXPECT_EQ(operations.size(), 1U);
+    EXPECT_TRUE(server.paramsOf("textDocument/codeAction").empty()); EXPECT_TRUE(rig.applier.edits.empty());
+}
 TEST(LanguageControllerRefactoring, PublishedAndModuleFixScopeHaveDifferentExplicitOwners) {
     FeatureServer server;
     FakeHost host("int main(){return 0;}", workPath("main.cpp"));
