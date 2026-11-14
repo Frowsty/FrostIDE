@@ -142,6 +142,8 @@ Result<FileDocument*> SaveManager::open(std::string_view path, std::optional<tex
         return std::unexpected(std::move(normalized.error()));
     }
     if (FileDocument* existing = find(*normalized)) {
+        if (m_refactoringOpened)
+            m_refactoringOpened(*existing);
         return existing;
     }
     auto loaded = m_loader.load(*normalized, encoding);
@@ -151,7 +153,10 @@ Result<FileDocument*> SaveManager::open(std::string_view path, std::optional<tex
     std::vector<Error> ignored; // A sweep failure never fails an open.
     sweepDirectory(io::parentPath(*normalized, m_options.style), ignored);
     std::string key = *normalized;
-    return &adopt(std::move(*normalized), std::move(key), std::move(*loaded));
+    auto& document = adopt(std::move(*normalized), std::move(key), std::move(*loaded));
+    if (m_refactoringOpened)
+        m_refactoringOpened(document);
+    return &document;
 }
 
 FileDocument& SaveManager::createUntitled(text::TextFileFormat format) {
