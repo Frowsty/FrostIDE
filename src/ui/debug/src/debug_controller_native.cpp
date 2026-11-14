@@ -2,6 +2,7 @@
 // Native backend selection, launch and attach; presentation/lifecycle remain in DebugController.
 #include "frost/ui/debug_controller.hpp"
 #include "frost/debug/gdb_dap.hpp"
+#include "frost/debug/dbgeng_dap.hpp"
 #include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"
 #include <QProcessEnvironment>
@@ -11,7 +12,7 @@
 
 namespace frost::ui {
 Result<debug::AdapterFactory> DebugController::adapterFactory(bool* nativeOsThreadIdsVerified,
-                                                              debug::DapProcessOutput output) {
+                                                              debug::DapProcessOutput output, std::string_view backendOverride) {
     if (nativeOsThreadIdsVerified)
         *nativeOsThreadIdsVerified = false;
     if (m_options.adapterFactory) {
@@ -20,7 +21,19 @@ Result<debug::AdapterFactory> DebugController::adapterFactory(bool* nativeOsThre
     if (m_options.fs == nullptr || m_options.launcher == nullptr) {
         return fail(ErrorCode::InvalidArgument, "the debugger has no process launcher");
     }
-    const auto backend = m_options.nativeBackendSetting ? m_options.nativeBackendSetting() : "lldb-dap";
+    const auto backend = !backendOverride.empty() ? std::string(backendOverride) :
+        (m_options.nativeBackendSetting ? m_options.nativeBackendSetting() : "lldb-dap");
+    if (backend == "frost-dbgeng") {
+#ifndef _WIN32
+        return fail(ErrorCode::Unsupported, "The DbgEng backend is supported on Windows only");
+#else
+        const auto path = m_options.dbgEngPathSetting ? m_options.dbgEngPathSetting() : std::string{};
+        if (!io::isAbsolutePath(path)) return fail(ErrorCode::InvalidArgument, "Configure the absolute Frost DbgEng adapter path");
+        auto exists = m_options.fs->exists(path);
+        if (!exists || !*exists) return fail(ErrorCode::NotFound, "Frost DbgEng adapter is missing: " + path);
+        return debug::dbgEngDapAdapterFactory(*m_options.launcher, path);
+#endif
+    }
     if (backend == "gdb") {
 #ifndef __linux__
         return fail(ErrorCode::Unsupported, "The GDB DAP backend is supported on Linux only");
@@ -64,6 +77,8 @@ Result<void> DebugController::startNativeTarget(const debug::DebugTarget& target
     if (m_options.trust == nullptr) {
         return fail(ErrorCode::InvalidArgument, "the debugger has no trust store");
     }
+    const bool useDbgEng = !m_options.adapterFactory && m_options.nativeBackendSetting &&
+                          m_options.nativeBackendSetting() == "frost-dbgeng";
     auto resolvedTarget = target;
     if (m_options.sourceMapSetting) {
         const auto [from, to] = m_options.sourceMapSetting();
@@ -85,6 +100,28 @@ Result<void> DebugController::startNativeTarget(const debug::DebugTarget& target
             resolvedTarget.trustRoots = std::move(roots);
             resolvedTarget.sourceMap = std::move(*mapping);
         }
+    }
+    if (useDbgEng) {
+        if (privacy) return fail(ErrorCode::Unsupported, "Private engine debugging requires the built-in pinned LLDB adapter");
+        if (auto trusted = debug::validateDebugTargetTrust(*m_options.trust, resolvedTarget); !trusted) return trusted;
+        std::vector<std::string> files;
+        if (m_options.natvisFiles) {
+            auto discovered = m_options.natvisFiles(resolvedTarget);
+            if (!discovered) return std::unexpected(std::move(discovered.error()));
+            files = std::move(*discovered);
+        }
+        const auto trustRevision = m_options.trust->snapshot(resolvedTarget.program).revision;
+        auto arguments = debug::dbgEngDapLaunchArguments({.native = resolvedTarget, .natvisFiles = files});
+        if (!arguments) return std::unexpected(std::move(arguments.error()));
+        auto factory = adapterFactory();
+        if (!factory) return std::unexpected(std::move(factory.error()));
+        auto started = startAdapterTarget(resolvedTarget, std::move(*factory), std::move(*arguments), "frost-dbgeng",
+            debug::DebugTargetMode::Launch, false, [trust = m_options.trust, resolvedTarget, trustRevision]() -> Result<void> {
+                if (trust->snapshot(resolvedTarget.program).revision != trustRevision)
+                    return fail(ErrorCode::Untrusted, "Trust changed after Natvis admission");
+                return debug::validateDebugTargetTrust(*trust, resolvedTarget);
+            });
+        return started;
     }
     bool osThreadIdsVerified = false;
     const bool useGdb = !m_options.adapterFactory && m_options.nativeBackendSetting && m_options.nativeBackendSetting() == "gdb";
@@ -124,8 +161,10 @@ Result<void> DebugController::startNativeTarget(const debug::DebugTarget& target
 Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
                                                  rpc::Json arguments, std::string adapterId,
                                                  debug::DebugTargetMode mode, bool readOnly,
-                                                 std::function<Result<void>()> launchAdmission) {
-    if (m_pendingRun || m_alternatePending || (m_hooks.mayStart && !m_hooks.mayStart()))
+                                                 std::function<Result<void>()> launchAdmission,
+                                                 const std::function<bool()>& ownerAdmission) {
+    const bool admitted = ownerAdmission ? ownerAdmission() : (!m_hooks.mayStart || m_hooks.mayStart());
+    if (m_pendingRun || m_alternatePending || !admitted)
         return fail(ErrorCode::Busy, "Another run or debug launch is still preparing");
     if (!m_options.trust || !factory || !arguments.isObject() || adapterId.empty())
         return fail(ErrorCode::InvalidArgument, "An adapter, arguments and trusted target are required");
@@ -174,6 +213,7 @@ Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& targe
         readOnly || actualMode == debug::DebugTargetMode::Attach);
     if (started) {
         m_nativeSession = !readOnly && (adapterId == "lldb-dap" || adapterId == "frost-dbgeng");
+        m_nativeOsThreadIdsVerified = false;
         m_lastCoreClrSession = false;
     }
     return started;
@@ -192,21 +232,37 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
         adapterId = "gdb";
         attachArguments.set("type", "gdb");
     }
-    bool osThreadIdsVerified = false;
-    if (!factory && adapterId == "gdb") {
-#ifndef __linux__
-        return fail(ErrorCode::Unsupported, "The GDB DAP backend is supported on Linux only");
-#else
-        if (!m_options.fs || !m_options.launcher) return fail(ErrorCode::InvalidArgument, "GDB has no process launcher");
-        auto path = debug::findGdbDap(*m_options.fs, m_options.gdbSetting ? m_options.gdbSetting() : std::string{});
-        if (!path) return std::unexpected(std::move(path.error()));
-        factory = debug::gdbDapAdapterFactory(*m_options.launcher, std::move(*path));
-#endif
+    if (!factory && adapterId == "lldb-dap" && !m_options.adapterFactory && m_options.nativeBackendSetting &&
+        m_options.nativeBackendSetting() == "frost-dbgeng") adapterId = "frost-dbgeng";
+    if (!factory && adapterId == "frost-dbgeng") {
+        if (!m_options.trust) return fail(ErrorCode::InvalidArgument, "The debugger has no trust store");
+        if (auto trusted = debug::validateDebugTargetTrust(*m_options.trust, target); !trusted) return trusted;
+        const auto pid = attachArguments.integerAt("processId").value_or(attachArguments.integerAt("pid").value_or(0));
+        if (pid <= 0) return fail(ErrorCode::InvalidArgument, "DbgEng attach requires a positive process ID");
+        std::vector<std::string> files;
+        if (m_options.natvisFiles) {
+            auto discovered = m_options.natvisFiles(target);
+            if (!discovered) return std::unexpected(std::move(discovered.error()));
+            files = std::move(*discovered);
+        }
+        const auto trustRevision = m_options.trust->snapshot(target.program).revision;
+        auto arguments = debug::dbgEngDapLaunchArguments({.native = target, .natvisFiles = files});
+        if (!arguments) return std::unexpected(std::move(arguments.error()));
+        arguments->set("processId", pid);
+        auto resolved = adapterFactory(nullptr, {}, "frost-dbgeng");
+        if (!resolved) return std::unexpected(std::move(resolved.error()));
+        auto started = startAdapterTarget(target, std::move(*resolved), std::move(*arguments), "frost-dbgeng",
+            debug::DebugTargetMode::Attach, false, [trust = m_options.trust, target, trustRevision]() -> Result<void> {
+                if (trust->snapshot(target.program).revision != trustRevision)
+                    return fail(ErrorCode::Untrusted, "Trust changed after Natvis admission");
+                return debug::validateDebugTargetTrust(*trust, target);
+            }, ownerAdmission);
+        return started;
     }
-    if (!factory && adapterId == "lldb-dap") {
-        auto resolved = adapterFactory(&osThreadIdsVerified);
-        if (!resolved)
-            return std::unexpected(resolved.error());
+    bool osThreadIdsVerified = false;
+    if (!factory && (adapterId == "gdb" || adapterId == "lldb-dap")) {
+        auto resolved = adapterFactory(&osThreadIdsVerified, {}, adapterId);
+        if (!resolved) return std::unexpected(std::move(resolved.error()));
         factory = std::move(*resolved);
     }
     const std::string displayAdapter =

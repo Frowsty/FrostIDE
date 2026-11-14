@@ -447,7 +447,7 @@ std::unique_ptr<DebugSession> DebugSession::start(AdapterFactory factory, rpc::J
             const auto self = weak.lock();
             if (!self)
                 return fail(ErrorCode::Cancelled, "The debug session ended before transmission");
-            if (command != "launch")
+            if (command != "launch" && command != "attach")
                 return {};
             {
                 LockGuard lock(self->mutex);

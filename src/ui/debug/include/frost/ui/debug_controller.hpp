@@ -92,7 +92,10 @@ struct DebugControllerOptions {
     io::IFileSystem* fs = nullptr;                 // For lldb-dap discovery and workspace.json.
     io::IProcessLauncher* launcher = nullptr;      // Starts lldb-dap.
     std::function<std::string()> lldbDapSetting{}; // tools.lldbDap.path; empty: "".
-    std::function<std::string()> nativeBackendSetting{}; // lldb-dap (default) or gdb (Linux).
+    std::function<std::string()> nativeBackendSetting{}; // lldb-dap (default), gdb (Linux), frost-dbgeng (Windows).
+    std::function<std::string()> dbgEngPathSetting{};
+    // GUI-only discovery admits project/dependency/user Natvis files before starting the adapter.
+    std::function<Result<std::vector<std::string>>(const debug::DebugTarget&)> natvisFiles{};
     std::function<std::string()> gdbSetting{}; // absolute user-installed GDB >=16.
     std::function<std::pair<std::string, std::string>()> sourceMapSetting{};
     // Overrides lldb-dap (tests: the fake-dap double). Empty: lldb-dap through `launcher`.
@@ -151,7 +154,8 @@ public:
                                                   rpc::Json arguments, std::string adapterId,
                                                   debug::DebugTargetMode mode = debug::DebugTargetMode::Launch,
                                                   bool readOnly = false,
-                                                  std::function<Result<void>()> launchAdmission = {});
+                                                  std::function<Result<void>()> launchAdmission = {},
+                                                  const std::function<bool()>& ownerAdmission = {});
     [[nodiscard]] bool readOnlySession() const noexcept { return m_session && m_session->readOnly(); }
     // The caller must finish the trusted managed build and verify assembly/PDB/source revisions.
     // Starts the supplied adapter through the same UI and session lifetime as native debugging.
@@ -353,7 +357,7 @@ private:
     bool validateCoreClrPath(std::string path, std::function<void(DebugController&)> approved);
 
     [[nodiscard]] Result<debug::AdapterFactory> adapterFactory(bool* nativeOsThreadIdsVerified = nullptr,
-                                                               debug::DapProcessOutput output = {});
+                                                               debug::DapProcessOutput output = {}, std::string_view backendOverride = {});
     [[nodiscard]] Result<void> startNativeTarget(const debug::DebugTarget& target, PrivateOutput output,
                                                  debug::DapProcessOutput processOutput,
                                                  std::optional<debug::NativeDebugPrivacy> privacy);
