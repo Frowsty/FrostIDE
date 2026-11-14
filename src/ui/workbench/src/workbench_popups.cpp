@@ -19,30 +19,41 @@
 namespace frost::ui {
 namespace {
 using IndexedFiles = std::vector<std::pair<std::string, std::string>>;
-sched::Task<Result<IndexedFiles>> indexedFiles(sched::IScheduler& scheduler,
-    std::shared_ptr<const nav::ProjectFiles> snapshot, std::vector<std::string> recents, std::string root,
-    std::string pattern, std::size_t limit, std::stop_token stop) {
-    co_await scheduler.schedule(sched::Lane::Interactive);
-    if (stop.stop_requested()) co_return fail(ErrorCode::Cancelled, "File search cancelled");
+Result<IndexedFiles> indexedFileCandidates(std::shared_ptr<const nav::ProjectFiles> snapshot,
+    const std::vector<std::string>& recents, const std::string& root, const std::string& pattern,
+    std::size_t limit, std::stop_token stop) {
+    if (stop.stop_requested()) return fail(ErrorCode::Cancelled, "File search cancelled");
     IndexedFiles candidates;
     std::vector<std::string> display;
     std::set<std::string> seen;
+    if (search::PathMatcher(pattern).empty()) for (const auto& path : recents) {
+        if (!seen.insert(path).second) continue;
+        candidates.emplace_back(path, root.empty() ? path : nav::relativeTo(root, path));
+        display.push_back(candidates.back().second);
+        if (candidates.size() == limit) break;
+    }
     for (const auto& hit : snapshot->searchIndex().query(pattern, snapshot->displayCandidates(), limit, stop)) {
         const auto& path = snapshot->candidates()[hit.index];
-        seen.insert(path);
+        if (!seen.insert(path).second) continue;
         candidates.emplace_back(path, snapshot->displayCandidates()[hit.index]);
         display.push_back(candidates.back().second);
     }
     for (const auto& path : recents) {
-        if (stop.stop_requested()) co_return fail(ErrorCode::Cancelled, "File search cancelled");
+        if (stop.stop_requested()) return fail(ErrorCode::Cancelled, "File search cancelled");
         if (!seen.insert(path).second) continue;
         candidates.emplace_back(path, root.empty() ? path : nav::relativeTo(root, path));
         display.push_back(candidates.back().second);
     }
     IndexedFiles out;
     for (const auto& hit : search::rankPaths(pattern, display, limit)) out.push_back(std::move(candidates[hit.index]));
-    if (stop.stop_requested()) co_return fail(ErrorCode::Cancelled, "File search cancelled");
-    co_return out;
+    if (stop.stop_requested()) return fail(ErrorCode::Cancelled, "File search cancelled");
+    return out;
+}
+sched::Task<Result<IndexedFiles>> indexedFiles(sched::IScheduler& scheduler,
+    std::shared_ptr<const nav::ProjectFiles> snapshot, std::vector<std::string> recents, std::string root,
+    std::string pattern, std::size_t limit, std::stop_token stop) {
+    co_await scheduler.schedule(sched::Lane::Interactive);
+    co_return indexedFileCandidates(std::move(snapshot), recents, root, pattern, limit, stop);
 }
 struct FilePopupQuery {
     std::stop_source stop;
@@ -471,8 +482,8 @@ ListPopup* Workbench::showSearchEverywhere(const QString& query, SearchEverywher
                                  cat == SearchEverywhereCategory::Files ? 50 : 8, fileQuery->stop.get_token())));
             } else {
                 // Small embedders/tests without a scheduler use the immutable index directly.
-                for (const auto& hit : m_files->searchIndex().query(location.pattern, m_files->displayCandidates(), 50))
-                    fileQuery->files.emplace_back(m_files->candidates()[hit.index], m_files->displayCandidates()[hit.index]);
+                if (auto hits = indexedFileCandidates(m_files, m_recentFiles.paths(), m_root, location.pattern,
+                        cat == SearchEverywhereCategory::Files ? 50 : 8, {})) fileQuery->files = std::move(*hits);
             }
         }
         fileQuery->publish();

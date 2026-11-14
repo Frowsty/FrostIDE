@@ -31,7 +31,10 @@ std::vector<RankedPath> PathIndex::query(std::string_view pattern, std::span<con
         return hits;
     }
     std::array<bool, 256> required{};
-    for (unsigned char c : pattern) if (c != ' ') required[fold(c)] = true;
+    // Matcher discards structural separators and boundary whitespace. Omitting these
+    // bytes is conservative even when an interior whitespace byte is significant.
+    for (unsigned char c : pattern)
+        if (c != '/' && c != '\\' && c != ' ' && c != '\t' && c != '\r' && c != '\n') required[fold(c)] = true;
     const std::vector<std::size_t>* smallest = nullptr;
     for (std::size_t c = 0; c < required.size(); ++c) if (required[c]) {
         if (m_postings[c].empty()) return hits;
