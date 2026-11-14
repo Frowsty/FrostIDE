@@ -38,6 +38,7 @@ Diagnostics:
     io::ProcessSpec spec;
     spec.executable = io::normalizePath(FROST_CLANG_BINARY).value();
     spec.arguments = {"--decode-tidy-fixes"};
+    spec.stdinMode = io::Stdio::Pipe;
     spec.killOnClose = true;
     auto output = io::runToCompletion(io::realProcessLauncher(), spec, yaml, 60s);
     ASSERT_TRUE(output) << output.error().describe();
