@@ -163,7 +163,11 @@ inline constexpr std::string_view lldbDapWindowsStepCommand =
 
 // Starts lldb-dap at `executable` through `launcher` for each session and connects a DAP client.
 // The launcher must outlive the sessions.
-[[nodiscard]] AdapterFactory lldbDapAdapterFactory(io::IProcessLauncher& launcher, std::string executable);
+[[nodiscard]] AdapterFactory lldbDapAdapterFactory(io::IProcessLauncher& launcher, std::string executable,
+                                                   DapProcessOutput output = {});
+struct NativeDebugPrivacy {
+    std::function<Result<void>()> launchAdmission;
+};
 
 /*
  * The one way a debug session starts: checks that every folder of target.trustRoots (or the
@@ -179,7 +183,7 @@ startDebugSession(const project::TrustStore& trust, const DebugTarget& target, A
 startDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
                   std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
                   std::vector<FunctionBreakpointLine> functionBreakpoints, std::vector<std::string> exceptionFilters,
-                  std::vector<std::string> throwTypes = {});
+                  std::vector<std::string> throwTypes = {}, std::optional<NativeDebugPrivacy> privacy = {});
 
 // Starts an already-running target using an explicitly supplied adapter and attach arguments.
 // The same trusted-root and absolute target checks apply; disconnect never terminates the host.

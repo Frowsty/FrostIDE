@@ -1,940 +1,418 @@
 // SPDX-License-Identifier: Apache-2.0
-// Authentication and byte preservation at the experimental Lua debug endpoint.
+// Contract-v1 standard DAP over a real loopback socket; actual engine VM oracles live in corpus tests.
 #include "frost/debug/lua_debug_adapter.hpp"
 #include "frost/debug/lua_debug_endpoint.hpp"
-#include "frost/rpc/framing.hpp"
-#include "frost/rpc/json.hpp"
 
 #include "debug_test_util.hpp"
+#include "lua_debug_peer.hpp"
 #include <gtest/gtest.h>
 
-#include <array>
-#include <atomic>
-#include <chrono>
 #include <future>
-#include <memory>
-#include <string>
-#include <thread>
-#include <utility>
-
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#include <sys/socket.h>
-
-#include <unistd.h>
-#endif
 
 namespace {
+using namespace frost;
+using namespace frost::debug;
+using namespace frost::debug::test;
 using namespace std::chrono_literals;
-#ifdef _WIN32
-using Socket = SOCKET;
-using SocketLength = int;
-constexpr Socket kInvalid = INVALID_SOCKET;
-void closeSocket(Socket socket) { closesocket(socket); }
-#else
-using Socket = int;
-using SocketLength = std::size_t;
-constexpr Socket kInvalid = -1;
-void closeSocket(Socket socket) { close(socket); }
-#endif
+auto deadline() { return std::chrono::steady_clock::now() + 3s; }
+using ReplyPromise = std::promise<Result<rpc::Json>>;
 
-void exerciseReservedPlayStop(bool preAdmission, bool refuse = false) {
-#ifdef _WIN32
-    WSADATA data{};
-    ASSERT_EQ(WSAStartup(MAKEWORD(2, 2), &data), 0);
-#endif
-    const Socket listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    ASSERT_NE(listener, kInvalid);
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    ASSERT_EQ(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
-    ASSERT_EQ(listen(listener, 1), 0);
-#ifdef _WIN32
-    int length = sizeof(address);
-#else
-    socklen_t length = sizeof(address);
-#endif
-    ASSERT_EQ(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length), 0);
-    std::atomic<bool> correct{false};
-    std::jthread server([&] {
-        fd_set ready;
-        FD_ZERO(&ready);
-        FD_SET(listener, &ready);
-        timeval timeout{5, 0};
-        if (select(static_cast<int>(listener + 1), &ready, nullptr, nullptr, &timeout) <= 0)
+TEST(LuaDebugEndpoint, FrozenRoleSeparatedHmacVectorsMatchEngineContract) {
+    // Public immutable vector from Frost-Tests/Data/Automation/ScriptDebugProtocol-v1.json.
+    ASSERT_GE(sodium_init(), 0);
+    const std::string client(64, 'e');
+    EXPECT_EQ(luaProof(kLuaCredential, luaTranscript("server", client)),
+              "eb4aa1f08dee5ce7457e4449b9742c88d6bf81eca40327e2aba937e0575fb239");
+    EXPECT_EQ(luaProof(kLuaCredential, luaTranscript("client", client)),
+              "689f8c8f67cf58c1891b7ba29b6cd261cb0c81c5df26dcae86b1002e11a9b4c9");
+}
+
+TEST(LuaDebugEndpoint, AuthenticatesAndLeavesActualNextDapFrameUnread) {
+    LuaDapPeer peer([](LuaDapPeer& peer) {
+        if (!peer.authenticate())
             return;
-        const Socket peer = accept(listener, nullptr, nullptr);
-        if (peer == kInvalid)
-            return;
-        frost::rpc::FrameDecoder decoder(2048);
-        std::array<char, 1024> buffer{};
-        int step = 0;
-        while (step < (refuse ? 5 : 4)) {
-            FD_ZERO(&ready);
-            FD_SET(peer, &ready);
-            timeval readTimeout{5, 0};
-            if (select(static_cast<int>(peer + 1), &ready, nullptr, nullptr, &readTimeout) <= 0)
-                break;
-            const int count = static_cast<int>(recv(peer, buffer.data(), static_cast<SocketLength>(buffer.size()), 0));
-            if (count <= 0)
-                break;
-            decoder.feed(std::string_view(buffer.data(), static_cast<std::size_t>(count)));
-            while (auto frame = decoder.next()) {
-                if (!*frame)
-                    break;
-                const auto request = frost::rpc::parseJson(**frame);
-                if (!request)
-                    break;
-                std::string response;
-                if (step == 0 && request->stringAt("token") == "0123456789abcdef0123456789abcdef")
-                    response = R"({"authenticated":true,"connectionGeneration":9})";
-                else if (step == 1 && request->stringAt("command") == "reservePlay" &&
-                         request->integerAt("requestId") == 1)
-                    response = R"({"requestId":1,"success":true,"operationId":42})";
-                else if (step == 2 && request->stringAt("command") == "armPlay" &&
-                         request->integerAt("requestId") == 2 && request->integerAt("operationId") == 42) {
-                    response = R"({"requestId":2,"success":true})";
-                } else if (step == 3 && request->stringAt("command") == "stopPlay" &&
-                           request->integerAt("requestId") == 3 && request->integerAt("operationId") == 42) {
-                    response = refuse         ? R"({"requestId":3,"success":false})"
-                               : preAdmission ? R"({"requestId":3,"success":true,"completed":true})"
-                                              : R"({"requestId":3,"success":true})";
-                    correct.store(true);
-                } else if (step == 4 && refuse && request->stringAt("command") == "continue" &&
-                           request->integerAt("requestId") == 4) {
-                    response = R"({"requestId":4,"success":true})";
-                } else
-                    break;
-                auto wire = frost::rpc::encodeFrame(response);
-                if (step == 3 && refuse)
-                    wire = frost::rpc::encodeFrame(R"({"event":"stopped","reason":"pause"})") + wire;
-                else if (step == 3 && !preAdmission)
-                    wire += frost::rpc::encodeFrame(R"({"event":"playStopped","operationId":41})") +
-                            frost::rpc::encodeFrame(R"({"event":"playStopped","operationId":42})") +
-                            frost::rpc::encodeFrame(R"({"event":"playStopped","operationId":42})");
-                else if (step == 4 && refuse)
-                    wire += frost::rpc::encodeFrame(R"({"event":"continued"})");
-                std::size_t offset = 0;
-                while (offset < wire.size()) {
-                    const int sent = static_cast<int>(
-                        send(peer, wire.data() + offset, static_cast<SocketLength>(wire.size() - offset), 0));
-                    if (sent <= 0)
-                        break;
-                    offset += static_cast<std::size_t>(sent);
-                }
-                if (offset != wire.size())
-                    break;
-                ++step;
-            }
-        }
-        closeSocket(peer);
+        peer.event("output", rpc::Json::object().set("category", "console").set("output", "peer-authenticated-output"));
+        (void)peer.receive();
     });
-    auto result = frost::debug::connectLuaDebugPlayEndpoint(ntohs(address.sin_port), "0123456789abcdef0123456789abcdef",
-                                                            std::chrono::steady_clock::now() + 3s);
-    ASSERT_TRUE(result);
-    EXPECT_EQ(result->connectionGeneration, 9U);
-    EXPECT_EQ(result->operationId, 42U);
-    EXPECT_EQ(result->nextWireRequest, 3);
-    std::atomic<int> terminated{0};
-    std::atomic<int> pausedEvents{0};
-    std::atomic<int> continuedEvents{0};
-    std::atomic<bool> closed{false};
-    frost::debug::DapHandlers handlers;
-    handlers.onEvent = [&](std::string_view event, const auto&) {
-        if (event == "terminated")
-            ++terminated;
-        if (event == "stopped")
-            ++pausedEvents;
-        if (event == "continued")
-            ++continuedEvents;
+    ASSERT_NE(peer.port, 0);
+    auto connection = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline());
+    ASSERT_TRUE(connection) << connection.error().describe();
+    std::promise<std::string> output;
+    auto observed = output.get_future();
+    DapHandlers handlers;
+    handlers.onEvent = [&output](std::string_view event, const rpc::Json& body) {
+        if (event == "output")
+            output.set_value(std::string(body.stringAt("output")));
     };
-    handlers.onClosed = [&](const auto&) { closed.store(true); };
-    auto factory =
-        frost::debug::luaDebugAdapterFactory(std::move(result->stream), result->nextWireRequest, result->operationId);
-    auto client = factory(std::move(handlers));
+    auto client = luaDebugAdapterFactory(std::move(*connection))(std::move(handlers));
     ASSERT_TRUE(client);
-    auto stopped = std::make_shared<std::promise<std::pair<bool, bool>>>();
-    auto stopResult = stopped->get_future();
-    (*client)->request("frost.stopPlay", frost::rpc::Json::object(), [stopped](auto reply) {
-        stopped->set_value({reply.has_value(), reply && reply->boolAt("completed").value_or(false)});
+    ASSERT_EQ(observed.wait_for(3s), std::future_status::ready);
+    EXPECT_EQ(observed.get(), "peer-authenticated-output");
+    (*client)->close();
+}
+
+TEST(LuaDebugEndpoint, StandardInitializeUsesSequenceThreeAndOnlyActualCapabilities) {
+    std::atomic<bool> correct{false};
+    LuaDapPeer peer([&](LuaDapPeer& peer) {
+        if (!peer.authenticate())
+            return;
+        auto initialize = peer.receive();
+        if (!initialize)
+            return;
+        correct = initialize->integerAt("seq") == 3 && initialize->stringAt("command") == "initialize";
+        peer.respond(*initialize, rpc::Json::object()
+                                      .set("supportsConditionalBreakpoints", false)
+                                      .set("supportsStepBack", false)
+                                      .set("peerMarker", "actual-capabilities"));
+        (void)peer.receive();
     });
-    ASSERT_EQ(stopResult.wait_for(5s), std::future_status::ready);
-    const auto outcome = stopResult.get();
-    EXPECT_EQ(outcome.first, !refuse);
-    EXPECT_EQ(outcome.second, preAdmission);
-    if (refuse) {
-        ASSERT_TRUE(frost::debug::test::waitUntil([&] { return pausedEvents.load() == 1; }));
-        auto resumed = std::make_shared<std::promise<bool>>();
-        auto resumeResult = resumed->get_future();
-        (*client)->request("continue", frost::rpc::Json::object(),
-                           [resumed](auto reply) { resumed->set_value(reply.has_value()); });
-        ASSERT_EQ(resumeResult.wait_for(5s), std::future_status::ready);
-        EXPECT_TRUE(resumeResult.get());
-    }
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return closed.load(); }));
-    EXPECT_EQ(terminated.load(), refuse ? 0 : 1);
-    EXPECT_EQ(pausedEvents.load(), refuse ? 1 : 0);
-    EXPECT_EQ(continuedEvents.load(), refuse ? 1 : 0);
+    auto connection = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline());
+    ASSERT_TRUE(connection);
+    auto client = luaDebugAdapterFactory(std::move(*connection))({});
+    ASSERT_TRUE(client);
+    auto promise = std::make_shared<ReplyPromise>();
+    auto reply = promise->get_future();
+    (*client)->request("initialize", rpc::Json::object(),
+                       [promise](auto result) { promise->set_value(std::move(result)); });
+    ASSERT_EQ(reply.wait_for(3s), std::future_status::ready);
+    auto result = reply.get();
+    ASSERT_TRUE(result);
+    EXPECT_EQ(result->stringAt("peerMarker"), "actual-capabilities");
+    EXPECT_EQ(result->boolAt("supportsConditionalBreakpoints"), false);
+    EXPECT_EQ(result->boolAt("supportsStepBack"), false);
     EXPECT_TRUE(correct.load());
     (*client)->close();
-    client->reset();
-    server.join();
-    closeSocket(listener);
-#ifdef _WIN32
-    WSACleanup();
-#endif
 }
 
-TEST(LuaDebugEndpoint, ReservesAndArmsExactPlayBeforeHandingOffWireIds) { exerciseReservedPlayStop(false); }
-
-TEST(LuaDebugEndpoint, PreAdmissionStopTerminatesWithoutAnEngineEvent) { exerciseReservedPlayStop(true); }
-
-TEST(LuaDebugEndpoint, RefusedPlayStopAllowsContinueWithoutTermination) { exerciseReservedPlayStop(false, true); }
-
-TEST(LuaDebugEndpoint, MapsReorderedWireRepliesToTheirDapRequests) {
-#ifdef _WIN32
-    WSADATA data{};
-    ASSERT_EQ(WSAStartup(MAKEWORD(2, 2), &data), 0);
-#endif
-    const Socket listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    ASSERT_NE(listener, kInvalid);
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    ASSERT_EQ(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
-    ASSERT_EQ(listen(listener, 1), 0);
-#ifdef _WIN32
-    int length = sizeof(address);
-#else
-    socklen_t length = sizeof(address);
-#endif
-    ASSERT_EQ(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length), 0);
-    std::atomic<std::int64_t> pauseWire{0};
-    std::atomic<std::int64_t> continueWire{0};
-    std::jthread server([&] {
-        fd_set ready;
-        FD_ZERO(&ready);
-        FD_SET(listener, &ready);
-        timeval timeout{5, 0};
-        if (select(static_cast<int>(listener + 1), &ready, nullptr, nullptr, &timeout) <= 0)
+TEST(LuaDebugEndpoint, MapsReorderedStandardRepliesToTheirDapRequests) {
+    LuaDapPeer peer([](LuaDapPeer& peer) {
+        if (!peer.authenticate())
             return;
-        const Socket peer = accept(listener, nullptr, nullptr);
-        if (peer == kInvalid)
+        auto first = peer.receive(), second = peer.receive();
+        if (!first || !second)
             return;
-        const auto sendAll = [peer](std::string_view wire) {
-            while (!wire.empty()) {
-                const int written =
-                    static_cast<int>(send(peer, wire.data(), static_cast<SocketLength>(wire.size()), 0));
-                if (written <= 0)
-                    return false;
-                wire.remove_prefix(static_cast<std::size_t>(written));
-            }
-            return true;
-        };
-        frost::rpc::FrameDecoder decoder(2048);
-        std::array<char, 1024> buffer{};
-        bool authenticated = false;
-        while (continueWire.load() == 0) {
-            FD_ZERO(&ready);
-            FD_SET(peer, &ready);
-            timeval readTimeout{5, 0};
-            if (select(static_cast<int>(peer + 1), &ready, nullptr, nullptr, &readTimeout) <= 0)
-                break;
-            const int count = static_cast<int>(recv(peer, buffer.data(), static_cast<SocketLength>(buffer.size()), 0));
-            if (count <= 0)
-                break;
-            decoder.feed(std::string_view(buffer.data(), static_cast<std::size_t>(count)));
-            while (auto frame = decoder.next()) {
-                if (!*frame)
-                    break;
-                const auto message = frost::rpc::parseJson(**frame);
-                if (!message)
-                    break;
-                if (!authenticated) {
-                    authenticated = true;
-                    const auto reply = frost::rpc::encodeFrame(R"({"authenticated":true})");
-                    if (!sendAll(reply))
-                        break;
-                } else if (message->stringAt("command") == "pause") {
-                    pauseWire.store(message->integerAt("requestId").value_or(0));
-                } else if (message->stringAt("command") == "continue") {
-                    continueWire.store(message->integerAt("requestId").value_or(0));
-                }
-            }
-        }
-        if (pauseWire.load() > 0 && continueWire.load() > 0) {
-            const auto failure = frost::rpc::Json::object().set("requestId", continueWire.load()).set("success", false);
-            const auto success = frost::rpc::Json::object().set("requestId", pauseWire.load()).set("success", true);
-            const auto wire = frost::rpc::encodeFrame(failure.dump()) + frost::rpc::encodeFrame(success.dump());
-            static_cast<void>(sendAll(wire));
-        }
-        closeSocket(peer);
+        peer.respond(*second, rpc::Json::object().set("value", 22));
+        peer.respond(*first, rpc::Json::object().set("value", 11));
+        (void)peer.receive();
     });
-    auto factory =
-        frost::debug::luaDebugAdapterFactory(ntohs(address.sin_port), "0123456789abcdef0123456789abcdef", 3s);
-    auto client = factory({});
+    auto connection = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline());
+    ASSERT_TRUE(connection);
+    auto client = luaDebugAdapterFactory(std::move(*connection))({});
     ASSERT_TRUE(client);
-    for (int i = 0; i < 3; ++i)
-        (*client)->request("threads", frost::rpc::Json::object(), [](auto) {});
-    auto paused = std::make_shared<std::promise<bool>>();
-    auto continued = std::make_shared<std::promise<bool>>();
-    auto pauseResult = paused->get_future();
-    auto continueResult = continued->get_future();
-    const auto pauseDap = (*client)->request("pause", frost::rpc::Json::object(),
-                                             [paused](auto result) { paused->set_value(result.has_value()); });
-    const auto continueDap = (*client)->request("continue", frost::rpc::Json::object(),
-                                                [continued](auto result) { continued->set_value(result.has_value()); });
-    EXPECT_GT(pauseDap, 2);
-    EXPECT_GT(continueDap, pauseDap);
-    ASSERT_EQ(pauseResult.wait_for(5s), std::future_status::ready);
-    ASSERT_EQ(continueResult.wait_for(5s), std::future_status::ready);
-    EXPECT_TRUE(pauseResult.get());
-    EXPECT_FALSE(continueResult.get());
-    EXPECT_EQ(pauseWire.load(), 2);
-    EXPECT_EQ(continueWire.load(), 3);
+    auto first = std::make_shared<ReplyPromise>(), second = std::make_shared<ReplyPromise>();
+    auto firstReply = first->get_future(), secondReply = second->get_future();
+    (*client)->request("threads", rpc::Json::object(), [first](auto result) { first->set_value(std::move(result)); });
+    (*client)->request("stackTrace", rpc::Json::object(),
+                       [second](auto result) { second->set_value(std::move(result)); });
+    ASSERT_EQ(firstReply.wait_for(3s), std::future_status::ready);
+    ASSERT_EQ(secondReply.wait_for(3s), std::future_status::ready);
+    auto a = firstReply.get(), b = secondReply.get();
+    ASSERT_TRUE(a);
+    ASSERT_TRUE(b);
+    EXPECT_EQ(a->integerAt("value"), 11);
+    EXPECT_EQ(b->integerAt("value"), 22);
     (*client)->close();
-    client->reset();
-    server.join();
-    closeSocket(listener);
-#ifdef _WIN32
-    WSACleanup();
-#endif
 }
 
-TEST(LuaDebugEndpoint, AuthenticatesAndLeavesTheNextFrameUnread) {
-#ifdef _WIN32
-    WSADATA data{};
-    ASSERT_EQ(WSAStartup(MAKEWORD(2, 2), &data), 0);
-#endif
-    const Socket listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    ASSERT_NE(listener, kInvalid);
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    ASSERT_EQ(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
-    ASSERT_EQ(listen(listener, 1), 0);
-#ifdef _WIN32
-    int length = sizeof(address);
-#else
-    socklen_t length = sizeof(address);
-#endif
-    ASSERT_EQ(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length), 0);
-    std::string received;
-    std::jthread server([&] {
-        fd_set set;
-        FD_ZERO(&set);
-        FD_SET(listener, &set);
-        timeval timeout{3, 0};
-        if (select(static_cast<int>(listener + 1), &set, nullptr, nullptr, &timeout) <= 0)
-            return;
-        const Socket peer = accept(listener, nullptr, nullptr);
-        if (peer == kInvalid)
-            return;
-        frost::rpc::FrameDecoder decoder(2048);
-        std::array<char, 2048> bytes{};
-        while (received.empty()) {
-            const int count = static_cast<int>(recv(peer, bytes.data(), static_cast<SocketLength>(bytes.size()), 0));
-            if (count <= 0)
-                break;
-            decoder.feed(std::string_view(bytes.data(), static_cast<std::size_t>(count)));
-            if (auto frame = decoder.next(); frame && *frame)
-                received = **frame;
-        }
-        if (!received.empty()) {
-            const std::string reply =
-                frost::rpc::encodeFrame(R"({"authenticated":true})") + frost::rpc::encodeFrame(R"({"event":"ready"})");
-            std::size_t sent = 0;
-            while (sent < reply.size()) {
-                const int count = static_cast<int>(
-                    send(peer, reply.data() + sent, static_cast<SocketLength>(reply.size() - sent), 0));
-                if (count <= 0)
-                    break;
-                sent += static_cast<std::size_t>(count);
-            }
-        }
-        closeSocket(peer);
-    });
-    auto stream = frost::debug::connectLuaDebugEndpoint(ntohs(address.sin_port), "0123456789abcdef0123456789abcdef",
-                                                        std::chrono::steady_clock::now() + 3s);
-    ASSERT_TRUE(stream);
-    frost::rpc::FrameDecoder decoder(1024);
-    std::array<char, 128> bytes{};
-    std::optional<frost::Result<std::string>> frame;
-    while (!frame) {
-        auto count = (*stream)->read(bytes);
-        ASSERT_TRUE(count);
-        ASSERT_GT(*count, 0U);
-        decoder.feed(std::string_view(bytes.data(), *count));
-        frame = decoder.next();
+TEST(LuaDebugEndpoint, MismatchedChallengeIdentityOrProofSendsNoClientProof) {
+    const std::vector<std::pair<std::string, rpc::Json>> cases{{"projectPath", "/different/project"},
+                                                               {"instanceId", std::string(32, '1')},
+                                                               {"generation", std::string(32, '2')},
+                                                               {"processId", 999},
+                                                               {"debugSessionId", std::string(32, '3')},
+                                                               {"serverProof", std::string(64, '0')},
+                                                               {"serverNonce", "short"},
+                                                               {"algorithm", "none"},
+                                                               {"protocolVersion", 2},
+                                                               {"clientNonce", std::string(64, '4')}};
+    for (const auto& [field, value] : cases) {
+        SCOPED_TRACE(field);
+        LuaDapPeer peer(
+            [&](LuaDapPeer& peer) { peer.authenticate([&](rpc::Json& challenge) { challenge.set(field, value); }); });
+        auto result = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline());
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error().code(), ErrorCode::PermissionDenied);
+        ASSERT_TRUE(waitUntil([&] { return peer.ended.load(); }, 3s));
+        EXPECT_EQ(peer.proofAttempts.load(), 0);
+        EXPECT_EQ(peer.received.load(), 1);
     }
-    ASSERT_TRUE(*frame);
-    EXPECT_EQ(**frame, R"({"event":"ready"})");
-    server.join();
-    auto request = frost::rpc::parseJson(received);
-    ASSERT_TRUE(request);
-    EXPECT_EQ(request->stringAt("token"), "0123456789abcdef0123456789abcdef");
-    closeSocket(listener);
-#ifdef _WIN32
-    WSACleanup();
-#endif
 }
 
-TEST(LuaDebugEndpoint, AdapterTranslatesSessionControlOverTheSocket) {
-#ifdef _WIN32
-    WSADATA data{};
-    ASSERT_EQ(WSAStartup(MAKEWORD(2, 2), &data), 0);
-#endif
-    const Socket listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    ASSERT_NE(listener, kInvalid);
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    ASSERT_EQ(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
-    ASSERT_EQ(listen(listener, 1), 0);
-#ifdef _WIN32
-    int length = sizeof(address);
-#else
-    socklen_t length = sizeof(address);
-#endif
-    ASSERT_EQ(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length), 0);
-    std::atomic<bool> continued{false};
-    std::atomic<std::int64_t> pauseWireId{0};
-    std::jthread server([&] {
-        fd_set set;
-        FD_ZERO(&set);
-        FD_SET(listener, &set);
-        timeval timeout{3, 0};
-        if (select(static_cast<int>(listener + 1), &set, nullptr, nullptr, &timeout) <= 0)
-            return;
-        const Socket peer = accept(listener, nullptr, nullptr);
-        if (peer == kInvalid)
-            return;
-        frost::rpc::FrameDecoder decoder(2048);
-        std::array<char, 1024> bytes{};
-        bool authenticated = false;
-        for (;;) {
-            const int count = static_cast<int>(recv(peer, bytes.data(), static_cast<SocketLength>(bytes.size()), 0));
-            if (count <= 0)
-                break;
-            decoder.feed(std::string_view(bytes.data(), static_cast<std::size_t>(count)));
-            while (auto frame = decoder.next()) {
-                if (!*frame)
-                    break;
-                auto message = frost::rpc::parseJson(**frame);
-                if (!message)
-                    break;
-                std::string response;
-                std::string extraEvent;
-                if (!authenticated) {
-                    authenticated = message->stringAt("token") == "0123456789abcdef0123456789abcdef";
-                    if (!authenticated)
-                        break;
-                    response = R"({"authenticated":true})";
-                } else if (message->stringAt("command") == "pause") {
-                    pauseWireId.store(message->integerAt("requestId").value_or(0));
-                    response = frost::rpc::Json::object()
-                                   .set("requestId", *message->integerAt("requestId"))
-                                   .set("success", true)
-                                   .dump();
-                    extraEvent = R"({"event":"stopped","reason":"pause"})";
-                } else if (message->stringAt("command") == "stackTrace") {
-                    response = frost::rpc::Json::object()
-                                   .set("requestId", *message->integerAt("requestId"))
-                                   .set("success", false)
-                                   .dump();
-                } else if (message->stringAt("command") == "continue") {
-                    continued.store(true);
-                    response = frost::rpc::Json::object()
-                                   .set("requestId", *message->integerAt("requestId"))
-                                   .set("success", true)
-                                   .dump();
-                    extraEvent = R"({"event":"continued"})";
-                }
-                const std::string wire = frost::rpc::encodeFrame(response) +
-                                         (extraEvent.empty() ? std::string() : frost::rpc::encodeFrame(extraEvent));
-                std::size_t sent = 0;
-                while (sent < wire.size()) {
-                    const int written = static_cast<int>(
-                        send(peer, wire.data() + sent, static_cast<SocketLength>(wire.size() - sent), 0));
-                    if (written <= 0)
-                        break;
-                    sent += static_cast<std::size_t>(written);
-                }
-            }
-        }
-        closeSocket(peer);
+TEST(LuaDebugEndpoint, AuthenticationAcknowledgmentCannotChangeTheProcessIdentity) {
+    LuaDapPeer peer([](LuaDapPeer& peer) {
+        peer.authenticate({}, [](rpc::Json& ack) { ack.set("processId", 999); });
+        (void)peer.receive();
     });
-    auto factory =
-        frost::debug::luaDebugAdapterFactory(ntohs(address.sin_port), "0123456789abcdef0123456789abcdef", 3s);
-    auto session = frost::debug::DebugSession::start(std::move(factory), frost::rpc::Json::object(), {}, {}, false,
-                                                     frost::debug::DebugTargetMode::Attach);
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return session->state() == frost::debug::DebugState::Running; }));
-    ASSERT_TRUE(session->pause());
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return session->state() == frost::debug::DebugState::Stopped; }));
-    EXPECT_EQ(pauseWireId.load(), 2);
-    auto rejected = std::make_shared<std::promise<bool>>();
-    auto rejectedResult = rejected->get_future();
-    session->evaluate("1 + 1", {}, "watch", [rejected](auto result) { rejected->set_value(!result); });
-    ASSERT_EQ(rejectedResult.wait_for(3s), std::future_status::ready);
-    EXPECT_TRUE(rejectedResult.get());
-    ASSERT_TRUE(session->continueRun());
-    ASSERT_TRUE(frost::debug::test::waitUntil(
-        [&] { return continued.load() && session->state() == frost::debug::DebugState::Running; }));
-    session->stop();
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return session->state() == frost::debug::DebugState::Ended; }));
-    session.reset();
-    server.join();
-    closeSocket(listener);
-#ifdef _WIN32
-    WSACleanup();
-#endif
+    auto result = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline());
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::PermissionDenied);
+    ASSERT_TRUE(waitUntil([&] { return peer.ended.load(); }, 3s));
+    EXPECT_EQ(peer.proofAttempts.load(), 1);
+    EXPECT_EQ(peer.received.load(), 2); // No initialize or any other standard command.
 }
 
-TEST(LuaDebugEndpoint, PrearmedPauseIsDeliveredAsAnEntryStop) {
-#ifdef _WIN32
-    WSADATA data{};
-    ASSERT_EQ(WSAStartup(MAKEWORD(2, 2), &data), 0);
-#endif
-    const Socket listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    ASSERT_NE(listener, kInvalid);
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    ASSERT_EQ(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
-    ASSERT_EQ(listen(listener, 1), 0);
-#ifdef _WIN32
-    int length = sizeof(address);
-#else
-    socklen_t length = sizeof(address);
-#endif
-    ASSERT_EQ(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length), 0);
-    std::atomic<bool> continued{false};
-    std::atomic<bool> latePauseSeen{false};
-    std::atomic<std::int64_t> prearmedPauseId{0};
-    std::jthread server([&] {
-        fd_set set;
-        FD_ZERO(&set);
-        FD_SET(listener, &set);
-        timeval timeout{3, 0};
-        if (select(static_cast<int>(listener + 1), &set, nullptr, nullptr, &timeout) <= 0)
-            return;
-        const Socket peer = accept(listener, nullptr, nullptr);
-        if (peer == kInvalid)
-            return;
-        frost::rpc::FrameDecoder decoder(2048);
-        std::array<char, 1024> bytes{};
-        bool authenticated = false;
-        for (;;) {
-            fd_set ready;
-            FD_ZERO(&ready);
-            FD_SET(peer, &ready);
-            timeval readTimeout{5, 0};
-            if (select(static_cast<int>(peer + 1), &ready, nullptr, nullptr, &readTimeout) <= 0)
-                break;
-            const int count = static_cast<int>(recv(peer, bytes.data(), static_cast<SocketLength>(bytes.size()), 0));
-            if (count <= 0)
-                break;
-            decoder.feed(std::string_view(bytes.data(), static_cast<std::size_t>(count)));
-            while (auto frame = decoder.next()) {
-                if (!*frame)
-                    break;
-                auto message = frost::rpc::parseJson(**frame);
-                if (!message)
-                    break;
-                std::string response;
-                std::string extraEvent;
-                if (!authenticated) {
-                    authenticated = message->stringAt("token") == "0123456789abcdef0123456789abcdef";
-                    if (!authenticated)
-                        break;
-                    response = R"({"authenticated":true})";
-                } else if (message->stringAt("command") == "armPause") {
-                    response = frost::rpc::Json::object()
-                                   .set("requestId", *message->integerAt("requestId"))
-                                   .set("success", true)
-                                   .dump();
-                } else if (message->stringAt("command") == "pause") {
-                    prearmedPauseId.store(message->integerAt("requestId").value_or(0));
-                    const std::string stopped = frost::rpc::encodeFrame(R"({"event":"stopped","reason":"entry"})");
-                    std::size_t offset = 0;
-                    while (offset < stopped.size()) {
-                        const int written = static_cast<int>(
-                            send(peer, stopped.data() + offset, static_cast<SocketLength>(stopped.size() - offset), 0));
-                        if (written <= 0)
-                            break;
-                        offset += static_cast<std::size_t>(written);
-                    }
-                    latePauseSeen.store(true);
-                    response = frost::rpc::Json::object()
-                                   .set("requestId", *message->integerAt("requestId"))
-                                   .set("success", false)
-                                   .dump();
-                } else if (message->stringAt("command") == "stackTrace") {
-                    response = frost::rpc::Json::object()
-                                   .set("requestId", *message->integerAt("requestId"))
-                                   .set("success", false)
-                                   .dump();
-                } else if (message->stringAt("command") == "continue") {
-                    continued.store(true);
-                    response = frost::rpc::Json::object()
-                                   .set("requestId", *message->integerAt("requestId"))
-                                   .set("success", true)
-                                   .dump();
-                    extraEvent = R"({"event":"continued"})";
-                }
-                const std::string wire = frost::rpc::encodeFrame(response) +
-                                         (extraEvent.empty() ? std::string() : frost::rpc::encodeFrame(extraEvent));
-                std::size_t sent = 0;
-                while (sent < wire.size()) {
-                    const int written = static_cast<int>(
-                        send(peer, wire.data() + sent, static_cast<SocketLength>(wire.size() - sent), 0));
-                    if (written <= 0)
-                        break;
-                    sent += static_cast<std::size_t>(written);
-                }
-            }
-        }
-        closeSocket(peer);
-    });
-    auto stream = frost::debug::connectLuaDebugEndpoint(ntohs(address.sin_port), "0123456789abcdef0123456789abcdef",
-                                                        std::chrono::steady_clock::now() + 3s, true);
-    ASSERT_TRUE(stream);
-    auto factory = frost::debug::luaDebugAdapterFactory(std::move(*stream));
-    auto duplicate = factory;
-    auto session = frost::debug::DebugSession::start(std::move(factory), frost::rpc::Json::object(), {}, {}, false,
-                                                     frost::debug::DebugTargetMode::Attach);
-    EXPECT_FALSE(duplicate({}));
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return session->state() == frost::debug::DebugState::Running; }));
-    ASSERT_TRUE(session->pause());
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return session->state() == frost::debug::DebugState::Stopped; }));
-    EXPECT_EQ(prearmedPauseId.load(), 2);
-    ASSERT_TRUE(session->stopInfo().has_value());
-    EXPECT_EQ(session->stopInfo()->reason, "entry");
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return latePauseSeen.load(); }));
-    auto rejected = std::make_shared<std::promise<bool>>();
-    auto rejectedResult = rejected->get_future();
-    session->evaluate("1 + 1", {}, "watch", [rejected](auto result) { rejected->set_value(!result); });
-    ASSERT_EQ(rejectedResult.wait_for(3s), std::future_status::ready);
-    EXPECT_TRUE(rejectedResult.get());
-    ASSERT_TRUE(session->continueRun());
-    ASSERT_TRUE(frost::debug::test::waitUntil(
-        [&] { return continued.load() && session->state() == frost::debug::DebugState::Running; }));
-    session->stop();
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return session->state() == frost::debug::DebugState::Ended; }));
-    session.reset();
-    server.join();
-    closeSocket(listener);
-#ifdef _WIN32
-    WSACleanup();
-#endif
+TEST(LuaDebugEndpoint, MissingAdmissionExpiredLeaseAndPreCancelledSetupSendNothing) {
+    LuaDapPeer peer([](LuaDapPeer&) {});
+    auto noAdmission = connectLuaDebugEndpoint(luaEndpoint(peer.port), {}, deadline());
+    ASSERT_FALSE(noAdmission);
+    EXPECT_EQ(noAdmission.error().code(), ErrorCode::InvalidArgument);
+    auto expired = luaEndpoint(peer.port);
+    expired.expiresAt = std::chrono::steady_clock::now() - 1ms;
+    auto timeout = connectLuaDebugEndpoint(std::move(expired), admitLua(), deadline());
+    ASSERT_FALSE(timeout);
+    EXPECT_EQ(timeout.error().code(), ErrorCode::Timeout);
+    std::stop_source stop;
+    stop.request_stop();
+    auto cancelled = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline(), stop.get_token());
+    ASSERT_FALSE(cancelled);
+    EXPECT_EQ(cancelled.error().code(), ErrorCode::Cancelled);
+    EXPECT_EQ(peer.accepted.load(), 0);
 }
 
-TEST(LuaDebugEndpoint, ImmediatePrearmedStopSurvivesHandshakeAndSessionStartup) {
-#ifdef _WIN32
-    WSADATA data{};
-    ASSERT_EQ(WSAStartup(MAKEWORD(2, 2), &data), 0);
-#endif
-    const Socket listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    ASSERT_NE(listener, kInvalid);
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    ASSERT_EQ(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
-    ASSERT_EQ(listen(listener, 1), 0);
-#ifdef _WIN32
-    int length = sizeof(address);
-#else
-    socklen_t length = sizeof(address);
-#endif
-    ASSERT_EQ(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length), 0);
-    std::atomic<bool> continued{false};
-    std::jthread server([&] {
-        fd_set set;
-        FD_ZERO(&set);
-        FD_SET(listener, &set);
-        timeval timeout{3, 0};
-        if (select(static_cast<int>(listener + 1), &set, nullptr, nullptr, &timeout) <= 0)
-            return;
-        const Socket peer = accept(listener, nullptr, nullptr);
-        if (peer == kInvalid)
-            return;
-        frost::rpc::FrameDecoder decoder(2048);
-        std::array<char, 1024> bytes{};
-        bool authenticated = false;
-        for (;;) {
-            fd_set ready;
-            FD_ZERO(&ready);
-            FD_SET(peer, &ready);
-            timeval readTimeout{5, 0};
-            if (select(static_cast<int>(peer + 1), &ready, nullptr, nullptr, &readTimeout) <= 0)
-                break;
-            const int count = static_cast<int>(recv(peer, bytes.data(), static_cast<SocketLength>(bytes.size()), 0));
-            if (count <= 0)
-                break;
-            decoder.feed(std::string_view(bytes.data(), static_cast<std::size_t>(count)));
-            while (auto frame = decoder.next()) {
-                if (!*frame)
-                    break;
-                auto message = frost::rpc::parseJson(**frame);
-                if (!message)
-                    break;
-                std::string response;
-                std::string extraEvent;
-                if (!authenticated) {
-                    authenticated = message->stringAt("token") == "0123456789abcdef0123456789abcdef";
-                    if (!authenticated)
-                        break;
-                    response = R"({"authenticated":true})";
-                } else if (message->stringAt("command") == "armPause") {
-                    response = frost::rpc::Json::object()
-                                   .set("requestId", *message->integerAt("requestId"))
-                                   .set("success", true)
-                                   .dump();
-                    extraEvent = R"({"event":"stopped","reason":"entry"})";
-                } else if (message->stringAt("command") == "stackTrace") {
-                    response = frost::rpc::Json::object()
-                                   .set("requestId", *message->integerAt("requestId"))
-                                   .set("success", false)
-                                   .dump();
-                } else if (message->stringAt("command") == "continue") {
-                    continued.store(true);
-                    response = frost::rpc::Json::object()
-                                   .set("requestId", *message->integerAt("requestId"))
-                                   .set("success", true)
-                                   .dump();
-                    extraEvent = R"({"event":"continued"})";
-                }
-                const std::string wire = frost::rpc::encodeFrame(response) +
-                                         (extraEvent.empty() ? std::string() : frost::rpc::encodeFrame(extraEvent));
-                std::size_t sent = 0;
-                while (sent < wire.size()) {
-                    const int written = static_cast<int>(
-                        send(peer, wire.data() + sent, static_cast<SocketLength>(wire.size() - sent), 0));
-                    if (written <= 0)
-                        break;
-                    sent += static_cast<std::size_t>(written);
-                }
-            }
-        }
-        closeSocket(peer);
+TEST(LuaDebugEndpoint, CancellationInterruptsAuthenticationWithoutSendingAProof) {
+    std::atomic<bool> challenged{false};
+    LuaDapPeer peer([&](LuaDapPeer& peer) {
+        if (peer.receive())
+            challenged = true;
+        (void)peer.receive(); // No reply: cancellation must wake the client's blocked auth read.
     });
-    auto stream = frost::debug::connectLuaDebugEndpoint(ntohs(address.sin_port), "0123456789abcdef0123456789abcdef",
-                                                        std::chrono::steady_clock::now() + 3s, true);
-    ASSERT_TRUE(stream);
-    auto factory = frost::debug::luaDebugAdapterFactory(std::move(*stream));
-    auto duplicate = factory;
-    auto session = frost::debug::DebugSession::start(std::move(factory), frost::rpc::Json::object(), {}, {}, false,
-                                                     frost::debug::DebugTargetMode::Attach);
-    EXPECT_FALSE(duplicate({}));
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return session->state() == frost::debug::DebugState::Stopped; }));
-    ASSERT_TRUE(session->stopInfo().has_value());
-    EXPECT_EQ(session->stopInfo()->reason, "entry");
-    ASSERT_TRUE(session->continueRun());
-    ASSERT_TRUE(frost::debug::test::waitUntil(
-        [&] { return continued.load() && session->state() == frost::debug::DebugState::Running; }));
-    session->stop();
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return session->state() == frost::debug::DebugState::Ended; }));
-    session.reset();
-    server.join();
-    closeSocket(listener);
-#ifdef _WIN32
-    WSACleanup();
-#endif
+    std::stop_source stop;
+    auto result = std::async(std::launch::async, [&] {
+        return connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline(), stop.get_token());
+    });
+    ASSERT_TRUE(waitUntil([&] { return challenged.load(); }, 1s));
+    stop.request_stop();
+    ASSERT_EQ(result.wait_for(1s), std::future_status::ready);
+    EXPECT_FALSE(result.get());
+    EXPECT_EQ(peer.proofAttempts.load(), 0);
 }
 
-TEST(LuaDebugEndpoint, DiscardingUnusedPreconnectedFactoryClosesThePeer) {
-#ifdef _WIN32
-    WSADATA data{};
-    ASSERT_EQ(WSAStartup(MAKEWORD(2, 2), &data), 0);
-#endif
-    const Socket listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    ASSERT_NE(listener, kInvalid);
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    ASSERT_EQ(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
-    ASSERT_EQ(listen(listener, 1), 0);
-#ifdef _WIN32
-    int length = sizeof(address);
-#else
-    socklen_t length = sizeof(address);
-#endif
-    ASSERT_EQ(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length), 0);
-    std::atomic<bool> disconnected{false};
-    std::jthread server([&] {
-        fd_set set;
-        FD_ZERO(&set);
-        FD_SET(listener, &set);
-        timeval timeout{3, 0};
-        if (select(static_cast<int>(listener + 1), &set, nullptr, nullptr, &timeout) <= 0)
+TEST(LuaDebugEndpoint, AbsoluteAuthenticationDeadlineIncludesPartialHeaderDribble) {
+    LuaDapPeer peer([](LuaDapPeer& peer) {
+        if (!peer.receive())
             return;
-        const Socket peer = accept(listener, nullptr, nullptr);
-        if (peer == kInvalid)
-            return;
-        frost::rpc::FrameDecoder decoder(2048);
-        std::array<char, 1024> bytes{};
-        while (true) {
-            FD_ZERO(&set);
-            FD_SET(peer, &set);
-            timeout = {5, 0};
-            if (select(static_cast<int>(peer + 1), &set, nullptr, nullptr, &timeout) <= 0)
-                break;
-            const int count = static_cast<int>(recv(peer, bytes.data(), static_cast<SocketLength>(bytes.size()), 0));
-            if (count <= 0) {
-                disconnected.store(true);
-                break;
-            }
-            decoder.feed(std::string_view(bytes.data(), static_cast<std::size_t>(count)));
-            if (auto frame = decoder.next(); frame && *frame) {
-                const std::string reply = frost::rpc::encodeFrame(R"({"authenticated":true})");
-                std::size_t sent = 0;
-                while (sent < reply.size()) {
-                    const int written = static_cast<int>(
-                        send(peer, reply.data() + sent, static_cast<SocketLength>(reply.size() - sent), 0));
-                    if (written <= 0)
-                        break;
-                    sent += static_cast<std::size_t>(written);
-                }
-            }
-        }
-        closeSocket(peer);
+        peer.sendBytes("Content-Length: ");
+        (void)peer.receive();
     });
-    auto stream = frost::debug::connectLuaDebugEndpoint(ntohs(address.sin_port), "0123456789abcdef0123456789abcdef",
-                                                        std::chrono::steady_clock::now() + 3s);
-    ASSERT_TRUE(stream);
+    const auto started = std::chrono::steady_clock::now();
+    auto result = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), started + 150ms);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::Timeout);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, 1s);
+    EXPECT_EQ(peer.proofAttempts.load(), 0);
+}
+
+TEST(LuaDebugEndpoint, RevocationClosesBlockedAuthenticatedTransport) {
+    LuaDapPeer peer([](LuaDapPeer& peer) {
+        if (peer.authenticate())
+            (void)peer.receive();
+    });
+    std::stop_source stop;
+    auto connection = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline(), stop.get_token());
+    ASSERT_TRUE(connection);
+    auto transport = std::move(*connection).takeTransport();
+    auto blocked = std::async(std::launch::async, [&] {
+        std::array<char, 256> bytes{};
+        return transport->read(bytes);
+    });
+    stop.request_stop();
+    ASSERT_EQ(blocked.wait_for(1s), std::future_status::ready);
+    auto closed = blocked.get();
+    EXPECT_TRUE(!closed || *closed == 0);
+}
+
+TEST(LuaDebugEndpoint, FreshAdmissionRefusalSendsZeroTargetFrames) {
+    std::atomic<bool> admitted{true};
+    LuaDapPeer peer([](LuaDapPeer& peer) {
+        if (peer.authenticate())
+            (void)peer.receive();
+    });
+    auto connection = connectLuaDebugEndpoint(
+        luaEndpoint(peer.port),
+        [&](const LuaDebugIdentity&, std::string_view) -> Result<void> {
+            if (!admitted)
+                return fail(ErrorCode::Untrusted, "revoked");
+            return {};
+        },
+        deadline());
+    ASSERT_TRUE(connection);
+    auto transport = std::move(*connection).takeTransport();
+    admitted = false;
+    const auto request = rpc::Json::object()
+                             .set("seq", 3)
+                             .set("type", "request")
+                             .set("command", "evaluate")
+                             .set("arguments", rpc::Json::object().set("expression", "danger()"));
+    auto result = transport->write(rpc::encodeFrame(request.dump()));
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::Untrusted);
+    ASSERT_TRUE(waitUntil([&] { return peer.ended.load(); }, 3s));
+    EXPECT_EQ(peer.received.load(), 2);
+}
+
+TEST(LuaDebugEndpoint, DiscardingUnusedAuthenticatedFactoryClosesThePeer) {
+    LuaDapPeer peer([](LuaDapPeer& peer) {
+        if (peer.authenticate())
+            (void)peer.receive();
+    });
+    auto connection = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline());
+    ASSERT_TRUE(connection);
     {
-        auto factory = frost::debug::luaDebugAdapterFactory(std::move(*stream));
-        auto copy = factory;
-        factory = {};
-        EXPECT_TRUE(static_cast<bool>(copy));
-        EXPECT_FALSE(disconnected.load());
+        auto unused = luaDebugAdapterFactory(std::move(*connection));
     }
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return disconnected.load(); }));
-    server.join();
-    closeSocket(listener);
-#ifdef _WIN32
-    WSACleanup();
-#endif
+    ASSERT_TRUE(waitUntil([&] { return peer.ended.load(); }, 3s));
+    EXPECT_EQ(peer.received.load(), 2);
 }
 
-TEST(LuaDebugEndpoint, MalformedEngineFrameDisconnectsWhileStoppedEvenWhenSessionIsRetained) {
-#ifdef _WIN32
-    WSADATA data{};
-    ASSERT_EQ(WSAStartup(MAKEWORD(2, 2), &data), 0);
-#endif
-    const Socket listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    ASSERT_NE(listener, kInvalid);
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    ASSERT_EQ(bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
-    ASSERT_EQ(listen(listener, 1), 0);
-#ifdef _WIN32
-    int length = sizeof(address);
-#else
-    socklen_t length = sizeof(address);
-#endif
-    ASSERT_EQ(getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length), 0);
-    std::atomic<bool> inject{false};
-    std::atomic<bool> disconnected{false};
-    std::jthread server([&] {
-        fd_set set;
-        FD_ZERO(&set);
-        FD_SET(listener, &set);
-        timeval timeout{3, 0};
-        if (select(static_cast<int>(listener + 1), &set, nullptr, nullptr, &timeout) <= 0)
+TEST(LuaDebugEndpoint, MalformedOrOversizedStandardFrameDisconnectsRetainedClient) {
+    for (const auto& malformed : {"Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}", "Content-Length: 1048577\r\n\r\n",
+                                  "Content-Length: 2\r\n\r\n[]"}) {
+        SCOPED_TRACE(malformed);
+        LuaDapPeer peer([&](LuaDapPeer& peer) {
+            if (!peer.authenticate())
+                return;
+            peer.sendBytes(malformed);
+            (void)peer.receive();
+        });
+        auto connection = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline());
+        ASSERT_TRUE(connection);
+        std::atomic<bool> closed{false};
+        DapHandlers handlers;
+        handlers.onClosed = [&](const auto&) { closed = true; };
+        auto client = luaDebugAdapterFactory(std::move(*connection))(std::move(handlers));
+        ASSERT_TRUE(client);
+        ASSERT_TRUE(waitUntil([&] { return closed.load(); }, 3s));
+        EXPECT_EQ(peer.received.load(), 2);
+        (*client)->close();
+    }
+}
+
+TEST(LuaDebugEndpoint, DisconnectObserverRequiresActualMatchingAcknowledgment) {
+    for (const bool accept : {true, false}) {
+        SCOPED_TRACE(accept);
+        LuaDapPeer peer([&](LuaDapPeer& peer) {
+            if (!peer.authenticate())
+                return;
+            auto request = peer.receive();
+            if (request && request->stringAt("command") == "disconnect")
+                peer.respond(*request, rpc::Json::object(), accept);
+            (void)peer.receive();
+        });
+        auto observed = std::make_shared<std::promise<Result<void>>>();
+        auto detached = observed->get_future();
+        LuaDebugTransportCallbacks callbacks;
+        callbacks.onDetached = [observed](auto result) { observed->set_value(std::move(result)); };
+        auto connection =
+            connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline(), {}, std::move(callbacks));
+        ASSERT_TRUE(connection);
+        auto client = luaDebugAdapterFactory(std::move(*connection))({});
+        ASSERT_TRUE(client);
+        (*client)->request("disconnect", rpc::Json::object().set("terminateDebuggee", false), [](auto) {});
+        ASSERT_EQ(detached.wait_for(3s), std::future_status::ready);
+        EXPECT_EQ(detached.get().has_value(), accept);
+        (*client)->close();
+    }
+}
+
+TEST(LuaDebugEndpoint, CredentialNeverReachesDapOutputOrProtocolErrors) {
+    LuaDapPeer peer([](LuaDapPeer& peer) {
+        if (!peer.authenticate())
             return;
-        const Socket peer = accept(listener, nullptr, nullptr);
-        if (peer == kInvalid)
-            return;
-        frost::rpc::FrameDecoder decoder(2048);
-        std::array<char, 1024> bytes{};
-        bool authenticated = false;
-        bool paused = false;
-        while (!paused) {
-            const int count = static_cast<int>(recv(peer, bytes.data(), static_cast<SocketLength>(bytes.size()), 0));
-            if (count <= 0)
-                break;
-            decoder.feed(std::string_view(bytes.data(), static_cast<std::size_t>(count)));
-            while (auto frame = decoder.next()) {
-                if (!*frame)
-                    break;
-                auto message = frost::rpc::parseJson(**frame);
-                if (!message)
-                    break;
-                std::string response;
-                std::string extraEvent;
-                if (!authenticated) {
-                    authenticated = message->stringAt("token") == "0123456789abcdef0123456789abcdef";
-                    response = R"({"authenticated":true})";
-                } else if (message->stringAt("command") == "pause") {
-                    paused = true;
-                    response = frost::rpc::Json::object()
-                                   .set("requestId", *message->integerAt("requestId"))
-                                   .set("success", true)
-                                   .dump();
-                    extraEvent = R"({"event":"stopped","reason":"pause"})";
-                }
-                const std::string wire = frost::rpc::encodeFrame(response) +
-                                         (extraEvent.empty() ? std::string() : frost::rpc::encodeFrame(extraEvent));
-                std::size_t sent = 0;
-                while (sent < wire.size()) {
-                    const int written = static_cast<int>(
-                        send(peer, wire.data() + sent, static_cast<SocketLength>(wire.size() - sent), 0));
-                    if (written <= 0)
-                        break;
-                    sent += static_cast<std::size_t>(written);
-                }
-            }
-        }
-        const auto deadline = std::chrono::steady_clock::now() + 3s;
-        while (paused && !inject.load() && std::chrono::steady_clock::now() < deadline)
-            std::this_thread::yield();
-        if (paused && inject.load()) {
-            const std::string invalid = frost::rpc::encodeFrame("not-json");
-            std::size_t sent = 0;
-            while (sent < invalid.size()) {
-                const int written = static_cast<int>(
-                    send(peer, invalid.data() + sent, static_cast<SocketLength>(invalid.size() - sent), 0));
-                if (written <= 0)
-                    break;
-                sent += static_cast<std::size_t>(written);
-            }
-            const auto closeDeadline = std::chrono::steady_clock::now() + 3s;
-            while (std::chrono::steady_clock::now() < closeDeadline) {
-                FD_ZERO(&set);
-                FD_SET(peer, &set);
-                timeout = timeval{0, 50000};
-                if (select(static_cast<int>(peer + 1), &set, nullptr, nullptr, &timeout) <= 0)
-                    continue;
-                if (recv(peer, bytes.data(), static_cast<SocketLength>(bytes.size()), 0) <= 0) {
-                    disconnected.store(true);
-                    break;
-                }
-                // A stack request can already be queued when malformed input arrives; drain it before EOF.
-            }
-        }
-        closeSocket(peer);
+        peer.event("output", rpc::Json::object()
+                                 .set("output", std::string(kLuaCredential))
+                                 .set(std::string(kLuaCredential), "secret-key-name"));
+        (void)peer.receive();
     });
-    auto factory =
-        frost::debug::luaDebugAdapterFactory(ntohs(address.sin_port), "0123456789abcdef0123456789abcdef", 3s);
-    auto session = frost::debug::DebugSession::start(std::move(factory), frost::rpc::Json::object(), {}, {}, false,
-                                                     frost::debug::DebugTargetMode::Attach);
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return session->state() == frost::debug::DebugState::Running; }));
-    ASSERT_TRUE(session->pause());
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return session->state() == frost::debug::DebugState::Stopped; }));
-    inject.store(true);
-    ASSERT_TRUE(frost::debug::test::waitUntil([&] { return disconnected.load(); }));
-    EXPECT_TRUE(frost::debug::test::waitUntil([&] { return session->state() == frost::debug::DebugState::Ended; }));
-    server.join();
-    session.reset();
-    closeSocket(listener);
-#ifdef _WIN32
-    WSACleanup();
-#endif
+    auto connection = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline());
+    ASSERT_TRUE(connection);
+    std::promise<std::string> output;
+    auto observed = output.get_future();
+    DapHandlers handlers;
+    handlers.onEvent = [&](std::string_view, const rpc::Json& body) { output.set_value(body.dump()); };
+    auto client = luaDebugAdapterFactory(std::move(*connection))(std::move(handlers));
+    ASSERT_TRUE(client);
+    ASSERT_EQ(observed.wait_for(3s), std::future_status::ready);
+    const auto text = observed.get();
+    EXPECT_EQ(text.find(kLuaCredential), std::string::npos);
+    EXPECT_NE(text.find("[redacted]"), std::string::npos);
+    (*client)->close();
+}
+
+TEST(LuaDebugEndpoint, NativeBusyAdmissionRefusesLocallyWithoutClosingAuthenticatedPeer) {
+    std::atomic<bool> nativePaused{false};
+    LuaDapPeer peer([](LuaDapPeer& peer) {
+        if (!peer.authenticate())
+            return;
+        const auto request = peer.receive();
+        if (request)
+            peer.respond(*request, rpc::Json::object().set("marker", "after-native-continued"));
+        (void)peer.receive();
+    });
+    auto connection = connectLuaDebugEndpoint(
+        luaEndpoint(peer.port),
+        [&](const LuaDebugIdentity&, std::string_view command) -> Result<void> {
+            if (nativePaused && command != "<receive>")
+                return fail(ErrorCode::Busy, "native adapter is actually stopped");
+            return {};
+        },
+        deadline());
+    ASSERT_TRUE(connection);
+    auto client = luaDebugAdapterFactory(std::move(*connection))({});
+    ASSERT_TRUE(client);
+    nativePaused = true;
+    auto refused = std::make_shared<ReplyPromise>();
+    auto refusedReply = refused->get_future();
+    (*client)->request("evaluate", rpc::Json::object(),
+                       [refused](auto reply) { refused->set_value(std::move(reply)); });
+    ASSERT_EQ(refusedReply.wait_for(3s), std::future_status::ready);
+    auto refusal = refusedReply.get();
+    ASSERT_FALSE(refusal);
+    EXPECT_EQ(refusal.error().code(), ErrorCode::Busy);
+    EXPECT_FALSE((*client)->closed());
+    EXPECT_EQ((*client)->sentMessageCount(), 0U);
+    EXPECT_EQ(peer.received.load(), 2); // Both auth messages only; no evaluate bytes.
+    nativePaused = false;
+    auto admitted = std::make_shared<ReplyPromise>();
+    auto admittedReply = admitted->get_future();
+    (*client)->request("threads", rpc::Json::object(),
+                       [admitted](auto reply) { admitted->set_value(std::move(reply)); });
+    ASSERT_EQ(admittedReply.wait_for(3s), std::future_status::ready);
+    auto result = admittedReply.get();
+    ASSERT_TRUE(result);
+    EXPECT_EQ(result->stringAt("marker"), "after-native-continued");
+    (*client)->close();
+}
+
+TEST(LuaDebugEndpoint, AuthenticatedFactoryCannotBeAdoptedTwice) {
+    LuaDapPeer peer([](LuaDapPeer& peer) {
+        if (peer.authenticate())
+            (void)peer.receive();
+    });
+    auto connection = connectLuaDebugEndpoint(luaEndpoint(peer.port), admitLua(), deadline());
+    ASSERT_TRUE(connection);
+    auto factory = luaDebugAdapterFactory(std::move(*connection));
+    const auto copy = factory;
+    auto first = factory({});
+    ASSERT_TRUE(first);
+    auto second = copy({});
+    ASSERT_FALSE(second);
+    EXPECT_EQ(second.error().code(), ErrorCode::Busy);
+    EXPECT_EQ(peer.received.load(), 2);
+    (*first)->close();
+}
+
+TEST(LuaDebugEndpoint, RetiredExperimentalEntryPointsRefuseWithoutConnecting) {
+    LuaDapPeer peer([](LuaDapPeer&) {});
+    auto endpoint = connectLuaDebugEndpoint(peer.port, "legacy-token", deadline());
+    auto play = connectLuaDebugPlayEndpoint(peer.port, "legacy-token", deadline());
+    auto factory = luaDebugAdapterFactory(peer.port, "legacy-token", 100ms, true);
+    auto client = factory({});
+    ASSERT_FALSE(endpoint);
+    ASSERT_FALSE(play);
+    ASSERT_FALSE(client);
+    EXPECT_EQ(endpoint.error().code(), ErrorCode::Unsupported);
+    EXPECT_EQ(play.error().code(), ErrorCode::Unsupported);
+    EXPECT_EQ(client.error().code(), ErrorCode::Unsupported);
+    EXPECT_EQ(peer.accepted.load(), 0);
 }
 } // namespace

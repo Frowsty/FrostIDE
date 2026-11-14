@@ -1,21 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # stage.ps1: builds FrostIDE (Release or RelWithDebInfo) and stages a folder that runs on its own
-# (W1, ADR 0044): frost.exe and frost_app.dll, the crash handler, the baked resources, the Qt
+# (W1, ADR 0044): frost.exe, frost_app.dll and the frost-dbgeng-dap.exe sidecar, the crash handler,
+# the baked resources, the Qt
 # runtime windeployqt picks for frost_app.dll, the .NET Framework ProjectHost (which uses installed
 # Visual Studio MSBuild), and the platform plugins (including the build's offscreen
 # plugin too, for --selftest), and the licence files (LICENSE, NOTICE, the vendored sources'
 # LICENSE files under licenses\). Release and RelWithDebInfo (and Debug with -BundleTools) also
 # bundle the pinned clangd with its resource directory, lldb-dap, LuaLS (ADR 0079), the managed
 # language server and the managed debugger; a missing one fails the stage (FND-13). Next to the
-# folder, <Destination>-symbols.zip holds frost.exe and frost_app.dll with the PDBs whose GUID and
+# folder, <Destination>-symbols.zip holds all three IDE images with the PDBs whose GUID and
 # age match them (tools/symbolize.py archive; symbolize.py --symbol-archive reads it). Windows only;
 # tools/stage.sh stages a Linux build.
 # AddressSanitizer builds also carry the pinned runtime DLL, checked against the build's sidecar.
 #
 # Every check that can fail on the inputs (the build tree, the ProjectHost, the resources, the HTTPS
-# backend, the dependency notices, the bundled tools, the PDB identities of frost.exe and
-# frost_app.dll) runs before the destination is touched. A failure after that, whether a check of
+# backend, the dependency notices, the bundled tools, the PDB identities of frost.exe,
+# frost_app.dll and frost-dbgeng-dap.exe) runs before the destination is touched. A failure after
+# that, whether a check of
 # the staged folder or an unexpected cmdlet error (a locked or unreadable file, a full disk: the
 # script-scope trap), removes the destination and symbol archive this run created, so a failed
 # stage never leaves a partial folder behind (R0-close item 7).
@@ -140,7 +142,7 @@ if (-not $SkipBuild) {
 }
 
 $binDir = Join-Path $BuildDir "src\app\$Config"
-foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
+foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $binDir $name))) { Fail "the build tree has no $name in $binDir" }
 }
 $projectHost = Join-Path $binDir 'project-host'
@@ -231,17 +233,17 @@ if (-not [System.IO.Path]::IsPathRooted($Python) -or -not (Test-Path -LiteralPat
 }
 $symbolArchive = $Destination.TrimEnd('\', '/') + '-symbols.zip'
 
-# The PDB identities, before the destination is touched: the staged frost.exe and frost_app.dll are
+# The PDB identities, before the destination is touched: the staged IDE images are
 # copies of the build tree's, so a stale or missing PDB fails here (step 7 writes the archive).
 $previous = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 $out = & $Python -I (Join-Path $PSScriptRoot 'symbolize.py') archive --stage $binDir --pdb-dir $binDir `
-    --check --require frost.exe --require frost_app.dll 2>&1
+    --check --require frost.exe --require frost_app.dll --require frost-dbgeng-dap.exe 2>&1
 $code = $LASTEXITCODE
 $ErrorActionPreference = $previous
 if ($code -ne 0) {
     $out | ForEach-Object { Write-Host "stage: symbols: $_" }
-    Fail "the build tree's frost.exe and frost_app.dll have no matching PDBs ($code)"
+    Fail "the build tree's IDE images have no matching PDBs ($code)"
 }
 
 # 2. A fresh destination (and symbol archive).
@@ -264,7 +266,7 @@ $script:ownedArchive = $symbolArchive
 if (-not $script:destinationExisted) { [void][System.IO.Directory]::CreateDirectory($Destination) }
 
 # 3. FrostIDE's own files.
-foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
+foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
 }
 if ($asanRuntime) {
@@ -281,7 +283,7 @@ foreach ($name in @('ProjectHostVsProbe.exe', 'ProjectHostVsProbe.exe.config')) 
     if ($sourceHash -ne $stagedHash) { Fail "the staged ProjectHost $name differs from the build output" }
 }
 if ($Config -ne 'Release') {
-    foreach ($name in @('frost.pdb', 'frost_app.pdb')) {
+    foreach ($name in @('frost.pdb', 'frost_app.pdb', 'frost-dbgeng-dap.pdb')) {
         $pdb = Join-Path $binDir $name
         if (Test-Path -LiteralPath $pdb) { Copy-Item -LiteralPath $pdb -Destination $Destination }
     }
@@ -370,7 +372,7 @@ if ($bundle) { Copy-Item -LiteralPath (Join-Path $lualsSource 'LICENSE') -Destin
 
 # 6. The checks.
 $plugin = if ($Config -eq 'Debug') { 'platforms\qwindowsd.dll' } else { 'platforms\qwindows.dll' }
-foreach ($name in @('frost.exe', 'frost_app.dll', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe', 'LICENSE', 'NOTICE', $plugin)) {
+foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe', 'LICENSE', 'NOTICE', $plugin)) {
     if (-not (Test-Path -LiteralPath (Join-Path $Destination $name))) { Fail "the staged folder has no $name" }
 }
 if ((Get-FileHash -LiteralPath $tlsSource -Algorithm SHA256).Hash -ne
@@ -384,8 +386,9 @@ if ($asanRuntime) {
         Fail 'the staged ASan runtime differs from the pinned SDK runtime'
     }
 }
-# The staged ConPTY pair must be byte-identical to the pair the build deployed.
-foreach ($name in @('conpty.dll', 'OpenConsole.exe')) {
+# The staged ConPTY pair and own DbgEng adapter must match the build output exactly.
+# DbgEng itself is System32-only: no debugger DLL is copied into this allowlisted payload.
+foreach ($name in @('conpty.dll', 'OpenConsole.exe', 'frost-dbgeng-dap.exe')) {
     $sourceHash = (Get-FileHash -LiteralPath (Join-Path $binDir $name) -Algorithm SHA256).Hash
     $stagedHash = (Get-FileHash -LiteralPath (Join-Path $Destination $name) -Algorithm SHA256).Hash
     if ($sourceHash -ne $stagedHash) { Fail "the staged $name differs from the build output" }
@@ -409,12 +412,12 @@ if ($bundle) {
     }
 }
 
-# 7. The symbol archive: frost.exe and frost_app.dll must each have the PDB their RSDS record names,
+# 7. The symbol archive: all three IDE images must have the PDB their RSDS record names,
 # with the same GUID and age, in the build tree.
 $previous = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 $out = & $Python -I (Join-Path $PSScriptRoot 'symbolize.py') archive --stage $Destination --pdb-dir $binDir `
-    --output $symbolArchive --require frost.exe --require frost_app.dll 2>&1
+    --output $symbolArchive --require frost.exe --require frost_app.dll --require frost-dbgeng-dap.exe 2>&1
 $code = $LASTEXITCODE
 $ErrorActionPreference = $previous
 $out | ForEach-Object { Write-Host "stage: symbols: $_" }

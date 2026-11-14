@@ -37,6 +37,10 @@ std::optional<T> parseDecimal(std::string_view digits) noexcept {
 
 } // namespace
 
+Result<std::string> IFileSystem::readFileSnapshot(std::string_view, std::size_t) {
+    return fail(ErrorCode::Unsupported, "bounded stable snapshots are not supported by this file system");
+}
+
 Result<void> IFileSystem::writeFileAtomicWithMtime(std::string_view, std::string_view,
                                                    std::filesystem::file_time_type) {
     return fail(ErrorCode::Unsupported, "Atomic timestamped writes are not supported by this file system");

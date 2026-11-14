@@ -22,6 +22,7 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QTabWidget>
 
 #include <chrono>
 #include <format>
@@ -309,7 +310,46 @@ TEST(UnitTestsWindow, GutterRunsExactlyOneRealGoogleTestCaseAndDebugStopsAtItsBr
     });
     ASSERT_NE(testCase, cases.end()) << "the real ctest list's exact Google Test filter backs this gutter case";
 
-    ASSERT_TRUE(frost::app::runGutterTestCase(w.root, *testCase).has_value());
+    auto* providers = qobject_cast<QTabWidget*>(w.root);
+    ASSERT_NE(providers, nullptr);
+    ASSERT_EQ(providers->count(), 2);
+    QWidget* ctest = providers->widget(0);
+    ASSERT_NE(ctest, nullptr);
+    providers->setCurrentIndex(1); // CTest routing must not depend on the visible engine tab.
+    const auto directCases = frost::app::unitTestsGutterCasesForFile(ctest, sourcePath, sourceText.str());
+    ASSERT_EQ(directCases.size(), cases.size());
+    for (std::size_t index = 0; index < cases.size(); ++index) {
+        EXPECT_EQ(directCases[index].test.name, cases[index].test.name);
+        EXPECT_EQ(directCases[index].caseName, cases[index].caseName);
+        EXPECT_EQ(directCases[index].line, cases[index].line);
+    }
+    QWidget impostor;
+    impostor.setObjectName(QStringLiteral("unitTestsToolWindow"));
+    QTabWidget wrongProviders;
+    wrongProviders.setObjectName(QStringLiteral("unitTestsProviders"));
+    wrongProviders.addTab(new QWidget(), QStringLiteral("CTest"));
+    for (QWidget* wrong : {static_cast<QWidget*>(nullptr), &impostor, static_cast<QWidget*>(&wrongProviders)}) {
+        EXPECT_TRUE(frost::app::unitTestsGutterCasesForFile(wrong, sourcePath, sourceText.str()).empty());
+        const auto run = frost::app::runGutterTestCase(wrong, *testCase);
+        ASSERT_FALSE(run);
+        EXPECT_EQ(run.error().code(), frost::ErrorCode::NotFound);
+        const auto debug = frost::app::debugGutterTestCase(wrong, *testCase);
+        ASSERT_FALSE(debug);
+        EXPECT_EQ(debug.error().code(), frost::ErrorCode::NotFound);
+    }
+
+    providers->removeTab(0);
+    EXPECT_TRUE(frost::app::unitTestsGutterCasesForFile(providers, sourcePath, sourceText.str()).empty());
+    const auto retiredRun = frost::app::runGutterTestCase(providers, *testCase);
+    ASSERT_FALSE(retiredRun);
+    EXPECT_EQ(retiredRun.error().code(), frost::ErrorCode::NotFound);
+    const auto retiredDebug = frost::app::debugGutterTestCase(providers, *testCase);
+    ASSERT_FALSE(retiredDebug);
+    EXPECT_EQ(retiredDebug.error().code(), frost::ErrorCode::NotFound);
+    providers->insertTab(0, ctest, QStringLiteral("CTest"));
+    providers->setCurrentIndex(1);
+
+    ASSERT_TRUE(frost::app::runGutterTestCase(ctest, *testCase).has_value());
     ASSERT_TRUE(waitFor([&] { return w.runAll->isEnabled(); }, 60s)) << w.summary->text().toStdString();
     const frost::run::TestResult* result = w.tree->result("Fixture.Passes");
     ASSERT_NE(result, nullptr);

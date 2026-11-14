@@ -21,6 +21,7 @@
 #include <cctype>
 #include <deque>
 #include <format>
+#include <limits>
 #include <map>
 #include <set>
 
@@ -119,6 +120,12 @@ struct OpenDocument {
     std::deque<std::pair<std::int64_t, text::Snapshot>> history;
     // The LSP version of the last diagnostics publish (the inactive regions map to it).
     std::optional<std::int64_t> diagnosedVersion;
+    std::uint64_t analysisToken = 0; // Zero once an ordinary document operation adopts the document.
+};
+
+struct ClosedAnalysisDocument {
+    FileDiagnostics cleared;
+    bool hadRegions = false;
 };
 
 } // namespace
@@ -141,6 +148,7 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
     ClangdState state FROST_GUARDED_BY(mutex) = ClangdState::Stopped;
     unsigned restarts FROST_GUARDED_BY(mutex) = 0;
     std::uint64_t round FROST_GUARDED_BY(mutex) = 0; // Increments per launch; older clients' callbacks are ignored.
+    std::uint64_t lastAnalysisToken FROST_GUARDED_BY(mutex) = 0; // Never reset or reused across launches.
     std::shared_ptr<io::IAsyncProcess> process FROST_GUARDED_BY(mutex);
     std::shared_ptr<GeneratedCommandsLease> processLease FROST_GUARDED_BY(mutex);
     std::shared_ptr<LspClient> client FROST_GUARDED_BY(mutex);
@@ -175,15 +183,79 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
     }
 
     void setState(ClangdState next) {
-        LockGuard lock(mutex);
-        state = next;
+        std::vector<ClosedAnalysisDocument> closed;
+        {
+            LockGuard lock(mutex);
+            state = next;
+            if (next != ClangdState::Running)
+                closed = takeAnalysisDocuments();
+        }
+        publishClosedAnalysis(closed);
     }
 
     void recordError(Error error, ClangdState next) {
         log::warn(kLogCategory, "{}", error.describe());
-        LockGuard lock(mutex);
-        lastError = std::move(error);
-        state = next;
+        std::vector<ClosedAnalysisDocument> closed;
+        {
+            LockGuard lock(mutex);
+            lastError = std::move(error);
+            state = next;
+            if (next != ClangdState::Running)
+                closed = takeAnalysisDocuments();
+        }
+        publishClosedAnalysis(closed);
+    }
+
+    [[nodiscard]] bool analysisCurrent(const AnalysisDocumentLease& lease) const FROST_REQUIRES(mutex) {
+        if (stop.stop_requested() || state != ClangdState::Running || lease.token == 0 || lease.generation != round)
+            return false;
+        const auto found = documents.find(documentKey(lease.path));
+        return found != documents.end() && found->second.analysisToken == lease.token &&
+               found->second.version == lease.lspVersion &&
+               found->second.latest.version() == lease.snapshot.version() &&
+               found->second.latest.sharesStorageWith(lease.snapshot);
+    }
+
+    [[nodiscard]] std::vector<ClosedAnalysisDocument> takeAnalysisDocuments() FROST_REQUIRES(mutex) {
+        std::vector<ClosedAnalysisDocument> closed;
+        for (auto it = documents.begin(); it != documents.end();) {
+            if (it->second.analysisToken == 0) {
+                ++it;
+                continue;
+            }
+            if (auto current = runningClient()) {
+                if (auto sent = current->didClose(it->second.uri); !sent)
+                    log::warn(kLogCategory, "analysis didClose {}: {}", it->second.path, sent.error().describe());
+            }
+            ClosedAnalysisDocument document;
+            document.cleared.file = it->second.path;
+            document.cleared.uri = it->second.uri;
+            document.hadRegions = inactive.erase(it->first) > 0;
+            closed.push_back(std::move(document));
+            it = documents.erase(it);
+        }
+        return closed;
+    }
+
+    void publishClosedAnalysis(std::vector<ClosedAnalysisDocument>& closed) {
+        for (auto& document : closed) {
+            if (document.hadRegions) {
+                InactiveRegions none;
+                none.file = document.cleared.file;
+                none.uri = document.cleared.uri;
+                notifyInactive(none);
+            }
+            diagnostics.publish(std::move(document.cleared));
+        }
+    }
+
+    void revokeAnalysisDocuments() {
+        std::vector<ClosedAnalysisDocument> closed;
+        {
+            LockGuard lock(mutex);
+            closed = takeAnalysisDocuments();
+        }
+        publishClosedAnalysis(closed);
     }
 
     // Samples the running clangd process's RSS via the ResourceGovernor and updates peakRssBytes.
@@ -672,6 +744,7 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
             }
             self->governor()->setLegActive(sched::HeavyLegKind::BackgroundIndex, false);
             self->governor()->unregisterProcess(static_cast<std::int64_t>(process->pid()));
+            self->setState(ClangdState::Restarting);
             client->close();
             {
                 LockGuard lock(self->mutex);
@@ -746,6 +819,7 @@ ClangdService::ClangdService(io::IProcessLauncher& launcher, io::AsyncContext co
 ClangdService::~ClangdService() {
     unregisterServiceShared(this);
     m_shared->stop.request_stop();
+    m_shared->revokeAnalysisDocuments();
     const std::shared_ptr<sched::ResourceGovernor> gov = m_shared->governor();
     gov->setLegActive(sched::HeavyLegKind::BackgroundIndex, false);
     std::shared_ptr<LspClient> client;
@@ -790,6 +864,7 @@ Result<void> ClangdService::start() {
 
 sched::Task<void> ClangdService::stop() {
     m_shared->stop.request_stop();
+    m_shared->revokeAnalysisDocuments();
     return finishStop();
 }
 
@@ -936,7 +1011,20 @@ Result<void> ClangdService::openDocument(std::string_view path, text::Snapshot s
     }
     LockGuard lock(m_shared->mutex);
     const std::string key = documentKey(*normalized);
-    if (m_shared->documents.contains(key)) {
+    if (auto existing = m_shared->documents.find(key); existing != m_shared->documents.end()) {
+        auto& document = existing->second;
+        if (document.analysisToken != 0) {
+            document.analysisToken = 0;
+            ++document.version;
+            document.latest = std::move(snapshot);
+            m_shared->pushHistory(document);
+            if (auto client = m_shared->runningClient()) {
+                const std::vector<ContentChange> fullText{{.range = std::nullopt, .text = document.latest.text()}};
+                if (auto sent = client->didChange(document.uri, document.version, fullText); !sent)
+                    return std::unexpected(std::move(sent.error()));
+            }
+            return {};
+        }
         return fail(ErrorCode::AlreadyExists, std::format("{} is already open", *normalized));
     }
     OpenDocument document;
@@ -955,6 +1043,55 @@ Result<void> ClangdService::openDocument(std::string_view path, text::Snapshot s
     return {};
 }
 
+Result<AnalysisDocumentLease> ClangdService::acquireAnalysisDocument(std::string_view path, text::Snapshot snapshot) {
+    auto normalized = io::normalizePath(path);
+    if (!normalized)
+        return std::unexpected(std::move(normalized.error()));
+    auto uri = pathToUri(*normalized);
+    if (!uri)
+        return std::unexpected(std::move(uri.error()));
+    LockGuard lock(m_shared->mutex);
+    const auto key = documentKey(*normalized);
+    if (m_shared->documents.contains(key))
+        return fail(ErrorCode::AlreadyExists, std::format("{} is already open", *normalized));
+    const auto client = m_shared->runningClient();
+    if (m_shared->stop.stop_requested() || !client)
+        return fail(ErrorCode::Busy, "analysis documents require a running clangd");
+    if (m_shared->lastAnalysisToken == std::numeric_limits<std::uint64_t>::max())
+        return fail(ErrorCode::OutOfRange, "analysis document ownership tokens exhausted");
+    OpenDocument document;
+    document.path = std::move(*normalized);
+    document.uri = std::move(*uri);
+    document.languageId = std::string(languageIdForPath(document.path));
+    document.latest = std::move(snapshot);
+    document.analysisToken = ++m_shared->lastAnalysisToken;
+    m_shared->pushHistory(document);
+    if (auto sent = client->didOpen(document.uri, document.languageId, document.version, document.latest.text()); !sent)
+        return std::unexpected(std::move(sent.error()));
+    AnalysisDocumentLease lease;
+    lease.path = document.path;
+    lease.token = document.analysisToken;
+    lease.generation = m_shared->round;
+    lease.lspVersion = document.version;
+    lease.snapshot = document.latest;
+    lease.m_service = m_shared;
+    m_shared->documents.emplace(key, std::move(document));
+    return lease;
+}
+
+bool ClangdService::analysisDocumentCurrent(const AnalysisDocumentLease& lease) const {
+    if (lease.m_service.lock() != m_shared)
+        return false;
+    LockGuard lock(m_shared->mutex);
+    return m_shared->analysisCurrent(lease);
+}
+
+Result<void> ClangdService::releaseAnalysisDocument(const AnalysisDocumentLease& lease) {
+    if (lease.m_service.lock() != m_shared)
+        return {};
+    return closeDocumentImpl(lease.path, &lease);
+}
+
 Result<void> ClangdService::changeDocument(std::string_view path, const text::ChangeSet& changes,
                                            text::Snapshot after) {
     LockGuard lock(m_shared->mutex);
@@ -963,6 +1100,7 @@ Result<void> ClangdService::changeDocument(std::string_view path, const text::Ch
         return fail(ErrorCode::NotFound, std::format("{} is not open", path));
     }
     OpenDocument& document = it->second;
+    document.analysisToken = 0;
     if (changes.baseVersion == changes.version && changes.changes.empty()) {
         document.latest = std::move(after);
         return {};
@@ -1013,6 +1151,7 @@ Result<void> ClangdService::saveDocument(std::string_view path) {
     if (it == m_shared->documents.end()) {
         return fail(ErrorCode::NotFound, std::format("{} is not open", path));
     }
+    it->second.analysisToken = 0;
     if (std::shared_ptr<LspClient> client = m_shared->runningClient()) {
         const std::string text = it->second.latest.text();
         if (auto sent = client->didSave(it->second.uri, text); !sent) {
@@ -1022,11 +1161,16 @@ Result<void> ClangdService::saveDocument(std::string_view path) {
     return {};
 }
 
-Result<void> ClangdService::closeDocument(std::string_view path) {
+Result<void> ClangdService::closeDocument(std::string_view path) { return closeDocumentImpl(path, nullptr); }
+
+Result<void> ClangdService::closeDocumentImpl(std::string_view path, const AnalysisDocumentLease* lease) {
     FileDiagnostics cleared;
     bool hadRegions = false;
+    std::optional<Error> notificationError;
     {
         LockGuard lock(m_shared->mutex);
+        if (lease && !m_shared->analysisCurrent(*lease))
+            return {};
         auto it = m_shared->documents.find(documentKey(path));
         if (it == m_shared->documents.end()) {
             return fail(ErrorCode::NotFound, std::format("{} is not open", path));
@@ -1034,6 +1178,8 @@ Result<void> ClangdService::closeDocument(std::string_view path) {
         if (std::shared_ptr<LspClient> client = m_shared->runningClient()) {
             if (auto sent = client->didClose(it->second.uri); !sent) {
                 log::warn(kLogCategory, "didClose {}: {}", it->second.path, sent.error().describe());
+                if (lease)
+                    notificationError = std::move(sent.error());
             }
         }
         cleared.file = it->second.path;
@@ -1048,6 +1194,8 @@ Result<void> ClangdService::closeDocument(std::string_view path) {
         m_shared->notifyInactive(none);
     }
     m_shared->diagnostics.publish(std::move(cleared));
+    if (notificationError)
+        return std::unexpected(std::move(*notificationError));
     return {};
 }
 

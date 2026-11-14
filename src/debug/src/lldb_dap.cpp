@@ -277,14 +277,24 @@ rpc::Json lldbDapLaunchArguments(const DebugTarget& target, bool libstdcxx, bool
     return launch;
 }
 
-AdapterFactory lldbDapAdapterFactory(io::IProcessLauncher& launcher, std::string executable) {
-    return [&launcher,
-            executable = std::move(executable)](DapHandlers handlers) -> Result<std::unique_ptr<IDebugAdapterClient>> {
-        auto process = launcher.launch(lldbDapProcessSpec(executable));
+AdapterFactory lldbDapAdapterFactory(io::IProcessLauncher& launcher, std::string executable, DapProcessOutput output) {
+    return [&launcher, executable = std::move(executable),
+            output = std::move(output)](DapHandlers handlers) -> Result<std::unique_ptr<IDebugAdapterClient>> {
+        auto spec = lldbDapProcessSpec(executable);
+        if (output.privateOutput) {
+            // Pinned LLDB's DAP and debugserver transports can trace raw launch environment/output
+            // outside our logger. Disable those inherited opt-ins before this private adapter runs.
+            // EXTRA_ARG_1 being absent also terminates LLDB's sequential extra-argument scan.
+            for (const auto name :
+                 {"LLDBDAP_LOG", "LLDB_DEBUGSERVER_LOG_FILE", "LLDB_DEBUGSERVER_LOG_FLAGS", "LLDB_SERVER_LOG_CHANNELS",
+                  "LLDB_DEBUGSERVER_EXTRA_ARG_1", "LLDB_DEBUGSERVER_PATH"})
+                spec.environment.emplace_back(name, std::nullopt);
+        }
+        auto process = launcher.launch(spec);
         if (!process) {
             return std::unexpected(std::move(process.error()).withContext("while starting lldb-dap"));
         }
-        return makeDapClient(processTransport(std::move(*process)), std::move(handlers));
+        return makeDapClient(processTransport(std::move(*process), output), std::move(handlers));
     };
 }
 
@@ -324,10 +334,16 @@ Result<std::unique_ptr<DebugSession>>
 startDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
                   std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
                   std::vector<FunctionBreakpointLine> functionBreakpoints, std::vector<std::string> exceptionFilters,
-                  std::vector<std::string> throwTypes) {
+                  std::vector<std::string> throwTypes, std::optional<NativeDebugPrivacy> privacy) {
     if (auto allowed = checkDebugTrust(trust, target); !allowed)
         return std::unexpected(std::move(allowed.error()));
     DebugSessionOptions options = lldbDapSessionOptions(DebugTargetMode::Launch);
+    if (privacy && !privacy->launchAdmission)
+        return fail(ErrorCode::InvalidArgument, "A private native launch requires final admission");
+    if (privacy) {
+        options.privateSession = true;
+        options.launchAdmission = std::move(privacy->launchAdmission);
+    }
     options.functionBreakpoints = std::move(functionBreakpoints);
     options.exceptionFilters = std::move(exceptionFilters);
     options.throwTypes = std::move(throwTypes);

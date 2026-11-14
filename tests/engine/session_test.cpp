@@ -54,8 +54,12 @@ std::string testMac(std::string_view secret, std::string_view text) {
 class SessionPeer {
 public:
     explicit SessionPeer(char generation = 'b', bool badProof = false, std::optional<Json> processId = Json(12345),
-                         bool badInfoIdentity = false)
-        : m_badProof(badProof), m_processId(std::move(processId)), m_badInfoIdentity(badInfoIdentity) {
+                         bool badInfoIdentity = false, std::optional<Json> scriptDebug = std::nullopt,
+                         Json bootstrapOverrides = Json::object(), bool pendingPlayer = false,
+                         std::optional<Json> crashSource = std::nullopt)
+        : m_badProof(badProof), m_processId(std::move(processId)), m_badInfoIdentity(badInfoIdentity),
+          m_scriptDebug(std::move(scriptDebug)), m_bootstrapOverrides(std::move(bootstrapOverrides)),
+          m_pendingPlayer(pendingPlayer), m_crashSource(std::move(crashSource)) {
 #ifdef _WIN32
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
@@ -117,7 +121,7 @@ public:
         }
     }
     EngineEndpoint endpoint;
-    std::atomic<unsigned> commands{0}, clientProofs{0};
+    std::atomic<unsigned> commands{0}, clientProofs{0}, bootstraps{0};
     std::atomic<bool> heartbeats{true};
 
 private:
@@ -225,14 +229,30 @@ private:
                         break;
                     if (method == "server.info") {
                         result = identity()
-                                     .set("role", "editor")
+                                     .set("role", m_pendingPlayer ? "player" : "editor")
                                      .set("contractVersion", 2)
                                      .set("sessionProtocolVersion", 2)
                                      .set("authenticated", true);
                         if (m_processId)
                             result.set("processId", *m_processId);
+                        if (m_scriptDebug)
+                            result.set("scriptDebug", *m_scriptDebug);
+                        if (m_crashSource)
+                            result.set("crashArtifactSource", *m_crashSource);
                         if (m_badInfoIdentity)
                             result.set("generation", std::string(32, 'f'));
+                    } else if (method == "script.debug.bootstrap") {
+                        ++bootstraps;
+                        result = identity()
+                                     .set("protocolVersion", 1)
+                                     .set("host", "127.0.0.1")
+                                     .set("port", 45678)
+                                     .set("processId", 12345)
+                                     .set("debugSessionId", std::string(32, 'c'))
+                                     .set("credential", std::string(64, 'd'))
+                                     .set("expiresMs", 30000);
+                        for (std::size_t i = 0; i < m_bootstrapOverrides.size(); ++i)
+                            result.set(m_bootstrapOverrides.keys()[i], m_bootstrapOverrides.items()[i]);
                     } else if (method == "schema.export") {
                         result =
                             Json::object().set("commands", Json::array({Json::object().set("name", "echo"),
@@ -241,11 +261,13 @@ private:
                     } else if (method == "server.subscribe") {
                         result = identity()
                                      .set("sequence", sequence)
-                                     .set("snapshots", Json::object().set("play.state", Json::object()
-                                                                                            .set("state", "Edit")
-                                                                                            .set("mode", "Edit")
-                                                                                            .set("paused", false)
-                                                                                            .set("frames", 0)));
+                                     .set("snapshots",
+                                          Json::object().set("play.state",
+                                                             Json::object()
+                                                                 .set("state", m_pendingPlayer ? "Unavailable" : "Edit")
+                                                                 .set("mode", m_pendingPlayer ? "Unavailable" : "Edit")
+                                                                 .set("paused", false)
+                                                                 .set("frames", 0)));
                         subscribed = true;
                     } else {
                         ++commands;
@@ -277,6 +299,33 @@ private:
                                                                        .set("sequence", ++sequence)
                                                                        .set("data", std::move(data)))))
                                 break;
+                        }
+                        if (method == "test.project-change" || method == "test.shutdown") {
+                            (void)sendJson(peer, Json::object()
+                                                     .set("jsonrpc", "2.0")
+                                                     .set("method", "engine.event")
+                                                     .set("params", identity()
+                                                                        .set("event", method == "test.shutdown"
+                                                                                          ? "server.shutdown"
+                                                                                          : "project.changed")
+                                                                        .set("sequence", ++sequence)
+                                                                        .set("data", Json::object())));
+#ifdef _WIN32
+                            shutdown(peer, SD_BOTH);
+#else
+                            shutdown(peer, SHUT_RDWR);
+#endif
+                            continue;
+                        }
+                        if (method == "test.operation-state") {
+                            (void)sendJson(peer,
+                                           Json::object()
+                                               .set("jsonrpc", "2.0")
+                                               .set("method", "engine.event")
+                                               .set("params", identity()
+                                                                  .set("event", "play.state")
+                                                                  .set("sequence", ++sequence)
+                                                                  .set("data", params ? *params : Json::object())));
                         }
                         if (method == "test.error") {
                             if (!sendJson(peer,
@@ -347,6 +396,10 @@ private:
     bool m_badProof = false;
     std::optional<Json> m_processId;
     bool m_badInfoIdentity = false;
+    std::optional<Json> m_scriptDebug;
+    Json m_bootstrapOverrides;
+    bool m_pendingPlayer = false;
+    std::optional<Json> m_crashSource;
     Socket m_listener = kInvalid, m_peer = kInvalid;
     std::mutex m_mutex;
     std::jthread m_thread;
@@ -358,7 +411,8 @@ struct Observations {
     std::mutex mutex;
     std::condition_variable cv;
     unsigned connections = 0, states = 0, disconnects = 0, logs = 0, diagnostics = 0;
-    EngineIdentity identity;
+    EngineIdentity identity, disconnectIdentity;
+    EngineDisconnectCause disconnectCause = EngineDisconnectCause::Unexpected;
     EngineState state;
     EngineLogEntry log;
     EngineDiagnostic diagnostic;
@@ -388,9 +442,11 @@ struct Observations {
             diagnostic = value;
             cv.notify_all();
         };
-        callbacks.disconnected = [this](const EngineDisconnect&) {
+        callbacks.disconnected = [this](const EngineDisconnect& value) {
             std::lock_guard lock(mutex);
             ++disconnects;
+            disconnectIdentity = value.identity;
+            disconnectCause = value.cause;
             cv.notify_all();
         };
         return callbacks;
@@ -736,6 +792,479 @@ TEST(EngineSession, TimeoutReportsUncertaintyAndDoesNotDropHealthySession) {
     EXPECT_NE(result.error().message().find("uncertain"), std::string::npos);
     EXPECT_TRUE((*session)->connected());
     EXPECT_TRUE(invoke(**session, "echo"));
+    (*session)->shutdown();
+}
+
+Json scriptDebugCapability(bool available = true) {
+    return Json::object().set("protocolVersion", 1).set("available", available);
+}
+Result<ScriptDebugBootstrap> privateBootstrap(
+    EngineSession& session, const EngineIdentity& owner,
+    std::function<Result<void>(const EngineIdentity&)> admission = [](const EngineIdentity&) -> Result<void> {
+        return {};
+    }) {
+    auto promise = std::make_shared<std::promise<Result<ScriptDebugBootstrap>>>();
+    auto future = promise->get_future();
+    auto accepted =
+        session.bootstrapScriptDebug(owner, std::move(admission), [promise](Result<ScriptDebugBootstrap> result) {
+            promise->set_value(std::move(result));
+        });
+    if (!accepted)
+        return std::unexpected(accepted.error());
+    if (future.wait_for(3s) != std::future_status::ready)
+        return fail(ErrorCode::Timeout, "private test bootstrap callback timed out");
+    return future.get();
+}
+TEST(EngineSession, LuaBootstrapIsPrivateAndGenericCommandSendsNothing) {
+    SessionPeer peer('b', false, Json(12345), false, scriptDebugCapability());
+    Observations observed;
+    auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    auto result = (*session)->request("script.debug.bootstrap", Json::object(), [](Result<Json>) {
+        ADD_FAILURE() << "private bootstrap must never complete through a generic JSON callback";
+    });
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_EQ(peer.bootstraps.load(), 0U);
+    EXPECT_EQ(peer.commands.load(), 0U);
+    EXPECT_EQ((*session)->sentCommandCount(), 0U);
+    (*session)->shutdown();
+}
+TEST(EngineSession, LuaBootstrapMissingOrUnavailableMetadataRefusesBeforeSend) {
+    for (const auto& metadata :
+         {std::optional<Json>{}, std::optional<Json>{scriptDebugCapability(false)},
+          std::optional<Json>{Json::object().set("available", true).set("protocolVersion", 2)}}) {
+        SessionPeer peer('b', false, Json(12345), false, metadata);
+        Observations observed;
+        auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+        ASSERT_TRUE(session);
+        ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+        auto result = privateBootstrap(**session, observed.identity);
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error().code(), ErrorCode::Unsupported);
+        EXPECT_EQ(peer.bootstraps.load(), 0U);
+        (*session)->shutdown();
+    }
+}
+TEST(EngineSession, LuaBootstrapMalformedCapabilityMetadataCannotAuthenticateAsDebugCapable) {
+    for (const auto& metadata :
+         {Json("invalid"), Json::object().set("available", "true").set("protocolVersion", 1),
+          Json::object().set("available", true), Json::object().set("available", true).set("protocolVersion", -1)}) {
+        SessionPeer peer('b', false, Json(12345), false, metadata);
+        Observations observed;
+        auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+        ASSERT_TRUE(session);
+        ASSERT_TRUE(observed.wait([&] { return observed.disconnects > 0; }));
+        EXPECT_EQ(observed.connections, 0U);
+        EXPECT_EQ(peer.bootstraps.load(), 0U);
+        EXPECT_FALSE((*session)->connected());
+        (*session)->shutdown();
+    }
+}
+TEST(EngineSession, LuaBootstrapBindsActualPidProjectAndConnectionBeforeSend) {
+    SessionPeer peer('b', false, Json(12345), false, scriptDebugCapability());
+    Observations observed;
+    auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    for (unsigned change = 0; change < 5; ++change) {
+        auto owner = observed.identity;
+        if (change == 0)
+            ++owner.processId;
+        if (change == 1)
+            ++owner.connectionGeneration;
+        if (change == 2)
+            owner.projectPath += "/other";
+        if (change == 3)
+            owner.instanceId = std::string(32, 'e');
+        if (change == 4)
+            owner.generation = std::string(32, 'e');
+        auto result = privateBootstrap(**session, owner);
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error().code(), ErrorCode::PermissionDenied);
+    }
+    EXPECT_EQ(peer.bootstraps.load(), 0U);
+    (*session)->shutdown();
+}
+TEST(EngineSession, LuaTypedBootstrapHasConservativeLeaseAndRevokedConnectionToken) {
+    SessionPeer peer('b', false, Json(12345), false, scriptDebugCapability());
+    Observations observed;
+    auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    auto revocation = (*session)->debugConnectionStopToken(observed.identity);
+    ASSERT_TRUE(revocation);
+    EXPECT_FALSE(revocation->stop_requested());
+    const auto queuedAfter = std::chrono::steady_clock::now();
+    auto result = privateBootstrap(**session, observed.identity);
+    const auto completedBefore = std::chrono::steady_clock::now();
+    ASSERT_TRUE(result) << result.error().describe();
+    EXPECT_EQ(result->processId, 12345);
+    EXPECT_EQ(result->projectPath, observed.identity.projectPath);
+    EXPECT_EQ(result->instanceId, observed.identity.instanceId);
+    EXPECT_EQ(result->generation, observed.identity.generation);
+    EXPECT_EQ(result->connectionGeneration, observed.identity.connectionGeneration);
+    EXPECT_EQ(result->debugSessionId, std::string(32, 'c'));
+    EXPECT_EQ(result->port, 45678);
+    EXPECT_GE(result->expiresAt, queuedAfter + 30s);
+    EXPECT_LE(result->expiresAt, completedBefore + 30s);
+    EXPECT_EQ(std::move(*result).takeCredential(), std::string(64, 'd'));
+    EXPECT_EQ(peer.bootstraps.load(), 1U);
+    EXPECT_EQ((*session)->sentCommandCount(), 0U);
+    peer.heartbeats = false;
+    ASSERT_TRUE(observed.wait([&] { return observed.disconnects > 0; }));
+    EXPECT_TRUE(revocation->stop_requested());
+    EXPECT_FALSE((*session)->debugConnectionStopToken(observed.identity));
+    (*session)->shutdown();
+}
+TEST(EngineSession, LuaBootstrapRechecksAdmissionAndTrustBeforeSending) {
+    SessionPeer peer('b', false, Json(12345), false, scriptDebugCapability());
+    Observations observed;
+    std::atomic<bool> trusted{true};
+    auto options = optionsFor(peer);
+    options.trusted = [&](std::string_view, std::uint64_t) { return trusted.load(); };
+    auto session = EngineSession::create(std::move(options), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    auto result = privateBootstrap(**session, observed.identity, [&](const EngineIdentity&) -> Result<void> {
+        trusted = false; // Cancellation/trust after a caller's successful policy must still deny.
+        return {};
+    });
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::Untrusted);
+    EXPECT_EQ(peer.bootstraps.load(), 0U);
+    EXPECT_EQ((*session)->sentCommandCount(), 0U);
+    (*session)->shutdown();
+}
+TEST(EngineSession, LuaBootstrapInvalidPrivateReplyCannotExposeCredentialInError) {
+    for (const auto& overrides :
+         {Json::object().set("processId", 999), Json::object().set("generation", std::string(32, 'f')),
+          Json::object().set("host", "remote.invalid"), Json::object().set("expiresMs", 30001),
+          Json::object().set("credential", "invalid-private-secret")}) {
+        SessionPeer peer('b', false, Json(12345), false, scriptDebugCapability(), overrides);
+        Observations observed;
+        auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+        ASSERT_TRUE(session);
+        ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+        auto result = privateBootstrap(**session, observed.identity);
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error().code(), ErrorCode::Corrupt);
+        EXPECT_EQ(result.error().describe().find(std::string(64, 'd')), std::string::npos);
+        EXPECT_EQ(result.error().describe().find("invalid-private-secret"), std::string::npos);
+        EXPECT_EQ(peer.bootstraps.load(), 1U);
+        (*session)->shutdown();
+    }
+}
+
+TEST(EngineSession, PendingPlayerDebugPublishesUnavailableWithoutInventingAVm) {
+    SessionPeer peer('b', false, Json(12345), false, scriptDebugCapability(), Json::object(), true);
+    Observations observed;
+    auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    EXPECT_EQ(observed.identity.role, "player");
+    EXPECT_EQ(observed.state.state, "Unavailable");
+    EXPECT_EQ(observed.state.mode, "Unavailable");
+    EXPECT_FALSE(observed.state.playing);
+    EXPECT_FALSE(observed.state.paused);
+    EXPECT_TRUE(observed.state.playGeneration.empty());
+    EXPECT_TRUE(privateBootstrap(**session, observed.identity));
+    (*session)->shutdown();
+}
+
+Json crashSourceMetadata() {
+#ifdef _WIN32
+    constexpr std::string_view root = "C:\\engine-crashes", project = "C:/session-project";
+#else
+    constexpr std::string_view root = "/engine-crashes", project = "/session-project";
+#endif
+    return Json::object()
+        .set("protocolVersion", 1)
+        .set("sourceId", std::string(32, 'f'))
+        .set("rootPath", root)
+        .set("processId", 12345)
+        .set("processStartUnixMs", 1794360000000LL)
+        .set("processRole", "editor")
+        .set("instanceId", std::string(32, 'a'))
+        .set("generation", std::string(32, 'b'))
+        .set("projectPath", project);
+}
+TEST(EngineSession, AuthenticatedCrashSourceSurvivesActualConnectionLossWithoutInventingCrashEvent) {
+    SessionPeer peer('b', false, Json(12345), false, std::nullopt, Json::object(), false, crashSourceMetadata());
+    Observations observed;
+    auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    ASSERT_TRUE(observed.identity.crashArtifactSource);
+    EXPECT_EQ(observed.identity.crashArtifactSource->processId, 12345);
+    EXPECT_EQ(observed.identity.crashArtifactSource->projectPath, peer.endpoint.projectPath);
+    EXPECT_EQ(observed.identity.crashArtifactSource->processStartUnixMs, 1794360000000LL);
+    EXPECT_EQ(observed.state.identity.crashArtifactSource, observed.identity.crashArtifactSource);
+    peer.heartbeats = false;
+    ASSERT_TRUE(observed.wait([&] { return observed.disconnects > 0; }));
+    EXPECT_EQ(observed.disconnectIdentity.crashArtifactSource, observed.identity.crashArtifactSource);
+    EXPECT_EQ(observed.logs, 0U);
+    EXPECT_EQ(observed.diagnostics, 0U);
+    (*session)->shutdown();
+}
+TEST(EngineSession, MismatchedLiveCrashSourceCannotAuthenticateAsAnotherProcessOrProject) {
+    for (const auto& mutation :
+         {Json::object().set("processId", 999), Json::object().set("generation", std::string(32, 'e')),
+          Json::object().set("projectPath", "/another/project"), Json::object().set("processStartUnixMs", 0),
+          Json::object().set("sourceId", "invalid")}) {
+        auto source = crashSourceMetadata();
+        for (std::size_t i = 0; i < mutation.size(); ++i)
+            source.set(mutation.keys()[i], mutation.items()[i]);
+        SessionPeer peer('b', false, Json(12345), false, std::nullopt, Json::object(), false, source);
+        Observations observed;
+        auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+        ASSERT_TRUE(session);
+        ASSERT_TRUE(observed.wait([&] { return observed.disconnects > 0; }));
+        EXPECT_EQ(observed.connections, 0U);
+        EXPECT_EQ(observed.states, 0U);
+        EXPECT_FALSE((*session)->connected());
+        (*session)->shutdown();
+    }
+}
+
+// The peer below verifies the liveness policy using explicit typed native evidence. Actual OS
+// debugger all-stop across 60+ seconds is a separate mandatory real-engine acceptance oracle.
+constexpr NativeDebuggerBinding kNativeBinding{17, 3, 12345};
+TEST(EngineSession, ExactNativeStopEvidenceHoldsHeartbeatOnlyAndContinuedUsesOriginalGrace) {
+    SessionPeer peer;
+    Observations observed;
+    auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    auto lease = (*session)->bindNativeDebuggerPause(observed.identity, kNativeBinding);
+    ASSERT_TRUE(lease);
+    ASSERT_TRUE(lease->observe({kNativeBinding, 1, NativeAdapterEvent::Stopped}));
+    peer.heartbeats = false;
+    std::this_thread::sleep_for(700ms); // >2x the actual negotiated 250ms timeout; no fake heartbeat.
+    EXPECT_TRUE((*session)->connected());
+    EXPECT_TRUE(invoke(**session, "echo"));
+    ASSERT_TRUE(lease->observe({kNativeBinding, 2, NativeAdapterEvent::Continued}));
+    std::this_thread::sleep_for(75ms);
+    EXPECT_TRUE((*session)->connected()); // Grace is separate from the old actual heartbeat timestamp.
+    ASSERT_TRUE(observed.wait([&] { return observed.disconnects > 0; }));
+    EXPECT_FALSE((*session)->connected());
+    EXPECT_FALSE(lease->observe({kNativeBinding, 3, NativeAdapterEvent::Stopped}));
+    (*session)->shutdown();
+}
+TEST(EngineSession, NativePauseCannotChangeRequestDeadlinesOrRescueTrustRevocation) {
+    SessionPeer peer;
+    Observations observed;
+    std::atomic<bool> trusted{true};
+    auto options = optionsFor(peer);
+    options.requestTimeout = 100ms;
+    options.trusted = [&](std::string_view, std::uint64_t) { return trusted.load(); };
+    auto session = EngineSession::create(std::move(options), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    auto lease = (*session)->bindNativeDebuggerPause(observed.identity, kNativeBinding);
+    ASSERT_TRUE(lease);
+    ASSERT_TRUE(lease->observe({kNativeBinding, 1, NativeAdapterEvent::Stopped}));
+    peer.heartbeats = false;
+    auto held = invoke(**session, "test.hold");
+    ASSERT_FALSE(held);
+    EXPECT_EQ(held.error().code(), ErrorCode::Timeout);
+    EXPECT_TRUE((*session)->connected());
+    trusted = false;
+    ASSERT_TRUE(observed.wait([&] { return observed.disconnects > 0; }));
+    EXPECT_FALSE(lease->observe({kNativeBinding, 2, NativeAdapterEvent::Stopped}));
+    (*session)->shutdown();
+}
+TEST(EngineSession, ForeignNativeEvidenceAndDuplicateBindingsCannotSuspendHeartbeatExpiry) {
+    SessionPeer peer;
+    Observations observed;
+    auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    for (unsigned change = 0; change < 4; ++change) {
+        auto wrong = observed.identity;
+        if (change == 0)
+            ++wrong.processId;
+        if (change == 1)
+            ++wrong.connectionGeneration;
+        if (change == 2)
+            wrong.projectPath += "/other";
+        if (change == 3)
+            wrong.generation = std::string(32, 'e');
+        EXPECT_FALSE((*session)->bindNativeDebuggerPause(wrong, kNativeBinding));
+    }
+    auto lease = (*session)->bindNativeDebuggerPause(observed.identity, kNativeBinding);
+    ASSERT_TRUE(lease);
+    auto duplicate = (*session)->bindNativeDebuggerPause(observed.identity, kNativeBinding);
+    ASSERT_FALSE(duplicate);
+    EXPECT_EQ(duplicate.error().code(), ErrorCode::AlreadyExists);
+    for (const auto binding : {NativeDebuggerBinding{18, 3, 12345}, NativeDebuggerBinding{17, 4, 12345},
+                               NativeDebuggerBinding{17, 3, 999}}) {
+        auto result = lease->observe({binding, 1, NativeAdapterEvent::Stopped});
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error().code(), ErrorCode::PermissionDenied);
+    }
+    peer.heartbeats = false;
+    ASSERT_TRUE(observed.wait([&] { return observed.disconnects > 0; }));
+    (*session)->shutdown();
+}
+TEST(EngineSession, StaleNativeStoppedEvidenceAndRepeatedContinuedCannotExtendGrace) {
+    SessionPeer peer;
+    Observations observed;
+    auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    auto lease = (*session)->bindNativeDebuggerPause(observed.identity, kNativeBinding);
+    ASSERT_TRUE(lease);
+    ASSERT_TRUE(lease->observe({kNativeBinding, 10, NativeAdapterEvent::Stopped}));
+    peer.heartbeats = false;
+    std::this_thread::sleep_for(400ms);
+    ASSERT_TRUE((*session)->connected());
+    ASSERT_TRUE(lease->observe({kNativeBinding, 11, NativeAdapterEvent::Continued}));
+    ASSERT_TRUE(lease->observe({kNativeBinding, 10, NativeAdapterEvent::Stopped})); // Stale; ignored.
+    for (std::uint64_t sequence = 12; sequence < 30 && (*session)->connected(); ++sequence) {
+        std::this_thread::sleep_for(40ms);
+        (void)lease->observe({kNativeBinding, sequence, NativeAdapterEvent::Continued});
+    }
+    EXPECT_FALSE((*session)->connected()); // Duplicate continued events cannot restart 250ms grace.
+    (*session)->shutdown();
+}
+TEST(EngineSession, ActualHeartbeatClearsResumeGraceAndLaterSilenceExpiresNormally) {
+    SessionPeer peer;
+    Observations observed;
+    auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    auto lease = (*session)->bindNativeDebuggerPause(observed.identity, kNativeBinding);
+    ASSERT_TRUE(lease);
+    ASSERT_TRUE(lease->observe({kNativeBinding, 1, NativeAdapterEvent::Stopped}));
+    peer.heartbeats = false;
+    std::this_thread::sleep_for(400ms);
+    ASSERT_TRUE(lease->observe({kNativeBinding, 2, NativeAdapterEvent::Continued}));
+    peer.heartbeats = true;
+    std::this_thread::sleep_for(500ms);
+    ASSERT_TRUE((*session)->connected());
+    peer.heartbeats = false;
+    ASSERT_TRUE(observed.wait([&] { return observed.disconnects > 0; }));
+    (*session)->shutdown();
+}
+TEST(EngineSession, NativeEndOrLeaseRevocationNeverGrantsAContinuationGrace) {
+    for (const bool ended : {true, false}) {
+        SessionPeer peer;
+        Observations observed;
+        auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+        ASSERT_TRUE(session);
+        ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+        auto lease = (*session)->bindNativeDebuggerPause(observed.identity, kNativeBinding);
+        ASSERT_TRUE(lease);
+        ASSERT_TRUE(lease->observe({kNativeBinding, 1, NativeAdapterEvent::Stopped}));
+        peer.heartbeats = false;
+        std::this_thread::sleep_for(400ms);
+        if (ended)
+            ASSERT_TRUE(lease->observe({kNativeBinding, 2, NativeAdapterEvent::Ended}));
+        else
+            lease->revoke();
+        auto resume = lease->observe({kNativeBinding, 3, NativeAdapterEvent::Continued});
+        ASSERT_FALSE(resume);
+        EXPECT_EQ(resume.error().code(), ErrorCode::Cancelled);
+        ASSERT_TRUE(observed.wait([&] { return observed.disconnects > 0; }));
+        (*session)->shutdown();
+    }
+}
+TEST(EngineSession, NativePauseNeverSuppressesPhysicalEofOrTransfersAcrossReconnect) {
+    SessionPeer first('b'), second('d');
+    Observations observed;
+    auto options = optionsFor(first);
+    options.rediscover = [&]() -> Result<EngineEndpoint> { return second.endpoint; };
+    auto session = EngineSession::create(std::move(options), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    auto lease = (*session)->bindNativeDebuggerPause(observed.identity, kNativeBinding);
+    ASSERT_TRUE(lease);
+    ASSERT_TRUE(lease->observe({kNativeBinding, 1, NativeAdapterEvent::Stopped}));
+    first.heartbeats = false;
+    std::this_thread::sleep_for(400ms);
+    ASSERT_TRUE((*session)->connected());
+    first.stop(); // Actual OS socket EOF, not a heartbeat timer.
+    ASSERT_TRUE(observed.wait([&] { return observed.connections == 2 && observed.states >= 2; }));
+    EXPECT_FALSE(lease->observe({kNativeBinding, 2, NativeAdapterEvent::Stopped}));
+    EXPECT_EQ(observed.identity.generation, second.endpoint.generation);
+    second.heartbeats = false;
+    ASSERT_TRUE(observed.wait([&] { return observed.disconnects >= 2; }));
+    EXPECT_FALSE((*session)->connected()); // Old stopped evidence cannot protect the new connection.
+    (*session)->shutdown();
+}
+TEST(EngineSession, ObservedCommandReplyCarriesActualSerializedEventCursor) {
+    SessionPeer peer;
+    Observations observed;
+    auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    ASSERT_TRUE(invoke(**session, "test.logs")); // Actual log+diagnostic envelopes precede its reply.
+    auto promise = std::make_shared<std::promise<Result<EngineCommandObservation>>>();
+    auto result = promise->get_future();
+    ASSERT_TRUE((*session)->requestObserved(
+        "echo", Json::object().set("value", 42),
+        [promise](Result<EngineCommandObservation> value) { promise->set_value(std::move(value)); }));
+    ASSERT_EQ(result.wait_for(3s), std::future_status::ready);
+    auto observedReply = result.get();
+    ASSERT_TRUE(observedReply);
+    EXPECT_EQ(observedReply->stateSequenceAtReply, 2U);
+    EXPECT_EQ(observedReply->data.integerAt("value"), 42);
+    (*session)->shutdown();
+}
+
+TEST(EngineSession, GracefulControlAnnouncementKeepsItsTypedCauseAcrossImmediateEof) {
+    for (const auto command : {"test.project-change", "test.shutdown"}) {
+        SessionPeer peer;
+        Observations observed;
+        auto options = optionsFor(peer);
+        options.rediscover = [&]() -> Result<EngineEndpoint> {
+            ADD_FAILURE() << "graceful control event must not auto-reconnect";
+            return peer.endpoint;
+        };
+        auto session = EngineSession::create(std::move(options), observed.callbacks());
+        ASSERT_TRUE(session);
+        ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+        EXPECT_FALSE(invoke(**session, command));
+        ASSERT_TRUE(observed.wait([&] { return observed.disconnects > 0; }));
+        EXPECT_EQ(observed.disconnectCause, std::string_view(command) == "test.shutdown"
+                                                ? EngineDisconnectCause::ServerShutdown
+                                                : EngineDisconnectCause::ProjectChanged);
+        EXPECT_FALSE((*session)->connected());
+        (*session)->shutdown();
+    }
+}
+TEST(EngineSession, RemotePlayOperationPhasesAreActualTypedStateAndUnknownPhaseDisconnects) {
+    SessionPeer peer;
+    Observations observed;
+    auto session = EngineSession::create(optionsFor(peer), observed.callbacks());
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(observed.wait([&] { return observed.states > 0; }));
+    auto state = Json::object()
+                     .set("state", "Edit")
+                     .set("mode", "Edit")
+                     .set("paused", false)
+                     .set("frames", 0)
+                     .set("operationId", std::string(32, 'd'))
+                     .set("phase", "pending")
+                     .set("playGeneration", "");
+    ASSERT_TRUE(invoke(**session, "test.operation-state", state));
+    ASSERT_TRUE(observed.wait([&] { return observed.states == 2; }));
+    EXPECT_EQ(observed.state.phase, "pending");
+    EXPECT_EQ(observed.state.operationId, std::string(32, 'd'));
+    EXPECT_FALSE(observed.state.playing);
+    EXPECT_TRUE(observed.state.playGeneration.empty());
+    state.set("state", "Play").set("mode", "Play").set("phase", "playing").set("playGeneration", std::string(32, 'e'));
+    ASSERT_TRUE(invoke(**session, "test.operation-state", state));
+    ASSERT_TRUE(observed.wait([&] { return observed.states == 3; }));
+    EXPECT_EQ(observed.state.playGeneration, std::string(32, 'e'));
+    EXPECT_TRUE(observed.state.playing);
+    state.set("state", "Edit").set("mode", "Edit").set("phase", "guessed").set("playGeneration", "");
+    EXPECT_FALSE(invoke(**session, "test.operation-state", state));
+    ASSERT_TRUE(observed.wait([&] { return observed.disconnects > 0; }));
+    EXPECT_EQ(observed.states, 3U);
+    EXPECT_EQ(observed.state.phase, "playing");
     (*session)->shutdown();
 }
 } // namespace

@@ -30,6 +30,7 @@
 #include "frost/ui/tr.hpp"
 
 #include "cmake_integration.hpp"
+#include "engine_binding_integration.hpp"
 #include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
@@ -391,6 +392,8 @@ void Workbench::startClangd(const std::string& root) {
                 [self, generation] {
                     if (!self || self->m_clangdGeneration != generation)
                         return;
+                    if (self->m_engineBindings)
+                        self->m_engineBindings->cancel();
                     if (self->m_language)
                         self->m_language->structureChanged();
                     // Reads the new server's database for languageReadiness before anyone asks, under
@@ -595,6 +598,8 @@ void Workbench::resumeDeferredClangd(bool retryUntilIdle) {
 }
 
 void Workbench::stopClangd() {
+    if (m_engineBindings)
+        m_engineBindings->cancel();
     m_clangdDeferredRoot.clear();
     QObject::disconnect(m_clangdDeferral);
     m_clangdCMakeState.clear();

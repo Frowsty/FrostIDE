@@ -334,6 +334,11 @@ public:
      * Errors: InvalidArgument (stdinData given but stdin is not a pipe), Timeout, IoError.
      */
     [[nodiscard]] virtual Result<ProcessResult> communicate(std::string_view stdinData, IClock::Duration timeout) = 0;
+    // Same concurrent stream/exit collection with an explicit optional deadline. nullopt waits for
+    // actual completion or terminate(), with no execution time cap. Existing custom process doubles
+    // inherit finite forwarding; unbounded support must be supplied explicitly (else Unsupported).
+    [[nodiscard]] virtual Result<ProcessResult> communicateUntil(std::string_view stdinData,
+                                                                 std::optional<IClock::Duration> timeout);
 
     /*
      * The processes still running in the child's container (killOnClose), the child itself
@@ -415,6 +420,13 @@ protected:
 [[nodiscard]] Result<ProcessResult> runToCompletion(IProcessLauncher& launcher, const ProcessSpec& spec,
                                                     std::string_view stdinData, IClock::Duration timeout,
                                                     std::stop_token stop = {});
+
+// Explicit optional-deadline variant. nullopt has no artificial execution cap; the stopped token
+// still ends/reaps the owned tree and discards output. Other behavior/errors match runToCompletion.
+[[nodiscard]] Result<ProcessResult> runToCompletionUntil(IProcessLauncher& launcher, const ProcessSpec& spec,
+                                                         std::string_view stdinData,
+                                                         std::optional<IClock::Duration> timeout,
+                                                         std::stop_token stop = {});
 
 // Whether this platform applies the Windows path and batch-file rules in validateProcessSpec.
 #ifdef _WIN32

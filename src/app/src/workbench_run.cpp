@@ -15,6 +15,8 @@
 #include "frost/run/run_types.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/debug_actions.hpp"
+#include "frost/ui/debug_retirement.hpp"
+#include "frost/ui/debug_session_registry.hpp"
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/find/find_feature.hpp"
 #include "frost/ui/run_actions.hpp"
@@ -39,6 +41,7 @@
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "managed_debug_preparation.hpp"
+#include "multi_session_debug.hpp"
 #include "project_properties_dialog.hpp"
 #include "settings_dialog.hpp"
 #include "unity_control.hpp"
@@ -126,6 +129,10 @@ void Workbench::createRunService() {
         if (m_engine)
             m_engine->processFinished(result);
     };
+    hooks.engineStopRequested = [this](run::RunId id) {
+        if (m_engine)
+            m_engine->explicitRunStop(id);
+    };
     hooks.generatedConfigurations = [this] { return generatedRunConfigurations(); };
     hooks.saveConfigurations = [this](const std::vector<run::RunConfiguration>& stored) {
         return saveRunConfigurations(stored);
@@ -148,7 +155,9 @@ void Workbench::createRunService() {
     m_runService = build::RunService::create(m_services.fs, m_services.launcher, m_services.trust, *m_runBuilder,
                                              std::move(options), m_runController->callbacks());
     m_runController->setService(m_runService.get());
+    m_debugRetirements = std::make_shared<ui::DebugRetirementBatch>();
     ui::DebugControllerOptions debugOptions;
+    debugOptions.retirements = m_debugRetirements;
     debugOptions.trust = &m_services.trust;
     debugOptions.fs = &m_services.fs;
     debugOptions.launcher = &m_services.launcher;
@@ -189,24 +198,21 @@ void Workbench::createRunService() {
     debugHooks.alternateAvailable = [this, selectedType] {
         const auto type = selectedType();
         if (type && run::isFrostEngineRunType(*type))
-            return false; // R7 owns the FrostEngine debug run variants.
+            return m_engineRunDebug != nullptr;
         return m_cmake != nullptr || type == run::RunType::Native || type == run::RunType::Attach ||
                type == run::RunType::Compound;
     };
     /*
      * RUN-5: an attach configuration attaches to the one running process whose executable it names
-     * (as Attach to Process does for a picked PID, with the same trust prompt); a compound one is
-     * refused, as compound debugging is DBG-10's. Debug only logs its errors, so they are notified.
+     * (as Attach to Process does for a picked PID, with the same trust prompt). Compound and typed
+     * engine configurations use the registry preparation path. Debug reports preparation errors.
      */
     debugHooks.startOverride = [this, selectedType]() -> std::optional<Result<void>> {
         const auto type = selectedType();
         if (type && run::isFrostEngineRunType(*type))
-            return Result<void>(fail(ErrorCode::Unsupported, "FrostEngine debug run types are available in R7"));
+            return startSelectedDebugConfiguration();
         if (type == run::RunType::Compound) {
-            const QString message = text("Debugging a compound configuration is not available yet (DBG-10). Run "
-                                         "starts its configurations; debug them one at a time.");
-            notify(text("Debug"), message, ui::NotificationKind::Warning);
-            return Result<void>(fail(ErrorCode::Unsupported, message.toStdString()));
+            return startCompoundDebug(*m_runController->selectedConfiguration());
         }
         if (type != run::RunType::Attach) {
             return std::nullopt;
@@ -246,8 +252,11 @@ void Workbench::createRunService() {
      * workspace nothing starts: the trust prompt asks, and once the user trusts the workspace it
      * starts this Debug again if the configuration is still the selected one.
      */
-    const auto prepareThenDebug = [this](run::RunConfiguration prepared, debug::DebugTarget target,
-                                         std::function<void(Result<debug::DebugTarget>)> done) -> Result<void> {
+    const auto primaryPrepareRun = std::make_shared<std::optional<run::RunId>>();
+    const auto primaryCMakePrepare = std::make_shared<bool>(false);
+    const auto prepareThenDebug =
+        [this, primaryPrepareRun](run::RunConfiguration prepared, debug::DebugTarget target,
+                                  std::function<void(Result<debug::DebugTarget>)> done) -> Result<void> {
         if (prepared.beforeLaunchTasks.empty() || !m_runManager) {
             done(std::move(target));
             return {};
@@ -268,14 +277,16 @@ void Workbench::createRunService() {
         prepared.workingDirectory = target.workingDirectory;
         const QPointer<Workbench> self(this);
         run::RunHandlers handlers;
-        handlers.onFinished = [self, target, done = std::move(done)](const run::RunResult& result) {
+        handlers.onFinished = [self, target, done = std::move(done), primaryPrepareRun](const run::RunResult& result) {
             if (!self)
                 return;
             QMetaObject::invokeMethod(
                 self.data(),
-                [self, target, done, result] {
+                [self, target, done, result, primaryPrepareRun] {
                     if (!self)
                         return;
+                    if (*primaryPrepareRun == result.id)
+                        primaryPrepareRun->reset();
                     if (result.error)
                         done(std::unexpected(*result.error));
                     else if (result.stopped)
@@ -288,6 +299,7 @@ void Workbench::createRunService() {
         auto started = m_runManager->start(prepared, std::move(handlers), run::RunMode::Prepare);
         if (!started)
             return std::unexpected(std::move(started.error()));
+        *primaryPrepareRun = *started;
         return {};
     };
     debugHooks.mayStart = [this] {
@@ -295,7 +307,8 @@ void Workbench::createRunService() {
                (!m_runManager || m_runManager->activeRuns().empty()) && m_runService->activeRuns().empty() &&
                (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
-    debugHooks.startAlternate = [this, nativeSelected, prepareThenDebug](auto done) -> Result<void> {
+    debugHooks.startAlternate = [this, nativeSelected, prepareThenDebug,
+                                 primaryCMakePrepare](auto done) -> Result<void> {
         if (nativeSelected()) {
             const run::RunConfiguration configuration = *m_runController->selectedConfiguration();
             auto plan = run::launchPlanFor(configuration);
@@ -317,29 +330,63 @@ void Workbench::createRunService() {
         if (!m_cmake)
             return fail(ErrorCode::InvalidArgument, "no CMake project is open");
         // The target's configuration (with the user's edits) names its before-launch tasks (RUN-5).
-        return m_cmake->debug([this, prepareThenDebug, done = std::move(done)](Result<debug::DebugTarget> target) {
-            const std::string id =
-                run::runConfigurationIdFor(run::kCMakeIdPrefix, m_cmake ? m_cmake->runTargetName() : std::string());
-            const run::RunConfiguration* edited =
-                m_runController ? m_runController->configurations().find(id) : nullptr;
-            if (!target || edited == nullptr || edited->beforeLaunchTasks.empty()) {
-                done(std::move(target));
-                return;
-            }
-            if (auto prepared = prepareThenDebug(*edited, std::move(*target), done); !prepared)
-                done(std::unexpected(std::move(prepared.error())));
-        });
+        *primaryCMakePrepare = true;
+        auto accepted = m_cmake->debug(
+            [this, prepareThenDebug, primaryCMakePrepare, done = std::move(done)](Result<debug::DebugTarget> target) {
+                *primaryCMakePrepare = false;
+                const std::string id =
+                    run::runConfigurationIdFor(run::kCMakeIdPrefix, m_cmake ? m_cmake->runTargetName() : std::string());
+                const run::RunConfiguration* edited =
+                    m_runController ? m_runController->configurations().find(id) : nullptr;
+                if (!target || edited == nullptr || edited->beforeLaunchTasks.empty()) {
+                    done(std::move(target));
+                    return;
+                }
+                if (auto prepared = prepareThenDebug(*edited, std::move(*target), done); !prepared)
+                    done(std::unexpected(std::move(prepared.error())));
+            });
+        if (!accepted)
+            *primaryCMakePrepare = false;
+        return accepted;
     };
-    debugHooks.stopAlternate = [this] {
-        if (m_cmake)
+    debugHooks.stopAlternate = [this, primaryPrepareRun, primaryCMakePrepare] {
+        if (*primaryCMakePrepare && m_cmake) {
+            *primaryCMakePrepare = false;
             m_cmake->stop();
-        // RUN-5: Stop while Debug's before-launch tasks run ends them (the only Prepare runs).
-        if (m_runManager)
-            for (const run::RunStatus& status : m_runManager->activeRuns())
-                if (status.mode == run::RunMode::Prepare)
-                    m_runManager->stop(status.id);
+        }
+        // Cancel only the primary controller's own preparation, never a compound sibling's task.
+        if (m_runManager && primaryPrepareRun->has_value()) {
+            m_runManager->stop(**primaryPrepareRun);
+            primaryPrepareRun->reset();
+        }
     };
+    ui::DebugControllerHooks childHooks;
+    childHooks.currentEditor = debugHooks.currentEditor;
+    childHooks.openSource = [this](const QString& path, int line) -> ui::EditorView* {
+        if (!openPath(path.toStdString(), FileLocation{line, 1}))
+            return nullptr;
+        auto* view = currentView();
+        return view ? &view->editor() : nullptr;
+    };
+    childHooks.notify = debugHooks.notify;
+    childHooks.showToolWindow = debugHooks.showToolWindow;
+    auto childOptions = debugOptions;
+    childOptions.allowRerun = false;
     m_debug = std::make_unique<ui::DebugController>(m_breakpoints, std::move(debugOptions), std::move(debugHooks));
+    m_debugSessions = std::make_unique<ui::DebugSessionRegistry>(
+        m_breakpoints, *m_debug, [childOptions, childHooks](debug::BreakpointManager& breakpoints) {
+            return std::make_unique<ui::DebugController>(breakpoints, childOptions, childHooks);
+        });
+    m_compoundDebug = std::make_unique<MultiSessionDebugCoordinator>(*m_debugSessions);
+    connect(m_compoundDebug.get(), &MultiSessionDebugCoordinator::failed, this,
+            [this](const QString& error) { notify(text("Debug"), error, ui::NotificationKind::Error); });
+    const auto refreshDebug = [this] {
+        if (m_window)
+            m_window->refreshActions();
+    };
+    connect(m_debugSessions.get(), &ui::DebugSessionRegistry::sessionStateChanged, this, refreshDebug);
+    connect(m_debugSessions.get(), &ui::DebugSessionRegistry::selectedChanged, this, refreshDebug);
+    connect(m_compoundDebug.get(), &MultiSessionDebugCoordinator::stateChanged, this, refreshDebug);
     connect(m_debug.get(), &ui::DebugController::stateChanged, this, [this] {
         if (m_managedDebugSnapshot && !m_debug->debugging())
             invalidateManagedDebug();
@@ -347,7 +394,14 @@ void Workbench::createRunService() {
     m_managedDebugPreparation =
         std::make_unique<ManagedDebugPreparation>(m_services.launcher, m_services.trust, systemClock());
     m_debug->setRunService(m_runService.get());
-    if (auto registered = ui::registerDebugActions(m_registry, *m_debug); !registered)
+    if (auto registered = ui::registerDebugActions(
+            m_registry, *m_debugSessions, [this] { return startSelectedDebugConfiguration(); },
+            [this] {
+                return !m_shutDown && !m_projectRoot.empty() && !m_compoundDebug->busy() &&
+                       !m_buildService->projectEditInProgress() && m_buildService->state() == build::BuildState::Idle &&
+                       (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
+            });
+        !registered)
         log::warn(kLog, "debug actions: {}", registered.error().describe());
     input::ActionSpec managedDebug;
     managedDebug.id = "run.debugManaged";
@@ -379,14 +433,17 @@ void Workbench::createRunService() {
         log::warn(kLog, "attach process action: {}", added.error().describe());
     ui::RunActionHooks actionHooks;
     actionHooks.debugging = [this] {
-        return (m_debug && (m_debug->debugging() || m_debug->rerunPending())) ||
+        return (m_debugSessions && (m_debugSessions->anyDebugging() || m_debugSessions->anyRerunPending() ||
+                                    m_debugSessions->hasPendingWork())) ||
                (m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob != nullptr;
     };
     actionHooks.stopDebugging = [this] {
         if ((m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob)
             invalidateManagedDebug();
-        if (m_debug)
-            m_debug->stop();
+        if (m_compoundDebug && m_compoundDebug->busy())
+            m_compoundDebug->cancel();
+        else if (m_debugSessions)
+            m_debugSessions->stopSelected();
     };
     actionHooks.selectedProject = [this]() -> std::optional<project::ProjectId> {
         return m_explorer ? m_explorer->currentProject() : std::nullopt;
@@ -546,13 +603,8 @@ void Workbench::attachToProcess(std::uint32_t pid, const std::string& exePath, c
                          .set("processId", static_cast<std::int64_t>(pid))
                          .set("justMyCode", false);
     } else {
-        auto lldbPath = debug::findLldbDap(
-            m_services.fs, debug::defaultLldbDapSearch(m_services.settings.snapshot()->get(key::toolsLldbDapPath)));
-        if (!lldbPath) {
-            notify(text("Attach to Process (Native C++)"), qs(lldbPath.error().message()), ui::NotificationKind::Error);
-            return;
-        }
-        factory = debug::lldbDapAdapterFactory(m_services.launcher, *lldbPath);
+        // Default native adapter resolution occurs in the controller at session start, capturing
+        // immutable pinned LLDB thread-ID provenance. Custom factories above stay unverified.
         attachArgs = rpc::Json::object()
                          .set("name", target.name)
                          .set("type", "lldb-dap")

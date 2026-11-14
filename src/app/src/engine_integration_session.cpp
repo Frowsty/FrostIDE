@@ -3,12 +3,14 @@
 #include "frost/io/path.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/ui/debug_controller.hpp"
+#include "frost/ui/debug_session_registry.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/toolwindows/engine_console.hpp"
 #include "frost/ui/toolwindows/engine_view.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 
 #include "engine_integration_internal.hpp"
+#include "engine_native_host_internal.hpp"
 #include <QComboBox>
 #include <QMetaObject>
 #include <QPushButton>
@@ -46,7 +48,9 @@ void EngineIntegration::Impl::retireSession() {
     tasks.push_back(workbench.m_pool->spawn(sched::Lane::Background, retireEngineSession(std::move(session))));
 }
 
-void EngineIntegration::Impl::clearSession(bool clearOutput) {
+void EngineIntegration::Impl::clearSession(bool clearOutput, bool preserveCrashObservation) {
+    if (!preserveCrashObservation)
+        revokeCrashObservation();
     ++sessionEpoch;
     eventQueue->active.store(false);
     pushSink = {};
@@ -57,8 +61,8 @@ void EngineIntegration::Impl::clearSession(bool clearOutput) {
     identity.reset();
     state.reset();
     nativeTarget.reset();
-    retainedDebugGeneration.reset();
-    nativeBoundDebugGeneration.reset();
+    retainedNativeBinding.reset();
+    nativeBoundBinding.reset();
     selectedInstance.clear();
     selectedServerGeneration.clear();
     lastRequest = 0;
@@ -79,6 +83,8 @@ void EngineIntegration::Impl::clearSession(bool clearOutput) {
         console->clear();
     if (indicator)
         indicator->setState(ui::EngineConnectionState::Disconnected);
+    if (nativeDebug)
+        nativeDebug->refresh();
     updateControls();
 }
 
@@ -90,8 +96,8 @@ bool EngineIntegration::Impl::currentIdentity(const engine::EngineIdentity& obse
 
 Result<void> EngineIntegration::pair(std::string_view instanceId) {
     auto& impl = *m_impl;
-    if (impl.ownedRun)
-        return fail(ErrorCode::Busy, "Stop the owned engine run before pairing another editor");
+    if (impl.ownedRun || impl.nativeHost)
+        return fail(ErrorCode::Busy, "Stop the owned engine host before pairing another editor");
     if (instanceId.empty())
         return fail(ErrorCode::InvalidArgument, "Select an editor instance to pair");
     const auto found = std::ranges::find(impl.instances, instanceId, &EngineInstanceRecord::instanceId);
@@ -115,11 +121,12 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
     const auto expectedRoot = root;
     const auto revision = trustRevision;
     const auto sharedPolicy = policy;
+    const auto crashHolder = crashSessions;
     const auto rootKey = projectKey;
     const auto admission = physicalAdmission;
     auto* trust = &workbench.m_services.trust;
     auto* fs = &workbench.m_services.fs;
-    const auto directory = ownedRun ? ownedConfigDirectory + "/Automation" : automationDirectory;
+    const auto directory = (ownedRun || nativeHost) ? ownedConfigDirectory + "/Automation" : automationDirectory;
     QPointer<EngineIntegration> self(&owner);
     engine::EngineSessionOptions options;
     options.endpoint = std::move(*endpoint);
@@ -224,14 +231,19 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
     };
     pushSink = push;
     engine::EngineSessionCallbacks callbacks;
-    callbacks.connected = [post, sharedPolicy, rootKey](const engine::EngineIdentity& observed) {
+    const auto nativeLease = nativeHost;
+    callbacks.connected = [post, sharedPolicy, rootKey, crashHolder,
+                           nativeLease](const engine::EngineIdentity& observed) {
         std::string schemaError;
+        if (nativeLease && (!nativeLease->active.load() || nativeLease->pid.load() <= 0 ||
+                            observed.processId != nativeLease->pid.load()))
+            schemaError = "Authenticated engine PID differs from its exact native DAP launch";
         {
             std::scoped_lock lock(sharedPolicy->mutex);
             sharedPolicy->policy.reset();
             sharedPolicy->context = {};
             auto schema = engine::parseSchemaDocument(observed.schema);
-            if (schema) {
+            if (schema && schemaError.empty()) {
                 sharedPolicy->policy =
                     std::make_unique<engine::CommandPolicy>(std::move(*schema), rootKey, sessionKey(observed));
                 auto& context = sharedPolicy->context;
@@ -247,16 +259,20 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
                 context.sessionId = sessionKey(observed);
                 context.capabilities = observed.capabilities;
                 context.availableCommands = observed.availableCommands;
-            } else {
+            } else if (!schema) {
                 schemaError = schema.error().message();
             }
         }
-        post(observed, [schemaError = std::move(schemaError)](Impl& impl, const engine::EngineIdentity& value) {
+        if (schemaError.empty())
+            crashHolder->authenticated(observed);
+        post(observed, [schemaError = std::move(schemaError), nativeLease](Impl& impl,
+                                                                           const engine::EngineIdentity& value) {
+            if (nativeLease && (impl.nativeHost != nativeLease || !nativeLease->active.load()))
+                return;
             if (impl.selectedInstance != value.instanceId)
                 return;
             if (!schemaError.empty()) {
-                if (impl.ownedRun && impl.workbench.m_runManager)
-                    impl.workbench.m_runManager->stop(*impl.ownedRun);
+                impl.stopOwnedHost();
                 impl.clearSession(false);
                 impl.lastError = schemaError;
                 impl.setStatus(qs(schemaError));
@@ -265,8 +281,8 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
             impl.identity = value;
             const auto processId = value.processId > 0 ? value.processId : static_cast<std::int64_t>(impl.ownedPid);
             impl.nativeTarget.reset();
-            impl.retainedDebugGeneration.reset();
-            impl.nativeBoundDebugGeneration.reset();
+            impl.retainedNativeBinding.reset();
+            impl.nativeBoundBinding.reset();
             if (processId > 0)
                 impl.nativeTarget = EngineNativeDebugTarget{
                     processId,         value.instanceId,  value.generation, impl.root, value.connectionGeneration,
@@ -283,7 +299,10 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
                 impl.startupWatch->stop();
             impl.indicator->setState(ui::EngineConnectionState::Connected);
             impl.setStatus(QStringLiteral("Authenticated with engine %1").arg(qs(value.instanceId)));
+            if (impl.nativeDebug)
+                impl.nativeDebug->refresh();
             impl.updateControls();
+            emit impl.owner.crashSourceObserved();
         });
     };
     callbacks.state = [push, sharedPolicy](const engine::EngineState& observed) {
@@ -296,26 +315,46 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
     };
     callbacks.log = [push](const engine::EngineLogEntry& value) { push(value); };
     callbacks.diagnostic = [push](const engine::EngineDiagnostic& value) { push(value); };
-    callbacks.disconnected = [post, sharedPolicy](const engine::EngineDisconnect& observed) {
+    callbacks.disconnected = [post, sharedPolicy, crashHolder](const engine::EngineDisconnect& observed) {
         {
             std::scoped_lock lock(sharedPolicy->mutex);
             sharedPolicy->context.connected = false;
             sharedPolicy->context.state.clear();
             sharedPolicy->policy.reset();
         }
+        const bool unexpected =
+            observed.cause == engine::EngineDisconnectCause::Unexpected &&
+            (observed.error.code() == ErrorCode::IoError || observed.error.code() == ErrorCode::Timeout);
+        (void)crashHolder->lost(observed.identity, unexpected);
         post(observed, [](Impl& impl, const engine::EngineDisconnect& value) {
             if (impl.identity && !impl.currentIdentity(value.identity))
                 return;
-            const auto* controller = impl.workbench.m_debug.get();
+            const bool unexpected =
+                value.cause == engine::EngineDisconnectCause::Unexpected &&
+                (value.error.code() == ErrorCode::IoError || value.error.code() == ErrorCode::Timeout);
+            if (unexpected)
+                impl.observedCrashLoss(value.identity);
+            else
+                impl.revokeCrashObservation();
+            const auto* registry = impl.workbench.m_debugSessions.get();
+            const auto* binding = impl.nativeBoundBinding ? &*impl.nativeBoundBinding : nullptr;
+            const auto* controller = binding && registry ? registry->controller(binding->registrySessionId) : nullptr;
+            const auto unique =
+                registry && binding ? registry->nativeForPid(binding->target.pid) : ui::DebugSessionEntry{};
             const auto* native = controller && controller->nativeSession() ? controller->session() : nullptr;
-            if (impl.identity && impl.nativeTarget && impl.nativeBoundDebugGeneration && controller &&
-                controller->sessionGeneration() == *impl.nativeBoundDebugGeneration && native &&
-                native->state() == debug::DebugState::Stopped && native->processId() == impl.nativeTarget->pid) {
-                impl.retainedDebugGeneration = controller->sessionGeneration();
-            } else if (!impl.retainedDebugGeneration || !controller ||
-                       controller->sessionGeneration() != *impl.retainedDebugGeneration) {
+            if (impl.identity && impl.nativeTarget && binding && binding->target == *impl.nativeTarget && controller &&
+                controller == binding->controller && unique.id == binding->registrySessionId &&
+                unique.controller == controller && controller->sessionGeneration() == binding->debugGeneration &&
+                native && controller->adapterStoppedEvidence() && native->processId() == impl.nativeTarget->pid) {
+                impl.retainedNativeBinding = *binding;
+            } else if (!impl.retainedNativeBinding || !registry ||
+                       registry->controller(impl.retainedNativeBinding->registrySessionId) !=
+                           impl.retainedNativeBinding->controller ||
+                       !impl.retainedNativeBinding->controller ||
+                       impl.retainedNativeBinding->controller->sessionGeneration() !=
+                           impl.retainedNativeBinding->debugGeneration) {
                 impl.nativeTarget.reset();
-                impl.retainedDebugGeneration.reset();
+                impl.retainedNativeBinding.reset();
             }
             impl.identity.reset();
             impl.state.reset();
@@ -328,8 +367,8 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
             impl.setStatus(qs(value.error.message()) +
                            QStringLiteral(" Refresh and select Pair to choose a replacement editor."));
             impl.observeEvent("disconnected", lang::Json::object().set("reason", value.error.message()));
-            if (!value.reconnecting && impl.ownedRun && impl.workbench.m_runManager)
-                impl.workbench.m_runManager->stop(*impl.ownedRun);
+            if (!value.reconnecting)
+                impl.stopOwnedHost();
             impl.updateControls();
         });
     };
@@ -438,10 +477,17 @@ lang::Json EngineIntegration::snapshot() const {
                    .set("discoveryBusy", impl.discoveryBusy)
                    .set("selectedInstanceId", impl.selectedInstance)
                    .set("connected", current && impl.session && impl.identity && impl.session->connected())
+                   .set("processId", current && impl.session && impl.session->connected() && impl.identity
+                                         ? impl.identity->processId
+                                         : std::int64_t{0})
                    .set("state", current && impl.state ? lang::Json(impl.state->state) : lang::Json{})
                    .set("playing", current && impl.state ? lang::Json(impl.state->playing) : lang::Json{})
                    .set("paused", current && impl.state ? lang::Json(impl.state->paused) : lang::Json{})
                    .set("frame", current && impl.state ? lang::Json(impl.state->frame) : lang::Json{})
+                   .set("playGeneration", current && impl.state ? lang::Json(impl.state->playGeneration) : lang::Json{})
+                   .set("operationId", current && impl.state ? lang::Json(impl.state->operationId) : lang::Json{})
+                   .set("phase", current && impl.state ? lang::Json(impl.state->phase) : lang::Json{})
+                   .set("operationError", current && impl.state ? lang::Json(impl.state->operationError) : lang::Json{})
                    .set("eventSequence", impl.lastEventSequence)
                    .set("lastRequestId", impl.lastRequest)
                    .set("lastCompletedRequestId", impl.lastCompletedRequest)

@@ -356,6 +356,20 @@ Result<build::RunId> RunController::run(std::optional<project::ProjectId> projec
     return runService(std::nullopt);
 }
 
+Result<run::RunId> RunController::runEngineConfiguration(const run::RunConfiguration& configuration) {
+    if (!run::isFrostEngineRunType(configuration.type))
+        return fail(ErrorCode::InvalidArgument, "Transient engine launch requires an Editor or Player configuration");
+    // R7 explicitly adds an independent debugger session. The ordinary Run veto while a primary
+    // debugger is live does not apply; runNative still enforces per-configuration project/trust
+    // admission, preparation, before-task admission and exact engine reservation.
+    if (configurationRunning(configuration.id))
+        return fail(ErrorCode::Busy, "This engine configuration is already running");
+    auto started = runNative(configuration);
+    if (!started)
+        return std::unexpected(started.error());
+    return *started;
+}
+
 Result<build::RunId> RunController::runConfiguration(const std::string& id) {
     if (m_hooks.mayRun && !m_hooks.mayRun())
         return fail(ErrorCode::Busy, "stop debugging first");
@@ -484,6 +498,13 @@ Result<build::RunId> RunController::runService(std::optional<project::ProjectId>
     return m_service->rerun(id);
 }
 
+void RunController::notifyExplicitEngineStop(run::RunId id) {
+    if (!m_hooks.engineStopRequested || !m_runs)
+        return;
+    if (std::ranges::any_of(m_native, [id](const auto& entry) { return entry.second.id == id && entry.second.engine; }))
+        m_hooks.engineStopRequested(id);
+}
+
 Result<build::RunId> RunController::runNative(const run::RunConfiguration& configuration) {
     if (m_runs == nullptr) {
         return fail(ErrorCode::Unsupported, "native run configurations need the RunManager");
@@ -497,6 +518,7 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
         }
         // Rerun: the run ends (its whole tree), then nativeFinished starts it again.
         m_native[configuration.id].rerunPending = true;
+        notifyExplicitEngineStop(*active);
         m_runs->stop(*active);
         return build::RunId{*active};
     }
@@ -521,7 +543,8 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
         launchConfiguration = std::move(*prepared);
         if (launchConfiguration.id != configuration.id || launchConfiguration.type != configuration.type ||
             launchConfiguration.program != configuration.program ||
-            launchConfiguration.engineProjectPath != configuration.engineProjectPath) {
+            launchConfiguration.engineProjectPath != configuration.engineProjectPath ||
+            launchConfiguration.engineDebugMode != configuration.engineDebugMode) {
             Error error(ErrorCode::InvalidArgument, "engine preparation changed the run identity, program or project");
             if (m_hooks.engineProcessFinished) {
                 run::RunResult failed;
@@ -538,12 +561,14 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
         RunTabHandlers handlers;
         handlers.stop = [this, id] {
             if (const auto active = configurationRun(id); active && m_runs != nullptr) {
+                notifyExplicitEngineStop(*active);
                 m_runs->stop(*active);
             }
         };
         handlers.rerun = [this, id] {
             if (const auto active = configurationRun(id); active && m_runs != nullptr) {
                 m_native[id].rerunPending = true;
+                notifyExplicitEngineStop(*active);
                 m_runs->stop(*active);
                 return;
             }
@@ -679,6 +704,7 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
     entry.id = *started;
     entry.console = console;
     entry.rerunPending = false;
+    entry.engine = engine;
     if (engine && m_hooks.engineRunAccepted) {
         m_hooks.engineRunAccepted(*started, launchConfiguration);
     }
@@ -713,6 +739,7 @@ Result<build::RunId> RunController::rerun() {
         const std::string id = key.mid(7).toStdString();
         if (const auto active = configurationRun(id); active && m_runs != nullptr) {
             m_native[id].rerunPending = true;
+            notifyExplicitEngineStop(*active);
             m_runs->stop(*active);
             return build::RunId{*active};
         }
@@ -749,6 +776,7 @@ void RunController::stop() {
     if (m_runs != nullptr) {
         for (const auto& [id, entry] : m_native) {
             if (entry.id != 0) {
+                notifyExplicitEngineStop(entry.id);
                 m_runs->stop(entry.id);
             }
         }

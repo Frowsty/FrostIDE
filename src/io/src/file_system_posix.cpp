@@ -331,6 +331,57 @@ public:
         return out;
     }
 
+    Result<std::string> readFileSnapshot(std::string_view path, std::size_t maxBytes) override {
+        auto checked = checkedPath(path);
+        if (!checked)
+            return std::unexpected(checked.error());
+        UniqueFd file(::open(checked->c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOCTTY | O_NOFOLLOW));
+        if (!file.valid()) {
+            if (errno == ELOOP)
+                return fail(ErrorCode::PermissionDenied, "snapshot cannot follow a symbolic link");
+            return std::unexpected(errnoError(errno, "readFileSnapshot", path));
+        }
+        struct stat before{};
+        if (::fstat(file.get(), &before) != 0)
+            return std::unexpected(errnoError(errno, "readFileSnapshot", path));
+        if (!S_ISREG(before.st_mode))
+            return fail(ErrorCode::InvalidArgument, "snapshot is not a regular file");
+        if (before.st_nlink != 1)
+            return fail(ErrorCode::PermissionDenied, "snapshot refuses hard-linked files");
+        if (before.st_size < 0 || static_cast<std::uint64_t>(before.st_size) > maxBytes)
+            return fail(ErrorCode::OutOfRange, "snapshot exceeds its byte limit");
+        std::string bytes(static_cast<std::size_t>(before.st_size), '\0');
+        std::size_t used = 0;
+        while (used < bytes.size()) {
+            const auto got =
+                ::read(file.get(), bytes.data() + used, std::min<std::size_t>(bytes.size() - used, 64 * 1024));
+            if (got < 0) {
+                if (errno == EINTR)
+                    continue;
+                return std::unexpected(errnoError(errno, "readFileSnapshot", path));
+            }
+            if (got == 0)
+                return fail(ErrorCode::Busy, "snapshot was truncated during its read");
+            used += static_cast<std::size_t>(got);
+        }
+        char extra = 0;
+        ssize_t got;
+        do {
+            got = ::read(file.get(), &extra, 1);
+        } while (got < 0 && errno == EINTR);
+        if (got < 0)
+            return std::unexpected(errnoError(errno, "readFileSnapshot", path));
+        struct stat after{};
+        if (::fstat(file.get(), &after) != 0)
+            return std::unexpected(errnoError(errno, "readFileSnapshot", path));
+        if (got != 0 || before.st_dev != after.st_dev || before.st_ino != after.st_ino ||
+            before.st_size != after.st_size || before.st_mtim.tv_sec != after.st_mtim.tv_sec ||
+            before.st_mtim.tv_nsec != after.st_mtim.tv_nsec || before.st_ctim.tv_sec != after.st_ctim.tv_sec ||
+            before.st_ctim.tv_nsec != after.st_ctim.tv_nsec || before.st_nlink != after.st_nlink)
+            return fail(ErrorCode::Busy, "snapshot changed during its read");
+        return bytes;
+    }
+
     Result<void> writeFileAtomic(std::string_view path, std::string_view data) override {
         return writeFileAtomicImpl(path, data, std::nullopt);
     }

@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -105,11 +106,59 @@ class Journey(j1.Journey):
         assert self.endpoint is not None
         request = self.endpoint.call("engine.command", command=method, params=params or {})
         request_id = request["requestId"]
-        state = self.wait_snapshot(lambda value: value.get("lastRequestId") == request_id and
+        state = self.wait_snapshot(lambda value: value.get("lastCompletedRequestId") == request_id and
                                    (value.get("lastReply") is not None or bool(value.get("lastError"))))
         if state.get("lastError"):
             raise RuntimeError(f"real engine refused {method}: {state['lastError']}")
         return state["lastReply"]
+
+    def start_play(self) -> dict[str, Any]:
+        assert self.endpoint is not None
+        sequence = self.endpoint.call("engine.state")["eventSequence"]
+        receipt = self.command("play.start")
+        operation = receipt.get("operationId")
+        if not (receipt.get("accepted") is True and receipt.get("pending") is True and
+                receipt.get("startedNow") is False and receipt.get("state") == "Edit" and
+                receipt.get("mode") == "Edit" and receipt.get("phase") == "pending" and
+                receipt.get("playGeneration") == "" and isinstance(operation, str) and
+                re.fullmatch(r"[0-9a-f]{32}", operation)):
+            raise RuntimeError("real Play receipt did not identify its pending operation")
+
+        def matching(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+            return [event for event in snapshot.get("events", []) if event.get("topic") == "play.state" and
+                    event.get("sequence", 0) > sequence and
+                    (event.get("data") or {}).get("operationId") == operation and
+                    (event.get("data") or {}).get("phase") == "playing" and
+                    (event.get("data") or {}).get("state") == "Play" and
+                    bool((event.get("data") or {}).get("playGeneration"))]
+
+        state = self.wait_snapshot(lambda value: value.get("operationId") == operation and
+            value.get("phase") == "playing" and value.get("playing") is True and bool(matching(value)))
+        pushed = matching(state)[-1]
+        if state.get("playGeneration") != pushed["data"]["playGeneration"]:
+            raise RuntimeError("IDE Play generation differs from the actual committed operation push")
+        return {"receipt": receipt, "commit": pushed["data"], "sequence": pushed["sequence"]}
+
+    def stop_play(self, started: dict[str, Any]) -> dict[str, Any]:
+        assert self.endpoint is not None
+        operation, generation = started["commit"]["operationId"], started["commit"]["playGeneration"]
+        sequence = self.endpoint.call("engine.state")["eventSequence"]
+        reply = self.command("play.stop", {"expectedOperationId": operation, "expectedPlayGeneration": generation})
+        if not (reply.get("operationId") == operation and reply.get("phase") == "completed" and
+                reply.get("state") == "Edit" and reply.get("playGeneration") == ""):
+            raise RuntimeError("real guarded Stop did not complete its exact committed operation")
+
+        def matching(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+            return [event for event in snapshot.get("events", []) if event.get("topic") == "play.state" and
+                    event.get("sequence", 0) > sequence and
+                    (event.get("data") or {}).get("operationId") == operation and
+                    (event.get("data") or {}).get("phase") == "completed" and
+                    (event.get("data") or {}).get("state") == "Edit" and
+                    not (event.get("data") or {}).get("playGeneration")]
+
+        state = self.wait_snapshot(lambda value: value.get("state") == "Edit" and value.get("operationId") == operation
+                                  and value.get("phase") == "completed" and bool(matching(value)))
+        return {"reply": reply, "terminal": matching(state)[-1]}
 
     def _journey_session(self, corpus: Path, image: Path) -> None:
         assert self.endpoint is not None
@@ -192,19 +241,21 @@ class Journey(j1.Journey):
             return
 
         def transitions() -> tuple[bool, Any, Any, str]:
-            sequence = ep.call("engine.state")["eventSequence"]
-            self.command("play.start")
-            self.wait_snapshot(lambda value: value.get("eventSequence", 0) > sequence and value.get("playing") is True)
+            started = self.start_play()
+            operation, generation = started["commit"]["operationId"], started["commit"]["playGeneration"]
             observations: list[dict[str, Any]] = []
             for cycle in range(20):
                 for paused in (True, False):
                     sequence = ep.call("engine.state")["eventSequence"]
                     reply = self.command("play.pause", {"paused": paused})
                     state = self.wait_snapshot(lambda value: value.get("eventSequence", 0) > sequence and
-                                               value.get("paused") is paused)
+                                               value.get("paused") is paused and value.get("operationId") == operation
+                                               and value.get("playGeneration") == generation)
                     matching = [event for event in state.get("events", []) if event.get("topic") == "play.state"
                                 and event.get("sequence", 0) > sequence and
-                                (event.get("data") or {}).get("paused") is paused]
+                                (event.get("data") or {}).get("paused") is paused and
+                                (event.get("data") or {}).get("operationId") == operation and
+                                (event.get("data") or {}).get("playGeneration") == generation]
                     if not matching or reply.get("paused") is not paused:
                         return False, {"cycles": 20, "pushOnly": True}, observations, "missing actual play.state push"
                     observations.append({"cycle": cycle, "paused": paused, "sequence": matching[-1]["sequence"]})
@@ -213,11 +264,11 @@ class Journey(j1.Journey):
             frame, sequence = paused_state["frame"], paused_state["eventSequence"]
             self.command("play.step", {"frames": 1})
             stepped = self.wait_snapshot(lambda value: value.get("eventSequence", 0) > sequence and
-                                        value.get("frame", 0) > frame and value.get("paused") is True)
-            self.command("play.stop")
-            self.wait_snapshot(lambda value: value.get("state") == "Edit")
+                                        value.get("frame", 0) > frame and value.get("paused") is True and
+                                        value.get("operationId") == operation and value.get("playGeneration") == generation)
+            stopped = self.stop_play(started)
             return True, {"cycles": 20, "stepFrameIncreases": True}, {"transitions": observations,
-                "frameBeforeStep": frame, "frameAfterStep": stepped["frame"]}, ""
+                "frameBeforeStep": frame, "frameAfterStep": stepped["frame"], "start": started, "stop": stopped}, ""
         def live_diagnostic() -> tuple[bool, Any, Any, str]:
             expected_path = project / diagnostic["path"]
             deadline = time.monotonic() + 30
@@ -239,12 +290,10 @@ class Journey(j1.Journey):
                         "logStreamed": bool(logs), "editor": opened, "problem": problems[found]}, ""
                 time.sleep(0.02)
             return False, diagnostic, problems, "real engine diagnostic did not appear in Problems"
-        self.command("play.start")
-        self.wait_snapshot(lambda value: value.get("playing") is True)
+        diagnostic_play = self.start_play()
         if not self.run_step("live engine log arrives and script error Problems activates the CLI oracle file and line", live_diagnostic):
             return
-        self.command("play.stop")
-        self.wait_snapshot(lambda value: value.get("state") == "Edit")
+        self.stop_play(diagnostic_play)
         if not self.run_step("Play, twenty pause/resume cycles, Step and Stop follow real push events", transitions):
             return
 

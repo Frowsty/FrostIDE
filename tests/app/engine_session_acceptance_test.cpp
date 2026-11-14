@@ -1,29 +1,49 @@
 // SPDX-License-Identifier: Apache-2.0
-// R6 mandatory Workbench acceptance against isolated real pinned FrostEditor processes.
+// R6/R7 Workbench acceptance against isolated real pinned engines, scene providers and dump adapters.
+#include "frost/engine/crash_artifact.hpp"
+#include "frost/engine/engine_test_provider.hpp"
 #include "frost/engine/project_content.hpp"
 #include "frost/engine/schema.hpp"
 #include "frost/io/async_process.hpp"
+#include "frost/io/os_error.hpp"
+#include "frost/io/utf.hpp"
 #include "frost/run/run_manager.hpp"
+#include "frost/ui/debug_controller.hpp"
+#include "frost/ui/debug_session_registry.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/engine_console.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 
+#include "engine_crash_observer.hpp"
 #include "support/real_engine_session.hpp"
 #include "workbench_rig.hpp"
 #include <QAction>
 #include <QMenu>
 #include <QPushButton>
+#include <QTabWidget>
 #include <QTreeView>
 #include <QTreeWidget>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <iterator>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <tuple>
+#include <type_traits>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#ifndef FROST_DBGENG_ADAPTER_PATH
+#error "The real crash composition case requires the built frost-dbgeng-dap path"
+#endif
+#endif
 
 namespace {
 using namespace std::chrono_literals;
@@ -939,4 +959,279 @@ TEST_F(RealEngineWorkbench, RevokedTrustCompletesOwnedEditorAndShutdownPreserves
         << "Workbench shutdown terminated an externally paired editor";
     (*survivor)->shutdown();
 }
+TEST_F(RealEngineWorkbench, ActualSceneListingAndSelectedRunPopulateTheWorkbenchUnitTestsProvider) {
+    auto& fs = frost::io::realFileSystem();
+    ASSERT_TRUE(frost::test::installAcceptanceScript(
+        project,
+        "local Cases = {}\nfunction Cases:OnCreate()\n"
+        "  Test.Case('real composed passing case', function() Test.Equal(2 + 2, 4) end)\n"
+        "  Test.Case('real composed failing case', function() Test.Equal(2 + 2, 5, 'real composed failure') end)\n"
+        "end\nreturn Cases\n"));
+    ASSERT_TRUE(build.cli("assets.refresh", project));
+    auto rawListing = build.cli("test.list", project, Json::object().set("folder", "Tests"));
+    ASSERT_TRUE(rawListing) << rawListing.error().describe();
+    auto listing = frost::engine::parseEngineTestListing(*rawListing);
+    ASSERT_TRUE(listing) << listing.error().describe();
+    ASSERT_FALSE(listing->tests.empty());
+    const auto selected =
+        std::ranges::find(listing->tests, "Assets/Tests/FeatureTest.fscene", &frost::engine::EngineSceneTest::scene);
+    ASSERT_NE(selected, listing->tests.end());
+    // Match the actual product provider's default invocation; the independent CLI owns the oracle.
+    const frost::engine::EngineTestProviderOptions defaults;
+    auto rawRun = build.cli("test.run", project,
+                            Json::object()
+                                .set("scenes", Json::array({selected->scene}))
+                                .set("frames", defaults.frames)
+                                .set("mode", "headless"));
+    ASSERT_TRUE(rawRun) << rawRun.error().describe();
+    const std::array scenes{selected->scene};
+    auto reports = frost::engine::parseEngineTestRun(*rawRun, scenes);
+    ASSERT_TRUE(reports) << reports.error().describe();
+    ASSERT_EQ(reports->size(), scenes.size());
+    const auto& oracle = reports->front();
+    ASSERT_EQ(oracle.outcome, frost::engine::EngineTestOutcome::Failed);
+    ASSERT_FALSE(oracle.cases.empty());
+    ASSERT_FALSE(oracle.failures.empty());
+
+    WorkbenchRig rig(dir, options());
+    ASSERT_NO_FATAL_FAILURE(open(rig));
+    ASSERT_TRUE(waitFor([&] { return !rig.workbench->engineState().boolAt("discoveryBusy").value_or(true); }, 30s));
+    rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow, false);
+    auto* providers = qobject_cast<QTabWidget*>(rig.window->toolWindows().content(frost::app::kUnitTestsToolWindow));
+    ASSERT_NE(providers, nullptr);
+    auto* widget = providers->findChild<QWidget*>(QStringLiteral("engineUnitTestsProvider"));
+    ASSERT_NE(widget, nullptr);
+    providers->setCurrentWidget(widget);
+    auto* tree = widget->findChild<QTreeWidget*>(QStringLiteral("engineTestsTree"));
+    auto* runSelected = widget->findChild<QPushButton*>(QStringLiteral("engineTestsRunSelected"));
+    auto* runAll = widget->findChild<QPushButton*>(QStringLiteral("engineTestsRunAll"));
+    auto* runFailed = widget->findChild<QPushButton*>(QStringLiteral("engineTestsRunFailed"));
+    ASSERT_NE(tree, nullptr);
+    ASSERT_NE(runSelected, nullptr);
+    ASSERT_NE(runAll, nullptr);
+    ASSERT_NE(runFailed, nullptr);
+    ASSERT_TRUE(waitFor([&] { return runAll->isEnabled(); }, 30s));
+    ASSERT_EQ(static_cast<std::size_t>(tree->topLevelItemCount()), listing->tests.size());
+    QTreeWidgetItem* selectedRow = nullptr;
+    for (int index = 0; index < tree->topLevelItemCount(); ++index) {
+        auto* item = tree->topLevelItem(index);
+        const auto& actual = listing->tests[static_cast<std::size_t>(index)];
+        EXPECT_EQ(item->text(0).toStdString(), actual.scene);
+        EXPECT_EQ(item->data(0, Qt::UserRole).toString().toStdString(), actual.id);
+        EXPECT_EQ(item->childCount(), 0); // test.list does not invent runtime Test.Case declarations.
+        if (actual.id == selected->id)
+            selectedRow = item;
+    }
+    ASSERT_NE(selectedRow, nullptr);
+    tree->setCurrentItem(selectedRow);
+    ASSERT_TRUE(runSelected->isEnabled());
+    runSelected->click();
+    ASSERT_TRUE(waitFor([&] { return runAll->isEnabled() && runFailed->isEnabled(); }, 30s));
+    // render() replaces tree items. Reacquire by the real scene identity after the asynchronous run.
+    selectedRow = nullptr;
+    for (int index = 0; index < tree->topLevelItemCount(); ++index)
+        if (tree->topLevelItem(index)->data(0, Qt::UserRole).toString().toStdString() == selected->id)
+            selectedRow = tree->topLevelItem(index);
+    ASSERT_NE(selectedRow, nullptr);
+    EXPECT_EQ(selectedRow->text(1).toStdString(), frost::engine::toString(oracle.outcome));
+    ASSERT_EQ(static_cast<std::size_t>(selectedRow->childCount()), oracle.cases.size() + oracle.failures.size());
+    for (std::size_t index = 0; index < oracle.cases.size(); ++index) {
+        const auto& expected = oracle.cases[index];
+        const auto* child = selectedRow->child(static_cast<int>(index));
+        EXPECT_EQ(child->text(0).toStdString(),
+                  expected.peer.empty() ? expected.name : expected.peer + ": " + expected.name);
+        EXPECT_EQ(child->text(1).toStdString(), frost::engine::toString(expected.outcome));
+        if (!expected.duration)
+            EXPECT_EQ(child->text(2), QString::fromUtf8("—"));
+    }
+    const auto failure =
+        std::ranges::find_if(oracle.failures, [](const auto& value) { return value.location.has_value(); });
+    ASSERT_NE(failure, oracle.failures.end());
+    const auto failureIndex = static_cast<std::size_t>(std::distance(oracle.failures.begin(), failure));
+    auto* failureRow = selectedRow->child(static_cast<int>(oracle.cases.size() + failureIndex));
+    EXPECT_EQ(failureRow->text(0).toStdString(), failure->message);
+    EXPECT_EQ(failureRow->data(0, Qt::UserRole + 2).toString().toStdString(), failure->location->path);
+    EXPECT_EQ(failureRow->data(0, Qt::UserRole + 3).toULongLong(), failure->location->line);
+    tree->setCurrentItem(failureRow);
+    EXPECT_FALSE(runSelected->isEnabled()); // Runtime children cannot be silently rerun as selectable scenes.
+    const auto expectedPath = fs.physicalPath(project + "/" + failure->location->path);
+    ASSERT_TRUE(expectedPath);
+    tree->itemDoubleClicked(failureRow, 0);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            auto* view = rig.workbench->currentView();
+            return view && fs.physicalPath(view->path()).value_or("") == *expectedPath &&
+                   static_cast<std::uint64_t>(view->status().line) == failure->location->line;
+        },
+        10s));
+}
+#ifdef _WIN32
+// A fixed fault in this test's own disposable editor, never an externally selected process.
+// Retaining the native process handle and then proving the original launcher owner remains alive
+// excludes PID reuse. No enumeration/name targeting or configurable executable payload exists.
+frost::Result<void> faultOwnedEditor(frost::test::RealEditor& editor, frost::io::ProcessId expectedPid,
+                                     const std::string& expectedImage) {
+    using Handle = std::unique_ptr<std::remove_pointer_t<HANDLE>, decltype(&CloseHandle)>;
+    // CreateRemoteThread's documented required rights, not PROCESS_ALL_ACCESS:
+    // https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-createremotethread
+    constexpr DWORD rights =
+        PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ;
+    Handle process(OpenProcess(rights, FALSE, expectedPid), &CloseHandle);
+    if (!process)
+        return std::unexpected(frost::io::lastWin32Error("owned editor fault: acquire process"));
+    auto liveOwner = editor.requireLiveOwnedProcess(expectedPid);
+    if (!liveOwner)
+        return liveOwner;
+    std::array<wchar_t, 32768> image{};
+    DWORD length = static_cast<DWORD>(image.size());
+    if (!QueryFullProcessImageNameW(process.get(), 0, image.data(), &length))
+        return std::unexpected(frost::io::lastWin32Error("owned editor fault: query image"));
+    auto actualImage = frost::io::fromWide(std::wstring_view(image.data(), length));
+    if (!actualImage)
+        return std::unexpected(actualImage.error());
+    auto actual = frost::io::realFileSystem().physicalPath(*actualImage);
+    auto expected = frost::io::realFileSystem().physicalPath(expectedImage);
+    if (!actual || !expected || *actual != *expected)
+        return frost::fail(frost::ErrorCode::PermissionDenied,
+                           "owned editor fault: actual image differs from pinned editor");
+
+    // UD2 raises a genuine illegal-instruction exception through the installed engine CrashHandler.
+    // Allocation is writable only during initialization, then executable/read-only. After thread
+    // start it must remain until owned-process teardown; freeing it while executing is forbidden.
+    constexpr std::array<unsigned char, 3> fault{0x0f, 0x0b, 0xc3};
+    void* code = VirtualAllocEx(process.get(), nullptr, fault.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!code)
+        return std::unexpected(frost::io::lastWin32Error("owned editor fault: allocate fixed stub"));
+    struct Allocation {
+        HANDLE process;
+        void* code;
+        bool started = false;
+        ~Allocation() {
+            if (!started)
+                static_cast<void>(VirtualFreeEx(process, code, 0, MEM_RELEASE));
+        }
+    } allocation{process.get(), code};
+    SIZE_T written = 0;
+    if (!WriteProcessMemory(process.get(), code, fault.data(), fault.size(), &written))
+        return std::unexpected(frost::io::lastWin32Error("owned editor fault: write fixed stub"));
+    if (written != fault.size())
+        return frost::fail(frost::ErrorCode::IoError, "owned editor fault: incomplete fixed stub write");
+    DWORD previous = 0;
+    if (!VirtualProtectEx(process.get(), code, fault.size(), PAGE_EXECUTE_READ, &previous) ||
+        !FlushInstructionCache(process.get(), code, fault.size()))
+        return std::unexpected(frost::io::lastWin32Error("owned editor fault: finalize fixed stub"));
+    Handle thread(CreateRemoteThread(process.get(), nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(code), nullptr,
+                                     0, nullptr),
+                  &CloseHandle);
+    if (!thread)
+        return std::unexpected(frost::io::lastWin32Error("owned editor fault: start fixed fault"));
+    allocation.started = true;
+    return {};
+}
+
+TEST_F(RealEngineWorkbench, ActualEditorCrashOffersAndOpensARealReadOnlyDumpSession) {
+    auto& fs = frost::io::realFileSystem();
+    const auto adapter = fs.physicalPath(FROST_DBGENG_ADAPTER_PATH);
+    ASSERT_TRUE(adapter) << adapter.error().describe();
+    auto configured = options();
+    configured.workbench.engineDumpAdapterPath = *adapter;
+    configured.workbench.engineDumpCacheDirectory = dir.join("private-dump-cache");
+    ASSERT_TRUE(fs.createDirectories(configured.workbench.engineDumpCacheDirectory));
+    WorkbenchRig rig(dir, configured);
+    ASSERT_NO_FATAL_FAILURE(open(rig));
+    frost::test::RealEditor editor;
+    auto endpoint = editor.start(build, project, config);
+    ASSERT_TRUE(endpoint) << endpoint.error().describe();
+    ASSERT_NO_FATAL_FAILURE(pair(rig, *endpoint));
+    const auto authenticatedPid = rig.workbench->engineState().integerAt("processId");
+    ASSERT_TRUE(authenticatedPid);
+    ASSERT_GT(*authenticatedPid, 0);
+    ASSERT_LE(static_cast<std::uint64_t>(*authenticatedPid), std::numeric_limits<frost::io::ProcessId>::max());
+    const auto ownedPid = editor.ownedPid();
+    ASSERT_EQ(static_cast<std::uint64_t>(ownedPid), static_cast<std::uint64_t>(*authenticatedPid));
+    auto* observer = rig.workbench->findChild<frost::app::EngineCrashObserver*>();
+    ASSERT_NE(observer, nullptr);
+    ASSERT_TRUE(
+        waitFor([&] { return observer->status().phase == frost::app::EngineCrashObservationPhase::Armed; }, 30s));
+    auto* sessions = rig.workbench->debugSessions();
+    ASSERT_NE(sessions, nullptr);
+    const auto sessionsBefore = sessions->sessions().size();
+    EXPECT_FALSE(sessions->anyDebugging());
+    auto fault = faultOwnedEditor(editor, ownedPid, build.program);
+    ASSERT_TRUE(fault) << fault.error().describe();
+    // Same actual crash completion deadline as the existing real engine crash-artifact oracle.
+    auto exited = editor.waitForOwnedExit(120s);
+    ASSERT_TRUE(exited) << exited.error().describe();
+    ASSERT_NE(exited->exitCode, 0) << "the fixed fault did not crash the actual engine";
+    std::optional<frost::ui::NotificationAction> openDump;
+    ASSERT_TRUE(waitFor(
+        [&] {
+            for (const auto& entry : rig.window->notifications().log())
+                if (entry.notification.title == QStringLiteral("FrostEngine crash dump"))
+                    for (const auto& action : entry.notification.actions)
+                        if (action.label == QStringLiteral("Open dump")) {
+                            openDump = action;
+                            return true;
+                        }
+            return false;
+        },
+        30s));
+    EXPECT_EQ(observer->status().phase, frost::app::EngineCrashObservationPhase::Offered);
+    EXPECT_EQ(sessions->sessions().size(), sessionsBefore);
+    EXPECT_FALSE(sessions->anyDebugging()) << "a crash notification must not auto-launch a debugger";
+    ASSERT_TRUE(openDump && openDump->run);
+    openDump->run(); // The real Workbench action selects the actual private dump through real DbgEng.
+    ASSERT_TRUE(waitFor(
+        [&] {
+            auto* selected = sessions->selected();
+            return sessions->sessions().size() > sessionsBefore && selected && selected->readOnlySession() &&
+                   selected->adapterStoppedEvidence() && selected->state() == frost::debug::DebugState::Stopped &&
+                   !selected->frames().frames.empty();
+        },
+        30s));
+    auto* dump = sessions->selected();
+    ASSERT_NE(dump, nullptr);
+    ASSERT_NE(dump->session(), nullptr);
+    ASSERT_TRUE(dump->session()->stopInfo());
+    EXPECT_TRUE(dump->session()->stopInfo()->isCrash());
+    auto cached = fs.listDirectory(configured.workbench.engineDumpCacheDirectory);
+    ASSERT_TRUE(cached);
+    std::optional<std::string> actualDump;
+    for (const auto& directory : *cached) {
+        if (directory.type != frost::io::FileType::Directory)
+            continue;
+        auto privateDirectory = frost::io::joinPath(configured.workbench.engineDumpCacheDirectory, directory.name);
+        ASSERT_TRUE(privateDirectory);
+        auto files = fs.listDirectory(*privateDirectory);
+        ASSERT_TRUE(files);
+        for (const auto& file : *files)
+            if (file.type == frost::io::FileType::Regular && file.name.ends_with(".dmp")) {
+                auto path = frost::io::joinPath(*privateDirectory, file.name);
+                ASSERT_TRUE(path);
+                auto bytes = fs.readFile(*path);
+                ASSERT_TRUE(bytes);
+                auto validated = frost::engine::validateCrashMinidump(*bytes, ownedPid);
+                ASSERT_TRUE(validated) << validated.error().describe();
+                ASSERT_FALSE(actualDump) << "one action created more than one correlated private dump";
+                actualDump = *path;
+            }
+    }
+    ASSERT_TRUE(actualDump) << "the actual Workbench action produced no private correlated minidump";
+    EXPECT_FALSE(dump->resume());
+    EXPECT_FALSE(dump->pause());
+    EXPECT_FALSE(dump->stepOver());
+    EXPECT_FALSE(dump->stepInto());
+    EXPECT_FALSE(dump->stepOut());
+    std::optional<frost::ErrorCode> mutationError;
+    dump->session()->evaluate("x = 7", dump->frames().frames.front().id, "repl", [&](auto result) {
+        mutationError = result ? frost::ErrorCode::Unknown : result.error().code();
+    });
+    ASSERT_TRUE(waitFor([&] { return mutationError.has_value(); }, 10s));
+    EXPECT_EQ(*mutationError, frost::ErrorCode::Unsupported);
+    EXPECT_EQ(dump->state(), frost::debug::DebugState::Stopped);
+    EXPECT_TRUE(dump->readOnlySession());
+    dump->stop();
+    ASSERT_TRUE(waitFor([&] { return !dump->debugging(); }, 10s));
+}
+#endif
 } // namespace

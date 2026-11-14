@@ -177,6 +177,12 @@ class StagedLuaLanguageServerTest(TempDirTestCase):
         result = subprocess.run(command, capture_output=True, text=True, errors="replace", env=env, check=False)
         self.assertEqual(result.returncode, 0, f"staging failed:\n{result.stdout}\n{result.stderr}")
         self.assertIn("stage: ok", result.stdout)
+        if WINDOWS:
+            adapter = "frost-dbgeng-dap.exe"
+            self.assertEqual(sha256_bytes((self.stage / adapter).read_bytes()),
+                             sha256_bytes((self.tree / "src/app/Debug" / adapter).read_bytes()))
+            self.assertFalse((self.stage / "dbgeng.dll").exists())
+            self.assertFalse((self.stage / "dbgmodel.dll").exists())
 
     def frost_environment(self, profile: Path, spawn_log: Path) -> dict[str, str]:
         env = clean_env(QT_QPA_PLATFORM="offscreen", FROST_LOG_LEVEL="debug", FROST_SPAWN_LOG_DIR=str(spawn_log))

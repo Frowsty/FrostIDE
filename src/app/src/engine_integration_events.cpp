@@ -227,6 +227,7 @@ void EngineIntegration::Impl::drainPushEvents() {
                     !impl.admitted(currentEpoch, expectedRoot, revision))
                     return;
                 bool diagnosticsChanged = false;
+                bool statePublished = false;
                 for (auto& event : resolved) {
                     std::visit(
                         [&](const auto& entry) {
@@ -237,6 +238,7 @@ void EngineIntegration::Impl::drainPushEvents() {
                                 if (impl.state && entry.sequence < impl.state->sequence)
                                     return;
                                 impl.state = entry;
+                                statePublished = true;
                                 impl.observeEvent("play.state", entry.data, entry.sequence);
                                 impl.indicator->setState(entry.state == "DebuggerPaused"
                                                              ? ui::EngineConnectionState::DebuggerPaused
@@ -280,6 +282,10 @@ void EngineIntegration::Impl::drainPushEvents() {
                 if (diagnosticsChanged && impl.workbench.m_problems)
                     impl.workbench.m_problems->model()->setProblems(ui::DiagnosticSource::Engine, impl.diagnostics);
                 impl.drainPushEvents();
+                // Consumers re-fetch the current typed state and identity. Emit only after
+                // publishing an admitted engine push, never from a successful command reply.
+                if (statePublished && self)
+                    emit self->stateObserved();
             },
             Qt::QueuedConnection);
     });

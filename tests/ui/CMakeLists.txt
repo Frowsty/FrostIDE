@@ -275,7 +275,7 @@ target_compile_definitions(ui_toolwindows_tests PRIVATE
 if(TARGET frost::ui_run)
     frost_add_test(ui_run_tests QT
         SOURCES run/run_console_test.cpp run/run_tool_window_test.cpp run/test_results_tree_test.cpp
-                run/frostengine_run_test.cpp
+                run/frostengine_run_test.cpp run/engine_debug_mode_test.cpp run/engine_stop_cause_test.cpp
         DEPS frost::ui_run frost::run frost::build frost::input frost::io)
     _frost_ui_test_wiring(ui_run_tests)
 endif()
@@ -330,7 +330,7 @@ target_compile_definitions(ui_vcs_git_tests PRIVATE FROST_VCS_GIT="${_frost_ui_v
 
 if(TARGET frost_ui_debug)
     frost_add_test(ui_debug_tests QT
-        SOURCES debug/debug_ui_test.cpp
+        SOURCES debug/debug_ui_test.cpp debug/debug_sessions_test.cpp
         DEPS frost::ui_debug frost::ui_editor frost::ui_shell frost::ui_run frost::debug frost::build frost::project
              frost::ui frost::ui_input frost::text_editor frost::text frost::syntax frost::input frost::sched frost::io
              frost_ui_test_support)

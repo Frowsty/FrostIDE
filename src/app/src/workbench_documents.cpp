@@ -21,6 +21,7 @@
 #include "frost/ui/vcs/change_markers.hpp"
 
 #include "cmake_integration.hpp"
+#include "engine_binding_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "project_properties_dialog.hpp"
@@ -149,10 +150,14 @@ DocumentEditorView* Workbench::currentView() const {
 }
 
 void Workbench::editorOpened(DocumentEditorView& view) {
+    if (m_engineBindings)
+        m_engineBindings->cancel();
     connect(&view.editor(), &ui::EditorView::textChanged, this, [this] { invalidateManagedDebug(); });
     if (m_git)
         m_git->attachEditor(view);
-    if (m_debug)
+    if (m_debugSessions)
+        m_debugSessions->attachEditor(&view.editor());
+    else if (m_debug)
         m_debug->attachEditor(&view.editor());
     refreshMarkers(view);
     if (m_documentRegistry->viewCount(view.path()) == 1) {
@@ -330,7 +335,9 @@ void Workbench::editorOpened(DocumentEditorView& view) {
 }
 
 void Workbench::editorClosing(DocumentEditorView& view) {
-    if (m_debug)
+    if (m_debugSessions)
+        m_debugSessions->detachEditor(&view.editor());
+    else if (m_debug)
         m_debug->detachEditor(&view.editor());
 }
 
@@ -338,6 +345,8 @@ void Workbench::editorClosed(DocumentEditorView& view) {
     // A close notification can reenter the document/view owner.
     // NOLINTNEXTLINE(performance-unnecessary-copy-initialization): Stable close identity.
     const std::string path = view.path();
+    if (m_engineBindings)
+        m_engineBindings->cancel();
     if (m_documentRegistry->viewCount(path) > 1)
         return;
     if (m_clangd && isCFamilySource(path))
@@ -363,6 +372,8 @@ void Workbench::editorClosed(DocumentEditorView& view) {
 }
 
 void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSet& change) {
+    if (m_engineBindings)
+        m_engineBindings->cancel();
     if (m_nav && !change.edits.empty()) {
         const ui::EditorViewStatus st = view.editor().status();
         m_nav->recordEditLocation(view.path(), st.line, st.column);
@@ -417,6 +428,8 @@ bool Workbench::editorCloseRequested(DocumentEditorView& view) {
 }
 
 void Workbench::documentChanged(const std::string& path) {
+    if (m_engineBindings && (isCFamilySource(path) || isLuaSource(path)))
+        m_engineBindings->cancel();
     invalidateManagedDebug();
     if (m_git)
         m_git->documentChanged();

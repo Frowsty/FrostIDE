@@ -116,6 +116,15 @@ public:
     [[nodiscard]] virtual Result<std::string> readFile(std::string_view path) = 0;
 
     /*
+     * A bounded stable snapshot of a regular, single-link file. Refuses a final symlink/reparse
+     * point; checks handle identity, size and write metadata before/after, and never grows past
+     * maxBytes during the read. Windows excludes concurrent write/delete handles. Parent physical
+     * containment remains the caller's responsibility. Errors: Unsupported (default implementation),
+     * OutOfRange (size cap), Busy (partial/concurrent writer), PermissionDenied (links), OS errors.
+     */
+    [[nodiscard]] virtual Result<std::string> readFileSnapshot(std::string_view path, std::size_t maxBytes);
+
+    /*
      * Replaces (or creates) the file at `path` with `data`, atomically: other
      * readers and a crash observe either the complete old content or the
      * complete new content, never a mixture or a truncated file.

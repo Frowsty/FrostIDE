@@ -37,7 +37,7 @@ struct EngineCliRequest {
     rpc::Json params = rpc::Json::object(); // Passed as --params (dumped exactly: handles stay exact).
     std::string project{};                  // --project <dir|file.frostproj> when not empty (absolute).
     std::string workingDirectory{};         // The child's current directory when not empty (absolute).
-    std::chrono::milliseconds timeout = std::chrono::minutes(5);
+    std::optional<std::chrono::milliseconds> timeout = std::chrono::minutes(5); // nullopt: cancellation-only, no cap.
     std::stop_token stopToken{};
 };
 

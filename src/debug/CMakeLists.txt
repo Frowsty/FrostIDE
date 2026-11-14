@@ -31,6 +31,7 @@ frost_add_library(debug LAYER debug
         src/coreclr_dap.cpp
         src/dap_client.cpp
         src/dap_types.cpp
+        src/dbgeng_dap.cpp
         src/debug_session.cpp
         src/debug_session_breakpoints.cpp
         src/debug_session_requests.cpp
@@ -48,7 +49,10 @@ frost_add_library(debug LAYER debug
         src/mono_windows_peer.cpp
         src/lua_debug_adapter.cpp
         src/lua_debug_endpoint.cpp
-    DEPS frost::rpc frost::project frost::settings frost::text frost::io frost::core)
+        src/lua_dap_transport.cpp
+        src/lua_dap_wire.cpp
+    DEPS frost::rpc frost::project frost::settings frost::text frost::io frost::core
+    THIRD_PARTY unofficial-sodium::sodium)
 target_compile_definitions(frost_debug PRIVATE FROST_PINNED_LLDB_VERSION="${_frost_lldb_version}")
 
 if(WIN32)

@@ -6,6 +6,7 @@
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"
+#include "frost/ui/debug_retirement.hpp"
 #include "frost/ui/run_console.hpp"
 
 #include "debug_controller_internal.hpp"
@@ -79,7 +80,11 @@ DebugController::~DebugController() {
     }
     m_editors.clear();
     ++m_generation;
-    m_session.reset(); // Closes lldb-dap's tree and joins the client's threads.
+    if (m_session && m_options.retirements &&
+        (m_session->targetMode() == debug::DebugTargetMode::Attach || m_session->readOnly()))
+        m_options.retirements->retire(std::move(m_session), kStopTimeout);
+    else
+        m_session.reset(); // Owned launches close their contained tree; attached batches join off-GUI.
 }
 
 void DebugController::setConsole(RunConsole* console) {
@@ -88,7 +93,12 @@ void DebugController::setConsole(RunConsole* console) {
     }
     m_console = console;
     if (m_console) {
-        connect(m_console, &RunConsole::stopRequested, this, [this] { stop(); });
+        connect(m_console, &RunConsole::stopRequested, this, [this] {
+            const QPointer<DebugController> self(this);
+            emit userStopRequested();
+            if (self)
+                self->stop();
+        });
         connect(m_console, &RunConsole::rerunRequested, this, [this] { rerun(); });
         connect(m_console, &RunConsole::inputSubmitted, this,
                 [this](const QString& line) { submitConsoleInput(line); });
@@ -235,22 +245,41 @@ void DebugController::onRunFinished(const build::RunOutcome& outcome, const std:
     }
 }
 
-Result<debug::AdapterFactory> DebugController::adapterFactory() {
+Result<debug::AdapterFactory> DebugController::adapterFactory(bool* nativeOsThreadIdsVerified,
+                                                              debug::DapProcessOutput output) {
+    if (nativeOsThreadIdsVerified)
+        *nativeOsThreadIdsVerified = false;
     if (m_options.adapterFactory) {
         return m_options.adapterFactory;
     }
     if (m_options.fs == nullptr || m_options.launcher == nullptr) {
         return fail(ErrorCode::InvalidArgument, "the debugger has no process launcher");
     }
-    auto path = debug::findLldbDap(
-        *m_options.fs, debug::defaultLldbDapSearch(m_options.lldbDapSetting ? m_options.lldbDapSetting() : ""));
+    const auto configured = m_options.lldbDapSetting ? m_options.lldbDapSetting() : std::string{};
+    auto path = debug::findLldbDap(*m_options.fs, debug::defaultLldbDapSearch(configured));
     if (!path) {
         return std::unexpected(std::move(path.error()));
     }
-    return debug::lldbDapAdapterFactory(*m_options.launcher, std::move(*path));
+    if (nativeOsThreadIdsVerified)
+        *nativeOsThreadIdsVerified = configured.empty();
+    return debug::lldbDapAdapterFactory(*m_options.launcher, std::move(*path), std::move(output));
 }
 
 Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
+    return startNativeTarget(target, {}, {}, {});
+}
+Result<void> DebugController::startNativeEngineTarget(const debug::DebugTarget& target, PrivateOutput output,
+                                                      std::function<void(std::string_view)> adapterStderr,
+                                                      std::function<Result<void>()> launchAdmission) {
+    if (!output || !launchAdmission || m_options.adapterFactory)
+        return fail(ErrorCode::Unsupported,
+                    "Private engine debugging requires the built-in pinned adapter and private admission");
+    return startNativeTarget(target, std::move(output), {true, std::move(adapterStderr)},
+                             debug::NativeDebugPrivacy{std::move(launchAdmission)});
+}
+Result<void> DebugController::startNativeTarget(const debug::DebugTarget& target, PrivateOutput output,
+                                                debug::DapProcessOutput processOutput,
+                                                std::optional<debug::NativeDebugPrivacy> privacy) {
     if (m_shutdown)
         return fail(ErrorCode::Cancelled, "the workbench is shutting down");
     if (m_session) {
@@ -281,21 +310,85 @@ Result<void> DebugController::startTarget(const debug::DebugTarget& target) {
             resolvedTarget.sourceMap = std::move(*mapping);
         }
     }
-    auto factory = adapterFactory();
+    bool osThreadIdsVerified = false;
+    auto factory = adapterFactory(&osThreadIdsVerified, std::move(processOutput));
     if (!factory)
         return std::unexpected(std::move(factory.error()));
+    if (privacy && !osThreadIdsVerified)
+        return fail(ErrorCode::Unsupported, "Private engine debugging requires the built-in pinned LLDB adapter");
     auto started = startSession(
         resolvedTarget.name.empty() ? std::string(io::fileName(resolvedTarget.program)) : resolvedTarget.name,
         resolvedTarget.program, "lldb-dap",
-        [this, resolvedTarget, factory = std::move(*factory)](debug::DebugSessionCallbacks callbacks) mutable {
+        [this, resolvedTarget, factory = std::move(*factory),
+         privacy = std::move(privacy)](debug::DebugSessionCallbacks callbacks) mutable {
             return debug::startDebugSession(*m_options.trust, resolvedTarget, std::move(factory),
                                             m_breakpoints.sessionLines(), std::move(callbacks),
                                             m_breakpoints.sessionFunctions(), m_breakpoints.sessionExceptionFilters(),
-                                            m_breakpoints.sessionThrowTypes());
-        });
+                                            m_breakpoints.sessionThrowTypes(), std::move(privacy));
+        },
+        false, std::move(output));
     if (started) {
         m_lastCoreClrSession = false;
         m_nativeSession = true;
+        m_nativeOsThreadIdsVerified = osThreadIdsVerified;
+    }
+    return started;
+}
+
+Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
+                                                 rpc::Json arguments, std::string adapterId,
+                                                 debug::DebugTargetMode mode, bool readOnly,
+                                                 std::function<Result<void>()> launchAdmission) {
+    if (m_pendingRun || m_alternatePending || (m_hooks.mayStart && !m_hooks.mayStart()))
+        return fail(ErrorCode::Busy, "Another run or debug launch is still preparing");
+    if (!m_options.trust || !factory || !arguments.isObject() || adapterId.empty())
+        return fail(ErrorCode::InvalidArgument, "An adapter, arguments and trusted target are required");
+    if (launchAdmission) {
+        if (auto admitted = launchAdmission(); !admitted)
+            return admitted;
+    }
+    auto roots = target.trustRoots;
+    if (roots.empty() && !target.program.empty())
+        roots.emplace_back(io::parentPath(target.program));
+    if (roots.empty())
+        return fail(ErrorCode::Untrusted, "The adapter target has no trusted workspace");
+    for (const auto& root : roots)
+        if (!io::isAbsolutePath(root) || !m_options.trust->isTrusted(root))
+            return fail(ErrorCode::Untrusted, "The adapter target workspace is not trusted");
+    if (readOnly) {
+        const auto dump = arguments.stringAt("dumpFile");
+        const bool localVerbatim = dump.size() >= 7 && dump.starts_with("\\\\?\\") && dump[5] == ':' && dump[6] == '\\';
+        if (!io::isAbsolutePath(dump) || (dump.starts_with("\\\\") && !localVerbatim) || dump.starts_with("//") ||
+            dump.find('\0') != std::string_view::npos)
+            return fail(ErrorCode::InvalidArgument, "A read-only adapter target requires an absolute local dump file");
+    }
+    if ((!readOnly || !target.program.empty()) && !io::isAbsolutePath(target.program))
+        return fail(ErrorCode::InvalidArgument, "The adapter program path must be absolute");
+    const auto actualMode = mode;
+    const auto display = adapterId;
+    auto started = startSession(
+        target.name, target.program, display,
+        [this, factory = std::move(factory), arguments = std::move(arguments), adapterId, actualMode, readOnly,
+         launchAdmission = std::move(launchAdmission)](
+            debug::DebugSessionCallbacks callbacks) mutable -> Result<std::unique_ptr<debug::DebugSession>> {
+            debug::DebugSessionOptions options;
+            options.adapterId = adapterId;
+            options.targetMode = actualMode;
+            options.readOnly = readOnly;
+            options.launchAdmission = std::move(launchAdmission);
+            if (!readOnly) {
+                options.functionBreakpoints = m_breakpoints.sessionFunctions();
+                options.exceptionFilters = m_breakpoints.sessionExceptionFilters();
+            }
+            return debug::DebugSession::start(std::move(factory), std::move(arguments),
+                                              readOnly ? std::map<std::string, std::vector<debug::BreakpointLine>>{}
+                                                       : m_breakpoints.sessionLines(),
+                                              std::move(callbacks), std::move(options));
+        },
+        readOnly || actualMode == debug::DebugTargetMode::Attach);
+    if (started) {
+        m_nativeSession = !readOnly && (adapterId == "lldb-dap" || adapterId == "frost-dbgeng");
+        m_lastCoreClrSession = false;
     }
     return started;
 }
@@ -308,6 +401,13 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
     const std::string_view typeView =
         attachArguments.isObject() ? attachArguments.stringAt("type") : std::string_view{};
     const std::string adapterId = !typeView.empty() ? std::string(typeView) : std::string("lldb-dap");
+    bool osThreadIdsVerified = false;
+    if (!factory && adapterId == "lldb-dap") {
+        auto resolved = adapterFactory(&osThreadIdsVerified);
+        if (!resolved)
+            return std::unexpected(resolved.error());
+        factory = std::move(*resolved);
+    }
     const std::string displayAdapter =
         adapterId == "coreclr" ? "CoreCLR" : (!typeView.empty() ? adapterId : std::string("Lua"));
     auto started = startSession(
@@ -328,6 +428,7 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
     if (started) {
         m_lastCoreClrSession = (adapterId == "coreclr");
         m_nativeSession = adapterId == "lldb-dap";
+        m_nativeOsThreadIdsVerified = osThreadIdsVerified;
     }
     return started;
 }
@@ -412,7 +513,7 @@ Result<void> DebugController::startCoreClrTarget(
 }
 
 Result<void> DebugController::startSession(std::string title, std::string program, std::string adapterName,
-                                           const SessionStarter& starter, bool attach) {
+                                           const SessionStarter& starter, bool attach, PrivateOutput privateOutput) {
     if (m_shutdown)
         return fail(ErrorCode::Cancelled, "the workbench is shutting down");
     if (m_session)
@@ -420,6 +521,7 @@ Result<void> DebugController::startSession(std::string title, std::string progra
     if (m_options.trust == nullptr)
         return fail(ErrorCode::InvalidArgument, "the debugger has no trust store");
     const std::uint64_t generation = ++m_generation;
+    m_nativeOsThreadIdsVerified = false;
     const std::shared_ptr<Relay> relay = m_relay;
     debug::DebugSessionCallbacks callbacks{
         .onStateChanged =
@@ -445,7 +547,11 @@ Result<void> DebugController::startSession(std::string title, std::string progra
                             [threadId, frame](DebugController* self) { self->onFrameSelected(threadId, frame); });
             },
         .onOutput =
-            [relay, generation](std::string_view category, std::string_view text) {
+            [relay, generation, privateOutput](std::string_view category, std::string_view text) {
+                if (privateOutput) {
+                    privateOutput(category, text);
+                    return;
+                }
                 relay->post(generation, [category = std::string(category), text = std::string(text)](
                                             DebugController* self) { self->onOutput(category, text); });
             },
@@ -472,6 +578,30 @@ Result<void> DebugController::startSession(std::string title, std::string progra
             [relay, generation](std::int64_t) {
                 relay->post(generation, [](DebugController* self) { emit self->stateChanged(); });
             },
+        .onConfigured =
+            [relay, generation] {
+                relay->post(generation, [](DebugController* self) {
+                    self->m_configured = true;
+                    emit self->configuredChanged();
+                });
+            },
+        .onContinued =
+            [relay, generation] {
+                relay->post(generation, [generation](DebugController* self) {
+                    self->m_adapterStopped = false;
+                    ++self->m_adapterEvidenceSequence;
+                    emit self->adapterContinued(generation);
+                    emit self->stateChanged();
+                });
+            },
+        .onAdapterStopped =
+            [relay, generation] {
+                relay->post(generation, [](DebugController* self) {
+                    self->m_adapterStopped = true;
+                    ++self->m_adapterEvidenceSequence;
+                    emit self->stateChanged();
+                });
+            },
     };
     m_breakpoints.resetStatus(debug::BreakpointStatus::Pending);
     auto session = starter(std::move(callbacks));
@@ -486,8 +616,13 @@ Result<void> DebugController::startSession(std::string title, std::string progra
         return std::unexpected(*outcome->error);
     }
     m_session = std::move(*session);
-    m_rerunAllowed = !attach;
+    for (auto& [view, attached] : m_editors)
+        if (attached->view)
+            refreshMarkers(*view);
+    m_rerunAllowed = !attach && !privateOutput && m_options.allowRerun;
     m_state = debug::DebugState::Starting;
+    m_configured = false;
+    m_adapterStopped = false;
     m_title = QString::fromStdString(title);
     m_stop.reset();
     m_threads.clear();
@@ -533,6 +668,7 @@ void DebugController::onState(debug::DebugState state) {
 }
 
 void DebugController::onStopped(const debug::StopInfo& stop) {
+    m_adapterStopped = true;
     clearLoadedSource();
     m_state = debug::DebugState::Stopped;
     m_stop = stop;
@@ -613,7 +749,7 @@ void DebugController::onFrameSelected(std::int64_t threadId, const debug::DebugF
                 });
             });
         }
-    } else if (frame.hasSource() && m_hooks.openSource) {
+    } else if (m_editorPresentation && frame.hasSource() && m_hooks.openSource) {
         if (EditorView* view = m_hooks.openSource(QString::fromStdString(frame.path), static_cast<int>(frame.line))) {
             attachEditor(view);
         }
@@ -639,9 +775,8 @@ void DebugController::onBreakpoints(const std::vector<debug::BreakpointResult>& 
 }
 
 void DebugController::onCapabilities(const debug::dap::Capabilities& capabilities) {
-    if (!m_session || !m_nativeSession) {
-        return; // The list is lldb-dap's (debug::BreakpointManager, "Function breakpoints and exception filters").
-    }
+    if (!m_session)
+        return; // Capabilities belong to this adapter/session, including embedded Lua adapters.
     const bool msvc = m_session->msvcExceptions();
     m_breakpoints.setAvailableExceptionFilters(capabilities.exceptionBreakpointFilters,
                                                [msvc](std::string_view filter) {
@@ -687,6 +822,7 @@ void DebugController::onEnded(std::uint64_t endingGeneration, const debug::Debug
 void DebugController::endSession() {
     m_killTimer.stop();
     ++m_generation;
+    ++m_adapterEvidenceSequence;
     m_state = debug::DebugState::Ended;
     m_stop.reset();
     m_threads.clear();
@@ -703,6 +839,11 @@ void DebugController::endSession() {
     ++m_coreClrValidationEpoch;
     m_coreClrSession = false;
     m_nativeSession = false;
+    m_nativeOsThreadIdsVerified = false;
+    m_configured = false;
+    m_adapterStopped = false;
+    m_stopHandler = {};
+    m_stopHandlerGeneration = 0;
     clearLoadedSource();
     std::unique_ptr<debug::DebugSession> ended = std::move(m_session);
     ended.reset(); // Joins the client's threads (the adapter has exited or was killed).

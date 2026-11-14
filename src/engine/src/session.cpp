@@ -10,8 +10,10 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <system_error>
 #include <thread>
@@ -20,6 +22,97 @@
 #include <sodium.h>
 
 namespace frost::engine {
+
+ScriptDebugBootstrap::ScriptDebugBootstrap(std::string credential) : m_credential(std::move(credential)) {}
+ScriptDebugBootstrap::~ScriptDebugBootstrap() { sodium_memzero(m_credential.data(), m_credential.size()); }
+ScriptDebugBootstrap& ScriptDebugBootstrap::operator=(ScriptDebugBootstrap&& other) noexcept {
+    if (this != &other) {
+        sodium_memzero(m_credential.data(), m_credential.size());
+        m_credential = std::move(other.m_credential);
+        projectPath = std::move(other.projectPath);
+        instanceId = std::move(other.instanceId);
+        generation = std::move(other.generation);
+        debugSessionId = std::move(other.debugSessionId);
+        port = other.port;
+        processId = other.processId;
+        connectionGeneration = other.connectionGeneration;
+        expiresAt = other.expiresAt;
+    }
+    return *this;
+}
+
+struct NativePauseLease::State {
+    enum class Phase { Normal, Stopped, Resumed, Revoked };
+    explicit State(NativeDebuggerBinding value, std::function<std::uint64_t()> counter)
+        : binding(value), heartbeatCounter(std::move(counter)) {}
+    const NativeDebuggerBinding binding;
+    const std::function<std::uint64_t()> heartbeatCounter;
+    std::mutex mutex;
+    Phase phase = Phase::Normal;
+    std::uint64_t eventSequence = 0, resumedHeartbeat = 0;
+    std::chrono::steady_clock::time_point resumedAt{};
+    std::unique_ptr<std::stop_callback<std::function<void()>>> connectionRevocation;
+    void revoke() noexcept {
+        std::lock_guard lock(mutex);
+        phase = Phase::Revoked;
+    }
+    bool revoked() {
+        std::lock_guard lock(mutex);
+        return phase == Phase::Revoked;
+    }
+    bool suspendsHeartbeat(std::chrono::steady_clock::time_point now, std::chrono::milliseconds timeout) {
+        std::lock_guard lock(mutex);
+        if (phase == Phase::Stopped)
+            return true;
+        if (phase != Phase::Resumed)
+            return false;
+        if (heartbeatCounter() != resumedHeartbeat) {
+            phase = Phase::Normal;
+            return false;
+        }
+        return now - resumedAt < timeout;
+    }
+};
+NativePauseLease::~NativePauseLease() { revoke(); }
+NativePauseLease& NativePauseLease::operator=(NativePauseLease&& other) noexcept {
+    if (this != &other) {
+        revoke();
+        m_state = std::move(other.m_state);
+    }
+    return *this;
+}
+void NativePauseLease::revoke() noexcept {
+    if (m_state)
+        m_state->revoke();
+}
+Result<void> NativePauseLease::observe(const NativeAdapterObservation& observation) {
+    if (!m_state)
+        return fail(ErrorCode::Cancelled, "Native debugger pause authority was released");
+    std::lock_guard lock(m_state->mutex);
+    if (m_state->phase == State::Phase::Revoked)
+        return fail(ErrorCode::Cancelled, "Native debugger pause authority was revoked");
+    if (observation.binding != m_state->binding)
+        return fail(ErrorCode::PermissionDenied, "Native pause evidence belongs to another debugger binding");
+    if (observation.eventSequence == 0)
+        return fail(ErrorCode::InvalidArgument, "Native pause evidence has no actual adapter event sequence");
+    if (observation.eventSequence <= m_state->eventSequence)
+        return {};
+    if (observation.event != NativeAdapterEvent::Stopped && observation.event != NativeAdapterEvent::Continued &&
+        observation.event != NativeAdapterEvent::Ended)
+        return fail(ErrorCode::InvalidArgument, "Unknown native adapter observation");
+    m_state->eventSequence = observation.eventSequence;
+    if (observation.event == NativeAdapterEvent::Ended)
+        m_state->phase = State::Phase::Revoked;
+    else if (observation.event == NativeAdapterEvent::Stopped)
+        m_state->phase = State::Phase::Stopped;
+    else if (m_state->phase == State::Phase::Stopped) {
+        m_state->phase = State::Phase::Resumed;
+        m_state->resumedAt = std::chrono::steady_clock::now();
+        m_state->resumedHeartbeat = m_state->heartbeatCounter();
+    }
+    return {};
+}
+
 namespace {
 using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
@@ -73,6 +166,9 @@ EngineIdentity eventIdentity(const EngineIdentity& source) {
     result.role = source.role;
     result.connectionGeneration = source.connectionGeneration;
     result.processId = source.processId;
+    result.crashArtifactSource = source.crashArtifactSource;
+    result.scriptDebugAvailable = source.scriptDebugAvailable;
+    result.scriptDebugProtocolVersion = source.scriptDebugProtocolVersion;
     result.capabilities = source.capabilities;
     result.heartbeatIntervalMs = source.heartbeatIntervalMs;
     result.heartbeatTimeoutMs = source.heartbeatTimeoutMs;
@@ -81,6 +177,14 @@ EngineIdentity eventIdentity(const EngineIdentity& source) {
 bool matches(const rpc::Json& json, const EngineIdentity& identity) {
     return json.stringAt("instanceId") == identity.instanceId && json.stringAt("generation") == identity.generation &&
            json.stringAt("projectPath") == identity.projectPath;
+}
+bool sameAuthenticatedOwner(const EngineIdentity& a, const EngineIdentity& b) {
+    return a.connectionGeneration != 0 && a.connectionGeneration == b.connectionGeneration &&
+           a.instanceId == b.instanceId && a.generation == b.generation && a.projectPath == b.projectPath &&
+           a.processId > 0 && a.processId == b.processId;
+}
+bool sameDebugOwner(const EngineIdentity& a, const EngineIdentity& b) {
+    return sameAuthenticatedOwner(a, b) && b.scriptDebugAvailable && b.scriptDebugProtocolVersion == 1;
 }
 rpc::Json strings(std::span<const std::string_view> values) {
     auto result = rpc::Json::array();
@@ -283,6 +387,14 @@ Result<Handshake> authenticate(io::LoopbackStream& stream, const EngineEndpoint&
         (role != "editor" && role != "player" && role != "headless"))
         return fail(ErrorCode::Corrupt, "engine server info does not match authenticated session");
     result.identity.role = role;
+    if (const auto* debugger = info->find("scriptDebug")) {
+        if (!debugger->isObject() || !debugger->boolAt("available") || !debugger->unsignedAt("protocolVersion") ||
+            debugger->unsignedAt("protocolVersion").value_or(0) > std::numeric_limits<std::uint32_t>::max())
+            return fail(ErrorCode::Corrupt, "engine script debugger capability metadata is invalid");
+        result.identity.scriptDebugAvailable = *debugger->boolAt("available");
+        result.identity.scriptDebugProtocolVersion =
+            static_cast<std::uint32_t>(*debugger->unsignedAt("protocolVersion"));
+    }
     // PID is usable for native DAP correlation only after the mutual proof and exact session
     // identity checks above. Older v2 hosts may omit it; malformed claimed IDs fail closed.
     if (const auto* pid = info->find("processId")) {
@@ -290,6 +402,13 @@ Result<Handshake> authenticate(io::LoopbackStream& stream, const EngineEndpoint&
         if (pid->kind() != rpc::Json::Kind::Integer || !value || *value <= 0)
             return fail(ErrorCode::Corrupt, "engine server info has an invalid process ID");
         result.identity.processId = *value;
+    }
+    if (const auto* crash = info->find("crashArtifactSource")) {
+        auto source = parseCrashArtifactSource(*crash, result.identity.instanceId, result.identity.generation,
+                                               result.identity.projectPath, result.identity.processId);
+        if (!source)
+            return fail(ErrorCode::Corrupt, "engine crash artifact source does not match authenticated identity");
+        result.identity.crashArtifactSource = std::move(*source);
     }
     if (!trusted())
         return fail(ErrorCode::Untrusted, "engine project trust changed");
@@ -329,20 +448,38 @@ struct EngineSession::Impl {
         std::string command;
         rpc::Json params;
         Reply reply;
+        ObservedReply observedReply;
         std::stop_token stop;
         Clock::time_point deadline;
         bool sent = false, cancelled = false;
+        ScriptDebugReply scriptReply;
+        std::function<Result<void>(const EngineIdentity&)> scriptAdmission;
+        EngineIdentity scriptOwner;
+        Clock::time_point leaseStarted{};
     };
+    static void failPending(Pending& item, Error error) {
+        if (item.scriptReply)
+            item.scriptReply(std::unexpected(std::move(error)));
+        else if (item.observedReply)
+            item.observedReply(std::unexpected(std::move(error)));
+        else if (item.reply)
+            item.reply(std::unexpected(std::move(error)));
+    }
     struct Connection {
         std::shared_ptr<io::LoopbackStream> stream;
         EngineIdentity identity;
         std::string secret;
         std::atomic<bool> failed{false};
         std::atomic<std::int64_t> lastHeartbeat{ticks()};
+        std::atomic<std::uint64_t> heartbeatCount{0};
+        std::weak_ptr<NativePauseLease::State> nativePause;
         std::atomic<std::int64_t> writeStarted{0};
         std::chrono::milliseconds heartbeatTimeout{5000};
         ErrorCode failure = ErrorCode::IoError; // Protected by owner's mutex.
+        EngineDisconnectCause disconnectCause = EngineDisconnectCause::Unexpected;
+        std::optional<EngineDisconnectCause> announcedControlCause;
         std::jthread reader;
+        std::stop_source debugLifetime;
         ~Connection() { sodium_memzero(secret.data(), secret.size()); }
     };
     EngineSessionOptions options;
@@ -361,12 +498,19 @@ struct EngineSession::Impl {
     bool trusted(std::string_view path) const {
         return options.trusted && options.trusted(path, options.trustRevision);
     }
-    void breakConnection(const std::shared_ptr<Connection>& conn, ErrorCode code) {
+    void breakConnection(const std::shared_ptr<Connection>& conn, ErrorCode code,
+                         EngineDisconnectCause cause = EngineDisconnectCause::Unexpected) {
         {
             std::lock_guard lock(mutex);
-            if (!conn->failed.exchange(true))
+            if (!conn->failed.exchange(true)) {
                 conn->failure = code;
+                conn->disconnectCause = code == ErrorCode::Untrusted ? EngineDisconnectCause::TrustRevoked
+                                        : cause == EngineDisconnectCause::Unexpected
+                                            ? conn->announcedControlCause.value_or(cause)
+                                            : cause;
+            }
         }
+        conn->debugLifetime.request_stop();
         conn->stream->close();
         cv.notify_all();
     }
@@ -395,11 +539,26 @@ struct EngineSession::Impl {
                         return;
                     }
                     conn->lastHeartbeat = ticks();
+                    ++conn->heartbeatCount;
                     continue;
                 }
                 bool overflow = false;
                 {
                     std::lock_guard lock(mutex);
+                    // A graceful control event can be followed immediately by physical EOF before
+                    // GUI/state publication. Preserve its authenticated announcement as the cause.
+                    if (message->stringAt("method") == "engine.event") {
+                        const auto* params = message->find("params");
+                        const auto* data = params ? params->find("data") : nullptr;
+                        if (params && matches(*params, conn->identity) &&
+                            params->unsignedAt("sequence").value_or(0) > 0 && data && data->isObject()) {
+                            const auto event = params->stringAt("event");
+                            if (event == "project.changed")
+                                conn->announcedControlCause = EngineDisconnectCause::ProjectChanged;
+                            else if (event == "server.shutdown")
+                                conn->announcedControlCause = EngineDisconnectCause::ServerShutdown;
+                        }
+                    }
                     overflow = incomingBytes + line.size() > kQueueLimit || incomingCount >= 1024;
                     if (!overflow) {
                         incomingBytes += line.size();
@@ -435,7 +594,15 @@ struct EngineSession::Impl {
             if (conn && !conn->failed) {
                 const auto now = ticks();
                 const auto started = conn->writeStarted.load();
-                if (now - conn->lastHeartbeat.load() > conn->heartbeatTimeout.count() ||
+                bool pausedExpiry = false;
+                std::shared_ptr<NativePauseLease::State> pause;
+                {
+                    std::lock_guard lock(mutex);
+                    pause = conn->nativePause.lock();
+                }
+                if (pause)
+                    pausedExpiry = pause->suspendsHeartbeat(Clock::now(), conn->heartbeatTimeout);
+                if ((!pausedExpiry && now - conn->lastHeartbeat.load() > conn->heartbeatTimeout.count()) ||
                     (started != 0 && now - started > options.connectTimeout.count()))
                     breakConnection(conn, ErrorCode::Timeout);
             }
@@ -451,9 +618,13 @@ struct EngineSession::Impl {
         const auto mode = data.stringAt("mode");
         const auto paused = data.boolAt("paused");
         const auto frames = data.unsignedAt("frames");
-        if ((value != "Edit" && value != "Play" && value != "Simulate" && value != "Paused" &&
-             value != "DebuggerPaused") ||
-            (mode != "Edit" && mode != "Play" && mode != "Simulate") || !paused || !frames) {
+        const bool pendingPlayer = value == "Unavailable" && mode == "Unavailable" && conn->identity.role == "player" &&
+                                   conn->identity.scriptDebugAvailable &&
+                                   conn->identity.scriptDebugProtocolVersion == 1 && paused == false && frames == 0 &&
+                                   data.stringAt("playGeneration").empty();
+        if (!pendingPlayer && ((value != "Edit" && value != "Play" && value != "Simulate" && value != "Paused" &&
+                                value != "DebuggerPaused") ||
+                               (mode != "Edit" && mode != "Play" && mode != "Simulate") || !paused || !frames)) {
             breakConnection(conn, ErrorCode::Corrupt);
             return;
         }
@@ -461,7 +632,38 @@ struct EngineSession::Impl {
         observed.identity = eventIdentity(conn->identity);
         observed.state = value;
         observed.mode = mode;
-        observed.playing = mode != "Edit";
+        if (const auto* play = data.find("playGeneration")) {
+            if (!play->isString() || (!play->asString()->empty() && !hex(*play->asString(), 32))) {
+                breakConnection(conn, ErrorCode::Corrupt);
+                return;
+            }
+            observed.playGeneration = *play->asString();
+        }
+        if (data.find("operationId") || data.find("phase")) {
+            const auto* operation = data.find("operationId");
+            const auto* phase = data.find("phase");
+            if (!operation || !operation->isString() || !phase || !phase->isString() ||
+                (!operation->asString()->empty() && !hex(*operation->asString(), 32))) {
+                breakConnection(conn, ErrorCode::Corrupt);
+                return;
+            }
+            observed.operationId = *operation->asString();
+            observed.phase = *phase->asString();
+            if ((observed.operationId.empty() != observed.phase.empty()) ||
+                (!observed.phase.empty() && observed.phase != "pending" && observed.phase != "playing" &&
+                 observed.phase != "cancelled" && observed.phase != "failed" && observed.phase != "completed")) {
+                breakConnection(conn, ErrorCode::Corrupt);
+                return;
+            }
+            if (const auto* error = data.find("operationError")) {
+                if (!error->isString() || error->asString()->size() > 4096) {
+                    breakConnection(conn, ErrorCode::Corrupt);
+                    return;
+                }
+                observed.operationError = *error->asString();
+            }
+        }
+        observed.playing = mode == "Play" || mode == "Simulate";
         observed.paused = *paused;
         observed.frame = *frames;
         observed.sequence = sequence;
@@ -476,20 +678,74 @@ struct EngineSession::Impl {
             return;
         }
         if (auto id = parsed->unsignedAt("id")) {
-            Reply reply;
+            std::optional<Pending> completed;
             {
                 std::lock_guard lock(mutex);
                 const auto found = pending.find(*id);
                 if (found == pending.end() || !found->second.sent)
                     return;
-                reply = std::move(found->second.reply);
+                completed.emplace(std::move(found->second));
                 pending.erase(found);
             }
-            if (reply) {
+            if (completed->scriptReply) {
+                auto& item = *completed;
+                if (item.cancelled || item.stop.stop_requested() || conn->failed || !online ||
+                    !sameDebugOwner(item.scriptOwner, conn->identity)) {
+                    failPending(item, Error(ErrorCode::Cancelled, "Lua debug bootstrap owner is no longer current"));
+                    return;
+                }
+                auto admitted = item.scriptAdmission(conn->identity);
+                if (!trusted(conn->identity.projectPath))
+                    admitted = fail(ErrorCode::Untrusted, "engine project trust changed");
+                if (!admitted) {
+                    failPending(item, Error(admitted.error().code(), "Lua debug bootstrap admission was revoked"));
+                    return;
+                }
+                auto result = responseResult(*parsed, conn->secret);
+                if (!result) {
+                    // A private reply may contain a credential even in malformed/error fields.
+                    // Its text never goes through a public generic command completion or log.
+                    failPending(item, Error(result.error().code(), "engine Lua debug bootstrap failed"));
+                    return;
+                }
+                const auto port = result->unsignedAt("port");
+                const auto pid = result->integerAt("processId");
+                const auto sid = result->stringAt("debugSessionId");
+                const auto credential = result->stringAt("credential");
+                if (result->integerAt("protocolVersion") != 1 || result->stringAt("host") != "127.0.0.1" ||
+                    !matches(*result, conn->identity) || !pid || *pid != conn->identity.processId || !port ||
+                    *port == 0 || *port > 65535 || !hex(sid, 32) || !hex(credential, 64) ||
+                    result->integerAt("expiresMs") != 30000) {
+                    failPending(item,
+                                Error(ErrorCode::Corrupt, "engine Lua debug bootstrap identity or lease is invalid"));
+                    return;
+                }
+                const auto expiresAt = item.leaseStarted + 30s;
+                if (Clock::now() >= expiresAt) {
+                    failPending(item, Error(ErrorCode::Timeout, "engine Lua debug bootstrap lease expired"));
+                    return;
+                }
+                ScriptDebugBootstrap bootstrap{std::string(credential)};
+                bootstrap.projectPath = conn->identity.projectPath;
+                bootstrap.instanceId = conn->identity.instanceId;
+                bootstrap.generation = conn->identity.generation;
+                bootstrap.processId = *pid;
+                bootstrap.connectionGeneration = conn->identity.connectionGeneration;
+                bootstrap.debugSessionId = sid;
+                bootstrap.port = static_cast<std::uint16_t>(*port);
+                bootstrap.expiresAt = expiresAt;
+                item.scriptReply(std::move(bootstrap));
+            } else if (completed->observedReply) {
+                auto result = responseResult(*parsed, conn->secret);
+                if (result)
+                    completed->observedReply(EngineCommandObservation{redact(*result, conn->secret), sequence});
+                else
+                    completed->observedReply(std::unexpected(result.error()));
+            } else if (completed->reply) {
                 auto result = responseResult(*parsed, conn->secret);
                 if (result)
                     *result = redact(*result, conn->secret);
-                reply(std::move(result));
+                completed->reply(std::move(result));
             }
             return;
         }
@@ -558,7 +814,9 @@ struct EngineSession::Impl {
             entry.data = std::move(data);
             callbacks.diagnostic(entry);
         } else if (event == "project.changed" || event == "server.shutdown")
-            breakConnection(conn, ErrorCode::IoError);
+            breakConnection(conn, ErrorCode::IoError,
+                            event == "project.changed" ? EngineDisconnectCause::ProjectChanged
+                                                       : EngineDisconnectCause::ServerShutdown);
     }
     void completeAll(ErrorCode code) {
         std::map<std::uint64_t, Pending> abandoned;
@@ -568,9 +826,8 @@ struct EngineSession::Impl {
         }
         for (auto& [id, item] : abandoned) {
             static_cast<void>(id);
-            if (item.reply)
-                item.reply(fail(code, item.sent ? "engine request interrupted; outcome uncertain"
-                                                : "engine request was not sent"));
+            failPending(item, Error(code, item.sent ? "engine request interrupted; outcome uncertain"
+                                                    : "engine request was not sent"));
         }
     }
     void workLoop(std::stop_token stop) {
@@ -583,6 +840,7 @@ struct EngineSession::Impl {
             attempted.generation = endpoint.generation;
             Error error(ErrorCode::IoError, "engine connection failed");
             std::shared_ptr<Connection> conn;
+            auto disconnectCause = EngineDisconnectCause::Unexpected;
             rpc::Json snapshot;
             std::uint64_t initialSequence = 0;
             std::string buffered;
@@ -658,11 +916,10 @@ struct EngineSession::Impl {
                         }
                     }
                     for (auto& item : expired)
-                        if (item.reply)
-                            item.reply(fail(item.cancelled || item.stop.stop_requested() ? ErrorCode::Cancelled
-                                                                                         : ErrorCode::Timeout,
-                                            item.sent ? "engine request interrupted; outcome uncertain"
-                                                      : "engine request was not sent"));
+                        failPending(item, Error(item.cancelled || item.stop.stop_requested() ? ErrorCode::Cancelled
+                                                                                             : ErrorCode::Timeout,
+                                                item.sent ? "engine request interrupted; outcome uncertain"
+                                                          : "engine request was not sent"));
                     for (auto& line : messages) {
                         if (conn->failed || stopping)
                             break;
@@ -677,24 +934,29 @@ struct EngineSession::Impl {
                         if (conn->failed || stopping)
                             break;
                         auto admitted =
-                            options.admitCommand
+                            item.scriptReply ? (sameDebugOwner(item.scriptOwner, conn->identity)
+                                                    ? item.scriptAdmission(conn->identity)
+                                                    : Result<void>(fail(ErrorCode::PermissionDenied,
+                                                                        "Lua debug bootstrap owner changed")))
+                            : options.admitCommand
                                 ? options.admitCommand(item.command, item.params, conn->identity)
                                 : Result<void>(fail(ErrorCode::PermissionDenied, "engine command policy unavailable"));
                         if (!trusted(conn->identity.projectPath))
                             admitted = fail(ErrorCode::Untrusted, "engine project trust changed");
                         if (!admitted) {
-                            Reply reply;
+                            std::optional<Pending> refused;
                             {
                                 std::lock_guard lock(mutex);
                                 auto it = pending.find(item.id);
                                 if (it != pending.end()) {
-                                    reply = std::move(it->second.reply);
+                                    refused.emplace(std::move(it->second));
                                     pending.erase(it);
                                 }
                             }
-                            if (reply) {
+                            if (refused) {
                                 const auto safe = redact(rpc::Json(admitted.error().message()), conn->secret);
-                                reply(fail(admitted.error().code(), std::string(safe.asString()->substr(0, 4096))));
+                                failPending(*refused, Error(admitted.error().code(),
+                                                            std::string(safe.asString()->substr(0, 4096))));
                             }
                             continue;
                         }
@@ -721,7 +983,8 @@ struct EngineSession::Impl {
                             breakConnection(conn, sent.error().code());
                             break;
                         }
-                        ++sentCount;
+                        if (!item.scriptReply)
+                            ++sentCount;
                     }
                 }
                 online = false;
@@ -731,6 +994,7 @@ struct EngineSession::Impl {
                 {
                     std::lock_guard lock(mutex);
                     error = Error(conn->failure, "engine connection interrupted");
+                    disconnectCause = conn->disconnectCause;
                     connection.reset();
                     incoming.clear();
                     incomingBytes = 0;
@@ -742,10 +1006,13 @@ struct EngineSession::Impl {
             completeAll(stopping ? ErrorCode::Cancelled : error.code());
             if (stopping || stop.stop_requested())
                 break;
-            const bool reconnect =
-                bool(options.rediscover) && trusted(endpoint.projectPath) && error.code() != ErrorCode::Untrusted;
+            if (error.code() == ErrorCode::Untrusted)
+                disconnectCause = EngineDisconnectCause::TrustRevoked;
+            const bool reconnect = bool(options.rediscover) && trusted(endpoint.projectPath) &&
+                                   error.code() != ErrorCode::Untrusted &&
+                                   disconnectCause == EngineDisconnectCause::Unexpected;
             if (callbacks.disconnected)
-                callbacks.disconnected(EngineDisconnect{attempted, error, reconnect});
+                callbacks.disconnected(EngineDisconnect{attempted, error, reconnect, disconnectCause});
             if (!reconnect)
                 break;
             {
@@ -799,7 +1066,7 @@ EngineSession::~EngineSession() {
 Result<std::uint64_t> EngineSession::request(std::string command, rpc::Json params, Reply reply, std::stop_token stop) {
     if (command.empty() || !params.isObject() || !reply || command == "auth" || command.starts_with("auth.") ||
         command == "server.configure" || command == "server.subscribe" || command == "server.shutdown" ||
-        command == "engine.event" || command == "engine.heartbeat" ||
+        command == "engine.event" || command == "engine.heartbeat" || command == "script.debug.bootstrap" ||
         command.size() + params.dump().size() > kRequestLimit)
         return fail(ErrorCode::InvalidArgument, "invalid engine request");
     std::lock_guard lock(m_impl->mutex);
@@ -819,10 +1086,118 @@ Result<std::uint64_t> EngineSession::request(std::string command, rpc::Json para
         return fail(ErrorCode::InvalidArgument, "engine request frame exceeds its limit");
     const auto id = m_impl->nextId++;
     const auto deadline = requestDeadline(command, m_impl->options.requestTimeout);
-    m_impl->pending.emplace(
-        id, Impl::Pending{id, std::move(command), std::move(params), std::move(reply), stop, deadline, false, false});
+    Impl::Pending pending;
+    pending.id = id;
+    pending.command = std::move(command);
+    pending.params = std::move(params);
+    pending.reply = std::move(reply);
+    pending.stop = stop;
+    pending.deadline = deadline;
+    m_impl->pending.emplace(id, std::move(pending));
     m_impl->cv.notify_all();
     return id;
+}
+Result<std::uint64_t> EngineSession::requestObserved(std::string command, rpc::Json params, ObservedReply reply,
+                                                     std::stop_token stop) {
+    if (command.empty() || !params.isObject() || !reply || command == "auth" || command.starts_with("auth.") ||
+        command == "server.configure" || command == "server.subscribe" || command == "server.shutdown" ||
+        command == "engine.event" || command == "engine.heartbeat" || command == "script.debug.bootstrap" ||
+        command.size() + params.dump().size() > kRequestLimit)
+        return fail(ErrorCode::InvalidArgument, "invalid engine request");
+    std::lock_guard lock(m_impl->mutex);
+    if (!m_impl->online || m_impl->stopping)
+        return fail(ErrorCode::Busy, "engine session is disconnected");
+    if (m_impl->pending.size() >= kPendingLimit)
+        return fail(ErrorCode::Busy, "engine request queue is full");
+    // Account for JSON escaping, the identity envelope, ID digits and final newline as well as
+    // params. The queued request must fit the complete wire-frame bound, including a long path.
+    const auto envelope = rpc::Json::object()
+                              .set("jsonrpc", "2.0")
+                              .set("id", m_impl->nextId)
+                              .set("method", command)
+                              .set("params", rpc::Json::object())
+                              .set("session", identityJson(m_impl->connection->identity));
+    if (envelope.dump().size() - 2 + params.dump().size() + 1 > kRequestLimit)
+        return fail(ErrorCode::InvalidArgument, "engine request frame exceeds its limit");
+    const auto id = m_impl->nextId++;
+    const auto deadline = requestDeadline(command, m_impl->options.requestTimeout);
+    Impl::Pending pending;
+    pending.id = id;
+    pending.command = std::move(command);
+    pending.params = std::move(params);
+    pending.observedReply = std::move(reply);
+    pending.stop = stop;
+    pending.deadline = deadline;
+    m_impl->pending.emplace(id, std::move(pending));
+    m_impl->cv.notify_all();
+    return id;
+}
+Result<std::uint64_t> EngineSession::bootstrapScriptDebug(const EngineIdentity& expected,
+                                                          std::function<Result<void>(const EngineIdentity&)> admission,
+                                                          ScriptDebugReply reply, std::stop_token stop) {
+    if (!admission || !reply)
+        return fail(ErrorCode::InvalidArgument,
+                    "Lua debug bootstrap needs explicit admission and a private completion");
+    if (stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "Lua debug bootstrap was cancelled");
+    std::lock_guard lock(m_impl->mutex);
+    if (!m_impl->online || m_impl->stopping || !m_impl->connection)
+        return fail(ErrorCode::Busy, "engine session is disconnected");
+    const auto& actual = m_impl->connection->identity;
+    if (!actual.scriptDebugAvailable || actual.scriptDebugProtocolVersion != 1)
+        return fail(ErrorCode::Unsupported, "this engine does not advertise the Lua debug protocol");
+    if (!sameDebugOwner(expected, actual))
+        return fail(ErrorCode::PermissionDenied, "Lua debug bootstrap does not match the selected engine connection");
+    if (m_impl->pending.size() >= kPendingLimit)
+        return fail(ErrorCode::Busy, "engine request queue is full");
+    const auto id = m_impl->nextId++;
+    Impl::Pending item;
+    item.id = id;
+    item.command = "script.debug.bootstrap";
+    item.params = rpc::Json::object();
+    item.stop = stop;
+    item.leaseStarted = Clock::now();
+    item.deadline = item.leaseStarted + std::min(m_impl->options.connectTimeout, std::chrono::milliseconds(30000));
+    item.scriptReply = std::move(reply);
+    item.scriptAdmission = std::move(admission);
+    item.scriptOwner = eventIdentity(actual);
+    m_impl->pending.emplace(id, std::move(item));
+    m_impl->cv.notify_all();
+    return id;
+}
+Result<std::stop_token> EngineSession::debugConnectionStopToken(const EngineIdentity& expected) const {
+    std::lock_guard lock(m_impl->mutex);
+    if (!m_impl->online || m_impl->stopping || !m_impl->connection || m_impl->connection->failed ||
+        !sameDebugOwner(expected, m_impl->connection->identity))
+        return fail(ErrorCode::PermissionDenied, "Lua debugger no longer belongs to this engine connection");
+    return m_impl->connection->debugLifetime.get_token();
+}
+Result<NativePauseLease> EngineSession::bindNativeDebuggerPause(const EngineIdentity& expected,
+                                                                NativeDebuggerBinding binding) {
+    if (binding.registrySessionId == 0 || binding.controllerGeneration == 0 || binding.processId <= 0 ||
+        binding.processId != expected.processId)
+        return fail(ErrorCode::InvalidArgument, "Native debugger pause binding has no exact registry/controller/PID");
+    if (!m_impl->trusted(expected.projectPath))
+        return fail(ErrorCode::Untrusted, "Native pause binding requires current engine project trust");
+    std::lock_guard lock(m_impl->mutex);
+    const auto connection = m_impl->connection;
+    if (!m_impl->online || m_impl->stopping || !connection || connection->failed ||
+        !sameAuthenticatedOwner(expected, connection->identity))
+        return fail(ErrorCode::PermissionDenied,
+                    "Native pause binding does not belong to this authenticated connection");
+    if (const auto existing = connection->nativePause.lock(); existing && !existing->revoked())
+        return fail(ErrorCode::AlreadyExists, "This engine already has a current native debugger pause binding");
+    auto state = std::make_shared<NativePauseLease::State>(binding, [weak = std::weak_ptr(connection)] {
+        const auto connection = weak.lock();
+        return connection ? connection->heartbeatCount.load() : std::uint64_t{0};
+    });
+    state->connectionRevocation = std::make_unique<std::stop_callback<std::function<void()>>>(
+        connection->debugLifetime.get_token(), [weak = std::weak_ptr(state)] {
+            if (const auto state = weak.lock())
+                state->revoke();
+        });
+    connection->nativePause = state;
+    return NativePauseLease(std::move(state));
 }
 void EngineSession::cancel(std::uint64_t id) {
     std::lock_guard lock(m_impl->mutex);
@@ -835,10 +1210,15 @@ void EngineSession::shutdown() noexcept {
     m_impl->online = false;
     m_impl->worker.request_stop();
     m_impl->watchdog.request_stop();
+    std::shared_ptr<Impl::Connection> connection;
     {
         std::lock_guard lock(m_impl->mutex);
-        if (m_impl->connection)
-            m_impl->connection->stream->close();
+        connection = m_impl->connection;
+    }
+    // stop_callbacks may query session status; never invoke them under the session mutex.
+    if (connection) {
+        connection->debugLifetime.request_stop();
+        connection->stream->close();
     }
     m_impl->cv.notify_all();
     if (m_impl->worker.joinable())

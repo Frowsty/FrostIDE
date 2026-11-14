@@ -193,8 +193,8 @@ TEST(RunConfigurationStore, RefusesDamagedFilesWhole) {
     refused("[]", ErrorCode::Corrupt, "not a JSON object");
     refused("{\"configurations\": []}", ErrorCode::Corrupt, "'version'");
     refused("{\"version\": 0}", ErrorCode::Corrupt, "version 0");
-    // Version 3 adds RUN-11 engine types; the next version remains unsupported.
-    refused("{\"version\": 4, \"configurations\": []}", ErrorCode::Unsupported, "version 4 is newer");
+    // Version 4 adds explicit native-and-Lua engine Debug; the next version remains unsupported.
+    refused("{\"version\": 5, \"configurations\": []}", ErrorCode::Unsupported, "version 5 is newer");
     refused("{\"version\": 1, \"configurations\": {}}", ErrorCode::Corrupt, "not an array");
     refused(head + good + "}, " + good + "}]}", ErrorCode::Corrupt, "#2: the id 'a' is used twice");
     refused(head + good + "}, 3]}", ErrorCode::Corrupt, "#2: not an object");

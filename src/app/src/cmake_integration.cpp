@@ -35,6 +35,7 @@
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPlainTextEdit>
+#include <QProcessEnvironment>
 #include <QSignalBlocker>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -366,12 +367,26 @@ void CMakeIntegration::refreshConfigureTask() {
 }
 
 Result<void> CMakeIntegration::debug(std::function<void(Result<debug::DebugTarget>)> done) {
+    return debugPrepared(std::nullopt, std::move(done));
+}
+
+Result<void> CMakeIntegration::debug(const run::RunConfiguration& frozen,
+                                     std::function<void(Result<debug::DebugTarget>)> done) {
+    if (frozen.type != run::RunType::CMakeTarget || frozen.target != runTargetName())
+        return fail(ErrorCode::InvalidArgument, "the captured CMake configuration does not name the selected target");
+    return debugPrepared(frozen, std::move(done));
+}
+
+Result<void> CMakeIntegration::debugPrepared(std::optional<run::RunConfiguration> frozen,
+                                             std::function<void(Result<debug::DebugTarget>)> done) {
     if (running() || m_debugDone)
         return fail(ErrorCode::Busy, "a CMake target is already running");
+    m_debugConfiguration = std::move(frozen);
     m_debugDone = std::move(done);
     auto started = run();
     if (!started) {
         m_debugDone = {};
+        m_debugConfiguration.reset();
         return std::unexpected(started.error());
     }
     return {};
@@ -764,6 +779,7 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
     auto admission = std::move(m_runAdmission);
     build::RunOutcome failed;
     const auto failDebug = [this](const Error& error) {
+        m_debugConfiguration.reset();
         if (m_debugDone) {
             auto done = std::move(m_debugDone);
             m_debugDone = {};
@@ -844,7 +860,16 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
     configuration.program = *program;
     configuration.arguments = m_runArguments;
     configuration.workingDirectory = m_service->sourceDirectory();
-    if (m_launchConfigurator)
+    if (m_debugConfiguration) {
+        const auto& frozen = *m_debugConfiguration;
+        configuration.id = frozen.id;
+        configuration.name = frozen.name;
+        if (!frozen.arguments.empty())
+            configuration.arguments = frozen.arguments;
+        if (!frozen.workingDirectory.empty())
+            configuration.workingDirectory = frozen.workingDirectory;
+        configuration.environment = frozen.environment;
+    } else if (m_launchConfigurator)
         configuration = m_launchConfigurator(std::move(configuration));
     if (m_debugDone) {
         debug::DebugTarget debugTarget;
@@ -852,13 +877,29 @@ void CMakeIntegration::buildFinished(std::uint64_t generation, const build::CMak
         debugTarget.program = configuration.program;
         debugTarget.workingDirectory = configuration.workingDirectory;
         debugTarget.arguments = configuration.arguments;
-        // lldb-dap sets variables over the inherited environment; a removal cannot be passed on.
-        for (const run::EnvironmentEntry& entry : configuration.environment)
-            if (entry.value)
-                debugTarget.environment.emplace_back(entry.name, *entry.value);
+        if (m_debugConfiguration &&
+            std::ranges::any_of(configuration.environment, [](const auto& entry) { return !entry.value; })) {
+            // DAP has no unset entry. Capture the inherited environment and send the complete
+            // resulting map, preserving each frozen removal instead of silently dropping it.
+            auto environment = QProcessEnvironment::systemEnvironment();
+            for (const auto& entry : configuration.environment) {
+                if (entry.value)
+                    environment.insert(QString::fromStdString(entry.name), QString::fromStdString(*entry.value));
+                else
+                    environment.remove(QString::fromStdString(entry.name));
+            }
+            for (const auto& name : environment.keys())
+                debugTarget.environment.emplace_back(name.toStdString(), environment.value(name).toStdString());
+            debugTarget.inheritEnvironment = false;
+        } else {
+            for (const auto& entry : configuration.environment)
+                if (entry.value)
+                    debugTarget.environment.emplace_back(entry.name, *entry.value);
+        }
         debugTarget.trustRoots = {m_service->sourceDirectory()};
         auto done = std::move(m_debugDone);
         m_debugDone = {};
+        m_debugConfiguration.reset();
         m_runStateChanged();
         done(std::move(debugTarget));
         return;
@@ -912,6 +953,7 @@ void CMakeIntegration::runFinished(const run::RunResult& result) {
 void CMakeIntegration::stop() {
     m_rerun = false;
     m_stopRequested = true;
+    m_debugConfiguration.reset();
     if (m_pending)
         m_service->cancel();
     if (m_running && m_runId)
@@ -923,6 +965,7 @@ void CMakeIntegration::shutdown() {
         return;
     m_shutdown = true;
     m_debugDone = {};
+    m_debugConfiguration.reset();
     m_rerun = false;
     m_pending = false;
     ++m_runGeneration;

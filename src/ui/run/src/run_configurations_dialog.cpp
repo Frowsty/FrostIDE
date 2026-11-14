@@ -11,6 +11,7 @@
 #include "frost/io/process.hpp"
 #include "frost/run/run_types.hpp"
 
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -184,6 +185,13 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     form->addRow(tr("Target:"), m_target);
     form->addRow(tr("Program:"), m_program);
     form->addRow(tr("Engine project:"), m_engineProject);
+    m_engineDebugMode = new QComboBox(this);
+    m_engineDebugMode->setObjectName(QStringLiteral("runConfigurationEngineDebugMode"));
+    m_engineDebugMode->addItem(tr("Lua"), static_cast<int>(run::EngineDebugMode::Lua));
+    m_engineDebugMode->addItem(tr("Native + Lua"), static_cast<int>(run::EngineDebugMode::NativeAndLua));
+    m_engineDebugMode->setToolTip(tr("Native + Lua launches one engine host under the native debugger, then attaches "
+                                     "Lua to that same authenticated process."));
+    form->addRow(tr("Engine debugger:"), m_engineDebugMode);
     form->addRow(tr("Program arguments:"), m_arguments);
     form->addRow(tr("Working directory:"), m_workingDirectory);
     form->addRow(tr("Environment variables:"), m_environment);
@@ -293,6 +301,8 @@ void RunConfigurationsDialog::showConfiguration(int row) {
     }
     m_form->setRowVisible(m_engineProject, run::isFrostEngineRunType(shownType));
     m_engineProject->setEnabled(valid);
+    m_form->setRowVisible(m_engineDebugMode, run::isFrostEngineRunType(shownType));
+    m_engineDebugMode->setEnabled(valid);
     m_form->setRowVisible(m_members, compoundType);
     m_form->setRowVisible(m_process, attachType);
     if (!valid) {
@@ -323,6 +333,7 @@ void RunConfigurationsDialog::showConfiguration(int row) {
     m_target->setText(configuration.target.empty() ? tr("(none)") : qs(configuration.target));
     m_program->setText(qs(configuration.program));
     m_engineProject->setText(qs(configuration.engineProjectPath));
+    m_engineDebugMode->setCurrentIndex(m_engineDebugMode->findData(static_cast<int>(configuration.engineDebugMode)));
     m_arguments->setText(formatRunArguments(configuration.arguments));
     m_workingDirectory->setText(qs(configuration.workingDirectory));
     m_environment->setPlainText(formatRunEnvironment(configuration.environment));
@@ -386,6 +397,7 @@ void RunConfigurationsDialog::storeFields() {
     }
     if (run::isFrostEngineRunType(configuration.type)) {
         configuration.engineProjectPath = utf8(m_engineProject->text().trimmed());
+        configuration.engineDebugMode = static_cast<run::EngineDebugMode>(m_engineDebugMode->currentData().toInt());
     }
     if (configuration.type == run::RunType::Compound) {
         configuration.configurations.clear();

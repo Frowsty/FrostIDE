@@ -23,7 +23,8 @@ void DebugSession::State::stopped(const rpc::Json& body) {
                   .text = event.text,
                   .threadId = event.threadId,
                   .allThreadsStopped = event.allThreadsStopped,
-                  .hitBreakpointIds = event.hitBreakpointIds};
+                  .hitBreakpointIds = event.hitBreakpointIds,
+                  .scriptPause = event.scriptPause};
     bool throwHit = false;
     bool stepInStop = false;
     {
@@ -478,6 +479,8 @@ void DebugSession::State::announceStop(StopInfo info) {
         sendBreakpoints(*restore);
     }
     emit([&] {
+        if (callbacks.onAdapterStopped)
+            callbacks.onAdapterStopped();
         if (callbacks.onStateChanged) {
             callbacks.onStateChanged(DebugState::Stopped);
         }
@@ -649,6 +652,8 @@ void DebugSession::State::framesAnswered(std::int64_t threadId, std::uint64_t ge
 
 // Sends `command` for the current thread after switching to Running.
 Result<void> DebugSession::State::resume(const std::string& command) {
+    if (readOnly)
+        return fail(ErrorCode::Unsupported, "A dump session cannot execute a process");
     std::int64_t thread = 0;
     std::uint64_t commandGeneration = 0;
     std::optional<StopInfo> oldStop;
@@ -719,26 +724,29 @@ Result<void> DebugSession::State::resume(const std::string& command) {
 }
 
 void DebugSession::State::continued() {
+    bool changed = false;
     {
         LockGuard lock(mutex);
         if (state == DebugState::Running) {
             ++generation; // A continued event supersedes any outstanding resume reply.
+        } else if (state != DebugState::Stopped) {
             return;
+        } else {
+            state = DebugState::Running;
+            ++generation;
+            stop.reset();
+            frames.clear();
+            loading.clear();
+            currentFrame.reset();
+            changed = true;
         }
-        if (state != DebugState::Stopped) {
-            return;
-        }
-        state = DebugState::Running;
-        ++generation;
-        stop.reset();
-        frames.clear();
-        loading.clear();
-        currentFrame.reset();
     }
     emit([&] {
-        if (callbacks.onStateChanged) {
+        if (changed && callbacks.onStateChanged) {
             callbacks.onStateChanged(DebugState::Running);
         }
+        if (callbacks.onContinued)
+            callbacks.onContinued();
     });
 }
 

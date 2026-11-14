@@ -18,6 +18,8 @@ Result<void> DebugSession::stepIn() { return m_state->resume("stepIn"); }
 Result<void> DebugSession::stepOut() { return m_state->resume("stepOut"); }
 
 Result<void> DebugSession::pause() {
+    if (m_state->readOnly)
+        return fail(ErrorCode::Unsupported, "A dump session cannot pause a process");
     std::optional<std::int64_t> thread;
     std::uint64_t gen = 0;
     {
@@ -41,6 +43,8 @@ Result<void> DebugSession::pause() {
 }
 
 Result<void> DebugSession::runToLine(const std::string& path, std::int64_t line) {
+    if (m_state->readOnly)
+        return fail(ErrorCode::Unsupported, "A dump session cannot execute a process");
     {
         LockGuard lock(m_state->mutex);
         if (m_state->state != DebugState::Stopped) {

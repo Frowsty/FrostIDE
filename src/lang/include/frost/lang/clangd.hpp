@@ -198,6 +198,21 @@ struct ClangdServiceOptions {
     std::function<void(std::string_view line)> onLog;
 };
 
+// An explicit temporary document owner. Copies identify the same lease and release is idempotent.
+// The immutable snapshot and LSP version describe exactly the didOpen queued by acquisition.
+// The originating service must outlive calls using this value. Destruction performs no work.
+struct AnalysisDocumentLease {
+    std::string path;
+    std::uint64_t token = 0;
+    std::uint64_t generation = 0;
+    std::int64_t lspVersion = 0;
+    text::Snapshot snapshot;
+
+private:
+    friend class ClangdService;
+    std::weak_ptr<const void> m_service;
+};
+
 class ClangdService final : public ILspRequester {
 public:
     // `launcher`, the context's reactor and scheduler must outlive the service and its stop().
@@ -240,7 +255,10 @@ public:
     std::uint64_t addInactiveRegionsListener(InactiveRegionsListener listener);
     void removeInactiveRegionsListener(std::uint64_t id);
 
-    // Opens `path` (absolute) with its current text. Errors: InvalidArgument (path), AlreadyExists.
+    // Opens `path` (absolute) with its current text. An analysis-owned document is adopted with
+    // exactly this snapshot and a full-text didChange at the next LSP version. Existing ordinary
+    // documents still report AlreadyExists. Errors: InvalidArgument (path), AlreadyExists, and
+    // the actual LSP notification error when adopting an analysis document.
     [[nodiscard]] Result<void> openDocument(std::string_view path, text::Snapshot snapshot);
     // Applies `changes`, which took the document from its last snapshot to `after`. A ChangeSet
     // that does not start at the recorded version is sent as a full-text change. Errors: NotFound.
@@ -250,6 +268,21 @@ public:
     [[nodiscard]] Result<void> saveDocument(std::string_view path);
     // Closes the document and drops its diagnostics. Errors: NotFound.
     [[nodiscard]] Result<void> closeDocument(std::string_view path);
+    // Temporarily opens an absent absolute path while Running. Queues the actual didOpen before
+    // returning, under the same lock as ordinary document operations and request admission.
+    // Never substitutes an already-open snapshot. Errors: InvalidArgument, AlreadyExists, Busy,
+    // OutOfRange (ownership token exhausted), or the actual LSP notification error.
+    // Thread-safe, O(log(open documents) + snapshot bytes); no disk I/O or server acknowledgement.
+    [[nodiscard]] Result<AnalysisDocumentLease> acquireAnalysisDocument(std::string_view path, text::Snapshot snapshot);
+    // Cheap thread-safe ownership check, O(log(open documents)). Ordinary open adopts the snapshot;
+    // change, save or close revokes temporary ownership; disconnect, restart and stop drop temporary
+    // documents. Snapshot identity, LSP version, monotonic token and service launch must all match.
+    [[nodiscard]] bool analysisDocumentCurrent(const AnalysisDocumentLease& lease) const;
+    // Closes only this exact still-owned document. Stale/foreign/revoked/repeated release succeeds
+    // without changing another owner. Cleanup after cancellation uses this same explicit method.
+    // Thread-safe, O(log(open documents)); sends didClose in document-operation order, never waits.
+    // A didClose enqueue error is returned after discarding local ownership.
+    [[nodiscard]] Result<void> releaseAnalysisDocument(const AnalysisDocumentLease& lease);
     // The LSP version of `path`'s latest text (1 when opened, one more per change sent), or nullopt
     // when it is not open; what an editor host reports as IEditorLanguageHost::documentVersion.
     [[nodiscard]] std::optional<std::int64_t> documentVersion(std::string_view path) const;
@@ -280,6 +313,7 @@ public:
     struct Shared; // src/lang/src/clangd_service.cpp.
 
 private:
+    [[nodiscard]] Result<void> closeDocumentImpl(std::string_view path, const AnalysisDocumentLease* lease);
     [[nodiscard]] sched::Task<void> finishStop();
     std::shared_ptr<Shared> m_shared;
     sched::JoinHandle<void> m_supervisor;
