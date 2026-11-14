@@ -2,6 +2,7 @@
 // CMake folder composition for the workbench.
 
 #include "cmake_integration.hpp"
+#include "cmake_kit_dialog.hpp"
 
 #include "frost/build/run_target.hpp"
 #include "frost/core/mutex.hpp"
@@ -299,6 +300,10 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     refreshProfiles();
     windows.setContent(kTargets, targets);
     auto* tool = new ui::cmake::CMakeToolWindow(*m_controller);
+    connect(tool, &ui::cmake::CMakeToolWindow::createKitRequested, this, [this, &fs] {
+        const QPointer<CMakeIntegration> self(this);
+        showCMakeKitDialog(fs, m_settings, *m_service, m_window, [self] { return !self.isNull(); });
+    });
     windows.setContent(kCMake, tool);
 }
 
