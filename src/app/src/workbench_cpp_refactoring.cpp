@@ -262,6 +262,10 @@ void Workbench::registerCppRefactoringActions() {
 }
 
 void Workbench::showCppRefactoring(std::string operation) {
+    if (operation == "move-file") {
+        moveCppProjectSource();
+        return;
+    }
     // Prefer the actual clangd tweaks for their broader expression/statement/local profiles.
     if (m_language && operation == "extract-variable") {
         m_language->extractVariable();
@@ -362,6 +366,10 @@ void Workbench::showCppRefactoring(std::string operation) {
                     ? QStringLiteral(
                           "Profile: literal arithmetic constant in an instance-method return, in an internal "
                           "non-aggregate class. Adds a private const instance field and changes object layout.")
+                : operation == "safe-delete"
+                    ? QStringLiteral("Profile: unreferenced automatic scalar local or internal free-function "
+                                     "definition, checked in every captured configuration. Effects, attributes, "
+                                     "assembly and real uses refuse; this removes a symbol, never a file.")
                     : QStringLiteral(
                           "Profile: complete arithmetic return expression; constant extraction requires a constant "
                           "expression. Stock clangd actions cover broader local variable/statement extraction.");

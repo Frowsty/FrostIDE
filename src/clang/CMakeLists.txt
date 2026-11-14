@@ -55,6 +55,7 @@ add_executable(frost-clang
     src/local_rename_plan.cpp
     src/ast_refactoring_plan.cpp
     src/ast_refactoring_operations.cpp
+    src/ast_safe_delete.cpp
     src/llvm_compression_shim.cpp
 )
 if(FROST_BUILD_TESTS)

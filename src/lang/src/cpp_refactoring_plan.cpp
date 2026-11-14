@@ -19,7 +19,7 @@ sched::Task<Result<CppRenameProposal>> requestCppRefactoringPlan(io::IProcessLau
                                                                  CppRefactoringRequest request,
                                                                  IClock::Duration timeout, std::stop_token stop) {
     constexpr std::array operations{"change-signature", "inline-variable", "inline-function", "extract-variable",
-                                    "extract-constant", "extract-method",  "extract-field"};
+                                    "extract-constant", "extract-method",  "extract-field",   "safe-delete"};
     if (std::ranges::find(operations, request.operation) == operations.end() ||
         request.endOffset < request.context.offset || request.context.path != request.context.seedTranslationUnit)
         co_return fail(ErrorCode::Unsupported, "Unknown AST operation or non-source selection");

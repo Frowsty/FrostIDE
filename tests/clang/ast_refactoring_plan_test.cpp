@@ -122,4 +122,18 @@ TEST_F(AstRefactoring, ExtractFieldRequiresAnInternalNonAggregateClass) {
     EXPECT_NE(after(result).find("this->extracted"), std::string::npos);
     EXPECT_NE(after(result).find("const int extracted = 2+3"), std::string::npos);
 }
+TEST_F(AstRefactoring, SafeDeleteRemovesOnlyUnreferencedLocalsAndInternalFunctions) {
+    auto local = plan("int main(){int unused=2+3; return 0;}\n", "safe-delete", "unused");
+    ASSERT_EQ(local.stringAt("status"), "ready");
+    EXPECT_EQ(after(local).find("unused"), std::string::npos);
+    auto function = plan("static int unused(){return 7;}\nint main(){return 0;}\n", "safe-delete", "unused");
+    ASSERT_EQ(function.stringAt("status"), "ready");
+    EXPECT_EQ(after(function).find("unused"), std::string::npos);
+    refused(plan("int main(){int used=2;return used;}\n", "safe-delete", "used"));
+    refused(plan("int effect(); int main(){int unused=effect();return 0;}\n", "safe-delete", "unused"));
+    refused(plan("static int used(){return 7;}\nint main(){return used();}\n", "safe-delete", "used"));
+    refused(plan("int main(){if(true) int unused; return 0;}\n", "safe-delete", "unused"));
+    refused(plan("static int used(int x){return x;}\ntemplate<class T> auto call(T x){return used(x);}\n",
+                 "safe-delete", "used"));
+}
 } // namespace
