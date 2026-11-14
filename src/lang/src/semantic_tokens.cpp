@@ -443,14 +443,16 @@ sched::Task<Result<std::vector<LspInlayHint>>> requestInlayHints(ILspRequester& 
         co_return std::unexpected(std::move(document.error()));
     }
     Json params = Json::object().set("textDocument", *document).set("range", toJson(range));
-    auto answered = co_await server.request("textDocument/inlayHint", params, token);
-    if (!answered) {
-        auto fallback = co_await server.request("clangd/inlayHints", std::move(params), token);
-        if (!fallback) {
-            co_return std::unexpected(std::move(answered.error()));
-        }
-        co_return parseInlayHints(*fallback);
-    }
+    if (token.stop_requested())
+        co_return fail(ErrorCode::Cancelled, "Inlay hint request cancelled");
+    const auto capabilities = server.serverCapabilities();
+    if (!capabilities || !capabilities->inlayHint)
+        co_return fail(ErrorCode::Unsupported, "The language server does not advertise inlay hints");
+    const auto method = capabilities->legacyClangdInlayHints ? "clangd/inlayHints" : "textDocument/inlayHint";
+    auto answered = co_await server.request(method, std::move(params), token);
+    // Cancellation, transport and server failures must never trigger an unadvertised second RPC.
+    if (!answered)
+        co_return std::unexpected(answered.error());
     co_return parseInlayHints(*answered);
 }
 

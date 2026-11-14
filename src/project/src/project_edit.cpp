@@ -97,6 +97,9 @@ Result<std::string> joinPaths(const std::vector<std::string>& paths, std::string
 } // namespace
 
 Result<std::string> projectEditRequest(const ProjectEdit& edit) {
+    if (edit.beforeFileCreate && (edit.commit || edit.beforeFileMove || edit.kind != ProjectEditKind::AddFiles ||
+                                  edit.files.empty() || edit.files.size() > 64))
+        return fail(ErrorCode::InvalidArgument, "BeforeFileCreate is exclusive to a non-committing AddFiles plan");
     if (edit.beforeFileMove && (edit.commit || edit.kind != ProjectEditKind::RenameFiles))
         return fail(ErrorCode::InvalidArgument, "BeforeFileMove is exclusive to a non-committing rename plan");
     for (const auto& [path, what] : {std::pair{std::string_view(edit.root), "the trusted root"},
@@ -121,6 +124,8 @@ Result<std::string> projectEditRequest(const ProjectEdit& edit) {
     appendMember(out, "Commit", edit.commit ? "true" : "false");
     if (edit.beforeFileMove)
         appendMember(out, "BeforeFileMove", "true");
+    if (edit.beforeFileCreate)
+        appendMember(out, "BeforeFileCreate", "true");
     appendMember(out, "TransactionId", edit.transactionId);
     if (solutionEdit) {
         if (auto checked = checkPath(edit.project, "the project"); !checked) {
@@ -398,8 +403,9 @@ Result<void> runProjectEdit(io::IProcessLauncher& launcher, const ProjectEditLau
 
 Result<ProjectEditPlan> runProjectEditPlan(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch,
                                            const ProjectEdit& edit, std::stop_token stop) {
-    if (edit.commit || !edit.beforeFileMove || edit.kind != ProjectEditKind::RenameFiles)
-        return fail(ErrorCode::InvalidArgument, "Request a non-committing BeforeFileMove rename plan");
+    if (edit.commit || !((edit.beforeFileMove && !edit.beforeFileCreate && edit.kind == ProjectEditKind::RenameFiles) ||
+                         (edit.beforeFileCreate && !edit.beforeFileMove && edit.kind == ProjectEditKind::AddFiles)))
+        return fail(ErrorCode::InvalidArgument, "Request an exclusive non-committing pre-move or pre-create plan");
     std::string response;
     auto ran = runProjectEditImpl(launcher, launch, edit, {}, &response, stop);
     if (stop.stop_requested())
@@ -407,6 +413,8 @@ Result<ProjectEditPlan> runProjectEditPlan(io::IProcessLauncher& launcher, const
     if (!ran)
         return std::unexpected(ran.error());
     auto plan = parseProjectEditPlan(response);
+    if (plan && plan->mode != (edit.beforeFileCreate ? "BeforeFileCreateAdd" : "BeforeFileMoveRename"))
+        return fail(ErrorCode::Corrupt, "ProjectHost returned a different operation planning mode");
     if (plan && detail::pathKey(plan->projectPath) != detail::pathKey(edit.definition))
         return fail(ErrorCode::Corrupt, "ProjectHost planned a different project definition");
     return plan;

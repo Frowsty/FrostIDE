@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <format>
 #include <memory>
+#include <set>
 #include <utility>
 
 namespace frost::app {
@@ -108,7 +109,13 @@ void Workbench::syncJsonDocument(DocumentEditorView& view) {
 
 lang::IWorkspaceEditApplier& LanguageBridge::applier() noexcept { return *this; }
 
-Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_view label) {
+Result<void> LanguageBridge::validateRefactoringTargets(const lang::WorkspaceEdit& edit) {
+    for (const auto& file : edit.files)
+        if (const auto state = find(file.path); state && state->changedOnDisk)
+            return fail(ErrorCode::Busy, "Resolve the external source change before refactoring: " + file.path);
+    for (const auto& file : edit.files)
+        if (const auto* view = m_workbench.m_editors->find(file.path); view && view->editor().isReadOnly())
+            return fail(ErrorCode::PermissionDenied, "Refactoring target is read-only: " + file.path);
     if (m_workbench.m_engineBindings)
         for (const auto& file : edit.files)
             if (m_workbench.m_engineBindings->protectsGeneratedResource(file.path))
@@ -130,7 +137,13 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
                     ErrorCode::Unsupported,
                     "Engine metadata rename requires the read-only combined binding preview and schema regeneration");
         }
-    if (label == "Rename") {
+    return {};
+}
+
+Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_view label) {
+    if (auto targets = validateRefactoringTargets(edit); !targets)
+        return targets;
+    if (label == "Rename" || label == "C++ Semantic Refactoring") {
         document::RefactoringPlan plan;
         plan.label = std::string(label);
         const auto positionEncoding = encoding();
@@ -168,9 +181,38 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
         }
         if (plan.buffers.empty() && plan.disk.empty())
             return {};
-        if (std::ranges::any_of(edit.files, [](const auto& file) { return isCFamilySource(file.path); })) {
+        if (label == "Rename" &&
+            std::ranges::any_of(edit.files, [](const auto& file) { return isCFamilySource(file.path); })) {
             if (auto admitted = m_workbench.admitCppRename(edit, plan); !admitted)
                 return std::unexpected(std::move(admitted.error()));
+        }
+        if (label == "C++ Semantic Refactoring") {
+            const auto root = m_workbench.m_projectRoot;
+            const auto server = m_workbench.m_clangd;
+            const auto generation = m_workbench.m_cppRenameGeneration;
+            const auto trust = m_workbench.m_services.trust.snapshot(root);
+            const QPointer<Workbench> self(&m_workbench);
+            std::set<std::string> open;
+            for (const auto& document : m_workbench.m_documents->documents())
+                if (!document->path().empty())
+                    open.insert(lang::documentKey(document->path()));
+            plan.revalidateContext = [self, root, server, generation, trust, open]() -> Result<void> {
+                if (!self || self->m_shutDown || self->m_projectRoot != root || self->m_clangd != server ||
+                    self->m_cppRenameGeneration != generation)
+                    return fail(ErrorCode::Busy, "Semantic preview context changed");
+                const auto current = self->m_services.trust.snapshot(root);
+                if (!current.trusted || current.revision != trust.revision)
+                    return fail(ErrorCode::Untrusted, "Project trust changed");
+                std::set<std::string> now;
+                for (const auto& document : self->m_documents->documents())
+                    if (!document->path().empty())
+                        now.insert(lang::documentKey(document->path()));
+                if (now != open)
+                    return fail(ErrorCode::Busy, "Open document layout changed during preview");
+                return {};
+            };
+            if (!m_workbench.previewCppRefactoring(plan))
+                return fail(ErrorCode::Cancelled, "Semantic refactoring cancelled");
         }
         auto applied = m_workbench.applyRefactoring(plan);
         if (!applied)

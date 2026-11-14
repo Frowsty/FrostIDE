@@ -21,6 +21,7 @@ frost_add_library(project LAYER project
         src/cmake_compile_database.cpp
         src/cmake_file_api.cpp
         src/cmake_membership.cpp
+        src/generated_sources.cpp
         src/cmake_presets.cpp
         src/cmake_profile.cpp
         src/cmake_syntax.cpp

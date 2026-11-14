@@ -661,4 +661,160 @@ TEST_F(FileTransactionReplace, RecoveryDoesNotAdoptTamperedRetainedBefore) {
     expectBytes(target, after);
     expectBytes(saved.retainedBeforePath, "foreign retained bytes");
 }
+
+TEST_F(FileTransactionReplace, CreationPreparesWithoutPlaceholderAndRoundTripsTheIdenticalObject) {
+    const auto created = scratch.join("created.cpp");
+    auto value = prepareFileCreation(created, store, after, 65536);
+    ASSERT_TRUE(value) << value.error().describe();
+    EXPECT_TRUE(value->receipt()->images.beforeSha256.empty());
+    EXPECT_FALSE(fs.exists(created).value_or(true));
+    const auto stage = value->receipt()->replacementPath;
+    expectBytes(stage, after);
+    ASSERT_TRUE(value->validateCurrent(false));
+    const auto installed = value->settle();
+    ASSERT_TRUE(installed.complete()) << installed.error->describe();
+    const auto identity = supportedSnapshot(created);
+    ASSERT_TRUE(identity);
+    expectBytes(created, after);
+    EXPECT_FALSE(fs.exists(stage).value_or(true));
+    ASSERT_TRUE(value->restoreBefore().complete());
+    EXPECT_FALSE(fs.exists(created).value_or(true));
+    expectBytes(stage, after);
+    ASSERT_TRUE(value->reapplyAfter().complete());
+    const auto redoneIdentity = supportedSnapshot(created);
+    ASSERT_TRUE(redoneIdentity);
+    EXPECT_EQ(*redoneIdentity, *identity);
+    expectBytes(created, after);
+}
+
+TEST_F(FileTransactionReplace, EmptyCreationIsAbsentBeforeRatherThanAnEmptyExistingFile) {
+    const auto created = scratch.join("empty.txt");
+    auto value = prepareFileCreation(created, store, "", 0);
+    ASSERT_TRUE(value);
+    EXPECT_TRUE(value->receipt()->images.beforeSha256.empty());
+    EXPECT_EQ(value->receipt()->images.afterSha256, sha256Hex(""));
+    ASSERT_TRUE(value->settle().complete());
+    expectBytes(created, "");
+    ASSERT_TRUE(value->restoreBefore().complete());
+    EXPECT_FALSE(fs.exists(created).value_or(true));
+    // Existing zero-length files are not absence and can never be adopted by Create.
+    ASSERT_TRUE(fs.writeFileAtomic(created, ""));
+    EXPECT_FALSE(prepareFileCreation(created, store, "new", 65536));
+    EXPECT_FALSE(value->reapplyAfter().complete());
+    expectBytes(created, "");
+}
+
+TEST_F(FileTransactionReplace, CreationRefusesOccupiedOrMissingParentBeforeAnyPublication) {
+    EXPECT_FALSE(prepareFileCreation(target, store, after, 65536));
+    expectBytes(target, before);
+    EXPECT_FALSE(prepareFileCreation(scratch.join("missing/child.cpp"), store, after, 65536));
+    EXPECT_FALSE(fs.exists(scratch.join("missing")).value_or(true));
+    EXPECT_FALSE(prepareFileCreation(scratch.join("too-big.cpp"), store, after, 1));
+    EXPECT_FALSE(fs.exists(scratch.join("too-big.cpp")).value_or(true));
+}
+
+TEST_F(FileTransactionReplace, CreationDoesNotOverwriteAConcurrentDestinationOrUndoTamperedData) {
+    const auto created = scratch.join("concurrent.cpp");
+    auto value = prepareFileCreation(created, store, after, 65536);
+    ASSERT_TRUE(value);
+    ASSERT_TRUE(fs.writeFileAtomic(created, "foreign"));
+    EXPECT_FALSE(value->settle().complete());
+    expectBytes(created, "foreign");
+    expectBytes(value->receipt()->replacementPath, after);
+}
+
+TEST_F(FileTransactionReplace, CreationInverseRefusesTamperedInstalledImage) {
+    const auto created = scratch.join("tampered.cpp");
+    auto value = prepareFileCreation(created, store, after, 65536);
+    ASSERT_TRUE(value);
+    ASSERT_TRUE(value->settle().complete());
+    ASSERT_TRUE(overwriteNative(created, "foreign bytes"));
+    EXPECT_FALSE(value->restoreBefore().complete());
+    expectBytes(created, "foreign bytes");
+    EXPECT_FALSE(fs.exists(value->receipt()->replacementPath).value_or(true));
+}
+
+TEST_F(FileTransactionReplace, CreationRecoveryReacquiresPublishedAndRetainedAfterWithoutAPlaceholder) {
+    const auto created = scratch.join("recover-created.cpp");
+    FileReplacementReceipt saved;
+    {
+        auto value = prepareFileCreation(created, store, after, 65536);
+        ASSERT_TRUE(value);
+        saved = *value->receipt(); // Initial manifest intentionally predates every effect.
+        ASSERT_TRUE(value->settle().complete());
+    }
+    auto installed = recoverFileReplacement(saved, "", after, false, 65536);
+    ASSERT_TRUE(installed) << installed.error().describe();
+    ASSERT_TRUE(installed->validateCurrent(true));
+    ASSERT_TRUE(installed->restoreBefore().complete());
+    installed = recoverFileReplacement(saved, "", after, true, 65536);
+    ASSERT_TRUE(installed) << installed.error().describe();
+    EXPECT_EQ(installed->receipt()->phase, FileReplacementPhase::BeforeRestored);
+    EXPECT_FALSE(fs.exists(created).value_or(true));
+    ASSERT_TRUE(installed->reapplyAfter().complete());
+    expectBytes(created, after);
+}
+
+TEST_F(FileTransactionReplace, CreationRecoveryRefusesForeignEndpointAndTamperedPrivateImage) {
+    const auto created = scratch.join("recover-conflict.cpp");
+    FileReplacementReceipt saved;
+    {
+        auto value = prepareFileCreation(created, store, after, 65536);
+        ASSERT_TRUE(value);
+        saved = *value->receipt();
+    }
+    ASSERT_TRUE(fs.writeFileAtomic(created, "foreign"));
+    EXPECT_FALSE(recoverFileReplacement(saved, "", after, false, 65536));
+    expectBytes(created, "foreign");
+    ASSERT_TRUE(overwriteNative(saved.replacementPath, "tampered stage"));
+    EXPECT_FALSE(recoverFileReplacement(saved, "", after, true, 65536));
+    expectBytes(saved.replacementPath, "tampered stage");
+}
+
+TEST_F(FileTransactionReplace, MissingTargetCanProvisionStoreUsingItsActualExistingParentVolume) {
+    const auto created = scratch.join("not-created-yet.cpp");
+    auto chosen = ensurePrivateTransactionStore(created, scratch.join("new-store"), scratch.path());
+    ASSERT_TRUE(chosen) << chosen.error().describe();
+    EXPECT_FALSE(fs.exists(created).value_or(true));
+    auto value = prepareFileCreation(created, *chosen, after, 65536);
+    ASSERT_TRUE(value) << value.error().describe();
+    EXPECT_FALSE(fs.exists(created).value_or(true));
+}
+
+TEST_F(FileTransactionReplace, ExistingAndMalformedReceiptsCannotBeReinterpretedAsAbsentBefore) {
+    auto existing = prepare();
+    ASSERT_TRUE(existing);
+    const auto receipt = *existing->receipt();
+    EXPECT_FALSE(receipt.images.beforeSha256.empty());
+    auto forged = receipt;
+    forged.images.beforeSha256.clear(); // Legacy/corrupt receipt is NOT a valid creation profile.
+    EXPECT_FALSE(recoverFileReplacement(forged, "", after, false, 65536));
+    expectBytes(target, before);
+    expectBytes(receipt.replacementPath, after);
+    auto valid = recoverFileReplacement(receipt, before, after, false, 65536);
+    ASSERT_TRUE(valid) << valid.error().describe();
+    EXPECT_EQ(valid->receipt()->phase, FileReplacementPhase::Prepared);
+}
+
+TEST_F(FileTransactionReplace, CreationPostPublicationFailureRetainsHonestProgressAndForeignData) {
+    const auto created = scratch.join("interference.cpp");
+    auto value = prepareFileCreation(created, store, after, 65536);
+    ASSERT_TRUE(value);
+    bool changed = false;
+    detail::setReplacementObserver(
+        [](void* context, detail::ReplacementBoundary boundary, const FileReplacementReceipt& receipt) {
+            if (boundary != detail::ReplacementBoundary::AfterInstalled)
+                return;
+            *static_cast<bool*>(context) = overwriteNative(receipt.images.targetPath, "foreign after").has_value();
+        },
+        &changed);
+    auto installed = value->settle();
+    detail::setReplacementObserver(nullptr, nullptr);
+    ASSERT_TRUE(changed);
+    EXPECT_FALSE(installed.complete());
+    EXPECT_EQ(installed.receipt.phase, FileReplacementPhase::AfterInstalledUnverified);
+    expectBytes(created, "foreign after");
+    EXPECT_FALSE(recoverFileReplacement(installed.receipt, "", after, true, 65536));
+    expectBytes(created, "foreign after");
+}
 } // namespace

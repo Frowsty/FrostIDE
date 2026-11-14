@@ -23,13 +23,13 @@ Json cppRenameRequestJson(const CppRenameRequest& request) {
         .set("compilationDatabase", request.compilationDatabase)
         .set("overlays", Json::array(std::move(overlays)));
 }
-Result<CppRenameProposal> parseCppRenameProposal(std::string_view bytes) {
+Result<CppRenameProposal> parseCppRenameProposal(std::string_view bytes, std::string_view expectedKind) {
     if (bytes.size() > 64 * 1024 * 1024)
         return fail(ErrorCode::InvalidArgument, "Rename proposal exceeds64MiB");
     auto parsed = parseJson(bytes);
     if (!parsed)
         return std::unexpected(std::move(parsed.error()));
-    if (parsed->stringAt("kind") != "cpp-rename-plan")
+    if (parsed->stringAt("kind") != expectedKind)
         return fail(ErrorCode::InvalidArgument, "Unexpected rename proposal kind");
     CppRenameProposal result;
     result.status = std::string(parsed->stringAt("status"));
@@ -124,6 +124,18 @@ Result<CppRenameProposal> parseCppRenameProposal(std::string_view bytes) {
 sched::Task<Result<CppRenameProposal>> requestCppRenamePlan(io::IProcessLauncher& launcher, io::AsyncContext context,
                                                             std::string helper, CppRenameRequest request,
                                                             IClock::Duration timeout, std::stop_token stop) {
+    auto payload = cppRenameRequestJson(request);
+    co_return co_await requestCppSemanticPlan(launcher, context, std::move(helper), std::move(request),
+                                              std::move(payload), "--plan-project-rename", "cpp-rename-plan", timeout,
+                                              stop);
+}
+sched::Task<Result<CppRenameProposal>> requestCppSemanticPlan(io::IProcessLauncher& launcher, io::AsyncContext context,
+                                                              std::string helper, CppRenameRequest request, Json json,
+                                                              std::string mode, std::string kind,
+                                                              IClock::Duration timeout, std::stop_token stop) {
+    if (!((mode == "--plan-project-rename" && kind == "cpp-rename-plan") ||
+          (mode == "--plan-ast-refactoring" && kind == "cpp-refactoring-plan")))
+        co_return fail(ErrorCode::Unsupported, "Unknown semantic planning protocol");
     if (!io::isAbsolutePath(helper) || !io::isAbsolutePath(request.projectRoot) || !io::isAbsolutePath(request.path) ||
         (!request.seedTranslationUnit.empty() && !io::isAbsolutePath(request.seedTranslationUnit)))
         co_return fail(ErrorCode::InvalidArgument, "Rename requires absolute helper/project/source paths");
@@ -135,12 +147,12 @@ sched::Task<Result<CppRenameProposal>> requestCppRenamePlan(io::IProcessLauncher
         if (!path || !overlays.emplace(*path, item.contents).second)
             co_return fail(ErrorCode::InvalidArgument, "Invalid/duplicate dirty overlay path");
     }
-    auto payload = cppRenameRequestJson(request).dump();
+    auto payload = json.dump();
     if (payload.size() > 32 * 1024 * 1024)
         co_return fail(ErrorCode::InvalidArgument, "Rename request exceeds32MiB");
     io::ProcessSpec spec;
     spec.executable = std::move(helper);
-    spec.arguments = {"--plan-project-rename"};
+    spec.arguments = {std::move(mode)};
     spec.workingDirectory = request.projectRoot;
     spec.stdinMode = io::Stdio::Pipe;
     spec.belowNormalPriority = true;
@@ -152,7 +164,7 @@ sched::Task<Result<CppRenameProposal>> requestCppRenamePlan(io::IProcessLauncher
     auto completed = co_await (*child)->communicate(std::move(payload), timeout, stop);
     if (!completed)
         co_return std::unexpected(std::move(completed.error()));
-    auto proposal = parseCppRenameProposal(completed->stdoutBytes);
+    auto proposal = parseCppRenameProposal(completed->stdoutBytes, kind);
     if (!proposal)
         co_return std::unexpected(std::move(proposal.error()));
     if (proposal->ready())

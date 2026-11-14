@@ -146,9 +146,13 @@ frost_add_library(app LAYER app
         src/workbench_language.cpp
         src/workbench_refactoring.cpp
         src/workbench_cpp_rename.cpp
+        src/workbench_cpp_refactoring.cpp
+        src/workbench_cpp_move.cpp
+        src/workbench_cpp_published_fixes.cpp
         src/workbench_save_actions.cpp
         src/workbench_lua.cpp
         src/workbench_inspection.cpp
+        src/workbench_cpp_scope_fixes.cpp
         src/workbench_managed.cpp
         src/managed_debug_preparation.cpp
         src/managed_source_snapshot.cpp
@@ -165,6 +169,8 @@ frost_add_library(app LAYER app
         src/workbench_project.cpp
         src/workbench_project_helpers.hpp
         src/workbench_new_project.cpp
+        src/workbench_templates.cpp
+        src/workbench_template_dialogs.cpp
         src/workbench_project_sources.cpp
         src/workbench_source_rename.cpp
         src/workbench_source_rename_integration.cpp

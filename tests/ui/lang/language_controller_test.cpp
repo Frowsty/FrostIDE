@@ -24,12 +24,14 @@
 #include <QCheckBox>
 #include <QDialog>
 #include <QEvent>
+#include <QInputDialog>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QShortcut>
 #include <QThread>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QWidget>
 #include <gtest/gtest.h>
@@ -504,6 +506,27 @@ TEST(LanguageControllerCompletion, CtrlSpaceShowsTheLookupAndEnterCommits) {
     EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
     EXPECT_EQ(host.text().substr(host.selected->begin.value(), 2), "\n}");
     EXPECT_FALSE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
+}
+
+TEST(LanguageControllerCompletion, CppCallSnippetRequestsParameterHintsWithoutAnEditorCommand) {
+    FeatureServer server;
+    server.on("textDocument/completion", [](const Json&) {
+        return Json::array({completionItem("foo(count)", 3, "1", "foo(${1:count})$0", true)});
+    });
+    server.on("textDocument/signatureHelp", [](const Json&) {
+        return Json::object().set("signatures", Json::array({Json::object().set("label", "foo(int count)")}));
+    });
+    FakeHost host("fo");
+    host.caretAfter("fo");
+    Rig rig(server, host);
+    rig.controller.completeCode();
+    ASSERT_TRUE(pumpUntil([&] { return rig.controller.completionPopup().isVisible(); }));
+    ASSERT_TRUE(rig.controller.keyPress(Qt::Key_Return, Qt::NoModifier));
+    EXPECT_EQ(host.text(), "foo(count)");
+    ASSERT_TRUE(host.selected);
+    EXPECT_EQ(host.text().substr(host.selected->begin.value(), host.selected->size()), "count");
+    ASSERT_TRUE(pumpUntil([&] { return rig.controller.parameterInfoPopup().isVisible(); }));
+    EXPECT_EQ(server.paramsOf("textDocument/signatureHelp").size(), 1U);
 }
 
 TEST(LanguageControllerCompletion, CallSnippetRequestsParameterHintsAfterSelectingArgument) {
@@ -1441,6 +1464,131 @@ Json tweakAction(const std::string& path, std::string id, const std::string& tit
 // FND-3 (REF-0): Refactor This lists Rename, then the server's refactorings in the defined order
 // (known tweaks first, then the rest in server order); quick fixes and source actions stay with
 // Alt+Enter. Choosing a tweak executes it on the server; nothing edits text locally.
+TEST(LanguageControllerRefactoring, TweakAdmissionPredatesCodeActionAndRefusesStaleSelectionBeforeExecute) {
+    FeatureServer server;
+    const auto path = workPath("main.cpp");
+    std::atomic<int> captures = 0;
+    std::atomic<bool> current = true;
+    server.on("textDocument/codeAction", [&](const Json&) {
+        EXPECT_EQ(captures.load(), 1);
+        current = false; // Models the captured document version changing while the query is in flight.
+        return Json::array({tweakAction(path, "ExtractVariable", "Extract subexpression to variable")});
+    });
+    FakeHost host("int f(){return 2+3;}", path);
+    Rig rig(server, host);
+    rig.controller.setCppSemanticEditFactory([&]() -> frost::Result<LanguageController::SemanticApply> {
+        ++captures;
+        return LanguageController::SemanticApply{[&](const fl::WorkspaceEdit&) -> frost::Result<void> {
+            if (!current)
+                return frost::fail(frost::ErrorCode::Busy, "captured version changed");
+            return {};
+        }};
+    });
+    std::vector<QString> status;
+    QObject::connect(&rig.controller, &LanguageController::statusMessage,
+                     [&](const auto& message) { status.push_back(message); });
+    rig.controller.extractVariable();
+    ASSERT_TRUE(pumpUntil([&] { return !status.empty(); }));
+    EXPECT_TRUE(status.back().contains(QStringLiteral("captured version changed")));
+    EXPECT_TRUE(server.paramsOf("workspace/executeCommand").empty());
+    EXPECT_TRUE(rig.applier.edits.empty());
+}
+TEST(LanguageControllerRefactoring, MoveAndSafeDeleteDispatchToTheAppTransactionAndAstOwners) {
+    FeatureServer server;
+    FakeHost host("int main(){int unused; return 0;}", workPath("main.cpp"));
+    Rig rig(server, host);
+    std::vector<std::string> operations;
+    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(std::move(operation)); });
+    rig.controller.moveSymbol();
+    rig.controller.safeDelete();
+    EXPECT_EQ(operations, (std::vector<std::string>{"move-file", "safe-delete"}));
+    EXPECT_TRUE(rig.applier.edits.empty());
+    EXPECT_EQ(host.undoSteps, 0);
+}
+TEST(LanguageControllerRefactoring, ConversionsShowOnlyActualApplicableProviderActions) {
+    FeatureServer server;
+    const auto path = workPath("main.cpp");
+    server.on("textDocument/codeAction", [&](const Json&) {
+        return Json::array({tweakAction(path, "SwapBinaryOperands", "Swap operands to +"),
+                            tweakAction(path, "ExtractVariable", "Extract subexpression to variable")});
+    });
+    server.on("workspace/executeCommand", [](const Json&) { return Json{}; });
+    FakeHost host("int f(int a,int b){return a+b;}", path);
+    Rig rig(server, host);
+    unsigned captures = 0;
+    rig.controller.setCppSemanticEditFactory([&]() -> frost::Result<LanguageController::SemanticApply> {
+        ++captures;
+        return LanguageController::SemanticApply{[](const fl::WorkspaceEdit&) -> frost::Result<void> { return {}; }};
+    });
+    rig.controller.convertCode();
+    auto& choice = rig.controller.choicePopup();
+    ASSERT_TRUE(pumpUntil([&] { return choice.isVisible(); }));
+    ASSERT_EQ(choice.list()->count(), 1);
+    EXPECT_EQ(choice.list()->item(0)->text(), QStringLiteral("Swap operands to +"));
+    EXPECT_EQ(captures, 1u);
+    emit choice.chosen(0);
+    ASSERT_TRUE(pumpUntil([&] { return server.paramsOf("workspace/executeCommand").size() == 1; }));
+    EXPECT_EQ(server.paramsOf("workspace/executeCommand")[0].find("arguments")->items()[0].stringAt("tweakID"),
+              "SwapBinaryOperands");
+    EXPECT_TRUE(rig.applier.edits.empty());
+}
+TEST(LanguageControllerRefactoring, ChangeSignatureUsesExplicitParameterEditorRatherThanOnlyPermutation) {
+    FeatureServer server;
+    FakeHost host("int f(int value){return value;}", workPath("main.cpp"));
+    Rig rig(server, host);
+    std::vector<std::string> operations;
+    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(operation); });
+    rig.controller.changeSignature();
+    EXPECT_EQ(operations, (std::vector<std::string>{"edit-signature"}));
+    EXPECT_TRUE(rig.applier.edits.empty());
+}
+
+TEST(LanguageControllerRefactoring, NativeCreateUsageChoicePreservesPreChoiceSnapshotAdmission) {
+    FeatureServer server;
+    FakeHost host("int f(){return missing(1);}", workPath("main.cpp"));
+    Rig rig(server, host);
+    bool current = true;
+    unsigned captures = 0;
+    rig.controller.setCppSemanticEditFactory([&]() -> frost::Result<LanguageController::SemanticApply> {
+        ++captures;
+        return LanguageController::SemanticApply{[&](const fl::WorkspaceEdit&) -> frost::Result<void> {
+            if (!current)
+                return frost::fail(frost::ErrorCode::Busy, "selection changed before native creation");
+            return {};
+        }};
+    });
+    std::vector<std::string> operations;
+    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(operation); });
+    rig.controller.createFromUsage();
+    auto& choice = rig.controller.choicePopup();
+    ASSERT_TRUE(choice.isVisible());
+    ASSERT_EQ(choice.list()->count(), 2);
+    EXPECT_TRUE(choice.list()->item(0)->text().contains(QStringLiteral("native recovered AST")));
+    emit choice.chosen(0);
+    EXPECT_EQ(operations, (std::vector<std::string>{"create-from-usage"}));
+    EXPECT_EQ(captures, 1U);
+    rig.controller.createFromUsage();
+    current = false;
+    emit choice.chosen(0);
+    EXPECT_EQ(operations.size(), 1U);
+    EXPECT_TRUE(server.paramsOf("textDocument/codeAction").empty());
+    EXPECT_TRUE(rig.applier.edits.empty());
+}
+TEST(LanguageControllerRefactoring, PublishedAndModuleFixScopeHaveDifferentExplicitOwners) {
+    FeatureServer server;
+    FakeHost host("int main(){return 0;}", workPath("main.cpp"));
+    Rig rig(server, host);
+    std::vector<std::string> operations;
+    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(operation); });
+    unsigned published = 0;
+    rig.controller.setCppPublishedScopeFix([&] { ++published; });
+    rig.controller.fixPublishedDiagnostics();
+    rig.controller.fixInScope();
+    EXPECT_EQ(published, 1u);
+    EXPECT_EQ(operations, (std::vector<std::string>{"fix-in-scope"}));
+    EXPECT_TRUE(rig.applier.edits.empty());
+}
+
 TEST(LanguageControllerRefactoring, RefactorThisListsRenameThenServerActionsInOrder) {
     FeatureServer server;
     const std::string path = workPath("main.cpp");
@@ -1509,7 +1657,7 @@ TEST(LanguageControllerRefactoring, NamedCommandsRunClangdTweaksOrReportTheirEpi
         const char* id;
         const char* epic;
     };
-    for (const Disabled& d : {Disabled{"refactor.inline", "REF-6"}, Disabled{"refactor.changeSignature", "REF-6"},
+    for (const Disabled& d : {Disabled{"refactor.changeSignature", "REF-6"},
                               Disabled{"refactor.extractConstant", "REF-7"}, Disabled{"refactor.extractField", "REF-7"},
                               Disabled{"refactor.extractParameter", "REF-7"}, Disabled{"refactor.move", "REF-8"},
                               Disabled{"refactor.safeDelete", "REF-8"}, Disabled{"code.overrideMethods", "REF-9"}}) {
@@ -1519,15 +1667,14 @@ TEST(LanguageControllerRefactoring, NamedCommandsRunClangdTweaksOrReportTheirEpi
         EXPECT_NE(registry.info(*action).description.find(d.epic), std::string::npos) << d.id;
     }
 
-    rig.controller.inlineSymbol();
     rig.controller.changeSignature();
     rig.controller.moveSymbol();
     rig.controller.safeDelete();
     rig.controller.extractField();
-    ASSERT_EQ(status.size(), 5U);
+    ASSERT_EQ(status.size(), 4U);
     EXPECT_TRUE(status[0].contains(QStringLiteral("REF-6")));
-    EXPECT_TRUE(status[2].contains(QStringLiteral("REF-8")));
-    EXPECT_TRUE(status[4].contains(QStringLiteral("REF-7")));
+    EXPECT_TRUE(status[1].contains(QStringLiteral("REF-8")));
+    EXPECT_TRUE(status[3].contains(QStringLiteral("REF-7")));
     EXPECT_EQ(host.undoSteps, 0);
     EXPECT_TRUE(rig.applier.edits.empty());
 
@@ -1541,8 +1688,8 @@ TEST(LanguageControllerRefactoring, NamedCommandsRunClangdTweaksOrReportTheirEpi
               "MemberwiseConstructor");
     // A tweak clangd does not offer here: a message, no edit.
     rig.controller.extractVariable();
-    ASSERT_TRUE(pumpUntil([&] { return status.size() == 6; }));
-    EXPECT_TRUE(status[5].contains(QStringLiteral("Extract Variable")));
+    ASSERT_TRUE(pumpUntil([&] { return status.size() == 5; }));
+    EXPECT_TRUE(status[4].contains(QStringLiteral("Extract Variable")));
     EXPECT_EQ(server.paramsOf("workspace/executeCommand").size(), 2U);
     EXPECT_EQ(host.undoSteps, 0);
 }
@@ -1690,7 +1837,7 @@ TEST(LanguageControllerRefactoring, LiveAndPostfixTemplatesFollowTheLanguage) {
         host.caretAfter("items.size().if");
         Rig rig(server, host);
         EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
-        EXPECT_EQ(host.text(), "void f() {\n    if (items.size()) {\n    \n}\n}\n");
+        EXPECT_EQ(host.text(), "void f() {\n    if (items.size()) {\n        \n    }\n}\n");
     }
     {
         // Not at the start of a statement: the old whole-line expansion produced
@@ -1885,3 +2032,75 @@ TEST(LanguageControllerNavigation, TypeHierarchyPopulatesSupertypesAndSubtypesAn
 }
 
 } // namespace
+
+namespace frost::ui::lang {
+namespace {
+TEST(LanguageControllerTemplates, SharedLoopPlaceholderEditsMirrorBeforeAdvancing) {
+    FeatureServer server;
+    FakeHost host("void f() {\n    \n}\n", workPath("main.cpp"));
+    host.caretAfter("{\n    ");
+    Rig rig(server, host);
+    rig.controller.insertLiveTemplate();
+    auto& choice = rig.controller.choicePopup();
+    ASSERT_TRUE(choice.isVisible());
+    choice.chosen(0); // The catalogue's actual first C++ item is the index loop.
+    ASSERT_TRUE(host.selected);
+    const auto active = *host.selected;
+    fl::ByteEdit edit{active, "index"};
+    ASSERT_TRUE(host.applyEdits(std::span(&edit, 1), "Edit placeholder", ByteOffset{active.begin.value() + 5}));
+    EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
+    EXPECT_NE(host.text().find("std::size_t index = 0; index < count; ++index"), std::string::npos);
+    ASSERT_TRUE(host.selected);
+    EXPECT_EQ(host.snapshot()->text(*host.selected), "count");
+}
+TEST(LanguageControllerTemplates, CMakePostfixAndLiveSetsUseCurrentEditorText) {
+    FeatureServer server;
+    FakeHost host("    items.for", workPath("CMakeLists.txt"));
+    host.caretAfter("items.for");
+    Rig rig(server, host);
+    EXPECT_TRUE(rig.controller.keyPress(Qt::Key_Tab, Qt::NoModifier));
+    EXPECT_EQ(host.text(), "    foreach(item IN LISTS items)\n        \n    endforeach()");
+    rig.controller.insertLiveTemplate();
+    auto& choices = rig.controller.choicePopup();
+    ASSERT_TRUE(choices.isVisible());
+    bool function = false;
+    for (int i = 0; i < choices.list()->count(); ++i)
+        function |= choices.list()->item(i)->text().startsWith("function");
+    EXPECT_TRUE(function);
+}
+TEST(LanguageControllerTemplates, StalePopupCannotInsertIntoChangedDocument) {
+    FeatureServer server;
+    FakeHost host("", workPath("main.cpp"));
+    Rig rig(server, host);
+    rig.controller.insertLiveTemplate();
+    ASSERT_TRUE(rig.controller.choicePopup().isVisible());
+    host.type("changed");
+    rig.controller.choicePopup().chosen(0);
+    EXPECT_EQ(host.text(), "changed");
+}
+} // namespace
+} // namespace frost::ui::langnamespace frost::ui::lang {
+namespace {
+TEST(LanguageControllerTemplates, ClosingControllerDuringAuthorPromptDoesNotApplyATemplate) {
+    FeatureServer server;
+    FakeHost host("", workPath("main.cpp"));
+    auto rig = std::make_unique<Rig>(server, host);
+    rig->controller.insertLiveTemplate();
+    auto& popup = rig->controller.choicePopup();
+    std::size_t selected = static_cast<std::size_t>(popup.list()->count());
+    for (int row = 0; row < popup.list()->count(); ++row)
+        if (popup.list()->item(row)->text().startsWith("Doxygen"))
+            selected = static_cast<std::size_t>(row);
+    ASSERT_LT(selected, static_cast<std::size_t>(popup.list()->count()));
+    QTimer::singleShot(0, [&] {
+        auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+        rig.reset();
+        if (dialog)
+            dialog->reject();
+    });
+    popup.chosen(selected);
+    EXPECT_FALSE(rig);
+    EXPECT_TRUE(host.text().empty());
+}
+}
+}

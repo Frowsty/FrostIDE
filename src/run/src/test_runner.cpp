@@ -832,4 +832,88 @@ bool TestRunner::waitForIdle(IClock::Duration timeout) const {
     return m_state->idleChanged.wait_for(lock, timeout, [this] { return !m_state->busy; });
 }
 
+Result<void> TestRunner::listFrameworkCases(const CTestSetup& setup, const DiscoveredTest& test,
+                                            FrameworkProfile profile,
+                                            std::function<void(Result<std::vector<FrameworkCase>>)> done) {
+    if (auto valid = checkSetup(setup); !valid)
+        return valid;
+    if (auto valid = checkProgram(test); !valid)
+        return valid;
+    if (auto arguments = frameworkArguments(profile, test.command, {}, "report", true); !arguments)
+        return std::unexpected(arguments.error());
+    return startJob(
+        *m_state, m_state,
+        [setup, test, profile, done = std::move(done)](State& state, std::stop_token token, std::uint64_t job,
+                                                       const std::function<void()>& finish) {
+            Result<std::vector<FrameworkCase>> result = fail(ErrorCode::Cancelled, "Framework listing stopped");
+            const auto path = state.scratchPath(setup, job, "framework-list.txt");
+            if (auto made = state.makeScratchDirectory(setup); !made)
+                result = std::unexpected(made.error());
+            else {
+                auto arguments = frameworkArguments(profile, test.command, {}, path, true);
+                auto outcome = state.runProcess(doctestSpec(setup, test, std::move(*arguments)), token, {});
+                if (!outcome)
+                    result = std::unexpected(outcome.error());
+                else if (outcome->exit.stopped || token.stop_requested())
+                    result = fail(ErrorCode::Cancelled, "Framework listing stopped");
+                else if (outcome->exit.waitFailed || outcome->exit.exitCode != 0)
+                    result = fail(ErrorCode::IoError, toolFailure(test.command.front(), outcome->exit.exitCode,
+                                                                  outcome->out, outcome->err));
+                else if (auto text = state.fs.readFile(path); !text)
+                    result = fail(ErrorCode::Corrupt, "Framework wrote no case listing");
+                else
+                    result = parseFrameworkList(profile, *text);
+            }
+            static_cast<void>(state.fs.remove(path));
+            finish();
+            if (done)
+                done(std::move(result));
+        });
+}
+
+Result<void> TestRunner::runFramework(const CTestSetup& setup, std::vector<FrameworkRunRequest> requests,
+                                      TestRunHandlers handlers) {
+    for (const auto& request : requests)
+        if (auto arguments = frameworkArguments(request.profile, request.test.command, request.cases, "report", false);
+            !arguments)
+            return std::unexpected(arguments.error());
+    auto logs = std::make_shared<std::map<std::string, std::string>>();
+    auto state = m_state;
+    return runDirectRequests(
+        *m_state, m_state, setup, std::move(requests), std::move(handlers), "framework-run.xml", "framework",
+        [logs](const CTestSetup& setup, const FrameworkRunRequest& request, std::string_view path) {
+            (*logs)[request.test.name] = std::string(path) + ".log";
+            auto arguments = frameworkArguments(request.profile, request.test.command, request.cases, path, false);
+            auto spec = doctestSpec(setup, request.test, std::move(*arguments));
+            // Inherited runtime controls must not override the explicitly selected protocol/filter.
+            if (!request.cases.empty())
+                spec.environment.emplace_back("BOOST_TEST_RUN_FILTERS", std::nullopt);
+            for (const auto* key : {"BOOST_TEST_REPORT_FORMAT", "BOOST_TEST_REPORT_SINK", "BOOST_TEST_LOG_FORMAT",
+                                    "BOOST_TEST_LOG_SINK", "BOOST_TEST_LOGGER", "BOOST_TEST_LIST_CONTENT"})
+                spec.environment.emplace_back(key, std::nullopt);
+            return spec;
+        },
+        [logs, state](const FrameworkRunRequest& request, const std::string& name, std::optional<std::string_view> text,
+                      const ProcessOutcome& outcome, bool, std::string& error) -> std::optional<TestResult> {
+            std::string log;
+            if (request.profile == FrameworkProfile::BoostTest185) {
+                const auto path = logs->at(name);
+                if (auto bytes = state->fs.readFile(path))
+                    log = std::move(*bytes);
+                static_cast<void>(state->fs.remove(path));
+            }
+            if (!text || outcome.exit.waitFailed) {
+                error = "Missing framework report or failed process wait";
+                return {};
+            }
+            auto parsed = parseFrameworkRun(request.profile, name, *text, log, request.cases, outcome.exit.exitCode,
+                                            outcome.out + outcome.err);
+            if (!parsed) {
+                error = parsed.error().message();
+                return {};
+            }
+            return std::move(*parsed);
+        });
+}
+
 } // namespace frost::run

@@ -73,15 +73,34 @@ void LanguageController::applyWorkspaceEdit(const fl::WorkspaceEdit& edit, const
 }
 
 void LanguageController::executeServerCommand(std::string commandName, std::vector<fl::Json> arguments,
-                                              const QString& label) {
+                                              const QString& label, std::shared_ptr<SemanticApply> semantic) {
     if (commandName.empty()) {
         return;
     }
+    if (m_cppSemanticCommand) {
+        unavailable(QStringLiteral("A semantic command is still finishing"));
+        return;
+    }
+    if (semantic) {
+        if (auto current = (*semantic)({}); !current) {
+            report(current.error(), label.toStdString());
+            return;
+        }
+        m_cppSemanticCommand = true;
+        m_cppSemanticApply.store(semantic);
+    }
     start<fl::Json>(
-        m_actionSlot,
+        semantic ? m_semanticCommandSlot : m_actionSlot,
         [&server = m_services.server, cmd = std::move(commandName), args = std::move(arguments)](
             std::stop_token token) { return fl::requestExecuteCommand(server, cmd, args, std::move(token)); },
-        [this, label](Result<fl::Json> result) {
+        [this, label, semantic](Result<fl::Json> result) {
+            if (semantic) {
+                m_cppSemanticCommand = false;
+                // Retain a fail-closed tombstone for an invalid late applyEdit after terminal reply.
+                m_cppSemanticApply.store(std::make_shared<SemanticApply>([](const fl::WorkspaceEdit&) -> Result<void> {
+                    return fail(ErrorCode::Busy, "Semantic command already finished; request a new preview");
+                }));
+            }
             if (!result) {
                 report(result.error(), label.toStdString());
                 return;
@@ -91,7 +110,11 @@ void LanguageController::executeServerCommand(std::string commandName, std::vect
                 const fl::Json* editNode = result->find("edit");
                 if (auto parsed = fl::parseWorkspaceEdit(editNode != nullptr ? *editNode : *result);
                     parsed && !parsed->empty()) {
-                    applyWorkspaceEdit(*parsed, label);
+                    if (semantic) {
+                        if (auto applied = (*semantic)(*parsed); !applied)
+                            report(applied.error(), label.toStdString());
+                    } else
+                        applyWorkspaceEdit(*parsed, label);
                 }
             }
         });
@@ -112,20 +135,7 @@ void LanguageController::insertSnippetAt(text::ByteRange replaceRange, std::stri
         report(applied.error(), undoLabel);
         return;
     }
-    m_tabStops.clear();
-    for (const fl::SnippetTabStop& stop : parsed.tabStops) {
-        m_tabStops.push_back(text::ByteRange{.begin = ByteOffset{base.value() + stop.begin},
-                                             .end = ByteOffset{base.value() + stop.end}});
-    }
-    if (!m_tabStops.empty()) {
-        const std::optional<text::Snapshot> after = m_services.host.snapshot();
-        m_tabStopsDocumentSize = after ? after->size().value() : 0;
-        if (m_tabStops.size() == 1 && m_tabStops.front().empty()) {
-            m_tabStops.clear();
-        } else {
-            static_cast<void>(nextTabStop());
-        }
-    }
+    beginLiveTemplate(parsed, base);
 }
 
 void LanguageController::showIntentions() {
@@ -162,12 +172,17 @@ void LanguageController::showIntentions() {
                     preferred.push_back(action.preferred);
                     m_choiceActions.emplace_back([this, path, requestedSnapshot, title = qs(action.title),
                                                   edit = std::move(action.edit), cmd = std::move(action.commandName),
-                                                  args = std::move(action.commandArguments)]() mutable {
+                                                  args = std::move(action.commandArguments),
+                                                  disabled = std::move(action.disabledReason)]() mutable {
                         const auto currentSnapshot = m_services.host.snapshot();
                         if (!hasDocument() || m_services.host.documentPath() != path || !requestedSnapshot ||
                             !currentSnapshot || !currentSnapshot->sharesStorageWith(*requestedSnapshot) ||
                             currentSnapshot->version() != requestedSnapshot->version()) {
                             emit statusMessage(QStringLiteral("The document changed; request the action again"));
+                            return;
+                        }
+                        if (!disabled.empty()) {
+                            report(Error(ErrorCode::Unsupported, disabled), title.toStdString());
                             return;
                         }
                         if (!edit.empty()) {

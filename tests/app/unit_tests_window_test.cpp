@@ -427,4 +427,57 @@ TEST(UnitTestsWindow, CombinedCTestFilterRunsEachExactGutterCaseIndividually) {
     }
 }
 
+#ifdef FROST_RUN_CATCH_FIXTURE
+TEST(UnitTestsWindow, ExplicitFrameworkProfileListsActualCasesAndRunsOnlySelectedCase) {
+    WorkDir dir("unit-tests-framework");
+    std::string program = FROST_RUN_CATCH_FIXTURE;
+    std::replace(program.begin(), program.end(), '\\', '/');
+    dir.write("CMakeLists.txt", "cmake_minimum_required(VERSION 3.24)\nproject(FrameworkUi "
+                                "NONE)\nenable_testing()\nadd_test(NAME framework COMMAND [==[" +
+                                    program + "]==])\n");
+    dir.write(
+        "CMakePresets.json",
+        R"({"version":3,"configurePresets":[{"name":"fixture","generator":"Ninja","binaryDir":"${sourceDir}/build"}]})");
+    WorkbenchRig rig(dir);
+    rig.show();
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    (void)configuredCTest(rig);
+    auto window = showWindow(rig);
+    ASSERT_NE(window.tree, nullptr);
+    ASSERT_TRUE(waitFor([&] { return window.tree->test("framework") != nullptr; }));
+    ASSERT_TRUE(frost::app::configureTestFramework(window.root, "framework", frost::run::FrameworkProfile::Catch2Xml3));
+    ASSERT_TRUE(waitFor([&] { return window.tree->itemFor("framework", "passes") != nullptr; }));
+    auto* selected = window.tree->itemFor("framework", "passes");
+    EXPECT_TRUE(selected->text(1).isEmpty());
+    window.tree->clearSelection();
+    selected->setSelected(true);
+    auto* run = window.root->findChild<QPushButton*>(QStringLiteral("unitTestsRunSelectedButton"));
+    ASSERT_NE(run, nullptr);
+    ASSERT_TRUE(waitFor([&] { return run->isEnabled(); }));
+    run->click();
+    ASSERT_TRUE(waitFor([&] {
+        const auto* result = window.tree->result("framework");
+        return result && !result->interim;
+    }));
+    const auto* result = window.tree->result("framework");
+    ASSERT_EQ(result->cases.size(), 1U);
+    EXPECT_EQ(result->cases.front().name, "passes");
+    EXPECT_EQ(result->cases.front().outcome, frost::run::TestOutcome::Passed);
+    EXPECT_TRUE(window.tree->itemFor("framework", "fails")->text(1).isEmpty());
+    // An unrelated whole-program tree selection must not widen an exact gutter request.
+    window.tree->clearSelection();
+    window.tree->itemFor("framework")->setSelected(true);
+    frost::run::GutterTestCase exact{*window.tree->test("framework"), "passes", frost::run::TestCaseFramework::Catch2,
+                                     0, "passes"};
+    ASSERT_TRUE(frost::app::runGutterTestCase(window.root, exact));
+    ASSERT_TRUE(waitFor([&] {
+        const auto* next = window.tree->result("framework");
+        return next && !next->interim;
+    }));
+    ASSERT_EQ(window.tree->result("framework")->cases.size(), 1U);
+    EXPECT_EQ(window.tree->result("framework")->cases.front().name, "passes");
+}
+#endif
+
 } // namespace

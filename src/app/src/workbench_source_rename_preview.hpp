@@ -17,7 +17,8 @@ namespace frost::app {
 // Cancelling requests the helper's stop token and retains the dialog until owned work completes.
 [[nodiscard]] Result<document::RefactoringPlan>
 prepareSourceRenameInBackground(QWidget* ownerWindow,
-                                std::function<Result<document::RefactoringPlan>(std::stop_token)> prepare);
+                                std::function<Result<document::RefactoringPlan>(std::stop_token)> prepare,
+                                std::string title = {});
 
 // Synchronous owner-thread API; only filesystem/static parsing runs on the owned worker.
 // Cancellation keeps the modal dialog alive until cooperative work ends; no GUI-thread wait

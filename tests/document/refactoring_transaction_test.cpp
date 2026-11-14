@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #endif
+#include "support/directory_link.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -398,5 +399,238 @@ TEST_F(RefactoringTransactionTest, JournalWriteFailureRetainsOldRenameKeyAndRetr
     EXPECT_EQ(bytes(target), "before a\r\n");
     EXPECT_EQ(bytes(project), "c.cpp\nb.cpp\n");
 }
+
+TEST_F(RefactoringTransactionTest, GeneratedFilesAndProjectMembershipAreOneApplyUndoRedo) {
+    const auto generated = scratch.join("generated.cpp");
+    RefactoringPlan value;
+    value.label = "Generate source";
+    value.creates = {{generated, "int generated;\n"}};
+    value.disk = {{project, "a.cpp\nb.cpp\n", "a.cpp\nb.cpp\ngenerated.cpp\n"}};
+    value.dependencies = {{generated, std::nullopt}};
+    auto applied = coordinator->apply(value);
+    ASSERT_TRUE(applied) << applied.error().describe();
+    ASSERT_EQ(applied->status, RefactoringStatus::Applied);
+    EXPECT_EQ(bytes(generated), "int generated;\n");
+    EXPECT_EQ(bytes(project), "a.cpp\nb.cpp\ngenerated.cpp\n");
+    auto undone = coordinator->undo(applied->token);
+    ASSERT_TRUE(undone);
+    EXPECT_EQ(undone->status, RefactoringStatus::Undone);
+    EXPECT_FALSE(fs.exists(generated).value_or(true));
+    EXPECT_EQ(bytes(project), "a.cpp\nb.cpp\n");
+    auto redone = coordinator->redo(applied->token);
+    ASSERT_TRUE(redone);
+    EXPECT_EQ(redone->status, RefactoringStatus::Redone);
+    EXPECT_EQ(bytes(generated), "int generated;\n");
+    EXPECT_EQ(bytes(project), "a.cpp\nb.cpp\ngenerated.cpp\n");
+}
+
+TEST_F(RefactoringTransactionTest, CreationConflictAndDuplicateEffectsRefuseBeforeMembershipChanges) {
+    RefactoringPlan value;
+    value.label = "Generate";
+    value.creates = {{a, "new file"}};
+    value.disk = {{project, "a.cpp\nb.cpp\n", "changed"}};
+    EXPECT_FALSE(coordinator->apply(value));
+    EXPECT_EQ(bytes(a), "before a\r\n");
+    EXPECT_EQ(bytes(project), "a.cpp\nb.cpp\n");
+    const auto generated = scratch.join("duplicate.cpp");
+    value.creates = {{generated, "one"}, {generated, "two"}};
+    EXPECT_FALSE(coordinator->apply(value));
+    EXPECT_FALSE(fs.exists(generated).value_or(true));
+    EXPECT_EQ(bytes(project), "a.cpp\nb.cpp\n");
+    value.creates = {{generated, "new"}};
+    value.dependencies = {{generated, std::string("existing")}};
+    EXPECT_FALSE(coordinator->apply(value));
+    EXPECT_FALSE(fs.exists(generated).value_or(true));
+}
+
+TEST_F(RefactoringTransactionTest, ForeignGeneratedFileBeforeUndoPreservesWholeAppliedProject) {
+    const auto generated = scratch.join("generated.cpp");
+    RefactoringPlan value;
+    value.creates = {{generated, "created"}};
+    value.disk = {{project, "a.cpp\nb.cpp\n", "generated.cpp\n"}};
+    auto applied = coordinator->apply(value);
+    ASSERT_TRUE(applied);
+    ASSERT_EQ(applied->status, RefactoringStatus::Applied);
+    ASSERT_TRUE(overwriteInterference(generated, "foreign"));
+    EXPECT_FALSE(coordinator->undo(applied->token));
+    EXPECT_EQ(bytes(generated), "foreign");
+    EXPECT_EQ(bytes(project), "generated.cpp\n");
+}
+
+TEST_F(RefactoringTransactionTest, CleanAutoOpenedCreationHasGlobalHistoryAndDirtyViewRefusesInverse) {
+    const auto generated = scratch.join("generated.cpp");
+    RefactoringPlan value;
+    value.creates = {{generated, "created\n"}};
+    auto applied = coordinator->apply(value);
+    ASSERT_TRUE(applied);
+    ASSERT_EQ(applied->status, RefactoringStatus::Applied);
+    auto* doc = open(generated);
+    ASSERT_NE(doc, nullptr);
+    EXPECT_FALSE(doc->dirty());
+    EXPECT_EQ(doc->document().undoState().externalUndo, applied->token);
+    auto undone = coordinator->undo(applied->token);
+    ASSERT_TRUE(undone);
+    ASSERT_EQ(undone->status, RefactoringStatus::Undone);
+    EXPECT_EQ(doc->diskState(), DiskState::Deleted);
+    EXPECT_EQ(doc->document().undoState().externalRedo, applied->token);
+    EXPECT_EQ(doc->document().text().text(), "created\n");
+    EXPECT_FALSE(doc->dirty());
+    auto redone = coordinator->redo(applied->token);
+    ASSERT_TRUE(redone);
+    ASSERT_EQ(redone->status, RefactoringStatus::Redone);
+    EXPECT_EQ(doc->diskState(), DiskState::InSync);
+    EXPECT_FALSE(doc->dirty());
+    auto edited = doc->document().replace({0, 0}, "dirty ", {});
+    ASSERT_TRUE(edited);
+    EXPECT_FALSE(coordinator->undo(applied->token));
+    EXPECT_EQ(bytes(generated), "created\n");
+    EXPECT_EQ(doc->document().text().text(), "dirty created\n");
+}
+
+TEST_F(RefactoringTransactionTest, SavingUndoneCreationCreatesForeignObjectAndRedoRefusesIt) {
+    const auto generated = scratch.join("generated.cpp");
+    RefactoringPlan value;
+    value.creates = {{generated, "created\n"}};
+    auto applied = coordinator->apply(value);
+    ASSERT_TRUE(applied);
+    auto* doc = open(generated);
+    ASSERT_NE(doc, nullptr);
+    ASSERT_TRUE(coordinator->undo(applied->token));
+    ASSERT_EQ(doc->diskState(), DiskState::Deleted);
+    auto saved = documents->save(*doc);
+    ASSERT_TRUE(saved);
+    EXPECT_FALSE(coordinator->redo(applied->token));
+    EXPECT_EQ(bytes(generated), "created\n");
+}
+
+TEST_F(RefactoringTransactionTest, RestartRecoversPartialCreationAndMembershipFromFrozenReceipt) {
+    const auto generated = scratch.join("generated.cpp");
+    RefactoringPlan value;
+    value.disk = {{project, "a.cpp\nb.cpp\n", "generated.cpp\n"}};
+    value.creates = {{generated, "created\n"}};
+    struct Actor {
+        std::string path;
+        bool occupied = false;
+    } actor{generated};
+    io::detail::setReplacementObserver(
+        [](void* context, io::detail::ReplacementBoundary boundary, const io::FileReplacementReceipt&) {
+            auto& activeActor = *static_cast<Actor*>(context);
+            if (boundary == io::detail::ReplacementBoundary::OriginalRetired && !activeActor.occupied)
+                activeActor.occupied = io::realFileSystem().writeFileAtomic(activeActor.path, "foreign").has_value();
+        },
+        &actor);
+    auto pending = coordinator->apply(value);
+    io::detail::setReplacementObserver(nullptr, nullptr);
+    ASSERT_TRUE(actor.occupied);
+    ASSERT_TRUE(pending);
+    ASSERT_EQ(pending->status, RefactoringStatus::PendingRecovery);
+    const auto token = pending->token;
+    EXPECT_EQ(bytes(generated), "foreign");
+    coordinator.reset();
+    coordinator = std::make_unique<RefactoringCoordinator>(*documents, fs, options);
+    auto recovered = coordinator->recoverPending();
+    ASSERT_TRUE(recovered);
+    ASSERT_EQ(recovered->size(), 1U);
+    EXPECT_EQ(recovered->front().status, RefactoringStatus::PendingRecovery);
+    EXPECT_EQ(bytes(generated), "foreign");
+    ASSERT_TRUE(fs.removeFile(generated)); // Explicit test actor removes only its known foreign file.
+    auto resumed = coordinator->resume(token);
+    ASSERT_TRUE(resumed) << resumed.error().describe();
+    EXPECT_EQ(resumed->status, RefactoringStatus::Applied);
+    EXPECT_EQ(bytes(generated), "created\n");
+    EXPECT_EQ(bytes(project), "generated.cpp\n");
+}
+
+TEST_F(RefactoringTransactionTest, CreateAncestorAliasesRefuseBeforeAnyMembershipOrFileEffects) {
+    const auto real = scratch.join("real");
+    const auto alias = scratch.join("alias");
+    ASSERT_TRUE(fs.createDirectories(scratch.join("real/sub")));
+    frost::test::makeDirectoryLink(alias, real);
+    const auto direct = scratch.join("real/sub/generated.cpp");
+    const auto aliased = scratch.join("alias/sub/generated.cpp");
+    RefactoringPlan value;
+    value.disk = {{project, "a.cpp\nb.cpp\n", "generated.cpp\n"}};
+    value.creates = {{direct, "first"}, {aliased, "second"}};
+    auto refused = coordinator->apply(value);
+    ASSERT_FALSE(refused);
+    EXPECT_EQ(refused.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_FALSE(fs.exists(direct).value_or(true));
+    EXPECT_FALSE(fs.exists(aliased).value_or(true));
+    EXPECT_EQ(bytes(project), "a.cpp\nb.cpp\n");
+    // A rename destination and Create must also not claim the same absent native endpoint.
+    value.creates = {{aliased, "second"}};
+    value.renames = {{a, direct, "before a\r\n"}};
+    auto mixed = coordinator->apply(value);
+    ASSERT_FALSE(mixed);
+    EXPECT_EQ(mixed.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_EQ(bytes(a), "before a\r\n");
+    EXPECT_FALSE(fs.exists(direct).value_or(true));
+    EXPECT_EQ(bytes(project), "a.cpp\nb.cpp\n");
+}
+
+#ifdef _WIN32
+TEST_F(RefactoringTransactionTest, UnicodeCaseAliasesCannotOwnTwoAbsentCreationEndpoints) {
+    RefactoringPlan value;
+    const auto upper = scratch.join("\xC3\x84.cpp");
+    const auto lower = scratch.join("\xC3\xA4.cpp");
+    value.creates = {{upper, "one"}, {lower, "two"}};
+    value.disk = {{project, "a.cpp\nb.cpp\n", "changed"}};
+    auto refused = coordinator->apply(value);
+    ASSERT_FALSE(refused);
+    EXPECT_EQ(refused.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_FALSE(fs.exists(upper).value_or(true));
+    EXPECT_FALSE(fs.exists(lower).value_or(true));
+    EXPECT_EQ(bytes(project), "a.cpp\nb.cpp\n");
+}
+#endif
+
+TEST_F(RefactoringTransactionTest, AliasedCreatedViewFormatChangeAfterUndoRefusesRedoBeforeMembership) {
+    const auto real = scratch.join("real");
+    const auto alias = scratch.join("alias");
+    ASSERT_TRUE(fs.createDirectories(scratch.join("real/sub")));
+    frost::test::makeDirectoryLink(alias, real);
+    const auto generated = scratch.join("real/sub/generated.cpp");
+    const auto spelling = scratch.join("alias/sub/generated.cpp");
+    RefactoringPlan value;
+    value.creates = {{generated, "created\n"}};
+    value.disk = {{project, "a.cpp\nb.cpp\n", "generated.cpp\n"}};
+    auto applied = coordinator->apply(value);
+    ASSERT_TRUE(applied);
+    ASSERT_EQ(applied->status, RefactoringStatus::Applied);
+    auto* doc = open(spelling);
+    ASSERT_NE(doc, nullptr);
+    EXPECT_EQ(doc->document().undoState().externalUndo, applied->token);
+    ASSERT_TRUE(coordinator->undo(applied->token));
+    EXPECT_EQ(doc->diskState(), DiskState::Deleted);
+    EXPECT_EQ(doc->document().undoState().externalRedo, applied->token);
+    doc->setLineSeparator(text::LineSeparator::Cr);
+    ASSERT_TRUE(doc->dirty());
+    EXPECT_FALSE(coordinator->redo(applied->token));
+    EXPECT_FALSE(fs.exists(generated).value_or(true));
+    EXPECT_EQ(bytes(project), "a.cpp\nb.cpp\n");
+    EXPECT_EQ(doc->encoding().format.lineSeparator, text::LineSeparator::Cr);
+}
+
+TEST_F(RefactoringTransactionTest, MultipleOpenCreationSpellingsNeverBypassDirtyViewAdmission) {
+    const auto real = scratch.join("real");
+    const auto alias = scratch.join("alias");
+    ASSERT_TRUE(fs.createDirectories(scratch.join("real/sub")));
+    frost::test::makeDirectoryLink(alias, real);
+    const auto generated = scratch.join("real/sub/generated.cpp");
+    RefactoringPlan value;
+    value.creates = {{generated, "created\n"}};
+    auto applied = coordinator->apply(value);
+    ASSERT_TRUE(applied);
+    auto* direct = open(generated);
+    auto* second = open(scratch.join("alias/sub/generated.cpp"));
+    ASSERT_NE(direct, nullptr);
+    ASSERT_NE(second, nullptr);
+    ASSERT_NE(direct, second);
+    ASSERT_TRUE(second->document().replace({0, 0}, "dirty ", {}));
+    EXPECT_FALSE(coordinator->undo(applied->token));
+    EXPECT_EQ(bytes(generated), "created\n");
+    EXPECT_EQ(second->document().text().text(), "dirty created\n");
+}
+
 } // namespace
 } // namespace frost::document::test

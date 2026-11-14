@@ -28,6 +28,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <optional>
@@ -178,8 +179,26 @@ public:
         }
         std::vector<std::pair<std::string, std::vector<run::GTestCase>>> gtestListings(m_listedGTestCases.begin(),
                                                                                        m_listedGTestCases.end());
-        return run::resolveGutterTestCasesInFile(filePath, content, tests, doctestListings, gtestListings,
-                                                 m_setup->buildDirectory);
+        auto resolved = run::resolveGutterTestCasesInFile(filePath, content, tests, doctestListings, gtestListings,
+                                                          m_setup->buildDirectory);
+        const auto requestedPath = io::normalizePath(filePath);
+        for (const auto& test : tests)
+            if (const auto* cases = m_tree->frameworkCases(test.name); cases && m_frameworkProfiles.contains(test.name))
+                for (const auto& entry : *cases)
+                    if (entry.location && entry.location->line > 0) {
+                        const auto path = io::normalizePath(absolute(entry.location->file));
+                        if (requestedPath && path &&
+                            QString::compare(qs(*path), qs(*requestedPath),
+                                             io::kNativePathStyle == io::PathStyle::Windows ? Qt::CaseInsensitive
+                                                                                            : Qt::CaseSensitive) == 0)
+                            resolved.push_back(run::GutterTestCase{test, entry.name,
+                                                                   m_frameworkProfiles.at(test.name) ==
+                                                                           run::FrameworkProfile::Catch2Xml3
+                                                                       ? run::TestCaseFramework::Catch2
+                                                                       : run::TestCaseFramework::BoostTest,
+                                                                   entry.location->line, entry.name});
+                    }
+        return resolved;
     }
 
     [[nodiscard]] Result<void> runSingleCase(const run::GutterTestCase& tc) {
@@ -187,6 +206,9 @@ public:
             return fail(ErrorCode::Busy, "Unit tests runner is busy or not configured");
         if (!currentGutterCase(tc))
             return fail(ErrorCode::InvalidArgument, "The gutter test is no longer in the current test listing");
+        if ((tc.framework == run::TestCaseFramework::Catch2 || tc.framework == run::TestCaseFramework::BoostTest) &&
+            !tc.caseName.empty())
+            return runFramework({tc.test.name}, {{tc.test.name, tc.caseName}}, false);
         if (tc.framework == run::TestCaseFramework::Doctest && !tc.caseName.empty())
             return startDoctestRequests({run::TestRunner::DoctestRunRequest{.test = tc.test, .cases = {tc.caseName}}},
                                         {tc.test.name});
@@ -208,6 +230,15 @@ public:
         return startDebug(*launch);
     }
 
+    [[nodiscard]] Result<void> configureFramework(const std::string& name, run::FrameworkProfile profile) {
+        if (!listingCurrent() || m_runner->busy())
+            return fail(ErrorCode::Busy, "Tests are busy or not configured");
+        const auto* test = m_tree->test(name);
+        if (!test)
+            return fail(ErrorCode::NotFound, "CTest did not discover this test");
+        return listFramework(*test, profile);
+    }
+
 private:
     [[nodiscard]] bool currentGutterCase(const run::GutterTestCase& tc) const {
         const auto* test = m_tree->test(tc.test.name);
@@ -215,6 +246,14 @@ private:
             return false;
         if (tc.framework == run::TestCaseFramework::CTestWhole)
             return tc.caseName.empty();
+        if (tc.framework == run::TestCaseFramework::Catch2 || tc.framework == run::TestCaseFramework::BoostTest) {
+            const auto* cases = m_tree->frameworkCases(tc.test.name);
+            const auto profile = m_frameworkProfiles.find(tc.test.name);
+            const auto expected = tc.framework == run::TestCaseFramework::Catch2 ? run::FrameworkProfile::Catch2Xml3
+                                                                                 : run::FrameworkProfile::BoostTest185;
+            return cases && profile != m_frameworkProfiles.end() && profile->second == expected &&
+                   std::ranges::any_of(*cases, [&tc](const auto& item) { return item.name == tc.caseName; });
+        }
         if (tc.framework == run::TestCaseFramework::Doctest) {
             const auto* cases = m_tree->doctestCases(tc.test.name);
             return cases && std::ranges::any_of(*cases, [&tc](const auto& item) { return item.name == tc.caseName; });
@@ -405,6 +444,18 @@ private:
         if (names.empty())
             return;
         const auto cases = m_tree->selectedCases();
+        const auto hasFramework = [this](const std::string& name) {
+            return m_tree->frameworkCases(name) && m_frameworkProfiles.contains(name);
+        };
+        if (std::ranges::all_of(names, hasFramework)) {
+            static_cast<void>(runFramework(names, cases));
+            return;
+        }
+        if (!cases.empty() && std::ranges::any_of(names, hasFramework)) {
+            setSummary(QStringLiteral(
+                "Select cases from compatible direct framework providers, or select whole CTest tests."));
+            return;
+        }
         if (!cases.empty()) {
             if (std::ranges::all_of(names, [this](const std::string& n) { return isDoctestTest(n); })) {
                 runDoctest(names, cases);
@@ -522,6 +573,13 @@ private:
         const run::DiscoveredTest* test = testName.empty() ? nullptr : m_tree->test(testName);
         if (!test || test->command.empty())
             return std::nullopt;
+        if (!caseName.empty() && m_tree->frameworkCases(testName) && m_frameworkProfiles.contains(testName)) {
+            const auto framework = m_frameworkProfiles.at(testName) == run::FrameworkProfile::Catch2Xml3
+                                       ? run::TestCaseFramework::Catch2
+                                       : run::TestCaseFramework::BoostTest;
+            auto launch = run::buildSingleTestLaunch(*m_setup, *test, caseName, framework);
+            return launch ? std::optional<run::SingleTestLaunch>(std::move(*launch)) : std::nullopt;
+        }
         const auto framework = caseName.empty()          ? run::TestCaseFramework::CTestWhole
                                : isDoctestTest(testName) ? run::TestCaseFramework::Doctest
                                                          : run::TestCaseFramework::GoogleTest;
@@ -667,6 +725,17 @@ private:
     }
 
     void open(const std::string& test, const std::string& caseName) {
+        if (const auto actual = unitTestsLocationOf(test, caseName, nullptr, m_tree->result(test), nullptr);
+            actual && m_context.openLocation) {
+            m_context.openLocation(absolute(actual->file), actual->line);
+            return;
+        }
+        if (const auto* cases = m_tree->frameworkCases(test))
+            if (const auto found = std::ranges::find(*cases, caseName, &run::FrameworkCase::name);
+                found != cases->end() && found->location && m_context.openLocation) {
+                m_context.openLocation(absolute(found->location->file), found->location->line);
+                return;
+            }
         const auto location =
             unitTestsLocationOf(test, caseName, m_tree->test(test), m_tree->result(test), m_tree->doctestCases(test));
         if (location && m_context.openLocation)
@@ -728,10 +797,20 @@ private:
         QAction* listWithDoctest = menu.addAction(QStringLiteral("List doctest Cases"));
         listWithDoctest->setEnabled(test && !test->command.empty() && idle);
         listWithDoctest->setToolTip(QStringLiteral("Run the test's program with doctest's --list-test-cases."));
+        QAction* catch2 = menu.addAction(QStringLiteral("List cases using Catch2 3 XML profile"));
+        QAction* boost = menu.addAction(QStringLiteral("List cases using Boost.Test 1.85 XML profile"));
+        catch2->setEnabled(test && !test->command.empty() && idle);
+        boost->setEnabled(catch2->isEnabled());
+        catch2->setToolTip(
+            QStringLiteral("Explicit profile: Catch2 3 XML listing and run schema 3; older schemas are refused."));
+        boost->setToolTip(QStringLiteral("Explicit profile: Boost.Test 1.85 DOT discovery and detailed XML results."));
         QAction* chosen = menu.exec(m_tree->viewport()->mapToGlobal(at));
         if (generation != m_listingGeneration || !listingCurrent())
             return;
-        if (chosen == run) {
+        if ((chosen == catch2 || chosen == boost) && testCopy) {
+            static_cast<void>(listFramework(*testCopy, chosen == catch2 ? run::FrameworkProfile::Catch2Xml3
+                                                                        : run::FrameworkProfile::BoostTest185));
+        } else if (chosen == run) {
             runSelection();
         } else if (chosen == debug && singleTarget) {
             (void)startDebug(*singleTarget);
@@ -743,6 +822,60 @@ private:
             m_explicitDoctest.insert(testCopy->name);
             listDoctest({testCopy->name}, std::nullopt);
         }
+    }
+
+    Result<void> listFramework(const run::DiscoveredTest& test, run::FrameworkProfile profile) {
+        if (!listingCurrent() || m_runner->busy())
+            return fail(ErrorCode::Busy, "Tests are busy or not configured");
+        const auto name = test.name;
+        auto started = m_runner->listFrameworkCases(
+            *m_setup, test, profile,
+            [this, key = m_listedKey, generation = m_listingGeneration, name,
+             profile](Result<std::vector<run::FrameworkCase>> cases) {
+                postForSource(key, generation, [this, name, profile, cases = std::move(cases)]() mutable {
+                    if (!cases)
+                        setSummary(qs(cases.error().message()));
+                    else {
+                        m_frameworkProfiles[name] = profile;
+                        m_tree->setFrameworkCases(name, std::move(*cases));
+                        setSummary(QStringLiteral("Listed %1 using %2. Select case rows and Run Selected or Debug.")
+                                       .arg(qs(name), qs(run::frameworkProfileName(profile))));
+                        notifyTestsChanged();
+                    }
+                    updateActions();
+                });
+            });
+        if (!started)
+            setSummary(qs(started.error().message()));
+        updateActions();
+        return started;
+    }
+    Result<void> runFramework(const std::vector<std::string>& names,
+                              const std::vector<std::pair<std::string, std::string>>& selected, bool fromTree = true) {
+        std::vector<run::TestRunner::FrameworkRunRequest> requests;
+        const auto whole = fromTree ? selectedWholeTests() : std::set<std::string>{};
+        for (const auto& name : names) {
+            const auto* test = m_tree->test(name);
+            if (!test || !m_tree->frameworkCases(name) || !m_frameworkProfiles.contains(name))
+                return fail(ErrorCode::InvalidArgument, "Framework cases are no longer in the current listing");
+            run::TestRunner::FrameworkRunRequest request{*test, m_frameworkProfiles.at(name), {}};
+            if (!whole.contains(name))
+                for (const auto& [owner, value] : selected)
+                    if (owner == name)
+                        request.cases.push_back(value);
+            requests.push_back(std::move(request));
+        }
+        m_tree->markPending(names);
+        m_console.clear();
+        m_runKind = QStringLiteral("framework");
+        auto started = m_runner->runFramework(*m_setup, std::move(requests), runHandlers());
+        if (!started) {
+            m_tree->finishRun({});
+            setSummary(qs(started.error().message()));
+        } else
+            setSummary(QStringLiteral("Running selected cases using their explicit framework profiles..."));
+        updateActions();
+        return started;
     }
 
     void listCases(const run::DiscoveredTest& test) {
@@ -779,6 +912,7 @@ private:
     QString m_listedSummary;
     QString m_runKind = QStringLiteral("ctest");
     std::set<std::string> m_explicitDoctest; // Tests the user listed with "List doctest Cases".
+    std::map<std::string, run::FrameworkProfile> m_frameworkProfiles;
     std::map<std::string, std::vector<run::GTestCase>> m_listedGTestCases;
     QString m_unavailable;
     QString m_console;
@@ -840,6 +974,13 @@ Result<void> debugGutterTestCase(QWidget* unitTestsWidget, const run::GutterTest
     if (!window)
         return fail(ErrorCode::NotFound, "Unit Tests window is not created");
     return window->debugSingleCase(testCase);
+}
+
+Result<void> configureTestFramework(QWidget* unitTestsWidget, const std::string& name, run::FrameworkProfile profile) {
+    auto* window = ctestProvider(unitTestsWidget);
+    if (!window)
+        return fail(ErrorCode::NotFound, "No unambiguous CTest provider");
+    return window->configureFramework(name, profile);
 }
 
 } // namespace frost::app

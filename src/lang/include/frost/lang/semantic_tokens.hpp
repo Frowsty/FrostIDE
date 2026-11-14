@@ -250,7 +250,8 @@ struct LspInlayHint {
 // Parses an LSP 3.17 InlayHint[] or clangd's clangd/inlayHints result.
 [[nodiscard]] std::vector<LspInlayHint> parseInlayHints(const Json& json);
 
-// Requests textDocument/inlayHint over `range` (falling back to clangd/inlayHints when needed).
+// Requests the advertised standard or legacy-clangd hint protocol over `range`; never retries
+// arbitrary failures using another protocol. Unsupported when no provider is advertised.
 [[nodiscard]] sched::Task<Result<std::vector<LspInlayHint>>>
 requestInlayHints(ILspRequester& server, std::string path, LspRange range, std::stop_token token = {});
 

@@ -2,8 +2,15 @@
 // REF-1 frozen native participants, durable decisions and owner-thread global document history.
 #include "frost/document/refactoring_transaction.hpp"
 
+#include "frost/core/assert.hpp"
 #include "frost/io/file_transaction_replace.hpp"
 #include "frost/io/spawn_log.hpp"
+#ifdef _WIN32
+#include "frost/io/os_error.hpp"
+#include "frost/io/utf.hpp"
+
+#include <windows.h>
+#endif
 #include "frost/storage/fingerprint.hpp"
 #include "frost/text/line_separator.hpp"
 #include "frost/text/text_file.hpp"
@@ -52,6 +59,27 @@ std::string pathKey(std::string_view path) {
     }
 #endif
     return key;
+}
+// An absent name has no file ID. Compare its retained parent ID and native leaf semantics;
+// UTF-8 byte lowercasing is insufficient for NTFS Unicode case aliases.
+Result<bool> sameAbsentLeaf(std::string_view left, std::string_view right) {
+#ifdef _WIN32
+    auto a = io::toWide(left), b = io::toWide(right);
+    if (!a)
+        return std::unexpected(a.error());
+    if (!b)
+        return std::unexpected(b.error());
+    if (a->size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        b->size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        return fail(ErrorCode::OutOfRange, "absent endpoint name exceeds native comparison bound");
+    const auto compared =
+        CompareStringOrdinal(a->data(), static_cast<int>(a->size()), b->data(), static_cast<int>(b->size()), TRUE);
+    if (!compared)
+        return std::unexpected(io::lastWin32Error("compare absent endpoint leaves"));
+    return compared == CSTR_EQUAL;
+#else
+    return left == right;
+#endif
 }
 struct Writer {
     std::string data = "FROST-REF1-1\n";
@@ -169,6 +197,14 @@ io::FileReplacementReceipt readReceipt(Reader& in) {
     if (phase > static_cast<unsigned>(io::FileReplacementPhase::MoveRestored))
         in.good = false;
     r.phase = static_cast<io::FileReplacementPhase>(phase);
+    // Backward-compatible field layout. Valid older replacement receipts always contain the
+    // 64-byte hash of an existing Before, including empty files. New creations use a disjoint
+    // absent hash + profile marker; older readers refuse them at their frozen hash validation.
+    const bool absent = r.images.beforeSha256.empty();
+    if (absent != r.metadataProfile.starts_with("CREATE LIMITED:") ||
+        (absent && (r.images.target != io::FileImageObservation{} || !r.beforeMetadataSha256.empty() ||
+                    !r.moveDestination.empty())))
+        in.good = false;
     return r;
 }
 void observation(Writer& out, const io::FileImageObservation& value) {
@@ -218,6 +254,12 @@ struct RefactoringCoordinator::State {
         Bookkeeping before, after;
         std::optional<text::ChangeSet> changes;
     };
+    struct CreatedView {
+        std::string path, ownerPath;
+        std::uint64_t instance = 0;
+        bool completed = false;
+        std::optional<text::ChangeSet> changes;
+    };
     struct Participant {
         std::string path, destination, before, after;
         std::optional<io::PreparedFileReplacement> native;
@@ -233,6 +275,7 @@ struct RefactoringCoordinator::State {
         std::vector<Participant> files;
         std::vector<Buffer> buffers;
         std::vector<ReadBuffer> reads;
+        std::vector<CreatedView> createdViews; // Live clean views, not persisted/pointer-owning history.
         Action action = Action::Apply;
         std::uint64_t decision = 0;
         bool pending = false, recovering = false;
@@ -299,6 +342,92 @@ struct RefactoringCoordinator::State {
     void unlock(TransactionId id) {
         for (const auto& doc : manager.documents())
             doc->document().releaseExternalWrite(id);
+    }
+    static bool creation(const Participant& file) {
+        return file.native && file.native->receipt()->images.beforeSha256.empty();
+    }
+    Result<void> creationViews(Record& r, bool currentAfter, bool adopt = true) {
+        for (const auto& file : r.files) {
+            if (!creation(file))
+                continue;
+            std::vector<FileDocument*> matches;
+            // Retained view instances must be checked even after Undo makes every file spelling
+            // absent, when resolving the full path can no longer discover an alias.
+            for (const auto& view : r.createdViews) {
+                if (view.ownerPath != file.path)
+                    continue;
+                auto* tracked = manager.find(view.path);
+                if (tracked && tracked->instanceId() == view.instance) {
+                    auto alias = file.native->namesTargetEndpoint(tracked->path());
+                    if (!alias)
+                        return std::unexpected(alias.error());
+                    if (!*alias)
+                        return fail(ErrorCode::Busy, "tracked created view path now names another parent");
+                    matches.push_back(tracked);
+                }
+            }
+            for (const auto& opened : manager.documents()) {
+                if (opened->untitled())
+                    continue;
+                auto alias = file.native->namesTargetEndpoint(opened->path());
+                if (!alias)
+                    return std::unexpected(alias.error());
+                if (*alias && std::find(matches.begin(), matches.end(), opened.get()) == matches.end())
+                    matches.push_back(opened.get());
+            }
+            if (matches.size() > 1)
+                return fail(ErrorCode::Busy, "multiple open document spellings claim a created file; close duplicates");
+            if (matches.empty())
+                continue; // Closed views do not invalidate native global history.
+            auto* doc = matches.front();
+            if (doc->dirty() || doc->m_pendingMerge || doc->m_outOfDate ||
+                (doc->m_diskState != DiskState::InSync && doc->m_diskState != DiskState::Deleted) || !doc->m_disk ||
+                doc->m_disk->size != file.after.size() ||
+                doc->m_disk->fingerprint != storage::xxh3Hash128(file.after) ||
+                doc->document().committedText().text() != doc->m_baseText.text())
+                return fail(ErrorCode::Busy, "created file has dirty/foreign open content or format: " + file.path);
+            auto leased = doc->document().acquireExternalWrite(r.id);
+            if (!leased)
+                return leased;
+            auto found = std::find_if(r.createdViews.begin(), r.createdViews.end(),
+                                      [&](const CreatedView& v) { return v.instance == doc->instanceId(); });
+            if (found == r.createdViews.end() && adopt) {
+                // A new clean view starts with no edit edge. Adopt a no-text-change global edge
+                // so ordinary editor Undo reaches this creation, preserving its saved/clean state.
+                auto edge = doc->document().recordExternalBarrier(r.id);
+                if (!edge)
+                    return edge;
+                if (!currentAfter) {
+                    auto undone = doc->document().undoExternal(r.id);
+                    if (!undone)
+                        return std::unexpected(undone.error());
+                }
+                doc->m_savedStateId = doc->document().undoState().stateId;
+                doc->m_generationStateId = FileDocument::kNoSavedState;
+                r.createdViews.push_back({doc->path(), file.path, doc->instanceId(), false, std::nullopt});
+            }
+        }
+        return {};
+    }
+    void openedCreatedDocument(FileDocument& doc) {
+        if (executing || manager.m_refactoringPending.assigned() || cursor == 0)
+            return;
+        auto& r = *history[cursor - 1];
+        bool owned = false;
+        for (const auto& file : r.files) {
+            if (!creation(file))
+                continue;
+            auto same = file.native->namesTargetEndpoint(doc.path());
+            if (same && *same && file.native->validateCurrent(true)) {
+                owned = true;
+                break;
+            }
+        }
+        if (!owned)
+            return;
+        // Ineligible/foreign opens remain ordinary views; they never acquire a fabricated edge.
+        static_cast<void>(creationViews(r, true));
+        unlock(r.id);
     }
     Result<void> dependencies(const Record& r, bool applied) const {
         for (const auto& d : r.plan.dependencies) {
@@ -430,6 +559,16 @@ struct RefactoringCoordinator::State {
             if (!doc || !sameBookkeeping(*doc, saved) || doc->document().committedText().text() != text)
                 return fail(ErrorCode::Busy, "refactoring state changed at final decision admission");
         }
+        if (auto checked = creationViews(r, action == Action::Undo); !checked)
+            return checked;
+        for (const auto& view : r.createdViews) {
+            auto* doc = manager.find(view.path);
+            if (!doc || doc->instanceId() != view.instance)
+                continue;
+            const auto state = doc->document().undoState();
+            if (action != Action::Apply && (action == Action::Undo ? state.externalUndo : state.externalRedo) != r.id)
+                return fail(ErrorCode::Busy, "created view global history lineage changed");
+        }
         Writer out;
         out.text(identityText(r.id));
         out.number(r.decision + 1);
@@ -443,6 +582,10 @@ struct RefactoringCoordinator::State {
         r.pending = true;
         r.plan.revalidateContext = {};
         manager.m_refactoringPending = r.id;
+        for (auto& view : r.createdViews) {
+            view.completed = false;
+            view.changes.reset();
+        }
         for (auto& b : r.buffers) {
             b.completed = false;
             b.journaled = false;
@@ -530,7 +673,8 @@ struct RefactoringCoordinator::State {
     }
 
     Result<std::unique_ptr<Record>> prepare(const RefactoringPlan& proposed) {
-        if (proposed.disk.size() + proposed.buffers.size() + proposed.renames.size() > options.maxParticipants)
+        if (proposed.disk.size() + proposed.buffers.size() + proposed.renames.size() + proposed.creates.size() >
+            options.maxParticipants)
             return fail(ErrorCode::OutOfRange, "too many refactoring participants");
         if (proposed.dependencies.size() + proposed.bufferDependencies.size() > options.maxReadDependencies)
             return fail(ErrorCode::OutOfRange, "too many read-only refactoring dependencies");
@@ -550,6 +694,9 @@ struct RefactoringCoordinator::State {
         for (const auto& m : proposed.renames)
             if (!bounded(m.expectedBytes))
                 return fail(ErrorCode::OutOfRange, "rename image limit");
+        for (const auto& c : proposed.creates)
+            if (!bounded(c.afterBytes))
+                return fail(ErrorCode::OutOfRange, "create image limit");
         for (const auto& d : proposed.dependencies)
             if (d.expectedBytes && !bounded(*d.expectedBytes))
                 return fail(ErrorCode::OutOfRange, "dependency limit");
@@ -583,6 +730,17 @@ struct RefactoringCoordinator::State {
                 return reject(Error(ErrorCode::InvalidArgument, "absolute movement paths required"));
             move.from = std::move(*from);
             move.to = std::move(*to);
+        }
+        for (auto& creation : r->plan.creates) {
+            auto path = io::normalizePath(creation.path);
+            if (!path || !io::isAbsolutePath(path ? *path : std::string{}))
+                return reject(Error(ErrorCode::InvalidArgument, "absolute creation path required"));
+            creation.path = std::move(*path);
+            if (openDocument(creation.path))
+                return reject(Error(ErrorCode::AlreadyExists, "creation endpoint is already open"));
+            for (const auto& d : r->plan.dependencies)
+                if (pathKey(d.path) == pathKey(creation.path) && (d.expectedBytes || d.directory))
+                    return reject(Error(ErrorCode::InvalidArgument, "creation requires an absent input receipt"));
         }
         for (const auto& b : proposed.buffers)
             if (auto added = addBuffer(*r, b); !added)
@@ -638,8 +796,8 @@ struct RefactoringCoordinator::State {
             }
             r->reads.push_back({doc->path(), d.expectedText, doc->instanceId()});
         }
-        const auto addNative = [&](std::string path, std::string before, std::string after,
-                                   std::string destination) -> Result<void> {
+        const auto addNative = [&](std::string path, std::string before, std::string after, std::string destination,
+                                   bool creation = false) -> Result<void> {
             if (!options.privateStoreForPath)
                 return fail(ErrorCode::InvalidArgument, "same-volume private store provider required");
             for (const auto& old : r->files)
@@ -649,28 +807,67 @@ struct RefactoringCoordinator::State {
                     (!old.destination.empty() && pathKey(path) == pathKey(old.destination)))
                     return fail(ErrorCode::InvalidArgument,
                                 "overlapping file effects require a combined producer plan");
-            auto actual = fs.readFile(path);
-            if (!actual)
-                return std::unexpected(actual.error());
-            if (*actual != before)
-                return fail(ErrorCode::Busy, "refactoring input changed: " + path);
+            if (!creation) {
+                auto actual = fs.readFile(path);
+                if (!actual)
+                    return std::unexpected(actual.error());
+                if (*actual != before)
+                    return fail(ErrorCode::Busy, "refactoring input changed: " + path);
+            } else if (openDocument(path))
+                return fail(ErrorCode::AlreadyExists, "creation endpoint became open");
             auto store = options.privateStoreForPath(path);
             if (!store)
                 return std::unexpected(store.error());
-            auto native = io::prepareFileReplacement(path, *store, after, options.maxFileBytes, options.maxFileBytes);
+            auto native =
+                creation ? io::prepareFileCreation(path, *store, after, options.maxFileBytes)
+                         : io::prepareFileReplacement(path, *store, after, options.maxFileBytes, options.maxFileBytes);
             if (!native)
                 return std::unexpected(native.error());
+            if (creation)
+                for (const auto& opened : manager.documents()) {
+                    if (opened->untitled())
+                        continue;
+                    auto same = native->namesTargetEndpoint(opened->path());
+                    if (!same)
+                        return std::unexpected(same.error());
+                    if (*same)
+                        return fail(ErrorCode::AlreadyExists, "creation endpoint has an existing open spelling");
+                }
             if (!destination.empty()) {
                 auto admitted = native->prepareMoveDestination(destination);
                 if (!admitted)
                     return std::unexpected(admitted.error());
             }
-            if (native->receipt()->images.beforeSha256 != io::sha256Hex(before))
+            if (!creation && native->receipt()->images.beforeSha256 != io::sha256Hex(before))
                 return fail(ErrorCode::Busy, "native capture differs from preview");
             for (const auto& old : r->files)
-                if (old.native->receipt()->images.target.volume == native->receipt()->images.target.volume &&
+                if (!creation && !old.native->receipt()->images.target.object.empty() &&
+                    old.native->receipt()->images.target.volume == native->receipt()->images.target.volume &&
                     old.native->receipt()->images.target.object == native->receipt()->images.target.object)
                     return fail(ErrorCode::InvalidArgument, "physical aliases cannot own separate transaction effects");
+            const auto absentEndpoint =
+                [](const io::FileReplacementReceipt& receipt) -> std::pair<io::FileImageObservation, std::string> {
+                if (receipt.images.beforeSha256.empty())
+                    return {receipt.images.targetParent, std::string(io::fileName(receipt.images.targetPath))};
+                if (!receipt.moveDestination.empty())
+                    return {receipt.moveParent, std::string(io::fileName(receipt.moveDestination))};
+                return {};
+            };
+            const auto endpoint = absentEndpoint(*native->receipt());
+            if (!endpoint.second.empty()) {
+                for (const auto& old : r->files) {
+                    const auto previous = absentEndpoint(*old.native->receipt());
+                    if (previous.second.empty() || endpoint.first.volume != previous.first.volume ||
+                        endpoint.first.object != previous.first.object)
+                        continue;
+                    auto same = sameAbsentLeaf(endpoint.second, previous.second);
+                    if (!same)
+                        return std::unexpected(same.error());
+                    if (*same)
+                        return fail(ErrorCode::InvalidArgument,
+                                    "physical parent/leaf aliases cannot own separate absent endpoints");
+                }
+            }
             r->files.push_back(
                 {std::move(path), std::move(destination), std::move(before), std::move(after), std::move(*native)});
             return {};
@@ -688,6 +885,11 @@ struct RefactoringCoordinator::State {
                 !io::isAbsolutePath(to ? *to : std::string{}) || *from == *to)
                 return reject(Error(ErrorCode::InvalidArgument, "move requires distinct absolute endpoints"));
             auto added = addNative(*from, m.expectedBytes, m.expectedBytes, *to);
+            if (!added)
+                return reject(added.error());
+        }
+        for (const auto& creation : r->plan.creates) {
+            auto added = addNative(creation.path, {}, creation.afterBytes, {}, true);
             if (!added)
                 return reject(added.error());
         }
@@ -1040,6 +1242,10 @@ struct RefactoringCoordinator::State {
                 (after ? doc->document().undoState().externalUndo : doc->document().undoState().externalRedo) != r.id)
                 return fail(ErrorCode::Busy, "global history is stale, closed or not at its document boundary");
         }
+        if (auto checked = creationViews(r, after); !checked) {
+            unlock(r.id);
+            return checked;
+        }
         for (const auto& b : r.buffers) {
             auto owned = current(b, after)->document().acquireExternalWrite(r.id);
             if (!owned) {
@@ -1086,6 +1292,8 @@ struct RefactoringCoordinator::State {
                 result.warnings.push_back(saved.error());
             return result;
         };
+        if (auto checked = creationViews(r, r.action != Action::Redo, false); !checked)
+            return incomplete(checked.error());
         for (std::size_t step = 0; step < r.files.size(); ++step) {
             auto& p = r.files[before ? r.files.size() - 1 - step : step];
             const auto phase = p.native->receipt()->phase;
@@ -1133,6 +1341,23 @@ struct RefactoringCoordinator::State {
             auto valid = p.native->validateCurrent(!before);
             if (!valid)
                 return incomplete(valid.error());
+        }
+        if (auto checked = creationViews(r, r.action != Action::Redo); !checked)
+            return incomplete(checked.error());
+        for (auto& view : r.createdViews) {
+            auto* doc = manager.find(view.path);
+            if (!doc || doc->instanceId() != view.instance || view.completed)
+                continue;
+            if (r.action != Action::Apply) {
+                auto changed = before ? doc->document().undoExternal(r.id) : doc->document().redoExternal(r.id);
+                if (!changed)
+                    return incomplete(changed.error());
+                view.changes = std::move(*changed);
+                doc->m_savedStateId = doc->document().undoState().stateId;
+                doc->m_generationStateId = FileDocument::kNoSavedState;
+            }
+            view.completed = true;
+            manager.m_deferredDiskChecks.insert(doc->instanceId());
         }
         std::vector<std::optional<storage::DiskBase>> diskBases(r.buffers.size());
         for (std::size_t i = 0; i < r.buffers.size(); ++i) {
@@ -1247,6 +1472,11 @@ struct RefactoringCoordinator::State {
             if (b.changes && options.changed)
                 options.changed(*doc, *b.changes);
         }
+        for (auto& view : r.createdViews) {
+            auto* doc = manager.find(view.path);
+            if (doc && doc->instanceId() == view.instance && view.changes && options.changed)
+                options.changed(*doc, *view.changes);
+        }
         for (const auto& doc : manager.documents()) {
             if (manager.m_deferredDiskChecks.erase(doc->instanceId()) == 0)
                 continue;
@@ -1258,8 +1488,18 @@ struct RefactoringCoordinator::State {
     }
 };
 RefactoringCoordinator::RefactoringCoordinator(SaveManager& documents, io::IFileSystem& fs, RefactoringOptions options)
-    : m_state(std::make_unique<State>(documents, fs, std::move(options))) {}
-RefactoringCoordinator::~RefactoringCoordinator() = default;
+    : m_state(std::make_unique<State>(documents, fs, std::move(options))) {
+    // Exactly one coordinator owns SaveManager's composition-root refactoring history.
+    FROST_PRE(!documents.m_refactoringOpenOwner);
+    documents.m_refactoringOpenOwner = m_state.get();
+    documents.m_refactoringOpened = [state = m_state.get()](FileDocument& doc) { state->openedCreatedDocument(doc); };
+}
+RefactoringCoordinator::~RefactoringCoordinator() {
+    if (m_state->manager.m_refactoringOpenOwner == m_state.get()) {
+        m_state->manager.m_refactoringOpened = {};
+        m_state->manager.m_refactoringOpenOwner = nullptr;
+    }
+}
 Result<RefactoringOutcome> RefactoringCoordinator::apply(const RefactoringPlan& plan) {
     auto& s = *m_state;
     if (!s.recovered) {

@@ -111,10 +111,9 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
         }
     }
     auto commit = fl::commitCompletion(item, *snapshot, wordStart, end, m_services.server.encoding());
-    // LuaLS uses this editor-local command for signature help after inserting a call snippet.
-    // Arbitrary commands supplied by the server are not executed.
-    const fl::Json* command = item.raw.find("command");
-    const bool triggerParameterHints = command && command->stringAt("command") == "editor.action.triggerParameterHints";
+    // Actual C++ call snippets and LuaLS's whitelisted editor-local hint request both enter
+    // parameter info after selecting the inserted argument. Other server commands are ignored.
+    const bool triggerParameterHints = fl::completionRequestsParameterHints(item);
     // Hiding lookup and applying edits can replace the completion model. Read its item first.
     closeLookup();
     if (!commit) {
@@ -125,6 +124,7 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
         report(applied.error(), "Completion");
         return;
     }
+    m_liveTemplate.reset();
     m_tabStops = std::move(commit->tabStops);
     if (!m_tabStops.empty()) {
         const std::optional<text::Snapshot> after = m_services.host.snapshot();
@@ -136,11 +136,14 @@ void LanguageController::commitCompletion(std::size_t itemIndex, bool replaceWor
             static_cast<void>(nextTabStop());
         }
     }
-    if (triggerParameterHints)
+    const auto serverCapabilities = m_services.server.serverCapabilities();
+    if (triggerParameterHints && serverCapabilities && serverCapabilities->signatureHelp)
         requestSignatureHelp(std::nullopt);
 }
 
 bool LanguageController::nextTabStop() {
+    if (m_liveTemplate && !m_tabStops.empty())
+        return advanceLiveTemplate();
     const std::optional<text::Snapshot> snapshot = m_services.host.snapshot();
     if (m_tabStops.empty() || !snapshot) {
         m_tabStops.clear();

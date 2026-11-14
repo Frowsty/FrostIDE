@@ -34,6 +34,7 @@ frost_add_library(lang LAYER lang
         src/cmake_compile_commands.cpp
         src/cpp_rename_plan.cpp
         src/cmake_language.cpp
+        src/cpp_refactoring_plan.cpp
         src/code_assist.cpp
         src/code_vision.cpp
         src/compile_commands.cpp
@@ -47,6 +48,8 @@ frost_add_library(lang LAYER lang
         src/frost_engine_lua.cpp
         src/fuzzy.cpp
         src/inspection.cpp
+        src/inspection_scope_fixes.cpp
+        src/inspection_scope_runner.cpp
         src/jsonrpc_connection.cpp
         src/jsonrpc_framing.cpp
         src/lsp_client.cpp
@@ -63,6 +66,9 @@ frost_add_library(lang LAYER lang
         src/save_actions.cpp
         src/semantic_tokens.cpp
         src/snippet.cpp
+        src/spelling.cpp
+        src/templates.cpp
+        src/file_templates.cpp
         src/symbols.cpp
         src/uri.cpp
         src/workspace_edit.cpp
@@ -71,5 +77,5 @@ target_compile_definitions(frost_lang PRIVATE FROST_PINNED_LLVM_VERSION="${_fros
     FROST_PINNED_LUALS_VERSION="${_frost_luals_version}")
 if(WIN32)
     # advapi32: RegGetValueW (the Windows SDK root); shell32: SHGetFolderPathW (vswhere's folder).
-    target_link_libraries(frost_lang PRIVATE advapi32 shell32)
+    target_link_libraries(frost_lang PRIVATE advapi32 shell32 ole32)
 endif()

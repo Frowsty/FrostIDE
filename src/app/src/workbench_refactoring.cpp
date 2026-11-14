@@ -35,6 +35,9 @@ Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document:
     for (const auto& move : plan.renames)
         if (!trusted(move.from) || !trusted(move.to))
             return fail(ErrorCode::Untrusted, "Trust both paths before renaming: " + move.from);
+    for (const auto& creation : plan.creates)
+        if (!trusted(creation.path))
+            return fail(ErrorCode::Untrusted, "Trust the project before creating: " + creation.path);
     std::vector<std::string> mutationPaths;
     for (const auto& edit : plan.disk)
         mutationPaths.push_back(edit.path);
@@ -44,6 +47,8 @@ Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document:
         mutationPaths.push_back(move.from);
         mutationPaths.push_back(move.to);
     }
+    for (const auto& creation : plan.creates)
+        mutationPaths.push_back(creation.path);
     if (!m_refactoring) {
         std::string target;
         if (!plan.disk.empty())
@@ -52,6 +57,8 @@ Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document:
             target = plan.buffers.front().path;
         else if (!plan.renames.empty())
             target = plan.renames.front().from;
+        else if (!plan.creates.empty())
+            target = plan.creates.front().path;
         else
             return fail(ErrorCode::InvalidArgument, "The refactoring contains no changes");
         std::string preferred = m_options.refactoringStateDirectory;
@@ -209,6 +216,7 @@ Result<document::RefactoringOutcome> Workbench::resumeRefactoring() {
 }
 
 void Workbench::registerRefactoringActions() {
+    registerCppRefactoringActions();
     for (const bool redo : {false, true}) {
         input::ActionSpec spec;
         spec.id = redo ? "editor.redo" : "editor.undo";

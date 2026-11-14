@@ -149,8 +149,12 @@ void LanguageController::initServiceHooks() {
             }
             const QString label =
                 params.find("label") != nullptr ? qs(params.stringAt("label")) : QStringLiteral("Apply Server Edit");
+            // Bind the owning request at message arrival, before any queued GUI delivery.
+            const auto semantic = self->m_cppSemanticApply.load();
             if (QThread::currentThread() == self->thread()) {
-                if (auto applied = self->m_services.applier.apply(*parsed, label.toStdString()); !applied) {
+                if (auto applied =
+                        semantic ? (*semantic)(*parsed) : self->m_services.applier.apply(*parsed, label.toStdString());
+                    !applied) {
                     emit self->statusMessage(QStringLiteral("%1: %2").arg(label, qs(applied.error().message())));
                     done(false);
                     return;
@@ -162,12 +166,14 @@ void LanguageController::initServiceHooks() {
                 auto completion = std::make_shared<std::function<void(bool)>>(std::move(done));
                 const bool invoked = QMetaObject::invokeMethod(
                     app,
-                    [self, edit = std::move(*parsed), label, completion]() mutable {
+                    [self, edit = std::move(*parsed), label, completion, semantic]() mutable {
                         if (!self) {
                             (*completion)(false);
                             return;
                         }
-                        if (auto result = self->m_services.applier.apply(edit, label.toStdString()); result) {
+                        if (auto result = semantic ? (*semantic)(edit)
+                                                   : self->m_services.applier.apply(edit, label.toStdString());
+                            result) {
                             (*completion)(true);
                         } else {
                             emit self->statusMessage(QStringLiteral("%1: %2").arg(label, qs(result.error().message())));
@@ -185,6 +191,7 @@ void LanguageController::initServiceHooks() {
 }
 
 LanguageController::~LanguageController() {
+    m_semanticCommandSlot.cancel();
     m_structureSlot.cancel();
     for (sched::LatestWins* slot :
          {&m_completionSlot, &m_resolveSlot, &m_signatureSlot, &m_hoverSlot, &m_navigationSlot, &m_usagesSlot,
@@ -301,6 +308,7 @@ namespace {
 enum class Availability : std::uint8_t {
     Always,            // Any document (LSP-backed or editor-wide).
     ClangdTweaks,      // C++ only: clangd tweaks.
+    AstOperations,     // C++ plus the application-owned captured AST planner.
     OptimizeImports,   // capabilities.optimizeImports.
     Surround,          // capabilities.surround.
     CompleteStatement, // capabilities.completeStatement.
@@ -312,6 +320,7 @@ bool available(Availability availability, const LanguageCapabilities& caps) {
     switch (availability) {
     case Availability::Always: return true;
     case Availability::ClangdTweaks: return caps.clangdTweaks;
+    case Availability::AstOperations: return caps.clangdTweaks;
     case Availability::OptimizeImports: return caps.optimizeImports;
     case Availability::Surround: return caps.surround;
     case Availability::CompleteStatement: return caps.completeStatement;
@@ -361,26 +370,40 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
         {"refactor.rename", "Rename", "Refactor", &LanguageController::rename, true},
         {"refactor.this", "Refactor This...", "Refactor", &LanguageController::refactorThis, true, A::Always,
          "Rename and the refactorings the language server offers at the caret"},
+        {"refactor.convert", "Convert C++ Selection...", "Refactor", &LanguageController::convertCode, true,
+         A::ClangdTweaks, "REF-10: applicable rewrite actions returned by clangd"},
+        {"code.createFromUsage", "Create from Usage...", "Code", &LanguageController::createFromUsage, true,
+         A::ClangdTweaks, "REF-9: actual provider create/declaration fixes; missing fixes are reported"},
+        {"code.fixPublishedDiagnostics", "Fix Published Diagnostics in Project...", "Code",
+         &LanguageController::fixPublishedDiagnostics, true, A::ClangdTweaks,
+         "REF-10: conflict-checked actual quickfix union over the captured project diagnostic scope"},
+        {"code.fixInScope", "Fix in Scope (clang-tidy)...", "Code", &LanguageController::fixInScope, true,
+         A::AstOperations,
+         "REF-10: actual exported module/project replacements through the captured inspection transaction"},
         {"refactor.extractVariable", "Extract Variable...", "Refactor", &LanguageController::extractVariable, true,
          A::ClangdTweaks, "C++: clangd's Extract Variable; other languages require REF-7"},
         {"refactor.extractConstant", "Extract Constant...", "Refactor", &LanguageController::extractConstant, true,
-         A::Never, "Requires the extract refactorings (REF-7)"},
-        {"refactor.extractField", "Extract Field...", "Refactor", &LanguageController::extractField, true, A::Never,
-         "Requires the extract refactorings (REF-7)"},
+         A::AstOperations, "REF-7: captured AST constant extraction; unsupported selections refuse"},
+        {"refactor.extractField", "Extract Field...", "Refactor", &LanguageController::extractField, true,
+         A::AstOperations, "REF-7: captured AST field extraction; bounded class/constant profile"},
         {"refactor.extractParameter", "Extract Parameter...", "Refactor", &LanguageController::extractParameter, true,
          A::Never, "Requires the extract refactorings (REF-7)"},
         {"refactor.extractMethod", "Extract Method...", "Refactor", &LanguageController::extractMethod, true,
          A::ClangdTweaks, "C++: clangd's Extract to Function; other languages require REF-7"},
-        {"refactor.inline", "Inline...", "Refactor", &LanguageController::inlineSymbol, true, A::Never,
-         "Requires the inline refactoring (REF-6)"},
+        {"refactor.inline", "Inline...", "Refactor", &LanguageController::inlineSymbol, true, A::ClangdTweaks,
+         "REF-6: actual clangd InlineVariable; use Inline C++ Call for the bounded AST call profile"},
         {"refactor.changeSignature", "Change Signature...", "Refactor", &LanguageController::changeSignature, true,
-         A::Never, "Requires the change signature refactoring (REF-6)"},
-        {"refactor.safeDelete", "Safe Delete...", "Refactor", &LanguageController::safeDelete, true, A::Never,
+         A::AstOperations,
+         "REF-6: explicit parameter names/types/order/add/remove across captured project declarations and direct "
+         "calls"},
+        {"refactor.safeDelete", "Safe Delete...", "Refactor", &LanguageController::safeDelete, true, A::AstOperations,
          "Requires the safe delete refactoring (REF-8)"},
-        {"refactor.move", "Move...", "Refactor", &LanguageController::moveSymbol, true, A::Never,
+        {"refactor.move", "Move File...", "Refactor", &LanguageController::moveSymbol, true, A::AstOperations,
          "Requires the move refactoring (REF-8)"},
         {"refactor.copy", "Copy...", "Refactor", &LanguageController::copySymbol, true, A::Never,
          "Requires the copy refactoring (REF-8)"},
+        {"code.checkSpelling", "Check Spelling in Selection...", "Code", &LanguageController::checkSelectionSpelling,
+         true},
         {"code.showIntentions", "Show Context Actions", "Code", &LanguageController::showIntentions, true},
         {"code.reformat", "Reformat Code", "Code", &LanguageController::reformat, true},
         {"code.reformatFile", "Reformat File", "Code", &LanguageController::reformatFile, true},
@@ -388,8 +411,18 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
          "C and C++: clangd's AST node for the caret or the selection"},
         {"code.generate", "Generate...", "Code", &LanguageController::generateCode, true, A::ClangdTweaks,
          "C++: clangd's constructor, special members and pure virtual overrides; the rest requires REF-9"},
-        {"code.overrideMethods", "Override Methods...", "Code", &LanguageController::overrideMethods, true, A::Never,
-         "Requires the generate engine (REF-9); Implement Methods overrides pure virtual methods"},
+        {"code.generateAccessors", "Generate Getters and Setters...", "Code",
+         &LanguageController::generateGettersSetters, true, A::AstOperations,
+         "REF-9: actual field types and captured class header; conflicting names refuse"},
+        {"code.generateEquality", "Generate Equality Members...", "Code", &LanguageController::generateEqualityMembers,
+         true, A::AstOperations, "REF-9: compare actual instance fields; base-state policy must be explicit"},
+        {"code.generateFormatting", "Generate Formatting Members...", "Code",
+         &LanguageController::generateFormattingMembers, true, A::AstOperations,
+         "REF-9: field-named formatTo stream member template"},
+        {"code.overrideMethods", "Override Methods...", "Code", &LanguageController::overrideMethods, true,
+         A::AstOperations,
+         "REF-9: actual direct-base virtual signatures with explicit throwing stubs; noexcept/invalid candidates "
+         "refuse"},
         {"code.implementMethods", "Implement Methods...", "Code", &LanguageController::implementMethods, true,
          A::ClangdTweaks, "C++: clangd's Override pure virtual methods; other languages require REF-9"},
         {"code.surroundWith", "Surround With...", "Code", &LanguageController::surroundWith, true, A::Surround,
@@ -410,7 +443,8 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
         if (entry.needsEditor) {
             spec.context = input::ContextRule{.all = {input::ContextKey::EditorFocus}, .none = {}};
             spec.enabled = [this, availability = entry.availability](const input::ActionContext&) {
-                return hasDocument() && available(availability, capabilities());
+                return hasDocument() && available(availability, capabilities()) &&
+                       (availability != Availability::AstOperations || static_cast<bool>(m_cppAstRefactoring));
             };
         }
         spec.handler = [this, handler = entry.handler](const input::ActionContext&, const input::InvokeInfo&) {
@@ -455,14 +489,35 @@ QString LanguageController::emptyResultMessage(const QString& none) const {
     return QStringLiteral("%1 (%2 returned no result)").arg(none, server);
 }
 
-void LanguageController::runCodeAction(fl::CodeActionItem action) {
+void LanguageController::runCodeAction(fl::CodeActionItem action, std::shared_ptr<SemanticApply> semantic) {
     const QString title = qs(action.title);
+    if (!action.disabledReason.empty()) {
+        report(Error(ErrorCode::Unsupported, action.disabledReason), action.title);
+        return;
+    }
+    if (semantic) {
+        if (auto current = (*semantic)({}); !current) {
+            report(current.error(), action.title);
+            return;
+        }
+    }
+    if (semantic && !action.edit.empty()) {
+        if (!action.commandName.empty()) {
+            report(Error(ErrorCode::Unsupported,
+                         "A combined edit/command refactoring cannot be split into separate transactions"),
+                   action.title);
+            return;
+        }
+        if (auto applied = (*semantic)(action.edit); !applied)
+            report(applied.error(), action.title);
+        return;
+    }
     if (!action.edit.empty()) {
         applyWorkspaceEdit(action.edit, title);
     }
     if (!action.commandName.empty()) {
         // clangd.applyTweak answers with a workspace/applyEdit (the server's apply-edit handler).
-        executeServerCommand(std::move(action.commandName), std::move(action.commandArguments), title);
+        executeServerCommand(std::move(action.commandName), std::move(action.commandArguments), title, semantic);
     }
 }
 
@@ -474,6 +529,19 @@ void LanguageController::runClangdTweak(std::string_view tweakId, const QString&
         unavailable(QStringLiteral("%1 is not available for this language yet").arg(label));
         return;
     }
+    if (m_cppSemanticCommand) {
+        unavailable(QStringLiteral("Wait for the active semantic command to finish"));
+        return;
+    }
+    std::shared_ptr<SemanticApply> semantic;
+    if (m_cppSemanticBegin) {
+        auto captured = m_cppSemanticBegin();
+        if (!captured) {
+            report(captured.error(), label.toStdString());
+            return;
+        }
+        semantic = std::make_shared<SemanticApply>(std::move(*captured));
+    }
     const std::string path = m_services.host.documentPath();
     fl::LspRange range{caretPosition(), caretPosition()};
     if (const auto selection = m_services.host.selection()) {
@@ -484,13 +552,13 @@ void LanguageController::runClangdTweak(std::string_view tweakId, const QString&
         [&server = m_services.server, path, range](std::stop_token token) {
             return fl::requestCodeActions(server, path, range, {}, std::move(token));
         },
-        [this, id = std::string(tweakId), label, none](Result<std::vector<fl::CodeActionItem>> actions) {
+        [this, id = std::string(tweakId), label, none, semantic](Result<std::vector<fl::CodeActionItem>> actions) {
             if (!actions) {
                 report(actions.error(), label.toStdString());
                 return;
             }
             if (const fl::CodeActionItem* tweak = fl::findTweak(*actions, id)) {
-                runCodeAction(*tweak);
+                runCodeAction(*tweak, semantic);
                 return;
             }
             emit statusMessage(none);

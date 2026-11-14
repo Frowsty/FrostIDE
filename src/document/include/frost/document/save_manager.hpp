@@ -424,6 +424,10 @@ private:
     std::function<SaveTransform(const FileDocument&, SaveReason)> m_saveTransform;
     std::set<std::string, std::less<>> m_sweptDirectories;
     std::set<std::uint64_t> m_deferredDiskChecks;
+    // One composition-root coordinator may adopt a newly opened clean created file into its
+    // existing global history. Callback is cleared by that coordinator before destruction.
+    const void* m_refactoringOpenOwner = nullptr;
+    std::function<void(FileDocument&)> m_refactoringOpened;
     TransactionId m_refactoringPending; // Source saves/close are barred until committed settlement.
     std::int64_t m_nextGeneration = 0;
     std::uint64_t m_nextUntitled = 0;

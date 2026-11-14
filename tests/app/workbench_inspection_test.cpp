@@ -235,4 +235,70 @@ TEST(WorkbenchInspection, SwitchingProjectsCancelsAnInspectionWaitingForResource
     EXPECT_EQ(launcher.pendingScripts(), 0u);
 }
 
+TEST(WorkbenchInspection, ExportedScopeFixPreviewRefusesStaleHeaderThenAppliesAndUndoesOneTransaction) {
+    frost::test::disableCrashDialogs();
+    auto& fs = fio::realFileSystem();
+    auto tidy = fl::findClangTidy(fs, fio::realProcessLauncher());
+    ASSERT_TRUE(tidy) << tidy.error().describe();
+    WorkDir dir("ref10-exported-module-fix"), recovery("ref10-private-recovery");
+    const std::string before = "#include \"header.hpp\"\nint* sourcePointer = 0;\n";
+    const std::string headerBefore = "inline int* headerPointer = 0;\n";
+    dir.write("src/input.cpp", before);
+    dir.write("src/header.hpp", headerBefore);
+    dir.write(".clang-tidy", "Checks: '-*,modernize-use-nullptr'\nWarningsAsErrors: ''\n");
+    const auto source = dir.join("src/input.cpp"), header = dir.join("src/header.hpp");
+    ASSERT_TRUE(fl::writeCompileCommands(
+        fs, dir.join("build"),
+        std::vector<fl::CompileCommand>{{dir.path(), source, {"clang++", "-std=c++20", "-c", source}}}));
+    frost::app::test::RigOptions options;
+    options.workbench.clangd = true;
+    options.workbench.clangdJobs = 1;
+    options.workbench.refactoringStateDirectory = recovery.join("transactions");
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(
+        rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsClangTidyPath, tidy->path));
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(source));
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->clangd() && rig.workbench->clangd()->compileCommands().has_value(); }, 60s));
+    const auto action = rig.workbench->registry().find("code.fixInScope");
+    ASSERT_TRUE(action);
+    EXPECT_TRUE(rig.workbench->registry().info(*action).hasHandler);
+    using Plan = frost::document::RefactoringPlan;
+    using Completion = std::optional<frost::Result<Plan>>;
+    auto prepare = [&] {
+        auto completed = std::make_shared<Completion>();
+        fl::InspectionScope scope;
+        scope.kind = fl::InspectionScopeKind::Project;
+        rig.workbench->prepareCppInspectionScopeFixes(
+            scope, {}, {}, [completed](frost::Result<Plan> plan) { completed->emplace(std::move(plan)); });
+        return completed;
+    };
+    auto first = prepare();
+    ASSERT_TRUE(waitFor([&] { return first->has_value(); }, 120s));
+    ASSERT_TRUE(first->value()) << first->value().error().describe();
+    EXPECT_EQ(first->value()->disk.size(), 1U);
+    EXPECT_EQ(first->value()->buffers.size(), 1U);
+    EXPECT_EQ(dir.read("src/input.cpp"), before);
+    EXPECT_EQ(dir.read("src/header.hpp"), headerBefore);
+    dir.write("src/header.hpp", "// external change\n" + headerBefore);
+    EXPECT_FALSE(rig.workbench->applyRefactoring(*first->value()));
+    EXPECT_EQ(rig.view()->editor().document().text().text(), before);
+    EXPECT_FALSE(rig.workbench->canUndoRefactoring());
+    auto second = prepare();
+    ASSERT_TRUE(waitFor([&] { return second->has_value(); }, 120s));
+    ASSERT_TRUE(second->value()) << second->value().error().describe();
+    auto applied = rig.workbench->applyRefactoring(*second->value());
+    ASSERT_TRUE(applied) << applied.error().describe();
+    EXPECT_EQ(applied->status, frost::document::RefactoringStatus::Applied);
+    EXPECT_EQ(rig.view()->editor().document().text().text(),
+              "#include \"header.hpp\"\nint* sourcePointer = nullptr;\n");
+    EXPECT_EQ(dir.read("src/header.hpp"), "// external change\ninline int* headerPointer = nullptr;\n");
+    auto undone = rig.workbench->undoRefactoring();
+    ASSERT_TRUE(undone) << undone.error().describe();
+    EXPECT_EQ(rig.view()->editor().document().text().text(), before);
+    EXPECT_EQ(dir.read("src/header.hpp"), "// external change\n" + headerBefore);
+}
+
 } // namespace

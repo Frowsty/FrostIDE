@@ -312,6 +312,22 @@ TEST(EditorInsightBinding, CodeVisionIncludesMethodsInsideNamespacedClasses) {
     }));
 }
 
+TEST(EditorInsightBinding, InlayHintRangeEndsAtActualDocumentEndWithoutTrailingNewline) {
+    FeatureServer server(capabilities().set("inlayHintProvider", true));
+    server.on("textDocument/inlayHint", [](const Json&) { return Json::array(); });
+    const auto path = workPath("end.cpp");
+    frost::ui::test::EditorHarness host("auto n=1;", at(path));
+    auto* binding = new EditorInsightBinding(*host.view, {server.client(), server.scheduler()});
+    binding->refreshInlayHints();
+    ASSERT_TRUE(pumpUntil([&] { return !server.paramsOf("textDocument/inlayHint").empty(); }));
+    const auto request = server.paramsOf("textDocument/inlayHint").back();
+    const auto* end = request.find("range")->find("end");
+    ASSERT_NE(end, nullptr);
+    EXPECT_EQ(end->integerAt("line"), 0);
+    EXPECT_EQ(end->integerAt("character"), 9);
+    EXPECT_TRUE(server.paramsOf("clangd/inlayHints").empty());
+}
+
 TEST(EditorInsightBinding, InlayHintsCodeVisionAndInlineDebugValuesRenderInDisplayList) {
     FROST_REQUIRE_OFFSCREEN();
     Json caps = capabilities().set("inlayHintProvider", true).set("documentSymbolProvider", true);

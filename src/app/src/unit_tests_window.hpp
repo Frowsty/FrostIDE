@@ -116,6 +116,10 @@ unitTestsDescribeSelection(const std::string& testName, const std::string& caseN
 [[nodiscard]] std::vector<run::GutterTestCase>
 unitTestsGutterCasesForFile(QWidget* unitTestsWidget, std::string_view filePath, std::string_view content);
 
+// Selects an explicit documented framework protocol for a real CTest-discovered test.
+[[nodiscard]] Result<void> configureTestFramework(QWidget* unitTestsWidget, const std::string& name,
+                                                  run::FrameworkProfile profile);
+
 // Runs a single gutter test case in `unitTestsWidget` (RUN-10).
 [[nodiscard]] Result<void> runGutterTestCase(QWidget* unitTestsWidget, const run::GutterTestCase& testCase);
 

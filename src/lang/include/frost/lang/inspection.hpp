@@ -111,6 +111,8 @@ struct InspectionProfile {
 [[nodiscard]] Result<std::vector<CompileCommandEntry>> loadCompileCommands(io::IFileSystem& fs,
                                                                            std::string_view compileCommandsPathOrDir);
 
+[[nodiscard]] Result<std::vector<CompileCommandEntry>> parseInspectionCompileCommands(std::string_view bytes);
+
 // Resolves which translation units from `compile_commands.json` belong to `scope`.
 [[nodiscard]] std::vector<std::string> resolveInspectionScopeFiles(std::span<const CompileCommandEntry> commands,
                                                                    const InspectionScope& scope);
@@ -145,6 +147,9 @@ struct InspectionRequest {
     std::vector<std::string> extraArgs;
     std::chrono::milliseconds timeout{120'000};
     std::stop_token stopToken{};
+    // Optional fresh caller-owned output path. The tool exports replacements only, never -fix.
+    // Caller captures source images before execution and decodes the actual YAML separately.
+    std::string exportFixesPath;
 };
 
 struct InspectionReport {

@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // LanguageController code generation and editing assistance (FND-3, ADR 0078): Generate (clangd's
-// MemberwiseConstructor, SpecialMembers and OverridePureVirtuals tweaks; the other generators are
-// disabled with REF-9), Optimize Imports/Includes (clangd's include cleaner, or the server's
+// MemberwiseConstructor, SpecialMembers and OverridePureVirtuals tweaks, plus captured AST member
+// generators), Optimize Imports/Includes (clangd's include cleaner, or the server's
 // organize-imports action), and the editor templates where language_capabilities.hpp allows them:
 // Surround With, Complete Current Statement, Live Templates and Postfix Templates, each with a set
 // per language. Nothing here generates members from line text.
 
 #include "frost/lang/clangd_actions.hpp"
 #include "frost/lang/code_assist.hpp"
+#include "frost/lang/templates.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 
 #include "language_controller_internal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -73,48 +75,6 @@ std::size_t postfixOperandStart(std::string_view line, std::size_t dot) {
     return i;
 }
 
-struct Template {
-    QString label;
-    std::string body;
-};
-
-// Insert Live Template's set for a language (language_capabilities.hpp: cpp and csharp).
-std::vector<Template> liveTemplatesFor(std::string_view languageId) {
-    if (languageId == "csharp") {
-        return {
-            {QStringLiteral("for - index loop"), "for (int ${1:i} = 0; ${1:i} < ${2:count}; ${1:i}++)\n{\n    $0\n}"},
-            {QStringLiteral("foreach - collection loop"), "foreach (var ${1:item} in ${2:collection})\n{\n    $0\n}"},
-            {QStringLiteral("if - condition"), "if (${1:condition})\n{\n    $0\n}"},
-            {QStringLiteral("ife - if/else"), "if (${1:condition})\n{\n    $2\n}\nelse\n{\n    $0\n}"},
-            {QStringLiteral("try - try/catch block"), "try\n{\n    $1\n}\ncatch (${2:Exception} ${3:e})\n{\n    $0\n}"},
-            {QStringLiteral("class - class definition"), "public class ${1:ClassName}\n{\n    $0\n}"},
-            {QStringLiteral("prop - auto property"), "public ${1:int} ${2:PropertyName} { get; set; }$0"},
-            {QStringLiteral("cw - Console.WriteLine"), "Console.WriteLine(${1:value});$0"},
-            {QStringLiteral("todo - TODO comment"), "// TODO: $0"},
-        };
-    }
-    if (languageId == "cpp") {
-        return {
-            {QStringLiteral("for - index loop"),
-             "for (std::size_t ${1:i} = 0; ${1:i} < ${2:count}; ++${1:i}) {\n    $0\n}"},
-            {QStringLiteral("foreach - range loop"), "for (auto&& ${1:item} : ${2:collection}) {\n    $0\n}"},
-            {QStringLiteral("rfor - reverse loop"),
-             "for (std::size_t ${1:i} = ${2:count}; ${1:i}-- > 0;) {\n    $0\n}"},
-            {QStringLiteral("if - condition"), "if (${1:condition}) {\n    $0\n}"},
-            {QStringLiteral("ife - if/else"), "if (${1:condition}) {\n    $2\n} else {\n    $0\n}"},
-            {QStringLiteral("try - try/catch block"),
-             "try {\n    $1\n} catch (const std::exception& ${2:e}) {\n    $0\n}"},
-            {QStringLiteral("class - class definition"), "class ${1:ClassName} {\npublic:\n    $0\n};"},
-            {QStringLiteral("struct - struct definition"), "struct ${1:StructName} {\n    $0\n};"},
-            {QStringLiteral("cout - print to stdout"), "std::cout << ${1:value} << '\\n';$0"},
-            {QStringLiteral("todo - TODO comment"), "// TODO: $0"},
-            {QStringLiteral("main - entry point"), "int main(int argc, char* argv[]) {\n    $0\n    return 0;\n}"},
-            {QStringLiteral("guard - #pragma once"), "#pragma once\n$0"},
-        };
-    }
-    return {};
-}
-
 struct Wrapper {
     QString label;
     std::string before;
@@ -157,6 +117,19 @@ void LanguageController::generateCode() {
     if (!hasDocument()) {
         return;
     }
+    if (m_cppSemanticCommand) {
+        unavailable(QStringLiteral("Wait for the active semantic command"));
+        return;
+    }
+    std::shared_ptr<SemanticApply> semantic;
+    if (capabilities().clangdTweaks && m_cppSemanticBegin) {
+        auto captured = m_cppSemanticBegin();
+        if (!captured) {
+            report(captured.error(), "Generate");
+            return;
+        }
+        semantic = std::make_shared<SemanticApply>(std::move(*captured));
+    }
     if (!capabilities().clangdTweaks) {
         unavailable(QStringLiteral("Generate requires the generate engine for this language (REF-9)"));
         return;
@@ -168,7 +141,7 @@ void LanguageController::generateCode() {
         [&server = m_services.server, path, range](std::stop_token token) {
             return fl::requestCodeActions(server, path, range, {}, std::move(token));
         },
-        [this](Result<std::vector<fl::CodeActionItem>> actions) {
+        [this, semantic](Result<std::vector<fl::CodeActionItem>> actions) {
             if (!actions) {
                 report(actions.error(), "Generate");
                 return;
@@ -182,18 +155,27 @@ void LanguageController::generateCode() {
                     titles.push_back(qs(tweak->title));
                     disabled.emplace_back();
                     m_choiceActions.emplace_back(
-                        [this, action = *tweak]() mutable { runCodeAction(std::move(action)); });
+                        [this, action = *tweak, semantic]() mutable { runCodeAction(std::move(action), semantic); });
                 }
             }
-            // Generators without an engine yet: visible, disabled, with their epic.
-            const QString reason = QStringLiteral("Requires the generate engine (REF-9)");
-            for (const QString& label :
-                 {QStringLiteral("Getters and Setters..."), QStringLiteral("Equality Members..."),
-                  QStringLiteral("Formatting Members..."), QStringLiteral("Override Methods...")}) {
+            // App-owned AST generators remain visible and name the missing composition when absent.
+            const QString reason = m_cppAstRefactoring && capabilities().clangdTweaks
+                                       ? QString{}
+                                       : QStringLiteral("Requires the generate engine (REF-9)");
+            const std::array generators{
+                std::pair{QStringLiteral("Getters and Setters..."), &LanguageController::generateGettersSetters},
+                std::pair{QStringLiteral("Equality Members..."), &LanguageController::generateEqualityMembers},
+                std::pair{QStringLiteral("Formatting Members..."), &LanguageController::generateFormattingMembers},
+                std::pair{QStringLiteral("Override Methods..."), &LanguageController::overrideMethods}};
+            for (const auto& [label, handler] : generators) {
                 titles.push_back(label);
                 disabled.push_back(reason);
-                m_choiceActions.emplace_back(
-                    [this, label, reason] { unavailable(label + QStringLiteral(": ") + reason); });
+                m_choiceActions.emplace_back([this, label, reason, handler] {
+                    if (reason.isEmpty())
+                        (this->*handler)();
+                    else
+                        unavailable(label + QStringLiteral(": ") + reason);
+                });
             }
             m_choice->start(QStringLiteral("Generate"), titles, m_services.host.caretScreenRect(), {},
                             std::move(disabled));
@@ -212,19 +194,35 @@ void LanguageController::implementMethods() {
 }
 
 void LanguageController::overrideMethods() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("generate-overrides");
+        return;
+    }
     unavailable(QStringLiteral("Override Methods requires the generate engine (REF-9); Implement Methods overrides "
                                "pure virtual methods"));
 }
 
 void LanguageController::generateGettersSetters() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("generate-accessors");
+        return;
+    }
     unavailable(QStringLiteral("Getters and Setters require the generate engine (REF-9)"));
 }
 
 void LanguageController::generateEqualityMembers() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("generate-equality");
+        return;
+    }
     unavailable(QStringLiteral("Equality Members require the generate engine (REF-9)"));
 }
 
 void LanguageController::generateFormattingMembers() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("generate-formatting");
+        return;
+    }
     unavailable(QStringLiteral("Formatting Members require the generate engine (REF-9)"));
 }
 
@@ -370,29 +368,6 @@ void LanguageController::optimizeImports() {
         });
 }
 
-void LanguageController::insertLiveTemplate() {
-    if (!hasDocument()) {
-        return;
-    }
-    const LanguageCapabilities& caps = capabilities();
-    const std::vector<Template> templates =
-        caps.liveTemplates ? liveTemplatesFor(caps.languageId) : std::vector<Template>{};
-    if (templates.empty()) {
-        unavailable(QStringLiteral("No live templates for this language yet (UX-6, REF-13)"));
-        return;
-    }
-    const ByteOffset caret = m_services.host.caretOffset();
-    const text::ByteRange target = m_services.host.selection().value_or(text::ByteRange{caret, caret});
-    std::vector<QString> titles;
-    m_choiceActions.clear();
-    for (const Template& t : templates) {
-        titles.push_back(t.label);
-        m_choiceActions.emplace_back(
-            [this, target, body = t.body] { insertSnippetAt(target, body, "Insert Live Template"); });
-    }
-    m_choice->start(QStringLiteral("Insert Live Template"), titles, m_services.host.caretScreenRect());
-}
-
 bool LanguageController::tryExpandPostfixCompletion() {
     const auto snapshot = m_services.host.snapshot();
     if (!snapshot || !capabilities().postfix) {
@@ -418,10 +393,26 @@ bool LanguageController::tryExpandPostfixCompletion() {
     const bool csharp = capabilities().languageId == "csharp";
     // Statement templates replace the operand with a statement: only when it starts the statement.
     const bool statementStart = trimView(std::string_view(beforeCaret).substr(0, exprStart)).empty();
-    const bool statementSuffix = suffix == "var" || suffix == "const" || suffix == "if" || suffix == "notnull" ||
-                                 suffix == "null" || suffix == "return" || suffix == "foreach";
+    const bool statementSuffix = suffix == "for" || suffix == "var" || suffix == "const" || suffix == "if" ||
+                                 suffix == "notnull" || suffix == "null" || suffix == "return" || suffix == "foreach";
     if (statementSuffix && !statementStart) {
         return false;
+    }
+    if (!csharp) {
+        const std::string key =
+            std::string(capabilities().languageId) + ".postfix." + std::string(suffix == "foreach" ? "for" : suffix);
+        const auto* definition = fl::findTemplate(key);
+        if (!definition)
+            return false;
+        auto expansion = fl::expandTemplate(definition->body, {{"EXPR", expr}});
+        if (!expansion) {
+            report(expansion.error(), "Postfix Template");
+            return false;
+        }
+        closeLookup();
+        insertAuthoredTemplateAt(text::ByteRange{ByteOffset{lineInfo->content.begin.value() + exprStart}, caret},
+                                 definition->body, {{"EXPR", expr}}, "Postfix Template");
+        return true;
     }
     std::string snippet;
     if (suffix == "var") {

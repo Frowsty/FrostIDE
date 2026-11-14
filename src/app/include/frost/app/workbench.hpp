@@ -80,7 +80,9 @@
 #include "frost/io/reactor.hpp"
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/cmake_compile_commands.hpp"
+#include "frost/lang/cpp_refactoring_plan.hpp"
 #include "frost/lang/diagnostics.hpp"
+#include "frost/lang/file_templates.hpp"
 #include "frost/lang/frost_engine_assets.hpp"
 #include "frost/lang/inspection.hpp"
 #include "frost/lang/json.hpp"
@@ -228,6 +230,17 @@ struct NewProjectSpec {
     std::string name;
     std::string location;
     NewProjectTemplate kind = NewProjectTemplate::CMakeExecutable;
+    std::string author;
+    std::string description;
+};
+
+struct SourceTemplateSpec {
+    lang::FileTemplateRequest file;
+    std::string directory; // Existing absolute destination; directory creation is not prewritten.
+    std::string cmakeTargetId;
+    std::string vcxprojPath;
+    bool newCMakeTarget = false;
+    bool staticLibrary = false;
 };
 
 // The ids of the Build output and Find Usages tool windows (bottom); Run is the shell's "run".
@@ -534,6 +547,8 @@ public:
     void showOpenDialog(IWorkbenchPrompts::OpenKind kind);
     // Shows the File > New Project prompt and creates + opens the project.
     void showNewProjectDialog();
+    void showSourceTemplateDialog();
+    [[nodiscard]] Result<std::vector<std::string>> createSourceTemplate(const SourceTemplateSpec&);
     // Creates a new project from `spec` without overwriting existing non-empty folders, and opens it.
     [[nodiscard]] Result<std::string> createNewProject(const NewProjectSpec& spec);
     // Creates a new file or folder in `directory` (empty: active tree/editor/project directory).
@@ -618,6 +633,13 @@ public:
     // REF-1: all source/project participants settle before views are notified. PendingRecovery is
     // committed work, not an unapplied failure; callers must not resubmit it. UI thread only.
     [[nodiscard]] Result<document::RefactoringOutcome> applyRefactoring(const document::RefactoringPlan& plan);
+    // Captures the active project/database/dirty documents and asynchronously prepares one atomic
+    // replacement proposal. No mutation; consumer previews before applyRefactoring. Owner thread.
+    void prepareCppInspectionScopeFixes(lang::InspectionScope scope, lang::InspectionProfile profile,
+                                        std::stop_token cancel,
+                                        std::function<void(Result<document::RefactoringPlan>)> done);
+    void prepareCppRefactoring(lang::CppRefactoringRequest request, std::stop_token cancel,
+                               std::function<void(Result<document::RefactoringPlan>)> done);
     [[nodiscard]] Result<document::RefactoringOutcome> undoRefactoring();
     [[nodiscard]] Result<document::RefactoringOutcome> redoRefactoring();
     [[nodiscard]] Result<document::RefactoringOutcome> resumeRefactoring();
@@ -755,6 +777,7 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    bool confirmSourceTemplatePlan(const document::RefactoringPlan&);
     friend class LanguageBridge;
     friend class EngineIntegration;
     friend class EngineBindingIntegration;
@@ -774,6 +797,13 @@ private:
     // Construction steps.
     void registerActions();
     void registerRefactoringActions();
+    void registerCppRefactoringActions();
+    void showCppRefactoring(std::string operation);
+    void showCppInspectionScopeFixes();
+    void moveCppProjectSource();
+    void showCppPublishedFixes();
+    [[nodiscard]] Result<std::function<Result<void>(const lang::WorkspaceEdit&)>> beginCppProviderRefactoring();
+    [[nodiscard]] bool previewCppRefactoring(const document::RefactoringPlan& plan);
     void publishRefactoringOutcome(const document::RefactoringOutcome& outcome);
     [[nodiscard]] bool refactoringTrusted(TransactionId token) const;
     [[nodiscard]] Result<document::RefactoringOutcome> runRefactoringHistory(TransactionId token, bool redo);

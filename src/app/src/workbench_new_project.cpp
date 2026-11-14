@@ -9,6 +9,7 @@
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
+#include "frost/lang/templates.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/solution_explorer.hpp"
@@ -276,6 +277,13 @@ void Workbench::showNewProjectDialog() {
 }
 
 Result<std::string> Workbench::createNewProject(const NewProjectSpec& spec) {
+    if (spec.author.size() > 256 || spec.description.size() > 4096 ||
+        spec.author.find_first_of("\r\n") != spec.author.npos ||
+        spec.description.find_first_of("\r\n") != spec.description.npos || spec.author.find("*/") != spec.author.npos ||
+        spec.description.find("*/") != spec.description.npos || spec.author.find('\0') != spec.author.npos ||
+        spec.description.find('\0') != spec.description.npos)
+        return fail(ErrorCode::InvalidArgument,
+                    "Project template author/description must be bounded comment-safe lines");
     if (Result<void> validName = validateProjectNameComponent(spec.name); !validName) {
         notify(text("Cannot create project"), qs(validName.error().message()), ui::NotificationKind::Error);
         return std::unexpected(std::move(validName.error()));
@@ -364,6 +372,19 @@ Result<std::string> Workbench::createNewProject(const NewProjectSpec& spec) {
         }
         if (isPrimarySource) {
             primarySourcePath = *fullPath;
+        }
+        if (!spec.author.empty() || !spec.description.empty()) {
+            const bool cmake = relativeName == "CMakeLists.txt" || relativeName.ends_with(".cmake");
+            const bool cpp =
+                relativeName.ends_with(".cpp") || relativeName.ends_with(".h") || relativeName.ends_with(".hpp");
+            if (cmake || cpp) {
+                const auto* definition = lang::findTemplate(cmake ? "file.cmake" : "file.cpp.source");
+                auto header = lang::expandTemplate(definition->body,
+                                                   {{"AUTHOR", spec.author}, {"DESCRIPTION", spec.description}});
+                if (!header)
+                    return false;
+                contents = header->parsed.text + "\n" + contents;
+            }
         }
         files.push_back(GeneratedFile{std::move(*fullPath), std::move(contents)});
         return true;

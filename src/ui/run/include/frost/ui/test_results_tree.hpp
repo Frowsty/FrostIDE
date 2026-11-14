@@ -53,6 +53,8 @@ public:
     // Lists `tests` (discovery order within each program group), without results.
     void setTests(std::vector<run::DiscoveredTest> tests);
     // Lists the cases `--gtest_list_tests` gave for `test` below it (without results).
+    void setFrameworkCases(const std::string& test, std::vector<run::FrameworkCase> cases);
+    [[nodiscard]] const std::vector<run::FrameworkCase>* frameworkCases(const std::string& test) const;
     void setGTestCases(const std::string& test, const std::vector<run::GTestCase>& cases);
     /*
      * Lists the cases doctest's --list-test-cases gave for each test of `listings` (test name ->
@@ -116,6 +118,7 @@ private:
     std::vector<run::DiscoveredTest> m_tests;
     std::vector<std::string> m_unlisted; // Named by a report, not by the last discovery.
     std::map<std::string, run::TestResult> m_results;
+    std::map<std::string, std::vector<run::FrameworkCase>> m_frameworkCases;
     std::map<std::string, std::vector<run::GTestCase>> m_listedCases;
     std::map<std::string, std::vector<run::DoctestCase>> m_doctestCases;
     std::map<std::string, QString> m_state; // "Pending" / "Running" while a run goes on.

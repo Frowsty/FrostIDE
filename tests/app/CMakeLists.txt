@@ -103,6 +103,7 @@ frost_add_test(app_workbench_tests QT
             workbench_engine_mixed_test.cpp
             engine_crash_cleanup_test.cpp engine_native_host_test.cpp engine_tests_lifetime_test.cpp
             source_rename_plan_test.cpp
+        workbench_templates_test.cpp
     DEPS frost::app frost::build frost::io frost::ui_find
     THIRD_PARTY Qt6::Network)
 target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
@@ -125,6 +126,18 @@ target_compile_definitions(app_binding_corpus_tests PRIVATE ${_frost_workbench_d
     FROST_BINDING_REPO_ROOT="${FROST_SOURCE_DIR}"
     FROST_BINDING_CORPUS_ARTIFACTS="${CMAKE_BINARY_DIR}/binding-corpus-artifacts")
 add_dependencies(app_binding_corpus_tests frost-clang)
+
+# Authored R11 composition using the existing Workbench rig and real AST proposal engine.
+frost_add_test(app_cpp_refactoring_journey_tests QT
+    SOURCES workbench_cpp_refactoring_journey_test.cpp
+    DEPS frost::app frost::build frost::lang frost::rpc frost::io
+    LABELS integration clangd
+    TIMEOUT 600)
+target_include_directories(app_cpp_refactoring_journey_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_cpp_refactoring_journey_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+add_dependencies(app_cpp_refactoring_journey_tests frost-clang)
 
 # DBG-10 real lldb sessions use actual source/stack/variable responses, separately from doubles.
 frost_add_test(app_multi_session_debug_real_tests QT
@@ -242,12 +255,13 @@ endif()
 # CPP-5 and REF-12 with the real clangd and clang-format (label integration, tag clangd): clangd's
 # links, folds, inlay hints and AST in the active editor, and the actions on save.
 frost_add_test(app_workbench_cpp_editor_tests QT
-    SOURCES workbench_cpp_editor_test.cpp workbench_inspection_test.cpp
+    SOURCES workbench_cpp_editor_test.cpp workbench_inspection_test.cpp workbench_create_usage_test.cpp
     DEPS frost::app frost::lang frost::io frost::sched
     LABELS integration clangd)
 target_include_directories(app_workbench_cpp_editor_tests PRIVATE ${FROST_SOURCE_DIR}/tests
     ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_cpp_editor_tests PRIVATE ${_frost_workbench_definitions})
+add_dependencies(app_workbench_cpp_editor_tests frost-clang)
 
 # R6 uses mandatory isolated real engines; these cases belong only to the corpus tier.
 include("${FROST_SOURCE_DIR}/tests/support/EngineCorpus.cmake")
@@ -419,3 +433,8 @@ target_compile_definitions(app_unit_tests_window_tests PRIVATE ${_frost_workbenc
     FROST_RUN_GTEST_FIXTURE="$<TARGET_FILE:run_gtest_fixture>"
     FROST_RUN_GTEST_SOURCE="${FROST_SOURCE_DIR}/tests/run/gtest_fixture.cpp")
 add_dependencies(app_unit_tests_window_tests run_ctest_stub run_gtest_fixture)
+
+if(FROST_BUILD_FRAMEWORK_ACCEPTANCE)
+    target_compile_definitions(app_unit_tests_window_tests PRIVATE FROST_RUN_CATCH_FIXTURE="$<TARGET_FILE:run_catch_fixture>")
+    add_dependencies(app_unit_tests_window_tests run_catch_fixture)
+endif()

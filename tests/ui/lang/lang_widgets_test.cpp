@@ -46,6 +46,22 @@ fl::CompletionItem item(const std::string& label, fl::CompletionItemKind kind, s
     return out;
 }
 
+TEST(CompletionPopupWidget, EnterCommitsActualServerPreselectWithinBestMatchClass) {
+    CompletionPopup popup;
+    auto first = item("alpha", fl::CompletionItemKind::Variable);
+    auto preferred = item("alpine", fl::CompletionItemKind::Variable);
+    preferred.preselect = true;
+    fl::CompletionList list;
+    list.items = {first, preferred};
+    popup.setList(std::move(list));
+    popup.setPrefix("al");
+    std::optional<std::size_t> committed;
+    QObject::connect(&popup, &CompletionPopup::commitRequested, [&](std::size_t index, bool) { committed = index; });
+    EXPECT_TRUE(popup.handleKey(Qt::Key_Return, Qt::NoModifier));
+    ASSERT_TRUE(committed);
+    EXPECT_EQ(*committed, 1U);
+}
+
 TEST(CompletionPopupWidget, ShowsFiltersMovesAndCommits) {
     CompletionPopup popup;
     fl::CompletionList list;

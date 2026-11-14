@@ -231,7 +231,7 @@ class ResultType:
 # Names declared in several modules (Diagnostic) list every module's own parser.
 _RUN7_TEST_PARSERS = ("src/run/src/ctest_parsers.cpp", "src/run/src/gtest_parsers.cpp",
                       # RUN-8: doctest's XML case list and run report and its console failure blocks.
-                      "src/run/src/doctest_parsers.cpp")
+                      "src/run/src/doctest_parsers.cpp", "src/run/src/framework_parsers.cpp")
 
 RESULT_TYPES: tuple[ResultType, ...] = (
     # Test outcomes and test discovery. RUN-7 (gtest, CTest), RUN-8 (doctest), RUN-10 (the Unit

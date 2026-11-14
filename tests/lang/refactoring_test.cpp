@@ -182,6 +182,14 @@ TEST(RefactoringTest, Ref3QuickFixAndClangdTweakApplyAndCompile) {
                                               "    return total;\n"
                                               "}\n";
     ASSERT_TRUE(fs.writeFileAtomic(tweakFile, kTweakSource).has_value());
+    const std::string inlineFile = scratch.join("inline.cpp");
+    constexpr std::string_view kInlineSource =
+        "int compute(int input) { const int temporary = input * 2; return temporary + 1; }\n";
+    ASSERT_TRUE(fs.writeFileAtomic(inlineFile, kInlineSource));
+    const std::string conversionFile = scratch.join("conversion.cpp");
+    constexpr std::string_view kConversionSource =
+        "int choose(bool flag) { if (flag) { return 1; } else { return 2; } }\n";
+    ASSERT_TRUE(fs.writeFileAtomic(conversionFile, kConversionSource));
 
     const std::vector<fl::CompileCommand> commands = {
         {.directory = scratch.path(),
@@ -190,6 +198,10 @@ TEST(RefactoringTest, Ref3QuickFixAndClangdTweakApplyAndCompile) {
         {.directory = scratch.path(),
          .file = tweakFile,
          .arguments = {"clang++", "-std=c++20", "-I" + scratch.path(), "-c", tweakFile}},
+        {.directory = scratch.path(), .file = inlineFile, .arguments = {"clang++", "-std=c++20", "-c", inlineFile}},
+        {.directory = scratch.path(),
+         .file = conversionFile,
+         .arguments = {"clang++", "-std=c++20", "-c", conversionFile}},
     };
     ASSERT_TRUE(fl::writeCompileCommands(fs, scratch.join("build"), commands).has_value());
 
@@ -271,6 +283,41 @@ TEST(RefactoringTest, Ref3QuickFixAndClangdTweakApplyAndCompile) {
     EXPECT_TRUE(compileWithRealCompiler(scratch.path(), tweakFile));
 
     ASSERT_TRUE(service->closeDocument(tweakFile).has_value());
+    // REF-6 normal inline path uses the real pinned clangd tweak, not an invented replacement.
+    auto inlineBuffer = frost::text::TextBuffer::fromUtf8(std::string(kInlineSource));
+    ASSERT_TRUE(inlineBuffer);
+    ASSERT_TRUE(service->openDocument(inlineFile, inlineBuffer->snapshot()));
+    const auto inlineVersion = service->documentVersion(inlineFile);
+    ASSERT_TRUE(waitFor([&] { return service->diagnosedVersion(inlineFile) == inlineVersion; }));
+    const fl::LspRange inlineRange{positionIn(kInlineSource, "temporary"), positionIn(kInlineSource, "temporary", 9)};
+    auto inlineActions = env.run(fl::requestCodeActions(*service, inlineFile, inlineRange, {}));
+    ASSERT_TRUE(inlineActions);
+    const auto* inlineVariable = fl::findTweak(*inlineActions, "InlineVariable");
+    ASSERT_NE(inlineVariable, nullptr);
+    serverEditApplied = false;
+    auto inlined =
+        env.run(fl::requestExecuteCommand(*service, inlineVariable->commandName, inlineVariable->commandArguments));
+    ASSERT_TRUE(inlined);
+    EXPECT_TRUE(serverEditApplied);
+    EXPECT_TRUE(compileWithRealCompiler(scratch.path(), inlineFile));
+    ASSERT_TRUE(service->closeDocument(inlineFile));
+    auto conversionBuffer = frost::text::TextBuffer::fromUtf8(std::string(kConversionSource));
+    ASSERT_TRUE(conversionBuffer);
+    ASSERT_TRUE(service->openDocument(conversionFile, conversionBuffer->snapshot()));
+    const auto conversionVersion = service->documentVersion(conversionFile);
+    ASSERT_TRUE(waitFor([&] { return service->diagnosedVersion(conversionFile) == conversionVersion; }));
+    const fl::LspRange conversionRange{positionIn(kConversionSource, "if"), positionIn(kConversionSource, "if", 2)};
+    auto conversionActions = env.run(fl::requestCodeActions(*service, conversionFile, conversionRange, {}));
+    ASSERT_TRUE(conversionActions);
+    const auto* swap = fl::findTweak(*conversionActions, "SwapIfBranches");
+    ASSERT_NE(swap, nullptr);
+    serverEditApplied = false;
+    auto converted = env.run(fl::requestExecuteCommand(*service, swap->commandName, swap->commandArguments));
+    ASSERT_TRUE(converted);
+    EXPECT_TRUE(serverEditApplied);
+    EXPECT_NE(fs.readFile(conversionFile).value_or(""), kConversionSource);
+    EXPECT_TRUE(compileWithRealCompiler(scratch.path(), conversionFile));
+    ASSERT_TRUE(service->closeDocument(conversionFile));
     stopClangd(env, *service);
 }
 
