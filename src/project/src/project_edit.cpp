@@ -135,6 +135,25 @@ Result<std::string> projectEditRequest(const ProjectEdit& edit) {
     }
     appendMember(out, "Configuration", edit.configuration);
     appendMember(out, "Platform", edit.platform);
+    if (edit.kind == ProjectEditKind::SetProperties) {
+        if (edit.propertyUpdates.empty())
+            return fail(ErrorCode::InvalidArgument, "a property edit needs updates");
+        appendMember(out, "EarlyProperties", edit.earlyProperties ? "true" : "false");
+        for (const auto& [key, value] : edit.propertyUpdates) {
+            const auto dot = key.find('.');
+            const auto valid = [](std::string_view name) {
+                return !name.empty() && std::ranges::all_of(name, [](unsigned char c) {
+                    return std::isalnum(c) != 0 || c == '_';
+                }) && (std::isalpha(static_cast<unsigned char>(name.front())) != 0 || name.front() == '_');
+            };
+            if (dot == std::string::npos || !valid(std::string_view(key).substr(0, dot)) ||
+                !valid(std::string_view(key).substr(dot + 1)))
+                return fail(ErrorCode::InvalidArgument, "invalid property page key");
+            appendMember(out, "Set:" + key, value);
+        }
+        out += '}';
+        return out;
+    }
     auto files = joinPaths(edit.files, "file");
     if (!files) {
         return std::unexpected(std::move(files.error()));
