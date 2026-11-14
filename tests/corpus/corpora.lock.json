@@ -6,9 +6,9 @@
       "id": "frostengine",
       "name": "FrostEngine",
       "url": "https://github.com/Frowsty/FrostEngine-AI-Claude",
-      "branch": "main",
-      "sha": "12b8c6de4c3805a9d1e84b86ddbb70b6999bb2dc",
-      "pinned": "2026-11-10",
+      "branch": "codex/r6-contract",
+      "sha": "37cc258b75df0c707dd9247ee73b125c541edb4d",
+      "pinned": "2026-11-14",
       "presets": {
         "windows": "windows-debug",
         "linux": "linux-debug"
