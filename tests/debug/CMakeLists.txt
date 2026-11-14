@@ -202,6 +202,17 @@ if(WIN32)
         FROST_VISUALIZER_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/visualizer_types.cpp"
         FROST_VISUALIZER_PACK="${FROST_SOURCE_DIR}/assets/visualizers/FrostCommon.natvis")
     add_dependencies(debug_natvis_pack_tests frost-dbgeng-dap)
+    frost_add_test(debug_dbgeng_depth_tests
+        SOURCES dbgeng_native_depth_test.cpp
+        DEPS frost::debug frost::build frost::rpc frost::io frost::core
+        LABELS integration dbgeng msvc
+        TIMEOUT 180)
+    target_include_directories(debug_dbgeng_depth_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(debug_dbgeng_depth_tests PRIVATE
+        FROST_DBGENG_ADAPTER_PATH="$<TARGET_FILE:frost-dbgeng-dap>"
+        FROST_DBGENG_DEPTH_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/dbgeng_native_depth.cpp"
+        FROST_PINNED_VC_TOOLS="${_frost_debug_msvc_tools}")
+    add_dependencies(debug_dbgeng_depth_tests frost-dbgeng-dap)
     frost_add_test(debug_msvc_tests
         SOURCES msvc_debug_test.cpp
         DEPS frost::debug frost::build frost::io
