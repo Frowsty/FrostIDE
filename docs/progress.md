@@ -3,6 +3,14 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-14: R15 bounded large-file product preview; runtime acceptance deferred
+
+- New regular files at or above 128 MiB route through the product editor factory to a separate read-only UTF-8 byte-page view, without creating an empty editable document or invoking the inner editor. Existing editable load/reload/merge/hot-exit guards remain intact.
+- Added IFileSystem retained native random-access readers with 64 KiB page bounds, 4 KiB positioned reads, native identity/size/write-metadata validation and cancellation. Lifetime-independent opener callbacks let background work outlive filesystem/view destruction without widget/host callbacks or GUI joins.
+- The view has previous/next pages, 64-bit byte navigation, cancellable LF/CRLF line seeking without a whole-file line table, explicit encoding/unknown-line/page-edge constraints and surfaced read/identity errors. ADR 0105 documents this limited read-only profile; full mapped/editable large-file behavior remains outside this slice.
+- Authored actual >1-GiB reader and 128-MiB product-factory fixtures plus UI encoding/navigation/cancellation/close/error tests for later execution. Independent GPT-6 Astra source review closed after encoding, opener-lifetime and authored-test corrections. No build, test, fixture generation, feature execution or benchmark ran, and no B15 or 1-GiB runtime acceptance is claimed.
+- Next: integration and later runtime verification when the user resumes testing. No user question blocks this slice.
+
 ## 2026-11-14: R12 Lua implementation integrated; runtime acceptance deferred
 
 - Added explicit standalone Lua Script/REPL configurations, console stdin, and standalone lua-debug DAP using the same selected interpreter, arguments, environment and working directory. Lua 5.4.9 has an explicit offline Clang build recipe and optional staging, including Windows UTF-8 path resources. The recipe, interpreter and adapter have not been executed in this phase.

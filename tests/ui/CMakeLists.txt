@@ -197,7 +197,7 @@ frost_add_test(ui_nav_tests
     DEPS frost::ui_nav frost::document frost::diff frost::text frost::io frost::sched)
 
 frost_add_test(ui_workbench_tests QT
-    SOURCES workbench/workbench_test.cpp
+    SOURCES workbench/workbench_test.cpp workbench/large_file_view_test.cpp
     DEPS frost::ui_workbench frost::ui_nav frost::ui_shell frost::ui frost::document frost::storage frost::input
          frost::io)
 _frost_ui_test_wiring(ui_workbench_tests)

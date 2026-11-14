@@ -171,3 +171,15 @@ Result<std::size_t> removeStaleTempFiles(IFileSystem& fs, std::string_view direc
 }
 
 } // namespace frost::io
+
+namespace frost::io {
+Result<std::unique_ptr<IRandomAccessReader>> IFileSystem::openRandomAccess(std::string_view path) {
+    return randomAccessOpener()(path);
+}
+
+RandomAccessOpener IFileSystem::randomAccessOpener() const {
+    return [](std::string_view) -> Result<std::unique_ptr<IRandomAccessReader>> {
+        return fail(ErrorCode::Unsupported, "Random access reader unavailable");
+    };
+}
+} // namespace frost::io

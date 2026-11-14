@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // DocumentEditorFactory: the shell's editor factory over documents (ADR 0042). It opens every tab
-// through the DocumentRegistry (canonical path, SaveManager, the LoadService's large-file guard) and
+// through the DocumentRegistry (canonical path, SaveManager, the LoadService's editable guard) and
 // wraps the inner editor (the placeholder until the W1 workbench binds the real editor to the
 // FileDocument) in a view with banners for the document's state: ReadOnlyReason::LongLine,
 // DiskState::OutOfDate (Reload, Overwrite), DiskState::Changed (Compare...) and Deleted.
@@ -63,8 +63,9 @@ class DocumentEditorView;
 
 /*
  * The factory. open() canonicalizes nothing itself (EditorTabs passes canonicalPath()'s result),
- * opens the document through the registry, then the inner editor; a refused document (the
- * large-file guard's OutOfRange) fails before the inner factory runs. The registry and the inner
+ * routes new regular files >=128 MiB to a bounded read-only preview without a FileDocument,
+ * otherwise opens through the registry and inner editor. Existing editable documents retain
+ * their original load/reload/merge guards. The registry and the inner
  * factory outlive the factory and its views. GUI thread only.
  */
 class DocumentEditorFactory final : public IEditorFactory {
