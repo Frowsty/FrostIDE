@@ -208,7 +208,7 @@ TEST_F(ProjectRename, ReorderedTranslationUnitsKeepTheEntireVirtualChain) {
                         {"b.h", b},
                         {"c.h", "#pragma once\n#include \"b.h\"\nstruct C:B{int tick() override{return 3;}};\n"},
                         {"last.cpp", "#include \"c.h\"\nint last(C& c){return c.tick();}"},
-                        {"first.cpp", "#define TOP\n#include \"b.h\"\nint first(A& a){return a.tick();}"},
+                        {"first.cpp", "#include \"a.h\"\nint first(A& a){return a.tick();}"},
                         {"middle.cpp", "#define TOP\n#include \"b.h\"\nint middle(B& b){return b.tick();}"}},
                        {"last.cpp", "first.cpp", "middle.cpp"}, "a.h", a.find("tick"), "next");
     ASSERT_EQ(result.stringAt("status"), "ready");
