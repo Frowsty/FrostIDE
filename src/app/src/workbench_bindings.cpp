@@ -33,6 +33,11 @@ Result<void> Workbench::previewEngineBindingRename(std::string name, bool native
     return m_engineBindings ? m_engineBindings->previewRename(std::move(name), native)
                             : Result<void>(fail(ErrorCode::Unsupported, "Binding integration is unavailable"));
 }
+Result<document::RefactoringOutcome> Workbench::applyEngineBindingRename() {
+    return m_engineBindings ? m_engineBindings->applyRename()
+                            : Result<document::RefactoringOutcome>(
+                                  fail(ErrorCode::Unsupported, "Binding integration is unavailable"));
+}
 lang::Json Workbench::engineBindingState() const {
     return m_engineBindings ? m_engineBindings->snapshot() : lang::Json::object().set("available", false);
 }

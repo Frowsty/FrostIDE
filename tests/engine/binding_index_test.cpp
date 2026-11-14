@@ -135,6 +135,24 @@ Json mappedResult(const Json& request) {
         .set("results", Json::array().push(std::move(result)));
 }
 
+TEST(BindingIndexBoundary, MissingOrMalformedEmbeddedCoverageCannotGrantProfileAuthority) {
+    SchemaDocument schema;
+    const auto request = bindingMapRequest(schema, root, root, path("Bindings.cpp")).value();
+    auto response =
+        Json::object().set("schemaVersion", 1).set("translationUnitParsed", true).set("results", Json::array());
+    auto report = parseBindingMapReport(request, response);
+    ASSERT_TRUE(report);
+    EXPECT_FALSE(report->embeddedLuaProfileVerified);
+    response.set("embeddedLuaProfile", "Frost::ScriptEngine::ExecuteString/v1");
+    EXPECT_FALSE(parseBindingMapReport(request, response));
+    response.set("embeddedLua", Json::array()).set("embeddedLuaRefusals", Json::array());
+    report = parseBindingMapReport(request, response);
+    ASSERT_TRUE(report);
+    EXPECT_TRUE(report->embeddedLuaProfileVerified);
+    response.set("embeddedLua", Json::array().push(Json::object().set("spelling", "unmapped")));
+    EXPECT_FALSE(parseBindingMapReport(request, response));
+}
+
 TEST(BindingIndexBoundary, ExactToolResponsePreservesUsrAndByteRanges) {
     SchemaDocument schema;
     schema.luaEntries = {entry("Physics.Cast", 7)};

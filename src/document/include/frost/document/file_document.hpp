@@ -58,6 +58,8 @@ public:
     // The committed-state value that never matches a real stateId: "no saved state".
     static constexpr std::uint64_t kNoSavedState = std::numeric_limits<std::uint64_t>::max();
 
+    [[nodiscard]] std::uint64_t instanceId() const noexcept { return m_instanceId; }
+
     FileDocument(const FileDocument&) = delete ("a FileDocument is owned by its SaveManager");
     FileDocument& operator=(const FileDocument&) = delete ("a FileDocument is owned by its SaveManager");
     ~FileDocument() = default;
@@ -76,9 +78,11 @@ public:
     [[nodiscard]] const text::DocumentEncoding& encoding() const noexcept { return m_encoding; }
     // "Convert to": the next save writes `encoding` (with or without a BOM); marks the document
     // dirty. Precondition (FROST_PRE): encoding.isValid() && (!bom || encoding.isUnicode()). O(1).
+    // Refused without mutation while an external transaction lease is held; UI must disable conversion then.
     void convertTo(text::Encoding encoding, bool bom) noexcept;
     // The separator new lines get (existing breaks are never rewritten). Marks the document dirty
     // when it changes. O(1).
+    // Likewise refused while externally leased.
     void setLineSeparator(text::LineSeparator separator) noexcept;
 
     // See the header comment. O(1).
@@ -101,8 +105,10 @@ public:
 
 private:
     friend class SaveManager;
+    friend class RefactoringCoordinator;
     FileDocument(std::string path, std::string key, text::Document document) noexcept;
 
+    std::uint64_t m_instanceId = 0;
     std::string m_path;
     std::string m_key;
     text::Document m_document;

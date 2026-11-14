@@ -42,8 +42,9 @@ constexpr std::string_view kLog = "workbench";
 } // namespace
 
 void Workbench::registerActions() {
-    // The shell registers editor.gotoLine itself (it opens its Go to Line popup).
-    static constexpr std::array<std::string_view, 1> kShellOwned{ui::actions::kGoToLine};
+    registerRefactoringActions();
+    // The shell owns Go to Line. Refactoring owns Undo/Redo routing at global document edges.
+    static constexpr std::array<std::string_view, 3> kShellOwned{ui::actions::kGoToLine, "editor.undo", "editor.redo"};
     if (auto editor = ui::registerEditorActions(m_registry, m_actionHost, kShellOwned); !editor) {
         log::warn(kLog, "editor actions: {}", editor.error().describe());
     }

@@ -280,6 +280,28 @@ TEST(LuaService, DelayedRequestSurvivesServiceDestruction) {
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code(), frost::ErrorCode::Busy);
 }
+TEST(LuaService, ProjectionOpenRequiresLiveProviderAndDoesNotRetainRejectedDocument) {
+    auto reactor = frost::io::Reactor::create();
+    ASSERT_TRUE(reactor);
+    frost::sched::SimExecutor sim;
+    frost::io::ScriptedProcessLauncher launcher;
+    frost::lang::LuaServiceOptions options;
+    options.serverPath = tool();
+    options.workspaceRoot = root();
+    options.trusted = true;
+    frost::lang::LuaService service(launcher, {**reactor, sim}, options);
+    auto document = frost::text::Document::fromUtf8("Cast()");
+    ASSERT_TRUE(document);
+    const auto path = frost::io::joinPath(root(), ".binding-projection.lua").value();
+    const auto opened = service.openProjectionDocument(path, document->text());
+    ASSERT_FALSE(opened);
+    EXPECT_EQ(opened.error().code(), frost::ErrorCode::Busy);
+    EXPECT_FALSE(service.documentVersion(path));
+    EXPECT_TRUE(launcher.launches().empty());
+    // Editor opens deliberately retain their established offline/next-start behavior.
+    EXPECT_TRUE(service.openDocument(path, document->text()));
+    EXPECT_TRUE(service.documentVersion(path));
+}
 TEST(LuaService, TrustStopsLaunchAndScriptedServerReceivesLuaDocuments) {
     auto reactor = frost::io::Reactor::create();
     ASSERT_TRUE(reactor.has_value());
@@ -308,6 +330,14 @@ TEST(LuaService, TrustStopsLaunchAndScriptedServerReceivesLuaDocuments) {
     ASSERT_TRUE(service.start().has_value());
     sim.runFor(5ms);
     ASSERT_EQ(service.state(), frost::lang::LuaState::Running);
+    const auto projectionPath = frost::io::joinPath(root(), ".strict-projection.lua").value();
+    const auto projection = service.openProjectionDocument(projectionPath, document->text());
+    ASSERT_TRUE(projection);
+    EXPECT_EQ(service.documentVersion(projectionPath), *projection);
+    const auto duplicateProjection = service.openProjectionDocument(projectionPath, document->text());
+    ASSERT_FALSE(duplicateProjection);
+    EXPECT_EQ(duplicateProjection.error().code(), frost::ErrorCode::AlreadyExists);
+    EXPECT_TRUE(service.closeDocument(projectionPath));
     EXPECT_EQ(lifecycle, 1);
     EXPECT_EQ(service.encoding(), frost::lang::PositionEncoding::Utf16);
     auto launches = launcher.launches();

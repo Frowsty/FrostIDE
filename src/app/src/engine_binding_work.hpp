@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Worker-only captured inputs for FEC-13; no GUI object is accessed by analysis or LSP coroutines.
 #pragma once
+#include "frost/document/refactoring_transaction.hpp"
 #include "frost/engine/binding_queries.hpp"
 #include "frost/io/process.hpp"
 #include "frost/lang/clangd.hpp"
@@ -12,6 +13,10 @@
 
 namespace frost::app::binding_work {
 [[nodiscard]] bool luaSource(std::string_view path) noexcept;
+// No captured document or filesystem entry (including dangling links) may be shadowed.
+[[nodiscard]] Result<void> admitBindingProjectionPath(io::IFileSystem& fs,
+                                                      std::span<const engine::BindingDocumentCapture> documents,
+                                                      std::string_view path);
 struct DocumentPath {
     std::string physical;
     engine::BindingDocumentRole role = engine::BindingDocumentRole::ExternalReadOnly;
@@ -69,6 +74,9 @@ struct Graph {
     IClock::SystemTime programMtime{};
     std::uint64_t engineTrustRevision = 0;
     std::vector<engine::BindingDocumentCapture> documents;
+    bool embeddedLuaProfileVerified = true;
+    std::vector<engine::BindingNameLiteral> embeddedLua;
+    std::vector<std::string> embeddedLuaRefusals;
     std::map<std::string, std::string, std::less<>> inputHashes;
     [[nodiscard]] const engine::BindingDocumentCapture* generatedDocument() const;
     [[nodiscard]] bool verifyReceipts(io::IFileSystem& fs) const;
@@ -86,6 +94,7 @@ struct ResultData {
     std::shared_ptr<Graph> graph;
     std::vector<engine::BindingUsage> usages;
     std::optional<engine::BindingSelectedRenamePreview> preview;
+    std::shared_ptr<const document::RefactoringPlan> applyPlan;
     // GUI staging only: acquire exact temporary native document ownership, then resume with
     // a newly captured lease/version. Workers never block waiting for a GUI callback.
     std::vector<engine::BindingDocumentCapture> nativeDocumentsToSynchronize;

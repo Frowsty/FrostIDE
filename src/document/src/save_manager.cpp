@@ -13,6 +13,7 @@
 #include "frost/text/text_buffer.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <format>
 #include <string>
 #include <utility>
@@ -79,11 +80,16 @@ std::vector<SaveEdit> saveTransformEdits(const text::Snapshot& current, const te
 // --- FileDocument ---
 
 FileDocument::FileDocument(std::string path, std::string key, text::Document document) noexcept
-    : m_path(std::move(path)), m_key(std::move(key)), m_document(std::move(document)) {}
+    : m_path(std::move(path)), m_key(std::move(key)), m_document(std::move(document)) {
+    static std::atomic<std::uint64_t> next{1};
+    m_instanceId = next.fetch_add(1, std::memory_order_relaxed);
+}
 
 bool FileDocument::dirty() const noexcept { return m_formatDirty || m_document.undoState().stateId != m_savedStateId; }
 
 void FileDocument::convertTo(text::Encoding encoding, bool bom) noexcept {
+    if (m_document.undoState().externallyLocked)
+        return; // Owned transaction refuses formatting changes.
     const text::DocumentEncoding converted = m_encoding.convertedTo(encoding, bom);
     if (converted.format != m_encoding.format) {
         m_formatDirty = true;
@@ -93,6 +99,8 @@ void FileDocument::convertTo(text::Encoding encoding, bool bom) noexcept {
 }
 
 void FileDocument::setLineSeparator(text::LineSeparator separator) noexcept {
+    if (m_document.undoState().externallyLocked)
+        return;
     if (m_encoding.format.lineSeparator != separator) {
         m_encoding.format.lineSeparator = separator;
         m_formatDirty = true;
@@ -170,6 +178,8 @@ FileDocument* SaveManager::find(std::string_view path) const {
 }
 
 Result<void> SaveManager::close(FileDocument& document) {
+    if (m_refactoringPending.assigned() || document.document().undoState().externallyLocked)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     Result<void> result;
     if (m_services.journal != nullptr && document.m_journaledGeneration != 0) {
         if (auto forgotten = m_services.journal->forget(document.key()); !forgotten) {
@@ -216,6 +226,8 @@ Result<SaveOutcome> SaveManager::saveAs(FileDocument& document, std::string_view
 }
 
 Result<void> SaveManager::renameDocument(FileDocument& document, std::string_view newPath) {
+    if (m_refactoringPending.assigned() || document.document().undoState().externallyLocked)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     auto normalized = normalize(newPath);
     if (!normalized) {
         return std::unexpected(std::move(normalized.error()));
@@ -244,6 +256,8 @@ Result<void> SaveManager::renameDocument(FileDocument& document, std::string_vie
 
 Result<SaveOutcome> SaveManager::saveTo(FileDocument& document, const std::string& path, const SaveOptions& options,
                                         bool saveAs) {
+    if (m_refactoringPending.assigned() || document.document().undoState().externallyLocked)
+        return fail(ErrorCode::Busy, "a refactoring transaction owns this document");
     const auto context = [&](Error error) {
         return std::unexpected(std::move(error).withContext("while saving " + path));
     };

@@ -6,6 +6,7 @@
 #include "frost/project/cmake_syntax.hpp"
 
 #include <algorithm>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -532,5 +533,205 @@ Result<CMakeMembershipPlan> planCMakeMembership(const CMakeProject& model, std::
     if (actual != expected)
         return fail(ErrorCode::Unsupported, "Edit changes remaining source roles");
     return plan;
+}
+
+Result<CMakeMembershipPlan> planCMakeSourceRename(const CMakeProject& model, std::size_t targetIndex,
+                                                  std::string_view oldSourcePath, std::string_view newSourcePath,
+                                                  std::string_view definitionPath,
+                                                  std::span<const CMakeInputSnapshot> inputs) {
+    if (targetIndex >= model.targets.size() || !io::isAbsolutePath(newSourcePath) ||
+        equalPath(oldSourcePath, newSourcePath))
+        return fail(ErrorCode::InvalidArgument, "Invalid CMake source rename");
+    std::string destination(newSourcePath);
+    std::replace(destination.begin(), destination.end(), '\\', '/');
+    const auto leaf = io::fileName(destination);
+    auto normalized = io::normalizePath(destination);
+    if (normalized)
+        std::replace(normalized->begin(), normalized->end(), '\\', '/');
+    if (!safeLiteral(destination) || destination.empty() || destination.back() == '/' || leaf.empty() || leaf == "." ||
+        leaf == ".." || !normalized || *normalized != destination)
+        return fail(ErrorCode::InvalidArgument, "Destination must be a normalized source-file endpoint");
+    if (!equalPath(io::parentPath(oldSourcePath), io::parentPath(destination)))
+        return fail(ErrorCode::Unsupported, "CMake source moves require separate path-context support");
+    for (std::size_t i = 0; i < model.targets.size(); ++i) {
+        for (const auto& source : model.targets[i].sources) {
+            if (equalPath(source.path, destination))
+                return fail(ErrorCode::AlreadyExists, "Destination is already a configured source");
+            if (i != targetIndex && equalPath(source.path, oldSourcePath))
+                return fail(ErrorCode::Unsupported, "Source belongs to another configured target");
+        }
+    }
+    // Reuse all invocation/input/role checks. The removal is only an internal proof of the
+    // selected literal span, never a published intermediate edit or a mutated configured model.
+    auto removal = planCMakeMembership(model, targetIndex, CMakeMembershipOperation::Remove, oldSourcePath,
+                                       definitionPath, inputs);
+    if (!removal)
+        return std::unexpected(std::move(removal.error()));
+    auto commands = scanCMakeSyntax(removal->original);
+    if (!commands)
+        return std::unexpected(std::move(commands.error()));
+    const CMakeSyntaxCommand* selected = nullptr;
+    const CMakeSyntaxArgument* literal = nullptr;
+    for (const auto& command : *commands) {
+        for (const auto& argument : command.arguments) {
+            if (!argument.isLiteral)
+                continue;
+            auto without = removal->original;
+            without.erase(argument.begin, argument.end - argument.begin);
+            if (without != removal->replacement)
+                continue;
+            if (literal)
+                return fail(ErrorCode::Unsupported, "Ambiguous source argument span");
+            selected = &command;
+            literal = &argument;
+        }
+    }
+    if (!selected || !literal)
+        return fail(ErrorCode::Unsupported, "Source argument span is unavailable");
+    // Same-parent rename preserves the proven relative invocation base. Quoting prevents an
+    // option-looking new leaf from acquiring a command role; all other token bytes are retained.
+    auto spelling = literal->literal;
+    const auto slash = spelling.find_last_of('/');
+    spelling.replace(slash == std::string::npos ? 0 : slash + 1, std::string::npos, io::fileName(destination));
+    if (spelling.find('/') == std::string::npos)
+        spelling = "./" + spelling;
+    CMakeMembershipPlan plan{std::string(definitionPath), removal->original, removal->original};
+    plan.replacement.replace(literal->begin, literal->end - literal->begin, "\"" + spelling + "\"");
+    auto parsed = scanCMakeSyntax(plan.replacement);
+    if (!parsed)
+        return std::unexpected(std::move(parsed.error()));
+    const CMakeSyntaxCommand* changed = nullptr;
+    for (const auto& command : *parsed) {
+        if (command.line == selected->line && command.name == selected->name) {
+            if (changed)
+                return fail(ErrorCode::Unsupported, "Edited command is ambiguous");
+            changed = &command;
+        }
+    }
+    if (!changed)
+        return fail(ErrorCode::Unsupported, "Edited command is missing");
+    auto before = sourceArguments(*selected, model.targets[targetIndex].name);
+    auto after = sourceArguments(*changed, model.targets[targetIndex].name);
+    if (!before || !after || before->roles != after->roles || before->sourceRoles != after->sourceRoles ||
+        before->sources.size() != after->sources.size())
+        return fail(ErrorCode::Unsupported, "Rename changes CMake command roles");
+    for (std::size_t i = 0; i < before->sources.size(); ++i) {
+        const auto& expected = before->sources[i] == literal ? spelling : before->sources[i]->literal;
+        if (after->sources[i]->literal != expected)
+            return fail(ErrorCode::Unsupported, "Rename changes another source argument");
+    }
+    return plan;
+}
+
+Result<std::vector<CMakeMembershipPlan>> planCMakeSourceRenameAllTargets(const CMakeProject& model,
+                                                                         std::string_view oldSourcePath,
+                                                                         std::string_view newSourcePath,
+                                                                         std::span<const CMakeInputSnapshot> inputs) {
+    struct Change {
+        std::size_t begin;
+        std::size_t end;
+        std::string replacement;
+    };
+    struct Definition {
+        std::string original;
+        std::vector<Change> changes;
+    };
+    std::map<std::string, Definition> definitions;
+    bool found = false;
+    for (const auto& input : inputs) {
+        const auto modeled =
+            std::ranges::find_if(model.inputs, [&](const auto& item) { return equalPath(item.path, input.path); });
+        if (modeled == model.inputs.end())
+            return fail(ErrorCode::Unsupported, "Captured CMake input is not in the published input graph");
+        if (modeled->generated)
+            continue;
+        auto parsed = scanCMakeSyntax(input.contents);
+        if (!parsed)
+            return std::unexpected(std::move(parsed.error()));
+        for (const auto& command : *parsed) {
+            if (command.name != "add_library" && command.name != "add_executable" && command.name != "target_sources")
+                continue;
+            if (command.arguments.empty() || !command.arguments[0].isLiteral)
+                return fail(ErrorCode::Unsupported, "Current target name is not a literal");
+            const auto* target = model.findTarget(command.arguments[0].literal);
+            if (!target)
+                return fail(ErrorCode::Unsupported,
+                            "Current target declarations differ from the published model; reconfigure first");
+            auto args = sourceArguments(command, target->name);
+            if (!args)
+                return std::unexpected(std::move(args.error()));
+            for (const auto* argument : args->sources) {
+                if (!safeLiteral(argument->literal))
+                    return fail(ErrorCode::Unsupported, "Current source membership is indirect");
+                if (sourceMatches(argument->literal, newSourcePath, io::parentPath(input.path), true) ||
+                    sourceMatches(argument->literal, newSourcePath, target->sourceDirectory, true))
+                    return fail(ErrorCode::AlreadyExists,
+                                "Destination is already named by a current CMake source command");
+                if ((sourceMatches(argument->literal, oldSourcePath, io::parentPath(input.path), true) ||
+                     sourceMatches(argument->literal, oldSourcePath, target->sourceDirectory, true)) &&
+                    std::ranges::none_of(target->sources,
+                                         [&](const auto& source) { return equalPath(source.path, oldSourcePath); }))
+                    return fail(ErrorCode::Unsupported,
+                                "Current source membership differs from the published model; reconfigure first");
+            }
+        }
+    }
+    for (const auto& target : model.targets) {
+        for (const auto& source : target.sources) {
+            if (equalPath(source.path, newSourcePath))
+                return fail(ErrorCode::AlreadyExists, "Destination is already a configured source");
+            if (!equalPath(source.path, oldSourcePath))
+                continue;
+            found = true;
+            if (source.backtraces.size() != 1 || source.backtraces[0].empty())
+                return fail(ErrorCode::Unsupported, "A source membership has ambiguous provenance");
+            CMakeProject selected = model;
+            selected.targets = {target};
+            // Every source command above is unscoped and contains only literals; the complete
+            // invocation graph is checked by the inner planner. Such memberships are identical
+            // in each configuration by construction, not inferred from one configuration's
+            // generated source list. Dynamic/configuration-dependent commands were refused.
+            selected.multiConfig = false;
+            selected.configurations = {model.configuration};
+            const auto& path = source.backtraces[0][0].file;
+            auto plan = planCMakeSourceRename(selected, 0, oldSourcePath, newSourcePath, path, inputs);
+            if (!plan)
+                return std::unexpected(std::move(plan.error()));
+            auto& definition = definitions[plan->definitionPath];
+            if (!definition.changes.empty() && definition.original != plan->original)
+                return fail(ErrorCode::InvalidArgument, "Configured definition snapshots disagree");
+            definition.original = plan->original;
+            std::size_t begin = 0;
+            while (begin < plan->original.size() && begin < plan->replacement.size() &&
+                   plan->original[begin] == plan->replacement[begin])
+                ++begin;
+            std::size_t suffix = 0;
+            while (suffix < plan->original.size() - begin && suffix < plan->replacement.size() - begin &&
+                   plan->original[plan->original.size() - 1 - suffix] ==
+                       plan->replacement[plan->replacement.size() - 1 - suffix])
+                ++suffix;
+            Change change{begin, plan->original.size() - suffix,
+                          plan->replacement.substr(begin, plan->replacement.size() - begin - suffix)};
+            const auto duplicate = std::ranges::find_if(definition.changes, [&](const auto& item) {
+                return item.begin == change.begin && item.end == change.end && item.replacement == change.replacement;
+            });
+            if (duplicate == definition.changes.end())
+                definition.changes.push_back(std::move(change));
+        }
+    }
+    if (!found)
+        return fail(ErrorCode::NotFound, "Source is not in any configured target");
+    std::vector<CMakeMembershipPlan> result;
+    for (auto& [path, definition] : definitions) {
+        std::ranges::sort(definition.changes, {}, &Change::begin);
+        for (std::size_t i = 1; i < definition.changes.size(); ++i)
+            if (definition.changes[i].begin < definition.changes[i - 1].end)
+                return fail(ErrorCode::InvalidArgument, "Target memberships propose overlapping definition edits");
+        CMakeMembershipPlan plan{path, definition.original, definition.original};
+        for (auto it = definition.changes.rbegin(); it != definition.changes.rend(); ++it)
+            plan.replacement.replace(it->begin, it->end - it->begin, it->replacement);
+        result.push_back(std::move(plan));
+    }
+    return result;
 }
 } // namespace frost::project

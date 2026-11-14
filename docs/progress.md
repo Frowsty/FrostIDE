@@ -3,6 +3,14 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-14: R8 implementation integrated; runtime acceptance deferred
+
+- Implemented the shared refactoring transaction owner for disk edits, dirty buffers, source moves and project membership, with global Undo/Redo, retained native recovery records and retryable journal settlement. A failed dirty-buffer journal leaves the transaction pending; Resume retries durability without applying the text edit twice. Workbench actions publish views and language-service updates after settlement.
+- Integrated selectable rename previews and asynchronous LibTooling conflict checks across compilation-database configurations. Captured source, buffer, include-directory and missing-include dependencies are checked before Apply. CMake membership edits and read-only ProjectHost `.vcxproj` rename plans join source and `.fmeta` moves in the same transaction. Unsupported dynamic project expressions are reported rather than guessed.
+- Cross-language binding Apply covers indexed Lua, native registration sites and directly mapped literal `ExecuteString` chunks. Computed, macro and concatenated chunks remain explicit preview exclusions. Engine metadata refresh follows actual settlement; stale binaries require a rebuild and do not produce predicted metadata.
+- GPT-6.1 Sol implementations received independent GPT-6 Astra source reviews. Regression sources cover semantic rename, previews, project planning, native recovery, dirty-buffer journal failure/retry and composed Workbench history. No builds, feature runs, test execution, WSL or verification runners were used in this continuation. Runtime correctness, the 50-file timing target, build-after-refactoring and Windows/WSL golden-corpus acceptance remain unverified under the user's implementation-first override.
+- R5/R6 and R7 are already on `main`. R9 debugger implementations are being integrated separately; independent R10 project/configuration work has started. No new binary or beta release was built.
+
 ## 2026-11-14: R7 implementation recovery on current main
 
 - Recovered the existing R7 IDE implementation onto current `main`, preserving the older integration candidates and their staged/unstaged work. The recovered source includes authenticated engine Lua DAP, independent/compound sessions, mixed native/Lua debugging, the engine Unit Tests provider, recovered crash-artifact inspection, and AST-backed cross-language binding navigation/usages/rename previews. Current R5/R6 and header-hierarchy fixes remain in the base.

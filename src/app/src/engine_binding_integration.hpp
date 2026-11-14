@@ -3,6 +3,7 @@
 #pragma once
 
 #include "frost/core/error.hpp"
+#include "frost/document/refactoring_transaction.hpp"
 #include "frost/lang/json.hpp"
 #include "frost/sched/scheduler.hpp"
 
@@ -43,6 +44,7 @@ public:
     [[nodiscard]] std::shared_ptr<EngineBindingRetirement> takeRetirement();
     [[nodiscard]] Result<void> refresh();
     [[nodiscard]] Result<void> findUsages();
+    [[nodiscard]] Result<document::RefactoringOutcome> applyRename();
     [[nodiscard]] Result<void> previewRename(std::string newLuaName, bool renameNative = false);
     // Standard Find Usages hook. False leaves the stock provider route unchanged; guarded async
     // fallback avoids recursing through this hook for symbols without a semantic binding edge.

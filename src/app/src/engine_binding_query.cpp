@@ -4,6 +4,7 @@
 #include "frost/io/utf.hpp"
 #include "frost/lang/lsp_types.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/text/text_buffer.hpp"
 
 #include "engine_binding_work.hpp"
 
@@ -222,12 +223,97 @@ sched::Task<Result<ResultData>> perform(Capture capture, std::shared_ptr<Graph> 
                 co_return fail(ErrorCode::NotFound, "The selected binding has no native query seed");
             nativeRenames.push_back({{*nativeSeed, capture.native.get()}, capture.newName});
         }
-        auto preview = co_await engine::querySelectedBindingRenamePreview(
-            graph->index, std::move(rename), std::move(nativeRenames), queryDocuments, admission, capture.stop);
+        struct ProjectionLease {
+            std::shared_ptr<lang::LuaService> provider;
+            std::vector<std::string> paths;
+            ~ProjectionLease() {
+                for (const auto& path : paths)
+                    (void)provider->closeDocument(path);
+            }
+        } projections{capture.lua, {}};
+        std::vector<engine::BindingEmbeddedLuaCapture> chunks;
+        if (graph->embeddedLua.size() > 1024)
+            co_return fail(ErrorCode::OutOfRange,
+                           "The bounded binding profile supports at most 1024 embedded Lua chunks");
+        std::size_t projectedBytes = 0;
+        for (const auto& literal : graph->embeddedLua) {
+            if (literal.decodedValue.size() > 16U * 1024U * 1024U - projectedBytes)
+                co_return fail(ErrorCode::OutOfRange, "The embedded Lua profile exceeds its 16 MiB projection bound");
+            projectedBytes += literal.decodedValue.size();
+            if (!capture.current())
+                co_return fail(ErrorCode::Cancelled, "Embedded Lua capture was cancelled");
+            auto text = text::TextBuffer::fromUtf8(literal.decodedValue);
+            if (!text)
+                co_return std::unexpected(text.error());
+            // Reserved unique nonexistent sibling URI: no files/cache contents are written.
+            auto path = io::joinPath(capture.root, ".frost-binding-" + capture.requestTag + "-" +
+                                                       std::to_string(chunks.size()) + ".lua");
+            if (!path)
+                co_return std::unexpected(path.error());
+            if (auto absent = admitBindingProjectionPath(*capture.fs, queryDocuments, *path); !absent)
+                co_return std::unexpected(absent.error());
+            auto opened = capture.lua->openProjectionDocument(*path, text->snapshot());
+            if (!opened)
+                co_return std::unexpected(opened.error());
+            projections.paths.push_back(*path);
+            if (!capture.current())
+                co_return fail(ErrorCode::Busy, "The Lua provider changed while opening an analysis projection");
+            engine::BindingDocumentCapture projection{*path, text->snapshot(), *opened,
+                                                      engine::BindingDocumentRole::UserSource};
+            queryDocuments.push_back(projection);
+            chunks.push_back({literal, std::move(projection)});
+        }
+        auto preview = co_await engine::querySelectedBindingRenamePreview(graph->index, std::move(rename),
+                                                                          std::move(nativeRenames), queryDocuments,
+                                                                          admission, capture.stop, std::move(chunks));
         if (!preview)
             co_return std::unexpected(preview.error());
+        for (const auto& projectionPath : projections.paths)
+            if (auto absent = admitBindingProjectionPath(*capture.fs, graph->documents, projectionPath); !absent)
+                co_return std::unexpected(absent.error());
+        preview->embeddedLanguageReferencesVerified = graph->embeddedLuaProfileVerified;
+        preview->applicationSafe = preview->embeddedLanguageReferencesVerified;
+        preview->supportedProfile = "Indexed Lua sources, native/registration semantic sites, and direct literal "
+                                    "Frost::ScriptEngine::ExecuteString chunks";
+        preview->coverageExclusions = graph->embeddedLuaRefusals;
+        if (!graph->embeddedLuaProfileVerified)
+            preview->applicationRefusal =
+                "The AST tool did not verify embedded Lua coverage for every compilation unit";
+
         result.preview = std::move(*preview);
         result.selectedIdentity = selectedBinding->lua.qualifiedName;
+        if (result.preview->applicationSafe) {
+            document::RefactoringPlan plan;
+            plan.label = "Rename C++/Lua binding " + result.preview->previousLuaIdentity;
+            for (const auto& file : result.preview->sourceFiles) {
+                const auto open = std::ranges::find_if(capture.openDocuments, [&](const auto& item) {
+                    return lang::documentKey(item.path) == lang::documentKey(file.path);
+                });
+                if (open != capture.openDocuments.end())
+                    plan.buffers.push_back({file.path, file.snapshot.text(), file.preview});
+                else
+                    plan.disk.push_back({file.path, file.snapshot.text(), file.preview});
+            }
+            // Freeze exact source/config dependencies. Derived metadata is checked by the initial
+            // graph admission, not a durable Undo dependency: settled history regenerates it.
+            for (const auto& document : graph->documents) {
+                if (document.role == engine::BindingDocumentRole::GeneratedEngineMetadata)
+                    continue;
+                auto disk = capture.fs->readFileSnapshot(document.path, 16U * 1024U * 1024U);
+                if (!disk)
+                    co_return std::unexpected(disk.error());
+                plan.dependencies.push_back({document.path, std::move(*disk)});
+            }
+            plan.dependencies.push_back({graph->databasePath, graph->databaseBytes});
+            for (const auto& open : capture.openDocuments)
+                plan.bufferDependencies.push_back({open.path, open.snapshot.text()});
+            plan.revalidateContext = [capture, graph]() -> Result<void> {
+                if (!graph->verify(capture))
+                    return fail(ErrorCode::Busy, "Binding source/schema/trust/provider capture changed before Apply");
+                return {};
+            };
+            result.applyPlan = std::make_shared<const document::RefactoringPlan>(std::move(plan));
+        }
         constexpr std::size_t limit = 1024U * 1024U;
         const auto append = [&](std::string_view value) {
             const auto remaining = limit - result.previewDisplay.size();
@@ -239,6 +325,12 @@ sched::Task<Result<ResultData>> perform(Capture capture, std::shared_ptr<Graph> 
             append("  Line " + std::to_string(point.line.value() + 1) + ": " + edit.before + " -> " + edit.after +
                    "\n");
         };
+        append("Apply scope: " + result.preview->supportedProfile + "\n");
+        append("Computed/macro/concatenated Lua chunks excluded: " +
+               std::to_string(result.preview->coverageExclusions.size()) + "\n");
+        for (const auto& exclusion : result.preview->coverageExclusions)
+            append("  Excluded: " + exclusion + "\n");
+        append("\n");
         for (const auto& file : result.preview->sourceFiles) {
             append("File: " + file.path + "\n");
             for (const auto& edit : file.edits)
@@ -248,8 +340,8 @@ sched::Task<Result<ResultData>> perform(Capture capture, std::shared_ptr<Graph> 
         append("Generated resource (regeneration intent only): " + result.preview->generatedResource.path + "\n");
         for (const auto& edit : result.preview->generatedResource.observedServerEdits)
             editText(edit);
-        append("\nCoverage: provider-indexed C++ and Lua documents. Embedded Lua in native string literals is "
-               "unverified. Read-only preview; not application-safe.\n");
+        append("\nEmbedded Lua coverage is limited to the direct literal chunks listed by the AST profile. "
+               "Runtime-computed scripts and unsupported embedding constructs are excluded.\n");
         if (result.previewDisplay.size() >= limit - 4)
             result.previewDisplay += "\n[Display limit reached; full immutable preview retained]";
         auto files = Json::array();
@@ -271,6 +363,8 @@ sched::Task<Result<ResultData>> perform(Capture capture, std::shared_ptr<Graph> 
                                .set("after", edit.after)
                                .set("origin", edit.origin == engine::BindingPreviewOrigin::RegistrationLiteral
                                                   ? "ast-literal"
+                                              : edit.origin == engine::BindingPreviewOrigin::EmbeddedLuaLiteral
+                                                  ? "embedded-lua-literal"
                                                   : "language-server"));
             }
             auto summary = Json::object()
@@ -298,17 +392,24 @@ sched::Task<Result<ResultData>> perform(Capture capture, std::shared_ptr<Graph> 
             generatedSummary.set("before", resource.before.text())
                 .set("regenerated", resource.regenerated.text)
                 .set("observedLanguageServerText", resource.observedLanguageServerText);
-        result.previewSummary = Json::object()
-                                    .set("previousIdentity", result.preview->previousLuaIdentity)
-                                    .set("renamedIdentity", result.preview->renamedLuaIdentity)
-                                    .set("files", std::move(files))
-                                    .set("generatedResource", std::move(generatedSummary))
-                                    .set("nativeRenameRequested", result.preview->nativeRenameRequested)
-                                    .set("embeddedLanguageReferencesVerified", false)
-                                    .set("applicationSafe", false)
-                                    .set("coverage", "provider-indexed")
-                                    .set("summaryComplete", summaryComplete)
-                                    .set("sourceFileCount", result.preview->sourceFiles.size());
+        auto exclusions = Json::array();
+        for (const auto& exclusion : result.preview->coverageExclusions)
+            exclusions.push(exclusion);
+        result.previewSummary =
+            Json::object()
+                .set("previousIdentity", result.preview->previousLuaIdentity)
+                .set("renamedIdentity", result.preview->renamedLuaIdentity)
+                .set("files", std::move(files))
+                .set("generatedResource", std::move(generatedSummary))
+                .set("nativeRenameRequested", result.preview->nativeRenameRequested)
+                .set("embeddedLanguageReferencesVerified", result.preview->embeddedLanguageReferencesVerified)
+                .set("applicationSafe", result.preview->applicationSafe)
+                .set("applicationRefusal", result.preview->applicationRefusal)
+                .set("coverage", result.preview->supportedProfile)
+                .set("coverageExclusions", std::move(exclusions))
+                .set("excludedChunkCount", result.preview->coverageExclusions.size())
+                .set("summaryComplete", summaryComplete)
+                .set("sourceFileCount", result.preview->sourceFiles.size());
     }
     co_await capture.scheduler->schedule(sched::Lane::Background);
     if (!graph->verify(capture))

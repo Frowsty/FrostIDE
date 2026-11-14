@@ -18,6 +18,7 @@ frost_add_test(project_unit_tests
         directory_roles_test.cpp
         paths_test.cpp
         project_edit_test.cpp
+        project_edit_plan_test.cpp
         project_host_protocol_test.cpp
         project_model_cache_test.cpp
         sln_reader_test.cpp
@@ -26,6 +27,7 @@ frost_add_test(project_unit_tests
         solution_model_test.cpp
         trust_store_test.cpp
         vcxproj_reader_test.cpp
+        vcxproj_rename_test.cpp
     DEPS frost::project)
 target_include_directories(project_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/project/src)
 target_compile_definitions(project_unit_tests PRIVATE FROST_PROJECT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
@@ -34,13 +36,14 @@ target_compile_definitions(project_unit_tests PRIVATE FROST_PROJECT_FIXTURE_DIR=
 # `cmake --preset` on fixtures/cmake/presets and fixtures/cmake/oracle, with the pinned cmake and
 # ninja that configured FrostIDE. Label "integration" with the tag "cmake".
 frost_add_test(project_cmake_tests
-    SOURCES cmake_presets_oracle_test.cpp
+    SOURCES cmake_presets_oracle_test.cpp cmake_membership_oracle_test.cpp
     DEPS frost::project frost::io
     LABELS integration cmake)
 target_include_directories(project_cmake_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(project_cmake_tests PRIVATE
     FROST_PROJECT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
     FROST_TEST_CMAKE="${CMAKE_COMMAND}"
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
     FROST_TEST_NINJA="${CMAKE_MAKE_PROGRAM}")
 
 # SLN-0, SLN-2 and SLN-3 against this machine's real MSBuild (Visual Studio or its Build Tools,

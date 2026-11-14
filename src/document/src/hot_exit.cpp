@@ -81,6 +81,8 @@ JournalReport SaveManager::journalDirty() {
 }
 
 Result<void> SaveManager::closeJournal() {
+    if (m_refactoringPending.assigned())
+        return fail(ErrorCode::Busy, "committed refactoring recovery must retain the hot-exit journal");
     if (m_services.journal == nullptr) {
         return {};
     }

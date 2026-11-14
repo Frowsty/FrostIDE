@@ -18,16 +18,37 @@
 #else
 #include <unistd.h>
 #endif
-#include "workbench_rig.hpp"
-#include "support/directory_link.hpp"
 #include "frost/lang/lsp_types.hpp"
 #include "frost/text/text_buffer.hpp"
+
+#include "support/directory_link.hpp"
+#include "workbench_rig.hpp"
 
 #include <algorithm>
 #include <array>
 
 namespace frost::app::test {
 namespace {
+
+TEST(WorkbenchBindings, ProjectionPathCannotShadowDiskEntryOrCapturedDocument) {
+    WorkDir dir("binding-projection-admission");
+    dir.write("project/existing.lua", "Cast()");
+    const auto absentPath = dir.join("project/.unique-projection.lua");
+    std::vector<engine::BindingDocumentCapture> documents;
+    EXPECT_TRUE(binding_work::admitBindingProjectionPath(io::realFileSystem(), documents, absentPath));
+    const auto existing =
+        binding_work::admitBindingProjectionPath(io::realFileSystem(), documents, dir.join("project/existing.lua"));
+    ASSERT_FALSE(existing);
+    EXPECT_EQ(existing.error().code(), ErrorCode::AlreadyExists);
+    documents.push_back({absentPath, {}, {}, engine::BindingDocumentRole::UserSource});
+    const auto captured = binding_work::admitBindingProjectionPath(io::realFileSystem(), documents, absentPath);
+    ASSERT_FALSE(captured);
+    EXPECT_EQ(captured.error().code(), ErrorCode::AlreadyExists);
+    documents.clear();
+    // Recheck after provider work: a path that appeared during a request also refuses publication.
+    dir.write("project/.unique-projection.lua", "Unrelated()");
+    EXPECT_FALSE(binding_work::admitBindingProjectionPath(io::realFileSystem(), documents, absentPath));
+}
 
 TEST(WorkbenchBindings, UntrustedQueriesRefuseWithZeroToolLaunchesAndNoInventedPreview) {
     WorkDir dir("binding-untrusted");
@@ -42,6 +63,9 @@ TEST(WorkbenchBindings, UntrustedQueriesRefuseWithZeroToolLaunchesAndNoInventedP
     auto refresh = rig.workbench->refreshEngineBindings();
     auto usages = rig.workbench->findEngineBindingUsages();
     auto rename = rig.workbench->previewEngineBindingRename("Renamed");
+    auto apply = rig.workbench->applyEngineBindingRename();
+    ASSERT_FALSE(apply);
+    EXPECT_EQ(apply.error().code(), ErrorCode::Busy);
     ASSERT_FALSE(refresh);
     ASSERT_FALSE(usages);
     ASSERT_FALSE(rename);
@@ -215,7 +239,8 @@ TEST(WorkbenchBindings, PhysicalAdmissionKeepsAliasWorkspaceWritableButExpectedM
     auto admitted = binding_work::resolveDocumentPath(fs, alias, "", metadata, document);
     ASSERT_TRUE(admitted);
     EXPECT_EQ(admitted->role, engine::BindingDocumentRole::UserSource);
-    EXPECT_EQ(lang::documentKey(admitted->physical), lang::documentKey(fs.physicalPath(dir.join("project/main.lua")).value()));
+    EXPECT_EQ(lang::documentKey(admitted->physical),
+              lang::documentKey(fs.physicalPath(dir.join("project/main.lua")).value()));
     ASSERT_TRUE(fs.removeFile(dir.join("project/generated.lua")));
     EXPECT_FALSE(binding_work::resolveDocumentPath(fs, alias, "", metadata, document));
 }
@@ -227,8 +252,9 @@ TEST(WorkbenchBindings, SemanticRenameNeedsExactGeneratedIdentityAndCannotFallba
     const auto metadata = dir.join("host-meta/FrostEngine-real/frost_schema.lua");
     auto& fs = io::realFileSystem();
     const auto definitions = [](const std::string& file) {
-        return rpc::Json::array().push(rpc::Json::object().set("uri", lang::pathToUri(file).value())
-            .set("range", lang::toJson(lang::LspRange{{0, 0}, {0, 1}})));
+        return rpc::Json::array().push(rpc::Json::object()
+                                           .set("uri", lang::pathToUri(file).value())
+                                           .set("range", lang::toJson(lang::LspRange{{0, 0}, {0, 1}})));
     };
     // No engine metadata is expected in an ordinary Lua workspace; actual nonbinding definition succeeds.
     auto ordinary = binding_work::admitRenameDefinitions(fs, definitions(dir.join("project/main.lua")), metadata);
@@ -239,12 +265,15 @@ TEST(WorkbenchBindings, SemanticRenameNeedsExactGeneratedIdentityAndCannotFallba
     auto bound = binding_work::admitRenameDefinitions(fs, definitions(metadata), metadata, physical);
     ASSERT_TRUE(bound);
     EXPECT_TRUE(bound->bound);
-    auto impostor = binding_work::admitRenameDefinitions(fs, definitions(dir.join("other/FrostEngine-impostor/frost_schema.lua")), metadata, physical);
+    auto impostor = binding_work::admitRenameDefinitions(
+        fs, definitions(dir.join("other/FrostEngine-impostor/frost_schema.lua")), metadata, physical);
     ASSERT_TRUE(impostor);
     EXPECT_FALSE(impostor->bound); // Directory/file names are insufficient evidence.
-    EXPECT_FALSE(binding_work::admitRenameDefinitions(fs, definitions(dir.join("project/missing.lua")), metadata, physical));
+    EXPECT_FALSE(
+        binding_work::admitRenameDefinitions(fs, definitions(dir.join("project/missing.lua")), metadata, physical));
     ASSERT_TRUE(fs.removeFile(metadata));
-    EXPECT_FALSE(binding_work::admitRenameDefinitions(fs, definitions(dir.join("project/main.lua")), metadata, physical));
+    EXPECT_FALSE(
+        binding_work::admitRenameDefinitions(fs, definitions(dir.join("project/main.lua")), metadata, physical));
     EXPECT_FALSE(binding_work::admitRenameDefinitions(fs, rpc::Json::array(), metadata));
 }
 
@@ -331,14 +360,15 @@ TEST(WorkbenchBindings, ConfiguredHostMetadataIsRequiredOnFirstRenameWithoutAnyB
     auto configured = lang::composeLuaConfiguration("Lua 5.4", {}, std::vector<std::string>{directory});
     EXPECT_TRUE(binding_work::expectsEngineMetadata(configured, directory));
     EXPECT_FALSE(binding_work::expectsEngineMetadata(lang::luaDefaults(), directory));
-    const auto actualDefinition = rpc::Json::array().push(rpc::Json::object()
-        .set("uri", lang::pathToUri(dir.join("project/main.lua")).value())
-        .set("range", lang::toJson(lang::LspRange{{0, 0}, {0, 1}})));
+    const auto actualDefinition =
+        rpc::Json::array().push(rpc::Json::object()
+                                    .set("uri", lang::pathToUri(dir.join("project/main.lua")).value())
+                                    .set("range", lang::toJson(lang::LspRange{{0, 0}, {0, 1}})));
     // The graph receipt is EMPTY: the actual effective host configuration is independent evidence.
     EXPECT_FALSE(binding_work::admitRenameDefinitions(fs, actualDefinition, metadata, {},
-                 binding_work::expectsEngineMetadata(configured, directory)));
-    auto ordinary = binding_work::admitRenameDefinitions(fs, actualDefinition, metadata, {},
-                 binding_work::expectsEngineMetadata(lang::luaDefaults(), directory));
+                                                      binding_work::expectsEngineMetadata(configured, directory)));
+    auto ordinary = binding_work::admitRenameDefinitions(
+        fs, actualDefinition, metadata, {}, binding_work::expectsEngineMetadata(lang::luaDefaults(), directory));
     ASSERT_TRUE(ordinary);
     EXPECT_FALSE(ordinary->bound);
     dir.write("state/host-meta/FrostEngine-real/frost_schema.lua", "---@meta\n");

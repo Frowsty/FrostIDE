@@ -30,6 +30,7 @@ frost_add_library(project LAYER project
         src/paths.cpp
         src/process_environment.cpp
         src/project_edit.cpp
+        src/project_edit_plan.cpp
         src/project_host.cpp
         src/project_model_cache.cpp
         src/sln_reader.cpp
@@ -40,6 +41,7 @@ frost_add_library(project LAYER project
         src/text_util.cpp
         src/trust_store.cpp
         src/vcxproj_reader.cpp
+        src/vcxproj_rename.cpp
         src/xml.cpp
     DEPS frost::io)
 target_link_libraries(frost_project PRIVATE pugixml::pugixml yyjson::yyjson)

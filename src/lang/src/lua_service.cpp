@@ -621,6 +621,33 @@ Result<void> LuaService::openDocument(std::string_view path, text::Snapshot snap
     return {};
 }
 
+Result<std::int64_t> LuaService::openProjectionDocument(std::string_view path, text::Snapshot snapshot) {
+    auto normalized = io::normalizePath(path);
+    if (!normalized)
+        return std::unexpected(normalized.error());
+    auto uri = pathToUri(*normalized);
+    if (!uri)
+        return std::unexpected(uri.error());
+    LockGuard lock(m_shared->mutex);
+    const auto key = documentKey(*normalized);
+    if (m_shared->documents.contains(key))
+        return fail(ErrorCode::AlreadyExists, "The analysis projection path is already open");
+    const auto client = m_shared->runningClient();
+    if (!client)
+        return fail(ErrorCode::Busy, "An analysis projection requires a running Lua provider");
+    OpenDocument document;
+    document.languageId = m_shared->options.languageId;
+    document.path = std::move(*normalized);
+    document.uri = std::move(*uri);
+    document.latest = std::move(snapshot);
+    m_shared->pushHistory(document);
+    if (auto sent = client->didOpen(document.uri, document.languageId, document.version, document.latest.text()); !sent)
+        return std::unexpected(sent.error());
+    const auto version = document.version;
+    m_shared->documents.emplace(key, std::move(document));
+    return version;
+}
+
 Result<void> LuaService::changeDocument(std::string_view path, const text::ChangeSet& changes, text::Snapshot after) {
     LockGuard lock(m_shared->mutex);
     auto it = m_shared->documents.find(documentKey(path));

@@ -97,6 +97,8 @@ Result<std::string> joinPaths(const std::vector<std::string>& paths, std::string
 } // namespace
 
 Result<std::string> projectEditRequest(const ProjectEdit& edit) {
+    if (edit.beforeFileMove && (edit.commit || edit.kind != ProjectEditKind::RenameFiles))
+        return fail(ErrorCode::InvalidArgument, "BeforeFileMove is exclusive to a non-committing rename plan");
     for (const auto& [path, what] : {std::pair{std::string_view(edit.root), "the trusted root"},
                                      std::pair{std::string_view(edit.definition), "the definition"}}) {
         if (auto checked = checkPath(path, what); !checked) {
@@ -117,6 +119,8 @@ Result<std::string> projectEditRequest(const ProjectEdit& edit) {
     appendMember(out, "Root", edit.root);
     appendMember(out, "Trusted", "true"); // The caller edits only a trusted root; the helper checks the flag.
     appendMember(out, "Commit", edit.commit ? "true" : "false");
+    if (edit.beforeFileMove)
+        appendMember(out, "BeforeFileMove", "true");
     appendMember(out, "TransactionId", edit.transactionId);
     if (solutionEdit) {
         if (auto checked = checkPath(edit.project, "the project"); !checked) {
@@ -227,8 +231,12 @@ std::vector<ProjectPathChange> projectEditsForPathChange(const SolutionModel& so
     return changes;
 }
 
-Result<void> runProjectEdit(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch, const ProjectEdit& edit,
-                            const std::function<bool(std::string_view digest)>& admit) {
+static Result<void> runProjectEditImpl(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch,
+                                       const ProjectEdit& edit,
+                                       const std::function<bool(std::string_view digest)>& admit,
+                                       std::string* plannedResponse, std::stop_token stop) {
+    if (stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "Project membership planning was cancelled");
     auto request = projectEditRequest(edit);
     if (!request) {
         return std::unexpected(std::move(request.error()));
@@ -246,6 +254,7 @@ Result<void> runProjectEdit(io::IProcessLauncher& launcher, const ProjectEditLau
         return std::unexpected(std::move(launched.error()));
     }
     std::unique_ptr<io::IProcess> process = std::move(*launched);
+    std::stop_callback cancelled(stop, [&process] { static_cast<void>(process->terminate()); });
     // The stderr drain keeps the helper from blocking on a full pipe; its tail explains a crash.
     std::string stderrTail;
     std::mutex stderrMutex;
@@ -282,6 +291,17 @@ Result<void> runProjectEdit(io::IProcessLauncher& launcher, const ProjectEditLau
         if (!status) {
             static_cast<void>(process->terminate());
         }
+        if (plannedResponse) {
+            // This worker has consumed the complete plan. End the private container too, so
+            // a property function's descendant cannot retain stderr and hang the GUI join.
+            auto ended = process->terminate();
+            if (!ended && result)
+                result = std::unexpected(ended.error());
+            auto exited = process->wait(std::chrono::seconds(5));
+            if (!exited && result)
+                result = std::unexpected(exited.error());
+            process->abandonOutput();
+        }
         drain.join();
         if (timedOut) {
             return fail(ErrorCode::Timeout, "ProjectHost did not finish the edit in time; it was ended");
@@ -307,6 +327,8 @@ Result<void> runProjectEdit(io::IProcessLauncher& launcher, const ProjectEditLau
                                    std::format("ProjectHost ended without an answer: {}", detail::trim(stderrTail))));
             }
             pending.append(buffer.data(), *count);
+            if (pending.size() > 64 * 1024 * 1024)
+                return finish(fail(ErrorCode::OutOfRange, "ProjectHost plan response exceeds 64 MiB"));
             newline = pending.find('\n');
         }
         std::string line = pending.substr(0, newline);
@@ -319,6 +341,8 @@ Result<void> runProjectEdit(io::IProcessLauncher& launcher, const ProjectEditLau
             return finish(std::unexpected(std::move(answer.error())));
         }
         if (answer->ready) {
+            if (plannedResponse)
+                return finish(fail(ErrorCode::Corrupt, "A plan-only helper must never request a commit decision"));
             if (decided || answer->transactionId != edit.transactionId) {
                 return finish(fail(ErrorCode::Corrupt, "ProjectHost announced an unexpected transaction"));
             }
@@ -342,8 +366,31 @@ Result<void> runProjectEdit(io::IProcessLauncher& launcher, const ProjectEditLau
         if (edit.commit && !decided) {
             return finish(fail(ErrorCode::Corrupt, "ProjectHost answered without asking to commit"));
         }
+        if (plannedResponse)
+            *plannedResponse = std::move(line);
         return finish({});
     }
+}
+
+Result<void> runProjectEdit(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch, const ProjectEdit& edit,
+                            const std::function<bool(std::string_view digest)>& admit) {
+    return runProjectEditImpl(launcher, launch, edit, admit, nullptr, {});
+}
+
+Result<ProjectEditPlan> runProjectEditPlan(io::IProcessLauncher& launcher, const ProjectEditLaunch& launch,
+                                           const ProjectEdit& edit, std::stop_token stop) {
+    if (edit.commit || !edit.beforeFileMove || edit.kind != ProjectEditKind::RenameFiles)
+        return fail(ErrorCode::InvalidArgument, "Request a non-committing BeforeFileMove rename plan");
+    std::string response;
+    auto ran = runProjectEditImpl(launcher, launch, edit, {}, &response, stop);
+    if (stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "Project membership planning was cancelled");
+    if (!ran)
+        return std::unexpected(ran.error());
+    auto plan = parseProjectEditPlan(response);
+    if (plan && detail::pathKey(plan->projectPath) != detail::pathKey(edit.definition))
+        return fail(ErrorCode::Corrupt, "ProjectHost planned a different project definition");
+    return plan;
 }
 
 } // namespace frost::project

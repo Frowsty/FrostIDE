@@ -426,6 +426,7 @@ frost::app::WorkbenchOptions workbenchOptions(const GuiStores& stores) {
             options.metadataCacheDirectory = std::move(*caches);
         options.sessionDirectory = under("sessions");
         options.projectEditStateDirectory = under("project-edits");
+        options.refactoringStateDirectory = under("refactoring");
         options.cmakeStatePath = under("cmake-profiles.txt");
         options.directoryRolesPath = under("directory-roles.txt");
     }

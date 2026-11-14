@@ -14,6 +14,7 @@
 #include "frost/lang/symbols.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/text/editor/commands.hpp"
+#include "frost/text/text_file.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
 #include "frost/ui/lang/language_controller.hpp"
@@ -99,7 +100,56 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
                     ErrorCode::Unsupported,
                     "Engine metadata rename requires the read-only combined binding preview and schema regeneration");
         }
-    // Applying edits is on the GUI thread; encoding may change on a clangd restart.
+    if (label == "Rename") {
+        document::RefactoringPlan plan;
+        plan.label = std::string(label);
+        const auto positionEncoding = encoding();
+        for (const auto& file : edit.files) {
+            if (auto state = find(file.path)) {
+                if (file.version && state->lspVersion != file.version)
+                    return fail(ErrorCode::Busy, "The document version changed: " + file.path);
+                if (state->changedOnDisk)
+                    return fail(ErrorCode::Busy, "Resolve the external change before refactoring: " + file.path);
+                const auto before = state->snapshot.text();
+                auto after = lang::applyTextEdits(before, file.edits, positionEncoding);
+                if (!after)
+                    return std::unexpected(std::move(after.error()));
+                plan.buffers.push_back({file.path, before, std::move(*after), document::BufferPersistence::Automatic});
+            } else {
+                if (file.version)
+                    return fail(ErrorCode::Busy, "The versioned document is no longer open: " + file.path);
+                auto raw = m_workbench.m_services.fs.readFile(file.path);
+                if (!raw)
+                    return std::unexpected(std::move(raw.error()));
+                auto decoded = text::decodeTextFile(*raw);
+                if (!decoded)
+                    return std::unexpected(std::move(decoded.error()));
+                auto after = lang::applyTextEdits(decoded->buffer.current().text(), file.edits, positionEncoding);
+                if (!after)
+                    return std::unexpected(std::move(after.error()));
+                auto buffer = text::TextBuffer::fromUtf8(std::move(*after));
+                if (!buffer)
+                    return std::unexpected(std::move(buffer.error()));
+                auto encoded = text::encodeForSave(buffer->current(), decoded->encoding);
+                if (!encoded)
+                    return std::unexpected(std::move(encoded.error()));
+                plan.disk.push_back({file.path, std::move(*raw), std::move(*encoded)});
+            }
+        }
+        if (plan.buffers.empty() && plan.disk.empty())
+            return {};
+        if (std::ranges::any_of(edit.files, [](const auto& file) { return isCFamilySource(file.path); })) {
+            if (auto admitted = m_workbench.admitCppRename(edit, plan); !admitted)
+                return std::unexpected(std::move(admitted.error()));
+        }
+        auto applied = m_workbench.applyRefactoring(plan);
+        if (!applied)
+            return std::unexpected(std::move(applied.error()));
+        // PendingRecovery has already produced a persistent UI notification with the Resume
+        // action. Do not report it as an unapplied failure or submit the same edits again.
+        return {};
+    }
+    // Other language edits retain their existing path; rename is one global transaction.
     m_applier.setEncoding(encoding());
     return m_applier.apply(edit, label);
 }

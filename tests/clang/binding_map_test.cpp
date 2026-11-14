@@ -202,6 +202,37 @@ protected:
     std::string source;
 };
 
+TEST_F(BindingMapTest, ExactEngineExecuteStringCapturesDecodedLiteralAndReportsUnsupportedChunks) {
+    source = R"cpp(namespace Frost {
+struct ScriptEngine { bool ExecuteString(const char* source); };
+}
+struct Other { bool ExecuteString(const char* source); };
+void calls(Frost::ScriptEngine& engine, Other& other, const char* computed) {
+    engine.ExecuteString("Cast()\nlocal Cast = function() end; Cast()");
+    engine.ExecuteString(R"lua(Cast()
+-- Cast remains a comment
+)lua");
+    engine.ExecuteString(computed);
+    engine.ExecuteString("Cast" "()");
+    other.ExecuteString("Cast()");
+}
+)cpp";
+    ASSERT_TRUE(write("fixture.cpp", source));
+    const auto output = run(request(Json::array()));
+    ASSERT_TRUE(output);
+    EXPECT_EQ(output->stringAt("embeddedLuaProfile"), "Frost::ScriptEngine::ExecuteString/v1");
+    ASSERT_EQ(output->boolAt("translationUnitParsed"), true);
+    const auto* chunks = output->find("embeddedLua");
+    ASSERT_TRUE(chunks && chunks->isArray());
+    ASSERT_EQ(chunks->size(), 2U); // An unrelated same-name method supplies no Lua evidence.
+    EXPECT_EQ(chunks->items()[0].stringAt("decodedValue"), "Cast()\nlocal Cast = function() end; Cast()");
+    EXPECT_EQ(chunks->items()[0].stringAt("spelling"), rangeBytes(*chunks->items()[0].find("range")));
+    EXPECT_TRUE(chunks->items()[1].stringAt("spelling").starts_with("R\"lua("));
+    const auto* excluded = output->find("embeddedLuaRefusals");
+    ASSERT_TRUE(excluded && excluded->isArray());
+    EXPECT_EQ(excluded->size(), 2U);
+}
+
 TEST_F(BindingMapTest, NativeArgumentIdentityOverridesLuaSpellingAndPreservesImmutableAliases) {
     auto output =
         run(request(Json::array({registration("direct", "visibleLuaName"), registration("alias", "alias"),
