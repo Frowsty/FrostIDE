@@ -381,6 +381,7 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
          "Requires the move refactoring (REF-8)"},
         {"refactor.copy", "Copy...", "Refactor", &LanguageController::copySymbol, true, A::Never,
          "Requires the copy refactoring (REF-8)"},
+        {"code.checkSpelling", "Check Spelling in Selection...", "Code", &LanguageController::checkSelectionSpelling, true},
         {"code.showIntentions", "Show Context Actions", "Code", &LanguageController::showIntentions, true},
         {"code.reformat", "Reformat Code", "Code", &LanguageController::reformat, true},
         {"code.reformatFile", "Reformat File", "Code", &LanguageController::reformatFile, true},

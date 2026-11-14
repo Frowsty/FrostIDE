@@ -9,6 +9,7 @@
 
 #include "frost/lang/clangd_actions.hpp"
 #include "frost/lang/code_assist.hpp"
+#include "frost/lang/templates.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 
 #include "language_controller_internal.hpp"
@@ -71,48 +72,6 @@ std::size_t postfixOperandStart(std::string_view line, std::size_t dot) {
         return std::string_view::npos;
     }
     return i;
-}
-
-struct Template {
-    QString label;
-    std::string body;
-};
-
-// Insert Live Template's set for a language (language_capabilities.hpp: cpp and csharp).
-std::vector<Template> liveTemplatesFor(std::string_view languageId) {
-    if (languageId == "csharp") {
-        return {
-            {QStringLiteral("for - index loop"), "for (int ${1:i} = 0; ${1:i} < ${2:count}; ${1:i}++)\n{\n    $0\n}"},
-            {QStringLiteral("foreach - collection loop"), "foreach (var ${1:item} in ${2:collection})\n{\n    $0\n}"},
-            {QStringLiteral("if - condition"), "if (${1:condition})\n{\n    $0\n}"},
-            {QStringLiteral("ife - if/else"), "if (${1:condition})\n{\n    $2\n}\nelse\n{\n    $0\n}"},
-            {QStringLiteral("try - try/catch block"), "try\n{\n    $1\n}\ncatch (${2:Exception} ${3:e})\n{\n    $0\n}"},
-            {QStringLiteral("class - class definition"), "public class ${1:ClassName}\n{\n    $0\n}"},
-            {QStringLiteral("prop - auto property"), "public ${1:int} ${2:PropertyName} { get; set; }$0"},
-            {QStringLiteral("cw - Console.WriteLine"), "Console.WriteLine(${1:value});$0"},
-            {QStringLiteral("todo - TODO comment"), "// TODO: $0"},
-        };
-    }
-    if (languageId == "cpp") {
-        return {
-            {QStringLiteral("for - index loop"),
-             "for (std::size_t ${1:i} = 0; ${1:i} < ${2:count}; ++${1:i}) {\n    $0\n}"},
-            {QStringLiteral("foreach - range loop"), "for (auto&& ${1:item} : ${2:collection}) {\n    $0\n}"},
-            {QStringLiteral("rfor - reverse loop"),
-             "for (std::size_t ${1:i} = ${2:count}; ${1:i}-- > 0;) {\n    $0\n}"},
-            {QStringLiteral("if - condition"), "if (${1:condition}) {\n    $0\n}"},
-            {QStringLiteral("ife - if/else"), "if (${1:condition}) {\n    $2\n} else {\n    $0\n}"},
-            {QStringLiteral("try - try/catch block"),
-             "try {\n    $1\n} catch (const std::exception& ${2:e}) {\n    $0\n}"},
-            {QStringLiteral("class - class definition"), "class ${1:ClassName} {\npublic:\n    $0\n};"},
-            {QStringLiteral("struct - struct definition"), "struct ${1:StructName} {\n    $0\n};"},
-            {QStringLiteral("cout - print to stdout"), "std::cout << ${1:value} << '\\n';$0"},
-            {QStringLiteral("todo - TODO comment"), "// TODO: $0"},
-            {QStringLiteral("main - entry point"), "int main(int argc, char* argv[]) {\n    $0\n    return 0;\n}"},
-            {QStringLiteral("guard - #pragma once"), "#pragma once\n$0"},
-        };
-    }
-    return {};
 }
 
 struct Wrapper {
@@ -370,29 +329,6 @@ void LanguageController::optimizeImports() {
         });
 }
 
-void LanguageController::insertLiveTemplate() {
-    if (!hasDocument()) {
-        return;
-    }
-    const LanguageCapabilities& caps = capabilities();
-    const std::vector<Template> templates =
-        caps.liveTemplates ? liveTemplatesFor(caps.languageId) : std::vector<Template>{};
-    if (templates.empty()) {
-        unavailable(QStringLiteral("No live templates for this language yet (UX-6, REF-13)"));
-        return;
-    }
-    const ByteOffset caret = m_services.host.caretOffset();
-    const text::ByteRange target = m_services.host.selection().value_or(text::ByteRange{caret, caret});
-    std::vector<QString> titles;
-    m_choiceActions.clear();
-    for (const Template& t : templates) {
-        titles.push_back(t.label);
-        m_choiceActions.emplace_back(
-            [this, target, body = t.body] { insertSnippetAt(target, body, "Insert Live Template"); });
-    }
-    m_choice->start(QStringLiteral("Insert Live Template"), titles, m_services.host.caretScreenRect());
-}
-
 bool LanguageController::tryExpandPostfixCompletion() {
     const auto snapshot = m_services.host.snapshot();
     if (!snapshot || !capabilities().postfix) {
@@ -418,10 +354,20 @@ bool LanguageController::tryExpandPostfixCompletion() {
     const bool csharp = capabilities().languageId == "csharp";
     // Statement templates replace the operand with a statement: only when it starts the statement.
     const bool statementStart = trimView(std::string_view(beforeCaret).substr(0, exprStart)).empty();
-    const bool statementSuffix = suffix == "var" || suffix == "const" || suffix == "if" || suffix == "notnull" ||
+    const bool statementSuffix = suffix == "for" || suffix == "var" || suffix == "const" || suffix == "if" || suffix == "notnull" ||
                                  suffix == "null" || suffix == "return" || suffix == "foreach";
     if (statementSuffix && !statementStart) {
         return false;
+    }
+    if (!csharp) {
+        const std::string key = std::string(capabilities().languageId) + ".postfix." + std::string(suffix == "foreach" ? "for" : suffix);
+        const auto* definition = fl::findTemplate(key);
+        if (!definition) return false;
+        auto expansion = fl::expandTemplate(definition->body, {{"EXPR", expr}});
+        if (!expansion) { report(expansion.error(), "Postfix Template"); return false; }
+        closeLookup();
+        insertAuthoredTemplateAt(text::ByteRange{ByteOffset{lineInfo->content.begin.value() + exprStart}, caret}, definition->body, {{"EXPR",expr}}, "Postfix Template");
+        return true;
     }
     std::string snippet;
     if (suffix == "var") {

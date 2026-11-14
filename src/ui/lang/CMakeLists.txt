@@ -20,6 +20,8 @@ frost_add_library(ui_lang LAYER ui
         src/language_controller_editing.cpp
         src/language_controller_navigation.cpp
         src/language_controller_codegen.cpp
+        src/language_controller_templates.cpp
+        src/language_controller_spelling.cpp
         src/language_controller_hierarchy.cpp
         src/language_controller_refactor.cpp
         src/refactoring_preview.cpp

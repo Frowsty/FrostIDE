@@ -40,7 +40,7 @@ constexpr TemplateDefinition kTemplates[]{
     {"csharp.ife", "if / else", "csharp", TemplateKind::Live, "if (${1:condition})\n{\n    $2\n}\nelse\n{\n    $0\n}"},
     {"csharp.try", "try / catch", "csharp", TemplateKind::Live, "try\n{\n    $1\n}\ncatch (${2:Exception} ${3:e})\n{\n    $0\n}"},
     {"csharp.class", "class definition", "csharp", TemplateKind::Live, "public class ${1:ClassName}\n{\n    $0\n}"},
-    {"csharp.prop", "auto property", "csharp", TemplateKind::Live, "public ${1:int} ${2:PropertyName} { get; set; }$0"},
+    {"csharp.prop", "prop - auto property", "csharp", TemplateKind::Live, "public ${1:int} ${2:PropertyName} { get; set; }$0"},
     {"csharp.cw", "Console.WriteLine", "csharp", TemplateKind::Live, "Console.WriteLine(${1:value});$0"},
     {"csharp.todo", "TODO comment", "csharp", TemplateKind::Live, "// TODO: $0"},
     {"cmake.if", "if / endif", "cmake", TemplateKind::Live, "if(${1:condition})\n    $0\nendif()"},
