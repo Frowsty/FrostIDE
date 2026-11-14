@@ -73,7 +73,8 @@ struct Metadata {
 #endif
 };
 
-Result<Native> openNative(std::string_view path, bool writable = false, bool directory = false) {
+Result<Native> openNative(std::string_view path, bool writable = false, bool directory = false,
+                          bool followDirectory = false) {
 #ifdef _WIN32
     auto wide = toWin32Path(path);
     if (!wide)
@@ -83,12 +84,14 @@ Result<Native> openNative(std::string_view path, bool writable = false, bool dir
         access |= DELETE;
     if (writable)
         access |= GENERIC_WRITE | WRITE_DAC | FILE_WRITE_ATTRIBUTES;
-    Native file(CreateFileW(wide->c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                            OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+    Native file(CreateFileW(
+        wide->c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | (directory && followDirectory ? 0 : FILE_FLAG_OPEN_REPARSE_POINT), nullptr));
     if (!file.valid())
         return std::unexpected(lastWin32Error("replacement: open native object", path));
 #else
-    int flags = (writable ? O_RDWR : O_RDONLY) | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK;
+    int flags =
+        (writable ? O_RDWR : O_RDONLY) | O_CLOEXEC | O_NONBLOCK | (directory && followDirectory ? 0 : O_NOFOLLOW);
     if (directory)
         flags |= O_DIRECTORY;
     Native file(::open(std::string(path).c_str(), flags));
@@ -1242,6 +1245,47 @@ FileReplacementOutcome PreparedFileReplacement::reapplyMove() {
         return {m_state->receipt, Error(ErrorCode::Busy, "redo move requires a completed inverse")};
     m_state->receipt.phase = FileReplacementPhase::Prepared;
     return moveOriginalTo(m_state->receipt.moveDestination);
+}
+
+Result<bool> PreparedFileReplacement::namesTargetEndpoint(std::string_view path) const {
+    if (!m_state)
+        return fail(ErrorCode::InvalidArgument, "moved-from replacement");
+    auto normalized = normalizePath(path);
+    if (!normalized || !isAbsolutePath(normalized ? *normalized : std::string{}))
+        return fail(ErrorCode::InvalidArgument, "absolute endpoint spelling required");
+    const auto leaf = fileName(*normalized), expected = fileName(m_state->receipt.images.targetPath);
+#ifdef _WIN32
+    auto a = toWide(leaf), b = toWide(expected);
+    if (!a)
+        return std::unexpected(a.error());
+    if (!b)
+        return std::unexpected(b.error());
+    if (a->size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        b->size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        return fail(ErrorCode::OutOfRange, "endpoint leaf exceeds native comparison bound");
+    const auto same =
+        CompareStringOrdinal(a->data(), static_cast<int>(a->size()), b->data(), static_cast<int>(b->size()), TRUE);
+    if (!same)
+        return std::unexpected(lastWin32Error("compare endpoint leaves", path));
+    if (same != CSTR_EQUAL)
+        return false;
+#else
+    if (leaf != expected)
+        return false;
+#endif
+    // Comparison follows an open document's directory spelling, unlike the no-follow mutation
+    // endpoint admission. The resulting native directory ID must equal the retained target parent.
+    auto parent = openNative(parentPath(*normalized), false, true, true);
+    if (!parent) {
+        if (parent.error().code() == ErrorCode::NotFound)
+            return false;
+        return std::unexpected(parent.error());
+    }
+    auto id = directoryIdentity(*parent, parentPath(*normalized));
+    if (!id)
+        return std::unexpected(id.error());
+    const auto& captured = m_state->receipt.images.targetParent;
+    return id->volume == captured.volume && id->object == captured.object;
 }
 
 Result<void> PreparedFileReplacement::validateCurrent(bool after) const {

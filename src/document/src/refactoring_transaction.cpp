@@ -255,7 +255,7 @@ struct RefactoringCoordinator::State {
         std::optional<text::ChangeSet> changes;
     };
     struct CreatedView {
-        std::string path;
+        std::string path, ownerPath;
         std::uint64_t instance = 0;
         bool completed = false;
         std::optional<text::ChangeSet> changes;
@@ -350,9 +350,36 @@ struct RefactoringCoordinator::State {
         for (const auto& file : r.files) {
             if (!creation(file))
                 continue;
-            auto* doc = openDocument(file.path);
-            if (!doc)
+            std::vector<FileDocument*> matches;
+            // Retained view instances must be checked even after Undo makes every file spelling
+            // absent, when resolving the full path can no longer discover an alias.
+            for (const auto& view : r.createdViews) {
+                if (view.ownerPath != file.path)
+                    continue;
+                auto* tracked = manager.find(view.path);
+                if (tracked && tracked->instanceId() == view.instance) {
+                    auto alias = file.native->namesTargetEndpoint(tracked->path());
+                    if (!alias)
+                        return std::unexpected(alias.error());
+                    if (!*alias)
+                        return fail(ErrorCode::Busy, "tracked created view path now names another parent");
+                    matches.push_back(tracked);
+                }
+            }
+            for (const auto& opened : manager.documents()) {
+                if (opened->untitled())
+                    continue;
+                auto alias = file.native->namesTargetEndpoint(opened->path());
+                if (!alias)
+                    return std::unexpected(alias.error());
+                if (*alias && std::find(matches.begin(), matches.end(), opened.get()) == matches.end())
+                    matches.push_back(opened.get());
+            }
+            if (matches.size() > 1)
+                return fail(ErrorCode::Busy, "multiple open document spellings claim a created file; close duplicates");
+            if (matches.empty())
                 continue; // Closed views do not invalidate native global history.
+            auto* doc = matches.front();
             if (doc->dirty() || doc->m_pendingMerge || doc->m_outOfDate ||
                 (doc->m_diskState != DiskState::InSync && doc->m_diskState != DiskState::Deleted) || !doc->m_disk ||
                 doc->m_disk->size != file.after.size() ||
@@ -377,7 +404,7 @@ struct RefactoringCoordinator::State {
                 }
                 doc->m_savedStateId = doc->document().undoState().stateId;
                 doc->m_generationStateId = FileDocument::kNoSavedState;
-                r.createdViews.push_back({doc->path(), doc->instanceId(), false, std::nullopt});
+                r.createdViews.push_back({doc->path(), file.path, doc->instanceId(), false, std::nullopt});
             }
         }
         return {};
@@ -386,10 +413,17 @@ struct RefactoringCoordinator::State {
         if (executing || manager.m_refactoringPending.assigned() || cursor == 0)
             return;
         auto& r = *history[cursor - 1];
-        const auto found = std::find_if(r.files.begin(), r.files.end(), [&](const Participant& p) {
-            return creation(p) && pathKey(p.path) == pathKey(doc.path());
-        });
-        if (found == r.files.end() || !found->native->validateCurrent(true))
+        bool owned = false;
+        for (const auto& file : r.files) {
+            if (!creation(file))
+                continue;
+            auto same = file.native->namesTargetEndpoint(doc.path());
+            if (same && *same && file.native->validateCurrent(true)) {
+                owned = true;
+                break;
+            }
+        }
+        if (!owned)
             return;
         // Ineligible/foreign opens remain ordinary views; they never acquire a fabricated edge.
         static_cast<void>(creationViews(r, true));
@@ -789,6 +823,16 @@ struct RefactoringCoordinator::State {
                          : io::prepareFileReplacement(path, *store, after, options.maxFileBytes, options.maxFileBytes);
             if (!native)
                 return std::unexpected(native.error());
+            if (creation)
+                for (const auto& opened : manager.documents()) {
+                    if (opened->untitled())
+                        continue;
+                    auto same = native->namesTargetEndpoint(opened->path());
+                    if (!same)
+                        return std::unexpected(same.error());
+                    if (*same)
+                        return fail(ErrorCode::AlreadyExists, "creation endpoint has an existing open spelling");
+                }
             if (!destination.empty()) {
                 auto admitted = native->prepareMoveDestination(destination);
                 if (!admitted)
