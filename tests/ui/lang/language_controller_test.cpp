@@ -1509,6 +1509,16 @@ TEST(LanguageControllerRefactoring, ConversionsShowOnlyActualApplicableProviderA
               "SwapBinaryOperands");
     EXPECT_TRUE(rig.applier.edits.empty());
 }
+TEST(LanguageControllerRefactoring, ChangeSignatureUsesExplicitParameterEditorRatherThanOnlyPermutation) {
+    FeatureServer server;
+    FakeHost host("int f(int value){return value;}", workPath("main.cpp"));
+    Rig rig(server, host);
+    std::vector<std::string> operations;
+    rig.controller.setCppAstRefactoring([&](std::string operation) { operations.push_back(operation); });
+    rig.controller.changeSignature();
+    EXPECT_EQ(operations, (std::vector<std::string>{"edit-signature"}));
+    EXPECT_TRUE(rig.applier.edits.empty());
+}
 TEST(LanguageControllerRefactoring, PublishedAndModuleFixScopeHaveDifferentExplicitOwners) {
     FeatureServer server;
     FakeHost host("int main(){return 0;}", workPath("main.cpp"));

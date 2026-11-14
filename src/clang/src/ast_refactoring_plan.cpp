@@ -3,6 +3,7 @@
 #include "ast_refactoring_plan.hpp"
 
 #include "ast_refactoring_operations.hpp"
+#include "ast_signature.hpp"
 #include "semantic_snapshot.hpp"
 namespace frost::clang_engine {
 namespace {
@@ -175,7 +176,10 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
     llvm::IntrusiveRefCntPtr<SnapshotFileSystem> frozen(
         new SnapshotFileSystem(physical, 32768, 512ULL * 1024 * 1024, 64ULL * 1024 * 1024));
     const bool generation = input.getString("operation").value_or("").starts_with("generate-");
-    if (!generation && (seed != anchor || seed.empty()))
+    const auto operation = input.getString("operation").value_or("");
+    const bool signature = operation == "change-signature" || operation == "edit-signature";
+    SignaturePlanner signatures(input, root, anchor, static_cast<unsigned>(input.getInteger("offset").value_or(0)));
+    if (!generation && !signature && (seed != anchor || seed.empty()))
         return refuse("unsupported", "AST operations require a selected source translation unit, not a header");
     std::map<std::string, std::string> candidates;
     bool selected = false;
@@ -184,6 +188,11 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
         auto ast = projectAST(command, frozen, {}, diagnostics);
         if (!ast || !frozen->error.empty())
             return refuse("parse-error", "Original compilation configuration failed");
+        if (signature) {
+            if (!signatures.discover(*ast, error))
+                return refuse("unsupported", error);
+            continue;
+        }
         if (!generation && command.Filename != anchor)
             continue;
         auto candidate = generation ? refactorGenerate(*ast, input, error) : refactorAst(*ast, input, error);
@@ -198,15 +207,39 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
         if (!inserted && position->second != *candidate)
             return refuse("conflict", "AST operation differs between compilation configurations");
     }
-    if (!selected || candidates.empty())
+    if (!signature && (!selected || candidates.empty()))
         return refuse("unsupported", "Selected translation unit has no captured compile command");
     if (!frozen->capturePositiveProbes())
         return refuse("unsupported", frozen->error);
     frozen->frozen = true;
+    if (signature) {
+        if (!signatures.found())
+            return refuse("unsupported", "Selected function has no captured declaration");
+        for (const auto& command : commands) {
+            Diagnostics diagnostics;
+            auto ast = projectAST(command, frozen, {}, diagnostics);
+            if (!ast || !frozen->error.empty())
+                return refuse("conflict", "Original signature replay failed");
+            if (!signatures.collect(*ast, error))
+                return refuse("unsupported", error);
+        }
+        std::map<std::string, std::shared_ptr<const std::string>> inputs;
+        for (const auto& [path, entry] : frozen->inputs)
+            inputs.emplace(path, entry.bytes);
+        auto planned = signatures.candidates(inputs, error);
+        if (!planned)
+            return refuse("unsupported", error);
+        candidates = std::move(*planned);
+    }
+    std::size_t configuration = 0;
     for (const auto& command : commands) {
         Diagnostics diagnostics;
-        if (!projectAST(command, frozen, candidates, diagnostics) || !frozen->error.empty())
+        auto ast = projectAST(command, frozen, candidates, diagnostics);
+        if (!ast || !frozen->error.empty())
             return refuse("conflict", "Candidate fails a frozen compilation configuration");
+        if (signature && !signatures.validate(*ast, configuration, error))
+            return refuse("conflict", error);
+        ++configuration;
     }
     llvm::json::Array files, dependencies, missing, directories;
     std::size_t outputBytes = 0;

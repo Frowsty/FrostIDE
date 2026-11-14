@@ -17,7 +17,8 @@ class AstRefactoring : public ::testing::Test {
 protected:
     frost::test::ScratchDir scratch{"ast-refactoring"};
     Json plan(std::string source, std::string operation, std::string selection, Json order = Json::array(),
-              std::string name = "extracted", bool header = false) {
+              std::string name = "extracted", bool header = false, Json parameters = {},
+              std::vector<std::pair<std::string, std::string>> extraSources = {}) {
         const auto file = scratch.join(header ? "fixture.hpp" : "fixture.cpp");
         const auto unit = scratch.join("fixture.cpp");
         const auto compiler = *frost::io::normalizePath(FROST_TEST_CXX_COMPILER);
@@ -36,11 +37,27 @@ protected:
         for (const auto& arg : std::vector<std::string>{"-std=c++20", "-c", unit, "-o", scratch.join("forbidden.o")})
             arguments.emplace_back(arg);
 #endif
-        auto database = Json::array({Json::object()
-                                         .set("directory", scratch.path())
-                                         .set("file", unit)
-                                         .set("arguments", Json::array(std::move(arguments)))})
-                            .dump();
+        std::vector<Json> commands{Json::object()
+                                       .set("directory", scratch.path())
+                                       .set("file", unit)
+                                       .set("arguments", Json::array(std::move(arguments)))};
+        for (const auto& [name, contents] : extraSources) {
+            const auto path = scratch.join(name);
+            EXPECT_TRUE(fs.writeFileAtomic(path, contents));
+            std::vector<Json> args{Json(compiler)};
+#ifdef _WIN32
+            for (const auto& arg : std::vector<std::string>{"/std:c++20", "/c", path})
+                args.emplace_back(arg);
+#else
+            for (const auto& arg : std::vector<std::string>{"-std=c++20", "-c", path})
+                args.emplace_back(arg);
+#endif
+            commands.push_back(Json::object()
+                                   .set("directory", scratch.path())
+                                   .set("file", path)
+                                   .set("arguments", Json::array(std::move(args))));
+        }
+        const auto database = Json::array(std::move(commands)).dump();
         auto request = Json::object()
                            .set("projectRoot", scratch.path())
                            .set("seedTranslationUnit", unit)
@@ -52,6 +69,8 @@ protected:
                            .set("parameterOrder", std::move(order))
                            .set("compilationDatabase", database)
                            .set("overlays", Json::array());
+        if (operation == "edit-signature")
+            request = request.set("editParameters", true).set("parameters", std::move(parameters));
         frost::io::ProcessSpec spec;
         spec.executable = *frost::io::normalizePath(FROST_CLANG_BINARY);
         spec.arguments = {"--plan-ast-refactoring"};
@@ -90,7 +109,55 @@ TEST_F(AstRefactoring, PermutesCanonicalFunctionParametersAndDirectCalls) {
                        "change-signature", "sum(int", Json::array({Json(1), Json(0)}));
     ASSERT_EQ(result.stringAt("status"), "ready");
     EXPECT_NE(after(result).find("int right, int left"), std::string::npos);
-    EXPECT_NE(after(result).find("sum(2, 1)"), std::string::npos);
+    EXPECT_NE(after(result).find("sum((2), (1))"), std::string::npos);
+}
+TEST_F(AstRefactoring, SignatureEditsHeaderDefinitionAndCallsAcrossCapturedTranslationUnits) {
+    auto rows = Json::array({Json::object().set("oldIndex", 1).set("type", "long").set("name", "value"),
+                             Json::object().set("type", "int").set("name", "bias").set("argument", "4")});
+    auto result =
+        plan("int combine(int unused, int right);\n", "edit-signature", "combine", {}, "unused", true, std::move(rows),
+             {{"definition.cpp", "#include \"fixture.hpp\"\nint combine(int unused,int right){return right;}\n"},
+              {"caller.cpp", "#include \"fixture.hpp\"\nint use(){return combine(1,2);}\n"}});
+    ASSERT_EQ(result.stringAt("status"), "ready");
+    ASSERT_EQ(result.find("files")->items().size(), 3u);
+    std::string combined;
+    for (const auto& file : result.find("files")->items())
+        combined += file.stringAt("after");
+    EXPECT_NE(combined.find("long value, int bias"), std::string::npos);
+    EXPECT_NE(combined.find("return value;"), std::string::npos);
+    EXPECT_NE(combined.find("combine((2), (4))"), std::string::npos);
+}
+TEST_F(AstRefactoring, SignatureSupportsOrdinaryNonvirtualMemberDeclarationsAndDefinitions) {
+    auto rows =
+        Json::array({Json::object().set("oldIndex", 1).set("name", "amount"), Json::object().set("oldIndex", 0)});
+    auto result = plan("struct Counter { int adjust(int left,int right); };\nint Counter::adjust(int left,int "
+                       "right){return right-left;}\nint use(){Counter c;return c.adjust(1,2);}\n",
+                       "edit-signature", "adjust", {}, "unused", false, std::move(rows));
+    ASSERT_EQ(result.stringAt("status"), "ready");
+    EXPECT_NE(after(result).find("return amount-left;"), std::string::npos);
+    EXPECT_NE(after(result).find("adjust((2), (1))"), std::string::npos);
+}
+TEST_F(AstRefactoring, SignatureRefusesUsedRemovalNameCaptureAddressEscapeAndSideEffects) {
+    const auto row = [] { return Json::array({Json::object().set("oldIndex", 1).set("name", "other")}); };
+    refused(
+        plan("int f(int left,int right){return left+right;}\n", "edit-signature", "f(", {}, "unused", false, row()));
+    refused(plan("int f(int left,int right){int other=2;return right+other;}\n", "edit-signature", "f(", {}, "unused",
+                 false, row()));
+    refused(plan("int f(int left,int right){return right;}\nauto pointer=&f;\n", "edit-signature", "f(", {}, "unused",
+                 false, row()));
+    refused(plan("int f(int left,int right){return right;}\nint use(){int x=0;return f(x++,2);}\n", "edit-signature",
+                 "f(", {}, "unused", false, row()));
+}
+TEST_F(AstRefactoring, SignatureNameCannotCaptureTypeLookupOrExpandThroughInsertionMacro) {
+    const auto rows = [](std::string name) {
+        return Json::array({Json::object().set("oldIndex", 0).set("name", name)});
+    };
+    refused(plan("using T=char; int f(int x){return sizeof(T);}\n", "edit-signature", "f(", {}, "unused", false,
+                 rows("T")));
+    refused(plan("#define renamed x\nint f(int x){return x;}\n", "edit-signature", "f(", {}, "unused", false,
+                 rows("renamed")));
+    refused(plan("int other=2;\nint f(int x){\n#define renamed other\nreturn x;\n#undef renamed\n}\n", "edit-signature",
+                 "f(", {}, "unused", false, rows("renamed")));
 }
 TEST_F(AstRefactoring, InlineNeverDropsUnusedArgumentSideEffects) {
     refused(plan("static int f(int unused){return 1;}\nint main(){int i=0; return f(i++);}\n", "inline-function",
