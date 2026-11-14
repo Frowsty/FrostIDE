@@ -38,6 +38,7 @@ struct Capture {
     std::uint64_t trustRevision = 0, generation = 0;
     std::shared_ptr<lang::ClangdService> server;
     std::stop_token stop;
+    std::shared_ptr<std::stop_callback<std::function<void()>>> cancellation;
 };
 using Prepared = Result<std::shared_ptr<Capture>>;
 sched::Task<void> prepare(io::IFileSystem* fs, io::IProcessLauncher* launcher, project::TrustStore* trust,
@@ -159,6 +160,7 @@ void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, std::
     const QPointer<Workbench> self(this);
     const auto cancellation = std::make_shared<std::stop_callback<std::function<void()>>>(
         cancel, [source = m_cppRenameStop]() mutable { source.request_stop(); });
+    capture->cancellation = cancellation; // Retained through queued delivery and the accepted plan context.
     auto publish = [self, cancellation, done = std::move(done)](Prepared result) mutable {
         static_cast<void>(cancellation);
         auto* app = QCoreApplication::instance();
