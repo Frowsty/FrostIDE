@@ -246,12 +246,16 @@ sched::Task<Result<ResultData>> perform(Capture capture, std::shared_ptr<Graph> 
                 std::to_string(chunks.size()) + ".lua");
             if (!path)
                 co_return std::unexpected(path.error());
-            auto opened = capture.lua->openDocument(*path, text->snapshot());
+            if (auto absent = admitBindingProjectionPath(*capture.fs, queryDocuments, *path); !absent)
+                co_return std::unexpected(absent.error());
+            auto opened = capture.lua->openProjectionDocument(*path, text->snapshot());
             if (!opened)
                 co_return std::unexpected(opened.error());
             projections.paths.push_back(*path);
+            if (!capture.current())
+                co_return fail(ErrorCode::Busy, "The Lua provider changed while opening an analysis projection");
             engine::BindingDocumentCapture projection{*path, text->snapshot(),
-                capture.lua->documentVersion(*path), engine::BindingDocumentRole::UserSource};
+                *opened, engine::BindingDocumentRole::UserSource};
             queryDocuments.push_back(projection);
             chunks.push_back({literal, std::move(projection)});
         }
@@ -259,6 +263,9 @@ sched::Task<Result<ResultData>> perform(Capture capture, std::shared_ptr<Graph> 
             graph->index, std::move(rename), std::move(nativeRenames), queryDocuments, admission, capture.stop, std::move(chunks));
         if (!preview)
             co_return std::unexpected(preview.error());
+        for (const auto& projectionPath : projections.paths)
+            if (auto absent = admitBindingProjectionPath(*capture.fs, graph->documents, projectionPath); !absent)
+                co_return std::unexpected(absent.error());
         preview->embeddedLanguageReferencesVerified = graph->embeddedLuaProfileVerified;
         preview->applicationSafe = preview->embeddedLanguageReferencesVerified;
         preview->supportedProfile = "Indexed Lua sources, native/registration semantic sites, and direct literal Frost::ScriptEngine::ExecuteString chunks";

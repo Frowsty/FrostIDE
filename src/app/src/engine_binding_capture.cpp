@@ -117,6 +117,33 @@ Result<void> captureDocumentSnapshot(io::IFileSystem& fs, Graph& graph,
     return {};
 }
 
+Result<void> admitBindingProjectionPath(io::IFileSystem& fs,
+    std::span<const engine::BindingDocumentCapture> documents, std::string_view path) {
+    const auto normalized = io::normalizePath(path);
+    if (!normalized || !io::isAbsolutePath(path))
+        return fail(ErrorCode::InvalidArgument, "A projection needs an absolute path");
+    const auto key = lang::documentKey(*normalized);
+    if (std::ranges::any_of(documents, [&](const auto& document) {
+        return lang::documentKey(document.path) == key;
+    }))
+        return fail(ErrorCode::AlreadyExists, "A projection would shadow a captured document");
+    auto exists = fs.exists(*normalized);
+    if (!exists)
+        return std::unexpected(exists.error());
+    if (*exists)
+        return fail(ErrorCode::AlreadyExists, "A projection would shadow an existing filesystem path");
+    // exists/status follow links. The directory entry check also rejects dangling links.
+    auto entries = fs.listDirectory(io::parentPath(*normalized));
+    if (!entries)
+        return std::unexpected(entries.error());
+    for (const auto& entry : *entries) {
+        const auto candidate = io::joinPath(io::parentPath(*normalized), entry.name);
+        if (!candidate || lang::documentKey(*candidate) == key)
+            return fail(ErrorCode::AlreadyExists, "A projection would shadow a filesystem directory entry");
+    }
+    return {};
+}
+
 bool luaSource(std::string_view path) noexcept {
     if (path.size() < 4)
         return false;

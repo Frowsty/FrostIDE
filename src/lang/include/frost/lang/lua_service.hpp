@@ -148,6 +148,10 @@ public:
     [[nodiscard]] std::optional<std::int64_t> documentVersion(std::string_view path) const;
     // Open an absolute file path. Errors: InvalidArgument, AlreadyExists.
     [[nodiscard]] Result<void> openDocument(std::string_view path, text::Snapshot snapshot);
+    // Analysis-only open: requires a running client and successfully queued didOpen. Refusal
+    // retains no local document. The caller must still check its captured provider generation
+    // before/after this call and every semantic request. Ordinary editor opens keep their behavior.
+    [[nodiscard]] Result<std::int64_t> openProjectionDocument(std::string_view path, text::Snapshot snapshot);
     // Send incremental edits when supported and applicable, otherwise full text. Errors: NotFound.
     [[nodiscard]] Result<void> changeDocument(std::string_view path, const text::ChangeSet& changes,
                                               text::Snapshot after);

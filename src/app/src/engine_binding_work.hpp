@@ -13,6 +13,9 @@
 
 namespace frost::app::binding_work {
 [[nodiscard]] bool luaSource(std::string_view path) noexcept;
+// No captured document or filesystem entry (including dangling links) may be shadowed.
+[[nodiscard]] Result<void> admitBindingProjectionPath(io::IFileSystem& fs,
+    std::span<const engine::BindingDocumentCapture> documents, std::string_view path);
 struct DocumentPath {
     std::string physical;
     engine::BindingDocumentRole role = engine::BindingDocumentRole::ExternalReadOnly;

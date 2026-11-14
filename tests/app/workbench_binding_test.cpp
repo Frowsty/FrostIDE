@@ -29,6 +29,26 @@
 namespace frost::app::test {
 namespace {
 
+TEST(WorkbenchBindings, ProjectionPathCannotShadowDiskEntryOrCapturedDocument) {
+    WorkDir dir("binding-projection-admission");
+    dir.write("project/existing.lua", "Cast()");
+    const auto absentPath = dir.join("project/.unique-projection.lua");
+    std::vector<engine::BindingDocumentCapture> documents;
+    EXPECT_TRUE(binding_work::admitBindingProjectionPath(io::realFileSystem(), documents, absentPath));
+    const auto existing = binding_work::admitBindingProjectionPath(io::realFileSystem(), documents,
+        dir.join("project/existing.lua"));
+    ASSERT_FALSE(existing);
+    EXPECT_EQ(existing.error().code(), ErrorCode::AlreadyExists);
+    documents.push_back({absentPath, {}, {}, engine::BindingDocumentRole::UserSource});
+    const auto captured = binding_work::admitBindingProjectionPath(io::realFileSystem(), documents, absentPath);
+    ASSERT_FALSE(captured);
+    EXPECT_EQ(captured.error().code(), ErrorCode::AlreadyExists);
+    documents.clear();
+    // Recheck after provider work: a path that appeared during a request also refuses publication.
+    dir.write("project/.unique-projection.lua", "Unrelated()");
+    EXPECT_FALSE(binding_work::admitBindingProjectionPath(io::realFileSystem(), documents, absentPath));
+}
+
 TEST(WorkbenchBindings, UntrustedQueriesRefuseWithZeroToolLaunchesAndNoInventedPreview) {
     WorkDir dir("binding-untrusted");
     dir.write("project/main.lua", "print('unchanged')\n");
