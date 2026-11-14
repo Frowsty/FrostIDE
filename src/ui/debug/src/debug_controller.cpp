@@ -122,8 +122,10 @@ Result<void> DebugController::setWorkspaceRoot(std::string root) {
     if (loaded) {
         m_root = std::move(root);
         auto watches = debug::loadPinnedWatches(*m_options.fs, m_root);
-        if (!watches) return std::unexpected(watches.error());
-        for (const auto& watch : *watches) m_pinnedWatches.push_back(QString::fromStdString(watch));
+        if (!watches)
+            return std::unexpected(watches.error());
+        for (const auto& watch : *watches)
+            m_pinnedWatches.push_back(QString::fromStdString(watch));
         emit pinnedWatchesChanged(m_pinnedWatches);
     }
     return loaded;
@@ -133,11 +135,14 @@ void DebugController::setPinnedWatches(const QStringList& expressions) {
     QStringList normalized;
     for (const auto& expression : expressions) {
         const auto trimmed = expression.trimmed();
-        if (!trimmed.isEmpty() && !normalized.contains(trimmed)) normalized.push_back(trimmed);
+        if (!trimmed.isEmpty() && !normalized.contains(trimmed))
+            normalized.push_back(trimmed);
     }
-    if (normalized == m_pinnedWatches) return;
+    if (normalized == m_pinnedWatches)
+        return;
     std::vector<std::string> stored;
-    for (const auto& expression : normalized) stored.push_back(expression.toStdString());
+    for (const auto& expression : normalized)
+        stored.push_back(expression.toStdString());
     if (!m_root.empty() && m_options.fs) {
         if (auto saved = debug::savePinnedWatches(*m_options.fs, m_root, stored); !saved) {
             report(std::unexpected(saved.error()), QStringLiteral("Save pinned watches"));
@@ -445,7 +450,8 @@ Result<void> DebugController::startSession(std::string title, std::string progra
             [relay, generation](const std::vector<std::string>& paths) {
                 relay->post(generation, [paths](DebugController* self) {
                     self->m_visualizers.clear();
-                    for (const auto& path : paths) self->m_visualizers.push_back(QString::fromStdString(path));
+                    for (const auto& path : paths)
+                        self->m_visualizers.push_back(QString::fromStdString(path));
                     emit self->visualizersChanged(self->m_visualizers);
                 });
             },

@@ -275,15 +275,21 @@ void DebugController::loadMoreFrames() {
 }
 
 std::int64_t DebugController::requestInspection(std::string command, rpc::Json arguments, InspectionDone done) {
-    if (!m_session) { done(fail(ErrorCode::Busy, "No debugger session")); return 0; }
+    if (!m_session) {
+        done(fail(ErrorCode::Busy, "No debugger session"));
+        return 0;
+    }
     const auto relay = m_relay;
     const auto generation = m_generation;
     const auto epoch = m_session->inspectionGeneration();
     const bool modules = command == "modules" || command == "frost.registers";
-    return m_session->requestInspection(std::move(command), std::move(arguments),
+    return m_session->requestInspection(
+        std::move(command), std::move(arguments),
         [relay, generation, epoch, modules, done = std::move(done)](Result<rpc::Json> body) {
             relay->post(generation, [epoch, modules, done, body = std::move(body)](DebugController* self) mutable {
-                if (modules && (!self->m_session || !self->paused() || self->m_session->inspectionGeneration() != epoch)) return;
+                if (modules &&
+                    (!self->m_session || !self->paused() || self->m_session->inspectionGeneration() != epoch))
+                    return;
                 done(std::move(body));
             });
         });
@@ -338,7 +344,8 @@ void DebugController::variables(std::int64_t reference, std::int64_t start, std:
                 }
                 done(list);
             });
-        }, m_hexadecimalValues, m_rawValues);
+        },
+        m_hexadecimalValues, m_rawValues);
 }
 
 void DebugController::evaluate(const QString& expression, const QString& context, EvaluateDone done) {
@@ -348,11 +355,12 @@ void DebugController::evaluate(const QString& expression, const QString& context
     const std::shared_ptr<Relay> relay = m_relay;
     const std::uint64_t generation = m_generation;
     const std::optional<std::int64_t> frame = m_frame ? std::optional<std::int64_t>(m_frame->id) : std::nullopt;
-    m_session->evaluate(expression.toStdString(), frame, context.toStdString(),
-                        [relay, generation, done = std::move(done)](Result<debug::dap::Variable> result) {
-                            relay->post(generation,
-                                        [done, result = std::move(result)](DebugController*) { done(result); });
-                        }, m_hexadecimalValues);
+    m_session->evaluate(
+        expression.toStdString(), frame, context.toStdString(),
+        [relay, generation, done = std::move(done)](Result<debug::dap::Variable> result) {
+            relay->post(generation, [done, result = std::move(result)](DebugController*) { done(result); });
+        },
+        m_hexadecimalValues);
 }
 
 void DebugController::submitConsoleInput(const QString& line) {
@@ -410,14 +418,20 @@ Result<debug::BreakpointId> DebugController::addFunctionBreakpoint(const QString
 }
 
 bool DebugController::navigateInstruction(const debug::dap::DisassembledInstruction& instruction) {
-    if (!m_session || !paused() || m_session->state() != debug::DebugState::Stopped || !m_editorPresentation || !instruction.location || instruction.line <= 0 || instruction.line > 2147483647)
-        return report(fail(ErrorCode::NotFound, "This instruction has no source location"), QStringLiteral("Open instruction source"));
+    if (!m_session || !paused() || m_session->state() != debug::DebugState::Stopped || !m_editorPresentation ||
+        !instruction.location || instruction.line <= 0 || instruction.line > 2147483647)
+        return report(fail(ErrorCode::NotFound, "This instruction has no source location"),
+                      QStringLiteral("Open instruction source"));
     const auto& source = *instruction.location;
     debug::DebugFrame frame;
-    frame.name = instruction.symbol; frame.path = source.path; frame.sourceName = source.name;
-    frame.sourceReference = source.sourceReference; frame.line = instruction.line;
+    frame.name = instruction.symbol;
+    frame.path = source.path;
+    frame.sourceName = source.name;
+    frame.sourceReference = source.sourceReference;
+    frame.line = instruction.line;
     if (m_coreClrFrameAllowed && !m_coreClrFrameAllowed(frame))
-        return report(fail(ErrorCode::Unsupported, "Instruction source is outside verified managed sources"), QStringLiteral("Open instruction source"));
+        return report(fail(ErrorCode::Unsupported, "Instruction source is outside verified managed sources"),
+                      QStringLiteral("Open instruction source"));
     if (source.sourceReference > 0) {
         clearLoadedSource();
         const auto sourceEpoch = m_sourceEpoch;
@@ -426,23 +440,30 @@ bool DebugController::navigateInstruction(const debug::dap::DisassembledInstruct
         const auto relay = m_relay;
         const auto name = source.name.empty() ? QStringLiteral("(loaded source)") : QString::fromStdString(source.name);
         const auto line = static_cast<int>(instruction.line);
-        m_session->source(source.sourceReference, [relay, generation, epoch, sourceEpoch, name, line](Result<std::string> body) {
+        m_session->source(source.sourceReference, [relay, generation, epoch, sourceEpoch, name,
+                                                   line](Result<std::string> body) {
             relay->post(generation, [epoch, sourceEpoch, name, line, body = std::move(body)](DebugController* self) {
                 if (!self->m_session || !self->paused() || self->m_session->inspectionGeneration() != epoch ||
-                    self->m_sourceEpoch != sourceEpoch) return;
-                if (!body) { self->report(std::unexpected(body.error()), QStringLiteral("Open instruction source")); return; }
+                    self->m_sourceEpoch != sourceEpoch)
+                    return;
+                if (!body) {
+                    self->report(std::unexpected(body.error()), QStringLiteral("Open instruction source"));
+                    return;
+                }
                 emit self->loadedSourceChanged(name, QString::fromStdString(*body), line);
             });
         });
         return true;
     }
     if (!m_editorPresentation || !m_hooks.openSource || !io::isAbsolutePath(source.path))
-        return report(fail(ErrorCode::NotFound, "Instruction source file is unavailable"), QStringLiteral("Open instruction source"));
+        return report(fail(ErrorCode::NotFound, "Instruction source file is unavailable"),
+                      QStringLiteral("Open instruction source"));
     m_hooks.openSource(QString::fromStdString(source.path), static_cast<int>(instruction.line));
     return true;
 }
 
-void DebugController::disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done, std::int64_t offset) {
+void DebugController::disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done,
+                                  std::int64_t offset) {
     if (!m_session) {
         return;
     }
@@ -453,16 +474,19 @@ void DebugController::disassemble(const QString& memoryReference, int instructio
     const auto frame = m_frame ? std::optional(m_frame->id) : std::nullopt;
     m_session->disassemble(
         memoryReference.trimmed().toStdString(), instructionCount,
-        [relay, generation, epoch, thread, frame, done = std::move(done)](Result<std::vector<debug::dap::DisassembledInstruction>> res) {
+        [relay, generation, epoch, thread, frame,
+         done = std::move(done)](Result<std::vector<debug::dap::DisassembledInstruction>> res) {
             relay->post(generation, [done, epoch, thread, frame, res = std::move(res)](DebugController* self) mutable {
                 if (!self->m_session || !self->paused() || self->m_session->inspectionGeneration() != epoch ||
-                    self->m_thread != thread || (self->m_frame ? std::optional(self->m_frame->id) : std::nullopt) != frame)
+                    self->m_thread != thread ||
+                    (self->m_frame ? std::optional(self->m_frame->id) : std::nullopt) != frame)
                     return;
                 if (done) {
                     done(std::move(res));
                 }
             });
-        }, offset);
+        },
+        offset);
 }
 
 void DebugController::readMemory(const QString& memoryReference, int count, ReadMemoryDone done, std::int64_t offset) {
@@ -474,17 +498,20 @@ void DebugController::readMemory(const QString& memoryReference, int count, Read
     const auto epoch = m_session->inspectionGeneration();
     const auto thread = m_thread;
     const auto frame = m_frame ? std::optional(m_frame->id) : std::nullopt;
-    m_session->readMemory(memoryReference.trimmed().toStdString(), count,
-                          [relay, generation, epoch, thread, frame, done = std::move(done)](Result<debug::dap::ReadMemoryResult> res) {
-                              relay->post(generation, [done, epoch, thread, frame, res = std::move(res)](DebugController* self) mutable {
+    m_session->readMemory(
+        memoryReference.trimmed().toStdString(), count,
+        [relay, generation, epoch, thread, frame, done = std::move(done)](Result<debug::dap::ReadMemoryResult> res) {
+            relay->post(generation, [done, epoch, thread, frame, res = std::move(res)](DebugController* self) mutable {
                 if (!self->m_session || !self->paused() || self->m_session->inspectionGeneration() != epoch ||
-                    self->m_thread != thread || (self->m_frame ? std::optional(self->m_frame->id) : std::nullopt) != frame)
+                    self->m_thread != thread ||
+                    (self->m_frame ? std::optional(self->m_frame->id) : std::nullopt) != frame)
                     return;
-                                  if (done) {
-                                      done(std::move(res));
-                                  }
-                              });
-                          }, offset);
+                if (done) {
+                    done(std::move(res));
+                }
+            });
+        },
+        offset);
 }
 
 // --- Breakpoints ---

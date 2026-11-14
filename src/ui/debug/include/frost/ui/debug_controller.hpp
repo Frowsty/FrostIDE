@@ -89,10 +89,10 @@ struct DebugControllerHooks {
 
 // Where the controller gets its adapter and services; every pointer must outlive the controller.
 struct DebugControllerOptions {
-    const project::TrustStore* trust = nullptr;    // Required: no session starts without it.
-    io::IFileSystem* fs = nullptr;                 // For lldb-dap discovery and workspace.json.
-    io::IProcessLauncher* launcher = nullptr;      // Starts lldb-dap.
-    std::function<std::string()> lldbDapSetting{}; // tools.lldbDap.path; empty: "".
+    const project::TrustStore* trust = nullptr;          // Required: no session starts without it.
+    io::IFileSystem* fs = nullptr;                       // For lldb-dap discovery and workspace.json.
+    io::IProcessLauncher* launcher = nullptr;            // Starts lldb-dap.
+    std::function<std::string()> lldbDapSetting{};       // tools.lldbDap.path; empty: "".
     std::function<std::string()> nativeBackendSetting{}; // lldb-dap (default), gdb (Linux), frost-dbgeng (Windows).
     std::function<std::string()> dbgEngPathSetting{};
     // GUI-only discovery admits project/dependency/user Natvis files before starting the adapter.
@@ -297,10 +297,16 @@ public:
     void evaluate(const QString& expression, const QString& context, EvaluateDone done);
     [[nodiscard]] const QStringList& pinnedWatches() const noexcept { return m_pinnedWatches; }
     void setPinnedWatches(const QStringList& expressions);
-    void setRawValues(bool enabled) { m_rawValues = enabled; emit valuesFormatChanged(); }
+    void setRawValues(bool enabled) {
+        m_rawValues = enabled;
+        emit valuesFormatChanged();
+    }
     [[nodiscard]] const QStringList& visualizers() const noexcept { return m_visualizers; }
     [[nodiscard]] bool rawValues() const noexcept { return m_rawValues; }
-    void setHexadecimalValues(bool enabled) { m_hexadecimalValues = enabled; emit valuesFormatChanged(); }
+    void setHexadecimalValues(bool enabled) {
+        m_hexadecimalValues = enabled;
+        emit valuesFormatChanged();
+    }
     [[nodiscard]] bool hexadecimalValues() const noexcept { return m_hexadecimalValues; }
     void submitConsoleInput(const QString& line);
     void setVariableValue(std::int64_t variablesReference, const QString& name, const QString& value,
@@ -311,7 +317,8 @@ public:
     // Adds a function breakpoint by name. Errors: InvalidArgument (empty, or more than one line).
     [[nodiscard]] Result<debug::BreakpointId> addFunctionBreakpoint(const QString& name);
     bool navigateInstruction(const debug::dap::DisassembledInstruction& instruction);
-    void disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done, std::int64_t offset = 0);
+    void disassemble(const QString& memoryReference, int instructionCount, DisassembleDone done,
+                     std::int64_t offset = 0);
     void readMemory(const QString& memoryReference, int count, ReadMemoryDone done, std::int64_t offset = 0);
 
 signals:
@@ -371,7 +378,8 @@ private:
     bool validateCoreClrPath(std::string path, std::function<void(DebugController&)> approved);
 
     [[nodiscard]] Result<debug::AdapterFactory> adapterFactory(bool* nativeOsThreadIdsVerified = nullptr,
-                                                               debug::DapProcessOutput output = {}, std::string_view backendOverride = {});
+                                                               debug::DapProcessOutput output = {},
+                                                               std::string_view backendOverride = {});
     [[nodiscard]] Result<void> startNativeTarget(const debug::DebugTarget& target, PrivateOutput output,
                                                  debug::DapProcessOutput processOutput,
                                                  std::optional<debug::NativeDebugPrivacy> privacy);

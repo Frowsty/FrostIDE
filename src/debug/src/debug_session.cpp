@@ -388,14 +388,19 @@ void DebugSession::State::event(std::string_view name, const rpc::Json& body) {
         moduleEvent(body);
     } else if (name == "frost.visualizersLoaded") {
         const auto* paths = body.find("paths");
-        if (!paths || !paths->isArray() || paths->size() > 64) return;
+        if (!paths || !paths->isArray() || paths->size() > 64)
+            return;
         std::vector<std::string> loaded;
         for (const auto& path : paths->items()) {
             const auto* value = path.asString();
-            if (!value || value->empty() || value->size() > 8192 || value->find('\0') != std::string::npos) return;
+            if (!value || value->empty() || value->size() > 8192 || value->find('\0') != std::string::npos)
+                return;
             loaded.push_back(*value);
         }
-        emit([&] { if (callbacks.onVisualizersChanged) callbacks.onVisualizersChanged(loaded); });
+        emit([&] {
+            if (callbacks.onVisualizersChanged)
+                callbacks.onVisualizersChanged(loaded);
+        });
     } else if (name == "process") {
         const dap::ProcessEvent process = dap::parseProcessEvent(body);
         {
@@ -457,8 +462,9 @@ std::unique_ptr<DebugSession> DebugSession::start(AdapterFactory factory, rpc::J
             const auto self = weak.lock();
             if (!self)
                 return fail(ErrorCode::Cancelled, "The debug session ended before transmission");
-            const bool inspectionConfiguration = command == "frost.setSymbolPaths" || command == "frost.reloadSymbols" ||
-                command == "frost.setSourceMap" || command == "frost.reloadNatvis";
+            const bool inspectionConfiguration = command == "frost.setSymbolPaths" ||
+                                                 command == "frost.reloadSymbols" || command == "frost.setSourceMap" ||
+                                                 command == "frost.reloadNatvis";
             if (inspectionConfiguration) {
                 {
                     LockGuard lock(self->mutex);
@@ -467,7 +473,8 @@ std::unique_ptr<DebugSession> DebugSession::start(AdapterFactory factory, rpc::J
                 }
                 if (!self->inspectionAdmission)
                     return fail(ErrorCode::PermissionDenied, "Debugger inspection trust admission is missing");
-                if (auto admitted = self->inspectionAdmission(); !admitted) return admitted;
+                if (auto admitted = self->inspectionAdmission(); !admitted)
+                    return admitted;
                 {
                     LockGuard lock(self->mutex);
                     if (self->stopRequested || self->state != DebugState::Stopped)

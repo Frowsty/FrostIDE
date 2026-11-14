@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Authored for later Linux execution; missing tools fail rather than skip.
 #include "frost/debug/gdb_dap.hpp"
+#include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/project/vcxproj.hpp"
-#include "frost/io/path.hpp"
+
 #include "debug_test_util.hpp"
-#include <future>
+
 #include <algorithm>
+#include <future>
 
 namespace frost::debug {
 TEST(GdbDapReal, BreakpointThreadsStackValueStepAndNormalExit) {
@@ -24,9 +26,8 @@ TEST(GdbDapReal, BreakpointThreadsStackValueStepAndNormalExit) {
     ASSERT_TRUE((*trust)->trust(std::string(io::parentPath(FROST_DEBUGGEE_PATH))));
     DebugTarget target{.program = FROST_DEBUGGEE_PATH, .inheritEnvironment = false};
     test::SessionRecorder recorder;
-    auto session = startGdbDebugSession(**trust, target,
-        gdbDapAdapterFactory(io::realProcessLauncher(), *gdb), {}, {{source, {{.id = 1, .line = line}}}},
-        recorder.callbacks());
+    auto session = startGdbDebugSession(**trust, target, gdbDapAdapterFactory(io::realProcessLauncher(), *gdb), {},
+                                        {{source, {{.id = 1, .line = line}}}}, recorder.callbacks());
     ASSERT_TRUE(session) << session.error().describe();
     ASSERT_TRUE(test::waitUntil([&] { return (*session)->selectedFrame().has_value(); }));
     auto frame = (*session)->selectedFrame();
@@ -44,7 +45,7 @@ TEST(GdbDapReal, BreakpointThreadsStackValueStepAndNormalExit) {
         auto variablesPromise = std::make_shared<std::promise<Result<VariableList>>>();
         auto variablesFuture = variablesPromise->get_future();
         (*session)->variables(scope.variablesReference, 0, 0,
-            [variablesPromise](auto answer) { variablesPromise->set_value(std::move(answer)); });
+                              [variablesPromise](auto answer) { variablesPromise->set_value(std::move(answer)); });
         ASSERT_EQ(variablesFuture.wait_for(std::chrono::seconds(20)), std::future_status::ready);
         auto variables = variablesFuture.get();
         ASSERT_TRUE(variables);
@@ -73,6 +74,3 @@ TEST(GdbDapReal, BreakpointThreadsStackValueStepAndNormalExit) {
     EXPECT_EQ((*session)->outcome()->exitCode, 0);
 }
 } // namespace frost::debug
-
-
-

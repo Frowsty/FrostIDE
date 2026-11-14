@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 // Native backend selection, launch and attach; presentation/lifecycle remain in DebugController.
-#include "frost/ui/debug_controller.hpp"
-#include "frost/debug/gdb_dap.hpp"
 #include "frost/debug/dbgeng_dap.hpp"
+#include "frost/debug/gdb_dap.hpp"
 #include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"
+#include "frost/ui/debug_controller.hpp"
+
 #include <QProcessEnvironment>
+
 #include <algorithm>
 #include <format>
 #include <utility>
 
 namespace frost::ui {
 Result<debug::AdapterFactory> DebugController::adapterFactory(bool* nativeOsThreadIdsVerified,
-                                                              debug::DapProcessOutput output, std::string_view backendOverride) {
+                                                              debug::DapProcessOutput output,
+                                                              std::string_view backendOverride) {
     if (nativeOsThreadIdsVerified)
         *nativeOsThreadIdsVerified = false;
     if (m_options.adapterFactory) {
@@ -21,16 +24,19 @@ Result<debug::AdapterFactory> DebugController::adapterFactory(bool* nativeOsThre
     if (m_options.fs == nullptr || m_options.launcher == nullptr) {
         return fail(ErrorCode::InvalidArgument, "the debugger has no process launcher");
     }
-    const auto backend = !backendOverride.empty() ? std::string(backendOverride) :
-        (m_options.nativeBackendSetting ? m_options.nativeBackendSetting() : "lldb-dap");
+    const auto backend = !backendOverride.empty()
+                             ? std::string(backendOverride)
+                             : (m_options.nativeBackendSetting ? m_options.nativeBackendSetting() : "lldb-dap");
     if (backend == "frost-dbgeng") {
 #ifndef _WIN32
         return fail(ErrorCode::Unsupported, "The DbgEng backend is supported on Windows only");
 #else
         const auto path = m_options.dbgEngPathSetting ? m_options.dbgEngPathSetting() : std::string{};
-        if (!io::isAbsolutePath(path)) return fail(ErrorCode::InvalidArgument, "Configure the absolute Frost DbgEng adapter path");
+        if (!io::isAbsolutePath(path))
+            return fail(ErrorCode::InvalidArgument, "Configure the absolute Frost DbgEng adapter path");
         auto exists = m_options.fs->exists(path);
-        if (!exists || !*exists) return fail(ErrorCode::NotFound, "Frost DbgEng adapter is missing: " + path);
+        if (!exists || !*exists)
+            return fail(ErrorCode::NotFound, "Frost DbgEng adapter is missing: " + path);
         return debug::dbgEngDapAdapterFactory(*m_options.launcher, path);
 #endif
     }
@@ -39,11 +45,13 @@ Result<debug::AdapterFactory> DebugController::adapterFactory(bool* nativeOsThre
         return fail(ErrorCode::Unsupported, "The GDB DAP backend is supported on Linux only");
 #else
         auto path = debug::findGdbDap(*m_options.fs, m_options.gdbSetting ? m_options.gdbSetting() : std::string{});
-        if (!path) return std::unexpected(std::move(path.error()));
+        if (!path)
+            return std::unexpected(std::move(path.error()));
         return debug::gdbDapAdapterFactory(*m_options.launcher, std::move(*path), std::move(output));
 #endif
     }
-    if (backend != "lldb-dap") return fail(ErrorCode::Unsupported, "Unknown native debugger backend: " + backend);
+    if (backend != "lldb-dap")
+        return fail(ErrorCode::Unsupported, "Unknown native debugger backend: " + backend);
     const auto configured = m_options.lldbDapSetting ? m_options.lldbDapSetting() : std::string{};
     auto path = debug::findLldbDap(*m_options.fs, debug::defaultLldbDapSearch(configured));
     if (!path) {
@@ -78,7 +86,7 @@ Result<void> DebugController::startNativeTarget(const debug::DebugTarget& target
         return fail(ErrorCode::InvalidArgument, "the debugger has no trust store");
     }
     const bool useDbgEng = !m_options.adapterFactory && m_options.nativeBackendSetting &&
-                          m_options.nativeBackendSetting() == "frost-dbgeng";
+                           m_options.nativeBackendSetting() == "frost-dbgeng";
     auto resolvedTarget = target;
     if (m_options.sourceMapSetting) {
         const auto [from, to] = m_options.sourceMapSetting();
@@ -102,21 +110,27 @@ Result<void> DebugController::startNativeTarget(const debug::DebugTarget& target
         }
     }
     if (useDbgEng) {
-        if (privacy) return fail(ErrorCode::Unsupported, "Private engine debugging requires the built-in pinned LLDB adapter");
-        if (auto trusted = debug::validateDebugTargetTrust(*m_options.trust, resolvedTarget); !trusted) return trusted;
+        if (privacy)
+            return fail(ErrorCode::Unsupported, "Private engine debugging requires the built-in pinned LLDB adapter");
+        if (auto trusted = debug::validateDebugTargetTrust(*m_options.trust, resolvedTarget); !trusted)
+            return trusted;
         std::vector<std::string> files;
         if (m_options.natvisFiles) {
             auto discovered = m_options.natvisFiles(resolvedTarget);
-            if (!discovered) return std::unexpected(std::move(discovered.error()));
+            if (!discovered)
+                return std::unexpected(std::move(discovered.error()));
             files = std::move(*discovered);
         }
         const auto trustRevision = m_options.trust->snapshot(resolvedTarget.program).revision;
         auto arguments = debug::dbgEngDapLaunchArguments({.native = resolvedTarget, .natvisFiles = files});
-        if (!arguments) return std::unexpected(std::move(arguments.error()));
+        if (!arguments)
+            return std::unexpected(std::move(arguments.error()));
         auto factory = adapterFactory();
-        if (!factory) return std::unexpected(std::move(factory.error()));
-        auto started = startAdapterTarget(resolvedTarget, std::move(*factory), std::move(*arguments), "frost-dbgeng",
-            debug::DebugTargetMode::Launch, false, [trust = m_options.trust, resolvedTarget, trustRevision]() -> Result<void> {
+        if (!factory)
+            return std::unexpected(std::move(factory.error()));
+        auto started = startAdapterTarget(
+            resolvedTarget, std::move(*factory), std::move(*arguments), "frost-dbgeng", debug::DebugTargetMode::Launch,
+            false, [trust = m_options.trust, resolvedTarget, trustRevision]() -> Result<void> {
                 if (trust->snapshot(resolvedTarget.program).revision != trustRevision)
                     return fail(ErrorCode::Untrusted, "Trust changed after Natvis admission");
                 return debug::validateDebugTargetTrust(*trust, resolvedTarget);
@@ -124,8 +138,11 @@ Result<void> DebugController::startNativeTarget(const debug::DebugTarget& target
         return started;
     }
     bool osThreadIdsVerified = false;
-    const bool useGdb = !m_options.adapterFactory && m_options.nativeBackendSetting && m_options.nativeBackendSetting() == "gdb";
-    if (privacy && useGdb) return fail(ErrorCode::Unsupported, "Private engine debugging requires the built-in pinned LLDB adapter; select LLDB in Native debugger settings" );
+    const bool useGdb =
+        !m_options.adapterFactory && m_options.nativeBackendSetting && m_options.nativeBackendSetting() == "gdb";
+    if (privacy && useGdb)
+        return fail(ErrorCode::Unsupported, "Private engine debugging requires the built-in pinned LLDB adapter; "
+                                            "select LLDB in Native debugger settings");
     auto factory = adapterFactory(&osThreadIdsVerified, std::move(processOutput));
     if (!factory)
         return std::unexpected(std::move(factory.error()));
@@ -139,10 +156,12 @@ Result<void> DebugController::startNativeTarget(const debug::DebugTarget& target
             if (useGdb) {
                 std::map<std::string, std::string> inherited;
                 const auto snapshot = QProcessEnvironment::systemEnvironment();
-                for (const auto& key : snapshot.keys()) inherited[key.toStdString()] = snapshot.value(key).toStdString();
-                return debug::startGdbDebugSession(*m_options.trust, resolvedTarget, std::move(factory),
-                    inherited, m_breakpoints.sessionLines(), std::move(callbacks), std::move(privacy),
-                    m_breakpoints.sessionFunctions(), m_breakpoints.sessionExceptionFilters());
+                for (const auto& key : snapshot.keys())
+                    inherited[key.toStdString()] = snapshot.value(key).toStdString();
+                return debug::startGdbDebugSession(*m_options.trust, resolvedTarget, std::move(factory), inherited,
+                                                   m_breakpoints.sessionLines(), std::move(callbacks),
+                                                   std::move(privacy), m_breakpoints.sessionFunctions(),
+                                                   m_breakpoints.sessionExceptionFilters());
             }
             return debug::startDebugSession(*m_options.trust, resolvedTarget, std::move(factory),
                                             m_breakpoints.sessionLines(), std::move(callbacks),
@@ -203,9 +222,11 @@ Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& targe
             options.readOnly = readOnly;
             options.launchAdmission = std::move(launchAdmission);
             options.inspectionAdmission = [trust, trustRoots]() -> Result<void> {
-                if (!trust || trustRoots.empty()) return fail(ErrorCode::Untrusted, "Debugger inspection requires trusted roots");
+                if (!trust || trustRoots.empty())
+                    return fail(ErrorCode::Untrusted, "Debugger inspection requires trusted roots");
                 for (const auto& root : trustRoots)
-                    if (auto admitted = trust->requireTrusted(root); !admitted) return admitted;
+                    if (auto admitted = trust->requireTrusted(root); !admitted)
+                        return admitted;
                 return {};
             };
             if (!readOnly) {
@@ -240,36 +261,46 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
         attachArguments.set("type", "gdb");
     }
     if (!factory && adapterId == "lldb-dap" && !m_options.adapterFactory && m_options.nativeBackendSetting &&
-        m_options.nativeBackendSetting() == "frost-dbgeng") adapterId = "frost-dbgeng";
+        m_options.nativeBackendSetting() == "frost-dbgeng")
+        adapterId = "frost-dbgeng";
     if (!factory && adapterId == "frost-dbgeng") {
-        if (!m_options.trust) return fail(ErrorCode::InvalidArgument, "The debugger has no trust store");
-        if (auto trusted = debug::validateDebugTargetTrust(*m_options.trust, target); !trusted) return trusted;
+        if (!m_options.trust)
+            return fail(ErrorCode::InvalidArgument, "The debugger has no trust store");
+        if (auto trusted = debug::validateDebugTargetTrust(*m_options.trust, target); !trusted)
+            return trusted;
         const auto pid = attachArguments.integerAt("processId").value_or(attachArguments.integerAt("pid").value_or(0));
-        if (pid <= 0) return fail(ErrorCode::InvalidArgument, "DbgEng attach requires a positive process ID");
+        if (pid <= 0)
+            return fail(ErrorCode::InvalidArgument, "DbgEng attach requires a positive process ID");
         std::vector<std::string> files;
         if (m_options.natvisFiles) {
             auto discovered = m_options.natvisFiles(target);
-            if (!discovered) return std::unexpected(std::move(discovered.error()));
+            if (!discovered)
+                return std::unexpected(std::move(discovered.error()));
             files = std::move(*discovered);
         }
         const auto trustRevision = m_options.trust->snapshot(target.program).revision;
         auto arguments = debug::dbgEngDapLaunchArguments({.native = target, .natvisFiles = files});
-        if (!arguments) return std::unexpected(std::move(arguments.error()));
+        if (!arguments)
+            return std::unexpected(std::move(arguments.error()));
         arguments->set("processId", pid);
         auto resolved = adapterFactory(nullptr, {}, "frost-dbgeng");
-        if (!resolved) return std::unexpected(std::move(resolved.error()));
-        auto started = startAdapterTarget(target, std::move(*resolved), std::move(*arguments), "frost-dbgeng",
-            debug::DebugTargetMode::Attach, false, [trust = m_options.trust, target, trustRevision]() -> Result<void> {
+        if (!resolved)
+            return std::unexpected(std::move(resolved.error()));
+        auto started = startAdapterTarget(
+            target, std::move(*resolved), std::move(*arguments), "frost-dbgeng", debug::DebugTargetMode::Attach, false,
+            [trust = m_options.trust, target, trustRevision]() -> Result<void> {
                 if (trust->snapshot(target.program).revision != trustRevision)
                     return fail(ErrorCode::Untrusted, "Trust changed after Natvis admission");
                 return debug::validateDebugTargetTrust(*trust, target);
-            }, ownerAdmission);
+            },
+            ownerAdmission);
         return started;
     }
     bool osThreadIdsVerified = false;
     if (!factory && (adapterId == "gdb" || adapterId == "lldb-dap")) {
         auto resolved = adapterFactory(&osThreadIdsVerified, {}, adapterId);
-        if (!resolved) return std::unexpected(std::move(resolved.error()));
+        if (!resolved)
+            return std::unexpected(std::move(resolved.error()));
         factory = std::move(*resolved);
     }
     const std::string displayAdapter =
@@ -280,8 +311,9 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
          adapterId](debug::DebugSessionCallbacks callbacks) mutable {
             if (adapterId == "gdb") {
                 return debug::attachGdbDebugSession(*m_options.trust, target, arguments.integerAt("pid").value_or(0),
-                    std::move(factory), m_breakpoints.sessionLines(), std::move(callbacks),
-                    m_breakpoints.sessionFunctions(), m_breakpoints.sessionExceptionFilters());
+                                                    std::move(factory), m_breakpoints.sessionLines(),
+                                                    std::move(callbacks), m_breakpoints.sessionFunctions(),
+                                                    m_breakpoints.sessionExceptionFilters());
             }
             auto session = debug::attachDebugSession(*m_options.trust, target, std::move(factory), std::move(arguments),
                                                      m_breakpoints.sessionLines(), std::move(callbacks), adapterId);

@@ -666,16 +666,18 @@ Result<void> DebugSession::State::resume(const std::string& command, rpc::Json e
         if (state != DebugState::Stopped) {
             return fail(ErrorCode::Busy, std::format("{} needs a paused program", command));
         }
-        if (expectedGeneration && (generation != *expectedGeneration || !currentFrame ||
-                                   currentFrame->id != expectedFrame))
+        if (expectedGeneration &&
+            (generation != *expectedGeneration || !currentFrame || currentFrame->id != expectedFrame))
             return fail(ErrorCode::Cancelled, "Step target expired");
         thread = currentThread.value_or(threads.empty() ? 1 : threads.front().id);
         oldStop = stop;
         oldFrames = frames;
         oldFrame = currentFrame;
         state = DebugState::Running;
-        stepInPhase = command == "stepIn" && extra.find("targetId") == nullptr && extra.stringAt("granularity") != "instruction"
-                          ? StepInPhase::Stepping : StepInPhase::None;
+        stepInPhase =
+            command == "stepIn" && extra.find("targetId") == nullptr && extra.stringAt("granularity") != "instruction"
+                ? StepInPhase::Stepping
+                : StepInPhase::None;
         thunkHops = 0;
         stepInOrigin.reset();
         if (const auto top = frames.find(thread); top != frames.end() && !top->second.frames.empty()) {

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/ui/debug_depth_panel.hpp"
+
 #include "frost/ui/debug_controller.hpp"
-#include <QComboBox>
+
 #include <QCheckBox>
+#include <QComboBox>
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -10,8 +12,8 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QTreeWidget>
 #include <QStringList>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 namespace frost::ui {
@@ -29,19 +31,29 @@ auto deliver(DebugController& controller, QWidget* owner, Done done, bool select
     const auto frame = controller.selectedFrame();
     const auto thread = controller.selectedThread();
     const auto epoch = controller.session() ? controller.session()->inspectionGeneration() : 0;
-    return [guard, &controller, generation, epoch, frame, thread, selectionBound, done = std::move(done)](Result<T> result) mutable {
-        if (!guard) return;
-        QMetaObject::invokeMethod(guard, [guard, &controller, generation, epoch, frame, thread, selectionBound, done, result = std::move(result)]() mutable {
-            if (!guard || controller.sessionGeneration() != generation || !controller.session()) return;
-            if (selectionBound && (!controller.paused() || controller.session()->inspectionGeneration() != epoch)) return;
-            const auto current = controller.selectedFrame();
-            if (selectionBound && controller.selectedThread() != thread) return;
-            if (selectionBound && (bool(current) != bool(frame) || (frame && current->id != frame->id))) return;
-            done(std::move(result));
-        }, Qt::QueuedConnection);
+    return [guard, &controller, generation, epoch, frame, thread, selectionBound,
+            done = std::move(done)](Result<T> result) mutable {
+        if (!guard)
+            return;
+        QMetaObject::invokeMethod(
+            guard,
+            [guard, &controller, generation, epoch, frame, thread, selectionBound, done,
+             result = std::move(result)]() mutable {
+                if (!guard || controller.sessionGeneration() != generation || !controller.session())
+                    return;
+                if (selectionBound && (!controller.paused() || controller.session()->inspectionGeneration() != epoch))
+                    return;
+                const auto current = controller.selectedFrame();
+                if (selectionBound && controller.selectedThread() != thread)
+                    return;
+                if (selectionBound && (bool(current) != bool(frame) || (frame && current->id != frame->id)))
+                    return;
+                done(std::move(result));
+            },
+            Qt::QueuedConnection);
     };
 }
-}
+} // namespace
 DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("debugDepthPanel"));
     auto* outer = new QVBoxLayout(this);
@@ -70,22 +82,34 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     registers->setHeaderLabels({QStringLiteral("Register"), QStringLiteral("Value"), QStringLiteral("Type")});
     auto* instruction = new QPushButton(QStringLiteral("Step one instruction"), this);
     connect(instruction, &QPushButton::clicked, this, [&controller, status] {
-        if (!controller.session()) return;
+        if (!controller.session())
+            return;
         if (auto result = controller.session()->stepInstruction(); !result)
             status->setText(QString::fromStdString(result.error().message()));
     });
     auto* freeze = new QPushButton(QStringLiteral("Freeze selected thread"), this);
     auto* thaw = new QPushButton(QStringLiteral("Thaw selected thread"), this);
     auto setFrozen = [this, &controller, status](bool frozen) {
-        if (!controller.session() || !controller.selectedThread()) return;
-        controller.session()->setThreadFrozen(*controller.selectedThread(), frozen, deliver(controller, this,
-            [status, frozen](Result<rpc::Json> body) {
-                if (!body) { status->setText(QString::fromStdString(body.error().message())); return; }
-                if (const auto state = body->boolAt("frozen"))
-                    status->setText(*state ? QStringLiteral("Adapter reports the thread is frozen.") : QStringLiteral("Adapter reports the thread is thawed."));
-                else status->setText(frozen ? QStringLiteral("Freeze command completed; current freeze state is unavailable.")
-                                           : QStringLiteral("Thaw command completed; current freeze state is unavailable."));
-            }, false));
+        if (!controller.session() || !controller.selectedThread())
+            return;
+        controller.session()->setThreadFrozen(
+            *controller.selectedThread(), frozen,
+            deliver(
+                controller, this,
+                [status, frozen](Result<rpc::Json> body) {
+                    if (!body) {
+                        status->setText(QString::fromStdString(body.error().message()));
+                        return;
+                    }
+                    if (const auto state = body->boolAt("frozen"))
+                        status->setText(*state ? QStringLiteral("Adapter reports the thread is frozen.")
+                                               : QStringLiteral("Adapter reports the thread is thawed."));
+                    else
+                        status->setText(
+                            frozen ? QStringLiteral("Freeze command completed; current freeze state is unavailable.")
+                                   : QStringLiteral("Thaw command completed; current freeze state is unavailable."));
+                },
+                false));
     };
     connect(freeze, &QPushButton::clicked, this, [setFrozen] { setFrozen(true); });
     connect(thaw, &QPushButton::clicked, this, [setFrozen] { setFrozen(false); });
@@ -109,15 +133,28 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     layout->addWidget(status);
     layout->addWidget(hex);
     layout->addWidget(raw);
-    layout->addWidget(refresh); layout->addWidget(calls); layout->addWidget(step);
+    layout->addWidget(refresh);
+    layout->addWidget(calls);
+    layout->addWidget(step);
     layout->addWidget(instruction);
-    layout->addWidget(freeze); layout->addWidget(thaw);
-    layout->addWidget(loadRegisters); layout->addWidget(registers, 1);
-    layout->addLayout(form); layout->addWidget(info); layout->addWidget(install); layout->addWidget(clear);
-    auto update = [&controller, status, refresh, calls, step, loadRegisters, registers, info, install, clear, access, dataId, selection, reference, name, hex, raw, instruction, freeze, thaw, registerEpoch] {
+    layout->addWidget(freeze);
+    layout->addWidget(thaw);
+    layout->addWidget(loadRegisters);
+    layout->addWidget(registers, 1);
+    layout->addLayout(form);
+    layout->addWidget(info);
+    layout->addWidget(install);
+    layout->addWidget(clear);
+    auto update = [&controller, status, refresh, calls, step, loadRegisters, registers, info, install, clear, access,
+                   dataId, selection, reference, name, hex, raw, instruction, freeze, thaw, registerEpoch] {
         ++*registerEpoch;
-        ++*selection; reference->clear(); name->clear();
-        calls->clear(); registers->clear(); access->clear(); dataId->clear();
+        ++*selection;
+        reference->clear();
+        name->clear();
+        calls->clear();
+        registers->clear();
+        access->clear();
+        dataId->clear();
         const auto* session = controller.session();
         const auto caps = session ? session->capabilities() : debug::dap::Capabilities{};
         raw->setEnabled(caps.frostSupportsRawView);
@@ -135,134 +172,220 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
         step->setEnabled(false);
         loadRegisters->setEnabled(stopped && controller.selectedFrame().has_value());
         info->setEnabled(mutableStop && caps.supportsDataBreakpoints);
-        install->setEnabled(false); clear->setEnabled(mutableStop && caps.supportsDataBreakpoints);
-        status->setText(QStringLiteral("Unavailable actions are disabled for this debugger. "
+        install->setEnabled(false);
+        clear->setEnabled(mutableStop && caps.supportsDataBreakpoints);
+        status->setText(QStringLiteral(
+            "Unavailable actions are disabled for this debugger. "
             "Select a variable and choose Watch Hardware Access to configure a hardware watchpoint. "
             "Freeze and thaw require debugger support; thread state is shown only when the debugger reports it."));
     };
     connect(&controller, &DebugController::stateChanged, this, update);
     connect(&controller, &DebugController::frameSelected, this, update);
     connect(refresh, &QPushButton::clicked, this, [this, &controller, calls, step, status] {
-        if (!controller.session()) return;
+        if (!controller.session())
+            return;
         controller.session()->stepInTargets(deliver(controller, this, [calls, step, status](Result<rpc::Json> body) {
-            calls->clear(); step->setEnabled(false);
-            if (!body) { status->setText(QString::fromStdString(body.error().message())); return; }
-            if (const auto* targets = body->find("targets")) for (const auto& target : targets->items()) {
-                if (const auto id = target.integerAt("id")) calls->addItem(text(target, "label"), QVariant::fromValue<qlonglong>(*id));
+            calls->clear();
+            step->setEnabled(false);
+            if (!body) {
+                status->setText(QString::fromStdString(body.error().message()));
+                return;
             }
+            if (const auto* targets = body->find("targets"))
+                for (const auto& target : targets->items()) {
+                    if (const auto id = target.integerAt("id"))
+                        calls->addItem(text(target, "label"), QVariant::fromValue<qlonglong>(*id));
+                }
             step->setEnabled(calls->count() > 0);
-            if (!calls->count()) status->setText(QStringLiteral("The adapter returned no call targets for this frame."));
+            if (!calls->count())
+                status->setText(QStringLiteral("The adapter returned no call targets for this frame."));
         }));
     });
     connect(step, &QPushButton::clicked, this, [this, &controller, calls, status] {
-        if (!controller.session() || calls->currentIndex() < 0) return;
+        if (!controller.session() || calls->currentIndex() < 0)
+            return;
         if (auto result = controller.session()->stepIntoTarget(calls->currentData().toLongLong()); !result)
             status->setText(QString::fromStdString(result.error().message()));
     });
     auto populateRegisters = [registers](QTreeWidgetItem* parent, const debug::VariableList& values) {
         for (const auto& value : values) {
-            auto* item = new QTreeWidgetItem({QString::fromStdString(value.name),
-                QString::fromStdString(value.value), QString::fromStdString(value.type)});
-            if (parent) parent->addChild(item); else registers->addTopLevelItem(item);
+            auto* item = new QTreeWidgetItem({QString::fromStdString(value.name), QString::fromStdString(value.value),
+                                              QString::fromStdString(value.type)});
+            if (parent)
+                parent->addChild(item);
+            else
+                registers->addTopLevelItem(item);
             item->setData(0, Qt::UserRole, QVariant::fromValue<qlonglong>(value.variablesReference));
-            if (value.variablesReference > 0) new QTreeWidgetItem(item, {QStringLiteral("Expand to load registers")});
+            if (value.variablesReference > 0)
+                new QTreeWidgetItem(item, {QStringLiteral("Expand to load registers")});
         }
     };
     connect(registers, &QTreeWidget::itemExpanded, this,
-        [this, &controller, status, registerEpoch, populateRegisters](QTreeWidgetItem* item) {
-            const auto reference = item->data(0, Qt::UserRole).toLongLong();
-            if (reference <= 0 || item->data(0, Qt::UserRole + 1).toBool()) return;
-            item->setData(0, Qt::UserRole + 1, true);
-            const auto epoch = *registerEpoch;
-            controller.variables(reference, 0, 256, deliver<debug::VariableList>(controller, this,
-                [item, status, registerEpoch, epoch, populateRegisters](Result<debug::VariableList> values) {
-                    if (*registerEpoch != epoch) return;
-                    while (item->childCount()) delete item->takeChild(0);
-                    if (!values) {
-                        item->setData(0, Qt::UserRole + 1, false);
-                        status->setText(QString::fromStdString(values.error().message()));
-                        new QTreeWidgetItem(item, {QStringLiteral("Expand to retry")});
-                        return;
-                    }
-                    populateRegisters(item, *values);
-                }));
-        });
+            [this, &controller, status, registerEpoch, populateRegisters](QTreeWidgetItem* item) {
+                const auto reference = item->data(0, Qt::UserRole).toLongLong();
+                if (reference <= 0 || item->data(0, Qt::UserRole + 1).toBool())
+                    return;
+                item->setData(0, Qt::UserRole + 1, true);
+                const auto epoch = *registerEpoch;
+                controller.variables(
+                    reference, 0, 256,
+                    deliver<debug::VariableList>(
+                        controller, this,
+                        [item, status, registerEpoch, epoch, populateRegisters](Result<debug::VariableList> values) {
+                            if (*registerEpoch != epoch)
+                                return;
+                            while (item->childCount())
+                                delete item->takeChild(0);
+                            if (!values) {
+                                item->setData(0, Qt::UserRole + 1, false);
+                                status->setText(QString::fromStdString(values.error().message()));
+                                new QTreeWidgetItem(item, {QStringLiteral("Expand to retry")});
+                                return;
+                            }
+                            populateRegisters(item, *values);
+                        }));
+            });
     connect(loadRegisters, &QPushButton::clicked, this,
-        [this, &controller, registers, status, registerEpoch, populateRegisters] {
-            if (!controller.selectedFrame()) return;
-            const auto epoch = ++*registerEpoch;
-            registers->clear();
-            if (controller.session() && controller.session()->capabilities().frostSupportsRegisters) {
-                auto arguments = rpc::Json::object();
-                if (controller.selectedThread()) arguments.set("threadId", *controller.selectedThread());
-                controller.requestInspection("frost.registers", std::move(arguments), deliver(controller, this,
-                    [status, registerEpoch, epoch, populateRegisters](Result<rpc::Json> body) {
-                        if (*registerEpoch != epoch) return;
-                        if (!body) { status->setText(QString::fromStdString(body.error().message())); return; }
-                        debug::VariableList values;
-                        if (const auto* registers = body->find("registers")) for (const auto& entry : registers->items()) {
-                            auto value = debug::dap::parseVariable(entry);
-                            if (value.type.empty()) value.type = std::string(entry.stringAt("typeName"));
-                            values.push_back(std::move(value));
-                        }
-                        populateRegisters(nullptr, values);
-                    }));
-                return;
-            }
-            controller.scopes(controller.selectedFrame()->id, deliver<debug::ScopeList>(controller, this,
-                [this, &controller, status, registerEpoch, epoch, populateRegisters](Result<debug::ScopeList> scopes) {
-                    if (*registerEpoch != epoch) return;
-                    if (!scopes) { status->setText(QString::fromStdString(scopes.error().message())); return; }
-                    bool found = false;
-                    for (const auto& scope : *scopes) if (scope.presentationHint == "registers") {
-                        found = true;
-                        controller.variables(scope.variablesReference, 0, 256, deliver<debug::VariableList>(controller, this,
-                            [status, registerEpoch, epoch, populateRegisters](Result<debug::VariableList> values) {
-                                if (*registerEpoch != epoch) return;
-                                if (!values) { status->setText(QString::fromStdString(values.error().message())); return; }
-                                populateRegisters(nullptr, *values);
-                            }));
-                    }
-                    if (!found) status->setText(QStringLiteral("The adapter exposes no registers scope for this frame."));
-                }));
-        });
-    auto invalidate = [dataId, install, access, selection] { ++*selection; dataId->clear(); install->setEnabled(false); access->clear(); };
+            [this, &controller, registers, status, registerEpoch, populateRegisters] {
+                if (!controller.selectedFrame())
+                    return;
+                const auto epoch = ++*registerEpoch;
+                registers->clear();
+                if (controller.session() && controller.session()->capabilities().frostSupportsRegisters) {
+                    auto arguments = rpc::Json::object();
+                    if (controller.selectedThread())
+                        arguments.set("threadId", *controller.selectedThread());
+                    controller.requestInspection(
+                        "frost.registers", std::move(arguments),
+                        deliver(controller, this,
+                                [status, registerEpoch, epoch, populateRegisters](Result<rpc::Json> body) {
+                                    if (*registerEpoch != epoch)
+                                        return;
+                                    if (!body) {
+                                        status->setText(QString::fromStdString(body.error().message()));
+                                        return;
+                                    }
+                                    debug::VariableList values;
+                                    if (const auto* registers = body->find("registers"))
+                                        for (const auto& entry : registers->items()) {
+                                            auto value = debug::dap::parseVariable(entry);
+                                            if (value.type.empty())
+                                                value.type = std::string(entry.stringAt("typeName"));
+                                            values.push_back(std::move(value));
+                                        }
+                                    populateRegisters(nullptr, values);
+                                }));
+                    return;
+                }
+                controller.scopes(
+                    controller.selectedFrame()->id,
+                    deliver<debug::ScopeList>(
+                        controller, this,
+                        [this, &controller, status, registerEpoch, epoch,
+                         populateRegisters](Result<debug::ScopeList> scopes) {
+                            if (*registerEpoch != epoch)
+                                return;
+                            if (!scopes) {
+                                status->setText(QString::fromStdString(scopes.error().message()));
+                                return;
+                            }
+                            bool found = false;
+                            for (const auto& scope : *scopes)
+                                if (scope.presentationHint == "registers") {
+                                    found = true;
+                                    controller.variables(
+                                        scope.variablesReference, 0, 256,
+                                        deliver<debug::VariableList>(
+                                            controller, this,
+                                            [status, registerEpoch, epoch,
+                                             populateRegisters](Result<debug::VariableList> values) {
+                                                if (*registerEpoch != epoch)
+                                                    return;
+                                                if (!values) {
+                                                    status->setText(QString::fromStdString(values.error().message()));
+                                                    return;
+                                                }
+                                                populateRegisters(nullptr, *values);
+                                            }));
+                                }
+                            if (!found)
+                                status->setText(
+                                    QStringLiteral("The adapter exposes no registers scope for this frame."));
+                        }));
+            });
+    auto invalidate = [dataId, install, access, selection] {
+        ++*selection;
+        dataId->clear();
+        install->setEnabled(false);
+        access->clear();
+    };
     connect(name, &QLineEdit::textChanged, this, invalidate);
     connect(reference, &QLineEdit::textChanged, this, invalidate);
-    connect(info, &QPushButton::clicked, this, [this, &controller, reference, name, access, dataId, install, status, selection] {
-        if (!controller.session()) return;
-        bool ok = false; const auto ref = reference->text().toLongLong(&ok);
-        if (!ok || ref <= 0) { status->setText(QStringLiteral("Choose a positive parent variablesReference.")); return; }
-        const auto serial = ++*selection;
-        controller.session()->dataBreakpointInfo(ref, name->text().toStdString(), deliver(controller, this,
-            [access, dataId, install, status, selection, serial](Result<rpc::Json> body) {
-                if (*selection != serial) return;
-                dataId->clear(); access->clear(); install->setEnabled(false);
-                if (!body) { status->setText(QString::fromStdString(body.error().message())); return; }
-                *dataId = text(*body, "dataId").toStdString();
-                status->setText(text(*body, "description"));
-                if (const auto* types = body->find("accessTypes")) for (const auto& type : types->items())
-                    if (type.asString()) access->addItem(QString::fromStdString(*type.asString()));
-                // DAP default is write when accessTypes is omitted.
-                if (!access->count()) access->addItem(QStringLiteral("write"));
-                install->setEnabled(!dataId->empty());
-            }));
-    });
-    auto replace = [this, &controller, status](rpc::Json list) {
-        if (!controller.session()) return;
-        controller.session()->setDataBreakpoints(std::move(list), deliver(controller, this, [status](Result<rpc::Json> body) {
-            if (!body) { status->setText(QString::fromStdString(body.error().message())); return; }
-            QStringList messages;
-            if (const auto* results = body->find("breakpoints")) for (const auto& result : results->items()) {
-                const auto parsed = debug::dap::parseBreakpoint(result);
-                messages << (parsed.verified ? QStringLiteral("Hardware watchpoint verified") : QStringLiteral("Hardware watchpoint unverified"))
-                    + QStringLiteral(": ") + QString::fromStdString(parsed.message);
+    connect(
+        info, &QPushButton::clicked, this,
+        [this, &controller, reference, name, access, dataId, install, status, selection] {
+            if (!controller.session())
+                return;
+            bool ok = false;
+            const auto ref = reference->text().toLongLong(&ok);
+            if (!ok || ref <= 0) {
+                status->setText(QStringLiteral("Choose a positive parent variablesReference."));
+                return;
             }
-            status->setText(messages.isEmpty() ? QStringLiteral("Adapter acknowledged an empty hardware watchpoint set.") : messages.join('\n'));
-        }, false));
+            const auto serial = ++*selection;
+            controller.session()->dataBreakpointInfo(
+                ref, name->text().toStdString(),
+                deliver(controller, this, [access, dataId, install, status, selection, serial](Result<rpc::Json> body) {
+                    if (*selection != serial)
+                        return;
+                    dataId->clear();
+                    access->clear();
+                    install->setEnabled(false);
+                    if (!body) {
+                        status->setText(QString::fromStdString(body.error().message()));
+                        return;
+                    }
+                    *dataId = text(*body, "dataId").toStdString();
+                    status->setText(text(*body, "description"));
+                    if (const auto* types = body->find("accessTypes"))
+                        for (const auto& type : types->items())
+                            if (type.asString())
+                                access->addItem(QString::fromStdString(*type.asString()));
+                    // DAP default is write when accessTypes is omitted.
+                    if (!access->count())
+                        access->addItem(QStringLiteral("write"));
+                    install->setEnabled(!dataId->empty());
+                }));
+        });
+    auto replace = [this, &controller, status](rpc::Json list) {
+        if (!controller.session())
+            return;
+        controller.session()->setDataBreakpoints(
+            std::move(list),
+            deliver(
+                controller, this,
+                [status](Result<rpc::Json> body) {
+                    if (!body) {
+                        status->setText(QString::fromStdString(body.error().message()));
+                        return;
+                    }
+                    QStringList messages;
+                    if (const auto* results = body->find("breakpoints"))
+                        for (const auto& result : results->items()) {
+                            const auto parsed = debug::dap::parseBreakpoint(result);
+                            messages << (parsed.verified ? QStringLiteral("Hardware watchpoint verified")
+                                                         : QStringLiteral("Hardware watchpoint unverified")) +
+                                            QStringLiteral(": ") + QString::fromStdString(parsed.message);
+                        }
+                    status->setText(messages.isEmpty()
+                                        ? QStringLiteral("Adapter acknowledged an empty hardware watchpoint set.")
+                                        : messages.join('\n'));
+                },
+                false));
     };
     connect(install, &QPushButton::clicked, this, [replace, dataId, access] {
-        if (dataId->empty()) return;
+        if (dataId->empty())
+            return;
         auto list = rpc::Json::array();
         list.push(rpc::Json::object().set("dataId", *dataId).set("accessType", access->currentText().toStdString()));
         replace(std::move(list));
@@ -274,4 +397,4 @@ void DebugDepthPanel::chooseVariable(std::int64_t reference, const QString& name
     m_reference->setText(QString::number(reference));
     m_name->setText(name);
 }
-}
+} // namespace frost::ui

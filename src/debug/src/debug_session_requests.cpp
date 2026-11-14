@@ -22,23 +22,29 @@ std::int64_t DebugSession::State::inspect(std::string command, rpc::Json argumen
         LockGuard lock(mutex);
         stopped = state == DebugState::Stopped;
         epoch = generation;
-        if (currentFrame) frame = currentFrame->id;
+        if (currentFrame)
+            frame = currentFrame->id;
         thread = currentThread;
     }
-    if (!stopped) { done(fail(ErrorCode::Busy, "Inspection needs a paused session")); return 0; }
+    if (!stopped) {
+        done(fail(ErrorCode::Busy, "Inspection needs a paused session"));
+        return 0;
+    }
     return send(command, std::move(arguments),
-        [weak = weak(), epoch, frame, thread, done = std::move(done)](Result<rpc::Json> body) {
-            auto self = weak.lock();
-            bool current = false;
-            if (self) {
-                LockGuard lock(self->mutex);
-                current = self->state == DebugState::Stopped && self->generation == epoch &&
-                          self->currentThread == thread &&
-                          (self->currentFrame ? std::optional(self->currentFrame->id) : std::nullopt) == frame;
-            }
-            if (!current) done(fail(ErrorCode::Cancelled, "Inspection reference expired"));
-            else done(std::move(body));
-        });
+                [weak = weak(), epoch, frame, thread, done = std::move(done)](Result<rpc::Json> body) {
+                    auto self = weak.lock();
+                    bool current = false;
+                    if (self) {
+                        LockGuard lock(self->mutex);
+                        current = self->state == DebugState::Stopped && self->generation == epoch &&
+                                  self->currentThread == thread &&
+                                  (self->currentFrame ? std::optional(self->currentFrame->id) : std::nullopt) == frame;
+                    }
+                    if (!current)
+                        done(fail(ErrorCode::Cancelled, "Inspection reference expired"));
+                    else
+                        done(std::move(body));
+                });
 }
 
 Result<void> DebugSession::continueRun() { return m_state->resume("continue"); }
@@ -88,45 +94,62 @@ std::int64_t DebugSession::stepInTargets(InspectionDone done) {
             m_state->stepTargets.clear();
         }
     }
-    if (error) { done(std::unexpected(*error)); return 0; }
+    if (error) {
+        done(std::unexpected(*error));
+        return 0;
+    }
     return m_state->send("stepInTargets", rpc::Json::object().set("frameId", frame),
-        [weak = std::weak_ptr<State>(m_state), generation, frame, thread, done = std::move(done)](Result<rpc::Json> body) {
-            auto state = weak.lock();
-            bool valid = false;
-            if (state) {
-                LockGuard lock(state->mutex);
-                valid = state->state == DebugState::Stopped && state->generation == generation &&
-                        state->currentFrame && state->currentFrame->id == frame && state->currentThread == thread;
-                if (valid && body) {
-                    state->stepTargets.clear();
-                    if (const auto* targets = body->find("targets"))
-                        for (const auto& target : targets->items())
-                            if (auto id = target.integerAt("id")) state->stepTargets.insert(*id);
-                    state->stepTargetsGeneration = generation;
-                    state->stepTargetsFrame = frame;
-                    state->stepTargetsThread = state->currentThread;
-                }
-            }
-            if (!valid) done(fail(ErrorCode::Cancelled, "Call targets expired"));
-            else done(std::move(body));
-        });
+                         [weak = std::weak_ptr<State>(m_state), generation, frame, thread,
+                          done = std::move(done)](Result<rpc::Json> body) {
+                             auto state = weak.lock();
+                             bool valid = false;
+                             if (state) {
+                                 LockGuard lock(state->mutex);
+                                 valid = state->state == DebugState::Stopped && state->generation == generation &&
+                                         state->currentFrame && state->currentFrame->id == frame &&
+                                         state->currentThread == thread;
+                                 if (valid && body) {
+                                     state->stepTargets.clear();
+                                     if (const auto* targets = body->find("targets"))
+                                         for (const auto& target : targets->items())
+                                             if (auto id = target.integerAt("id"))
+                                                 state->stepTargets.insert(*id);
+                                     state->stepTargetsGeneration = generation;
+                                     state->stepTargetsFrame = frame;
+                                     state->stepTargetsThread = state->currentThread;
+                                 }
+                             }
+                             if (!valid)
+                                 done(fail(ErrorCode::Cancelled, "Call targets expired"));
+                             else
+                                 done(std::move(body));
+                         });
 }
 
 std::int64_t DebugSession::requestInspection(std::string command, rpc::Json arguments, InspectionDone done) {
     const auto caps = capabilities();
-    const bool supported = (command == "modules" && caps.supportsModulesRequest) ||
+    const bool supported =
+        (command == "modules" && caps.supportsModulesRequest) ||
         (command == "frost.registers" && caps.frostSupportsRegisters) ||
         ((command == "frost.setSymbolPaths" || command == "frost.reloadSymbols") && caps.frostSupportsSymbolControl) ||
         (command == "frost.setSourceMap" && caps.frostSupportsSourceMap) ||
         (command == "frost.reloadNatvis" && caps.frostSupportsNatvisReload);
-    if (!supported) { done(fail(ErrorCode::Unsupported, "Adapter does not support this inspection operation")); return 0; }
-    if (!arguments.isObject() || arguments.dump().size() > 65536) {
-        done(fail(ErrorCode::InvalidArgument, "Inspection arguments must be a bounded object")); return 0;
+    if (!supported) {
+        done(fail(ErrorCode::Unsupported, "Adapter does not support this inspection operation"));
+        return 0;
     }
-    if (command == "modules" || command == "frost.registers") return m_state->inspect(std::move(command), std::move(arguments), std::move(done));
+    if (!arguments.isObject() || arguments.dump().size() > 65536) {
+        done(fail(ErrorCode::InvalidArgument, "Inspection arguments must be a bounded object"));
+        return 0;
+    }
+    if (command == "modules" || command == "frost.registers")
+        return m_state->inspect(std::move(command), std::move(arguments), std::move(done));
     // Symbol paths/maps/visualizer reload change adapter inspection configuration. Their successful
     // ACK stays authoritative across frame selection, unlike frame-scoped inspection data.
-    if (state() != DebugState::Stopped) { done(fail(ErrorCode::Busy, "Pause before changing debugger inspection settings")); return 0; }
+    if (state() != DebugState::Stopped) {
+        done(fail(ErrorCode::Busy, "Pause before changing debugger inspection settings"));
+        return 0;
+    }
     return m_state->send(std::move(command), std::move(arguments), std::move(done));
 }
 
@@ -138,21 +161,36 @@ std::int64_t DebugSession::setThreadFrozen(std::int64_t threadId, bool frozen, I
             error = Error{ErrorCode::Unsupported, "This debugger cannot freeze or thaw threads"};
         else if (m_state->state != DebugState::Stopped)
             error = Error{ErrorCode::Busy, "Pause before changing thread freeze state"};
-        else if (std::ranges::none_of(m_state->threads, [threadId](const DebugThread& thread) { return thread.id == threadId; }))
+        else if (std::ranges::none_of(m_state->threads,
+                                      [threadId](const DebugThread& thread) { return thread.id == threadId; }))
             error = Error{ErrorCode::NotFound, "Thread no longer exists"};
     }
-    if (error) { done(std::unexpected(*error)); return 0; }
-    return m_state->send("frost.setThreadFrozen", rpc::Json::object().set("threadId", threadId).set("frozen", frozen),
+    if (error) {
+        done(std::unexpected(*error));
+        return 0;
+    }
+    return m_state->send(
+        "frost.setThreadFrozen", rpc::Json::object().set("threadId", threadId).set("frozen", frozen),
         [weak = std::weak_ptr<State>(m_state), threadId, done = std::move(done)](Result<rpc::Json> body) {
             auto self = weak.lock();
-            if (!self) { done(fail(ErrorCode::Cancelled, "Debug session ended")); return; }
-            if (!body) { done(std::move(body)); return; }
-            if (body->integerAt("threadId") != threadId ||
-                body->boolAt("operationApplied") != true || body->boolAt("commandSucceeded") != true) {
-                done(fail(ErrorCode::Corrupt, "Adapter did not confirm the thread command completed")); return;
+            if (!self) {
+                done(fail(ErrorCode::Cancelled, "Debug session ended"));
+                return;
+            }
+            if (!body) {
+                done(std::move(body));
+                return;
+            }
+            if (body->integerAt("threadId") != threadId || body->boolAt("operationApplied") != true ||
+                body->boolAt("commandSucceeded") != true) {
+                done(fail(ErrorCode::Corrupt, "Adapter did not confirm the thread command completed"));
+                return;
             }
             std::uint64_t epoch = 0;
-            { LockGuard lock(self->mutex); epoch = self->generation; }
+            {
+                LockGuard lock(self->mutex);
+                epoch = self->generation;
+            }
             self->requestThreads(epoch, std::nullopt);
             done(std::move(body));
         });
@@ -160,24 +198,41 @@ std::int64_t DebugSession::setThreadFrozen(std::int64_t threadId, bool frozen, I
 
 std::int64_t DebugSession::dataBreakpointInfo(std::int64_t reference, std::string name, InspectionDone done) {
     bool supported = false, stopped = false;
-    { LockGuard lock(m_state->mutex);
-      supported = m_state->caps.supportsDataBreakpoints && !m_state->readOnly;
-      stopped = m_state->state == DebugState::Stopped; }
-    if (!supported) { done(fail(ErrorCode::Unsupported, "Hardware data breakpoints are unavailable")); return 0; }
-    if (!stopped || reference <= 0 || name.empty()) {
-        done(fail(ErrorCode::InvalidArgument, "Choose a variable in a paused session")); return 0;
+    {
+        LockGuard lock(m_state->mutex);
+        supported = m_state->caps.supportsDataBreakpoints && !m_state->readOnly;
+        stopped = m_state->state == DebugState::Stopped;
     }
-    return m_state->inspect("dataBreakpointInfo", rpc::Json::object().set("variablesReference", reference).set("name", std::move(name)), std::move(done));
+    if (!supported) {
+        done(fail(ErrorCode::Unsupported, "Hardware data breakpoints are unavailable"));
+        return 0;
+    }
+    if (!stopped || reference <= 0 || name.empty()) {
+        done(fail(ErrorCode::InvalidArgument, "Choose a variable in a paused session"));
+        return 0;
+    }
+    return m_state->inspect("dataBreakpointInfo",
+                            rpc::Json::object().set("variablesReference", reference).set("name", std::move(name)),
+                            std::move(done));
 }
 
 std::int64_t DebugSession::setDataBreakpoints(rpc::Json breakpoints, InspectionDone done) {
     bool supported = false, stopped = false;
-    { LockGuard lock(m_state->mutex);
-      supported = m_state->caps.supportsDataBreakpoints && !m_state->readOnly;
-      stopped = m_state->state == DebugState::Stopped; }
-    if (!supported) { done(fail(ErrorCode::Unsupported, "Hardware data breakpoints are unavailable")); return 0; }
-    if (!stopped) { done(fail(ErrorCode::Busy, "Data breakpoint changes need a paused session")); return 0; }
-    return m_state->send("setDataBreakpoints", rpc::Json::object().set("breakpoints", std::move(breakpoints)), std::move(done));
+    {
+        LockGuard lock(m_state->mutex);
+        supported = m_state->caps.supportsDataBreakpoints && !m_state->readOnly;
+        stopped = m_state->state == DebugState::Stopped;
+    }
+    if (!supported) {
+        done(fail(ErrorCode::Unsupported, "Hardware data breakpoints are unavailable"));
+        return 0;
+    }
+    if (!stopped) {
+        done(fail(ErrorCode::Busy, "Data breakpoint changes need a paused session"));
+        return 0;
+    }
+    return m_state->send("setDataBreakpoints", rpc::Json::object().set("breakpoints", std::move(breakpoints)),
+                         std::move(done));
 }
 
 Result<void> DebugSession::pause() {
@@ -350,7 +405,8 @@ std::int64_t DebugSession::variables(std::int64_t variablesReference, std::int64
         arguments.set("format", rpc::Json::object().set("hex", true));
     if (raw && capabilities().frostSupportsRawView) {
         auto format = rpc::Json::object().set("frostRaw", true);
-        if (hexadecimal && capabilities().supportsValueFormattingOptions) format.set("hex", true);
+        if (hexadecimal && capabilities().supportsValueFormattingOptions)
+            format.set("hex", true);
         arguments.set("format", std::move(format));
     }
     if (count > 0) {
@@ -392,11 +448,13 @@ std::int64_t DebugSession::evaluate(std::string expression, std::optional<std::i
 std::int64_t DebugSession::setVariable(std::int64_t variablesReference, std::string_view name, std::string_view value,
                                        SetVariableDone done) {
     if (!capabilities().supportsSetVariable || m_state->readOnly) {
-        if (done) done(fail(ErrorCode::Unsupported, "Adapter does not support setting values"));
+        if (done)
+            done(fail(ErrorCode::Unsupported, "Adapter does not support setting values"));
         return 0;
     }
     if (state() != DebugState::Stopped || variablesReference <= 0 || name.empty()) {
-        if (done) done(fail(ErrorCode::Busy, "Choose a variable in a paused session"));
+        if (done)
+            done(fail(ErrorCode::Busy, "Choose a variable in a paused session"));
         return 0;
     }
     std::string varName(name);
@@ -431,47 +489,52 @@ std::int64_t DebugSession::setExceptionBreakpoints(const std::vector<std::string
 std::int64_t DebugSession::disassemble(std::string_view memoryReference, std::int64_t instructionCount,
                                        DisassembleDone done, std::int64_t instructionOffset) {
     if (!capabilities().supportsDisassembleRequest) {
-        if (done) done(fail(ErrorCode::Unsupported, "Adapter does not support disassembly"));
+        if (done)
+            done(fail(ErrorCode::Unsupported, "Adapter does not support disassembly"));
         return 0;
     }
     if (memoryReference.empty() || instructionCount <= 0 || instructionCount > 4096) {
-        if (done) done(fail(ErrorCode::InvalidArgument, "Disassembly needs a reference and 1..4096 instructions"));
+        if (done)
+            done(fail(ErrorCode::InvalidArgument, "Disassembly needs a reference and 1..4096 instructions"));
         return 0;
     }
-    return m_state->inspect("disassemble", dap::disassembleArguments(memoryReference, instructionCount, instructionOffset),
-                         [done = std::move(done)](Result<rpc::Json> body) {
-                             if (!done) {
-                                 return;
-                             }
-                             if (!body) {
-                                 done(std::unexpected(std::move(body.error())));
-                                 return;
-                             }
-                             done(dap::parseDisassembleResponse(*body));
-                         });
+    return m_state->inspect("disassemble",
+                            dap::disassembleArguments(memoryReference, instructionCount, instructionOffset),
+                            [done = std::move(done)](Result<rpc::Json> body) {
+                                if (!done) {
+                                    return;
+                                }
+                                if (!body) {
+                                    done(std::unexpected(std::move(body.error())));
+                                    return;
+                                }
+                                done(dap::parseDisassembleResponse(*body));
+                            });
 }
 
 std::int64_t DebugSession::readMemory(std::string_view memoryReference, std::int64_t count, ReadMemoryDone done,
                                       std::int64_t offset) {
     if (!capabilities().supportsReadMemoryRequest) {
-        if (done) done(fail(ErrorCode::Unsupported, "Adapter does not support reading memory"));
+        if (done)
+            done(fail(ErrorCode::Unsupported, "Adapter does not support reading memory"));
         return 0;
     }
     if (memoryReference.empty() || count <= 0 || count > 65536) {
-        if (done) done(fail(ErrorCode::InvalidArgument, "Memory reads need a reference and 1..65536 bytes"));
+        if (done)
+            done(fail(ErrorCode::InvalidArgument, "Memory reads need a reference and 1..65536 bytes"));
         return 0;
     }
     return m_state->inspect("readMemory", dap::readMemoryArguments(memoryReference, count, offset),
-                         [done = std::move(done)](Result<rpc::Json> body) {
-                             if (!done) {
-                                 return;
-                             }
-                             if (!body) {
-                                 done(std::unexpected(std::move(body.error())));
-                                 return;
-                             }
-                             done(dap::parseReadMemoryResponse(*body));
-                         });
+                            [done = std::move(done)](Result<rpc::Json> body) {
+                                if (!done) {
+                                    return;
+                                }
+                                if (!body) {
+                                    done(std::unexpected(std::move(body.error())));
+                                    return;
+                                }
+                                done(dap::parseReadMemoryResponse(*body));
+                            });
 }
 
 std::int64_t DebugSession::gotoLine(std::int64_t threadId, std::string_view path, std::int64_t line,

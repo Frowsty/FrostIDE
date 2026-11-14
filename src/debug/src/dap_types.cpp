@@ -108,8 +108,8 @@ Capabilities mergeCapabilities(Capabilities caps, const rpc::Json& body) {
     mergeFlag(caps.frostSupportsNatvisReload, source, "frostSupportsNatvisReload");
     mergeFlag(caps.frostSupportsRegisters, source, "frostSupportsRegisters");
     mergeFlag(caps.frostSupportsRawView, source, "frostSupportsRawView");
-    if (const auto value = source.boolAt("frostStructuredNatvis")) caps.frostStructuredNatvis = *value;
-
+    if (const auto value = source.boolAt("frostStructuredNatvis"))
+        caps.frostStructuredNatvis = *value;
 
     if (const rpc::Json* filters = source.find("exceptionBreakpointFilters");
         filters != nullptr && filters->isArray()) {
@@ -156,7 +156,9 @@ Breakpoint parseBreakpoint(const rpc::Json& json) {
     return breakpoint;
 }
 
-Thread parseThread(const rpc::Json& json) { return Thread{.id = integer(json, "id"), .name = text(json, "name"), .frozen = json.boolAt("frostFrozen")}; }
+Thread parseThread(const rpc::Json& json) {
+    return Thread{.id = integer(json, "id"), .name = text(json, "name"), .frozen = json.boolAt("frostFrozen")};
+}
 
 StackFrame parseStackFrame(const rpc::Json& json) {
     StackFrame frame;

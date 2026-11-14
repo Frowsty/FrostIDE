@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Real adapter-backed modules, symbol configuration and Natvis reload controls.
 #pragma once
-#include <QWidget>
 #include <QStringList>
+#include <QWidget>
 class QTreeWidget;
 class QPlainTextEdit;
 class QLabel;
@@ -17,6 +17,7 @@ public:
     explicit DebugSymbolsWindow(DebugController&, QWidget* parent = nullptr);
     // Absolute admitted files used by the launched target; saved replacements reload at next stop.
     void setVisualizers(QStringList files);
+
 private:
     void refresh();
     void reloadVisualizers();
@@ -40,4 +41,4 @@ private:
     QFileSystemWatcher* m_watcher;
     bool m_visualizersChanged = false;
 };
-}
+} // namespace frost::ui

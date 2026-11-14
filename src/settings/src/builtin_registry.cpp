@@ -420,8 +420,10 @@ struct Entry {
          kApplicationOnly, true, true},
         toolPath("tools.debugger.path", "Debugger", "The debug adapter executable; empty uses the bundled one."),
         toolPath("tools.lldbDap.path", "lldb-dap", "The lldb-dap executable; empty uses the SDK-pinned one."),
-        toolPath("tools.gdb.path", "GDB", "Absolute user-installed GNU GDB >=16 executable with Python/DAP support (Linux)."),
-        toolPath("tools.dbgEng.path", "Frost DbgEng adapter", "Absolute frost-dbgeng-dap executable; empty uses the staged Windows adapter."),
+        toolPath("tools.gdb.path", "GDB",
+                 "Absolute user-installed GNU GDB >=16 executable with Python/DAP support (Linux)."),
+        toolPath("tools.dbgEng.path", "Frost DbgEng adapter",
+                 "Absolute frost-dbgeng-dap executable; empty uses the staged Windows adapter."),
         {"debug.nativeBackend", "Native debugger", "Backend used for ordinary native launch and attach sessions.",
          "Build, Execution, Deployment/Debugger",
 #ifdef __linux__

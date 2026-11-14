@@ -13,11 +13,12 @@
 
 #include "frost/debug/breakpoints.hpp"
 #include "frost/debug/dap_types.hpp"
-#include <vector>
 
 #include <QDialog>
 #include <QString>
 #include <QWidget>
+
+#include <vector>
 
 class QAction;
 class QCheckBox;

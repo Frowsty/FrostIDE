@@ -183,7 +183,7 @@ struct DebugFrame {
     std::int64_t column = 0;
     std::string module;
     std::string instructionPointerReference; // Exact adapter reference for low-level navigation.
-    bool subtle = false; // presentationHint "subtle" or "label".
+    bool subtle = false;                     // presentationHint "subtle" or "label".
 
     [[nodiscard]] bool hasSource() const noexcept { return (!path.empty() || sourceReference > 0) && line > 0; }
 };
@@ -403,7 +403,8 @@ public:
     // The scopes of frame `frameId`. Returns the request's seq (for cancel), 0 when not sent.
     std::int64_t scopes(std::int64_t frameId, ScopesDone done);
     // The children of `variablesReference`; `count` 0 asks for all, else `start`.. `start + count`.
-    std::int64_t variables(std::int64_t variablesReference, std::int64_t start, std::int64_t count, VariablesDone done, bool hexadecimal = false, bool raw = false);
+    std::int64_t variables(std::int64_t variablesReference, std::int64_t start, std::int64_t count, VariablesDone done,
+                           bool hexadecimal = false, bool raw = false);
     // Evaluates `expression` in `frameId` (none: the global context) for `context` ("watch", "repl",
     // "hover"); the result is a Variable named after the expression.
     std::int64_t evaluate(std::string expression, std::optional<std::int64_t> frameId, std::string context,

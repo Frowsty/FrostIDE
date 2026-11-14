@@ -164,7 +164,11 @@ void Workbench::createRunService() {
     debugOptions.natvisFiles = [this](const debug::DebugTarget& target) { return discoverProjectVisualizers(target); };
     debugOptions.dbgEngPathSetting = [this] {
         const auto configured = m_services.settings.snapshot()->get(key::toolsDbgEngPath);
-        return configured.empty() ? QDir(QCoreApplication::applicationDirPath()).filePath("frost-dbgeng-dap.exe").toUtf8().toStdString() : configured;
+        return configured.empty() ? QDir(QCoreApplication::applicationDirPath())
+                                        .filePath("frost-dbgeng-dap.exe")
+                                        .toUtf8()
+                                        .toStdString()
+                                  : configured;
     };
     debugOptions.adapterFactory = m_options.debugAdapterFactory;
     debugOptions.lldbDapSetting = [this] { return m_services.settings.snapshot()->get(key::toolsLldbDapPath); };

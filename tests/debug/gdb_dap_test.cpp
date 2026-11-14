@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "frost/debug/gdb_dap.hpp"
-#include "../../src/debug/src/gdb_transport.hpp"
-#include <future>
-#include <array>
 #include "frost/core/clock.hpp"
+#include "frost/debug/gdb_dap.hpp"
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/project/trust_store.hpp"
+
+#include "../../src/debug/src/gdb_transport.hpp"
 #include "debug_test_util.hpp"
 #include <gtest/gtest.h>
+
 #include <algorithm>
+#include <array>
+#include <future>
 
 namespace frost::debug {
 namespace {
@@ -60,7 +62,7 @@ TEST(GdbDap, DiscoveryNeverSearchesPathOrSubstitutesMissingConfiguredTools) {
 TEST(GdbDap, StartupDisablesInitAutoLoadAndNetworkWithoutTouchingDapStdio) {
     const auto spec = gdbDapProcessSpec(test::workPath("gdb"));
     for (const auto* argument : {"--nx", "--interpreter=dap", "--init-eval-command=set auto-load off",
-                                "--init-eval-command=set debuginfod enabled off"})
+                                 "--init-eval-command=set debuginfod enabled off"})
         EXPECT_NE(std::ranges::find(spec.arguments, argument), spec.arguments.end());
     EXPECT_EQ(spec.stdinMode, io::Stdio::Pipe);
     EXPECT_EQ(spec.stdoutMode, io::Stdio::Pipe);
@@ -68,7 +70,8 @@ TEST(GdbDap, StartupDisablesInitAutoLoadAndNetworkWithoutTouchingDapStdio) {
     EXPECT_TRUE(spec.killOnClose);
 }
 TEST(GdbDap, EnvironmentReplacesTheInferiorBlockAndKeepsArgumentsLiteral) {
-    DebugTarget target{.program = test::workPath("program"), .arguments = {"a b", "$(touch nope)"},
+    DebugTarget target{.program = test::workPath("program"),
+                       .arguments = {"a b", "$(touch nope)"},
                        .environment = {{"KEEP", "override"}, {"ADDED", "value"}}};
     auto arguments = gdbDapLaunchArguments(target, {{"KEEP", "original"}, {"OTHER", "inherited"}});
     ASSERT_TRUE(arguments);

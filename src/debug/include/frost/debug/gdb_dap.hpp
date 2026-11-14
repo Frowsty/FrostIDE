@@ -11,19 +11,21 @@ namespace frost::debug {
 // Factory returns immediately. DAP reader performs cancellable version/process preparation.
 // Launcher and trust store supplied to the session helpers must outlive all sessions.
 [[nodiscard]] AdapterFactory gdbDapAdapterFactory(io::IProcessLauncher& launcher, std::string executable,
-                                                DapProcessOutput output = {});
+                                                  DapProcessOutput output = {});
 // inheritedEnvironment is a snapshot supplied by the caller; explicit target values win.
 // GDB's env replaces the entire inferior environment, unlike LLDB's env array.
-[[nodiscard]] Result<rpc::Json> gdbDapLaunchArguments(
-    const DebugTarget& target, const std::map<std::string, std::string>& inheritedEnvironment);
-[[nodiscard]] Result<std::unique_ptr<DebugSession>> startGdbDebugSession(
-    const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
-    const std::map<std::string, std::string>& inheritedEnvironment,
-    std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
-    std::optional<NativeDebugPrivacy> privacy = {},
-    std::vector<FunctionBreakpointLine> functionBreakpoints = {}, std::vector<std::string> exceptionFilters = {});
-[[nodiscard]] Result<std::unique_ptr<DebugSession>> attachGdbDebugSession(
-    const project::TrustStore& trust, const DebugTarget& target, std::int64_t pid, AdapterFactory factory,
-    std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
-    std::vector<FunctionBreakpointLine> functionBreakpoints = {}, std::vector<std::string> exceptionFilters = {});
+[[nodiscard]] Result<rpc::Json> gdbDapLaunchArguments(const DebugTarget& target,
+                                                      const std::map<std::string, std::string>& inheritedEnvironment);
+[[nodiscard]] Result<std::unique_ptr<DebugSession>>
+startGdbDebugSession(const project::TrustStore& trust, const DebugTarget& target, AdapterFactory factory,
+                     const std::map<std::string, std::string>& inheritedEnvironment,
+                     std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
+                     std::optional<NativeDebugPrivacy> privacy = {},
+                     std::vector<FunctionBreakpointLine> functionBreakpoints = {},
+                     std::vector<std::string> exceptionFilters = {});
+[[nodiscard]] Result<std::unique_ptr<DebugSession>>
+attachGdbDebugSession(const project::TrustStore& trust, const DebugTarget& target, std::int64_t pid,
+                      AdapterFactory factory, std::map<std::string, std::vector<BreakpointLine>> breakpoints,
+                      DebugSessionCallbacks callbacks, std::vector<FunctionBreakpointLine> functionBreakpoints = {},
+                      std::vector<std::string> exceptionFilters = {});
 } // namespace frost::debug

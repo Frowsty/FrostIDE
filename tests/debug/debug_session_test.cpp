@@ -5,15 +5,15 @@
 // an exception stop that selects the faulting frame, the exit, scopes, paged variables, evaluate,
 // breakpoints changed during a session, Run to Cursor, Stop, an adapter crash and a failed start.
 
+#include "frost/core/clock.hpp"
 #include "frost/debug/debug_session.hpp"
 #include "frost/debug/fake_debug_adapter.hpp"
+#include "frost/io/mem_fs.hpp"
+#include "frost/project/trust_store.hpp"
 #include "frost/rpc/framing.hpp"
 
 #include "../../src/debug/src/debug_session_internal.hpp"
 #include "debug_test_util.hpp"
-#include "frost/core/clock.hpp"
-#include "frost/io/mem_fs.hpp"
-#include "frost/project/trust_store.hpp"
 #include <gtest/gtest.h>
 
 #include <cctype>
@@ -55,12 +55,13 @@ TEST(DebugSessionAdapterProfile, AttachAdmissionRechecksTrustAfterInitializeBefo
     DebugSessionOptions options;
     options.targetMode = DebugTargetMode::Attach;
     options.launchAdmission = [&]() -> Result<void> {
-        if (!(*trust)->isTrusted(root)) return fail(ErrorCode::Untrusted, "Attach trust revoked during initialize");
+        if (!(*trust)->isTrusted(root))
+            return fail(ErrorCode::Untrusted, "Attach trust revoked during initialize");
         return {};
     };
     test::SessionRecorder recorder;
     auto session = DebugSession::start(fakeFactory(adapter), rpc::Json::object().set("pid", 123), {},
-                                        recorder.callbacks(), std::move(options));
+                                       recorder.callbacks(), std::move(options));
     ASSERT_TRUE(session);
     ASSERT_TRUE(test::waitUntil([&] { return recorder.hasEnded(); }));
     EXPECT_TRUE(adapter.argumentsOf("attach").empty());
