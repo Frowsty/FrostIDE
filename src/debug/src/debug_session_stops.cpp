@@ -518,7 +518,7 @@ void DebugSession::State::requestThreads(std::uint64_t gen, std::optional<std::s
         if (const rpc::Json* threads = body->find("threads"); threads != nullptr) {
             for (const rpc::Json& thread : threads->items()) {
                 const dap::Thread parsed = dap::parseThread(thread);
-                list.push_back(DebugThread{parsed.id, parsed.name});
+                list.push_back(DebugThread{parsed.id, parsed.name, parsed.frozen});
             }
         }
         std::optional<std::int64_t> selected;

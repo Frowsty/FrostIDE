@@ -21,6 +21,12 @@ TEST(DebugDepthProtocol, OptionalCapabilitiesRemainFalseAndPartialUpdatesPreserv
     EXPECT_TRUE(caps.supportsStepInTargetsRequest);
     EXPECT_FALSE(caps.supportsDataBreakpoints);
 }
+TEST(DebugDepthProtocol, ThreadFreezeStateIsUnknownUnlessExplicitlyReported) {
+    EXPECT_FALSE(dap::parseThread(rpc::Json::object().set("id", 17)).frozen.has_value());
+    EXPECT_EQ(dap::parseThread(rpc::Json::object().set("id", 17).set("frostFrozen", true)).frozen, true);
+    EXPECT_EQ(dap::parseThread(rpc::Json::object().set("id", 17).set("frostFrozen", false)).frozen, false);
+    EXPECT_FALSE(dap::parseThread(rpc::Json::object().set("id", 17).set("frostFrozen", "false")).frozen.has_value());
+}
 TEST(DebugDepthProtocol, MemoryReferenceRemainsOpaqueAndIsNeverInferredFromValue) {
     EXPECT_TRUE(dap::parseVariable(rpc::Json::object().set("value", "0x1234")).memoryReference.empty());
     EXPECT_EQ(dap::parseVariable(rpc::Json::object().set("value", "pretty pointer")
@@ -40,6 +46,10 @@ TEST(DebugDepthSession, MissingCapabilitiesRefuseWithoutSendingOptionalRequests)
     EXPECT_TRUE(answered);
     EXPECT_TRUE(adapter.argumentsOf("stepInTargets").empty());
     EXPECT_FALSE(session->stepIntoTarget(1));
+    session->setThreadFrozen(1, true, [&](Result<rpc::Json> result) {
+        ASSERT_FALSE(result); EXPECT_EQ(result.error().code(), ErrorCode::Unsupported);
+    });
+    EXPECT_TRUE(adapter.argumentsOf("frost.setThreadFrozen").empty());
     session->readMemory("opaque", 16, [&](Result<dap::ReadMemoryResult> result) {
         ASSERT_FALSE(result); EXPECT_EQ(result.error().code(), ErrorCode::Unsupported);
     });

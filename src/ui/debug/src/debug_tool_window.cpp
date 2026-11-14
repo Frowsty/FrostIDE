@@ -21,6 +21,7 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
+#include <QCompleter>
 #include <QDialogButtonBox>
 #include <QFontDatabase>
 #include <QFormLayout>
@@ -234,6 +235,11 @@ void DebugToolWindow::buildThreadsAndVariablesTab() {
     auto* framesLayout = new QVBoxLayout(framesPane);
     framesLayout->setContentsMargins(0, 0, 0, 0);
     m_threads = new QComboBox(framesPane);
+    m_threads->setEditable(true);
+    m_threads->setInsertPolicy(QComboBox::NoInsert);
+    m_threads->setToolTip(QStringLiteral("Search threads by name or ID"));
+    m_threads->completer()->setFilterMode(Qt::MatchContains);
+    m_threads->completer()->setCompletionMode(QCompleter::PopupCompletion);
     framesLayout->addWidget(m_threads);
     m_frames = new FramesModel(m_controller, this);
     m_framesView = new QListView(framesPane);
@@ -523,9 +529,10 @@ void DebugToolWindow::updateThreads() {
     m_threads->clear();
     int current = -1;
     for (const debug::DebugThread& thread : m_controller.threads()) {
-        const QString name = thread.name.empty()
+        QString name = thread.name.empty()
                                  ? QStringLiteral("Thread %1").arg(thread.id)
                                  : QStringLiteral("%1 (%2)").arg(QString::fromStdString(thread.name)).arg(thread.id);
+        if (thread.frozen.has_value()) name += *thread.frozen ? QStringLiteral(" [frozen]") : QStringLiteral(" [thawed]");
         m_threads->addItem(name, QVariant::fromValue<qlonglong>(thread.id));
         if (m_controller.selectedThread() == thread.id) {
             current = m_threads->count() - 1;

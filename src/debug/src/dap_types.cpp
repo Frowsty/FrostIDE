@@ -101,6 +101,7 @@ Capabilities mergeCapabilities(Capabilities caps, const rpc::Json& body) {
     mergeFlag(caps.supportsDataBreakpoints, source, "supportsDataBreakpoints");
     mergeFlag(caps.supportsSingleThreadExecutionRequests, source, "supportsSingleThreadExecutionRequests");
     mergeFlag(caps.supportsValueFormattingOptions, source, "supportsValueFormattingOptions");
+    mergeFlag(caps.frostSupportsThreadFreeze, source, "frostSupportsThreadFreeze");
 
     if (const rpc::Json* filters = source.find("exceptionBreakpointFilters");
         filters != nullptr && filters->isArray()) {
@@ -147,7 +148,7 @@ Breakpoint parseBreakpoint(const rpc::Json& json) {
     return breakpoint;
 }
 
-Thread parseThread(const rpc::Json& json) { return Thread{.id = integer(json, "id"), .name = text(json, "name")}; }
+Thread parseThread(const rpc::Json& json) { return Thread{.id = integer(json, "id"), .name = text(json, "name"), .frozen = json.boolAt("frostFrozen")}; }
 
 StackFrame parseStackFrame(const rpc::Json& json) {
     StackFrame frame;

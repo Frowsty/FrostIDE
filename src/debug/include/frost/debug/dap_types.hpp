@@ -54,6 +54,7 @@ struct Capabilities {
     bool supportsDataBreakpoints = false;
     bool supportsSingleThreadExecutionRequests = false;
     bool supportsValueFormattingOptions = false;
+    bool frostSupportsThreadFreeze = false;
     std::vector<ExceptionFilter> exceptionBreakpointFilters{};
 };
 
@@ -124,6 +125,7 @@ struct Breakpoint {
 struct Thread {
     std::int64_t id = 0;
     std::string name;
+    std::optional<bool> frozen; // Actual frostFrozen extension; absence is unknown.
 };
 
 [[nodiscard]] Thread parseThread(const rpc::Json& json);

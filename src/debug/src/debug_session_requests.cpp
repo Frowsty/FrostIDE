@@ -112,6 +112,33 @@ std::int64_t DebugSession::stepInTargets(InspectionDone done) {
         });
 }
 
+std::int64_t DebugSession::setThreadFrozen(std::int64_t threadId, bool frozen, InspectionDone done) {
+    std::optional<Error> error;
+    {
+        LockGuard lock(m_state->mutex);
+        if (!m_state->caps.frostSupportsThreadFreeze || m_state->readOnly)
+            error = Error{ErrorCode::Unsupported, "This debugger cannot freeze or thaw threads"};
+        else if (m_state->state != DebugState::Stopped)
+            error = Error{ErrorCode::Busy, "Pause before changing thread freeze state"};
+        else if (std::ranges::none_of(m_state->threads, [threadId](const DebugThread& thread) { return thread.id == threadId; }))
+            error = Error{ErrorCode::NotFound, "Thread no longer exists"};
+    }
+    if (error) { done(std::unexpected(*error)); return 0; }
+    return m_state->send("frost.setThreadFrozen", rpc::Json::object().set("threadId", threadId).set("frozen", frozen),
+        [weak = std::weak_ptr<State>(m_state), threadId, done = std::move(done)](Result<rpc::Json> body) {
+            auto self = weak.lock();
+            if (!self) { done(fail(ErrorCode::Cancelled, "Debug session ended")); return; }
+            if (!body) { done(std::move(body)); return; }
+            if (body->integerAt("threadId") != threadId || !body->boolAt("frozen")) {
+                done(fail(ErrorCode::Corrupt, "Adapter omitted the actual thread freeze state")); return;
+            }
+            std::uint64_t epoch = 0;
+            { LockGuard lock(self->mutex); epoch = self->generation; }
+            self->requestThreads(epoch, std::nullopt);
+            done(std::move(body));
+        });
+}
+
 std::int64_t DebugSession::dataBreakpointInfo(std::int64_t reference, std::string name, InspectionDone done) {
     bool supported = false, stopped = false;
     { LockGuard lock(m_state->mutex);

@@ -167,6 +167,7 @@ struct FunctionBreakpointLine {
 struct DebugThread {
     std::int64_t id = 0;
     std::string name;
+    std::optional<bool> frozen;
 
     friend bool operator==(const DebugThread&, const DebugThread&) = default;
 };
@@ -365,6 +366,7 @@ public:
     using InspectionDone = std::function<void(Result<rpc::Json>)>;
     // Capability-gated stopped inspection; references expire on resume, stop or selection change.
     std::int64_t stepInTargets(InspectionDone done);
+    std::int64_t setThreadFrozen(std::int64_t threadId, bool frozen, InspectionDone done);
     std::int64_t dataBreakpointInfo(std::int64_t reference, std::string name, InspectionDone done);
     // Replaces the complete adapter data-breakpoint set, following DAP semantics.
     std::int64_t setDataBreakpoints(rpc::Json breakpoints, InspectionDone done);

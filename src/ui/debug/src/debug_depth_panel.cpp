@@ -60,6 +60,19 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
         if (auto result = controller.session()->stepInstruction(); !result)
             status->setText(QString::fromStdString(result.error().message()));
     });
+    auto* freeze = new QPushButton(QStringLiteral("Freeze selected thread"), this);
+    auto* thaw = new QPushButton(QStringLiteral("Thaw selected thread"), this);
+    auto setFrozen = [this, &controller, status](bool frozen) {
+        if (!controller.session() || !controller.selectedThread()) return;
+        controller.session()->setThreadFrozen(*controller.selectedThread(), frozen, deliver(controller, this,
+            [status](Result<rpc::Json> body) {
+                if (!body) { status->setText(QString::fromStdString(body.error().message())); return; }
+                status->setText(body->boolAt("frozen").value_or(false)
+                    ? QStringLiteral("Adapter reports the thread is frozen.") : QStringLiteral("Adapter reports the thread is thawed."));
+            }, false));
+    };
+    connect(freeze, &QPushButton::clicked, this, [setFrozen] { setFrozen(true); });
+    connect(thaw, &QPushButton::clicked, this, [setFrozen] { setFrozen(false); });
     auto* loadRegisters = new QPushButton(QStringLiteral("Load registers"), this);
     auto* form = new QFormLayout;
     auto* reference = m_reference = new QLineEdit(this);
@@ -79,9 +92,10 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     layout->addWidget(hex);
     layout->addWidget(refresh); layout->addWidget(calls); layout->addWidget(step);
     layout->addWidget(instruction);
+    layout->addWidget(freeze); layout->addWidget(thaw);
     layout->addWidget(loadRegisters); layout->addWidget(registers, 1);
     layout->addLayout(form); layout->addWidget(info); layout->addWidget(install); layout->addWidget(clear);
-    auto update = [&controller, status, refresh, calls, step, loadRegisters, registers, info, install, clear, access, dataId, selection, reference, name, hex, instruction] {
+    auto update = [&controller, status, refresh, calls, step, loadRegisters, registers, info, install, clear, access, dataId, selection, reference, name, hex, instruction, freeze, thaw] {
         ++*selection; reference->clear(); name->clear();
         calls->clear(); registers->clear(); access->clear(); dataId->clear();
         const auto* session = controller.session();
@@ -90,6 +104,10 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
         hex->setToolTip(QStringLiteral("Requires debugger value formatting support"));
         const bool stopped = session && controller.paused();
         const bool mutableStop = stopped && !controller.readOnlySession();
+        freeze->setEnabled(mutableStop && caps.frostSupportsThreadFreeze && controller.selectedThread().has_value());
+        thaw->setEnabled(freeze->isEnabled());
+        freeze->setToolTip(QStringLiteral("Requires debugger thread freeze support"));
+        thaw->setToolTip(freeze->toolTip());
         instruction->setEnabled(mutableStop && caps.supportsSteppingGranularity);
         refresh->setEnabled(mutableStop && caps.supportsStepInTargetsRequest);
         step->setEnabled(false);
@@ -98,7 +116,7 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
         install->setEnabled(false); clear->setEnabled(mutableStop && caps.supportsDataBreakpoints);
         status->setText(QStringLiteral("Unavailable actions are disabled for this debugger. "
             "Select a variable and choose Watch Hardware Access to configure a hardware watchpoint. "
-            "Thread freeze/thaw is unavailable with this adapter."));
+            "Freeze and thaw are available only when the debugger can report the actual thread state."));
     };
     connect(&controller, &DebugController::stateChanged, this, update);
     connect(&controller, &DebugController::frameSelected, this, update);
