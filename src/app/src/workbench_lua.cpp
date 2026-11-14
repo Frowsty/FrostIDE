@@ -13,6 +13,7 @@
 #include "frost/io/reactor.hpp"
 #include "frost/lang/frost_engine_lua.hpp"
 #include "frost/lang/lua_rc.hpp"
+#include "frost/lang/lua_input_index.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/sched/lane.hpp"
@@ -28,6 +29,7 @@
 #include "engine_binding_integration.hpp"
 #include "language_bridge.hpp"
 #include <QMetaObject>
+#include <QTimer>
 
 #include <algorithm>
 #include <limits>
@@ -42,6 +44,12 @@ struct WorkbenchLuaState {
     std::uint64_t generation = 0;        // Increments per LuaLS start and stop; older callbacks are dropped.
     std::vector<std::string> folderKeys; // documentKeys of the running LuaLS's extra folders, sorted.
     std::vector<std::string> inputKeys;  // documentKeys of the host providers' inputs.
+    lang::LuaInputIndex inputIndex;
+    bool configurationRefreshQueued = false;
+    void setInputs(std::vector<std::string> inputs) {
+        inputKeys = std::move(inputs);
+        inputIndex.reset(inputKeys);
+    }
     std::map<std::string, std::shared_ptr<ui::BackgroundTask>> tasks; // $/progress token -> its task.
     std::vector<std::string> titles;    // Every progress title LuaLS began for this project, in order.
     std::vector<std::string> refreshes; // Every refresh request handled for this project, in order.
@@ -201,14 +209,6 @@ std::vector<std::string> sortedFolderKeys(const std::vector<lang::LuaWorkspaceFo
 }
 
 // Whether the path `key` is `input`, lies below it, or is a folder above it (documentKeys).
-bool touches(std::string_view key, std::string_view input) {
-    const auto below = [](std::string_view inner, std::string_view outer) {
-        return inner.size() > outer.size() && inner.starts_with(outer) &&
-               (inner[outer.size()] == '/' || inner[outer.size()] == '\\');
-    };
-    return key == input || below(key, input) || below(input, key);
-}
-
 sched::Task<void> prepareLuaPlanTask(io::IFileSystem* fs, std::shared_ptr<WorkbenchLuaState> luaStatePtr,
                                      std::string runtime, std::string stateDirectory, std::string root,
                                      QPointer<Workbench> self,
@@ -374,7 +374,7 @@ void Workbench::startLua(const std::string& root) {
         options.configuration = std::move(plan.configuration);
         options.folders = plan.folders;
         st.folderKeys = sortedFolderKeys(plan.folders);
-        st.inputKeys = std::move(plan.inputKeys);
+        st.setInputs(std::move(plan.inputKeys));
         options.onLifecycle = [self = QPointer<Workbench>(this), generation] {
             if (self)
                 QMetaObject::invokeMethod(
@@ -495,7 +495,7 @@ void Workbench::refreshLuaConfiguration() {
                                        self->startLua(self->m_projectRoot);
                                        return;
                                    }
-                                   self->m_luaState->inputKeys = std::move(plan.inputKeys);
+                                   self->m_luaState->setInputs(std::move(plan.inputKeys));
                                    if (auto sent = self->m_lua->changeConfiguration(std::move(plan.configuration),
                                                                                     std::move(plan.folders));
                                        !sent)
@@ -513,7 +513,7 @@ void Workbench::refreshLuaConfiguration() {
         startLua(m_projectRoot);
         return;
     }
-    state.inputKeys = std::move(plan.inputKeys);
+    state.setInputs(std::move(plan.inputKeys));
     if (auto sent = m_lua->changeConfiguration(std::move(plan.configuration), std::move(plan.folders)); !sent)
         log::warn("workbench", "LuaLS didChangeConfiguration: {}", sent.error().describe());
 }
@@ -540,8 +540,7 @@ void Workbench::onLuaFilesChanged(const io::FileChangeBatch& batch) {
     const auto add = [&](const std::string& path, lang::FileChangeType type) {
         changes.push_back({path, type});
         const std::string key = lang::documentKey(path);
-        hostInputs = hostInputs || std::ranges::any_of(m_luaState->inputKeys,
-                                                       [&](const std::string& input) { return touches(key, input); });
+        hostInputs = hostInputs || m_luaState->inputIndex.touches(key);
     };
     for (const io::FileChange& change : batch.changes) {
         switch (change.kind) {
@@ -562,8 +561,16 @@ void Workbench::onLuaFilesChanged(const io::FileChangeBatch& batch) {
     else if (*sent > 0)
         log::debug("workbench", "LuaLS didChangeWatchedFiles: {} changes", *sent);
     // A host's own files changed (the engine wrote its reference or definitions): compose again.
-    if (hostInputs)
-        refreshLuaConfiguration();
+    if (hostInputs && !m_luaState->configurationRefreshQueued) {
+        auto state=m_luaState;
+        state->configurationRefreshQueued=true;
+        const auto generation=state->generation;
+        QTimer::singleShot(75,this,[this,state,generation] {
+            state->configurationRefreshQueued=false;
+            if(m_luaState==state && state->generation==generation && m_lua)
+                refreshLuaConfiguration();
+        });
+    }
 }
 void Workbench::onLuaProgress(std::uint64_t generation, const lang::LuaProgress& progress) {
     if (!m_lua || !m_luaState || m_luaState->generation != generation)

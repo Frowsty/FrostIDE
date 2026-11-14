@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+
 #
 # Tests for frost::lang (W2, ADR 0036):
 #   lang_unit_tests    JSON, framing, JSON-RPC and the LSP client against a scripted in-memory fake
@@ -57,6 +58,7 @@ frost_add_test(lang_unit_tests
         frost_engine_assets_test.cpp
         frost_engine_lua_test.cpp
         lua_host_test.cpp
+        lua_input_index_test.cpp
         lua_rc_test.cpp
         lua_service_test.cpp
         msbuild_provider_test.cpp
