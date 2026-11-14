@@ -68,6 +68,7 @@
 #include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
 #include "frost/debug/breakpoints.hpp"
+#include "frost/lang/file_templates.hpp"
 #include "frost/document/autosave.hpp"
 #include "frost/document/refactoring_transaction.hpp"
 #include "frost/document/save_manager.hpp"
@@ -228,6 +229,17 @@ struct NewProjectSpec {
     std::string name;
     std::string location;
     NewProjectTemplate kind = NewProjectTemplate::CMakeExecutable;
+    std::string author;
+    std::string description;
+};
+
+struct SourceTemplateSpec {
+    lang::FileTemplateRequest file;
+    std::string directory; // Existing absolute destination; directory creation is not prewritten.
+    std::string cmakeTargetId;
+    std::string vcxprojPath;
+    bool newCMakeTarget = false;
+    bool staticLibrary = false;
 };
 
 // The ids of the Build output and Find Usages tool windows (bottom); Run is the shell's "run".
@@ -534,6 +546,8 @@ public:
     void showOpenDialog(IWorkbenchPrompts::OpenKind kind);
     // Shows the File > New Project prompt and creates + opens the project.
     void showNewProjectDialog();
+    void showSourceTemplateDialog();
+    [[nodiscard]] Result<std::vector<std::string>> createSourceTemplate(const SourceTemplateSpec&);
     // Creates a new project from `spec` without overwriting existing non-empty folders, and opens it.
     [[nodiscard]] Result<std::string> createNewProject(const NewProjectSpec& spec);
     // Creates a new file or folder in `directory` (empty: active tree/editor/project directory).
@@ -755,6 +769,7 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    bool confirmSourceTemplatePlan(const document::RefactoringPlan&);
     friend class LanguageBridge;
     friend class EngineIntegration;
     friend class EngineBindingIntegration;

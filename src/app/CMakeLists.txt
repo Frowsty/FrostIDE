@@ -165,6 +165,8 @@ frost_add_library(app LAYER app
         src/workbench_project.cpp
         src/workbench_project_helpers.hpp
         src/workbench_new_project.cpp
+        src/workbench_templates.cpp
+        src/workbench_template_dialogs.cpp
         src/workbench_project_sources.cpp
         src/workbench_source_rename.cpp
         src/workbench_source_rename_integration.cpp

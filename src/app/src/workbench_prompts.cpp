@@ -240,6 +240,12 @@ std::optional<NewProjectSpec> DialogWorkbenchPrompts::chooseNewProject(QWidget* 
     nameEdit->setObjectName(QStringLiteral("newProjectNameEdit"));
     nameEdit->selectAll();
     form->addRow(text("Project name:"), nameEdit);
+    auto* authorEdit = new QLineEdit(&dialog);
+    authorEdit->setObjectName(QStringLiteral("newProjectAuthorEdit"));
+    form->addRow(text("Author (optional):"), authorEdit);
+    auto* descriptionEdit = new QLineEdit(&dialog);
+    descriptionEdit->setObjectName(QStringLiteral("newProjectDescriptionEdit"));
+    form->addRow(text("Description (optional):"), descriptionEdit);
 
     QString initialLocation = QDir::toNativeSeparators(qs(defaultLocation));
     if (initialLocation.isEmpty()) {
@@ -313,6 +319,8 @@ std::optional<NewProjectSpec> DialogWorkbenchPrompts::chooseNewProject(QWidget* 
     spec.location = QDir::toNativeSeparators(locationEdit->text().trimmed()).toStdString();
     const int row = std::clamp(templateList->currentRow(), 0, static_cast<int>(entries.size()) - 1);
     spec.kind = entries[static_cast<std::size_t>(row)].kind;
+    spec.author=authorEdit->text().toUtf8().toStdString();
+    spec.description=descriptionEdit->text().toUtf8().toStdString();
     return spec;
 }
 
