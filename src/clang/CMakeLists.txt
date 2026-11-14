@@ -54,6 +54,7 @@ add_executable(frost-clang
     src/frost_clang_main.cpp
     src/local_rename_plan.cpp
     src/ast_refactoring_plan.cpp
+    src/ast_create_from_usage.cpp
     src/ast_refactoring_operations.cpp
     src/ast_safe_delete.cpp
     src/ast_generation.cpp

@@ -11,6 +11,8 @@ Json cppRefactoringRequestJson(const CppRefactoringRequest& request) {
         order.emplace_back(static_cast<std::uint64_t>(index));
     return cppRenameRequestJson(request.context)
         .set("operation", request.operation)
+        .set("usageReturnType", request.usageReturnType)
+        .set("usageBody", request.usageBody)
         .set("endOffset", request.endOffset)
         .set("parameterOrder", Json::array(std::move(order)));
 }
@@ -21,7 +23,7 @@ sched::Task<Result<CppRenameProposal>> requestCppRefactoringPlan(io::IProcessLau
     constexpr std::array operations{"change-signature",  "inline-variable",     "inline-function",
                                     "extract-variable",  "extract-constant",    "extract-method",
                                     "extract-field",     "safe-delete",         "generate-accessors",
-                                    "generate-equality", "generate-formatting", "generate-overrides"};
+                                    "generate-equality", "generate-formatting", "generate-overrides", "create-from-usage"};
     if (std::ranges::find(operations, request.operation) == operations.end() ||
         request.endOffset < request.context.offset ||
         (!request.operation.starts_with("generate-") && request.context.path != request.context.seedTranslationUnit))

@@ -78,4 +78,31 @@ TEST(CppRefactoringPlan, RealRefusalUsesDedicatedModeAndCannotCarryPartialEdits)
     EXPECT_EQ(launcher.launches()[0].spec.arguments, (std::vector<std::string>{"--plan-ast-refactoring"}));
     EXPECT_TRUE(launcher.launches()[0].spec.killOnClose);
 }
+
+TEST(CppRefactoringPlan, CreationPreservesExplicitImplementationAndUnknownReturnInferenceOnWire) {
+    frost::lang::CppRefactoringRequest request;
+    request.context.path = path("a.cpp"); request.context.seedTranslationUnit = request.context.path;
+    request.context.offset = 31; request.endOffset = 38; request.operation = "create-from-usage";
+    request.usageBody = "return left + right;";
+    const auto json = frost::lang::cppRefactoringRequestJson(request);
+    EXPECT_EQ(json.stringAt("operation"), "create-from-usage");
+    EXPECT_EQ(json.stringAt("usageReturnType"), "");
+    EXPECT_EQ(json.stringAt("usageBody"), "return left + right;");
+}
+TEST(CppRefactoringPlan, CreationUsesContainedAstModeAndRetainsRealRecoveryRefusal) {
+    auto reactor = frost::io::Reactor::create(); ASSERT_TRUE(reactor);
+    frost::sched::SimExecutor executor; frost::io::ScriptedProcessLauncher launcher;
+    launcher.expect({.exitCode = 1, .stdoutBytes = R"({"kind":"cpp-refactoring-plan","status":"parse-error","files":[],"diagnostics":["unrelated baseline error"]})"});
+    frost::lang::CppRefactoringRequest request;
+    request.context.projectRoot = path(""); request.context.path = path("a.cpp");
+    request.context.seedTranslationUnit = request.context.path; request.context.newName = "unused";
+    request.context.compilationDatabase = "[]"; request.operation = "create-from-usage";
+    request.usageReturnType = "int"; request.usageBody = "return 42;";
+    auto result = executor.spawn(frost::sched::Lane::Background,
+        frost::lang::requestCppRefactoringPlan(launcher, {**reactor, executor}, path("frost-clang"), request,
+                                               std::chrono::seconds(10))).join();
+    ASSERT_TRUE(result); EXPECT_FALSE(result->ready()); EXPECT_TRUE(result->files.empty());
+    ASSERT_EQ(launcher.launches().size(), 1U);
+    EXPECT_EQ(launcher.launches()[0].spec.arguments, (std::vector<std::string>{"--plan-ast-refactoring"}));
+}
 } // namespace
