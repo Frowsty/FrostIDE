@@ -806,6 +806,7 @@ private:
     [[nodiscard]] bool previewCppRefactoring(const document::RefactoringPlan& plan);
     void registerLuaRefactoringActions();
     void showLuaRefactoring(std::string operation);
+    void renameLuaModule();
     void publishRefactoringOutcome(const document::RefactoringOutcome& outcome);
     [[nodiscard]] bool refactoringTrusted(TransactionId token) const;
     [[nodiscard]] Result<document::RefactoringOutcome> runRefactoringHistory(TransactionId token, bool redo);
