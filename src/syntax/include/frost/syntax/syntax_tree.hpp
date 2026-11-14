@@ -8,6 +8,7 @@
 #include "frost/core/clock.hpp"
 #include "frost/syntax/highlight.hpp"
 #include "frost/syntax/language.hpp"
+#include "frost/syntax/lua_ast.hpp"
 #include "frost/syntax/outline.hpp"
 #include "frost/text/positions.hpp"
 #include "frost/text/snapshot.hpp"
@@ -106,6 +107,10 @@ public:
     [[nodiscard]] ByteOffset luaErrorStartAt(ByteOffset at) const noexcept;
     // The matching block opener for a Lua end/until token, or nullopt. O(tree depth).
     [[nodiscard]] std::optional<ByteOffset> luaCloserOpener(ByteOffset at) const noexcept;
+    // Worker-side actual AST admission: only current, error-free Lua trees. Owns strings/snapshot,
+    // so the result no longer borrows grammar/tree nodes. Bounded iterative O(nodes+edges),
+    // cancellation/timeouts return errors, never a partial or fabricated semantic projection.
+    [[nodiscard]] Result<LuaAstProjection> luaAstProjection(const LuaAstLimits& limits={}) const;
 
     /*
      * The ranges of the named nodes that contain `selection`, smallest first, strictly growing and
