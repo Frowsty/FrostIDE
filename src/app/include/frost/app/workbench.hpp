@@ -181,6 +181,7 @@ struct ManagedSourceSnapshot;
 
 class LanguageBridge;
 class CMakeIntegration;
+class StandaloneBuildBackend;
 class ProjectEditProcess;
 class EngineIntegration;
 class EngineLuaDebugCoordinator;
@@ -1053,6 +1054,7 @@ private:
     // Declared before m_cmake, which runs through it, so it is destroyed after it (RUN-1).
     std::unique_ptr<run::RunManager> m_runManager;
     std::unique_ptr<CMakeIntegration> m_cmake;
+    std::unique_ptr<StandaloneBuildBackend> m_standalone;
     // RUN-3: a CMake target chosen in the run configuration combo that the targets window could not
     // take yet (it showed an older model); connectCMakeRunConfigurations applies it. "" for none.
     std::string m_pendingCMakeTarget;

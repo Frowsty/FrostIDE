@@ -43,6 +43,8 @@ frost_add_library(app LAYER app
         src/automation_endpoint.hpp
         src/command_line.cpp
         src/cmake_build_backend.hpp
+        src/standalone_build_backend.hpp
+        src/standalone_build_backend.cpp
         src/cmake_integration.hpp
         src/cmake_integration.cpp
         src/cmake_kit_dialog.cpp

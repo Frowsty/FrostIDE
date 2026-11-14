@@ -73,7 +73,10 @@ std::optional<std::string> inferExternalProjectRootForFile(std::string_view file
         return std::nullopt;
     const QString suffix = fileInfo.suffix().toLower();
     if (suffix == QStringLiteral("frostproj") || suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx") ||
-        fileInfo.fileName().compare(QStringLiteral("CMakeLists.txt"), Qt::CaseInsensitive) == 0)
+        fileInfo.fileName().compare(QStringLiteral("CMakeLists.txt"), Qt::CaseInsensitive) == 0 ||
+        fileInfo.fileName() == QStringLiteral("compile_commands.json") ||
+        fileInfo.fileName() == QStringLiteral("Makefile") || fileInfo.fileName() == QStringLiteral("makefile") ||
+        fileInfo.fileName() == QStringLiteral("GNUmakefile"))
         return std::nullopt;
     const QString canonicalFile = fileInfo.canonicalFilePath();
     if (canonicalFile.isEmpty())
@@ -127,7 +130,11 @@ std::optional<std::string> inferExternalProjectRootForFile(std::string_view file
         const QDir dir(ancestor.path);
         if (QFileInfo(dir.filePath(QStringLiteral(".luarc.json"))).isFile() ||
             QFileInfo(dir.filePath(QStringLiteral("ProjectSettings"))).isDir() || hasEntryWithSuffix(dir, u"sln") ||
-            hasEntryWithSuffix(dir, u"slnx") || QFileInfo(dir.filePath(QStringLiteral("CMakeLists.txt"))).isFile()) {
+            hasEntryWithSuffix(dir, u"slnx") || QFileInfo(dir.filePath(QStringLiteral("CMakeLists.txt"))).isFile() ||
+            QFileInfo(dir.filePath(QStringLiteral("compile_commands.json"))).isFile() ||
+            QFileInfo(dir.filePath(QStringLiteral("Makefile"))).isFile() ||
+            QFileInfo(dir.filePath(QStringLiteral("makefile"))).isFile() ||
+            QFileInfo(dir.filePath(QStringLiteral("GNUmakefile"))).isFile()) {
             if (auto root = externalProjectRoot(utf8(ancestor.path)))
                 return *root;
         }
