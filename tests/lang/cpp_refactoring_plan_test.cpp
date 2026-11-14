@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: Apache-2.0
+// Authored semantic-operation wire tests. The transport must preserve scope and refuse fake modes.
+#include "frost/io/path.hpp"
+#include "frost/io/reactor.hpp"
+#include "frost/io/scripted_process_launcher.hpp"
+#include "frost/lang/cpp_refactoring_plan.hpp"
+#include "frost/sched/sim_executor.hpp"
+
+#include <gtest/gtest.h>
+
+#include <chrono>
+namespace {
+std::string path(std::string_view name) {
+    return frost::io::joinPath(frost::io::kNativePathStyle == frost::io::PathStyle::Windows ? "C:/project" : "/project",
+                               name)
+        .value();
+}
+TEST(CppRefactoringPlan, SerializesExactByteSelectionAndParameterPermutation) {
+    frost::lang::CppRefactoringRequest request;
+    request.context.path = path("a.cpp");
+    request.context.offset = 12;
+    request.endOffset = 19;
+    request.context.newName = "temporary";
+    request.operation = "change-signature";
+    request.parameterOrder = {2, 0, 1};
+    const auto json = frost::lang::cppRefactoringRequestJson(request);
+    EXPECT_EQ(json.stringAt("operation"), "change-signature");
+    EXPECT_EQ(json.find("offset")->asUnsigned(), 12u);
+    EXPECT_EQ(json.find("endOffset")->asUnsigned(), 19u);
+    ASSERT_EQ(json.find("parameterOrder")->items().size(), 3u);
+    EXPECT_EQ(json.find("parameterOrder")->items()[0].asUnsigned(), 2u);
+}
+TEST(CppRefactoringPlan, UnknownOperationsCannotStartArbitraryHelperModes) {
+    auto reactor = frost::io::Reactor::create();
+    ASSERT_TRUE(reactor);
+    frost::sched::SimExecutor executor;
+    frost::io::ScriptedProcessLauncher launcher;
+    frost::lang::CppRefactoringRequest request;
+    request.context.projectRoot = path("");
+    request.context.path = path("a.cpp");
+    request.context.seedTranslationUnit = request.context.path;
+    request.operation = "--execute-arbitrary";
+    auto result =
+        executor
+            .spawn(frost::sched::Lane::Background,
+                   frost::lang::requestCppRefactoringPlan(launcher, {**reactor, executor}, path("frost-clang"), request,
+                                                          std::chrono::seconds(10)))
+            .join();
+    EXPECT_FALSE(result);
+    EXPECT_TRUE(launcher.launches().empty());
+}
+TEST(CppRefactoringPlan, RealRefusalUsesDedicatedModeAndCannotCarryPartialEdits) {
+    auto reactor = frost::io::Reactor::create();
+    ASSERT_TRUE(reactor);
+    frost::sched::SimExecutor executor;
+    frost::io::ScriptedProcessLauncher launcher;
+    launcher.expect(
+        {.exitCode = 1,
+         .stdoutBytes =
+             R"({"kind":"cpp-refactoring-plan","status":"unsupported","files":[],"diagnostics":["macro range"]})"});
+    frost::lang::CppRefactoringRequest request;
+    request.context.projectRoot = path("");
+    request.context.path = path("a.cpp");
+    request.context.seedTranslationUnit = request.context.path;
+    request.context.newName = "unused";
+    request.context.compilationDatabase = "[]";
+    request.operation = "inline-variable";
+    auto result =
+        executor
+            .spawn(frost::sched::Lane::Background,
+                   frost::lang::requestCppRefactoringPlan(launcher, {**reactor, executor}, path("frost-clang"), request,
+                                                          std::chrono::seconds(10)))
+            .join();
+    ASSERT_TRUE(result);
+    EXPECT_FALSE(result->ready());
+    EXPECT_TRUE(result->files.empty());
+    ASSERT_EQ(launcher.launches().size(), 1u);
+    EXPECT_EQ(launcher.launches()[0].spec.arguments, (std::vector<std::string>{"--plan-ast-refactoring"}));
+    EXPECT_TRUE(launcher.launches()[0].spec.killOnClose);
+}
+} // namespace

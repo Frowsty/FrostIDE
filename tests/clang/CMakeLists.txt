@@ -36,7 +36,7 @@ add_dependencies(clang_binding_map_tests frost-clang)
 
 # Read-only REF-4 preparation: separate real-tool tests leave CLANG-0's rewrite spike intact.
 frost_add_test(local_rename_plan_tests
-    SOURCES local_rename_plan_test.cpp project_rename_plan_test.cpp
+    SOURCES local_rename_plan_test.cpp project_rename_plan_test.cpp ast_refactoring_plan_test.cpp
     DEPS frost::rpc frost::io frost::core
     LABELS integration)
 target_include_directories(local_rename_plan_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

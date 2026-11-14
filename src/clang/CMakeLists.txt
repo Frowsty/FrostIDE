@@ -53,6 +53,8 @@ add_executable(frost-clang
     src/binding_map_command.cpp
     src/frost_clang_main.cpp
     src/local_rename_plan.cpp
+    src/ast_refactoring_plan.cpp
+    src/ast_refactoring_operations.cpp
     src/llvm_compression_shim.cpp
 )
 if(FROST_BUILD_TESTS)
