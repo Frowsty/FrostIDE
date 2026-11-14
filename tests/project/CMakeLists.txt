@@ -18,6 +18,7 @@ frost_add_test(project_unit_tests
         directory_roles_test.cpp
         paths_test.cpp
         project_edit_test.cpp
+        project_edit_plan_test.cpp
         project_host_protocol_test.cpp
         project_model_cache_test.cpp
         sln_reader_test.cpp
@@ -26,6 +27,7 @@ frost_add_test(project_unit_tests
         solution_model_test.cpp
         trust_store_test.cpp
         vcxproj_reader_test.cpp
+        vcxproj_rename_test.cpp
     DEPS frost::project)
 target_include_directories(project_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/project/src)
 target_compile_definitions(project_unit_tests PRIVATE FROST_PROJECT_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

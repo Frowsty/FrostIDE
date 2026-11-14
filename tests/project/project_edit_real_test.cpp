@@ -88,6 +88,102 @@ protected:
     std::string m_msbuild;
 };
 
+TEST_F(ProjectEditReal, PreMoveSdkPlanReturnsInverseAndImportBytesWithoutMovingOrWritingAnything) {
+    EditScratch scratch("r8 pre-move SDK plan");
+    ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
+    auto edit = fileEdit(scratch, ProjectEditKind::RenameFiles, "App/App.vcxproj");
+    edit.files = {scratch.join("App/app.cpp")};
+    edit.renamedTo = {scratch.join("App/renamed.cpp")};
+    edit.commit = false;
+    edit.beforeFileMove = true;
+    edit.transactionId = test::newTransactionId();
+    auto before = io::realFileSystem().readFile(edit.definition);
+    auto filters = io::realFileSystem().readFile(edit.definition + ".filters");
+    auto source = io::realFileSystem().readFile(edit.files[0]);
+    ASSERT_TRUE(before && filters && source);
+    ASSERT_FALSE(exists(edit.renamedTo[0]));
+    auto plan = runProjectEditPlan(io::realProcessLauncher(),
+                                   {.hostPath = hostPath(), .msbuildPath = m_msbuild}, edit);
+    ASSERT_TRUE(plan) << plan.error().describe();
+    EXPECT_EQ(plan->projectBefore, *before);
+    EXPECT_EQ(plan->filtersBefore, *filters);
+    EXPECT_NE(plan->projectAfter.find("renamed.cpp"), std::string::npos);
+    EXPECT_FALSE(plan->imports.empty());
+    EXPECT_EQ(plan->configurations.size(), 5);
+    for (const auto& input : plan->imports)
+        EXPECT_EQ(io::realFileSystem().readFile(input.path).value_or("unreadable"), input.bytes);
+    EXPECT_EQ(io::realFileSystem().readFile(edit.definition).value_or("unreadable"), *before);
+    EXPECT_EQ(io::realFileSystem().readFile(edit.definition + ".filters").value_or("unreadable"), *filters);
+    EXPECT_EQ(io::realFileSystem().readFile(edit.files[0]).value_or("unreadable"), *source);
+    EXPECT_FALSE(exists(edit.renamedTo[0]));
+    EXPECT_FALSE(exists(scratch.join(".frost-project-edit-journal")));
+}
+
+TEST_F(ProjectEditReal, PreMoveImportRulesCannotDropOrDuplicateTheNewItem) {
+    for (const std::string operation : {"Remove", "Include"}) {
+        EditScratch scratch("r8 imported destination rule " + operation);
+        ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
+        auto edit = fileEdit(scratch, ProjectEditKind::RenameFiles, "App/App.vcxproj");
+        edit.files = {scratch.join("App/app.cpp")};
+        edit.renamedTo = {scratch.join("App/renamed.cpp")};
+        edit.commit = false;
+        edit.beforeFileMove = true;
+        edit.transactionId = test::newTransactionId();
+        auto xml = io::realFileSystem().readFile(edit.definition);
+        ASSERT_TRUE(xml);
+        const auto at = xml->rfind("</Project>");
+        ASSERT_NE(at, std::string::npos);
+        xml->insert(at, "<Import Project=\"RenameRule.props\"/>\n");
+        writeFile(edit.definition, *xml);
+        writeFile(scratch.join("App/RenameRule.props"), "<Project><ItemGroup><ClCompile " + operation +
+                  "=\"renamed.cpp\"/></ItemGroup></Project>");
+        auto plan = runProjectEditPlan(io::realProcessLauncher(),
+                                       {.hostPath = hostPath(), .msbuildPath = m_msbuild}, edit);
+        EXPECT_FALSE(plan) << operation;
+        EXPECT_EQ(io::realFileSystem().readFile(edit.definition).value_or("unreadable"), *xml);
+        EXPECT_TRUE(exists(edit.files[0]));
+        EXPECT_FALSE(exists(edit.renamedTo[0]));
+    }
+}
+
+TEST_F(ProjectEditReal, PreMoveImportConditionsAndPropertyFunctionsCannotChangeAfterTheMove) {
+    for (const std::string source : {"app.cpp", "renamed.cpp", "property-function", "property-reassigned", "instance-property"}) {
+        EditScratch scratch("r8 file-dependent import " + source);
+        ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
+        auto edit = fileEdit(scratch, ProjectEditKind::RenameFiles, "App/App.vcxproj");
+        edit.files = {scratch.join("App/app.cpp")};
+        edit.renamedTo = {scratch.join("App/renamed.cpp")};
+        edit.commit = false;
+        edit.beforeFileMove = true;
+        edit.transactionId = test::newTransactionId();
+        auto xml = io::realFileSystem().readFile(edit.definition);
+        ASSERT_TRUE(xml);
+        const auto at = xml->rfind("</Project>");
+        ASSERT_NE(at, std::string::npos);
+        const std::string rule = source == "instance-property"
+            ? "<PropertyGroup><RenameInput>app.cpp</RenameInput><UseRenameRule Condition=\"Exists('$(RenameInput.ToUpper())')\">true"
+              "</UseRenameRule><RenameInput>unrelated.cpp</RenameInput></PropertyGroup>"
+              "<Import Project=\"RenameRule.props\" Condition=\"'$(UseRenameRule)'=='true'\"/>"
+            : source == "property-reassigned"
+            ? "<PropertyGroup><RenameInput>app.cpp</RenameInput><UseRenameRule Condition=\"Exists('$(RenameInput)')\">true"
+              "</UseRenameRule><RenameInput>unrelated.cpp</RenameInput></PropertyGroup>"
+              "<Import Project=\"RenameRule.props\" Condition=\"'$(UseRenameRule)'=='true'\"/>"
+            : source == "property-function"
+            ? "<PropertyGroup><UseRenameRule>$([System.IO.File]::Exists('$(MSBuildProjectDirectory)\\app.cpp'))"
+              "</UseRenameRule></PropertyGroup><Import Project=\"RenameRule.props\" Condition=\"'$(UseRenameRule)'=='true'\"/>"
+            : "<Import Project=\"RenameRule.props\" Condition=\"Exists('" + source + "')\"/>";
+        xml->insert(at, rule);
+        writeFile(edit.definition, *xml);
+        writeFile(scratch.join("App/RenameRule.props"), "<Project><PropertyGroup><RenameRule>true</RenameRule></PropertyGroup></Project>");
+        auto plan = runProjectEditPlan(io::realProcessLauncher(),
+                                       {.hostPath = hostPath(), .msbuildPath = m_msbuild}, edit);
+        EXPECT_FALSE(plan) << source;
+        EXPECT_EQ(io::realFileSystem().readFile(edit.definition).value_or("unreadable"), *xml);
+        EXPECT_TRUE(exists(edit.files[0]));
+        EXPECT_FALSE(exists(edit.renamedTo[0]));
+    }
+}
+
 TEST_F(ProjectEditReal, AddRenameAndRemoveChangeOnlyTheirElementsAndTheSolutionStillBuilds) {
     EditScratch scratch("sln6 file edits");
     ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
