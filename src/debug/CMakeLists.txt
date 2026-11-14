@@ -32,6 +32,7 @@ frost_add_library(debug LAYER debug
         src/dap_client.cpp
         src/dap_types.cpp
         src/dbgeng_dap.cpp
+        src/natvis_discovery.cpp
         src/debug_session.cpp
         src/debug_session_breakpoints.cpp
         src/debug_session_requests.cpp

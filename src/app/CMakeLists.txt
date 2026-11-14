@@ -123,6 +123,7 @@ frost_add_library(app LAYER app
         src/workbench_clone.cpp
         src/workbench_prompts.cpp
         src/workbench_run.cpp
+        src/workbench_visualizers.cpp
         src/workbench_multi_debug.cpp
         src/workbench_run_configurations.cpp
         src/workbench_tool_windows.cpp
@@ -199,6 +200,11 @@ if(NOT WIN32)
         target_compile_definitions(frost PRIVATE $<$<CONFIG:Debug>:FROST_SPAWN_LOG=1>)
     endif()
     target_compile_definitions(frost PRIVATE ${frost_automation_definitions})
+    add_custom_target(frost_visualizers
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${FROST_SOURCE_DIR}/assets/visualizers $<TARGET_FILE_DIR:frost>/visualizers
+        VERBATIM)
+    add_dependencies(frost frost_visualizers)
     return()
 endif()
 
@@ -281,3 +287,11 @@ add_custom_command(TARGET frost POST_BUILD
             ${FROST_QT_PLUGIN_DIR}/tls/qschannelbackend$<$<CONFIG:Debug>:d>.dll
             $<TARGET_FILE_DIR:frost>/tls
     VERBATIM)
+
+# Original visualizer packs are staged alongside the application on every platform.
+add_custom_target(frost_visualizers
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${FROST_SOURCE_DIR}/assets/visualizers $<TARGET_FILE_DIR:frost>/visualizers
+    VERBATIM)
+
+add_dependencies(frost frost_visualizers)

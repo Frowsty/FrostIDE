@@ -958,6 +958,7 @@ private:
     // describes it in the declined notice); Cancelled when declined.
     [[nodiscard]] Result<void> writeCMakeListsWithPreview(const std::string& canonicalLists, const std::string& before,
                                                           const std::string& after, const QString& change);
+    [[nodiscard]] Result<std::vector<std::string>> discoverProjectVisualizers(const debug::DebugTarget& target);
     // Keeps loaded C++ projects in step with a rename, move or delete on disk (see renameItem).
     void updatePathInVcxproj(const std::string& oldPath, const std::string& newPath, bool directory, bool deleted);
     // Runs `FrostEditor assets.find-references` before renaming, moving or deleting an asset in a
