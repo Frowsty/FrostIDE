@@ -81,6 +81,7 @@ frost_add_test(io_integration_tests
     SOURCES
         async_process_test.cpp
         file_transaction_prepare_test.cpp
+        file_transaction_replace_test.cpp
         file_system_test.cpp
         file_watcher_test.cpp
         ignore_rules_git_test.cpp
