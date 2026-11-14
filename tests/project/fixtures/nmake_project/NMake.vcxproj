@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals"><ProjectGuid>{703A689E-A17F-48AC-9E54-CA2B228EF510}</ProjectGuid></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration"><ConfigurationType>Makefile</ConfigurationType><PlatformToolset>v143</PlatformToolset></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <NMakeBuildCommandLine>"$(VCToolsInstallDir)bin\Hostx64\x64\cl.exe" /nologo /c /DFROST_NMAKE=7 /Fo"$(ProjectDir)main.obj" "$(ProjectDir)main.cpp"</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>$(NMakeBuildCommandLine)</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>if exist "$(ProjectDir)main.obj" del /q "$(ProjectDir)main.obj"</NMakeCleanCommandLine>
+    <NMakeOutput>$(ProjectDir)main.obj</NMakeOutput>
+    <NMakeIncludeSearchPath>$(ProjectDir)include</NMakeIncludeSearchPath>
+    <NMakePreprocessorDefinitions>FROST_NMAKE=7</NMakePreprocessorDefinitions>
+    <NMakeForcedIncludes>$(ProjectDir)include\forced.h</NMakeForcedIncludes>
+    <AdditionalOptions>/std:c++20</AdditionalOptions>
+  </PropertyGroup>
+  <ItemGroup><ClCompile Include="main.cpp" /><ClInclude Include="include\forced.h" /></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

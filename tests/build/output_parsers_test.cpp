@@ -26,6 +26,29 @@ std::vector<Diagnostic> run(IOutputParser& parser, const std::vector<std::string
     return out;
 }
 
+TEST(StructuredMsBuildDiagnostics, PreservesLocalizedMultilineMessagesAndProjectIdentity) {
+    auto diagnostic = parseStructuredMsBuildLine(R"(FROSTBUILD1 {"Severity":"error","Code":"C2065","Message":"okänd symbol\nsecond line","File":"C:\\src\\main.cpp","Line":17,"Column":4,"Project":"C:\\src\\App.vcxproj"})");
+    ASSERT_TRUE(diagnostic);
+    EXPECT_EQ(diagnostic->message, "okänd symbol\nsecond line");
+    EXPECT_EQ(diagnostic->line, 17);
+    EXPECT_EQ(diagnostic->column, 4);
+    EXPECT_EQ(diagnostic->file, R"(C:\src\main.cpp)");
+    EXPECT_EQ(diagnostic->project, R"(C:\src\App.vcxproj)");
+}
+
+TEST(StructuredMsBuildDiagnostics, ConsoleDuplicatesAndMalformedEventsAreIgnored) {
+    auto parser = makeStructuredMsBuildOutputParser();
+    const auto diagnostics = run(*parser, {
+        "main.cpp(17): error C2065: unknown symbol",
+        R"(FROSTBUILD1 {"Severity":"warning","Code":"C4100","Message":"unused","File":"a.cpp","Line":2,"Column":0,"Project":"App.vcxproj"})",
+        "FROSTBUILD1 {broken",
+        R"(FROSTBUILD1 {"Severity":"message"})"
+    });
+    ASSERT_EQ(diagnostics.size(), 1U);
+    EXPECT_EQ(diagnostics.front().severity, Severity::Warning);
+    EXPECT_EQ(diagnostics.front().code, "C4100");
+}
+
 TEST(GnuDiagnostics, ParsesLocationsSeveritiesAndFlags) {
     auto warning =
         parseGnuDiagnosticLine("/work/tiny/src/core.c:7:9: warning: unused variable 'x' [-Wunused-variable]");
