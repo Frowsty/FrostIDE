@@ -147,3 +147,23 @@ if(FROST_BUILD_FRAMEWORK_ACCEPTANCE)
         FROST_RUN_CATCH_FIXTURE="$<TARGET_FILE:run_catch_fixture>" FROST_RUN_BOOST_FIXTURE="$<TARGET_FILE:run_boost_fixture>")
     add_dependencies(run_framework_real_tests run_catch_fixture run_boost_fixture)
 endif()
+
+# LUA-12 real frameworks must be provisioned for the selected interpreter. Missing inputs fail.
+include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
+set(FROST_BUSTED_ENTRY "" CACHE FILEPATH "Installed Busted 2.2.0 Lua entry script (not a shebang launcher)")
+frost_add_test(run_lua_framework_real_tests
+    SOURCES lua_framework_real_test.cpp
+    DEPS frost::run frost::debug frost::io frost::core
+    THIRD_PARTY pugixml::pugixml
+    LABELS integration lua standalone)
+target_include_directories(run_lua_framework_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+file(TO_CMAKE_PATH "${FROST_LUA54_EXECUTABLE}" _frost_framework_lua)
+file(TO_CMAKE_PATH "${FROST_LUA_DEBUG_ADAPTER}" _frost_framework_adapter)
+file(TO_CMAKE_PATH "${FROST_BUSTED_ENTRY}" _frost_framework_busted)
+target_compile_definitions(run_lua_framework_real_tests PRIVATE
+    FROST_TEST_LUA_INTERPRETER="${_frost_framework_lua}"
+    FROST_TEST_LUA_DEBUG_ADAPTER="${_frost_framework_adapter}"
+    FROST_TEST_BUSTED_ENTRY="${_frost_framework_busted}"
+    FROST_LUA_DISCOVERY_BRIDGE="${FROST_SOURCE_DIR}/tools/luaunit-discovery.lua"
+    FROST_LUA_FRAMEWORK_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/lua"
+    FROST_IO_TEST_CHILD="$<TARGET_FILE:io_test_child>")
