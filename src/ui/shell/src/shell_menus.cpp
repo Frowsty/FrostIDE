@@ -33,6 +33,7 @@ namespace a = frost::ui::actions;
 
 constexpr std::array kFileMenu{
     act("file.newProject"),
+    act("file.newFromTemplate"),
     act("file.new"),
     act("file.newFolder"),
     act("file.rename"),

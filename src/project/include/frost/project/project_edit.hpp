@@ -76,6 +76,9 @@ struct ProjectEdit {
     // R8 plan-only rename before the source move. Never valid with commit=true; the returned
     // definition bytes join the same native/document transaction as the physical rename.
     bool beforeFileMove = false;
+    // Plan-only AddFiles for absent generated files. No project/source writes or staging;
+    // existing destination directories and namespace-independent explicit membership required.
+    bool beforeFileCreate = false;
 };
 
 /*
@@ -148,10 +151,11 @@ struct ProjectEditPlan {
     std::vector<ProjectEditInputBytes> imports;
     std::vector<std::string> configurations;
     std::string environment;
+    std::string mode;
 };
 // Decodes the versioned, bounded Commit=false response, including exact inverse/input bytes.
 [[nodiscard]] Result<ProjectEditPlan> parseProjectEditPlan(std::string_view line);
-// Blocking worker-only plan. Refuses committing/non-rename requests; cancellation ends the owned
+// Blocking worker-only pre-move rename/pre-create AddFiles plan. Refuses committing requests; cancellation ends the owned
 // helper. No Ready/approval round trip, source move, journal or definition write is permitted.
 [[nodiscard]] Result<ProjectEditPlan> runProjectEditPlan(io::IProcessLauncher& launcher,
                                                          const ProjectEditLaunch& launch, const ProjectEdit& edit,

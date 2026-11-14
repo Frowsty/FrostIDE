@@ -19,6 +19,7 @@ frost_add_test(project_unit_tests
         paths_test.cpp
         project_edit_test.cpp
         project_edit_plan_test.cpp
+        generated_sources_test.cpp
         project_host_protocol_test.cpp
         project_model_cache_test.cpp
         sln_reader_test.cpp
@@ -38,7 +39,7 @@ target_compile_definitions(project_unit_tests PRIVATE FROST_PROJECT_FIXTURE_DIR=
 # ninja that configured FrostIDE. Label "integration" with the tag "cmake".
 frost_add_test(project_cmake_tests
     SOURCES cmake_presets_oracle_test.cpp cmake_membership_oracle_test.cpp
-    DEPS frost::project frost::io
+    DEPS frost::project frost::lang frost::io
     LABELS integration cmake)
 target_include_directories(project_cmake_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(project_cmake_tests PRIVATE

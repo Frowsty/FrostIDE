@@ -95,14 +95,20 @@ std::vector<CodeActionItem> parseCodeActions(const Json& json) {
             continue;
         }
         WorkspaceEdit parsedEdit;
+        std::string disabledReason;
+        if (const auto* disabled = item.find("disabled"))
+            disabledReason = std::string(disabled->stringAt("reason"));
         if (const Json* edit = item.find("edit"); edit != nullptr && !edit->isNull()) {
             auto parsed = parseWorkspaceEdit(*edit);
             if (!parsed) {
-                log::warn(kLogCategory, "skipped code action '{}': {}", item.stringAt("title"),
+                log::warn(kLogCategory, "unavailable code action '{}': {}", item.stringAt("title"),
                           parsed.error().describe());
-                continue;
+                if (parsed.error().code() != ErrorCode::Unsupported)
+                    continue;
+                disabledReason = parsed.error().message();
+            } else {
+                parsedEdit = std::move(*parsed);
             }
-            parsedEdit = std::move(*parsed);
         }
         std::string commandName;
         std::vector<Json> commandArguments;
@@ -131,7 +137,8 @@ std::vector<CodeActionItem> parseCodeActions(const Json& json) {
                                      .preferred = item.boolAt("isPreferred").value_or(false),
                                      .edit = std::move(parsedEdit),
                                      .commandName = std::move(commandName),
-                                     .commandArguments = std::move(commandArguments)});
+                                     .commandArguments = std::move(commandArguments),
+                                     .disabledReason = std::move(disabledReason)});
     }
     std::ranges::stable_sort(out, [](const CodeActionItem& a, const CodeActionItem& b) {
         const auto rank = [](const CodeActionItem& action) {
@@ -235,6 +242,8 @@ Result<void> mergeWorkspaceEdit(WorkspaceEdit& dest, const WorkspaceEdit& src) {
 }
 
 [[nodiscard]] int includeActionPriority(const CodeActionItem& action) {
+    if (!action.disabledReason.empty())
+        return -1;
     if (action.edit.empty()) {
         return -1;
     }
@@ -258,6 +267,58 @@ Result<void> mergeWorkspaceEdit(WorkspaceEdit& dest, const WorkspaceEdit& src) {
 }
 
 } // namespace
+
+sched::Task<Result<ScopeFixes>> requestFixesInScope(ILspRequester& server, std::vector<FileDiagnostics> scope,
+                                                    std::stop_token token) {
+    ScopeFixes result;
+    std::size_t checked = 0;
+    for (const auto& file : scope) {
+        if (file.stale)
+            co_return fail(ErrorCode::Busy, "A scope diagnostic was computed for stale text: " + file.file);
+        for (const auto& diagnostic : file.diagnostics) {
+            if (token.stop_requested())
+                co_return fail(ErrorCode::Cancelled, "Fix in scope cancelled");
+            if (++checked > 8192)
+                co_return fail(ErrorCode::OutOfRange, "Fix in scope exceeds 8192 diagnostics");
+            auto actions = co_await requestCodeActions(server, file.file, diagnostic.lspRange, {diagnostic}, token);
+            if (!actions)
+                co_return std::unexpected(actions.error());
+            std::vector<const CodeActionItem*> eligible;
+            std::string refusal;
+            for (const auto& action : *actions) {
+                if (!action.kind.starts_with("quickfix"))
+                    continue;
+                if (!action.disabledReason.empty()) {
+                    refusal = action.disabledReason;
+                    continue;
+                }
+                if (action.edit.empty() || !action.commandName.empty())
+                    continue;
+                if (std::ranges::none_of(eligible, [&](const auto* previous) { return previous->edit == action.edit; }))
+                    eligible.push_back(&action);
+            }
+            const CodeActionItem* selected = nullptr;
+            unsigned preferred = 0;
+            for (const auto* action : eligible)
+                if (action->preferred) {
+                    selected = action;
+                    ++preferred;
+                }
+            if (!preferred && eligible.size() == 1)
+                selected = eligible.front();
+            if (!selected || preferred > 1) {
+                result.unresolved.push_back(
+                    file.file + ": " + diagnostic.message +
+                    (refusal.empty() ? " (no unique direct provider fix)" : " (" + refusal + ")"));
+                continue;
+            }
+            if (auto merged = mergeWorkspaceEdit(result.edit, selected->edit); !merged)
+                co_return std::unexpected(merged.error());
+            result.chosenActions.push_back(selected->title);
+        }
+    }
+    co_return result;
+}
 
 sched::Task<Result<WorkspaceEdit>> requestOptimizeIncludes(ILspRequester& server, std::string path,
                                                            std::span<const LiveDiagnostic> diagnostics,
@@ -288,11 +349,15 @@ sched::Task<Result<WorkspaceEdit>> requestOptimizeIncludes(ILspRequester& server
             co_return std::unexpected(std::move(spanActions.error()));
         }
         for (const CodeActionItem& action : *spanActions) {
+            if (!action.disabledReason.empty())
+                continue;
             if (toLowerAsciiString(action.title) == "fix all includes" && !action.edit.empty()) {
                 co_return action.edit;
             }
         }
         for (const CodeActionItem& action : *spanActions) {
+            if (!action.disabledReason.empty())
+                continue;
             const std::string title = toLowerAsciiString(action.title);
             if ((title == "remove all unused includes" || title == "add all missing includes") &&
                 !action.edit.empty()) {
