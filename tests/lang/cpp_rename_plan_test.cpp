@@ -42,7 +42,8 @@ Json ready() {
                                               .set("sha256", frost::io::sha256Hex(before))
                                               .set("bytes", before.size())
                                               .set("overlay", true)}))
-        .set("missingDependencies", Json::array({Json(path("optional.h"))}));
+        .set("missingDependencies", Json::array({Json(path("optional.h"))}))
+        .set("directoryDependencies", Json::array({Json(path("include"))}));
 }
 TEST(CppRenamePlan, PreservesWholeImagesAndDirtyOverlayReadReceipts) {
     auto parsed = frost::lang::parseCppRenameProposal(ready().dump());

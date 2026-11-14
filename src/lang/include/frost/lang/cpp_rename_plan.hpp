@@ -42,6 +42,7 @@ struct CppRenameProposal {
     std::vector<CppRenameFile> files;
     std::vector<CppRenameDependency> dependencies;
     std::vector<std::string> missingDependencies;
+    std::vector<std::string> directoryDependencies; // Positive directory-kind probes, not absence.
     std::vector<std::string> diagnostics;
     std::uint64_t translationUnitConfigurations = 0;
     [[nodiscard]] bool ready() const noexcept { return status == "ready"; }

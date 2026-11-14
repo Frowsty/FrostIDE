@@ -150,13 +150,41 @@ private:
 class SnapshotFileSystem final : public llvm::vfs::ProxyFileSystem {
 public:
     explicit SnapshotFileSystem(llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> base, std::size_t files = kFiles,
-                                std::size_t bytes = kDependencyBytes)
-        : ProxyFileSystem(std::move(base)), m_fileLimit(files), m_byteLimit(bytes) {}
+                                std::size_t bytes = kDependencyBytes, std::size_t fileBytes = kDependencyBytes)
+        : ProxyFileSystem(std::move(base)), m_fileLimit(files), m_byteLimit(bytes), m_singleFileLimit(fileBytes) {}
     std::vector<std::string> missingInputs() const {
         std::vector<std::string> result;
         for (const auto& [path, status] : m_status)
             if (!status && (status.getError() == std::errc::no_such_file_or_directory ||
                             status.getError() == std::errc::not_a_directory))
+                result.push_back(path);
+        return result;
+    }
+    bool capturePositiveProbes() {
+        std::vector<std::string> paths;
+        for (const auto& [path, observed] : m_status) {
+            if (!observed) {
+                if (observed.getError() != std::errc::no_such_file_or_directory &&
+                    observed.getError() != std::errc::not_a_directory) {
+                    error = "A namespace probe has no proven file or absence result";
+                    return false;
+                }
+            } else if (observed->isRegularFile() && !inputs.contains(path))
+                paths.push_back(path);
+        }
+        for (const auto& path : paths) {
+            auto file = openFileForRead(path);
+            if (!file) {
+                error = "A positive file probe could not be captured: " + path;
+                return false;
+            }
+        }
+        return error.empty();
+    }
+    std::vector<std::string> directoryInputs() const {
+        std::vector<std::string> result;
+        for (const auto& [path, observed] : m_status)
+            if (observed && observed->isDirectory())
                 result.push_back(path);
         return result;
     }
@@ -232,10 +260,11 @@ public:
             error = "dependency identity changed after namespace observation";
             return std::make_error_code(std::errc::io_error);
         }
-        if (!info->isRegularFile() || !(m_fileLimit == kFiles && m_byteLimit == kDependencyBytes
-                                            ? dependencyFits(inputs.size(), m_bytes, info->getSize())
-                                            : slotFits(inputs.size(), m_fileLimit) && m_bytes <= m_byteLimit &&
-                                                  info->getSize() <= m_byteLimit - m_bytes)) {
+        if (!info->isRegularFile() || info->getSize() > m_singleFileLimit ||
+            !(m_fileLimit == kFiles && m_byteLimit == kDependencyBytes
+                  ? dependencyFits(inputs.size(), m_bytes, info->getSize())
+                  : slotFits(inputs.size(), m_fileLimit) && m_bytes <= m_byteLimit &&
+                        info->getSize() <= m_byteLimit - m_bytes)) {
             error = "dependency resource/type limit exceeded";
             return std::make_error_code(std::errc::file_too_large);
         }
@@ -262,6 +291,7 @@ public:
 private:
     std::size_t m_fileLimit;
     std::size_t m_byteLimit;
+    std::size_t m_singleFileLimit;
     std::size_t m_bytes = 0;
     std::size_t m_namespaceBytes = 0;
     std::map<std::string, llvm::ErrorOr<llvm::vfs::Status>> m_status;
@@ -950,14 +980,16 @@ public:
 
 class ProjectOccurrences final : public clang::RecursiveASTVisitor<ProjectOccurrences> {
     clang::ASTContext& context;
+    clang::Preprocessor* preprocessor;
     const std::set<std::string>& family;
     std::string spelling;
 
 public:
     std::map<std::string, std::set<unsigned>> tokens;
     bool unsupportedMacro = false;
-    ProjectOccurrences(clang::ASTContext& ctx, const std::set<std::string>& ids, std::string name)
-        : context(ctx), family(ids), spelling(std::move(name)) {}
+    ProjectOccurrences(clang::ASTContext& ctx, clang::Preprocessor& pp, const std::set<std::string>& ids,
+                       std::string name)
+        : context(ctx), preprocessor(&pp), family(ids), spelling(std::move(name)) {}
     void consider(const clang::NamedDecl* declaration, clang::SourceLocation location) {
         if (!declaration || location.isInvalid())
             return;
@@ -968,12 +1000,34 @@ public:
         if (std::ranges::none_of(ids, [&](const auto& id) { return family.contains(id); }))
             return;
         auto& sm = context.getSourceManager();
-        if (location.isMacroID()) {
+        while (location.isMacroID()) {
             if (!sm.isMacroArgExpansion(location)) {
                 unsupportedMacro = true;
                 return;
             }
-            location = sm.getSpellingLoc(location);
+            const auto name = clang::Lexer::getImmediateMacroName(location, sm, context.getLangOpts());
+            auto* identifier = preprocessor->getIdentifierInfo(name);
+            if (!identifier) {
+                unsupportedMacro = true;
+                return;
+            }
+            const auto definition = preprocessor->getMacroDefinitionAtLoc(identifier, sm.getExpansionLoc(location));
+            const auto* macro = definition.getMacroInfo();
+            if (!macro) {
+                unsupportedMacro = true;
+                return;
+            }
+            for (const auto& token : macro->tokens())
+                if (token.is(clang::tok::hash) || token.is(clang::tok::hashhash)) {
+                    unsupportedMacro = true;
+                    return;
+                }
+            const auto spelling = sm.getImmediateSpellingLoc(location);
+            if (spelling == location) {
+                unsupportedMacro = true;
+                return;
+            }
+            location = spelling;
         }
         if (!location.isFileID()) {
             unsupportedMacro = true;
@@ -1068,8 +1122,9 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
         }))
         return refuse("invalid-input", "New name must be one C++ identifier");
     auto inside = [&](llvm::StringRef path) {
-        return path == root || (path.starts_with(root) && path.size() > root.size() &&
-                                (llvm::sys::path::is_separator(root.back()) || llvm::sys::path::is_separator(path[root.size()])));
+        return path == root ||
+               (path.starts_with(root) && path.size() > root.size() &&
+                (llvm::sys::path::is_separator(root.back()) || llvm::sys::path::is_separator(path[root.size()])));
     };
     if (!inside(anchor) || (!seed.empty() && !inside(seed)))
         return refuse("unsupported", "Selection must belong to the captured project");
@@ -1163,7 +1218,8 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
                 return refuse("invalid-input", "Duplicate, external or oversized overlay");
         }
     physical->pushOverlay(overlays);
-    llvm::IntrusiveRefCntPtr<SnapshotFileSystem> frozen(new SnapshotFileSystem(physical, 65536, 1024ULL * 1024 * 1024));
+    llvm::IntrusiveRefCntPtr<SnapshotFileSystem> frozen(
+        new SnapshotFileSystem(physical, 32768, 512ULL * 1024 * 1024, 64ULL * 1024 * 1024));
     std::set<std::string> family;
     std::string oldName;
     std::string chosenSeed = seed;
@@ -1214,6 +1270,8 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
     std::stable_sort(commands.begin(), commands.end(), [&](const auto& a, const auto& b) {
         return (a.Filename == chosenSeed) > (b.Filename == chosenSeed);
     });
+    if (!frozen->capturePositiveProbes())
+        return refuse("unsupported", frozen->error);
     frozen->frozen = true;
     std::vector<std::string> newNames{newName}, oldNames{oldName};
     std::vector<std::vector<std::string>> ids{std::vector<std::string>(family.begin(), family.end())};
@@ -1224,7 +1282,7 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
         auto ast = projectAST(command, frozen, {}, diagnostics);
         if (!ast || !frozen->error.empty())
             return refuse("conflict", "Frozen original configuration cannot be replayed");
-        ProjectOccurrences occurrences(ast->getASTContext(), family, oldName);
+        ProjectOccurrences occurrences(ast->getASTContext(), ast->getPreprocessor(), family, oldName);
         occurrences.TraverseDecl(ast->getASTContext().getTranslationUnitDecl());
         if (occurrences.unsupportedMacro)
             return refuse("unsupported", "A target occurrence depends on a macro body, token paste or stringization");
@@ -1271,13 +1329,18 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
     auto mappedOffset = [&](unsigned original) {
         std::int64_t delta = 0;
         for (const auto& [path, edits] : replacements)
-            if (absolute(path, root) == anchor)
-                for (const auto& edit : edits)
-                    if (edit.getOffset() < original)
+            if (absolute(path, root) == anchor) {
+                for (const auto& edit : edits) {
+                    if (original >= edit.getOffset() && original - edit.getOffset() < edit.getLength())
+                        return static_cast<unsigned>(static_cast<std::int64_t>(edit.getOffset()) + delta);
+                    if (edit.getOffset() + edit.getLength() <= original)
                         delta += static_cast<std::int64_t>(edit.getReplacementText().size()) - edit.getLength();
+                }
+            }
         return static_cast<unsigned>(static_cast<std::int64_t>(original) + delta);
     };
     std::set<std::string> reverseFamily;
+    std::vector<std::pair<std::vector<std::string>, std::vector<std::string>>> candidateEdges;
     std::map<std::string, clang::tooling::Replacements> reverse;
     for (const auto& command : commands) {
         Diagnostics diagnostics;
@@ -1292,20 +1355,20 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
             auto found = clang::tooling::getUSRsForDeclaration(selected.declaration, ast->getASTContext());
             reverseFamily.insert(found.begin(), found.end());
         }
-        // Collect candidate override families before the reverse occurrence pass.
         ProjectMethods methods(ast->getASTContext());
         methods.TraverseDecl(ast->getASTContext().getTranslationUnitDecl());
-        for (bool changed = true; changed;) {
-            changed = false;
-            for (const auto& [left, right] : methods.edges)
-                if (std::ranges::any_of(left, [&](const auto& id) { return reverseFamily.contains(id); }) ||
-                    std::ranges::any_of(right, [&](const auto& id) { return reverseFamily.contains(id); })) {
-                    for (const auto& id : left)
-                        changed |= reverseFamily.insert(id).second;
-                    for (const auto& id : right)
-                        changed |= reverseFamily.insert(id).second;
-                }
-        }
+        candidateEdges.insert(candidateEdges.end(), methods.edges.begin(), methods.edges.end());
+    }
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& [left, right] : candidateEdges)
+            if (std::ranges::any_of(left, [&](const auto& id) { return reverseFamily.contains(id); }) ||
+                std::ranges::any_of(right, [&](const auto& id) { return reverseFamily.contains(id); })) {
+                for (const auto& id : left)
+                    changed |= reverseFamily.insert(id).second;
+                for (const auto& id : right)
+                    changed |= reverseFamily.insert(id).second;
+            }
     }
     std::vector<std::vector<std::string>> reverseIDs{
         std::vector<std::string>(reverseFamily.begin(), reverseFamily.end())};
@@ -1337,7 +1400,7 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
         if (*restored != *original->second.bytes)
             return refuse("conflict", "Semantic round trip detects capture or changed overload resolution");
     }
-    llvm::json::Array files, dependencies, missing;
+    llvm::json::Array files, dependencies, missing, directories;
     std::size_t outputBytes = 0;
     auto charge = [&](std::size_t bytes) {
         constexpr std::size_t limit = 64 * 1024 * 1024;
@@ -1371,6 +1434,14 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
             return refuse("unsupported", "Namespace receipt budget exceeded");
         missing.push_back(path);
     }
+    for (const auto& path : frozen->directoryInputs()) {
+        if (!charge(path.size()))
+            return refuse("unsupported", "Directory receipt output budget exceeded");
+        directories.push_back(path);
+    }
+    if (dependencies.size() + missing.size() + directories.size() > 32768)
+        return refuse("unsupported", "Transaction read-dependency budget exceeded");
+    result["directoryDependencies"] = std::move(directories);
     result["status"] = "ready";
     result["files"] = std::move(files);
     result["dependencies"] = std::move(dependencies);
