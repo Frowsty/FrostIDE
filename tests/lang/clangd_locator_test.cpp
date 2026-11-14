@@ -66,6 +66,28 @@ TEST(FindClangd, PrefersTheSettingThenTheSdkThenPath) {
     EXPECT_EQ(chosen->origin, ClangdOrigin::Path);
 }
 
+TEST(FindClangd, BundledFrostPrecedesStockWhileExplicitOverrideRemainsAuthoritative) {
+    MemFs fs(frost::systemClock());
+    place(fs, "sdk");
+    place(fs, "override");
+    ASSERT_TRUE(fs.createDirectories(dir("application")));
+    const auto bundled = frost::io::joinPath(dir("application"), kWindows ? "frost-clang.exe" : "frost-clang").value();
+    ASSERT_TRUE(fs.writeFileAtomic(bundled, "isolated-engine"));
+    ClangdSearch search{.sdkDirectories = {dir("sdk")}, .bundledFrostPath = bundled};
+    auto found = findClangd(fs, search);
+    ASSERT_TRUE(found);
+    EXPECT_EQ(found->path, bundled);
+    EXPECT_EQ(found->origin, ClangdOrigin::BundledFrost);
+    search.configuredPath = exeIn("override");
+    found = findClangd(fs, search);
+    ASSERT_TRUE(found);
+    EXPECT_EQ(found->origin, ClangdOrigin::Setting);
+    search.configuredPath.clear();
+    search.bundledFrostPath = frost::io::joinPath(dir("application"), "missing").value();
+    found = findClangd(fs, search);
+    ASSERT_TRUE(found);
+    EXPECT_EQ(found->origin, ClangdOrigin::PinnedSdk);
+}
 TEST(FindClangd, QuotedPathEntriesAreAccepted) {
     MemFs fs(frost::systemClock());
     place(fs, "quoted dir");

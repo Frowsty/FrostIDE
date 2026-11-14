@@ -3,6 +3,11 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-14: R13 bundled C++ feature-host first vertical
+
+- Normal C++ server selection now prefers the bundled isolated `frost-clang`, while explicit stock-server settings remain authoritative and missing bundles retain the existing stock fallback. The bundled choice must advertise its actual versioned feature-module capability before Running. Application builds and both platform staging scripts include the helper; its normal clangd mode resolves the staged pinned resource directory without changing explicit overrides, trust, synchronization or lifecycle behavior.
+- Locator/capability and actual later definition-navigation tests are authored. ADR 0097 records the unchanged process/CRT boundary and the separate configuration-index, preprocessor and modules producer boundaries. These latter verticals remain to implement. No build, test, tool execution, indexing benchmark or journey was run.
+
 ## 2026-11-14: R11 explicit project-scoped Change Signature
 
 - A composed component-fixture test now obtains ten actual AST proposals (signature, inline, extraction, safe delete and generators), applies each through the existing Workbench transaction API, and checks complete Undo/Redo history against exact images. It is authored and source-reviewed only; the PLAN engine-corpus journey and runtime acceptance remain deferred.

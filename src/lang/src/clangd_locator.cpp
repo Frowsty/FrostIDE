@@ -123,6 +123,7 @@ std::string_view toString(ClangdOrigin origin) noexcept {
     case ClangdOrigin::Setting: return "setting";
     case ClangdOrigin::PinnedSdk: return "pinned SDK";
     case ClangdOrigin::Path: return "PATH";
+    case ClangdOrigin::BundledFrost: return "bundled frost-clang";
     }
     return "PATH";
 }
@@ -141,6 +142,14 @@ ClangdSearch defaultClangdSearch(std::string configuredPath) {
     // ~/sdk/env.sh set them for development and tests), then PATH. No machine-specific default
     // root (FND-10): the product never guesses a developer's drive.
     if (const std::string exeDir = executableDirectory(); !exeDir.empty()) {
+        if (auto bundled = io::joinPath(exeDir,
+#ifdef _WIN32
+                                        "frost-clang.exe"
+#else
+                                        "frost-clang"
+#endif
+                                        ))
+            search.bundledFrostPath = std::move(*bundled);
         if (std::string bundledPinned = llvmBin(exeDir); !bundledPinned.empty()) {
             search.sdkDirectories.push_back(std::move(bundledPinned));
         }
@@ -180,6 +189,12 @@ Result<ClangdLocation> findClangd(io::IFileSystem& fs, const ClangdSearch& searc
         return ClangdLocation{.path = std::move(*normalized), .origin = ClangdOrigin::Setting};
     }
     std::vector<std::string> tried;
+    if (!search.bundledFrostPath.empty()) {
+        auto bundled = io::normalizePath(search.bundledFrostPath);
+        if (bundled && io::isAbsolutePath(*bundled) && isRegularFile(fs, *bundled))
+            return ClangdLocation{.path = std::move(*bundled), .origin = ClangdOrigin::BundledFrost};
+        tried.push_back(search.bundledFrostPath);
+    }
     for (const std::string& directory : search.sdkDirectories) {
         if (auto candidate = candidateIn(directory)) {
             if (isRegularFile(fs, *candidate)) {

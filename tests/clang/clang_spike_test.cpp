@@ -145,6 +145,8 @@ TEST(ClangSpike, FeatureModuleAnswersCustomLspRequests) {
     ASSERT_NE(featureCap, nullptr);
     EXPECT_EQ(featureCap->stringAt("engine"), "frost-clang");
     EXPECT_EQ(featureCap->stringAt("llvmVersion"), "23.1.4");
+    ASSERT_NE(featureCap->find("schema"), nullptr);
+    EXPECT_EQ(featureCap->find("schema")->asUnsigned(), 1u);
 
     // 2. Send initialized notification.
     Json initializedNotif =
@@ -188,6 +190,43 @@ TEST(ClangSpike, FeatureModuleAnswersCustomLspRequests) {
     ASSERT_NE(pingResult, nullptr);
     EXPECT_EQ(pingResult->boolAt("featureModule"), true);
     EXPECT_EQ(pingResult->stringAt("echo"), "mt-static-sdk-ok");
+
+    // CPP-7: the feature host still serves ordinary clangd navigation, not only custom metadata.
+    const std::string uri =
+#ifdef _WIN32
+        "file:///C:/frost-platform-fixture.cpp";
+#else
+        "file:///tmp/frost-platform-fixture.cpp";
+#endif
+    ASSERT_TRUE(sendLspMessage(
+        proc, Json::object()
+                  .set("jsonrpc", "2.0")
+                  .set("method", "textDocument/didOpen")
+                  .set("params", Json::object().set(
+                                     "textDocument",
+                                     Json::object()
+                                         .set("uri", uri)
+                                         .set("languageId", "cpp")
+                                         .set("version", 1)
+                                         .set("text", "int first(){return 7;}\nint second(){return first();}\n")))));
+    ASSERT_TRUE(sendLspMessage(
+        proc, Json::object()
+                  .set("jsonrpc", "2.0")
+                  .set("id", 40)
+                  .set("method", "textDocument/definition")
+                  .set("params", Json::object()
+                                     .set("textDocument", Json::object().set("uri", uri))
+                                     .set("position", Json::object().set("line", 1).set("character", 22)))));
+    const auto definition = readResponseWithId(proc, decoder, 40);
+    ASSERT_TRUE(definition);
+    ASSERT_NE(definition->find("result"), nullptr);
+    ASSERT_EQ(definition->find("result")->items().size(), 1u);
+    EXPECT_EQ(definition->find("result")->items()[0].stringAt("uri"), uri);
+    ASSERT_TRUE(
+        sendLspMessage(proc, Json::object()
+                                 .set("jsonrpc", "2.0")
+                                 .set("method", "textDocument/didClose")
+                                 .set("params", Json::object().set("textDocument", Json::object().set("uri", uri)))));
 
     // 5. Clean LSP shutdown + exit.
     Json shutdownReq = Json::object().set("jsonrpc", "2.0").set("id", 4).set("method", "shutdown");
