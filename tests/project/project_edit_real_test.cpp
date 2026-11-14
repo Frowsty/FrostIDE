@@ -594,3 +594,49 @@ TEST_F(ProjectEditReal, SolutionPersistenceAddsAndRemovesProjectsAndRefusesToRew
 
 } // namespace
 } // namespace frost::project
+namespace frost::project {
+namespace {
+TEST_F(ProjectEditReal, PreCreateSdkHeaderAndSourcePlanEvaluatesBeforeAnyFileExists) {
+    EditScratch scratch("r11 pre-create SDK class");
+    ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
+    auto edit=fileEdit(scratch,ProjectEditKind::AddFiles,"App/App.vcxproj");
+    edit.files={scratch.join("App/Widget.hpp"),scratch.join("App/Widget.cpp")};
+    edit.commit=false; edit.beforeFileCreate=true; edit.transactionId=test::newTransactionId();
+    const auto before=io::realFileSystem().readFile(edit.definition); ASSERT_TRUE(before);
+    auto planned=runProjectEditPlan(io::realProcessLauncher(),{.hostPath=hostPath(),.msbuildPath=m_msbuild},edit);
+    ASSERT_TRUE(planned) << planned.error().describe();
+    EXPECT_EQ(planned->mode,"BeforeFileCreateAdd"); EXPECT_EQ(planned->projectBefore,*before);
+    EXPECT_NE(planned->projectAfter.find("ClInclude Include=\"Widget.hpp\""),std::string::npos);
+    EXPECT_NE(planned->projectAfter.find("ClCompile Include=\"Widget.cpp\""),std::string::npos);
+    EXPECT_FALSE(planned->imports.empty());
+    EXPECT_EQ(io::realFileSystem().readFile(edit.definition).value_or("unreadable"),*before);
+    for(const auto& file:edit.files) EXPECT_FALSE(exists(file));
+    // The isolated oracle applies the proposal and exact source only after the no-prewrite check.
+    // Production uses REF-1 Create; the composed application tests cover that joined owner.
+    writeFile(edit.files[0],"#pragma once\nclass Widget { public: Widget(); };\n");
+    writeFile(edit.files[1],"#include \"Widget.hpp\"\nWidget::Widget() = default;\n");
+    writeFile(edit.definition,planned->projectAfter);
+    if(planned->filtersAfter) writeFile(edit.definition+".filters",*planned->filtersAfter);
+    for(const auto* configuration:{"Debug","Release"}) {
+        const auto keys=oracleKeys(m_msbuild,edit.definition,configuration,"x64");
+        for(const auto& file:edit.files) EXPECT_TRUE(keys.contains(key(file)));
+    }
+    expectBuilds(scratch,"Generated.sln");
+}
+TEST_F(ProjectEditReal, PreCreateImportCannotHideOrDuplicateTheProposedGeneratedSource) {
+    for(const std::string operation:{"Remove","Include"}) {
+        EditScratch scratch("r11 pre-create imported rule "+operation);
+        ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
+        auto edit=fileEdit(scratch,ProjectEditKind::AddFiles,"App/App.vcxproj");
+        edit.files={scratch.join("App/Widget.cpp")}; edit.commit=false; edit.beforeFileCreate=true; edit.transactionId=test::newTransactionId();
+        auto before=io::realFileSystem().readFile(edit.definition); ASSERT_TRUE(before);
+        before->insert(before->rfind("</Project>"),"<Import Project=\"GeneratedRule.props\"/>\n");
+        writeFile(edit.definition,*before);
+        writeFile(scratch.join("App/GeneratedRule.props"),"<Project><ItemGroup><ClCompile "+operation+"=\"Widget.cpp\"/></ItemGroup></Project>");
+        EXPECT_FALSE(runProjectEditPlan(io::realProcessLauncher(),{.hostPath=hostPath(),.msbuildPath=m_msbuild},edit));
+        EXPECT_EQ(io::realFileSystem().readFile(edit.definition).value_or("unreadable"),*before);
+        EXPECT_FALSE(exists(edit.files[0]));
+    }
+}
+}
+}

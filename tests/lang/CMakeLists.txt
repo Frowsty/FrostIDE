@@ -44,6 +44,7 @@ frost_add_test(lang_unit_tests
         features_test.cpp
         fuzzy_snippet_test.cpp
         templates_test.cpp
+        file_templates_test.cpp
         spelling_test.cpp
         json_schema_test.cpp
         json_test.cpp

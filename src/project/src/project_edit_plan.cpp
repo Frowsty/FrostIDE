@@ -72,9 +72,10 @@ Result<ProjectEditPlan> parseProjectEditPlan(std::string_view line) {
     const auto* error = root->find("Error");
     const auto* edit = root->find("Edit");
     if (!error || !error->isNull() || !edit || !edit->isObject() || edit->integerAt("PlanVersion") != 1 ||
-        edit->stringAt("Mode") != "BeforeFileMoveRename")
+        (edit->stringAt("Mode") != "BeforeFileMoveRename" && edit->stringAt("Mode") != "BeforeFileCreateAdd"))
         return fail(ErrorCode::Corrupt, "Expected a successful versioned pre-move ProjectHost plan");
     ProjectEditPlan result;
+    result.mode = edit->stringAt("Mode");
     result.projectPath = edit->stringAt("ProjectPath");
     result.environment = edit->stringAt("Environment");
     if (!io::isAbsolutePath(result.projectPath) || result.environment.empty())
