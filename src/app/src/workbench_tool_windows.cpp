@@ -30,11 +30,13 @@
 #include "engine_unit_tests_window.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "lua_unit_tests_window.hpp"
 #include "project_edit_process.hpp"
 #include "project_properties_dialog.hpp"
 #include "settings_dialog.hpp"
 #include "unit_tests_window.hpp"
 #include "unity_control.hpp"
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
@@ -467,6 +469,47 @@ void Workbench::attachToolWindows() {
         auto* providers = new QTabWidget(owner->m_window);
         providers->setObjectName(QStringLiteral("unitTestsProviders"));
         providers->addTab(createUnitTestsToolWindowWidget(providers, std::move(context)), text("CTest"));
+        LuaUnitTestsContext lua;
+        lua.fs = &owner->m_services.fs;
+        lua.launcher = &owner->m_services.launcher;
+        lua.trust = &owner->m_services.trust;
+        lua.scratchDirectory =
+            QDir(qs(owner->m_options.journalDirectory)).filePath(QStringLiteral("lua-test-reports")).toStdString();
+        lua.discoveryBridge = QDir(QCoreApplication::applicationDirPath())
+                                  .filePath(QStringLiteral("lua-tests/luaunit-discovery.lua"))
+                                  .toStdString();
+        lua.source = [owner]() -> Result<LuaUnitTestsSource> {
+            if (!owner || owner->m_shutDown || !owner->m_runController || owner->m_projectRoot.empty())
+                return fail(ErrorCode::NotFound, "Open a trusted workspace and select a Lua Script run configuration");
+            const auto* selected = owner->m_runController->selectedConfiguration();
+            if (!selected || selected->type != run::RunType::LuaScript)
+                return fail(ErrorCode::Unsupported,
+                            "Select a Lua Script run configuration (target: Busted entry script or LuaUnit driver)");
+            const auto trust = owner->m_services.trust.snapshot(owner->m_projectRoot);
+            if (!trust.trusted)
+                return fail(ErrorCode::Untrusted, "Trust the workspace before discovering Lua tests");
+            return LuaUnitTestsSource{*selected, owner->m_projectRoot, trust.revision,
+                                      owner->m_luaRuntimeStop.get_token()};
+        };
+        lua.prepare = [owner](const run::RunConfiguration& configuration) -> Result<void> {
+            if (!owner || owner->m_shutDown)
+                return fail(ErrorCode::Cancelled, "Lua workspace closed");
+            return owner->prepareStandaloneLua(configuration);
+        };
+        lua.debug = [owner](run::RunConfiguration configuration) -> Result<void> {
+            if (!owner || owner->m_shutDown)
+                return fail(ErrorCode::Cancelled, "Lua workspace closed");
+            return owner->startStandaloneLuaDebug(std::move(configuration));
+        };
+        lua.openLocation = [owner](const std::string& path, int line) {
+            if (owner && !owner->m_shutDown)
+                owner->openLocation(qs(path), line, 1);
+        };
+        lua.testsChanged = [owner] {
+            if (owner && !owner->m_shutDown)
+                owner->refreshAllMarkers();
+        };
+        providers->addTab(createLuaUnitTestsWidget(providers, std::move(lua)), text("Lua"));
         EngineUnitTestsWindowContext engine;
         engine.fs = &owner->m_services.fs;
         engine.launcher = &owner->m_services.launcher;

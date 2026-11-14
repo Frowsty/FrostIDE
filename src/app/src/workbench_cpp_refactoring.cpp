@@ -580,7 +580,7 @@ bool Workbench::previewCppRefactoring(const document::RefactoringPlan& plan) {
     QDialog dialog(m_window);
     dialog.setWindowTitle(display(plan.label));
     auto* layout = new QVBoxLayout(&dialog);
-    layout->addWidget(new QLabel(QStringLiteral("Actual clangd WorkspaceEdit. Apply is atomic and rechecks captured "
+    layout->addWidget(new QLabel(QStringLiteral("Captured source proposal. Apply is atomic and rechecks captured "
                                                 "before-images. Preview images are capped at 1 MiB."),
                                  &dialog));
     auto* tabs = new QTabWidget(&dialog);
@@ -595,6 +595,8 @@ bool Workbench::previewCppRefactoring(const document::RefactoringPlan& plan) {
         add(file.path, file.expectedText, file.afterText);
     for (const auto& file : plan.disk)
         add(file.path, file.expectedBytes, file.afterBytes);
+    for (const auto& file : plan.renames)
+        add(file.from + " -> " + file.to, file.expectedBytes, file.expectedBytes);
     layout->addWidget(tabs);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
     connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, &QDialog::accept);

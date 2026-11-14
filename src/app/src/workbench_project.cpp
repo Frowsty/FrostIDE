@@ -505,6 +505,8 @@ void Workbench::offerProjectTrust() {
 
 // NOLINTNEXTLINE(performance-unnecessary-value-param): Own identities across reentrant project callbacks.
 void Workbench::setProject(std::string root, QString name, std::string recentPath) {
+    m_luaRuntimeStop.request_stop();
+    m_luaRuntimeStop = std::stop_source{};
     invalidateManagedDebug();
     cancelEngineTestDebugPreparation();
     if (m_engineBindings)
@@ -658,6 +660,7 @@ bool Workbench::closeForOpen() {
     m_closingSolution = false;
     if (m_debug)
         (void)m_debug->setWorkspaceRoot({});
+    m_luaRuntimeStop.request_stop();
     m_projectRoot.clear();
     m_projectIdentity.clear();
     if (m_window) {

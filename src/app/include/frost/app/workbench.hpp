@@ -804,6 +804,9 @@ private:
     void showCppPublishedFixes();
     [[nodiscard]] Result<std::function<Result<void>(const lang::WorkspaceEdit&)>> beginCppProviderRefactoring();
     [[nodiscard]] bool previewCppRefactoring(const document::RefactoringPlan& plan);
+    void registerLuaRefactoringActions();
+    void showLuaRefactoring(std::string operation);
+    void renameLuaModule();
     void publishRefactoringOutcome(const document::RefactoringOutcome& outcome);
     [[nodiscard]] bool refactoringTrusted(TransactionId token) const;
     [[nodiscard]] Result<document::RefactoringOutcome> runRefactoringHistory(TransactionId token, bool redo);
@@ -841,6 +844,11 @@ private:
     void stopTerminal();
     void detach();
 
+    // Standalone Lua routes share the selected RunConfiguration executable and owned lifecycles.
+    [[nodiscard]] std::string defaultLuaInterpreterPath() const;
+    [[nodiscard]] Result<void> prepareStandaloneLua(const run::RunConfiguration& configuration);
+    [[nodiscard]] std::function<Result<void>()> luaLaunchAdmissionFor(const run::RunConfiguration& configuration) const;
+    [[nodiscard]] Result<void> startStandaloneLuaDebug(run::RunConfiguration configuration);
     // Projects.
     Result<void> openSolution(const std::string& path);
     /*
@@ -1251,6 +1259,7 @@ private:
     bool m_suppressNewFileNotice = false;
     bool m_solutionLoading = false;
     std::stop_source m_solutionLoadStop;
+    std::stop_source m_luaRuntimeStop;
     bool m_shutDown = false;
 };
 

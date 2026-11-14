@@ -69,7 +69,7 @@ void Workbench::showSourceTemplateDialog() {
     auto* form = new QFormLayout();
     auto* kind = new QComboBox(&dialog);
     kind->setObjectName("sourceTemplateKind");
-    kind->addItems({"C++ class (header and source)", "C++ source", "C++ header", "CMake script"});
+    kind->addItems({"C++ class (header and source)", "C++ source", "C++ header", "CMake script", "Lua module"});
     if (model)
         kind->addItems({"New CMake executable target", "New CMake static library target"});
     form->addRow("Template:", kind);
@@ -117,7 +117,7 @@ void Workbench::showSourceTemplateDialog() {
         &dialog);
     explanation->setWordWrap(true);
     layout->addWidget(explanation);
-    connect(kind, &QComboBox::currentIndexChanged, &dialog, [&](int index) { membership->setEnabled(index < 4); });
+    connect(kind, &QComboBox::currentIndexChanged, &dialog, [&](int index) { membership->setEnabled(index < 5); });
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     layout->addWidget(buttons);
     buttons->button(QDialogButtonBox::Ok)->setText("Prepare preview");
@@ -136,14 +136,15 @@ void Workbench::showSourceTemplateDialog() {
     spec.file.kind = selected == 1   ? lang::FileTemplateKind::Source
                      : selected == 2 ? lang::FileTemplateKind::Header
                      : selected == 3 ? lang::FileTemplateKind::CMakeScript
-                     : selected == 4 ? lang::FileTemplateKind::Executable
+                     : selected == 4 ? lang::FileTemplateKind::LuaModule
+                     : selected == 5 ? lang::FileTemplateKind::Executable
                                      : lang::FileTemplateKind::Class;
     spec.file.name = name->text().trimmed().toUtf8().toStdString();
     spec.file.author = author->text().toUtf8().toStdString();
     spec.file.description = description->text().toUtf8().toStdString();
     spec.directory = QDir::fromNativeSeparators(directory->text()).toUtf8().toStdString();
-    spec.newCMakeTarget = selected >= 4;
-    spec.staticLibrary = selected == 5;
+    spec.newCMakeTarget = selected >= 5;
+    spec.staticLibrary = selected == 6;
     if (!spec.newCMakeTarget) {
         if (model)
             spec.cmakeTargetId = membership->currentData().toString().toStdString();

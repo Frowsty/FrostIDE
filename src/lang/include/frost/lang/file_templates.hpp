@@ -3,7 +3,7 @@
 #pragma once
 #include "frost/lang/templates.hpp"
 namespace frost::lang {
-enum class FileTemplateKind { Class, Source, Header, CMakeScript, Executable };
+enum class FileTemplateKind { Class, Source, Header, CMakeScript, Executable, LuaModule };
 struct FileTemplateRequest {
     FileTemplateKind kind = FileTemplateKind::Class;
     std::string name, author, description;

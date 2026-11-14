@@ -141,6 +141,8 @@ TEST(SettingsRegistry, TypedKeysMatchTheRegistry) {
     expectTypedKey(key::toolsGitPath);
     expectTypedKey(key::toolsClangdPath);
     expectTypedKey(key::toolsLuaLanguageServerPath);
+    expectTypedKey(key::toolsLuaInterpreterPath);
+    expectTypedKey(key::toolsLuaDebugAdapterPath);
     expectTypedKey(key::luaRuntimeVersion);
     expectTypedKey(key::toolsClangFormatPath);
     expectTypedKey(key::toolsClangTidyPath);

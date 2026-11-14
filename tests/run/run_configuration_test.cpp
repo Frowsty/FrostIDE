@@ -570,5 +570,84 @@ TEST(RunManagerRules, StopCancelsTheBeforeLaunchStep) {
     cancel.reset();
 }
 
+TEST(LuaRunConfiguration, ScriptPlanUsesSelectedInterpreterAndExactFlagsScriptAndArgv) {
+    RunConfiguration config;
+    config.id = "lua.main";
+    config.name = "Lua main";
+    config.type = RunType::LuaScript;
+    config.program = native("sdk/lua54/lua");
+    config.target = native("project/main.lua");
+    config.interpreterArguments = {"-E", "-e", "assert(_VERSION == 'Lua 5.4')"};
+    config.arguments = {"two words", "", "a=b"};
+    auto plan = launchPlanFor(config);
+    ASSERT_TRUE(plan) << plan.error().describe();
+    EXPECT_EQ(plan->program, config.program);
+    EXPECT_EQ(plan->arguments, (std::vector<std::string>{"-E", "-e", "assert(_VERSION == 'Lua 5.4')", config.target,
+                                                         "two words", "", "a=b"}));
+    EXPECT_EQ(plan->workingDirectory, native("project"));
+    const auto json = serializeRunConfigurations(std::span(&config, 1));
+    auto document = rpc::parseJson(json);
+    ASSERT_TRUE(document);
+    EXPECT_EQ(document->integerAt("version"), 5);
+    auto parsed = parseRunConfigurations(json);
+    ASSERT_TRUE(parsed);
+    ASSERT_EQ(parsed->size(), 1U);
+    EXPECT_EQ(parsed->front(), config);
+}
+TEST(LuaRunConfiguration, ReplUsesRealInteractiveFlagAndExistingInputCapableRunPlan) {
+    RunConfiguration config;
+    config.id = "lua.repl";
+    config.name = "Lua REPL";
+    config.type = RunType::LuaRepl;
+    config.program = native("sdk/lua54/lua");
+    config.workingDirectory = native("project");
+    config.interpreterArguments = {"-E"};
+    auto plan = launchPlanFor(config);
+    ASSERT_TRUE(plan);
+    EXPECT_EQ(plan->program, config.program);
+    EXPECT_EQ(plan->arguments, (std::vector<std::string>{"-E", "-i"}));
+    EXPECT_EQ(plan->workingDirectory, config.workingDirectory);
+    config.target = native("project/main.lua");
+    EXPECT_FALSE(validateRunConfiguration(config));
+}
+TEST(LuaRunConfiguration, VersionFiveIsRequiredWithoutChangingLegacyStoreVersions) {
+    RunConfiguration old;
+    old.id = "native.old";
+    old.name = "Old";
+    old.program = native("program");
+    const auto legacy = serializeRunConfigurations(std::span(&old, 1));
+    auto legacyJson = rpc::parseJson(legacy);
+    ASSERT_TRUE(legacyJson);
+    EXPECT_EQ(legacyJson->integerAt("version"), 1);
+    auto lua = old;
+    lua.type = RunType::LuaScript;
+    lua.target = native("project/main.lua");
+    auto json = serializeRunConfigurations(std::span(&lua, 1));
+    const auto marker = json.find("\"version\": 5");
+    ASSERT_NE(marker, std::string::npos);
+    json.replace(marker, std::string("\"version\": 5").size(), "\"version\": 4");
+    EXPECT_FALSE(parseRunConfigurations(json));
+    old.interpreterArguments = {"-E"};
+    EXPECT_FALSE(validateRunConfiguration(old));
+}
+TEST(LuaRunConfiguration, RejectsImplicitRuntimeRelativeScriptAndAmbiguousInterpreterOperands) {
+    RunConfiguration config;
+    config.id = "lua.main";
+    config.name = "Lua main";
+    config.type = RunType::LuaScript;
+    config.program = native("sdk/lua54/lua");
+    config.target = native("project/main.lua");
+    for (const auto& flags : std::vector<std::vector<std::string>>{{"-e"}, {"other.lua"}, {"-i"}, {"-"}}) {
+        config.interpreterArguments = flags;
+        EXPECT_FALSE(validateRunConfiguration(config));
+    }
+    config.interpreterArguments.clear();
+    config.program.clear();
+    EXPECT_FALSE(validateRunConfiguration(config));
+    config.program = native("sdk/lua54/lua");
+    config.target = "relative.lua";
+    EXPECT_FALSE(validateRunConfiguration(config));
+}
+
 } // namespace
 } // namespace frost::run

@@ -55,6 +55,7 @@
 #include "frost/project/cmake_profile.hpp"
 #include "frost/run/doctest_parsers.hpp"
 #include "frost/run/framework_parsers.hpp"
+#include "frost/run/lua_framework_parsers.hpp"
 #include "frost/run/test_model.hpp"
 
 #include <functional>
@@ -114,7 +115,7 @@ struct CTestSetup {
 // An anchored ctest regular expression matching exactly `names` (header comment). Pure.
 [[nodiscard]] std::string ctestExactNameRegex(const std::vector<std::string>& names);
 
-enum class TestCaseFramework : std::uint8_t { CTestWhole, GoogleTest, Doctest, Catch2, BoostTest };
+enum class TestCaseFramework : std::uint8_t { CTestWhole, GoogleTest, Doctest, Catch2, BoostTest, Busted, LuaUnit };
 
 // Replaces doctest's case filters and case-sensitivity flags with exact, case-sensitive selection.
 // Returns the full command, preserving its option prefix. Errors: InvalidArgument (empty command,
@@ -274,6 +275,19 @@ public:
     };
     [[nodiscard]] Result<void> runFramework(const CTestSetup& setup, std::vector<FrameworkRunRequest> requests,
                                             TestRunHandlers handlers);
+
+    // LUA-12: same owned RunSession lifecycle as native frameworks, with an explicit Lua
+    // configuration and caller-owned scratch directory. No CTest registration is fabricated.
+    struct LuaFrameworkRequest {
+        RunConfiguration configuration;
+        LuaTestProfile profile = LuaTestProfile::Busted220;
+        std::string scratchDirectory;
+        std::string discoveryBridge;
+        std::vector<std::string> cases;
+    };
+    [[nodiscard]] Result<void> listLuaFramework(LuaFrameworkRequest request,
+                                                std::function<void(Result<std::vector<FrameworkCase>>)> done);
+    [[nodiscard]] Result<void> runLuaFramework(LuaFrameworkRequest request, TestRunHandlers handlers);
 
     // Ends the current job's process tree; the job then finishes as stopped/Cancelled. Idempotent.
     void cancel();

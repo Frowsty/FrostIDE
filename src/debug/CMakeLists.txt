@@ -30,6 +30,7 @@ frost_add_library(debug LAYER debug
         src/pinned_watches.cpp
         src/breakpoints.cpp
         src/coreclr_dap.cpp
+        src/standalone_lua_dap.cpp
         src/cmake_dap.cpp
         src/dap_client.cpp
         src/dap_types.cpp

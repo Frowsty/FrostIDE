@@ -27,7 +27,7 @@ Result<std::vector<GeneratedTemplateFile>> renderFileTemplate(const FileTemplate
         if (part.empty() ||
             !((part.front() >= 'A' && part.front() <= 'Z') || (part.front() >= 'a' && part.front() <= 'z') ||
               part.front() == '_') ||
-            keywords.find(" " + part + " ") != keywords.npos)
+            (request.kind != FileTemplateKind::LuaModule && keywords.find(" " + part + " ") != keywords.npos))
             return fail(ErrorCode::InvalidArgument, "Use a valid C++ identifier for each namespace/name component");
         for (char c : part)
             if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'))
@@ -40,6 +40,12 @@ Result<std::vector<GeneratedTemplateFile>> renderFileTemplate(const FileTemplate
     if (request.kind != FileTemplateKind::Class && components.size() != 1)
         return fail(ErrorCode::InvalidArgument, "Only class templates accept namespace-qualified names");
     const auto& name = components.back();
+    if (request.kind == FileTemplateKind::LuaModule) {
+        constexpr std::string_view luaWords = " and break do else elseif end false for function goto if in local nil "
+                                              "not or repeat return then true until while ";
+        if (luaWords.find(" " + name + " ") != luaWords.npos)
+            return fail(ErrorCode::InvalidArgument, "A Lua module binding cannot be a reserved word");
+    }
     TemplateVariables variables{
         {"CLASS", name}, {"HEADER", name + ".hpp"}, {"AUTHOR", request.author}, {"DESCRIPTION", request.description}};
     std::vector<GeneratedTemplateFile> result;
@@ -90,6 +96,10 @@ Result<std::vector<GeneratedTemplateFile>> renderFileTemplate(const FileTemplate
         break;
     case FileTemplateKind::CMakeScript:
         if (auto made = append(name + ".cmake", "file.cmake"); !made)
+            return std::unexpected(made.error());
+        break;
+    case FileTemplateKind::LuaModule:
+        if (auto made = append(name + ".lua", "file.lua.module"); !made)
             return std::unexpected(made.error());
         break;
     case FileTemplateKind::Executable: {

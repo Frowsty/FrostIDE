@@ -102,6 +102,10 @@ public:
     // RUN-11: add a typed editor/player configuration, with editable executable and project.
     std::string addFrostEditor();
     std::string addFrostPlayer();
+    std::string addLuaScript();
+    std::string addLuaRepl();
+    // Defaults are copied into a NEW Lua configuration, never substituted at launch.
+    void setLuaDefaults(std::string interpreter, std::string script, std::string workingDirectory);
 
     using ImportHandler = std::function<Result<run::RunImportReport>(const std::string& path,
                                                                      std::span<const run::RunConfiguration> current)>;
@@ -135,6 +139,11 @@ private:
     QComboBox* m_engineDebugMode = nullptr;
     QPushButton* m_addFrostEditor = nullptr;
     QPushButton* m_addFrostPlayer = nullptr;
+    QPushButton* m_addLuaScript = nullptr;
+    QPushButton* m_addLuaRepl = nullptr;
+    QLineEdit* m_luaScript = nullptr;
+    QLineEdit* m_interpreterArguments = nullptr;
+    std::string m_luaInterpreterDefault, m_luaScriptDefault, m_luaWorkingDirectoryDefault;
     QLineEdit* m_arguments = nullptr;
     QLineEdit* m_workingDirectory = nullptr;
     QPlainTextEdit* m_environment = nullptr;

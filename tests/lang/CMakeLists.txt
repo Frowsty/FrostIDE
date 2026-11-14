@@ -1,4 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
+
+frost_add_test(lang_lua_refactoring_tests
+    SOURCES lua_refactoring_test.cpp lua_module_rename_test.cpp ../syntax/syntax_test_support.cpp
+    DEPS frost::lang frost::syntax frost::sched frost::text
+    LABELS unit)
+target_include_directories(lang_lua_refactoring_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/syntax/src)
+
+# Optional source spike: no implicit download, default registration, or adoption/performance claim.
+set(FROST_EMMYLUA_TEST_EXECUTABLE "" CACHE FILEPATH "Explicit installed emmylua_ls for opt-in comparison")
+if(FROST_EMMYLUA_TEST_EXECUTABLE)
+    frost_add_test(lang_lua_provider_comparison_tests
+        SOURCES lua_provider_comparison_test.cpp
+        DEPS frost::lang frost::io frost::sched frost::text
+        LABELS integration lua experimental)
+    target_include_directories(lang_lua_provider_comparison_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(lang_lua_provider_comparison_tests PRIVATE FROST_EMMYLUA_TEST_EXECUTABLE="${FROST_EMMYLUA_TEST_EXECUTABLE}")
+endif()
+
 #
 # Tests for frost::lang (W2, ADR 0036):
 #   lang_unit_tests    JSON, framing, JSON-RPC and the LSP client against a scripted in-memory fake
@@ -58,6 +76,7 @@ frost_add_test(lang_unit_tests
         frost_engine_assets_test.cpp
         frost_engine_lua_test.cpp
         lua_host_test.cpp
+        lua_input_index_test.cpp
         lua_rc_test.cpp
         lua_service_test.cpp
         msbuild_provider_test.cpp
