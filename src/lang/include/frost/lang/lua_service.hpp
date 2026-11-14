@@ -18,6 +18,9 @@
 #include <span>
 
 namespace frost::lang {
+// Opt-in EmmyLua Rust stdio profile (ADR0095). Native project config remains authoritative;
+// executable discovery and workspace trust are caller admission, never an implicit install.
+[[nodiscard]] Result<std::vector<std::string>> emmyLuaArguments(std::string_view stateDirectory);
 
 struct LuaSearch {
     std::string configuredPath;           // Absolute user-selected executable, if any.

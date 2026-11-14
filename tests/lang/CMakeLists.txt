@@ -6,7 +6,16 @@ frost_add_test(lang_lua_refactoring_tests
     LABELS unit)
 target_include_directories(lang_lua_refactoring_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/syntax/src)
 
-
+# Optional source spike: no implicit download, default registration, or adoption/performance claim.
+set(FROST_EMMYLUA_TEST_EXECUTABLE "" CACHE FILEPATH "Explicit installed emmylua_ls for opt-in comparison")
+if(FROST_EMMYLUA_TEST_EXECUTABLE)
+    frost_add_test(lang_lua_provider_comparison_tests
+        SOURCES lua_provider_comparison_test.cpp
+        DEPS frost::lang frost::io frost::sched frost::text
+        LABELS integration lua experimental)
+    target_include_directories(lang_lua_provider_comparison_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(lang_lua_provider_comparison_tests PRIVATE FROST_EMMYLUA_TEST_EXECUTABLE="${FROST_EMMYLUA_TEST_EXECUTABLE}")
+endif()
 
 #
 # Tests for frost::lang (W2, ADR 0036):
