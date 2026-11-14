@@ -31,8 +31,8 @@ sched::Task<Result<CppRenameProposal>> requestCppRefactoringPlan(io::IProcessLau
                                                                  CppRefactoringRequest request,
                                                                  IClock::Duration timeout, std::stop_token stop) {
     constexpr std::array operations{
-        "change-signature",  "edit-signature",      "inline-variable",   "inline-function", "extract-variable",
-        "extract-constant",  "extract-method",      "extract-field",     "safe-delete",     "generate-accessors",
+        "change-signature",  "edit-signature",      "inline-variable",    "inline-function",  "extract-variable",
+        "extract-constant",  "extract-method",      "extract-field",      "safe-delete",      "generate-accessors",
         "generate-equality", "generate-formatting", "generate-overrides", "create-from-usage"};
     if (std::ranges::find(operations, request.operation) == operations.end() ||
         request.endOffset < request.context.offset ||

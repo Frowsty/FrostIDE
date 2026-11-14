@@ -246,25 +246,38 @@ TEST(Completion, ResolveFetchesDocumentation) {
 }
 
 TEST(Completion, ServerPreselectIsRespectedWithinBestNonDeprecatedMatchClass) {
-    auto first = plain("alpha", "1"); auto preferred = plain("alpine", "2"); preferred.preselect = true;
-    CompletionModel model; model.setList({.items = {first, preferred}}); model.setPrefix("al");
-    ASSERT_NE(model.selectedItem(), nullptr); EXPECT_EQ(model.selectedItem()->label, "alpine");
-    preferred.deprecated = true; model.setList({.items = {first, preferred}}); model.setPrefix("al");
+    auto first = plain("alpha", "1");
+    auto preferred = plain("alpine", "2");
+    preferred.preselect = true;
+    CompletionModel model;
+    model.setList({.items = {first, preferred}});
+    model.setPrefix("al");
+    ASSERT_NE(model.selectedItem(), nullptr);
+    EXPECT_EQ(model.selectedItem()->label, "alpine");
+    preferred.deprecated = true;
+    model.setList({.items = {first, preferred}});
+    model.setPrefix("al");
     EXPECT_EQ(model.selectedItem()->label, "alpha");
 }
 TEST(Completion, PartialResolvePreservesTheServersCallSnippetAndTriggersParameterHints) {
     auto capabilities = FeatureServer::defaultCapabilities();
     capabilities.set("completionProvider", Json::object().set("resolveProvider", true));
     FeatureServer server(capabilities);
-    server.on("completionItem/resolve", [](const Json&) { return Json::object().set("documentation", "Compiler-supplied help"); });
+    server.on("completionItem/resolve",
+              [](const Json&) { return Json::object().set("documentation", "Compiler-supplied help"); });
     auto raw = item("foo(int count)", "foo", "1");
-    raw.set("insertTextFormat", 2).set("textEdit", Json::object().set("range", range(0,0,2)).set("newText", "foo(${1:count})$0"));
+    raw.set("insertTextFormat", 2)
+        .set("textEdit", Json::object().set("range", range(0, 0, 2)).set("newText", "foo(${1:count})$0"));
     auto original = frost::lang::parseCompletionItem(raw);
     auto resolved = server.run(frost::lang::resolveCompletionItem(server.client(), original));
-    ASSERT_TRUE(resolved); EXPECT_TRUE(resolved->snippet); EXPECT_EQ(resolved->insertText, "foo(${1:count})$0");
+    ASSERT_TRUE(resolved);
+    EXPECT_TRUE(resolved->snippet);
+    EXPECT_EQ(resolved->insertText, "foo(${1:count})$0");
     EXPECT_TRUE(frost::lang::completionRequestsParameterHints(*resolved));
-    auto commit = frost::lang::commitCompletion(*resolved, snapshotOf("fo"), ByteOffset{0}, ByteOffset{2}, PositionEncoding::Utf8);
-    ASSERT_TRUE(commit); EXPECT_FALSE(commit->tabStops.empty());
+    auto commit = frost::lang::commitCompletion(*resolved, snapshotOf("fo"), ByteOffset{0}, ByteOffset{2},
+                                                PositionEncoding::Utf8);
+    ASSERT_TRUE(commit);
+    EXPECT_FALSE(commit->tabStops.empty());
     EXPECT_EQ(commit->edits.front().text, "foo(count)");
     resolved->kind = CompletionItemKind::Variable;
     EXPECT_FALSE(frost::lang::completionRequestsParameterHints(*resolved));

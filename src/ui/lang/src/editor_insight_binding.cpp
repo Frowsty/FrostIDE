@@ -601,7 +601,8 @@ void EditorInsightBinding::refreshInlayHints() {
         return;
     }
     const auto capabilities = m_services.server.serverCapabilities();
-    if (!capabilities || !capabilities->inlayHint) return;
+    if (!capabilities || !capabilities->inlayHint)
+        return;
     const text::Snapshot snapshot = m_view->editor().text();
     const std::uint64_t version = snapshot.version();
     const auto encoding = m_services.server.encoding();

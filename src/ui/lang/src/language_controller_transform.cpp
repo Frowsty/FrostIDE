@@ -17,19 +17,28 @@ void LanguageController::createFromUsage() {
         return;
     }
     auto captured = m_cppSemanticBegin();
-    if (!captured) { report(captured.error(), "Create from Usage"); return; }
+    if (!captured) {
+        report(captured.error(), "Create from Usage");
+        return;
+    }
     auto semantic = std::make_shared<SemanticApply>(std::move(*captured));
     m_choiceActions.clear();
     m_choiceActions.emplace_back([this, semantic] {
-        if (auto current = (*semantic)({}); !current) { report(current.error(), "Create from Usage"); return; }
+        if (auto current = (*semantic)({}); !current) {
+            report(current.error(), "Create from Usage");
+            return;
+        }
         m_cppAstRefactoring("create-from-usage");
     });
     m_choiceActions.emplace_back([this, semantic] {
-        if (auto current = (*semantic)({}); !current) { report(current.error(), "Create from Usage"); return; }
+        if (auto current = (*semantic)({}); !current) {
+            report(current.error(), "Create from Usage");
+            return;
+        }
         showProviderTransformations(true);
     });
     m_choice->start(QStringLiteral("Create from Usage"),
-                    {QStringLiteral("Create function or method — native recovered AST..."),
+                    {QStringLiteral("Create function or method â€” native recovered AST..."),
                      QStringLiteral("Choose an actual provider create/declaration fix...")},
                     m_services.host.caretScreenRect());
 }

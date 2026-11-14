@@ -2,8 +2,8 @@
 // AST operations over the same immutable VFS and complete command admission as R8 rename.
 #include "ast_refactoring_plan.hpp"
 
-#include "ast_refactoring_operations.hpp"
 #include "ast_create_from_usage.hpp"
+#include "ast_refactoring_operations.hpp"
 #include "ast_signature.hpp"
 #include "semantic_snapshot.hpp"
 namespace frost::clang_engine {
@@ -28,10 +28,9 @@ const clang::NamedDecl* projectCanonical(const clang::NamedDecl* declaration) {
 }
 
 template<class DiagnosticSink>
-std::unique_ptr<clang::ASTUnit> projectAST(const clang::tooling::CompileCommand& command,
-                                           llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs,
-                                           const std::map<std::string, std::string>& changes,
-                                           DiagnosticSink& diagnostics, bool recovery = false) {
+std::unique_ptr<clang::ASTUnit>
+projectAST(const clang::tooling::CompileCommand& command, llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs,
+           const std::map<std::string, std::string>& changes, DiagnosticSink& diagnostics, bool recovery = false) {
     ProjectCommand database(command);
     std::vector<std::string> files{command.Filename};
     clang::tooling::ClangTool tool(database, files, std::make_shared<clang::PCHContainerOperations>(), fs);
@@ -154,7 +153,8 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
         args.push_back("-fno-implicit-modules");
         args.push_back("-fno-implicit-module-maps");
         if (creation) {
-            args.insert(args.end(), {"-Xclang", "-frecovery-ast", "-Xclang", "-frecovery-ast-type", "-Werror=return-type"});
+            args.insert(args.end(),
+                        {"-Xclang", "-frecovery-ast", "-Xclang", "-frecovery-ast-type", "-Werror=return-type"});
         }
         command.CommandLine = std::move(args);
     }
@@ -193,10 +193,12 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
     for (const auto& command : commands) {
         Diagnostics diagnostics;
         CreateUsageDiagnostics recovered(anchor, root, static_cast<unsigned>(*offset));
-        auto ast = creation ? projectAST(command, frozen, {}, recovered, true)
-                            : projectAST(command, frozen, {}, diagnostics);
+        auto ast =
+            creation ? projectAST(command, frozen, {}, recovered, true) : projectAST(command, frozen, {}, diagnostics);
         if (!ast || !frozen->error.empty() || (creation && recovered.unrelated))
-            return refuse("parse-error", creation ? "Original configuration has errors outside the selected unresolved use" : "Original compilation configuration failed");
+            return refuse("parse-error", creation
+                                             ? "Original configuration has errors outside the selected unresolved use"
+                                             : "Original compilation configuration failed");
         if (signature) {
             if (!signatures.discover(*ast, error))
                 return refuse("unsupported", error);
@@ -210,8 +212,12 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
             if (!recovered.selectedError)
                 return refuse("unsupported", "The selected identifier has no exact unresolved-use compiler diagnostic");
             auto created = createFromUsage(*ast, input, error);
-            if (created) { target = std::move(created->path); candidate = std::move(created->after); }
-        } else candidate = generation ? refactorGenerate(*ast, input, error) : refactorAst(*ast, input, error);
+            if (created) {
+                target = std::move(created->path);
+                candidate = std::move(created->after);
+            }
+        } else
+            candidate = generation ? refactorGenerate(*ast, input, error) : refactorAst(*ast, input, error);
         if (!candidate && generation && error == "not-applicable")
             continue;
         selected = true;

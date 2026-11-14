@@ -321,8 +321,10 @@ TEST(EditorInsightBinding, InlayHintRangeEndsAtActualDocumentEndWithoutTrailingN
     binding->refreshInlayHints();
     ASSERT_TRUE(pumpUntil([&] { return !server.paramsOf("textDocument/inlayHint").empty(); }));
     const auto request = server.paramsOf("textDocument/inlayHint").back();
-    const auto* end = request.find("range")->find("end"); ASSERT_NE(end, nullptr);
-    EXPECT_EQ(end->integerAt("line"), 0); EXPECT_EQ(end->integerAt("character"), 9);
+    const auto* end = request.find("range")->find("end");
+    ASSERT_NE(end, nullptr);
+    EXPECT_EQ(end->integerAt("line"), 0);
+    EXPECT_EQ(end->integerAt("character"), 9);
     EXPECT_TRUE(server.paramsOf("clangd/inlayHints").empty());
 }
 

@@ -104,7 +104,9 @@ sched::Task<void> prepare(io::IFileSystem* fs, io::IProcessLauncher* launcher, p
     for (const auto& path : proposal->directoryDependencies)
         capture->plan.dependencies.push_back({path, std::nullopt, true});
     for (const auto& file : proposal->files) {
-        lang::FileEdit target; target.path = file.path; capture->targets.files.push_back(std::move(target));
+        lang::FileEdit target;
+        target.path = file.path;
+        capture->targets.files.push_back(std::move(target));
         if (file.overlay)
             capture->plan.buffers.push_back({file.path, file.before, file.after});
         else
@@ -220,7 +222,8 @@ void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, std::
                                             "Disk input aliases an open editor; request an exact snapshot");
                         }
                     }
-                    if (!self->m_bridge) return fail(ErrorCode::Cancelled, "C++ language bridge ended");
+                    if (!self->m_bridge)
+                        return fail(ErrorCode::Cancelled, "C++ language bridge ended");
                     return self->m_bridge->validateRefactoringTargets(capture->targets);
                 };
                 auto current = revalidate();
@@ -272,7 +275,10 @@ void Workbench::registerCppRefactoringActions() {
 }
 
 void Workbench::showCppRefactoring(std::string operation) {
-    if (operation == "fix-in-scope") { showCppInspectionScopeFixes(); return; }
+    if (operation == "fix-in-scope") {
+        showCppInspectionScopeFixes();
+        return;
+    }
     if (operation == "move-file") {
         moveCppProjectSource();
         return;
@@ -382,14 +388,18 @@ void Workbench::showCppRefactoring(std::string operation) {
             m_window, QStringLiteral("Create from Usage"),
             QStringLiteral("C++ return type (leave empty to infer only from a known return/initializer context):"),
             QLineEdit::Normal, {}, &accepted);
-        if (!accepted) return;
+        if (!accepted)
+            return;
         const auto body = QInputDialog::getMultiLineText(
             m_window, QStringLiteral("Create from Usage — implementation"),
-            QStringLiteral("Implementation statements (without outer braces). Parameter names use argument identifiers, "
-                           "otherwise arg1, arg2, ... . Supply real behavior; no throwing/default stub is invented:"),
+            QStringLiteral(
+                "Implementation statements (without outer braces). Parameter names use argument identifiers, "
+                "otherwise arg1, arg2, ... . Supply real behavior; no throwing/default stub is invented:"),
             {}, &accepted);
-        if (!accepted) return;
-        request.usageReturnType = returnType.toStdString(); request.usageBody = body.toStdString();
+        if (!accepted)
+            return;
+        request.usageReturnType = returnType.toStdString();
+        request.usageBody = body.toStdString();
     } else if (operation == "change-signature") {
         bool accepted = false;
         const auto order = QInputDialog::getText(
@@ -452,10 +462,11 @@ void Workbench::showCppRefactoring(std::string operation) {
                           "Type/add/remove edits intentionally change semantics; external callers are outside the "
                           "captured scope.")
                 : operation == "create-from-usage"
-                    ? QStringLiteral("Profile: selected compiler-reported unresolved ordinary free/object-member call. "
-                                     "Parameter types come from recovered argument QualTypes; implementation is supplied "
-                                     "by you. A source-local free definition or public inline method in its captured "
-                                     "project class/header is inserted. All configurations must reparse without errors.")
+                    ? QStringLiteral(
+                          "Profile: selected compiler-reported unresolved ordinary free/object-member call. "
+                          "Parameter types come from recovered argument QualTypes; implementation is supplied "
+                          "by you. A source-local free definition or public inline method in its captured "
+                          "project class/header is inserted. All configurations must reparse without errors.")
                 : operation == "inline-function"
                     ? QStringLiteral("Profile: one direct call to an internal arithmetic function with a single pure "
                                      "return expression; every argument must be a non-volatile value or literal.")

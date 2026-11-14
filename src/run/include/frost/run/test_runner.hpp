@@ -265,14 +265,15 @@ public:
 
     // Explicit protocol selection; no filename/source-macro framework guessing.
     [[nodiscard]] Result<void> listFrameworkCases(const CTestSetup& setup, const DiscoveredTest& test,
-        FrameworkProfile profile, std::function<void(Result<std::vector<FrameworkCase>>)> done);
+                                                  FrameworkProfile profile,
+                                                  std::function<void(Result<std::vector<FrameworkCase>>)> done);
     struct FrameworkRunRequest {
         DiscoveredTest test;
         FrameworkProfile profile = FrameworkProfile::Catch2Xml3;
         std::vector<std::string> cases;
     };
     [[nodiscard]] Result<void> runFramework(const CTestSetup& setup, std::vector<FrameworkRunRequest> requests,
-                                          TestRunHandlers handlers);
+                                            TestRunHandlers handlers);
 
     // Ends the current job's process tree; the job then finishes as stopped/Cancelled. Idempotent.
     void cancel();
