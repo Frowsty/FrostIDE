@@ -1,0 +1,147 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "frost/debug/cmake_dap.hpp"
+#include "frost/io/utf.hpp"
+#include <algorithm>
+#include <atomic>
+#include <cstring>
+#include <thread>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <cerrno>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
+namespace frost::debug {
+namespace {
+class CMakeTransport final : public IDapTransport {
+public:
+#ifdef _WIN32
+    using Handle = HANDLE;
+#else
+    using Handle = int;
+#endif
+    CMakeTransport(Handle handle, std::function<void()> cancel) : m_handle(handle), m_cancel(std::move(cancel)) {}
+    ~CMakeTransport() override {
+        close();
+#ifdef _WIN32
+        CloseHandle(m_handle);
+#else
+        ::close(m_handle);
+#endif
+    }
+    Result<std::size_t> read(std::span<char> bytes) override {
+#ifdef _WIN32
+        return transfer(bytes.data(), bytes.size(), false);
+#else
+        ssize_t count;
+        do { count = ::recv(m_handle, bytes.data(), bytes.size(), 0); } while (count < 0 && errno == EINTR);
+        if (count < 0 && !m_closed) return fail(ErrorCode::IoError, "CMake debugger socket read failed");
+        return count < 0 ? 0 : static_cast<std::size_t>(count);
+#endif
+    }
+    Result<void> write(std::string_view bytes) override {
+        while (!bytes.empty()) {
+#ifdef _WIN32
+            auto count = transfer(const_cast<char*>(bytes.data()), bytes.size(), true);
+            if (!count) return std::unexpected(count.error());
+            if (*count == 0) return fail(ErrorCode::IoError, "CMake debugger pipe closed");
+            bytes.remove_prefix(*count);
+#else
+            ssize_t count;
+            do { count = ::send(m_handle, bytes.data(), bytes.size(), MSG_NOSIGNAL); } while (count < 0 && errno == EINTR);
+            if (count <= 0) return fail(ErrorCode::IoError, "CMake debugger socket write failed");
+            bytes.remove_prefix(static_cast<std::size_t>(count));
+#endif
+        }
+        return {};
+    }
+    void close() noexcept override {
+        if (m_closed.exchange(true)) return;
+#ifdef _WIN32
+        CancelIoEx(m_handle, nullptr);
+#else
+        ::shutdown(m_handle, SHUT_RDWR);
+#endif
+        if (m_cancel) m_cancel();
+    }
+private:
+#ifdef _WIN32
+    Result<std::size_t> transfer(char* bytes, std::size_t size, bool writing) {
+        if (m_closed) return writing ? Result<std::size_t>(fail(ErrorCode::IoError, "CMake debugger pipe closed"))
+                                     : Result<std::size_t>(0);
+        OVERLAPPED op{};
+        op.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!op.hEvent) return fail(ErrorCode::IoError, "CMake debugger I/O event failed");
+        DWORD count = 0;
+        const DWORD length = static_cast<DWORD>(std::min<std::size_t>(size, 1024 * 1024));
+        const bool immediate = writing ? WriteFile(m_handle, bytes, length, &count, &op)
+                                       : ReadFile(m_handle, bytes, length, &count, &op);
+        DWORD error = immediate ? ERROR_SUCCESS : GetLastError();
+        if (error == ERROR_IO_PENDING) {
+            // Covers close racing with submission after CancelIoEx ran.
+            if (m_closed) CancelIoEx(m_handle, &op);
+            if (!GetOverlappedResult(m_handle, &op, &count, TRUE)) error = GetLastError();
+            else error = ERROR_SUCCESS;
+        }
+        CloseHandle(op.hEvent);
+        if (!writing && (error == ERROR_BROKEN_PIPE || error == ERROR_OPERATION_ABORTED)) return 0;
+        if (error != ERROR_SUCCESS) return fail(ErrorCode::IoError, "CMake debugger pipe transfer failed");
+        return static_cast<std::size_t>(count);
+    }
+#endif
+    Handle m_handle;
+    std::function<void()> m_cancel;
+    std::atomic<bool> m_closed{false};
+};
+Result<std::unique_ptr<IDapTransport>> connect(std::string_view endpoint, std::function<void()> cancel,
+                                              std::chrono::milliseconds timeout) {
+    if (endpoint.find('\0') != std::string_view::npos || timeout <= std::chrono::milliseconds::zero())
+        return fail(ErrorCode::InvalidArgument, "Invalid CMake debugger endpoint or deadline");
+#ifdef _WIN32
+    if (!endpoint.starts_with("\\\\.\\pipe\\FrostIDE-CMake-"))
+        return fail(ErrorCode::InvalidArgument, "CMake debugger requires a private FrostIDE local pipe");
+    auto wide = io::toWide(endpoint);
+    if (!wide) return std::unexpected(wide.error());
+#else
+    if (endpoint.empty() || endpoint.front() != '/' || endpoint.size() >= sizeof(sockaddr_un{}.sun_path))
+        return fail(ErrorCode::InvalidArgument, "CMake debugger requires an absolute local socket path");
+#endif
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    do {
+#ifdef _WIN32
+        auto handle = CreateFileW(wide->c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                                  FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+        if (handle != INVALID_HANDLE_VALUE)
+            return std::unique_ptr<IDapTransport>(new CMakeTransport(handle, std::move(cancel)));
+        if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PIPE_BUSY)
+            return fail(ErrorCode::IoError, "Cannot open CMake debugger pipe");
+#else
+        int handle = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (handle < 0) return fail(ErrorCode::IoError, "Cannot create CMake debugger socket");
+        sockaddr_un address{};
+        address.sun_family = AF_UNIX;
+        std::memcpy(address.sun_path, endpoint.data(), endpoint.size());
+        if (::connect(handle, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0)
+            return std::unique_ptr<IDapTransport>(new CMakeTransport(handle, std::move(cancel)));
+        const int error = errno;
+        ::close(handle);
+        if (error != ENOENT && error != ECONNREFUSED && error != EINTR)
+            return fail(ErrorCode::IoError, "Cannot connect to CMake debugger socket");
+#endif
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return fail(ErrorCode::Timeout, "CMake debugger did not open its endpoint before the deadline");
+}
+} // namespace
+AdapterFactory cmakeDapFactory(std::string endpoint, std::function<void()> cancelConfigure,
+                              std::chrono::milliseconds timeout) {
+    return [endpoint = std::move(endpoint), cancel = std::move(cancelConfigure), timeout](DapHandlers handlers)
+        -> Result<std::unique_ptr<IDebugAdapterClient>> {
+        auto transport = connect(endpoint, cancel, timeout);
+        if (!transport) { if (cancel) cancel(); return std::unexpected(transport.error()); }
+        return makeDapClient(std::move(*transport), std::move(handlers));
+    };
+}
+} // namespace frost::debug

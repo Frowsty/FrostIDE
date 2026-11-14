@@ -17,6 +17,8 @@
 #include "frost/settings/keys.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/run_controller.hpp"
+#include "frost/ui/debug_controller.hpp"
+#include "frost/debug/cmake_dap.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
@@ -263,6 +265,17 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
                     restartClangdIfCMakeStateChanged();
             });
         connectCMakeRunConfigurations(); // RUN-2/RUN-3: the targets' run configurations.
+        m_cmake->setConfigureDebugger([this](std::string endpoint, std::string root, std::function<void()> cancel)
+            -> Result<void> {
+            if (!m_debug) return fail(ErrorCode::Unsupported, "Debugger UI is unavailable");
+            debug::DebugTarget target;
+            target.name = "CMake configure";
+            target.program = io::joinPath(root, "CMakeLists.txt").value_or("");
+            target.trustRoots = {root};
+            auto admission = [trust = &m_services.trust, root] { return trust->requireTrusted(root); };
+            return m_debug->startAdapterTarget(target, debug::cmakeDapFactory(std::move(endpoint), std::move(cancel)),
+                rpc::Json::object(), "cmake", debug::DebugTargetMode::Launch, false, std::move(admission));
+        });
         if (auto opened = m_cmake->open(path); !opened) {
             m_cmake.reset();
             return std::unexpected(std::move(opened.error()));

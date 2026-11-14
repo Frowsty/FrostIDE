@@ -248,6 +248,43 @@ TEST_F(CMakeServiceTest, CacheEditsBecomeTypedConfigureArgumentsWithoutMutatingT
     EXPECT_EQ(service->activeProfile(), profile);
 }
 
+TEST_F(CMakeServiceTest, DebugReloadUsesConfigurePipelineAndSavesBeforeLaunch) {
+    auto opts = options();
+    opts.configureOnOpen = false;
+    ASSERT_TRUE(trustStore->trust(folder()));
+    expectFirstConfigure({.neverExits = true});
+    start(std::move(opts));
+    ASSERT_TRUE(service->openFolder(folder()));
+    std::atomic<bool> saved{false};
+    std::promise<void> connected;
+    service->setSaveAllHook([&](auto done) { saved = true; done(Result<void>{}); });
+    ASSERT_TRUE(service->configureDebug("private-debug-endpoint", [&] { connected.set_value(); }));
+    ASSERT_EQ(connected.get_future().wait_for(kWait), std::future_status::ready);
+    ASSERT_TRUE(saved);
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 2U);
+    const auto& args = launches.back().arguments;
+    EXPECT_NE(std::ranges::find(args, "--debugger"), args.end());
+    EXPECT_NE(std::ranges::find(args, "--debugger-pipe"), args.end());
+    EXPECT_NE(std::ranges::find(args, "private-debug-endpoint"), args.end());
+    service->cancel();
+    waitIdle();
+}
+
+TEST_F(CMakeServiceTest, DebugReloadWaitsForTrustAndCannotRunCallbackEarly) {
+    auto opts = options();
+    opts.configureOnOpen = false;
+    start(std::move(opts));
+    ASSERT_TRUE(service->openFolder(folder()));
+    std::atomic<bool> ready{false};
+    ASSERT_TRUE(service->configureDebug("private-debug-endpoint", [&] { ready = true; }));
+    EXPECT_EQ(service->state(), BuildState::NeedsTrust);
+    EXPECT_TRUE(launcher.launches().empty());
+    EXPECT_FALSE(ready);
+    service->cancel();
+    waitIdle();
+}
+
 TEST_F(CMakeServiceTest, DeferredWatcherReloadWaitsForExternalAdmission) {
     std::atomic<bool> blocked{false};
     std::atomic<int> held{0};

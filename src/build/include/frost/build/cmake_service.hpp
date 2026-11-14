@@ -347,6 +347,9 @@ public:
     [[nodiscard]] Result<void> configure();
     // Session-only overrides; only a new successful File API reply confirms the values.
     [[nodiscard]] Result<void> configureCache(std::vector<project::CMakeCacheVariable> edits);
+    // Explicit debug reload. Uses the same profile, tool/environment preparation, Save All,
+    // trust gate and File API refresh as configure(). Ready runs after actual process launch.
+    [[nodiscard]] Result<void> configureDebug(std::string endpoint, std::function<void()> ready);
     [[nodiscard]] Result<void> configureOwned(std::uint64_t owner);
     // Retry a deferred automatic configure after an external admission lease is released.
     void admissionAvailable();
