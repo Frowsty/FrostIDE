@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // LanguageController code generation and editing assistance (FND-3, ADR 0078): Generate (clangd's
-// MemberwiseConstructor, SpecialMembers and OverridePureVirtuals tweaks; the other generators are
-// disabled with REF-9), Optimize Imports/Includes (clangd's include cleaner, or the server's
+// MemberwiseConstructor, SpecialMembers and OverridePureVirtuals tweaks, plus captured AST member
+// generators), Optimize Imports/Includes (clangd's include cleaner, or the server's
 // organize-imports action), and the editor templates where language_capabilities.hpp allows them:
 // Surround With, Complete Current Statement, Live Templates and Postfix Templates, each with a set
 // per language. Nothing here generates members from line text.
@@ -15,6 +15,7 @@
 #include "language_controller_internal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -116,6 +117,19 @@ void LanguageController::generateCode() {
     if (!hasDocument()) {
         return;
     }
+    if (m_cppSemanticCommand) {
+        unavailable(QStringLiteral("Wait for the active semantic command"));
+        return;
+    }
+    std::shared_ptr<SemanticApply> semantic;
+    if (capabilities().clangdTweaks && m_cppSemanticBegin) {
+        auto captured = m_cppSemanticBegin();
+        if (!captured) {
+            report(captured.error(), "Generate");
+            return;
+        }
+        semantic = std::make_shared<SemanticApply>(std::move(*captured));
+    }
     if (!capabilities().clangdTweaks) {
         unavailable(QStringLiteral("Generate requires the generate engine for this language (REF-9)"));
         return;
@@ -127,7 +141,7 @@ void LanguageController::generateCode() {
         [&server = m_services.server, path, range](std::stop_token token) {
             return fl::requestCodeActions(server, path, range, {}, std::move(token));
         },
-        [this](Result<std::vector<fl::CodeActionItem>> actions) {
+        [this, semantic](Result<std::vector<fl::CodeActionItem>> actions) {
             if (!actions) {
                 report(actions.error(), "Generate");
                 return;
@@ -141,18 +155,27 @@ void LanguageController::generateCode() {
                     titles.push_back(qs(tweak->title));
                     disabled.emplace_back();
                     m_choiceActions.emplace_back(
-                        [this, action = *tweak]() mutable { runCodeAction(std::move(action)); });
+                        [this, action = *tweak, semantic]() mutable { runCodeAction(std::move(action), semantic); });
                 }
             }
-            // Generators without an engine yet: visible, disabled, with their epic.
-            const QString reason = QStringLiteral("Requires the generate engine (REF-9)");
-            for (const QString& label :
-                 {QStringLiteral("Getters and Setters..."), QStringLiteral("Equality Members..."),
-                  QStringLiteral("Formatting Members..."), QStringLiteral("Override Methods...")}) {
+            // App-owned AST generators remain visible and name the missing composition when absent.
+            const QString reason = m_cppAstRefactoring && capabilities().clangdTweaks
+                                       ? QString{}
+                                       : QStringLiteral("Requires the generate engine (REF-9)");
+            const std::array generators{
+                std::pair{QStringLiteral("Getters and Setters..."), &LanguageController::generateGettersSetters},
+                std::pair{QStringLiteral("Equality Members..."), &LanguageController::generateEqualityMembers},
+                std::pair{QStringLiteral("Formatting Members..."), &LanguageController::generateFormattingMembers},
+                std::pair{QStringLiteral("Override Methods..."), &LanguageController::overrideMethods}};
+            for (const auto& [label, handler] : generators) {
                 titles.push_back(label);
                 disabled.push_back(reason);
-                m_choiceActions.emplace_back(
-                    [this, label, reason] { unavailable(label + QStringLiteral(": ") + reason); });
+                m_choiceActions.emplace_back([this, label, reason, handler] {
+                    if (reason.isEmpty())
+                        (this->*handler)();
+                    else
+                        unavailable(label + QStringLiteral(": ") + reason);
+                });
             }
             m_choice->start(QStringLiteral("Generate"), titles, m_services.host.caretScreenRect(), {},
                             std::move(disabled));
@@ -171,19 +194,35 @@ void LanguageController::implementMethods() {
 }
 
 void LanguageController::overrideMethods() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("generate-overrides");
+        return;
+    }
     unavailable(QStringLiteral("Override Methods requires the generate engine (REF-9); Implement Methods overrides "
                                "pure virtual methods"));
 }
 
 void LanguageController::generateGettersSetters() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("generate-accessors");
+        return;
+    }
     unavailable(QStringLiteral("Getters and Setters require the generate engine (REF-9)"));
 }
 
 void LanguageController::generateEqualityMembers() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("generate-equality");
+        return;
+    }
     unavailable(QStringLiteral("Equality Members require the generate engine (REF-9)"));
 }
 
 void LanguageController::generateFormattingMembers() {
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("generate-formatting");
+        return;
+    }
     unavailable(QStringLiteral("Formatting Members require the generate engine (REF-9)"));
 }
 

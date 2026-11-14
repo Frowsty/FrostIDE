@@ -174,7 +174,8 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
     physical->pushOverlay(overlays);
     llvm::IntrusiveRefCntPtr<SnapshotFileSystem> frozen(
         new SnapshotFileSystem(physical, 32768, 512ULL * 1024 * 1024, 64ULL * 1024 * 1024));
-    if (seed != anchor || seed.empty())
+    const bool generation = input.getString("operation").value_or("").starts_with("generate-");
+    if (!generation && (seed != anchor || seed.empty()))
         return refuse("unsupported", "AST operations require a selected source translation unit, not a header");
     std::map<std::string, std::string> candidates;
     bool selected = false;
@@ -183,12 +184,16 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
         auto ast = projectAST(command, frozen, {}, diagnostics);
         if (!ast || !frozen->error.empty())
             return refuse("parse-error", "Original compilation configuration failed");
-        if (command.Filename != anchor)
+        if (!generation && command.Filename != anchor)
+            continue;
+        auto candidate = generation ? refactorGenerate(*ast, input, error) : refactorAst(*ast, input, error);
+        if (!candidate && generation && error == "not-applicable")
             continue;
         selected = true;
-        auto candidate = refactorAst(*ast, input, error);
         if (!candidate)
             return refuse("unsupported", error);
+        if (!frozen->inputs.contains(anchor))
+            return refuse("unsupported", "Selected file has no exact captured source receipt");
         auto [position, inserted] = candidates.emplace(anchor, *candidate);
         if (!inserted && position->second != *candidate)
             return refuse("conflict", "AST operation differs between compilation configurations");

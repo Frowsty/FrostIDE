@@ -41,6 +41,12 @@ what is next, blockers and open questions for the user.
 - Added CMake named/install targets and Ninja single-file Build/Compile/Rebuild/Clean from the actual compilation database's unique object output. Build uses cmake --build; object clean uses native Ninja's target clean. Missing/ambiguous/outside outputs and other generators refuse explicitly; personal build wrappers do not silently receive file operations.
 - Authored model/argv, application admission/save-cancellation/rebuild-failure, and native CMake command tests. Independent source review completed. No build, test, external tool, WSL or feature execution ran under the implementation-first override; runtime acceptance remains deferred.
 
+## 2026-11-14: R11 actual class/header member generation source
+
+- Added getters/setters, field equality, `formatTo` stream member templates and direct-base declared virtual override stubs from actual Clang record/field/method types. Generated members carry Doxygen stubs. Constructor/special-member/pure-override support continues through actual clangd actions with the same before-query semantic admission.
+- Selected project headers are analyzed in their real captured translation-unit contexts; candidate bytes must agree across configurations and every supplied configuration reparses with immutable dependencies. Name collisions, insertion-time macros, unsupported template/field/base policies and missing receipts refuse. Override bodies are explicitly unimplemented throwing stubs: noexcept methods refuse, and exception-disabled/otherwise-invalid output fails candidate parsing. Ancestor virtual closure is not claimed. Formatting is a caller-instantiated stream template, not an invented `toString` implementation.
+- Normal Generate menu and Find Action routes are wired, with authored header/member/override/refusal goldens. Targeted independent source review passed; only changed-source formatting ran. Builds, tests and runtime verification remain deferred. REF10, usage-driven declarations, project signature breadth and the composed scripted journey continue separately.
+
 ## 2026-11-14: R11 Move and safe-delete source checkpoint
 
 - Normal C++ Move File now invokes the existing source/sidecar/project-membership transaction producer; it performs no separate filesystem move or post-move project write. Symbol move is not claimed by this file operation.
