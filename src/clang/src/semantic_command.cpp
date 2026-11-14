@@ -31,16 +31,34 @@ std::optional<SemanticCommand> semanticCommand(const llvm::json::Object& request
     result.configuration = configuration->str();
     result.databaseSha256 = sha256(*database);
     result.commandIndex = static_cast<std::uint64_t>(*ordinal);
-    auto parsed = clang::tooling::JSONCompilationDatabase::loadFromBuffer(
-        *database, error, clang::tooling::JSONCommandLineSyntax::AutoDetect);
-    if (!parsed)
+    auto captured = llvm::json::parse(*database);
+    if (!captured) {
+        error = llvm::toString(captured.takeError());
         return {};
-    const auto commands = parsed->getAllCompileCommands();
-    if (commands.size() > 32768 || static_cast<std::uint64_t>(*ordinal) >= commands.size()) {
+    }
+    const auto* entries = captured->getAsArray();
+    if (!entries || entries->size() > 32768 || static_cast<std::uint64_t>(*ordinal) >= entries->size()) {
         error = "Command ordinal outside captured database";
         return {};
     }
-    result.command = commands[static_cast<std::size_t>(*ordinal)];
+    // CompilationDatabase enumeration is not a JSON-row-order contract. Decode precisely the
+    // requested captured row through Clang, which still owns command-string quoting semantics.
+    llvm::json::Array selected;
+    selected.push_back((*entries)[static_cast<std::size_t>(*ordinal)]);
+    std::string selectedBytes;
+    llvm::raw_string_ostream selectedStream(selectedBytes);
+    selectedStream << llvm::json::Value(std::move(selected));
+    selectedStream.flush();
+    auto parsed = clang::tooling::JSONCompilationDatabase::loadFromBuffer(
+        selectedBytes, error, clang::tooling::JSONCommandLineSyntax::AutoDetect);
+    if (!parsed)
+        return {};
+    const auto commands = parsed->getAllCompileCommands();
+    if (commands.size() != 1) {
+        error = "Captured row does not name one compile command";
+        return {};
+    }
+    result.command = commands.front();
     auto& command = result.command;
     command.Directory = absolute(command.Directory, result.root);
     command.Filename = absolute(command.Filename, command.Directory);

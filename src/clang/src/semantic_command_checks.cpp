@@ -61,6 +61,27 @@ int checkSemanticCommand(std::string_view resourceDirectory) {
         if (semanticCommand(request(std::move(args)), resourceDirectory, error) || error.empty())
             return fail("Unsafe semantic command was admitted");
     }
+    llvm::json::Array ordered;
+    const std::vector<std::string> names{"z.cpp", "a.cpp", "z.cpp"};
+    for (std::size_t index = 0; index < names.size(); ++index)
+        ordered.push_back(llvm::json::Object{{"directory", root},
+                                             {"file", root + "/" + names[index]},
+                                             {"arguments", llvm::json::Array{"clang++", "-c", root + "/" + names[index],
+                                                                             "-DROW=" + std::to_string(index)}}});
+    std::string orderedBytes;
+    llvm::raw_string_ostream orderedStream(orderedBytes);
+    orderedStream << llvm::json::Value(std::move(ordered));
+    orderedStream.flush();
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        auto selected = request({"clang++", "-c", root + "/unit.cpp"});
+        selected["compilationDatabase"] = orderedBytes;
+        selected["commandIndex"] = index;
+        auto command = semanticCommand(selected, resourceDirectory, error);
+        if (!command || command->command.Filename != root + "/" + names[index] ||
+            std::ranges::find(command->command.CommandLine, "-DROW=" + std::to_string(index)) ==
+                command->command.CommandLine.end())
+            return fail("Captured JSON command row order was not preserved");
+    }
     llvm::outs() << "semantic command admission checks passed\n";
     return 0;
 }
