@@ -84,6 +84,50 @@ std::string fixturePath(std::string_view relative) {
     return frost::io::normalizePath(std::string(FROST_VCS_FIXTURE_DIR) + "/" + std::string(relative)).value();
 }
 
+TEST(GitCommitChecks, RequireReviewAndBlockActualFailedCheckWithoutChangingHead) {
+    TempRepo repo("commit-checks");
+    repo.init();
+    repo.write("a.txt", "initial\n");
+    const auto head = repo.commitAll("initial");
+    repo.write("a.txt", "trailing whitespace \n");
+    CommitRequest request{.paths = {repo.path("a.txt")}, .message = "checked"};
+    request.checks = {{.name = "Whitespace", .executable = repo.runner().gitPath(), .arguments = {"diff", "--check"}}};
+    auto unreviewed = repo.repository().commit(request);
+    ASSERT_FALSE(unreviewed);
+    EXPECT_EQ(unreviewed.error().code(), ErrorCode::InvalidArgument);
+    request.checksReviewed = true;
+    auto failed = repo.repository().commit(request);
+    ASSERT_FALSE(failed);
+    EXPECT_NE(failed.error().message().find("exited with code"), std::string::npos);
+    EXPECT_EQ(trimmed(repo.git({"rev-parse", "HEAD"})), head);
+    repo.write("a.txt", "clean\n");
+    auto committed = repo.repository().commit(request);
+    ASSERT_TRUE(committed) << committed.error().describe();
+    EXPECT_NE(committed->commit, head);
+    EXPECT_NE(committed->output.find("Whitespace exited with code 0"), std::string::npos);
+}
+
+TEST(GitCommitChecks, IndexMutationRequiresReviewBeforeCommitAndHookStillRunsAfterChecks) {
+    TempRepo repo("commit-check-index");
+    repo.init();
+    repo.write("a.txt", "initial\n");
+    const auto head = repo.commitAll("initial");
+    repo.write("a.txt", "changed\n");
+    CommitRequest request{.paths = {repo.path("a.txt")}, .message = "checked"};
+    request.checksReviewed = true;
+    request.checks = {{.name = "Stages a file", .executable = repo.runner().gitPath(), .arguments = {"add", "--", "a.txt"}}};
+    auto changed = repo.repository().commit(request);
+    ASSERT_FALSE(changed);
+    EXPECT_EQ(changed.error().code(), ErrorCode::Busy);
+    EXPECT_EQ(trimmed(repo.git({"rev-parse", "HEAD"})), head);
+    request.checks = {{.name = "Git available", .executable = repo.runner().gitPath(), .arguments = {"--version"}}};
+    repo.hook("pre-commit", "echo actual-hook-rejected >&2; exit 1");
+    auto refused = repo.repository().commit(request);
+    ASSERT_FALSE(refused);
+    EXPECT_NE(refused.error().message().find("actual-hook-rejected"), std::string::npos);
+    EXPECT_EQ(trimmed(repo.git({"rev-parse", "HEAD"})), head);
+}
+
 TEST(GitE2E, DiscoversTheWorkTreeFromAFileOrASubdirectory) {
     TempRepo repo("vcs-discover");
     repo.init();

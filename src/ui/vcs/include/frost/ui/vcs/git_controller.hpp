@@ -101,7 +101,8 @@ public:
     [[nodiscard]] bool busy() const;
 
     // --- Operations (queued on the service; each ends with operationFinished). ---
-    void commit(std::vector<std::string> paths, const QString& message, bool amend, bool pushAfter = false);
+    void commit(std::vector<std::string> paths, const QString& message, bool amend, bool pushAfter = false,
+                std::vector<vcs::CommitCheck> checks = {}, bool checksReviewed = false);
     void rollback(std::vector<std::string> paths);
     void checkout(const QString& branch);
     void createBranch(const QString& name);

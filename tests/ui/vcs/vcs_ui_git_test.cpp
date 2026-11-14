@@ -53,6 +53,29 @@ std::unique_ptr<GitController> controllerFor(const TempRepo& repo) {
     return controller;
 }
 
+TEST(GitUiE2E, CommitChecksReviewIsRequiredAndFailureKeepsMessageAndSelection) {
+    FROST_REQUIRE_OFFSCREEN();
+    TempRepo repo("ui-commit-check");
+    repo.init();
+    repo.write("a.txt", "initial\n");
+    repo.commitAll("initial");
+    repo.write("a.txt", "trailing \n");
+    auto controller = controllerFor(repo);
+    CommitToolWindow window(*controller);
+    window.setMessage(QStringLiteral("checked commit"));
+    window.setCommitChecks({{.name = "Whitespace", .executable = repo.runner().gitPath(), .arguments = {"diff", "--check"}}});
+    window.setConfirmHandler([](const QString&, const QString&) { return false; });
+    EXPECT_FALSE(window.commit());
+    EXPECT_FALSE(controller->busy());
+    window.setConfirmHandler([](const QString&, const QString& text) { return text.contains("Whitespace") && text.contains("--check"); });
+    EXPECT_TRUE(window.commit());
+    ASSERT_TRUE(controller->waitForIdle(kWait));
+    ASSERT_TRUE(controller->lastResult());
+    EXPECT_FALSE(controller->lastResult()->succeeded());
+    EXPECT_EQ(window.message(), QStringLiteral("checked commit"));
+    EXPECT_TRUE(window.model().isChecked(repo.path("a.txt")));
+}
+
 TEST(GitUiE2E, RejectsSecondCommitUntilFirstCompletionIsDelivered) {
     FROST_REQUIRE_OFFSCREEN();
     TempRepo repo("ui-held-completion");

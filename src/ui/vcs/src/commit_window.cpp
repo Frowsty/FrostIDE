@@ -11,6 +11,10 @@
 #include "frost/vcs/vcs_status.hpp"
 
 #include <QCheckBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QTableWidget>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeyEvent>
@@ -265,6 +269,10 @@ CommitToolWindow::CommitToolWindow(GitController& controller, QWidget* parent)
     messageRow->addWidget(m_resolveConflictsButton);
     messageRow->addWidget(m_historyButton);
     auto* buttons = new QHBoxLayout;
+    m_checksButton = new QPushButton(tr("Commit Checks..."), this);
+    m_checksButton->setObjectName(QStringLiteral("commitChecksButton"));
+    connect(m_checksButton, &QPushButton::clicked, this, &CommitToolWindow::configureChecks);
+    buttons->addWidget(m_checksButton);
     buttons->addWidget(m_commit);
     buttons->addWidget(m_commitAndPush);
     buttons->addStretch(1);
@@ -318,6 +326,78 @@ void CommitToolWindow::useHistoryMessage(int index) {
     }
 }
 
+void CommitToolWindow::configureChecks() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Commit Checks"));
+    dialog.setObjectName(QStringLiteral("commitChecksDialog"));
+    dialog.resize(850, 400);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* note = new QLabel(tr("Checks run in the repository root, in row order. Enter an absolute executable path; "
+        "arguments are literal, one per line. Commands are reviewed before each commit."), &dialog);
+    note->setWordWrap(true);
+    layout->addWidget(note);
+    auto* table = new QTableWidget(static_cast<int>(m_checks.size()), 4, &dialog);
+    table->setObjectName(QStringLiteral("commitChecksTable"));
+    table->setHorizontalHeaderLabels({tr("Name"), tr("Executable"), tr("Arguments (one per line)"), tr("Timeout (seconds)")});
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    for (int row = 0; row < table->rowCount(); ++row) {
+        const auto& check = m_checks[static_cast<std::size_t>(row)];
+        table->setItem(row, 0, new QTableWidgetItem(qs(check.name)));
+        table->setItem(row, 1, new QTableWidgetItem(qs(check.executable)));
+        auto* arguments = new QPlainTextEdit(table);
+        QStringList lines;
+        for (const auto& argument : check.arguments) lines.push_back(qs(argument));
+        arguments->setPlainText(lines.join('\n'));
+        table->setCellWidget(row, 2, arguments);
+        table->setItem(row, 3, new QTableWidgetItem(QString::number(std::chrono::duration_cast<std::chrono::seconds>(check.timeout).count())));
+        table->setRowHeight(row, 80);
+    }
+    layout->addWidget(table, 1);
+    auto* rowButtons = new QHBoxLayout();
+    auto* add = new QPushButton(tr("Add Check"), &dialog);
+    auto* remove = new QPushButton(tr("Remove Check"), &dialog);
+    rowButtons->addWidget(add);
+    rowButtons->addWidget(remove);
+    rowButtons->addStretch();
+    layout->addLayout(rowButtons);
+    connect(add, &QPushButton::clicked, &dialog, [table] {
+        const auto row = table->rowCount();
+        table->insertRow(row);
+        table->setItem(row, 0, new QTableWidgetItem(QStringLiteral("Check")));
+        table->setItem(row, 1, new QTableWidgetItem());
+        table->setCellWidget(row, 2, new QPlainTextEdit(table));
+        table->setItem(row, 3, new QTableWidgetItem(QStringLiteral("300")));
+        table->setRowHeight(row, 80);
+    });
+    connect(remove, &QPushButton::clicked, &dialog, [table] {
+        if (table->currentRow() >= 0) table->removeRow(table->currentRow());
+    });
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        std::vector<vcs::CommitCheck> configured;
+        for (int row = 0; row < table->rowCount(); ++row) {
+            vcs::CommitCheck check;
+            check.name = table->item(row, 0)->text().trimmed().toStdString();
+            check.executable = table->item(row, 1)->text().trimmed().toStdString();
+            bool validTimeout = false;
+            const auto seconds = table->item(row, 3)->text().toLongLong(&validTimeout);
+            if (check.name.empty() || !QFileInfo(qs(check.executable)).isAbsolute() || !validTimeout || seconds <= 0 || seconds > 86400) {
+                QMessageBox::warning(&dialog, tr("Commit Checks"), tr("Each check needs a name, an absolute executable and a timeout of 1-86400 seconds."));
+                return;
+            }
+            const auto text = static_cast<QPlainTextEdit*>(table->cellWidget(row, 2))->toPlainText();
+            if (!text.isEmpty()) for (const auto& argument : text.split('\n')) check.arguments.push_back(argument.toStdString());
+            check.timeout = std::chrono::seconds(seconds);
+            configured.push_back(std::move(check));
+        }
+        m_checks = std::move(configured);
+        dialog.accept();
+    });
+    dialog.exec();
+}
+
 bool CommitToolWindow::commit() { return startCommit(false); }
 
 bool CommitToolWindow::commitAndPush() { return startCommit(true); }
@@ -336,10 +416,21 @@ bool CommitToolWindow::startCommit(bool push) {
         m_result->setText(tr("Select the files to commit."));
         return false;
     }
+    if (!m_checks.empty()) {
+        QString review = tr("Run these checks in %1 before committing? A failure or changed selected file blocks the commit.\n")
+            .arg(qs(m_controller->info().workTree));
+        for (const auto& check : m_checks) {
+            review += "\n" + qs(check.name) + "\n" + qs(check.executable);
+            for (const auto& argument : check.arguments) review += "\n    " + qs(argument);
+        }
+        const bool approved = m_confirm ? m_confirm(tr("Review Commit Checks"), review)
+            : QMessageBox::question(this, tr("Review Commit Checks"), review) == QMessageBox::Yes;
+        if (!approved) return false;
+    }
     m_committing = true;
     m_result->setText(push ? tr("Committing and pushing...") : tr("Committing..."));
     updateButtons();
-    m_controller->commit(paths, message(), amend, push);
+    m_controller->commit(paths, message(), amend, push, m_checks, !m_checks.empty());
     return true;
 }
 
@@ -430,6 +521,7 @@ void CommitToolWindow::refreshFromController() {
 void CommitToolWindow::updateButtons() {
     const bool idle = m_controller && !m_committing;
     const bool hasFiles = !m_model->checkedPaths().empty();
+    m_checksButton->setEnabled(idle && !m_controller->busy());
     m_commit->setEnabled(idle);
     m_commitAndPush->setEnabled(idle);
     m_rollback->setEnabled(idle && hasFiles);

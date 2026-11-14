@@ -116,10 +116,21 @@ struct GitBlameLine {
     friend bool operator==(const GitBlameLine&, const GitBlameLine&) = default;
 };
 
+// Explicitly configured local check. Executed without a shell in the repository root, under
+// the commit operation's cancellation/tree ownership; never loaded automatically from a project.
+struct CommitCheck {
+    std::string name;
+    std::string executable; // Absolute executable path; arguments are literal argv entries.
+    std::vector<std::string> arguments;
+    IClock::Duration timeout = std::chrono::minutes(5);
+};
+
 struct CommitRequest {
     std::vector<std::string> paths; // Absolute paths of the selected files (a rename: either path).
     std::string message;
     bool amend = false;
+    std::vector<CommitCheck> checks;
+    bool checksReviewed = false; // Caller reviewed these exact commands for this commit.
 };
 
 struct CommitResult {
