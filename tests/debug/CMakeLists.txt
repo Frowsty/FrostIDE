@@ -188,6 +188,17 @@ add_dependencies(debug_dap_real_tests debug_test_scenarios)
 if(WIN32)
     file(READ "${FROST_SOURCE_DIR}/sdk/sdk.lock.json" _frost_debug_msvc_lock)
     string(JSON _frost_debug_msvc_tools GET "${_frost_debug_msvc_lock}" msvc vcToolsVersion)
+    frost_add_test(debug_dbgeng_depth_tests
+        SOURCES dbgeng_native_depth_test.cpp
+        DEPS frost::debug frost::build frost::rpc frost::io frost::core
+        LABELS integration dbgeng msvc
+        TIMEOUT 180)
+    target_include_directories(debug_dbgeng_depth_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(debug_dbgeng_depth_tests PRIVATE
+        FROST_DBGENG_ADAPTER_PATH="$<TARGET_FILE:frost-dbgeng-dap>"
+        FROST_DBGENG_DEPTH_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/dbgeng_native_depth.cpp"
+        FROST_PINNED_VC_TOOLS="${_frost_debug_msvc_tools}")
+    add_dependencies(debug_dbgeng_depth_tests frost-dbgeng-dap)
     frost_add_test(debug_msvc_tests
         SOURCES msvc_debug_test.cpp
         DEPS frost::debug frost::build frost::io
