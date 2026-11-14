@@ -31,6 +31,7 @@ frost_add_library(ui_editor LAYER ui
         src/editor_view.cpp
         src/editor_view_commands.cpp
         src/editor_view_essentials.cpp
+        src/editor_view_extras.cpp
         src/editor_view_input.cpp
         src/editor_view_insight.cpp
         src/editor_view_paint.cpp
@@ -38,6 +39,7 @@ frost_add_library(ui_editor LAYER ui
         src/find_bar.cpp
         src/glyph_atlas.cpp
         src/go_to_line.cpp
+        src/markdown_preview.cpp
         src/insight_status.cpp
         src/qt_text_shaper.cpp
         src/raster_renderer.cpp
