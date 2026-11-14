@@ -66,6 +66,7 @@ protected:
         frost::io::ProcessSpec spec;
         spec.executable = frost::io::normalizePath(FROST_CLANG_BINARY).value();
         spec.arguments = {"--plan-ast-refactoring"};
+        spec.stdinMode = frost::io::Stdio::Pipe;
         spec.workingDirectory = scratch.path();
         spec.killOnClose = true;
         spec.environment.emplace_back("FROST_LLVM_ROOT",
