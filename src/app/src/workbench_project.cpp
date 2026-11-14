@@ -36,9 +36,11 @@
 #include "project_edit_process.hpp"
 #include "unity_control.hpp"
 #include "workbench_project_helpers.hpp"
+#include "workbench_source_rename_preview.hpp"
 #include <QDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QPointer>
 #include <QTimer>
 
 #include <algorithm>
@@ -85,6 +87,8 @@ Result<void> Workbench::openCMakeProject(std::string_view path) {
 }
 
 Result<void> Workbench::openPath(std::string_view path, FileLocation at) {
+    if (m_solutionLoading || m_shutDown)
+        return fail(ErrorCode::Busy, "A solution is loading or the Workbench is closing");
     // The registry's canonical spelling (one document per file), the lexical form for a missing one.
     const std::string canonical = m_documentRegistry->canonicalize(path);
     Result<io::FileStatus> status = m_services.fs.status(canonical);
@@ -148,14 +152,27 @@ Result<void> Workbench::openExternalProject(std::string_view path) {
 }
 
 Result<void> Workbench::openSolution(const std::string& path) {
+    if (m_solutionLoading || m_shutDown)
+        return fail(ErrorCode::Busy, "A solution is loading or the Workbench is closing");
     if (m_solution && lang::documentKey(m_solution->path()) == lang::documentKey(path)) {
         transitionLauncherToMainWindow();
         offerProjectTrust();
         return {}; // Already the project.
     }
-    Result<project::SolutionModel> loaded = project::SolutionModel::load(
-        m_services.fs, path, {.cppHierarchy = m_cppHierarchyMode, .unloadedProjectPaths = m_unloadedProjectPaths});
+    QPointer<Workbench> owner(this);
+    m_solutionLoading = true;
+    m_solutionLoadStop = std::stop_source{};
+    auto loaded = loadSolutionInBackground(
+        m_window, m_services.fs, path,
+        {.cppHierarchy = m_cppHierarchyMode, .unloadedProjectPaths = m_unloadedProjectPaths}, m_solutionLoadStop);
+    if (!owner)
+        return fail(ErrorCode::Cancelled, "Workbench closed while reading the solution");
+    m_solutionLoading = false;
+    if (m_shutDown)
+        return fail(ErrorCode::Cancelled, "Workbench shut down while reading the solution");
     if (!loaded) {
+        if (loaded.error().code() == ErrorCode::Cancelled)
+            return std::unexpected(std::move(loaded.error()));
         notify(text("Cannot open %1").arg(qs(path)), qs(loaded.error().message()), ui::NotificationKind::Error);
         return std::unexpected(std::move(loaded.error()));
     }
@@ -164,6 +181,9 @@ Result<void> Workbench::openSolution(const std::string& path) {
     }
     auto model = std::make_shared<const project::SolutionModel>(std::move(*loaded));
     m_solution = model;
+    if (model->approximate())
+        notify(text("Approximate solution"), qs(std::string(model->approximationNotice())),
+               ui::NotificationKind::Warning);
     if (auto opened = m_build->openSolution(model); !opened) {
         // The explorer still shows the solution; building is unavailable.
         notify(text("The build service cannot open %1").arg(qs(model->name())), qs(opened.error().message()),
@@ -207,6 +227,8 @@ Result<void> Workbench::openSolution(const std::string& path) {
 }
 
 Result<void> Workbench::openFolder(const std::string& path, bool discoverSolution, std::string recentPath) {
+    if (m_solutionLoading || m_shutDown)
+        return fail(ErrorCode::Busy, "A solution is loading or the Workbench is closing");
     // A folder with one solution opens that solution (.sln before .slnx of the same name).
     if (Result<std::vector<io::DirEntry>> entries = m_services.fs.listDirectory(path); discoverSolution && entries) {
         std::vector<std::string> solutions;
@@ -483,6 +505,10 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
 }
 
 bool Workbench::closeForOpen() {
+    if (m_solutionLoading) {
+        m_solutionLoadStop.request_stop();
+        return false; // Do not replace/close the current project while the modal worker owns its inputs.
+    }
     if (m_projectEditWaitingForReaders || (m_projectEdit && m_projectEdit->busy())) {
         notify(text("The project stays open"), text("Wait for the project edit to finish."),
                ui::NotificationKind::Warning);

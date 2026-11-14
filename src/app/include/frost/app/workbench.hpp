@@ -1211,6 +1211,8 @@ private:
     std::vector<std::string> m_discarded;
     std::optional<lang::AssetReferenceReport> m_lastAssetReferenceReport;
     bool m_suppressNewFileNotice = false;
+    bool m_solutionLoading = false;
+    std::stop_source m_solutionLoadStop;
     bool m_shutDown = false;
 };
 

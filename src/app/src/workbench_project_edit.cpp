@@ -141,6 +141,10 @@ std::optional<QString> Workbench::projectEditBlocked(const std::string& projectP
 }
 
 Result<std::pair<std::string, std::string>> Workbench::projectEditTools() {
+    if (m_solution) {
+        if (auto allowed = m_solution->requireProjectMutation(); !allowed)
+            return std::unexpected(allowed.error());
+    }
     std::string executable = m_options.projectEditHostPath;
     if (executable.empty())
         executable = utf8(QDir(QCoreApplication::applicationDirPath())

@@ -708,6 +708,11 @@ void Workbench::onSettingsChanged() {
 }
 
 bool Workbench::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::Close && m_solutionLoading && m_window && watched == m_window.data()) {
+        m_solutionLoadStop.request_stop();
+        event->ignore(); // Worker/dialog must settle before closing the owning window.
+        return true;
+    }
     // general.confirmExit: closing the IDE window (title bar, Alt+F4, File > Exit) asks first. This
     // application-wide filter runs before the navigation workbench's own close handling. Closes the
     // IDE starts itself (update restart, version switch) set m_exitConfirmed and are not asked.
@@ -835,6 +840,7 @@ bool Workbench::anyDebugSessionActive() const {
 }
 
 void Workbench::shutdown() {
+    m_solutionLoadStop.request_stop();
     if (m_shutDown) {
         return;
     }
