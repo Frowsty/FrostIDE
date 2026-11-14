@@ -370,7 +370,10 @@ public:
                                      CMakeBuildCompletion done = {},
                                      const std::shared_ptr<const project::CMakeProject>& expectedModel = {});
     // Cancels the job in progress (BuildService::cancel). Idempotent.
-    void cancel();
+    // With a debugger endpoint, cancel only that exact configure job; stale sessions cannot
+    // cancel a later build or configure. Empty retains the ordinary Stop behavior.
+    void cancel(std::string_view debuggerEndpoint = {});
+    [[nodiscard]] bool debugConfigureCurrent(std::string_view endpoint) const;
     // Trusts `root` and lets a job waiting in NeedsTrust go on; once the folder is trusted and has no
     // configured model yet, configures it (configureOnOpen). Errors: those of TrustStore::trust.
     [[nodiscard]] Result<void> trust(std::string_view root);
