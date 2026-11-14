@@ -46,6 +46,8 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <thread>
+#include <QMetaObject>
 
 namespace frost::app {
 
@@ -134,6 +136,17 @@ std::vector<PageSpec> cppPropertyPages() {
          },
          nullptr,
          kDebuggingNote},
+        {"Configuration Properties", "NMake", {
+             {"Prop.NMakeBuildCommandLine", "Build Command Line", kMultiLineField},
+             {"Prop.NMakeReBuildCommandLine", "Rebuild Command Line", kMultiLineField},
+             {"Prop.NMakeCleanCommandLine", "Clean Command Line", kMultiLineField},
+             {"Prop.NMakeOutput", "Output", nullptr},
+             {"Prop.NMakeIncludeSearchPath", "Include Search Path", nullptr},
+             {"Prop.NMakePreprocessorDefinitions", "Preprocessor Definitions", nullptr},
+             {"Prop.NMakeForcedIncludes", "Forced Includes", nullptr},
+             {"Prop.NMakeAssemblySearchPath", "Assembly Search Path", nullptr},
+             {"Prop.AdditionalOptions", "Additional Compiler Options", nullptr},
+         }},
         {"C/C++",
          "General",
          {
@@ -432,7 +445,9 @@ void buildPropertyPagesUi(const std::vector<PageSpec>& specs, QTreeWidget* tree,
 } // namespace
 
 void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std::string& projectPath,
-                                 const std::string& activeConfigPlatform, std::function<void()> onSaved) {
+                                 const std::string& activeConfigPlatform, std::function<void()> onSaved,
+                                 std::function<Result<void>(std::string_view, const ProjectPropertyMap&)> saveProperties,
+                                 std::function<Result<ProjectPropertyMap>(std::string_view, const std::vector<std::string>&, std::stop_token)> evaluatedProperties) {
     auto readRes = fs.readFile(projectPath);
     if (!readRes) {
         QMessageBox::warning(parent, QStringLiteral("Project Properties"),
@@ -452,6 +467,9 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
     auto* outer = new QVBoxLayout(&dialog);
     outer->setContentsMargins(12, 12, 12, 12);
     outer->setSpacing(10);
+    if (isCpp)
+        outer->addWidget(new QLabel(QStringLiteral("Edit declared values and expressions; field tooltips show MSBuild evaluated values including imports. "
+            "Apply submits a trusted transaction and refreshes code intelligence when it completes."), &dialog));
 
     QComboBox* cfgCombo = nullptr;
     if (isCpp) {
@@ -485,6 +503,10 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
     buildPropertyPagesUi(specs, tree, stack, bindings);
 
     ProjectPropertyMap loadedProps;
+    std::jthread evaluationWorker;
+    std::uint64_t evaluationGeneration = 0;
+    auto* evaluationStatus = new QLabel(&dialog);
+    if (isCpp) outer->addWidget(evaluationStatus);
     const auto loadCurrentConfig = [&] {
         const std::string cfg = cfgCombo ? cfgCombo->currentText().toStdString() : std::string();
         loadedProps = isCpp ? parseVcxprojPropertiesForConfig(currentXml, cfg) : parseCsprojProperties(currentXml);
@@ -505,6 +527,29 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
             const auto it = loadedProps.find(b.key);
             b.setValue(it != loadedProps.end() ? it->second : std::string());
         }
+        evaluationWorker.request_stop();
+        if (evaluationWorker.joinable()) evaluationWorker.join();
+        const auto generation = ++evaluationGeneration;
+        if (isCpp && evaluatedProperties && cfg.find('|') != std::string::npos) {
+            std::vector<std::string> keys;
+            for (const auto& binding : bindings) keys.push_back(binding.key);
+            evaluationStatus->setText(QStringLiteral("Evaluating imported property values…"));
+            evaluationWorker = std::jthread([&, cfg, keys = std::move(keys), generation](std::stop_token stop) {
+                auto evaluated = evaluatedProperties(cfg, keys, stop);
+                if (stop.stop_requested()) return;
+                QMetaObject::invokeMethod(&dialog, [&, generation, evaluated = std::move(evaluated)] {
+                    if (generation != evaluationGeneration) return;
+                    evaluationStatus->setText(evaluated ? QStringLiteral("MSBuild evaluated values are available in field tooltips.")
+                        : QStringLiteral("Evaluated values unavailable: %1").arg(toQs(evaluated.error().message())));
+                    if (!evaluated) return;
+                    for (const auto& [key, value] : *evaluated)
+                        if (auto* field = dialog.findChild<QWidget*>(QString::fromStdString("prop_" + key)))
+                            field->setToolTip(QStringLiteral("MSBuild evaluated value (including imports):\n%1").arg(toQs(value)));
+                }, Qt::QueuedConnection);
+            });
+        } else if (isCpp) {
+            evaluationStatus->setText(QStringLiteral("Choose one configuration in a trusted solution to inspect evaluated values."));
+        }
     };
     loadCurrentConfig();
 
@@ -521,7 +566,19 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
         }
         if (updates.empty())
             return true;
+        // The transaction must not race this dialog's independent read-only evaluator.
+        ++evaluationGeneration;
+        evaluationWorker.request_stop();
+        if (evaluationWorker.joinable()) evaluationWorker.join();
         const std::string cfg = cfgCombo ? cfgCombo->currentText().toStdString() : std::string();
+        if (isCpp) {
+            auto admitted = saveProperties ? saveProperties(cfg, {})
+                : Result<void>(fail(ErrorCode::Untrusted, "Open a trusted solution to edit MSBuild properties."));
+            if (!admitted) {
+                QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"), toQs(admitted.error().message()));
+                return false;
+            }
+        }
         // The debugger settings go to <project>.vcxproj.user (kDebuggingNote), in each configuration
         // the combo names ("All Configurations": every one it lists), never into the project file.
         std::vector<build::UserFileProperty> userUpdates;
@@ -534,6 +591,11 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
                     ++it;
                 }
             }
+        }
+        if (!userUpdates.empty() && !updates.empty()) {
+            QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"),
+                QStringLiteral("Save debugger settings and project properties separately; they use different transactions."));
+            return false;
         }
         if (!userUpdates.empty()) {
             std::vector<std::string> configurations;
@@ -562,8 +624,18 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
             }
         }
         if (!updates.empty()) {
-            currentXml = isCpp ? applyVcxprojPropertiesForConfig(currentXml, cfg, updates)
-                               : applyCsprojProperties(currentXml, updates);
+            if (isCpp) {
+                auto submitted = saveProperties ? saveProperties(cfg, updates)
+                    : Result<void>(fail(ErrorCode::Unsupported, "Open a trusted solution to edit MSBuild properties."));
+                if (!submitted) {
+                    QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"), toQs(submitted.error().message()));
+                    return false;
+                }
+                // The asynchronous transaction owns the write; leave the dialog before another edit.
+                dialog.accept();
+                return true;
+            }
+            currentXml = applyCsprojProperties(currentXml, updates);
             if (auto written = fs.writeFileAtomic(projectPath, currentXml); !written) {
                 QMessageBox::warning(&dialog, QStringLiteral("Save Project Properties"),
                                      toQs(written.error().message()));
@@ -603,6 +675,9 @@ void showProjectPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const std
     outer->addWidget(buttons);
     ui::installDialogChrome(&dialog, true);
     dialog.exec();
+    ++evaluationGeneration;
+    evaluationWorker.request_stop();
+    if (evaluationWorker.joinable()) evaluationWorker.join();
 }
 
 void showSolutionPropertiesDialog(QWidget* parent, io::IFileSystem& fs, const project::SolutionModel& solution,

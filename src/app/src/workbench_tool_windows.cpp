@@ -139,6 +139,29 @@ void Workbench::attachToolWindows() {
             startProjectEvaluation(m_projectRoot);
             if (m_clangd)
                 restartClangd();
+        }, [this, propertyProject = projectPath.toStdString()](std::string_view configuration, const ProjectPropertyMap& updates) -> Result<void> {
+            if (updates.empty()) {
+                if (auto blocked = projectEditBlocked(propertyProject))
+                    return fail(ErrorCode::Untrusted, blocked->toStdString());
+                return {};
+            }
+            const auto bar = configuration.find('|');
+            if (bar == std::string_view::npos)
+                return fail(ErrorCode::InvalidArgument, "Choose one Configuration|Platform pair.");
+            project::ProjectEdit edit;
+            edit.kind = project::ProjectEditKind::SetProperties;
+            edit.definition = propertyProject;
+            edit.configuration = std::string(configuration.substr(0, bar));
+            edit.platform = std::string(configuration.substr(bar + 1));
+            edit.propertyUpdates.assign(updates.begin(), updates.end());
+            if (auto refused = submitProjectEdit(std::move(edit), QStringLiteral("Project Properties")))
+                return fail(ErrorCode::InvalidArgument, refused->toStdString());
+            return {};
+        }, [this, propertyProject = projectPath.toStdString(), root = m_projectRoot, solution = m_solution->path()]
+           (std::string_view configuration, const std::vector<std::string>& keys, std::stop_token stop) -> Result<ProjectPropertyMap> {
+            auto evaluated = evaluatePropertyPage(propertyProject, root, solution, configuration, keys, stop);
+            if (!evaluated) return std::unexpected(std::move(evaluated.error()));
+            return std::move(evaluated->properties);
         });
     });
     connect(explorer, &ui::SolutionExplorer::solutionPropertiesRequested, this, [this] {
