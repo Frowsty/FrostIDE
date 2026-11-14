@@ -31,6 +31,7 @@ frost_add_test(lang_unit_tests
     SOURCES
         cpp_rename_plan_test.cpp
         cpp_refactoring_plan_test.cpp
+        scope_fixes_test.cpp
         clangd_actions_test.cpp
         cmake_compile_commands_unit_test.cpp
         cmake_language_test.cpp
