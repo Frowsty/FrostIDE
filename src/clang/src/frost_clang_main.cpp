@@ -45,6 +45,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "local_rename_plan.hpp"
+#include "semantic_command.hpp"
 #include "tidy_fixes_decode.hpp"
 
 #include <cstdlib>
@@ -335,6 +336,9 @@ int main(int argc, char* argv[]) {
         return frost::clang_engine::runBindingMap(argc, argv, detectClangResourceDir());
     }
 #ifdef FROST_CLANG_PLAN_TESTS
+    if (argc == 2 && std::string_view(argv[1]) == "--check-semantic-command") {
+        return frost::clang_engine::checkSemanticCommand(detectClangResourceDir());
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--check-local-rename-planner") {
         return frost::clang_engine::checkLocalRenamePlanner(detectClangResourceDir());
     }

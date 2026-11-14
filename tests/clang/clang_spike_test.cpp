@@ -306,6 +306,16 @@ int runComputation() {
     verifyCompilesWithPinnedClang(sourcePath, scratch.path());
 }
 
+TEST(ClangSpike, SharedSemanticAdmissionStripsOutputsAndRejectsFrontendPlugins) {
+    frost::test::ScratchDir scratch("semantic-command-admission");
+    frost::io::ProcessSpec spec;
+    spec.executable = frostClangPath();
+    spec.workingDirectory = scratch.path();
+    spec.arguments = {"--check-semantic-command"};
+    auto checked = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, "", kProcessTimeout);
+    ASSERT_TRUE(checked);
+    EXPECT_EQ(checked->exitCode, 0) << checked->stdoutBytes << checked->stderrBytes;
+}
 TEST(ClangSpike, LibToolingRewritesClassTypeAndMembersAndCompiles) {
     frost::test::ScratchDir scratch("clang-rewrite-type");
     ASSERT_FALSE(scratch.path().empty());
