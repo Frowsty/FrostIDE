@@ -7903,3 +7903,29 @@ with a pointer.
   run from the staged directory observed its bundled DLL and OpenConsole process. Native Linux tests
   cover the terminal protocol and PTY, but the latest application integration has not run on Linux.
   The staged snapshot still needs independent review and the merged-tree verification gate.
+
+
+## 2026-11-14: R15 editor extras implementation (source review only)
+
+- UX-5 reuses the existing pinned permissively licensed Markdown grammar/queries; no new dependency,
+  download or ADR is needed. The production Preview Markdown action follows the original editor with
+  a size cap, disabled raw HTML/resource loading, and explicit HTTP(S) hyperlink activation.
+- UX-7 adds document-anchor bookmarks with Undo-aware movement and production navigation actions,
+  one bounded current-version tree-sitter sticky scope, and a TODO/FIXME action composed from the
+  existing bounded/cancellable Find session (dirty overlays and directory ignore rules included).
+  Existing Problems publication and navigation remain the actual diagnostics UI.
+- UX-15 consumes real bounded OSC 133 prompt/command/output/exit marks and OSC 7 directory metadata;
+  navigation clips expired positions and discards unknown reflow coordinates. Application-only
+  personal shell/argv/folder profiles recheck project trust and owner context revision before launch.
+  Shells must emit the supported protocol; this change does not rewrite shell startup files.
+- UX-16 reads actual durable history through a separate worker-owned SQLite connection, uses the
+  FileDocument key, bounds revision/content capture, rejects stale selections/editor versions and
+  offers an undoable restore to the original buffer with explicit Save. The modal is parentless and
+  rejects on owner destruction before joining its worker. The freeze-report action opens only a
+  user-selected bounded snapshot and displays raw recorded data without resolving embedded paths.
+- Authored editor resource-denial/bookmark/sticky tests, VT mark/bounds tests, profile trust/argv/
+  generation tests, composed TODO tests, and real durable-history restore/Undo/owner-close tests.
+- Astra independently source-reviewed the editor, terminal, app/history and authored test slices;
+  the modal lifetime and bounded report-read findings were fixed. Commits: dd193193, 040ef30a,
+  97e679b1 on codex/r15-editor-extras. No builds, tests, feature runs, WSL, benchmarks, probes or
+  verification runners were executed. Runtime acceptance remains deferred by user instruction.
