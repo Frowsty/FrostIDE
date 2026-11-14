@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QPointer>
 #include <QVBoxLayout>
 #include <QXmlStreamReader>
 #include <algorithm>
@@ -176,13 +177,18 @@ Result<std::vector<settings::ConditionalSettingEdit>> prepareVisualStudioImport(
     return edits;
 }
 bool showSettingsImport(settings::SettingsStore& store, QWidget* parent) {
+    const bool hadParent = parent != nullptr;
+    const QPointer<QWidget> owner(parent);
     const auto path = QFileDialog::getOpenFileName(parent, QStringLiteral("Import Visual Studio Settings"), {}, QStringLiteral("Visual Studio settings (*.vssettings)"));
-    if (path.isEmpty()) return false;
+    if (path.isEmpty() || (hadParent && !owner)) return false;
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024) return false;
     const auto bytes = file.read(1024 * 1024 + 1);
     auto imported = parseVisualStudioSettings(std::string_view(bytes.constData(), static_cast<std::size_t>(bytes.size())));
-    QDialog dialog(parent);
+    // A nested event loop may destroy the settings owner. A parent must not delete this
+    // stack object, and no callback may touch its borrowed store after that owner is gone.
+    QDialog dialog;
+    if (owner) QObject::connect(owner.data(), &QObject::destroyed, &dialog, &QDialog::reject);
     ui::installDialogChrome(&dialog, true);
     dialog.setWindowTitle(QStringLiteral("Review Settings Import"));
     auto* layout = new QVBoxLayout(&dialog);
@@ -199,6 +205,7 @@ bool showSettingsImport(settings::SettingsStore& store, QWidget* parent) {
         categories->addItem(QString::fromStdString(font.id + "  " + font.font + "  (" + std::to_string(font.colors.size()) + " colors)"));
     if (imported && imported->fonts.empty()) categories->addItem(QStringLiteral("Shortcuts only"));
     const auto refresh = [&] {
+        if (hadParent && !owner) { dialog.reject(); return; }
         captured.clear();
         if (!imported) { status->setText(QString::fromStdString(imported.error().message())); buttons->button(QDialogButtonBox::Apply)->setEnabled(false); return; }
         auto proposal = prepareVisualStudioImport(store, *imported, static_cast<std::size_t>(std::max(0, categories->currentIndex())));
@@ -216,6 +223,7 @@ bool showSettingsImport(settings::SettingsStore& store, QWidget* parent) {
     QObject::connect(categories, &QComboBox::currentIndexChanged, &dialog, [&](int) { refresh(); });
     bool applied = false;
     QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
+        if (hadParent && !owner) { dialog.reject(); return; }
         if (auto result = store.applyConditional(settings::Scope::Application, captured); !result) {
             status->setText(QString::fromStdString(result.error().message()));
             buttons->button(QDialogButtonBox::Apply)->setEnabled(false);

@@ -51,4 +51,24 @@ TEST(DockingV2, SideModeVisibilityAndGeometryRestoreFromSameSettings) {
     EXPECT_TRUE(restored.isVisible("services"));
     EXPECT_EQ(settings.current().find("services")->side, 1);
 }
+TEST(DockingV2, HiddenRestoreDoesNotOverwriteSavedModeSizeOrPin) {
+    ShellLayout initial;
+    auto& saved = initial.entry("services");
+    saved.side = 1; saved.floating = true; saved.size = 417; saved.pinned = false; saved.visible = false;
+    InMemoryShellSettings settings(initial);
+    QWidget host;
+    auto* center = new QWidget;
+    ToolWindowManager manager(host, *center, settings);
+    ASSERT_TRUE(manager.add({.id = "services", .title = QStringLiteral("Services"), .side = ToolWindowSide::Left}));
+    EXPECT_EQ(settings.storeCount(), 0U);
+    EXPECT_EQ(settings.current(), initial);
+    EXPECT_TRUE(manager.isFloating("services"));
+    EXPECT_EQ(manager.size("services"), 417);
+    manager.show("services", false);
+    const auto* restored = settings.current().find("services");
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->side, 1);
+    EXPECT_EQ(restored->size, 417);
+    EXPECT_EQ(restored->pinned, false);
+}
 } // namespace frost::ui

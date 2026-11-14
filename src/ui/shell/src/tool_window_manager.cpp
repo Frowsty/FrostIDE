@@ -839,6 +839,7 @@ Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
     Window& window =
         m_windows.emplace_back(Window{std::move(spec), button, nullptr, defaultSize, 0, false, pinnedByDefault});
     updateSidebarVisibility();
+    const bool wasRestoring = std::exchange(m_restoringLayout, true);
     if (const Result<ShellLayout> layout = m_settings.load(); layout) {
         if (const ToolWindowLayout* remembered = layout->find(id); remembered != nullptr) {
             if (remembered->side >= 0 && remembered->side <= 2) moveToSide(id, static_cast<ToolWindowSide>(remembered->side));
@@ -853,6 +854,9 @@ Result<void> ToolWindowManager::add(ToolWindowSpec spec) {
             }
         }
     }
+    m_restoringLayout = wasRestoring;
+    window.button->setVisible(window.pinned || window.visible);
+    updateSidebarVisibility();
     return {};
 }
 
@@ -1264,6 +1268,7 @@ void ToolWindowManager::applySizes() {
 }
 
 void ToolWindowManager::storeLayout() {
+    if (m_restoringLayout) return;
     Result<ShellLayout> loaded = m_settings.load();
     ShellLayout layout = loaded ? std::move(*loaded) : ShellLayout{};
     for (const Window& window : m_windows) {

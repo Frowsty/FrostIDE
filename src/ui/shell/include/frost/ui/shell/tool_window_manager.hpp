@@ -205,6 +205,7 @@ private:
     QWidget& m_center;
     IShellSettings& m_settings;
     bool m_floatStoreQueued = false;
+    bool m_restoringLayout = false;
     QWidget* m_leftSidebar = nullptr;
     QToolButton* m_moreButton = nullptr;
     QSplitter* m_horizontal = nullptr;

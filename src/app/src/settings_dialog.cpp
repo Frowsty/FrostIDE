@@ -27,6 +27,7 @@
 #include <QPainterPath>
 #include <QPen>
 #include <QPushButton>
+#include <QPointer>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -429,7 +430,9 @@ void SettingsDialog::build() {
             m_status->setText(text("Apply or Reload pending changes before importing a scheme."));
             return;
         }
-        if (showSettingsImport(m_store, this)) { m_keymap.reloadPreferences(); reload(); }
+        const QPointer<SettingsDialog> owner(this);
+        const bool imported = showSettingsImport(m_store, this);
+        if (owner && imported) { owner->m_keymap.reloadPreferences(); owner->reload(); }
     });
     reloadButton->setToolTip(text("Discard pending changes and reload settings from disk"));
     m_apply = buttons->button(QDialogButtonBox::Apply);
