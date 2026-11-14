@@ -17,30 +17,33 @@ class AstRefactoring : public ::testing::Test {
 protected:
     frost::test::ScratchDir scratch{"ast-refactoring"};
     Json plan(std::string source, std::string operation, std::string selection, Json order = Json::array(),
-              std::string name = "extracted") {
-        const auto file = scratch.join("fixture.cpp");
+              std::string name = "extracted", bool header = false) {
+        const auto file = scratch.join(header ? "fixture.hpp" : "fixture.cpp");
+        const auto unit = scratch.join("fixture.cpp");
         const auto compiler = *frost::io::normalizePath(FROST_TEST_CXX_COMPILER);
         auto& fs = frost::io::realFileSystem();
         EXPECT_TRUE(fs.writeFileAtomic(file, source));
+        if (header)
+            EXPECT_TRUE(fs.writeFileAtomic(unit, "#include \"fixture.hpp\"\nint main(){return 0;}\n"));
         const auto offset = source.find(selection);
         EXPECT_NE(offset, std::string::npos);
         std::vector<Json> arguments{Json(compiler)};
 #ifdef _WIN32
         for (const auto& arg :
-             std::vector<std::string>{"/std:c++20", "/c", file, "/Fo" + scratch.join("forbidden.obj")})
+             std::vector<std::string>{"/std:c++20", "/c", unit, "/Fo" + scratch.join("forbidden.obj")})
             arguments.emplace_back(arg);
 #else
-        for (const auto& arg : std::vector<std::string>{"-std=c++20", "-c", file, "-o", scratch.join("forbidden.o")})
+        for (const auto& arg : std::vector<std::string>{"-std=c++20", "-c", unit, "-o", scratch.join("forbidden.o")})
             arguments.emplace_back(arg);
 #endif
         auto database = Json::array({Json::object()
                                          .set("directory", scratch.path())
-                                         .set("file", file)
+                                         .set("file", unit)
                                          .set("arguments", Json::array(std::move(arguments)))})
                             .dump();
         auto request = Json::object()
                            .set("projectRoot", scratch.path())
-                           .set("seedTranslationUnit", file)
+                           .set("seedTranslationUnit", unit)
                            .set("path", file)
                            .set("offset", offset)
                            .set("endOffset", offset + selection.size())
@@ -121,6 +124,33 @@ TEST_F(AstRefactoring, ExtractFieldRequiresAnInternalNonAggregateClass) {
     ASSERT_EQ(result.stringAt("status"), "ready");
     EXPECT_NE(after(result).find("this->extracted"), std::string::npos);
     EXPECT_NE(after(result).find("const int extracted = 2+3"), std::string::npos);
+}
+TEST_F(AstRefactoring, GenerateMembersUsesActualProjectHeaderAndFieldTypes) {
+    auto accessors = plan("struct Data { int count; const int fixed = 2; };\n", "generate-accessors", "Data",
+                          Json::array(), "unused", true);
+    ASSERT_EQ(accessors.stringAt("status"), "ready");
+    EXPECT_NE(after(accessors).find("getCount() const"), std::string::npos);
+    EXPECT_NE(after(accessors).find("setCount(int value)"), std::string::npos);
+    EXPECT_EQ(after(accessors).find("setFixed"), std::string::npos);
+    EXPECT_NE(after(accessors).find("@param value"), std::string::npos);
+    auto equality = plan("struct Data { int count; };\n", "generate-equality", "Data", Json::array(), "unused", true);
+    ASSERT_EQ(equality.stringAt("status"), "ready");
+    EXPECT_NE(after(equality).find("this->count == other.count"), std::string::npos);
+    auto formatting =
+        plan("struct Data { int count; };\n", "generate-formatting", "Data", Json::array(), "unused", true);
+    ASSERT_EQ(formatting.stringAt("status"), "ready");
+    EXPECT_NE(after(formatting).find("formatTo(Stream& out) const"), std::string::npos);
+}
+TEST_F(AstRefactoring, GenerateOverridesUsesBaseSignaturesAndExplicitStubBodies) {
+    auto overrides = plan("struct Base { virtual int evaluate(int value) const = 0; }; struct Child : Base {};\n",
+                          "generate-overrides", "Child", Json::array(), "unused", true);
+    ASSERT_EQ(overrides.stringAt("status"), "ready");
+    EXPECT_NE(after(overrides).find("evaluate(int arg0) const override"), std::string::npos);
+    EXPECT_NE(after(overrides).find("Unimplemented override: evaluate"), std::string::npos);
+    refused(plan("struct Base { virtual int evaluate() noexcept = 0; }; struct Child : Base {};\n",
+                 "generate-overrides", "Child", Json::array(), "unused", true));
+    refused(plan("struct Data { int count; int getCount() const {return count;} };\n", "generate-accessors", "Data",
+                 Json::array(), "unused", true));
 }
 TEST_F(AstRefactoring, SafeDeleteRemovesOnlyUnreferencedLocalsAndInternalFunctions) {
     auto local = plan("int main(){int unused=2+3; return 0;}\n", "safe-delete", "unused");

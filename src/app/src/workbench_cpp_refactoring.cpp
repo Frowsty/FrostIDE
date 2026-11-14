@@ -131,7 +131,8 @@ void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, std::
     }
     auto capture = std::make_shared<Capture>();
     request.context.projectRoot = m_projectRoot;
-    request.context.seedTranslationUnit = request.context.path;
+    request.context.seedTranslationUnit =
+        request.operation.starts_with("generate-") ? std::string{} : request.context.path;
     request.context.overlays.clear();
     const auto bundled =
         QDir(QCoreApplication::applicationDirPath())
@@ -366,6 +367,12 @@ void Workbench::showCppRefactoring(std::string operation) {
                     ? QStringLiteral(
                           "Profile: literal arithmetic constant in an instance-method return, in an internal "
                           "non-aggregate class. Adds a private const instance field and changes object layout.")
+                : operation.starts_with("generate-")
+                    ? QStringLiteral(
+                          "Profile: actual non-template class declarations, including captured project headers. "
+                          "Accessors/equality/formatTo use real fields without bases. Override generation uses one "
+                          "actual base and emits explicitly unimplemented throwing stubs; noexcept methods refuse. "
+                          "Formatting is a member template instantiated with the caller's stream.")
                 : operation == "safe-delete"
                     ? QStringLiteral("Profile: unreferenced automatic scalar local or internal free-function "
                                      "definition, checked in every captured configuration. Effects, attributes, "

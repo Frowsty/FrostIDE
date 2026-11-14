@@ -18,10 +18,13 @@ sched::Task<Result<CppRenameProposal>> requestCppRefactoringPlan(io::IProcessLau
                                                                  io::AsyncContext context, std::string helper,
                                                                  CppRefactoringRequest request,
                                                                  IClock::Duration timeout, std::stop_token stop) {
-    constexpr std::array operations{"change-signature", "inline-variable", "inline-function", "extract-variable",
-                                    "extract-constant", "extract-method",  "extract-field",   "safe-delete"};
+    constexpr std::array operations{"change-signature",  "inline-variable",     "inline-function",
+                                    "extract-variable",  "extract-constant",    "extract-method",
+                                    "extract-field",     "safe-delete",         "generate-accessors",
+                                    "generate-equality", "generate-formatting", "generate-overrides"};
     if (std::ranges::find(operations, request.operation) == operations.end() ||
-        request.endOffset < request.context.offset || request.context.path != request.context.seedTranslationUnit)
+        request.endOffset < request.context.offset ||
+        (!request.operation.starts_with("generate-") && request.context.path != request.context.seedTranslationUnit))
         co_return fail(ErrorCode::Unsupported, "Unknown AST operation or non-source selection");
     auto payload = cppRefactoringRequestJson(request);
     co_return co_await requestCppSemanticPlan(launcher, context, std::move(helper), std::move(request.context),

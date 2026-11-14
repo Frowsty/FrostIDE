@@ -5,7 +5,7 @@
 namespace frost::lang {
 struct CppRefactoringRequest {
     CppRenameRequest context;
-    std::string operation; // change-signature, inline-variable/function, extract-variable/constant/method/field.
+    std::string operation; // Whitelisted signature/inline/extract/safe-delete and generate-* operations.
     std::uint64_t endOffset = 0;
     std::vector<unsigned> parameterOrder; // Complete existing-parameter permutation, not arbitrary source text.
 };

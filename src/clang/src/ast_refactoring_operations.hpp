@@ -13,4 +13,8 @@ namespace frost::clang_engine {
                                                      std::string& error);
 [[nodiscard]] std::optional<std::string> refactorSafeDelete(clang::ASTUnit& ast, const llvm::json::Object& request,
                                                             std::string& error);
+// Included-header generation returns that selected file's candidate; not-applicable means the
+// current captured TU does not contain the selected record, not a semantic approval.
+[[nodiscard]] std::optional<std::string> refactorGenerate(clang::ASTUnit& ast, const llvm::json::Object& request,
+                                                          std::string& error);
 } // namespace frost::clang_engine
