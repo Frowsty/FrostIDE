@@ -23,7 +23,9 @@ namespace frost::ui::lang {
  * UI-thread-only dialog. The reader returns current editor text when open, otherwise disk text,
  * and must outlive the dialog. Captures every file on construction, shows only real supplied
  * edits, and checks selected files again before accepting. No writes occur here; the caller
- * applies selectedEdit() through its transaction service after accepted(). O(text + edits).
+ * applies selectedEdit() through its transaction service after accepted(). Capturing is O(text +
+ * edits); each selection refresh copies selected edits and renders the selected file. Validation
+ * rereads selected files and matches entries in O(files squared + text + edits log edits).
  */
 class RefactoringPreview final : public QDialog {
 public:

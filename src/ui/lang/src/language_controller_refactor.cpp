@@ -174,18 +174,23 @@ void LanguageController::onRenameAccepted(const QString& name) {
 
 void LanguageController::performAcceptedRename(std::string path, fl::LspPosition position, std::string oldName,
                                                std::string newName, bool searchComments, bool preview) {
+    const fl::PositionEncoding renameEncoding = m_services.server.encoding();
     start<fl::WorkspaceEdit>(
         m_renameSlot,
         [&server = m_services.server, path, position, newName](std::stop_token token) {
             return fl::requestRename(server, path, position, newName, std::move(token));
         },
-        [this, searchComments, preview, oldName, newName](Result<fl::WorkspaceEdit> edit) {
+        [this, searchComments, preview, oldName, newName, renameEncoding](Result<fl::WorkspaceEdit> edit) {
             if (!edit) {
                 report(edit.error(), "Rename failed");
                 return;
             }
             if (edit->empty()) {
                 emit statusMessage(QStringLiteral("Nothing to rename"));
+                return;
+            }
+            if (m_services.server.encoding() != renameEncoding) {
+                report(Error(ErrorCode::Busy, "The language server changed. Request Rename again."), "Rename failed");
                 return;
             }
             if (searchComments && !oldName.empty() && oldName != newName) {
@@ -209,9 +214,12 @@ void LanguageController::performAcceptedRename(std::string path, fl::LspPosition
             }
             if (preview) {
                 const QPointer<LanguageController> guard(this);
-                auto read = [guard](std::string_view path) -> Result<std::string> {
+                auto read = [guard, renameEncoding](std::string_view path) -> Result<std::string> {
                     if (!guard) {
                         return fail(ErrorCode::Cancelled, "The editor was closed");
+                    }
+                    if (guard->m_services.server.encoding() != renameEncoding) {
+                        return fail(ErrorCode::Busy, "The language server changed. Request a new refactoring preview.");
                     }
                     for (const auto& [openPath, snap] : guard->m_services.host.openDocuments()) {
                         if (fl::documentKey(openPath) == fl::documentKey(path)) {
@@ -224,7 +232,12 @@ void LanguageController::performAcceptedRename(std::string path, fl::LspPosition
                                                        std::move(read), m_services.host.editorWidget());
                 dialog->setWindowTitle(QStringLiteral("Rename '%1' to '%2'").arg(qs(oldName), qs(newName)));
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
-                connect(dialog, &QDialog::accepted, this, [this, dialog] {
+                connect(dialog, &QDialog::accepted, this, [this, dialog, renameEncoding] {
+                    if (m_services.server.encoding() != renameEncoding) {
+                        report(Error(ErrorCode::Busy, "The language server changed. Request Rename again."),
+                               "Rename failed");
+                        return;
+                    }
                     applyWorkspaceEdit(dialog->selectedEdit(), QStringLiteral("Rename"));
                 });
                 dialog->open();

@@ -23,6 +23,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QEvent>
+#include <QDialog>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QScopeGuard>
@@ -187,6 +188,61 @@ public:
     std::vector<std::string> labels;
     bool refuse = false;
 };
+
+// Models renegotiating encoding after a server restart while retaining real scripted requests.
+class RestartableEncodingRequester final : public fl::ILspRequester {
+public:
+    explicit RestartableEncodingRequester(fl::ILspRequester& server) : m_server(server) {}
+    frost::sched::Task<frost::Result<Json>> request(std::string method, Json params,
+                                                   std::stop_token token = {}) override {
+        return m_server.request(std::move(method), std::move(params), token);
+    }
+    fl::PositionEncoding encoding() const override { return current; }
+    std::optional<fl::ServerCapabilities> serverCapabilities() const override {
+        return m_server.serverCapabilities();
+    }
+    fl::PositionEncoding current = fl::PositionEncoding::Utf8;
+private:
+    fl::ILspRequester& m_server;
+};
+
+TEST(LanguageControllerRefactoring, EncodingChangeWhilePreviewOpenCannotApplyOldRanges) {
+    FeatureServer server;
+    const std::string path = workPath("main.cpp");
+    server.on("textDocument/prepareRename", [](const Json&) { return rangeJson(0, 3, 6); });
+    server.on("textDocument/rename", [&](const Json&) {
+        return Json::object().set("changes", Json::object().set(uriOf(path), Json::array({
+            Json::object().set("range", rangeJson(0, 3, 6)).set("newText", "renamed")})));
+    });
+    FakeHost host("\xc3\xa9 old\n");
+    host.caretAfter("o");
+    frost::io::MemFs fs(frost::systemClock());
+    RecordingApplier applier;
+    RestartableEncodingRequester requester(server.client());
+    LanguageController controller({.server = requester, .scheduler = server.scheduler(), .host = host,
+                                    .applier = applier, .fs = fs, .diagnostics = {}});
+    controller.rename();
+    auto& input = controller.renameInput();
+    ASSERT_TRUE(pumpUntil([&] { return input.isVisible(); }));
+    input.previewUsagesCheckbox()->setChecked(true);
+    emit input.accepted(QStringLiteral("renamed"));
+    QPointer<QDialog> preview;
+    ASSERT_TRUE(pumpUntil([&] {
+        for (auto* widget : QApplication::topLevelWidgets()) {
+            if (widget->objectName() == QStringLiteral("refactoringPreview")) {
+                preview = qobject_cast<QDialog*>(widget);
+                return !preview.isNull();
+            }
+        }
+        return false;
+    }));
+    const auto close = qScopeGuard([&] { if (preview) preview->reject(); });
+    requester.current = fl::PositionEncoding::Utf16;
+    preview->accept();
+    EXPECT_TRUE(applier.edits.empty());
+    EXPECT_EQ(host.text(), "\xc3\xa9 old\n");
+    EXPECT_TRUE(preview->isVisible());
+}
 
 // A controller over `server`, `host` and `applier`.
 struct Rig {

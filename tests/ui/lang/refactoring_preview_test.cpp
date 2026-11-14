@@ -104,4 +104,18 @@ TEST(RefactoringPreview, MissingSourceAtCaptureDisablesApply) {
     ASSERT_NE(apply, nullptr);
     EXPECT_FALSE(apply->isEnabled());
 }
+
+TEST(RefactoringPreview, OverlappingRangesCannotBeAcceptedProgrammatically) {
+    Files files;
+    auto edits = proposed();
+    edits.files[0].edits.push_back({{{0, 1}, {0, 5}}, "conflict"});
+    RefactoringPreview dialog(std::move(edits), fl::PositionEncoding::Utf16,
+                               [&](std::string_view path) { return files.read(path); });
+    bool accepted = false;
+    QObject::connect(&dialog, &QDialog::accepted, [&] { accepted = true; });
+    dialog.accept();
+    EXPECT_FALSE(accepted);
+    EXPECT_FALSE(dialog.validateSelection());
+    EXPECT_EQ(files.text.at("/project/a.cpp"), "old old\n");
+}
 } // namespace
