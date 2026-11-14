@@ -48,7 +48,7 @@ void Workbench::showSourceTemplateDialog() {
     dialog.setWindowModality(Qt::ApplicationModal); connect(this,&QObject::destroyed,&dialog,&QDialog::reject);
     auto* layout=new QVBoxLayout(&dialog); auto* form=new QFormLayout();
     auto* kind=new QComboBox(&dialog); kind->setObjectName("sourceTemplateKind");
-    kind->addItems({"C++ class (header and source)","C++ source","C++ header","CMake script"});
+    kind->addItems({"C++ class (header and source)","C++ source","C++ header","CMake script","Lua module"});
     if(model) kind->addItems({"New CMake executable target","New CMake static library target"});
     form->addRow("Template:",kind);
     auto* name=new QLineEdit(&dialog); name->setObjectName("sourceTemplateName"); name->setPlaceholderText("Widget or namespace::Widget for a class"); form->addRow("Name:",name);
@@ -70,7 +70,7 @@ void Workbench::showSourceTemplateDialog() {
     auto* description=new QLineEdit(&dialog); description->setObjectName("sourceTemplateDescription"); form->addRow("Description (optional):",description);
     layout->addLayout(form);
     auto* explanation=new QLabel("Files are UTF-8, in an existing directory. You will preview all file and membership changes before Apply.",&dialog); explanation->setWordWrap(true); layout->addWidget(explanation);
-    connect(kind,&QComboBox::currentIndexChanged,&dialog,[&](int index) { membership->setEnabled(index<4); });
+    connect(kind,&QComboBox::currentIndexChanged,&dialog,[&](int index) { membership->setEnabled(index<5); });
     auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog); layout->addWidget(buttons);
     buttons->button(QDialogButtonBox::Ok)->setText("Prepare preview");
     connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept); connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
@@ -81,10 +81,10 @@ void Workbench::showSourceTemplateDialog() {
     SourceTemplateSpec spec;
     const auto selected=kind->currentIndex();
     spec.file.kind=selected==1?lang::FileTemplateKind::Source:selected==2?lang::FileTemplateKind::Header:
-        selected==3?lang::FileTemplateKind::CMakeScript:selected==4?lang::FileTemplateKind::Executable:lang::FileTemplateKind::Class;
+        selected==3?lang::FileTemplateKind::CMakeScript:selected==4?lang::FileTemplateKind::LuaModule:selected==5?lang::FileTemplateKind::Executable:lang::FileTemplateKind::Class;
     spec.file.name=name->text().trimmed().toUtf8().toStdString(); spec.file.author=author->text().toUtf8().toStdString(); spec.file.description=description->text().toUtf8().toStdString();
     spec.directory=QDir::fromNativeSeparators(directory->text()).toUtf8().toStdString();
-    spec.newCMakeTarget=selected>=4; spec.staticLibrary=selected==5;
+    spec.newCMakeTarget=selected>=5; spec.staticLibrary=selected==6;
     if(!spec.newCMakeTarget) {
         if(model) spec.cmakeTargetId=membership->currentData().toString().toStdString();
         else if(solution) spec.vcxprojPath=membership->currentData().toString().toStdString();

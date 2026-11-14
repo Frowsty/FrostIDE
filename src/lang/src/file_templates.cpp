@@ -15,12 +15,16 @@ Result<std::vector<GeneratedTemplateFile>> renderFileTemplate(const FileTemplate
         const auto end=request.name.find("::",start);
         const auto part=request.name.substr(start,end==std::string::npos?end:end-start);
         if(part.empty() || !((part.front()>='A'&&part.front()<='Z') || (part.front()>='a'&&part.front()<='z') || part.front()=='_') ||
-            keywords.find(" "+part+" ")!=keywords.npos) return fail(ErrorCode::InvalidArgument,"Use a valid C++ identifier for each namespace/name component");
+            (request.kind!=FileTemplateKind::LuaModule && keywords.find(" "+part+" ")!=keywords.npos)) return fail(ErrorCode::InvalidArgument,"Use a valid C++ identifier for each namespace/name component");
         for(char c:part) if(!((c>='A'&&c<='Z') || (c>='a'&&c<='z') || (c>='0'&&c<='9') || c=='_')) return fail(ErrorCode::InvalidArgument,"Template names do not contain paths or punctuation");
         components.push_back(part); if(end==std::string::npos) break; start=end+2;
     }
     if(request.kind!=FileTemplateKind::Class && components.size()!=1) return fail(ErrorCode::InvalidArgument,"Only class templates accept namespace-qualified names");
     const auto& name=components.back();
+    if(request.kind==FileTemplateKind::LuaModule) {
+        constexpr std::string_view luaWords=" and break do else elseif end false for function goto if in local nil not or repeat return then true until while ";
+        if(luaWords.find(" "+name+" ")!=luaWords.npos) return fail(ErrorCode::InvalidArgument,"A Lua module binding cannot be a reserved word");
+    }
     TemplateVariables variables{{"CLASS",name},{"HEADER",name+".hpp"},{"AUTHOR",request.author},{"DESCRIPTION",request.description}};
     std::vector<GeneratedTemplateFile> result;
     auto append=[&](std::string filename,std::string_view id)->Result<void> {
@@ -46,6 +50,7 @@ Result<std::vector<GeneratedTemplateFile>> renderFileTemplate(const FileTemplate
     case FileTemplateKind::Source: if(auto made=append(name+".cpp","file.cpp.source");!made) return std::unexpected(made.error()); break;
     case FileTemplateKind::Header: if(auto made=append(name+".hpp","file.cpp.header");!made) return std::unexpected(made.error()); break;
     case FileTemplateKind::CMakeScript: if(auto made=append(name+".cmake","file.cmake");!made) return std::unexpected(made.error()); break;
+    case FileTemplateKind::LuaModule: if(auto made=append(name+".lua","file.lua.module");!made) return std::unexpected(made.error()); break;
     case FileTemplateKind::Executable: {
         auto rendered=expandTemplate(findTemplate("cpp.main")->body,{}); if(!rendered) return std::unexpected(rendered.error());
         auto header=expandTemplate(findTemplate("file.cpp.source")->body,variables); if(!header) return std::unexpected(header.error());
