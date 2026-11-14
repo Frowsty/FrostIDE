@@ -40,6 +40,10 @@
 #include <QTreeView>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QDir>
+#include <QTemporaryDir>
+#include <QToolButton>
+#include <QUuid>
 
 #include <algorithm>
 #include <cctype>
@@ -299,7 +303,44 @@ CMakeIntegration::CMakeIntegration(io::IFileSystem& fs, io::IProcessLauncher& la
     refreshProfiles();
     windows.setContent(kTargets, targets);
     auto* tool = new ui::cmake::CMakeToolWindow(*m_controller);
+    auto* debugReload = new QToolButton(tool);
+    debugReload->setObjectName(QStringLiteral("cmakeDebugReload"));
+    debugReload->setText(tr("Debug Reload CMake Project"));
+    if (tool->layout()) tool->layout()->addWidget(debugReload);
+    connect(debugReload, &QToolButton::clicked, this, [this] {
+        if (auto started = debugConfigure(); !started)
+            console().appendOutput(build::RunOutputKind::System, started.error().message());
+    });
     windows.setContent(kCMake, tool);
+}
+
+Result<void> CMakeIntegration::debugConfigure() {
+    if (!m_configureDebugger) return fail(ErrorCode::Unsupported, "CMake configure debugger is unavailable");
+    const std::string root = m_service->sourceDirectory();
+    if (auto allowed = m_trust.requireTrusted(root); !allowed) return allowed;
+    if (m_service->state() != build::BuildState::Idle)
+        return fail(ErrorCode::Busy, "A CMake job is already running");
+    auto directory = std::make_shared<QTemporaryDir>(QDir::tempPath() + QStringLiteral("/frost-cmake-XXXXXX"));
+    if (!directory->isValid()) return fail(ErrorCode::IoError, "Cannot create a private CMake debugger directory");
+#ifdef _WIN32
+    const std::string endpoint = "\\\\.\\pipe\\FrostIDE-CMake-" +
+        QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+#else
+    const std::string endpoint = directory->filePath(QStringLiteral("dap.sock")).toStdString();
+#endif
+    std::weak_ptr<build::CMakeService> weakService = m_service;
+    const auto cancel = [weakService, directory] {
+        if (auto service = weakService.lock()) service->cancel();
+    };
+    auto relay = m_runRelay;
+    return m_service->configureDebug(endpoint, [relay, endpoint, root, cancel] {
+        relay->post([endpoint, root, cancel](CMakeIntegration& self) {
+            if (auto started = self.m_configureDebugger(endpoint, root, cancel); !started) {
+                cancel();
+                self.console().appendOutput(build::RunOutputKind::System, started.error().message());
+            }
+        });
+    });
 }
 
 CMakeIntegration::~CMakeIntegration() {

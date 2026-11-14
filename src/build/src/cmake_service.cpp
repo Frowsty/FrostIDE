@@ -308,6 +308,17 @@ Result<void> CMakeService::configure() {
     return m_state->startJobLocked(State::JobKind::Configure, false, {}, {CMakeStep::Configure});
 }
 
+Result<void> CMakeService::configureDebug(std::string endpoint, std::function<void()> ready) {
+    if (endpoint.empty() || endpoint.find('\0') != std::string::npos || !ready)
+        return fail(ErrorCode::InvalidArgument, "CMake debug reload requires a local endpoint and session callback");
+    LockGuard lock(m_state->mutex);
+    auto started = m_state->startJobLocked(State::JobKind::Configure, false, {}, {CMakeStep::Configure});
+    if (!started) return started;
+    m_state->job->debuggerEndpoint = std::move(endpoint);
+    m_state->job->debuggerReady = std::move(ready);
+    return {};
+}
+
 Result<void> CMakeService::configureOwned(std::uint64_t owner) {
     if (!owner)
         return fail(ErrorCode::InvalidArgument, "owned configure requires an owner");

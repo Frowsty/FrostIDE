@@ -99,9 +99,14 @@ public:
     void selectRunTarget(const std::string& name);
     // The Run/Debug target's name, or "" (no model, no executable target).
     [[nodiscard]] std::string runTargetName() const;
+    using ConfigureDebugger = std::function<Result<void>(std::string endpoint, std::string root,
+                                                         std::function<void()> cancel)>;
+    void setConfigureDebugger(ConfigureDebugger start) { m_configureDebugger = std::move(start); }
+    [[nodiscard]] Result<void> debugConfigure();
 
 private:
     ui::BuildController& m_build;
+    ConfigureDebugger m_configureDebugger;
     build::BuildService& m_sharedAdmission;
     std::shared_ptr<void> m_runAdmission;
     ui::ShellWindow& m_window;

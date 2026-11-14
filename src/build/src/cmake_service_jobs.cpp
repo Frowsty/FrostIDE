@@ -230,6 +230,12 @@ void CMakeService::State::prepare(std::uint64_t id) {
         if (!isCurrentLocked(id)) {
             return;
         }
+        if (!job->debuggerEndpoint.empty() && !job->debuggerSaved) {
+            job->debuggerSaved = true;
+            setStateLocked(BuildState::SavingDocuments);
+            post([this, id] { saveDocuments(id); });
+            return;
+        }
         admission = job->admission;
         profile = job->profile;
         wrapperJob = job->wrapper.has_value();
@@ -418,6 +424,11 @@ void CMakeService::State::runNextStepLocked() {
             return;
         }
         spec.arguments = std::move(*arguments);
+        if (!job->debuggerEndpoint.empty()) {
+            spec.arguments.emplace_back("--debugger");
+            spec.arguments.emplace_back("--debugger-pipe");
+            spec.arguments.push_back(job->debuggerEndpoint);
+        }
         spec.workingDirectory = job->sourceDir;
         emit([this, profile = job->profile.name] {
             if (callbacks.onConfigureStarted) {
@@ -524,6 +535,11 @@ void CMakeService::State::runNextStepLocked() {
     BuildSessionOptions sessionOptions;
     sessionOptions.parser =
         configure ? OutputParserFactory(&makeCMakeOutputParser) : OutputParserFactory(&makeCompilerOutputParser);
+    const auto launchTrust = trustStore.snapshot(job->sourceDir);
+    if (!launchTrust.trusted || launchTrust.revision != job->trustRevision) {
+        finishJobLocked(Error(ErrorCode::Cancelled, "project trust changed before CMake process launch"));
+        return;
+    }
     auto session = BuildSession::start(launcher, spec, true, std::move(sessionCallbacks), systemClock(),
                                        std::move(sessionOptions));
     if (!session) {
@@ -531,6 +547,7 @@ void CMakeService::State::runNextStepLocked() {
         return;
     }
     job->session = std::move(*session);
+    if (configure && job->debuggerReady) emit(std::move(job->debuggerReady));
     setStateLocked(BuildState::Running);
 }
 

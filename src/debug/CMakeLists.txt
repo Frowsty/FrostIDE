@@ -29,6 +29,7 @@ frost_add_library(debug LAYER debug
     SOURCES
         src/breakpoints.cpp
         src/coreclr_dap.cpp
+        src/cmake_dap.cpp
         src/dap_client.cpp
         src/dap_types.cpp
         src/dbgeng_dap.cpp

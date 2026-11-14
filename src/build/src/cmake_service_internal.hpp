@@ -209,6 +209,9 @@ struct CMakeService::State : std::enable_shared_from_this<CMakeService::State> {
         std::string replyIndexBefore{}; // The current reply's index when the configure step started.
         bool generating = false;        // cmake printed "-- Configuring done" in this configure step.
         bool readingReply = false;      // The configure step's reply is being read.
+        std::string debuggerEndpoint{};
+        std::function<void()> debuggerReady{};
+        bool debuggerSaved = false;
     };
 
     State(io::IFileSystem& fileSystem, io::IProcessLauncher& processLauncher, project::TrustStore& store,

@@ -345,6 +345,9 @@ public:
     // Reload: configures the active profile in the background. Errors: InvalidArgument (no folder,
     // an unusable profile: CMakeProfile::problem), Busy.
     [[nodiscard]] Result<void> configure();
+    // Explicit debug reload. Uses the same profile, tool/environment preparation, Save All,
+    // trust gate and File API refresh as configure(). Ready runs after actual process launch.
+    [[nodiscard]] Result<void> configureDebug(std::string endpoint, std::function<void()> ready);
     [[nodiscard]] Result<void> configureOwned(std::uint64_t owner);
     // Retry a deferred automatic configure after an external admission lease is released.
     void admissionAvailable();
