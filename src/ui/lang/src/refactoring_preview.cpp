@@ -17,13 +17,11 @@
 namespace frost::ui::lang {
 namespace fl = ::frost::lang;
 namespace {
-QString display(std::string_view text) {
-    return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
-}
+QString display(std::string_view text) { return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())); }
 } // namespace
 
-RefactoringPreview::RefactoringPreview(fl::WorkspaceEdit edit, fl::PositionEncoding encoding,
-                                     ReadText reader, QWidget* parent)
+RefactoringPreview::RefactoringPreview(fl::WorkspaceEdit edit, fl::PositionEncoding encoding, ReadText reader,
+                                       QWidget* parent)
     : QDialog(parent), m_edit(std::move(edit)), m_encoding(encoding), m_reader(std::move(reader)) {
     setObjectName(QStringLiteral("refactoringPreview"));
     setWindowTitle(tr("Refactoring Preview"));
@@ -69,9 +67,9 @@ RefactoringPreview::RefactoringPreview(fl::WorkspaceEdit edit, fl::PositionEncod
         auto* row = new QTreeWidgetItem(m_tree, {display(file.path)});
         row->setFlags(row->flags() | Qt::ItemIsUserCheckable | Qt::ItemIsAutoTristate);
         for (const auto& change : file.edits) {
-            auto* child = new QTreeWidgetItem(row, {
-                tr("Line %1, column %2").arg(change.range.start.line + 1).arg(change.range.start.character + 1),
-                display(change.newText)});
+            auto* child = new QTreeWidgetItem(
+                row, {tr("Line %1, column %2").arg(change.range.start.line + 1).arg(change.range.start.character + 1),
+                      display(change.newText)});
             child->setFlags(child->flags() | Qt::ItemIsUserCheckable);
             child->setCheckState(0, Qt::Checked);
         }
@@ -104,6 +102,8 @@ fl::WorkspaceEdit RefactoringPreview::selectedEdit() const {
 }
 
 Result<void> RefactoringPreview::validateSelection() const {
+    if (m_validationPending)
+        return fail(ErrorCode::Busy, "Checking C++ rename conflicts");
     if (!m_error.empty()) {
         return fail(ErrorCode::InvalidArgument, m_error);
     }
@@ -147,12 +147,27 @@ void RefactoringPreview::accept() {
     QDialog::accept();
 }
 
+void RefactoringPreview::setValidationPending() {
+    m_validationPending = true;
+    refresh();
+}
+
+void RefactoringPreview::finishValidation(Result<void> result) {
+    m_validationPending = false;
+    if (!result)
+        m_error = result.error().message();
+    refresh();
+}
+
 void RefactoringPreview::refresh() {
     const auto selected = selectedEdit();
-    m_apply->setEnabled(m_error.empty() && !selected.empty());
+    m_apply->setEnabled(!m_validationPending && m_error.empty() && !selected.empty());
     m_status->setText(m_error.empty() ? tr("%1 selected edits in %2 files")
-                         .arg(static_cast<qulonglong>(selected.editCount()))
-                         .arg(static_cast<qulonglong>(selected.files.size())) : display(m_error));
+                                            .arg(static_cast<qulonglong>(selected.editCount()))
+                                            .arg(static_cast<qulonglong>(selected.files.size()))
+                                      : display(m_error));
+    if (m_validationPending)
+        m_status->setText(tr("Checking C++ rename conflicts… You can review the edits while this runs."));
     auto* row = m_tree->currentItem();
     if (!row) {
         return;

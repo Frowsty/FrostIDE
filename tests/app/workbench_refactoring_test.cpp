@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // REF-1 composition tests: one action spans files/views and Undo restores the complete operation.
-#include "workbench_rig.hpp"
 #include "frost/document/refactoring_transaction.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 
+#include "workbench_rig.hpp"
 #include <gtest/gtest.h>
 
 namespace frost::app::test {
@@ -24,8 +24,8 @@ TEST(WorkbenchRefactoring, OneUndoRestoresClosedFileAndOpenView) {
     ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/a.cpp")));
     document::RefactoringPlan plan;
     plan.label = "Rename";
-    plan.buffers.push_back({dir.join("workspace/a.cpp"), "int oldName;\n", "int newName;\n",
-                            document::BufferPersistence::Automatic});
+    plan.buffers.push_back(
+        {dir.join("workspace/a.cpp"), "int oldName;\n", "int newName;\n", document::BufferPersistence::Automatic});
     plan.disk.push_back({dir.join("workspace/b.cpp"), "oldName = 1;\n", "newName = 1;\n"});
     const auto applied = rig.workbench->applyRefactoring(plan);
     ASSERT_TRUE(applied);
@@ -55,8 +55,7 @@ TEST(WorkbenchRefactoring, StaleParticipantRefusesAllChanges) {
     ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
     document::RefactoringPlan plan;
     plan.label = "Rename";
-    plan.disk = {{dir.join("workspace/a.cpp"), "old\n", "new\n"},
-                 {dir.join("workspace/b.cpp"), "old\n", "new\n"}};
+    plan.disk = {{dir.join("workspace/a.cpp"), "old\n", "new\n"}, {dir.join("workspace/b.cpp"), "old\n", "new\n"}};
     EXPECT_FALSE(rig.workbench->applyRefactoring(plan));
     EXPECT_EQ(dir.read("workspace/a.cpp"), "old\n");
     EXPECT_EQ(dir.read("workspace/b.cpp"), "external\n");
@@ -130,8 +129,7 @@ TEST(WorkbenchRefactoring, EditorUndoRoutesTheWholeGlobalBoundary) {
     ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/a.cpp")));
     document::RefactoringPlan plan;
     plan.label = "Rename";
-    plan.buffers.push_back({dir.join("workspace/a.cpp"), "old\n", "new\n",
-                            document::BufferPersistence::Automatic});
+    plan.buffers.push_back({dir.join("workspace/a.cpp"), "old\n", "new\n", document::BufferPersistence::Automatic});
     plan.disk.push_back({dir.join("workspace/b.cpp"), "old\n", "new\n"});
     const auto applied = rig.workbench->applyRefactoring(plan);
     ASSERT_TRUE(applied);

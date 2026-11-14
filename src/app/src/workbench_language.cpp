@@ -112,28 +112,39 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
                     return fail(ErrorCode::Busy, "Resolve the external change before refactoring: " + file.path);
                 const auto before = state->snapshot.text();
                 auto after = lang::applyTextEdits(before, file.edits, positionEncoding);
-                if (!after) return std::unexpected(std::move(after.error()));
-                plan.buffers.push_back({file.path, before, std::move(*after),
-                                        document::BufferPersistence::Automatic});
+                if (!after)
+                    return std::unexpected(std::move(after.error()));
+                plan.buffers.push_back({file.path, before, std::move(*after), document::BufferPersistence::Automatic});
             } else {
                 if (file.version)
                     return fail(ErrorCode::Busy, "The versioned document is no longer open: " + file.path);
                 auto raw = m_workbench.m_services.fs.readFile(file.path);
-                if (!raw) return std::unexpected(std::move(raw.error()));
+                if (!raw)
+                    return std::unexpected(std::move(raw.error()));
                 auto decoded = text::decodeTextFile(*raw);
-                if (!decoded) return std::unexpected(std::move(decoded.error()));
+                if (!decoded)
+                    return std::unexpected(std::move(decoded.error()));
                 auto after = lang::applyTextEdits(decoded->buffer.current().text(), file.edits, positionEncoding);
-                if (!after) return std::unexpected(std::move(after.error()));
+                if (!after)
+                    return std::unexpected(std::move(after.error()));
                 auto buffer = text::TextBuffer::fromUtf8(std::move(*after));
-                if (!buffer) return std::unexpected(std::move(buffer.error()));
+                if (!buffer)
+                    return std::unexpected(std::move(buffer.error()));
                 auto encoded = text::encodeForSave(buffer->current(), decoded->encoding);
-                if (!encoded) return std::unexpected(std::move(encoded.error()));
+                if (!encoded)
+                    return std::unexpected(std::move(encoded.error()));
                 plan.disk.push_back({file.path, std::move(*raw), std::move(*encoded)});
             }
         }
-        if (plan.buffers.empty() && plan.disk.empty()) return {};
+        if (plan.buffers.empty() && plan.disk.empty())
+            return {};
+        if (std::ranges::any_of(edit.files, [](const auto& file) { return isCFamilySource(file.path); })) {
+            if (auto admitted = m_workbench.admitCppRename(edit, plan); !admitted)
+                return std::unexpected(std::move(admitted.error()));
+        }
         auto applied = m_workbench.applyRefactoring(plan);
-        if (!applied) return std::unexpected(std::move(applied.error()));
+        if (!applied)
+            return std::unexpected(std::move(applied.error()));
         // PendingRecovery has already produced a persistent UI notification with the Resume
         // action. Do not report it as an unapplied failure or submit the same edits again.
         return {};

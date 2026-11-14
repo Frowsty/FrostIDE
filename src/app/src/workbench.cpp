@@ -234,6 +234,12 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                                    m_options.metadataCacheDirectory,
                                    // Empty answers say why: no server, fallback flags, indexing (R0 follow-up 4).
                                    [this](std::string_view path) { return languageReadiness(path); }});
+    m_language->setCppRenameCheck([this](std::string path, lang::LspPosition position, std::string name,
+                                         lang::WorkspaceEdit required, lang::WorkspaceEdit offered,
+                                         std::stop_token cancel, std::function<void(Result<void>)> done) {
+        checkCppRename(std::move(path), position, std::move(name), std::move(required), std::move(offered), cancel,
+                       std::move(done));
+    });
     if (auto registered = m_language->registerActions(m_registry); !registered) {
         log::warn(kLog, "language actions: {}", registered.error().describe());
     }
@@ -246,6 +252,12 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             return;
         const auto trust = m_services.trust.snapshot(m_projectRoot);
         const bool trusted = trust.trusted;
+        if (m_cppRenameTrustRevision && (!trusted || trust.revision != *m_cppRenameTrustRevision)) {
+            m_cppRenameStop.request_stop();
+            ++m_cppRenameGeneration;
+            m_cppRenameTrustRevision.reset();
+            m_cppRenameAdmission.reset();
+        }
         if (m_cppInspectionTrustRevision && (!trusted || trust.revision != *m_cppInspectionTrustRevision)) {
             m_cppInspectionStop.request_stop();
             ++m_cppInspectionGeneration;
@@ -827,6 +839,7 @@ void Workbench::shutdown() {
         return;
     }
     m_shutDown = true;
+    m_cppRenameStop.request_stop();
     m_cppInspectionStop.request_stop();
     if (m_clone) {
         // Ends git's process tree and waits for the worker; its queued result is then ignored.

@@ -16,15 +16,18 @@ namespace fl = frost::lang;
 using frost::ui::lang::RefactoringPreview;
 
 fl::WorkspaceEdit proposed() {
-    return {.files = {{.path = "/project/a.cpp", .uri = "file:///project/a.cpp", .version = 12,
+    return {.files = {{.path = "/project/a.cpp",
+                       .uri = "file:///project/a.cpp",
+                       .version = 12,
                        .edits = {{{{0, 0}, {0, 3}}, "newName"}, {{{0, 4}, {0, 7}}, "newName"}}},
-                     {.path = "/project/b.cpp", .uri = "file:///project/b.cpp", .version = std::nullopt,
+                      {.path = "/project/b.cpp",
+                       .uri = "file:///project/b.cpp",
+                       .version = std::nullopt,
                        .edits = {{{{0, 0}, {0, 3}}, "newName"}}}}};
 }
 
 struct Files {
-    std::unordered_map<std::string, std::string> text{{"/project/a.cpp", "old old\n"},
-                                                    {"/project/b.cpp", "old\n"}};
+    std::unordered_map<std::string, std::string> text{{"/project/a.cpp", "old old\n"}, {"/project/b.cpp", "old\n"}};
     frost::Result<std::string> read(std::string_view path) {
         const auto it = text.find(std::string(path));
         if (it == text.end()) {
@@ -37,7 +40,7 @@ struct Files {
 TEST(RefactoringPreview, ExcludingAnOccurrencePreservesOtherRangesAndVersions) {
     Files files;
     RefactoringPreview dialog(proposed(), fl::PositionEncoding::Utf16,
-                               [&](std::string_view path) { return files.read(path); });
+                              [&](std::string_view path) { return files.read(path); });
     auto* tree = dialog.findChild<QTreeWidget*>(QStringLiteral("refactoringEdits"));
     ASSERT_NE(tree, nullptr);
     tree->topLevelItem(0)->child(0)->setCheckState(0, Qt::Unchecked);
@@ -56,7 +59,7 @@ TEST(RefactoringPreview, ExcludingAnOccurrencePreservesOtherRangesAndVersions) {
 TEST(RefactoringPreview, ExcludedFilesAreNeitherSubmittedNorRechecked) {
     Files files;
     RefactoringPreview dialog(proposed(), fl::PositionEncoding::Utf16,
-                               [&](std::string_view path) { return files.read(path); });
+                              [&](std::string_view path) { return files.read(path); });
     auto* tree = dialog.findChild<QTreeWidget*>(QStringLiteral("refactoringEdits"));
     ASSERT_NE(tree, nullptr);
     tree->topLevelItem(1)->setCheckState(0, Qt::Unchecked);
@@ -68,7 +71,7 @@ TEST(RefactoringPreview, ExcludedFilesAreNeitherSubmittedNorRechecked) {
 TEST(RefactoringPreview, ChangedSelectedSourceRefusesAcceptWithoutWriting) {
     Files files;
     RefactoringPreview dialog(proposed(), fl::PositionEncoding::Utf16,
-                               [&](std::string_view path) { return files.read(path); });
+                              [&](std::string_view path) { return files.read(path); });
     bool accepted = false;
     QObject::connect(&dialog, &QDialog::accepted, [&] { accepted = true; });
     files.text["/project/a.cpp"] = "some unrelated change\n";
@@ -83,7 +86,7 @@ TEST(RefactoringPreview, ChangedSelectedSourceRefusesAcceptWithoutWriting) {
 TEST(RefactoringPreview, EmptySelectionDisablesApplyAndRejectsProgrammaticAccept) {
     Files files;
     RefactoringPreview dialog(proposed(), fl::PositionEncoding::Utf16,
-                               [&](std::string_view path) { return files.read(path); });
+                              [&](std::string_view path) { return files.read(path); });
     auto* tree = dialog.findChild<QTreeWidget*>(QStringLiteral("refactoringEdits"));
     ASSERT_NE(tree, nullptr);
     tree->topLevelItem(0)->setCheckState(0, Qt::Unchecked);
@@ -98,7 +101,7 @@ TEST(RefactoringPreview, MissingSourceAtCaptureDisablesApply) {
     Files files;
     files.text.erase("/project/b.cpp");
     RefactoringPreview dialog(proposed(), fl::PositionEncoding::Utf16,
-                               [&](std::string_view path) { return files.read(path); });
+                              [&](std::string_view path) { return files.read(path); });
     EXPECT_FALSE(dialog.validateSelection());
     const auto* apply = dialog.findChild<QPushButton*>(QStringLiteral("applyRefactoring"));
     ASSERT_NE(apply, nullptr);
@@ -110,12 +113,42 @@ TEST(RefactoringPreview, OverlappingRangesCannotBeAcceptedProgrammatically) {
     auto edits = proposed();
     edits.files[0].edits.push_back({{{0, 1}, {0, 5}}, "conflict"});
     RefactoringPreview dialog(std::move(edits), fl::PositionEncoding::Utf16,
-                               [&](std::string_view path) { return files.read(path); });
+                              [&](std::string_view path) { return files.read(path); });
     bool accepted = false;
     QObject::connect(&dialog, &QDialog::accepted, [&] { accepted = true; });
     dialog.accept();
     EXPECT_FALSE(accepted);
     EXPECT_FALSE(dialog.validateSelection());
     EXPECT_EQ(files.text.at("/project/a.cpp"), "old old\n");
+}
+
+TEST(RefactoringPreview, SemanticCheckKeepsPreviewReadableButPreventsEarlyApply) {
+    Files files;
+    RefactoringPreview dialog(proposed(), fl::PositionEncoding::Utf16,
+                              [&](std::string_view path) { return files.read(path); });
+    dialog.setValidationPending();
+    const auto* apply = dialog.findChild<QPushButton*>(QStringLiteral("applyRefactoring"));
+    ASSERT_NE(apply, nullptr);
+    EXPECT_FALSE(apply->isEnabled());
+    bool accepted = false;
+    QObject::connect(&dialog, &QDialog::accepted, [&] { accepted = true; });
+    dialog.accept();
+    EXPECT_FALSE(accepted);
+    dialog.finishValidation({});
+    EXPECT_TRUE(apply->isEnabled());
+    dialog.accept();
+    EXPECT_TRUE(accepted);
+}
+
+TEST(RefactoringPreview, SemanticConflictKeepsApplyDisabled) {
+    Files files;
+    RefactoringPreview dialog(proposed(), fl::PositionEncoding::Utf16,
+                              [&](std::string_view path) { return files.read(path); });
+    dialog.setValidationPending();
+    dialog.finishValidation(frost::fail(frost::ErrorCode::InvalidArgument, "a declaration would hide another name"));
+    EXPECT_FALSE(dialog.validateSelection());
+    const auto* apply = dialog.findChild<QPushButton*>(QStringLiteral("applyRefactoring"));
+    ASSERT_NE(apply, nullptr);
+    EXPECT_FALSE(apply->isEnabled());
 }
 } // namespace

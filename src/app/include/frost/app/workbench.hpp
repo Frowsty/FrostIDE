@@ -69,6 +69,7 @@
 #include "frost/core/error.hpp"
 #include "frost/debug/breakpoints.hpp"
 #include "frost/document/autosave.hpp"
+#include "frost/document/refactoring_transaction.hpp"
 #include "frost/document/save_manager.hpp"
 #include "frost/input/action.hpp"
 #include "frost/input/keymap_service.hpp"
@@ -88,7 +89,6 @@
 #include "frost/lang/managed_service.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/workspace_edit.hpp"
-#include "frost/document/refactoring_transaction.hpp"
 #include "frost/project/directory_roles.hpp"
 #include "frost/project/project_edit.hpp"
 #include "frost/project/project_host.hpp"
@@ -198,6 +198,7 @@ class UnityControlIntegration;
 class GitIntegration;
 struct GitClone;
 struct CompileDatabaseState; // workbench_language.cpp
+struct CppRenameAdmission;   // workbench_cpp_rename.cpp
 struct WorkbenchLuaState;    // workbench_lua.cpp
 
 // The workbench's own action ids (the navigation workbench owns file.saveAll, file.saveDocument,
@@ -673,6 +674,7 @@ public:
     [[nodiscard]] Result<void> refreshEngineBindings();
     [[nodiscard]] Result<void> findEngineBindingUsages();
     [[nodiscard]] Result<void> previewEngineBindingRename(std::string newLuaName, bool renameNative = false);
+    [[nodiscard]] Result<document::RefactoringOutcome> applyEngineBindingRename();
     [[nodiscard]] lang::Json engineBindingState() const;
     [[nodiscard]] std::shared_ptr<engine::EngineLuaHostProvider> engineLuaHostProvider() const;
     [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
@@ -742,6 +744,9 @@ public:
     [[nodiscard]] DocumentEditorView* currentView() const;
 
 signals:
+    // Emitted only after whole-transaction settlement (including resumed decisions and Undo/Redo).
+    // Direct UI-thread consumers may regenerate derived caches for a token they own.
+    void refactoringSettled(const frost::document::RefactoringOutcome& outcome);
     // A project opened (`name` non-empty) or closed (empty).
     void projectChanged(const QString& name);
 
@@ -771,6 +776,9 @@ private:
     void publishRefactoringOutcome(const document::RefactoringOutcome& outcome);
     [[nodiscard]] bool refactoringTrusted(TransactionId token) const;
     [[nodiscard]] Result<document::RefactoringOutcome> runRefactoringHistory(TransactionId token, bool redo);
+    void checkCppRename(std::string path, lang::LspPosition position, std::string newName, lang::WorkspaceEdit required,
+                        lang::WorkspaceEdit offered, std::stop_token cancel, std::function<void(Result<void>)> done);
+    [[nodiscard]] Result<void> admitCppRename(const lang::WorkspaceEdit& selected, document::RefactoringPlan& plan);
     void createBuildService();
     void createRunService();
     // Run configurations (RUN-2/RUN-3, workbench_run_configurations.cpp): the generated ones of the
@@ -1004,6 +1012,10 @@ private:
     std::vector<RefactoringPaths> m_refactoringPaths;
     TransactionId m_pendingRefactoring;
     TransactionId m_refactoringAdmissionToken;
+    std::shared_ptr<CppRenameAdmission> m_cppRenameAdmission;
+    std::stop_source m_cppRenameStop;
+    std::uint64_t m_cppRenameGeneration = 0;
+    std::optional<std::uint64_t> m_cppRenameTrustRevision;
     std::unique_ptr<document::AutosaveController> m_autosave;
     std::unique_ptr<ui::nav::SessionStore> m_sessions;
     std::unique_ptr<ui::nav::DocumentRegistry> m_documentRegistry;

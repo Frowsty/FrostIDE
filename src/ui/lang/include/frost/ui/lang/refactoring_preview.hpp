@@ -30,12 +30,15 @@ namespace frost::ui::lang {
 class RefactoringPreview final : public QDialog {
 public:
     using ReadText = std::function<Result<std::string>(std::string_view)>;
-    RefactoringPreview(::frost::lang::WorkspaceEdit edit, ::frost::lang::PositionEncoding encoding,
-                       ReadText reader, QWidget* parent = nullptr);
+    RefactoringPreview(::frost::lang::WorkspaceEdit edit, ::frost::lang::PositionEncoding encoding, ReadText reader,
+                       QWidget* parent = nullptr);
     // Keeps file versions, original ranges and server ordering; excludes unchecked edits/files.
     [[nodiscard]] ::frost::lang::WorkspaceEdit selectedEdit() const;
     // Rechecks captured source bytes. Busy means the caller must request a fresh rename.
     [[nodiscard]] Result<void> validateSelection() const;
+    // The preview stays interactive while the real AST tool checks the complete semantic group.
+    void setValidationPending();
+    void finishValidation(Result<void> result);
     void accept() override;
 
 private:
@@ -45,6 +48,7 @@ private:
     ReadText m_reader;
     std::vector<std::string> m_before;
     std::string m_error;
+    bool m_validationPending = false;
     QTreeWidget* m_tree = nullptr;
     QPlainTextEdit* m_original = nullptr;
     QPlainTextEdit* m_proposed = nullptr;

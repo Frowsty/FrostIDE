@@ -11,9 +11,9 @@
 #include "frost/lang/navigation.hpp"
 #include "frost/lang/refactoring.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/text/text_file.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/lang/refactoring_preview.hpp"
-#include "frost/text/text_file.hpp"
 
 #include "language_controller_internal.hpp"
 
@@ -181,7 +181,8 @@ void LanguageController::performAcceptedRename(std::string path, fl::LspPosition
         [&server = m_services.server, path, position, newName](std::stop_token token) {
             return fl::requestRename(server, path, position, newName, std::move(token));
         },
-        [this, searchComments, preview, oldName, newName, renameEncoding](Result<fl::WorkspaceEdit> edit) {
+        [this, path, position, searchComments, preview, oldName, newName,
+         renameEncoding](Result<fl::WorkspaceEdit> edit) {
             if (!edit) {
                 report(edit.error(), "Rename failed");
                 return;
@@ -194,6 +195,8 @@ void LanguageController::performAcceptedRename(std::string path, fl::LspPosition
                 report(Error(ErrorCode::Busy, "The language server changed. Request Rename again."), "Rename failed");
                 return;
             }
+            const auto semanticEdit = *edit;
+            const bool semanticCheck = languageIdForPath(path) == "cpp" && m_services.cppRenameCheck;
             if (searchComments && !oldName.empty() && oldName != newName) {
                 for (fl::FileEdit& fileEdit : edit->files) {
                     std::optional<text::Snapshot> snap;
@@ -213,7 +216,7 @@ void LanguageController::performAcceptedRename(std::string path, fl::LspPosition
                     }
                 }
             }
-            if (preview) {
+            if (preview || semanticCheck) {
                 const QPointer<LanguageController> guard(this);
                 auto read = [guard, renameEncoding](std::string_view path) -> Result<std::string> {
                     if (!guard) {
@@ -228,15 +231,18 @@ void LanguageController::performAcceptedRename(std::string path, fl::LspPosition
                         }
                     }
                     auto raw = guard->m_services.fs.readFile(path);
-                    if (!raw) return std::unexpected(std::move(raw.error()));
+                    if (!raw)
+                        return std::unexpected(std::move(raw.error()));
                     auto decoded = text::decodeTextFile(std::move(*raw));
-                    if (!decoded) return std::unexpected(std::move(decoded.error()));
+                    if (!decoded)
+                        return std::unexpected(std::move(decoded.error()));
                     if (!decoded->encoding.fidelity.lossless())
                         return fail(ErrorCode::Corrupt, "Cannot refactor a file with a lossy text encoding");
                     return decoded->buffer.current().text();
                 };
-                auto* dialog = new RefactoringPreview(std::move(*edit), m_services.server.encoding(),
-                                                       std::move(read), m_services.host.editorWidget());
+                const auto offeredEdit = *edit;
+                auto* dialog = new RefactoringPreview(std::move(*edit), m_services.server.encoding(), std::move(read),
+                                                      m_services.host.editorWidget());
                 dialog->setWindowTitle(QStringLiteral("Rename '%1' to '%2'").arg(qs(oldName), qs(newName)));
                 dialog->setAttribute(Qt::WA_DeleteOnClose);
                 connect(dialog, &QDialog::accepted, this, [this, dialog, renameEncoding] {
@@ -247,6 +253,18 @@ void LanguageController::performAcceptedRename(std::string path, fl::LspPosition
                     }
                     applyWorkspaceEdit(dialog->selectedEdit(), QStringLiteral("Rename"));
                 });
+                if (semanticCheck) {
+                    dialog->setValidationPending();
+                    QPointer<RefactoringPreview> previewGuard(dialog);
+                    const auto cancellation = std::make_shared<std::stop_source>();
+                    connect(dialog, &QDialog::finished, dialog, [cancellation] { cancellation->request_stop(); });
+                    connect(dialog, &QObject::destroyed, [cancellation] { cancellation->request_stop(); });
+                    m_services.cppRenameCheck(path, position, newName, semanticEdit, offeredEdit,
+                                              cancellation->get_token(), [previewGuard](Result<void> result) {
+                                                  if (previewGuard)
+                                                      previewGuard->finishValidation(std::move(result));
+                                              });
+                }
                 dialog->open();
                 return;
             }
