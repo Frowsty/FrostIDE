@@ -18,6 +18,28 @@ std::string literal(std::string_view value) {
     return result;
 }
 constexpr TemplateDefinition kTemplates[]{
+    {"lua.local", "local — binding", "lua", TemplateKind::Live, "local ${1:name} = ${2:value}$0"},
+    {"lua.function", "local function", "lua", TemplateKind::Live,
+     "local function ${1:name}(${2:arguments})\n    $0\nend"},
+    {"lua.if", "if / then / end", "lua", TemplateKind::Live, "if ${1:condition} then\n    $0\nend"},
+    {"lua.ife", "if / else", "lua", TemplateKind::Live, "if ${1:condition} then\n    $2\nelse\n    $0\nend"},
+    {"lua.for", "for — numeric loop", "lua", TemplateKind::Live, "for ${1:i} = ${2:1}, ${3:count} do\n    $0\nend"},
+    {"lua.pairs", "for — table pairs", "lua", TemplateKind::Live,
+     "for ${1:key}, ${2:value} in pairs(${3:items}) do\n    $0\nend"},
+    {"lua.ipairs", "for — ordered elements", "lua", TemplateKind::Live,
+     "for ${1:index}, ${2:value} in ipairs(${3:items}) do\n    $0\nend"},
+    {"lua.while", "while / do / end", "lua", TemplateKind::Live, "while ${1:condition} do\n    $0\nend"},
+    {"lua.repeat", "repeat / until", "lua", TemplateKind::Live, "repeat\n    $0\nuntil ${1:condition}"},
+    {"lua.table", "table constructor", "lua", TemplateKind::Live,
+     "local ${1:name} = {\n    ${2:key} = ${3:value},\n}\n$0"},
+    {"lua.module", "module table", "lua", TemplateKind::Live, "local ${1:M} = {}\n\n$0\n\nreturn ${1:M}"},
+    {"lua.pcall", "protected call", "lua", TemplateKind::Live,
+     "local ${1:ok}, ${2:result} = pcall(${3:callable})\nif not ${1:ok} then\n    $0\nend"},
+    {"lua.doc", "Lua documentation", "lua", TemplateKind::Live,
+     "--- ${1:Description}\n--- @author ${AUTHOR}\n--- @date ${DATE}\n---@param ${2:name} ${3:any}\n---@return "
+     "${4:any}\n$0"},
+    {"file.lua.module", "Lua module", "lua", TemplateKind::File,
+     "--- ${DESCRIPTION}\n--- @author ${AUTHOR}\nlocal ${CLASS} = {}\n\nreturn ${CLASS}\n"},
     {"cpp.for", "for — index loop", "cpp", TemplateKind::Live,
      "for (std::size_t ${1:i} = 0; ${1:i} < ${2:count}; ++${1:i}) {\n    $0\n}"},
     {"cpp.foreach", "foreach — range loop", "cpp", TemplateKind::Live,

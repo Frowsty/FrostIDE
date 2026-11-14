@@ -96,6 +96,8 @@ constexpr std::array kEntries{
     Entry{settings::key::toolsManagedDotnetPath.name, 4},
     Entry{settings::key::toolsManagedServerPath.name, 4},
     Entry{settings::key::toolsLuaLanguageServerPath.name, 4},
+    Entry{settings::key::luaLanguageProvider.name, 4},
+    Entry{settings::key::toolsEmmyLuaPath.name, 4},
     Entry{settings::key::luaRuntimeVersion.name, 4},
     Entry{settings::key::debugSourceMapFrom.name, 4},
     Entry{settings::key::debugSourceMapTo.name, 4},

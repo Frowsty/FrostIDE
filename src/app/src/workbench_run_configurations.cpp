@@ -124,7 +124,7 @@ run::RunConfiguration Workbench::configureCMakeLaunch(run::RunConfiguration laun
 Result<void> Workbench::mayRunConfiguration(const run::RunConfiguration& configuration, std::function<void()> retry) {
     // A run configuration belongs to the open workspace, whose trust it needs (like a build).
     if (!hasProject() || m_services.trust.isTrusted(m_projectRoot))
-        return {};
+        return run::isLuaRunType(configuration.type) ? prepareStandaloneLua(configuration) : Result<void>{};
     if (m_window && m_build) {
         auto* dialog = new ui::TrustDialog(*m_build, {qs(m_projectRoot)}, m_window, ui::TrustPurpose::Build);
         dialog->setAttribute(Qt::WA_DeleteOnClose);

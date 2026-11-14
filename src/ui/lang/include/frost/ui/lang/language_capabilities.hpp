@@ -13,8 +13,8 @@
  * row; usage and implementation counts arrive with CPP-9) and clangdTweaks (the named refactor and
  * generate commands map to clangd tweaks, clangd_actions.hpp).
  *
- * Lua gets only the features its language server answers (completion, navigation, rename, code
- * actions, formatting): every column is false. Unknown languages ("plaintext") get nothing either.
+ * Lua additionally has authored live templates from the shared catalogue. Semantic refactorings
+ * use their own actual AST/server admission. Unknown languages ("plaintext") get nothing.
  * Threads: constexpr data, safe anywhere.
  */
 #pragma once
@@ -60,7 +60,7 @@ inline constexpr std::array<LanguageCapabilities, 5> kLanguageCapabilities{{
      .codeVision = true,
      .clangdTweaks = false},
     {.languageId = "cmake", .serverName = "CMake", .postfix = true, .liveTemplates = true},
-    {.languageId = "lua", .serverName = "LuaLS"},
+    {.languageId = "lua", .serverName = "LuaLS", .liveTemplates = true},
     {.languageId = "plaintext", .serverName = ""},
 }};
 

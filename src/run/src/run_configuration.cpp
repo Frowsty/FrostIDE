@@ -70,6 +70,11 @@ void writeConfiguration(std::string& out, const RunConfiguration& configuration,
         if (configuration.engineDebugMode != EngineDebugMode::Lua)
             member("engineDebugMode", rpc::Json(toString(configuration.engineDebugMode)).dump());
     }
+    if (isLuaRunType(configuration.type)) {
+        std::string interpreterArguments;
+        writeStringArray(interpreterArguments, configuration.interpreterArguments);
+        member("interpreterArguments", interpreterArguments);
+    }
     std::string arguments;
     writeStringArray(arguments, configuration.arguments);
     member("arguments", arguments);
@@ -220,6 +225,16 @@ Result<RunConfiguration> readConfiguration(const rpc::Json& object, std::size_t 
         }
         *field = std::move(*value);
     }
+    if (const auto* flags = object.find("interpreterArguments")) {
+        if (!flags->isArray())
+            return corrupt(index, "'interpreterArguments' is not an array");
+        for (const auto& flag : flags->items()) {
+            const auto* text = flag.asString();
+            if (!text)
+                return corrupt(index, "an interpreter argument is not a string");
+            configuration.interpreterArguments.push_back(*text);
+        }
+    }
     if (const auto* mode = object.find("engineDebugMode")) {
         if (!mode->isString())
             return corrupt(index, "'engineDebugMode' is not a string");
@@ -322,6 +337,8 @@ Result<void> checkForSave(std::span<const RunConfiguration> configurations) {
 std::string_view toString(RunType type) noexcept {
     switch (type) {
     case RunType::Native: return "native";
+    case RunType::LuaScript: return "lua-script";
+    case RunType::LuaRepl: return "lua-repl";
     case RunType::CMakeTarget: return "cmake-target";
     case RunType::MSBuild: return "msbuild";
     case RunType::Compound: return "compound";
@@ -333,8 +350,9 @@ std::string_view toString(RunType type) noexcept {
 }
 
 std::optional<RunType> parseRunType(std::string_view text) noexcept {
-    for (const RunType type : {RunType::Native, RunType::CMakeTarget, RunType::MSBuild, RunType::Compound,
-                               RunType::Attach, RunType::FrostEditor, RunType::FrostPlayer}) {
+    for (const RunType type :
+         {RunType::Native, RunType::CMakeTarget, RunType::MSBuild, RunType::Compound, RunType::Attach,
+          RunType::FrostEditor, RunType::FrostPlayer, RunType::LuaScript, RunType::LuaRepl}) {
         if (toString(type) == text) {
             return type;
         }
@@ -369,6 +387,8 @@ std::optional<EngineDebugMode> parseEngineDebugMode(std::string_view text) noexc
     return std::nullopt;
 }
 
+bool isLuaRunType(RunType type) noexcept { return type == RunType::LuaScript || type == RunType::LuaRepl; }
+
 Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
     if (configuration.id.empty() || configuration.id.size() > kMaxIdLength ||
         !std::ranges::all_of(configuration.id, idCharacter)) {
@@ -397,7 +417,41 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
     } else if (!configuration.engineProjectPath.empty()) {
         return invalid(configuration, "only a FrostEngine configuration has an engine project");
     }
+    if (!isLuaRunType(configuration.type) && !configuration.interpreterArguments.empty())
+        return invalid(configuration, "interpreterArguments belong only to standalone Lua");
+    for (const auto& argument : configuration.interpreterArguments)
+        if (hasNul(argument))
+            return invalid(configuration, "interpreter argument contains NUL");
     switch (configuration.type) {
+    case RunType::LuaScript:
+    case RunType::LuaRepl:
+        if (configuration.program.empty())
+            return invalid(configuration, "select an absolute Lua interpreter executable");
+        if (configuration.beforeLaunch != BeforeLaunch::None || !configuration.beforeLaunchTasks.empty())
+            return invalid(configuration, "standalone Lua configurations do not support build/tasks before launch");
+        if (configuration.type == RunType::LuaScript &&
+            (!io::isAbsolutePath(configuration.target) || !io::normalizePath(configuration.target)))
+            return invalid(configuration, "a Lua script configuration needs an absolute script path");
+        if (configuration.type == RunType::LuaRepl &&
+            (!configuration.target.empty() || !configuration.arguments.empty()))
+            return invalid(configuration, "Lua REPL has no script or script arguments; use interpreterArguments");
+        for (std::size_t i = 0; i < configuration.interpreterArguments.size(); ++i) {
+            const auto& flag = configuration.interpreterArguments[i];
+            if (flag == "-E" || flag == "-W" || flag == "-v")
+                continue;
+            if (flag == "-e" || flag == "-l") {
+                if (++i == configuration.interpreterArguments.size())
+                    return invalid(configuration, "Lua -e/-l requires its own argument");
+                continue;
+            }
+            if ((flag.starts_with("-e") || flag.starts_with("-l")) && flag.size() > 2)
+                continue;
+            if (flag == "--" && configuration.type == RunType::LuaScript &&
+                i + 1 == configuration.interpreterArguments.size())
+                continue;
+            return invalid(configuration, "use Lua 5.4 interpreter flags only; REPL adds -i automatically");
+        }
+        break;
     case RunType::FrostEditor:
     case RunType::FrostPlayer:
     case RunType::Native:
@@ -540,6 +594,8 @@ Result<std::vector<RunConfiguration>> parseRunConfigurations(std::string_view js
         if (!configuration) {
             return std::unexpected(std::move(configuration.error()));
         }
+        if (isLuaRunType(configuration->type) && *version < 5)
+            return corrupt(index, "standalone Lua requires store version 5");
         if (configuration->engineDebugMode == EngineDebugMode::NativeAndLua && *version < 4)
             return corrupt(index, "native-and-lua Debug requires store version 4");
         if (!ids.insert(configuration->id).second) {
@@ -582,7 +638,11 @@ std::string serializeRunConfigurations(std::span<const RunConfiguration> configu
         configurations, [](const RunConfiguration& configuration) { return isFrostEngineRunType(configuration.type); });
     const bool mixed = std::ranges::any_of(
         configurations, [](const auto& c) { return c.engineDebugMode == EngineDebugMode::NativeAndLua; });
-    const int version = mixed ? 4 : engine ? 3 : (std::ranges::any_of(configurations, usesRun5Features) ? 2 : 1);
+    const bool lua = std::ranges::any_of(configurations, [](const auto& c) { return isLuaRunType(c.type); });
+    const int version = lua      ? 5
+                        : mixed  ? 4
+                        : engine ? 3
+                                 : (std::ranges::any_of(configurations, usesRun5Features) ? 2 : 1);
     std::string out = std::format("{{\n  \"version\": {},\n  \"configurations\": [", version);
     if (configurations.empty()) {
         out += "]\n}\n";

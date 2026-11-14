@@ -92,6 +92,9 @@ struct RunControllerHooks {
     std::function<void(const std::string& target)> selectCMakeTarget{};
     // The trust gate of a native configuration; an error is reported and nothing starts. Empty: allowed.
     std::function<Result<void>(const run::RunConfiguration& configuration)> mayRunConfiguration{};
+    // GUI captures immutable trust/project cancellation; the closure runs on RunManager's writer
+    // before launching. Required for standalone Lua, no QObject access on that writer.
+    std::function<std::function<Result<void>()>(const run::RunConfiguration&)> launchAdmissionFor{};
     // RUN-11, GUI thread: called after trust gating, before RunManager accepts an engine run.
     // The app reserves its session generation and adds authenticated server launch options to a
     // transient copy (never saved). Missing hook refuses engine runs. Errors prevent launch.

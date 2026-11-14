@@ -38,6 +38,8 @@ std::string utf8(const QString& text) { return text.toUtf8().toStdString(); }
 QString typeLabel(run::RunType type) {
     switch (type) {
     case run::RunType::Native: return QObject::tr("Native executable");
+    case run::RunType::LuaScript: return QObject::tr("Lua script (selected interpreter)");
+    case run::RunType::LuaRepl: return QObject::tr("Lua REPL (interactive Run)");
     case run::RunType::FrostEditor: return QObject::tr("FrostEngine Editor");
     case run::RunType::FrostPlayer: return QObject::tr("FrostEngine Player");
     case run::RunType::CMakeTarget: return QObject::tr("CMake application");
@@ -208,6 +210,15 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     form->addRow(tr("Type:"), m_type);
     form->addRow(tr("Target:"), m_target);
     form->addRow(tr("Program:"), m_program);
+    m_luaScript = new QLineEdit(this);
+    m_luaScript->setObjectName(QStringLiteral("runConfigurationLuaScript"));
+    m_luaScript->setPlaceholderText(tr("Absolute script path"));
+    m_interpreterArguments = new QLineEdit(this);
+    m_interpreterArguments->setObjectName(QStringLiteral("runConfigurationInterpreterArguments"));
+    m_interpreterArguments->setToolTip(
+        tr("Lua interpreter flags before the script: -E, -W, -v, -e chunk, -l module. REPL adds -i."));
+    form->addRow(tr("Lua script:"), m_luaScript);
+    form->addRow(tr("Interpreter flags:"), m_interpreterArguments);
     form->addRow(tr("Engine project:"), m_engineProject);
     m_engineDebugMode = new QComboBox(this);
     m_engineDebugMode->setObjectName(QStringLiteral("runConfigurationEngineDebugMode"));
@@ -248,6 +259,14 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     m_addFrostPlayer->setObjectName(QStringLiteral("frostPlayerConfigurationButton"));
     compoundLayout->addWidget(m_addFrostEditor);
     compoundLayout->addWidget(m_addFrostPlayer);
+    m_addLuaScript = new QPushButton(tr("Add Lua script..."), compound);
+    m_addLuaRepl = new QPushButton(tr("Add Lua REPL..."), compound);
+    m_addLuaScript->setObjectName(QStringLiteral("luaScriptConfigurationButton"));
+    m_addLuaRepl->setObjectName(QStringLiteral("luaReplConfigurationButton"));
+    compoundLayout->addWidget(m_addLuaScript);
+    compoundLayout->addWidget(m_addLuaRepl);
+    connect(m_addLuaScript, &QPushButton::clicked, this, [this] { addLuaScript(); });
+    connect(m_addLuaRepl, &QPushButton::clicked, this, [this] { addLuaRepl(); });
     compoundLayout->addStretch(1);
     outer->addWidget(compound);
     m_error->setObjectName(QStringLiteral("runConfigurationError"));
@@ -334,6 +353,8 @@ void RunConfigurationsDialog::showConfiguration(int row) {
     m_addAttach->setEnabled(m_canAddNative);
     m_addFrostEditor->setEnabled(m_canAddNative);
     m_addFrostPlayer->setEnabled(m_canAddNative);
+    m_addLuaScript->setEnabled(m_canAddNative);
+    m_addLuaRepl->setEnabled(m_canAddNative);
     const run::RunType shownType = valid ? m_configurations[static_cast<std::size_t>(row)].type : run::RunType::Native;
     const bool compoundType = shownType == run::RunType::Compound;
     const bool attachType = shownType == run::RunType::Attach;
@@ -346,6 +367,14 @@ void RunConfigurationsDialog::showConfiguration(int row) {
     m_engineProject->setEnabled(valid);
     m_form->setRowVisible(m_engineDebugMode, run::isFrostEngineRunType(shownType));
     m_engineDebugMode->setEnabled(valid);
+    m_form->setRowVisible(m_luaScript, shownType == run::RunType::LuaScript);
+    m_form->setRowVisible(m_interpreterArguments, run::isLuaRunType(shownType));
+    if (run::isLuaRunType(shownType)) {
+        m_form->setRowVisible(m_target, false);
+        m_form->setRowVisible(m_beforeLaunch, false);
+        m_form->setRowVisible(m_tasks, false);
+        m_form->setRowVisible(m_arguments, shownType == run::RunType::LuaScript);
+    }
     m_form->setRowVisible(m_members, compoundType);
     m_form->setRowVisible(m_process, attachType);
     if (!valid) {
@@ -375,6 +404,8 @@ void RunConfigurationsDialog::showConfiguration(int row) {
                               : typeLabel(configuration.type));
     m_target->setText(configuration.target.empty() ? tr("(none)") : qs(configuration.target));
     m_program->setText(qs(configuration.program));
+    m_luaScript->setText(qs(configuration.target));
+    m_interpreterArguments->setText(formatRunArguments(configuration.interpreterArguments));
     m_engineProject->setText(qs(configuration.engineProjectPath));
     m_engineDebugMode->setCurrentIndex(m_engineDebugMode->findData(static_cast<int>(configuration.engineDebugMode)));
     m_arguments->setText(formatRunArguments(configuration.arguments));
@@ -383,7 +414,8 @@ void RunConfigurationsDialog::showConfiguration(int row) {
     m_remove->setEnabled(!generated);
     m_remove->setToolTip(generated ? tr("Generated from the project; it comes back with the next generation.")
                                    : tr("Remove this configuration"));
-    const bool native = configuration.type == run::RunType::Native || run::isFrostEngineRunType(configuration.type);
+    const bool native = configuration.type == run::RunType::Native || run::isFrostEngineRunType(configuration.type) ||
+                        run::isLuaRunType(configuration.type);
     const bool msbuild = configuration.type == run::RunType::MSBuild;
     m_program->setReadOnly(!native);
     m_program->setPlaceholderText(native ? tr("Absolute path of the program")
@@ -417,6 +449,13 @@ void RunConfigurationsDialog::showConfiguration(int row) {
     } else if (configuration.type == run::RunType::CMakeTarget) {
         m_note->setText(tr("The target is built first, then its executable runs. When the arguments here are empty, "
                            "the CMake Targets window's Run/Debug arguments for the active profile apply."));
+    } else if (run::isLuaRunType(configuration.type)) {
+        m_note->setText(
+            configuration.type == run::RunType::LuaRepl
+                ? tr("Run starts this interpreter with -i. Enter Lua in the Run console input. Debug a script "
+                     "configuration instead.")
+                : tr("Program is the explicit Lua interpreter for both Run and Debug. Interpreter flags precede the "
+                     "script; program arguments follow it. Debug needs an installed lua-debug path in Toolchains."));
     } else if (compoundType) {
         m_note->setText(tr("Run starts every checked configuration, each in its own tab. Debugging several "
                            "configurations together is not available yet (DBG-10)."));
@@ -435,8 +474,14 @@ void RunConfigurationsDialog::storeFields() {
     }
     run::RunConfiguration& configuration = m_configurations[static_cast<std::size_t>(m_row)];
     configuration.name = utf8(m_name->text().trimmed());
-    if (configuration.type == run::RunType::Native || run::isFrostEngineRunType(configuration.type)) {
+    if (configuration.type == run::RunType::Native || run::isFrostEngineRunType(configuration.type) ||
+        run::isLuaRunType(configuration.type)) {
         configuration.program = utf8(m_program->text().trimmed());
+    }
+    if (run::isLuaRunType(configuration.type)) {
+        configuration.target =
+            configuration.type == run::RunType::LuaScript ? utf8(m_luaScript->text().trimmed()) : std::string{};
+        configuration.interpreterArguments = parseRunArguments(m_interpreterArguments->text());
     }
     if (run::isFrostEngineRunType(configuration.type)) {
         configuration.engineProjectPath = utf8(m_engineProject->text().trimmed());
@@ -525,8 +570,8 @@ std::string RunConfigurationsDialog::copySelected() {
         return {};
     }
     const run::RunConfiguration source = m_configurations[static_cast<std::size_t>(row)];
-    if (source.type == run::RunType::Compound || source.type == run::RunType::Attach ||
-        run::isFrostEngineRunType(source.type)) {
+    if (run::isLuaRunType(source.type) || source.type == run::RunType::Compound ||
+        source.type == run::RunType::Attach || run::isFrostEngineRunType(source.type)) {
         run::RunConfiguration same = source;
         same.name = utf8(tr("%1 (copy)").arg(qs(source.name)));
         same.id = run::uniqueRunConfigurationId(run::runConfigurationIdFor(run::toString(source.type), same.name),
@@ -557,6 +602,15 @@ std::string RunConfigurationsDialog::addFrostEditor() { return addOfType(run::Ru
 
 std::string RunConfigurationsDialog::addFrostPlayer() { return addOfType(run::RunType::FrostPlayer); }
 
+void RunConfigurationsDialog::setLuaDefaults(std::string interpreter, std::string script,
+                                             std::string workingDirectory) {
+    m_luaInterpreterDefault = std::move(interpreter);
+    m_luaScriptDefault = std::move(script);
+    m_luaWorkingDirectoryDefault = std::move(workingDirectory);
+}
+std::string RunConfigurationsDialog::addLuaScript() { return addOfType(run::RunType::LuaScript); }
+std::string RunConfigurationsDialog::addLuaRepl() { return addOfType(run::RunType::LuaRepl); }
+
 std::string RunConfigurationsDialog::addOfType(run::RunType type) {
     if (!m_canAddNative) {
         return {};
@@ -564,9 +618,14 @@ std::string RunConfigurationsDialog::addOfType(run::RunType type) {
     storeFields();
     run::RunConfiguration configuration;
     configuration.type = type;
-    configuration.name = utf8(run::isFrostEngineRunType(type)  ? typeLabel(type)
-                              : type == run::RunType::Compound ? tr("Unnamed compound")
-                                                               : tr("Unnamed attach"));
+    if (run::isLuaRunType(type)) {
+        configuration.program = m_luaInterpreterDefault;
+        configuration.target = type == run::RunType::LuaScript ? m_luaScriptDefault : std::string{};
+        configuration.workingDirectory = m_luaWorkingDirectoryDefault;
+    }
+    configuration.name = utf8((run::isLuaRunType(type) || run::isFrostEngineRunType(type)) ? typeLabel(type)
+                              : type == run::RunType::Compound                             ? tr("Unnamed compound")
+                                                                                           : tr("Unnamed attach"));
     configuration.id = run::uniqueRunConfigurationId(
         run::runConfigurationIdFor(run::toString(type), configuration.name), m_configurations);
     m_configurations.push_back(std::move(configuration));

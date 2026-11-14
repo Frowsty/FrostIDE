@@ -33,3 +33,16 @@ TEST(FileTemplates, EveryFileKindRendersUtf8AndExecutableContainsARealEntryPoint
             EXPECT_NE(files->front().contents.find("int main()"), std::string::npos);
     }
 }
+TEST(FileTemplatesLua, ModuleCreatesOneLuaFileAndRefusesReservedBindings) {
+    auto files = lang::renderFileTemplate({lang::FileTemplateKind::LuaModule, "Module", "Author", "Description"});
+    ASSERT_TRUE(files);
+    ASSERT_EQ(files->size(), 1);
+    EXPECT_EQ(files->front().name, "Module.lua");
+    EXPECT_NE(files->front().contents.find("local Module = {}"), std::string::npos);
+    for (const auto* name : {"class", "namespace", "template"}) {
+        auto lua = lang::renderFileTemplate({lang::FileTemplateKind::LuaModule, name, "", ""});
+        ASSERT_TRUE(lua);
+        EXPECT_EQ(lua->front().name, std::string(name) + ".lua");
+    }
+    EXPECT_FALSE(lang::renderFileTemplate({lang::FileTemplateKind::LuaModule, "end", "", ""}));
+}

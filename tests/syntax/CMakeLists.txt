@@ -12,6 +12,7 @@ frost_add_test(syntax_tests
         language_test.cpp
         highlight_test.cpp
         session_test.cpp
+        lua_ast_test.cpp
         syntax_test_support.cpp
     DEPS frost::syntax frost::sched frost::text
     LABELS unit)

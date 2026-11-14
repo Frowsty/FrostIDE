@@ -15,6 +15,16 @@
         "signer": "https://github.com/llvm/llvm-project/.github/workflows/release-sources.yml@refs/tags/llvmorg-23.1.4"
       },
       "note": "The pinned SHA-256 equals the digest GitHub publishes for the release asset, and gh attestation verify (gh 2.103.3, 2026-11-02) accepted the release's Sigstore bundle, signed by the release-sources.yml workflow at the tag. tools/build-lldb.ps1 and tools/build-lldb.sh build lldb-dap from it (ADR 0049)."
+    },
+    "lua54": {
+      "version": "5.4.9",
+      "url": "https://www.lua.org/ftp/lua-5.4.9.tar.gz",
+      "file": "lua-5.4.9.tar.gz",
+      "sha256": "2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6",
+      "license": "MIT",
+      "licenseSource": "src/lua.h (copyright notice), doc/readme.html",
+      "buildRecipe": "tools/build_lua_runtime.py",
+      "note": "Source archive pin only, not a built executable digest. Build with pinned Clang; Windows Lua API exports live in lua54.dll. ADR0094. No lua-debug binary is redistributed."
     }
   },
   "windows": {

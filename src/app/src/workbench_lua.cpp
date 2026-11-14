@@ -12,6 +12,7 @@
 #include "frost/io/path.hpp"
 #include "frost/io/reactor.hpp"
 #include "frost/lang/frost_engine_lua.hpp"
+#include "frost/lang/lua_input_index.hpp"
 #include "frost/lang/lua_rc.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/trust_store.hpp"
@@ -28,6 +29,7 @@
 #include "engine_binding_integration.hpp"
 #include "language_bridge.hpp"
 #include <QMetaObject>
+#include <QTimer>
 
 #include <algorithm>
 #include <limits>
@@ -42,6 +44,13 @@ struct WorkbenchLuaState {
     std::uint64_t generation = 0;        // Increments per LuaLS start and stop; older callbacks are dropped.
     std::vector<std::string> folderKeys; // documentKeys of the running LuaLS's extra folders, sorted.
     std::vector<std::string> inputKeys;  // documentKeys of the host providers' inputs.
+    lang::LuaInputIndex inputIndex;
+    std::optional<std::uint64_t> configurationRefreshQueued;
+    std::string provider = "luals";
+    void setInputs(std::vector<std::string> inputs) {
+        inputKeys = std::move(inputs);
+        inputIndex.reset(inputKeys);
+    }
     std::map<std::string, std::shared_ptr<ui::BackgroundTask>> tasks; // $/progress token -> its task.
     std::vector<std::string> titles;    // Every progress title LuaLS began for this project, in order.
     std::vector<std::string> refreshes; // Every refresh request handled for this project, in order.
@@ -201,14 +210,6 @@ std::vector<std::string> sortedFolderKeys(const std::vector<lang::LuaWorkspaceFo
 }
 
 // Whether the path `key` is `input`, lies below it, or is a folder above it (documentKeys).
-bool touches(std::string_view key, std::string_view input) {
-    const auto below = [](std::string_view inner, std::string_view outer) {
-        return inner.size() > outer.size() && inner.starts_with(outer) &&
-               (inner[outer.size()] == '/' || inner[outer.size()] == '\\');
-    };
-    return key == input || below(key, input) || below(input, key);
-}
-
 sched::Task<void> prepareLuaPlanTask(io::IFileSystem* fs, std::shared_ptr<WorkbenchLuaState> luaStatePtr,
                                      std::string runtime, std::string stateDirectory, std::string root,
                                      QPointer<Workbench> self,
@@ -302,11 +303,13 @@ void Workbench::startLua(const std::string& root) {
         return;
     stopLua();
     WorkbenchLuaState& state = luaState(m_luaState, m_services.launcher);
+    state.provider = m_services.settings.snapshot()->get(settings::key::luaLanguageProvider);
     state.titles.clear();
     state.refreshes.clear();
     m_luaUnavailable.clear();
     m_luaObservedTrust = m_services.trust.isTrusted(root);
-    m_luaConfiguredPath = m_services.settings.snapshot()->get(settings::key::toolsLuaLanguageServerPath);
+    m_luaConfiguredPath = m_services.settings.snapshot()->get(
+        state.provider == "emmylua" ? settings::key::toolsEmmyLuaPath : settings::key::toolsLuaLanguageServerPath);
     m_luaRuntimeVersion = m_services.settings.snapshot()->get(settings::key::luaRuntimeVersion);
     if (!m_luaObservedTrust) {
         for (auto* view : m_editors->views())
@@ -318,8 +321,13 @@ void Workbench::startLua(const std::string& root) {
     }
     auto snapshot = m_services.settings.snapshot();
     lang::LuaSearch search = m_options.luaSearch ? *m_options.luaSearch : lang::defaultLuaSearch();
-    search.configuredPath = snapshot->get(settings::key::toolsLuaLanguageServerPath);
-    auto found = lang::findLuaLanguageServer(m_services.fs, search);
+    const bool experimental = state.provider == "emmylua";
+    search.configuredPath = m_luaConfiguredPath;
+    auto found =
+        experimental && search.configuredPath.empty()
+            ? Result<std::string>(fail(ErrorCode::NotFound,
+                                       "Experimental EmmyLua requires an explicit absolute executable in Settings"))
+            : lang::findLuaLanguageServer(m_services.fs, search);
     // LuaLS writes its log and generated meta files under the user profile, never into its
     // (possibly read-only, staged) installation directory; host meta files go there too.
     std::string stateDirectory = m_options.luaStateDirectory;
@@ -344,7 +352,8 @@ void Workbench::startLua(const std::string& root) {
             notifyLuaUnavailable();
         return;
     }
-    auto arguments = lang::luaLanguageServerArguments(stateDirectory);
+    auto arguments =
+        experimental ? lang::emmyLuaArguments(stateDirectory) : lang::luaLanguageServerArguments(stateDirectory);
     if (!arguments) {
         m_luaUnavailable = "no per-user directory for the LuaLS log and meta files: " + arguments.error().message();
         notifyLuaUnavailable();
@@ -371,10 +380,11 @@ void Workbench::startLua(const std::string& root) {
         options.workspaceRoot = root;
         options.arguments = std::move(args);
         options.trusted = true;
+        options.displayName = st.provider == "emmylua" ? "EmmyLua Rust (experimental)" : "LuaLS";
         options.configuration = std::move(plan.configuration);
         options.folders = plan.folders;
         st.folderKeys = sortedFolderKeys(plan.folders);
-        st.inputKeys = std::move(plan.inputKeys);
+        st.setInputs(std::move(plan.inputKeys));
         options.onLifecycle = [self = QPointer<Workbench>(this), generation] {
             if (self)
                 QMetaObject::invokeMethod(
@@ -444,6 +454,17 @@ void Workbench::startLua(const std::string& root) {
     // When a built FrostEditor binary's schema.export is not yet cached, warm it and write the
     // generated meta files on a background worker so the GUI thread never stalls waiting for a
     // child process (FND-9b).
+    if (experimental) {
+        // Emmy reads its own native configuration. Do not pass LuaLS CLI flags, runtime values,
+        // generated host overrides or pretend the two providers share configuration schemas.
+        LuaPlan plan;
+        plan.configuration = lang::Json::object();
+        for (const auto* file : {".emmyrc.json", ".emmyrc.lua", ".luarc.json"})
+            if (auto path = io::joinPath(root, file))
+                plan.inputKeys.push_back(lang::documentKey(*path));
+        launchWithPlan(std::move(*arguments), std::move(plan), std::nullopt);
+        return;
+    }
     if (state.engineHost && state.engineHost->needsSchemaWarmup(m_services.fs, root)) {
         QPointer<Workbench> self(this);
         std::vector<std::string> args = std::move(*arguments);
@@ -471,6 +492,10 @@ void Workbench::refreshLuaConfiguration() {
     if (!m_lua || m_projectRoot.empty())
         return;
     WorkbenchLuaState& state = luaState(m_luaState, m_services.launcher);
+    if (state.provider == "emmylua") {
+        startLua(m_projectRoot);
+        return;
+    }
     m_luaRuntimeVersion = m_services.settings.snapshot()->get(settings::key::luaRuntimeVersion);
     std::string stateDirectory = m_options.luaStateDirectory;
     if (stateDirectory.empty()) {
@@ -495,7 +520,7 @@ void Workbench::refreshLuaConfiguration() {
                                        self->startLua(self->m_projectRoot);
                                        return;
                                    }
-                                   self->m_luaState->inputKeys = std::move(plan.inputKeys);
+                                   self->m_luaState->setInputs(std::move(plan.inputKeys));
                                    if (auto sent = self->m_lua->changeConfiguration(std::move(plan.configuration),
                                                                                     std::move(plan.folders));
                                        !sent)
@@ -513,7 +538,7 @@ void Workbench::refreshLuaConfiguration() {
         startLua(m_projectRoot);
         return;
     }
-    state.inputKeys = std::move(plan.inputKeys);
+    state.setInputs(std::move(plan.inputKeys));
     if (auto sent = m_lua->changeConfiguration(std::move(plan.configuration), std::move(plan.folders)); !sent)
         log::warn("workbench", "LuaLS didChangeConfiguration: {}", sent.error().describe());
 }
@@ -521,13 +546,16 @@ void Workbench::onLuaSettingsChanged() {
     if (m_engineBindings)
         m_engineBindings->cancel();
     const auto snapshot = m_services.settings.snapshot();
-    const auto luaPath = snapshot->get(settings::key::toolsLuaLanguageServerPath);
+    const auto provider = snapshot->get(settings::key::luaLanguageProvider);
+    const auto luaPath = snapshot->get(provider == "emmylua" ? settings::key::toolsEmmyLuaPath
+                                                             : settings::key::toolsLuaLanguageServerPath);
     const auto luaRuntime = snapshot->get(settings::key::luaRuntimeVersion);
-    if (m_projectRoot.empty() || (luaPath == m_luaConfiguredPath && luaRuntime == m_luaRuntimeVersion))
+    if (m_projectRoot.empty() || (m_luaState && provider == m_luaState->provider && luaPath == m_luaConfiguredPath &&
+                                  luaRuntime == m_luaRuntimeVersion))
         return;
     // Another server is a restart; another runtime version reaches the running LuaLS live
     // (didChangeConfiguration, LUA-3), so its diagnostics follow without losing its state.
-    if (luaPath != m_luaConfiguredPath || !m_lua)
+    if (!m_luaState || provider != m_luaState->provider || luaPath != m_luaConfiguredPath || !m_lua)
         startLua(m_projectRoot);
     else
         refreshLuaConfiguration();
@@ -540,8 +568,7 @@ void Workbench::onLuaFilesChanged(const io::FileChangeBatch& batch) {
     const auto add = [&](const std::string& path, lang::FileChangeType type) {
         changes.push_back({path, type});
         const std::string key = lang::documentKey(path);
-        hostInputs = hostInputs || std::ranges::any_of(m_luaState->inputKeys,
-                                                       [&](const std::string& input) { return touches(key, input); });
+        hostInputs = hostInputs || m_luaState->inputIndex.touches(key);
     };
     for (const io::FileChange& change : batch.changes) {
         switch (change.kind) {
@@ -562,8 +589,17 @@ void Workbench::onLuaFilesChanged(const io::FileChangeBatch& batch) {
     else if (*sent > 0)
         log::debug("workbench", "LuaLS didChangeWatchedFiles: {} changes", *sent);
     // A host's own files changed (the engine wrote its reference or definitions): compose again.
-    if (hostInputs)
-        refreshLuaConfiguration();
+    if (hostInputs && m_luaState->configurationRefreshQueued != m_luaState->generation) {
+        auto state = m_luaState;
+        const auto generation = state->generation;
+        state->configurationRefreshQueued = generation;
+        QTimer::singleShot(75, this, [this, state, generation] {
+            if (state->configurationRefreshQueued == generation)
+                state->configurationRefreshQueued.reset();
+            if (m_luaState == state && state->generation == generation && m_lua)
+                refreshLuaConfiguration();
+        });
+    }
 }
 void Workbench::onLuaProgress(std::uint64_t generation, const lang::LuaProgress& progress) {
     if (!m_lua || !m_luaState || m_luaState->generation != generation)

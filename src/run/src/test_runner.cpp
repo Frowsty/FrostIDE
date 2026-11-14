@@ -92,18 +92,29 @@ struct TestRunner::State {
      * collected; `stop` ends the tree. Errors: the launcher's.
      */
     Result<ProcessOutcome> runProcess(io::ProcessSpec spec, const std::stop_token& token,
-                                      const std::function<void(std::string_view)>& onStdout) {
+                                      const std::function<void(std::string_view)>& onStdout,
+                                      std::size_t outputLimit = 0) {
         struct Collector {
             std::mutex mutex;
             std::condition_variable done;
             ProcessOutcome outcome;
             bool exited = false;
+            bool overflow = false;
         };
         auto collector = std::make_shared<Collector>();
         build::RunSessionCallbacks callbacks;
-        callbacks.onOutput = [collector, &onStdout](build::RunStream stream, std::string_view text) {
+        callbacks.onOutput = [collector, &onStdout, outputLimit](build::RunStream stream, std::string_view text) {
             {
                 std::lock_guard lock(collector->mutex);
+                if (outputLimit &&
+                    text.size() > outputLimit - std::min(outputLimit, collector->outcome.out.size() +
+                                                                          collector->outcome.err.size())) {
+                    collector->overflow = true;
+                    collector->done.notify_all();
+                    return;
+                }
+                if (collector->overflow)
+                    return;
                 (stream == build::RunStream::Stdout ? collector->outcome.out : collector->outcome.err) += text;
             }
             if (stream == build::RunStream::Stdout && onStdout)
@@ -118,6 +129,7 @@ struct TestRunner::State {
         spec.killOnClose = true;
         spec.stdinMode = io::Stdio::Null;
         build::RunSessionOptions options;
+        options.rejectInvalidUtf8 = outputLimit != 0;
         options.terminateDescendantsOnExit = true; // Tests ctest left behind end with it.
         auto session = build::RunSession::start(launcher, spec, std::move(callbacks), clock, options);
         if (!session)
@@ -125,10 +137,18 @@ struct TestRunner::State {
         {
             std::stop_callback onStop(token, [&session] { (*session)->stop(); });
             std::unique_lock lock(collector->mutex);
-            collector->done.wait(lock, [&] { return collector->exited; });
+            collector->done.wait(lock, [&] { return collector->exited || collector->overflow; });
+            if (collector->overflow && !collector->exited) {
+                lock.unlock();
+                (*session)->stop();
+                lock.lock();
+                collector->done.wait(lock, [&] { return collector->exited; });
+            }
         }
         session->reset(); // Joins the session's threads; every callback has returned.
         std::lock_guard lock(collector->mutex);
+        if (collector->overflow)
+            return fail(ErrorCode::Unsupported, "Lua framework output exceeded 32 MiB; owned process tree stopped");
         return std::move(collector->outcome);
     }
 
@@ -914,6 +934,165 @@ Result<void> TestRunner::runFramework(const CTestSetup& setup, std::vector<Frame
             }
             return std::move(*parsed);
         });
+}
+
+namespace {
+io::ProcessSpec luaSpec(const LaunchPlan& plan) {
+    io::ProcessSpec spec;
+    spec.executable = plan.program;
+    spec.arguments = plan.arguments;
+    spec.workingDirectory = plan.workingDirectory;
+    for (const auto& entry : plan.environment)
+        spec.environment.emplace_back(entry.name, entry.value);
+    return spec;
+}
+Result<void> startLuaJob(std::shared_ptr<TestRunner::State> state, TestRunner::LuaFrameworkRequest request,
+                         bool listing, std::function<void(Result<std::vector<FrameworkCase>>)> done,
+                         TestRunHandlers handlers) {
+    if (!io::isAbsolutePath(request.scratchDirectory))
+        return fail(ErrorCode::InvalidArgument, "Lua test scratch directory must be absolute");
+    auto probe = luaFrameworkConfiguration(request.profile, request.configuration, request.cases,
+                                           request.scratchDirectory + "/report.xml", listing, request.discoveryBridge);
+    if (!probe)
+        return std::unexpected(probe.error());
+    return startJob(
+        *state, state,
+        [request = std::move(request), listing, done = std::move(done),
+         handlers = std::move(handlers)](TestRunner::State& worker, const std::stop_token& stop, std::uint64_t job,
+                                         const std::function<void()>& finish) {
+            TestRunReport report;
+            Result<std::vector<FrameworkCase>> cases = fail(ErrorCode::Cancelled, "Lua listing stopped");
+            const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+            const std::string path = request.scratchDirectory + std::format("/lua-{:x}-{}-report.xml", stamp, job);
+            auto end = [&] {
+                static_cast<void>(worker.fs.remove(path));
+                finish();
+                if (listing) {
+                    if (done)
+                        done(std::move(cases));
+                } else if (handlers.onFinished)
+                    handlers.onFinished(report);
+            };
+            auto error = [&](Error value) {
+                report.error = value;
+                cases = std::unexpected(std::move(value));
+                end();
+            };
+            if (auto made = worker.fs.createDirectories(request.scratchDirectory); !made) {
+                error(made.error());
+                return;
+            }
+            // Version is queried by the same selected interpreter and entry script, before discovery
+            // or execution. --ignore-lua disables .busted's interpreter-reexecution directive.
+            if (request.profile == LuaTestProfile::Busted220) {
+                auto version = request.configuration;
+                version.arguments = {"--ignore-lua", "--version"};
+                auto plan = launchPlanFor(version);
+                if (!plan) {
+                    error(plan.error());
+                    return;
+                }
+                auto actual = worker.runProcess(luaSpec(*plan), stop, {}, 32 * 1024 * 1024);
+                if (!actual) {
+                    error(actual.error());
+                    return;
+                }
+                auto value = actual->out;
+                while (!value.empty() && (value.back() == '\n' || value.back() == '\r'))
+                    value.pop_back();
+                if (stop.stop_requested() || actual->exit.stopped) {
+                    report.stopped = true;
+                    error(Error{ErrorCode::Cancelled, "Lua version check stopped"});
+                    return;
+                }
+                if (actual->exit.waitFailed || actual->exit.cleanupFailed || actual->exit.decodingFailed ||
+                    actual->exit.exitCode || value != "2.2.0") {
+                    error(Error{ErrorCode::Unsupported, "Busted 2.2.0 is required: " + actual->out + actual->err});
+                    return;
+                }
+            }
+            auto config = luaFrameworkConfiguration(request.profile, request.configuration, request.cases, path,
+                                                    listing, request.discoveryBridge);
+            if (!config) {
+                error(config.error());
+                return;
+            }
+            auto plan = launchPlanFor(*config);
+            if (!plan) {
+                error(plan.error());
+                return;
+            }
+            report.commandLine = displayCommandLine(*plan);
+            if (!listing && handlers.onTestStarted)
+                handlers.onTestStarted(request.configuration.name);
+            auto actual = worker.runProcess(luaSpec(*plan), stop, handlers.onOutput, 32 * 1024 * 1024);
+            if (!actual) {
+                error(actual.error());
+                return;
+            }
+            report.exitCode = actual->exit.exitCode;
+            if (actual->exit.cleanupFailed || actual->exit.decodingFailed) {
+                report.stopped = actual->exit.stopped;
+                error(Error{ErrorCode::IoError, actual->exit.cleanupFailed
+                                                    ? "Lua framework owned descendant cleanup failed"
+                                                    : "Lua framework wrote malformed UTF-8"});
+                return;
+            }
+            if (stop.stop_requested() || actual->exit.stopped) {
+                report.stopped = true;
+                error(Error{ErrorCode::Cancelled, "Lua test process tree stopped"});
+                return;
+            }
+            if (actual->exit.waitFailed) {
+                error(Error{ErrorCode::IoError, "Lua test process wait failed"});
+                return;
+            }
+            std::string text;
+            if (listing && request.profile == LuaTestProfile::Busted220)
+                text = actual->out;
+            else {
+                auto status = worker.fs.status(path);
+                if (!status || status->type != io::FileType::Regular || status->size > 64 * 1024 * 1024) {
+                    error(Error{ErrorCode::Corrupt, "Lua framework report is missing, not regular or oversized: " +
+                                                        actual->out + actual->err});
+                    return;
+                }
+                auto bytes = worker.fs.readFile(path);
+                if (!bytes) {
+                    error(Error{ErrorCode::Corrupt,
+                                "Lua framework wrote no complete report: " + actual->out + actual->err});
+                    return;
+                }
+                text = std::move(*bytes);
+            }
+            if (listing) {
+                if (actual->exit.exitCode) {
+                    error(Error{ErrorCode::IoError,
+                                toolFailure("Lua discovery", actual->exit.exitCode, actual->out, actual->err)});
+                    return;
+                }
+                cases = parseLuaFrameworkList(request.profile, text);
+            } else {
+                auto parsed = parseLuaFrameworkRun(request.profile, request.configuration.name, text, request.cases,
+                                                   actual->exit.exitCode, actual->out + actual->err);
+                if (!parsed) {
+                    error(parsed.error());
+                    return;
+                }
+                report.results.push_back(std::move(*parsed));
+                if (handlers.onTestFinished)
+                    handlers.onTestFinished(report.results.back());
+            }
+            end();
+        });
+}
+} // namespace
+Result<void> TestRunner::listLuaFramework(LuaFrameworkRequest request,
+                                          std::function<void(Result<std::vector<FrameworkCase>>)> done) {
+    return startLuaJob(m_state, std::move(request), true, std::move(done), {});
+}
+Result<void> TestRunner::runLuaFramework(LuaFrameworkRequest request, TestRunHandlers handlers) {
+    return startLuaJob(m_state, std::move(request), false, {}, std::move(handlers));
 }
 
 } // namespace frost::run
