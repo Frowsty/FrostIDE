@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace frost::project {
 
@@ -27,8 +28,9 @@ struct CMakeMembershipPlan {
 
 /*
  * Plan one change to the configured target. `inputs` must contain exactly one snapshot for each
- * non-CMake-owned input, including supported generated compiler/system files, with the same bytes
- * as the active configure observed. The caller retains
+ * non-CMake-owned input, including supported generated compiler/system files, captured as one immutable request snapshot. The model/backtraces are checked provenance hints,
+ * not a claim that configure observed those bytes. Parsed command roles and the complete static
+ * invocation graph must still agree with the selected model origin. The caller retains
  * and revalidates every snapshot, project, profile and document generation through publication.
  * `sourcePath` is an absolute existing file and `definitionPath` names the traced project input.
  * No filesystem I/O or mutation is performed. The returned replacement differs only in one
@@ -65,5 +67,14 @@ struct CMakeMembershipPlan {
                                                                 std::string_view newSourcePath,
                                                                 std::string_view definitionPath,
                                                                 std::span<const CMakeInputSnapshot> inputs);
+
+// Plan all configured target memberships from the SAME original snapshots. Shared definition
+// files merge nonoverlapping proven token edits; any unsafe membership refuses the entire batch.
+// Every current source command must name a published target and its old-source membership must
+// agree with the model, so a stale model cannot silently omit a newly introduced membership.
+// No intermediate model mutation, writes or partial successes. Caller retains all input receipts.
+[[nodiscard]] Result<std::vector<CMakeMembershipPlan>>
+planCMakeSourceRenameAllTargets(const CMakeProject& model, std::string_view oldSourcePath,
+                                std::string_view newSourcePath, std::span<const CMakeInputSnapshot> inputs);
 
 } // namespace frost::project

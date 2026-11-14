@@ -636,5 +636,35 @@ TEST(CMakeMembershipRename, RefusesDotTrailingSlashAndNonNormalizedDestinations)
     }
 }
 
+
+TEST(CMakeMembershipRename, AggregatesSharedDefinitionFromOriginalBytesAcrossTargets) {
+    auto model = editableProject();
+    auto other = model.targets[0];
+    other.name = "other";
+    other.backtrace[0].line = 4;
+    other.sources[0].backtraces[0][0].line = 4;
+    other.sources[0].backtraces[0][0].command = "add_library";
+    model.targets.push_back(other);
+    const auto definition = source("sub/CMakeLists.txt");
+    const std::string text = "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/a b.cpp\")\nadd_library(other STATIC \"dir/a b.cpp\")\n";
+    const std::array inputs{CMakeInputSnapshot{source("CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\nproject(Test)\nadd_subdirectory(sub)\n"}, CMakeInputSnapshot{definition, text}};
+    auto plans = planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs);
+    ASSERT_TRUE(plans) << plans.error().describe();
+    ASSERT_EQ(plans->size(), 1U);
+    EXPECT_EQ((*plans)[0].original, text);
+    EXPECT_EQ((*plans)[0].replacement, "# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/new.cpp\")\nadd_library(other STATIC \"dir/new.cpp\")\n");
+    model.targets.back().sources[0].generated = true;
+    EXPECT_FALSE(planCMakeSourceRenameAllTargets(model, source("sub/dir/a b.cpp"), source("sub/dir/new.cpp"), inputs));
+}
+
+
+TEST(CMakeMembershipRename, RefusesCurrentTargetMembershipMissingFromPublishedModel) {
+    const auto model=editableProject();
+    const auto definition=source("sub/CMakeLists.txt");
+    const std::array inputs{CMakeInputSnapshot{source("CMakeLists.txt"),"cmake_minimum_required(VERSION 3.20)\nproject(Test)\nadd_subdirectory(sub)\n"},CMakeInputSnapshot{definition,"# keep\nadd_library(core STATIC base.cpp)\ntarget_sources(core PRIVATE \"dir/a b.cpp\")\nadd_library(new_target STATIC \"dir/a b.cpp\")\n"}};
+    auto result=planCMakeSourceRenameAllTargets(model,source("sub/dir/a b.cpp"),source("sub/dir/new.cpp"),inputs);
+    ASSERT_FALSE(result);EXPECT_EQ(result.error().code(),ErrorCode::Unsupported);
+}
+
 } // namespace
 } // namespace frost::project
