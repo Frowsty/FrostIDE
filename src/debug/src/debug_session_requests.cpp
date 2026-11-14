@@ -46,6 +46,12 @@ Result<void> DebugSession::next() { return m_state->resume("next"); }
 Result<void> DebugSession::stepIn() { return m_state->resume("stepIn"); }
 Result<void> DebugSession::stepOut() { return m_state->resume("stepOut"); }
 
+Result<void> DebugSession::stepInstruction(bool into) {
+    if (!capabilities().supportsSteppingGranularity)
+        return fail(ErrorCode::Unsupported, "Adapter does not support instruction stepping");
+    return m_state->resume(into ? "stepIn" : "next", rpc::Json::object().set("granularity", "instruction"));
+}
+
 Result<void> DebugSession::stepIntoTarget(std::int64_t targetId) {
     std::uint64_t generation = 0;
     std::int64_t frame = 0;
@@ -65,6 +71,7 @@ Result<void> DebugSession::stepIntoTarget(std::int64_t targetId) {
 }
 
 std::int64_t DebugSession::stepInTargets(InspectionDone done) {
+    std::optional<std::int64_t> thread;
     std::uint64_t generation = 0;
     std::int64_t frame = 0;
     std::optional<Error> error;
@@ -77,18 +84,19 @@ std::int64_t DebugSession::stepInTargets(InspectionDone done) {
         else {
             generation = m_state->generation;
             frame = m_state->currentFrame->id;
+            thread = m_state->currentThread;
             m_state->stepTargets.clear();
         }
     }
     if (error) { done(std::unexpected(*error)); return 0; }
     return m_state->send("stepInTargets", rpc::Json::object().set("frameId", frame),
-        [weak = std::weak_ptr<State>(m_state), generation, frame, done = std::move(done)](Result<rpc::Json> body) {
+        [weak = std::weak_ptr<State>(m_state), generation, frame, thread, done = std::move(done)](Result<rpc::Json> body) {
             auto state = weak.lock();
             bool valid = false;
             if (state) {
                 LockGuard lock(state->mutex);
                 valid = state->state == DebugState::Stopped && state->generation == generation &&
-                        state->currentFrame && state->currentFrame->id == frame;
+                        state->currentFrame && state->currentFrame->id == frame && state->currentThread == thread;
                 if (valid && body) {
                     state->stepTargets.clear();
                     if (const auto* targets = body->find("targets"))

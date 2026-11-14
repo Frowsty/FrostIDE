@@ -459,6 +459,10 @@ void DebugToolWindow::wireControllerSignals() {
         }
     });
     connect(&m_controller, &DebugController::frameSelected, this, [this] {
+        if (m_memoryAddressInput && m_controller.selectedFrame())
+            m_memoryAddressInput->setText(qs(m_controller.selectedFrame()->instructionPointerReference));
+        if (m_disassemblyTree) m_disassemblyTree->clear();
+        if (m_memoryView) m_memoryView->clear();
         const int row = m_frames->selectedRow();
         if (row >= 0) {
             const QSignalBlocker blocker(m_framesView->selectionModel());
@@ -502,6 +506,11 @@ void DebugToolWindow::updateActions() {
     if (m_readMemoryButton != nullptr) {
         m_readMemoryButton->setEnabled(paused && m_controller.session() && m_controller.session()->capabilities().supportsReadMemoryRequest);
         m_readMemoryButton->setToolTip(QStringLiteral("Requires adapter memory-read support"));
+    }
+    if (!paused) {
+        if (m_disassemblyTree) m_disassemblyTree->clear();
+        if (m_memoryView) m_memoryView->clear();
+        if (m_memoryAddressInput) m_memoryAddressInput->clear();
     }
     if (live && !paused) {
         m_reason->setText(m_controller.statusText());

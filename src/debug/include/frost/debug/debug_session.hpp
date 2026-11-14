@@ -360,6 +360,7 @@ public:
     [[nodiscard]] Result<void> next();
     [[nodiscard]] Result<void> stepIn();
     // A target ID must come from stepInTargets for this stop and selected frame.
+    [[nodiscard]] Result<void> stepInstruction(bool into = true);
     [[nodiscard]] Result<void> stepIntoTarget(std::int64_t targetId);
     using InspectionDone = std::function<void(Result<rpc::Json>)>;
     // Capability-gated stopped inspection; references expire on resume, stop or selection change.

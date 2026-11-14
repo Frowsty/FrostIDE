@@ -54,6 +54,12 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     auto* registers = new QTreeWidget(this);
     registers->setObjectName(QStringLiteral("debugRegisters"));
     registers->setHeaderLabels({QStringLiteral("Register"), QStringLiteral("Value"), QStringLiteral("Type")});
+    auto* instruction = new QPushButton(QStringLiteral("Step one instruction"), this);
+    connect(instruction, &QPushButton::clicked, this, [&controller, status] {
+        if (!controller.session()) return;
+        if (auto result = controller.session()->stepInstruction(); !result)
+            status->setText(QString::fromStdString(result.error().message()));
+    });
     auto* loadRegisters = new QPushButton(QStringLiteral("Load registers"), this);
     auto* form = new QFormLayout;
     auto* reference = m_reference = new QLineEdit(this);
@@ -72,9 +78,10 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     layout->addWidget(status);
     layout->addWidget(hex);
     layout->addWidget(refresh); layout->addWidget(calls); layout->addWidget(step);
+    layout->addWidget(instruction);
     layout->addWidget(loadRegisters); layout->addWidget(registers, 1);
     layout->addLayout(form); layout->addWidget(info); layout->addWidget(install); layout->addWidget(clear);
-    auto update = [&controller, status, refresh, calls, step, loadRegisters, registers, info, install, clear, access, dataId, selection, reference, name, hex] {
+    auto update = [&controller, status, refresh, calls, step, loadRegisters, registers, info, install, clear, access, dataId, selection, reference, name, hex, instruction] {
         ++*selection; reference->clear(); name->clear();
         calls->clear(); registers->clear(); access->clear(); dataId->clear();
         const auto* session = controller.session();
@@ -83,6 +90,7 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
         hex->setToolTip(QStringLiteral("Requires debugger value formatting support"));
         const bool stopped = session && controller.paused();
         const bool mutableStop = stopped && !controller.readOnlySession();
+        instruction->setEnabled(mutableStop && caps.supportsSteppingGranularity);
         refresh->setEnabled(mutableStop && caps.supportsStepInTargetsRequest);
         step->setEnabled(false);
         loadRegisters->setEnabled(stopped && controller.selectedFrame().has_value());

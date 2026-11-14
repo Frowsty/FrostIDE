@@ -76,5 +76,40 @@ TEST(DebugDepthSession, SelectedCallUsesAdapterIdAndExpiredTargetIsRejected) {
     EXPECT_EQ(adapter.argumentsOf("stepIn").front().integerAt("targetId"), 73);
     EXPECT_EQ(adapter.argumentsOf("stepIn").front().integerAt("threadId"), 1);
 }
+TEST(DebugDepthSession, HardwareBreakpointResponseKeepsAdapterVerificationAndOpaqueDataId) {
+    FakeDebugAdapter adapter;
+    const auto path = test::workPath("watch.cpp");
+    scriptProgram(adapter, FakeProgram{.sourcePath = path, .codeLines = {10}});
+    adapter.on("initialize", [](const rpc::Json&) { return FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("supportsConfigurationDoneRequest", true).set("supportsDataBreakpoints", true)}; });
+    adapter.on("dataBreakpointInfo", [](const rpc::Json&) { return FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("dataId", "opaque:heap/9").set("description", "obj.count")
+            .set("accessTypes", rpc::Json::array({"write", "readWrite"})).set("canPersist", false)}; });
+    adapter.on("setDataBreakpoints", [](const rpc::Json&) { return FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("breakpoints", rpc::Json::array({rpc::Json::object()
+            .set("verified", false).set("message", "No hardware slots available")}))}; });
+    auto session = DebugSession::start(test::fakeFactory(adapter), rpc::Json::object(), {{path, {{1, 10}}}}, {});
+    ASSERT_TRUE(waitUntil([&] { return session->selectedFrame().has_value(); }));
+    std::promise<Result<rpc::Json>> info;
+    auto infoResult = info.get_future();
+    session->dataBreakpointInfo(100, "count", [&](Result<rpc::Json> result) { info.set_value(std::move(result)); });
+    ASSERT_EQ(infoResult.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    auto body = infoResult.get(); ASSERT_TRUE(body);
+    EXPECT_EQ(body->stringAt("dataId"), "opaque:heap/9");
+    auto list = rpc::Json::array({rpc::Json::object().set("dataId", body->stringAt("dataId"))
+        .set("accessType", "write")});
+    std::promise<Result<rpc::Json>> configured;
+    auto configuredResult = configured.get_future();
+    session->setDataBreakpoints(std::move(list), [&](Result<rpc::Json> result) { configured.set_value(std::move(result)); });
+    ASSERT_EQ(configuredResult.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    auto response = configuredResult.get(); ASSERT_TRUE(response);
+    ASSERT_NE(response->find("breakpoints"), nullptr);
+    const auto result = dap::parseBreakpoint(response->find("breakpoints")->items().front());
+    EXPECT_FALSE(result.verified);
+    EXPECT_EQ(result.message, "No hardware slots available");
+    EXPECT_EQ(adapter.argumentsOf("dataBreakpointInfo").front().integerAt("variablesReference"), 100);
+    EXPECT_EQ(adapter.argumentsOf("dataBreakpointInfo").front().stringAt("name"), "count");
+}
+
 }
 }
