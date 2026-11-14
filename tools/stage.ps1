@@ -142,7 +142,7 @@ if (-not $SkipBuild) {
 }
 
 $binDir = Join-Path $BuildDir "src\app\$Config"
-foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
+foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $binDir $name))) { Fail "the build tree has no $name in $binDir" }
 }
 $visualizers = Join-Path $binDir 'visualizers'
@@ -268,7 +268,7 @@ $script:ownedArchive = $symbolArchive
 if (-not $script:destinationExisted) { [void][System.IO.Directory]::CreateDirectory($Destination) }
 
 # 3. FrostIDE's own files.
-foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
+foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
 }
 if ($asanRuntime) {

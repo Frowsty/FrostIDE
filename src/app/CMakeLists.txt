@@ -199,6 +199,15 @@ if(WIN32)
     frost_add_executable(frost_held_read LAYER app SOURCES src/mono_held_read_main.cpp)
 endif()
 
+function(frost_deploy_clang_platform target)
+    # Copy, never link, the isolated /MT LLVM engine into the application's runtime directory.
+    add_custom_target(frost_platform_engine
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:frost-clang> $<TARGET_FILE_DIR:${target}>
+        DEPENDS frost-clang VERBATIM)
+    add_dependencies(${target} frost_platform_engine)
+endfunction()
+
 if(NOT WIN32)
     frost_add_executable(frost LAYER app
         SOURCES src/main.cpp
@@ -215,6 +224,7 @@ if(NOT WIN32)
             ${FROST_SOURCE_DIR}/assets/visualizers $<TARGET_FILE_DIR:frost>/visualizers
         VERBATIM)
     add_dependencies(frost frost_visualizers)
+    frost_deploy_clang_platform(frost)
     return()
 endif()
 
@@ -273,6 +283,7 @@ if(FROST_ASAN_RUNTIME_DLL)
 endif()
 # Building frost builds the DLL it loads.
 add_dependencies(frost frost_app_shared)
+frost_deploy_clang_platform(frost)
 add_dependencies(frost frost-dbgeng-dap)
 # The Windows helper uses the locally installed VS MSBuild assemblies at runtime. Build it with
 # the pinned .NET SDK in a private profile; it does not redistribute those VS assemblies.

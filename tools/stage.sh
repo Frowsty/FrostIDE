@@ -106,7 +106,7 @@ fi
 
 # 2. The inputs, before the destination is touched.
 bin_dir="$build_dir/src/app/$config"
-for name in frost crashpad_handler; do
+for name in frost frost-clang crashpad_handler; do
     [[ -f "$bin_dir/$name" ]] || fail "the build tree has no $name in $bin_dir"
 done
 [[ -d "$bin_dir/resources" ]] || fail "the build tree has no resources in $bin_dir"
@@ -143,7 +143,7 @@ else
 fi
 
 # 4. FrostIDE's files and licences (the vendored sources' LICENSE files, named as stage.ps1 does).
-cp -- "$bin_dir/frost" "$bin_dir/crashpad_handler" "$dest/" || fail "cannot copy frost"
+cp -- "$bin_dir/frost" "$bin_dir/frost-clang" "$bin_dir/crashpad_handler" "$dest/" || fail "cannot copy frost"
 cp -R -- "$bin_dir/resources" "$dest/resources" || fail "cannot copy the resources"
 cp -- "$REPO/LICENSE" "$REPO/NOTICE" "$dest/" || fail "cannot copy the licences"
 mkdir -p -- "$dest/licenses"

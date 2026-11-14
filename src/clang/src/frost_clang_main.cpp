@@ -62,6 +62,7 @@ public:
     void initializeLSP(clang::clangd::LSPBinder& bind, const llvm::json::Object& /*clientCaps*/,
                        llvm::json::Object& serverCaps) override {
         serverCaps["frostClangFeatureModule"] = llvm::json::Object{
+            {"schema", 1},
             {"engine", "frost-clang"},
             {"llvmVersion", LLVM_VERSION_STRING},
             {"methods", llvm::json::Array{"frost/clangInfo", "frost/spikePing"}},
@@ -228,6 +229,13 @@ private:
 };
 
 std::string detectClangResourceDir() {
+    static int executableAnchor = 0;
+    llvm::SmallString<256> bundled(llvm::sys::fs::getMainExecutable("frost-clang", &executableAnchor));
+    llvm::sys::path::remove_filename(bundled);
+    llvm::sys::path::append(bundled, std::string("llvm-") + LLVM_VERSION_STRING, "lib", "clang",
+                            std::to_string(LLVM_VERSION_MAJOR));
+    if (llvm::sys::fs::is_directory(bundled))
+        return std::string(bundled.str());
     if (const char* llvmRoot = std::getenv("FROST_LLVM_ROOT"); llvmRoot != nullptr && *llvmRoot != '\0') {
         llvm::SmallString<256> candidate(llvmRoot);
         llvm::sys::path::append(candidate, "lib", "clang", std::to_string(LLVM_VERSION_MAJOR));
@@ -345,6 +353,22 @@ int main(int argc, char* argv[]) {
     }
     if (argc >= 2 && std::string_view(argv[1]) == "--rewrite-symbol") {
         return runSymbolRewriter(argc, argv);
+    }
+    // clangdMain would otherwise search lib/clang relative to the helper, while packaging keeps
+    // the pinned resource directory under llvm-<version>. Preserve an explicit caller override.
+    bool explicitResource = false;
+    for (int index = 1; index < argc; ++index) {
+        const llvm::StringRef argument(argv[index]);
+        explicitResource |= argument == "--resource-dir" || argument == "-resource-dir" ||
+                            argument.starts_with("--resource-dir=") || argument.starts_with("-resource-dir=");
+    }
+    const auto resource = detectClangResourceDir();
+    if (!explicitResource && !resource.empty()) {
+        std::string option = "--resource-dir=" + resource;
+        std::vector<char*> arguments(argv, argv + argc);
+        arguments.push_back(option.data());
+        arguments.push_back(nullptr);
+        return clang::clangd::clangdMain(argc + 1, arguments.data());
     }
     return clang::clangd::clangdMain(argc, argv);
 }

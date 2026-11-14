@@ -40,6 +40,7 @@ class StageShTest(TempDirTestCase):
         bin_dir.mkdir(parents=True)
         shutil.copyfile("/bin/true", bin_dir / "frost")
         (bin_dir / "frost").chmod(0o755)
+        self._executable(bin_dir / "frost-clang", b"isolated LLVM engine fixture")
         self._executable(bin_dir / "crashpad_handler", b"\x7fELF crashpad fixture")
         (bin_dir / "resources" / "themes").mkdir(parents=True)
         (bin_dir / "resources" / "themes" / "glacier-dark.ftheme").write_bytes(b"theme fixture")
@@ -72,7 +73,7 @@ class StageShTest(TempDirTestCase):
         result = self._stage(build, sdk, destination)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"stage: ok {destination}", result.stdout)
-        for name in ("frost", "crashpad_handler", "resources/themes/glacier-dark.ftheme", "LICENSE", "NOTICE",
+        for name in ("frost", "frost-clang", "crashpad_handler", "resources/themes/glacier-dark.ftheme", "LICENSE", "NOTICE",
                      "licenses/luals-LICENSE.txt", "licenses/tree-sitter-LICENSE",
                      "unity/com.frostide.editor/package.json",
                      f"{LLVM}/bin/clangd", f"{LLVM}/lib/clang/23/include/stddef.h", f"{LLDB}/bin/lldb-dap",
