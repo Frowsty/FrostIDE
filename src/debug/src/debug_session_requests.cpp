@@ -129,8 +129,9 @@ std::int64_t DebugSession::setThreadFrozen(std::int64_t threadId, bool frozen, I
             auto self = weak.lock();
             if (!self) { done(fail(ErrorCode::Cancelled, "Debug session ended")); return; }
             if (!body) { done(std::move(body)); return; }
-            if (body->integerAt("threadId") != threadId || !body->boolAt("frozen")) {
-                done(fail(ErrorCode::Corrupt, "Adapter omitted the actual thread freeze state")); return;
+            if (body->integerAt("threadId") != threadId ||
+                body->boolAt("operationApplied") != true || body->boolAt("commandSucceeded") != true) {
+                done(fail(ErrorCode::Corrupt, "Adapter did not confirm the thread command completed")); return;
             }
             std::uint64_t epoch = 0;
             { LockGuard lock(self->mutex); epoch = self->generation; }

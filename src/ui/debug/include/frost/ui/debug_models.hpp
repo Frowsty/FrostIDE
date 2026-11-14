@@ -80,6 +80,8 @@ public:
     [[nodiscard]] bool isLoadMoreRow(const QModelIndex& index) const;
     // The value shown at `index` (Copy Value).
     [[nodiscard]] QString valueAt(const QModelIndex& index) const;
+    [[nodiscard]] QString expressionAt(const QModelIndex& index) const;
+    [[nodiscard]] QString memoryReferenceAt(const QModelIndex& index) const;
     [[nodiscard]] QString nameAt(const QModelIndex& index) const;
     [[nodiscard]] std::int64_t parentReferenceAt(const QModelIndex& index) const;
     [[nodiscard]] bool isVariableRow(const QModelIndex& index) const;

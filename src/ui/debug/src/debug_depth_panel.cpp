@@ -26,13 +26,15 @@ auto deliver(DebugController& controller, QWidget* owner, Done done, bool select
     QPointer<QWidget> guard(owner);
     const auto generation = controller.sessionGeneration();
     const auto frame = controller.selectedFrame();
+    const auto thread = controller.selectedThread();
     const auto epoch = controller.session() ? controller.session()->inspectionGeneration() : 0;
-    return [guard, &controller, generation, epoch, frame, selectionBound, done = std::move(done)](Result<T> result) mutable {
+    return [guard, &controller, generation, epoch, frame, thread, selectionBound, done = std::move(done)](Result<T> result) mutable {
         if (!guard) return;
-        QMetaObject::invokeMethod(guard, [guard, &controller, generation, epoch, frame, selectionBound, done, result = std::move(result)]() mutable {
+        QMetaObject::invokeMethod(guard, [guard, &controller, generation, epoch, frame, thread, selectionBound, done, result = std::move(result)]() mutable {
             if (!guard || controller.sessionGeneration() != generation || !controller.session()) return;
             if (selectionBound && (!controller.paused() || controller.session()->inspectionGeneration() != epoch)) return;
             const auto current = controller.selectedFrame();
+            if (selectionBound && controller.selectedThread() != thread) return;
             if (selectionBound && (bool(current) != bool(frame) || (frame && current->id != frame->id))) return;
             done(std::move(result));
         }, Qt::QueuedConnection);
@@ -65,10 +67,12 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
     auto setFrozen = [this, &controller, status](bool frozen) {
         if (!controller.session() || !controller.selectedThread()) return;
         controller.session()->setThreadFrozen(*controller.selectedThread(), frozen, deliver(controller, this,
-            [status](Result<rpc::Json> body) {
+            [status, frozen](Result<rpc::Json> body) {
                 if (!body) { status->setText(QString::fromStdString(body.error().message())); return; }
-                status->setText(body->boolAt("frozen").value_or(false)
-                    ? QStringLiteral("Adapter reports the thread is frozen.") : QStringLiteral("Adapter reports the thread is thawed."));
+                if (const auto state = body->boolAt("frozen"))
+                    status->setText(*state ? QStringLiteral("Adapter reports the thread is frozen.") : QStringLiteral("Adapter reports the thread is thawed."));
+                else status->setText(frozen ? QStringLiteral("Freeze command completed; current freeze state is unavailable.")
+                                           : QStringLiteral("Thaw command completed; current freeze state is unavailable."));
             }, false));
     };
     connect(freeze, &QPushButton::clicked, this, [setFrozen] { setFrozen(true); });
@@ -116,7 +120,7 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
         install->setEnabled(false); clear->setEnabled(mutableStop && caps.supportsDataBreakpoints);
         status->setText(QStringLiteral("Unavailable actions are disabled for this debugger. "
             "Select a variable and choose Watch Hardware Access to configure a hardware watchpoint. "
-            "Freeze and thaw are available only when the debugger can report the actual thread state."));
+            "Freeze and thaw require debugger support; thread state is shown only when the debugger reports it."));
     };
     connect(&controller, &DebugController::stateChanged, this, update);
     connect(&controller, &DebugController::frameSelected, this, update);

@@ -131,6 +131,16 @@ QTreeView* makeVariablesView(QWidget* parent, VariablesModel* model, DebugToolWi
                 QObject::connect(setVal, &QAction::triggered, owner,
                                  [owner, view, model, index] { owner->promptSetVariableValue(view, model, index); });
             }
+            if (owner && !isWatchesView && !model->expressionAt(index).isEmpty()) {
+                const QString expression = model->expressionAt(index);
+                menu.addAction(QStringLiteral("Pin as Watch"), owner,
+                    [owner, expression] { owner->watchesModel()->addWatch(expression); });
+            }
+            if (owner && !model->memoryReferenceAt(index).isEmpty()) {
+                const QString reference = model->memoryReferenceAt(index);
+                menu.addAction(QStringLiteral("View Memory"), owner,
+                    [owner, reference] { owner->inspectMemoryReference(reference); });
+            }
             if (isWatchesView && model->isWatchRoot(index)) {
                 const int row = index.row();
                 QAction* rmWatch = menu.addAction(QStringLiteral("Remove Watch"));
@@ -852,6 +862,14 @@ void DebugToolWindow::onFrameActivated(int row) {
     if (id.isValid() && id.toLongLong() >= 0) {
         m_controller.selectFrame(id.toLongLong());
     }
+}
+
+void DebugToolWindow::inspectMemoryReference(const QString& reference) {
+    if (!m_controller.paused() || reference.isEmpty()) return;
+    m_memoryAddressInput->setText(reference);
+    if (m_memoryView && m_memoryView->parentWidget())
+        m_tabs->setCurrentWidget(m_memoryView->parentWidget()->parentWidget());
+    requestMemoryDump();
 }
 
 void DebugToolWindow::watchHardwareAccess(VariablesModel* model, const QModelIndex& index) {

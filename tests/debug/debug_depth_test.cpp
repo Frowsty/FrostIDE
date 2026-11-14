@@ -121,5 +121,33 @@ TEST(DebugDepthSession, HardwareBreakpointResponseKeepsAdapterVerificationAndOpa
     EXPECT_EQ(adapter.argumentsOf("dataBreakpointInfo").front().stringAt("name"), "count");
 }
 
+TEST(DebugDepthSession, FreezeReceiptDoesNotInventPersistentThreadState) {
+    FakeDebugAdapter adapter;
+    const auto path = test::workPath("threads.cpp");
+    scriptProgram(adapter, FakeProgram{.sourcePath = path, .codeLines = {10}});
+    adapter.on("initialize", [](const rpc::Json&) { return FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("supportsConfigurationDoneRequest", true).set("frostSupportsThreadFreeze", true)}; });
+    adapter.on("frost.setThreadFrozen", [](const rpc::Json& arguments) { return FakeDebugAdapter::Reply{.body =
+        rpc::Json::object().set("threadId", *arguments.integerAt("threadId"))
+            .set("operationApplied", true).set("commandSucceeded", true)}; });
+    auto session = DebugSession::start(test::fakeFactory(adapter), rpc::Json::object(), {{path, {{1, 10}}}}, {});
+    ASSERT_TRUE(waitUntil([&] { return session->selectedFrame().has_value(); }));
+    std::promise<Result<rpc::Json>> receipt;
+    auto result = receipt.get_future();
+    session->setThreadFrozen(2, true, [&](Result<rpc::Json> body) { receipt.set_value(std::move(body)); });
+    ASSERT_EQ(result.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    auto body = result.get(); ASSERT_TRUE(body);
+    EXPECT_FALSE(body->boolAt("frozen").has_value());
+    EXPECT_EQ(adapter.argumentsOf("frost.setThreadFrozen").front().integerAt("threadId"), 2);
+    EXPECT_EQ(adapter.argumentsOf("frost.setThreadFrozen").front().boolAt("frozen"), true);
+    for (const auto& thread : session->threads()) EXPECT_FALSE(thread.frozen.has_value());
+    bool rejected = false;
+    session->setThreadFrozen(999, false, [&](Result<rpc::Json> response) {
+        rejected = true; ASSERT_FALSE(response); EXPECT_EQ(response.error().code(), ErrorCode::NotFound);
+    });
+    EXPECT_TRUE(rejected);
+    EXPECT_EQ(adapter.argumentsOf("frost.setThreadFrozen").size(), 1U);
+}
+
 }
 }

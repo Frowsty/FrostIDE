@@ -77,6 +77,7 @@ public:
 
     // Copies the value of the Variables or Watches row with focus to the clipboard.
     void copySelectedValue();
+    void inspectMemoryReference(const QString& reference);
     void watchHardwareAccess(VariablesModel* model, const QModelIndex& index);
     [[nodiscard]] bool readOnlySession() const;
     // Prompts to modify the value of the selected variable row.

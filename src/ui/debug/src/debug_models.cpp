@@ -118,6 +118,8 @@ struct VariablesModel::Node {
     QString name;
     QString value;
     QString type;
+    QString evaluateName;
+    QString memoryReference;
     bool error = false;
     std::int64_t reference = 0;
     std::int64_t indexed = 0;
@@ -309,6 +311,7 @@ void VariablesModel::evaluateWatch(Node& node) {
     node.fetched = false;
     node.fetching = false;
     node.reference = 0;
+    node.memoryReference.clear();
     if (!m_controller.paused()) {
         node.value = m_controller.debugging() ? QStringLiteral("(the program is running)")
                                               : QStringLiteral("(no debug session)");
@@ -334,6 +337,8 @@ void VariablesModel::evaluateWatch(Node& node) {
         if (result) {
             target->value = QString::fromStdString(result->value);
             target->type = QString::fromStdString(result->type);
+            target->evaluateName = QString::fromStdString(result->evaluateName);
+            target->memoryReference = QString::fromStdString(result->memoryReference);
             target->reference = result->variablesReference;
             target->indexed = result->indexedVariables;
             target->error = false;
@@ -394,6 +399,8 @@ void VariablesModel::addChildren(std::uint64_t id, Result<debug::VariableList> l
             child->name = QString::fromStdString(variable.name);
             child->value = QString::fromStdString(variable.value);
             child->type = QString::fromStdString(variable.type);
+            child->evaluateName = QString::fromStdString(variable.evaluateName);
+            child->memoryReference = QString::fromStdString(variable.memoryReference);
             child->reference = variable.variablesReference;
             child->indexed = variable.indexedVariables;
             rows.push_back(std::move(child));
@@ -434,6 +441,13 @@ bool VariablesModel::isLoadMoreRow(const QModelIndex& index) const {
 
 QString VariablesModel::valueAt(const QModelIndex& index) const {
     return index.isValid() ? nodeFor(index)->value : QString();
+}
+
+QString VariablesModel::expressionAt(const QModelIndex& index) const {
+    return index.isValid() ? nodeFor(index)->evaluateName : QString();
+}
+QString VariablesModel::memoryReferenceAt(const QModelIndex& index) const {
+    return index.isValid() ? nodeFor(index)->memoryReference : QString();
 }
 
 QString VariablesModel::nameAt(const QModelIndex& index) const {
