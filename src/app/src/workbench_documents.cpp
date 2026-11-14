@@ -636,6 +636,12 @@ void Workbench::showSaveAsDialog() {
 
 void Workbench::rebindRenamedDocument(const std::string& oldPath, const std::string& newPath) {
     document::FileDocument* doc = m_documents->find(oldPath);
+    // A settled refactoring has already renamed the SaveManager document. The view still
+    // carries the old path until this callback publishes the change to tabs and language servers.
+    if (doc == nullptr) {
+        if (auto* view = m_editors->find(oldPath); view && view->document().path() == newPath)
+            doc = &view->document();
+    }
     if (doc == nullptr) {
         if (m_nav) {
             m_nav->notifyPathRenamed(oldPath, newPath);
@@ -652,7 +658,8 @@ void Workbench::rebindRenamedDocument(const std::string& oldPath, const std::str
     m_liveMarkers.erase(lang::documentKey(oldPath));
     std::erase(m_discarded, oldPath);
 
-    (void)m_documents->renameDocument(*doc, newPath);
+    if (doc->path() != newPath)
+        (void)m_documents->renameDocument(*doc, newPath);
     m_editors->renamePath(oldPath, newPath);
 
     for (DocumentEditorView* peer : m_editors->views()) {

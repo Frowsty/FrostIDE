@@ -13,6 +13,7 @@
 #include "frost/lang/uri.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/lang/refactoring_preview.hpp"
+#include "frost/text/text_file.hpp"
 
 #include "language_controller_internal.hpp"
 
@@ -226,7 +227,13 @@ void LanguageController::performAcceptedRename(std::string path, fl::LspPosition
                             return snap.text();
                         }
                     }
-                    return guard->m_services.fs.readFile(path);
+                    auto raw = guard->m_services.fs.readFile(path);
+                    if (!raw) return std::unexpected(std::move(raw.error()));
+                    auto decoded = text::decodeTextFile(std::move(*raw));
+                    if (!decoded) return std::unexpected(std::move(decoded.error()));
+                    if (!decoded->encoding.fidelity.lossless())
+                        return fail(ErrorCode::Corrupt, "Cannot refactor a file with a lossy text encoding");
+                    return decoded->buffer.current().text();
                 };
                 auto* dialog = new RefactoringPreview(std::move(*edit), m_services.server.encoding(),
                                                        std::move(read), m_services.host.editorWidget());

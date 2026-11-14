@@ -95,7 +95,7 @@ set(_frost_workbench_definitions
     FROST_BUILD_FIXTURES="${FROST_SOURCE_DIR}/tests/build/fixtures"
     FROST_APP_WORK_ROOT="${CMAKE_CURRENT_BINARY_DIR}/workbench-work")
 frost_add_test(app_workbench_tests QT
-    SOURCES workbench_test.cpp workbench_terminal_test.cpp engine_locator_test.cpp engine_native_debug_test.cpp workbench_find_test.cpp project_edit_process_test.cpp update_check_test.cpp update_readiness_test.cpp update_state_test.cpp
+    SOURCES workbench_test.cpp workbench_refactoring_test.cpp workbench_terminal_test.cpp engine_locator_test.cpp engine_native_debug_test.cpp workbench_find_test.cpp project_edit_process_test.cpp update_check_test.cpp update_readiness_test.cpp update_state_test.cpp
             multi_session_debug_test.cpp engine_unit_tests_window_test.cpp
             engine_unit_tests_source_test.cpp engine_run_debug_test.cpp
             engine_dump_controller_test.cpp engine_crash_observer_test.cpp engine_mixed_debug_test.cpp

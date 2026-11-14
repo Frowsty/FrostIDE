@@ -88,6 +88,7 @@
 #include "frost/lang/managed_service.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/workspace_edit.hpp"
+#include "frost/document/refactoring_transaction.hpp"
 #include "frost/project/directory_roles.hpp"
 #include "frost/project/project_edit.hpp"
 #include "frost/project/project_host.hpp"
@@ -360,6 +361,8 @@ struct ManagedDebugSelection {
 struct WorkbenchOptions {
     // Per-user project edit lineage directory (absolute); empty disables project edits.
     std::string projectEditStateDirectory;
+    // Owner-private refactoring recovery/store preference; actual stores follow target volumes.
+    std::string refactoringStateDirectory;
     // Packaged Windows ProjectHost executable; empty uses project-host beside the application.
     std::string projectEditHostPath;
     // This process's hot-exit journal and the recovery scan (absolute); "" disables hot exit.
@@ -610,6 +613,15 @@ public:
     [[nodiscard]] input::ActionRegistry& registry() noexcept { return m_registry; }
     [[nodiscard]] input::KeymapService& keymap() noexcept { return *m_keymap; }
     [[nodiscard]] document::SaveManager& documents() noexcept { return *m_documents; }
+    // REF-1: all source/project participants settle before views are notified. PendingRecovery is
+    // committed work, not an unapplied failure; callers must not resubmit it. UI thread only.
+    [[nodiscard]] Result<document::RefactoringOutcome> applyRefactoring(const document::RefactoringPlan& plan);
+    [[nodiscard]] Result<document::RefactoringOutcome> undoRefactoring();
+    [[nodiscard]] Result<document::RefactoringOutcome> redoRefactoring();
+    [[nodiscard]] Result<document::RefactoringOutcome> resumeRefactoring();
+    [[nodiscard]] bool canUndoRefactoring() const noexcept;
+    [[nodiscard]] bool canRedoRefactoring() const noexcept;
+    [[nodiscard]] bool refactoringPending() const noexcept;
     [[nodiscard]] ui::nav::DocumentRegistry& documentRegistry() noexcept { return *m_documentRegistry; }
     // The real editors (one view per tab, inside the registry's banner view).
     [[nodiscard]] DocumentEditorFactory& editors() noexcept { return *m_editors; }
@@ -755,6 +767,10 @@ private:
 
     // Construction steps.
     void registerActions();
+    void registerRefactoringActions();
+    void publishRefactoringOutcome(const document::RefactoringOutcome& outcome);
+    [[nodiscard]] bool refactoringTrusted(TransactionId token) const;
+    [[nodiscard]] Result<document::RefactoringOutcome> runRefactoringHistory(TransactionId token, bool redo);
     void createBuildService();
     void createRunService();
     // Run configurations (RUN-2/RUN-3, workbench_run_configurations.cpp): the generated ones of the
@@ -978,6 +994,16 @@ private:
     std::optional<storage::HotExitJournal> m_journal;
     std::optional<storage::LocalHistory> m_history;
     std::unique_ptr<document::SaveManager> m_documents;
+    std::unique_ptr<document::RefactoringCoordinator> m_refactoring;
+    struct RefactoringPaths {
+        TransactionId token;
+        std::vector<document::FileRename> renames;
+        std::vector<std::string> mutationPaths;
+        bool applied = false;
+    };
+    std::vector<RefactoringPaths> m_refactoringPaths;
+    TransactionId m_pendingRefactoring;
+    TransactionId m_refactoringAdmissionToken;
     std::unique_ptr<document::AutosaveController> m_autosave;
     std::unique_ptr<ui::nav::SessionStore> m_sessions;
     std::unique_ptr<ui::nav::DocumentRegistry> m_documentRegistry;
