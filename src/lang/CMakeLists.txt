@@ -48,6 +48,8 @@ frost_add_library(lang LAYER lang
         src/frost_engine_lua.cpp
         src/fuzzy.cpp
         src/inspection.cpp
+        src/inspection_scope_fixes.cpp
+        src/inspection_scope_runner.cpp
         src/jsonrpc_connection.cpp
         src/jsonrpc_framing.cpp
         src/lsp_client.cpp

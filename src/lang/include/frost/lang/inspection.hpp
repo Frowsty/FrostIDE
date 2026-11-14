@@ -111,6 +111,8 @@ struct InspectionProfile {
 [[nodiscard]] Result<std::vector<CompileCommandEntry>> loadCompileCommands(io::IFileSystem& fs,
                                                                            std::string_view compileCommandsPathOrDir);
 
+[[nodiscard]] Result<std::vector<CompileCommandEntry>> parseInspectionCompileCommands(std::string_view bytes);
+
 // Resolves which translation units from `compile_commands.json` belong to `scope`.
 [[nodiscard]] std::vector<std::string> resolveInspectionScopeFiles(std::span<const CompileCommandEntry> commands,
                                                                    const InspectionScope& scope);
