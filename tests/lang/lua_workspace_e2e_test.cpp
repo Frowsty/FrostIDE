@@ -18,12 +18,14 @@
 #include "frost/lang/lua_rc.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/lang/templates.hpp"
+#include "frost/lang/navigation.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/sched/thread_pool.hpp"
 #include "frost/text/document.hpp"
 
 #include "support/scratch_dir.hpp"
+#include "../../src/lang/src/timeout.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -409,5 +411,42 @@ TEST(LuaTemplatesReal, SharedLuaExpansionsPassThePinnedServersActualBatchCheck) 
     auto parsed=frost::lang::parseJson(*report); ASSERT_TRUE(parsed);
     if(parsed->isObject()) for(const auto& diagnostics:parsed->items()) for(const auto& diagnostic:diagnostics.items())
         EXPECT_NE(diagnostic.integerAt("severity"),1)<<diagnostic.dump();
+}
+
+namespace {
+frost::sched::Task<frost::Result<std::vector<frost::lang::Location>>> largeTreeDefinition(
+    frost::sched::IScheduler& scheduler,frost::lang::LuaService& service,std::string file) {
+    frost::lang::detail::Deadline deadline(scheduler,5s);
+    co_return co_await frost::lang::requestLocations(service,frost::lang::NavigationTarget::Definition,
+        std::move(file),{0,16},deadline.token());
+}
+}
+TEST(LuaLargeTreeReal, ActualIndexedModuleDefinitionTracksDirtyEditsAndRecordsObservations) {
+    const auto server=pinnedLuaLs();ASSERT_FALSE(server.empty());
+    frost::test::ScratchDir scratch("lua-large-tree");const auto root=scratch.join("workspace"),file=scratch.join("workspace/main.lua");
+    for(unsigned i=0;i<2000;++i)write(scratch.join("workspace/modules/m"+std::to_string(i)+".lua"),"return {value="+std::to_string(i)+"}\n");
+    write(scratch.join("workspace/.luarc.json"),"{\"runtime\":{\"path\":[\"modules/?.lua\"],\"pathStrict\":true}}");
+    const std::string source="local m=require('m1999')\nprint(m.value)\n";write(file,source);
+    auto reactor=frost::io::Reactor::create();ASSERT_TRUE(reactor);
+    frost::sched::ThreadPool pool(frost::sched::ThreadPoolOptions{.workerCount=2});
+    auto options=serviceOptions(server,scratch,root);
+    frost::lang::LuaService service(frost::io::realProcessLauncher(),{**reactor,pool},options);
+    auto document=frost::text::Document::fromUtf8(source);ASSERT_TRUE(document);
+    ASSERT_TRUE(service.openDocument(file,document->text()));const auto start=frost::systemClock().steadyNow();ASSERT_TRUE(service.start());
+    ASSERT_TRUE(waitFor([&]{return service.state()==frost::lang::LuaState::Running;}));
+    const auto resolves=[&](const std::string& expected) {
+        auto locations=pool.spawn(frost::sched::Lane::UserVisible,largeTreeDefinition(pool,service,file)).join();
+        return locations&&std::ranges::any_of(*locations,[&](const auto& location){return frost::lang::documentKey(location.path)==frost::lang::documentKey(expected);});
+    };
+    EXPECT_TRUE(waitFor([&]{return resolves(scratch.join("workspace/modules/m1999.lua"));}));
+    RecordProperty("firstDefinitionNanoseconds",static_cast<std::int64_t>((frost::systemClock().steadyNow()-start).count()));
+    const std::string dirty="local m=require('m0')\nprint(m.value)\n";
+    auto changed=document->replace({frost::ByteOffset{0},frost::ByteOffset{source.size()}},dirty,{});ASSERT_TRUE(changed);
+    const auto before=frost::systemClock().steadyNow();ASSERT_TRUE(service.changeDocument(file,*changed,document->text()));
+    EXPECT_TRUE(waitFor([&]{return resolves(scratch.join("workspace/modules/m0.lua"));}));
+    RecordProperty("dirtyDefinitionNanoseconds",static_cast<std::int64_t>((frost::systemClock().steadyNow()-before).count()));
+    RecordProperty("moduleFiles",2000);
+    EXPECT_EQ(frost::io::realFileSystem().readFile(file).value_or(""),source);
+    pool.spawn(frost::sched::Lane::UserVisible,service.stop()).join();EXPECT_FALSE(service.serverPid());pool.shutdown();
 }
 } // namespace
