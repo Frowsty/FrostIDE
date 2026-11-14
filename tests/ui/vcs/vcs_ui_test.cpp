@@ -157,7 +157,7 @@ struct DiffRig {
         viewer.setDiff(std::move(*diff), QStringLiteral("HEAD"), QStringLiteral("Working copy"));
         QCoreApplication::processEvents();
     }
-    [[nodiscard]] int rightLine() const { return viewer.rightPane()->textCursor().blockNumber(); }
+    [[nodiscard]] int rightLine() const { return viewer.rightPane()->status().line - 1; }
     void press(int key, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
         QKeyEvent down(QEvent::KeyPress, key, modifiers);
         QCoreApplication::sendEvent(viewer.rightPane(), &down);
@@ -165,6 +165,51 @@ struct DiffRig {
 
     DiffViewer viewer;
 };
+
+TEST(DiffViewer, EditableWorkingSideUsesTransactionalHistoryAndRetainsEditsAcrossRefresh) {
+    FROST_REQUIRE_OFFSCREEN();
+    DiffViewer viewer;
+    auto diff = vcs::SideBySideDiff::compute("old\n", "new\n");
+    ASSERT_TRUE(diff);
+    viewer.setDiff(std::move(*diff), "HEAD", "Working copy");
+    std::string applied;
+    viewer.setApplyHandler([&](std::string_view original, std::string_view result) -> Result<void> {
+        EXPECT_EQ(original, "new\n");
+        applied = result;
+        return {};
+    });
+    ASSERT_TRUE(viewer.rightPane()->typeText("edited "));
+    EXPECT_EQ(viewer.rightText(), QStringLiteral("edited new\n"));
+    EXPECT_TRUE(viewer.hasWorkingEdits());
+    auto incoming = vcs::SideBySideDiff::compute("old\n", "external\n");
+    ASSERT_TRUE(incoming);
+    viewer.setDiff(std::move(*incoming), "HEAD", "Working copy");
+    EXPECT_EQ(viewer.rightText(), QStringLiteral("edited new\n"));
+    ASSERT_TRUE(viewer.rightPane()->perform(EditorAction::Undo));
+    EXPECT_EQ(viewer.rightText(), QStringLiteral("new\n"));
+    ASSERT_TRUE(viewer.rightPane()->perform(EditorAction::Redo));
+    ASSERT_TRUE(viewer.applyWorkingCopy());
+    EXPECT_EQ(applied, "edited new\n");
+    EXPECT_FALSE(viewer.hasWorkingEdits());
+}
+
+TEST(DiffViewer, StaleApplyFailureRetainsEditableOutputAndUndoHistory) {
+    FROST_REQUIRE_OFFSCREEN();
+    DiffViewer viewer;
+    auto diff = vcs::SideBySideDiff::compute("base\n", "working\n");
+    ASSERT_TRUE(diff);
+    viewer.setDiff(std::move(*diff), "HEAD", "Working copy");
+    viewer.setApplyHandler([](std::string_view, std::string_view) -> Result<void> {
+        return fail(ErrorCode::Busy, "Source changed");
+    });
+    ASSERT_TRUE(viewer.rightPane()->typeText("resolved "));
+    auto failed = viewer.applyWorkingCopy();
+    ASSERT_FALSE(failed);
+    EXPECT_EQ(failed.error().code(), ErrorCode::Busy);
+    EXPECT_TRUE(viewer.hasWorkingEdits());
+    ASSERT_TRUE(viewer.rightPane()->perform(EditorAction::Undo));
+    EXPECT_EQ(viewer.rightText(), QStringLiteral("working\n"));
+}
 
 TEST(DiffViewer, ShowsBothVersionsWithTheirHighlights) {
     FROST_REQUIRE_OFFSCREEN();
@@ -174,10 +219,10 @@ TEST(DiffViewer, ShowsBothVersionsWithTheirHighlights) {
     EXPECT_EQ(viewer.rightTitle(), QStringLiteral("Working copy"));
     EXPECT_TRUE(viewer.leftPane()->isReadOnly());
     EXPECT_TRUE(viewer.rightPane()->isReadOnly());
-    EXPECT_EQ(viewer.leftPane()->document()->blockCount(), 200);
-    EXPECT_EQ(viewer.rightPane()->document()->blockCount(), 200);
-    EXPECT_EQ(viewer.leftPane()->document()->findBlockByNumber(10).text(), QStringLiteral("line 10"));
-    EXPECT_EQ(viewer.rightPane()->document()->findBlockByNumber(10).text(), QStringLiteral("line ten"));
+    EXPECT_EQ(viewer.leftPane()->document().text().lineCount(), 201U);
+    EXPECT_EQ(viewer.rightPane()->document().text().lineCount(), 201U);
+    EXPECT_EQ(viewer.leftText().split(QLatin1Char('\n')).at(10), QStringLiteral("line 10"));
+    EXPECT_EQ(viewer.rightText().split(QLatin1Char('\n')).at(10), QStringLiteral("line ten"));
 
     ASSERT_EQ(viewer.diff().blocks().size(), 3U);
     EXPECT_EQ(viewer.diff().blocks()[0].kind(), vcs::LineChangeKind::Modified);
@@ -187,10 +232,10 @@ TEST(DiffViewer, ShowsBothVersionsWithTheirHighlights) {
     // added line, plus the changed word.
     EXPECT_EQ(viewer.highlightCount(vcs::DiffSide::Left), 3);
     EXPECT_EQ(viewer.highlightCount(vcs::DiffSide::Right), 3);
-    const QList<QTextEdit::ExtraSelection> right = viewer.rightPane()->extraSelections();
+    const auto right = viewer.rightPane()->decorations();
     bool word = false;
-    for (const QTextEdit::ExtraSelection& selection : right) {
-        word = word || selection.cursor.selectedText() == QStringLiteral("ten");
+    for (const auto& decoration : right) {
+        word = word || viewer.rightPane()->document().text().text(decoration.range) == "ten";
     }
     EXPECT_TRUE(word);
 }
@@ -204,7 +249,7 @@ TEST(DiffViewer, F7AndShiftF7MoveBetweenTheChanges) {
     EXPECT_TRUE(rig.viewer.nextChange());
     EXPECT_EQ(rig.viewer.currentBlock(), std::optional<std::size_t>(1));
     EXPECT_EQ(rig.rightLine(), 50); // The deletion sits before right line 50.
-    EXPECT_EQ(rig.viewer.leftPane()->textCursor().blockNumber(), 50);
+    EXPECT_EQ(rig.viewer.leftPane()->status().line - 1, 50);
     rig.press(Qt::Key_F7);
     EXPECT_EQ(rig.viewer.currentBlock(), std::optional<std::size_t>(2));
     EXPECT_EQ(rig.rightLine(), 120);

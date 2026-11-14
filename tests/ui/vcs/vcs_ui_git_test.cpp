@@ -313,13 +313,13 @@ TEST(GitUiE2E, TheDiffOpensFromTheCommitWindowAndCompareWithHead) {
     ASSERT_TRUE(outcome.has_value());
     ASSERT_TRUE(outcome->has_value()) << outcome->error().describe();
     EXPECT_EQ(viewer.leftTitle(), QStringLiteral("HEAD"));
-    EXPECT_EQ(viewer.leftPane()->toPlainText(), QStringLiteral("int a = 1;\nint b = 2;\nint c = 3;"));
-    EXPECT_EQ(viewer.rightPane()->toPlainText(), QStringLiteral("int a = 1;\nint b = 20;\nint c = 3;\nint d = 4;"));
+    EXPECT_EQ(viewer.leftText(), QStringLiteral("int a = 1;\nint b = 2;\nint c = 3;\n"));
+    EXPECT_EQ(viewer.rightText(), QStringLiteral("int a = 1;\nint b = 20;\nint c = 3;\nint d = 4;\n"));
     ASSERT_EQ(viewer.diff().blocks().size(), 2U);
     EXPECT_EQ(viewer.currentBlock(), std::optional<std::size_t>(0));
-    EXPECT_EQ(viewer.rightPane()->textCursor().blockNumber(), 1);
+    EXPECT_EQ(viewer.rightPane()->status().line - 1, 1);
     EXPECT_TRUE(viewer.nextChange());
-    EXPECT_EQ(viewer.rightPane()->textCursor().blockNumber(), 3);
+    EXPECT_EQ(viewer.rightPane()->status().line - 1, 3);
 
     // The index version of an unversioned file is missing: an empty left side.
     repo.write("fresh.txt", "fresh\n");
@@ -329,7 +329,7 @@ TEST(GitUiE2E, TheDiffOpensFromTheCommitWindowAndCompareWithHead) {
     ASSERT_TRUE(controller->waitForIdle(kWait));
     ASSERT_TRUE(outcome.has_value() && outcome->has_value());
     EXPECT_TRUE(viewer.leftTitle().startsWith(QStringLiteral("Index")));
-    EXPECT_TRUE(viewer.leftPane()->toPlainText().isEmpty());
+    EXPECT_TRUE(viewer.leftText().isEmpty());
     ASSERT_EQ(viewer.diff().blocks().size(), 1U);
     EXPECT_EQ(viewer.diff().blocks()[0].kind(), vcs::LineChangeKind::Added);
 }

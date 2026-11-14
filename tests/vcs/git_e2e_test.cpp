@@ -84,6 +84,43 @@ std::string fixturePath(std::string_view relative) {
     return frost::io::normalizePath(std::string(FROST_VCS_FIXTURE_DIR) + "/" + std::string(relative)).value();
 }
 
+TEST(GitDailyWorkflows, ContinueResolvedRebaseAndRoundTripStashThroughRealGit) {
+    TempRepo repo("daily-rebase-stash");
+    repo.init();
+    repo.write("a.txt", "base\n");
+    repo.commitAll("base");
+    const auto main = trimmed(repo.git({"branch", "--show-current"}));
+    repo.git({"checkout", "-b", "topic"});
+    repo.write("a.txt", "topic\n");
+    repo.commitAll("topic change");
+    repo.git({"checkout", main});
+    repo.write("a.txt", "main\n");
+    repo.commitAll("main change");
+    repo.git({"checkout", "topic"});
+    auto conflict = repo.repository().rebaseBranch(main);
+    ASSERT_FALSE(conflict);
+    ASSERT_FALSE(repo.git({"ls-files", "--unmerged"}).stdoutBytes.empty());
+    repo.write("a.txt", "resolved\n");
+    repo.git({"add", "--", "a.txt"});
+    auto continued = repo.repository().rebaseStep(RebaseStep::Continue);
+    ASSERT_TRUE(continued) << continued.error().describe();
+    repo.git({"merge-base", "--is-ancestor", main, "HEAD"});
+    EXPECT_EQ(repo.read("a.txt"), "resolved\n");
+    repo.write("a.txt", "stashed modification\n");
+    repo.write("untracked.txt", "stashed untracked\n");
+    auto stashed = repo.repository().stashPush("daily work", true);
+    ASSERT_TRUE(stashed) << stashed.error().describe();
+    EXPECT_EQ(repo.read("a.txt"), "resolved\n");
+    EXPECT_FALSE(repo.exists("untracked.txt"));
+    auto applied = repo.repository().stashApply(0, false);
+    ASSERT_TRUE(applied) << applied.error().describe();
+    EXPECT_EQ(repo.read("a.txt"), "stashed modification\n");
+    EXPECT_EQ(repo.read("untracked.txt"), "stashed untracked\n");
+    auto dropped = repo.repository().stashDrop(0);
+    ASSERT_TRUE(dropped) << dropped.error().describe();
+    EXPECT_TRUE(repo.git({"stash", "list"}).stdoutBytes.empty());
+}
+
 TEST(GitCommitChecks, SelectingRenameSourceChecksDestinationBytesToo) {
     TempRepo repo("commit-check-rename");
     repo.init();
