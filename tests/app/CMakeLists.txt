@@ -257,6 +257,12 @@ frost_add_test(app_engine_session_acceptance_tests QT
 frost_configure_engine_corpus_target(app_engine_session_acceptance_tests)
 target_include_directories(app_engine_session_acceptance_tests PRIVATE ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_engine_session_acceptance_tests PRIVATE ${_frost_workbench_definitions})
+if(WIN32)
+    # FER-16 composed acceptance launches the actual read-only dump adapter, never a scripted peer.
+    target_compile_definitions(app_engine_session_acceptance_tests PRIVATE
+        FROST_DBGENG_ADAPTER_PATH="$<TARGET_FILE:frost-dbgeng-dap>")
+    add_dependencies(app_engine_session_acceptance_tests frost-dbgeng-dap)
+endif()
 
 frost_add_test(app_workbench_lua_tests QT
     SOURCES workbench_lua_test.cpp workbench_lua_workspace_test.cpp
