@@ -142,6 +142,8 @@ void Workbench::startProjectEvaluation(const std::string& root) {
             m_explorer->setSolution(m_solution);
     }
     stopProjectEvaluation();
+    if (m_solution && m_solution->approximate())
+        return; // Trust does not make Linux static parsing into an MSBuild evaluation.
     const auto admission = m_services.trust.snapshot(root);
     m_projectTrustRevision = admission.revision;
     std::string configuration;

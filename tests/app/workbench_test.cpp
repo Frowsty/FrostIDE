@@ -3322,4 +3322,38 @@ TEST(Workbench, NoActionPretendsToDebugOneTestOrOpenAServicesWindow) {
     EXPECT_FALSE(rig.window->toolWindows().isVisible(frost::app::kUnitTestsToolWindow));
 }
 
+TEST(Workbench, SolutionLoadPumpsEventsRejectsReentryAndCancelKeepsPreviousProject) {
+    WorkDir dir("solution-load-cancel", "tiny_sln");
+    WorkbenchRig rig(dir);
+    const auto current = dir.join("current");
+    ASSERT_TRUE(frost::io::realFileSystem().createDirectories(current));
+    ASSERT_TRUE(rig.workbench->openPath(current));
+    const auto previousTitle = rig.window->windowTitle();
+    bool eventServiced = false;
+    QTimer::singleShot(0, rig.window.get(), [&] {
+        eventServiced = true;
+        auto nested = rig.workbench->openPath(dir.join("Tiny.sln"));
+        ASSERT_FALSE(nested);
+        EXPECT_EQ(nested.error().code(), frost::ErrorCode::Busy);
+        EXPECT_FALSE(rig.workbench->closeProject()); // Cancels without closing the old project.
+        EXPECT_EQ(rig.window->windowTitle(), previousTitle);
+        EXPECT_EQ(rig.workbench->solution(), nullptr); // No partial tree was published.
+    });
+    auto cancelled = rig.workbench->openPath(dir.join("Tiny.sln"));
+    ASSERT_TRUE(eventServiced);
+    ASSERT_FALSE(cancelled);
+    EXPECT_EQ(cancelled.error().code(), frost::ErrorCode::Cancelled);
+    EXPECT_EQ(rig.window->windowTitle(), previousTitle);
+    EXPECT_EQ(rig.workbench->solution(), nullptr);
+    // The synchronous API still returns the complete final outcome on the next request.
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    ASSERT_NE(rig.workbench->solution(), nullptr);
+    EXPECT_EQ(rig.workbench->solution()->projects().size(), 2U);
+#ifndef _WIN32
+    EXPECT_TRUE(rig.workbench->solution()->approximate());
+    EXPECT_FALSE(rig.workbench->solution()->requireProjectMutation());
+    EXPECT_FALSE(rig.workbench->solution()->requireExecution());
+#endif
+}
+
 } // namespace
