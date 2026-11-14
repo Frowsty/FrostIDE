@@ -17,6 +17,7 @@
 #include "frost/io/path.hpp"
 
 #include <cstddef>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -76,6 +77,7 @@ private:
 struct WildcardLimits {
     std::size_t maxDirectories = 20'000;
     std::size_t maxFiles = 100'000;
+    std::stop_token stop;
 };
 
 struct WildcardExpansion {

@@ -1030,6 +1030,10 @@ Result<void> BuildService::build(BuildAction action, std::optional<project::Proj
     if (!s.solution) {
         return fail(ErrorCode::InvalidArgument, "no solution is open");
     }
+    if (s.solution->approximate()) {
+        if (auto allowed = s.solution->requireExecution(); !allowed)
+            return std::unexpected(allowed.error());
+    }
     if (!s.active) {
         return fail(ErrorCode::InvalidArgument, std::format("{} has no solution configurations", s.solution->name()));
     }
@@ -1117,6 +1121,10 @@ Result<void> BuildService::compile(std::string_view filePath, BuildCompletion on
     }
     if (!s.solution) {
         return fail(ErrorCode::InvalidArgument, "no solution is open");
+    }
+    if (s.solution->approximate()) {
+        if (auto allowed = s.solution->requireExecution(); !allowed)
+            return std::unexpected(allowed.error());
     }
     if (!s.active) {
         return fail(ErrorCode::InvalidArgument, std::format("{} has no solution configurations", s.solution->name()));

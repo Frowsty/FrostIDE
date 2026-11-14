@@ -59,9 +59,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -126,11 +128,35 @@ struct ProjectEvaluationSummary {
     std::size_t itemCount = 0; // Distinct item paths.
 };
 
+// NativeStatic is a literal Windows-reader model, not evaluated MSBuild authority. Linux defaults
+// to an explicitly approximate, read-only project model; source text remains ordinary editable text.
+enum class SolutionModelMode { NativeStatic, ApproximateReadOnly };
+struct SolutionLoadProgress {
+    std::size_t completedProjects = 0;
+    std::size_t totalProjects = 0;
+    std::string projectPath;
+};
+struct SolutionLoadProfile {
+    std::size_t projects = 0;
+    std::size_t cppProjectsRead = 0;
+    std::size_t managedProjectsRead = 0;
+    std::size_t managedDirectoryLists = 0; // Default C# walk calls, not all filesystem operations.
+    std::size_t nodes = 0;
+};
+
 struct SolutionLoadOptions {
     CppHierarchyMode cppHierarchy = CppHierarchyMode::Filters;
     std::vector<std::string> unloadedProjectPaths = {};
     // Evaluated items per project (see the header comment); projects not listed stay static.
     std::vector<EvaluatedProjectItems> evaluated = {};
+#ifdef _WIN32
+    SolutionModelMode mode = SolutionModelMode::NativeStatic;
+#else
+    SolutionModelMode mode = SolutionModelMode::ApproximateReadOnly;
+#endif
+    std::stop_token stop;
+    // Worker-thread progress, never an estimate of time remaining. Must not throw or reenter load.
+    std::function<void(const SolutionLoadProgress&)> progress;
 };
 
 // "C++", "C#", "Visual Basic", "F#", "shared items", "unknown".
@@ -175,6 +201,15 @@ public:
      */
     [[nodiscard]] static Result<SolutionModel> load(io::IFileSystem& fs, std::string_view solutionPath,
                                                     SolutionLoadOptions options = {});
+
+    [[nodiscard]] SolutionModelMode mode() const noexcept { return m_mode; }
+    [[nodiscard]] bool approximate() const noexcept { return m_mode == SolutionModelMode::ApproximateReadOnly; }
+    [[nodiscard]] const SolutionLoadProfile& loadProfile() const noexcept { return m_loadProfile; }
+    // Model edits/execution are unsupported for an approximate solution even after trust. Other
+    // services still apply their own trust/tool checks to native static models.
+    [[nodiscard]] Result<void> requireProjectMutation() const;
+    [[nodiscard]] Result<void> requireExecution() const;
+    [[nodiscard]] std::string_view approximationNotice() const noexcept;
 
     // Pure worker-thread overlay for one successfully evaluated project's item type. Unlisted
     // nodes are disconnected; returning items regain their original hierarchy and indices.
@@ -232,6 +267,8 @@ private:
     friend class SolutionModelBuilder;
     SolutionModel() = default;
 
+    SolutionModelMode m_mode = SolutionModelMode::NativeStatic;
+    SolutionLoadProfile m_loadProfile;
     SolutionFormat m_format = SolutionFormat::Sln;
     CppHierarchyMode m_cppHierarchy = CppHierarchyMode::Filters;
     std::string m_path;

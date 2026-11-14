@@ -102,7 +102,9 @@ struct ParsedCsproj {
     std::vector<std::string> warnings;
 };
 
-Result<ParsedCsproj> readCsproj(io::IFileSystem& fs, std::string_view projectPath) {
+Result<ParsedCsproj> readCsproj(io::IFileSystem& fs, std::string_view projectPath, std::stop_token stop) {
+    if (stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "managed project read cancelled");
     auto normalized = detail::normalizeAbsolute(projectPath);
     if (!normalized) {
         return std::unexpected(std::move(normalized.error()));
@@ -119,6 +121,8 @@ Result<ParsedCsproj> readCsproj(io::IFileSystem& fs, std::string_view projectPat
     out.directory = std::string(io::parentPath(*normalized));
     const pugi::xml_node root = doc.document_element();
     for (pugi::xml_node group : root.children()) {
+        if (stop.stop_requested())
+            return fail(ErrorCode::Cancelled, "managed project parsing cancelled");
         if (detail::isElement(group, "PropertyGroup")) {
             for (pugi::xml_node prop : group.children()) {
                 if (detail::isElement(prop, "ProjectGuid")) {
@@ -144,6 +148,8 @@ Result<ParsedCsproj> readCsproj(io::IFileSystem& fs, std::string_view projectPat
             }
         } else if (detail::isElement(group, "ItemGroup")) {
             for (pugi::xml_node item : group.children()) {
+                if (stop.stop_requested())
+                    return fail(ErrorCode::Cancelled, "managed project parsing cancelled");
                 const std::string_view name = detail::localName(item);
                 if (iequals(name, "ProjectReference")) {
                     for (std::string_view raw : detail::splitTrimmed(detail::attribute(item, "Include"), ';')) {
@@ -278,7 +284,7 @@ std::string_view toString(ProjectKind kind) noexcept {
 class SolutionModelBuilder {
 public:
     SolutionModelBuilder(io::IFileSystem& fs, SolutionModel& model, const SolutionLoadOptions& options = {})
-        : m_fs(fs), m_model(model) {
+        : m_fs(fs), m_options(options), m_model(model) {
         for (const EvaluatedProjectItems& evaluated : options.evaluated) {
             if (auto norm = detail::normalizeAbsolute(evaluated.projectPath)) {
                 m_evaluated.emplace(detail::pathKey(*norm), &evaluated);
@@ -309,13 +315,24 @@ public:
                  .project = std::nullopt,
                  .itemType = ItemType::None,
                  .filterPath = {}});
+        m_model.m_loadProfile.projects = file.projects.size();
+        m_model.m_projects.reserve(file.projects.size());
+        m_model.m_projectsByPath.reserve(file.projects.size());
+        m_model.m_projectsByGuid.reserve(file.projects.size());
+        if (m_options.progress)
+            m_options.progress({0, file.projects.size(), {}});
         addFolders(file);
         for (std::size_t i = 0; i < file.projects.size(); ++i) {
+            if (m_options.stop.stop_requested())
+                return;
             addProject(file, file.projects[i], i);
+            if (m_options.progress)
+                m_options.progress({i + 1, file.projects.size(), file.projects[i].path});
         }
         resolveDependencies(file);
         resolveConfigurations(file);
         sortChildren();
+        m_model.m_loadProfile.nodes = m_model.m_nodes.size();
     }
 
 private:
@@ -436,7 +453,9 @@ private:
             info.nodeKind = NodeKind::UnavailableProject;
             info.error = Error(ErrorCode::Cancelled, "unloaded");
         } else if (info.kind == ProjectKind::Cpp) {
-            auto project = readVcxproj(m_fs, entry.path, VcxprojOptions{.solutionDirectory = m_model.m_directory});
+            ++m_model.m_loadProfile.cppProjectsRead;
+            auto project = readVcxproj(
+                m_fs, entry.path, VcxprojOptions{.solutionDirectory = m_model.m_directory, .stop = m_options.stop});
             if (project) {
                 info.nodeKind = NodeKind::Project;
                 if (info.projectGuid.empty()) {
@@ -448,7 +467,8 @@ private:
                 info.error = std::move(project.error());
             }
         } else if (info.kind == ProjectKind::CSharp) {
-            auto parsed = readCsproj(m_fs, entry.path);
+            ++m_model.m_loadProfile.managedProjectsRead;
+            auto parsed = readCsproj(m_fs, entry.path, m_options.stop);
             if (parsed) {
                 info.nodeKind = NodeKind::Project;
                 if (info.projectGuid.empty() && !parsed->projectGuid.empty()) {
@@ -527,7 +547,7 @@ private:
                              info.name, include));
         }
         FiltersFile filters;
-        if (auto read = readVcxprojFilters(m_fs, project)) {
+        if (auto read = readVcxprojFilters(m_fs, project, {.stop = m_options.stop})) {
             filters = std::move(*read);
         } else {
             warn(std::format("{}: filters ignored: {}", info.name, read.error().message()));
@@ -743,10 +763,13 @@ private:
             std::size_t visitedFiles = 0;
             const auto walk = [&](const auto& self, const std::string& absDir, const std::string& relDir,
                                   NodeId parentNode) -> void {
+                if (m_options.stop.stop_requested())
+                    return;
                 if (visitedDirs >= limits.maxDirectories || visitedFiles >= limits.maxFiles) {
                     return;
                 }
                 ++visitedDirs;
+                ++m_model.m_loadProfile.managedDirectoryLists;
                 auto entries = m_fs.listDirectory(absDir);
                 if (!entries) {
                     return;
@@ -755,6 +778,8 @@ private:
                     return detail::icompare(a.name, b.name) < 0;
                 });
                 for (const io::DirEntry& entry : *entries) {
+                    if (m_options.stop.stop_requested())
+                        return;
                     if (entry.type == io::FileType::Directory) {
                         if (isExcludedCsprojDirectory(entry.name)) {
                             continue;
@@ -806,7 +831,7 @@ private:
             std::vector<std::string> matchedPaths;
             if (detail::hasWildcard(item.include)) {
                 if (auto pattern = detail::PathPattern::make(csproj.directory, item.include)) {
-                    if (auto expanded = detail::expandWildcard(m_fs, *pattern)) {
+                    if (auto expanded = detail::expandWildcard(m_fs, *pattern, {.stop = m_options.stop})) {
                         matchedPaths = std::move(expanded->paths);
                         if (!expanded->warning.empty()) {
                             warn(std::format("{}: {}", info.name, expanded->warning));
@@ -848,6 +873,8 @@ private:
 
     void resolveDependencies(const SolutionFile& file) {
         for (std::size_t i = 0; i < m_model.m_projects.size(); ++i) {
+            if (m_options.stop.stop_requested())
+                return;
             ProjectInfo& info = m_model.m_projects[i];
             const ProjectId self{static_cast<std::uint32_t>(i)};
             std::unordered_set<std::uint32_t> seen;
@@ -892,6 +919,8 @@ private:
     void resolveConfigurations(const SolutionFile& file) {
         const auto& configs = m_model.m_configurations;
         for (std::size_t i = 0; i < m_model.m_projects.size(); ++i) {
+            if (m_options.stop.stop_requested())
+                return;
             ProjectInfo& info = m_model.m_projects[i];
             const SolutionProjectEntry& entry = file.projects[i];
             info.configurationMap.resize(configs.size());
@@ -924,11 +953,14 @@ private:
             return x.key < y.key;
         };
         for (Node& node : m_model.m_nodes) {
+            if (m_options.stop.stop_requested())
+                return;
             std::ranges::sort(node.children, before);
         }
     }
 
     io::IFileSystem& m_fs;
+    const SolutionLoadOptions& m_options;
     SolutionModel& m_model;
     std::unordered_set<std::string> m_unloadedKeys;
     std::unordered_map<std::string, NodeId> m_folderNodes; // Folder id -> node.
@@ -941,14 +973,45 @@ Result<SolutionModel> SolutionModel::load(
     io::IFileSystem& fs, std::string_view solutionPath,
     // NOLINTNEXTLINE(performance-unnecessary-value-param): Own option snapshot across filesystem callbacks.
     SolutionLoadOptions options) {
+    if (options.stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "solution load cancelled");
+    if (options.mode == SolutionModelMode::ApproximateReadOnly && !options.evaluated.empty())
+        return fail(ErrorCode::Unsupported, "approximate solution cannot claim evaluated MSBuild items");
     auto file = readSolutionFile(fs, solutionPath);
     if (!file) {
         return std::unexpected(std::move(file.error()));
     }
     SolutionModel model;
     model.m_cppHierarchy = options.cppHierarchy;
+    model.m_mode = options.mode;
     SolutionModelBuilder(fs, model, options).build(std::move(*file));
+    if (options.stop.stop_requested())
+        return fail(ErrorCode::Cancelled, "solution load cancelled; no partial model published");
     return model;
+}
+
+Result<void> SolutionModel::requireProjectMutation() const {
+#ifndef _WIN32
+    return fail(ErrorCode::Unsupported, "Linux solution models are read-only; project writes require Windows MSBuild");
+#else
+    if (approximate())
+        return fail(ErrorCode::Unsupported, "Approximate solution model is read-only");
+#endif
+    return {};
+}
+Result<void> SolutionModel::requireExecution() const {
+#ifndef _WIN32
+    return fail(ErrorCode::Unsupported, "MSBuild solution build/run/debug is unavailable on Linux");
+#else
+    if (approximate())
+        return fail(ErrorCode::Unsupported, "Approximate solution cannot authorize execution");
+#endif
+    return {};
+}
+std::string_view SolutionModel::approximationNotice() const noexcept {
+    return approximate() ? "Approximate solution (read-only project model): static files and references only; imports "
+                           "and conditions are not evaluated. Build/run/debug require Windows MSBuild."
+                         : std::string_view{};
 }
 
 const Node& SolutionModel::node(NodeId id) const {
