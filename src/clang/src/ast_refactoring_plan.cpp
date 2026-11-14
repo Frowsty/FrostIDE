@@ -3,6 +3,7 @@
 #include "ast_refactoring_plan.hpp"
 
 #include "ast_refactoring_operations.hpp"
+#include "ast_create_from_usage.hpp"
 #include "ast_signature.hpp"
 #include "semantic_snapshot.hpp"
 namespace frost::clang_engine {
@@ -26,10 +27,11 @@ const clang::NamedDecl* projectCanonical(const clang::NamedDecl* declaration) {
     return clang::tooling::getCanonicalSymbolDeclaration(declaration);
 }
 
+template<class DiagnosticSink>
 std::unique_ptr<clang::ASTUnit> projectAST(const clang::tooling::CompileCommand& command,
                                            llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs,
                                            const std::map<std::string, std::string>& changes,
-                                           Diagnostics& diagnostics) {
+                                           DiagnosticSink& diagnostics, bool recovery = false) {
     ProjectCommand database(command);
     std::vector<std::string> files{command.Filename};
     clang::tooling::ClangTool tool(database, files, std::make_shared<clang::PCHContainerOperations>(), fs);
@@ -38,7 +40,8 @@ std::unique_ptr<clang::ASTUnit> projectAST(const clang::tooling::CompileCommand&
     for (const auto& [path, bytes] : changes)
         tool.mapVirtualFile(path, bytes);
     std::vector<std::unique_ptr<clang::ASTUnit>> units;
-    if (tool.buildASTs(units) || diagnostics.failed || units.size() != 1)
+    const auto built = tool.buildASTs(units);
+    if ((!recovery && (built || diagnostics.failed)) || units.size() != 1)
         return {};
     return std::move(units[0]);
 }
@@ -91,6 +94,7 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
     auto commands = database->getAllCompileCommands();
     if (commands.empty() || commands.size() > 16384)
         return refuse("unsupported", "Compilation database is empty or exceeds16384 configurations");
+    const bool creation = input.getString("operation").value_or("") == "create-from-usage";
     bool hasSeed = seed.empty();
     llvm::json::Array pch;
     for (auto& command : commands) {
@@ -149,6 +153,9 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
         args.push_back("-resource-dir=" + resource.str());
         args.push_back("-fno-implicit-modules");
         args.push_back("-fno-implicit-module-maps");
+        if (creation) {
+            args.insert(args.end(), {"-Xclang", "-frecovery-ast", "-Xclang", "-frecovery-ast-type", "-Werror=return-type"});
+        }
         command.CommandLine = std::move(args);
     }
     if (!hasSeed)
@@ -185,9 +192,11 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
     bool selected = false;
     for (const auto& command : commands) {
         Diagnostics diagnostics;
-        auto ast = projectAST(command, frozen, {}, diagnostics);
-        if (!ast || !frozen->error.empty())
-            return refuse("parse-error", "Original compilation configuration failed");
+        CreateUsageDiagnostics recovered(anchor, root, static_cast<unsigned>(*offset));
+        auto ast = creation ? projectAST(command, frozen, {}, recovered, true)
+                            : projectAST(command, frozen, {}, diagnostics);
+        if (!ast || !frozen->error.empty() || (creation && recovered.unrelated))
+            return refuse("parse-error", creation ? "Original configuration has errors outside the selected unresolved use" : "Original compilation configuration failed");
         if (signature) {
             if (!signatures.discover(*ast, error))
                 return refuse("unsupported", error);
@@ -195,15 +204,22 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
         }
         if (!generation && command.Filename != anchor)
             continue;
-        auto candidate = generation ? refactorGenerate(*ast, input, error) : refactorAst(*ast, input, error);
+        std::optional<std::string> candidate;
+        std::string target = anchor;
+        if (creation) {
+            if (!recovered.selectedError)
+                return refuse("unsupported", "The selected identifier has no exact unresolved-use compiler diagnostic");
+            auto created = createFromUsage(*ast, input, error);
+            if (created) { target = std::move(created->path); candidate = std::move(created->after); }
+        } else candidate = generation ? refactorGenerate(*ast, input, error) : refactorAst(*ast, input, error);
         if (!candidate && generation && error == "not-applicable")
             continue;
         selected = true;
         if (!candidate)
             return refuse("unsupported", error);
-        if (!frozen->inputs.contains(anchor))
+        if (!frozen->inputs.contains(target))
             return refuse("unsupported", "Selected file has no exact captured source receipt");
-        auto [position, inserted] = candidates.emplace(anchor, *candidate);
+        auto [position, inserted] = candidates.emplace(target, *candidate);
         if (!inserted && position->second != *candidate)
             return refuse("conflict", "AST operation differs between compilation configurations");
     }
