@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/debug/gdb_dap.hpp"
+#include "gdb_transport.hpp"
 #include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"
 #include <utility>
@@ -7,6 +8,19 @@
 #include <chrono>
 
 namespace frost::debug {
+namespace {
+AdapterFactory trustGdbFactory(AdapterFactory factory, const project::TrustStore& trust, DebugTarget target) {
+    return [factory = std::move(factory), &trust, target = std::move(target)](DapHandlers handlers) mutable {
+        auto original = std::move(handlers.beforeWrite);
+        handlers.beforeWrite = [&trust, target, original = std::move(original)](std::string_view command) -> Result<void> {
+            if (command == "launch" || command == "attach")
+                if (auto allowed = validateDebugTargetTrust(trust, target); !allowed) return allowed;
+            return original ? original(command) : Result<void>{};
+        };
+        return factory(std::move(handlers));
+    };
+}
+}
 Result<void> validateGdbDapVersion(std::string_view banner) {
     auto line = banner.substr(0, banner.find('\n'));
     while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.remove_suffix(1);
@@ -47,16 +61,7 @@ io::ProcessSpec gdbDapProcessSpec(std::string executable) {
 AdapterFactory gdbDapAdapterFactory(io::IProcessLauncher& launcher, std::string executable, DapProcessOutput output) {
     return [&launcher, executable = std::move(executable), output = std::move(output)](DapHandlers handlers)
         -> Result<std::unique_ptr<IDebugAdapterClient>> {
-        auto probe = gdbDapProcessSpec(executable);
-        probe.arguments = {"--nx", "--quiet", "--version"};
-        auto version = io::runToCompletion(launcher, probe, {}, std::chrono::seconds(5));
-        if (!version) return std::unexpected(std::move(version.error()).withContext("while checking GDB version"));
-        auto supported = validateGdbDapVersion(version->stdoutBytes);
-        if (version->exitCode != 0 || !supported)
-            return fail(ErrorCode::Unsupported, "GDB DAP requires GNU GDB >=16 with Python support");
-        auto process = launcher.launch(gdbDapProcessSpec(executable));
-        if (!process) return std::unexpected(std::move(process.error()).withContext("while starting GDB >=16 DAP (Python support required)"));
-        return makeDapClient(processTransport(std::move(*process), output), std::move(handlers));
+        return makeDapClient(gdbDapTransport(launcher, executable, output), std::move(handlers));
     };
 }
 
@@ -97,7 +102,7 @@ Result<std::unique_ptr<DebugSession>> startGdbDebugSession(
         options.privateSession = true;
         options.launchAdmission = std::move(privacy->launchAdmission);
     }
-    return DebugSession::start(std::move(factory), std::move(*arguments), std::move(breakpoints),
+    return DebugSession::start(trustGdbFactory(std::move(factory), trust, target), std::move(*arguments), std::move(breakpoints),
                                std::move(callbacks), std::move(options));
 }
 
@@ -116,7 +121,7 @@ Result<std::unique_ptr<DebugSession>> attachGdbDebugSession(
     options.exceptionFilters = std::move(exceptionFilters);
     options.targetMode = DebugTargetMode::Attach;
     options.attachHint = ptraceAttachHint(io::realFileSystem());
-    return DebugSession::start(std::move(factory), rpc::Json::object().set("program", target.program).set("pid", pid),
+    return DebugSession::start(trustGdbFactory(std::move(factory), trust, target), rpc::Json::object().set("program", target.program).set("pid", pid),
                                std::move(breakpoints), std::move(callbacks), std::move(options));
 }
 } // namespace frost::debug
