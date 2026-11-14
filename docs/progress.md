@@ -3,6 +3,12 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-14: R11 implementation continuing after R10
+
+- R10 source is on `main` at `a51d9b99`. The remaining roadmap continues through R19; a round merge is a checkpoint, not a request to stop. Work remains implementation-first with two concurrent Sol implementers and focused independent Astra source reviews. Builds, tests, feature execution, WSL and performance runs remain off.
+- R11's generated-file transaction now stages absent destinations, combines creation with project membership edits, and retains reversible native history and recovery. Clean generated-file views join editor Undo/Redo; dirty or format-changed views, conflicting aliases and foreign files refuse before effects. Existing parent directories are required. New tests cover native recovery, composed history and opened alias conflicts; they have not run.
+- The Create source received independent review and is integrated on `codex/r11-integration`. C++ semantic refactoring, templates, generation/conversion actions and Catch2/Boost.Test work remain in progress. R11 is not yet implementation-complete or runtime-accepted; no new release has been built.
+
 ## 2026-11-14: R10 implementation integrated; execution deferred
 
 - Added personal CMake kits, File API target/cache editing through configure, CMake declaration/target/variable completion and navigation, and configure debugging through an owned asynchronous local DAP transport. CMake language input reads are bounded and cancellable on the background scheduler; open editor snapshots take precedence. Standalone compilation-database and GNU Make workspaces, named/install targets and unambiguous Ninja object-file operations are wired into existing build, save, trust and run flows.
