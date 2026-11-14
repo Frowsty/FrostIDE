@@ -38,7 +38,7 @@ if(WIN32)
     target_sources(lua PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/lua.rc")
     set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/lua.rc" PROPERTIES
         OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lua.manifest")
-    target_link_options(lua PRIVATE /MANIFEST:NO)
+    target_link_options(lua PRIVATE "LINKER:/MANIFEST:NO")
 else()
     target_link_options(lua PRIVATE "-Wl,-E")
     set_target_properties(lua PROPERTIES INSTALL_RPATH "$ORIGIN")
