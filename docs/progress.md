@@ -60,6 +60,11 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R19 integration import
+
+- Imported the eleven cleared R19 grammar/extension/sample/native-sandbox commits onto924e8937 without replaying old R17 registry commits. Conflict joins preserve all existing Frost asset syntax aliases, MSBuild source list, Unreal/project/coverage fixtures, MCP executable dependency and staging/LLVM payload checks, Lua dialect tool suites, and accumulated progress entries. MCP is now explicitly copied beside its existing stage prerequisite/check; stage.sh executable mode retained.
+- Existing managed/GLSL/requester routing, Unreal, remote v6 and core auth sources were not replaced. Normal debug paths retain the generic external preparation lease addition. Added the separately authorized Git semantic-conflict owner declaration and parentless dialog rejection, leaving other dialogs unchanged. Removed extra EOF blank lines introduced by native imports. Independent conflict/lifetime source review requested. No push, builds, tests, feature/OS execution or WSL.
+
 ## 2026-11-20: R19 pending DAP preparation ownership
 
 - Added one generation-owned external preparation lease to the normal debug controller. Pending extension preparation enables normal Stop, blocks other starts and cancels on Stop/shutdown; only its exact current lease may adopt. Repeated extension Debug explicitly cancels the previous owned request before replacement; contribution/workspace revocation also cancels it. Cancellation revokes actual launch authority and late prepared children cannot adopt.

@@ -484,4 +484,3 @@ void appendWindowsArgument(std::string& commandLine, std::string_view argument);
                                                           const std::vector<std::string>& arguments);
 
 } // namespace frost::io
-

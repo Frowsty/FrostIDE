@@ -22,4 +22,3 @@ namespace frost::io::detail {
 [[nodiscard]] Result<void> enforceLinuxSandbox(const ProcessSandboxProfile& profile);
 }
 #endif
-
