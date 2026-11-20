@@ -81,7 +81,7 @@ void Workbench::createRunService() {
     hooks.confirmRerun = [this](const QString& project) { return m_services.prompts.confirmRerun(m_window, project); };
     hooks.reportError = [this](const QString& message) { notify(text("Run"), message, ui::NotificationKind::Error); };
     hooks.mayRun = [this] {
-        return !m_nativeAnalysisActive && !m_buildService->projectEditInProgress() &&
+        return !m_nativeAnalysisActive && !m_remoteBuildActive && !m_buildService->projectEditInProgress() &&
                (!m_debug || (!m_debug->debugging() && !m_debug->rerunPending()));
     };
     hooks.alternateAvailable = [this] { return m_cmake != nullptr; };
@@ -114,6 +114,7 @@ void Workbench::createRunService() {
                    ? m_engine->sessionToolPlanFor(configuration)
                    : std::function<Result<run::LaunchPlan>(run::LaunchPlan)>{};
     };
+    hooks.prepareRemoteRun=[this](const run::RunConfiguration& configuration){return prepareRemoteRun(configuration);};
     hooks.prepareEngineConfiguration =
         [this](const run::RunConfiguration& configuration) -> Result<run::RunConfiguration> {
         if (!m_engine)
@@ -334,7 +335,7 @@ void Workbench::createRunService() {
         return {};
     };
     debugHooks.mayStart = [this] {
-        return !m_nativeAnalysisActive && !m_buildService->projectEditInProgress() && !m_runController->running() &&
+        return !m_nativeAnalysisActive && !m_remoteBuildActive && !m_buildService->projectEditInProgress() && !m_runController->running() &&
                (!m_runManager || m_runManager->activeRuns().empty()) && m_runService->activeRuns().empty() &&
                (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };

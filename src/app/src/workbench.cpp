@@ -870,6 +870,7 @@ bool Workbench::anyDebugSessionActive() const {
 }
 
 void Workbench::shutdown() {
+    m_remoteStop.request_stop();
     m_luaRuntimeStop.request_stop();
     m_solutionLoadStop.request_stop();
     if (m_shutDown) {

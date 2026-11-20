@@ -239,6 +239,8 @@ private:
 }
 Result<std::unique_ptr<io::IProcess>> RemoteProcessLauncher::launch(const io::ProcessSpec& workload) {
     if(auto valid=validateRemoteWorkload(workload);!valid)return std::unexpected(valid.error());
+    if(m_options.startupTimeout<=0ms||m_options.startupTimeout>60s||m_options.stopTimeout<=0ms||m_options.stopTimeout>30s)
+        return fail(ErrorCode::InvalidArgument,"Remote startup/Stop deadlines exceed the bounded supported policy");
     if(!m_options.admit)return fail(ErrorCode::Untrusted,"Remote execution requires current project and endpoint admission");
     if(auto admitted=m_options.admit();!admitted)return std::unexpected(admitted.error());
 #ifndef _WIN32

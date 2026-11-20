@@ -477,6 +477,7 @@ void Workbench::registerActions() {
         [this] { return interactiveReady() && m_terminal && m_services.trust.isTrusted(m_projectRoot); });
     add("agent.chat", "AI Agent Native Chat...", [this] { showNativeAgent(); }, [this] { return interactiveReady() && m_services.trust.isTrusted(m_projectRoot); });
     add("agent.disconnect", "Disconnect AI Agent", [this] { stopAgentBridge(); }, [this] { return agentBridgeActive(); });
+    registerRemoteActions();
     // No "window.services" alias for the Unit Tests window: the Services window is UX-9's, and
     // Alt+8 is bound to window.unitTests in the module defaults.
     add(

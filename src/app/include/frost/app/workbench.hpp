@@ -392,6 +392,9 @@ struct WorkbenchOptions {
     std::string sessionDirectory;
     // settings.openApplicationFile's target (absolute); "" disables the action.
     std::string applicationSettingsFile;
+    // Application-owned R19 endpoint/profile registries. Empty derives beside application settings.
+    std::string remoteTargetsPath;
+    std::string wslCMakeProfilesPath;
     // Watches the project folder for external changes (the real file watcher; off in most tests).
     bool watchFiles = false;
     // Where FrostIDE-written compile_commands.json files go (absolute; one directory per solution);
@@ -834,6 +837,10 @@ private:
     [[nodiscard]] Result<void> ensureRefactoringCoordinator(const std::string& target);
     void registerCppRefactoringActions();
     void registerCppIndexActions();
+    void registerRemoteActions();
+    void editRemoteTargets();
+    void showWslCMake();
+    [[nodiscard]] Result<run::RunHandlers> prepareRemoteRun(const run::RunConfiguration& configuration);
     void showCppIndex(std::string operation, std::string symbol = {});
     void showCppRefactoring(std::string operation);
     void showCppInspectionScopeFixes();
@@ -1218,6 +1225,9 @@ private:
     bool m_cppAnalyzerRunning = false;
     std::function<Result<void>()> m_cppAnalyzerExportCheck;
     std::shared_ptr<sched::ResourceGovernor> m_resourceGovernor;
+    std::stop_source m_remoteStop;
+    bool m_remoteBuildActive=false;
+    std::uint64_t m_remoteBuildGeneration=0;
     std::shared_ptr<lang::ClangdService> m_clangd;
     // The root already told that clangd was not found (the notice appears once per project; ADR 0078).
     std::string m_clangdUnavailableNotifiedRoot;
