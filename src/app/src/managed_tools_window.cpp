@@ -60,7 +60,7 @@ public:
         if (m_context.projects)
             for (const auto& path : m_context.projects())
                 m_project->addItem(q(path));
-        auto* browse = new QPushButton(tr("Choose project…"), m_form);
+        auto* browse = new QPushButton(tr("Choose projectï¿½"), m_form);
         auto* projectRow = new QHBoxLayout();
         projectRow->addWidget(m_project, 1);
         projectRow->addWidget(browse);
@@ -78,8 +78,12 @@ public:
         form->addRow(tr("Target framework"), m_framework);
         m_configuration = new QComboBox(m_form);
         m_configuration->setEditable(true);
+        m_configuration->setObjectName("managedConfiguration");
         m_configuration->addItems({"Debug", "Release"});
         form->addRow(tr("Configuration"), m_configuration);
+        m_runtimeIdentifier = new QLineEdit(m_form);
+        m_runtimeIdentifier->setObjectName("managedRuntimeIdentifier");
+        form->addRow(tr("Runtime identifier (optional)"), m_runtimeIdentifier);
         if (tests) {
             m_platform = new QComboBox(m_form);
             m_platform->addItems({"VSTest", "Microsoft.Testing.Platform"});
@@ -145,9 +149,9 @@ public:
             button(tr("Vulnerable"), [this] { packages(build::PackageQuery::Vulnerable); });
             button(tr("Deprecated"), [this] { packages(build::PackageQuery::Deprecated); });
             button(tr("Restore"), [this] { packages(build::PackageQuery::Restore); });
-            button(tr("Install…"), [this] { edit("install"); });
-            button(tr("Update…"), [this] { edit("update"); });
-            button(tr("Remove…"), [this] { edit("remove"); });
+            button(tr("Installï¿½"), [this] { edit("install"); });
+            button(tr("Updateï¿½"), [this] { edit("update"); });
+            button(tr("Removeï¿½"), [this] { edit("remove"); });
         }
         form->addRow(buttons);
         outer->addWidget(m_form);
@@ -199,6 +203,9 @@ public:
                         break;
                     }
         });
+        m_observedContext = m_context.evaluatedProject ? m_context.evaluatedProject() : nullptr;
+        if (m_observedContext)
+            applySelectedDefaults();
         const auto invalidate = [this] {
             if (!m_job && !m_preparing) {
                 m_table->setRowCount(0);
@@ -208,18 +215,34 @@ public:
         };
         connect(m_project, &QComboBox::currentTextChanged, this, invalidate);
         connect(m_framework, &QLineEdit::textChanged, this, invalidate);
+        connect(m_runtimeIdentifier, &QLineEdit::textChanged, this, invalidate);
         connect(m_configuration, &QComboBox::currentTextChanged, this, invalidate);
         if (m_platform)
             connect(m_platform, &QComboBox::currentIndexChanged, this, [invalidate](int) { invalidate(); });
         auto* timer = new QTimer(this);
         timer->setInterval(100);
         connect(timer, &QTimer::timeout, this, [this] {
+            const auto selected = m_context.evaluatedProject ? m_context.evaluatedProject() : nullptr;
+            if (selected != m_observedContext) {
+                m_observedContext = selected;
+                m_defaultsPending = true;
+                m_table->setRowCount(0);
+                m_results.clear();
+                m_failed.clear();
+            }
             if ((m_job || m_preparing) && !current()) {
                 if (m_job)
                     m_job->stop();
                 if (m_preparing)
                     m_snapshot.request_stop();
                 m_status->setText(tr("Workspace or trust changed; cancelling the managed operation."));
+            }
+            if (m_defaultsPending && !m_job && !m_preparing) {
+                m_defaultsPending = false;
+                m_workflow = false;
+                applySelectedDefaults();
+                m_form->setEnabled(true);
+                m_stop->setEnabled(false);
             }
         });
         timer->start();
@@ -234,6 +257,21 @@ public:
     }
 
 private:
+    void applySelectedDefaults() {
+        m_project->clear();
+        if (m_context.projects)
+            for (const auto& path : m_context.projects())
+                m_project->addItem(q(path));
+        const auto selected = m_observedContext && (m_context.preferredProject.empty() ||
+                                                    m_observedContext->request.project == m_context.preferredProject)
+                                  ? m_observedContext
+                                  : nullptr;
+        if (selected)
+            m_project->setEditText(q(selected->request.project));
+        m_framework->setText(selected ? q(selected->request.targetFramework) : QString());
+        m_configuration->setCurrentText(selected ? q(selected->request.configuration) : QStringLiteral("Debug"));
+        m_runtimeIdentifier->setText(selected ? q(selected->request.runtimeIdentifier) : QString());
+    }
     void error(std::string_view message) {
         m_status->setText(q(message));
         m_workflow = false;
@@ -243,16 +281,16 @@ private:
         }
     }
     build::ManagedProjectRequest request() const {
-        return {m_context.dotnet ? m_context.dotnet() : std::string(),
-                m_project->currentText().toStdString(),
-                m_configuration->currentText().toStdString(),
-                m_framework->text().trimmed().toStdString(),
-                {}};
+        return {m_context.dotnet ? m_context.dotnet() : std::string(), m_project->currentText().toStdString(),
+                m_configuration->currentText().toStdString(), m_framework->text().trimmed().toStdString(),
+                m_runtimeIdentifier->text().trimmed().toStdString()};
     }
     bool current() const {
         if (!m_context.root || !m_context.trust || m_context.root() != m_root ||
             (m_context.generation && m_context.generation() != m_generation) ||
             (m_context.dotnet && m_context.dotnet() != m_request.dotnet))
+            return false;
+        if (m_context.evaluatedProject && m_context.evaluatedProject() != m_operationContext)
             return false;
         const auto trust = m_context.trust->snapshot(m_root);
         return trust.trusted && trust.revision == m_trustRevision;
@@ -266,6 +304,18 @@ private:
             error("Managed workspace services are unavailable");
             return false;
         }
+        const auto selected = m_context.evaluatedProject ? m_context.evaluatedProject() : nullptr;
+        if (m_defaultsPending || selected != m_observedContext) {
+            m_observedContext = selected;
+            m_defaultsPending = false;
+            m_table->setRowCount(0);
+            m_results.clear();
+            m_failed.clear();
+            applySelectedDefaults();
+            error("SDK project context changed; review the updated selection before running tools");
+            return false;
+        }
+        m_operationContext = selected;
         m_root = m_context.root();
         m_generation = m_context.generation ? m_context.generation() : 0;
         const auto trust = m_context.trust->snapshot(m_root);
@@ -632,8 +682,10 @@ private:
     bool m_tests;
     QWidget* m_form = nullptr;
     QComboBox *m_project = nullptr, *m_configuration = nullptr, *m_platform = nullptr;
-    QLineEdit *m_framework = nullptr, *m_search = nullptr, *m_version = nullptr, *m_source = nullptr,
-              *m_helper = nullptr;
+    std::shared_ptr<const build::ManagedProjectEvaluation> m_observedContext, m_operationContext;
+    bool m_defaultsPending = false;
+    QLineEdit *m_runtimeIdentifier = nullptr, *m_framework = nullptr, *m_search = nullptr, *m_version = nullptr,
+              *m_source = nullptr, *m_helper = nullptr;
     QCheckBox *m_prerelease = nullptr, *m_build = nullptr;
     QPushButton* m_stop = nullptr;
     QLabel* m_status = nullptr;
@@ -828,9 +880,11 @@ void ManagedToolsWidget::edit(std::string operation) {
                         QPointer<ManagedToolsWidget> self(this);
                         const auto root = m_root;
                         const auto revision = m_trustRevision, generation = m_generation;
-                        plan.revalidateContext = [self, root, revision, generation]() -> Result<void> {
-                            if (!self || !self->current() || self->m_root != root ||
-                                self->m_trustRevision != revision || self->m_generation != generation)
+                        const auto selectedContext = m_operationContext;
+                        plan.revalidateContext = [self, root, revision, generation, selectedContext]() -> Result<void> {
+                            if (!self || !self->current() || self->m_operationContext != selectedContext ||
+                                self->m_root != root || self->m_trustRevision != revision ||
+                                self->m_generation != generation)
                                 return fail(ErrorCode::Cancelled, "Package preview context changed");
                             return {};
                         };

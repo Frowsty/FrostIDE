@@ -201,7 +201,8 @@ Result<CoverageReport> collectNativeCoverage(io::IFileSystem& fs, io::IProcessLa
         spec.arguments = std::move(arguments);
         spec.workingDirectory = request.compilationDirectory;
         spec.environment.emplace_back("DEBUGINFOD_URLS", "");
-        auto result = runAnalysisCommand(launcher, std::move(spec), stop, guarded);
+        auto result = runAnalysisCommand(launcher, std::move(spec), stop, guarded, std::chrono::minutes(5),
+                                         32U * 1024U * 1024U, {}, admission);
         if (!result)
             return std::unexpected(result.error());
         if (result->exitCode != 0 || !result->error.empty())
@@ -262,7 +263,8 @@ Result<CoverageReport> collectNativeCoverage(io::IFileSystem& fs, io::IProcessLa
             return key == "LLVM_PROFILE_FILE";
         });
         spec.environment.emplace_back("LLVM_PROFILE_FILE", *pattern);
-        auto ran = runAnalysisCommand(launcher, std::move(spec), stop, guarded, std::nullopt);
+        auto ran = runAnalysisCommand(launcher, std::move(spec), stop, guarded, std::nullopt, 32U * 1024U * 1024U, {},
+                                      admission);
         if (!ran)
             return std::unexpected(ran.error());
         programExit = ran->exitCode;

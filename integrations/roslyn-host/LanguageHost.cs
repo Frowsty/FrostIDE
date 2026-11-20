@@ -3,6 +3,7 @@
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
+using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Completion;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -26,6 +27,7 @@ internal sealed class LanguageHost
     private readonly Dictionary<string, int> versions = new(PathComparer);
     private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
     private MSBuildWorkspace? workspace;
+    private RefactoringProviderCatalog? providerCatalog;
     private Solution? solution;
     private string root = "";
     private bool shutdown;
@@ -36,7 +38,7 @@ internal sealed class LanguageHost
         var consuming = rpc.Consume(Dispatch, stop.Token);
         try { var completed = await Task.WhenAny(reading, consuming); if (completed == consuming) stop.Cancel(); await Task.WhenAll(reading, consuming); }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
-        finally { stop.Cancel(); workspace?.Dispose(); }
+        finally { stop.Cancel(); workspace?.Dispose(); providerCatalog?.Dispose(); }
         return shutdown ? 0 : 1;
     }
     private string? Option(string name)
@@ -66,7 +68,8 @@ internal sealed class LanguageHost
             .Add(Assembly.Load("Microsoft.CodeAnalysis.CSharp.Workspaces"))
             .Add(Assembly.Load("Microsoft.CodeAnalysis.Features"))
             .Add(Assembly.Load("Microsoft.CodeAnalysis.CSharp.Features"));
-        workspace = MSBuildWorkspace.Create(properties, MefHostServices.Create(assemblies.Distinct()));
+        providerCatalog = new RefactoringProviderCatalog(assemblies);
+        workspace = MSBuildWorkspace.Create(properties, providerCatalog.HostServices);
         workspace.LoadMetadataForReferencedProjects = false;
         workspace.SkipUnrecognizedProjects = false;
         workspace.WorkspaceFailed += (_, value) => Console.Error.WriteLine(value.Diagnostic.Message);
@@ -106,8 +109,17 @@ internal sealed class LanguageHost
     private static string UriOf(string file) => new Uri(Path.GetFullPath(file)).AbsoluteUri;
     private SemanticFeatureContext Context(Document document) => new(document, async (changed, token) => {
         var captured = document.Project.Solution; await ValidateSources(captured, token);
-        await ValidateCompilation(captured, changed, token); return await WorkspaceEdit(captured, changed, token);
-    });
+        foreach (var project in changed.GetChanges(captured).GetProjectChanges()) {
+            foreach (var id in project.GetChangedDocuments().Concat(project.GetRemovedDocuments())) {
+                var path = captured.GetDocument(id)?.FilePath;
+                if (path is null || SourceIds(captured, path).Length != 1)
+                    throw new NotSupportedException("Owned refactorings of linked/shared source require all-context propagation");
+            }
+            if (project.GetAddedDocuments().Any() && SourceIds(captured, document.FilePath!).Length != 1)
+                throw new NotSupportedException("Moving a shared source type requires all-context membership updates");
+        }
+        await ValidateCompilation(captured, changed, token); return await WorkspaceEdit(captured, changed, token, document.Id);
+    }, providerCatalog);
     private async Task Publish(Document document, CancellationToken token)
     {
         var text = await document.GetTextAsync(token);
@@ -155,7 +167,7 @@ internal sealed class LanguageHost
             return new { capabilities = new { positionEncoding = "utf-16", experimental = new { frostLibrarySources = 1 }, textDocumentSync = new { openClose = true, change = 2, save = new { includeText = false } },
                 completionProvider = new { triggerCharacters = new[] { "." } }, hoverProvider = true, definitionProvider = true, referencesProvider = true,
                 renameProvider = new { prepareProvider = true }, documentFormattingProvider = true, documentSymbolProvider = true, codeLensProvider = new { resolveProvider = false },
-                signatureHelpProvider = new { triggerCharacters = new[] { "(", "," } }, codeActionProvider = new { codeActionKinds = new[] { "refactor.rewrite" } } }, serverInfo = new { name = "FrostRoslynHost", version = "1" } };
+                signatureHelpProvider = new { triggerCharacters = new[] { "(", "," } }, codeActionProvider = new { codeActionKinds = new[] { "refactor.rewrite", "refactor.extract", "refactor.inline", "refactor.move" } } }, serverInfo = new { name = "FrostRoslynHost", version = "1" } };
         case "initialized": return null;
         case "shutdown": shutdown = true; return null;
         case "exit": stop.Cancel(); return null;
@@ -312,27 +324,93 @@ internal sealed class LanguageHost
                 throw new InvalidOperationException("Managed source changed outside this session; reload the evaluated workspace before refactoring");
         }
     }
-    private async Task<object> WorkspaceEdit(Solution before, Solution after, CancellationToken token)
+    private async Task<object> WorkspaceEdit(Solution before, Solution after, CancellationToken token, DocumentId? origin = null)
     {
         var delta = after.GetChanges(before);
-        if (delta.GetAddedProjects().Any() || delta.GetRemovedProjects().Any()) throw new NotSupportedException("Project creation/removal cannot enter a text refactoring preview");
+        if (delta.GetAddedProjects().Any() || delta.GetRemovedProjects().Any()) throw new NotSupportedException("Project identity changes cannot enter REF1");
         var changes = new Dictionary<string, object[]>(PathComparer);
+        var inputs = new Dictionary<string, string>(PathComparer);
+        var creates = new List<object>(); var renames = new List<object>();
+        var createdPaths = new List<string>(); var movedPaths = new List<(string From, string To)>();
+        foreach (var document in before.Projects.SelectMany(p => p.Documents)) {
+            token.ThrowIfCancellationRequested();
+            if (document.FilePath is null) throw new NotSupportedException("Source without physical path");
+            var image = (await document.GetTextAsync(token)).ToString();
+            if (inputs.TryGetValue(document.FilePath, out var linked) && linked != image) throw new InvalidOperationException("Linked source images disagree");
+            inputs[document.FilePath] = image;
+        }
+        foreach (var project in before.Projects) {
+            if (project.FilePath is null) throw new NotSupportedException("Project without physical path");
+            inputs[project.FilePath] = await File.ReadAllTextAsync(project.FilePath, token);
+        }
+        if (inputs.Count > 1000 || inputs.Values.Sum(v => (long)System.Text.Encoding.UTF8.GetByteCount(v)) > 4 * 1024 * 1024)
+            throw new NotSupportedException("Managed source receipt budget exceeded");
+        var selected = origin is null ? null : before.GetDocument(origin);
+        Project? resourceProject = null;
         foreach (var project in delta.GetProjectChanges()) {
-            if (project.GetAddedDocuments().Any() || project.GetRemovedDocuments().Any() || project.GetAddedAdditionalDocuments().Any() || project.GetRemovedAdditionalDocuments().Any())
-                throw new NotSupportedException("File creation/removal requires a dedicated project transaction");
+            if (project.GetRemovedDocuments().Any() || project.GetAddedAdditionalDocuments().Any() || project.GetRemovedAdditionalDocuments().Any() ||
+                project.GetChangedAdditionalDocuments().Any() || project.GetAddedAnalyzerConfigDocuments().Any() || project.GetRemovedAnalyzerConfigDocuments().Any() || project.GetChangedAnalyzerConfigDocuments().Any())
+                throw new NotSupportedException("Unsupported non-source or deleted document delta");
+            foreach (var id in project.GetAddedDocuments()) {
+                var added = after.GetDocument(id)!;
+                if (selected is null || added.Project.Id != selected.Project.Id || added.FilePath is null || selected.FilePath is null ||
+                    !PathComparer.Equals(Path.GetDirectoryName(added.FilePath), Path.GetDirectoryName(selected.FilePath)) ||
+                    !added.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || File.Exists(added.FilePath) || Directory.Exists(added.FilePath))
+                    throw new NotSupportedException("Move type requires an absent same-directory C# endpoint in the selected project");
+                creates.Add(new { uri = UriOf(added.FilePath), text = (await added.GetTextAsync(token)).ToString() });
+                createdPaths.Add(added.FilePath); resourceProject = selected.Project;
+            }
             foreach (var id in project.GetChangedDocuments()) {
-                var syntax = await after.GetDocument(id)!.GetSyntaxRootAsync(token);
+                var oldDoc = before.GetDocument(id)!; var newDoc = after.GetDocument(id)!;
+                var syntax = await newDoc.GetSyntaxRootAsync(token);
                 if (syntax is not null && syntax.GetAnnotatedNodesAndTokens(Microsoft.CodeAnalysis.CodeActions.ConflictAnnotation.Kind).Any())
                     throw new InvalidOperationException("Roslyn reports an unresolved refactoring conflict");
-                var oldDoc = before.GetDocument(id)!; var newDoc = after.GetDocument(id)!;
-                if (oldDoc.FilePath is null || !PathComparer.Equals(oldDoc.FilePath, newDoc.FilePath)) throw new NotSupportedException("File renames require a dedicated project transaction");
+                if (oldDoc.FilePath is null || newDoc.FilePath is null) throw new NotSupportedException("Source without physical path");
+                if (oldDoc.FilePath != newDoc.FilePath) {
+                    if (selected is null || id != selected.Id || PathComparer.Equals(oldDoc.FilePath, newDoc.FilePath) ||
+                        !PathComparer.Equals(Path.GetDirectoryName(oldDoc.FilePath), Path.GetDirectoryName(newDoc.FilePath)) ||
+                        !newDoc.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || File.Exists(newDoc.FilePath) || Directory.Exists(newDoc.FilePath) ||
+                        !(await oldDoc.GetTextAsync(token)).ContentEquals(await newDoc.GetTextAsync(token)))
+                        throw new NotSupportedException("File rename requires unchanged bytes and distinct absent same-directory endpoint; case-only moves are refused");
+                    renames.Add(new { oldUri = UriOf(oldDoc.FilePath), newUri = UriOf(newDoc.FilePath) });
+                    movedPaths.Add((oldDoc.FilePath, newDoc.FilePath)); resourceProject = selected.Project;
+                    continue;
+                }
                 var edits = await Edits(oldDoc, newDoc, token);
                 if (changes.TryGetValue(oldDoc.FilePath, out var linked) && JsonSerializer.Serialize(linked) != JsonSerializer.Serialize(edits))
                     throw new InvalidOperationException("Linked project contexts propose inconsistent source edits");
                 changes[oldDoc.FilePath] = edits;
             }
         }
-        return new { documentChanges = changes.Select(change => new { textDocument = new { uri = UriOf(change.Key), version = versions.TryGetValue(change.Key, out var version) ? (int?)version : null }, edits = change.Value }).ToArray() };
+        if (creates.Count + renames.Count > 1) throw new NotSupportedException("Only one move/create endpoint is supported per semantic proposal");
+        if (resourceProject is not null) {
+            var path = resourceProject.FilePath!;
+            var xml = XDocument.Parse(inputs[path], LoadOptions.PreserveWhitespace);
+            var element = xml.Root ?? throw new InvalidOperationException("Missing project XML root");
+            if ((string?)element.Attribute("Sdk") != "Microsoft.NET.Sdk" ||
+                element.DescendantsAndSelf().Any(e => e.Attributes().Any(a => a.Name.LocalName == "Condition")) ||
+                element.Descendants().Any(e => e.Name.LocalName is "Import" or "Target" ||
+                    (e.Name.LocalName == "Compile" && (e.HasElements || e.Attributes().Any(a => a.Name.LocalName is not ("Include" or "Remove"))))))
+                throw new NotSupportedException("Move type/file requires a simple unconditional Microsoft.NET.Sdk project without custom imports/targets or Compile metadata");
+            for (var directory = new DirectoryInfo(Path.GetDirectoryName(path)!); directory is not null; directory = directory.Parent)
+                foreach (var name in new[] { "Directory.Build.props", "Directory.Build.targets" })
+                    if (File.Exists(Path.Combine(directory.FullName, name))) throw new NotSupportedException("Move type/file with inherited project overrides is unavailable");
+            var ns = element.Name.Namespace;
+            var group = new XElement(ns + "ItemGroup");
+            foreach (var move in movedPaths) group.Add(new XElement(ns + "Compile", new XAttribute("Remove", Path.GetRelativePath(Path.GetDirectoryName(path)!, move.From))));
+            foreach (var target in createdPaths.Concat(movedPaths.Select(m => m.To))) {
+                var relative = Path.GetRelativePath(Path.GetDirectoryName(path)!, target);
+                if (relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Contains("..")) throw new NotSupportedException("Move endpoint outside project");
+                group.Add(new XElement(ns + "Compile", new XAttribute("Remove", relative)), new XElement(ns + "Compile", new XAttribute("Include", relative)));
+            }
+            element.Add(group);
+            var projectText = SourceText.From(inputs[path]);
+            changes[path] = [new { range = Range(projectText, new TextSpan(0, projectText.Length)), newText = xml.ToString(SaveOptions.DisableFormatting) }];
+        }
+        var documentChanges = changes.Select(change => new { textDocument = new { uri = UriOf(change.Key), version = versions.TryGetValue(change.Key, out var version) ? (int?)version : null }, edits = change.Value }).ToArray();
+        if (origin is null) return new { documentChanges }; // Existing rename/simplify callers keep their contract.
+        return new { documentChanges,
+            frostManaged = new { producer = "FrostRoslynHost", inputs = inputs.Select(input => new { uri = UriOf(input.Key), text = input.Value }).ToArray(), creates, renames } };
     }
     private async Task<object> Rename(Document doc, int offset, string newName, CancellationToken token)
     {

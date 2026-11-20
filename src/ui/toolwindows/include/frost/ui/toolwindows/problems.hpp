@@ -45,7 +45,8 @@ class IconCache;
 class BuildController;
 
 // The originating tool family, kept distinct for filtering and independent result clearing.
-enum class DiagnosticSource : std::uint8_t { Build, Live, Inspection, Engine, Unity };
+enum class DiagnosticSource : std::uint8_t { Build, Live, Inspection, Engine, EngineShader, Unity };
+
 
 struct Problem {
     build::BuildDiagnostic diagnostic;

@@ -38,7 +38,7 @@ struct LanguageCapabilities {
     bool clangdTweaks = false;
 };
 
-inline constexpr std::array<LanguageCapabilities, 5> kLanguageCapabilities{{
+inline constexpr std::array<LanguageCapabilities, 6> kLanguageCapabilities{{
     {.languageId = "cpp",
      .serverName = "clangd",
      .postfix = true,
@@ -60,7 +60,9 @@ inline constexpr std::array<LanguageCapabilities, 5> kLanguageCapabilities{{
      .codeVision = true,
      .clangdTweaks = false},
     {.languageId = "cmake", .serverName = "CMake", .postfix = true, .liveTemplates = true},
+    {.languageId = "glsl", .serverName = "FrostEngine GLSL"},
     {.languageId = "lua", .serverName = "LuaLS", .liveTemplates = true},
+    {.languageId = "json", .serverName = "the selected JSON schema service"},
     {.languageId = "plaintext", .serverName = ""},
 }};
 
@@ -94,9 +96,12 @@ inline constexpr std::array<LanguageCapabilities, 5> kLanguageCapabilities{{
     if (e == "cs" || e == "csx") {
         return "csharp";
     }
+    if (e == "glsl" || e == "glslh")
+        return "glsl";
     if (e == "lua") {
         return "lua";
     }
+    if(e=="json"||e=="jsonc"||e=="fmat"||e=="fscene"||e=="fmeta"||e=="fschema"||e=="ftable"||e=="frostproj"||e=="feproject")return "json";
     return "plaintext";
 }
 

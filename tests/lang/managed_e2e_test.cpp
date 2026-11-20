@@ -6,6 +6,7 @@
 #include "frost/io/utf.hpp"
 #include "frost/lang/managed_service.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/lang/workspace_edit.hpp"
 #include "frost/sched/thread_pool.hpp"
 #include "frost/text/document.hpp"
 
@@ -131,6 +132,21 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
     const std::string lib = scratch.join("Lib/Greeter.cs");
     ASSERT_TRUE(fs.writeFileAtomic(app, "using Library; public class Example {}\n").has_value());
     ASSERT_TRUE(fs.writeFileAtomic(lib, "namespace Library; public class Greeter {}\n").has_value());
+    const auto shadowPath = scratch.join("Lib/Shadow.cs");
+    const std::string shadowText =
+        "namespace Shadow; public class @var { public static implicit operator @var(int x) => new @var(); public "
+        "static implicit operator int(@var x) => 99; } public class Probe { public int Introduce() { return 1; } "
+        "public int Inline() { var answer = 1; return answer; } }\n";
+    ASSERT_TRUE(fs.writeFileAtomic(shadowPath, shadowText));
+    const std::string semanticSource =
+        "public class Operations { private static int Add(int left,long right)=>left+(int)right; "
+        "public static int Run()=>Add(1,2); private static void Unused(){} private static int deadField; "
+        "private int instanceField; private static void Used(){} public static void Keep()=>Used(); "
+        "public static int Extract(int input){int doubled=input*2; return doubled+1;} "
+        "private static int Clash(int a,long b)=>0; private static int Clash(long a,long b)=>0; "
+        "public static int Existing()=>Clash(1L,1); } public class Extra {}\n";
+    const auto semanticFile = scratch.join("Lib/Refactor.cs");
+    ASSERT_TRUE(fs.writeFileAtomic(semanticFile, semanticSource));
     auto options = lang::managedServiceOptions(dotnet, serverPath, scratch.path(), true);
     options.environment.emplace_back("DOTNET_CLI_HOME", scratch.join("dotnet-home"));
     for (const auto* name : {"LOCALAPPDATA", "APPDATA", "HOME", "USERPROFILE", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
@@ -152,7 +168,9 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
         text::Document::fromUtf8("using Library; public class Example { public string Run() { var s = "
                                  "\"\xf0\x9f\x98\x80\"; return new Greeter().SayHello(); MissingMethod(); } }\n");
     auto libText = text::Document::fromUtf8(
-        "namespace Library; public class Greeter { public string SayHello() => \"Unsaved\"; }\n");
+        "namespace Library; public class Greeter { public string SayHello() => \"Unsaved\"; public int Compute() { "
+        "return 21 + 21; } public int Inline() { var answer = 42; return answer; } public int Multiple() { var count = "
+        "42; return count + count; } }\n");
     ASSERT_TRUE(appText && libText);
     ASSERT_TRUE(service.openDocument(app, appText->text()).has_value());
     ASSERT_TRUE(service.openDocument(lib, libText->text()).has_value());
@@ -201,6 +219,110 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
                                      request(pool, service, "textDocument/definition", positionParams(*uri, 98)))
                               .join();
         EXPECT_TRUE(definition && definition->dump().find("Greeter.cs") != std::string::npos);
+        // Actual owned host proposals over a referenced-project overlay; source files stay unchanged.
+        auto libUri = lang::pathToUri(lib);
+        ASSERT_TRUE(libUri);
+        const std::string localSource =
+            "namespace Library; public class Greeter { public string SayHello() => \"Unsaved\"; public int Compute() { "
+            "return 21 + 21; } public int Inline() { var answer = 42; return answer; } public int Multiple() { var "
+            "count = 42; return count + count; } }\n";
+        auto actionsAt = [&](std::string_view selected, bool cursor = false) {
+            const auto start = localSource.find(selected);
+            auto params = lang::Json::object().set("textDocument", lang::Json::object().set("uri", *libUri));
+            auto position = [](std::size_t column) {
+                return lang::Json::object().set("line", 0).set("character", static_cast<int>(column));
+            };
+            params.set("range", lang::Json::object()
+                                    .set("start", position(start))
+                                    .set("end", position(start + (cursor ? 0 : selected.size()))));
+            params.set("context", lang::Json::object().set("diagnostics", lang::Json::array()));
+            return pool
+                .spawn(sched::Lane::UserVisible, request(pool, service, "textDocument/codeAction", std::move(params)))
+                .join();
+        };
+        const auto semanticUri = lang::pathToUri(semanticFile);
+        ASSERT_TRUE(semanticUri);
+        const auto semanticActions = [&](std::string_view selected, bool cursor) {
+            const auto start = semanticSource.find(selected);
+            EXPECT_NE(start, std::string::npos);
+            auto position = [](std::size_t column) {
+                return lang::Json::object().set("line", 0).set("character", static_cast<int>(column));
+            };
+            return pool
+                .spawn(sched::Lane::UserVisible,
+                       request(pool, service, "textDocument/codeAction",
+                               lang::Json::object()
+                                   .set("textDocument", lang::Json::object().set("uri", *semanticUri))
+                                   .set("range", lang::Json::object()
+                                                     .set("start", position(start))
+                                                     .set("end", position(start + (cursor ? 0 : selected.size()))))
+                                   .set("context", lang::Json::object().set("diagnostics", lang::Json::array()))))
+                .join();
+        };
+        const auto signature = semanticActions("int left", true);
+        ASSERT_TRUE(signature) << signature.error().describe();
+        EXPECT_NE(signature->dump().find("Swap first two parameters"), std::string::npos);
+        EXPECT_NE(signature->dump().find("left:"), std::string::npos);
+        EXPECT_NE(signature->dump().find("right:"), std::string::npos);
+        EXPECT_NE(signature->dump().find("frostManaged"), std::string::npos);
+        const auto overloaded = semanticActions("int a,long b", true);
+        ASSERT_TRUE(overloaded);
+        EXPECT_EQ(overloaded->dump().find("Swap first two parameters"), std::string::npos);
+        const auto unused = semanticActions("Unused", true);
+        ASSERT_TRUE(unused);
+        EXPECT_NE(unused->dump().find("Delete private declaration with no source references"), std::string::npos);
+        const auto used = semanticActions("Used(){}", true);
+        ASSERT_TRUE(used);
+        EXPECT_EQ(used->dump().find("Delete private declaration with no source references"), std::string::npos);
+        const auto layoutField = semanticActions("instanceField", true);
+        ASSERT_TRUE(layoutField);
+        EXPECT_EQ(layoutField->dump().find("Delete private declaration with no source references"), std::string::npos);
+        const auto extract = semanticActions("int doubled=input*2; return doubled+1;", false);
+        ASSERT_TRUE(extract);
+        EXPECT_NE(extract->dump().find("refactor.extract"), std::string::npos);
+        const auto move = semanticActions("Extra {}", true);
+        ASSERT_TRUE(move);
+        EXPECT_NE(move->dump().find("refactor.move"), std::string::npos);
+        EXPECT_NE(move->dump().find("Extra.cs"), std::string::npos);
+        auto unchangedSemantic = fs.readFileSnapshot(semanticFile, 4096U);
+        ASSERT_TRUE(unchangedSemantic);
+        EXPECT_EQ(*unchangedSemantic, semanticSource);
+        auto introduce = actionsAt("21 + 21");
+        ASSERT_TRUE(introduce) << introduce.error().describe();
+        EXPECT_NE(introduce->dump().find("Introduce local for return value (Roslyn)"), std::string::npos);
+        EXPECT_NE(introduce->dump().find("documentChanges"), std::string::npos);
+        auto inlineLocal = actionsAt("answer;", true);
+        ASSERT_TRUE(inlineLocal) << inlineLocal.error().describe();
+        EXPECT_NE(inlineLocal->dump().find("Inline return local (Roslyn)"), std::string::npos);
+        auto multiple = actionsAt("count + count", true);
+        ASSERT_TRUE(multiple) << multiple.error().describe();
+        EXPECT_EQ(multiple->dump().find("Inline return local (Roslyn)"), std::string::npos);
+        auto unchangedLibrary = fs.readFileSnapshot(lib, 1024U);
+        ASSERT_TRUE(unchangedLibrary);
+        EXPECT_EQ(*unchangedLibrary, "namespace Library; public class Greeter {}\n");
+        // A real type named @var changes conversion semantics although both forms compile.
+        // Neither inferred-local transformation may be offered in that semantic scope.
+        auto shadowUri = lang::pathToUri(shadowPath);
+        ASSERT_TRUE(shadowUri);
+        for (const auto& selected : {std::string("1; } public int Inline"), std::string("answer;")}) {
+            const auto start = shadowText.find(selected);
+            ASSERT_NE(start, std::string::npos);
+            auto position = [](std::size_t column) {
+                return lang::Json::object().set("line", 0).set("character", static_cast<int>(column));
+            };
+            auto parameters = lang::Json::object()
+                                  .set("textDocument", lang::Json::object().set("uri", *shadowUri))
+                                  .set("range", lang::Json::object()
+                                                    .set("start", position(start))
+                                                    .set("end", position(start + (selected.starts_with("1") ? 1 : 0))))
+                                  .set("context", lang::Json::object().set("diagnostics", lang::Json::array()));
+            auto response = pool.spawn(sched::Lane::UserVisible,
+                                       request(pool, service, "textDocument/codeAction", std::move(parameters)))
+                                .join();
+            ASSERT_TRUE(response) << response.error().describe();
+            EXPECT_EQ(response->dump().find("Introduce local for return value (Roslyn)"), std::string::npos);
+            EXPECT_EQ(response->dump().find("Inline return local (Roslyn)"), std::string::npos);
+        }
         auto params = positionParams(*uri, 98);
         params.set("newName", "Welcome");
         auto rename =

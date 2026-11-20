@@ -202,6 +202,7 @@ $bundle = $Config -ne 'Debug' -or $BundleTools
 $llvmRel = "llvm-$($lock.windows.llvm.version)"
 $clangdSource = Join-Path $SdkRoot "$llvmRel\bin\clangd.exe"
 $scanDepsSource = Join-Path $SdkRoot "$llvmRel\bin\clang-scan-deps.exe"
+$coverageTools = @('llvm-cov.exe', 'llvm-profdata.exe')
 $clangLibSource = Join-Path $SdkRoot "$llvmRel\lib\clang"
 $lldbRel = "lldb-$($lock.windows.lldb.version)"
 $lldbSourceDir = Join-Path $SdkRoot "$lldbRel\bin"
@@ -210,6 +211,10 @@ $lualsRel = "luals-$($lock.windows.luals.version)"
 $lualsSource = Join-Path $SdkRoot $lualsRel
 if ($bundle) {
     if (-not (Test-Path -LiteralPath $scanDepsSource -PathType Leaf)) { Fail "missing bundled clang-scan-deps: $scanDepsSource" }
+    foreach ($tool in $coverageTools) {
+        $path = Join-Path $SdkRoot "$llvmRel\bin\$tool"
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "missing bundled LLVM coverage tool: $path" }
+    }
     if (-not (Test-Path -LiteralPath $clangdSource -PathType Leaf)) { Fail "missing bundled clangd: $clangdSource" }
     if (-not (Test-Path -LiteralPath $clangLibSource -PathType Container)) {
         Fail "missing bundled clangd resource directory: $clangLibSource"
@@ -319,6 +324,7 @@ if ($bundle) {
     New-Item -ItemType Directory -Force -Path $llvmBinDest | Out-Null
     Copy-Item -LiteralPath $clangdSource -Destination $llvmBinDest -Force
     Copy-Item -LiteralPath $scanDepsSource -Destination $llvmBinDest -Force
+    foreach ($tool in $coverageTools) { Copy-Item -LiteralPath (Join-Path $SdkRoot "$llvmRel\bin\$tool") -Destination $llvmBinDest -Force }
     $llvmLibDest = Join-Path $Destination "$llvmRel\lib"
     New-Item -ItemType Directory -Force -Path $llvmLibDest | Out-Null
     Copy-Item -LiteralPath $clangLibSource -Destination $llvmLibDest -Recurse -Force
@@ -425,7 +431,7 @@ else {
     Write-Host 'stage: local Debug preview; dependency source/notice packaging was not requested'
 }
 if ($bundle) {
-    foreach ($name in @("$llvmRel\bin\clangd.exe", "$llvmRel\bin\clang-scan-deps.exe", "$lldbRel\bin\lldb-dap.exe", "$lualsRel\bin\lua-language-server.exe",
+    foreach ($name in @("$llvmRel\bin\llvm-cov.exe", "$llvmRel\bin\llvm-profdata.exe", "$llvmRel\bin\clangd.exe", "$llvmRel\bin\clang-scan-deps.exe", "$lldbRel\bin\lldb-dap.exe", "$lualsRel\bin\lua-language-server.exe",
             'roslyn\FrostRoslynHost.dll', 'FrostManagedDebug\adapter\netcoredbg.exe', 'licenses\luals-LICENSE.txt')) {
         if (-not (Test-Path -LiteralPath (Join-Path $Destination $name) -PathType Leaf)) { Fail "the staged folder has no $name" }
     }

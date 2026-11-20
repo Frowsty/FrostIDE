@@ -62,8 +62,10 @@ bool EngineIntegration::Impl::admitted(std::uint64_t expectedEpoch, std::string_
 }
 
 void EngineIntegration::Impl::invalidate(bool stopOwned) {
+    clearShaderPreview();
     testsSourceRevision->fetch_add(1);
     ++epoch;
+    toolResolutions.clear();
     physicalAdmission->store(false);
     physicalAdmission = std::make_shared<std::atomic<bool>>(true);
     ++discoveryGeneration;
@@ -90,6 +92,9 @@ void EngineIntegration::Impl::invalidate(bool stopOwned) {
     clearSession(true);
     instances.clear();
     installations.clear();
+    clearAssetUsages();
+    assetIndex.reset();
+    publishDocumentAssets();
     projectContent.reset();
     if (picker)
         picker->clear();
@@ -142,7 +147,7 @@ void EngineIntegration::Impl::projectChanged() {
                                       260});
             projectRegistered = added.has_value();
         }
-        for (const auto id : {kEngineConsoleWindow, kEngineProjectWindow}) {
+        for (const auto id : {kEngineConsoleWindow, kEngineProjectWindow, kEnginePerformanceWindow}) {
             if (!available)
                 windows.hide(id);
             if (auto* button = windows.stripeButton(id))
@@ -239,6 +244,7 @@ Result<void> EngineIntegration::Impl::refresh() {
 }
 
 void EngineIntegration::Impl::updateControls() {
+    refreshSessionContext();
     const bool trusted = !root.empty() && workbench.m_services.trust.snapshot(root).trusted;
     const bool ready = available && trusted && admitted(epoch, root, trustRevision);
     if (refreshButton)
@@ -304,6 +310,8 @@ void EngineIntegration::Impl::updateControls() {
 EngineIntegration::EngineIntegration(Workbench& workbench)
     : QObject(&workbench), m_impl(std::make_unique<Impl>(*this, workbench)) {
     auto& impl = *m_impl;
+    registerDocumentActions();
+    registerTemplateActions();
     impl.automationDirectory = workbench.m_options.engineAutomationDirectory;
     if (impl.automationDirectory.empty()) {
         QString directory = qEnvironmentVariable("FROST_ENGINE_AUTOMATION_DIR");
@@ -425,6 +433,10 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
     impl.projectView = new ui::EngineView(workbench.m_window);
     impl.projectView->hide();
     connect(impl.projectView, &ui::EngineView::refreshRequested, this, [this] { m_impl->refreshProjectContent(); });
+    connect(impl.projectView, &ui::EngineView::serializedPropertiesRequested, this, [this] {
+        if (auto result = showSerializedProperties(); !result)
+            m_impl->setStatus(qs(result.error().message()));
+    });
     connect(impl.projectView, &ui::EngineView::openAsset, this, [this](const QString& path, const QString& handle) {
         if (!m_impl->projectContent)
             return;
@@ -433,6 +445,32 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
         if (found != m_impl->projectContent->assets.end() &&
             std::to_string(found->handle.value) == handle.toUtf8().toStdString())
             m_impl->openAsset(relative);
+    });
+    connect(impl.projectView, &ui::EngineView::findAssetUsages, this,
+            [this](const QString& path, const QString& handle) {
+                auto id = engine::engineHandleFrom(lang::Json(handle.toStdString()));
+                auto result = id ? m_impl->findAssetUsages(path.toStdString(), *id)
+                                 : Result<void>(fail(ErrorCode::InvalidArgument, "Invalid asset handle"));
+                if (!result)
+                    m_impl->setStatus(qs(result.error().message()));
+            });
+    connect(impl.projectView, &ui::EngineView::openAssetUsage, this, [this](const QString& path) {
+        if (!m_impl->assetUsages || !m_impl->projectContent)
+            return;
+        const auto relative = path.toStdString();
+        for (const auto& ref : m_impl->assetUsages->references)
+            if (ref.path == relative) {
+                if (!ref.indexed) {
+                    m_impl->setStatus(QStringLiteral("This unsaved scene exists only in FrostEditor; no IDE disk "
+                                                     "document represents its current contents"));
+                } else if (ref.type == "ProjectSettings") {
+                    // The navigation workbench opens text documents only; unlike the app-level
+                    // open-location route it cannot select/switch a project by file extension.
+                    m_impl->openProjectSettingsDocument();
+                } else
+                    m_impl->openAsset(relative);
+                return;
+            }
     });
     for (const auto& [id, name, method] : {std::tuple{"engine.play", "Play", "play.start"},
                                            {"engine.pause", "Pause", "play.pause"},
@@ -495,6 +533,7 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
         if (auto added = workbench.m_registry.add(std::move(action)); !added)
             log::warn("engine", "Cannot register engine action: {}", added.error().describe());
     }
+    impl.attachSessionTools();
     impl.startupWatch = new QTimer(this);
     impl.startupWatch->setInterval(100);
     connect(impl.startupWatch, &QTimer::timeout, this, [this] { m_impl->checkOwnedStartup(); });
@@ -535,6 +574,7 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
             },
             this);
     }
+    installShaderPreviewActions();
     impl.projectChanged();
 }
 

@@ -441,6 +441,7 @@ void Workbench::startManaged(const std::string& root) {
     m_language->structureChanged();
 }
 void Workbench::stopManaged() {
+    ++m_managedRefactoringEpoch;
     if (m_managedTrustDialog) {
         m_managedTrustDialog->close();
         m_managedTrustDialog.clear();

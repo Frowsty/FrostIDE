@@ -52,6 +52,18 @@ frost_add_library(app LAYER app
         src/managed_tools_window.cpp
         src/managed_tools_window.hpp
         src/workbench_managed_tools.cpp
+        src/engine_asset_integration.cpp
+        src/engine_asset_move.cpp
+        src/engine_shader_preview.cpp
+        src/engine_shader_language.cpp
+        src/engine_shader_language_input.cpp
+        src/engine_shader_language_requester.cpp
+        src/engine_serialized_properties.cpp
+        src/engine_document_integration.cpp
+        src/engine_json_reference_provider.cpp
+        src/engine_json_schema_reader.cpp
+        src/engine_template_integration.cpp
+        src/engine_integration_tools.cpp
         src/engine_integration.cpp
         src/engine_integration.hpp
         src/engine_integration_internal.hpp
@@ -133,6 +145,7 @@ frost_add_library(app LAYER app
         src/settings_dialog.hpp
         src/settings_import.cpp
         src/settings_import.hpp
+        src/hosting_review.cpp
         src/hosting_cli.cpp
         src/hosting_panel.cpp
         src/workbench_hosting.cpp
@@ -151,6 +164,7 @@ frost_add_library(app LAYER app
         src/workbench_attach.cpp
         src/workbench_clone.cpp
         src/workbench_prompts.cpp
+        src/workbench_native_analysis.cpp
         src/workbench_run.cpp
         src/workbench_lua_runtime.cpp
         src/workbench_visualizers.cpp
@@ -169,6 +183,7 @@ frost_add_library(app LAYER app
         src/engine_mixed_debug.hpp
         src/workbench_mixed_debug.cpp
         src/engine_native_debug.hpp
+        src/workbench_managed_refactoring.cpp
         src/workbench_language.cpp
         src/language_registry_integration.cpp
         src/workbench_refactoring.cpp

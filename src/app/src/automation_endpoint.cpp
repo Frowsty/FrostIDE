@@ -1273,6 +1273,8 @@ struct AutomationEndpoint::Impl {
                                          : problem.source == ui::DiagnosticSource::Inspection ? "inspection"
                                          : problem.source == ui::DiagnosticSource::Engine     ? "engine"
                                          : problem.source == ui::DiagnosticSource::Unity      ? "unity"
+                                         : problem.source == ui::DiagnosticSource::EngineShader ? "engine-shader"
+
                                                                                               : "live"));
         }
         return Json::object().set("problems", std::move(list));

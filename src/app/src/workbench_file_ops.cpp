@@ -49,6 +49,13 @@ bool unityAssetPath(io::IFileSystem& fs, const std::string& root, std::string_vi
     if (root.empty() || !fs.exists(root + "/ProjectSettings/ProjectVersion.txt").value_or(false)) return false;
     return lang::isUnityAssetsPath(root, path);
 }
+bool engineAssetDirectory(io::IFileSystem& fs, std::string_view path) {
+    return lang::locateFrostEngineAsset(fs, path).has_value() ||
+           (qs(io::fileName(path)).compare(QStringLiteral("Assets"), Qt::CaseInsensitive) == 0 &&
+            lang::isFrostEngineProjectRoot(fs, io::parentPath(path)));
+}
+
+
 } // namespace
 
 void Workbench::checkFrostEngineAssetReferences(std::string_view path, std::string_view operation) {
@@ -170,6 +177,9 @@ Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_
         // Refactoring settlement/Undo/Redo owns all open-document, tab, LSP and navigation rebinds.
         return m_documentRegistry->canonicalize(*targetJoined);
     }
+    if (engineAssetDirectory(m_services.fs, canonicalOld))
+        return fail(ErrorCode::Unsupported,
+                    "Engine asset folder renames require a directory transaction; no folder was moved");
     // Directory renames retain the existing folder path; native REF-1 currently covers files.
     if (auto renamed = moveWithSidecar(*movePlan); !renamed) {
         notify(text("Cannot rename %1").arg(qs(io::fileName(canonicalOld))), qs(renamed.error().message()),
@@ -432,6 +442,12 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
         }
         const std::string oldParent(io::parentPath(canonicalOld));
         if (lang::documentKey(oldParent) == lang::documentKey(canonicalTargetDir)) {
+            continue;
+        }
+        if (isDir && engineAssetDirectory(m_services.fs, canonicalOld)) {
+            notify(text("Cannot move folder"),
+                   text("Engine asset folder moves require a directory transaction; no folder was moved."),
+                   ui::NotificationKind::Warning);
             continue;
         }
         if (isDir) {

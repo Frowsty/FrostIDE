@@ -13,6 +13,7 @@
 #include "frost/ui/toolwindows/build_controller.hpp"
 
 #include "cmake_integration.hpp"
+#include "engine_integration.hpp"
 #include "trusted_project_launcher.hpp"
 #include "workbench_source_rename.hpp"
 #include "workbench_source_rename_preview.hpp"
@@ -41,6 +42,10 @@ struct RenameProject {
 
 Result<document::RefactoringPlan> Workbench::prepareProjectSourceRename(const std::string& oldPath,
                                                                         const std::string& newPath) {
+    if (lang::locateFrostEngineAsset(m_services.fs, oldPath)) {
+        if (auto recovered = recoverRefactoringJournal(false); !recovered)
+            return std::unexpected(recovered.error());
+    }
     if (m_solution) {
         if (auto allowed = m_solution->requireProjectMutation(); !allowed)
             return std::unexpected(allowed.error());
@@ -336,6 +341,12 @@ Result<document::RefactoringPlan> Workbench::prepareProjectSourceRename(const st
             return std::unexpected(valid.error());
     }
     prepared->revalidateContext = std::move(validate);
+    if (lang::locateFrostEngineAsset(m_services.fs, oldPath)) {
+        if (!m_engine)
+            return fail(ErrorCode::Unsupported, "Pair the FrostEditor session before moving an engine asset");
+        if (auto engine = m_engine->prepareAssetMove(*prepared, oldPath, newPath); !engine)
+            return std::unexpected(engine.error());
+    }
     return prepared;
 }
 

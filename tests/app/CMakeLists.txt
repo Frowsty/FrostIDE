@@ -23,13 +23,14 @@
 # runs frost.exe beside the test). app_tests runs offscreen Qt only and takes no lock.
 
 frost_add_test(app_tests QT
-    SOURCES agent_bridge_test.cpp command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp stall_hooks_test.cpp
+    SOURCES agent_bridge_test.cpp command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp engine_shader_requester_test.cpp stall_hooks_test.cpp
             workbench_project_helpers_test.cpp cmake_kit_test.cpp standalone_build_backend_test.cpp
-            unity_events_test.cpp unity_tests_window_test.cpp settings_import_test.cpp hosting_cli_test.cpp managed_tools_window_test.cpp
+            unity_events_test.cpp unity_tests_window_test.cpp settings_import_test.cpp hosting_cli_test.cpp hosting_review_test.cpp managed_tools_window_test.cpp
+
     DEPS frost::app frost::diag frost::io)
 target_link_libraries(app_tests PRIVATE Qt6::Network)
 # tests/support/scratch_dir.hpp (the persistent services' data directory).
-target_include_directories(app_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_include_directories(app_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 
 # Most of start-up hardening cannot be undone (startup.hpp), so StartupHardeningDeathTest
 # applies it only in a death-test child of this binary, which needs no QApplication (no Qt
@@ -110,7 +111,7 @@ frost_add_test(app_workbench_tests QT
         workbench_lua_refactoring_test.cpp
     DEPS frost::app frost::build frost::io frost::ui_find
     THIRD_PARTY Qt6::Network)
-target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
+target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src ${FROST_SOURCE_DIR}/src/io/src)
 target_compile_definitions(app_workbench_tests PRIVATE ${_frost_workbench_definitions})
 
 # FEC-13 drives actual Workbench binding navigation/usages/preview widgets against the locked
@@ -160,7 +161,7 @@ frost_add_test(app_engine_session_tests QT
     DEPS frost::app frost::build frost::io frost::ui_find
     THIRD_PARTY Qt6::Network unofficial-sodium::sodium
     LABELS integration)
-target_include_directories(app_engine_session_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
+target_include_directories(app_engine_session_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src ${FROST_SOURCE_DIR}/src/io/src)
 target_compile_definitions(app_engine_session_tests PRIVATE ${_frost_workbench_definitions})
 # Exercise the release floor across independent processes, including a stale reader.
 if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{FROST_SDK}/py/Scripts/python.exe")
@@ -479,3 +480,9 @@ frost_add_test(app_mono_held_reader_tests
 target_include_directories(app_mono_held_reader_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_mono_held_reader_tests PRIVATE FROST_HELD_READER="$<TARGET_FILE:frost_held_read>")
 add_dependencies(app_mono_held_reader_tests frost_held_read)
+# RUN-12 later genuine instrumented selected-run/action/gutter journey.
+frost_add_test(app_workbench_native_coverage_tests QT SOURCES workbench_native_coverage_test.cpp
+    DEPS frost::app frost::run frost::lang frost::io frost::sched LABELS integration)
+target_include_directories(app_workbench_native_coverage_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
+target_compile_definitions(app_workbench_native_coverage_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")

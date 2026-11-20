@@ -169,6 +169,32 @@ TEST(TerminalToolWindow, NativeAccessibilityReadsActualWideCellsAndSelectsOutput
     text->removeSelection(0);
     EXPECT_FALSE(t.view()->hasSelection());
 }
+TEST(TerminalToolWindow, NativeAccessibilityRetainsHistoryOffsetsAcrossViewportScrolling) {
+    TerminalRig t;
+    t.pty()->print("HISTORY-FIRST\r\n");
+    const auto rows = t.view()->gridSize().rows;
+    std::string output;
+    for (int row = 0; row < rows + 2; ++row) output += "later\r\n";
+    output += "HISTORY-LAST";
+    t.pty()->print(output);
+    ASSERT_TRUE(waitFor([&] { return t.view()->session()->read([](const frost::term::VtScreen& screen) {
+        return screen.scrollbackSize() > 0 && screen.screenText().find("HISTORY-LAST") != std::string::npos;
+    }); }));
+    auto* accessible = QAccessible::queryAccessibleInterface(t.view());
+    ASSERT_NE(accessible, nullptr);
+    auto* text = accessible->textInterface();
+    ASSERT_NE(text, nullptr);
+    const auto before = text->text(0, -1);
+    ASSERT_TRUE(before.startsWith(QStringLiteral("HISTORY-FIRST")));
+    EXPECT_TRUE(text->characterRect(0).isEmpty());
+    text->scrollToSubstring(0, 13);
+    EXPECT_GT(t.view()->scrollOffset(), 0);
+    EXPECT_EQ(text->text(0, -1), before);
+    EXPECT_FALSE(text->characterRect(0).isEmpty());
+    text->addSelection(0, 13);
+    EXPECT_EQ(t.view()->selectedText(), QStringLiteral("HISTORY-FIRST"));
+}
+
 #ifdef _WIN32
 TEST(TerminalToolWindow, Win32ModeForwardsNativeShiftEnterPressAndRelease) {
     TerminalRig t;

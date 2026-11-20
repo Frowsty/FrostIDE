@@ -113,6 +113,9 @@ done
 for name in LICENSE NOTICE; do
     [[ -f "$REPO/$name" ]] || fail "the repository has no $name"
 done
+for tool in llvm-cov llvm-profdata; do
+    [[ -f "$sdk_root/$llvm_rel/bin/$tool" ]] || fail "missing bundled LLVM coverage tool: $sdk_root/$llvm_rel/bin/$tool"
+done
 clangd="$sdk_root/$llvm_rel/bin/clangd"
 scan_deps="$sdk_root/$llvm_rel/bin/clang-scan-deps"
 clang_lib="$sdk_root/$llvm_rel/lib/clang"
@@ -172,6 +175,9 @@ cp -R -- "$REPO/integrations/unity/com.frostide.editor" "$dest/unity/" || fail "
 mkdir -p -- "$dest/$llvm_rel/bin" "$dest/$llvm_rel/lib" "$dest/$lldb_rel/bin" "$dest/$lldb_rel/lib"
 cp -- "$scan_deps" "$dest/$llvm_rel/bin/" || fail "cannot copy clang-scan-deps"
 cp -- "$clangd" "$dest/$llvm_rel/bin/" || fail "cannot copy clangd"
+for tool in llvm-cov llvm-profdata; do
+    cp -- "$sdk_root/$llvm_rel/bin/$tool" "$dest/$llvm_rel/bin/" || fail "cannot copy LLVM coverage tool $tool"
+done
 cp -R -- "$clang_lib" "$dest/$llvm_rel/lib/" || fail "cannot copy the clangd resource directory"
 cp -- "$sdk_root/$lldb_rel/bin/lldb-dap" "$sdk_root/$lldb_rel/bin/lldb-argdumper" "$dest/$lldb_rel/bin/" ||
     fail "cannot copy lldb-dap"
@@ -183,6 +189,8 @@ cp -- "$sdk_root/$luals_rel/LICENSE" "$dest/licenses/luals-LICENSE.txt"
 
 # 6. The checks: every staged executable is its source's bytes, and frost's libraries resolve.
 for pair in "frost_held_read:$bin_dir/frost_held_read" "frost:$bin_dir/frost" "crashpad_handler:$bin_dir/crashpad_handler" \
+            "$llvm_rel/bin/llvm-cov:$sdk_root/$llvm_rel/bin/llvm-cov" "$llvm_rel/bin/llvm-profdata:$sdk_root/$llvm_rel/bin/llvm-profdata" \
+
             "$llvm_rel/bin/clang-scan-deps:$scan_deps" "$llvm_rel/bin/clangd:$clangd" "$lldb_rel/bin/lldb-dap:$sdk_root/$lldb_rel/bin/lldb-dap" \
             "$luals_rel/bin/lua-language-server:$sdk_root/$luals_rel/bin/lua-language-server"; do
     staged="$dest/${pair%%:*}"

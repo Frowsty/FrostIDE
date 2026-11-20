@@ -3,6 +3,7 @@
 #include "frost/io/path.hpp"
 #include "frost/lang/frost_engine_lua.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/run/engine_session_configurations.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/toolwindows/engine_view.hpp"
 #include "frost/ui/workbench/workbench.hpp"
@@ -19,6 +20,7 @@
 
 #include <algorithm>
 #include <format>
+#include <ranges>
 
 namespace frost::app {
 namespace {
@@ -65,6 +67,12 @@ std::vector<run::RunConfiguration> EngineIntegration::Impl::generated() const {
         editor.workingDirectory = std::string(io::parentPath(installation.program));
         editor.arguments = workbench.m_options.engineEditorArguments;
         out.push_back(std::move(editor));
+        if (auto tools = run::engineSessionRunConfigurations(
+                digest, installation.preset.empty() ? "default" : installation.preset,
+                installation.cliProgram.empty() ? installation.program : installation.cliProgram,
+                installation.playerProgram, selectedProject);
+            tools)
+            out.insert(out.end(), std::make_move_iterator(tools->begin()), std::make_move_iterator(tools->end()));
         if (!installation.playerProgram.empty()) {
             run::RunConfiguration player;
             player.id = "engine.player." + digest;
@@ -281,6 +289,102 @@ EngineIntegration::launchPlanFor(const run::RunConfiguration& configuration) con
     };
 }
 
+std::function<Result<void>()> EngineIntegration::sessionToolAdmissionFor(const run::RunConfiguration& config) const {
+    auto& impl = *m_impl;
+    const auto generated = impl.generated();
+    const bool matches = config.type == run::RunType::Native && run::isEngineSessionToolId(config.id) &&
+                         std::ranges::find(generated, config) != generated.end();
+    auto* fs = &impl.workbench.m_services.fs;
+    auto* trust = &impl.workbench.m_services.trust;
+    const auto root = impl.root, key = impl.projectKey, project = impl.selectedProject;
+    if (!matches)
+        return []() -> Result<void> {
+            return fail(ErrorCode::PermissionDenied,
+                        "Export/multiplayer configuration differs from the selected generated command");
+        };
+    auto& slot = impl.toolResolutions[config.id];
+    if (!slot)
+        slot = std::make_shared<EngineToolResolution>();
+    const auto resolution = slot;
+    const auto revision = impl.trustRevision;
+    const auto admission = impl.physicalAdmission;
+    return [matches, fs, trust, root, key, project, revision, admission, resolution]() -> Result<void> {
+        if (!matches || !admission->load())
+            return fail(ErrorCode::PermissionDenied,
+                        "Export/multiplayer configuration no longer matches the selected engine project");
+        const auto snapshot = trust->snapshot(root);
+        if (!snapshot.trusted || snapshot.revision != revision)
+            return fail(ErrorCode::Untrusted, "Export/multiplayer project trust changed before launch");
+        if (!retainEngineProjectIdentity(*fs, root, key, admission))
+            return fail(ErrorCode::PermissionDenied,
+                        "Export/multiplayer physical project identity changed before launch");
+        auto physical = fs->physicalPath(project);
+        if (!physical)
+            return std::unexpected(physical.error());
+        auto status = fs->status(*physical);
+        if (!status)
+            return std::unexpected(status.error());
+        if (status->type != io::FileType::Directory &&
+            (status->type != io::FileType::Regular || !lang::isFrostEngineProjectFileName(io::fileName(*physical))))
+            return fail(ErrorCode::InvalidArgument, "Export/multiplayer project must be a directory or project file");
+        const auto directory =
+            status->type == io::FileType::Regular ? std::string(io::parentPath(*physical)) : *physical;
+        if (lang::documentKey(directory) != key)
+            return fail(ErrorCode::PermissionDenied,
+                        "Export/multiplayer project resolves outside the original physical root");
+        std::scoped_lock lock(resolution->mutex);
+        if (resolution->project && lang::documentKey(*resolution->project) != lang::documentKey(*physical))
+            return fail(ErrorCode::PermissionDenied, "Export/multiplayer project file changed after admission");
+        if (!resolution->project)
+            resolution->project = *physical;
+        return {};
+    };
+}
+std::function<Result<run::LaunchPlan>(run::LaunchPlan)>
+EngineIntegration::sessionToolPlanFor(const run::RunConfiguration& config) const {
+    auto admission = sessionToolAdmissionFor(config);
+    const auto found = m_impl->toolResolutions.find(config.id);
+    if (found == m_impl->toolResolutions.end())
+        return [admission = std::move(admission)](run::LaunchPlan) -> Result<run::LaunchPlan> {
+            auto allowed = admission();
+            return fail(ErrorCode::PermissionDenied,
+                        allowed ? "No generated native project reservation" : allowed.error().message());
+        };
+    const auto resolution = found->second;
+    auto* fs = &m_impl->workbench.m_services.fs;
+    const auto project = m_impl->selectedProject, key = m_impl->projectKey;
+    const auto expectedProgram = config.program;
+    const auto expectedArguments = config.arguments;
+    const auto projectIndex = config.id.starts_with("engine.export.") ? 2U : 1U;
+    return [admission = std::move(admission), fs, project, key, expectedProgram, expectedArguments, projectIndex,
+            resolution](run::LaunchPlan plan) -> Result<run::LaunchPlan> {
+        if (auto allowed = admission(); !allowed)
+            return std::unexpected(allowed.error());
+        if (plan.program != expectedProgram || plan.arguments != expectedArguments ||
+            plan.arguments.size() <= projectIndex || plan.arguments[projectIndex] != project)
+            return fail(ErrorCode::PermissionDenied, "Export/multiplayer launch lost its captured command identity");
+        auto physical = fs->physicalPath(project);
+        if (!physical)
+            return std::unexpected(physical.error());
+        auto status = fs->status(*physical);
+        if (!status)
+            return std::unexpected(status.error());
+        const auto directory =
+            status->type == io::FileType::Regular ? std::string(io::parentPath(*physical)) : *physical;
+        if (lang::documentKey(directory) != key)
+            return fail(ErrorCode::PermissionDenied,
+                        "Export/multiplayer project resolves outside the selected physical root");
+        {
+            std::scoped_lock lock(resolution->mutex);
+            if (!resolution->project || lang::documentKey(*resolution->project) != lang::documentKey(*physical))
+                return fail(ErrorCode::PermissionDenied, "Export/multiplayer project target changed during resolution");
+            plan.arguments[projectIndex] = *resolution->project;
+        }
+        if (auto allowed = admission(); !allowed)
+            return std::unexpected(allowed.error());
+        return plan;
+    };
+}
 void EngineIntegration::runAccepted(run::RunId id, const run::RunConfiguration& configuration) {
     auto& impl = *m_impl;
     if (!impl.runAdmission || !impl.runAdmission->active.load() || impl.runAdmission->id != configuration.id ||
@@ -464,6 +568,9 @@ void EngineIntegration::processFinished(const run::RunResult& result) {
 }
 
 void EngineIntegration::Impl::refreshProjectContent() {
+    clearAssetUsages();
+    assetIndex.reset();
+    publishDocumentAssets();
     const auto generation = ++contentGeneration;
     if (!admitted(epoch, root, trustRevision)) {
         projectView->setUnavailable(QStringLiteral("Trust the project to read its engine content"));
@@ -511,6 +618,16 @@ void EngineIntegration::Impl::refreshProjectContent() {
                     return;
                 impl.projectBusy = false;
                 if (content) {
+                    auto index = engine::AssetIndex::create(*content);
+                    if (!index) {
+                        impl.projectContent.reset();
+                        impl.projectView->setUnavailable(qs(index.error().message()));
+                        return;
+                    }
+                    impl.assetIndex = std::make_shared<const engine::AssetIndex>(std::move(*index));
+                    impl.refreshSessionContext();
+
+                    impl.publishDocumentAssets();
                     impl.projectContent = *content;
                     impl.projectView->setContent(std::move(*content));
                 } else {
@@ -552,6 +669,43 @@ void EngineIntegration::Impl::openAsset(std::string relative) {
                         (void)self->m_impl->workbench.m_nav->openFile(*resolved);
                 } else
                     self->m_impl->setStatus(qs(resolved.error().message()));
+            },
+            Qt::QueuedConnection);
+    });
+}
+
+void EngineIntegration::Impl::openProjectSettingsDocument() {
+    if (!projectContent)
+        return;
+    const auto content = *projectContent;
+    const auto currentEpoch = epoch;
+    const auto expectedRoot = root;
+    const auto revision = trustRevision;
+    const auto generation = contentGeneration;
+    auto* fs = &workbench.m_services.fs;
+    const auto key = projectKey;
+    const auto admission = physicalAdmission;
+    const QPointer<EngineIntegration> self(&owner);
+    background([self, fs, content, currentEpoch, expectedRoot, revision, generation, key, admission] {
+        if (!retainEngineProjectIdentity(*fs, expectedRoot, key, admission))
+            return;
+        auto actual = fs->physicalPath(content.projectFile);
+        auto parent = fs->physicalPath(content.directory);
+        const bool allowed =
+            actual && parent && lang::documentKey(io::parentPath(*actual)) == lang::documentKey(*parent);
+        if (!self)
+            return;
+        QMetaObject::invokeMethod(
+            self.data(),
+            [self, content, currentEpoch, expectedRoot, revision, generation, allowed] {
+                if (!self || !self->m_impl->admitted(currentEpoch, expectedRoot, revision) ||
+                    self->m_impl->contentGeneration != generation)
+                    return;
+                if (allowed && self->m_impl->workbench.m_nav)
+                    static_cast<void>(self->m_impl->workbench.m_nav->openFile(content.projectFile));
+                else
+                    self->m_impl->setStatus(
+                        QStringLiteral("Engine project settings document no longer belongs to the admitted project"));
             },
             Qt::QueuedConnection);
     });
