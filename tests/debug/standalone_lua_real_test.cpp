@@ -222,8 +222,14 @@ TEST(StandaloneLuaReal, SameInterpreterBreakpointsLocalsUpvaluesTablesMutationSt
     ASSERT_TRUE(session.continueRun());
     ASSERT_TRUE(
         test::waitUntil([&] { return recorder.stopCount() > continued && session.selectedFrame().has_value(); }));
-    EXPECT_EQ(session.selectedFrame()->line, coroutineLine);
-    EXPECT_GE(session.threads().size(), 2U); // A real coroutine created after the initial configuration.
+    const auto coroutineFrame = session.selectedFrame();
+    ASSERT_TRUE(coroutineFrame);
+    EXPECT_EQ(coroutineFrame->line, coroutineLine);
+    auto childValue = answer<dap::Variable>(
+        [&](auto done) { session.evaluate("childValue", coroutineFrame->id, "watch", std::move(done)); });
+    ASSERT_TRUE(childValue);
+    EXPECT_EQ(childValue->value, "23");
+    EXPECT_GE(session.threads().size(), 2U) << "The active coroutine must have its own exposed thread identity";
     ASSERT_TRUE(session.continueRun());
     ASSERT_TRUE(test::waitUntil([&] { return recorder.hasEnded(); }));
     ASSERT_TRUE(session.outcome());
