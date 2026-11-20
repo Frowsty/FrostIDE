@@ -3,6 +3,12 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R16 native analysis UI/profiling draft checkpoint
+
+- Drafted selected Native/CMake/MSBuild coverage/import/profiling actions through existing Save All/build/task preparation, actual-count independent coverage gutters, timed installed perf/WPR/xperf sample collection, raw genuine tool reports, local symbols and named ETW-instance retirement. ADR0111 records the external OS-tool boundary and observed-source provenance limits. Pinned LLVM coverage tools join the staged payload.
+- Authored later normal Workbench coverage/gutter, owned ETW startup-cancellation, trace-mutation and real OS hot-function oracle fixtures; staging fixture inputs include both LLVM coverage executables. These drafts have not been built or executed. Earlier coverage collection core18c305fb received narrow independent Astra source review; UI/profiling/staging review is still pending.
+- Initial reviewer blockers remain: selected configuration/model changes must revoke queued worker launch admission, and live project-trust revocation must cancel an already running coverage/profile process. These are not cleared or relabelled as hardening. Root requested focused source commits and release of this worker slot while the review queue proceeds. No builds, tests, feature execution, probes, installation or WSL occurred.
+
 ## 2026-11-20 — R16 C1 source (codex/r16-c1)
 
 - UX-17 C1: explicit per-window workspace consent after L1/trust, loopback-only authenticated
