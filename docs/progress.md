@@ -1,3 +1,26 @@
+# FrostIDE progress log
+
+Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
+what is next, blockers and open questions for the user.
+
+## 2026-11-20 — R16 C1 source (codex/r16-c1)
+
+- UX-17 C1: explicit per-window workspace consent after L1/trust, loopback-only authenticated
+  WebSocket/MCP editor bridge, current-user discovery/cleanup, per-session generation, revocation,
+  expiry and disconnect. No startup listener or provider process. Bounded framing, payloads,
+  outstanding calls and clients; no Origin fallback or all-interface bind.
+- Direct opt-in user-installed CLI version/auth detection and PTY Agent Terminal, without shell
+  interpolation, automatic login, prompts, hooks or credential reads. Older CLI terminal-only mode.
+- Real editor metadata/diagnostics and selection/mention notifications, editable nonblocking diff
+  review with explicit Apply/Reject, save approval and once-only completion. Physical workspace
+  resources only; same-file diff target; Windows WSL drive spellings retain root containment.
+- Offline fixtures authored for no-consent listener refusal, private discovery lifetime, cross-window
+  tokens, Origin rejection, initialization/masking/fragmentation, revocation and resource boundaries.
+- Astra source review found and fixed modal lifetimes, stale consent generations, probe trust
+  admission, diff baseline identity, auth status parsing and request accounting. No builds/tests,
+  provider launches, prompts, data transfer, installs/downloads or WSL execution performed. Real CLI
+  interoperability, ACL/WSL acceptance and runtime budgets remain local verification gates (ADR0108).
+
 ## 2026-11-20 — R16 delivery source (codex/r16-delivery)
 
 - FND-17: preserved and completed existing CLI drafts with standalone shared-editor diff/merge,
@@ -13,10 +36,6 @@
   builds, tests, feature executions, installs, downloads, or WSL calls performed. Astra source review
   found owner routing, abandoned tickets, busy polling, duplicate-open and uninstall cleanup issues;
   fixes applied across repeated Astra source reviews; final packaging review surfaced no further blockers. Runtime checks not run. Runtime acceptance and release gates remain pending.
-# FrostIDE progress log
-
-Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
-what is next, blockers and open questions for the user.
 
 ## 2026-11-20: R16 MSBuild and CMake language implementation
 
