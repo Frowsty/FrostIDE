@@ -159,17 +159,21 @@ ShaderSourceScan scanShaderSource(std::string_view s, ShaderSourceKind kind, std
                 }
                 const auto endOfLine = s.find('\n', i);
                 auto trailing = s.substr(i, endOfLine == s.npos ? s.size() - i : endOfLine - i);
-                const auto comment = trailing.find("//");
-                if (comment != trailing.npos)
-                    trailing = trailing.substr(0, comment);
-                while (!trailing.empty() && space(trailing.back()))
-                    trailing.remove_suffix(1);
-                if (!trailing.empty() && trailing.back() == '\\')
+                while (!trailing.empty()) {
+                    while (!trailing.empty() && space(trailing.front()))
+                        trailing.remove_prefix(1);
+                    if (trailing.empty() || trailing.starts_with("//"))
+                        break;
+                    if (trailing.starts_with("/*")) {
+                        const auto close = trailing.find("*/", 2);
+                        if (close == trailing.npos)
+                            break; // Comment continues past this physical line.
+                        trailing.remove_prefix(close + 2);
+                        continue;
+                    }
                     include.literal = false;
-                while (!trailing.empty() && space(trailing.front()))
-                    trailing.remove_prefix(1);
-                if (!trailing.empty() && !trailing.starts_with("/*"))
-                    include.literal = false;
+                    break;
+                }
                 out.includes.push_back(std::move(include));
             }
             linePrefix = false;

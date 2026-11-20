@@ -47,6 +47,17 @@ TEST(ShaderSource, SplicedCommentsAndMacroBodiesNeverInventLiteralIncludes) {
     EXPECT_FALSE(result.includes[0].literal);
     EXPECT_EQ(result.includes[1].target, "real.hlsl");
 }
+TEST(ShaderSource, EntireIncludeSuffixMustRemainWhitespaceOrComments) {
+    for (const auto& suffix : {std::string(" /*comment*/ trailingGarbage"), std::string(" /*comment*/ ") + char(92)}) {
+        auto result = scanShaderSource("#include \"a.hlsl\"" + suffix + "\n", ShaderSourceKind::Hlsl);
+        ASSERT_EQ(result.includes.size(), 1);
+        EXPECT_FALSE(result.includes.front().literal);
+    }
+    auto valid =
+        scanShaderSource("#include \"a.hlsl\" /*first*/ /*second*/ // trailing comment\n", ShaderSourceKind::Hlsl);
+    ASSERT_EQ(valid.includes.size(), 1);
+    EXPECT_TRUE(valid.includes.front().literal);
+}
 TEST(ShaderSource, LimitsAndCancellationAreExplicitAndExtensionProfilesAreSeparate) {
     EXPECT_EQ(shaderSourceKind("x.SHADER"), ShaderSourceKind::ShaderLab);
     EXPECT_EQ(shaderSourceKind("x.compute"), ShaderSourceKind::Hlsl);
