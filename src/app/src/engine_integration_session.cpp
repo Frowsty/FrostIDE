@@ -50,6 +50,7 @@ void EngineIntegration::Impl::retireSession() {
 
 void EngineIntegration::Impl::clearSession(bool clearOutput, bool preserveCrashObservation) {
     owner.clearDocumentTools();
+    shaderLanguageProgram.clear();
     clearShaderPreview();
     clearAssetUsages();
     clearSessionTools();
@@ -362,6 +363,7 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
             }
             impl.owner.clearDocumentTools();
             impl.clearSessionTools();
+            impl.shaderLanguageProgram.clear();
             impl.clearShaderPreview();
             impl.clearAssetUsages();
             impl.identity.reset();
@@ -394,7 +396,7 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
 
 Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Json params,
                                                     std::function<void(Result<lang::Json>)> completed,
-                                                    bool workerCompletion) {
+                                                    bool workerCompletion, std::stop_token stop) {
     if (!admitted(epoch, root, trustRevision))
         return fail(ErrorCode::Untrusted, "Project trust changed before the engine command");
     if (!session || !identity || !session->connected())
@@ -449,45 +451,50 @@ Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Js
                     if (!impl.admitted(currentEpoch, expectedRoot, revision) || impl.session.get() != exactSession ||
                         !impl.currentIdentity(observed))
                         return;
-                    impl.requests.erase(*requestId);
-                    impl.lastCompletedRequest = *requestId;
-                    if (impl.lastRequest == *requestId) {
-                        impl.lastReply = result ? *result : lang::Json{};
-                        impl.lastError = result ? std::string{} : result.error().message();
+                    if (method != "shader.language") {
+                        impl.requests.erase(*requestId);
+                        impl.lastCompletedRequest = *requestId;
+                        if (impl.lastRequest == *requestId) {
+                            impl.lastReply = result ? *result : lang::Json{};
+                            impl.lastError = result ? std::string{} : result.error().message();
+                        }
+                        impl.updateControls();
+                        EngineCommandReply reply;
+                        reply.identity = observed;
+                        reply.identity.schema = lang::Json{};
+                        reply.identity.availableCommands.clear();
+                        reply.method = method;
+                        reply.success = result.has_value();
+                        reply.message = result ? result->dump() : result.error().message();
+                        reply.data = result ? *result : lang::Json::object().set("message", result.error().message());
+                        if (impl.pushSink)
+                            impl.pushSink(std::move(reply));
+                        impl.setStatus(result ? QStringLiteral("Command completed") : qs(result.error().message()));
+                        // Other engine operations may change content; retain no complete usage
+                        // snapshot across them. External edits have no content event in contract v2,
+                        // so retained counts are explicitly labelled query snapshots, not live values.
+                        if (result && method != "assets.find-references")
+                            impl.clearAssetUsages();
                     }
-                    impl.updateControls();
-                    EngineCommandReply reply;
-                    reply.identity = observed;
-                    reply.identity.schema = lang::Json{};
-                    reply.identity.availableCommands.clear();
-                    reply.method = method;
-                    reply.success = result.has_value();
-                    reply.message = result ? result->dump() : result.error().message();
-                    reply.data = result ? *result : lang::Json::object().set("message", result.error().message());
-                    if (impl.pushSink)
-                        impl.pushSink(std::move(reply));
-                    impl.setStatus(result ? QStringLiteral("Command completed") : qs(result.error().message()));
-                    // Other engine operations may change content; retain no complete usage
-                    // snapshot across them. External edits have no content event in contract v2,
-                    // so retained counts are explicitly labelled query snapshots, not live values.
-                    if (result && method != "assets.find-references")
-                        impl.clearAssetUsages();
                     // Command replies never change the toolbar's play/paused/frame state.
                     if (completed)
                         completed(std::move(result));
                 },
                 Qt::QueuedConnection);
-        });
+        },
+        stop);
     if (!started) {
         lastError = started.error().message();
         return std::unexpected(started.error());
     }
     *requestId = *started;
-    lastRequest = *started;
-    requests.emplace(*started, method);
-    updateControls();
-    lastReply = lang::Json{};
-    lastError.clear();
+    if (method != "shader.language") {
+        lastRequest = *started;
+        requests.emplace(*started, method);
+        updateControls();
+        lastReply = lang::Json{};
+        lastError.clear();
+    }
     return started;
 }
 

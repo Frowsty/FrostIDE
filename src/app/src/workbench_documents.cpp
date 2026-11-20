@@ -161,13 +161,16 @@ void Workbench::editorOpened(DocumentEditorView& view) {
     else if (m_debug)
         m_debug->attachEditor(&view.editor());
     syncJsonDocument(view);
-    connect(&view.editor(), &ui::EditorView::textChanged, this,
-            [this, current = &view] {
-                syncJsonDocument(*current);
-                scheduleCppAnalyzer(current->path());
-                if (m_engine)
-                    m_engine->invalidateShaderPreview();
-            });
+    connect(&view.editor(), &ui::EditorView::textChanged, this, [this, current = &view] {
+        syncJsonDocument(*current);
+        scheduleCppAnalyzer(current->path());
+        if (m_engine) {
+            m_engine->invalidateShaderPreview();
+            m_engine->scheduleShaderDiagnostics(current->path());
+        }
+    });
+    if (m_engine)
+        m_engine->scheduleShaderDiagnostics(view.path());
     scheduleCppAnalyzer(view.path());
     view.editor().setProperty("engineAssetContext", m_engine && m_engine->isListedAsset(view.path()));
     refreshMarkers(view);
@@ -499,6 +502,8 @@ void Workbench::documentChanged(const std::string& path) {
         if (m_clangd && isCFamilySource(view->path()))
             (void)m_clangd->saveDocument(view->path());
     }
+    if (m_engine)
+        m_engine->scheduleShaderDiagnostics(view->path());
 }
 
 // --- Saving ---

@@ -135,6 +135,10 @@ struct EngineIntegration::Impl {
     std::optional<engine::AssetUsages> assetUsages;
     std::uint64_t assetQueryGeneration{}, assetInvalidationGeneration{};
     std::uint64_t shaderPreviewGeneration{};
+    std::optional<std::uint64_t> shaderDiagnosticScheduled;
+    std::string shaderDiagnosticScheduledPath;
+    std::string shaderLanguageProgram;
+    std::stop_source shaderLanguageStop;
     QPointer<QWidget> previewDialog;
     std::map<std::uint64_t, std::uint64_t> assetQueries;
     std::string selectedInstance;
@@ -189,7 +193,7 @@ struct EngineIntegration::Impl {
     [[nodiscard]] Result<void> connectInstance(const EngineInstanceRecord& instance);
     [[nodiscard]] Result<std::uint64_t> send(std::string method, lang::Json params,
                                              std::function<void(Result<lang::Json>)> completed = {},
-                                             bool workerCompletion = false);
+                                             bool workerCompletion = false, std::stop_token stop = {});
     [[nodiscard]] Result<void> findAssetUsages(std::string relative, engine::EngineHandle handle);
     void clearAssetUsages();
     void publishDocumentProblems();

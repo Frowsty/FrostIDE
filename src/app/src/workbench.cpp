@@ -718,6 +718,7 @@ void Workbench::notify(const QString& title, const QString& body, ui::Notificati
 void Workbench::onSettingsChanged() {
     ++m_cppAnalyzerTicket;
     if (m_cppAnalyzerRunning) m_cppInspectionStop.request_stop();
+    if(m_engine){m_engine->invalidateShaderPreview();if(auto* view=currentView())m_engine->scheduleShaderDiagnostics(view->path());}
     const auto snapshot = m_services.settings.snapshot();
     m_documents->applySettings(*snapshot);
     onLuaSettingsChanged(); // workbench_lua.cpp: a restart or a live didChangeConfiguration (LUA-3).

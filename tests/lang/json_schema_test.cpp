@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/lang/json_schema.hpp"
+#include "frost/lang/json_entity_hierarchy.hpp"
+#include "frost/lang/symbols.hpp"
 #include "frost/lang/lsp_types.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/sched/scheduler.hpp"
@@ -227,6 +229,68 @@ TEST(JsonSchema, DeclarationReadCannotPublishAfterSelectedSchemaGenerationChange
     service.setDeclarationReader([&](std::string_view,std::string_view)->Result<text::Snapshot> {service.clearEngineSchemas();return snapshot(R"({"Columns":[{"Name":"Damage"}]})");});
     auto params=textDocumentPosition(path,toLspPosition(table,ByteOffset{table.text().find("Damage")+2},PositionEncoding::Utf16)).value();
     auto result=sched::syncWait(service.request("textDocument/definition",params));ASSERT_FALSE(result);EXPECT_EQ(result.error().code(),ErrorCode::Cancelled);
+}
+TEST(JsonSchema, CapturedSceneStructureUsesActualParentHierarchyAndExactIdSelections) {
+    JsonSchemaService service;const auto project=root+"Game";const auto path=project+"/a.fscene";
+    ASSERT_TRUE(service.installEngineSchemas(project,referenceSchemas()));
+    const auto text=snapshot(R"({"Entities":[{"ID":2,"Components":{"Tag":{"Tag":"Child"},"Relationship":{"Parent":"1"}}},{"ID":1,"Components":{"Tag":{"Tag":"Root"}}},{"ID":3,"Components":{"Tag":{"Tag":"Other"}}}]})");
+    service.updateDocument(path,text);auto params=Json::object().set("textDocument",textDocumentIdentifier(path).value());
+    auto result=sched::syncWait(service.request("textDocument/documentSymbol",params));ASSERT_TRUE(result);ASSERT_EQ(result->size(),2U);
+    const auto& parent=result->items()[0];EXPECT_EQ(parent.stringAt("name"),"Root");const auto* children=parent.find("children");ASSERT_NE(children,nullptr);ASSERT_EQ(children->size(),1U);
+    EXPECT_EQ(children->items()[0].stringAt("name"),"Child");EXPECT_EQ(result->items()[1].stringAt("name"),"Other");
+    const auto selection=parseRange(*parent.find("selectionRange"));ASSERT_TRUE(selection);
+    EXPECT_EQ(fromLspPosition(text,selection->start,PositionEncoding::Utf16)->value(),text.text().find("\"ID\":1")+5);
+    const auto whole=parseRange(*parent.find("range")),child=parseRange(*children->items()[0].find("range"));ASSERT_TRUE(whole&&child);EXPECT_LE(whole->start,child->start);EXPECT_GE(whole->end,child->end);
+}
+TEST(JsonSchema, InvalidEntityTopologyIsRefusedAndGenericSchemaStructureUsesActualKeys) {
+    JsonSchemaService service;const auto project=root+"Game";const auto path=project+"/a.fscene";
+    ASSERT_TRUE(service.installEngineSchemas(project,referenceSchemas()));
+    auto params=Json::object().set("textDocument",textDocumentIdentifier(path).value());
+    for(const auto* invalid:{R"({"Entities":[{"ID":1},{"ID":1}]})",R"({"Entities":[{"ID":1,"Components":{"Relationship":{"Parent":2}}}]})",R"({"Entities":[{"ID":1,"Components":{"Relationship":{"Parent":1}}}]})",R"({"Entities":[{}]})"}) {
+        service.updateDocument(path,snapshot(invalid));auto result=sched::syncWait(service.request("textDocument/documentSymbol",params));ASSERT_FALSE(result)<<invalid;EXPECT_EQ(result.error().code(),ErrorCode::Corrupt);
+    }
+    const auto schemaPath=project+"/Assets/Test.fschema";service.updateDocument(schemaPath,snapshot(R"({"Columns":[{"Name":"Damage","Type":"Int"}]})"));
+    params=Json::object().set("textDocument",textDocumentIdentifier(schemaPath).value());auto result=sched::syncWait(service.request("textDocument/documentSymbol",params));ASSERT_TRUE(result);ASSERT_EQ(result->size(),1U);
+    EXPECT_EQ(result->items()[0].stringAt("name"),"Columns");const auto* children=result->items()[0].find("children");ASSERT_NE(children,nullptr);ASSERT_EQ(children->size(),1U);EXPECT_EQ(children->items()[0].stringAt("name"),"[0]");
+}
+TEST(JsonSchema, SessionSchemaLossKeepsOnlyLabeledProjectIndexSnapshotLookupsUntilIndexRevocation) {
+    JsonSchemaService service;const auto project=root+"Game";const auto material=project+"/Assets/Material.fmat",meta=project+"/Assets/Texture.png.fmeta";
+    ASSERT_TRUE(service.installEngineSchemas(project,actualSchemas()));service.updateDocument(material,snapshot(R"({"Program":42})"));ASSERT_EQ(service.diagnostics(material).size(),1U);
+    JsonAssetReferenceProvider provider;
+    provider.resolve=[](const Json& value)->std::optional<JsonIndexedAsset> {if(value.asUnsigned()==42U)return JsonIndexedAsset{42,"Assets/Texture.png","Texture2D"};return {};};
+    provider.complete=[](const std::vector<std::string>&,std::string_view,std::size_t){return std::vector<JsonIndexedAsset>{};};service.setAssetReferences(project,provider);
+    const auto text=snapshot(R"({"Handle":42,"Type":"Texture2D"})");service.updateDocument(meta,text);
+    const auto params=textDocumentPosition(meta,LspPosition{0,11}).value();
+    // EngineIntegration's admitted disconnect calls this revocation boundary (also covered
+    // by its HMAC-session disconnect regression). The actual CLI index is project scoped.
+    service.clearEngineSchemas();EXPECT_TRUE(service.diagnostics(material).empty());EXPECT_FALSE(service.handles(material));
+    auto definition=sched::syncWait(service.request("textDocument/definition",params));ASSERT_TRUE(definition);ASSERT_EQ(definition->size(),1U);
+    auto hover=sched::syncWait(service.request("textDocument/hover",params));ASSERT_TRUE(hover);EXPECT_NE(hover->find("contents")->stringAt("value").find("index snapshot"),std::string::npos);
+    service.setAssetReferences({},{});definition=sched::syncWait(service.request("textDocument/definition",params));ASSERT_TRUE(definition);EXPECT_EQ(definition->size(),0U);
+}
+TEST(JsonSchema, EntityHierarchyBoundsRefuseRatherThanDropCapturedEntities) {
+    std::vector<JsonEntityStructureNode> tooMany(10001);auto result=jsonEntityHierarchy(tooMany);ASSERT_FALSE(result);EXPECT_EQ(result.error().code(),ErrorCode::OutOfRange);
+    std::vector<JsonEntityStructureNode> chain;
+    for(std::uint32_t i=0;i<66;++i)chain.push_back({i+1,i,"Node",{{i,0},{i,1}},{{i,0},{i,1}}});
+    result=jsonEntityHierarchy(chain);ASSERT_FALSE(result);EXPECT_EQ(result.error().code(),ErrorCode::OutOfRange);
+    chain.resize(65);result=jsonEntityHierarchy(chain);EXPECT_TRUE(result);
+}
+TEST(JsonSchema, GenericStructurePropertySelectionsRemainInsideWholeRangesRecursively) {
+    JsonSchemaService service;const auto path=root+"Game/Assets/Test.fschema";
+    const auto text=snapshot("{\n\"Columns\":[{\"Name\":\"Damage\",\"Type\":\"Int\",\"Nested\":{\"Value\":1}}]}" );
+    service.updateDocument(path,text);auto params=Json::object().set("textDocument",textDocumentIdentifier(path).value());
+    auto reply=sched::syncWait(service.request("textDocument/documentSymbol",params));ASSERT_TRUE(reply);
+    const auto symbols=parseDocumentSymbols(*reply);ASSERT_EQ(symbols.size(),1U);
+    std::size_t count=0;
+    const auto check=[&](auto& self,const std::vector<DocumentSymbol>& rows,const LspRange* parent)->void {
+        for(const auto& row:rows) {
+            ++count;EXPECT_LE(row.range.start,row.selectionRange.start);EXPECT_LE(row.selectionRange.end,row.range.end);
+            if(parent){EXPECT_LE(parent->start,row.range.start);EXPECT_LE(row.range.end,parent->end);}
+            self(self,row.children,&row.range);
+        }
+    };
+    check(check,symbols,nullptr);EXPECT_EQ(count,6U);
+    EXPECT_EQ(fromLspPosition(text,symbols.front().range.start,PositionEncoding::Utf16)->value(),text.text().find("\"Columns\""));
 }
 } // namespace
 } // namespace frost::lang

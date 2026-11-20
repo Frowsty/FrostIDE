@@ -3,6 +3,10 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R14 main joined into R16 integration
+
+Locally merged published main 1d5b0c46 into codex/r16-integration 06630d1b. Additive conflict resolution retains GLSL and MSBuild provider routing, all document readiness/version paths, agent/hosting/shader requester fixtures, and both progress histories. Automatic CMake, coverage, CLI, schema/hierarchy and Workbench hooks retained. GLSL stop-token propagation and worker/GUI handoff remain unchanged. Only git diff --check performed; no builds, tests, feature execution, WSL or push. Independent Astra composed-join review remains pending.
+
 ## 2026-11-20: R16 native analysis UI/profiling draft checkpoint
 
 - Drafted selected Native/CMake/MSBuild coverage/import/profiling actions through existing Save All/build/task preparation, actual-count independent coverage gutters, timed installed perf/WPR/xperf sample collection, raw genuine tool reports, local symbols and named ETW-instance retirement. ADR0111 records the external OS-tool boundary and observed-source provenance limits. Pinned LLVM coverage tools join the staged payload.
@@ -55,6 +59,13 @@ what is next, blockers and open questions for the user.
 - Added an explicit Pull Requests tool window using separately installed gh/glab executables, an explicit host/repository and real provider output. Account identity, bounded open-review pages, metadata, head-checked provider patches, checkout, comments, approval and GitHub request-changes use documented commands/API fields (ADR 0107). Opening/invalidation launches nothing. Review/checkout confirmation names the exact action, target, commit and body; review JSON uses stdin. Project/trust admission, generation invalidation, cancellation and mutex-gated worker callbacks prevent old-project completions from reappearing.
 - Authored tests cover native editor UTF-16/emoji selection/edit/undo/read-only behavior, terminal wide-cell output/selection/geometry, both provider JSON contracts, malformed/duplicate identity rows, exact commit-pinned review bodies, refused/cancelled launches, actual CLI errors, changed-head diff rejection and zero-launch UI construction. No builds, tests, features, provider requests, outbound messages or WSL ran. Hosting sources await independent review; no complete UX14/UX19 or R16 runtime gate is claimed.
 - Remaining hosted-VCS scope includes inline anchored comments, repository sharing/sign-in UX, worktree/LFS/signing depth and runtime provider conformance. Root coordinates the remaining R16 tracks and integration. C1 has a separate owner; this branch does not implement or claim its secure transport.
+## 2026-11-20 R14 FrostEngine content integration
+
+R14 connects the Engine View, asset usage queries and serialized property inspector to a paired FrostEngine session. Asset moves carry sidecars and reference edits through the IDE preview, journal and Undo. Engine templates, editor controls, measured performance data, export and multiplayer configurations use the engine's actual contracts. Data tables navigate to inherited schema declarations, and the Structure view shows the captured scene entity hierarchy.
+
+GLSL completion, hover, definition, include navigation and Structure use the engine compiler and preprocessor. Validation publishes Problems, and previews use engine-rendered images. The corpus pin names the published companion revision that implements these commands. Completion omits scopes whose boundaries the pinned compiler cannot establish. Project-scoped asset metadata is available as an offline snapshot. Live diagnostics and usage observations clear on disconnect.
+
+GPT-6.1 Sol authored the implementations and regression fixtures. GPT-6 Astra reviewed the source. Builds, runtime tests, paired-engine journeys and release packaging remain deferred at the user's request.
 
 ## 2026-11-20: R14 shader validation and real engine preview source
 
@@ -91,6 +102,7 @@ what is next, blockers and open questions for the user.
 - Component shapes now preserve actual reflection documentation/defaults/bounds, entity/asset reference markers and accepted alternate scalar/vector/enum/flags encodings. This fixes default-output-only inferred type restrictions on valid serializer inputs. Dynamic extension metadata is checked before consumption, and POSIX traversal components cannot select a project profile. Actual reflection metadata and special float/flags regressions are authored; Astra source review closed the vector-string gap.
 - Added actual-index asset type/path-prefix completion and exact-u64 handle/path/object navigation/hover, plus same-captured-document entity ID/name completion and exact declaration navigation. Actual index reset/republication revokes stale queries. Object completion updates authoritative Handle and Path atomically through standard additional edits, preserving multiline edits and unrelated fields. High-u64, filtering/revocation, ambiguous IDs and complete completion-commit-to-index resolution regressions are authored; Astra source review passed.
 - Table column and nested field definition navigation follows actual schema.info declaredIn metadata to exact Columns/Fields Name tokens. Captured open schema text wins; closed project declarations use a bounded lossless reader with physical containment/identity checks and schema-generation cancellation. Inherited/open-buffer, revoked read, containment and size-limit tests are authored; Astra source review passed for valid engine schema nesting.
+- Authored captured scene Parent hierarchy and generic supported-JSON Structure projection with exact ID/key selections, subtree-contained ranges and explicit duplicate/missing/unresolved/cyclic/depth/count refusal. Added project/schema/table/meta JSON syntax aliases. Offline completion/hover labels identify the real retained index snapshot; session-schema revocation withdraws live schemas while project/trust index revocation removes snapshot navigation. Hierarchy, bounds, generic outline and revocation-boundary tests are authored. Independent Astra review found a generic property key/whole-range containment issue; corrected it and authored recursive genuine-parser containment coverage. The combined hierarchy/snapshot slice is source-reviewed clear; no runtime execution occurred.
 - Shared engine alias/test is committed as 3858746d atop the existing reviewed document schema/validation implementation. Next: finish shader/material validation and engine previews, and the remaining schema editing surface; no runtime exit is claimed.
 
 ## 2026-11-20 R13 C++ analysis implementation integrated
@@ -8092,3 +8104,6 @@ with a pointer.
   the modal lifetime and bounded report-read findings were fixed. Commits: dd193193, 040ef30a,
   97e679b1 on codex/r15-editor-extras. No builds, tests, feature runs, WSL, benchmarks, probes or
   verification runners were executed. Runtime acceptance remains deferred by user instruction.
+### R14 native GLSL authoring profile (2026-11-20)
+
+Implemented ordinary completion, declaration/definition, hover, Structure and idle diagnostics through authenticated native shader.language (producer 08897089), using compiler AST identities and actual include provenance. Governed asynchronous requests preserve cancellation/deadline semantics without blocking workers; trust/session/state/source changes invalidate observations. Retained dirty documents without views validate document identity, version and bytes. Authored normal key-entry real-engine journey, strict projection/routing tests and single-dispatcher response/cancellation/timeout/late-reply regressions. ADR0103 records bounded ownership/scope and unsupported operations. Independent Astra native and IDE source reviews cleared. No builds, tests, feature execution or WSL run; runtime acceptance remains open.

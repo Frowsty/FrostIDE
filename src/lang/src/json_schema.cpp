@@ -3,6 +3,7 @@
 
 #include "frost/io/path.hpp"
 #include "frost/lang/lsp_types.hpp"
+#include "frost/lang/json_entity_hierarchy.hpp"
 #include "frost/lang/uri.hpp"
 
 #include <algorithm>
@@ -204,6 +205,66 @@ std::vector<CapturedJsonEntity> capturedEntities(const Scanner& scan,std::string
         else if(const auto* text=value->asString())row.name=*text;
     }
     std::vector<CapturedJsonEntity> entities;for(auto& [key,row]:rows)if(row.id)entities.push_back(std::move(row));return entities;
+}
+Result<Json> capturedEntityStructure(const text::Snapshot& snapshot,const Scanner& scan,std::string_view source) {
+    auto parsed=rpc::parseJson(source);if(!parsed)return std::unexpected(parsed.error());
+    const auto* entities=parsed->find("Entities");if(!entities)return Json::array();
+    if(!entities->isArray())return fail(ErrorCode::Corrupt,"Captured scene Entities is not an array");
+    if(entities->size()>10000)return fail(ErrorCode::OutOfRange,"Captured scene structure exceeds 10000 entities");
+    struct Ranges {const Node* whole=nullptr;const Node* id=nullptr;unsigned seen=0;};
+    std::map<std::string,Ranges,std::less<>> ranges;unsigned roots=0;
+    for(const auto& node:scan.nodes)if(!node.path.empty()&&node.path[0]=="Entities") {
+        if(node.path.size()==1){if(++roots>1)return fail(ErrorCode::Corrupt,"Scene structure has duplicate Entities members");continue;}
+        auto& row=ranges[node.path[1]];unsigned bit=0;
+        if(node.path.size()==2){bit=1;row.whole=&node;}
+        else if(node.path.size()==3&&node.path[2]=="ID"){bit=2;row.id=&node;}
+        else if(node.path.size()==3&&node.path[2]=="Components")bit=4;
+        else if(node.path.size()==4&&node.path[2]=="Components"&&node.path[3]=="Tag")bit=8;
+        else if(node.path.size()==4&&node.path[2]=="Components"&&node.path[3]=="Relationship")bit=16;
+        else if(node.path.size()==5&&node.path[2]=="Components"&&node.path[3]=="Tag"&&node.path[4]=="Tag")bit=32;
+        else if(node.path.size()==5&&node.path[2]=="Components"&&node.path[3]=="Relationship"&&node.path[4]=="Parent")bit=64;
+        if(bit&&(row.seen&bit))return fail(ErrorCode::Corrupt,"Scene structure has ambiguous duplicate entity members");row.seen|=bit;
+    }
+    std::vector<JsonEntityStructureNode> captured;captured.reserve(entities->size());
+    for(std::size_t i=0;i<entities->size();++i) {
+        const auto& entity=entities->items()[i];const auto* value=entity.find("ID");const auto id=value?exactJsonId(*value):std::nullopt;
+        const auto found=ranges.find(std::to_string(i));if(!id||found==ranges.end()||!found->second.whole||!found->second.id)
+            return fail(ErrorCode::Corrupt,"Captured scene structure needs an exact entity ID and source token");
+        const auto& location=found->second;JsonEntityStructureNode node;node.id=*id;
+        if(const auto* components=entity.find("Components")) {
+            if(const auto* tag=components->find("Tag"))node.name=std::string(tag->stringAt("Tag"));
+            if(const auto* relationship=components->find("Relationship"))if(const auto* parent=relationship->find("Parent")) {
+                const auto exact=parent->isNull()?std::optional<std::uint64_t>(0):exactJsonId(*parent);
+                if(!exact)return fail(ErrorCode::Corrupt,"Captured scene Parent is not an exact entity ID");node.parent=*exact;
+            }
+        }
+        node.range={toLspPosition(snapshot,ByteOffset{location.whole->begin},PositionEncoding::Utf16),toLspPosition(snapshot,ByteOffset{location.whole->end},PositionEncoding::Utf16)};
+        node.selectionRange={toLspPosition(snapshot,ByteOffset{location.id->begin},PositionEncoding::Utf16),toLspPosition(snapshot,ByteOffset{location.id->end},PositionEncoding::Utf16)};
+        captured.push_back(std::move(node));
+    }
+    return jsonEntityHierarchy(captured);
+}
+Result<Json> capturedJsonStructure(const text::Snapshot& snapshot,const Scanner& scan,std::string_view source) {
+    auto parsed=rpc::parseJson(source);if(!parsed)return std::unexpected(parsed.error());
+    if(scan.nodes.size()>10000)return fail(ErrorCode::OutOfRange,"JSON structure exceeds 10000 captured nodes");
+    std::map<std::vector<std::string>,std::size_t> indices;
+    std::vector<std::vector<std::size_t>> children(scan.nodes.size());
+    for(std::size_t i=0;i<scan.nodes.size();++i)if(!indices.emplace(scan.nodes[i].path,i).second)return fail(ErrorCode::Corrupt,"JSON structure contains ambiguous duplicate property paths");
+    std::vector<std::size_t> roots;
+    for(std::size_t i=0;i<scan.nodes.size();++i)if(!scan.nodes[i].path.empty()) {
+        auto parent=scan.nodes[i].path;parent.pop_back();const auto found=indices.find(parent);
+        if(found==indices.end()||parent.empty())roots.push_back(i);else children[found->second].push_back(i);
+    }
+    const auto emit=[&](auto& self,std::size_t i)->Json {
+        const auto& node=scan.nodes[i];auto nested=Json::array();for(const auto child:children[i])nested.push(self(self,child));
+        const auto parentPath=[&]{auto path=node.path;path.pop_back();return path;}();const auto parent=indices.find(parentPath);
+        const bool arrayParent=parent!=indices.end()&&scan.nodes[parent->second].array;
+        const auto name=arrayParent?"["+node.path.back()+"]":node.path.back();
+        const auto range=LspRange{toLspPosition(snapshot,ByteOffset{node.keyEnd?node.keyBegin:node.begin},PositionEncoding::Utf16),toLspPosition(snapshot,ByteOffset{node.end},PositionEncoding::Utf16)};
+        const auto selection=node.keyEnd?LspRange{toLspPosition(snapshot,ByteOffset{node.keyBegin},PositionEncoding::Utf16),toLspPosition(snapshot,ByteOffset{node.keyEnd},PositionEncoding::Utf16)}:range;
+        return Json::object().set("name",name).set("kind",node.object?19:node.array?18:7).set("range",toJson(range)).set("selectionRange",toJson(selection)).set("children",nested);
+    };
+    auto result=Json::array();for(const auto root:roots)result.push(emit(emit,root));return result;
 }
 std::optional<Json> tableReference(const text::Snapshot& snapshot) {
     if(snapshot.size().value()>256*1024)return {};
@@ -465,6 +526,7 @@ std::optional<ServerCapabilities> JsonSchemaService::serverCapabilities() const 
     capabilities.completion = true;
     capabilities.hover = true;
     capabilities.definition = true;
+    capabilities.documentSymbol = true;
     capabilities.completionTriggerCharacters = {"\"", ":"};
     return capabilities;
 }
@@ -548,6 +610,11 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
     auto source = normalized(*path, snapshot);
     if (!source)
         co_return std::unexpected(source.error());
+    Scanner scan{*source};scan.value();
+    if(method=="textDocument/documentSymbol") {
+        if(path->ends_with(".fscene"))co_return capturedEntityStructure(snapshot,scan,*source);
+        co_return capturedJsonStructure(snapshot,scan,*source);
+    }
     const auto* position = params.find("position");
     const auto point = position ? parsePosition(*position) : std::nullopt;
     if (!point)
@@ -558,8 +625,6 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
     if (toLspPosition(snapshot, *byteOffset, PositionEncoding::Utf16) != *point)
         co_return fail(ErrorCode::OutOfRange, "A JSON request position cannot be clamped into another token");
     const auto offset = byteOffset->value();
-    Scanner scan{*source};
-    scan.value();
     const Node* selected = nullptr;
     for (const auto& node : scan.nodes)
         if ((node.begin <= offset && offset <= node.end) ||
@@ -634,7 +699,7 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
         if(const auto* value=schema->find("default"))description+="\nDefault: "+value->dump();
         if(const auto* minimum=schema->find("minimum"))description+="\nMinimum: "+minimum->dump();
         if(const auto* maximum=schema->find("maximum"))description+="\nMaximum: "+maximum->dump();
-        if(indexed)description+="\nActual indexed asset: "+indexed->path+" ("+indexed->type+", "+std::to_string(indexed->handle)+")";
+        if(indexed)description+="\nActual engine index snapshot asset: "+indexed->path+" ("+indexed->type+", "+std::to_string(indexed->handle)+")";
         description += "\n";
         description += engine?"Actual engine serializer/default field shapes; semantic validation requires the selected engine's document.validate.":bundledJsonSchemaCoverage(*path);
         co_return Json::object().set("contents", Json::object().set("kind", "plaintext").set("value", description));
@@ -665,7 +730,7 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
             auto actual=assets.complete(types,prefix,5001);incomplete=actual.size()>5000;if(incomplete)actual.resize(5000);
             for(const auto& asset:actual)if(asset.handle&&safeIndexedPath(asset.path)&&(types.empty()||std::ranges::find(types,asset.type)!=types.end())) {
                 const bool handle=(!selected->path.empty()&&selected->path.back()=="Handle")||(referenceValue&&referenceValue->kind()==Json::Kind::Integer);
-                auto item=Json::object().set("label",asset.path).set("kind",17).set("detail",asset.type+" — "+std::to_string(asset.handle))
+                auto item=Json::object().set("label",asset.path).set("kind",17).set("detail",asset.type+" — "+std::to_string(asset.handle)+" (engine index snapshot)")
                     .set("textEdit",Json::object().set("range",editRange).set("newText",handle?Json(asset.handle).dump():Json(asset.path).dump()));
                 // Asset handles are authoritative over path hints. A completion inside an
                 // object must update both members in the same completion Undo operation.
