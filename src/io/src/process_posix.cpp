@@ -26,6 +26,7 @@
 
 #include "internal.hpp"
 #include "process_internal.hpp"
+#include "process_sandbox_internal.hpp"
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -660,6 +661,11 @@ int addStreamAction(posix_spawn_file_actions_t& actions, Stdio mode, int target,
 Result<detail::SpawnedChild> spawnPosixChild(const ProcessSpec& spec) {
     if (auto valid = validateProcessSpec(spec, /*windowsRules=*/false); !valid) {
         return std::unexpected(std::move(valid.error()));
+    }
+    if (spec.sandbox) {
+        auto enforcing = detail::prepareLinuxSandboxLaunch(spec);
+        if (!enforcing) return std::unexpected(enforcing.error());
+        return spawnPosixChild(*enforcing);
     }
     // Decided before any pipe is created, since a new pipe may take a free descriptor 0-2.
     const Stdio stdinMode = effectiveMode(spec.stdinMode, STDIN_FILENO, spec.killOnClose);

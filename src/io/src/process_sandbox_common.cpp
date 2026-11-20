@@ -12,6 +12,8 @@ std::string key(std::string_view path, PathStyle style) {
 }
 bool sandboxAllowsPath(const ProcessSandboxProfile& profile, std::string_view path, SandboxAccess access, PathStyle style) {
     const auto target = key(path, style); if (target.empty()) return false;
+    if (target == ".." || target.find("/../") != target.npos || target.ends_with("/..") ||
+        target.find("\\..\\") != target.npos || target.ends_with("\\..")) return false;
     for (const auto& grant : profile.paths) {
         const auto root = key(grant.path, style);
         if (!hasSandboxAccess(grant.access, access) || root.empty()) continue;
@@ -34,6 +36,7 @@ Result<void> validateProcessSandbox(const ProcessSpec& spec, bool windowsRules, 
     for (const auto& grant : profile.paths) {
         if (grant.path.size() > 4096 || grant.path.find('\0') != grant.path.npos || !isValidUtf8(grant.path) ||
             !isAbsolutePath(grant.path, style) || !normalizePath(grant.path, style) ||
+            grant.path.find("/../") != grant.path.npos || grant.path.ends_with("/..") || grant.path.find("\\..\\") != grant.path.npos || grant.path.ends_with("\\..") ||
             static_cast<unsigned>(grant.access) == 0 || static_cast<unsigned>(grant.access) > 7)
             return fail(ErrorCode::InvalidArgument, "Sandbox grants require bounded absolute UTF-8 paths and explicit known rights");
         if (windowsRules && prepared) {
