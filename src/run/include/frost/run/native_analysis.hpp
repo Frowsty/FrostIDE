@@ -27,7 +27,7 @@ struct AnalysisCommandResult {
 [[nodiscard]] Result<AnalysisCommandResult>
 runAnalysisCommand(io::IProcessLauncher& launcher, io::ProcessSpec spec, std::stop_token stop,
                    AnalysisAdmission admission = {}, std::optional<IClock::Duration> timeout = std::chrono::minutes(5),
-                   std::size_t outputCap = 32 * 1024 * 1024);
+                   std::size_t outputCap = 32 * 1024 * 1024, std::function<void(io::ProcessId)> started = {});
 struct CoverageLine {
     std::uint32_t line = 0;
     std::uint64_t hits = 0;
@@ -71,4 +71,32 @@ struct CoverageRequest {
 [[nodiscard]] Result<CoverageReport> collectNativeCoverage(io::IFileSystem& fs, io::IProcessLauncher& launcher,
                                                            const CoverageRequest& request, std::stop_token stop = {},
                                                            AnalysisAdmission admission = {});
+// Profiling preserves the installed tool's genuine report, including unresolved symbols. It does
+// not manufacture a normalized sample table from undocumented/version-dependent columns.
+enum class NativeProfileBackend { Perf, WindowsEtw };
+struct NativeProfileRequest {
+    NativeProfileBackend backend = NativeProfileBackend::Perf;
+    LaunchPlan plan;
+    std::string outputDirectory;
+    std::string perf, wpr, xperf;
+    // Unique FrostIDE-<UUID> instance. Only this owned WPR instance is ever stopped/cancelled.
+    std::string sessionName;
+    bool systemWideEtwConsent = false;
+    IClock::Duration duration = std::chrono::seconds(10); // Positive, at most5minutes; owned tree ends at interval.
+};
+struct NativeProfileReport {
+    NativeProfileBackend backend = NativeProfileBackend::Perf;
+    AnalysisFileIdentity binary, trace;
+    std::string toolReport, diagnostics;
+    std::optional<int> programExitCode;
+    std::optional<io::ProcessId> programPid; // Windows owned program PID; perf report retains real PIDs.
+};
+// Worker only. perf owns its command's tree. WPR owns a uniquely named ETW CPU instance;
+// retiring that OS instance is mandatory cleanup even after cancellation/trust revocation.
+// admission gates every ordinary process; cleanup executes only the captured installed WPR.
+// Windows reports system-wide samples explicitly. Symbol paths are local and no server is used.
+[[nodiscard]] Result<NativeProfileReport> collectNativeProfile(io::IFileSystem& fs, io::IProcessLauncher& launcher,
+                                                               const NativeProfileRequest& request,
+                                                               std::stop_token stop = {},
+                                                               AnalysisAdmission admission = {});
 } // namespace frost::run

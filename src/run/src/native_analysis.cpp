@@ -36,7 +36,8 @@ Result<void> validateAnalysisIdentity(io::IFileSystem& fs, const AnalysisFileIde
 }
 Result<AnalysisCommandResult> runAnalysisCommand(io::IProcessLauncher& launcher, io::ProcessSpec spec,
                                                  std::stop_token stop, AnalysisAdmission admission,
-                                                 std::optional<IClock::Duration> timeout, std::size_t outputCap) {
+                                                 std::optional<IClock::Duration> timeout, std::size_t outputCap,
+                                                 std::function<void(io::ProcessId)> onStarted) {
     if (!io::isAbsolutePath(spec.executable) || !io::isAbsolutePath(spec.workingDirectory) || !outputCap ||
         outputCap > 64U * 1024U * 1024U || (timeout && *timeout <= IClock::Duration::zero()))
         return fail(ErrorCode::InvalidArgument,
@@ -73,6 +74,8 @@ Result<AnalysisCommandResult> runAnalysisCommand(io::IProcessLauncher& launcher,
                                             {.terminateDescendantsOnExit = true, .rejectInvalidUtf8 = true});
     if (!session)
         return std::unexpected(session.error());
+    if (onStarted)
+        onStarted((*session)->processId());
     const auto started = systemClock().steadyNow();
     std::stop_callback cancel(stop, [&] { (*session)->stop(); });
     bool expired = false, overflow = false;
