@@ -176,6 +176,7 @@ enum class ServerReadiness : std::uint8_t; // frost/ui/lang/language_controller.
 class QTemporaryFile;
 
 namespace frost::app {
+struct ManagedToolsContext;
 class ManagedDebugPreparation;
 class MultiSessionDebugCoordinator;
 struct ManagedSnapshotJob;
@@ -915,6 +916,8 @@ private:
     [[nodiscard]] bool closeForOpen();
     void refreshRecent();
     void showOpenRecent();
+    [[nodiscard]] ManagedToolsContext managedToolsContext();
+    void showManagedPackages(const std::string& projectPath);
     void showSettings();
     void showUpdateCheck();
     void showVersionSwitcher();

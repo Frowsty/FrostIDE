@@ -23,6 +23,12 @@ set(_frost_managed_test_dotnet "")
 if(DEFINED ENV{DOTNET_ROOT} AND EXISTS "$ENV{DOTNET_ROOT}/dotnet${CMAKE_EXECUTABLE_SUFFIX}")
     set(_frost_managed_test_dotnet "$ENV{DOTNET_ROOT}/dotnet${CMAKE_EXECUTABLE_SUFFIX}")
 endif()
+# R17 package proposal acceptance is mandatory and offline; missing configured SDK fails.
+add_test(NAME managed_nuget_planner
+    COMMAND "${Python3_EXECUTABLE}" -B "${FROST_SOURCE_DIR}/tests/managed/test_nuget_planner.py")
+set_tests_properties(managed_nuget_planner PROPERTIES LABELS "integration;managed;nuget"
+    RESOURCE_LOCK frost_desktop TIMEOUT 300
+    ENVIRONMENT "FROST_MANAGED_TEST_DOTNET=${_frost_managed_test_dotnet};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
 add_test(NAME managed_pdb_guard
     COMMAND "${Python3_EXECUTABLE}" "${FROST_SOURCE_DIR}/tests/managed/test_pdb_guard.py")
 set_tests_properties(managed_pdb_guard PROPERTIES

@@ -380,8 +380,7 @@ void Workbench::registerActions() {
                 }
             }
             if (!projPath.empty())
-                showNuGetPackageManagerDialog(m_window, m_services.fs, projPath,
-                                              [this] { refreshSolutionExplorerForFsChange(); });
+                showManagedPackages(projPath);
         },
         [this] { return m_window != nullptr && m_solution != nullptr; });
     add(

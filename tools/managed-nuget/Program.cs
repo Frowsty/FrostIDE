@@ -6,6 +6,8 @@ using System.Text;
 using System.Text.Json;
 using System.Xml;
 using Microsoft.Build.Construction;
+using Microsoft.Build.Evaluation;
+using NuGet.Versioning;
 
 sealed class Utf8Writer : StringWriter { public override Encoding Encoding => new UTF8Encoding(false); }
 
@@ -17,6 +19,9 @@ static class Program
         {
             if (args.Length != 2 || args[0] != "--sdk" || !Path.IsPathFullyQualified(args[1])) throw new InvalidDataException("An absolute user-installed .NET SDK directory is required");
             var sdk = Path.GetFullPath(args[1]);
+            Environment.SetEnvironmentVariable("MSBUILD_EXE_PATH", Path.Combine(sdk, "MSBuild.dll"));
+            Environment.SetEnvironmentVariable("MSBuildSDKsPath", Path.Combine(sdk, "Sdks"));
+            Environment.SetEnvironmentVariable("MSBuildExtensionsPath", sdk);
             AssemblyLoadContext.Default.Resolving += (_, name) => { var path = Path.Combine(sdk, name.Name + ".dll"); return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null; };
             return Plan();
         }
@@ -29,6 +34,7 @@ static class Program
         if (line.Length > 4 * 1024 * 1024) throw new InvalidDataException("Package plan request is too large");
         using var json = JsonDocument.Parse(line);
         var request = json.RootElement;
+        using var collection = new ProjectCollection();
         string Text(string key) => request.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString()! : "";
         if (!request.TryGetProperty("trusted", out var trusted) || trusted.ValueKind != JsonValueKind.True) throw new InvalidDataException("Workspace is not trusted");
         if (!Path.IsPathFullyQualified(Text("root"))) throw new InvalidDataException("Workspace root must be absolute");
@@ -47,8 +53,8 @@ static class Program
         if (!project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Select a C# SDK project");
         var package = Text("package"); var version = Text("version"); var operation = Text("operation");
         bool Literal(string text) => text.Length != 0 && text.All(c => char.IsAsciiLetterOrDigit(c) || ".-_+[](), ".Contains(c));
-        if (!Literal(package) || package.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '.' && c != '-' && c != '_')) throw new InvalidDataException("Invalid package ID");
-        if (operation != "remove" && !Literal(version)) throw new InvalidDataException("An explicit literal package version or range is required");
+        if (package.Length > 100 || !Literal(package) || package.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '.' && c != '-' && c != '_')) throw new InvalidDataException("Invalid package ID");
+        if (operation != "remove" && (version.Length > 256 || !Literal(version) || !VersionRange.TryParse(version, out _))) throw new InvalidDataException("An explicit literal package version or range is required");
         if (operation != "install" && operation != "update" && operation != "remove") throw new InvalidDataException("Unknown package operation");
         var files = new List<object>();
         (ProjectRootElement Xml, byte[] Before, bool Bom, string Newline) Load(string file)
@@ -58,7 +64,8 @@ static class Program
             var content = new UTF8Encoding(false, true).GetString(bytes, bom ? 3 : 0, bytes.Length - (bom ? 3 : 0));
             if (content.Contains("\r\n") && content.Replace("\r\n", "").Contains('\n')) throw new InvalidDataException("Mixed line endings are unsupported");
             using var reader = XmlReader.Create(new StringReader(content), new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
-            var xml = ProjectRootElement.Create(reader, null, true); xml.FullPath = file;
+            while (reader.Read()) { }
+            var xml = ProjectRootElement.Open(file, collection, true) ?? throw new InvalidDataException("Cannot load package definition");
             return (xml, bytes, bom, content.Contains("\r\n") ? "\r\n" : "\n");
         }
         ProjectItemElement? Find(ProjectRootElement xml, string type)
@@ -67,13 +74,14 @@ static class Program
             if (matches.Length > 1) throw new InvalidDataException("Multiple declarations of this package require a scoped edit");
             var item = matches.SingleOrDefault();
             if (item != null && (item.Condition.Length != 0 || item.Parent.Condition.Length != 0 || item.Parent is not ProjectItemGroupElement || item.Parent.Parent != xml || item.Update.Length != 0 || item.Remove.Length != 0)) throw new InvalidDataException("Conditional or indirect package declarations require a scoped edit");
-            if (xml.Items.Any(item => item.ItemType == type && (item.Include.Contains("$(") || item.Include.Contains("@(") || item.Update.Equals(package, StringComparison.OrdinalIgnoreCase) || item.Remove.Equals(package, StringComparison.OrdinalIgnoreCase)))) throw new InvalidDataException("Dynamic package declarations prevent an unambiguous edit");
+            if (xml.Items.Any(item => item.ItemType == type && (item.Include.IndexOfAny(new[] { '$', '@', '*', '?', ';' }) >= 0 || item.Exclude.Length != 0 || item.Update.Equals(package, StringComparison.OrdinalIgnoreCase) || item.Remove.Equals(package, StringComparison.OrdinalIgnoreCase)))) throw new InvalidDataException("Dynamic package declarations prevent an unambiguous edit");
             return item;
         }
         void SetVersion(ProjectItemElement item)
         {
             if (item.Metadata.Any(m => m.Name == "VersionOverride" || m.Condition.Length != 0)) throw new InvalidDataException("Version overrides or conditional metadata require a scoped edit");
             var versions = item.Metadata.Where(m => m.Name == "Version").ToArray();
+            if (versions.Any(m => m.Value.Contains("$(") || m.Value.Contains("@("))) throw new InvalidDataException("Package version comes from an expression; edit its evaluated owning property instead");
             if (versions.Length > 1) throw new InvalidDataException("Ambiguous package version metadata");
             if (versions.Length == 0) item.AddMetadata("Version", version, true); else versions[0].Value = version;
         }
@@ -85,8 +93,19 @@ static class Program
             var bytes = new UTF8Encoding(false, true).GetBytes(after);
             if (!bytes.AsSpan().SequenceEqual(state.Before)) files.Add(new { path = file, beforeBase64 = Convert.ToBase64String(state.Before), afterBase64 = Convert.ToBase64String(bytes) });
         }
-        var state = Load(project); var reference = Find(state.Xml, "PackageReference");
+        var state = Load(project);
         var centralFile = Text("centralFile");
+        var centralPath = centralFile.Length == 0 ? "" : Definition(centralFile);
+        (ProjectRootElement Xml, byte[] Before, bool Bom, string Newline)? centralState = centralPath.Length == 0 ? null : Load(centralPath);
+        if (Text("configuration").Length == 0 || Text("targetFramework").Length == 0) throw new InvalidDataException("Explicit evaluated configuration and framework are required");
+        var globals = new Dictionary<string, string> { ["Configuration"] = Text("configuration"), ["TargetFramework"] = Text("targetFramework") };
+        var evaluated = new Project(state.Xml, globals, null, collection);
+        if (evaluated.GetPropertyValue("UsingMicrosoftNETSdk") != "true") throw new InvalidDataException("Select an SDK-style C# project");
+        if ((evaluated.GetPropertyValue("ManagePackageVersionsCentrally") == "true") != (centralState != null)) throw new InvalidDataException("Central package ownership differs from the evaluated project");
+        var existing = evaluated.GetItems("PackageReference").Where(item => item.EvaluatedInclude.Equals(package, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if ((operation == "install" && existing.Length != 0) || (operation != "install" && existing.Length != 1)) throw new InvalidDataException("Evaluated package identity is absent, duplicated or already installed");
+        if (existing.Any(item => !item.Xml.ContainingProject.FullPath.Equals(project, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))) throw new InvalidDataException("Package reference is owned by an import");
+        var reference = Find(state.Xml, "PackageReference");
         if (operation == "remove") { if (reference == null) throw new InvalidDataException("Package reference is not directly owned by the selected project"); reference.Parent.RemoveChild(reference); }
         else
         {
@@ -97,9 +116,26 @@ static class Program
             else
             {
                 if (reference.Metadata.Any(m => m.Name == "Version" || m.Name == "VersionOverride")) throw new InvalidDataException("Central package has a project-local version override");
-                var central = Definition(centralFile); var centralState = Load(central); var entry = Find(centralState.Xml, "PackageVersion");
+                var central = centralPath; var centralDefinition = centralState!.Value; var entry = Find(centralDefinition.Xml, "PackageVersion");
+                var activeVersions = evaluated.GetItems("PackageVersion").Where(item => item.EvaluatedInclude.Equals(package, StringComparison.OrdinalIgnoreCase)).ToArray();
+                if (activeVersions.Length > 1 || activeVersions.Any(item => !item.Xml.ContainingProject.FullPath.Equals(central, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))) throw new InvalidDataException("Central package version is duplicated or owned by an import");
                 if (operation == "install" && entry != null && entry.Metadata.Any(m => m.Name == "Version" && m.Value != version)) throw new InvalidDataException("Central version is shared; explicitly update its declaration");
-                entry ??= centralState.Xml.AddItem("PackageVersion", package); SetVersion(entry); Emit(central, centralState);
+                entry ??= centralDefinition.Xml.AddItem("PackageVersion", package); SetVersion(entry);
+            }
+        }
+        evaluated.MarkDirty();
+        evaluated.ReevaluateIfNecessary();
+        var projected = evaluated.GetItems("PackageReference").Where(item => item.EvaluatedInclude.Equals(package, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (operation == "remove") { if (projected.Length != 0) throw new InvalidDataException("An imported declaration still supplies the removed package"); }
+        else
+        {
+            if (projected.Length != 1) throw new InvalidDataException("Proposed package is absent or duplicated after actual MSBuild reevaluation");
+            if (centralState == null) { if (projected[0].GetMetadataValue("Version") != version) throw new InvalidDataException("An imported declaration overrides the proposed package version"); }
+            else
+            {
+                var versions = evaluated.GetItems("PackageVersion").Where(item => item.EvaluatedInclude.Equals(package, StringComparison.OrdinalIgnoreCase)).ToArray();
+                if (projected[0].GetMetadataValue("Version").Length != 0 || projected[0].GetMetadataValue("VersionOverride").Length != 0 || versions.Length != 1 || versions[0].GetMetadataValue("Version") != version) throw new InvalidDataException("Central version proposal is overridden by evaluated project logic");
+                Emit(centralPath, centralState.Value);
             }
         }
         Emit(project, state);

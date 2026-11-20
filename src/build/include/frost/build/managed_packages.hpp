@@ -19,6 +19,7 @@ struct ManagedPackage {
     bool transitive = false;
 };
 struct ManagedPackageReport {
+    std::string projectPath{}; // Actual SDK-reported project; absent for feed search.
     std::vector<ManagedPackage> packages{};
     std::vector<std::string> problems{}; // Feed failures remain visible even when another feed returned packages.
 };
@@ -26,7 +27,8 @@ struct ManagedPackageReport {
 [[nodiscard]] Result<io::ProcessSpec> managedPackageSpec(const ManagedPackageRequest& request);
 [[nodiscard]] Result<ManagedPackageReport> parseManagedPackageReport(std::string_view json, PackageQuery query);
 // Trust-gated real process with streamed output and whole-tree cancellation (BuildSession contract).
-[[nodiscard]] Result<std::unique_ptr<BuildSession>> startManagedPackageQuery(
-    io::IProcessLauncher& launcher, const project::TrustStore& trust, const ManagedPackageRequest& request,
-    const std::vector<std::string>& roots, BuildCallbacks callbacks, IClock& clock = systemClock());
-}
+[[nodiscard]] Result<std::unique_ptr<BuildSession>>
+startManagedPackageQuery(io::IProcessLauncher& launcher, const project::TrustStore& trust,
+                         const ManagedPackageRequest& request, const std::vector<std::string>& roots,
+                         BuildCallbacks callbacks, IClock& clock = systemClock());
+} // namespace frost::build

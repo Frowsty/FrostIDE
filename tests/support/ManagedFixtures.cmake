@@ -73,6 +73,10 @@ function(frost_add_managed_fixture_test name)
             "\"ManagedE2E.UnsavedCrossProjectUtf16NavigationAndRename\":[\"sdk\",\"server\"]")
     elseif(name STREQUAL "build_managed_evaluation_tests")
         set(cases "\"ManagedEvaluationReal.EvaluatedItemsAndCompilerContextFollowActualSdkInnerBuilds\":[\"sdk\"]")
+    elseif(name STREQUAL "build_managed_packages_tests")
+        set(cases "\"ManagedPackagesReal.LocalFeedRestoreSearchAndResolvedVersionsUseActualSdk\":[\"sdk\"]")
+    elseif(name STREQUAL "run_dotnet_adapter_tests")
+        set(cases "\"DotnetTestsReal.ActualAdapterDiscoveryReportsAndFailedMethodSelectionAgree\":[\"sdk\"]")
     elseif(name STREQUAL "app_workbench_managed_tests")
         set(cases "\"WorkbenchManaged.RealConsoleProjectBuildsAndDebugsWithVerifiedSource\":[\"sdk\",\"debugger\"],\n"
             "\"WorkbenchManaged.TrustAndUnsavedCrossProjectRenameReachEditors\":[\"sdk\",\"server\"],\n"

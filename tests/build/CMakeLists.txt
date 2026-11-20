@@ -149,3 +149,8 @@ frost_add_managed_fixture_test(build_managed_evaluation_tests SOURCES managed_ev
 target_include_directories(build_managed_evaluation_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(build_managed_evaluation_tests PRIVATE
     FROST_EVALUATED_SDK_FIXTURE="${FROST_SOURCE_DIR}/tests/managed/fixtures/EvaluatedSdk")
+
+# R17 offline NuGet process acceptance. The package/feed are authored under an isolated scratch root.
+frost_add_managed_fixture_test(build_managed_packages_tests SOURCES managed_packages_real_test.cpp
+    DEPS frost::build frost::project frost::io frost::core LABELS integration managed nuget)
+target_include_directories(build_managed_packages_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

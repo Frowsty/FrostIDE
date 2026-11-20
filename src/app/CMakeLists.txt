@@ -49,6 +49,9 @@ frost_add_library(app LAYER app
         src/cmake_integration.cpp
         src/cmake_kit_dialog.cpp
         src/workbench_dependencies.cpp
+        src/managed_tools_window.cpp
+        src/managed_tools_window.hpp
+        src/workbench_managed_tools.cpp
         src/engine_integration.cpp
         src/engine_integration.hpp
         src/engine_integration_internal.hpp

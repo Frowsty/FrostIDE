@@ -25,7 +25,7 @@
 frost_add_test(app_tests QT
     SOURCES agent_bridge_test.cpp command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp stall_hooks_test.cpp
             workbench_project_helpers_test.cpp cmake_kit_test.cpp standalone_build_backend_test.cpp
-            settings_import_test.cpp hosting_cli_test.cpp
+            settings_import_test.cpp hosting_cli_test.cpp managed_tools_window_test.cpp
     DEPS frost::app frost::diag frost::io)
 target_link_libraries(app_tests PRIVATE Qt6::Network)
 # tests/support/scratch_dir.hpp (the persistent services' data directory).

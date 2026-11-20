@@ -175,3 +175,9 @@ frost_add_test(run_native_coverage_real_tests
     LABELS integration)
 target_include_directories(run_native_coverage_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(run_native_coverage_real_tests PRIVATE FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+
+include("${FROST_SOURCE_DIR}/tests/support/ManagedFixtures.cmake")
+frost_add_managed_fixture_test(run_dotnet_adapter_tests SOURCES dotnet_tests_real_test.cpp
+    DEPS frost::run frost::build frost::project frost::io frost::core LABELS integration managed)
+target_include_directories(run_dotnet_adapter_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(run_dotnet_adapter_tests PRIVATE FROST_DOTNET_TEST_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/dotnet")
