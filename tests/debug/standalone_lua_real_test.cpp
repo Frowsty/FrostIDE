@@ -27,7 +27,8 @@ Result<T> answer(Send send) {
 std::int64_t marker(std::string_view source, std::string_view name) {
     const auto pos = source.find(name);
     EXPECT_NE(pos, std::string::npos);
-    return 1 + std::count(source.begin(), source.begin() + (pos == std::string::npos ? 0 : pos), '\n');
+    const auto prefix = pos == std::string::npos ? std::string_view{} : source.substr(0, pos);
+    return 1 + std::count(prefix.begin(), prefix.end(), '\n');
 }
 run::RunConfiguration scriptConfiguration(const std::string& directory) {
     run::RunConfiguration config;
@@ -135,11 +136,11 @@ TEST(StandaloneLuaReal, SameInterpreterBreakpointsLocalsUpvaluesTablesMutationSt
     const auto coroutineLine = marker(*source, "STANDALONE_COROUTINE");
     test::SessionRecorder recorder;
     auto owned = DebugSession::start(
-        standaloneLuaAdapterFactory(io::realProcessLauncher(), FROST_TEST_LUA_DEBUG_ADAPTER), std::move(*launch),
-        {{config.target, {{.id = 1, .line = localLine}, {.id = 2, .line = coroutineLine}}}}, recorder.callbacks(),
-        false, "lua");
-    ASSERT_TRUE(owned) << owned.error().describe();
-    auto& session = **owned;
+        standaloneLuaAdapterFactory(io::realProcessLauncher(), FROST_TEST_LUA_DEBUG_ADAPTER, target),
+        std::move(*launch), {{config.target, {{.id = 1, .line = localLine}, {.id = 2, .line = coroutineLine}}}},
+        recorder.callbacks(), false, "lua");
+    ASSERT_TRUE(owned);
+    auto& session = *owned;
     ASSERT_TRUE(test::waitUntil([&] { return session.selectedFrame().has_value(); }));
     auto frame = session.selectedFrame();
     ASSERT_TRUE(frame);
@@ -226,11 +227,45 @@ TEST(StandaloneLuaReal, SameInterpreterBreakpointsLocalsUpvaluesTablesMutationSt
     ASSERT_TRUE(session.continueRun());
     ASSERT_TRUE(test::waitUntil([&] { return recorder.hasEnded(); }));
     ASSERT_TRUE(session.outcome());
+    EXPECT_FALSE(session.outcome()->error);
     EXPECT_EQ(session.outcome()->exitCode, 0);
     {
         LockGuard lock(recorder.mutex);
         EXPECT_NE(recorder.output.find("STANDALONE_RESULT"), std::string::npos);
     }
+}
+TEST(StandaloneLuaReal, OwnedTargetExitAndOutputSurviveAdapterEof) {
+    ASSERT_TRUE(io::isAbsolutePath(FROST_TEST_LUA_DEBUG_ADAPTER));
+    frost::test::ScratchDir scratch("standalone-lua-exit");
+    StandaloneLuaTarget target;
+    target.interpreter = FROST_TEST_LUA_INTERPRETER;
+    target.script = scratch.join("exit.lua");
+    target.workingDirectory = scratch.path();
+    target.interpreterArguments = {"-W"};
+    target.arguments = {"two words"};
+    target.environment = {{"FROST_LUA_DEBUG_FIXTURE", "admitted value"}};
+    ASSERT_TRUE(io::realFileSystem().writeFileAtomic(
+        target.script, "local marker = assert(io.open('observed', 'w')); marker:close()\n"
+                       "print(arg[1], os.getenv('FROST_LUA_DEBUG_FIXTURE'))\nos.exit(7)\n"));
+    auto launch = standaloneLuaLaunchArguments(target);
+    ASSERT_TRUE(launch);
+    test::SessionRecorder recorder;
+    auto session = DebugSession::start(
+        standaloneLuaAdapterFactory(io::realProcessLauncher(), FROST_TEST_LUA_DEBUG_ADAPTER, target),
+        std::move(*launch), {}, recorder.callbacks(), false, "lua");
+    ASSERT_TRUE(session);
+    ASSERT_TRUE(test::waitUntil([&] { return session->selectedFrame().has_value() || recorder.hasEnded(); }));
+    ASSERT_TRUE(session->selectedFrame());
+    EXPECT_EQ(session->selectedFrame()->line, 1);
+    ASSERT_TRUE(session->continueRun());
+    ASSERT_TRUE(test::waitUntil([&] { return recorder.hasEnded(); }));
+    const auto outcome = session->outcome();
+    ASSERT_TRUE(outcome);
+    EXPECT_FALSE(outcome->error);
+    EXPECT_EQ(outcome->exitCode, 7);
+    EXPECT_TRUE(io::realFileSystem().status(scratch.join("observed")));
+    LockGuard lock(recorder.mutex);
+    EXPECT_NE(recorder.output.find("two words\tadmitted value"), std::string::npos);
 }
 } // namespace
 } // namespace frost::debug

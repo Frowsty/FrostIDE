@@ -206,7 +206,7 @@ struct ClientState {
                 outgoingMessage = std::move(outgoing.front());
                 outgoing.pop_front();
             }
-            if (handlers.beforeWrite) {
+            if (handlers.beforeWrite && outgoingMessage.requestSequence) {
                 auto admitted = handlers.beforeWrite(outgoingMessage.command);
                 if (!admitted) {
                     IDebugAdapterClient::Completion done;
@@ -300,6 +300,10 @@ struct ClientState {
                                                             : answer.error().message());
         }
         static_cast<void>(send(std::move(response), std::nullopt));
+        // The Lua proxy does not act on a refused terminal response. Closing its owned
+        // connection releases the pending launch and kills any previously admitted child.
+        if (!answer && handlers.supportsOwnedRunInTerminal && command == "runInTerminal")
+            transport->close();
     }
 
     void dispatch(std::string_view payload) {
@@ -402,6 +406,8 @@ public:
     DapClient& operator=(const DapClient&) = delete;
 
     std::int64_t request(std::string command, rpc::Json arguments, Completion done) override {
+        if (command == "initialize" && m_state->handlers.supportsOwnedRunInTerminal)
+            arguments.set("supportsRunInTerminalRequest", true);
         rpc::Json message = rpc::Json::object().set("type", "request").set("command", command);
         if (!arguments.isNull()) {
             message.set("arguments", std::move(arguments));

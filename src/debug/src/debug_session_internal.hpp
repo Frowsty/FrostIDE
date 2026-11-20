@@ -230,6 +230,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     std::vector<std::int64_t> pauseCandidates FROST_GUARDED_BY(mutex); // Header comment, "Pause".
     std::optional<std::int64_t> pauseOrigin FROST_GUARDED_BY(mutex);
     std::optional<int> exitCode FROST_GUARDED_BY(mutex);
+    bool ownedTargetClosedCleanly FROST_GUARDED_BY(mutex) = false;
     std::optional<Error> fatalError FROST_GUARDED_BY(mutex);
     std::optional<DebugOutcome> outcome FROST_GUARDED_BY(mutex);
 

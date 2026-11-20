@@ -109,6 +109,10 @@ struct DapHandlers {
     // Thread-safe, fast final admission on the real writer thread; refusal sends zero bytes and
     // completes that request once on the writer thread. Never destroy the client in an I/O callback.
     std::function<Result<void>(std::string_view command)> beforeWrite{};
+    // Set only by an adapter factory that owns and validates the in-terminal launch.
+    bool supportsOwnedRunInTerminal = false;
+    // Out-of-band exit status of a locally owned debuggee and whether its adapter closed cleanly.
+    std::function<void(int, bool)> onOwnedTargetExit{};
 };
 
 /*

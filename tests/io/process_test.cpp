@@ -601,6 +601,26 @@ TEST(RealProcessLauncher, StdinIsPiped) {
     EXPECT_EQ(result->exitCode, 0);
 }
 
+#ifdef __linux__
+TEST(RealProcessLauncher, SocketStdinIsOptInAndDeliversEof) {
+    ProcessSpec spec;
+    spec.executable = "/bin/sh";
+    spec.stdinMode = Stdio::Pipe;
+    spec.arguments = {"-c", "test -p /proc/self/fd/0"};
+    const auto pipe = run(spec);
+    ASSERT_TRUE(pipe.has_value()) << pipe.error().describe();
+    EXPECT_EQ(pipe->exitCode, 0);
+
+    spec.posixSocketStdin = true;
+    spec.arguments = {"-c", "test -S /proc/self/fd/0 && exec /bin/cat"};
+    const std::string input = "first line\nsecond line\r\n\0\xff end"s;
+    const auto socket = run(spec, input);
+    ASSERT_TRUE(socket.has_value()) << socket.error().describe();
+    EXPECT_EQ(socket->stdoutBytes, input);
+    EXPECT_EQ(socket->exitCode, 0);
+}
+#endif
+
 TEST(RealProcessLauncher, MoreThanOneMegabyteOnBothPipes) {
     // The child alternates 4 KiB chunks between stdout and stderr: draining one pipe at a
     // time would deadlock as soon as the other pipe's buffer fills.

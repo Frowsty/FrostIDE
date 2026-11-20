@@ -286,7 +286,7 @@ void DebugSession::State::closed(const Error& why) {
         result.disconnectConfirmed = disconnectConfirmed;
         if (fatalError) {
             result.error = fatalError;
-        } else if (!stopRequested && !terminatedSeen && !disconnectSent) {
+        } else if (!stopRequested && !terminatedSeen && !disconnectSent && !ownedTargetClosedCleanly) {
             result.error =
                 Error(ErrorCode::IoError, std::format("The debug adapter ended unexpectedly: {}", why.message()));
         }
@@ -502,6 +502,24 @@ std::unique_ptr<DebugSession> DebugSession::start(AdapterFactory factory, rpc::J
             }
             return {};
         },
+        .onOwnedTargetExit =
+            [weak](int code, bool cleanAdapterClose) {
+                if (const auto self = weak.lock()) {
+                    self->afterStartup([self, code, cleanAdapterClose] {
+                        {
+                            LockGuard lock(self->mutex);
+                            if (self->state == DebugState::Ended)
+                                return;
+                            self->ownedTargetClosedCleanly = cleanAdapterClose;
+                            self->exitCode = code;
+                        }
+                        self->emit([&] {
+                            if (self->callbacks.onExited)
+                                self->callbacks.onExited(code);
+                        });
+                    });
+                }
+            },
     };
     auto client = factory ? factory(std::move(handlers))
                           : Result<std::unique_ptr<IDebugAdapterClient>>(

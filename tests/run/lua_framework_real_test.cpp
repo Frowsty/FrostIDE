@@ -246,8 +246,8 @@ TEST(LuaFrameworkReal, LuaUnitSelectedCaseDebugUsesSameInterpreterAndRealStopped
     const auto line = 1 + std::count(source->begin(), source->begin() + static_cast<std::ptrdiff_t>(marker), '\n');
     debug::test::SessionRecorder recorder;
     auto owned = debug::DebugSession::start(
-        debug::standaloneLuaAdapterFactory(io::realProcessLauncher(), FROST_TEST_LUA_DEBUG_ADAPTER), std::move(*launch),
-        {{c.target, {{.id = 1, .line = line}}}}, recorder.callbacks(), false, "lua");
+        debug::standaloneLuaAdapterFactory(io::realProcessLauncher(), FROST_TEST_LUA_DEBUG_ADAPTER, target),
+        std::move(*launch), {{c.target, {{.id = 1, .line = line}}}}, recorder.callbacks(), false, "lua");
     ASSERT_TRUE(owned);
     auto& session = *owned;
     ASSERT_TRUE(debug::test::waitUntil([&] { return session.selectedFrame().has_value(); }));
@@ -255,6 +255,7 @@ TEST(LuaFrameworkReal, LuaUnitSelectedCaseDebugUsesSameInterpreterAndRealStopped
     ASSERT_TRUE(session.continueRun());
     ASSERT_TRUE(debug::test::waitUntil([&] { return recorder.hasEnded(); }));
     ASSERT_TRUE(session.outcome());
+    EXPECT_FALSE(session.outcome()->error);
     EXPECT_EQ(session.outcome()->exitCode, 0);
 }
 } // namespace

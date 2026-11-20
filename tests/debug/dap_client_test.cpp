@@ -12,6 +12,7 @@
 #include "debug_test_util.hpp"
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <future>
 #include <memory>
 #include <string>
@@ -181,6 +182,23 @@ TEST(DapClient, ReverseRequestsAreDeclinedOrAnswered) {
         ASSERT_NE(answer.find("body"), nullptr);
         EXPECT_EQ(answer.find("body")->boolAt("ok"), true);
     }
+}
+
+TEST(DapClient, AdapterRequestsCannotArmClientLaunchAdmission) {
+    FakeDebugAdapter adapter;
+    Handlers handlers;
+    std::atomic<int> admissions = 0;
+    auto callbacks = handlers.make();
+    callbacks.beforeWrite = [&](std::string_view command) -> Result<void> {
+        if (command == "launch")
+            ++admissions;
+        return {};
+    };
+    auto client = makeDapClient(adapter.transport(), std::move(callbacks));
+    static_cast<void>(adapter.sendReverseRequest("launch"));
+    ASSERT_TRUE(waitUntil([&] { return adapter.reverseResponses().size() == 1; }));
+    EXPECT_EQ(adapter.reverseResponses().front().boolAt("success"), false);
+    EXPECT_EQ(admissions.load(), 0);
 }
 
 TEST(DapClient, CancelCompletesWithCancelledAndTellsTheAdapter) {

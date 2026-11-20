@@ -28,6 +28,7 @@
 #include "process_internal.hpp"
 #include "process_sandbox_internal.hpp"
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 
@@ -571,9 +572,13 @@ Result<UniqueFd> aboveStdio(UniqueFd fd) {
     return UniqueFd(moved);
 }
 
-Result<PipeEnds> createPipe(bool parentReads) {
+Result<PipeEnds> createPipe(bool parentReads, bool socketBacked = false) {
     int fds[2];
-    if (::pipe2(fds, O_CLOEXEC) != 0) {
+    if (socketBacked) {
+        if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, fds) != 0) {
+            return std::unexpected(errnoError(errno, "socketpair"));
+        }
+    } else if (::pipe2(fds, O_CLOEXEC) != 0) {
         return std::unexpected(errnoError(errno, "pipe2"));
     }
     UniqueFd rawRead(fds[0]);
@@ -678,7 +683,7 @@ Result<detail::SpawnedChild> spawnPosixChild(const ProcessSpec& spec) {
     for (auto [mode, ends, parentReads] :
          {std::tuple{stdinMode, &in, false}, std::tuple{stdoutMode, &out, true}, std::tuple{stderrMode, &err, true}}) {
         if (mode == Stdio::Pipe) {
-            auto pipe = createPipe(parentReads);
+            auto pipe = createPipe(parentReads, ends == &in && spec.posixSocketStdin);
             if (!pipe) {
                 return std::unexpected(std::move(pipe.error()));
             }

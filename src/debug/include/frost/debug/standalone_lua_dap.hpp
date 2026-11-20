@@ -19,5 +19,6 @@ struct StandaloneLuaTarget {
 [[nodiscard]] Result<rpc::Json> standaloneLuaLaunchArguments(const StandaloneLuaTarget& target);
 // Installed upstream bin/lua-debug[.exe], NO arguments (descriptorFactory.js), owned pipes/tree.
 // Keep its extension/script/native runtime dependencies installed; no silent alternate executable.
-[[nodiscard]] AdapterFactory standaloneLuaAdapterFactory(io::IProcessLauncher& launcher, std::string executable);
+[[nodiscard]] AdapterFactory standaloneLuaAdapterFactory(io::IProcessLauncher& launcher, std::string executable,
+                                                         StandaloneLuaTarget target);
 } // namespace frost::debug

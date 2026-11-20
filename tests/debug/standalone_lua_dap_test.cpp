@@ -2,9 +2,12 @@
 // Real protocol/argv construction, not simulated conformance acceptance.
 #include "frost/debug/standalone_lua_dap.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
+#include "frost/rpc/framing.hpp"
 
 #include "debug_test_util.hpp"
 #include <gtest/gtest.h>
+
+#include <atomic>
 namespace frost::debug {
 namespace {
 TEST(StandaloneLuaDap, ExplicitLuaExeAndArg0NeverFallBackToAdapterBundledInterpreter) {
@@ -27,7 +30,7 @@ TEST(StandaloneLuaDap, ExplicitLuaExeAndArg0NeverFallBackToAdapterBundledInterpr
     ASSERT_NE(launch->find("arg"), nullptr);
     ASSERT_EQ(launch->find("arg")->size(), 2U);
     EXPECT_EQ(*launch->find("arg")->items()[0].asString(), "two words");
-    EXPECT_EQ(launch->stringAt("console"), "internalConsole");
+    EXPECT_EQ(launch->stringAt("console"), "integratedTerminal");
     EXPECT_EQ(launch->boolAt("useWSL"), false);
 }
 TEST(StandaloneLuaDap, RejectsMissingRuntimeAndRelativeScriptBeforeStartingAdapter) {
@@ -39,7 +42,7 @@ TEST(StandaloneLuaDap, RejectsMissingRuntimeAndRelativeScriptBeforeStartingAdapt
     target.script = "relative.lua";
     EXPECT_FALSE(standaloneLuaLaunchArguments(target));
     io::ScriptedProcessLauncher launcher;
-    auto factory = standaloneLuaAdapterFactory(launcher, "lua-debug");
+    auto factory = standaloneLuaAdapterFactory(launcher, "lua-debug", target);
     EXPECT_FALSE(factory({}));
 }
 
@@ -47,7 +50,7 @@ TEST(StandaloneLuaDap, InstalledAdapterUsesNoArgumentsAndOwnedStdioWithNoInterpr
     io::ScriptedProcessLauncher launcher;
     const auto adapter = test::workPath("installed-lua-debug/bin/lua-debug");
     launcher.expect({.expectExecutable = adapter, .launchError = Error(ErrorCode::IoError, "authored start refusal")});
-    auto started = standaloneLuaAdapterFactory(launcher, adapter)({});
+    auto started = standaloneLuaAdapterFactory(launcher, adapter, {})({});
     EXPECT_FALSE(started);
     const auto launches = launcher.launches();
     ASSERT_EQ(launches.size(), 1U);
@@ -57,6 +60,25 @@ TEST(StandaloneLuaDap, InstalledAdapterUsesNoArgumentsAndOwnedStdioWithNoInterpr
     EXPECT_EQ(launches.front().spec.stdoutMode, io::Stdio::Pipe);
     EXPECT_EQ(launches.front().spec.stderrMode, io::Stdio::Pipe);
     EXPECT_TRUE(launches.front().spec.killOnClose);
+}
+
+TEST(StandaloneLuaDap, UnsolicitedTerminalRequestClosesTheAdapterWithoutLaunchingLua) {
+    io::ScriptedProcessLauncher launcher;
+    const auto adapter = test::workPath("installed-lua-debug/bin/lua-debug");
+    const auto request = rpc::encodeFrame(R"({"seq":1,"type":"request","command":"runInTerminal","arguments":{}})");
+    launcher.expect({.expectExecutable = adapter, .stdoutBytes = request, .outputHeld = true});
+    StandaloneLuaTarget target;
+    target.interpreter = test::workPath("sdk/lua");
+    target.script = test::workPath("project/main.lua");
+    target.workingDirectory = test::workPath("project");
+    std::atomic<bool> closed = false;
+    auto client = standaloneLuaAdapterFactory(launcher, adapter,
+                                              std::move(target))({.onClosed = [&](const Error&) { closed = true; }});
+    ASSERT_TRUE(client);
+    ASSERT_TRUE(test::waitUntil([&] { return closed.load(); }));
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1U);
+    EXPECT_TRUE(launches.front().terminated);
 }
 
 } // namespace

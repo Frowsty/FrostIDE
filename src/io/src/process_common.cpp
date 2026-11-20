@@ -30,6 +30,12 @@ bool isDeviceNamespace(std::string_view path, bool windowsRules) noexcept {
 Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules) {
     if (auto sandbox = validateProcessSandbox(spec, windowsRules); !sandbox)
         return sandbox;
+    if (spec.posixSocketStdin) {
+        if (windowsRules)
+            return fail(ErrorCode::Unsupported, "socket-backed stdin requires Linux");
+        if (spec.stdinMode != Stdio::Pipe || spec.pseudoTerminal)
+            return invalid("socket-backed stdin requires piped stdin and no pseudo terminal");
+    }
     if (spec.residentMemoryLimitBytes) {
         if (!windowsRules) {
             return fail(ErrorCode::Unsupported, "residentMemoryLimitBytes requires Windows HARDWS_MAX");

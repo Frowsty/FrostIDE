@@ -37,8 +37,13 @@ or unchecked adapter payload by default. Lua and upstream lua-debug are MIT; any
 packaging must preserve their licenses and audit all native/submodule dependencies separately.
 
 The upstream bootstrap emits interpreter/-e/bootstrap, then arg0, program, arg. FrostIDE always
-sends explicit luaexe equal to Run's selected interpreter, luaVersion=lua54, UTF8, internalConsole
-and useWSL=false. No adapter-bundled runtime fallback is allowed. Environment removals cannot be
+sends explicit luaexe equal to Run's selected interpreter, luaVersion=lua54, UTF8, and useWSL=false.
+The upstream integratedTerminal route allows FrostIDE to own the Lua child and observe its output
+and exit. The standalone profile accepts one reverse request matching the admitted interpreter,
+working directory, arguments and environment, and the installed extension bootstrap for the held
+adapter PID. FrostIDE builds the bootstrap argument locally and launches the child directly.
+The adapter can close without reporting a debuggee exit, so FrostIDE reads the held child's status.
+No adapter-bundled runtime fallback is allowed. Environment removals cannot be
 represented by the inspected launch schema and Debug refuses them instead of retaining variables
 silently. REPL Debug is explicitly unsupported; use a script Debug configuration. Standalone Lua
 build/tasks-before-launch are currently refused rather than skipped.

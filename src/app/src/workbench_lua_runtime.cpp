@@ -112,7 +112,7 @@ Result<void> Workbench::startStandaloneLuaDebug(run::RunConfiguration configurat
     target.arguments = plan->arguments;
     target.workingDirectory = plan->workingDirectory;
     target.trustRoots = {m_projectRoot};
-    return m_debug->startAdapterTarget(target, debug::standaloneLuaAdapterFactory(m_services.launcher, adapter),
+    return m_debug->startAdapterTarget(target, debug::standaloneLuaAdapterFactory(m_services.launcher, adapter, lua),
                                        std::move(*arguments), "lua", debug::DebugTargetMode::Launch, false,
                                        luaLaunchAdmissionFor(configuration));
 }

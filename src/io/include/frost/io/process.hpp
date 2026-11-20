@@ -161,6 +161,9 @@ struct ProcessSpec {
     Stdio stdoutMode = Stdio::Pipe;
     Stdio stderrMode = Stdio::Pipe;
 
+    // Linux only, with stdinMode == Pipe. Use a Unix socket for children that peek at stdin as a socket.
+    bool posixSocketStdin = false;
+
     // Contain the child and its descendants: a Job Object on Windows, a new session and process group
     // on POSIX (see the header comment for what each covers).
     bool killOnClose = true;
