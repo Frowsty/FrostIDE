@@ -100,6 +100,8 @@ Result<void> validateCppModuleScannerVersion(std::string_view banner) {
 Result<CppModuleGraph> scanCppModules(io::IProcessLauncher& launcher, io::IFileSystem& fs, const CppModuleScanRequest& request) {
     if (!request.trusted)
         return fail(ErrorCode::PermissionDenied, "Trust the project before scanning C++ module commands");
+    if (request.scanner.empty())
+        return fail(ErrorCode::NotFound, "Pinned clang-scan-deps tool unavailable");
     if (!io::isAbsolutePath(request.scanner) || !io::isAbsolutePath(request.privateDatabasePath) ||
         !io::isAbsolutePath(request.workingDirectory) || request.databaseBytes.empty() || !request.validateCurrent)
         return fail(ErrorCode::InvalidArgument, "Module scan requires a pinned scanner and captured compilation context");
