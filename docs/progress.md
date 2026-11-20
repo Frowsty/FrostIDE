@@ -1,3 +1,9 @@
+## 2026-11-20 — Full verification started after R19
+
+- The first Ubuntu 24.04 `--full --corpus` run on `2a5ac93e` exited 1. Debug, ASan/UBSan, TSan and fuzz builds all stopped on the same signed-to-unsigned conversion of a `readlink` result in the Linux process sandbox. Their native test stages did not run. The corrected translation unit passed an independent check with pinned Clang 23.1.4.
+- The same run reported 340 files requiring clang-format and 143 frost-lint violations. Feature-matrix validation and the licence check passed. The initial corpus check found missing clones. Subsequent independent corpus verification confirmed the exact FrostEngine and MoreLINQ pins on both platforms and Notepad++ on Windows.
+- The full Windows verifier was started with the corpus tier, two build jobs and one test job. A corrected Linux full run is queued after Windows. These runs require separate final results. Manual milestone UAT and opt-in installed-tool checks also require their own evidence.
+
 ## 2026-11-20 — Focused Windows verification after R19
 
 - Built the Windows Debug IDE with the pinned clang-cl preset. Its startup self-test passed all 14 checks, including showing and closing the main window offscreen. The first run exposed an access violation while constructing the .NET Project panel. The workbench now waits for the shell before attaching the panel.
