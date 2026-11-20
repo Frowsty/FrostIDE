@@ -182,6 +182,8 @@ Result<void> LanguageBridge::validateRefactoringTargets(const lang::WorkspaceEdi
 }
 
 Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_view label) {
+    if (edit.managed)
+        return applyManagedProposal(edit, label);
     if (auto targets = validateRefactoringTargets(edit); !targets)
         return targets;
     if (label == "Rename" || label == "C++ Semantic Refactoring") {

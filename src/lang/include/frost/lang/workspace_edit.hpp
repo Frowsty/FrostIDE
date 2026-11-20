@@ -65,8 +65,29 @@ struct FileEdit {
     friend bool operator==(const FileEdit&, const FileEdit&) = default;
 };
 
+// Owned Roslyn proposal receipts/resource deltas. Generic LSP appliers must refuse these;
+// only the trusted managed REF1 adapter may adopt their complete semantic group.
+struct ManagedSourceInput {
+    std::string path, text;
+    friend bool operator==(const ManagedSourceInput&, const ManagedSourceInput&) = default;
+};
+struct ManagedFileCreation {
+    std::string path, text;
+    friend bool operator==(const ManagedFileCreation&, const ManagedFileCreation&) = default;
+};
+struct ManagedFileRename {
+    std::string from, to;
+    friend bool operator==(const ManagedFileRename&, const ManagedFileRename&) = default;
+};
+struct ManagedProposal {
+    std::vector<ManagedSourceInput> inputs;
+    std::vector<ManagedFileCreation> creates;
+    std::vector<ManagedFileRename> renames;
+    friend bool operator==(const ManagedProposal&, const ManagedProposal&) = default;
+};
 struct WorkspaceEdit {
     std::vector<FileEdit> files; // In the server's order; one entry per file.
+    std::optional<ManagedProposal> managed;
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] std::size_t editCount() const noexcept;
     friend bool operator==(const WorkspaceEdit&, const WorkspaceEdit&) = default;

@@ -9,11 +9,17 @@
 #include "../../src/app/src/unity_context.hpp"
 #include "support/managed_profile_guard.hpp"
 #include "workbench_rig.hpp"
+#include <QApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFile>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QPushButton>
 #include <QScopeGuard>
+#include <QTabWidget>
+#include <QTimer>
 
 #include <algorithm>
 #include <chrono>
@@ -228,6 +234,10 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     dir.write("Lib/Greeter.cs", "namespace Library; public class Greeter { public string SayHello() => \"Hello\"; }\n");
     dir.write("App/Example.cs", "using Library;\npublic class Example {\n public string Run() {\n  var g = new "
                                 "Greeter();\n  var bad = MissingMethod();\n  return g.SayHello();\n }\n}\n");
+    const std::string semanticSource =
+        "public class Operations { private static int Add(int first,long second)=>first+(int)second; public static int "
+        "Call()=>Add(1,2); } public class Detached {}\n";
+    dir.write("Lib/Operations.cs", semanticSource);
     auto options = frost::lang::managedServiceOptions(dotnet, assembly, dir.path(), true);
     options.environment.emplace_back("DOTNET_CLI_HOME", dir.join(".dotnet-home"));
     for (const auto& name : profileVariables)
@@ -310,6 +320,86 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     EXPECT_NE(lib->editor().editor().text().text().find("string SayHello()"), std::string::npos);
     ASSERT_TRUE(rig.workbench->redoRefactoring());
     EXPECT_NE(editor->editor().text().text().find("g.Welcome()"), std::string::npos);
+    // Normal Alt+Enter -> installed Roslyn provider/action -> whole-group preview -> REF1/Undo.
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Lib/Operations.cs")));
+    auto* semanticView = rig.workbench->currentView();
+    const auto choose = [&](std::size_t offset, QString title, std::function<void()> duringPreview = {}) {
+        semanticView->editor().editor().setState(frost::text::EditorState::caretAt(frost::ByteOffset{offset}));
+        semanticView->widget()->setFocus();
+        frost::app::test::sendKey(semanticView->widget(), Qt::Key_Return, Qt::AltModifier);
+        auto& choices = rig.workbench->language()->choicePopup();
+        int index = -1;
+        EXPECT_TRUE(waitFor(
+            [&] {
+                for (int row = 0; row < choices.list()->count(); ++row)
+                    if (choices.list()->item(row)->text().contains(title, Qt::CaseInsensitive)) {
+                        index = row;
+                        return true;
+                    }
+                return false;
+            },
+            30s));
+        if (index < 0)
+            return false;
+        bool observed = false;
+        QTimer watcher;
+        QObject::connect(&watcher, &QTimer::timeout, [&] {
+            for (auto* widget : QApplication::topLevelWidgets()) {
+                auto* preview = qobject_cast<QDialog*>(widget);
+                if (!preview || !preview->isVisible() || !preview->windowTitle().contains(title, Qt::CaseInsensitive))
+                    continue;
+                observed = true;
+                watcher.stop();
+                EXPECT_NE(preview->findChild<QTabWidget*>(), nullptr);
+                if (duringPreview)
+                    duringPreview();
+                auto* buttons = preview->findChild<QDialogButtonBox*>();
+                if (buttons)
+                    buttons->button(QDialogButtonBox::Apply)->click();
+                return;
+            }
+        });
+        watcher.start(10);
+        choices.list()->setCurrentRow(index);
+        frost::app::test::sendKey(choices.list(), Qt::Key_Return, Qt::NoModifier);
+        watcher.stop();
+        return observed;
+    };
+    const auto buildLibrary = [&] {
+        auto build = restore;
+        build.arguments = {"build", dir.join("Lib/Lib.csproj"), "--no-restore", "--nologo"};
+        auto result = frost::io::runToCompletion(frost::io::realProcessLauncher(), build, {}, 45s);
+        EXPECT_TRUE(result);
+        if (result)
+            EXPECT_EQ(result->exitCode, 0) << result->stdoutBytes << result->stderrBytes;
+    };
+    ASSERT_TRUE(choose(semanticSource.find("int first"), QStringLiteral("Swap first two parameters")));
+    const std::string reordered(semanticView->editor().editor().text().text());
+    EXPECT_NE(reordered.find("first:"), std::string::npos);
+    EXPECT_NE(reordered.find("second:"), std::string::npos);
+    buildLibrary();
+    ASSERT_TRUE(rig.workbench->undoRefactoring());
+    EXPECT_EQ(semanticView->editor().editor().text().text(), semanticSource);
+    ASSERT_TRUE(rig.workbench->redoRefactoring());
+    EXPECT_EQ(semanticView->editor().editor().text().text(), reordered);
+    ASSERT_TRUE(rig.workbench->undoRefactoring());
+    const auto projectBefore = frost::io::realFileSystem().readFileSnapshot(dir.join("Lib/Lib.csproj"), 65536U);
+    ASSERT_TRUE(projectBefore);
+    ASSERT_TRUE(choose(semanticSource.find("Detached {}"), QStringLiteral("Detached.cs")));
+    EXPECT_TRUE(frost::io::realFileSystem().exists(dir.join("Lib/Detached.cs")).value_or(false));
+    auto projectAfter = frost::io::realFileSystem().readFileSnapshot(dir.join("Lib/Lib.csproj"), 65536U);
+    ASSERT_TRUE(projectAfter);
+    EXPECT_NE(projectAfter->find("Detached.cs"), std::string::npos);
+    buildLibrary();
+    ASSERT_TRUE(rig.workbench->undoRefactoring());
+    EXPECT_FALSE(frost::io::realFileSystem().exists(dir.join("Lib/Detached.cs")).value_or(true));
+    EXPECT_EQ(frost::io::realFileSystem().readFileSnapshot(dir.join("Lib/Lib.csproj"), 65536U).value(), *projectBefore);
+    EXPECT_EQ(semanticView->editor().editor().text().text(), semanticSource);
+    // Occupied endpoint at adoption must refuse the complete group, preserving both source and project.
+    ASSERT_TRUE(choose(semanticSource.find("Detached {}"), QStringLiteral("Detached.cs"),
+                       [&] { dir.write("Lib/Detached.cs", "// occupied during preview\n"); }));
+    EXPECT_EQ(semanticView->editor().editor().text().text(), semanticSource);
+    EXPECT_EQ(frost::io::realFileSystem().readFileSnapshot(dir.join("Lib/Lib.csproj"), 65536U).value(), *projectBefore);
     EXPECT_TRUE(rig.trust->untrust(dir.path()));
     EXPECT_TRUE(waitFor([&] { return rig.workbench->managed() == nullptr; }, 5s));
     const std::string alternate = dir.join("alternate-server.dll");

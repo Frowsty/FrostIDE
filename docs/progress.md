@@ -3,6 +3,10 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R17 managed semantic proposals and REF1 adoption
+
+Native checkpoint 514d3bf4 adds installed Roslyn Extract Method/Move Type providers, bounded semantic signature reorder and source-reference-safe private deletion, with actual host fixture sources. The followup connects owned source/project receipts to a complete managed REF1 preview, journaled create/rename/edit adoption and global Undo/Redo; legacy rename/simplify responses stay unchanged. Explicitly refused profiles include linked-source mutation, overload sets, instance-layout deletion, case-only moves and conditional/custom/inherited project membership. Original normal Alt+Enter and post-refactor build assertions are authored; none were run. Initial provider/signature/delete/catalog review cleared; final serializer/move/adapter and fixture review pending. No builds, tests, feature execution, packages or WSL.
+
 ## 2026-11-20: R17 owned RoslynHost foundation source checkpoint
 
 - Added the owned FrostRoslynHost stdio provider using the existing audited Roslyn 5.9.0/MSBuildWorkspace assets and pinned .NET 10.0.403. The supervised C# service, SDK bootstrap, Windows staging and real managed fixture defaults now select this host instead of csharp-ls. ADR 0109 records its existing dependency provenance and pending verification; no new package feed/version is introduced.

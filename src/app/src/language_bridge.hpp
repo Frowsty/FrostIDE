@@ -52,6 +52,7 @@ public:
     // The applier the controller's rename and quick fixes use (the encoding follows clangd's).
     [[nodiscard]] lang::IWorkspaceEditApplier& applier() noexcept;
     [[nodiscard]] Result<void> apply(const lang::WorkspaceEdit& edit, std::string_view label) override;
+    [[nodiscard]] Result<void> applyManagedProposal(const lang::WorkspaceEdit& edit, std::string_view label);
     [[nodiscard]] Result<void> validateRefactoringTargets(const lang::WorkspaceEdit& edit);
     // The UI publishes and withdraws servers; requests retain the server they captured.
     void setServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setServer(std::move(server)); }

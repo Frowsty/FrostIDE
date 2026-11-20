@@ -68,7 +68,7 @@ std::vector<TextEdit> parseTextEdits(const Json& json) {
 bool WorkspaceEdit::empty() const noexcept { return editCount() == 0; }
 
 std::size_t WorkspaceEdit::editCount() const noexcept {
-    std::size_t count = 0;
+    std::size_t count = managed ? managed->creates.size() + managed->renames.size() : 0;
     for (const FileEdit& file : files) {
         count += file.edits.size();
     }
@@ -80,6 +80,43 @@ Result<WorkspaceEdit> parseWorkspaceEdit(const Json& json) {
         return fail(ErrorCode::InvalidArgument, "a workspace edit must be an object");
     }
     WorkspaceEdit out;
+    if (const auto* owned = json.find("frostManaged")) {
+        if (!owned->isObject() || owned->stringAt("producer") != "FrostRoslynHost")
+            return fail(ErrorCode::InvalidArgument, "Invalid managed proposal identity");
+        ManagedProposal proposal;
+        std::size_t bytes = 0;
+        for (const auto name : {"inputs", "creates", "renames"}) {
+            const auto* entries = owned->find(name);
+            if (!entries || !entries->isArray() || entries->size() > 1000)
+                return fail(ErrorCode::InvalidArgument, "Invalid managed proposal entries");
+            for (const auto& entry : entries->items()) {
+                if (!entry.isObject())
+                    return fail(ErrorCode::InvalidArgument, "Invalid managed proposal entry");
+                if (name == std::string_view("renames")) {
+                    auto from = uriToPath(entry.stringAt("oldUri")), to = uriToPath(entry.stringAt("newUri"));
+                    if (!from || !to)
+                        return fail(ErrorCode::InvalidArgument, "Invalid managed move URI");
+                    proposal.renames.push_back({*from, *to});
+                } else {
+                    const auto* text = entry.find("text");
+                    auto path = uriToPath(entry.stringAt("uri"));
+                    if (!path || !text || !text->isString())
+                        return fail(ErrorCode::InvalidArgument, "Invalid managed source image");
+                    bytes += text->asString()->size();
+                    if (bytes > 4U * 1024U * 1024U)
+                        return fail(ErrorCode::OutOfRange, "Managed proposal source budget exceeded");
+                    if (name == std::string_view("inputs"))
+                        proposal.inputs.push_back({*path, *text->asString()});
+                    else
+                        proposal.creates.push_back({*path, *text->asString()});
+                }
+            }
+        }
+        if (proposal.inputs.empty())
+            return fail(ErrorCode::InvalidArgument, "Managed proposal needs captured inputs");
+        out.managed = std::move(proposal);
+    }
+
     if (const Json* changes = json.find("documentChanges"); changes != nullptr && changes->isArray()) {
         for (const Json& change : changes->items()) {
             if (change.find("kind") != nullptr) {
@@ -191,6 +228,8 @@ ByteOffset mapThroughEdits(ByteOffset offset, std::span<const ByteEdit> edits) n
 }
 
 Result<void> WorkspaceEditApplier::apply(const WorkspaceEdit& edit, std::string_view label) {
+    if (edit.managed)
+        return fail(ErrorCode::Unsupported, "Managed proposals require the trusted REF1 adapter");
     struct Planned {
         const FileEdit* file = nullptr;
         bool open = false;

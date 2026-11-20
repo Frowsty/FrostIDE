@@ -109,6 +109,15 @@ internal sealed class LanguageHost
     private static string UriOf(string file) => new Uri(Path.GetFullPath(file)).AbsoluteUri;
     private SemanticFeatureContext Context(Document document) => new(document, async (changed, token) => {
         var captured = document.Project.Solution; await ValidateSources(captured, token);
+        foreach (var project in changed.GetChanges(captured).GetProjectChanges()) {
+            foreach (var id in project.GetChangedDocuments().Concat(project.GetRemovedDocuments())) {
+                var path = captured.GetDocument(id)?.FilePath;
+                if (path is null || SourceIds(captured, path).Length != 1)
+                    throw new NotSupportedException("Owned refactorings of linked/shared source require all-context propagation");
+            }
+            if (project.GetAddedDocuments().Any() && SourceIds(captured, document.FilePath!).Length != 1)
+                throw new NotSupportedException("Moving a shared source type requires all-context membership updates");
+        }
         await ValidateCompilation(captured, changed, token); return await WorkspaceEdit(captured, changed, token, document.Id);
     }, providerCatalog);
     private async Task Publish(Document document, CancellationToken token)
@@ -378,8 +387,11 @@ internal sealed class LanguageHost
             var path = resourceProject.FilePath!;
             var xml = XDocument.Parse(inputs[path], LoadOptions.PreserveWhitespace);
             var element = xml.Root ?? throw new InvalidOperationException("Missing project XML root");
-            if ((string?)element.Attribute("Sdk") != "Microsoft.NET.Sdk" || element.Descendants().Any(e => e.Name.LocalName is "Import" or "Target"))
-                throw new NotSupportedException("Move type/file requires a simple Microsoft.NET.Sdk project without custom imports/targets");
+            if ((string?)element.Attribute("Sdk") != "Microsoft.NET.Sdk" ||
+                element.DescendantsAndSelf().Any(e => e.Attributes().Any(a => a.Name.LocalName == "Condition")) ||
+                element.Descendants().Any(e => e.Name.LocalName is "Import" or "Target" ||
+                    (e.Name.LocalName == "Compile" && (e.HasElements || e.Attributes().Any(a => a.Name.LocalName is not ("Include" or "Remove"))))))
+                throw new NotSupportedException("Move type/file requires a simple unconditional Microsoft.NET.Sdk project without custom imports/targets or Compile metadata");
             for (var directory = new DirectoryInfo(Path.GetDirectoryName(path)!); directory is not null; directory = directory.Parent)
                 foreach (var name in new[] { "Directory.Build.props", "Directory.Build.targets" })
                     if (File.Exists(Path.Combine(directory.FullName, name))) throw new NotSupportedException("Move type/file with inherited project overrides is unavailable");
@@ -395,7 +407,9 @@ internal sealed class LanguageHost
             var projectText = SourceText.From(inputs[path]);
             changes[path] = [new { range = Range(projectText, new TextSpan(0, projectText.Length)), newText = xml.ToString(SaveOptions.DisableFormatting) }];
         }
-        return new { documentChanges = changes.Select(change => new { textDocument = new { uri = UriOf(change.Key), version = versions.TryGetValue(change.Key, out var version) ? (int?)version : null }, edits = change.Value }).ToArray(),
+        var documentChanges = changes.Select(change => new { textDocument = new { uri = UriOf(change.Key), version = versions.TryGetValue(change.Key, out var version) ? (int?)version : null }, edits = change.Value }).ToArray();
+        if (origin is null) return new { documentChanges }; // Existing rename/simplify callers keep their contract.
+        return new { documentChanges,
             frostManaged = new { producer = "FrostRoslynHost", inputs = inputs.Select(input => new { uri = UriOf(input.Key), text = input.Value }).ToArray(), creates, renames } };
     }
     private async Task<object> Rename(Document doc, int offset, string newName, CancellationToken token)
