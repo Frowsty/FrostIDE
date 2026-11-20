@@ -306,6 +306,7 @@ if(NOT WIN32)
     include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
     frost_stage_lua_runtime(frost)
     add_dependencies(frost frostide_mcp)
+    frost_deploy_extension_sandbox(frost)
     return()
 endif()
 

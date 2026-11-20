@@ -28,6 +28,21 @@ class SandboxDeploymentTest(unittest.TestCase):
                 source = (REPO / relative).read_text(encoding="utf-8")
                 self.assertIn(f"frost_deploy_extension_sandbox({target})", source)
 
+    def test_linux_production_target_deploys_before_early_return_and_matches_stage(self):
+        app = (REPO / "src/app/CMakeLists.txt").read_text(encoding="utf-8")
+        linux = app.split("if(NOT WIN32)\n", 1)[1].split("return()", 1)[0]
+        declaration = linux.index("frost_add_executable(frost LAYER app")
+        deployment = linux.index("frost_deploy_extension_sandbox(frost)")
+        self.assertLess(declaration, deployment)
+        # The actual caller's output directory is the native sibling lookup and stage source.
+        io = (REPO / "src/io/CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIn("$<TARGET_FILE:frost-extension-sandbox> $<TARGET_FILE_DIR:${target}>", io)
+        self.assertIn("install(TARGETS frost-extension-sandbox RUNTIME DESTINATION bin)", io)
+        stage = (REPO / "tools/stage.sh").read_text(encoding="utf-8")
+        self.assertIn('bin_dir="$build_dir/src/app/$config"', stage)
+        self.assertIn('"$bin_dir/frost-extension-sandbox" "$dest/"', stage)
+        self.assertIn('"frost-extension-sandbox:$bin_dir/frost-extension-sandbox"', stage)
+
 
 if __name__ == "__main__":
     unittest.main()

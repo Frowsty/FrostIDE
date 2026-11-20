@@ -60,6 +60,10 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R19 Linux production helper deployment join
+
+- Added sandbox helper deployment to the real non-Windows frost target before its CMake early return. Existing Windows/no-op call remains; native/sample fixtures retain their deployment. Extended authored source regression to check the Linux target declaration/deployment ordering, sibling output destination, install/bin path and normal stage source/copy/check. This addresses Astra's production-path finding; no configure/build/Linux execution occurred.
+
 ## 2026-11-20: R19 integration import
 
 - Imported the eleven cleared R19 grammar/extension/sample/native-sandbox commits onto924e8937 without replaying old R17 registry commits. Conflict joins preserve all existing Frost asset syntax aliases, MSBuild source list, Unreal/project/coverage fixtures, MCP executable dependency and staging/LLVM payload checks, Lua dialect tool suites, and accumulated progress entries. MCP is now explicitly copied beside its existing stage prerequisite/check; stage.sh executable mode retained.
