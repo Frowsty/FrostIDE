@@ -22,6 +22,6 @@ Output is bounded at protocol, process queues, retained console and GUI relay bo
 
 ## Verification and consequences
 
-Implementation and independent source review are the current evidence. Mapping and guardian fixes through 052cd2b9 received focused Astra source clearance. Later application integration and bounded-relay changes remain subject to final independent review. No builds, tests, feature execution, WSL or SSH commands were run for this slice.
+Implementation and independent source review are the current evidence. Mapping and guardian fixes through 052cd2b9 received focused Astra source clearance. Later application integration, bounded-relay changes, actual WSL oracle source and this ADR received final independent Astra source clearance through 86ff4d17. No builds, tests, feature execution, WSL or SSH commands were run for this slice.
 
 Authored deferred fixtures exercise actual guardian execution and independent descendant identity checks, explicit real transport execution, and actual WSL configure/build/run with generated compilation-database mapping. They require deliberately supplied endpoints and tool paths; unavailable endpoints skip and do not establish remote acceptance. Normal UI, shutdown, cancellation, connection-loss cleanup, tool-version behavior and cross-platform compilation remain runtime acceptance work. Source implementation is not a deployment or process-lifecycle acceptance claim.

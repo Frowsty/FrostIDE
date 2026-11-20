@@ -1,6 +1,6 @@
 # ADR0122: Managed framework tooling and EventPipe diagnostics
 
-Status: implementation in progress; independent source review and runtime acceptance pending.
+Status: core and UI implementation independently source-reviewed; runtime acceptance pending.
 
 LTR19 adds framework-specific workflows to the evaluated R17 SDK model. Evaluation, installed
 language servers and diagnostic tools remain the evidence providers. File extensions alone never

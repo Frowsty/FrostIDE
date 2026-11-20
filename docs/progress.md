@@ -26,9 +26,9 @@
 
 - Astra_unreal source-cleared dc28ac55 profile parser/admission, actual running-profile browser URL,
   evaluated framework lists and owned-run diagnostic UI/cancellation. Corrected its cosmetic label
-  encoding finding. Core770a23b5 review remains pending separately; no runtime claim.
+  encoding finding. Core 770a23b5 and final UI source review are complete; no runtime claim.
 
-## 2026-11-20 — R19 LTR19 framework/profile/diagnostic entry points (source review pending)
+## 2026-11-20 — R19 LTR19 framework/profile/diagnostic entry points (source review complete)
 
 - Added normal managed.diagnostics action and .NET Project button for exact running generated
   SDK configurations. Capture retains coreCLR PID/image evidence, selected context/trust lease,
@@ -39,7 +39,7 @@
   points share existing actual target validation. Explicit running-profile HTTP(S) browser action
   makes no readiness/browser-debug claim.
 - Authored later real SDK Workbench profile/escaping receipt fixture plus parser cases. No execution.
-  Independent source review pending for this increment and preceding770a23b5.
+  Independent source review cleared this increment and preceding 770a23b5.
 - LTR19 remains incomplete: bundled Razor/XAML/F#/VB semantics, designers, browser debugging,
   MAUI deployment and specialized framework inspections are still open. Existing registry can host
   explicitly installed licensed providers; listing files does not implement those capabilities.
@@ -64,7 +64,7 @@ what is next, blockers and open questions for the user.
 
 - Added application-owned approved WSL/SSH endpoint records, exact path mappings, distinct Remote Run configurations and a structured guardian protocol with identity-bound descendant cleanup. Windows WSL CMake profiles use explicit pinned tool paths, shared build admission and resource leases; normal UI exposes configure/build/clean/list actions and mapped diagnostics.
 - Authored deferred actual guardian/transport fixtures and a real WSL configure/build/run/generated-CDB oracle. Output relay bounds, unique profile selection and bounded registry-save validation address independent application-review findings. ADR 0115 records the narrow scope and cleanup acknowledgement contract.
-- Focused endpoint/mapping/guardian source review cleared through 052cd2b9; final application review continues through 0825d09c. No build, test, feature, WSL or SSH execution occurred. Normal UI and process-lifecycle acceptance remain deferred; missing explicit fixture endpoints are skips, not acceptance. Branch and fixtures are frozen for independent review.
+- Focused endpoint/mapping/guardian source review cleared through 052cd2b9; final application review cleared through 86ff4d17. No build, test, feature, WSL or SSH execution occurred. Normal UI and process-lifecycle acceptance remain deferred; missing explicit fixture endpoints are skips, not acceptance. Branch and fixtures are frozen after independent source review.
 ## 2026-11-20: R17 managed semantic proposals and REF1 adoption
 
 Native checkpoint 514d3bf4 adds installed Roslyn Extract Method/Move Type providers, bounded semantic signature reorder and source-reference-safe private deletion, with actual host fixture sources. The followup connects owned source/project receipts to a complete managed REF1 preview, journaled create/rename/edit adoption and global Undo/Redo; legacy rename/simplify responses stay unchanged. Explicitly refused profiles include linked-source mutation, overload sets, instance-layout deletion, case-only moves and conditional/custom/inherited project membership. Original normal Alt+Enter and post-refactor build assertions are authored; none were run. Independent Astra source review cleared initial providers and the final serializer/move/REF1 adapter plus authored fixtures. A retained requester registered on GUI stamps the original service/model/trust context; stale popup actions refuse, and workers never read Workbench state. No builds, tests, feature execution, packages or WSL.
