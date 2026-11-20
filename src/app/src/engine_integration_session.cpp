@@ -50,6 +50,7 @@ void EngineIntegration::Impl::retireSession() {
 
 void EngineIntegration::Impl::clearSession(bool clearOutput, bool preserveCrashObservation) {
     owner.clearDocumentTools();
+    clearShaderPreview();
     clearAssetUsages();
     clearSessionTools();
     if (!preserveCrashObservation)

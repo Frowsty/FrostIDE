@@ -16,6 +16,7 @@ frost_add_library(engine LAYER engine
         src/asset_move_plan.cpp
         src/serialized_properties.cpp
         src/document_tools.cpp
+        src/shader_preview.cpp
         src/binding_index.cpp
         src/binding_preview.cpp
         src/binding_queries.cpp

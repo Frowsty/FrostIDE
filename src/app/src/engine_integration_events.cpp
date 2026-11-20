@@ -238,6 +238,8 @@ void EngineIntegration::Impl::drainPushEvents() {
                                 if (impl.state && entry.sequence < impl.state->sequence)
                                     return;
                                 impl.clearAssetUsages();
+                                if(impl.state && (impl.state->state!=entry.state || impl.state->mode!=entry.mode || impl.state->playGeneration!=entry.playGeneration))
+                                    impl.clearShaderPreview();
                                 impl.state = entry;
                                 statePublished = true;
                                 impl.observeEvent("play.state", entry.data, entry.sequence);

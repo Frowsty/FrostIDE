@@ -60,6 +60,10 @@ public:
     void clearDocumentTools();
     void registerDocumentActions();
     void registerTemplateActions();
+    // GUI explicit commands; current snapshots/trust/session guard final diagnostics and PNG display.
+    [[nodiscard]] Result<void> shaderPreview(bool preview, std::string absolutePath = {});
+    void installShaderPreviewActions();
+    void invalidateShaderPreview();
     // Actual authenticated content command; callback runs on GUI only for the retained session.
     [[nodiscard]] Result<std::uint64_t> contentCommand(std::string method, lang::Json params,
                                                        std::function<void(Result<lang::Json>)> completed);

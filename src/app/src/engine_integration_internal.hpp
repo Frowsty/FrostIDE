@@ -134,6 +134,8 @@ struct EngineIntegration::Impl {
     std::shared_ptr<const engine::AssetIndex> assetIndex;
     std::optional<engine::AssetUsages> assetUsages;
     std::uint64_t assetQueryGeneration{}, assetInvalidationGeneration{};
+    std::uint64_t shaderPreviewGeneration{};
+    QPointer<QWidget> previewDialog;
     std::map<std::uint64_t, std::uint64_t> assetQueries;
     std::string selectedInstance;
     std::string selectedServerGeneration;
@@ -198,6 +200,7 @@ struct EngineIntegration::Impl {
     void clearPerformanceLenses();
     void capturePerformanceSources(std::uint64_t revision);
     void publishPerformanceLenses();
+    void clearShaderPreview();
     void refreshProjectContent();
     void openAsset(std::string relative);
     void openProjectSettingsDocument();

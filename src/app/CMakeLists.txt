@@ -51,6 +51,7 @@ frost_add_library(app LAYER app
         src/workbench_dependencies.cpp
         src/engine_asset_integration.cpp
         src/engine_asset_move.cpp
+        src/engine_shader_preview.cpp
         src/engine_serialized_properties.cpp
         src/engine_document_integration.cpp
         src/engine_template_integration.cpp

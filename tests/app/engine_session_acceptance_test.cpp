@@ -4,8 +4,10 @@
 #include "frost/engine/engine_test_provider.hpp"
 #include "frost/engine/project_content.hpp"
 #include "frost/engine/schema.hpp"
+#include "frost/engine/shader_preview.hpp"
 #include "frost/io/async_process.hpp"
 #include "frost/io/os_error.hpp"
+#include "frost/io/spawn_log.hpp"
 #include "frost/io/utf.hpp"
 #include "frost/run/run_manager.hpp"
 #include "frost/ui/debug_controller.hpp"
@@ -23,9 +25,11 @@
 #include <QAction>
 #include <QComboBox>
 #include <QDialog>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QTabWidget>
@@ -176,6 +180,81 @@ protected:
         config = dir.join("engine-config");
     }
 };
+
+TEST_F(RealEngineWorkbench, NativeShaderProblemsEqualCompilerOracleAndRealPreviewPixelsEqualEngineReadback) {
+    auto& fs = frost::io::realFileSystem();
+    const auto shader = project + "/Assets/Shaders/R14.glsl", material = project + "/Assets/Materials/R14.fmat";
+    const std::string source = "#type compute\nlayout(local_size_x=1) in;void main(){r14_missing_identifier;}\n";
+    const std::string materialBytes = "{\"Version\":1,\"Program\":\"Sprite\",\"Blend\":\"Opaque\"}";
+    ASSERT_TRUE(fs.createDirectories(project + "/Assets/Shaders"));
+    ASSERT_TRUE(fs.createDirectories(project + "/Assets/Materials"));
+    ASSERT_TRUE(fs.writeFileAtomic(shader, source));
+    ASSERT_TRUE(fs.writeFileAtomic(material, materialBytes));
+    auto oracle = build.cli("shader.validate", project,
+                            Json::object()
+                                .set("path", "Assets/Shaders/R14.glsl")
+                                .set("source", source)
+                                .set("shaderRoot", "Assets/Shaders"));
+    ASSERT_TRUE(oracle);
+    auto diagnostics = frost::engine::parseShaderValidation(*oracle, "Assets/Shaders/R14.glsl", source);
+    ASSERT_TRUE(diagnostics);
+    ASSERT_FALSE(diagnostics->issues.empty());
+    auto rendered = build.cli("assets.preview", project,
+                              Json::object().set("path", "Assets/Materials/R14.fmat").set("size", 256).set("frame", 0));
+    ASSERT_TRUE(rendered);
+    auto png =
+        frost::engine::parseAssetPreview(*rendered, "Assets/Materials/R14.fmat", frost::io::sha256Hex(materialBytes));
+    ASSERT_TRUE(png);
+    const auto expected =
+        QImage::fromData(reinterpret_cast<const uchar*>(png->png.data()), static_cast<int>(png->png.size()), "PNG");
+    ASSERT_FALSE(expected.isNull());
+    frost::test::RealEditor editor;
+    auto endpoint = editor.start(build, project, config);
+    ASSERT_TRUE(endpoint);
+    WorkbenchRig rig(dir, options());
+    ASSERT_NO_FATAL_FAILURE(open(rig));
+    ASSERT_NO_FATAL_FAILURE(pair(rig, *endpoint));
+    ASSERT_TRUE(rig.workbench->openPath(shader));
+    auto validate = rig.workbench->registry().find("engine.validateShader");
+    ASSERT_TRUE(validate);
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*validate, {}), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return std::ranges::any_of(rig.workbench->problems()->model()->problems(), [](const auto& row) {
+                return row.source == frost::ui::DiagnosticSource::EngineShader;
+            });
+        },
+        60s));
+    EXPECT_EQ(std::ranges::count(rig.workbench->problems()->model()->problems(),
+                                 frost::ui::DiagnosticSource::EngineShader, &frost::ui::Problem::source),
+              static_cast<std::ptrdiff_t>(diagnostics->issues.size()));
+    for (const auto& issue : diagnostics->issues)
+        EXPECT_TRUE(std::ranges::any_of(rig.workbench->problems()->model()->problems(), [&](const auto& row) {
+            return row.source == frost::ui::DiagnosticSource::EngineShader &&
+                   row.diagnostic.diagnostic.message == issue.message &&
+                   row.diagnostic.diagnostic.line == static_cast<int>(issue.line);
+        }));
+    ASSERT_TRUE(rig.workbench->openPath(material));
+    auto preview = rig.workbench->registry().find("engine.previewAsset");
+    ASSERT_TRUE(preview);
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*preview, {}), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.window->findChild<QLabel*>(QStringLiteral("engineRenderedPreviewImage")) != nullptr; }, 120s));
+    auto* image = rig.window->findChild<QLabel*>(QStringLiteral("engineRenderedPreviewImage"));
+    ASSERT_NE(image, nullptr);
+    EXPECT_EQ(image->pixmap().toImage().convertToFormat(QImage::Format_RGBA8888),
+              expected.convertToFormat(QImage::Format_RGBA8888));
+    ASSERT_TRUE(rig.trust->untrust(project));
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.window->findChild<QLabel*>(QStringLiteral("engineRenderedPreviewImage")) == nullptr; }, 10s));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return std::ranges::none_of(rig.workbench->problems()->model()->problems(), [](const auto& row) {
+                return row.source == frost::ui::DiagnosticSource::EngineShader;
+            });
+        },
+        10s));
+}
 
 TEST_F(RealEngineWorkbench, RealConsoleAdmissionSendsAllowedCommandAndDenialSendsZeroFrames) {
     auto exported = build.cli("schema.export", project);

@@ -62,6 +62,7 @@ bool EngineIntegration::Impl::admitted(std::uint64_t expectedEpoch, std::string_
 }
 
 void EngineIntegration::Impl::invalidate(bool stopOwned) {
+    clearShaderPreview();
     testsSourceRevision->fetch_add(1);
     ++epoch;
     toolResolutions.clear();
@@ -572,6 +573,7 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
             },
             this);
     }
+    installShaderPreviewActions();
     impl.projectChanged();
 }
 

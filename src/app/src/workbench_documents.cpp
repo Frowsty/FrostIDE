@@ -165,6 +165,8 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             [this, current = &view] {
                 syncJsonDocument(*current);
                 scheduleCppAnalyzer(current->path());
+                if (m_engine)
+                    m_engine->invalidateShaderPreview();
             });
     scheduleCppAnalyzer(view.path());
     view.editor().setProperty("engineAssetContext", m_engine && m_engine->isListedAsset(view.path()));
@@ -451,8 +453,10 @@ bool Workbench::editorCloseRequested(DocumentEditorView& view) {
 void Workbench::documentChanged(const std::string& path) {
     if (m_engine)
         m_engine->invalidateAssetUsages();
-    if (m_engine)
+    if (m_engine) {
         m_engine->invalidatePerformanceLenses();
+        m_engine->invalidateShaderPreview();
+    }
     if (m_engineBindings && (isCFamilySource(path) || isLuaSource(path)))
         m_engineBindings->cancel();
     invalidateManagedDebug();

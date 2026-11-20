@@ -3,6 +3,14 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R14 shader validation and real engine preview source
+
+- Added authenticated Edit-only engine `shader.validate` over actual GLSL preprocessor/compiler and material serializer/program/layout APIs. The IDE captures main editor text, retains source/dependency and absence receipts, rejects dirty includes/stale source/session/state, and publishes actual source diagnostics in a separate Engine Shader Problems scope.
+- Added genuine engine-rendered saved texture/material/sprite-sheet previews with isolated empty-content engine, copied session registry/VFS, bounded resource/readback/PNG paths, explicit failure on unavailable GPU or unresolved fallbacks, and source/texture hashes. IDE previews display validated PNG bytes as snapshots and close on editor/trust/session/state invalidation. The safe engine slice is committed at `698f9b5d`; other engine owners' changes were not staged.
+- ADR 0103 records existing GLSL text/comment authoring plus explicit base-variant validation/navigation, no added language server or dependency, and supported preview scope. Shader semantic language-service work is not claimed complete by this slice.
+- Authored real engine compiler/include/BOM/missing/material/readback fixtures, strict IDE response readers, and a composed later journey comparing Problems and displayed pixels with direct real engine oracles. Independent Astra source review cleared compiler, resource, lifetime and UI publication seams. Source formatting only ran; builds, tests, feature execution and WSL remain deferred.
+- Next: integrate additive constructor/header/document hooks with other R14 branches and continue GLSL authoring scope decisions. No blocking user question.
+
 ## 2026-11-20: R14 authenticated session tools and measured source attribution
 
 - Added generated real `build.export` and localhost dedicated-server/two-client compound configurations using the selected installed tools. Each native child retains deferred trust revision, project invalidation and exact physical project-file admission; generated command edits refuse. Existing Run tabs, owned process containment and partial-start reporting remain authoritative.
