@@ -65,9 +65,12 @@ internal sealed class UnitySemanticFeature : ISemanticFeature, ISemanticContribu
         ISymbol? selectedSymbol = tokenNode is null ? null : model.GetSymbolInfo(tokenNode, token).Symbol;
         if (selectedSymbol is null && tokenNode is VariableDeclaratorSyntax variable) selectedSymbol = model.GetDeclaredSymbol(variable, token);
         if (selectedSymbol is null && tokenNode is MethodDeclarationSyntax methodDeclaration) selectedSymbol = model.GetDeclaredSymbol(methodDeclaration, token);
+        if (selectedSymbol is null && tokenNode is TypeDeclarationSyntax typeDeclaration) selectedSymbol = model.GetDeclaredSymbol(typeDeclaration, token);
         object? selectedMember = null;
         var selected = root.FindToken(Math.Min(offset, Math.Max(0, root.FullSpan.End - 1))).Parent?.AncestorsAndSelf().OfType<TypeDeclarationSyntax>().FirstOrDefault();
         if (parameters.TryGetProperty("allTypes", out var allTypes) && allTypes.ValueKind == JsonValueKind.True) selected = null;
+        if (method == "frost/unity/generateEvent" && (selected is null || !selected.Span.Contains(offset)))
+            throw new ArgumentException("Select one enclosing Unity type before generating an event function");
         var declarations = selected is null ? root.DescendantNodes().OfType<TypeDeclarationSyntax>() : new[] { selected };
         var types = new List<object>();
         foreach (var declaration in declarations) {
@@ -104,7 +107,7 @@ internal sealed class UnitySemanticFeature : ISemanticFeature, ISemanticContribu
                         var supported = SerializableType(field.Type, compilation);
                         if (supported && !reference) {
                             if (SymbolEqualityComparer.Default.Equals(selectedSymbol, field)) selectedMember = new { kind = "field", name = field.Name, identity = Identity(field, document.Project), sourcePath = syntaxReference.SyntaxTree.FilePath, declaringType = type.Name };
-                            fields.Add(new { identity = Identity(field, document.Project), name = field.Name, range = memberRange, type = field.Type.ToDisplayString(), declaringType = Identity(type, document.Project), serialized = true });
+                            fields.Add(new { identity = Identity(field, document.Project), name = field.Name, range = memberRange, type = field.Type.ToDisplayString(), declaringType = Identity(type, document.Project), scriptTypeName = type.Name, serialized = true });
                         }
                         else if (serialize && !reference) inspections.Add(new { code = "FUNITY002", range = memberRange, identity = Identity(field, document.Project), message = "SerializeField type is outside the supported Unity serialization contract", severity = "information" });
                     }
@@ -168,6 +171,13 @@ internal sealed class UnitySemanticFeature : ISemanticFeature, ISemanticContribu
     }
     public async Task<IReadOnlyList<object>> CodeActions(SemanticFeatureContext context, JsonElement parameters, CancellationToken token) {
         var range = parameters.GetProperty("range").GetProperty("start");
+        var source = await context.Document.GetTextAsync(token);
+        var line = range.GetProperty("line").GetInt32(); var character = range.GetProperty("character").GetInt32();
+        if (line < 0 || line >= source.Lines.Count || character < 0 || character > source.Lines[line].Span.Length) return Array.Empty<object>();
+        var offset = source.Lines[line].Start + character;
+        var root = await context.Document.GetSyntaxRootAsync(token);
+        var enclosing = root?.FindToken(Math.Clamp(offset, 0, Math.Max(0, root.FullSpan.End - 1))).Parent?.AncestorsAndSelf().OfType<TypeDeclarationSyntax>().FirstOrDefault();
+        if (enclosing is null || !enclosing.Span.Contains(offset)) return Array.Empty<object>();
         var selected = JsonSerializer.SerializeToElement(new { position = range });
         var facts = await Facts(context, selected, token);
         var result = new List<object>();
@@ -189,7 +199,7 @@ internal sealed class UnitySemanticFeature : ISemanticFeature, ISemanticContribu
             foreach (var callback in type.GetProperty("implicitUses").EnumerateArray()) result.Add(new {
                 range = callback.GetProperty("range"), command = new { title = callback.GetProperty("performanceCritical").GetBoolean() ? "Unity per-frame event" : "Unity event function", command = "navigate.findUsages" } });
             foreach (var field in type.GetProperty("fields").EnumerateArray()) result.Add(new {
-                range = field.GetProperty("range"), command = new { title = "Unity serialized field", command = "navigate.findUsages" }, data = new { identity = field.GetProperty("identity"), field = field.GetProperty("name").GetString(), sourcePath = context.Document.FilePath } });
+                range = field.GetProperty("range"), command = new { title = "Unity serialized field", command = "navigate.findUsages" }, data = new { identity = field.GetProperty("identity"), field = field.GetProperty("name").GetString(), sourcePath = context.Document.FilePath, declaringType = field.GetProperty("scriptTypeName").GetString() } });
         }
         return result;
     }

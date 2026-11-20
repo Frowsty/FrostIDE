@@ -83,3 +83,24 @@ TEST(UnityAssets, RoslynSelectedFieldsAndVoidEventsJoinOriginalObjectGuidIdentit
     EXPECT_EQ(*fs.readFile("/p/Assets/Scene.unity"), yaml);
 }
 }
+namespace {
+TEST(UnityAssets, BlockSerializedFieldKeysRemainUsageEvidence) {
+    frost::ManualClock clock; frost::io::MemFs fs{clock, frost::io::PathStyle::Posix};
+    ASSERT_TRUE(fs.createDirectories("/p/Assets"));
+    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/Component.cs.meta", "guid: " + guid + "\n"));
+    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/Scene.unity", "%YAML 1.1\n--- !u!114 &10\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " + guid + ", type: 3}\n  items:\n  - 17\n  nested:\n    health: 31\n  description: |\n    line one\n"));
+    const std::vector<std::string> files{"/p/Assets/Component.cs", "/p/Assets/Scene.unity"};
+    for (const auto* field : {"items", "nested", "description"}) {
+        const auto query = queryUnityAssets(fs, files, {}, "/p/Assets/Component.cs", 0, {}, field, "field");
+        ASSERT_TRUE(query.recognized); ASSERT_EQ(query.usages.size(), 1); ASSERT_EQ(query.usages[0].usages.size(), 1);
+        EXPECT_EQ(query.usages[0].usages[0].lineText.substr(0, std::string(field).size()), field);
+    }
+}
+TEST(UnityAssets, CodeVisionScriptAssociationRejectsSecondTypeInSameSource) {
+    EXPECT_TRUE(isUnityScriptAssociation("/p/Assets/Foo.cs", "Foo"));
+    EXPECT_FALSE(isUnityScriptAssociation("/p/Assets/Foo.cs", "Other"));
+    EXPECT_TRUE(isUnityScriptAssociation("C:\\p\\Assets\\Foo.cs", "Foo"));
+    EXPECT_FALSE(isUnityScriptAssociation("C:\\p\\Assets\\Foo.cs", "Other"));
+    EXPECT_FALSE(isUnityScriptAssociation("/p/Assets/Foo.cs", ""));
+}
+}

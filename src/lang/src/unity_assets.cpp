@@ -38,6 +38,11 @@ std::optional<std::string> number(std::string_view& s) {
     std::string result(s.substr(0, end)); s.remove_prefix(end); return result;
 }
 }
+bool isUnityScriptAssociation(std::string_view path, std::string_view declaringType) {
+    const auto slash = path.find_last_of("/\\");
+    const auto name = slash == path.npos ? path : path.substr(slash + 1);
+    return !declaringType.empty() && name.ends_with(".cs") && name.substr(0, name.size() - 3) == declaringType;
+}
 bool isUnityAssetsPath(std::string_view root, std::string_view path, io::PathStyle style) {
     const auto assets = documentKey(std::string(root) + "/Assets", style), key = documentKey(path, style);
     return key == assets || (key.size() > assets.size() && key.starts_with(assets) &&
@@ -229,6 +234,8 @@ std::vector<UnityAssetUsage> memberUsages(std::span<const UnityAssetSnapshot> sn
                         if (colon != text.npos && key.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == key.npos) {
                             auto value = trim(text.substr(colon + 1));
                             const auto valueOffset = value.empty() ? begin : static_cast<std::size_t>(value.data() - snapshot.contents.data());
+                            if (indent == 2 && key == name && kind == "field")
+                                values.push_back({object, std::string(key), std::string(value), begin + static_cast<std::size_t>(key.data() - line.data())});
                             if (value.starts_with('|') || value.starts_with('>')) scalarIndent = indent;
                             else {
                                 bool complete = true;
@@ -246,8 +253,6 @@ std::vector<UnityAssetUsage> memberUsages(std::span<const UnityAssetSnapshot> sn
                                     for (const auto& usage : fileIndex.usages(guid))
                                         if (usage.offset >= begin && usage.offset < begin + line.size()) scripts[object] = usage.guid;
                                 }
-                                if (complete && indent == 2 && key == name && kind == "field" && !value.empty())
-                                    values.push_back({object, std::string(key), std::string(value), begin + static_cast<std::size_t>(key.data() - line.data())});
                                 if (key == "m_PersistentCalls" && value.empty()) persistentIndent = indent;
                                 if (persistentIndent) {
                                     if (key == "m_Target") {

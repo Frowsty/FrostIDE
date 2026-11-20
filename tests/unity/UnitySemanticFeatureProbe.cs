@@ -13,8 +13,8 @@ internal static class UnitySemanticFeatureProbe
         var project = workspace.AddProject(ProjectInfo.Create(ProjectId.CreateNewId(), VersionStamp.Create(), "UnityFixture", "UnityFixture", LanguageNames.CSharp,
             filePath: Path.Combine(Path.GetTempPath(), "UnityFixture.csproj"), compilationOptions: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary),
             metadataReferences: new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) }));
+        workspace.AddDocument(project.Id, "UnityTypes.cs", SourceText.From("namespace UnityEngine { public class Object { public static Object FindObjectOfType() => new Object(); } public class MonoBehaviour : Object {} public class ScriptableObject : Object {} public sealed class SerializeField : System.Attribute {} }"));
         var source = """
-            namespace UnityEngine { public class Object { public static Object FindObjectOfType() => new Object(); } public class MonoBehaviour : Object {} public class ScriptableObject : Object {} public sealed class SerializeField : System.Attribute {} }
             class Component : UnityEngine.MonoBehaviour {
                 [UnityEngine.SerializeField] private int health;
                 private void Update() { UnityEngine.Object.FindObjectOfType(); }
@@ -36,6 +36,23 @@ internal static class UnitySemanticFeatureProbe
         Require(types[0].GetProperty("inspections").GetArrayLength() == 1, "Incorrect callback signature is diagnosed");
         Require(types[0].GetProperty("hotspots").GetArrayLength() == 1, "Actual Unity object lookup in Update is highlighted");
         Require(types[0].GetProperty("fields")[0].GetProperty("identity").GetProperty("declarationId").GetString() == "F:Component.health", "Serialized field uses Roslyn declaration identity");
+        var className = JsonSerializer.SerializeToElement(new { position = new { line = 0, character = 7 } });
+        var selectedType = JsonSerializer.SerializeToElement(await feature.Execute("frost/unity/semantics", context, className, CancellationToken.None));
+        Require(selectedType.GetProperty("selectedMember").GetProperty("kind").GetString() == "asset", "Declared class selection retains original script asset usages");
+        Require(selectedType.GetProperty("selectedMember").GetProperty("identity").GetProperty("declarationId").GetString() == "T:Component", "Selected script type has declared Roslyn identity");
+        var headerSource = "using System;\nclass First : UnityEngine.MonoBehaviour {}\nclass Second : UnityEngine.MonoBehaviour {}\n";
+        var headerDocument = document.WithText(SourceText.From(headerSource));
+        var headerContext = new SemanticFeatureContext(headerDocument, (_, _) => throw new InvalidOperationException("Header generation must never reach proposal adoption"));
+        var rejected = false;
+        try {
+            await feature.Execute("frost/unity/generateEvent", headerContext,
+                JsonSerializer.SerializeToElement(new { position = new { line = 0, character = 2 }, eventName = "OnEnable" }), CancellationToken.None);
+        } catch (ArgumentException) { rejected = true; }
+        Require(rejected, "Generation outside one explicitly selected enclosing type is refused");
+        var headerActions = await feature.CodeActions(headerContext, JsonSerializer.SerializeToElement(new {
+            range = new { start = new { line = 0, character = 2 }, end = new { line = 0, character = 2 } }
+        }), CancellationToken.None);
+        Require(headerActions.Count == 0, "Normal intentions cannot silently choose the first of multiple Unity types");
         var generation = JsonSerializer.SerializeToElement(new { position = new { line = 2, character = 4 }, eventName = "OnEnable" });
         await feature.Execute("frost/unity/generateEvent", context, generation, CancellationToken.None);
         Require(proposed is not null, "Generation must pass through the admitted proposal callback");

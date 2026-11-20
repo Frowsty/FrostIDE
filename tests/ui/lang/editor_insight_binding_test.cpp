@@ -8,6 +8,9 @@
 // fresh diagnostics.
 
 #include "frost/lang/uri.hpp"
+#include "frost/core/clock.hpp"
+#include "frost/io/mem_fs.hpp"
+#include "frost/io/path.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
 
 #include "editor/editor_harness.hpp"
@@ -583,4 +586,28 @@ TEST(EditorInsightBinding, ManagedCodeLensPublishesUnityEvidenceThroughNormalCod
     EXPECT_EQ(h.view->codeVisionLenses().front().label, "Unity event function");
     EXPECT_EQ(h.view->codeVisionLenses().front().actionId, "navigate.findUsages");
     EXPECT_EQ(h.view->codeVisionLenses().front().symbolOffset, ByteOffset{6});
+}
+
+TEST(EditorInsightBinding, UnityFieldLensDoesNotBorrowAnotherTypesScriptGuid) {
+    FROST_REQUIRE_OFFSCREEN();
+    FeatureServer server(capabilities().set("documentSymbolProvider", true));
+    const std::string source = workPath("Foo.cs"), scene = workPath("Scene.unity");
+    server.on("textDocument/documentSymbol", [](const Json&) { return Json::array(); });
+    server.on("textDocument/codeLens", [source](const Json&) {
+        const auto range = Json::object().set("start", Json::object().set("line", 1).set("character", 0))
+            .set("end", Json::object().set("line", 1).set("character", 1));
+        return Json::array({Json::object().set("range", range).set("command", Json::object()
+            .set("title", "Unity serialized field").set("command", "navigate.findUsages"))
+            .set("data", Json::object().set("field", "health").set("sourcePath", source).set("declaringType", "Other"))});
+    });
+    frost::ManualClock clock; frost::io::MemFs fs{clock, frost::io::kNativePathStyle};
+    ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(source)));
+    ASSERT_TRUE(fs.writeFileAtomic(source + ".meta", "guid: 0123456789abcdef0123456789abcdef\n"));
+    ASSERT_TRUE(fs.writeFileAtomic(scene, "%YAML 1.1\n--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: 0123456789abcdef0123456789abcdef, type: 3}\n  health: 99\n"));
+    frost::ui::test::EditorHarness h("class Foo { public int health; }\nclass Other { public int health; }\n", at(source));
+    auto* binding = new EditorInsightBinding(*h.view, {server.client(), server.scheduler()});
+    binding->setUnityInsightInputs([&] { return frost::ui::lang::UnityInsightInputs{&fs, {source, scene}, {}, [] { return true; }}; });
+    binding->setCodeVisionEnabled(true); binding->refreshCodeVision();
+    ASSERT_TRUE(pumpUntil([&] { return !h.view->codeVisionLenses().empty(); }));
+    EXPECT_EQ(h.view->codeVisionLenses().front().label, "Unity serialized field");
 }

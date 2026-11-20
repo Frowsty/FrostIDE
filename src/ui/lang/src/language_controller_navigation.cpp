@@ -459,9 +459,8 @@ sched::Task<Result<UnityUsagesOutcome>> unityUsagesTask(fl::ILspRequester& serve
                 if (member && member->isObject()) {
                     const auto source = member->stringAt("sourcePath"), name = member->stringAt("name"), kind = member->stringAt("kind");
                     const auto* identity = member->find("identity");
-                    const auto sourceName = io::fileName(source);
                     const bool inventoried = std::ranges::any_of(files, [&](const auto& file) { return fl::documentKey(file) == fl::documentKey(source); });
-                    if (inventoried && sourceName.ends_with(".cs") && sourceName.substr(0, sourceName.size() - 3) == member->stringAt("declaringType") &&
+                    if (inventoried && fl::isUnityScriptAssociation(source, member->stringAt("declaringType")) &&
                         identity && !identity->stringAt("declarationId").empty() && !identity->stringAt("assembly").empty() &&
                         (kind == "field" || kind == "eventMethod" || kind == "asset"))
                         unity = fl::queryUnityAssets(fs, files, overlays, source, 0, token, kind == "asset" ? std::string_view{} : name, kind);

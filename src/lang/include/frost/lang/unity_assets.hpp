@@ -13,6 +13,7 @@
 #include <vector>
 namespace frost::lang {
 [[nodiscard]] bool isUnityAssetsPath(std::string_view root, std::string_view path, io::PathStyle style = io::kNativePathStyle);
+[[nodiscard]] bool isUnityScriptAssociation(std::string_view path, std::string_view declaringType);
 struct UnityAssetSnapshot {
     std::string path, contents;
 };

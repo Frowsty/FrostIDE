@@ -83,7 +83,8 @@ sched::Task<Result<CodeVisionOutcome>> codeVisionCountsTask(fl::ILspRequester& s
                     std::string label(command->stringAt("title"));
                     const auto* data = item.find("data");
                     if (data && unityInputs.fs && !unityInputs.files.empty() && valueQueries++ < 8 &&
-                        !data->stringAt("field").empty() && data->stringAt("sourcePath") == path) {
+                        !data->stringAt("field").empty() && data->stringAt("sourcePath") == path &&
+                        fl::isUnityScriptAssociation(path, data->stringAt("declaringType"))) {
                         auto values = fl::queryUnityAssets(*unityInputs.fs, unityInputs.files, unityInputs.overlays, path, 0, token, data->stringAt("field"), "field");
                         std::size_t count = 0; std::string sample;
                         for (const auto& group : values.usages) for (const auto& usage : group.usages) {
