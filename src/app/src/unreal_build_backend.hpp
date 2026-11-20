@@ -47,7 +47,8 @@ public:
     std::vector<build::BuildDiagnostic> diagnostics() const override { return m_diagnostics; }
     const project::UnrealProject& model() const { return m_model; }
     void attachMenu(ui::ShellWindow& window, std::function<Result<void>(std::string)> addEditor = {},
-        std::function<void(const std::string&)> openFile = {}, std::function<void()> semanticProfileChanged = {});
+        std::function<void(const std::string&)> openFile = {}, std::function<void()> semanticProfileChanged = {},
+        std::function<void()> inspectReflection = {});
     Result<void> selectCompileDatabase(std::string file);
     const std::string& compileDatabase() const { return m_databaseFile; }
     std::string configurationIdentity() const;

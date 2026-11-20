@@ -60,6 +60,7 @@
 #include "settings_dialog.hpp"
 #include "standalone_build_backend.hpp"
 #include "unreal_build_backend.hpp"
+#include "frost/lang/unreal_reflection.hpp"
 #include "unity_control.hpp"
 #include <QApplication>
 #include <QCoreApplication>
@@ -239,6 +240,10 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                                    m_options.metadataCacheDirectory,
                                    // Empty answers say why: no server, fallback flags, indexing (R0 follow-up 4).
                                    [this](std::string_view path) { return languageReadiness(path); }});
+    m_language->setLocalCompletion([this](std::string_view path,const text::Snapshot& snapshot,ByteOffset caret) -> std::optional<lang::CompletionList> {
+        if (!m_unreal || !isCFamilySource(path) || snapshot.size().value()>256*1024) return {};
+        return lang::unrealSpecifierCompletions(snapshot.text(),static_cast<std::size_t>(caret.value()));
+    });
     m_language->setCppRenameCheck([this](std::string path, lang::LspPosition position, std::string name,
                                          lang::WorkspaceEdit required, lang::WorkspaceEdit offered,
                                          std::stop_token cancel, std::function<void(Result<void>)> done) {

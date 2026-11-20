@@ -26,7 +26,7 @@
 
 namespace frost::app {
 void UnrealBuildBackend::attachMenu(ui::ShellWindow& window, std::function<Result<void>(std::string)> addEditor,
-    std::function<void(const std::string&)> openFile, std::function<void()> semanticProfileChanged) {
+    std::function<void(const std::string&)> openFile, std::function<void()> semanticProfileChanged, std::function<void()> inspectReflection) {
     m_semanticProfileChanged = std::move(semanticProfileChanged);
     m_menu = new QMenu(tr("Unreal"), &window);
     window.menuBar()->addMenu(m_menu);
@@ -35,6 +35,8 @@ void UnrealBuildBackend::attachMenu(ui::ShellWindow& window, std::function<Resul
     auto report = [host](Result<void> result) {
         if (host && !result) QMessageBox::warning(host.data(), tr("Unreal"), QString::fromStdString(result.error().message()));
     };
+    if (inspectReflection) connect(m_menu->addAction(tr("Inspect reflection specifiers in captured command…")), &QAction::triggered, this,
+        [inspectReflection=std::move(inspectReflection)] { inspectReflection(); });
     connect(m_menu->addAction(tr("Project modules, plugins and targets…")), &QAction::triggered, this,
         [self, host, openFile] { if (self && host) self->showProjectModel(host.data(), openFile); });
     connect(m_menu->addAction(tr("Select generated compilation database for current profile…")), &QAction::triggered, this,

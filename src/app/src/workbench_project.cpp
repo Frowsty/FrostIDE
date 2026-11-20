@@ -389,7 +389,8 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
             return m_runController->selectConfiguration(configuration->id);
         }, [self=QPointer<Workbench>(this), file=m_unreal->model().projectFile](const std::string& path) {
             if (self && self->m_unreal && self->m_unreal->model().projectFile == file) (void)self->openPath(path);
-        }, [self=QPointer<Workbench>(this)] { if (self) self->restartClangd(); });
+        }, [self=QPointer<Workbench>(this)] { if (self) self->restartClangd(); },
+        [self=QPointer<Workbench>(this)] { if (self && self->m_unreal) self->showCppIndex("preprocess"); });
     }
     if (m_nav) {
         if (auto opened = m_nav->openProject(path); !opened) {
