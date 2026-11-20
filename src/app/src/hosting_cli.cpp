@@ -47,6 +47,7 @@ Result<HostingCommand> hostingCommand(const HostingRequest& request) {
     const auto operation = request.operation;
     const bool numbered = operation != HostingOperation::Account && operation != HostingOperation::List;
     if (numbered && request.number == 0) return fail(ErrorCode::InvalidArgument, "Select a provider review first");
+    if (operation == HostingOperation::Checkout && !io::isAbsolutePath(request.gitExecutable)) return fail(ErrorCode::InvalidArgument, "Choose an absolute Git executable to verify checkout HEAD");
     const bool review = operation == HostingOperation::Approve || operation == HostingOperation::RequestChanges;
     if (review && !sha(request.head)) return fail(ErrorCode::InvalidArgument, "Refresh the selected review to capture its exact head commit");
     if ((operation == HostingOperation::Comment || operation == HostingOperation::RequestChanges) && request.body.empty()) return fail(ErrorCode::InvalidArgument, "Enter a review message");
@@ -132,12 +133,29 @@ Result<std::string> runHosting(io::IProcessLauncher& launcher, const HostingRequ
         return {};
     };
     if (request.operation == HostingOperation::Diff) if (auto matched = matchesHead(); !matched) return std::unexpected(matched.error());
+    if (request.operation == HostingOperation::Checkout) if (auto matched = matchesHead(); !matched) return std::unexpected(matched.error());
     auto output = io::runToCompletion(launcher, command->process, command->input, std::chrono::seconds(60), stop);
-    if (!output) return std::unexpected(output.error());
-    if (stop.stop_requested() || !admitted()) return fail(ErrorCode::Cancelled, "Provider project changed during request");
+    if (!output) {
+        if (request.operation == HostingOperation::Checkout) return fail(output.error().code(), "Checkout may have changed local files; inspect Git state. " + output.error().message());
+        return std::unexpected(output.error());
+    }
+    if (stop.stop_requested() || !admitted()) return fail(ErrorCode::Cancelled, request.operation == HostingOperation::Checkout ? "Checkout was interrupted; inspect local Git state" : "Provider project changed during request");
     if (output->exitCode != 0 || output->signal != 0) return fail(ErrorCode::IoError, "Provider CLI failed: " + output->stderrBytes.substr(0, 4096));
     if (output->stdoutBytes.size() > 8 * 1024 * 1024) return fail(ErrorCode::OutOfRange, "Provider output exceeds 8 MiB");
     if (request.operation == HostingOperation::Diff) if (auto matched = matchesHead(); !matched) return std::unexpected(matched.error());
+    if (request.operation == HostingOperation::Checkout) {
+        auto verify = command->process;
+        verify.executable = request.gitExecutable;
+        verify.arguments = {"--no-pager", "rev-parse", "--verify", "HEAD"};
+        verify.stdinMode = io::Stdio::Null;
+        if (stop.stop_requested() || !admitted()) return fail(ErrorCode::Cancelled, "Checkout was interrupted; inspect the local Git state");
+        auto actual = io::runToCompletion(launcher, verify, {}, std::chrono::seconds(10), stop);
+        if (!actual) return std::unexpected(actual.error().withContext("checkout may have changed local files; HEAD verification failed"));
+        std::string_view head = actual->stdoutBytes;
+        while (!head.empty() && (head.back() == '\n' || head.back() == '\r')) head.remove_suffix(1);
+        if (actual->exitCode != 0 || actual->signal != 0 || head != request.head)
+            return fail(ErrorCode::Busy, "Checkout changed the local Git state but its HEAD differs from the captured review commit; inspect Git and refresh the review");
+    }
     return std::move(output->stdoutBytes);
 }
 }

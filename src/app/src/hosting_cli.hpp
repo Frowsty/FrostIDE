@@ -11,7 +11,7 @@ enum class HostingOperation { Account, List, Details, Diff, Checkout, Comment, A
 struct HostingRequest {
     HostingProvider provider = HostingProvider::GitHub;
     HostingOperation operation = HostingOperation::List;
-    std::string executable, root, host, repository;
+    std::string executable, gitExecutable, root, host, repository;
     std::uint32_t number = 0;
     std::uint32_t page = 1;
     std::string head, body;

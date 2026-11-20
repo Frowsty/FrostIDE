@@ -14,9 +14,9 @@ namespace {
 HostingRequest request() {
     HostingRequest result;
 #ifdef _WIN32
-    result.executable = "C:/tools/gh.exe"; result.root = "C:/project";
+    result.executable = "C:/tools/gh.exe"; result.gitExecutable = "C:/tools/git.exe"; result.root = "C:/project";
 #else
-    result.executable = "/tools/gh"; result.root = "/project";
+    result.executable = "/tools/gh"; result.gitExecutable = "/tools/git"; result.root = "/project";
 #endif
     result.host = "github.example"; result.repository = "owner/repo"; result.number = 42;
     result.head = std::string(40, 'a');
@@ -79,6 +79,27 @@ TEST(HostingCli, HeadChangeDuringDiffDiscardsTheEntireReturnedPatch) {
     auto result = runHosting(launcher, selected, [] { return true; });
     ASSERT_FALSE(result); EXPECT_EQ(result.error().code(), ErrorCode::Busy);
     EXPECT_EQ(launcher.launches().size(), 3U);
+}
+TEST(HostingCli, ChangedHeadBeforeCheckoutNeverLaunchesTheCheckout) {
+    io::ScriptedProcessLauncher launcher;
+    launcher.expect(io::ScriptedProcess{.stdoutBytes = githubRow('b')});
+    auto selected = request(); selected.operation = HostingOperation::Checkout;
+    auto result = runHosting(launcher, selected, [] { return true; });
+    ASSERT_FALSE(result); EXPECT_EQ(result.error().code(), ErrorCode::Busy);
+    const auto launches = launcher.launches(); ASSERT_EQ(launches.size(), 1U);
+    EXPECT_EQ(launches.front().spec.arguments.front(), "api");
+}
+TEST(HostingCli, CheckoutSuccessRequiresActualLocalGitHeadToEqualCapturedCommit) {
+    io::ScriptedProcessLauncher launcher;
+    launcher.expect(io::ScriptedProcess{.stdoutBytes = githubRow()});
+    launcher.expect(io::ScriptedProcess{.stdoutBytes = "branch checked out"});
+    launcher.expect(io::ScriptedProcess{.stdoutBytes = std::string(40, 'b') + "\n"});
+    auto selected = request(); selected.operation = HostingOperation::Checkout;
+    auto result = runHosting(launcher, selected, [] { return true; });
+    ASSERT_FALSE(result); EXPECT_EQ(result.error().code(), ErrorCode::Busy);
+    const auto launches = launcher.launches(); ASSERT_EQ(launches.size(), 3U);
+    EXPECT_EQ(launches.back().spec.executable, selected.gitExecutable);
+    EXPECT_EQ(launches.back().spec.arguments, (std::vector<std::string>{"--no-pager", "rev-parse", "--verify", "HEAD"}));
 }
 TEST(HostingCli, PanelCreationAndContextInvalidationNeverContactAProvider) {
     io::ScriptedProcessLauncher launcher;

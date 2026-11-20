@@ -22,7 +22,7 @@
 namespace frost::app {
 HostingPanel::HostingPanel(HostingEnvironment environment, QWidget* parent)
     : QWidget(parent), m_environment(std::move(environment)), m_provider(new QComboBox(this)),
-      m_executable(new QLineEdit(this)), m_host(new QLineEdit(QStringLiteral("github.com"), this)),
+      m_executable(new QLineEdit(this)), m_gitExecutable(new QLineEdit(this)), m_host(new QLineEdit(QStringLiteral("github.com"), this)),
       m_repository(new QLineEdit(this)), m_page(new QSpinBox(this)), m_reviews(new QTreeWidget(this)),
       m_details(new QPlainTextEdit(this)), m_body(new QPlainTextEdit(this)), m_status(new QLabel(this)),
       m_cancel(new QPushButton(QStringLiteral("Cancel Request"), this)) {
@@ -42,6 +42,8 @@ HostingPanel::HostingPanel(HostingEnvironment environment, QWidget* parent)
     auto* browse = new QPushButton(QStringLiteral("Choose CLI..."), path);
     pathLayout->addWidget(m_executable); pathLayout->addWidget(browse);
     form->addRow(QStringLiteral("CLI executable"), path);
+    m_gitExecutable->setObjectName(QStringLiteral("hostingGitExecutable"));
+    form->addRow(QStringLiteral("Git executable (checkout verification)"), m_gitExecutable);
     form->addRow(QStringLiteral("Host"), m_host);
     form->addRow(QStringLiteral("Owner / repository"), m_repository);
     m_page->setRange(1, 10000);
@@ -83,7 +85,7 @@ HostingPanel::HostingPanel(HostingEnvironment environment, QWidget* parent)
     connect(m_provider, &QComboBox::currentIndexChanged, this, [this](int index) {
         invalidate(); m_host->setText(index == 0 ? QStringLiteral("github.com") : QStringLiteral("gitlab.com"));
     });
-    for (auto* field : {m_executable, m_host, m_repository}) connect(field, &QLineEdit::textChanged, this, [this] { invalidate(); });
+    for (auto* field : {m_executable, m_gitExecutable, m_host, m_repository}) connect(field, &QLineEdit::textChanged, this, [this] { invalidate(); });
     refreshButtons();
 }
 HostingPanel::~HostingPanel() {
@@ -111,6 +113,7 @@ void HostingPanel::start(HostingOperation operation) {
     HostingRequest request;
     request.provider = m_provider->currentIndex() == 0 ? HostingProvider::GitHub : HostingProvider::GitLab;
     request.operation = operation; request.executable = m_executable->text().toUtf8().toStdString();
+    request.gitExecutable = m_gitExecutable->text().toUtf8().toStdString();
     request.root = m_environment.root(); request.host = m_host->text().toUtf8().toStdString();
     request.repository = m_repository->text().toUtf8().toStdString(); request.page = static_cast<std::uint32_t>(m_page->value());
     request.body = m_body->toPlainText().toUtf8().toStdString();

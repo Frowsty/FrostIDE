@@ -31,7 +31,7 @@ private:
     void refreshButtons();
     HostingEnvironment m_environment;
     QComboBox* m_provider;
-    QLineEdit *m_executable, *m_host, *m_repository;
+    QLineEdit *m_executable, *m_gitExecutable, *m_host, *m_repository;
     QSpinBox* m_page;
     QTreeWidget* m_reviews;
     QPlainTextEdit *m_details, *m_body;
