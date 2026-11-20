@@ -21,12 +21,10 @@
 # a partial folder behind. After copying, every staged executable is compared byte for byte with
 # its source, and `ldd` must resolve every shared library frost needs.
 #
-# Qt. frost links the pinned Qt of the SDK through its RUNPATH (an absolute path into
-# $FROST_SDK/qt), so a Linux stage runs on a machine with that SDK installed; deploying Qt into the
-# stage is not done yet (TODO(M5): the portable Linux package, PLAN.md "Packaging"). The stage
-# prints the RUNPATH it relies on.
-#
-# Exit status: 0 staged, 1 a check failed (nothing partial is left), 2 usage. Linux only; bash 4+,
+# Qt is copied into qt/lib and qt/plugins. The frost wrapper resolves the relocated package,
+# supplies its library/plugin paths and executes frost.bin. Release packaging requires the
+# source-pinned --qt-source archive; Debug fixture stages may omit that archive.
+## Exit status: 0 staged, 1 a check failed (nothing partial is left), 2 usage. Linux only; bash 4+,
 # coreutils, python3 (reads the lock), cmp and ldd.
 
 set -euo pipefail
@@ -44,6 +42,7 @@ sdk_root="${FROST_SDK:-}"
 jobs=""
 skip_build=0
 force=0
+qt_source=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dest) dest="${2:-}"; shift 2 ;;
@@ -53,6 +52,7 @@ while [[ $# -gt 0 ]]; do
         --jobs) jobs="${2:-}"; shift 2 ;;
         --skip-build) skip_build=1; shift ;;
         --force) force=1; shift ;;
+        --qt-source) qt_source="${2:-}"; shift 2 ;;
         -h|--help) usage ;;
         *) echo "stage: unknown argument '$1'" >&2; usage ;;
     esac
@@ -129,6 +129,13 @@ for name in bin/lua-language-server main.lua LICENSE; do
         fail "missing bundled LuaLS file: $sdk_root/$luals_rel/$name (tools/bootstrap-wsl.sh)"
 done
 
+for name in lua54/lua lua54/liblua54.so licenses/Lua/lua.h; do
+    [[ -f "$bin_dir/$name" ]] || fail "missing standalone Lua runtime: $name"
+done
+qt_args=(--repo "$REPO" --sdk "$sdk_root" --destination "$dest")
+[[ "$config" != Debug ]] || qt_args+=(--debug)
+[[ -z "$qt_source" ]] || qt_args+=(--qt-source "$qt_source")
+python3 -B "$REPO/tools/stage_linux_qt.py" "${qt_args[@]}" --check-only
 # 3. A fresh destination.
 if [[ -e "$dest" && ! -d "$dest" ]]; then
     fail "$dest exists and is not a folder"
@@ -144,6 +151,10 @@ else
     created="$dest"
 fi
 
+
+cp -R -- "$bin_dir/lua54" "$dest/lua54"
+mkdir -p -- "$dest/licenses"
+cp -R -- "$bin_dir/licenses/Lua" "$dest/licenses/Lua"
 # 4. FrostIDE's files and licences (the vendored sources' LICENSE files, named as stage.ps1 does).
 cp -- "$bin_dir/frost" "$bin_dir/frost-clang" "$bin_dir/frost-analyzer" "$bin_dir/crashpad_handler" "$dest/" || fail "cannot copy frost"
 cp -R -- "$bin_dir/resources" "$dest/resources" || fail "cannot copy the resources"
@@ -178,14 +189,25 @@ for pair in "frost:$bin_dir/frost" "crashpad_handler:$bin_dir/crashpad_handler" 
     [[ -x "$staged" ]] || fail "the staged $staged is missing or not executable"
     cmp -s -- "$staged" "${pair#*:}" || fail "the staged ${pair%%:*} differs from ${pair#*:}"
 done
-if ! libraries="$(ldd "$dest/frost" 2>&1)"; then
+
+python3 -B "$REPO/tools/stage_linux_qt.py" "${qt_args[@]}"
+if ! libraries="$(LD_LIBRARY_PATH="$dest/qt/lib" ldd "$dest/frost.bin" 2>&1)"; then
     fail "ldd cannot read the staged frost: $libraries"
 fi
 if grep -q 'not found' <<<"$libraries"; then
     fail "the staged frost needs libraries that do not resolve: $(grep 'not found' <<<"$libraries" | sed 's/^[[:space:]]*//' | paste -sd ' ' -)"
 fi
-runpath="$( (readelf -d "$dest/frost" 2>/dev/null || true) | sed -n 's/.*(RUNPATH).*\[\(.*\)\]/\1/p')"
-[[ -z "$runpath" ]] || echo "stage: frost loads Qt through its RUNPATH $runpath (not staged)"
+# Qt/ICU must resolve within this stage even when a build RUNPATH points into the SDK.
+# Validate mandatory XCB/offscreen plugin dependency closures too, including host desktop libraries.
+for image in "$dest/frost.bin" "$dest/qt/plugins/platforms/libqxcb.so" "$dest/qt/plugins/platforms/libqoffscreen.so" "$dest/qt/plugins/tls/libqopensslbackend.so"; do
+    dependencies="$(LD_LIBRARY_PATH="$dest/qt/lib" ldd "$image" 2>&1)" || fail "cannot inspect $image"
+    grep -q 'not found' <<<"$dependencies" && fail "unresolved dependency in $image: $dependencies"
+    while IFS= read -r resolved; do
+        [[ "$resolved" == "$dest/qt/lib/"* ]] || fail "unpackaged Qt/ICU dependency: $resolved"
+    done < <(sed -n -E 's/^[[:space:]]*(libQt6[^[:space:]]+|libicu[^[:space:]]+) => (.*) \(0x[0-9a-f]+\)$/\2/p' <<<"$dependencies")
+done
+runpath="$( (readelf -d "$dest/frost.bin" 2>/dev/null || true) | sed -n 's/.*(RUNPATH).*\[\(.*\)\]/\1/p')"
+[[ -z "$runpath" ]] || echo "stage: launcher resolves packaged Qt first"
 
 files="$(find "$dest" -type f | wc -l)"
 bytes="$(du -sb "$dest" | cut -f1)"

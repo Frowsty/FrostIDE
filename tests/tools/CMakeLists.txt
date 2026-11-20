@@ -23,6 +23,17 @@ set(_frost_managed_test_dotnet "")
 if(DEFINED ENV{DOTNET_ROOT} AND EXISTS "$ENV{DOTNET_ROOT}/dotnet${CMAKE_EXECUTABLE_SUFFIX}")
     set(_frost_managed_test_dotnet "$ENV{DOTNET_ROOT}/dotnet${CMAKE_EXECUTABLE_SUFFIX}")
 endif()
+if(FROST_TEST_CSHARP_DOTNET)
+    set(_frost_nuget_planner_dotnet "${FROST_TEST_CSHARP_DOTNET}")
+else()
+    set(_frost_nuget_planner_dotnet "${_frost_managed_test_dotnet}")
+endif()
+# R17 package proposal acceptance is mandatory and offline; missing configured SDK fails.
+add_test(NAME managed_nuget_planner
+    COMMAND "${Python3_EXECUTABLE}" -B "${FROST_SOURCE_DIR}/tests/managed/test_nuget_planner.py")
+set_tests_properties(managed_nuget_planner PROPERTIES LABELS "integration;managed;nuget"
+    RESOURCE_LOCK frost_desktop TIMEOUT 300
+    ENVIRONMENT "FROST_MANAGED_TEST_DOTNET=${_frost_nuget_planner_dotnet};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
 add_test(NAME managed_pdb_guard
     COMMAND "${Python3_EXECUTABLE}" "${FROST_SOURCE_DIR}/tests/managed/test_pdb_guard.py")
 set_tests_properties(managed_pdb_guard PROPERTIES
@@ -83,6 +94,7 @@ set_tests_properties(tools.staged_luals PROPERTIES
 
 # Each suite runs as a script (its directory goes first on sys.path) in the build directory: ctest
 # labels only tests that run there with mod.tools (tests/CMakeLists.txt checks this).
+list(APPEND _frost_tool_suites delivery)
 foreach(suite IN LISTS _frost_tool_suites)
     add_test(NAME tools.${suite}
         COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_${suite}.py -v)

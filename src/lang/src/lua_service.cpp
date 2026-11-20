@@ -137,6 +137,12 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
     // the root's (the root, the fallback scope without a URI and unknown URIs).
     [[nodiscard]] Json configurationFor(std::string_view scopeUri, std::string_view section) const {
         LockGuard lock(mutex);
+        if (options.configurationIsSectionMap) {
+            if (section.empty())
+                return configuration;
+            const auto* value = configuration.find(section);
+            return value ? *value : Json();
+        }
         if (!scopeUri.empty()) {
             if (auto path = uriToPath(scopeUri)) {
                 const std::string key = documentKey(*path);
@@ -240,6 +246,7 @@ struct LuaService::Shared : std::enable_shared_from_this<LuaService::Shared> {
     [[nodiscard]] InitializeOptions initializeOptions() const {
         InitializeOptions init;
         init.rootPath = options.workspaceRoot;
+        init.initializationOptions = options.initializationOptions;
         init.processId = currentProcessId();
         // LuaLS 3.19.1 corrupts incremental line positions when its legacy UTF-8
         // offsetEncoding is offered. Keep the standard UTF-16 wire encoding.

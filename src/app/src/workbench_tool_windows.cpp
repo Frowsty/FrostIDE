@@ -36,6 +36,7 @@
 #include "project_properties_dialog.hpp"
 #include "settings_dialog.hpp"
 #include "unit_tests_window.hpp"
+#include "managed_tools_window.hpp"
 #include "unity_control.hpp"
 #include <QCoreApplication>
 #include <QDir>
@@ -247,8 +248,7 @@ void Workbench::attachToolWindows() {
     connect(explorer, &ui::SolutionExplorer::manageNuGetPackagesRequested, this, [this](const QString& projectPath) {
         if (!m_window || !m_solution)
             return;
-        showNuGetPackageManagerDialog(m_window, m_services.fs, projectPath.toStdString(),
-                                      [this] { refreshSolutionExplorerForFsChange(); });
+        showManagedPackages(projectPath.toStdString());
     });
     connect(explorer, &ui::SolutionExplorer::cppHierarchyModeChanged, this, [this](project::CppHierarchyMode mode) {
         m_cppHierarchyMode = mode;
@@ -399,14 +399,7 @@ void Workbench::attachToolWindows() {
     nugetSpec.side = ui::ToolWindowSide::Bottom;
     nugetSpec.iconId = std::string(ui::icons::kBuildPackage);
     nugetSpec.createContent = [this]() -> QWidget* {
-        std::string initialProj;
-        if (m_explorer && m_solution) {
-            if (const auto projId = m_explorer->currentProject())
-                initialProj = m_solution->project(*projId).path;
-        }
-        return createNuGetToolWindowWidget(
-            m_window, m_services.fs, [this]() -> const project::SolutionModel* { return m_solution.get(); },
-            std::move(initialProj), [this] { refreshSolutionExplorerForFsChange(); });
+        return createManagedPackagesWidget(m_window, managedToolsContext());
     };
     if (auto added = windows.add(std::move(nugetSpec)); !added) {
         log::warn(kLog, "nuget tool window: {}", added.error().describe());
@@ -473,6 +466,7 @@ void Workbench::attachToolWindows() {
         auto* providers = new QTabWidget(owner->m_window);
         providers->setObjectName(QStringLiteral("unitTestsProviders"));
         providers->addTab(createUnitTestsToolWindowWidget(providers, std::move(context)), text("CTest"));
+        providers->addTab(createDotnetTestsWidget(providers, owner->managedToolsContext()), text(".NET"));
         LuaUnitTestsContext lua;
         lua.fs = &owner->m_services.fs;
         lua.launcher = &owner->m_services.launcher;

@@ -6,7 +6,9 @@
 #include "frost/lang/json_schema.hpp"
 #include "frost/lang/lsp_client.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/project/msbuild_source.hpp"
 
+#include <map>
 #include <memory>
 #include <utility>
 
@@ -35,15 +37,28 @@ public:
         LockGuard lock(m_mutex);
         m_cmake = std::move(server);
     }
+    void setMSBuildServer(std::shared_ptr<lang::ILspRequester> server) {
+        LockGuard lock(m_mutex); m_msbuild = std::move(server);
+    }
     void setManagedServer(std::shared_ptr<lang::ILspRequester> server) {
         LockGuard lock(m_mutex);
         m_managed = std::move(server);
         if (m_managed && m_applyEditHandler)
             m_managed->setApplyEditHandler(m_applyEditHandler);
     }
+    void setRegisteredServers(std::map<std::string, std::shared_ptr<lang::ILspRequester>> routes) {
+        LockGuard lock(m_mutex);
+        m_registered = std::move(routes);
+        for (const auto& [extension, server] : m_registered)
+            if (server && m_applyEditHandler)
+                server->setApplyEditHandler(m_applyEditHandler);
+    }
     void setApplyEditHandler(ApplyEditHandler handler) override {
         LockGuard lock(m_mutex);
         m_applyEditHandler = std::move(handler);
+        for (const auto& [extension, server] : m_registered)
+            if (server)
+                server->setApplyEditHandler(m_applyEditHandler);
         if (m_server)
             m_server->setApplyEditHandler(m_applyEditHandler);
         if (m_lua)
@@ -53,11 +68,13 @@ public:
     }
     void setActivePath(std::string_view path) {
         LockGuard lock(m_mutex);
+        m_activePath = path;
         m_activeLua = isLua(path);
         m_activeManaged = isCSharp(path);
         m_activeJson = lang::hasBundledJsonSchema(path);
         m_activeCMake = isCMake(path);
-        m_hasActive = m_activeLua || m_activeManaged || m_activeJson || m_activeCMake || isCpp(path);
+        m_activeMSBuild = project::isMSBuildSource(path);
+        m_hasActive = m_activeLua || m_activeManaged || m_activeJson || m_activeCMake || m_activeMSBuild || isCpp(path);
     }
 
     [[nodiscard]] sched::Task<Result<lang::Json>> request(std::string method, lang::Json params,
@@ -110,11 +127,19 @@ private:
                 return true;
         return false;
     }
+    [[nodiscard]] std::shared_ptr<lang::ILspRequester> registeredFor(std::string_view path) const
+        FROST_REQUIRES(m_mutex) {
+        const auto found = m_registered.find(lang::documentKey(path));
+        return found == m_registered.end() ? nullptr : found->second;
+    }
     [[nodiscard]] std::shared_ptr<lang::ILspRequester> server() const {
         LockGuard lock(m_mutex);
+        if (!m_hasActive)
+            return registeredFor(m_activePath);
         return m_hasActive ? (m_activeLua       ? m_lua
                               : m_activeManaged ? m_managed
                               : m_activeJson    ? m_json
+                              : m_activeMSBuild ? m_msbuild
                               : m_activeCMake   ? m_cmake
                                                 : m_server)
                            : nullptr;
@@ -132,9 +157,10 @@ private:
             return isLua(*path)                        ? m_lua
                    : isCSharp(*path)                   ? m_managed
                    : lang::hasBundledJsonSchema(*path) ? m_json
+                   : project::isMSBuildSource(*path)      ? m_msbuild
                    : isCMake(*path)                    ? m_cmake
                    : isCpp(*path)                      ? m_server
-                                                       : nullptr;
+                                                       : registeredFor(*path);
         }
         if (auto active = server())
             return active;
@@ -158,8 +184,12 @@ private:
     std::shared_ptr<lang::ILspRequester> m_managed FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_json FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_cmake FROST_GUARDED_BY(m_mutex);
+    std::map<std::string, std::shared_ptr<lang::ILspRequester>> m_registered FROST_GUARDED_BY(m_mutex);
+    std::string m_activePath FROST_GUARDED_BY(m_mutex);
     bool m_activeJson FROST_GUARDED_BY(m_mutex) = false;
     bool m_activeCMake FROST_GUARDED_BY(m_mutex) = false;
+    std::shared_ptr<lang::ILspRequester> m_msbuild FROST_GUARDED_BY(m_mutex);
+    bool m_activeMSBuild FROST_GUARDED_BY(m_mutex) = false;
     ApplyEditHandler m_applyEditHandler FROST_GUARDED_BY(m_mutex);
     bool m_activeManaged FROST_GUARDED_BY(m_mutex) = false;
     bool m_activeLua FROST_GUARDED_BY(m_mutex) = false;

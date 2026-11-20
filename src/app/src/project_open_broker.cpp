@@ -11,10 +11,12 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QEventLoop>
 #include <QFileInfo>
 #include <QMetaObject>
 #include <QPointer>
 #include <QTimer>
+#include <QUuid>
 
 #include <algorithm>
 #include <chrono>
@@ -213,8 +215,9 @@ Result<void> openExternalFile(Workbench& workbench, std::string_view path, int l
     }
     return {};
 }
-Result<void> forwardExternalOpen(std::string_view root, std::string_view file, int line, int column, bool columnUtf16) {
+Result<void> forwardExternalOpen(std::string_view root, std::string_view file, int line, int column, bool columnUtf16, bool wait) {
     auto payload = lang::Json::object().set("root", std::string(root)).set("file", std::string(file));
+    if (wait) payload.set("wait", true);
     if (columnUtf16) {
         // A legacy owner requires top-level line and column, so it rejects this versioned
         // position instead of silently treating UTF-16 units as bytes.
@@ -230,6 +233,47 @@ Result<void> forwardExternalOpen(std::string_view root, std::string_view file, i
     auto reply = io::requestLocalIpc(externalProjectKey(root), payload.dump(), 5s);
     if (!reply)
         return std::unexpected(std::move(reply.error()));
+    if (wait) {
+        if (!reply->starts_with("wait:") || reply->size() > 100)
+            return fail(ErrorCode::Unsupported, "the project window does not support document-close waiting");
+        const std::string ticket = reply->substr(5);
+        const auto poll = lang::Json::object().set("method", "document.wait").set("root", std::string(root)).set("ticket", ticket).dump();
+        auto lastReply = std::chrono::steady_clock::now();
+        for (;;) {
+            auto state = io::requestLocalIpc(externalProjectKey(root), poll, 2s);
+            if (!state) {
+                // A GUI stall is not a close. Owner death is still surfaced by transport errors.
+                if (state.error().code() == ErrorCode::Timeout || state.error().code() == ErrorCode::Busy) {
+                    if (std::chrono::steady_clock::now() - lastReply > 30s)
+                        return fail(ErrorCode::Timeout, "document owner did not respond for 30 seconds");
+                    std::this_thread::sleep_for(200ms);
+                    continue;
+                }
+                return std::unexpected(std::move(state.error()));
+            }
+            lastReply = std::chrono::steady_clock::now();
+            if (*state == "retry:busy") { std::this_thread::sleep_for(200ms); continue; }
+            if (*state == "closed") return {};
+            if (*state != "open") return fail(ErrorCode::Cancelled, "document wait was cancelled by its owner");
+            std::this_thread::sleep_for(200ms);
+        }
+    }
+    if (*reply != "ok") return fail(ErrorCode::Busy, "window did not accept the open request");
+    return {};
+}
+Result<void> startExternalWaitOwner(io::IProcessLauncher& launcher, std::string_view executable,
+                                    std::string_view root, std::string_view file) {
+    if (!io::isAbsolutePath(executable) || !io::isAbsolutePath(root) || !io::isAbsolutePath(file))
+        return fail(ErrorCode::InvalidArgument, "wait owner paths must be absolute");
+    io::ProcessSpec spec;
+    spec.executable = executable;
+    spec.arguments = {"--project", std::string(root)};
+    spec.killOnClose = false;
+    spec.stdinMode = io::Stdio::Null;
+    spec.stdoutMode = io::Stdio::Null;
+    spec.stderrMode = io::Stdio::Null;
+    auto child = launcher.launch(spec);
+    if (!child) return std::unexpected(std::move(child.error()));
     return {};
 }
 ProjectOpenBroker::ProjectOpenBroker(Workbench& workbench, MainWindow& window, std::string root,
@@ -270,15 +314,30 @@ Result<void> ProjectOpenBroker::start() {
         std::unique_lock lock(waiter->mutex);
         if (!waiter->changed.wait_for(lock, 2s, [&] { return waiter->done; })) {
             waiter->done = true;
-            return fail(ErrorCode::Timeout, "window is busy");
+            return std::string("retry:busy");
         }
         return std::move(waiter->result);
     });
 }
 Result<std::string> ProjectOpenBroker::accept(const std::string& request) {
+    // Polling renews a short lease; interrupted clients cannot permanently exhaust ticket capacity.
+    const auto now = std::chrono::steady_clock::now();
+    std::erase_if(m_waiting, [&](const auto& item) { return now - item.second.touched > 30s; });
     auto json = lang::parseJson(request);
     if (!json || !json->isObject())
         return fail(ErrorCode::InvalidArgument, "invalid open request");
+    if (json->stringAt("method") == "document.wait") {
+        if (json->stringAt("root") != m_root || m_workbench.projectRoot().empty())
+            return fail(ErrorCode::Cancelled, "the project window changed");
+        const auto found = m_waiting.find(std::string(json->stringAt("ticket")));
+        if (found == m_waiting.end()) return fail(ErrorCode::NotFound, "unknown document wait ticket");
+        found->second.touched = now;
+        if (found->second.editor) return std::string("open");
+        m_waiting.erase(found);
+        if (m_waiting.empty() && m_waitCloseLoop) m_waitCloseLoop->quit();
+        return std::string("closed");
+    }
+    if (m_finishingWaits) return fail(ErrorCode::Cancelled, "the window is closing");
     if (json->stringAt("method") == "unity.hello") {
         const std::string announcedRoot(json->stringAt("root"));
         if (announcedRoot.empty() || m_workbench.projectRoot().empty() ||
@@ -313,12 +372,38 @@ Result<std::string> ProjectOpenBroker::accept(const std::string& request) {
             openExternalFile(m_workbench, file, static_cast<int>(*line), static_cast<int>(*column), columnUtf16);
         !opened)
         return std::unexpected(std::move(opened.error()));
+    std::string waitTicket;
+    if (json->boolAt("wait").value_or(false)) {
+        if (file.empty() || m_waiting.size() >= 256)
+            return fail(ErrorCode::Busy, "document waiting requires a file and at most 256 active clients");
+        const auto canonical = physicalInfoPath(QFileInfo(qs(file)));
+        QObject* editor = nullptr;
+        for (auto* view : m_workbench.editors().views()) {
+            const auto path = physicalInfoPath(QFileInfo(qs(view->path())));
+            if (path && canonical && lang::documentKey(*path) == lang::documentKey(*canonical)) { editor = &view->editor(); break; }
+        }
+        if (!editor) return fail(ErrorCode::NotFound, "opened document has no live editor to wait for");
+        waitTicket = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+        m_waiting.emplace(waitTicket, WaitTicket{editor, now});
+    }
     if (m_window.isMinimized())
         m_window.setWindowState((m_window.windowState() & ~Qt::WindowMinimized) | Qt::WindowActive);
     m_window.show();
     m_window.raise();
     m_window.activateWindow();
-    return std::string("ok");
+    return waitTicket.empty() ? std::string("ok") : "wait:" + waitTicket;
+}
+void ProjectOpenBroker::finishWaits() {
+    m_finishingWaits = true;
+    if (m_waiting.empty()) return;
+    // aboutToQuit follows an accepted close, after the ordinary Save/close veto handling. Keep
+    // the authenticated server alive briefly to deliver actual close acknowledgements to clients.
+    for (auto& [ticket, view] : m_waiting) { (void)ticket; view.editor.clear(); }
+    QEventLoop loop;
+    m_waitCloseLoop = &loop;
+    QTimer::singleShot(2000, &loop, &QEventLoop::quit);
+    loop.exec();
+    m_waitCloseLoop = nullptr;
 }
 void ProjectOpenBroker::projectChanged() {
     const auto resolved = externalProjectRoot(m_workbench.projectRoot());
@@ -330,6 +415,7 @@ void ProjectOpenBroker::projectChanged() {
         // reservation remains held by the worker until its listener is completely stopped.
         m_retired.emplace_back([old = std::move(m_owner)] { old->stop(); });
     }
+    m_waiting.clear();
     m_root = root;
     if (m_root.empty())
         return;

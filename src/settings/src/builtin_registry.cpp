@@ -57,10 +57,17 @@ struct Entry {
     const ScopeMask projectToo = kAllFileScopes;
     const ScopeMask editorConfig = kAllScopesWithEditorConfig;
     return {
+        {"languages.serverRegistry", "Local language server registry",
+         "Version 1 manifest for locally installed, SHA256-pinned and license-reviewed stdio language servers. "
+         "Configure Language Servers opens the onboarding editor. Project settings cannot supply servers.",
+         "Languages/Language Servers", stringSchema(1024 * 1024), text("{\"version\":1,\"servers\":[]}"),
+         kApplicationOnly, true},
         // Editor: font.
-        {"editor.schemeColors", "Editor color scheme", "Explicit editor and syntax color overrides imported or edited by the user.", "Editor/Color Scheme",
+        {"editor.schemeColors", "Editor color scheme",
+         "Explicit editor and syntax color overrides imported or edited by the user.", "Editor/Color Scheme",
          recordListSchema({FieldSpec{.name = "name", .type = FieldType::String, .required = true},
-                           FieldSpec{.name = "color", .type = FieldType::String, .required = true}}, 128),
+                           FieldSpec{.name = "color", .type = FieldType::String, .required = true}},
+                          128),
          Value(RecordList{}), kApplicationOnly},
         {"editor.fontFamily", "Font",
          "The editor font family. FrostIDE bundles JetBrains Mono, Fira Code, Cascadia Code, Cascadia Mono, "
@@ -245,11 +252,11 @@ struct Entry {
                            FieldSpec{.name = "size",
                                      .type = FieldType::Integer,
                                      .required = false,
-                                       .description = "Its width or height in pixels; 0 or absent uses the default."},
-                             FieldSpec{.name = "side", .type = FieldType::Integer, .required = false},
-                             FieldSpec{.name = "floating", .type = FieldType::Bool, .required = false},
-                             FieldSpec{.name = "pinned", .type = FieldType::Bool, .required = false},
-                             FieldSpec{.name = "geometry", .type = FieldType::String, .required = false}},
+                                     .description = "Its width or height in pixels; 0 or absent uses the default."},
+                           FieldSpec{.name = "side", .type = FieldType::Integer, .required = false},
+                           FieldSpec{.name = "floating", .type = FieldType::Bool, .required = false},
+                           FieldSpec{.name = "pinned", .type = FieldType::Bool, .required = false},
+                           FieldSpec{.name = "geometry", .type = FieldType::String, .required = false}},
                           64),
          Value(RecordList{}), kApplicationOnly, false, true},
 
@@ -421,6 +428,7 @@ struct Entry {
          text("Lua 5.4"), kApplicationAndPersonal},
 
         // Tool paths (Application-only executes keys).
+        toolPath("tools.claude.path", "Claude Code", "Absolute separately installed native Claude Code executable; launching and editor sharing require per-window consent."),
         toolPath("tools.msbuild.path", "MSBuild", "MSBuild.exe to build solutions with; empty finds it with vswhere."),
         toolPath("tools.vcpkg.path", "vcpkg",
                  "Absolute user-installed vcpkg executable; dependency operations require explicit consent."),
@@ -442,13 +450,33 @@ struct Entry {
                  "Absolute LuaLS executable path; empty searches PATH."),
         toolPath("tools.clangd.path", "clangd", "The clangd executable; empty uses the bundled one."),
         toolPath("tools.clangFormat.path", "clang-format", "The clang-format executable; empty uses the bundled one."),
-        toolPath("tools.frostAnalyzer.path", "frost-analyzer", "Absolute native analyzer executable; empty uses the bundled one."),
-        {"analysis.cpp.enabled", "Automatic native C++ analysis", "Runs the bundled native AST/CFG analyzer after idle in trusted projects.", "Editor/Inspections/Frost C++", boolSchema(), Value(true), projectToo},
-        {"analysis.cpp.onSave", "Native analysis on save", "Analyze saved C++ translation units using actual compile commands.", "Editor/Inspections/Frost C++", boolSchema(), Value(true), projectToo},
-        {"analysis.powerSave", "Power Save analysis pause", "Pauses automatic expensive analysis; explicit manual inspection remains available.", "Editor/Inspections", boolSchema(), Value(false), projectToo},
-        {"analysis.cpp.rules", "Native analyzer profile overrides", "check-pattern=error|warning|weak-warning|info|off; applied after individual severity keys.", "Editor/Inspections/Frost C++", stringListSchema(256,4096), emptyList(), projectToo},
-#define FROST_ANALYZER_RULE(id,title,category,level,applicability,key,cfg) \
-        {key,title,applicability,"Editor/Inspections/Frost C++",enumSchema(options({{"default","Default"},{"error","Error"},{"warning","Warning"},{"weak-warning","Weak warning"},{"info","Information"},{"off","Off"}})),text("default"),projectToo},
+        toolPath("tools.frostAnalyzer.path", "frost-analyzer",
+                 "Absolute native analyzer executable; empty uses the bundled one."),
+        {"analysis.cpp.enabled", "Automatic native C++ analysis",
+         "Runs the bundled native AST/CFG analyzer after idle in trusted projects.", "Editor/Inspections/Frost C++",
+         boolSchema(), Value(true), projectToo},
+        {"analysis.cpp.onSave", "Native analysis on save",
+         "Analyze saved C++ translation units using actual compile commands.", "Editor/Inspections/Frost C++",
+         boolSchema(), Value(true), projectToo},
+        {"analysis.powerSave", "Power Save analysis pause",
+         "Pauses automatic expensive analysis; explicit manual inspection remains available.", "Editor/Inspections",
+         boolSchema(), Value(false), projectToo},
+        {"analysis.cpp.rules", "Native analyzer profile overrides",
+         "check-pattern=error|warning|weak-warning|info|off; applied after individual severity keys.",
+         "Editor/Inspections/Frost C++", stringListSchema(256, 4096), emptyList(), projectToo},
+#define FROST_ANALYZER_RULE(id, title, category, level, applicability, key, cfg)                                       \
+    {key,                                                                                                              \
+     title,                                                                                                            \
+     applicability,                                                                                                    \
+     "Editor/Inspections/Frost C++",                                                                                   \
+     enumSchema(options({{"default", "Default"},                                                                       \
+                         {"error", "Error"},                                                                           \
+                         {"warning", "Warning"},                                                                       \
+                         {"weak-warning", "Weak warning"},                                                             \
+                         {"info", "Information"},                                                                      \
+                         {"off", "Off"}})),                                                                            \
+     text("default"),                                                                                                  \
+     projectToo},
 #include "../../../resources/analyzer_rules.inc"
 #undef FROST_ANALYZER_RULE
         toolPath("tools.clangTidy.path", "clang-tidy", "The clang-tidy executable; empty uses the bundled one."),
@@ -480,12 +508,24 @@ struct Entry {
 
         // Terminal (ADR 0051).
         {"terminal.profiles", "Personal terminal profiles",
-         "Named absolute shell executables, argument arrays and optional working directories. Application-only; custom profiles require trust when a project is open.",
+         "Named absolute shell executables, argument arrays and optional working directories. Application-only; custom "
+         "profiles require trust when a project is open.",
          "Tools/Terminal",
-         recordListSchema({FieldSpec{.name = "name", .type = FieldType::String, .required = true, .description = "Profile label"},
-                           FieldSpec{.name = "shell", .type = FieldType::String, .required = true, .description = "Absolute executable path"},
-                           FieldSpec{.name = "arguments", .type = FieldType::StringList, .required = false, .description = "One argv element per item"},
-                           FieldSpec{.name = "workingDirectory", .type = FieldType::String, .required = false, .description = "Absolute initial folder"}}, 64),
+         recordListSchema(
+             {FieldSpec{.name = "name", .type = FieldType::String, .required = true, .description = "Profile label"},
+              FieldSpec{.name = "shell",
+                        .type = FieldType::String,
+                        .required = true,
+                        .description = "Absolute executable path"},
+              FieldSpec{.name = "arguments",
+                        .type = FieldType::StringList,
+                        .required = false,
+                        .description = "One argv element per item"},
+              FieldSpec{.name = "workingDirectory",
+                        .type = FieldType::String,
+                        .required = false,
+                        .description = "Absolute initial folder"}},
+             64),
          Value(RecordList{}), kApplicationOnly, true},
         {"terminal.shell", "Shell path",
          "The shell the terminal starts, as an absolute path; empty uses PowerShell 7, Windows PowerShell or "

@@ -110,6 +110,8 @@ struct LuaServiceOptions {
     bool firstArgumentIsAbsolutePath = false;
     bool trusted = false; // Must be true before any process is launched.
     Json configuration = luaDefaults();
+    bool configurationIsSectionMap = false; // Generic registry: exact LSP section -> JSON map.
+    Json initializationOptions;             // Generic initialize payload; Lua/managed defaults stay null.
     RestartPolicy restart;
     IClock::Duration initializeTimeout = std::chrono::seconds(60);
     IClock::Duration shutdownTimeout = std::chrono::seconds(5);

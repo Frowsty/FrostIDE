@@ -3,6 +3,10 @@
 #pragma once
 #include "frost/core/error.hpp"
 #include "frost/io/local_ipc.hpp"
+#include "frost/io/process.hpp"
+#include <QPointer>
+#include <map>
+#include <chrono>
 
 #include <QObject>
 
@@ -12,6 +16,8 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+
+class QEventLoop;
 
 namespace frost::app {
 class Workbench;
@@ -28,7 +34,10 @@ class MainWindow;
                                             bool columnUtf16 = false);
 // Secondary process: sends one bounded request and waits for the owning window's acknowledgement.
 [[nodiscard]] Result<void> forwardExternalOpen(std::string_view root, std::string_view file, int line, int column,
-                                               bool columnUtf16 = false);
+                                               bool columnUtf16 = false, bool wait = false);
+// Start an ordinary owner window for a --wait client; the owner keeps normal Save/close semantics.
+[[nodiscard]] Result<void> startExternalWaitOwner(io::IProcessLauncher& launcher, std::string_view executable,
+                                                  std::string_view root, std::string_view file);
 
 // GUI thread owns this adapter. The handler runs on the IPC worker, posts to this object, and
 // waits at most two seconds for the UI; destruction cancels the server and joins its worker.
@@ -38,6 +47,8 @@ public:
                       std::unique_ptr<io::LocalIpcOwner> owner);
     ~ProjectOpenBroker() override;
     [[nodiscard]] Result<void> start(); // Call only after first frame.
+    // Called on accepted application shutdown; completes close tickets through IPC before server exit.
+    void finishWaits();
     void projectChanged();              // Rebind on a project switch; already-owned roots remain unchanged.
 private:
     [[nodiscard]] Result<std::string> accept(const std::string& request);
@@ -47,6 +58,10 @@ private:
     std::string m_root;
     std::unique_ptr<io::LocalIpcOwner> m_owner;
     bool m_firstFrame = false;
+    struct WaitTicket { QPointer<QObject> editor; std::chrono::steady_clock::time_point touched; };
+    std::map<std::string, WaitTicket, std::less<>> m_waiting;
+    QEventLoop* m_waitCloseLoop = nullptr;
+    bool m_finishingWaits = false;
     std::vector<std::jthread> m_retired;
 };
 } // namespace frost::app

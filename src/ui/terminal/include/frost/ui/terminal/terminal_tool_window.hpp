@@ -97,6 +97,8 @@ public:
     [[nodiscard]] Result<int> newTabWithShell(const std::string& shellExecutable,
                                               const std::string& workingDirectory = {},
                                               const term::TerminalProfile* profile = nullptr);
+    // Explicit user-approved absolute process; trusted current workspace only, no shell interpolation.
+    [[nodiscard]] Result<int> newTabWithProcess(const io::ProcessSpec& spec, const QString& title);
     [[nodiscard]] Result<TerminalView*> splitTab(int index, const std::string& workingDirectory = {});
     [[nodiscard]] Result<TerminalView*> splitCurrentTab(const std::string& workingDirectory = {});
     // Closes tab `index` (ending its shell's tree). Out of range: nothing.
@@ -197,6 +199,7 @@ public:
 
     // Shows the terminal and opens a tab in `folder` (absolute). Errors: those of newTab.
     [[nodiscard]] Result<int> openInTerminal(const std::string& folder);
+    [[nodiscard]] Result<int> openProcess(const io::ProcessSpec& spec, const QString& title);
     // The folder terminal.openInTerminal uses ("" for the project root).
     void setFolderProvider(std::function<std::string()> provider) { m_folderProvider = std::move(provider); }
     // The tool window's content, or nullptr before it was first shown.

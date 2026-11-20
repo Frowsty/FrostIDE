@@ -384,8 +384,7 @@ void Workbench::registerActions() {
                 }
             }
             if (!projPath.empty())
-                showNuGetPackageManagerDialog(m_window, m_services.fs, projPath,
-                                              [this] { refreshSolutionExplorerForFsChange(); });
+                showManagedPackages(projPath);
         },
         [this] { return m_window != nullptr && m_solution != nullptr; });
     add(
@@ -466,15 +465,20 @@ void Workbench::registerActions() {
         input::ActionSpec atMention;
         atMention.id = "agent.atMention";
         atMention.name = "Mention Selection in AI Agent";
-        atMention.description = "Requires the AI agent panel (UX-17)";
+        atMention.description = "Mention the current workspace selection in connected AI Agent CLIs";
         atMention.group = "Agent";
         atMention.context.none = input::ContextKeys{input::ContextKey::DialogFocus};
-        atMention.enabled = [](const input::ActionContext&) { return false; };
-        atMention.handler = [](const input::ActionContext&, const input::InvokeInfo&) {};
+        atMention.enabled = [this](const input::ActionContext&) { return agentBridgeActive(); };
+        atMention.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { mentionAgentSelection(); };
         if (auto added = m_registry.add(std::move(atMention)); !added) {
             log::warn(kLog, "action agent.atMention: {}", added.error().describe());
         }
     }
+    add("agent.connect", "Connect AI Agent to This Workspace...", [this] { enableAgentBridge(false); },
+        [this] { return interactiveReady() && m_services.trust.isTrusted(m_projectRoot); });
+    add("agent.terminal", "Agent Terminal (runs Claude Code)...", [this] { enableAgentBridge(true); },
+        [this] { return interactiveReady() && m_terminal && m_services.trust.isTrusted(m_projectRoot); });
+    add("agent.disconnect", "Disconnect AI Agent", [this] { stopAgentBridge(); }, [this] { return agentBridgeActive(); });
     // No "window.services" alias for the Unit Tests window: the Services window is UX-9's, and
     // Alt+8 is bound to window.unitTests in the module defaults.
     add(

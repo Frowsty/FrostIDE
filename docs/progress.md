@@ -12,6 +12,65 @@ what is next, blockers and open questions for the user.
 - Actual project/compiler events check the owned generated-context revision; the package debounces regeneration on real project changes and after domain registration, preserving the existing immutable generation/hash/no-link publication. Public per-assembly Unity6000 analyzer/source-generator DLLs, additional files, rulesets and global compiler configs are now preserved in generated projects. Missing/ambiguous compiler arguments retain explicit reporting rather than being guessed; unrelated host config discovery is disabled. Astra source-reviewed that follow-up against installed Unity API metadata.
 - Authored protocol/callback/gap/continuation/future-cursor fixtures, strict C++ payload rejection tests, separate Problems source/UTF-16 routing and authenticated callback-to-Console/Problems/trust-revocation integration coverage. Consumer source review remains pending. Builds, tests, feature runs, Unity, WSL and platform acceptance remain deferred. No complete R18 milestone, debugger/test-runner/asset-semantics or analyzer-coverage acceptance is claimed; root coordinates those independent tracks.
 
+## 2026-11-20: R17 managed inventory and evaluated SDK snapshot API underway
+
+- Inventoried the existing supervised csharp-ls 0.28.0 transport, audited Roslyn 5.9.0/MSBuildWorkspace graph, .NET 10.0.403 pins, managed property/build/debug helpers and self-authored SDK fixtures. No private work solutions were read.
+- Added an SDK-style MSBuild evaluation command/parser API retaining genuine Compile/ProjectReference/PackageReference/PackageVersion/analyzer metadata, explicit TFM/RID context, compiler properties and central-package/test-project facts. Project/TFM/RID mismatches and bounded malformed output refuse. The command starts no restore or build target; trust and process containment retain existing BuildSession ownership.
+- Authored linked/removed/conditional/multitarget SDK fixtures and model/admission regressions for later execution. RoslynHost and normal product model integration continue separately. An independent source review cleared explicit inner-TFM admission and the real SDK fixture consumer; outer TFM discovery remains separate. This is an incremental source checkpoint, not R17 completion; runtime verification remains pending. No dotnet, build, test, feature, package installation or WSL execution occurred.
+
+## 2026-11-20: R17 LTR-17 governed language-server onboarding
+
+- Authored application-only local stdio registry, bounded identity/selectors/configuration manifests, exact executable/payload/license SHA256 pins and existing SPDX allowlist admission. Configure Language Servers imports/reviews local manifests; no packages are downloaded or bundled. Generic supervised services start lazily on actual in-project documents and retain existing specialized language routes.
+- Added real lifecycle/document/diagnostic/Problems integration, exact admitted document requester routes, per-launch trust+physical-root/pin checks and request/reply/applyEdit source guards. Root replacement retires services and requires renewed trust; stale/failed observations withdraw diagnostics/insight. Declared versions stay separate from actual initialize serverInfo. ADR0117 records limits and governance.
+- Registry, guarded launcher, supervised generic wire, retained routing and onboarding refusal tests are authored. Independent Astra source review cleared the initial implementation and focused corrections for physical-root/external-document/stale observations and returned edit participants. No builds, tests, feature execution, downloads, WSL or pushes occurred. Next: focused source rereview, additive SLN18/Roslyn joins and later real-server acceptance.
+
+## 2026-11-20 — R16 C1 source (codex/r16-c1)
+
+- UX-17 C1: explicit per-window workspace consent after L1/trust, loopback-only authenticated
+  WebSocket/MCP editor bridge, current-user discovery/cleanup, per-session generation, revocation,
+  expiry and disconnect. No startup listener or provider process. Bounded framing, payloads,
+  outstanding calls and clients; no Origin fallback or all-interface bind.
+- Direct opt-in user-installed CLI version/auth detection and PTY Agent Terminal, without shell
+  interpolation, automatic login, prompts, hooks or credential reads. Older CLI terminal-only mode.
+- Real editor metadata/diagnostics and selection/mention notifications, editable nonblocking diff
+  review with explicit Apply/Reject, save approval and once-only completion. Physical workspace
+  resources only; same-file diff target; Windows WSL drive spellings retain root containment.
+- Offline fixtures authored for no-consent listener refusal, private discovery lifetime, cross-window
+  tokens, Origin rejection, initialization/masking/fragmentation, revocation and resource boundaries.
+- Astra source review found and fixed modal lifetimes, stale consent generations, probe trust
+  admission, diff baseline identity, auth status parsing and request accounting. No builds/tests,
+  provider launches, prompts, data transfer, installs/downloads or WSL execution performed. Real CLI
+  interoperability, ACL/WSL acceptance and runtime budgets remain local verification gates (ADR0108).
+
+## 2026-11-20 — R16 delivery source (codex/r16-delivery)
+
+- FND-17: preserved and completed existing CLI drafts with standalone shared-editor diff/merge,
+  bounded UTF-8 admission, stale snapshot rejection, atomic output and cancellation status. Requires
+  R15 editor APIs from 8ee29a92. Wait uses inferred owning-project IPC, actual editor lifetime,
+  accepted shutdown acknowledgement, renewable bounded tickets and busy-owner polling.
+- Added manifest-owned Windows per-user install/uninstall with optional HKCU project association;
+  foreign/modified files survive uninstall. Python prerequisite remains. Linux stages bundle Qt/ICU/plugins with relocatable lookup and pinned Qt source notices.
+- Both stage scripts require/copy standalone source-pinned Lua plus matching API library and notice.
+- UPG-1/REL-1: offline candidate-lock plan and local evidence validation infrastructure, with explicit
+  source/lock hashes, named gates and user sign-off record. No pins bumped or release claim made.
+- Tests authored: CLI parser cases and temporary-file installer/evidence regression fixtures plus real IPC editor-close ticket/replay coverage. No
+  builds, tests, feature executions, installs, downloads, or WSL calls performed. Astra source review
+  found owner routing, abandoned tickets, busy polling, duplicate-open and uninstall cleanup issues;
+  fixes applied across repeated Astra source reviews; final packaging review surfaced no further blockers. Runtime checks not run. Runtime acceptance and release gates remain pending.
+
+## 2026-11-20: R16 MSBuild and CMake language implementation
+
+- SLN-18 adds bounded, read-only XML property/target declarations and literal import loading for `.props`/`.targets`, normal editor completion/hover/navigation, and actual winning property/import source origins reported by the already-trusted ProjectHost evaluation. Source declarations are labelled unevaluated; actual values are labelled by their last evaluated project/configuration. No source query starts evaluation, resolves unknown property functions, or grants trust.
+- CMK-9 adds parser-backed syntax/duplicate-target inspections and configured literal target rename through the normal Rename action and REF1 atomic preview/Apply/Undo. Captured CMake input images include generated/external scripts as read-only evidence, alongside reply/CDB and current model/trust provenance. Reserved link grammar names and unsupported dynamic/indirect target spellings refuse instead of guessing. Literal relative `add_subdirectory` follows documented caller source-directory contexts and confirms each destination in the actual File API graph. Direct absolute `include` is supported; conditional/OPTIONAL/module-search imports and hidden EVAL/CALL/callback evaluation explicitly refuse. Relative includes remain ambiguous because CMake searches module paths before source fallback.
+- Authored future actual MSBuild CLI value/import origin and CMake configure/File API target-dependency oracles; normal UI fixtures cover untrusted source navigation, multi-file atomic rename/Undo and changed closed-input refusal during preview. No build, test, configure, feature, native tool or WSL execution occurred. Independent Astra source review has closed target grammar/native Windows containment findings; normal UI/atomic/stale-preview source fixtures are reviewed; the final direct-import/source-context delta is under source re-review. Runtime milestone acceptance remains deferred.
+
+## 2026-11-20: R16 native text accessibility and explicit hosted-review CLI profiles
+
+- Custom editor and terminal viewport now expose real text through Qt native accessibility factories. Editor offsets/selections use UTF-16 mappings over actual snapshots, editing retains undo and read-only admission, and geometry follows the actual viewport. Terminal exposes actual visible cells, wide/combining characters, program-owned caret, output selection and output notifications; it never pretends terminal output is editable. Astra source-reviewed 311dc966/d0fd127b without actionable findings. Windows/Linux screen-reader acceptance, diagnostic text navigation and whole-scrollback accessibility remain unexecuted/additional work.
+- Added an explicit Pull Requests tool window using separately installed gh/glab executables, an explicit host/repository and real provider output. Account identity, bounded open-review pages, metadata, head-checked provider patches, checkout, comments, approval and GitHub request-changes use documented commands/API fields (ADR 0107). Opening/invalidation launches nothing. Review/checkout confirmation names the exact action, target, commit and body; review JSON uses stdin. Project/trust admission, generation invalidation, cancellation and mutex-gated worker callbacks prevent old-project completions from reappearing.
+- Authored tests cover native editor UTF-16/emoji selection/edit/undo/read-only behavior, terminal wide-cell output/selection/geometry, both provider JSON contracts, malformed/duplicate identity rows, exact commit-pinned review bodies, refused/cancelled launches, actual CLI errors, changed-head diff rejection and zero-launch UI construction. No builds, tests, features, provider requests, outbound messages or WSL ran. Hosting sources await independent review; no complete UX14/UX19 or R16 runtime gate is claimed.
+- Remaining hosted-VCS scope includes inline anchored comments, repository sharing/sign-in UX, worktree/LFS/signing depth and runtime provider conformance. Root coordinates the remaining R16 tracks and integration. C1 has a separate owner; this branch does not implement or claim its secure transport.
+
 ## 2026-11-20 R13 C++ analysis implementation integrated
 
 The default C++ bundle registers the Clang-backed index, native analyzer, preprocessor views and module actions. The SQLite index distinguishes build configurations. The analyzer emits SARIF for 33 AST checks and five control-flow checks. Idle, save and manual analysis share Workbench Problems publication and cancellation.
@@ -77,6 +136,12 @@ GPT-6.1 Sol authored the implementations and regression tests. GPT-6 Astra revie
 - The view has previous/next pages, 64-bit byte navigation, cancellable LF/CRLF line seeking without a whole-file line table, explicit encoding/unknown-line/page-edge constraints and surfaced read/identity errors. ADR 0105 documents this limited read-only profile; full mapped/editable large-file behavior remains outside this slice.
 - Authored actual >1-GiB reader and 128-MiB product-factory fixtures plus UI encoding/navigation/cancellation/close/error tests for later execution. Independent GPT-6 Astra source review closed after encoding, opener-lifetime and authored-test corrections. No build, test, fixture generation, feature execution or benchmark ran, and no B15 or 1-GiB runtime acceptance is claimed.
 - Next: integration and later runtime verification when the user resumes testing. No user question blocks this slice.
+
+## 2026-11-20: R16 native coverage collection core
+
+- Completed bounded actual llvm-profdata merge and llvm-cov baseline/LCOV export collection over an owned instrumented run or explicitly imported raw profiles. Strict parsing preserves line/branch counts, rejects contradictory/duplicate summaries, and reports missing instrumentation/tools rather than inferring counts. Tools use exact pinned-version admission; debuginfod is disabled.
+- Binary, available source and raw-profile identities are captured/revalidated, project admission runs before subprocess launches and publication, and RunSession owns cancellation/output/deadline/tree cleanup. Source hashes describe observed snapshots and do not prove an arbitrary externally built binary used those source bytes.
+- Authored parser/identity cases and a later genuine instrumented compiler/run/profile/export journey compared with independent llvm-cov show counts. Independent Astra source review cleared this core. No build, test, feature execution, probes or WSL ran. Normal configuration actions, gutters and native profiling continue separately; RUN-12 acceptance remains deferred.
 
 ## 2026-11-14: R12 Lua implementation integrated; runtime acceptance deferred
 

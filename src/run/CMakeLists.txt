@@ -17,6 +17,8 @@
 
 frost_add_library(run LAYER run
     SOURCES
+        src/native_analysis.cpp
+        src/native_coverage.cpp
         src/vs_import.cpp
         src/run_configuration.cpp
         src/run_configuration_set.cpp
@@ -29,5 +31,6 @@ frost_add_library(run LAYER run
         src/lua_framework_parsers.cpp
         src/doctest_parsers.cpp
         src/test_runner.cpp
+        src/dotnet_tests.cpp
     DEPS frost::build frost::settings frost::project frost::rpc frost::io frost::core)
 target_link_libraries(frost_run PRIVATE pugixml::pugixml)

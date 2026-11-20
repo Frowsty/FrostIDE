@@ -56,6 +56,7 @@
 #include <QScopeGuard>
 
 #include <algorithm>
+#include <atomic>
 #include <utility>
 
 namespace frost::app {
@@ -65,6 +66,19 @@ namespace key = settings::key;
 namespace {
 
 constexpr std::string_view kLog = "workbench";
+// Request-only one-off attach authority. The DAP writer releases it after its final admission;
+// every rejection/cancellation also releases it when the last request capture is destroyed.
+struct ManagedAttachGrant {
+    project::TrustStore& trust;
+    std::string root;
+    std::atomic_bool released{false};
+    ManagedAttachGrant(project::TrustStore& store, std::string path) : trust(store), root(std::move(path)) {}
+    void release() {
+        if (!released.exchange(true))
+            trust.endSessionTrust(root);
+    }
+    ~ManagedAttachGrant() { release(); }
+};
 
 QString text(const char* source) { return ui::qtr("frost::app::Workbench", source); }
 
@@ -542,6 +556,10 @@ void Workbench::showAttachToProcess() {
 
 void Workbench::attachToProcess(std::uint32_t pid, const std::string& exePath, const std::string& exeName,
                                 bool attachAsDotNet) {
+    std::shared_ptr<ManagedAttachGrant> attachGrant;
+    if (attachAsDotNet && m_projectRoot.empty() && io::isAbsolutePath(exePath) &&
+        m_services.trust.isTrusted(io::parentPath(exePath)))
+        attachGrant = std::make_shared<ManagedAttachGrant>(m_services.trust, std::string(io::parentPath(exePath)));
     if (!m_debug || m_debug->debugging()) {
         notify(text("Attach to Process"), text("A debug session is already active; stop it first."),
                ui::NotificationKind::Warning);
@@ -586,15 +604,18 @@ void Workbench::attachToProcess(std::uint32_t pid, const std::string& exePath, c
                     [this, trustRoot] { m_services.trust.endSessionTrust(trustRoot); });
         }
         connect(dialog, &QDialog::accepted, this, [this, pid, exePath, exeName, attachAsDotNet, trustRoot, oneOff] {
-            // The session grant ends with this handler, whatever the attach does.
-            const auto endGrant = qScopeGuard([this, &trustRoot, oneOff] {
-                if (oneOff)
+            bool managedGrantTransferred = false;
+            // Managed attach transfers the temporary grant to its actual DAP dispatch.
+            const auto endGrant = qScopeGuard([this, &trustRoot, oneOff, &managedGrantTransferred] {
+                if (oneOff && !managedGrantTransferred)
                     m_services.trust.endSessionTrust(trustRoot);
             });
             // Retry only when the user actually trusted (or, one-off, confirmed) the folder and the
             // project did not change meanwhile; a cancelled prompt attaches nothing.
-            if (!m_shutDown && oneOff == m_projectRoot.empty() && m_services.trust.isTrusted(trustRoot))
+            if (!m_shutDown && oneOff == m_projectRoot.empty() && m_services.trust.isTrusted(trustRoot)) {
+                managedGrantTransferred = oneOff && attachAsDotNet;
                 attachToProcess(pid, exePath, exeName, attachAsDotNet);
+            }
         });
         dialog->open();
         return;
@@ -643,7 +664,19 @@ void Workbench::attachToProcess(std::uint32_t pid, const std::string& exePath, c
         }
     }
 
-    if (auto attached = m_debug->attachTarget(target, std::move(factory), std::move(attachArgs)); !attached) {
+    std::function<Result<void>()> processAdmission;
+    if (attachAsDotNet) {
+        auto captured = debug::coreClrProcessAdmission(pid, exePath);
+        if (!captured) {
+            notify(text("Attach to Process (.NET)"), qs(captured.error().message()), ui::NotificationKind::Error);
+            return;
+        }
+        processAdmission = std::move(*captured);
+    }
+    if (auto attached = m_debug->attachTarget(target, std::move(factory), std::move(attachArgs), {},
+                                             std::move(processAdmission),
+                                             attachGrant ? std::function<void()>([attachGrant] { attachGrant->release(); })
+                                                         : std::function<void()>{}); !attached) {
         notify(text("Attach to Process"), qs(attached.error().message()), ui::NotificationKind::Error);
         return;
     }

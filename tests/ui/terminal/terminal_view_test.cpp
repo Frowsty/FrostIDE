@@ -14,6 +14,7 @@
 
 #include "shell/shell_rig.hpp"
 #include <QApplication>
+#include <QAccessible>
 #include <QClipboard>
 #include <QFocusEvent>
 #include <QInputMethodEvent>
@@ -145,6 +146,29 @@ TEST(TerminalToolWindow, KittyModeForwardsShiftEnter) {
     EXPECT_TRUE(t.pty()->waitForInput("\x1b[13;2u", 5s)) << t.pty()->input();
 }
 
+TEST(TerminalToolWindow, NativeAccessibilityReadsActualWideCellsAndSelectsOutput) {
+    TerminalRig t;
+    t.pty()->print("A\xf0\x9f\x98\x80" "B");
+    ASSERT_TRUE(waitFor([&] { return t.view()->session()->read([](const frost::term::VtScreen& screen) { return screen.screenText().starts_with("A\xf0\x9f\x98\x80" "B"); }); }));
+    auto* accessible = QAccessible::queryAccessibleInterface(t.view());
+    ASSERT_NE(accessible, nullptr);
+    EXPECT_EQ(accessible->role(), QAccessible::Terminal);
+    EXPECT_TRUE(accessible->state().readOnly);
+    EXPECT_EQ(accessible->editableTextInterface(), nullptr);
+    auto* text = accessible->textInterface();
+    ASSERT_NE(text, nullptr);
+    EXPECT_EQ(text->text(0, 4), QString::fromUtf8("A\xf0\x9f\x98\x80" "B"));
+    text->addSelection(1, 3);
+    EXPECT_EQ(t.view()->selectedText(), QString::fromUtf8("\xf0\x9f\x98\x80"));
+    int begin = -1, end = -1;
+    text->selection(0, &begin, &end);
+    EXPECT_EQ(begin, 1); EXPECT_EQ(end, 3);
+    const auto rect = text->characterRect(1);
+    EXPECT_GT(rect.width(), t.view()->cellSize().width());
+    EXPECT_EQ(text->offsetAtPoint(rect.center()), 1);
+    text->removeSelection(0);
+    EXPECT_FALSE(t.view()->hasSelection());
+}
 #ifdef _WIN32
 TEST(TerminalToolWindow, Win32ModeForwardsNativeShiftEnterPressAndRelease) {
     TerminalRig t;

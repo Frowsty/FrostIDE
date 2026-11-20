@@ -32,8 +32,11 @@ enum class SelfTestKind {
     Render, // --selftest=render: draw an editor on the real platform with editor.renderer's default.
 };
 
+enum class CliTool { Open, Diff, Merge };
 struct CommandLine {
     Mode mode = Mode::Gui;
+    CliTool tool = CliTool::Open;
+    bool wait = false; // Wait for the actual opened editor tab to close, through current-user IPC.
     // Paths given as positional arguments, in order, as UTF-8.
     std::vector<std::string> paths;
     // Explicit project root or .frostproj, before document paths; empty means restore as usual.

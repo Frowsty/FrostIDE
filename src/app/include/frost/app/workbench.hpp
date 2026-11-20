@@ -176,12 +176,14 @@ enum class ServerReadiness : std::uint8_t; // frost/ui/lang/language_controller.
 class QTemporaryFile;
 
 namespace frost::app {
+struct ManagedToolsContext;
 class ManagedDebugPreparation;
 class MultiSessionDebugCoordinator;
 struct ManagedSnapshotJob;
 struct ManagedSourceSnapshot;
 
 class LanguageBridge;
+class LanguageRegistryIntegration;
 class CMakeIntegration;
 class StandaloneBuildBackend;
 class ProjectEditProcess;
@@ -199,6 +201,7 @@ class EngineDumpController;
 class EngineCrashObserver;
 class UnityControlIntegration;
 class GitIntegration;
+class AgentIntegration;
 struct GitClone;
 struct CompileDatabaseState; // workbench_language.cpp
 struct CppRenameAdmission;   // workbench_cpp_rename.cpp
@@ -609,6 +612,12 @@ public:
     // The open solution, or nullptr (no project, or a folder project).
     [[nodiscard]] std::shared_ptr<const project::SolutionModel> solution() const { return m_solution; }
 
+    // Explicit per-window C1 consent; never starts from startup or project configuration.
+    void enableAgentBridge(bool launchTerminal);
+    void stopAgentBridge();
+    void mentionAgentSelection();
+    [[nodiscard]] bool agentBridgeActive() const;
+
     // --- Saving and external changes ---
 
     // Saves `view`'s document. Errors: SaveManager::save's (also shown as a notification).
@@ -741,6 +750,9 @@ public:
      * ($/progress), else Unknown. GUI thread; a few stats per call (clangdUsesFallbackFlags).
      */
     [[nodiscard]] ui::lang::ServerReadiness languageReadiness(std::string_view path);
+    // Application-only local onboarding. Validates manifest without launching during parsing.
+    [[nodiscard]] Result<void> setLanguageServerRegistry(std::string manifest);
+    [[nodiscard]] lang::Json languageServerRegistryState() const;
     // WorkbenchOptions::metadataCacheDirectory, as the language features got it.
     [[nodiscard]] const std::string& metadataCacheDirectory() const noexcept {
         return m_options.metadataCacheDirectory;
@@ -783,11 +795,13 @@ protected:
 private:
     bool confirmSourceTemplatePlan(const document::RefactoringPlan&);
     friend class LanguageBridge;
+    friend class LanguageRegistryIntegration;
     friend class EngineIntegration;
     friend class EngineBindingIntegration;
     [[nodiscard]] bool canStartLuaDebug() const;
     friend class UnityControlIntegration;
     friend class GitIntegration;
+    friend class AgentIntegration;
 
     // IDocumentEditorListener.
     void editorOpened(DocumentEditorView& view) override;
@@ -842,6 +856,7 @@ private:
     [[nodiscard]] Result<void> startSelectedDebugConfiguration();
     void attachLanguage();
     void attachServices();
+    void attachHosting();
     void attachEngineBindings();
     // GUI retirement is nonblocking; the destructor drains after feature teardown, before services.
     void retireEngineBindingWork(std::shared_ptr<EngineBindingRetirement> retirement);
@@ -901,6 +916,8 @@ private:
     [[nodiscard]] bool closeForOpen();
     void refreshRecent();
     void showOpenRecent();
+    [[nodiscard]] ManagedToolsContext managedToolsContext();
+    void showManagedPackages(const std::string& projectPath);
     void showSettings();
     void showUpdateCheck();
     void showVersionSwitcher();
@@ -1205,6 +1222,7 @@ private:
     bool m_compileDatabaseReading = false;
     sched::LatestWins m_searchSymbolsSlot;
     std::unique_ptr<LanguageBridge> m_bridge;
+    std::unique_ptr<LanguageRegistryIntegration> m_registeredLanguages;
     std::unique_ptr<ui::lang::LanguageController> m_language;
     // Text the user typed into the current editor during this key press (for textTyped).
     std::string m_typed;
@@ -1213,6 +1231,7 @@ private:
 
     std::unique_ptr<term::RealPtyLauncher> m_terminalLauncher;
     std::unique_ptr<ui::TerminalIntegration> m_terminal;
+    std::unique_ptr<AgentIntegration> m_agent;
     std::unique_ptr<ui::FindFeature> m_find;
     QPointer<ui::ShellWindow> m_window;
     std::unique_ptr<ui::Workbench> m_nav;

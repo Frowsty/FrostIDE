@@ -42,6 +42,7 @@
 #include "frost/ui/workbench/file_system_view.hpp"
 #include "frost/vcs/git_locator.hpp"
 
+#include "agent_integration.hpp"
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
 #include "engine_crash_observer.hpp"
@@ -54,6 +55,7 @@
 #include "git_clone.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "language_registry_integration.hpp"
 #include "managed_debug_preparation.hpp"
 #include "multi_session_debug.hpp"
 #include "project_edit_process.hpp"
@@ -220,7 +222,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     m_language = std::make_unique<ui::lang::LanguageController>(
         ui::lang::LanguageServices{*m_bridge, *m_pool, *m_bridge, m_bridge->applier(), m_services.fs,
                                    [this](std::string_view path) -> std::vector<lang::LiveDiagnostic> {
-                                       if (lang::hasBundledJsonSchema(path))
+                                       if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path))
                                            return m_bridge->jsonDiagnostics(path);
                                        std::optional<lang::FileDiagnostics> set;
                                        if (isManagedSource(path) && m_managed)
@@ -257,6 +259,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     if (auto registered = m_language->registerActions(m_registry); !registered) {
         log::warn(kLog, "language actions: {}", registered.error().describe());
     }
+
+    m_registeredLanguages = std::make_unique<LanguageRegistryIntegration>(*this);
 
     m_luaTrustWatch.setParent(this);
     m_luaTrustWatch.setObjectName(QStringLiteral("projectTrustWatch"));
@@ -722,7 +726,8 @@ void Workbench::notify(const QString& title, const QString& body, ui::Notificati
 
 void Workbench::onSettingsChanged() {
     ++m_cppAnalyzerTicket;
-    if (m_cppAnalyzerRunning) m_cppInspectionStop.request_stop();
+    if (m_cppAnalyzerRunning)
+        m_cppInspectionStop.request_stop();
     const auto snapshot = m_services.settings.snapshot();
     m_documents->applySettings(*snapshot);
     onLuaSettingsChanged(); // workbench_lua.cpp: a restart or a live didChangeConfiguration (LUA-3).
@@ -925,6 +930,7 @@ void Workbench::shutdown() {
         m_engine->shutdown();
     if (m_unity)
         m_unity->shutdown();
+    stopAgentBridge();
     stopTerminal();
     if (m_standalone) {
         m_build->setBackend(m_buildBackend.get());
@@ -962,6 +968,8 @@ void Workbench::shutdown() {
     if (auto closed = m_documents->closeJournal(); !closed) {
         log::warn(kLog, "hot-exit journal: {}", closed.error().describe());
     }
+    if (m_registeredLanguages)
+        m_registeredLanguages->shutdown();
     stopLua();
     stopManaged();
     stopClangd();

@@ -24,6 +24,7 @@
 #include "engine_binding_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "language_registry_integration.hpp"
 #include "project_properties_dialog.hpp"
 #include "unit_tests_window.hpp"
 #include <QAction>
@@ -150,6 +151,10 @@ DocumentEditorView* Workbench::currentView() const {
 }
 
 void Workbench::editorOpened(DocumentEditorView& view) {
+    if (m_registeredLanguages) {
+        m_registeredLanguages->poll();
+        m_registeredLanguages->sync(view);
+    }
     if (m_engineBindings)
         m_engineBindings->cancel();
     connect(&view.editor(), &ui::EditorView::textChanged, this, [this] { invalidateManagedDebug(); });
@@ -160,8 +165,10 @@ void Workbench::editorOpened(DocumentEditorView& view) {
     else if (m_debug)
         m_debug->attachEditor(&view.editor());
     syncJsonDocument(view);
-    connect(&view.editor(), &ui::EditorView::textChanged, this,
-            [this, current = &view] { syncJsonDocument(*current); scheduleCppAnalyzer(current->path()); });
+    connect(&view.editor(), &ui::EditorView::textChanged, this, [this, current = &view] {
+        syncJsonDocument(*current);
+        scheduleCppAnalyzer(current->path());
+    });
     scheduleCppAnalyzer(view.path());
     refreshMarkers(view);
     if (m_documentRegistry->viewCount(view.path()) == 1) {
@@ -359,8 +366,10 @@ void Workbench::editorClosed(DocumentEditorView& view) {
         (void)m_managed->closeDocument(path);
     if (m_lua && isLuaSource(path))
         (void)m_lua->closeDocument(path);
+    if (m_registeredLanguages)
+        m_registeredLanguages->close(path);
     m_language->editorChanged();
-    if (lang::hasBundledJsonSchema(path) && m_bridge) {
+    if ((lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path)) && m_bridge) {
         m_bridge->closeJsonDocument(path);
         QMetaObject::invokeMethod(this, [this] { refreshLiveProblems(); }, Qt::QueuedConnection);
     }
@@ -404,6 +413,8 @@ void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSe
         (void)m_managed->changeDocument(view.path(), change, view.document().document().text());
     if (m_lua && isLuaSource(view.path()))
         (void)m_lua->changeDocument(view.path(), change, view.document().document().text());
+    if (m_registeredLanguages)
+        m_registeredLanguages->sync(view);
     if (DocumentEditorView* current = currentView(); current && &current->document() == &view.document())
         m_language->structureChanged();
     // What the user typed, now in the document and with clangd: completion and parameter info.
@@ -477,6 +488,8 @@ void Workbench::documentChanged(const std::string& path) {
             (void)m_lua->saveDocument(view->path());
         if (m_clangd && isCFamilySource(view->path()))
             (void)m_clangd->saveDocument(view->path());
+        if (m_registeredLanguages)
+            m_registeredLanguages->saved(view->path());
     }
 }
 
