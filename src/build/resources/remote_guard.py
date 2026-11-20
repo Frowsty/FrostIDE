@@ -57,17 +57,68 @@ def descendants():
     return owned
 
 
+def identity(pid):
+    with open("/proc/" + str(pid) + "/stat", encoding="ascii", errors="replace") as handle:
+        text = handle.read()
+    fields = text[text.rfind(")") + 2:].split()
+    return int(fields[1]), int(fields[19])  # Parent and Linux start-time ticks.
+
+
+def bound_pid(fd):
+    with open("/proc/self/fdinfo/" + str(fd), encoding="ascii") as handle:
+        for line in handle:
+            if line.startswith("Pid:"):
+                return int(line.split()[1])
+    return -1
+
+
+def owned_pidfd(pid):
+    # Bind every current ancestry edge before accepting ownership. The final signal uses the
+    # pinned pidfd, never a recycled integer PID. Recheck all edges after opening the chain.
+    opened = []
+    observed = {}
+    current = pid
+    target_fd = None
+    try:
+        while current != os.getpid():
+            if current <= 0 or current in observed or len(observed) >= 512:
+                return None
+            fd = os.pidfd_open(current, 0)
+            opened.append(fd)
+            row = identity(current)
+            if bound_pid(fd) != current:
+                return None
+            observed[current] = (fd, row)
+            if target_fd is None:
+                target_fd = fd
+            current = row[0]
+        for current, (fd, row) in observed.items():
+            if identity(current) != row or bound_pid(fd) != current:
+                return None
+        opened.remove(target_fd)
+        return target_fd
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        return None
+    finally:
+        for fd in opened:
+            os.close(fd)
+
 def cleanup_tree():
     # Linux subreaper ownership retains orphaned/double-forked descendants in this guardian.
     deadline = time.monotonic() + 4
     while time.monotonic() < deadline:
         for pid in descendants():
+            fd = owned_pidfd(pid)
+            if fd is None:
+                continue
             try:
-                os.kill(pid, signal.SIGKILL)
+                signal.pidfd_send_signal(fd, signal.SIGKILL, None, 0)
             except ProcessLookupError:
                 pass
             except PermissionError:
                 return False
+            finally:
+                os.close(fd)
         if child is not None:
             try:
                 child.wait(timeout=0.1)
@@ -92,6 +143,8 @@ def run():
     global token, child
     if sys.platform != "linux":
         raise RuntimeError("remote guardian supports Linux/WSL targets only")
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        raise RuntimeError("Linux pidfd process-identity ownership requires Python >=3.9 and kernel pidfd support")
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER, Linux prctl(2).
         raise RuntimeError("Linux child-subreaper ownership unavailable")

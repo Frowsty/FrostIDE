@@ -12,7 +12,7 @@ struct RemoteExecutionOptions {
     std::chrono::milliseconds stopTimeout{5000};
 };
 // A per-job, immutable endpoint launcher. Lifetime: base launcher outlives all children.
-// Remote Linux Python/proc/subreaper support is checked by the actual guardian. No endpoint
+// Remote Linux Python >=3.9/proc/pidfd/subreaper support is checked by the actual guardian. No endpoint
 // discovery, password dialog, implicit approval, local project hooks or remote shell argv expansion.
 class RemoteProcessLauncher final : public io::IProcessLauncher {
 public:
