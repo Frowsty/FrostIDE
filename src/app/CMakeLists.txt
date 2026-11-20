@@ -194,6 +194,7 @@ frost_add_library(app LAYER app
         src/mono_held_capture.cpp
         src/mono_held_capture.hpp
         src/workbench_managed_debug.cpp
+        src/workbench_unity_debug.cpp
         src/project_edit_process.cpp
         src/workbench_project_edit.cpp
         src/unity_context.hpp
@@ -325,7 +326,7 @@ if(FROST_ASAN_RUNTIME_DLL)
     target_compile_definitions(frost PRIVATE FROST_LAUNCHER_PRELOAD_ASAN_RUNTIME="${_frost_asan_runtime_name}")
 endif()
 # Building frost builds the DLL it loads.
-add_dependencies(frost frost_app_shared)
+add_dependencies(frost frost_app_shared frost_held_read)
 frost_deploy_clang_platform(frost)
 add_dependencies(frost frost-dbgeng-dap)
 # The Windows helper uses the locally installed VS MSBuild assemblies at runtime. Build it with

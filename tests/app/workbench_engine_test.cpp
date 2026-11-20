@@ -1257,3 +1257,31 @@ TEST(WorkbenchEngine, WorkerLaunchLatchesExactProjectFileAndRefusesSameRootAlias
 }
 
 } // namespace
+
+namespace {
+TEST(WorkbenchEngine, UnityUnsupportedBackendNeverStartsSourceVerifier) {
+    WorkDir dir("unity-debug-backend", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    RigOptions options;
+    options.disableProjectEvaluation = true;
+    options.launcher = &launcher;
+    options.workbench.selectUnityDebug = [](std::string_view) {
+        return std::optional{frost::app::UnityMonoDebugSelection{.player = true, .il2cpp = true, .pid = 1, .port = 5555}};
+    };
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                dir.join("missing-csharp-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                dir.join("missing-lua-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    auto id = rig.workbench->registry().find("debug.attachUnity");
+    ASSERT_TRUE(id);
+    frost::input::ActionContext context;
+    context.trusted = true;
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
+    EXPECT_TRUE(launcher.launches().empty());
+    EXPECT_FALSE(rig.workbench->debugController()->debugging());
+}
+
+} // namespace

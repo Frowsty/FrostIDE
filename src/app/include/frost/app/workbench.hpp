@@ -371,6 +371,14 @@ struct WorkbenchServices {
     IWorkbenchPrompts& prompts;
 };
 
+// Explicit local target inputs; an installed provider must independently verify process and source identity.
+struct UnityMonoDebugSelection {
+    bool player = false;
+    bool il2cpp = false;
+    std::uint32_t pid = 0;
+    std::uint16_t port = 0;
+    std::string assembly, pdb, dotnet;
+};
 struct ManagedDebugSelection {
     std::string project;
     std::string dotnet;
@@ -441,6 +449,7 @@ struct WorkbenchOptions {
     // MSBuild.exe (absolute); "" uses tools.msbuild.path, else vswhere at the first build.
     std::string msbuildPath;
     debug::AdapterFactory debugAdapterFactory{}; // Optional adapter override for integration tests.
+    std::function<std::optional<UnityMonoDebugSelection>(std::string_view)> selectUnityDebug; // Test-only picker seam.
     std::string managedPdbGuardPath;             // Test override; normally resolved beside the application.
     std::function<std::optional<ManagedDebugSelection>(std::string_view)> selectManagedDebug; // Test seam.
     std::function<QString(const QString&)> selectExistingProjectSource;                       // Test seam.
@@ -971,6 +980,7 @@ private:
     void offerProjectTrust();
     void offerLuaTrust();
     void startManagedDebug();
+    void startUnityDebug();
     void invalidateManagedDebug();
     [[nodiscard]] bool managedDebugFrameAllowed(const debug::DebugFrame& frame) const;
     void validateManagedBreakpoint(std::string path, std::function<void(bool)> done);

@@ -431,3 +431,27 @@ TEST(MonoDap, InitializesAndReportsConnectorFailureWithoutHanging) {
 }
 } // namespace
 } // namespace frost::debug::mono
+
+namespace frost::debug::mono {
+namespace {
+TEST(MonoDap, UnsupportedBreakpointSemanticsDoNotInstallOrEndSession) {
+    ScriptedMono runtime;
+    ASSERT_NE(runtime.port, 0);
+    auto client = monoAdapterFactory(runtime.target())({});
+    ASSERT_TRUE(client);
+    ASSERT_TRUE(requestSync(**client, "attach"));
+    for (const auto* key : {"condition", "hitCondition", "logMessage"}) {
+        const auto args = rpc::Json::object()
+            .set("source", rpc::Json::object().set("path", "/owned/a.cs"))
+            .set("breakpoints", rpc::Json::array({rpc::Json::object().set("line", 10).set(key, "unsupported")}));
+        auto rejected = requestSync(**client, "setBreakpoints", args);
+        ASSERT_FALSE(rejected);
+        EXPECT_EQ(rejected.error().code(), ErrorCode::Unsupported);
+        EXPECT_FALSE((*client)->closed());
+    }
+    EXPECT_TRUE(requestSync(**client, "disconnect"));
+    EXPECT_TRUE(runtime.disposed);
+}
+
+} // namespace
+} // namespace frost::debug::mono

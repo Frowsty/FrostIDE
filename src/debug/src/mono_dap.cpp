@@ -200,6 +200,14 @@ struct Worker : std::enable_shared_from_this<Worker> {
         const auto* requested = args.find("breakpoints");
         if (!requested || !requested->isArray() || requested->size() > 1024)
             return fail(ErrorCode::InvalidArgument, "invalid Mono breakpoints");
+        // Refuse unsupported semantics before modifying existing installed breakpoints.
+        for (const auto& item : requested->items()) {
+            for (const auto* key : {"condition", "hitCondition", "logMessage"}) {
+                const auto* value = item.find(key);
+                if (value && (!value->isString() || !value->asString()->empty()))
+                    return fail(ErrorCode::Unsupported, "Mono conditional, hit-count and log breakpoints are unsupported");
+            }
+        }
         if (auto cleared = clearPath(path); !cleared)
             return std::unexpected(std::move(cleared.error()));
         std::vector<rpc::Json> results;

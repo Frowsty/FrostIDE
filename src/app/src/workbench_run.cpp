@@ -455,6 +455,18 @@ void Workbench::createRunService() {
     managedDebug.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startManagedDebug(); };
     if (auto added = m_registry.add(std::move(managedDebug)); !added)
         log::warn(kLog, "managed debug action: {}", added.error().describe());
+    input::ActionSpec unityDebug;
+    unityDebug.id = "debug.attachUnity";
+    unityDebug.name = "Attach Unity Mono Debugger...";
+    unityDebug.description = "Attach the verified Mono profile to an explicitly selected Unity Editor or player";
+    unityDebug.group = "Debug";
+    unityDebug.executesProjectCode = true;
+    unityDebug.enabled = [this](const input::ActionContext&) {
+        return canStartLuaDebug() && !m_buildService->externalLaunchAdmissionBusy();
+    };
+    unityDebug.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startUnityDebug(); };
+    if (auto added = m_registry.add(std::move(unityDebug)); !added)
+        log::warn(kLog, "Unity debug action: {}", added.error().describe());
     input::ActionSpec attachProcess;
     attachProcess.id = "debug.attachToProcess";
     attachProcess.name = "Attach to Process...";

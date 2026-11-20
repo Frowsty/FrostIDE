@@ -14,6 +14,12 @@ what is next, blockers and open questions for the user.
 - Actual registered semantic providers outrank the builtin source fallback. Named source/span/include/root/candidate limits and scheduler-free fallback are recorded in ADR0118. Lexer, physical source navigation/provenance, ambiguous/missing/macro limits, provider precedence and worker editor regressions are authored.
 - Independent Astra source review is requested. No builds, tests, shader/Unity feature execution, downloads/install, WSL or pushes occurred. Next: source-review corrections, additive R14 GLSL joins, then independent R19 other-language/extension branches.
 
+## 2026-11-20 R18 Unity Mono attach source slice
+
+- Added an explicit command-palette Editor/player attach flow using independently held Windows PID/image/creation identity, user-confirmed known loopback port, actual loaded-module/PDB byte comparison and verified source snapshots. Selected Editor attaches bind the authenticated bridge epoch; trust revisions and source edits revoke admission. Shared run/debug ownership is rechecked after modal selection and source capture.
+- Uses the existing original Mono 2.58 adapter and held-read/PDB-verifier path. Staging requires and copies the original held-read helper before publishing a Windows bundle. No new dependency or Unity licence acquisition is introduced. Unsupported IL2CPP/Linux profile, conditional/hit/log breakpoints and absent tools are refused; no compatibility with CoreCLR, rich values, multi-module debugging or domain survival is claimed.
+- Authored OS identity, unsupported breakpoint and product action refusal coverage. Source review pending; builds, tests, Unity and feature/platform execution deferred. This narrow slice does not satisfy the full LTR11 exit criteria.
+
 ## 2026-11-20: R18 Unity authenticated event/Console/compiler checkpoint
 
 - Extended the existing project/domain-bound HMAC channel with capability-gated, monotonic event continuations. The Unity package journals public log, compiler and project callbacks, reports exact lost prefixes after bounded retention, caps strings/batch bytes and marks truncation. Authenticated Refresh Assets and Request Compilation execute on the Editor update thread and distinguish acceptance from later observed compiler state. Astra source-reviewed producer 220030e without a blocker; no Unity Editor or runtime test ran.
