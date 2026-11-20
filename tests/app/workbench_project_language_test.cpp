@@ -73,7 +73,8 @@ void cmakeRenameJourney(bool stale) {
     QString status;
     QObject::connect(rig.workbench->language(),&frost::ui::lang::LanguageController::statusMessage,
         rig.window.get(),[&](const QString& message){status=message;});
-    emit popup.accepted(QStringLiteral("bravo"));
+    popup.field()->setText(QStringLiteral("bravo"));
+    frost::app::test::sendKey(popup.field(),Qt::Key_Return,Qt::NoModifier);
     ASSERT_TRUE(waitFor([&] {return sawPreview && (stale ? !status.isEmpty() : rig.workbench->canUndoRefactoring());},60s));
     auto disk=frost::io::realFileSystem().readFile(dir.join("project/extra.cmake")); ASSERT_TRUE(disk);
     if (stale) {
