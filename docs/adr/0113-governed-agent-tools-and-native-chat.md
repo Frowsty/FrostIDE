@@ -70,10 +70,9 @@ currently disabled, so fresh native file checkpoints are normally unavailable by
 
 ## Explicit current scope and acceptance gaps
 
-Hierarchy adapters currently expose the engine's prepared root items, not expanded edge trees.
-inspection_info returns unavailable where no inspection metadata adapter is present. CTest is the
+Hierarchy adapters expose actual prepared roots and immediate incoming/outgoing or super/subtype edges through existing LSP services, with bounded flat records and workspace admission per reply. They do not claim transitive trees. inspection_info returns exact source-owned analyzer registry metadata and configured severity; unknown or external-tool ids remain unavailable. CTest is the
 current C2 run_tests provider; other test providers are not inferred or relabeled as CTest results.
-These are remaining adapter work, not claims of complete PLAN C2/C3 parity.
+Other providers and full PLAN C2/C3 parity remain outside these bounded adapters.
 
 The committed offline fixtures cover auth refusal/argument policy, framing, initialization/control
 correlation and timeouts, pagination, Stop-hook loops, private create-new/hard-link admission and a

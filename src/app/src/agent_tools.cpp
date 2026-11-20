@@ -679,6 +679,24 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
         else if (tool == "call_hierarchy") methodName = "textDocument/prepareCallHierarchy";
         else { reply(error(id, "unknown tool", -32601)); return; }
     }
+    if (tool == "type_hierarchy" || tool == "call_hierarchy") {
+        QPointer<AgentTools> guard(this);
+        const auto issued = m->instance;
+        agent::hierarchyEdges(tool == "type_hierarchy", std::move(paramsJson),
+            [guard, issued](std::string method, Json params, agent::IdeQueryDone done) {
+                if (!guard || !guard->m->live() || guard->m->instance != issued) { done(fail(ErrorCode::Cancelled, "hierarchy consent expired")); return; }
+                guard->m->lsp(qs(method), std::move(params), std::move(done));
+            },
+            [guard, issued](std::string_view uri) {
+                return guard && guard->m->live() && guard->m->instance == issued &&
+                    agentWorkspaceResource(guard->m->owner.m_services.fs, utf8(guard->m->root), uri).has_value();
+            },
+            [guard, issued, id, tool, reply = std::move(reply)](Result<Json> value) mutable {
+                if (!guard || !guard->m->live() || guard->m->instance != issued) { reply(error(id, "hierarchy consent expired")); return; }
+                if (!value) reply(error(id, qs(value.error().message()))); else guard->m->result(id, tool, std::move(*value), std::move(reply));
+            });
+        return;
+    }
     m->lsp(methodName, std::move(paramsJson), [this, id, tool, reply = std::move(reply)](Result<Json> value) mutable {
         if (!value) reply(error(id, qs(value.error().message())));
         else { auto scoped = m->scopedLocations(*value); m->result(id, tool, scoped ? std::move(*scoped) : Json::array(), std::move(reply)); }

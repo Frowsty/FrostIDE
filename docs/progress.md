@@ -1,3 +1,11 @@
+## 2026-11-20 — C2 actual hierarchy edges
+
+- Existing LSP services now supply immediate incoming/outgoing calls and super/subtype edges,
+  retaining opaque provider handles only for follow-up requests. Flat records use ordinary MCP
+  pagination; root/edge counts, retained bytes and workspace authorization are bounded.
+- Authored offline fixtures cover both directions, actual ranges, escaping resources, provider
+  failures, response bounds, pagination and consent revocation. Source review pending; no builds,
+  tests, features, provider processes or data transmissions performed.
 ## 2026-11-20 — C2 inspection metadata adapter
 
 - inspection_info now returns exact source-owned metadata from the same analyzer rule registry used
