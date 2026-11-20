@@ -11,6 +11,7 @@
 #include <QLineEdit>
 #include <QTimer>
 #include <chrono>
+#include <algorithm>
 namespace {
 using namespace std::chrono_literals;
 using frost::app::test::waitFor;
@@ -38,8 +39,10 @@ TEST(WorkbenchProjectLanguage, UntrustedPropsNavigationUsesLiteralSourceImportWi
 }
 void cmakeRenameJourney(bool stale) {
     WorkDir dir(stale?"cmk9-stale-preview":"cmk9-atomic-preview");
+    auto includePath=dir.join("project/extra.cmake");
+    std::replace(includePath.begin(),includePath.end(),'\\','/');
     const std::string source="cmake_minimum_required(VERSION 3.25)\nproject(TargetRename LANGUAGES NONE)\n"
-        "add_custom_target(alpha)\nadd_custom_target(consumer)\ninclude(extra.cmake)\n";
+        "add_custom_target(alpha)\nadd_custom_target(consumer)\ninclude(\""+includePath+"\")\n";
     const std::string extra="add_dependencies(consumer alpha)\n";
     dir.write("project/CMakeLists.txt",source);
     dir.write("project/extra.cmake",extra);

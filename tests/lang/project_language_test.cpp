@@ -77,6 +77,13 @@ TEST(CMakeRefactoring, DynamicAndUnsupportedTargetUsesRefuseTheEntirePlan) {
         EXPECT_FALSE(planCMakeTargetRename(input,{0,19},"bravo"));
     }
 }
+TEST(CMakeRefactoring, SearchOptionalAndConditionalImportsRefuseWithoutGuessing) {
+    for (const auto* text:{"include(extra.cmake)\n","include(/outside/absent.cmake OPTIONAL)\n",
+                          "if(ON)\ninclude(/outside/file.cmake)\nendif()\n"}) {
+        auto input=cmakeInput(std::string("add_custom_target(alpha)\n")+text);
+        EXPECT_FALSE(planCMakeTargetRename(input,{0,19},"bravo"));
+    }
+}
 TEST(CMakeRefactoring, LinkGrammarKeywordsAreRefusedAsOldOrNewTargetNames) {
     auto input=cmakeInput("add_custom_target(alpha)\ntarget_link_libraries(consumer PUBLIC alpha)\n");
     for (const auto* name:{"PUBLIC","PRIVATE","INTERFACE","debug","optimized","general"})

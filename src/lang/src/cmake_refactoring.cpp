@@ -67,6 +67,16 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
         edits.uri=pathToUri(path).value_or("");
         edits.path=uriToPath(edits.uri).value_or(path);
         for (const auto& command:*parsed) {
+            if (command.name=="include" || command.name=="add_subdirectory") {
+                if (command.scopeDepth!=0 || command.nestedArguments || command.arguments.empty() ||
+                    !command.arguments[0].isLiteral || !io::isAbsolutePath(command.arguments[0].literal) ||
+                    (command.name=="include" && command.arguments.size()!=1))
+                    return fail(ErrorCode::Unsupported,"CMake rename requires unconditional absolute direct include/subdirectory paths; optional or search-module imports are opaque");
+                auto imported=command.name=="include" ? io::normalizePath(command.arguments[0].literal) :
+                    io::joinPath(command.arguments[0].literal,"CMakeLists.txt");
+                if (!imported || !std::ranges::any_of(files,[&](const auto& file){return documentKey(file.first)==documentKey(*imported);}))
+                    return fail(ErrorCode::Busy,"Direct CMake import is absent from the actual captured File API input graph");
+            }
             for (std::size_t i=0;i<command.arguments.size();++i) {
                 const auto& argument=command.arguments[i];
                 if (!argument.isLiteral) {
