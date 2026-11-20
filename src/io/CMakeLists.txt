@@ -26,6 +26,7 @@ set(frost_io_sources
     src/path.cpp
     src/polling_watcher.cpp
     src/process_common.cpp
+    src/process_sandbox_common.cpp
     src/reactor.cpp
     src/real_file_watcher.cpp
     src/scripted_process_launcher.cpp
@@ -60,3 +61,4 @@ if(WIN32)
     target_link_libraries(frost_io INTERFACE ws2_32 delayimp)
     target_link_options(frost_io INTERFACE "LINKER:/DELAYLOAD:ws2_32.dll")
 endif()
+

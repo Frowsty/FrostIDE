@@ -54,6 +54,7 @@
 
 #include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
+#include "frost/io/process_sandbox_profile.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -240,6 +241,8 @@ struct ProcessSpec {
      * trimming is performed. A child with sufficient access can deliberately change its own OS policy afterwards.
      */
     std::optional<std::uint64_t> residentMemoryLimitBytes = std::nullopt;
+    // Opt-in native content sandbox. Unavailable enforcement is an error, never ordinary launch.
+    std::optional<ProcessSandboxProfile> sandbox;
 };
 
 // The most descriptors ProcessSpec::posixInheritedFds may pass.
@@ -481,3 +484,4 @@ void appendWindowsArgument(std::string& commandLine, std::string_view argument);
                                                           const std::vector<std::string>& arguments);
 
 } // namespace frost::io
+
