@@ -167,3 +167,18 @@ frost_add_test(build_remote_target_tests
     SOURCES remote_target_test.cpp wsl_cmake_test.cpp
     DEPS frost::build frost::io frost::rpc
     LABELS unit)
+
+# R19 actual Linux guardian plus explicitly selected real WSL/SSH transport acceptance.
+# Missing externally authorized endpoints are reported skipped, never counted as remote acceptance.
+if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{FROST_SDK}/py/Scripts/python.exe")
+    set(Python3_EXECUTABLE "$ENV{FROST_SDK}/py/Scripts/python.exe")
+endif()
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+file(TO_CMAKE_PATH "${Python3_EXECUTABLE}" _frost_remote_test_python)
+frost_add_test(build_remote_process_real_tests
+    SOURCES remote_process_real_test.cpp
+    DEPS frost::build frost::io frost::rpc
+    LABELS integration remote)
+target_compile_definitions(build_remote_process_real_tests PRIVATE
+    FROST_REMOTE_TEST_PYTHON="${_frost_remote_test_python}"
+    FROST_REMOTE_GUARD_SOURCE="${FROST_SOURCE_DIR}/src/build/resources/remote_guard.py")
