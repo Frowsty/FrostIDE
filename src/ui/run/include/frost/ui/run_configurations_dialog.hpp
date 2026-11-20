@@ -146,6 +146,7 @@ private:
     QPushButton* m_addLuaRepl = nullptr;
     QLineEdit* m_luaScript = nullptr;
     QLineEdit* m_interpreterArguments = nullptr;
+    QComboBox* m_luaRuntime = nullptr;
     std::string m_luaInterpreterDefault, m_luaScriptDefault, m_luaWorkingDirectoryDefault;
     QLineEdit* m_arguments = nullptr;
     QLineEdit* m_workingDirectory = nullptr;

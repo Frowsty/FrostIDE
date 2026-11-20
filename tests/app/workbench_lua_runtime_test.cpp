@@ -47,6 +47,18 @@ TEST(WorkbenchLuaRuntime, RunUsesExplicitInterpreterAndDirtyScriptSavePolicy) {
     EXPECT_TRUE(launches.front().spec.killOnClose);
     EXPECT_TRUE(dir.read("workspace/main.lua").starts_with("-- saved before Lua\n"));
 }
+TEST(WorkbenchLuaRuntime, ExplicitLuauRunsThroughNormalSelectionButDebugRefusesWithoutFallback) {
+    WorkDir dir("luau-explicit-profile"); dir.write("tools/luau","never-executed fixture"); dir.write("workspace/typed.luau","local x: number = 42\nprint(x)\n");
+    io::ScriptedProcessLauncher launcher; RigOptions options; options.launcher=&launcher; options.disableProjectEvaluation=true;
+    WorkbenchRig rig(dir,options); ASSERT_TRUE(rig.trust->trust(dir.join("workspace"))); ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace")));
+    run::RunConfiguration config; config.id="luau.script"; config.name="Luau"; config.type=run::RunType::LuaScript;
+    config.program=dir.join("tools/luau"); config.target=dir.join("workspace/typed.luau"); config.luaRuntime="luau"; config.arguments={"argument"};
+    rig.workbench->runController()->setStoredConfigurations({config}); ASSERT_TRUE(rig.workbench->runController()->selectConfiguration(config.id));
+    auto refused=rig.workbench->debugController()->debug(); ASSERT_FALSE(refused); EXPECT_EQ(refused.error().code(),ErrorCode::Unsupported); EXPECT_TRUE(launcher.launches().empty());
+    launcher.expect({.expectExecutable=config.program}); auto started=rig.workbench->runController()->run(); ASSERT_TRUE(started);
+    ASSERT_TRUE(rig.workbench->runManager()->waitForIdle(std::chrono::seconds(30)));
+    ASSERT_EQ(launcher.launches().size(),1U); EXPECT_EQ(launcher.launches().front().spec.arguments,(std::vector<std::string>{config.target,"-a","argument"}));
+}
 TEST(WorkbenchLuaRuntime, MissingAdapterAndReplDebugNeverStartNativeOrEngineFallback) {
     WorkDir dir("lua-debug-unavailable");
     dir.write("tools/lua", "unit fixture, never executed");

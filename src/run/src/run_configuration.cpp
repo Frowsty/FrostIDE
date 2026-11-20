@@ -74,6 +74,7 @@ void writeConfiguration(std::string& out, const RunConfiguration& configuration,
         std::string interpreterArguments;
         writeStringArray(interpreterArguments, configuration.interpreterArguments);
         member("interpreterArguments", interpreterArguments);
+        if (configuration.luaRuntime != "lua54") member("luaRuntime", rpc::Json(configuration.luaRuntime).dump());
     }
     std::string arguments;
     writeStringArray(arguments, configuration.arguments);
@@ -224,6 +225,10 @@ Result<RunConfiguration> readConfiguration(const rpc::Json& object, std::size_t 
             return std::unexpected(std::move(value.error()));
         }
         *field = std::move(*value);
+    }
+    if (const auto* runtime = object.find("luaRuntime")) {
+        if (!runtime->isString()) return corrupt(index, "luaRuntime is not a string");
+        configuration.luaRuntime = *runtime->asString();
     }
     if (const auto* flags = object.find("interpreterArguments")) {
         if (!flags->isArray())
@@ -418,6 +423,9 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
     } else if (!configuration.engineProjectPath.empty()) {
         return invalid(configuration, "only a FrostEngine configuration has an engine project");
     }
+    if (configuration.luaRuntime != "lua54" && (!isLuaRunType(configuration.type) ||
+        (configuration.luaRuntime != "luajit" && configuration.luaRuntime != "luau")))
+        return invalid(configuration, "unknown Lua runtime or runtime set on a non-Lua configuration");
     if (!isLuaRunType(configuration.type) && !configuration.interpreterArguments.empty())
         return invalid(configuration, "interpreterArguments belong only to standalone Lua");
     for (const auto& argument : configuration.interpreterArguments)
@@ -438,6 +446,13 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
             return invalid(configuration, "Lua REPL has no script or script arguments; use interpreterArguments");
         for (std::size_t i = 0; i < configuration.interpreterArguments.size(); ++i) {
             const auto& flag = configuration.interpreterArguments[i];
+            if (configuration.luaRuntime == "luau") {
+                if (flag == "-O0" || flag == "-O1" || flag == "-O2" || flag == "-g0" || flag == "-g1" || flag == "-g2") continue;
+                return invalid(configuration, "Luau interpreter flags support explicit -O0..2 and -g0..2 only");
+            }
+            if (flag == "-W" && configuration.luaRuntime == "luajit")
+                return invalid(configuration, "LuaJIT has no Lua 5.4 warning flag");
+            if (configuration.luaRuntime == "luajit" && (flag == "-joff" || flag == "-jon")) continue;
             if (flag == "-E" || flag == "-W" || flag == "-v")
                 continue;
             if (flag == "-e" || flag == "-l") {
@@ -450,7 +465,7 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
             if (flag == "--" && configuration.type == RunType::LuaScript &&
                 i + 1 == configuration.interpreterArguments.size())
                 continue;
-            return invalid(configuration, "use Lua 5.4 interpreter flags only; REPL adds -i automatically");
+            return invalid(configuration, "use the selected runtime's supported interpreter flags; REPL mode is added automatically");
         }
         break;
     case RunType::FrostEditor:
@@ -604,6 +619,7 @@ Result<std::vector<RunConfiguration>> parseRunConfigurations(std::string_view js
         if(configuration->type==RunType::Remote && *version<6)return corrupt(index,"named remote Run requires store version 6");
         if (isLuaRunType(configuration->type) && *version < 5)
             return corrupt(index, "standalone Lua requires store version 5");
+        if (configuration->luaRuntime != "lua54" && *version < 6) return corrupt(index, "Lua dialect profiles require store version 6");
         if (configuration->engineDebugMode == EngineDebugMode::NativeAndLua && *version < 4)
             return corrupt(index, "native-and-lua Debug requires store version 4");
         if (!ids.insert(configuration->id).second) {
@@ -647,8 +663,9 @@ std::string serializeRunConfigurations(std::span<const RunConfiguration> configu
     const bool mixed = std::ranges::any_of(
         configurations, [](const auto& c) { return c.engineDebugMode == EngineDebugMode::NativeAndLua; });
     const bool lua = std::ranges::any_of(configurations, [](const auto& c) { return isLuaRunType(c.type); });
-    const bool remote=std::ranges::any_of(configurations,[](const auto& c){return c.type==RunType::Remote;});
-    const int version = remote ? 6 : lua      ? 5
+    const bool remote = std::ranges::any_of(configurations, [](const auto& c) { return c.type == RunType::Remote; });
+    const bool dialect = std::ranges::any_of(configurations, [](const auto& c) { return c.luaRuntime != "lua54"; });
+    const int version = (remote || dialect) ? 6 : lua ? 5
                         : mixed  ? 4
                         : engine ? 3
                                  : (std::ranges::any_of(configurations, usesRun5Features) ? 2 : 1);

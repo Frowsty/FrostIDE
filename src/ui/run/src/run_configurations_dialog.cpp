@@ -225,7 +225,12 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     m_interpreterArguments = new QLineEdit(this);
     m_interpreterArguments->setObjectName(QStringLiteral("runConfigurationInterpreterArguments"));
     m_interpreterArguments->setToolTip(
-        tr("Lua interpreter flags before the script: -E, -W, -v, -e chunk, -l module. REPL adds -i."));
+        tr("Explicit CLI profile: Lua 5.4 -E/-W/-v/-e/-l; LuaJIT -E/-v/-e/-l/-jon/-joff; Luau -O0..2/-g0..2. REPL flags follow the selected runtime."));
+    m_luaRuntime = new QComboBox(this);
+    m_luaRuntime->setObjectName(QStringLiteral("runConfigurationLuaRuntime"));
+    m_luaRuntime->addItem(tr("Lua 5.4"), "lua54"); m_luaRuntime->addItem(tr("LuaJIT"), "luajit"); m_luaRuntime->addItem(tr("Luau"), "luau");
+    m_luaRuntime->setToolTip(tr("Explicit interpreter/CLI profile. Analysis settings are separate; only Lua 5.4 has the configured DAP profile."));
+    form->addRow(tr("Lua runtime:"), m_luaRuntime);
     form->addRow(tr("Lua script:"), m_luaScript);
     form->addRow(tr("Interpreter flags:"), m_interpreterArguments);
     form->addRow(tr("Engine project:"), m_engineProject);
@@ -419,7 +424,9 @@ void RunConfigurationsDialog::showConfiguration(int row) {
     m_program->setText(qs(configuration.program));
     m_remoteEndpoint->setText(configuration.type==run::RunType::Remote?qs(configuration.target):QString{});
     m_luaScript->setText(qs(configuration.target));
+    m_luaRuntime->setEnabled(run::isLuaRunType(configuration.type));
     m_interpreterArguments->setText(formatRunArguments(configuration.interpreterArguments));
+    m_luaRuntime->setCurrentIndex(m_luaRuntime->findData(qs(configuration.luaRuntime)));
     m_engineProject->setText(qs(configuration.engineProjectPath));
     m_engineDebugMode->setCurrentIndex(m_engineDebugMode->findData(static_cast<int>(configuration.engineDebugMode)));
     m_arguments->setText(formatRunArguments(configuration.arguments));
@@ -501,6 +508,7 @@ void RunConfigurationsDialog::storeFields() {
         configuration.target =
             configuration.type == run::RunType::LuaScript ? utf8(m_luaScript->text().trimmed()) : std::string{};
         configuration.interpreterArguments = parseRunArguments(m_interpreterArguments->text());
+        configuration.luaRuntime = utf8(m_luaRuntime->currentData().toString());
     }
     if (run::isFrostEngineRunType(configuration.type)) {
         configuration.engineProjectPath = utf8(m_engineProject->text().trimmed());

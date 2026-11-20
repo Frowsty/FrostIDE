@@ -8242,3 +8242,15 @@ The selected SDK project, configuration, target framework and runtime identifier
 C# code actions present supported local, Extract Method, Move Type, signature and Safe Delete changes in the existing refactoring preview. File moves and project edits participate in the same Undo transaction. Actions refuse linked files, conditional project membership or ambiguous symbols when a safe rewrite cannot be represented. Support depends on the evaluated project and available Roslyn providers.
 
 GPT-6 Astra independently inspected the implementation and regression sources. The MoreLINQ 4.4.0 corpus is pinned at 6d97c3b1d482f98300f4446df14742b0e3fafbec. Building the corpus, comparing Roslyn diagnostics and test discovery, installing from a local NuGet feed, and hitting a netcoredbg breakpoint remain deferred to the requested test phase. This milestone does not certify an executable or an updater release.
+## 2026-11-20: R19 LUA-16 dialect profile checkpoint (source only)
+
+- Added explicit persisted lua54/LuaJIT/Luau Run/REPL profiles and normal dialog selection; non-default
+  profiles require store version 6. Luau uses its actual -a script-argument boundary and native REPL;
+  LuaJIT flags remain distinct. Non-Lua54 debugging refuses the existing Lua54 ABI before any adapter.
+- Kept LuaJIT LuaLS analysis selection separate from execution. Added an offline immutable-source,
+  license-receipted recipe and local Luau LSP manifest producer for normal registry onboarding of
+  .luau, languageId luau, with no LuaLS or engine fallback. ADR 0124 states the unsigned-source,
+  dependency/native-grammar/debugger limits and deferred verification explicitly.
+- Authored model/argv/store, registry routing, normal Run/refused-Debug and source-recipe regressions,
+  plus Luau typed and LuaJIT FFI fixtures. No build/configuration, tests, interpreters, WSL, installs,
+  binary/source archive downloads or pushes ran. Independent source review remains pending.
