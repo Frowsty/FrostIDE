@@ -2,6 +2,7 @@
 // Deferred CPP-15 normal Workbench action journey with real scanner output and dependency receipts.
 #include "frost/io/path.hpp"
 #include "frost/lang/clangd.hpp"
+#include "frost/lang/clangd_service.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "support/crash_dialogs.hpp"
 #include "workbench_rig.hpp"
