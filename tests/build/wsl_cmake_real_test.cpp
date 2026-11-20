@@ -41,7 +41,7 @@ TEST(WslCMakeReal, ActualMappedSourceBuildAndGeneratedCompilationDatabase) {
     const auto remoteSource=trim(mapped->stdoutBytes);ASSERT_TRUE(io::isAbsolutePath(remoteSource,io::PathStyle::Posix));
     endpoint.mappings={{source,remoteSource}};
     RemoteProcessLauncher launcher(io::realProcessLauncher(),endpoint,{.admit=[]()->Result<void>{return {};}});
-    auto create=python(endpoint,"import pathlib,tempfile; p=pathlib.Path(tempfile.mkdtemp(prefix='frost-cmk16-')); (p/'fixture-owner').write_text('FrostIDE-CMK16'); print(p)");
+    auto create=python(endpoint,"import pathlib,tempfile; p=pathlib.Path(tempfile.mkdtemp(prefix='frost-cmk16-',dir='/tmp')); (p/'fixture-owner').write_text('FrostIDE-CMK16'); print(p)");
     auto created=io::runToCompletion(launcher,create,"",30s);ASSERT_TRUE(created);ASSERT_EQ(created->exitCode,0)<<created->stderrBytes;
     const auto build=trim(created->stdoutBytes);ASSERT_TRUE(build.starts_with("/tmp/frost-cmk16-"));
     OwnedWslBuild owned{&launcher,endpoint,build};

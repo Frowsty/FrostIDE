@@ -103,6 +103,7 @@ Result<WslProfileChoice> editWslProfileForm(QWidget* parent,build::WslCMakeProfi
         const auto endpoint=std::find_if(targets.begin(),targets.end(),[&](const auto& row){return row.id==profile.targetId;});
         if(endpoint==targets.end()){error->setText("Select a saved named WSL target first.");return;}
         auto valid=build::wslCMakeCommand(profile,*endpoint,requested.value_or(build::WslCMakeOperation::Configure),1);if(!valid){error->setText(q(valid.error().message()));return;}
+        if(auto retained=build::parseWslCMakeProfiles(build::wslCMakeProfilesJson(std::vector<build::WslCMakeProfile>{profile}));!retained){error->setText(q(retained.error().message()));return;}
         operation=requested;dialog.accept();};
     for(const auto& [label,value]:std::initializer_list<std::pair<const char*,build::WslCMakeOperation>>{{"Configure",build::WslCMakeOperation::Configure},{"Build",build::WslCMakeOperation::Build},{"Clean",build::WslCMakeOperation::Clean},{"List targets",build::WslCMakeOperation::ListTargets}}){auto* button=new QPushButton(label,&dialog);actions->addWidget(button);QObject::connect(button,&QPushButton::clicked,&dialog,[&,value]{accept(value);});}
     auto* save=new QPushButton("Save without running",&dialog);auto* cancel=new QPushButton("Cancel",&dialog);actions->addWidget(save);actions->addWidget(cancel);

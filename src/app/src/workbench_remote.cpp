@@ -35,6 +35,8 @@
 #include <array>
 #include <map>
 #include <tuple>
+#include <deque>
+#include <mutex>
 namespace frost::app {
 namespace {
 using namespace std::chrono_literals;
@@ -198,6 +200,50 @@ struct BuildView {
     }
     void finish(){for(std::size_t i=0;i<2;++i){lines[i].finish([&](auto line){parsers[i]->feed(line,[&](auto value){diagnostic(std::move(value));});});parsers[i]->finish([&](auto value){diagnostic(std::move(value));});}}
 };
+class RemoteOutputRelay final:public std::enable_shared_from_this<RemoteOutputRelay> {
+public:
+    RemoteOutputRelay(QObject* context,RemoteOutput deliver,RemoteDone finished,std::shared_ptr<std::stop_source> stop)
+        :m_context(context),m_deliver(std::move(deliver)),m_finished(std::move(finished)),m_stop(std::move(stop)) {}
+    void output(build::RunStream stream,std::string bytes) {
+        bool schedule=false,overflow=false;
+        {
+            std::lock_guard lock(m_mutex);
+            if(!m_overflow) {
+                if(m_bytes+bytes.size()>4U*1024U*1024U||m_pending.size()>=1024){m_overflow=true;overflow=true;}
+                else {
+                    m_bytes+=bytes.size();
+                    if(!m_pending.empty()&&m_pending.back().first==stream&&m_pending.back().second.size()+bytes.size()<=65536)
+                        m_pending.back().second+=bytes;
+                    else m_pending.emplace_back(stream,std::move(bytes));
+                }
+            }
+            if(!m_scheduled){m_scheduled=true;schedule=true;}
+        }
+        if(overflow)m_stop->request_stop();if(schedule)post();
+    }
+    void complete(Result<build::RunExit> result) {
+        bool schedule=false;
+        {std::lock_guard lock(m_mutex);m_completion=std::move(result);if(!m_scheduled){m_scheduled=true;schedule=true;}}
+        if(schedule)post();
+    }
+private:
+    void post(){if(m_context)QMetaObject::invokeMethod(m_context.data(),[self=shared_from_this()]{self->drain();},Qt::QueuedConnection);}
+    void drain() {
+        std::deque<std::pair<build::RunStream,std::string>> batch;std::optional<Result<build::RunExit>> completed;bool again=false,overflow=false;
+        {
+            std::lock_guard lock(m_mutex);std::size_t bytes=0;
+            while(!m_pending.empty()&&batch.size()<16&&bytes<128U*1024U){bytes+=m_pending.front().second.size();m_bytes-=m_pending.front().second.size();batch.push_back(std::move(m_pending.front()));m_pending.pop_front();}
+            again=!m_pending.empty();overflow=m_overflow;
+            if(!again){m_scheduled=false;if(m_completion){completed=std::move(m_completion);m_completion.reset();}}
+        }
+        for(auto& [stream,text]:batch)m_deliver(stream,std::move(text));
+        if(completed){if(overflow)m_finished(fail(ErrorCode::OutOfRange,"Remote output relay exceeded its 4 MiB/1024-frame budget; command stopped"));else m_finished(std::move(*completed));}
+        if(again)post();
+    }
+    QPointer<QObject> m_context;RemoteOutput m_deliver;RemoteDone m_finished;std::shared_ptr<std::stop_source> m_stop;
+    std::mutex m_mutex;std::deque<std::pair<build::RunStream,std::string>> m_pending;
+    std::size_t m_bytes=0;bool m_scheduled=false,m_overflow=false;std::optional<Result<build::RunExit>> m_completion;
+};
 }
 void Workbench::registerRemoteActions() {
     for(const auto& [id,label]:std::array{std::pair{"remote.targets","Remote Targets..."},std::pair{"cmake.wsl","WSL CMake Toolchains..."}}) {
@@ -250,16 +296,17 @@ void Workbench::showWslCMake() {
     auto profiles=*profileBytes?build::parseWslCMakeProfiles(**profileBytes):Result<std::vector<build::WslCMakeProfile>>(std::vector<build::WslCMakeProfile>{});
     if(!profiles){notify("WSL CMake",q(profiles.error().message()),ui::NotificationKind::Error);return;}
     QStringList choices;std::vector<std::size_t> indexes;
-    for(std::size_t i=0;i<profiles->size();++i)if(lang::documentKey((*profiles)[i].localSourceDirectory)==lang::documentKey(source)){choices.push_back(q((*profiles)[i].name));indexes.push_back(i);}
+    for(std::size_t i=0;i<profiles->size();++i)if(lang::documentKey((*profiles)[i].localSourceDirectory)==lang::documentKey(source)){choices.push_back(QStringLiteral("[%1] %2").arg(q((*profiles)[i].id),q((*profiles)[i].name)));indexes.push_back(i);}
     choices.push_back("New WSL profile...");bool selected=false;
     const auto choice=QInputDialog::getItem(m_window,"WSL CMake","Application build profile:",choices,0,false,&selected);if(!selected)return;
     build::WslCMakeProfile profile;std::optional<std::size_t> existing;
     const auto index=choices.indexOf(choice);if(index>=0&&static_cast<std::size_t>(index)<indexes.size()){existing=indexes[static_cast<std::size_t>(index)];profile=(*profiles)[*existing];}
-    else{profile.id="wsl."+QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();profile.name="WSL Debug";profile.localSourceDirectory=source;profile.cacheDefinitions={"CMAKE_BUILD_TYPE:STRING=Debug"};}
+    else{if(profiles->size()>=128){notify("WSL CMake","The application WSL profile limit (128) is reached.",ui::NotificationKind::Warning);return;}profile.id="wsl."+QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();profile.name="WSL Debug";profile.localSourceDirectory=source;profile.cacheDefinitions={"CMAKE_BUILD_TYPE:STRING=Debug"};}
     auto edited=editWslProfileForm(m_window,std::move(profile),*targets);if(!edited)return;
     if(m_projectRoot!=root||rootStop.stop_requested()||m_shutDown)return;
     if(existing)(*profiles)[*existing]=edited->profile;else profiles->push_back(edited->profile);
     const auto savedProfiles=build::wslCMakeProfilesJson(*profiles);
+    if(auto valid=build::parseWslCMakeProfiles(savedProfiles);!valid){notify("WSL CMake",q(valid.error().message()),ui::NotificationKind::Error);return;}
     if(auto saved=saveRegistry(m_services.fs,profilesPath,*profileBytes,savedProfiles);!saved){notify("WSL CMake",q(saved.error().message()),ui::NotificationKind::Error);return;}
     if(!edited->operation)return;
     run::RunConfiguration intent;intent.id="remote.wsl-build";intent.name=edited->profile.name;intent.type=run::RunType::Remote;intent.target=edited->profile.targetId;
@@ -304,7 +351,7 @@ void Workbench::showWslCMake() {
             done(std::move(*local));co_return;};
         self->m_pool->spawn(sched::Lane::Background,navigate(&self->m_services.fs,&self->m_services.trust,capture,diagnostic.file,std::move(result))).detach();
     });
-    auto stream=[self,owner,view,root,generation](build::RunStream channel,std::string text){if(self)QMetaObject::invokeMethod(self.data(),[=]{if(self&&owner&&self->m_remoteBuildGeneration==generation&&self->m_projectRoot==root)view->feed(channel,text);},Qt::QueuedConnection);};
+    auto deliver=[self,owner,view,root,generation](build::RunStream channel,std::string text){if(self&&owner&&self->m_remoteBuildGeneration==generation&&self->m_projectRoot==root)view->feed(channel,text);};
     auto done=[self,owner,statusGuard,stopGuard,view,generation](Result<build::RunExit> result){if(self)QMetaObject::invokeMethod(self.data(),[=]{
         if(!self||self->m_remoteBuildGeneration!=generation)return;self->m_remoteBuildActive=false;
         if(self->m_cmake)self->m_cmake->service().admissionAvailable();
@@ -314,8 +361,11 @@ void Workbench::showWslCMake() {
         else if(result->waitFailed||result->cleanupFailed)statusGuard->setText("Remote result/cleanup could not be confirmed; inspect actual transport output.");
         else statusGuard->setText(QStringLiteral("Actual remote exit code: %1%2").arg(result->exitCode).arg(result->stopped?QStringLiteral(" (stopped)"):QString{}));
     },Qt::QueuedConnection);};
+    auto relay=std::make_shared<RemoteOutputRelay>(this,std::move(deliver),std::move(done),stop);
+    RemoteOutput stream=[relay](auto channel,std::string bytes){relay->output(channel,std::move(bytes));};
+    RemoteDone completed=[relay](Result<build::RunExit> result){relay->complete(std::move(result));};
     dialog->show();
-    m_pool->spawn(sched::Lane::Background,runWslBuild(&m_services.fs,&m_services.launcher,&m_services.trust,capture,edited->profile,*edited->operation,m_resourceGovernor,std::move(reserved),std::move(stream),std::move(done))).detach();
+    m_pool->spawn(sched::Lane::Background,runWslBuild(&m_services.fs,&m_services.launcher,&m_services.trust,capture,edited->profile,*edited->operation,m_resourceGovernor,std::move(reserved),std::move(stream),std::move(completed))).detach();
 #endif
 }
 } // namespace frost::app

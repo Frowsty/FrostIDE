@@ -76,7 +76,7 @@ TEST(RemoteTransportReal, ExplicitlySelectedWslOrSshEndpointReportsActualWorkloa
     target.transport=RemoteTransport::Ssh;target.transportExecutable=environment("FROST_REMOTE_TEST_SSH");target.host=environment("FROST_REMOTE_TEST_HOST");target.user=environment("FROST_REMOTE_TEST_USER");
     if(target.transportExecutable.empty()||target.host.empty()||target.user.empty())GTEST_SKIP()<<"No explicitly selected strict-known-host SSH acceptance endpoint; not counted as transport acceptance";
 #endif
-    const auto python=environment("FROST_REMOTE_TEST_PYTHON");if(!python.empty())target.remotePython=python;
+    const auto python=environment("FROST_REMOTE_TEST_LINUX_PYTHON");if(!python.empty())target.remotePython=python;
     RemoteProcessLauncher launcher(io::realProcessLauncher(),target,{.admit=[]()->Result<void>{return {};}});
     auto spec=workload(target.remotePython,"import json,sys; print(json.dumps(sys.argv[1:])); sys.exit(23)");spec.arguments.push_back("literal space ; $() argument");
     auto actual=io::runToCompletion(launcher,spec,"",30s);ASSERT_TRUE(actual)<<actual.error().describe();EXPECT_EQ(actual->exitCode,23);
