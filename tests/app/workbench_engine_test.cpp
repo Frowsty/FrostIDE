@@ -152,12 +152,19 @@ bool pairPeer(WorkbenchRig& rig, const EngineSessionPeer& peer) {
     }
     auto paired = rig.workbench->pairEngineInstance(peer.instanceId());
     EXPECT_TRUE(paired) << (paired ? "" : paired.error().message());
-    return paired && waitFor(
-                         [&] {
-                             const auto value = rig.workbench->engineState();
-                             return value.boolAt("connected") == true && value.stringAt("state") == "Edit";
-                         },
-                         5s);
+    if (!paired)
+        return false;
+    const bool connected = waitFor(
+        [&] {
+            const auto value = rig.workbench->engineState();
+            return value.boolAt("connected") == true && value.stringAt("state") == "Edit";
+        },
+        5s);
+    EXPECT_TRUE(connected) << rig.workbench->engineState().dump() << " Handshake replies "
+                           << peer.replies("auth.challenge") << " " << peer.replies("auth.prove") << " "
+                           << peer.replies("server.info") << " " << peer.replies("schema.export") << " "
+                           << peer.replies("server.subscribe");
+    return connected;
 }
 frost::ui::EngineConsole* console(WorkbenchRig& rig) {
     rig.window->toolWindows().show("frostEngine");
@@ -704,9 +711,7 @@ TEST(WorkbenchEngine, ActualSessionHelperRejectsTrustedAliasRetargetAfterAuthent
     std::atomic<bool> retargeted{false}; // Outlives the peer's joined callback thread.
     EngineSessionPeer peer(dir.join("first"));
     advertise(dir, peer);
-    peer.setBeforeReply([&](std::string_view method) {
-        if (method != "schema.export")
-            return;
+    peer.setBeforeSchemaReply([&] {
         // Schema arrives during the authenticated handshake, before the helper submits the
         // requested editor.focus. Keep the replacement present until admission observes it.
         EXPECT_GT(peer.authenticated.load(), 0U);
@@ -1474,6 +1479,9 @@ TEST(WorkbenchEngineDocuments, CapturedByteCoordinatesDirtyRepliesAndDisconnectA
     ASSERT_TRUE(pairPeer(rig, peer));
     ASSERT_TRUE(waitFor([&] { return peer.replies("document.schemas") == 1; }, 3s));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("project/Assets/test.fmat")));
+    ASSERT_NE(console(rig), nullptr);
+    auto* panel = rig.window->toolWindows().content("frostEngine");
+    ASSERT_NE(panel, nullptr);
     const auto invoke = [&](const char* name) {
         auto id = rig.workbench->registry().find(name);
         EXPECT_TRUE(id);
@@ -1512,20 +1520,15 @@ TEST(WorkbenchEngineDocuments, CapturedByteCoordinatesDirtyRepliesAndDisconnectA
     const auto& rows = rig.workbench->problems()->model()->problems();
     auto row = std::ranges::find(rows, frost::ui::DiagnosticSource::Engine, &frost::ui::Problem::source);
     ASSERT_NE(row, rows.end());
-    EXPECT_EQ(row->diagnostic.line, 2);
-    EXPECT_EQ(row->diagnostic.column, 23);
+    EXPECT_EQ(row->diagnostic.diagnostic.line, 2);
+    EXPECT_EQ(row->diagnostic.diagnostic.column, 23);
     invoke("engine.document.validate");
     ASSERT_TRUE(waitFor([&] { return peer.requests("document.validate").size() == 2; }, 3s));
     ASSERT_TRUE(rig.workbench->currentView()->editor().typeText(" "));
     ASSERT_TRUE(waitFor([&] { return countEngine() == 0; }, 3s));
     peer.release("document.validate", reply);
     ASSERT_TRUE(waitFor([&] { return peer.replies("document.validate") == 2; }, 3s));
-    ASSERT_TRUE(waitFor(
-        [&] {
-            return hasStatus(rig.window->toolWindows().content("frostEngine"),
-                             QStringLiteral("stale engine validation was discarded"));
-        },
-        3s));
+    ASSERT_TRUE(waitFor([&] { return hasStatus(panel, QStringLiteral("stale engine validation was discarded")); }, 3s));
     EXPECT_EQ(countEngine(), 0);
     EXPECT_EQ(dir.read("project/Assets/test.fmat"), source);
     invoke("engine.document.validate");
@@ -1533,8 +1536,8 @@ TEST(WorkbenchEngineDocuments, CapturedByteCoordinatesDirtyRepliesAndDisconnectA
     peer.release("document.validate", reply);
     ASSERT_TRUE(waitFor([&] { return countEngine() == 1; }, 3s));
     peer.stop();
-    ASSERT_TRUE(waitFor([&] { return !rig.workbench->engineState().boolAt("connected").value_or(false); }, 3s));
-    EXPECT_EQ(countEngine(), 0);
+    ASSERT_TRUE(waitFor(
+        [&] { return !rig.workbench->engineState().boolAt("connected").value_or(false) && countEngine() == 0; }, 3s));
     EngineSessionPeer replacement(dir.join("project"), 'b');
     replacement.enableDocumentTools();
     replacement.result("document.schemas", schemas);
@@ -1643,7 +1646,7 @@ TEST(WorkbenchEngineDocuments, ActualTableSchemaReplyFeedsCapturedRowProblems) {
             const auto& rows = rig.workbench->problems()->model()->problems();
             return std::ranges::any_of(rows, [](const auto& row) {
                 return row.source == frost::ui::DiagnosticSource::Live &&
-                       row.diagnostic.message.find("maximum") != std::string::npos;
+                       row.diagnostic.diagnostic.message.find("maximum") != std::string::npos;
             });
         },
         3s));
@@ -1754,8 +1757,12 @@ TEST(WorkbenchEngine, UnityUnsupportedBackendNeverStartsSourceVerifier) {
     options.disableProjectEvaluation = true;
     options.launcher = &launcher;
     options.workbench.selectUnityDebug = [](std::string_view) {
-        return std::optional{
-            frost::app::UnityMonoDebugSelection{.player = true, .il2cpp = true, .pid = 1, .port = 5555}};
+        frost::app::UnityMonoDebugSelection selection;
+        selection.player = true;
+        selection.il2cpp = true;
+        selection.pid = 1;
+        selection.port = 5555;
+        return std::optional(std::move(selection));
     };
     WorkbenchRig rig(dir, options);
     ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
@@ -1788,7 +1795,8 @@ TEST(WorkbenchEngine, UnitySelectionCannotRenewRevokedTrustConsent) {
                                                                  .port = 5555,
                                                                  .assembly = dir.join("module.dll"),
                                                                  .pdb = dir.join("module.pdb"),
-                                                                 .dotnet = dir.join("dotnet.exe")}};
+                                                                 .dotnet = dir.join("dotnet.exe"),
+                                                                 .verifier = {}}};
     };
     WorkbenchRig rig(dir, options);
     active = &rig;

@@ -69,6 +69,16 @@ std::optional<ui::Problem> problem(const WorkbenchRig& rig, std::string_view pat
     return found == rows.end() ? std::nullopt : std::optional(*found);
 }
 
+std::string validationState(const WorkbenchRig& rig, const ValidatorLauncher& launcher) {
+    std::string state = "Worker launches: " + std::to_string(launcher.launches.load());
+    for (const auto& entry : rig.window->notifications().log())
+        state += "\n" + entry.notification.title.toStdString() + " " + entry.notification.text.toStdString();
+    for (const auto& row : rig.workbench->problems()->model()->problems())
+        state +=
+            "\n" + row.diagnostic.path + " " + row.diagnostic.diagnostic.code + " " + row.diagnostic.diagnostic.message;
+    return state;
+}
+
 TEST(WorkbenchSnapshotValidation, UnsavedCMakeAndJsonReachEditorAndProblems) {
     WorkDir dir("snapshot-validator");
     constexpr std::string_view cmake = "add_library(car STATIC car.cpp)\n";
@@ -82,7 +92,8 @@ TEST(WorkbenchSnapshotValidation, UnsavedCMakeAndJsonReachEditorAndProblems) {
     auto* cmakeView = rig.view();
     ASSERT_NE(cmakeView, nullptr);
     ASSERT_TRUE(replaceBuffer(*cmakeView, std::string(cmake) + "add_library(car STATIC other.cpp)\n"));
-    ASSERT_TRUE(waitFor([&] { return problem(rig, cmakePath, "cmake.duplicate-target").has_value(); }));
+    ASSERT_TRUE(waitFor([&] { return problem(rig, cmakePath, "cmake.duplicate-target").has_value(); }))
+        << validationState(rig, launcher);
     const auto duplicate = problem(rig, cmakePath, "cmake.duplicate-target");
     ASSERT_TRUE(duplicate);
     EXPECT_EQ(duplicate->diagnostic.diagnostic.line, 2);
@@ -99,7 +110,8 @@ TEST(WorkbenchSnapshotValidation, UnsavedCMakeAndJsonReachEditorAndProblems) {
     ASSERT_NE(jsonView, nullptr);
     constexpr std::string_view json = "{\"label\":\"\xf0\x9f\x8d\x80\", \"version\":\"bad\"}";
     ASSERT_TRUE(replaceBuffer(*jsonView, json));
-    ASSERT_TRUE(waitFor([&] { return problem(rig, jsonPath, "schema").has_value(); }));
+    ASSERT_TRUE(waitFor([&] { return problem(rig, jsonPath, "schema").has_value(); }))
+        << validationState(rig, launcher);
     const auto shape = problem(rig, jsonPath, "schema");
     ASSERT_TRUE(shape);
     const auto value = json.find("\"bad\"");
@@ -126,7 +138,8 @@ TEST(WorkbenchSnapshotValidation, MissingHelperClearsOwnedProblemsAndReportsUnav
     WorkbenchRig rig(dir, {.launcher = &launcher});
     const auto cmakePath = dir.join("targets.cmake"), jsonPath = dir.join("CMakePresets.json");
     ASSERT_TRUE(rig.workbench->openPath(cmakePath));
-    ASSERT_TRUE(waitFor([&] { return problem(rig, cmakePath, "cmake.duplicate-target").has_value(); }));
+    ASSERT_TRUE(waitFor([&] { return problem(rig, cmakePath, "cmake.duplicate-target").has_value(); }))
+        << validationState(rig, launcher);
     auto* cmakeView = rig.view();
     ASSERT_NE(cmakeView, nullptr);
     ui::EditorDiagnostic independent;
@@ -167,7 +180,7 @@ TEST(WorkbenchSnapshotValidation, SupersededWorkerResponseNeverPublishes) {
     ASSERT_NE(view, nullptr);
     ASSERT_TRUE(replaceBuffer(*view, R"({"version":)"));
     launcher.release.release();
-    ASSERT_TRUE(waitFor([&] { return problem(rig, path, "syntax").has_value(); }));
+    ASSERT_TRUE(waitFor([&] { return problem(rig, path, "syntax").has_value(); })) << validationState(rig, launcher);
     EXPECT_EQ(launcher.launches.load(), 2);
     EXPECT_FALSE(launcher.gateTimedOut.load());
     EXPECT_FALSE(stalePublished);
@@ -193,7 +206,7 @@ TEST(WorkbenchSnapshotValidation, ClosedDocumentResponseCannotReachReopenedTab) 
     dir.write("CMakePresets.json", R"({"version":)");
     ASSERT_TRUE(rig.workbench->openPath(path));
     launcher.release.release();
-    ASSERT_TRUE(waitFor([&] { return problem(rig, path, "syntax").has_value(); }));
+    ASSERT_TRUE(waitFor([&] { return problem(rig, path, "syntax").has_value(); })) << validationState(rig, launcher);
     EXPECT_EQ(launcher.launches.load(), 2);
     EXPECT_FALSE(launcher.gateTimedOut.load());
     EXPECT_FALSE(stalePublished);

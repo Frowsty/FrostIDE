@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <set>
@@ -137,6 +138,10 @@ public:
         return found == m_replied.end() ? 0 : found->second;
     }
     void enableDocumentTools() { m_documentTools = true; }
+    void setBeforeSchemaReply(std::function<void()> callback) {
+        std::lock_guard lock(m_mutex);
+        m_beforeSchemaReply = std::move(callback);
+    }
     void hold(std::string method) {
         std::lock_guard lock(m_mutex);
         m_held.insert(std::move(method));
@@ -433,9 +438,16 @@ private:
                                 result.set("scriptDebug",
                                            Json::object().set("available", true).set("protocolVersion", 1));
                         }
-                    } else if (method == "schema.export")
+                    } else if (method == "schema.export") {
+                        std::function<void()> beforeReply;
+                        {
+                            std::lock_guard lock(m_mutex);
+                            beforeReply = m_beforeSchemaReply;
+                        }
+                        if (beforeReply)
+                            beforeReply();
                         result = schema();
-                    else if (method == "server.subscribe") {
+                    } else if (method == "server.subscribe") {
                         subscribed = true;
                         result = identity()
                                      .set("sequence", sequence)
@@ -506,6 +518,7 @@ private:
     std::uint16_t m_luaDebugPort = 0;
     std::atomic<bool> m_documentTools = false;
     mutable std::mutex m_mutex;
+    std::function<void()> m_beforeSchemaReply;
     std::vector<Json> m_requests;
     std::map<std::string, std::size_t> m_replied;
     std::set<std::string> m_held;
