@@ -64,6 +64,7 @@ public:
                                                                     std::string label);
     [[nodiscard]] Result<std::vector<std::uint8_t>> breakpoint(std::uint32_t method, std::uint64_t ilOffset,
                                                                std::string label);
+    [[nodiscard]] Result<std::vector<std::uint8_t>> exceptions(std::uint32_t assembly, bool caught, std::string label);
     [[nodiscard]] Result<std::vector<std::uint8_t>> stepOver(std::uint32_t thread, std::string label);
     [[nodiscard]] Result<std::vector<std::uint8_t>> clearEvent(std::uint8_t kind, std::uint32_t id, std::string label);
     [[nodiscard]] Result<std::vector<std::uint8_t>> frames(std::uint32_t thread, std::string label);

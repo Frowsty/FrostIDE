@@ -126,5 +126,11 @@ TEST(MonoResponses, FormatsActualPrimitiveBitsAndRefusesMalformedOrComplexValues
     auto reference = decodeScalar(std::vector<std::uint8_t>{0x12,0,0,0,1});
     ASSERT_FALSE(reference); EXPECT_EQ(reference.error().code(), ErrorCode::Unsupported);
 }
+TEST(MonoResponses, ExceptionStopRequiresActualObjectAndExactPayload) {
+    std::vector<std::uint8_t> bytes{2,0,0,0,1,13,0,0,0,9,0,0,0,1,0,0,0,42};
+    auto stop = decodeStop(bytes); ASSERT_TRUE(stop); EXPECT_EQ(stop->exception, 42u);
+    bytes.back() = 0; EXPECT_FALSE(decodeStop(bytes));
+    bytes.back() = 42; bytes.push_back(0); EXPECT_FALSE(decodeStop(bytes));
+}
 } // namespace
 } // namespace frost::debug::mono

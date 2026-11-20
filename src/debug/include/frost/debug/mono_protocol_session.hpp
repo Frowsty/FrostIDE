@@ -37,6 +37,8 @@ public:
                                                           std::uint32_t ordinal);
     [[nodiscard]] Result<std::vector<std::uint8_t>> step(std::uint32_t thread);
     [[nodiscard]] Result<std::vector<std::uint8_t>> clearStep();
+    [[nodiscard]] Result<std::vector<std::uint8_t>> exceptions(std::uint32_t assembly, bool caught);
+    [[nodiscard]] Result<std::vector<std::uint8_t>> clearException();
     [[nodiscard]] Result<std::vector<std::uint8_t>> dispose();
     [[nodiscard]] const SessionState& state() const noexcept { return m_gate.state(); }
     [[nodiscard]] bool uncleanClose() const noexcept { return m_gate.uncleanClose(); }

@@ -34,10 +34,11 @@ Result<std::vector<Packet>> ProtocolSession::feed(std::span<const std::uint8_t> 
                 return fail(ErrorCode::Corrupt, "invalid Mono event");
             }
             const auto kind = packet.payload[5];
-            if (kind == 10 || kind == 11) {
+            if (kind == 10 || kind == 11 || kind == 13) {
                 auto stop = decodeStop(packet.payload);
                 if (!stop || (kind == 10 && !m_gate.ownsBreakpoint(stop->request)) ||
-                    (kind == 11 && m_gate.activeStep() != stop->request)) {
+                    (kind == 11 && m_gate.activeStep() != stop->request) ||
+                    (kind == 13 && m_gate.activeException() != stop->request)) {
                     close();
                     return fail(ErrorCode::Corrupt, "unowned Mono stop event");
                 }
@@ -101,7 +102,7 @@ Result<std::vector<Packet>> ProtocolSession::feed(std::span<const std::uint8_t> 
             major = read32(p.data() + p.size() - 8);
             minor = read32(p.data() + p.size() - 4);
         }
-        if (packet.error == 0 && (*m_operation == Operation::Step || *m_operation == Operation::Breakpoint)) {
+        if (packet.error == 0 && (*m_operation == Operation::Step || *m_operation == Operation::Breakpoint || *m_operation == Operation::Exception)) {
             if (p.size() != 4) {
                 close();
                 return fail(ErrorCode::Corrupt, "invalid Mono event request reply");
@@ -111,7 +112,7 @@ Result<std::vector<Packet>> ProtocolSession::feed(std::span<const std::uint8_t> 
         if (packet.error == 0 &&
             (*m_operation == Operation::Negotiate || *m_operation == Operation::Suspend ||
              *m_operation == Operation::Resume || *m_operation == Operation::ClearBreakpoint ||
-             *m_operation == Operation::ClearStep || *m_operation == Operation::Dispose) &&
+             *m_operation == Operation::ClearStep || *m_operation == Operation::ClearException || *m_operation == Operation::Dispose) &&
             !p.empty()) {
             close();
             return fail(ErrorCode::Corrupt, "unexpected Mono acknowledgement data");
@@ -219,6 +220,14 @@ Result<std::vector<std::uint8_t>> ProtocolSession::clearStep() {
         return fail(ErrorCode::Busy, "no Mono step request");
     return prepare(Operation::ClearStep,
                    [this, id](std::string l) { return m_wire.clearEvent(11, *id, std::move(l)); });
+}
+Result<std::vector<std::uint8_t>> ProtocolSession::exceptions(std::uint32_t assembly, bool caught) {
+    return prepare(Operation::Exception, [this, assembly, caught](std::string l) { return m_wire.exceptions(assembly, caught, std::move(l)); });
+}
+Result<std::vector<std::uint8_t>> ProtocolSession::clearException() {
+    const auto id = m_gate.activeException();
+    if (!id) return fail(ErrorCode::Busy, "no owned Mono exception request");
+    return prepare(Operation::ClearException, [this, id](std::string l) { return m_wire.clearEvent(13, *id, std::move(l)); }, *id);
 }
 Result<std::vector<std::uint8_t>> ProtocolSession::dispose() {
     return prepare(Operation::Dispose, [this](std::string l) { return m_wire.dispose(std::move(l)); });

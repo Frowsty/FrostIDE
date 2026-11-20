@@ -51,6 +51,9 @@ struct Worker : std::enable_shared_from_this<Worker> {
     std::uint32_t assembly = 0, stoppedThread = 0;
     std::int64_t nextFrame = 1;
     bool stepPending = false;
+    std::optional<std::uint32_t> exceptionRequest;
+    std::uint32_t exceptionObject = 0;
+    bool catchExceptions = false;
     bool admitted = false;
     bool detached = false;
     bool protocolHealthy = true;
@@ -253,7 +256,7 @@ struct Worker : std::enable_shared_from_this<Worker> {
         auto event = decodeStop(packet.payload);
         if (!event)
             return std::unexpected(std::move(event.error()));
-        if (event->kind == 11 && stepPending) {
+        if (stepPending) {
             if (!call(session.clearStep()))
                 return fail(ErrorCode::IoError, "could not clear Mono step");
             stepPending = false;
@@ -265,8 +268,9 @@ struct Worker : std::enable_shared_from_this<Worker> {
         if (!found || found->empty())
             return fail(ErrorCode::Corrupt, "Mono stop has no frame");
         bool mapped = false;
-        const auto method = methods.find(event->method);
-        if (method != methods.end() && found->front().method == event->method &&
+        const auto eventMethod = event->kind == 13 ? found->front().method : event->method;
+        const auto method = methods.find(eventMethod);
+        if (method != methods.end() && found->front().method == eventMethod &&
             (event->kind != 11 || event->rawOffset == 0 ||
              (found->front().ilOffset >= 0 &&
               event->rawOffset == static_cast<std::uint64_t>(found->front().ilOffset)))) {
@@ -286,9 +290,10 @@ struct Worker : std::enable_shared_from_this<Worker> {
         if (!mapped)
             return fail(ErrorCode::Corrupt, "Mono stop is outside verified source locations");
         stoppedThread = event->thread;
+        exceptionObject = event->kind == 13 ? event->exception : 0;
         frames.clear();
         rpc::Json body = rpc::Json::object()
-                             .set("reason", event->kind == 10 ? "breakpoint" : "step")
+                             .set("reason", event->kind == 10 ? "breakpoint" : event->kind == 13 ? "exception" : "step")
                              .set("threadId", static_cast<std::int64_t>(event->thread))
                              .set("allThreadsStopped", true);
         if (event->kind == 10)
@@ -398,6 +403,36 @@ struct Worker : std::enable_shared_from_this<Worker> {
         return rpc::Json::object().set("result", scalar->value).set("type", scalar->type)
             .set("variablesReference", 0);
     }
+    Result<rpc::Json> exceptionFilters(const rpc::Json& args) {
+        if (!stream || session.state().phase() != Phase::Suspended)
+            return fail(ErrorCode::Busy, "Mono exception filters require a suspended session");
+        const auto* filters = args.find("filters");
+        if (!filters || !filters->isArray() || filters->size() > 2)
+            return fail(ErrorCode::InvalidArgument, "invalid Mono exception filters");
+        for (const auto* key : {"filterOptions", "exceptionOptions"}) {
+            const auto* options = args.find(key);
+            if (options && (!options->isArray() || options->size())) return fail(ErrorCode::Unsupported, "Mono conditional exception filters are unavailable");
+        }
+        bool enabled = false, caught = false;
+        for (const auto& filter : filters->items()) {
+            const auto* name = filter.asString();
+            if (!name || (*name != "all" && *name != "uncaught")) return fail(ErrorCode::Unsupported, "unsupported Mono exception filter");
+            enabled = true; caught = caught || *name == "all";
+        }
+        if (exceptionRequest) {
+            if (!call(session.clearException())) return fail(ErrorCode::IoError, "Mono exception filter clear failed");
+            exceptionRequest.reset();
+        }
+        if (enabled) {
+            auto reply = call(session.exceptions(assembly, caught));
+            if (!reply) return std::unexpected(std::move(reply.error()));
+            auto id = decodeId(reply->payload);
+            if (!id) return std::unexpected(std::move(id.error()));
+            exceptionRequest = *id;
+        }
+        catchExceptions = caught;
+        return rpc::Json::object();
+    }
     Result<void> detach() {
         if (!stream)
             return {};
@@ -407,6 +442,10 @@ struct Worker : std::enable_shared_from_this<Worker> {
             if (!call(session.clearStep()))
                 return fail(ErrorCode::IoError, "Mono step clear failed");
             stepPending = false;
+        }
+        if (exceptionRequest) {
+            if (!call(session.clearException())) return fail(ErrorCode::IoError, "Mono exception clear before detach failed");
+            exceptionRequest.reset();
         }
         while (!breakpoints.empty()) {
             auto r = clearPath(breakpoints.begin()->first);
@@ -421,7 +460,11 @@ struct Worker : std::enable_shared_from_this<Worker> {
     }
     Result<rpc::Json> handle(const std::string& command, const rpc::Json& args) {
         if (command == "initialize")
-            return rpc::Json::object().set("supportsConfigurationDoneRequest", true).set("supportsEvaluateForHovers", true);
+            return rpc::Json::object().set("supportsConfigurationDoneRequest", true).set("supportsEvaluateForHovers", true)
+                .set("supportsExceptionInfoRequest", true)
+                .set("exceptionBreakpointFilters", rpc::Json::array({
+                    rpc::Json::object().set("filter", "all").set("label", "Any exception in verified module").set("default", false),
+                    rpc::Json::object().set("filter", "uncaught").set("label", "Unhandled exception in verified module").set("default", false)}));
         if (command == "attach") {
             auto result = attach();
             if (!result)
@@ -431,10 +474,18 @@ struct Worker : std::enable_shared_from_this<Worker> {
         }
         if (command != "disconnect" && !admitted)
             return fail(ErrorCode::Busy, "Mono session has not been admitted");
+        if (command == "setExceptionBreakpoints") return exceptionFilters(args);
+        if (command == "exceptionInfo") {
+            if (!exceptionObject || !stoppedThread || args.integerAt("threadId") != stoppedThread || session.state().phase() != Phase::Suspended)
+                return fail(ErrorCode::InvalidArgument, "no current Mono exception stop");
+            return rpc::Json::object().set("exceptionId", "Mono object " + std::to_string(exceptionObject))
+                .set("breakMode", catchExceptions ? "always" : "unhandled");
+        }
         if (command == "setBreakpoints")
             return setBreakpoints(args);
         if (command == "configurationDone" || command == "continue") {
             stoppedThread = 0;
+            exceptionObject = 0;
             frames.clear();
             if (!stream || !call(session.resume()))
                 return fail(ErrorCode::IoError, "Mono resume failed");
@@ -470,6 +521,7 @@ struct Worker : std::enable_shared_from_this<Worker> {
             if (!call(session.resume()))
                 return fail(ErrorCode::IoError, "Mono resume after step failed");
             stoppedThread = 0;
+            exceptionObject = 0;
             frames.clear();
             return rpc::Json::object();
         }

@@ -145,5 +145,12 @@ TEST(MonoWire, OwnedOracleCommandShapes) {
     ASSERT_TRUE(threads);
     EXPECT_EQ(*threads, (std::vector<std::uint8_t>{0, 0, 0, 11, 0, 0, 0, 8, 0, 1, 2}));
 }
+TEST(MonoWire, ExceptionFilterCarries258ExtensionAndVerifiedAssemblyScope) {
+    Wire wire; ASSERT_TRUE(wire.feed(bytes(Wire::handshake)));
+    auto request = wire.exceptions(7, false, "exceptions"); ASSERT_TRUE(request);
+    EXPECT_EQ(std::vector<std::uint8_t>(request->begin() + 11, request->end()),
+        (std::vector<std::uint8_t>{13,2,2,8,0,0,0,0,0,1,1,0,0,11,0,0,0,1,0,0,0,7}));
+    EXPECT_FALSE(wire.exceptions(0, true, "missing assembly"));
+}
 } // namespace
 } // namespace frost::debug::mono

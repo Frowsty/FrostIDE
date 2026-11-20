@@ -103,9 +103,12 @@ Result<StopEvent> decodeStop(std::span<const std::uint8_t> payload) {
     std::uint32_t count = 0;
     StopEvent e;
     if (!r.byte(policy) || policy != 2 || !r.u32(count) || count != 1 || !r.byte(e.kind) ||
-        (e.kind != 10 && e.kind != 11) || !r.u32(e.request) || !e.request || !r.u32(e.thread) || !e.thread ||
-        !r.u32(e.method) || !e.method || !r.u64(e.rawOffset) || !r.done())
+        (e.kind != 10 && e.kind != 11 && e.kind != 13) || !r.u32(e.request) || !e.request || !r.u32(e.thread) || !e.thread)
         return fail(ErrorCode::Corrupt, "invalid Mono stop event");
+    if (e.kind == 13) {
+        if (!r.u32(e.exception) || !e.exception || !r.done()) return fail(ErrorCode::Corrupt, "invalid Mono exception event");
+    } else if (!r.u32(e.method) || !e.method || !r.u64(e.rawOffset) || !r.done())
+        return fail(ErrorCode::Corrupt, "invalid Mono stop location");
     return e;
 }
 

@@ -14,6 +14,7 @@ struct StopEvent {
     std::uint8_t kind = 0;
     std::uint32_t request = 0;
     std::uint32_t thread = 0;
+    std::uint32_t exception = 0;
     std::uint32_t method = 0;
     std::uint64_t rawOffset = 0;
 };

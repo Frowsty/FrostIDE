@@ -75,9 +75,9 @@ bool sendAll(TestSocket s, const std::vector<std::uint8_t>& data) {
 class ScriptedMono {
 public:
     explicit ScriptedMono(bool badImage = false, bool failResume = false, bool failSecondClear = false,
-                          bool stopAfterResume = false)
+                          bool stopAfterResume = false, bool exceptionStop = false)
         : badImage(badImage), failResume(failResume), failSecondClear(failSecondClear),
-          stopAfterResume(stopAfterResume) {
+          stopAfterResume(stopAfterResume), exceptionStop(exceptionStop) {
 #ifdef _WIN32
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
@@ -219,9 +219,10 @@ private:
             if (!sendAll(peer, reply))
                 break;
             if (set == 1 && command == 4 && stopAfterResume) {
-                const std::vector<std::uint8_t> event{0, 0, 0, 37, 0, 0, 0, 7, 0, 64, 100, 2, 0, 0, 0, 1, 10, 0, 0,
+                const std::vector<std::uint8_t> breakpointEvent{0, 0, 0, 37, 0, 0, 0, 7, 0, 64, 100, 2, 0, 0, 0, 1, 10, 0, 0,
                                                       0, 9, 0, 0,  0, 1, 0, 0, 0, 3,  0,   0, 0, 0, 0, 0, 0,  4};
-                if (!sendAll(peer, event))
+                const std::vector<std::uint8_t> exceptionEvent{0,0,0,29,0,0,0,7,0,64,100,2,0,0,0,1,13,0,0,0,9,0,0,0,1,0,0,0,42};
+                if (!sendAll(peer, exceptionStop ? exceptionEvent : breakpointEvent))
                     break;
                 stopAfterResume = false;
             }
@@ -232,7 +233,7 @@ private:
     }
     TestSocket listener = badSocket;
     std::jthread server;
-    bool badImage, failResume, failSecondClear, stopAfterResume;
+    bool badImage, failResume, failSecondClear, stopAfterResume, exceptionStop;
     std::uint32_t nextBreakpoint = 9;
 #ifdef _WIN32
     bool winsock = false;
@@ -487,6 +488,28 @@ TEST(MonoDap, EvaluateReadsOnlyCurrentFrameLocalAndRejectsExpressions) {
     EXPECT_TRUE(requestSync(**client, "continue"));
     EXPECT_FALSE(requestSync(**client, "evaluate", rpc::Json::object().set("frameId", *id).set("expression", "count")));
     EXPECT_TRUE(requestSync(**client, "disconnect"));
+}
+TEST(MonoDap, OwnedExceptionFilterProducesActualExceptionStopAndClearsBeforeDetach) {
+    ScriptedMono runtime(false, false, false, true, true);
+    std::promise<rpc::Json> stopped;
+    auto stop = stopped.get_future();
+    DapHandlers handlers;
+    handlers.onEvent = [&](std::string_view name, const rpc::Json& body) { if (name == "stopped") stopped.set_value(body); };
+    auto client = monoAdapterFactory(runtime.target())(std::move(handlers));
+    ASSERT_TRUE(client);
+    ASSERT_TRUE(requestSync(**client, "attach"));
+    ASSERT_TRUE(requestSync(**client, "setExceptionBreakpoints", rpc::Json::object().set("filters", rpc::Json::array({"uncaught"}))));
+    EXPECT_FALSE(requestSync(**client, "setExceptionBreakpoints", rpc::Json::object().set("filters", rpc::Json::array({"unknown"}))));
+    ASSERT_TRUE(requestSync(**client, "continue"));
+    ASSERT_EQ(stop.wait_for(5s), std::future_status::ready);
+    EXPECT_EQ(stop.get().stringAt("reason"), "exception");
+    auto info = requestSync(**client, "exceptionInfo", rpc::Json::object().set("threadId", 1));
+    ASSERT_TRUE(info); EXPECT_EQ(info->stringAt("exceptionId"), "Mono object 42");
+    EXPECT_EQ(info->stringAt("breakMode"), "unhandled");
+    EXPECT_FALSE(requestSync(**client, "exceptionInfo", rpc::Json::object().set("threadId", 2)));
+    EXPECT_TRUE(requestSync(**client, "disconnect"));
+    EXPECT_EQ(runtime.clears.load(), 1);
+    EXPECT_TRUE(runtime.disposed);
 }
 } // namespace
 } // namespace frost::debug::mono

@@ -18,6 +18,12 @@ Locally merged main 7db564d3 into R18 integration 63f4cbc0. Retained compiler-ba
 - Actual registered semantic providers outrank the builtin source fallback. Named source/span/include/root/candidate limits and scheduler-free fallback are recorded in ADR0118. Lexer, physical source navigation/provenance, ambiguous/missing/macro limits, provider precedence and worker editor regressions are authored.
 - Independent Astra source review is requested. No builds, tests, shader/Unity feature execution, downloads/install, WSL or pushes occurred. Next: source-review corrections, additive R14 GLSL joins, then independent R19 other-language/extension branches.
 
+## 2026-11-20 R18 Mono exception stop controls
+
+- Added actual Mono 2.58 exception request/clear commands, limited to the verified assembly, with the documented caught/uncaught/subclasses and 2.54 filter-extension bytes. DAP exposes any/unhandled module exception filters and actual stopped exception object identity; unsupported conditional/type filters refuse before replacing an installed filter.
+- Session gates own exception request IDs separately, admit only exact owned object-bearing stop events, defer an early event until resume acknowledgement, and require clearing the request before disposal. Source publication still requires a verified module location; interrupted step requests are cleared on any owned stop. No exception message/type is invented from the object ID.
+- Authored wire, gate, decoder, early/foreign-event and socket-peer stop/info/cleanup coverage. Public protocol/encoding evidence: Mono soft debugger wire format and MIT debugger-agent.c exception modifier/event paths. Independent source review pending; no tests, builds or Unity/feature execution.
+
 ## 2026-11-20 R18 Linux Mono source/attach join
 
 - Linux Unity Mono attach now joins the pidfd/socket-owner verifier with the original isolated no-link held source reader. The reader walks absolute ancestry through openat/O_NOFOLLOW descriptors, requires a unique regular-file link and actual kernel read lease, brackets bounded capture/output with canonical-path/metadata/lease checks and rejects lease-break requests. Unsupported filesystems or ownership refuse the capture; the parent retains its timeout/cancellation kill policy.
