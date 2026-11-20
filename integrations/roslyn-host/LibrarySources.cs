@@ -217,11 +217,22 @@ internal static class LibrarySources
     private static async Task<byte[]> FetchSource(Uri uri, CancellationToken token)
     {
         RequireSourceOrigin(uri);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        token = deadline.Token;
         using var handler = new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false, UseDefaultCredentials = false, UseProxy = false, AutomaticDecompression = DecompressionMethods.None };
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
         using var response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, token); response.EnsureSuccessStatusCode();
         if (response.Content.Headers.ContentLength > MaxSource) throw new InvalidDataException("SourceLink body exceeds budget");
-        using var input = await response.Content.ReadAsStreamAsync(token); using var output = new MemoryStream(); var buffer = new byte[16384];
+        using var input = await response.Content.ReadAsStreamAsync(token);
+        return await ReadSourceBody(input, token);
+    }
+    internal static async Task<byte[]> ReadSourceBody(Stream input, CancellationToken token, TimeSpan? timeout = null)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(timeout ?? TimeSpan.FromSeconds(20));
+        token = deadline.Token;
+        using var output = new MemoryStream(); var buffer = new byte[16384];
         while (true) { int count = await input.ReadAsync(buffer, token); if (count == 0) break; if (output.Length + count > MaxSource) throw new InvalidDataException("SourceLink body exceeds budget"); await output.WriteAsync(buffer.AsMemory(0, count), token); }
         return output.ToArray();
     }

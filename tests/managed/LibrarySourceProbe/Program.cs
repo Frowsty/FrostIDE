@@ -12,6 +12,11 @@ using Microsoft.CodeAnalysis.Emit;
 using Microsoft.CodeAnalysis.Text;
 internal static class Program
 {
+    private sealed class StalledStream : MemoryStream
+    {
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
+        { await Task.Delay(Timeout.InfiniteTimeSpan, token); return 0; }
+    }
     private static void Require(bool value, string message) { if (!value) throw new Exception(message); }
     private static JsonElement Json(object value) => JsonSerializer.SerializeToElement(value);
     private static async Task Main(string[] args)
@@ -63,6 +68,9 @@ internal static class Program
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
         refused = false; try { await LibrarySources.Read(method, assembly, "decompiled", false, cancelled.Token); } catch (OperationCanceledException) { refused = true; }
         Require(refused, "cancelled decompilation continued");
+        using var stalled = new StalledStream();
+        refused = false; try { await LibrarySources.ReadSourceBody(stalled, default, TimeSpan.FromMilliseconds(5)); } catch (OperationCanceledException) { refused = true; }
+        Require(refused, "stalled SourceLink response body escaped its deadline");
         Console.WriteLine("LibrarySourceProbe passed: real PE, portable PDB, embedded source, decompilation, IL, metadata and source policy");
     }
 }

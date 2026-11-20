@@ -1266,12 +1266,16 @@ TEST(LanguageControllerNavigation, OwnedLibraryRejectsBadReceiptAndWorkspaceCach
         .metadataCacheDir = workPath("caches")});
     std::vector<QString> status;
     QObject::connect(&controller, &LanguageController::statusMessage, [&](const QString& message) { status.push_back(message); });
-    controller.decompileExternalSymbol();
+    server.on("textDocument/declaration", [](const Json&) { return Json::array(); });
+    server.on("textDocument/definition", [](const Json&) { return Json::array(); });
+    controller.gotoDeclaration();
     ASSERT_TRUE(pumpUntil([&] { return status.size() == 1; }));
     EXPECT_NE(status.back().toStdString().find("checksum"), std::string::npos);
     EXPECT_FALSE(fs.exists(workPath("caches")).value_or(true));
     valid.store(true);
-    controller.decompileExternalSymbol();
+    server.on("textDocument/declaration", [](const Json&) { return Json::array(); });
+    server.on("textDocument/definition", [](const Json&) { return Json::array(); });
+    controller.gotoDeclaration();
     ASSERT_TRUE(pumpUntil([&] { return status.size() == 2; }));
     EXPECT_NE(status.back().toStdString().find("outside the workspace"), std::string::npos);
     EXPECT_TRUE(host.opened.empty());
