@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // FER-10 unit contract/refusal tests; real command fidelity is checked in the corpus target.
+#include "frost/lang/uri.hpp"
+
 #include "support/directory_link.hpp"
 #include "support/engine_test_fixture.hpp"
 #include <gtest/gtest.h>

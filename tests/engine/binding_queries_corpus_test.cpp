@@ -221,7 +221,9 @@ Result<Analysis> analyze(corpus::Evidence& evidence, const std::string& engineRo
         io::joinPath(sdk, "luals-" + std::string(lang::pinnedLuaLanguageServerVersion()) + "/bin/" + luaExecutable);
     if (!luaPath)
         return fail(ErrorCode::NotFound, "pinned LuaLS SDK path unavailable");
-    auto lua = lang::findLuaLanguageServer(fs, {.configuredPath = *luaPath});
+    lang::LuaSearch luaSearch;
+    luaSearch.configuredPath = *luaPath;
+    auto lua = lang::findLuaLanguageServer(fs, luaSearch);
     if (!lua)
         return std::unexpected(lua.error());
     lang::LuaServiceOptions luaOptions;

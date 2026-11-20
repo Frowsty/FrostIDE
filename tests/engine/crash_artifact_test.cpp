@@ -82,7 +82,7 @@ TEST(CrashArtifact, AuthenticatedSourceRequiresExactIdentityPidAndSafeMetadata) 
         parseCrashArtifactSource(value, source.instanceId, source.generation, source.projectPath, source.processId));
     for (const auto key : {"instanceId", "generation", "projectPath", "processRole", "rootPath", "sourceId"}) {
         auto broken = value;
-        broken.set(key, "invalid");
+        broken.set(key, std::string_view(key) == "processRole" ? "invalid role" : "invalid");
         EXPECT_FALSE(parseCrashArtifactSource(broken, source.instanceId, source.generation, source.projectPath,
                                               source.processId))
             << key;
@@ -186,19 +186,24 @@ TEST(CrashArtifact, LinksReparseAndMutationDuringReadCannotPublishASnapshot) {
     ASSERT_TRUE(dir);
     auto dump = io::joinPath(*dir, "crash.dmp");
     ASSERT_TRUE(dump);
-    fs.linked = *dump;
+    const auto physicalDump = io::normalizePath(*dump);
+    ASSERT_TRUE(physicalDump);
+    fs.linked = *physicalDump;
     auto linked = (*observer)->poll(fs);
     ASSERT_TRUE(linked);
     EXPECT_FALSE(linked->artifact);
     fs.linked.clear();
+    bool mutated = false;
     fs.onRead = [&](std::string_view path) {
-        if (path == *dump) {
+        if (path == *physicalDump) {
             clock.advance(1ns);
-            static_cast<void>(memory.writeFileAtomic(path, "changed"));
+            ASSERT_TRUE(memory.writeFileAtomic(path, "changed"));
+            mutated = true;
         }
     };
     auto changed = (*observer)->poll(fs);
     ASSERT_TRUE(changed);
+    EXPECT_TRUE(mutated);
     EXPECT_FALSE(changed->artifact);
 }
 TEST(CrashArtifact, MaterializationCopiesImmutableValidatedBytesAndRejectsCacheLinksOrCorruption) {

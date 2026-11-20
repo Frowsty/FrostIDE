@@ -8,7 +8,9 @@ namespace frost::engine {
 namespace {
 SceneMergeRequest request() {
     return {
-        .images = {"Assets/Scenes/A.fscene", R"({"Entities":[]})", R"({"Entities":[]})", R"({"Entities":[]})", true}};
+        .images = {"Assets/Scenes/A.fscene", R"({"Entities":[]})", R"({"Entities":[]})", R"({"Entities":[]})", true},
+        .choices = {},
+        .candidate = {}};
 }
 rpc::Json reply(const SceneMergeRequest& r) {
     return rpc::Json::object()

@@ -30,9 +30,11 @@ Json locations(const BindingDocumentCapture& document, std::uint32_t begin, std:
         Json::object().set("uri", lang::pathToUri(document.path).value()).set("range", range(begin, end)));
 }
 Json rename(const BindingDocumentCapture& document, std::uint32_t begin, std::uint32_t end, std::string text) {
-    return Json::object().set("documentChanges", Json::array().push(Json::object()
-        .set("textDocument", Json::object().set("uri", lang::pathToUri(document.path).value()).set("version", *document.lspVersion))
-        .set("edits", Json::array().push(Json::object().set("range", range(begin, end)).set("newText", std::move(text)))));
+    auto identifier =
+        Json::object().set("uri", lang::pathToUri(document.path).value()).set("version", *document.lspVersion);
+    auto edits = Json::array().push(Json::object().set("range", range(begin, end)).set("newText", std::move(text)));
+    auto change = Json::object().set("textDocument", std::move(identifier)).set("edits", std::move(edits));
+    return Json::object().set("documentChanges", Json::array().push(std::move(change)));
 }
 
 TEST(BindingQueries, EachProviderEncodingMapsToExactCapturedUnicodeBytes) {
