@@ -108,7 +108,7 @@ frost_add_test(app_workbench_tests QT
         workbench_lua_refactoring_test.cpp
     DEPS frost::app frost::build frost::io frost::ui_find
     THIRD_PARTY Qt6::Network)
-target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
+target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src ${FROST_SOURCE_DIR}/src/io/src)
 target_compile_definitions(app_workbench_tests PRIVATE ${_frost_workbench_definitions})
 
 # FEC-13 drives actual Workbench binding navigation/usages/preview widgets against the locked
@@ -158,7 +158,7 @@ frost_add_test(app_engine_session_tests QT
     DEPS frost::app frost::build frost::io frost::ui_find
     THIRD_PARTY Qt6::Network unofficial-sodium::sodium
     LABELS integration)
-target_include_directories(app_engine_session_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
+target_include_directories(app_engine_session_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src ${FROST_SOURCE_DIR}/src/io/src)
 target_compile_definitions(app_engine_session_tests PRIVATE ${_frost_workbench_definitions})
 # Exercise the release floor across independent processes, including a stale reader.
 if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{FROST_SDK}/py/Scripts/python.exe")

@@ -41,6 +41,10 @@ struct RenameProject {
 
 Result<document::RefactoringPlan> Workbench::prepareProjectSourceRename(const std::string& oldPath,
                                                                         const std::string& newPath) {
+    if (lang::locateFrostEngineAsset(m_services.fs, oldPath)) {
+        if (auto recovered = recoverRefactoringJournal(false); !recovered)
+            return std::unexpected(recovered.error());
+    }
     if (m_solution) {
         if (auto allowed = m_solution->requireProjectMutation(); !allowed)
             return std::unexpected(allowed.error());

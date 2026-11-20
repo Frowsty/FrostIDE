@@ -4,8 +4,10 @@
 #include "frost/io/mem_fs.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 
+#include "file_transaction_replace_testing.hpp"
 #include "workbench_rig.hpp"
 #include "workbench_source_rename.hpp"
+#include <QScopeGuard>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -277,6 +279,50 @@ TEST(SourceRenameWorkbench, ExternalLeaseAndFinalAdmissionGateHistoryBeforeAnyIn
     EXPECT_EQ(dir.read("workspace/asset.lua.fmeta"), "stable-handle\n");
     ASSERT_TRUE(rig.workbench->redoRefactoring());
     EXPECT_EQ(settled, (std::vector<bool>{true, false, true}));
+}
+
+TEST(SourceRenameWorkbench, SameProcessResumeRetainsExternalLeaseUntilNativeJournalSettles) {
+    app::test::WorkDir dir("external-asset-resume");
+    dir.write("workspace/Reference.json", "before");
+    app::test::RigOptions options;
+    options.workbench.refactoringStateDirectory = dir.join("private-refactoring");
+    app::test::WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
+    document::RefactoringPlan plan;
+    plan.label = "Engine reference edit";
+    plan.disk.push_back({dir.join("workspace/Reference.json"), "before", "after"});
+    int settled = 0, cancelled = 0;
+    plan.external = std::make_shared<document::RefactoringExternalGuard>();
+    plan.external->settled = [&](bool applied) -> Result<void> {
+        EXPECT_TRUE(applied);
+        EXPECT_EQ(dir.read("workspace/Reference.json"), "after");
+        ++settled;
+        return {};
+    };
+    plan.external->cancelled = [&] { ++cancelled; };
+    bool interrupted = false;
+    io::detail::setReplacementObserver(
+        [](void* data, io::detail::ReplacementBoundary boundary, const io::FileReplacementReceipt& receipt) {
+            if (boundary != io::detail::ReplacementBoundary::OriginalRetired ||
+                !receipt.images.targetPath.ends_with("Reference.json") || *static_cast<bool*>(data))
+                return;
+            *static_cast<bool*>(data) =
+                io::realFileSystem().writeFileAtomic(receipt.images.targetPath, "foreign interruption").has_value();
+        },
+        &interrupted);
+    const auto reset = qScopeGuard([] { io::detail::setReplacementObserver(nullptr, nullptr); });
+    auto pending = rig.workbench->applyRefactoring(plan);
+    ASSERT_TRUE(pending);
+    ASSERT_EQ(pending->status, document::RefactoringStatus::PendingRecovery);
+    EXPECT_EQ(settled, 0);
+    EXPECT_EQ(cancelled, 0);
+    io::detail::setReplacementObserver(nullptr, nullptr);
+    ASSERT_TRUE(io::realFileSystem().removeFile(dir.join("workspace/Reference.json")));
+    auto resumed = rig.workbench->resumeRefactoring();
+    ASSERT_TRUE(resumed);
+    EXPECT_EQ(resumed->status, document::RefactoringStatus::Applied);
+    EXPECT_EQ(settled, 1);
+    EXPECT_EQ(cancelled, 0);
 }
 
 } // namespace

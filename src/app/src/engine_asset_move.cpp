@@ -55,6 +55,56 @@ struct MoveBoundary {
 };
 QString q(std::string_view s) { return QString::fromUtf8(s.data(), static_cast<qsizetype>(s.size())); }
 } // namespace
+Result<void> EngineIntegration::recoverAssetMoveAfterNativeSettlement() {
+    auto& impl = *m_impl;
+    if (!impl.session || !impl.identity || !impl.session->connected())
+        return fail(ErrorCode::NotFound,
+                    "Native journal settled; pair the relevant engine session to reconcile its lease");
+    if (std::ranges::find(impl.identity->availableCommands, "assets.recover-move-plan") ==
+        impl.identity->availableCommands.end())
+        return fail(ErrorCode::NotFound, "This engine does not advertise disconnected asset lease recovery");
+    const auto epoch = impl.epoch, revision = impl.trustRevision, sessionEpoch = impl.sessionEpoch;
+    const auto root = impl.root;
+    const auto identity = *impl.identity;
+    auto* exact = impl.session.get();
+    struct Reply {
+        std::mutex mutex;
+        std::condition_variable ready;
+        std::optional<Result<lang::Json>> value;
+    };
+    auto reply = std::make_shared<Reply>();
+    auto sent = impl.send(
+        "assets.recover-move-plan", lang::Json::object(),
+        [reply](Result<lang::Json> value) {
+            std::scoped_lock lock(reply->mutex);
+            reply->value = std::move(value);
+            reply->ready.notify_one();
+        },
+        true);
+    if (!sent)
+        return std::unexpected(sent.error());
+    std::unique_lock lock(reply->mutex);
+    if (!reply->ready.wait_for(lock, std::chrono::seconds(30), [&] { return reply->value.has_value(); }))
+        return fail(ErrorCode::Timeout, "Native journal settled; engine lease reconciliation reply is unknown");
+    if (!impl.admitted(epoch, root, revision) || impl.sessionEpoch != sessionEpoch || impl.session.get() != exact ||
+        !impl.currentIdentity(identity))
+        return fail(ErrorCode::Cancelled, "Engine source changed while reconciling the settled native journal");
+    auto result = std::move(*reply->value);
+    if (!result)
+        return std::unexpected(result.error());
+    if (result->boolAt("recovered") == false)
+        return {};
+    const auto handle = engine::engineHandleAt(*result, "handle");
+    if (result->boolAt("recovered") != true || result->boolAt("verified") != true ||
+        result->boolAt("refreshed") != true || !result->boolAt("applied") || result->stringAt("lease").empty() ||
+        result->stringAt("receipt").empty() || !handle || !handle->value ||
+        !result->stringAt("path").starts_with("Assets/"))
+        return fail(ErrorCode::Corrupt,
+                    "Native journal settled; engine recovery did not return a complete verified receipt");
+    impl.clearAssetUsages();
+    impl.refreshProjectContent();
+    return {};
+}
 Result<void> EngineIntegration::prepareAssetMove(document::RefactoringPlan& plan, std::string oldPath,
                                                  std::string newPath) {
     auto& impl = *m_impl;

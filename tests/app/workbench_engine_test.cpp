@@ -15,6 +15,7 @@
 
 #include "engine_request_helper.hpp"
 #include "engine_session_peer.hpp"
+#include "file_transaction_replace_testing.hpp"
 #include "workbench_rig.hpp"
 #include <QCheckBox>
 #include <QLabel>
@@ -23,6 +24,7 @@
 #include <QLineEdit>
 #include <QTimer>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QTreeWidget>
 
 #include <algorithm>
@@ -226,6 +228,83 @@ bool runReservationReleased(WorkbenchRig& rig) {
     const auto state = rig.workbench->engineState();
     return state.boolAt("launchReserved") == false && state.unsignedAt("ownedRunId") == 0 &&
            !rig.workbench->runController()->running();
+}
+
+// Labelled socket-peer regression: native restart journal replay is real; the scripted peer
+// supplies the retained disconnected-lease receipt only after observing the full settled state.
+TEST(WorkbenchEngine, ExplicitRestartRecoverySettlesNativeJournalBeforeStrandedLeaseRequest) {
+    WorkDir dir("engine-stranded-native-journal");
+    dir.write("project/Game.frostproj", "{}");
+    dir.write("project/Assets/Old.lua", "return 1\n");
+    dir.write("project/Assets/Old.lua.fmeta", "stable-handle");
+    dir.write("project/Reference.json", "before");
+    auto options = peerOptions(dir);
+    options.workbench.refactoringStateDirectory = dir.join("private-refactoring");
+    bool interrupted = false;
+    {
+        WorkbenchRig first(dir, options);
+        ASSERT_TRUE(first.trust->trust(dir.join("project")));
+        frost::document::RefactoringPlan plan;
+        plan.label = "Asset move interrupted after decision";
+        plan.disk.push_back({dir.join("project/Reference.json"), "before", "after"});
+        plan.renames.push_back({dir.join("project/Assets/Old.lua"), dir.join("project/Assets/New.lua"), "return 1\n"});
+        plan.renames.push_back(
+            {dir.join("project/Assets/Old.lua.fmeta"), dir.join("project/Assets/New.lua.fmeta"), "stable-handle"});
+        frost::io::detail::setReplacementObserver(
+            [](void* data, frost::io::detail::ReplacementBoundary boundary,
+               const frost::io::FileReplacementReceipt& receipt) {
+                if (boundary != frost::io::detail::ReplacementBoundary::OriginalRetired ||
+                    !receipt.images.targetPath.ends_with("Reference.json") || *static_cast<bool*>(data))
+                    return;
+                *static_cast<bool*>(data) = frost::io::realFileSystem()
+                                                .writeFileAtomic(receipt.images.targetPath, "foreign interruption")
+                                                .has_value();
+            },
+            &interrupted);
+        const auto reset = qScopeGuard([] { frost::io::detail::setReplacementObserver(nullptr, nullptr); });
+        auto pending = first.workbench->applyRefactoring(plan);
+        ASSERT_TRUE(pending);
+        ASSERT_EQ(pending->status, frost::document::RefactoringStatus::PendingRecovery);
+        ASSERT_TRUE(interrupted);
+    }
+    EngineSessionPeer peer(dir.join("project"));
+    advertise(dir, peer);
+    peer.hold("assets.recover-move-plan");
+    WorkbenchRig restarted(dir, options);
+    ASSERT_TRUE(openTrusted(restarted, dir.join("project")));
+    ASSERT_TRUE(pairPeer(restarted, peer));
+    auto blocked = restarted.workbench->recoverRefactoringJournal();
+    ASSERT_FALSE(blocked);
+    EXPECT_TRUE(restarted.workbench->refactoringPending());
+    EXPECT_TRUE(peer.requests("assets.recover-move-plan").empty());
+    // The fixture owns the explicit foreign obstruction. Recovery never guesses it is safe to erase.
+    ASSERT_TRUE(frost::io::realFileSystem().removeFile(dir.join("project/Reference.json")));
+    std::atomic<bool> sawCompleteImages{false};
+    std::jthread oracle([&] {
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (peer.requests("assets.recover-move-plan").empty() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(5ms);
+        sawCompleteImages =
+            dir.read("project/Reference.json") == "after" && dir.read("project/Assets/New.lua") == "return 1\n" &&
+            dir.read("project/Assets/New.lua.fmeta") == "stable-handle" &&
+            !frost::io::realFileSystem().exists(dir.join("project/Assets/Old.lua")).value_or(true) &&
+            !frost::io::realFileSystem().exists(dir.join("project/Assets/Old.lua.fmeta")).value_or(true);
+        peer.release("assets.recover-move-plan", Json::object()
+                                                     .set("recovered", true)
+                                                     .set("verified", true)
+                                                     .set("refreshed", true)
+                                                     .set("applied", true)
+                                                     .set("lease", "stranded-lease")
+                                                     .set("receipt", "retained-receipt")
+                                                     .set("handle", 18446744073709551615ULL)
+                                                     .set("path", "Assets/New.lua"));
+    });
+    auto recovered = restarted.workbench->recoverRefactoringJournal();
+    oracle.join();
+    ASSERT_TRUE(recovered) << (recovered ? "" : recovered.error().describe());
+    EXPECT_TRUE(sawCompleteImages.load());
+    EXPECT_FALSE(restarted.workbench->refactoringPending());
+    EXPECT_EQ(peer.requests("assets.recover-move-plan").size(), 1);
 }
 
 TEST(WorkbenchEngine, ManagedSelectionRechecksSharedOwnerBeforePreparation) {

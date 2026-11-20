@@ -63,6 +63,7 @@ public:
                                                        std::function<void(Result<lang::Json>)> completed);
     [[nodiscard]] Result<void> findAssetUsagesForDocument(std::string_view absolutePath, bool reveal = true);
     void invalidateAssetUsages();
+    [[nodiscard]] Result<void> recoverAssetMoveAfterNativeSettlement();
     // GUI-only authenticated preparation; bounded nonpumping reply waits and modal preview. No disk effects.
     // Exact lease and reversible receipt remain tied to the original session and project trust.
     [[nodiscard]] Result<void> prepareAssetMove(document::RefactoringPlan& plan, std::string oldPath,

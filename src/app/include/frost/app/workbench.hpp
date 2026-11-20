@@ -645,6 +645,9 @@ public:
     [[nodiscard]] Result<document::RefactoringOutcome> undoRefactoring();
     [[nodiscard]] Result<document::RefactoringOutcome> redoRefactoring();
     [[nodiscard]] Result<document::RefactoringOutcome> resumeRefactoring();
+    // Explicit restart recovery: replay only owned native decisions, then verify a stranded
+    // engine lease against actual full images. Never creates a new asset move decision.
+    [[nodiscard]] Result<void> recoverRefactoringJournal(bool explicitRequest = true);
     [[nodiscard]] bool canUndoRefactoring() const noexcept;
     [[nodiscard]] bool canRedoRefactoring() const noexcept;
     [[nodiscard]] bool refactoringPending() const noexcept;
@@ -804,6 +807,7 @@ private:
     void registerActions();
     void registerEditorExtrasActions();
     void registerRefactoringActions();
+    [[nodiscard]] Result<void> ensureRefactoringCoordinator(const std::string& target);
     void registerCppRefactoringActions();
     void registerCppIndexActions();
     void showCppIndex(std::string operation, std::string symbol = {});

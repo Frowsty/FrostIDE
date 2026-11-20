@@ -106,3 +106,16 @@ the Assets directory itself) are refused until native directory transactions exi
 implementation boundaries; the ordinary paired GUI acceptance journey has not run. Parser and
 native external-guard history regression sources are authored; paired-engine/platform executions
 remain deferred by the user override.
+
+The explicit **Recover Refactoring Journal and Engine Lease** action is available after opening
+and trusting a project, even when no in-memory refactoring coordinator exists. It initializes
+the owned native recovery store and replays/resumes only existing durable decisions. Native
+PendingRecovery blocks engine reconciliation. After complete native settlement it requests the
+actual `assets.recover-move-plan {}` observation: `{recovered:false}` means the engine has no
+stranded disconnected lease; `recovered:true` requires the complete verified/refreshed retained
+receipt with exact unsigned handle/path. A mixed state remains an explicit error with its lock
+held. Ordinary engine Rename/Move preflights this same owned-journal boundary before obtaining a
+new engine lease. No engine expected bytes or new filesystem write plan are supplied by recovery.
+Authored regressions cover native same-process Resume and a real native interrupted journal
+restart coupled to a labelled authenticated socket peer whose recovery reply follows complete
+native file/metadata images. These sources have not executed.

@@ -8,6 +8,7 @@
 #include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 
+#include "engine_integration.hpp"
 #include <QScopeGuard>
 #include <QStandardPaths>
 
@@ -19,52 +20,10 @@ namespace {
 QString display(std::string_view text) { return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size())); }
 } // namespace
 
-Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document::RefactoringPlan& plan) {
-    if (m_refactoringExecuting)
-        return fail(ErrorCode::Busy, "A refactoring boundary is already executing");
-    m_refactoringExecuting = true;
-    const auto executing = qScopeGuard([this] { m_refactoringExecuting = false; });
-    if (m_shutDown) {
+Result<void> Workbench::ensureRefactoringCoordinator(const std::string& target) {
+    if (m_shutDown)
         return fail(ErrorCode::Cancelled, "The workbench is shutting down");
-    }
-    // A refactoring can edit files only in trusted projects. Producer snapshots/dependencies are
-    // rechecked by the coordinator; trust is rechecked here at the mutation boundary.
-    const auto trusted = [this](std::string_view path) { return m_services.trust.isTrusted(path); };
-    for (const auto& edit : plan.disk)
-        if (!trusted(edit.path))
-            return fail(ErrorCode::Untrusted, "Trust the project before refactoring: " + edit.path);
-    for (const auto& edit : plan.buffers)
-        if (!trusted(edit.path))
-            return fail(ErrorCode::Untrusted, "Trust the project before refactoring: " + edit.path);
-    for (const auto& move : plan.renames)
-        if (!trusted(move.from) || !trusted(move.to))
-            return fail(ErrorCode::Untrusted, "Trust both paths before renaming: " + move.from);
-    for (const auto& creation : plan.creates)
-        if (!trusted(creation.path))
-            return fail(ErrorCode::Untrusted, "Trust the project before creating: " + creation.path);
-    std::vector<std::string> mutationPaths;
-    for (const auto& edit : plan.disk)
-        mutationPaths.push_back(edit.path);
-    for (const auto& edit : plan.buffers)
-        mutationPaths.push_back(edit.path);
-    for (const auto& move : plan.renames) {
-        mutationPaths.push_back(move.from);
-        mutationPaths.push_back(move.to);
-    }
-    for (const auto& creation : plan.creates)
-        mutationPaths.push_back(creation.path);
     if (!m_refactoring) {
-        std::string target;
-        if (!plan.disk.empty())
-            target = plan.disk.front().path;
-        else if (!plan.buffers.empty())
-            target = plan.buffers.front().path;
-        else if (!plan.renames.empty())
-            target = plan.renames.front().from;
-        else if (!plan.creates.empty())
-            target = plan.creates.front().path;
-        else
-            return fail(ErrorCode::InvalidArgument, "The refactoring contains no changes");
         std::string preferred = m_options.refactoringStateDirectory;
         if (preferred.empty()) {
             const auto data = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
@@ -119,6 +78,56 @@ Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document:
             publishRefactoringOutcome(outcome);
         m_pendingRefactoring = m_refactoring->pendingToken();
     }
+    return {};
+}
+
+Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document::RefactoringPlan& plan) {
+    if (m_refactoringExecuting)
+        return fail(ErrorCode::Busy, "A refactoring boundary is already executing");
+    m_refactoringExecuting = true;
+    const auto executing = qScopeGuard([this] { m_refactoringExecuting = false; });
+    if (m_shutDown) {
+        return fail(ErrorCode::Cancelled, "The workbench is shutting down");
+    }
+    // A refactoring can edit files only in trusted projects. Producer snapshots/dependencies are
+    // rechecked by the coordinator; trust is rechecked here at the mutation boundary.
+    const auto trusted = [this](std::string_view path) { return m_services.trust.isTrusted(path); };
+    for (const auto& edit : plan.disk)
+        if (!trusted(edit.path))
+            return fail(ErrorCode::Untrusted, "Trust the project before refactoring: " + edit.path);
+    for (const auto& edit : plan.buffers)
+        if (!trusted(edit.path))
+            return fail(ErrorCode::Untrusted, "Trust the project before refactoring: " + edit.path);
+    for (const auto& move : plan.renames)
+        if (!trusted(move.from) || !trusted(move.to))
+            return fail(ErrorCode::Untrusted, "Trust both paths before renaming: " + move.from);
+    for (const auto& creation : plan.creates)
+        if (!trusted(creation.path))
+            return fail(ErrorCode::Untrusted, "Trust the project before creating: " + creation.path);
+    std::vector<std::string> mutationPaths;
+    for (const auto& edit : plan.disk)
+        mutationPaths.push_back(edit.path);
+    for (const auto& edit : plan.buffers)
+        mutationPaths.push_back(edit.path);
+    for (const auto& move : plan.renames) {
+        mutationPaths.push_back(move.from);
+        mutationPaths.push_back(move.to);
+    }
+    for (const auto& creation : plan.creates)
+        mutationPaths.push_back(creation.path);
+    std::string target;
+    if (!plan.disk.empty())
+        target = plan.disk.front().path;
+    else if (!plan.buffers.empty())
+        target = plan.buffers.front().path;
+    else if (!plan.renames.empty())
+        target = plan.renames.front().from;
+    else if (!plan.creates.empty())
+        target = plan.creates.front().path;
+    else
+        return fail(ErrorCode::InvalidArgument, "The refactoring contains no changes");
+    if (auto ready = ensureRefactoringCoordinator(target); !ready)
+        return std::unexpected(ready.error());
     if (m_refactoring->pending())
         return fail(ErrorCode::Busy, "Finish the pending refactoring with Resume Refactoring before starting another");
     auto admittedPlan = plan;
@@ -251,10 +260,58 @@ Result<document::RefactoringOutcome> Workbench::resumeRefactoring() {
     return outcome;
 }
 
+Result<void> Workbench::recoverRefactoringJournal(bool explicitRequest) {
+    if (m_refactoringExecuting)
+        return fail(ErrorCode::Busy, "A refactoring boundary is already executing");
+    if (m_projectRoot.empty() || !m_services.trust.isTrusted(m_projectRoot))
+        return fail(ErrorCode::Untrusted, "Open and trust the project before recovering its refactoring journal");
+    m_refactoringExecuting = true;
+    const auto executing = qScopeGuard([this] { m_refactoringExecuting = false; });
+    auto target = io::joinPath(m_projectRoot, ".frost-refactoring-recovery-volume");
+    if (!target)
+        return std::unexpected(target.error());
+    if (auto ready = ensureRefactoringCoordinator(*target); !ready)
+        return ready;
+    while (m_refactoring->pending()) {
+        auto outcome = m_refactoring->resume(m_refactoring->pendingToken());
+        if (!outcome)
+            return std::unexpected(outcome.error());
+        publishRefactoringOutcome(*outcome);
+        if (outcome->status == document::RefactoringStatus::PendingRecovery)
+            return fail(ErrorCode::Busy,
+                        "Native journal settlement remains incomplete; engine lease recovery was not requested");
+    }
+    // Only the owned native journal is authority for replay. Engine recovery merely verifies
+    // its retained complete pre/post image after native settlement, never client-supplied bytes.
+    if (m_engine) {
+        auto recovered = m_engine->recoverAssetMoveAfterNativeSettlement();
+        if (!recovered && explicitRequest)
+            return recovered;
+        if (!recovered && recovered.error().code() != ErrorCode::NotFound)
+            return recovered;
+    }
+    return {};
+}
+
 void Workbench::registerRefactoringActions() {
     registerCppRefactoringActions();
     registerLuaRefactoringActions();
     registerCppIndexActions();
+    input::ActionSpec recover;
+    recover.id = "refactor.recoverJournal";
+    recover.name = "Recover Refactoring Journal and Engine Lease";
+    recover.group = "Refactor";
+    recover.context.none = input::ContextKeys{input::ContextKey::DialogFocus};
+    recover.enabled = [this](const input::ActionContext&) {
+        return !m_shutDown && !m_projectRoot.empty() && !m_refactoringExecuting;
+    };
+    recover.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
+        if (auto result = recoverRefactoringJournal(); !result)
+            notify(QStringLiteral("Refactoring recovery requires attention"), display(result.error().message()),
+                   ui::NotificationKind::Warning);
+    };
+    if (auto added = m_registry.add(std::move(recover)); !added)
+        log::warn("refactoring", "recovery action registration: {}", added.error().describe());
     for (const bool redo : {false, true}) {
         input::ActionSpec spec;
         spec.id = redo ? "editor.redo" : "editor.undo";
