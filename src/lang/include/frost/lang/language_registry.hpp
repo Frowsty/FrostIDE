@@ -4,6 +4,8 @@
 #include "frost/io/file_system.hpp"
 #include "frost/lang/lua_service.hpp"
 #include "frost/project/trust_store.hpp"
+
+#include <atomic>
 namespace frost::lang {
 struct LanguageServerArtifact {
     std::string path, sha256;
@@ -40,6 +42,7 @@ public:
     RegistryProcessLauncher(io::IProcessLauncher& launcher, io::IFileSystem& fs, project::TrustStore& trust,
                             LanguageServerDefinition definition, std::string root, std::uint64_t revision,
                             std::string physicalRoot);
+    void revoke() noexcept { m_active.store(false); }
     [[nodiscard]] Result<void> admitWorkspace() const;
     [[nodiscard]] Result<void> admitDocument(std::string_view path) const;
     [[nodiscard]] Result<void> admitEdit(const Json& workspaceEdit) const;
@@ -55,6 +58,7 @@ private:
     LanguageServerDefinition m_definition;
     std::string m_root, m_physicalRoot;
     std::uint64_t m_revision;
+    std::atomic<bool> m_active{true};
 };
 // Retained requester boundary: each request/reply and incoming applyEdit rechecks the captured
 // workspace identity/trust. Documents outside that physical workspace never reach this server.

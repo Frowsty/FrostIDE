@@ -10,6 +10,7 @@
 #include "frost/ui/lang/editor_insight_binding.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 
+#include "extension_integration.hpp"
 #include "language_bridge.hpp"
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -56,6 +57,7 @@ void LanguageRegistryIntegration::retire() {
     ++m_generation;
     m_workbench.m_bridge->setRegisteredServers({});
     for (auto& [id, entry] : m_entries) {
+        entry->launcher->revoke();
         entry->service->diagnostics().removeListener(entry->listener);
         m_retired.push_back(m_workbench.m_pool->spawn(sched::Lane::Background, Entry::stop(entry)));
     }
@@ -89,7 +91,13 @@ void LanguageRegistryIntegration::poll() {
         return true;
     });
     const auto root = m_workbench.m_projectRoot;
-    const auto manifest = m_workbench.m_services.settings.snapshot()->get(settings::key::languageServerRegistry);
+    auto manifest = m_workbench.m_services.settings.snapshot()->get(settings::key::languageServerRegistry);
+    if (m_workbench.m_extensions) {
+        m_workbench.m_extensions->poll();
+        auto combined = m_workbench.m_extensions->composeLanguageRegistry(manifest);
+        manifest =
+            combined ? std::move(*combined) : std::string("invalid extension registry: ") + combined.error().message();
+    }
     const auto trust = m_workbench.m_services.trust.snapshot(root);
     const auto physicalNow =
         root.empty() ? Result<std::string>(std::string{}) : m_workbench.m_services.fs.physicalPath(root);
@@ -212,6 +220,26 @@ std::shared_ptr<lang::LuaService> LanguageRegistryIntegration::service(std::stri
     if (found == m_entries.end() || !found->second->launcher->admitDocument(path))
         return {};
     return found->second->service;
+}
+namespace {
+sched::Task<Result<lang::Json>> commandFailure(Error error) { co_return std::unexpected(std::move(error)); }
+} // namespace
+sched::Task<Result<lang::Json>> LanguageRegistryIntegration::executeCommand(std::string path, std::string serverId,
+                                                                            std::string command, lang::Json arguments,
+                                                                            std::stop_token stop) {
+    poll();
+    auto selected = service(path);
+    if (!selected || !m_registry)
+        return commandFailure(Error{ErrorCode::PermissionDenied, "No admitted language provider for this document"});
+    const auto* definition = m_registry->forPath(path);
+    const auto entry = definition ? m_entries.find(definition->id) : m_entries.end();
+    const auto capabilities = selected->capabilities();
+    if (!definition || definition->id != serverId || entry == m_entries.end() || !capabilities ||
+        !lang::extensionCommandAdvertised(*capabilities, command))
+        return commandFailure(Error{ErrorCode::Unsupported, "The active provider did not advertise this command"});
+    return entry->second->requester->request(
+        "workspace/executeCommand",
+        lang::Json::object().set("command", std::move(command)).set("arguments", std::move(arguments)), stop);
 }
 void LanguageRegistryIntegration::sync(DocumentEditorView& view) {
     auto server = service(view.path());

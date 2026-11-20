@@ -107,6 +107,7 @@ frost_add_test(app_workbench_tests QT
             scene_merge_dialog_test.cpp
             source_rename_plan_test.cpp
             language_registry_integration_test.cpp
+            extension_integration_test.cpp
         workbench_templates_test.cpp
         workbench_lua_refactoring_test.cpp
         workbench_structural_search_test.cpp

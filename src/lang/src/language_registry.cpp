@@ -194,6 +194,8 @@ RegistryProcessLauncher::RegistryProcessLauncher(io::IProcessLauncher& launcher,
     : m_launcher(launcher), m_fs(fs), m_trust(trust), m_definition(std::move(definition)), m_root(std::move(root)),
       m_physicalRoot(std::move(physicalRoot)), m_revision(revision) {}
 Result<void> RegistryProcessLauncher::admitWorkspace() const {
+    if (!m_active.load())
+        return fail(ErrorCode::Cancelled, "Registered tool contribution was revoked");
     const auto trust = m_trust.snapshot(m_root);
     auto physical = m_fs.physicalPath(m_root);
     if (!trust.trusted || trust.revision != m_revision || !physical ||
@@ -226,6 +228,8 @@ Result<void> RegistryProcessLauncher::admitEdit(const Json& edit) const {
     return {};
 }
 Result<void> RegistryProcessLauncher::admit(const io::ProcessSpec& spec) {
+    if (auto allowed = admitWorkspace(); !allowed)
+        return allowed;
     auto trust = m_trust.snapshot(m_root);
     auto physical = m_fs.physicalPath(m_root);
     if (!trust.trusted || trust.revision != m_revision || !physical ||
@@ -242,7 +246,7 @@ Result<void> RegistryProcessLauncher::admit(const io::ProcessSpec& spec) {
     if (!trust.trusted || trust.revision != m_revision || !physical ||
         documentKey(*physical) != documentKey(m_physicalRoot))
         return fail(ErrorCode::Untrusted, "Workspace trust changed while verifying language server pins");
-    return {};
+    return admitWorkspace();
 }
 Result<std::unique_ptr<io::IProcess>> RegistryProcessLauncher::launch(const io::ProcessSpec& spec) {
     if (auto allowed = admit(spec); !allowed)

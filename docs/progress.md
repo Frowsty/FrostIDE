@@ -60,10 +60,15 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R19 UX-20 public extension contribution API
+
+- Added bounded versioned capability-declared data contributions for existing governed language servers, actual advertised provider commands and explicit pinned local stdio DAP launch. Added import/review, command and debug palette actions plus public Workbench entry points. No installer or in-process extension code.
+- Captured/rechecked trust revision, physical workspace and exact saved source for DAP; removing/changing contributions cancels observations and retires owned services/sessions. Added pure contract, retained-authority revocation and product refusal/persistence fixtures. ADR0121 records API shape and explicit limits. Independent source review requested; no build/test/feature execution.
+
 ## 2026-11-20: R19 LTR-18 real grammar source recipes
 
 - Audited actual official generated grammar sources for Python, JavaScript/JSX, TypeScript/TSX, YAML, TOML and PowerShell. Added exact commit/archive/member hashes, original MIT evidence, future-configure source-only CMake recipes, actual language/query routing and offline license/SBOM governance. Existing all-language checks gain real profiles and representative samples; dedicated parse/query and license-negative regressions are authored.
-- ADR0119 records provenance, the parent-authorized source audit and no-generator/no-upstream-build policy. Independent Astra source review is requested. No configure/build, tests, feature/parser execution, installation, source generation, WSL or pushes occurred. Next: source review corrections, then governed public extension and real DAP onboarding contributions.
+- ADR0119 records provenance, the parent-authorized source audit and no-generator/no-upstream-build policy. Astra source review cleared 575333a1. No configure/build, tests, feature/parser execution, installation, source generation, WSL or pushes occurred. Next: source review corrections, then governed public extension and real DAP onboarding contributions.
 
 ## 2026-11-20: R19 explicit remote toolchains source freeze
 

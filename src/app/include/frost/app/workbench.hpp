@@ -187,6 +187,7 @@ struct ManagedSourceSnapshot;
 
 class LanguageBridge;
 class LanguageRegistryIntegration;
+class ExtensionIntegration;
 class CMakeIntegration;
 class StandaloneBuildBackend;
 class UnrealBuildBackend;
@@ -791,6 +792,10 @@ public:
     // Application-only local onboarding. Validates manifest without launching during parsing.
     [[nodiscard]] Result<void> setLanguageServerRegistry(std::string manifest);
     [[nodiscard]] lang::Json languageServerRegistryState() const;
+    [[nodiscard]] Result<void> setExtensionCatalog(std::string manifest);
+    [[nodiscard]] lang::Json extensionCatalogState() const;
+    [[nodiscard]] Result<void> debugWithExtension(std::string contributionId);
+    [[nodiscard]] Result<void> executeExtensionCommand(std::string contributionId);
     // WorkbenchOptions::metadataCacheDirectory, as the language features got it.
     [[nodiscard]] const std::string& metadataCacheDirectory() const noexcept {
         return m_options.metadataCacheDirectory;
@@ -835,6 +840,7 @@ private:
     bool confirmSourceTemplatePlan(const document::RefactoringPlan&);
     friend class LanguageBridge;
     friend class LanguageRegistryIntegration;
+    friend class ExtensionIntegration;
     friend class EngineIntegration;
     friend class EngineBindingIntegration;
     [[nodiscard]] bool canStartLuaDebug() const;
@@ -1297,6 +1303,7 @@ private:
     sched::LatestWins m_searchSymbolsSlot;
     std::unique_ptr<LanguageBridge> m_bridge;
     std::unique_ptr<LanguageRegistryIntegration> m_registeredLanguages;
+    std::unique_ptr<ExtensionIntegration> m_extensions;
     std::unique_ptr<ui::lang::LanguageController> m_language;
     // Text the user typed into the current editor during this key press (for textTyped).
     std::string m_typed;

@@ -53,6 +53,7 @@
 #include "engine_mixed_launch.hpp"
 #include "engine_run_debug.hpp"
 #include "engine_unit_tests_window.hpp"
+#include "extension_integration.hpp"
 #include "git_clone.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
@@ -262,6 +263,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
         log::warn(kLog, "language actions: {}", registered.error().describe());
     }
 
+    m_extensions = std::make_unique<ExtensionIntegration>(*this);
     m_registeredLanguages = std::make_unique<LanguageRegistryIntegration>(*this);
 
     m_luaTrustWatch.setParent(this);
@@ -1010,6 +1012,8 @@ void Workbench::shutdown() {
     if (auto closed = m_documents->closeJournal(); !closed) {
         log::warn(kLog, "hot-exit journal: {}", closed.error().describe());
     }
+    if (m_extensions)
+        m_extensions->shutdown();
     if (m_registeredLanguages)
         m_registeredLanguages->shutdown();
     stopLua();

@@ -121,6 +121,32 @@ TEST(LanguageRegistry, LaunchRefusesChangedPinsRevokedThenRegrantedTrustAndUnrev
     EXPECT_FALSE(guarded.launch(spec));
     EXPECT_EQ(actual.launches().size(), 1);
 }
+TEST(LanguageRegistry, RemovedContributionRevokesRetainedLaunchAuthorityWithoutTrustChange) {
+    io::MemFs fs(systemClock());
+    ASSERT_TRUE(fs.createDirectories(root() + "/workspace"));
+    ASSERT_TRUE(fs.writeFileAtomic(root() + "/workspace/local.py", "value=1"));
+    ASSERT_TRUE(fs.writeFileAtomic(root() + "/server", "binary"));
+    ASSERT_TRUE(fs.writeFileAtomic(root() + "/LICENSE", "license evidence"));
+    auto trust = project::TrustStore::open(fs, root() + "/trust.txt");
+    ASSERT_TRUE(trust);
+    ASSERT_TRUE((*trust)->trust(root() + "/workspace"));
+    auto registry = LanguageServerRegistry::parse(manifest(definition()));
+    ASSERT_TRUE(registry);
+    auto physical = fs.physicalPath(root() + "/workspace");
+    ASSERT_TRUE(physical);
+    io::ScriptedProcessLauncher actual;
+    RegistryProcessLauncher guarded(actual, fs, **trust, registry->definitions().front(), root() + "/workspace",
+                                    (*trust)->snapshot(root() + "/workspace").revision, *physical);
+    ASSERT_TRUE(guarded.admitDocument(root() + "/workspace/local.py"));
+    guarded.revoke();
+    EXPECT_FALSE(guarded.admitDocument(root() + "/workspace/local.py"));
+    io::ProcessSpec spec;
+    spec.executable = root() + "/server";
+    spec.arguments = {"--stdio"};
+    spec.workingDirectory = root() + "/workspace";
+    EXPECT_FALSE(guarded.launch(spec));
+    EXPECT_TRUE(actual.launches().empty());
+}
 TEST(LanguageRegistry, RequestBoundaryRejectsExternalDocumentsAndRevokedDelayedTasksBeforeServerAccess) {
     io::MemFs fs(systemClock());
     ASSERT_TRUE(fs.createDirectories(root() + "/workspace"));

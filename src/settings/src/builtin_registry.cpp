@@ -57,6 +57,11 @@ struct Entry {
     const ScopeMask projectToo = kAllFileScopes;
     const ScopeMask editorConfig = kAllScopesWithEditorConfig;
     return {
+        {"extensions.catalog", "Public extension contributions",
+         "API v1 capability-declared local language servers, debug adapters and advertised server commands. "
+         "Application-only; no installs or in-process plugin code.",
+         "Languages/Extensions", stringSchema(1024 * 1024), text("{\"apiVersion\":1,\"extensions\":[]}"),
+         kApplicationOnly, true},
         {"languages.serverRegistry", "Local language server registry",
          "Version 1 manifest for locally installed, SHA256-pinned and license-reviewed stdio language servers. "
          "Configure Language Servers opens the onboarding editor. Project settings cannot supply servers.",
