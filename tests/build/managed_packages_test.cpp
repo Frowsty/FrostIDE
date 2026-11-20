@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/build/managed_packages.hpp"
+#include "frost/io/mem_fs.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/project/trust_store.hpp"
 
@@ -50,4 +51,17 @@ EXPECT_TRUE(installed->packages[1].transitive);
 EXPECT_NE(installed->packages[1].status.find("High"), std::string::npos);
 EXPECT_FALSE(parseManagedPackageReport(R"({"projects":[]})", PackageQuery::Installed));
 }
+}
+TEST(ManagedPackages, InputSnapshotsEnforcePerFileBudgetBeforeParsingAndHonorCancellation) {
+    test::MemTree tree;
+    tree.write("large.props", std::string(4 * 1024 * 1024 + 1, 'x'));
+    const auto snapshots = snapshotManagedPackageInputs(tree.fs, {test::MemTree::path("large.props")});
+    ASSERT_FALSE(snapshots);
+    EXPECT_EQ(snapshots.error().code(), ErrorCode::OutOfRange);
+    std::stop_source stop;
+    stop.request_stop();
+    const auto cancelled =
+        snapshotManagedPackageInputs(tree.fs, {test::MemTree::path("missing.props")}, stop.get_token());
+    ASSERT_FALSE(cancelled);
+    EXPECT_EQ(cancelled.error().code(), ErrorCode::Cancelled);
 }

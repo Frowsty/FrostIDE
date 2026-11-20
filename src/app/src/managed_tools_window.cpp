@@ -535,37 +535,60 @@ private:
                     error("Adapter discovery completed. No test results have been inferred.");
                     return;
                 }
-                auto bytes = m_context.fs->readFile((report + "/results.trx").toStdString());
-                reportOwner->remove();
-                if (!bytes) {
-                    error("The test process produced no TRX report; inspect tool output (MTP requires its TRX "
-                          "extension).");
-                    return;
-                }
-                auto results = run::parseDotnetTrx(*bytes);
-                if (!results) {
-                    error(results.error().message());
-                    return;
-                }
-                m_results = std::move(*results);
-                m_failed.clear();
-                m_table->setRowCount(0);
-                for (const auto& item : m_results) {
-                    const int row = m_table->rowCount();
-                    m_table->insertRow(row);
-                    auto* name = new QTableWidgetItem(q(item.result.name));
-                    name->setData(Qt::UserRole, q(item.fullyQualifiedName));
-                    m_table->setItem(row, 0, name);
-                    m_table->setItem(row, 1, new QTableWidgetItem(q(run::toString(item.result.outcome))));
-                    m_table->setItem(row, 2, new QTableWidgetItem(q(run::formatTestDuration(item.result.duration))));
-                    if (run::countsAsFailure(item.result.outcome) && !item.fullyQualifiedName.empty())
-                        m_failed.push_back(item.fullyQualifiedName);
-                }
-                error(exit.success
-                          ? "Test process completed; displayed outcomes come from TRX."
-                          : "Test process exited with failure; displayed outcomes come from its real TRX report.");
+                readReport(report, reportOwner, exit.success);
             });
         });
+    }
+    void readReport(const QString& report, std::shared_ptr<QTemporaryDir> reportOwner, bool success) {
+        m_preparing = true;
+        m_stop->setEnabled(true);
+        QPointer<ManagedToolsWidget> self(this);
+        auto* fs = m_context.fs;
+        m_snapshot =
+            std::jthread([self, fs, report, reportOwner = std::move(reportOwner), success](std::stop_token stop) {
+                auto result = [&]() -> Result<std::vector<run::DotnetTestResult>> {
+                    if (stop.stop_requested())
+                        return fail(ErrorCode::Cancelled, "Test report parsing cancelled");
+                    auto parsed = run::readDotnetTrxReport(*fs, (report + "/results.trx").toStdString());
+                    if (stop.stop_requested())
+                        return fail(ErrorCode::Cancelled, "Test report parsing cancelled");
+                    return parsed;
+                }();
+                reportOwner->remove();
+                if (self)
+                    QMetaObject::invokeMethod(self.data(), [self, result = std::move(result), success]() mutable {
+                        if (!self)
+                            return;
+                        self->m_preparing = false;
+                        if (!self->current() || self->m_snapshot.get_stop_token().stop_requested()) {
+                            self->error("Discarded stale or cancelled test report");
+                            return;
+                        }
+                        if (!result) {
+                            self->error(result.error().message());
+                            return;
+                        }
+                        self->publishReport(std::move(*result), success);
+                    });
+            });
+    }
+    void publishReport(std::vector<run::DotnetTestResult> results, bool success) {
+        m_results = std::move(results);
+        m_failed.clear();
+        m_table->setRowCount(0);
+        for (const auto& item : m_results) {
+            const int row = m_table->rowCount();
+            m_table->insertRow(row);
+            auto* name = new QTableWidgetItem(q(item.result.name));
+            name->setData(Qt::UserRole, q(item.fullyQualifiedName));
+            m_table->setItem(row, 0, name);
+            m_table->setItem(row, 1, new QTableWidgetItem(q(run::toString(item.result.outcome))));
+            m_table->setItem(row, 2, new QTableWidgetItem(q(run::formatTestDuration(item.result.duration))));
+            if (run::countsAsFailure(item.result.outcome) && !item.fullyQualifiedName.empty())
+                m_failed.push_back(item.fullyQualifiedName);
+        }
+        error(success ? "Test process completed; displayed outcomes come from TRX."
+                      : "Test process exited with failure; displayed outcomes come from its real TRX report.");
     }
     void snapshotDependencies(std::set<std::string> paths,
                               std::function<void(Result<std::vector<document::ReadDependency>>)> done) {
@@ -581,19 +604,13 @@ private:
         m_snapshot =
             std::jthread([self, fs, paths = std::move(paths), done = std::move(done)](std::stop_token stop) mutable {
                 auto result = [&]() -> Result<std::vector<document::ReadDependency>> {
+                    auto captured = build::snapshotManagedPackageInputs(
+                        *fs, std::vector<std::string>(paths.begin(), paths.end()), stop);
+                    if (!captured)
+                        return std::unexpected(captured.error());
                     std::vector<document::ReadDependency> dependencies;
-                    size_t bytes = 0;
-                    for (const auto& path : paths) {
-                        if (stop.stop_requested())
-                            return fail(ErrorCode::Cancelled, "MSBuild dependency capture cancelled");
-                        auto contents = fs->readFile(path);
-                        if (!contents)
-                            return std::unexpected(contents.error());
-                        if (contents->size() > 4 * 1024 * 1024 || bytes + contents->size() > 32 * 1024 * 1024)
-                            return fail(ErrorCode::OutOfRange, "MSBuild import snapshot budget exceeded");
-                        bytes += contents->size();
-                        dependencies.push_back({path, *contents, false});
-                    }
+                    for (auto& input : *captured)
+                        dependencies.push_back({std::move(input.path), std::move(input.bytes), false});
                     return dependencies;
                 }();
                 if (self)

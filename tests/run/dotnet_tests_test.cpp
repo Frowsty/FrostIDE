@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
 #include "frost/run/dotnet_tests.hpp"
 
@@ -51,5 +52,36 @@ TEST(DotnetTests, CommandsOwnOneFrameworkAndRejectFilterInjection) {
     EXPECT_FALSE(dotnetTestSpec(request));
     request.selected.clear();
     ASSERT_TRUE(dotnetTestSpec(request));
+}
+TEST(DotnetTests, MalformedOrDuplicateDefinitionsNeverCreateMethodSelectionAuthority) {
+    const auto report = [](std::string definitions) {
+        return "<TestRun><Results><UnitTestResult testId=\"id\" executionId=\"exec\" testName=\"Display\" "
+               "outcome=\"Passed\"/></Results><TestDefinitions>" +
+               definitions + "</TestDefinitions><ResultSummary outcome=\"Completed\"/></TestRun>";
+    };
+    for (const auto* definition :
+         {"<UnitTest id=\"id\"><TestMethod name=\"Pass\"/></UnitTest>",
+          "<UnitTest id=\"id\"><TestMethod className=\"Suite\"/></UnitTest>",
+          "<UnitTest><TestMethod className=\"Suite\" name=\"Pass\"/></UnitTest>",
+          "<UnitTest id=\"id\"><TestMethod className=\"Suite\" name=\"Pass\"/></UnitTest><UnitTest "
+          "id=\"id\"><TestMethod className=\"Other\" name=\"Wrong\"/></UnitTest>"})
+        EXPECT_FALSE(parseDotnetTrx(report(definition)));
+    const auto unknown = parseDotnetTrx(report(""));
+    ASSERT_TRUE(unknown);
+    ASSERT_EQ(unknown->size(), 1u);
+    EXPECT_TRUE(unknown->front().fullyQualifiedName.empty());
+    const auto noMethod = parseDotnetTrx(report("<UnitTest id=\"id\"/>"));
+    ASSERT_TRUE(noMethod);
+    EXPECT_TRUE(noMethod->front().fullyQualifiedName.empty());
+}
+TEST(DotnetTests, OversizedReportIsRefusedByTheBoundedFilesystemBoundary) {
+    io::MemFs fs{systemClock()};
+    const auto root = io::kNativePathStyle == io::PathStyle::Windows ? std::string("C:/bounded-report")
+                                                                     : std::string("/bounded-report");
+    ASSERT_TRUE(fs.createDirectories(root));
+    ASSERT_TRUE(fs.writeFileAtomic(root + "/results.trx", std::string(16 * 1024 * 1024 + 1, 'x')));
+    const auto result = readDotnetTrxReport(fs, root + "/results.trx");
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::OutOfRange);
 }
 } // namespace frost::run

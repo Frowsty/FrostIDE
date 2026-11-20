@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/run/dotnet_tests.hpp"
 
+#include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"
 
@@ -150,11 +151,20 @@ Result<std::vector<DotnetTestResult>> parseDotnetTrx(std::string_view xml) {
     if (!results || !summary)
         return fail(ErrorCode::Corrupt, "TRX report is incomplete");
     std::map<std::string, std::string> identities;
+    std::set<std::string> definitions;
     for (const auto definition : child(root, "TestDefinitions").children()) {
+        if (local(definition.name()) != "UnitTest")
+            continue;
+        const std::string id = definition.attribute("id").value();
+        if (id.empty() || !definitions.insert(id).second)
+            return fail(ErrorCode::Corrupt, "TRX test definition has a missing or duplicate identity");
         const auto method = child(definition, "TestMethod");
-        if (method)
-            identities[definition.attribute("id").value()] =
-                std::string(method.attribute("className").value()) + "." + method.attribute("name").value();
+        if (!method)
+            continue; // Real outcomes remain displayable, but lack executable method authority.
+        const std::string className = method.attribute("className").value(), name = method.attribute("name").value();
+        if (className.find_first_not_of(" \t\r\n") == className.npos || name.find_first_not_of(" \t\r\n") == name.npos)
+            return fail(ErrorCode::Corrupt, "TRX method definition has a missing class or name");
+        identities.emplace(id, className + "." + name);
     }
     std::vector<DotnetTestResult> report;
     std::set<std::string> executions;
@@ -167,7 +177,8 @@ Result<std::vector<DotnetTestResult>> parseDotnetTrx(std::string_view xml) {
         const std::string execution = row.attribute("executionId").value(), outcome = row.attribute("outcome").value();
         if (test.id.empty() || test.result.name.empty() || execution.empty() || !executions.insert(execution).second)
             return fail(ErrorCode::Corrupt, "TRX result has ambiguous identity");
-        test.fullyQualifiedName = identities[test.id];
+        if (const auto identity = identities.find(test.id); identity != identities.end())
+            test.fullyQualifiedName = identity->second;
         if (outcome == "Passed")
             test.result.outcome = TestOutcome::Passed;
         else if (outcome == "Failed" || outcome == "Error" || outcome == "Timeout" || outcome == "Aborted")
@@ -204,6 +215,12 @@ Result<std::vector<DotnetTestResult>> parseDotnetTrx(std::string_view xml) {
         report.push_back(std::move(test));
     }
     return report;
+}
+Result<std::vector<DotnetTestResult>> readDotnetTrxReport(io::IFileSystem& fs, std::string_view path) {
+    auto bytes = fs.readFileSnapshot(path, 16 * 1024 * 1024);
+    if (!bytes)
+        return std::unexpected(bytes.error());
+    return parseDotnetTrx(*bytes);
 }
 Result<std::unique_ptr<build::BuildSession>>
 startDotnetTest(io::IProcessLauncher& launcher, const project::TrustStore& trust, const DotnetTestRequest& request,

@@ -3,6 +3,9 @@
 #include "frost/build/managed_project.hpp"
 #include "frost/run/test_model.hpp"
 
+namespace frost::io {
+class IFileSystem;
+}
 namespace frost::run {
 enum class DotnetTestPlatform { VSTest, MicrosoftTestingPlatform };
 struct DotnetTestRequest {
@@ -23,6 +26,8 @@ struct DotnetTestResult {
 [[nodiscard]] Result<std::vector<std::string>> parseDotnetTestDiscovery(std::string_view output);
 // Actual TRX result rows with adapter identities, messages and stack traces. Missing/truncated report refuses.
 [[nodiscard]] Result<std::vector<DotnetTestResult>> parseDotnetTrx(std::string_view xml);
+// Bounded stable 16 MiB file admission before parsing; callers run this blocking read off the UI thread.
+[[nodiscard]] Result<std::vector<DotnetTestResult>> readDotnetTrxReport(io::IFileSystem& fs, std::string_view path);
 [[nodiscard]] Result<std::unique_ptr<build::BuildSession>>
 startDotnetTest(io::IProcessLauncher& launcher, const project::TrustStore& trust, const DotnetTestRequest& request,
                 const std::vector<std::string>& roots, build::BuildCallbacks callbacks, IClock& clock = systemClock());

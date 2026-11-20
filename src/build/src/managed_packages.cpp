@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/build/managed_packages.hpp"
 
+#include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"
 
 #include "json.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace frost::build {
@@ -165,6 +167,23 @@ Result<ManagedPackageReport> parseManagedPackageReport(std::string_view text, Pa
         }
     }
     return report;
+}
+Result<std::vector<ManagedPackageInput>>
+snapshotManagedPackageInputs(io::IFileSystem& fs, const std::vector<std::string>& paths, std::stop_token stop) {
+    if (paths.size() > 4096)
+        return fail(ErrorCode::OutOfRange, "Too many MSBuild input files");
+    std::vector<ManagedPackageInput> snapshots;
+    size_t bytes = 0;
+    for (const auto& path : paths) {
+        if (stop.stop_requested())
+            return fail(ErrorCode::Cancelled, "MSBuild input snapshots cancelled");
+        auto contents = fs.readFileSnapshot(path, std::min<size_t>(4 * 1024 * 1024, 32 * 1024 * 1024 - bytes));
+        if (!contents)
+            return std::unexpected(contents.error());
+        bytes += contents->size();
+        snapshots.push_back({path, std::move(*contents)});
+    }
+    return snapshots;
 }
 Result<std::unique_ptr<BuildSession>> startManagedPackageQuery(io::IProcessLauncher& launcher,
                                                                const project::TrustStore& trust,

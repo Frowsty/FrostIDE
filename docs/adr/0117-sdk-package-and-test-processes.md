@@ -15,7 +15,8 @@ configuration does not silently restore them.
 The ordinary NuGet action, project context menu and NuGet tool window use the real provider. The user
 selects an explicit project, configuration and TFM. Trusted Save All precedes SDK actions; workspace,
 project-generation, SDK and trust revisions fence queued results. Cancellation owns the entire process
-tree. Bounded import reads run on a worker; the actual evaluated items/properties are checked again after
+tree. Bounded stable import reads enforce their limits before allocation and run on a worker; completed TRX
+reads and parsing also run on that worker with a 16 MiB filesystem cap; the actual evaluated items/properties are checked again after
 capturing dependencies. Source-only work does not establish a measured responsiveness result.
 
 Package install/update/remove runs the separately installed `NuGetPlanner.dll` through the SDK. The
@@ -53,8 +54,9 @@ Authored evidence includes protocol, TRX, command-injection, untrusted ordinary-
 mandatory real-SDK local-feed scenario that packs an authored package in a private root. Missing configured
 SDK inputs fail that fixture; they do not skip. The actual adapter fixture also requires an explicitly
 provisioned local feed containing its pinned MSTest/Test SDK packages and dependencies
-(`FROST_TEST_DOTNET_TEST_FEED`); it never falls back to public feeds. The independent planner probe
-builds only against the installed SDK in a private profile, validates exact no-write proposals, and
+(`FROST_TEST_DOTNET_TEST_FEED`); it never falls back to public feeds. The independent planner probe uses a private system-temporary root outside the source checkout
+(including when the configured build tree is inside it), prefers the explicitly configured SDK, and
+builds only against that installed SDK in a private profile, validates exact no-write proposals, and
 refuses conditional/expression/outside-root ownership. No build, configuration, test runner, feature-matrix tool or
 WSL execution was performed for this source checkpoint.
 

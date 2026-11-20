@@ -3,6 +3,11 @@
 #pragma once
 #include "frost/build/managed_project.hpp"
 
+#include <stop_token>
+
+namespace frost::io {
+class IFileSystem;
+}
 namespace frost::build {
 enum class PackageQuery { Search, Installed, Outdated, Vulnerable, Deprecated, Restore };
 struct ManagedPackageRequest {
@@ -26,6 +31,12 @@ struct ManagedPackageReport {
 // Specs never execute. Listing explicitly disables implicit restore; Restore is a separate action.
 [[nodiscard]] Result<io::ProcessSpec> managedPackageSpec(const ManagedPackageRequest& request);
 [[nodiscard]] Result<ManagedPackageReport> parseManagedPackageReport(std::string_view json, PackageQuery query);
+struct ManagedPackageInput {
+    std::string path{}, bytes{};
+};
+// Blocking stable snapshots: 4096 files, 4 MiB each, 32 MiB total. Worker-only in the product UI.
+[[nodiscard]] Result<std::vector<ManagedPackageInput>>
+snapshotManagedPackageInputs(io::IFileSystem& fs, const std::vector<std::string>& paths, std::stop_token stop = {});
 // Trust-gated real process with streamed output and whole-tree cancellation (BuildSession contract).
 [[nodiscard]] Result<std::unique_ptr<BuildSession>>
 startManagedPackageQuery(io::IProcessLauncher& launcher, const project::TrustStore& trust,

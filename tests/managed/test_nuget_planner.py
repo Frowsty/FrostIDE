@@ -16,13 +16,13 @@ REPO = Path(__file__).resolve().parents[2]
 class NuGetPlanner(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        dotnet = Path(os.environ.get("FROST_MANAGED_TEST_DOTNET", ""))
+        dotnet = Path(os.environ.get("FROST_MANAGED_TEST_DOTNET") or os.environ.get("FROST_TEST_CSHARP_DOTNET", ""))
         if not dotnet.is_absolute() or not dotnet.is_file():
             raise AssertionError("Required configured .NET 10 SDK executable is missing")
         parent = Path(os.environ.get("FROST_MANAGED_TEST_ROOT", ""))
         if not parent.is_absolute() or not parent.is_dir():
             raise AssertionError("Required private managed test build root is missing")
-        cls.temporary = tempfile.TemporaryDirectory(prefix="nuget-planner-test-", dir=parent)
+        cls.temporary = tempfile.TemporaryDirectory(prefix="nuget-planner-test-")
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.root = Path(cls.temporary.name)
         cls.dotnet = dotnet
