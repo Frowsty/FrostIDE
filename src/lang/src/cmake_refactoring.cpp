@@ -92,7 +92,7 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
                 if (!slot) return fail(ErrorCode::Unsupported,"Target name occurs in an unsupported/indirect CMake command: "+command.name);
                 const auto root=documentKey(input.model->sourceDirectory), key=documentKey(path);
                 const auto inputFile=std::find_if(input.model->inputs.begin(),input.model->inputs.end(),[&](const auto& file){return documentKey(file.path)==key;});
-                if (root.empty() || !(key.starts_with(root) && key.size()>root.size() && key[root.size()]=='/') ||
+                if (root.empty() || !(key.starts_with(root) && key.size()>root.size() && (key[root.size()]=='/' || key[root.size()]=='\\')) ||
                     (inputFile!=input.model->inputs.end() && (inputFile->generated || inputFile->external)))
                     return fail(ErrorCode::Unsupported,"Target rename cannot edit generated/external project inputs");
                 const auto span=std::string_view(bytes).substr(argument.begin,argument.end-argument.begin);
@@ -117,6 +117,13 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
 std::vector<LiveDiagnostic> inspectCMakeSource(std::string_view path,const text::Snapshot& source) {
 
     std::vector<LiveDiagnostic> result;
+    if (source.size().value()>CMakeLanguageService::kMaxInputBytes) {
+        LiveDiagnostic diagnostic; diagnostic.file=path; diagnostic.line=1; diagnostic.column=1;
+        diagnostic.severity=DiagnosticSeverity::Information; diagnostic.code="cmake.analysis-budget";
+        diagnostic.source="FrostIDE CMake source parser";
+        diagnostic.message="CMake source inspection unavailable: document exceeds the 256 KiB analysis budget";
+        result.push_back(std::move(diagnostic)); return result;
+    }
     auto parsed=project::scanCMakeSyntax(source.text());
     if (!parsed) {
         LiveDiagnostic diagnostic;

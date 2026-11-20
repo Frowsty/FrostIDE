@@ -4,20 +4,25 @@
 #include "frost/lang/cmake_refactoring.hpp"
 #include "frost/text/text_buffer.hpp"
 #include <gtest/gtest.h>
+#include "frost/io/path.hpp"
+#include "frost/lang/uri.hpp"
 namespace frost::lang {
 namespace {
+std::string projectPath(std::string_view leaf) {
+    return io::joinPath(io::kNativePathStyle==io::PathStyle::Windows ? "C:/project" : "/project",leaf).value();
+}
 Json position(unsigned line,unsigned character) { return Json::object().set("position",toJson(LspPosition{line,character})); }
 TEST(MSBuildLanguage, ConditionsAndDynamicImportsRemainSourceOnly) {
     const std::string source="<Project><PropertyGroup Condition=\"'$(Configuration)'=='Debug'\"><Feature>yes</Feature></PropertyGroup>"
         "<Import Project=\"$(Unknown)/missing.props\" /></Project>";
-    auto parsed=project::parseMSBuildSource(source,"/project/test.props");
+    auto parsed=project::parseMSBuildSource(source,projectPath("test.props"));
     ASSERT_TRUE(parsed);
     ASSERT_EQ(parsed->properties.size(),1U);
     EXPECT_FALSE(parsed->properties[0].condition.empty());
     ASSERT_EQ(parsed->imports.size(),1U);
     EXPECT_FALSE(parsed->imports[0].literal);
     MSBuildLanguageInput input;
-    input.path="/project/test.props"; input.source=text::TextBuffer::fromUtf8(source).value().snapshot();
+    input.path=projectPath("test.props"); input.source=text::TextBuffer::fromUtf8(source).value().snapshot();
     auto completion=queryMSBuildLanguage(input,"textDocument/completion",position(0,0));
     ASSERT_TRUE(completion);
     bool sourceOnly=false;
@@ -27,17 +32,17 @@ TEST(MSBuildLanguage, ConditionsAndDynamicImportsRemainSourceOnly) {
 }
 TEST(MSBuildLanguage, EngineOriginWinsOverInactiveSourceAssignments) {
     MSBuildLanguageInput input;
-    input.path="/project/main.props";
+    input.path=projectPath("main.props");
     input.source=text::TextBuffer::fromUtf8("<Project>\n<PropertyGroup><Chosen>$(Flag)</Chosen></PropertyGroup>\n</Project>\n").value().snapshot();
-    input.inputs={{"/project/import.targets","<Project>\n<PropertyGroup><Flag>engine</Flag></PropertyGroup>\n</Project>"}};
+    input.inputs={{projectPath("import.targets"),"<Project>\n<PropertyGroup><Flag>engine</Flag></PropertyGroup>\n</Project>"}};
     project::EvaluatedProjectItems evaluated;
-    evaluated.projectPath="/project/main.props"; evaluated.configuration="Debug"; evaluated.platform="x64";
-    evaluated.propertyDefinitions.push_back({"Flag","engine","/project/import.targets",2,17});
+    evaluated.projectPath=projectPath("main.props"); evaluated.configuration="Debug"; evaluated.platform="x64";
+    evaluated.propertyDefinitions.push_back({"Flag","engine",projectPath("import.targets"),2,17});
     input.evaluations.push_back(evaluated);
     auto definition=queryMSBuildLanguage(input,"textDocument/definition",position(1,28));
     ASSERT_TRUE(definition);
     ASSERT_EQ(definition->size(),1U);
-    EXPECT_EQ(definition->items()[0].stringAt("uri"),"file:///project/import.targets");
+    EXPECT_EQ(definition->items()[0].stringAt("uri"),pathToUri(projectPath("import.targets")).value());
     input.evaluations[0].propertyDefinitions[0].line=999;
     auto stale=queryMSBuildLanguage(input,"textDocument/definition",position(1,28));
     ASSERT_TRUE(stale);
@@ -46,10 +51,10 @@ TEST(MSBuildLanguage, EngineOriginWinsOverInactiveSourceAssignments) {
 }
 CMakeLanguageInput cmakeInput(std::string source) {
     CMakeLanguageInput input;
-    input.path="/project/CMakeLists.txt";
+    input.path=projectPath("CMakeLists.txt");
     input.source=text::TextBuffer::fromUtf8(std::move(source)).value().snapshot();
     auto model=std::make_shared<project::CMakeProject>();
-    model->sourceDirectory="/project"; model->inputsAvailable=true;
+    model->sourceDirectory=projectPath(""); model->inputsAvailable=true;
     model->inputs.push_back({input.path});
     project::CMakeTarget target; target.name="alpha";
     target.backtrace.push_back({input.path,1,"add_custom_target"});
@@ -84,8 +89,8 @@ TEST(CMakeRefactoring, LinkGrammarKeywordsAreRefusedAsOldOrNewTargetNames) {
 TEST(CMakeRefactoring, GeneratedDynamicMetadataIsReadOnlyCapturedEvidence) {
     auto input=cmakeInput("add_custom_target(alpha)\n");
     auto model=std::make_shared<project::CMakeProject>(*input.model);
-    model->inputs.push_back({"/build/CMakeSystem.cmake",true,false,false}); input.model=model;
-    input.inputs.emplace_back("/build/CMakeSystem.cmake","set(CMAKE_HOST_SYSTEM_NAME \"${HOST}\")\n");
+    model->inputs.push_back({projectPath("../build/CMakeSystem.cmake"),true,false,false}); input.model=model;
+    input.inputs.emplace_back(projectPath("../build/CMakeSystem.cmake"),"set(CMAKE_HOST_SYSTEM_NAME \"${HOST}\")\n");
     auto plan=planCMakeTargetRename(input,{0,19},"bravo");
     ASSERT_TRUE(plan);
     EXPECT_EQ(plan->inputs.size(),2U);
@@ -93,7 +98,7 @@ TEST(CMakeRefactoring, GeneratedDynamicMetadataIsReadOnlyCapturedEvidence) {
 }
 TEST(CMakeRefactoring, ParserInspectionsReportConcreteSourceFacts) {
     auto source=text::TextBuffer::fromUtf8("add_custom_target(alpha)\nadd_custom_target(alpha)\n").value();
-    auto diagnostics=inspectCMakeSource("/project/CMakeLists.txt",source.snapshot());
+    auto diagnostics=inspectCMakeSource(projectPath("CMakeLists.txt"),source.snapshot());
     ASSERT_EQ(diagnostics.size(),1U);
     EXPECT_EQ(diagnostics[0].code,"cmake.duplicate-target");
     EXPECT_EQ(diagnostics[0].line,2);
