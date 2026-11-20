@@ -460,3 +460,11 @@ target_include_directories(app_workbench_cpp_modules_tests PRIVATE ${FROST_SOURC
 target_compile_definitions(app_workbench_cpp_modules_tests PRIVATE ${_frost_workbench_definitions}
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 add_dependencies(app_workbench_cpp_modules_tests frost-clang)
+
+# R16 normal .props/.targets navigation plus actual-configured CMK-9 atomic/stale-preview journeys.
+frost_add_test(app_workbench_project_language_tests QT
+    SOURCES workbench_project_language_test.cpp
+    DEPS frost::app frost::lang frost::build frost::io
+    LABELS integration cmake)
+target_include_directories(app_workbench_project_language_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_workbench_project_language_tests PRIVATE ${_frost_workbench_definitions})

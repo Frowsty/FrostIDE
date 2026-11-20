@@ -7,6 +7,7 @@
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 #include <chrono>
+#include <algorithm>
 namespace frost::lang {
 TEST(CMakeTargetRenameReal, ReconfiguredFileApiReportsRenamedTargetAndDependency) {
     frost::test::ScratchDir scratch("cmk9-configure");
@@ -31,7 +32,7 @@ TEST(CMakeTargetRenameReal, ReconfiguredFileApiReportsRenamedTargetAndDependency
     input.path=path; input.source=text::TextBuffer::fromUtf8(source).value().snapshot();
     input.model=std::make_shared<project::CMakeProject>(**before);
     for (const auto& file:input.model->inputs)
-        if (!file.cmake && !file.generated && !file.external && file.path!=path) {
+        if (!file.cmake && file.path!=path) {
             auto bytes=fs.readFile(file.path); ASSERT_TRUE(bytes); input.inputs.emplace_back(file.path,*bytes);
         }
     auto proposal=planCMakeTargetRename(input,{2,19},"bravo");
