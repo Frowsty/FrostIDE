@@ -501,4 +501,5 @@ if(TARGET frost-extension-text-statistics)
         FROST_EXTENSION_SAMPLE_LICENSE="${FROST_SOURCE_DIR}/LICENSE"
         FROST_EXTENSION_SAMPLE_RUNTIME="${_frost_sample_runtime}")
     add_dependencies(app_extension_sample_tests frost-extension-text-statistics)
+    frost_deploy_extension_sandbox(app_extension_sample_tests)
 endif()

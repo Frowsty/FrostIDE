@@ -60,6 +60,11 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R19 paired native source freeze
+
+- Integrated IO owner native enforcement59df7ce3 and final source/fixtures/deployment315e520a as localbeca3d14/fb479a4a. Added the app sample fixture's enforcing-helper deployment call; frost and native IO fixture deployment remain owner-provided. Corrected staging-parent ownershipf57ad0db is independently source-cleared. Native path traversal now advances its separator and bounds pinned handles.
+- Entire extension/sample/native source remains unexecuted. Independent paired source review and platform enforcement acceptance remain pending; no builds/tests/features, ACL/container creation or OS probes occurred. Source frozen for integration and review.
+
 ## 2026-11-20: R19 staging parent ownership correction
 
 - Corrected both app sandboxParent helpers to own the parent path as std::string before fallback or suffix composition. This fixes the reviewed string_view compile error and temporary fallback lifetime. Native path traversal/helper deployment fixes remain coordinated with the IO owner; source review continues. No builds/tests/execution.
