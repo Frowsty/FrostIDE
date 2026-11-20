@@ -3,6 +3,7 @@
 
 #include "frost/core/clock.hpp"
 #include "frost/debug/coreclr_dap.hpp"
+#include "frost/debug/lldb_dap.hpp"
 #include "frost/io/mem_fs.hpp"
 #include "frost/project/trust_store.hpp"
 

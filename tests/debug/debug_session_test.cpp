@@ -65,9 +65,10 @@ TEST(DebugSessionAdapterProfile, AttachAdmissionRechecksTrustAfterInitializeBefo
     ASSERT_TRUE(session);
     ASSERT_TRUE(test::waitUntil([&] { return recorder.hasEnded(); }));
     EXPECT_TRUE(adapter.argumentsOf("attach").empty());
-    ASSERT_TRUE((*session)->outcome());
-    ASSERT_TRUE((*session)->outcome()->error);
-    EXPECT_EQ((*session)->outcome()->error->code(), ErrorCode::Untrusted);
+    const auto outcome = session->outcome();
+    ASSERT_TRUE(outcome);
+    ASSERT_TRUE(outcome->error);
+    EXPECT_EQ(outcome->error->code(), ErrorCode::Untrusted);
 }
 TEST(DebugSessionAdapterProfile, InitializeCarriesTheSelectedAdapterId) {
     FakeDebugAdapter adapter;
@@ -178,7 +179,7 @@ TEST_F(DebugSessionTest, LaunchesConfiguresBreakpointsAndStopsOnOne) {
         EXPECT_FALSE(recorder.breakpoints[1].verified);
         EXPECT_EQ(recorder.breakpoints[1].message, "No code is generated for this line");
         EXPECT_EQ(recorder.output, "hello from the debuggee\n");
-        EXPECT_EQ(recorder.threads, (std::vector<DebugThread>{{1, "main"}, {2, "worker"}}));
+        EXPECT_EQ(recorder.threads, (std::vector<DebugThread>{{1, "main", {}}, {2, "worker", {}}}));
     }
     // The stopped thread's frames, the top one selected at the breakpoint's line.
     EXPECT_EQ(session->selectedThread(), 1);

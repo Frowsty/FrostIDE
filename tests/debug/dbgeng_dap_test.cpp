@@ -116,7 +116,7 @@ TEST(DbgEngProtocol, HitCountGrammarHasNoCommandOrZeroDivisorEscape) {
     EXPECT_EQ(dbgeng::hitMatches("3", 2), false);
     EXPECT_EQ(dbgeng::hitMatches("%2", 4), true);
     for (auto text : {"0", "%0", "2;g", "-1", "abc"})
-        EXPECT_FALSE(dbgeng::hitMatches(text));
+        EXPECT_FALSE(dbgeng::hitMatches(text, 1));
 }
 } // namespace
 } // namespace frost::debug

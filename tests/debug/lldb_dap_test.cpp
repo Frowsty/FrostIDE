@@ -246,9 +246,10 @@ TEST(LldbDap, TheFactoryStartsLldbDapThroughTheLauncher) {
 
 TEST(LldbDap, PrivateAdapterDisablesInheritedRawProtocolAndDebugserverTraceSinks) {
     io::ScriptedProcessLauncher launcher;
-    const auto executable = workPath("sdk/" + kExe);
+    const auto executable = workPath("sdk/" + kExe());
     launcher.expect({.expectExecutable = executable, .launchError = Error(ErrorCode::NotFound, "fixture")});
-    auto factory = lldbDapAdapterFactory(launcher, executable, DapProcessOutput{.privateOutput = true});
+    auto factory =
+        lldbDapAdapterFactory(launcher, executable, DapProcessOutput{.privateOutput = true, .onStderrChunk = {}});
     EXPECT_FALSE(factory(DapHandlers{.privateSession = true}));
     const auto launches = launcher.launches();
     ASSERT_EQ(launches.size(), 1U);
