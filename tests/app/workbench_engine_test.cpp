@@ -1692,7 +1692,10 @@ TEST(WorkbenchEngine, Il2cppNativeProfileUsesNativeLaunchAndProvidedGeneratedSou
         dir.join("missing-lua-server.exe")));
     ASSERT_TRUE(rig.trust->trust(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
-    ASSERT_TRUE(rig.workbench->debugController()->breakpoints().add(dir.join("generated/Code.cpp"), 1));
+    auto& breakpoints = rig.workbench->debugController()->breakpoints();
+    const auto generated = dir.join("generated/Code.cpp");
+    const auto cppBreakpoint = breakpoints.add(generated, 1);
+    ASSERT_TRUE(cppBreakpoint);
     ASSERT_TRUE(rig.workbench->debugController()->breakpoints().add(dir.join("generated/Code.cs"), 1));
     auto id = rig.workbench->registry().find("debug.unityIl2cppNative"); ASSERT_TRUE(id);
     frost::input::ActionContext context; context.trusted = true;
@@ -1708,7 +1711,18 @@ TEST(WorkbenchEngine, Il2cppNativeProfileUsesNativeLaunchAndProvidedGeneratedSou
     ASSERT_EQ(sourceRequests.size(), 1u);
     const auto* source = sourceRequests.front().find("source");
     ASSERT_TRUE(source);
-    EXPECT_EQ(source->stringAt("path"), dir.join("generated/Code.cpp"));
+    EXPECT_EQ(source->stringAt("path"), generated);
+
+    ASSERT_TRUE(frost::io::realFileSystem().removeFile(generated));
+    ASSERT_TRUE(breakpoints.remove(*cppBreakpoint));
+    ASSERT_TRUE(waitFor([&] { return adapter.argumentsOf("setBreakpoints").size() == 2; }));
+    const auto clearRequests = adapter.argumentsOf("setBreakpoints");
+    const auto* clearedSource = clearRequests.back().find("source");
+    ASSERT_TRUE(clearedSource);
+    EXPECT_EQ(clearedSource->stringAt("path"), generated);
+    const auto* clearedBreakpoints = clearRequests.back().find("breakpoints");
+    ASSERT_TRUE(clearedBreakpoints);
+    EXPECT_EQ(clearedBreakpoints->size(), 0u);
     EXPECT_TRUE(launcher.launches().empty()); // The explicit native test adapter owns this protocol fixture.
     rig.workbench->debugController()->stop();
 }

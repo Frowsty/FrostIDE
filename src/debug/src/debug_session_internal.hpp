@@ -202,6 +202,8 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     std::optional<std::int64_t> stepTargetsThread FROST_GUARDED_BY(mutex);
     std::uint64_t generation FROST_GUARDED_BY(mutex) = 0; // Bumped by each stop and resume.
     std::map<std::string, std::vector<BreakpointLine>> breakpoints FROST_GUARDED_BY(mutex);
+    // A source can disappear after an admitted set request, but its adapter breakpoints still need clearing.
+    std::set<std::string> sentBreakpointSources FROST_GUARDED_BY(mutex);
     std::vector<FunctionBreakpointLine> functionBreakpoints FROST_GUARDED_BY(mutex);
     std::vector<std::string> exceptionFilters FROST_GUARDED_BY(mutex);
     std::vector<std::string> throwTypes FROST_GUARDED_BY(mutex); // Header comment, "Exception filters".
