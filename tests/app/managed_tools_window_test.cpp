@@ -40,9 +40,15 @@ TEST(ManagedToolsWindow, UntrustedNormalActionsNeverLaunchAndDiscoveryHasNoInven
     ASSERT_NE(widget->findChild<QTableWidget*>(), nullptr);
     EXPECT_EQ(widget->findChild<QTableWidget*>()->rowCount(), 0);
     std::unique_ptr<QWidget> packages(createManagedPackagesWidget(nullptr, context));
-    for (auto* button : packages->findChildren<QPushButton*>())
-        if (button->text() == "Search" || button->text() == "Restore" || button->text() == "Install…")
+    QPushButton* installButton = nullptr;
+    for (auto* button : packages->findChildren<QPushButton*>()) {
+        if (button->text() == "Installâ€¦")
+            installButton = button;
+        else if (button->text() == "Search" || button->text() == "Restore")
             button->click();
+    }
+    ASSERT_NE(installButton, nullptr);
+    installButton->click();
     EXPECT_TRUE(launcher.launches().empty());
 }
 } // namespace frost::app

@@ -60,7 +60,7 @@ public:
         if (m_context.projects)
             for (const auto& path : m_context.projects())
                 m_project->addItem(q(path));
-        auto* browse = new QPushButton(tr("Choose project�"), m_form);
+        auto* browse = new QPushButton(tr("Choose project…"), m_form);
         auto* projectRow = new QHBoxLayout();
         projectRow->addWidget(m_project, 1);
         projectRow->addWidget(browse);
@@ -149,9 +149,9 @@ public:
             button(tr("Vulnerable"), [this] { packages(build::PackageQuery::Vulnerable); });
             button(tr("Deprecated"), [this] { packages(build::PackageQuery::Deprecated); });
             button(tr("Restore"), [this] { packages(build::PackageQuery::Restore); });
-            button(tr("Install�"), [this] { edit("install"); });
-            button(tr("Update�"), [this] { edit("update"); });
-            button(tr("Remove�"), [this] { edit("remove"); });
+            button(tr("Install…"), [this] { edit("install"); });
+            button(tr("Update…"), [this] { edit("update"); });
+            button(tr("Remove…"), [this] { edit("remove"); });
         }
         form->addRow(buttons);
         outer->addWidget(m_form);
