@@ -98,7 +98,7 @@ inline constexpr std::array<LanguageCapabilities, 6> kLanguageCapabilities{{
     if (e == "lua") {
         return "lua";
     }
-    if(e=="json"||e=="jsonc"||e=="fmat"||e=="fscene")return "json";
+    if(e=="json"||e=="jsonc"||e=="fmat"||e=="fscene"||e=="fmeta"||e=="fschema"||e=="ftable"||e=="frostproj"||e=="feproject")return "json";
     return "plaintext";
 }
 
