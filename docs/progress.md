@@ -18,6 +18,12 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R16 MSBuild and CMake language implementation
+
+- SLN-18 adds bounded, read-only XML property/target declarations and literal import loading for `.props`/`.targets`, normal editor completion/hover/navigation, and actual winning property/import source origins reported by the already-trusted ProjectHost evaluation. Source declarations are labelled unevaluated; actual values are labelled by their last evaluated project/configuration. No source query starts evaluation, resolves unknown property functions, or grants trust.
+- CMK-9 adds parser-backed syntax/duplicate-target inspections and configured literal target rename through the normal Rename action and REF1 atomic preview/Apply/Undo. Captured CMake input images include generated/external scripts as read-only evidence, alongside reply/CDB and current model/trust provenance. Reserved link grammar names and unsupported dynamic/indirect target spellings refuse instead of guessing. Import-closure admission is under final independent review.
+- Authored future actual MSBuild CLI value/import origin and CMake configure/File API target-dependency oracles; normal UI fixtures cover untrusted source navigation, multi-file atomic rename/Undo and changed closed-input refusal during preview. No build, test, configure, feature, native tool or WSL execution occurred. Independent Astra source review has closed target grammar/native Windows containment findings; final joins remain under review. Runtime milestone acceptance remains deferred.
+
 ## 2026-11-20: R16 native text accessibility and explicit hosted-review CLI profiles
 
 - Custom editor and terminal viewport now expose real text through Qt native accessibility factories. Editor offsets/selections use UTF-16 mappings over actual snapshots, editing retains undo and read-only admission, and geometry follows the actual viewport. Terminal exposes actual visible cells, wide/combining characters, program-owned caret, output selection and output notifications; it never pretends terminal output is editable. Astra source-reviewed 311dc966/d0fd127b without actionable findings. Windows/Linux screen-reader acceptance, diagnostic text navigation and whole-scrollback accessibility remain unexecuted/additional work.
