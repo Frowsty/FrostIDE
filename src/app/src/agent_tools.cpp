@@ -4,6 +4,8 @@
 #include "agent_private.hpp"
 #include "agent_scope.hpp"
 #include "frost/agent/protocol.hpp"
+#include "frost/agent/ide_queries.hpp"
+#include "frost/settings/registry.hpp"
 #include "frost/app/workbench.hpp"
 #include "frost/io/local_ipc.hpp"
 #include "frost/io/utf.hpp"
@@ -655,7 +657,14 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
         auto data = Json::array();
         for (const auto& result : snapshot->results) data.push(Json::object().set("name", result.name).set("outcome", std::string(run::toString(result.outcome))).set("reason", result.reason));
         m->result(id, tool, std::move(data), std::move(reply)); return;
-    }    if (tool == "inspection_info") { reply(error(id, "inspection metadata provider is unavailable in this workspace")); return; }
+    }
+    if (tool == "inspection_info") {
+        auto info = agent::inspectionInfo(utf8(args.value("id").toString()));
+        if (!info) { reply(error(id, qs(info.error().message()))); return; }
+        const auto setting = info->stringAt("settingKey");
+        info->set("configuredSeverity", m->owner.m_services.settings.snapshot()->get(settings::Key<std::string>{setting}));
+        m->result(id, tool, std::move(*info), std::move(reply)); return;
+    }
     auto paramsJson = Json::object();
     QString methodName;
     if (tool == "symbol_search") { methodName = "workspace/symbol"; paramsJson.set("query", utf8(args.value("query").toString())); }

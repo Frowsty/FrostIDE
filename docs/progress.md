@@ -1,3 +1,10 @@
+## 2026-11-20 — C2 inspection metadata adapter
+
+- inspection_info now returns exact source-owned metadata from the same analyzer rule registry used
+  by frost-analyzer and the settings UI, plus the actual configured severity. It does not claim an
+  analyzer run, installed binary or synthesized external-tool catalog. Unknown ids remain unavailable.
+- Exact-id/provenance/unknown-id regressions authored; source review and execution remain pending.
+  Hierarchy edge adapter follows separately. No builds, tests, provider or analyzer runs performed.
 ## 2026-11-20 — R19 native source review repairs
 
 - Corrected proxy cwd fromStdPath Result propagation and constructed the actual named native
