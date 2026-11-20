@@ -16,9 +16,9 @@
 #      (every preset cache variable, the generator, toolset and platform);
 #   4. open a source file: clangd runs, on the IDE-owned compilation database for that configuration
 #      (a directory FrostIDE owns, outside the corpus tree, holding the file) [needs CPP-3];
-#   5. Go to Definition in three modules (Frost, Frost-Runtime, Frost-Services) lands where the same
-#      clangd binary (its spawn-log path and sha256), asked textDocument/definition on the same
-#      database, says;
+#   5. Go to Definition in three modules (Frost, Frost-Runtime, Frost-Services) matches the pinned
+#      SDK clangd on the same database. The active server's PID and spawn digest identify whether
+#      the IDE used stock clangd or its bundled frost-clang.
 #   6. a seeded compile error in one small target (FrostTestDetachedChild: one source, no library
 #      dependencies) is built through the preset; Problems shows it at the seeded line and its
 #      activation opens that line;
@@ -230,6 +230,26 @@ def tools_seen(records: list[dict]) -> dict[str, dict]:
 
 
 # --- The endpoint client --------------------------------------------------------------------------
+
+
+def navigation_server(records: list[dict], pid: int, frost: Path, oracle: Path) -> dict:
+    """Identify the active IDE server and validate its executable independently of the SDK oracle."""
+    stock_digest = sha256_file(oracle)
+    bundled = frost.with_name("frost-clang" + oracle.suffix)
+    starts = [row for row in records if row.get("event") == "start" and row.get("pid") == pid]
+    if not pid or len(starts) != 1:
+        raise ValueError(f"Expected one server start for active PID {pid}, found {len(starts)}")
+    path = Path(starts[0]["executable"])
+    if not path.is_absolute():
+        raise ValueError(f"Relative server executable in spawn log: {path}")
+    digest = sha256_file(path)
+    if starts[0].get("sha256") != digest:
+        raise ValueError(f"Server executable differs from its spawn digest: {path}")
+    if not same_path(path, bundled) and not (os.path.normcase(path.name) == os.path.normcase(oracle.name)
+                                             and digest == stock_digest):
+        raise ValueError(f"Active PID {pid} is neither bundled frost-clang nor pinned clangd: {path}")
+    return {"server": {"pid": pid, "executable": str(path), "sha256": digest},
+            "oracle": {"executable": str(oracle), "sha256": stock_digest}}
 
 
 class EndpointError(RuntimeError):
@@ -797,12 +817,21 @@ class Journey:
     def _navigation(self, corpus: Path) -> None:
         ep = self.endpoint
         clangd = ep.call("state")["clangd"]
-        tools = tools_seen(spawn_records(self.spawn_dir))
-        started = tools.get("clangd.exe" if WINDOWS else "clangd")
-        if not started:
-            self.evidence.step("Go to Definition oracle", ok=False, note="the spawn log has no clangd start")
+        try:
+            version = json.loads((REPO / corpora.SDK_LOCK_FILE).read_text(encoding="utf-8"))[corpora.PLATFORM]["llvm"]["version"]
+            sdk = Path(os.environ["FROST_SDK"])
+            if not sdk.is_absolute():
+                raise ValueError("FROST_SDK must be an absolute SDK path")
+            oracle = sdk / f"llvm-{version}" / "bin" / ("clangd.exe" if WINDOWS else "clangd")
+            identity = navigation_server(spawn_records(self.spawn_dir), clangd["pid"], Path(self.args.frost), oracle)
+            reported = subprocess.run([oracle, "--version"], capture_output=True, text=True, check=True, timeout=15)
+            if not re.search(rf"^clangd version {re.escape(version)}(?:\s|$)", reported.stdout, re.MULTILINE):
+                raise ValueError(f"{oracle} did not report clangd version {version}")
+            self.evidence.data["navigationTools"] = identity | {"llvmVersion": version}
+        except (OSError, KeyError, ValueError, subprocess.SubprocessError) as error:
+            self.evidence.step("Go to Definition oracle", ok=False, note=str(error))
             return
-        self.oracle = ClangdOracle(started["executable"], clangd.get("compileCommandsDirectory") or "", corpus)
+        self.oracle = ClangdOracle(str(oracle), clangd.get("compileCommandsDirectory") or "", corpus)
         for module, relative, needle in NAVIGATION:
             path = corpus / relative
 

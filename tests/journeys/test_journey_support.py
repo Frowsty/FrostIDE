@@ -30,6 +30,34 @@ class EvidenceTest(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
+    def test_navigation_server_tracks_the_active_pid_and_verifies_bundled_or_stock_bytes(self) -> None:
+        sdk = self.tmp / "sdk"
+        sdk.mkdir()
+        oracle = sdk / ("clangd.exe" if j1_cmake.WINDOWS else "clangd")
+        oracle.write_bytes(b"stock oracle")
+        stock = self.tmp / oracle.name
+        stock.write_bytes(oracle.read_bytes())
+        frost = self.tmp / ("frost.exe" if j1_cmake.WINDOWS else "frost")
+        bundled = frost.with_name("frost-clang" + oracle.suffix)
+        bundled.write_bytes(b"integrated server")
+        def start(pid: int, path: Path) -> dict:
+            return {"event": "start", "pid": pid, "executable": str(path), "sha256": j1_cmake.sha256_file(path)}
+        starts = [start(1, stock), start(2, bundled)]
+        for pid, path in [(1, stock), (2, bundled)]:
+            identity = j1_cmake.navigation_server(starts, pid, frost, oracle)
+            self.assertEqual(identity["server"]["executable"], str(path))
+            self.assertEqual(identity["oracle"]["sha256"], j1_cmake.sha256_file(oracle))
+        for records in ([], starts + [starts[1]], [starts[1] | {"sha256": "changed"}]):
+            with self.assertRaises(ValueError):
+                j1_cmake.navigation_server(records, 2, frost, oracle)
+        other = sdk / bundled.name
+        other.write_bytes(bundled.read_bytes())
+        with self.assertRaises(ValueError):
+            j1_cmake.navigation_server([start(3, other)], 3, frost, oracle)
+        stock.write_bytes(b"unreviewed stock replacement")
+        with self.assertRaises(ValueError):
+            j1_cmake.navigation_server([start(4, stock)], 4, frost, oracle)
+
     def test_the_evidence_records_each_step_and_is_ok_only_when_every_step_is(self) -> None:
         evidence = j1_cmake.Evidence(self.tmp / "out" / "j1.json")
         self.assertTrue(evidence.step("first", ok=True, oracle={"line": 3}, observed={"line": 3}, seconds=0.25))
