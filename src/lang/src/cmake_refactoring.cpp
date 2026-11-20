@@ -242,7 +242,8 @@ Result<std::vector<SnapshotValidationIssue>> inspectCMakeSource(const text::Snap
             const auto& target = command.arguments.front();
             const auto line = source.lineInfo(LineIndex{static_cast<std::uint32_t>(command.line - 1)});
             const auto start = line->content.begin;
-            result.push_back({provider, "cmake.duplicate-target",
+            result.push_back({provider,
+                              "cmake.duplicate-target",
                               "Duplicate unconditional literal target declaration: " + target.literal,
                               {start, start}});
             if (result.size() == kSnapshotValidationMaxIssues)

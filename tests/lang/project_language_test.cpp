@@ -11,9 +11,7 @@ namespace frost::lang {
 namespace {
 constexpr auto kProjectRoot = io::kNativePathStyle == io::PathStyle::Windows ? "C:/project" : "/project";
 
-std::string projectPath(std::string_view leaf) {
-    return io::joinPath(kProjectRoot, leaf).value();
-}
+std::string projectPath(std::string_view leaf) { return io::joinPath(kProjectRoot, leaf).value(); }
 Json position(unsigned line, unsigned character) {
     return Json::object().set("position", toJson(LspPosition{line, character}));
 }

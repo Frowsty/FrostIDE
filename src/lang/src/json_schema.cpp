@@ -6,6 +6,7 @@
 #include "frost/lang/json_entity_hierarchy.hpp"
 #include "frost/lang/lsp_types.hpp"
 #include "frost/lang/uri.hpp"
+
 #include "snapshot_validator_protocol.hpp"
 
 #include <algorithm>
@@ -848,7 +849,7 @@ std::vector<SnapshotValidationIssue> JsonSchemaService::snapshotIssues(std::stri
         .value_or(std::vector<SnapshotValidationIssue>{});
 }
 Result<std::vector<SnapshotValidationIssue>> inspectJsonSnapshot(std::string_view path, const text::Snapshot& snapshot,
-                                                                const Json* engineSchema) {
+                                                                 const Json* engineSchema) {
     std::size_t shapeNodes = 0;
     if (engineSchema && !admissibleEngineShape(*engineSchema, 0, shapeNodes))
         return fail(ErrorCode::Corrupt, "Malformed or oversized engine schema keyword shape");
@@ -889,7 +890,9 @@ Result<std::vector<SnapshotValidationIssue>> inspectJsonSnapshot(std::string_vie
                 ++end;
         }
         issues.push_back({engineSchema ? "frost-engine-schema-shape" : "frost-json-schema",
-                          parsed ? "schema" : "syntax", std::move(message), {ByteOffset{begin}, ByteOffset{end}}});
+                          parsed ? "schema" : "syntax",
+                          std::move(message),
+                          {ByteOffset{begin}, ByteOffset{end}}});
         if (issues.size() == kSnapshotValidationMaxIssues)
             break;
     }

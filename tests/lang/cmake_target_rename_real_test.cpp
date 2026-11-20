@@ -69,7 +69,8 @@ TEST(CMakeTargetRenameReal, ReconfiguredFileApiReportsRenamedTargetAndDependency
     EXPECT_EQ((**after).findTarget("alpha"), nullptr);
     EXPECT_NE(std::find(consumer->dependencies.begin(), consumer->dependencies.end(), bravo->id),
               consumer->dependencies.end());
-    EXPECT_EQ(inspectCMakeSource(text::TextBuffer::fromUtf8(fs.readFile(path).value()).value().snapshot()).value().size(),
-              0U);
+    EXPECT_EQ(
+        inspectCMakeSource(text::TextBuffer::fromUtf8(fs.readFile(path).value()).value().snapshot()).value().size(),
+        0U);
 }
 } // namespace frost::lang
