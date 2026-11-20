@@ -853,6 +853,30 @@ TEST_F(DebugUiTest, LoadedSourceReferenceDoesNotNavigateToUnverifiedDiskBytes) {
     stopSession();
 }
 
+TEST_F(DebugUiTest, ExternalPreparationIsSingleOwnedAndStopRejectsLateAdoption) {
+    int cancelled = 0;
+    auto first = controller->beginExternalPreparation([&] { ++cancelled; });
+    ASSERT_TRUE(first);
+    EXPECT_TRUE(controller->debugging());
+    EXPECT_FALSE(controller->beginExternalPreparation([&] { ++cancelled; }));
+    controller->stop();
+    EXPECT_EQ(cancelled, 1);
+    EXPECT_FALSE(controller->debugging());
+    EXPECT_FALSE(controller->finishExternalPreparation(*first));
+    auto replacement = controller->beginExternalPreparation([&] { ++cancelled; });
+    ASSERT_TRUE(replacement);
+    EXPECT_FALSE(controller->finishExternalPreparation(*first));
+    EXPECT_TRUE(controller->finishExternalPreparation(*replacement));
+    EXPECT_EQ(cancelled, 1);
+    EXPECT_FALSE(controller->debugging());
+    auto last = controller->beginExternalPreparation([&] { ++cancelled; });
+    ASSERT_TRUE(last);
+    controller->shutdown();
+    EXPECT_EQ(cancelled, 2);
+    EXPECT_FALSE(controller->finishExternalPreparation(*last));
+    EXPECT_EQ(factoryCalls, 0);
+}
+
 TEST_F(DebugUiTest, ShutdownRejectsADelayedAlternateBuildCompletion) {
     std::function<void(Result<debug::DebugTarget>)> completion;
     int stopped = 0;

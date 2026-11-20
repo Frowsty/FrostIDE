@@ -25,6 +25,8 @@ public:
 private:
     struct PreparedDebug;
     void adoptDebug(std::shared_ptr<PreparedDebug> prepared);
+    void cancelPendingDebug();
+    std::shared_ptr<PreparedDebug> m_pendingDebug;
     void configure();
     void chooseDebug();
     void chooseCommand();

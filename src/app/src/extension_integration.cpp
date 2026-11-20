@@ -25,6 +25,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <utility>
 namespace frost::app {
 namespace {
 QString q(std::string_view s) { return QString::fromUtf8(s.data(), static_cast<qsizetype>(s.size())); }
@@ -53,7 +54,7 @@ struct ExtensionIntegration::PreparedDebug {
     io::FileStatus status;
     std::string file, root, hash, adapterId, title;
     lang::Json arguments;
-    std::uint64_t generation{}, version{};
+    std::uint64_t generation{}, version{}, controllerGeneration{};
 };
 namespace {
 sched::Task<void> prepareExtensionDebug(std::function<void()> prepare) {
@@ -81,7 +82,17 @@ ExtensionIntegration::ExtensionIntegration(Workbench& workbench) : QObject(&work
     m_poll.start(250);
 }
 ExtensionIntegration::~ExtensionIntegration() { shutdown(); }
+void ExtensionIntegration::cancelPendingDebug() {
+    auto pending = std::exchange(m_pendingDebug, {});
+    if (!pending)
+        return;
+    pending->active->store(false);
+    pending->admission->revoke();
+    if (m_workbench.m_debug && m_workbench.m_debug->sessionGeneration() == pending->controllerGeneration)
+        m_workbench.m_debug->stop();
+}
 void ExtensionIntegration::revoke() {
+    cancelPendingDebug();
     m_active->store(false);
     m_stop.request_stop();
     ++m_generation;
@@ -225,6 +236,9 @@ Result<void> ExtensionIntegration::debugCurrentFile(std::string selected) {
     if (m_physicalIdentityRevoked)
         return fail(ErrorCode::PermissionDenied,
                     "Physical project changed; close and reopen the project before extension debug");
+    cancelPendingDebug();
+    if (m_workbench.m_debug->debugging())
+        return fail(ErrorCode::Busy, "A debug operation is already running");
     const auto revision = m_revision;
     const auto physicalIdentity = m_physicalRoot;
     const auto file = view->path(), root = m_root;
@@ -271,7 +285,7 @@ Result<void> ExtensionIntegration::debugCurrentFile(std::string selected) {
         return allowed;
     auto prepared = std::make_shared<PreparedDebug>();
     prepared->admission = std::move(admission);
-    prepared->active = active;
+    prepared->active = std::make_shared<std::atomic<bool>>(true);
     prepared->generation = m_generation;
     prepared->file = file;
     prepared->root = root;
@@ -279,6 +293,16 @@ Result<void> ExtensionIntegration::debugCurrentFile(std::string selected) {
     prepared->arguments = std::move(*args);
     prepared->adapterId = chosen->adapterId;
     prepared->title = chosen->title;
+    auto pendingLease = m_workbench.m_debug->beginExternalPreparation([weak = std::weak_ptr<PreparedDebug>(prepared)] {
+        if (auto request = weak.lock()) {
+            request->active->store(false);
+            request->admission->revoke();
+        }
+    });
+    if (!pendingLease)
+        return std::unexpected(pendingLease.error());
+    prepared->controllerGeneration = *pendingLease;
+    m_pendingDebug = prepared;
     auto* fs = &m_workbench.m_services.fs;
     const QPointer<ExtensionIntegration> self(this);
     m_tasks.push_back(m_workbench.m_pool->spawn(
@@ -323,8 +347,17 @@ Result<void> ExtensionIntegration::debugCurrentFile(std::string selected) {
 }
 void ExtensionIntegration::adoptDebug(std::shared_ptr<PreparedDebug> prepared) {
     poll();
-    if (m_stopped || m_workbench.m_shutDown || prepared->generation != m_generation || !prepared->active->load())
+    if (m_pendingDebug != prepared)
         return;
+    if (m_stopped || m_workbench.m_shutDown || prepared->generation != m_generation || !prepared->active->load()) {
+        cancelPendingDebug();
+        return;
+    }
+    if (!m_workbench.m_debug->finishExternalPreparation(prepared->controllerGeneration)) {
+        cancelPendingDebug();
+        return;
+    }
+    m_pendingDebug.reset();
     if (prepared->error) {
         m_workbench.notify(QStringLiteral("Extension debug refused"), q(prepared->error->message()),
                            ui::NotificationKind::Warning);

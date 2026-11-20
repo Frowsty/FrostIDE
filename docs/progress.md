@@ -60,6 +60,11 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R19 pending DAP preparation ownership
+
+- Added one generation-owned external preparation lease to the normal debug controller. Pending extension preparation enables normal Stop, blocks other starts and cancels on Stop/shutdown; only its exact current lease may adopt. Repeated extension Debug explicitly cancels the previous owned request before replacement; contribution/workspace revocation also cancels it. Cancellation revokes actual launch authority and late prepared children cannot adopt.
+- Authored single-owner, Stop/late completion, replacement generation and shutdown regression. Source review requested; no execution.
+
 ## 2026-11-20: R19 paired native source freeze
 
 - Integrated IO owner native enforcement59df7ce3 and final source/fixtures/deployment315e520a as localbeca3d14/fb479a4a. Added the app sample fixture's enforcing-helper deployment call; frost and native IO fixture deployment remain owner-provided. Corrected staging-parent ownershipf57ad0db is independently source-cleared. Native path traversal now advances its separator and bounds pinned handles.
