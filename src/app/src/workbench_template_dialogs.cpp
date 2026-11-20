@@ -72,6 +72,8 @@ void Workbench::showSourceTemplateDialog() {
     kind->addItems({"C++ class (header and source)", "C++ source", "C++ header", "CMake script", "Lua module"});
     if (model)
         kind->addItems({"New CMake executable target", "New CMake static library target"});
+    const auto componentIndex=kind->count();
+    kind->addItem("FrostEngine C++ component (CMake executable)");
     form->addRow("Template:", kind);
     auto* name = new QLineEdit(&dialog);
     name->setObjectName("sourceTemplateName");
@@ -117,7 +119,7 @@ void Workbench::showSourceTemplateDialog() {
         &dialog);
     explanation->setWordWrap(true);
     layout->addWidget(explanation);
-    connect(kind, &QComboBox::currentIndexChanged, &dialog, [&](int index) { membership->setEnabled(index < 5); });
+    connect(kind, &QComboBox::currentIndexChanged, &dialog, [&](int index) { membership->setEnabled(index < 5 || index == componentIndex); });
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     layout->addWidget(buttons);
     buttons->button(QDialogButtonBox::Ok)->setText("Prepare preview");
@@ -133,7 +135,8 @@ void Workbench::showSourceTemplateDialog() {
     }
     SourceTemplateSpec spec;
     const auto selected = kind->currentIndex();
-    spec.file.kind = selected == 1   ? lang::FileTemplateKind::Source
+    spec.file.kind = selected == componentIndex ? lang::FileTemplateKind::FrostComponent
+                     : selected == 1   ? lang::FileTemplateKind::Source
                      : selected == 2 ? lang::FileTemplateKind::Header
                      : selected == 3 ? lang::FileTemplateKind::CMakeScript
                      : selected == 4 ? lang::FileTemplateKind::LuaModule
@@ -143,7 +146,7 @@ void Workbench::showSourceTemplateDialog() {
     spec.file.author = author->text().toUtf8().toStdString();
     spec.file.description = description->text().toUtf8().toStdString();
     spec.directory = QDir::fromNativeSeparators(directory->text()).toUtf8().toStdString();
-    spec.newCMakeTarget = selected >= 5;
+    spec.newCMakeTarget = model && selected >= 5 && selected != componentIndex;
     spec.staticLibrary = selected == 6;
     if (!spec.newCMakeTarget) {
         if (model)

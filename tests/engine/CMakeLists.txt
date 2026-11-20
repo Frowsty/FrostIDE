@@ -47,7 +47,7 @@ frost_configure_engine_corpus_target(engine_test_provider_corpus_tests)
 # FEC-13 compares usages with real providers and applies the reviewed preview only in an owned
 # disposable clone before a full engine build/test/exporter oracle. The shared lock spans each case.
 frost_add_test(binding_queries_corpus_tests
-    SOURCES binding_queries_corpus_test.cpp binding_corpus_support.hpp
+    SOURCES binding_queries_corpus_test.cpp component_template_corpus_test.cpp binding_corpus_support.hpp
     DEPS frost::engine frost::build frost::lang frost::sched frost::text frost::io frost::rpc frost::core
     LABELS integration corpus clangd luals
     TIMEOUT 18000)
