@@ -106,6 +106,7 @@ frost_add_test(app_workbench_tests QT
             source_rename_plan_test.cpp
         workbench_templates_test.cpp
         workbench_lua_refactoring_test.cpp
+        workbench_structural_search_test.cpp
     DEPS frost::app frost::build frost::io frost::ui_find
     THIRD_PARTY Qt6::Network)
 target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)

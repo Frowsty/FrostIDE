@@ -434,6 +434,7 @@ Workbench::~Workbench() {
     if (m_documentRegistry) {
         m_documentRegistry->unsubscribe(m_registryListener);
     }
+    m_structuralStop.request_stop();
     for (auto& stopped : m_retiredLua)
         if (stopped.valid())
             stopped.join();

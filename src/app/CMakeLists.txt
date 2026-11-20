@@ -160,6 +160,7 @@ frost_add_library(app LAYER app
         src/workbench_save_actions.cpp
         src/workbench_lua.cpp
         src/workbench_lua_refactoring.cpp
+        src/workbench_structural_search.cpp
         src/workbench_lua_module.cpp
         src/workbench_inspection.cpp
         src/workbench_analyzer.cpp

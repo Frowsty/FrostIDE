@@ -812,6 +812,8 @@ private:
     [[nodiscard]] Result<std::function<Result<void>(const lang::WorkspaceEdit&)>> beginCppProviderRefactoring();
     [[nodiscard]] bool previewCppRefactoring(const document::RefactoringPlan& plan);
     void registerLuaRefactoringActions();
+    void registerStructuralSearchActions();
+    void showStructuralSearch(bool replace);
     void showLuaRefactoring(std::string operation);
     void renameLuaModule();
     void publishRefactoringOutcome(const document::RefactoringOutcome& outcome);
@@ -1158,6 +1160,7 @@ private:
     std::string m_managedServerPath;
     std::shared_ptr<lang::LuaService> m_lua;
     std::uint64_t m_luaListener = 0;
+    std::stop_source m_structuralStop;
     std::vector<sched::JoinHandle<void>> m_retiredLua;
     QPointer<ui::TrustDialog> m_luaTrustDialog;
     QTimer m_luaTrustWatch;

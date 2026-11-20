@@ -8007,3 +8007,18 @@ with a pointer.
   symbol/breakpoint revalidation, uncertain-outcome handling and explicit restart ownership.
 - No builds, configuration, tests, feature runs, WSL, installs or licence acceptance were performed.
   Independent source review is pending on codex/r19-hot-reload-decision.
+
+## 2026-11-20: R19 REF-15 structural search/replace checkpoint (source only)
+
+- Added actual pinned-parser S-expression structural queries with one @match, named captures and
+  literal equality/set predicates. Replacements expand exact captured bytes, refuse ambiguous or
+  overlapping matches and require an error-free complete reparse. This is explicitly syntax-only;
+  semantic/type/binding/regex constraints refuse rather than silently switching to text search.
+- Normal Search/Refactor actions capture current/open/indexed-project same-language scopes, parse
+  on workers with cancellation and byte/match/time ceilings, preserve disk encoding and dirty
+  overlays, and use the existing complete preview and one REF-1 global Undo/Redo transaction.
+  Captured search rows navigate only to matching live source. No files are written before Apply.
+- Authored actual C++/Lua grammar regressions and normal Workbench preview/Undo/cancellation
+  journeys. docs/protocols/structural-patterns.md specifies syntax and concrete scope/semantic limits.
+  No builds, configuration, tests, feature executions, WSL, installs or pushes ran. Independent
+  source review and runtime acceptance are pending on codex/r19-structural-search.

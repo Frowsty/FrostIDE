@@ -218,6 +218,7 @@ Result<document::RefactoringOutcome> Workbench::resumeRefactoring() {
 void Workbench::registerRefactoringActions() {
     registerCppRefactoringActions();
     registerLuaRefactoringActions();
+    registerStructuralSearchActions();
     registerCppIndexActions();
     for (const bool redo : {false, true}) {
         input::ActionSpec spec;

@@ -323,6 +323,8 @@ Result<CompiledQuery> compileQuery(const TSLanguage* grammar, std::string_view s
     for (std::uint32_t id = 0; id < captures; ++id) {
         const std::string_view name = captureNameOf(query, id);
         const bool internal = name.starts_with('_');
+        if (kind == QueryKind::Structural)
+            continue;
         if (kind == QueryKind::Highlights) {
             const std::optional<HighlightKind> highlight = internal ? std::nullopt : highlightKindFromCapture(name);
             if (!internal && !highlight) {
