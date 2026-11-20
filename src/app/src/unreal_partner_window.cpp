@@ -37,20 +37,26 @@ UnrealPartnerWindow::UnrealPartnerWindow(std::string projectFile,project::TrustS
     }
     layout->addLayout(row);m_status=new QLabel(tr("Disconnected; no partner data"),this);m_status->setWordWrap(true);layout->addWidget(m_status);
     m_state=new QLabel(tr("PIE state unavailable"),this);layout->addWidget(m_state);
-    auto* filter=new QLineEdit(this);filter->setPlaceholderText(tr("Filter observed Blueprint or function object"));layout->addWidget(filter);
+    auto* filter=new QLineEdit(this);m_filter=filter;filter->setObjectName(QStringLiteral("unrealBlueprintFilter"));filter->setPlaceholderText(tr("Filter observed Blueprint or function object"));layout->addWidget(filter);
     m_calls=new QTableWidget(0,3,this);m_calls->setObjectName(QStringLiteral("unrealBlueprintCalls"));
     m_calls->setHorizontalHeaderLabels({tr("Blueprint object"),tr("Function object"),tr("Actual graph node")});
     m_calls->setEditTriggers(QAbstractItemView::NoEditTriggers);m_calls->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);layout->addWidget(m_calls);
     m_calls->setToolTip(tr("Snapshot from the last explicit refresh. Refresh after graph edits."));
-    connect(filter,&QLineEdit::textChanged,this,[this](const QString& query){
-        for(int row=0;row<m_calls->rowCount();++row){bool match=query.isEmpty();for(int column=0;column<3;++column)if(const auto* item=m_calls->item(row,column))match=match||item->text().contains(query,Qt::CaseInsensitive);m_calls->setRowHidden(row,!match);}
-    });
+    connect(filter,&QLineEdit::textChanged,this,[this]{applyBlueprintFilter();});
     m_logs=new QPlainTextEdit(this);m_logs->setReadOnly(true);m_logs->document()->setMaximumBlockCount(1000);layout->addWidget(m_logs);
     m_watch.setInterval(100);connect(&m_watch,&QTimer::timeout,this,[this]{checkSession();});updateControls();
 }
 UnrealPartnerWindow::~UnrealPartnerWindow(){m_watch.stop();if(m_socket)m_socket->abort();std::fill(m_token.begin(),m_token.end(),'\0');}
 bool UnrealPartnerWindow::admitted() const {const auto now=m_trust.snapshot(m_root);return m_socket&&now.trusted&&now.revision==m_revision;}
 void UnrealPartnerWindow::updateControls(){for(auto* widget:m_controls)widget->setEnabled(m_ready&&admitted());m_port->setEnabled(!m_socket);m_secret->setEnabled(!m_socket);m_connectButton->setEnabled(!m_socket);}
+void UnrealPartnerWindow::applyBlueprintFilter(){
+    const auto query=m_filter->text();
+    for(int row=0;row<m_calls->rowCount();++row){
+        bool match=query.isEmpty();
+        for(int column=0;column<3;++column)if(const auto* item=m_calls->item(row,column))match=match||item->text().contains(query,Qt::CaseInsensitive);
+        m_calls->setRowHidden(row,!match);
+    }
+}
 void UnrealPartnerWindow::closeEvent(QCloseEvent* event){endSession(tr("Disconnected"));QDialog::closeEvent(event);}
 void UnrealPartnerWindow::endSession(const QString& reason){
     ++m_epoch;m_watch.stop();m_ready=false;m_pending.clear();m_input.clear();m_initialState.reset();
@@ -103,6 +109,7 @@ void UnrealPartnerWindow::receive(const lang::UnrealPartnerEvent& event){
             if(event.status=="ok"&&event.scope!="loaded-blueprint-graphs"){endSession(tr("Local partner omitted the Blueprint observation scope."));return;}
             if(event.status=="ok")for(const auto& call:event.calls){const int row=m_calls->rowCount();m_calls->insertRow(row);
                 m_calls->setItem(row,0,new QTableWidgetItem(QString::fromStdString(call.blueprint)));m_calls->setItem(row,1,new QTableWidgetItem(QString::fromStdString(call.function)));m_calls->setItem(row,2,new QTableWidgetItem(QString::fromStdString(call.node)));}
+            applyBlueprintFilter();
         }
         m_status->setText(tr("Partner reply: %1 — %2").arg(QString::fromStdString(operation),QString::fromStdString(event.status)));
     }else if(event.kind=="state"){

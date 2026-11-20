@@ -46,6 +46,18 @@ TEST(UnrealPartnerProtocol, MatchingObservedRowsAreClearedOnRevokeRegrant) {
     output=rpc::Json(envelope).set("kind","reply").set("id",*request->find("id")).set("status","ok").set("scope","loaded-blueprint-graphs").set("calls",rpc::Json::array({node})).dump()+"\n";
     ASSERT_EQ(peer->write(output.data(),static_cast<qint64>(output.size())),static_cast<qint64>(output.size()));
     ASSERT_TRUE(pump([&]{return calls->rowCount()==1;}));EXPECT_EQ(calls->item(0,0)->text(),QStringLiteral("/Game/Authored.Authored"));
+    auto* filter=window.findChild<QLineEdit*>(QStringLiteral("unrealBlueprintFilter"));ASSERT_NE(filter,nullptr);
+    filter->setText(QStringLiteral("Wanted"));EXPECT_TRUE(calls->isRowHidden(0));
+    received.clear();refresh->click();
+    ASSERT_TRUE(pump([&]{received+=peer->readAll();return received.contains('\n');}));
+    request=rpc::parseJsonStrict(std::string_view(received.constData(),static_cast<std::size_t>(received.indexOf('\n'))));ASSERT_TRUE(request);
+    auto wanted=rpc::Json(node).set("blueprint","/Game/Wanted.Wanted").set("node",std::string(32,'c'));
+    auto other=rpc::Json(node).set("blueprint","/Game/Other.Other").set("node",std::string(32,'d'));
+    output=rpc::Json(envelope).set("kind","reply").set("id",*request->find("id")).set("status","ok").set("scope","loaded-blueprint-graphs").set("calls",rpc::Json::array({wanted,other})).dump()+"\n";
+    ASSERT_EQ(peer->write(output.data(),static_cast<qint64>(output.size())),static_cast<qint64>(output.size()));
+    ASSERT_TRUE(pump([&]{return calls->rowCount()==2;}));
+    EXPECT_EQ(filter->text(),QStringLiteral("Wanted"));EXPECT_FALSE(calls->isRowHidden(0));EXPECT_TRUE(calls->isRowHidden(1));
+    filter->clear();EXPECT_FALSE(calls->isRowHidden(0));EXPECT_FALSE(calls->isRowHidden(1));
     ASSERT_TRUE((*trust)->untrust(root));ASSERT_TRUE((*trust)->trust(root));
     ASSERT_TRUE(pump([&]{return calls->rowCount()==0&&!refresh->isEnabled();}));
     EXPECT_TRUE(token->text().isEmpty());
