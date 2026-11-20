@@ -64,6 +64,12 @@ public:
     [[nodiscard]] Result<void> shaderPreview(bool preview, std::string absolutePath = {});
     void installShaderPreviewActions();
     void invalidateShaderPreview();
+    // Ordinary GUI-dispatched language requests; stop reaches the actual session and all results retain source
+    // identity.
+    void requestShaderLanguage(std::string method, lang::Json params, std::stop_token stop,
+                               std::function<void(Result<lang::Json>)> completed);
+    void scheduleShaderDiagnostics(std::string path);
+    [[nodiscard]] std::string shaderLanguageIdentity() const;
     // Actual authenticated content command; callback runs on GUI only for the retained session.
     [[nodiscard]] Result<std::uint64_t> contentCommand(std::string method, lang::Json params,
                                                        std::function<void(Result<lang::Json>)> completed);

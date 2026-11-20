@@ -60,6 +60,7 @@ inline constexpr std::array<LanguageCapabilities, 6> kLanguageCapabilities{{
      .codeVision = true,
      .clangdTweaks = false},
     {.languageId = "cmake", .serverName = "CMake", .postfix = true, .liveTemplates = true},
+    {.languageId = "glsl", .serverName = "FrostEngine GLSL"},
     {.languageId = "lua", .serverName = "LuaLS", .liveTemplates = true},
     {.languageId = "json", .serverName = "the selected JSON schema service"},
     {.languageId = "plaintext", .serverName = ""},
@@ -95,6 +96,8 @@ inline constexpr std::array<LanguageCapabilities, 6> kLanguageCapabilities{{
     if (e == "cs" || e == "csx") {
         return "csharp";
     }
+    if (e == "glsl" || e == "glslh")
+        return "glsl";
     if (e == "lua") {
         return "lua";
     }

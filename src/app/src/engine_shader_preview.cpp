@@ -4,10 +4,12 @@
 #include "frost/io/path.hpp"
 #include "frost/io/spawn_log.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 
 #include "engine_integration_internal.hpp"
+#include "engine_shader_language_requester.hpp"
 #include <QDialog>
 #include <QDir>
 #include <QFileDialog>
@@ -92,6 +94,10 @@ Result<void> dependencies(io::IFileSystem& fs, std::string_view root, const std:
 } // namespace
 void EngineIntegration::invalidateShaderPreview() { m_impl->clearShaderPreview(); }
 void EngineIntegration::installShaderPreviewActions() {
+    connect(this, &EngineIntegration::stateObserved, this, [this] {
+        if (auto* view = m_impl->workbench.currentView())
+            scheduleShaderDiagnostics(view->path());
+    });
     for (const auto& [id, name, preview] : {std::tuple{"engine.validateShader", "Validate Shader / Material", false},
                                             std::tuple{"engine.previewAsset", "Preview Engine Asset...", true}}) {
         input::ActionSpec action;
@@ -119,6 +125,13 @@ void EngineIntegration::installShaderPreviewActions() {
 }
 void EngineIntegration::Impl::clearShaderPreview() {
     ++shaderPreviewGeneration;
+    shaderLanguageStop.request_stop();
+    shaderLanguageStop = std::stop_source{};
+    for (auto* view : workbench.m_editors->views())
+        if (isEngineShaderSource(view->path()))
+            view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live, {});
+    if (auto* view = workbench.currentView(); view && isEngineShaderSource(view->path()) && workbench.m_language)
+        workbench.m_language->structureReplaced();
     if (previewDialog)
         previewDialog->close();
     previewDialog = nullptr;

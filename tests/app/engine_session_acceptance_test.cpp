@@ -9,9 +9,12 @@
 #include "frost/io/os_error.hpp"
 #include "frost/io/spawn_log.hpp"
 #include "frost/io/utf.hpp"
+#include "frost/lang/completion.hpp"
+#include "frost/lang/uri.hpp"
 #include "frost/run/run_manager.hpp"
 #include "frost/ui/debug_controller.hpp"
 #include "frost/ui/debug_session_registry.hpp"
+#include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
@@ -266,6 +269,102 @@ TEST_F(RealEngineWorkbench, NativeShaderProblemsEqualCompilerOracleAndRealPrevie
             });
         },
         10s));
+}
+
+TEST_F(RealEngineWorkbench, GlslUserCompletionDefinitionAndStructureUseRealEngineSemantics) {
+    auto& fs = frost::io::realFileSystem();
+    const auto main = project + "/Assets/Shaders/Editing.glsl",
+               header = project + "/Assets/Shaders/Include/Types.glslh";
+    const std::string source = "#include \"Include/Types.glslh\"\n#type compute\nlayout(local_size_x=1) in;\nvoid "
+                               "main(){\n float localValue=1.0;\n float useValue=glo;\n useValue+=includedValue;\n}\n";
+    ASSERT_TRUE(fs.createDirectories(project + "/Assets/Shaders/Include"));
+    ASSERT_TRUE(fs.writeFileAtomic(main, source));
+    ASSERT_TRUE(fs.writeFileAtomic(header, "float globalValue;\nfloat includedValue;\n"));
+    const auto caret = source.find("glo;") + 3;
+    auto oracle = build.cli(
+        "shader.language", project,
+        Json::object()
+            .set("path", "Assets/Shaders/Editing.glsl")
+            .set("queryPath", "Assets/Shaders/Editing.glsl")
+            .set("method", "completion")
+            .set("offset", caret)
+            .set("overlays",
+                 Json::array({Json::object().set("path", "Assets/Shaders/Editing.glsl").set("source", source)})));
+    ASSERT_TRUE(oracle);
+    ASSERT_FALSE(oracle->find("items")->items().empty());
+    frost::test::RealEditor engine;
+    auto endpoint = engine.start(build, project, config);
+    ASSERT_TRUE(endpoint);
+    WorkbenchRig rig(dir, options());
+    ASSERT_NO_FATAL_FAILURE(open(rig));
+    ASSERT_NO_FATAL_FAILURE(pair(rig, *endpoint));
+    // Dirty journaled documents intentionally survive with no editor view.
+    const auto retainedPath = project + "/Assets/Shaders/Include/Retained.glslh";
+    ASSERT_TRUE(fs.writeFileAtomic(retainedPath, "float retainedDisk;\n"));
+    auto retained = rig.workbench->documents().open(retainedPath);
+    ASSERT_TRUE(retained);
+    ASSERT_TRUE((*retained)->document().replace(frost::text::ByteRange{frost::ByteOffset{0}, frost::ByteOffset{0}},
+                                                "// unsaved retained overlay\n", frost::text::EditContext{}));
+    ASSERT_EQ(rig.workbench->editors().find(retainedPath), nullptr);
+    ASSERT_TRUE(rig.workbench->openPath(main));
+    auto* view = rig.workbench->currentView();
+    ASSERT_NE(view, nullptr);
+    view->editor().setState(frost::text::EditorState::caretAt(frost::ByteOffset{caret}));
+    view->widget()->setFocus();
+    QApplication::processEvents();
+    sendKey(view->widget(), Qt::Key_Space, Qt::ControlModifier);
+    auto& popup = rig.workbench->language()->completionPopup();
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return std::ranges::any_of(popup.model().items(),
+                                       [](const auto& item) { return item.label == "globalValue"; });
+        },
+        60s));
+    for (const auto& actual : popup.model().items())
+        EXPECT_TRUE(std::ranges::any_of(oracle->find("items")->items(), [&](const auto& item) {
+            return item.stringAt("label") == actual.label && item.stringAt("detail") == actual.detail;
+        }));
+    size_t selected = 0;
+    bool found = false;
+    for (const auto& entry : popup.model().entries()) {
+        if (popup.model().items()[entry.item].label == "globalValue") {
+            found = true;
+            break;
+        }
+        ++selected;
+    }
+    ASSERT_TRUE(found);
+    popup.model().select(selected);
+    ASSERT_TRUE(popup.handleKey(Qt::Key_Return, Qt::NoModifier));
+    auto edited = source;
+    edited.replace(source.find("glo;"), 3, "globalValue");
+    EXPECT_EQ(view->editor().editor().text().text(), edited);
+    // Ctrl+B follows the actual parser-bound use into the engine-resolved include, including dirty main-source overlay.
+    view->editor().setState(frost::text::EditorState::caretAt(frost::ByteOffset{edited.rfind("includedValue") + 3}));
+    view->widget()->setFocus();
+    QApplication::processEvents();
+    sendKey(view->widget(), Qt::Key_B, Qt::ControlModifier);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            auto* current = rig.workbench->currentView();
+            return current && frost::lang::documentKey(current->path()) == frost::lang::documentKey(header);
+        },
+        60s));
+    EXPECT_EQ(rig.workbench->currentView()->status().line, 2);
+    rig.workbench->currentView()->widget()->setFocus();
+    QApplication::processEvents();
+    sendKey(rig.workbench->currentView()->widget(), Qt::Key_F12, Qt::ControlModifier);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return rig.workbench->language()->symbolPopup().structureMode() &&
+                   rig.workbench->language()->symbolPopup().visibleRowCount() >= 2;
+        },
+        60s));
+    ASSERT_TRUE(engine.kill());
+    ASSERT_TRUE(waitFor([&] { return !rig.workbench->engineState().boolAt("connected").value_or(true); }, 30s));
+    EXPECT_TRUE(std::ranges::none_of(rig.workbench->problems()->model()->problems(), [](const auto& problem) {
+        return problem.source == frost::ui::DiagnosticSource::EngineShader;
+    }));
 }
 
 TEST_F(RealEngineWorkbench, RealConsoleAdmissionSendsAllowedCommandAndDenialSendsZeroFrames) {

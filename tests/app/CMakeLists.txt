@@ -23,12 +23,12 @@
 # runs frost.exe beside the test). app_tests runs offscreen Qt only and takes no lock.
 
 frost_add_test(app_tests QT
-    SOURCES command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp stall_hooks_test.cpp
+    SOURCES command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp engine_shader_requester_test.cpp stall_hooks_test.cpp
             workbench_project_helpers_test.cpp cmake_kit_test.cpp standalone_build_backend_test.cpp
             settings_import_test.cpp
     DEPS frost::app frost::diag frost::io)
 # tests/support/scratch_dir.hpp (the persistent services' data directory).
-target_include_directories(app_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_include_directories(app_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 
 # Most of start-up hardening cannot be undone (startup.hpp), so StartupHardeningDeathTest
 # applies it only in a death-test child of this binary, which needs no QApplication (no Qt

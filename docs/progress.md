@@ -8034,3 +8034,6 @@ with a pointer.
   the modal lifetime and bounded report-read findings were fixed. Commits: dd193193, 040ef30a,
   97e679b1 on codex/r15-editor-extras. No builds, tests, feature runs, WSL, benchmarks, probes or
   verification runners were executed. Runtime acceptance remains deferred by user instruction.
+### R14 native GLSL authoring profile (2026-11-20)
+
+Implemented ordinary completion, declaration/definition, hover, Structure and idle diagnostics through authenticated native shader.language (producer 08897089), using compiler AST identities and actual include provenance. Governed asynchronous requests preserve cancellation/deadline semantics without blocking workers; trust/session/state/source changes invalidate observations. Retained dirty documents without views validate document identity, version and bytes. Authored normal key-entry real-engine journey, strict projection/routing tests and single-dispatcher response/cancellation/timeout/late-reply regressions. ADR0103 records bounded ownership/scope and unsupported operations. Independent Astra native and IDE source reviews cleared. No builds, tests, feature execution or WSL run; runtime acceptance remains open.
