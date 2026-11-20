@@ -25,6 +25,12 @@ TEST(RemoteTargets, MapsExplicitBoundariesAndRefusesTraversalOrAmbiguousInverse)
     EXPECT_EQ(*remote,"/home/builder/source/src/With Case.cpp");
     auto restored=mapRemoteToLocal(configured,*remote);ASSERT_TRUE(restored);EXPECT_EQ(*restored,local);
     EXPECT_FALSE(mapRemoteToLocal(configured,"/home/builder/source/../outside.cpp"));
+    EXPECT_FALSE(mapLocalToRemote(configured,configured.mappings[0].localRoot+"/../outside.cpp"));
+    if(io::kNativePathStyle==io::PathStyle::Windows) {
+        EXPECT_FALSE(mapRemoteToLocal(configured,"/home/builder/source/..\\outside.cpp"));
+        EXPECT_FALSE(mapRemoteToLocal(configured,"/home/builder/source/C:/outside.cpp"));
+        EXPECT_FALSE(mapRemoteToLocal(configured,"/home/builder/source/directory./file.cpp"));
+    }
     EXPECT_FALSE(mapRemoteToLocal(configured,"/home/builder/source-sibling/file.cpp"));
     configured.mappings.push_back({io::joinPath(configured.mappings[0].localRoot,"nested").value(),"/other"});
     EXPECT_FALSE(validateRemoteTarget(configured));

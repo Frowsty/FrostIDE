@@ -11,6 +11,14 @@ bool clean(std::string_view text) {return std::ranges::none_of(text,[](unsigned 
 bool identifier(std::string_view text) {
     return !text.empty() && text.size()<=128 && std::ranges::all_of(text,[](unsigned char c){return std::isalnum(c)||c=='_'||c=='-'||c=='.';});
 }
+bool hasDotComponent(std::string_view path,bool windows) {
+    std::size_t begin=0;
+    for(std::size_t i=0;i<=path.size();++i) {
+        if(i!=path.size() && path[i]!='/' && !(windows&&path[i]=='\\'))continue;
+        const auto part=path.substr(begin,i-begin);if(part=="."||part=="..")return true;begin=i+1;
+    }
+    return false;
+}
 std::string localKey(std::string_view path) {
     auto result=io::normalizePath(path).value_or(std::string(path));
     if (io::kNativePathStyle==io::PathStyle::Windows)
@@ -50,7 +58,8 @@ Result<void> validateRemoteTarget(const RemoteTarget& target) {
     for (std::size_t i=0;i<target.mappings.size();++i) {
         const auto& mapping=target.mappings[i];
         if (!io::isAbsolutePath(mapping.localRoot) || !io::isAbsolutePath(mapping.remoteRoot,io::PathStyle::Posix) ||
-            !clean(mapping.localRoot) || !clean(mapping.remoteRoot))
+            !clean(mapping.localRoot) || !clean(mapping.remoteRoot) ||
+            hasDotComponent(mapping.localRoot,io::kNativePathStyle==io::PathStyle::Windows) || hasDotComponent(mapping.remoteRoot,false))
             return fail(ErrorCode::InvalidArgument,"Local/remote mapping roots must be absolute and free of control characters");
         const auto local=localKey(mapping.localRoot);
         auto remote=io::normalizePath(mapping.remoteRoot,io::PathStyle::Posix);
@@ -66,17 +75,29 @@ Result<void> validateRemoteTarget(const RemoteTarget& target) {
 }
 Result<std::string> mapRemoteToLocal(const RemoteTarget& target,std::string_view value) {
     if (auto valid=validateRemoteTarget(target);!valid)return std::unexpected(valid.error());
+    if(hasDotComponent(value,false))return fail(ErrorCode::InvalidArgument,"Remote source mapping refuses dot traversal components");
     auto path=io::normalizePath(value,io::PathStyle::Posix);if(!path)return std::unexpected(path.error());
     for(const auto& mapping:target.mappings) {
         const auto root=io::normalizePath(mapping.remoteRoot,io::PathStyle::Posix).value();
         if(!within(*path,root))continue;
         auto suffix=path->substr(root.size());while(suffix.starts_with('/'))suffix.erase(0,1);
-        return suffix.empty()?io::normalizePath(mapping.localRoot):io::joinPath(mapping.localRoot,suffix);
+        if(io::kNativePathStyle==io::PathStyle::Windows && suffix.find_first_of("\\:")!=suffix.npos)
+            return fail(ErrorCode::Unsupported,"Remote filename cannot be represented in the Windows source namespace");
+        auto mapped=suffix.empty()?io::normalizePath(mapping.localRoot):io::joinPath(mapping.localRoot,suffix);
+        if(!mapped)return std::unexpected(mapped.error());
+        if(!within(localKey(*mapped),localKey(mapping.localRoot)))
+            return fail(ErrorCode::InvalidArgument,"Remote source mapping escaped its explicit local root");
+        auto reversed=mapLocalToRemote(target,*mapped);
+        if(!reversed||*reversed!=*path)
+            return fail(ErrorCode::Unsupported,"Remote source path has no exact reversible local representation");
+        return mapped;
     }
     return fail(ErrorCode::NotFound,"Remote path has no explicit local source mapping: "+std::string(value));
 }
 Result<std::string> mapLocalToRemote(const RemoteTarget& target,std::string_view value) {
     if (auto valid=validateRemoteTarget(target);!valid)return std::unexpected(valid.error());
+    if(hasDotComponent(value,io::kNativePathStyle==io::PathStyle::Windows))
+        return fail(ErrorCode::InvalidArgument,"Local source mapping refuses dot traversal components");
     auto normalized=io::normalizePath(value);if(!normalized)return std::unexpected(normalized.error());
     const auto path=localKey(*normalized);
     for(const auto& mapping:target.mappings) {
