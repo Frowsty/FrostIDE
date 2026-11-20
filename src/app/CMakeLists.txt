@@ -138,6 +138,7 @@ frost_add_library(app LAYER app
         src/settings_dialog.hpp
         src/settings_import.cpp
         src/settings_import.hpp
+        src/hosting_review.cpp
         src/hosting_cli.cpp
         src/hosting_panel.cpp
         src/workbench_hosting.cpp
