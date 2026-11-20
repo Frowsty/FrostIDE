@@ -79,6 +79,8 @@ public:
      * default opens it like openLocation. The workbench's host (LanguageBridge) opens it in an
      * editor that stays read-only.
      */
+    // Physical workspace root for refusing profile-cache output inside a project; empty for unbound hosts.
+    [[nodiscard]] virtual std::string libraryWorkspaceRoot() const { return {}; }
     virtual void openReadOnlyLocation(std::string_view path, ::frost::lang::LspPosition position) {
         openLocation(path, position);
     }

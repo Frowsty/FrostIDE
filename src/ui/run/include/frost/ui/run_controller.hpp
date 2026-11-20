@@ -95,9 +95,13 @@ struct RunControllerHooks {
     // GUI captures immutable trust/project cancellation; the closure runs on RunManager's writer
     // before launching. Required for standalone Lua, no QObject access on that writer.
     std::function<std::function<Result<void>()>(const run::RunConfiguration&)> launchAdmissionFor{};
-    // Optional final resolver for generated native tools; captures physical project identity.
+    // Optional final physical-target resolver for owned generated native recipes.
     std::function<std::function<Result<run::LaunchPlan>(run::LaunchPlan)>(const run::RunConfiguration&)>
         nativeLaunchPlanFor{};
+    // Owned native resolution that invokes a tool receives the run cancellation token.
+    std::function<std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)>(
+        const run::RunConfiguration&)>
+        nativeLaunchPlanWithCancellationFor{};
     // RUN-11, GUI thread: called after trust gating, before RunManager accepts an engine run.
     // The app reserves its session generation and adds authenticated server launch options to a
     // transient copy (never saved). Missing hook refuses engine runs. Errors prevent launch.

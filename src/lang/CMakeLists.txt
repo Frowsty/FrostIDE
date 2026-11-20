@@ -72,6 +72,8 @@ frost_add_library(lang LAYER lang
         src/lua_module_rename.cpp
         src/managed_service.cpp
         src/lsp_types.cpp
+        src/language_registry.cpp
+
         src/msbuild_language.cpp
         src/msbuild_compile_commands.cpp
         src/msvc_environment.cpp

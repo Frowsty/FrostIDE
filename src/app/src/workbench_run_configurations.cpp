@@ -67,6 +67,8 @@ std::vector<run::RunConfiguration> Workbench::generatedRunConfigurations() const
             generated.push_back(std::move(entry));
         }
     }
+    auto managed = managedRunConfigurations();
+    generated.insert(generated.end(), std::make_move_iterator(managed.begin()), std::make_move_iterator(managed.end()));
     return generated;
 }
 

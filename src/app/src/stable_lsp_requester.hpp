@@ -10,6 +10,7 @@
 
 #include "engine_shader_language_requester.hpp"
 
+#include <map>
 #include <memory>
 #include <utility>
 
@@ -30,10 +31,11 @@ public:
         if (m_lua && m_applyEditHandler)
             m_lua->setApplyEditHandler(m_applyEditHandler);
     }
-    void setJsonServer(std::shared_ptr<lang::ILspRequester> server, std::function<bool(std::string_view)> handles = {}) {
+    void setJsonServer(std::shared_ptr<lang::ILspRequester> server,
+                       std::function<bool(std::string_view)> handles = {}) {
         LockGuard lock(m_mutex);
         m_json = std::move(server);
-        m_jsonHandles=std::move(handles);
+        m_jsonHandles = std::move(handles);
     }
     void setCMakeServer(std::shared_ptr<lang::ILspRequester> server) {
         LockGuard lock(m_mutex);
@@ -53,9 +55,19 @@ public:
         if (m_managed && m_applyEditHandler)
             m_managed->setApplyEditHandler(m_applyEditHandler);
     }
+    void setRegisteredServers(std::map<std::string, std::shared_ptr<lang::ILspRequester>> routes) {
+        LockGuard lock(m_mutex);
+        m_registered = std::move(routes);
+        for (const auto& [extension, server] : m_registered)
+            if (server && m_applyEditHandler)
+                server->setApplyEditHandler(m_applyEditHandler);
+    }
     void setApplyEditHandler(ApplyEditHandler handler) override {
         LockGuard lock(m_mutex);
         m_applyEditHandler = std::move(handler);
+        for (const auto& [extension, server] : m_registered)
+            if (server)
+                server->setApplyEditHandler(m_applyEditHandler);
         if (m_server)
             m_server->setApplyEditHandler(m_applyEditHandler);
         if (m_lua)
@@ -65,13 +77,15 @@ public:
     }
     void setActivePath(std::string_view path) {
         LockGuard lock(m_mutex);
+        m_activePath = path;
         m_activeShader = isEngineShaderSource(path);
         m_activeLua = isLua(path);
         m_activeManaged = isCSharp(path);
-        m_activeJson = m_jsonHandles?m_jsonHandles(path):lang::hasBundledJsonSchema(path);
+        m_activeJson = m_jsonHandles ? m_jsonHandles(path) : lang::hasBundledJsonSchema(path);
         m_activeCMake = isCMake(path);
         m_activeMSBuild = project::isMSBuildSource(path);
-        m_hasActive = m_activeShader || m_activeLua || m_activeManaged || m_activeJson || m_activeCMake || m_activeMSBuild || isCpp(path);
+        m_hasActive = m_activeShader || m_activeLua || m_activeManaged || m_activeJson || m_activeCMake ||
+                      m_activeMSBuild || isCpp(path);
     }
 
     [[nodiscard]] sched::Task<Result<lang::Json>> request(std::string method, lang::Json params,
@@ -124,8 +138,15 @@ private:
                 return true;
         return false;
     }
+    [[nodiscard]] std::shared_ptr<lang::ILspRequester> registeredFor(std::string_view path) const
+        FROST_REQUIRES(m_mutex) {
+        const auto found = m_registered.find(lang::documentKey(path));
+        return found == m_registered.end() ? nullptr : found->second;
+    }
     [[nodiscard]] std::shared_ptr<lang::ILspRequester> server() const {
         LockGuard lock(m_mutex);
+        if (!m_hasActive)
+            return registeredFor(m_activePath);
         return m_hasActive ? (m_activeShader    ? m_shader
                               : m_activeLua     ? m_lua
                               : m_activeManaged ? m_managed
@@ -145,14 +166,14 @@ private:
             if (!path)
                 return nullptr;
             LockGuard lock(m_mutex);
-            return isEngineShaderSource(*path)         ? m_shader
-                   : isLua(*path)                      ? m_lua
-                   : isCSharp(*path)                   ? m_managed
+            return isEngineShaderSource(*path)                                                  ? m_shader
+                   : isLua(*path)                                                               ? m_lua
+                   : isCSharp(*path)                                                            ? m_managed
                    : (m_jsonHandles ? m_jsonHandles(*path) : lang::hasBundledJsonSchema(*path)) ? m_json
-                   : project::isMSBuildSource(*path)      ? m_msbuild
-                   : isCMake(*path)                    ? m_cmake
-                   : isCpp(*path)                      ? m_server
-                                                       : nullptr;
+                   : project::isMSBuildSource(*path)                                            ? m_msbuild
+                   : isCMake(*path)                                                             ? m_cmake
+                   : isCpp(*path)                                                               ? m_server
+                                                                                                : registeredFor(*path);
         }
         if (auto active = server())
             return active;
@@ -177,6 +198,8 @@ private:
     std::shared_ptr<lang::ILspRequester> m_json FROST_GUARDED_BY(m_mutex);
     std::function<bool(std::string_view)> m_jsonHandles FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_cmake FROST_GUARDED_BY(m_mutex);
+    std::map<std::string, std::shared_ptr<lang::ILspRequester>> m_registered FROST_GUARDED_BY(m_mutex);
+    std::string m_activePath FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_shader FROST_GUARDED_BY(m_mutex);
     bool m_activeShader FROST_GUARDED_BY(m_mutex) = false;
     bool m_activeJson FROST_GUARDED_BY(m_mutex) = false;

@@ -103,6 +103,8 @@ Result<void> Workbench::openPath(std::string_view path, FileLocation at) {
     if (status->type == io::FileType::Directory) {
         return openFolder(canonical);
     }
+    if (!hasProject() && extensionOf(canonical) == ".csproj")
+        return openFolder(std::string(io::parentPath(canonical)), false, canonical);
     if (extensionOf(canonical) == ".frostproj")
         return openFolder(std::string(io::parentPath(canonical)), false, canonical);
     const auto marker = io::fileName(canonical);
@@ -505,6 +507,8 @@ void Workbench::offerProjectTrust() {
 
 // NOLINTNEXTLINE(performance-unnecessary-value-param): Own identities across reentrant project callbacks.
 void Workbench::setProject(std::string root, QString name, std::string recentPath) {
+    clearManagedProjectContext();
+    m_managedModelRefreshQueued = false;
     m_luaRuntimeStop.request_stop();
     m_luaRuntimeStop = std::stop_source{};
     invalidateManagedDebug();
@@ -660,6 +664,8 @@ bool Workbench::closeForOpen() {
     m_closingSolution = false;
     if (m_debug)
         (void)m_debug->setWorkspaceRoot({});
+    clearManagedProjectContext();
+    m_managedModelRefreshQueued = false;
     m_luaRuntimeStop.request_stop();
     m_projectRoot.clear();
     m_projectIdentity.clear();

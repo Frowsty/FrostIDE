@@ -4,7 +4,9 @@
 #include "frost/debug/coreclr_dap.hpp"
 
 #include "frost/io/path.hpp"
+#include "frost/debug/lldb_dap.hpp"
 #include "frost/project/trust_store.hpp"
+#include <limits>
 
 namespace frost::debug {
 
@@ -66,18 +68,57 @@ startCoreClrSession(const project::TrustStore& trust, const CoreClrTarget& targe
     auto launch = coreClrLaunchArguments(target);
     if (!launch)
         return std::unexpected(std::move(launch.error()));
-    if (trustRoots.empty())
-        return fail(ErrorCode::InvalidArgument, "managed debugging requires project trust roots");
-    for (const auto& root : trustRoots) {
-        if (!io::isAbsolutePath(root) || root.find('\0') != std::string::npos)
-            return fail(ErrorCode::InvalidArgument, "managed project trust root must be absolute");
-        if (!trust.isTrusted(root))
-            return fail(ErrorCode::Untrusted, "managed project is not trusted");
-    }
-    if (!trust.isTrusted(io::parentPath(target.assembly)))
-        return fail(ErrorCode::Untrusted, "managed assembly directory is not trusted");
+    auto admission = [&trust, target, trustRoots]() -> Result<void> {
+        if (trustRoots.empty())
+            return fail(ErrorCode::InvalidArgument, "managed debugging requires project trust roots");
+        for (const auto& root : trustRoots) {
+            if (!io::isAbsolutePath(root) || root.find('\0') != std::string::npos)
+                return fail(ErrorCode::InvalidArgument, "managed project trust root must be absolute");
+            if (!trust.isTrusted(root))
+                return fail(ErrorCode::Untrusted, "managed project is not trusted");
+        }
+        if (!trust.isTrusted(io::parentPath(target.assembly)) || !trust.isTrusted(target.workingDirectory))
+            return fail(ErrorCode::Untrusted, "managed assembly or working directory is not trusted");
+        return {};
+    };
+    if (auto allowed = admission(); !allowed)
+        return std::unexpected(std::move(allowed.error()));
+    DebugSessionOptions options;
+    options.adapterId = "coreclr";
+    options.launchAdmission = std::move(admission);
     return DebugSession::start(std::move(factory), std::move(*launch), std::move(breakpoints), std::move(callbacks),
-                               false, "coreclr");
+                               std::move(options));
+}
+
+Result<std::unique_ptr<DebugSession>>
+attachCoreClrSession(const project::TrustStore& trust, const DebugTarget& target, std::int64_t pid,
+                     AdapterFactory factory, std::function<Result<void>()> processAdmission,
+                     std::map<std::string, std::vector<BreakpointLine>> breakpoints, DebugSessionCallbacks callbacks,
+                     std::function<void()> releaseAuthorization) {
+    if (pid <= 0 || pid > std::numeric_limits<std::uint32_t>::max() || !processAdmission || !factory)
+        return fail(ErrorCode::InvalidArgument, "CoreCLR attach requires a local PID, adapter and process admission");
+    auto admission = [&trust, target, processAdmission = std::move(processAdmission)]() -> Result<void> {
+        if (auto allowed = validateDebugTargetTrust(trust, target); !allowed)
+            return allowed;
+        if (!target.workingDirectory.empty() &&
+            (!io::isAbsolutePath(target.workingDirectory) || !trust.isTrusted(target.workingDirectory)))
+            return fail(ErrorCode::Untrusted, "CoreCLR attach working directory is not trusted");
+        return processAdmission();
+    };
+    if (auto allowed = admission(); !allowed)
+        return std::unexpected(std::move(allowed.error()));
+    DebugSessionOptions options;
+    options.adapterId = "coreclr";
+    options.targetMode = DebugTargetMode::Attach;
+    options.launchAdmission = [admission = std::move(admission), release = std::move(releaseAuthorization)] {
+        auto allowed = admission();
+        if (release)
+            release();
+        return allowed;
+    };
+    return DebugSession::start(std::move(factory),
+                               rpc::Json::object().set("processId", pid).set("justMyCode", false),
+                               std::move(breakpoints), std::move(callbacks), std::move(options));
 }
 
 } // namespace frost::debug

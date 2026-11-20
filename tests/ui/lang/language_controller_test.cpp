@@ -21,6 +21,7 @@
 #include "../../../src/ui/lang/src/language_controller_internal.hpp"
 #include "lang/feature_server.hpp"
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QCheckBox>
 #include <QDialog>
 #include <QEvent>
@@ -157,6 +158,12 @@ public:
     void openLocation(std::string_view path, fl::LspPosition position) override {
         opened.emplace_back(std::string(path), position);
     }
+    void openReadOnlyLocation(std::string_view path, fl::LspPosition position) override {
+        ++readOnlyOpens; openLocation(path, position);
+    }
+    int readOnlyOpens = 0;
+    std::string libraryRoot;
+    std::string libraryWorkspaceRoot() const override { return libraryRoot; }
     void setUsageHighlights(std::vector<fl::DocumentHighlight> list) override { highlights = std::move(list); }
     std::vector<std::pair<std::string, frost::text::Snapshot>> openDocuments() const override {
         return {{m_path, m_buffer.current()}};
@@ -1193,6 +1200,87 @@ std::string metadataCache() {
 #endif
 }
 
+TEST(LanguageControllerNavigation, OwnedLibraryActionsCacheActualBytesAndKeepSourceLinkExplicit) {
+    auto caps = FeatureServer::defaultCapabilities();
+    caps.set("experimental", Json::object().set("frostLibrarySources", 1));
+    FeatureServer server(std::move(caps));
+    const std::string source = "// Decompiled fixture receipt\npublic static class Library {}\n";
+    const auto digest = QCryptographicHash::hash(QByteArray::fromStdString(source), QCryptographicHash::Sha256).toHex().toStdString();
+    server.on("frost/managed/librarySource", [&](const Json&) {
+        return Json::object().set("source", source).set("sourceSha256", digest).set("identity", digest)
+            .set("extension", ".cs").set("line", 1).set("kind", "decompiled");
+    });
+    FakeHost host("Library.Value();", workPath("Program.cs"));
+    host.caretAfter("Library.Val");
+    frost::io::MemFs fs(frost::systemClock());
+    ASSERT_TRUE(fs.createDirectories(frost::io::parentPath(metadataCache())));
+    RecordingApplier applier;
+    LanguageController controller(LanguageServices{.server = server.client(), .scheduler = server.scheduler(),
+        .host = host, .applier = applier, .fs = fs,
+        .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
+        .metadataCacheDir = metadataCache()});
+    server.on("textDocument/declaration", [](const Json&) { return Json::array(); });
+    server.on("textDocument/definition", [](const Json&) { return Json::array(); });
+    controller.gotoDeclaration();
+    ASSERT_TRUE(pumpUntil([&] { return host.opened.size() == 1; }));
+    EXPECT_EQ(fs.readFile(host.opened.front().first).value_or(""), source);
+    EXPECT_EQ(host.opened.front().first, frost::io::joinPath(metadataCache(), digest + ".cs").value());
+    EXPECT_EQ(host.readOnlyOpens, 1);
+    EXPECT_FALSE(server.paramsOf("frost/managed/librarySource").front().boolAt("allowSourceLink").value_or(true));
+    EXPECT_EQ(server.paramsOf("frost/managed/librarySource").front().stringAt("mode"), "auto");
+    controller.showExternalSourceLink();
+    ASSERT_TRUE(pumpUntil([&] { return host.opened.size() == 2; }));
+    EXPECT_TRUE(server.paramsOf("frost/managed/librarySource").back().boolAt("allowSourceLink").value_or(false));
+    controller.showExternalIl();
+    ASSERT_TRUE(pumpUntil([&] { return host.opened.size() == 3; }));
+    EXPECT_EQ(server.paramsOf("frost/managed/librarySource").back().stringAt("mode"), "il");
+    ASSERT_TRUE(fs.writeFileAtomic(host.opened.front().first, "changed cache"));
+    std::vector<QString> status;
+    QObject::connect(&controller, &LanguageController::statusMessage, [&](const QString& message) { status.push_back(message); });
+    controller.decompileExternalSymbol();
+    ASSERT_TRUE(pumpUntil([&] { return !status.empty(); }));
+    EXPECT_EQ(host.opened.size(), 3U);
+    EXPECT_NE(status.back().toStdString().find("modified"), std::string::npos);
+    EXPECT_FALSE(fs.exists(workDir()).value_or(true));
+}
+TEST(LanguageControllerNavigation, OwnedLibraryRejectsBadReceiptAndWorkspaceCacheBeforeWriting) {
+    auto caps = FeatureServer::defaultCapabilities();
+    caps.set("experimental", Json::object().set("frostLibrarySources", 1));
+    FeatureServer server(std::move(caps));
+    const std::string bytes = "public class Library {}\n";
+    const auto digest = QCryptographicHash::hash(QByteArray::fromStdString(bytes), QCryptographicHash::Sha256).toHex().toStdString();
+    std::atomic_bool valid{false};
+    server.on("frost/managed/librarySource", [&](const Json&) {
+        return Json::object().set("source", bytes).set("identity", digest).set("extension", ".cs")
+            .set("sourceSha256", valid.load() ? digest : std::string(64, '0'));
+    });
+    FakeHost host("Library.Value();", workPath("Program.cs"));
+    host.caretAfter("Library.Val");
+    host.libraryRoot = workDir();
+    frost::io::MemFs fs(frost::systemClock());
+    ASSERT_TRUE(fs.createDirectories(workDir()));
+    RecordingApplier applier;
+    LanguageController controller(LanguageServices{.server = server.client(), .scheduler = server.scheduler(),
+        .host = host, .applier = applier, .fs = fs,
+        .diagnostics = [](std::string_view) { return std::vector<fl::LiveDiagnostic>{}; },
+        .metadataCacheDir = workPath("caches")});
+    std::vector<QString> status;
+    QObject::connect(&controller, &LanguageController::statusMessage, [&](const QString& message) { status.push_back(message); });
+    server.on("textDocument/declaration", [](const Json&) { return Json::array(); });
+    server.on("textDocument/definition", [](const Json&) { return Json::array(); });
+    controller.gotoDeclaration();
+    ASSERT_TRUE(pumpUntil([&] { return status.size() == 1; }));
+    EXPECT_NE(status.back().toStdString().find("checksum"), std::string::npos);
+    EXPECT_FALSE(fs.exists(workPath("caches")).value_or(true));
+    valid.store(true);
+    server.on("textDocument/declaration", [](const Json&) { return Json::array(); });
+    server.on("textDocument/definition", [](const Json&) { return Json::array(); });
+    controller.gotoDeclaration();
+    ASSERT_TRUE(pumpUntil([&] { return status.size() == 2; }));
+    EXPECT_NE(status.back().toStdString().find("outside the workspace"), std::string::npos);
+    EXPECT_TRUE(host.opened.empty());
+    EXPECT_FALSE(fs.exists(workPath("caches")).value_or(true));
+}
 // FND-3 (LTR-1, D32 replaces the old synthesis test): a C# server's real metadata source is shown
 // from the metadata cache, byte for byte, and nothing is written into the workspace.
 TEST(LanguageControllerNavigation, GotoDeclarationShowsServerMetadataFromTheCacheOnly) {

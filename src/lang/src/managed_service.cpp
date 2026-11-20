@@ -9,11 +9,11 @@ LuaServiceOptions managedServiceOptions(std::string dotnetPath, std::string serv
                                         bool trusted) {
     LuaServiceOptions options;
     options.serverPath = std::move(dotnetPath);
-    options.arguments = {std::move(serverAssembly), "--loglevel", "warning"};
+    options.arguments = {std::move(serverAssembly)};
     options.workspaceRoot = std::move(workspaceRoot);
     options.trusted = trusted;
     options.languageId = "csharp";
-    options.displayName = "C# language server";
+    options.displayName = "FrostRoslynHost";
     options.firstArgumentIsAbsolutePath = true;
     options.environment = {{"DOTNET_CLI_TELEMETRY_OPTOUT", std::string("1")},
                            {"DOTNET_NOLOGO", std::string("1")},

@@ -49,6 +49,9 @@ frost_add_library(app LAYER app
         src/cmake_integration.cpp
         src/cmake_kit_dialog.cpp
         src/workbench_dependencies.cpp
+        src/managed_tools_window.cpp
+        src/managed_tools_window.hpp
+        src/workbench_managed_tools.cpp
         src/engine_asset_integration.cpp
         src/engine_asset_move.cpp
         src/engine_shader_preview.cpp
@@ -176,7 +179,9 @@ frost_add_library(app LAYER app
         src/engine_mixed_debug.hpp
         src/workbench_mixed_debug.cpp
         src/engine_native_debug.hpp
+        src/workbench_managed_refactoring.cpp
         src/workbench_language.cpp
+        src/language_registry_integration.cpp
         src/workbench_refactoring.cpp
         src/workbench_cpp_rename.cpp
         src/workbench_cpp_refactoring.cpp
@@ -191,6 +196,9 @@ frost_add_library(app LAYER app
         src/workbench_analyzer.cpp
         src/workbench_cpp_scope_fixes.cpp
         src/workbench_managed.cpp
+        src/workbench_managed_model.cpp
+        src/managed_build_backend.cpp
+        src/workbench_managed_run.cpp
         src/managed_debug_preparation.cpp
         src/managed_source_snapshot.cpp
         src/mono_adapter_preparation.cpp

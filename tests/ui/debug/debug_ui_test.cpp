@@ -516,6 +516,26 @@ TEST_F(DebugUiTest, ConfiguredSourceMapIsValidatedBeforeLaunchingTheAdapter) {
     stopSession();
 }
 
+TEST_F(DebugUiTest, CoreClrAttachRequiresCapturedProcessAndUsesNonterminatingOwnership) {
+    debug::scriptProgram(adapter, debug::FakeProgram{.runsForever = true});
+    adapter.on("attach", [](const rpc::Json&) {
+        return debug::FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json()}}};
+    });
+    auto missing = controller->attachTarget(target(), debug::test::fakeFactory(adapter),
+                                            rpc::Json::object().set("type", "coreclr").set("processId", 123));
+    ASSERT_FALSE(missing);
+    EXPECT_TRUE(adapter.requests().empty());
+    ASSERT_TRUE(controller->attachTarget(target(), debug::test::fakeFactory(adapter),
+                                          rpc::Json::object().set("type", "coreclr").set("processId", 123), {},
+                                          [] { return Result<void>{}; }));
+    ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
+    EXPECT_EQ(adapter.argumentsOf("initialize").front().stringAt("adapterID"), "coreclr");
+    EXPECT_EQ(adapter.argumentsOf("attach").front().integerAt("processId"), 123);
+    stopSession();
+    ASSERT_FALSE(adapter.argumentsOf("disconnect").empty());
+    EXPECT_EQ(adapter.argumentsOf("disconnect").back().boolAt("terminateDebuggee"), false);
+    EXPECT_TRUE(adapter.argumentsOf("terminate").empty());
+}
 TEST_F(DebugUiTest, AttachingUsesTheSuppliedAdapterAndKeepsTheHostAlive) {
     RunConsole console;
     controller->setConsole(&console);

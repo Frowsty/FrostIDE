@@ -219,6 +219,10 @@ public:
     // Shows real metadata-as-source from the language server for the symbol at the caret, written
     // under metadataCacheDir; never writes into the workspace and never synthesises a source.
     void decompileExternalSymbol();
+    void showExternalSourceLink();
+    void showExternalIl();
+    void showAssemblyMetadata();
+    void showLibrarySource(std::string mode, bool allowSourceLink);
 
     // --- Editor hooks ---
     // Cancel requests and dismiss document-specific UI when the active editor changes.

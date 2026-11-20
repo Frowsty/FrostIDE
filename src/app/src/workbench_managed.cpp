@@ -222,10 +222,16 @@ void Workbench::checkUnityProjectContext() {
 void Workbench::startManaged(const std::string& root) {
     if (m_shutDown)
         return;
+    const auto contextTrust = m_services.trust.snapshot(root);
+    if (m_managedEvaluation && (m_managedContextRoot != root || !contextTrust.trusted ||
+                                contextTrust.revision != m_managedContextTrustRevision))
+        clearManagedProjectContext();
     m_unityRevisionRoot = root;
     m_unityRevision.clear();
     stopManaged();
     const auto snapshot = m_services.settings.snapshot();
+    if (m_managedEvaluation && snapshot->get(settings::key::toolsManagedDotnetPath) != m_managedDotnetPath)
+        clearManagedProjectContext();
     m_managedDotnetPath = snapshot->get(settings::key::toolsManagedDotnetPath);
     m_managedServerPath = snapshot->get(settings::key::toolsManagedServerPath);
     if (!m_services.trust.isTrusted(root)) {
@@ -249,7 +255,7 @@ void Workbench::startManaged(const std::string& root) {
                        ignored,
                    ui::NotificationKind::Warning);
     }
-    std::string dotnetPath = m_managedDotnetPath;
+    std::string dotnetPath = m_managedEvaluation ? m_managedEvaluation->request.dotnet : m_managedDotnetPath;
     std::string serverPath = m_managedServerPath;
     if (dotnetPath.empty()) {
 #ifdef _WIN32
@@ -316,19 +322,34 @@ void Workbench::startManaged(const std::string& root) {
             }
         }
     }
+    if (!m_managedEvaluation && !m_managedModelJob && std::string_view(m_projectIdentity).ends_with(".csproj")) {
+        if (dotnetPath.empty()) {
+            notify(QStringLiteral(".NET project context"),
+                   QStringLiteral("The .NET SDK is unavailable; configure the managed SDK executable."),
+                   ui::NotificationKind::Warning);
+            return;
+        }
+        const auto active = m_buildService->activeConfiguration();
+        if (auto queued = configureManagedProject({.dotnet = dotnetPath,
+                                                   .project = m_projectIdentity,
+                                                   .configuration = active ? active->configuration : "Debug"});
+            !queued)
+            notify(QStringLiteral(".NET project context"), QString::fromStdString(queued.error().message()),
+                   ui::NotificationKind::Error);
+        return;
+    }
     if (serverPath.empty()) {
         const QString sdk = qEnvironmentVariable("FROST_SDK");
         if (!sdk.isEmpty()) {
             const std::string sdkServer =
-                QDir(sdk).filePath(QStringLiteral("managed/CSharpLanguageServer.dll")).toUtf8().toStdString();
+                QDir(sdk).filePath(QStringLiteral("roslyn/FrostRoslynHost.dll")).toUtf8().toStdString();
             const auto st = m_services.fs.status(sdkServer);
             if (st && st->type == io::FileType::Regular)
                 serverPath = sdkServer;
         }
         if (serverPath.empty()) {
             const QString appDir = QCoreApplication::applicationDirPath();
-            serverPath =
-                QDir(appDir).filePath(QStringLiteral("managed/CSharpLanguageServer.dll")).toUtf8().toStdString();
+            serverPath = QDir(appDir).filePath(QStringLiteral("roslyn/FrostRoslynHost.dll")).toUtf8().toStdString();
         }
     }
     if (!io::isAbsolutePath(dotnetPath) || !io::isAbsolutePath(serverPath)) {
@@ -357,13 +378,37 @@ void Workbench::startManaged(const std::string& root) {
         return;
     }
     auto options = lang::managedServiceOptions(dotnetPath, serverPath, root, true);
+    const auto activeManagedConfiguration = m_buildService->activeConfiguration();
+    options.arguments.emplace_back("--configuration");
+    options.arguments.push_back(m_managedEvaluation          ? m_managedEvaluation->request.configuration
+                                : activeManagedConfiguration ? activeManagedConfiguration->configuration
+                                                             : "Debug");
+    if (m_managedEvaluation) {
+        options.arguments.emplace_back("--framework");
+        options.arguments.push_back(m_managedEvaluation->request.targetFramework);
+        if (!m_managedEvaluation->request.runtimeIdentifier.empty()) {
+            options.arguments.emplace_back("--runtime-identifier");
+            options.arguments.push_back(m_managedEvaluation->request.runtimeIdentifier);
+        }
+        options.arguments.emplace_back("--project-context");
+        options.arguments.push_back(m_managedEvaluation->request.project);
+    }
     options.environment.emplace_back("DOTNET_ROLL_FORWARD", "LatestMajor");
     // Keep the Unity root as the LSP workspace: source documents live outside the
-    // generated directory. Tell csharp-ls which solution to load explicitly.
+    // generated directory. Tell RoslynHost which solution to load explicitly.
     if (!m_unityRevision.empty()) {
         const QString solution = unitySolution(root, m_unityRevision);
         options.arguments.emplace_back("--solution");
         options.arguments.push_back(solution.toUtf8().toStdString());
+    } else if (m_managedEvaluation && !std::string_view(m_projectIdentity).ends_with(".sln") &&
+               !std::string_view(m_projectIdentity).ends_with(".slnx")) {
+        options.arguments.emplace_back("--solution");
+        options.arguments.push_back(m_managedEvaluation->request.project);
+    } else if (std::string_view(m_projectIdentity).ends_with(".csproj") ||
+               std::string_view(m_projectIdentity).ends_with(".sln") ||
+               std::string_view(m_projectIdentity).ends_with(".slnx")) {
+        options.arguments.emplace_back("--solution");
+        options.arguments.push_back(m_projectIdentity);
     }
     if (!cliHome.isEmpty())
         options.environment.emplace_back("DOTNET_CLI_HOME", cliHome.toUtf8().toStdString());
@@ -396,6 +441,7 @@ void Workbench::startManaged(const std::string& root) {
     m_language->structureChanged();
 }
 void Workbench::stopManaged() {
+    ++m_managedRefactoringEpoch;
     if (m_managedTrustDialog) {
         m_managedTrustDialog->close();
         m_managedTrustDialog.clear();

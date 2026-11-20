@@ -27,6 +27,7 @@
 #include "engine_json_schema_reader.hpp"
 #include "engine_shader_language_requester.hpp"
 #include "language_bridge.hpp"
+#include "language_registry_integration.hpp"
 #include <QCoreApplication>
 #include <QMetaObject>
 
@@ -181,6 +182,8 @@ Result<void> LanguageBridge::validateRefactoringTargets(const lang::WorkspaceEdi
 }
 
 Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_view label) {
+    if (edit.managed)
+        return applyManagedProposal(edit, label);
     if (auto targets = validateRefactoringTargets(edit); !targets)
         return targets;
     if (label == "Rename" || label == "C++ Semantic Refactoring") {
@@ -381,6 +384,9 @@ std::int64_t LanguageBridge::documentVersion() const {
         return m_workbench.m_managed ? m_workbench.m_managed->documentVersion(path).value_or(0) : 0;
     if (isLuaSource(path))
         return m_workbench.m_lua ? m_workbench.m_lua->documentVersion(path).value_or(0) : 0;
+    if (m_workbench.m_registeredLanguages)
+        if (auto server = m_workbench.m_registeredLanguages->service(path))
+            return server->documentVersion(path).value_or(0);
     if (clangd == nullptr || path.empty()) {
         return 0;
     }
@@ -404,6 +410,10 @@ std::string LanguageBridge::structureIdentity() const {
     if (isCFamilySource(path) && m_workbench.m_clangd)
         return std::format("{}:{}:{}:{}", key, reinterpret_cast<std::uintptr_t>(m_workbench.m_clangd.get()),
                            m_workbench.m_clangd->restarts(), static_cast<int>(m_workbench.m_clangd->state()));
+    if (m_workbench.m_registeredLanguages)
+        if (auto server = m_workbench.m_registeredLanguages->service(path))
+            return std::format("{}:{}:{}:{}", key, reinterpret_cast<std::uintptr_t>(server.get()), server->restarts(),
+                               static_cast<int>(server->state()));
     return std::format("{}:none", key);
 }
 
@@ -494,6 +504,8 @@ void LanguageBridge::openLocation(std::string_view path, lang::LspPosition posit
     view->goToLine(static_cast<int>(point.line.value()) + 1, static_cast<int>(point.column.value()) + 1);
 }
 
+std::string LanguageBridge::libraryWorkspaceRoot() const { return m_workbench.m_projectRoot; }
+
 void LanguageBridge::openReadOnlyLocation(std::string_view path, lang::LspPosition position) {
     openLocation(path, position);
     DocumentEditorView* view = m_workbench.currentView();
@@ -538,6 +550,9 @@ std::optional<lang::OpenDocumentState> LanguageBridge::find(std::string_view pat
         state.lspVersion = m_workbench.m_lua->documentVersion(path);
     else if (isCFamilySource(path) && m_workbench.m_clangd)
         state.lspVersion = m_workbench.m_clangd->documentVersion(path);
+    else if (m_workbench.m_registeredLanguages)
+        if (auto server = m_workbench.m_registeredLanguages->service(path))
+            state.lspVersion = server->documentVersion(path);
     state.dirty = view->document().dirty();
     state.changedOnDisk = view->document().diskState() == document::DiskState::Changed ||
                           view->document().diskState() == document::DiskState::OutOfDate;
@@ -671,6 +686,9 @@ ui::lang::ServerReadiness Workbench::languageReadiness(std::string_view path) {
         return m_lua && m_lua->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;
     if (isManagedSource(path))
         return m_managed && m_managed->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;
+    if (m_registeredLanguages)
+        if (auto server = m_registeredLanguages->service(path))
+            return server->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;
     if (!isCFamilySource(path) || !m_clangd || m_clangd->state() != lang::ClangdState::Running)
         return Readiness::NotRunning;
     if (clangdUsesFallbackFlags(path) == true)

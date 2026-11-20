@@ -17,8 +17,8 @@
 
 #include "frost/core/error.hpp"
 #include "frost/lang/cmake_language.hpp"
-#include "frost/lang/msbuild_language.hpp"
 #include "frost/lang/lsp_client.hpp"
+#include "frost/lang/msbuild_language.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/ui/lang/editor_language_host.hpp"
 
@@ -52,19 +52,31 @@ public:
     // The applier the controller's rename and quick fixes use (the encoding follows clangd's).
     [[nodiscard]] lang::IWorkspaceEditApplier& applier() noexcept;
     [[nodiscard]] Result<void> apply(const lang::WorkspaceEdit& edit, std::string_view label) override;
+    [[nodiscard]] std::string managedProposalIdentity() const;
+    [[nodiscard]] Result<void> applyManagedProposal(const lang::WorkspaceEdit& edit, std::string_view label);
     [[nodiscard]] Result<void> validateRefactoringTargets(const lang::WorkspaceEdit& edit);
     // The UI publishes and withdraws servers; requests retain the server they captured.
     void setServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setServer(std::move(server)); }
 
     void setLuaServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setLuaServer(std::move(server)); }
-    void setManagedServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setManagedServer(std::move(server)); }
+    void setManagedServer(std::shared_ptr<lang::ILspRequester> server);
+    void setRegisteredServers(std::map<std::string, std::shared_ptr<lang::ILspRequester>> routes) {
+        m_server.setRegisteredServers(std::move(routes));
+    }
     void setActivePath(std::string_view path);
 
     void closeJsonDocument(std::string_view path) { m_json->removeDocument(path); }
     [[nodiscard]] bool handlesJsonDocument(std::string_view path) const { return m_json->handles(path); }
-    [[nodiscard]] Result<void> installEngineDocumentSchemas(std::string root, const lang::Json& schemas) { return m_json->installEngineSchemas(std::move(root),schemas); }
-    [[nodiscard]] Result<void> installEngineTableSchema(std::string path,const text::Snapshot& snapshot,const lang::Json& reply) { return m_json->installEngineTableSchema(std::move(path),snapshot,reply); }
-    void setJsonAssetReferences(std::string root,lang::JsonAssetReferenceProvider provider) { m_json->setAssetReferences(std::move(root),std::move(provider)); }
+    [[nodiscard]] Result<void> installEngineDocumentSchemas(std::string root, const lang::Json& schemas) {
+        return m_json->installEngineSchemas(std::move(root), schemas);
+    }
+    [[nodiscard]] Result<void> installEngineTableSchema(std::string path, const text::Snapshot& snapshot,
+                                                        const lang::Json& reply) {
+        return m_json->installEngineTableSchema(std::move(path), snapshot, reply);
+    }
+    void setJsonAssetReferences(std::string root, lang::JsonAssetReferenceProvider provider) {
+        m_json->setAssetReferences(std::move(root), std::move(provider));
+    }
     void clearEngineDocumentSchemas() { m_json->clearEngineSchemas(); }
     [[nodiscard]] std::vector<lang::LiveDiagnostic> jsonDiagnostics(std::string_view path) const;
     // ILspRequester: the server for the document.
@@ -90,6 +102,7 @@ public:
     void openLocation(std::string_view path, lang::LspPosition position) override;
     // openLocation, then the view of `path` stays read-only (DocumentEditorView::setForcedReadOnly):
     // a metadata-cache source is shown, never edited or saved (LTR-1).
+    [[nodiscard]] std::string libraryWorkspaceRoot() const override;
     void openReadOnlyLocation(std::string_view path, lang::LspPosition position) override;
     void setUsageHighlights(std::vector<lang::DocumentHighlight> highlights) override;
     [[nodiscard]] std::vector<std::pair<std::string, text::Snapshot>> openDocuments() const override;
