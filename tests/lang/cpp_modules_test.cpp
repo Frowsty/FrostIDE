@@ -6,7 +6,8 @@
 #include "frost/io/path.hpp"
 namespace frost::lang {
 TEST(CppModules, CapturedHeaderChangesAndNewInputsInvalidateWholeReceipt) {
-    io::MemFs fs;
+    ManualClock clock;
+    io::MemFs fs(clock);
     const std::string root = io::kNativePathStyle == io::PathStyle::Windows ? "C:/modules" : "/modules";
     const auto source = io::joinPath(root, "source.cppm").value();
     const auto header = io::joinPath(root, "conditional.h").value();
