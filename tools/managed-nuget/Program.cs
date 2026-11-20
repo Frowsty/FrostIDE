@@ -31,12 +31,14 @@ static class Program
         var request = json.RootElement;
         string Text(string key) => request.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString()! : "";
         if (!request.TryGetProperty("trusted", out var trusted) || trusted.ValueKind != JsonValueKind.True) throw new InvalidDataException("Workspace is not trusted");
+        if (!Path.IsPathFullyQualified(Text("root"))) throw new InvalidDataException("Workspace root must be absolute");
         var root = Path.GetFullPath(Text("root"));
         string Definition(string path)
         {
             if (!Path.IsPathFullyQualified(path)) throw new InvalidDataException("Definition path must be absolute");
             var full = Path.GetFullPath(path);
-            if (Path.GetRelativePath(root, full).Split(Path.DirectorySeparatorChar).Contains("..")) throw new InvalidDataException("Package definition leaves the workspace");
+            var relative = Path.GetRelativePath(root, full);
+            if (Path.IsPathFullyQualified(relative) || relative.Split(Path.DirectorySeparatorChar).Contains("..")) throw new InvalidDataException("Package definition leaves the workspace");
             for (var current = new FileInfo(full).FullName; !string.IsNullOrEmpty(current); current = Path.GetDirectoryName(current))
                 if (File.Exists(current) || Directory.Exists(current)) if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("Linked package definitions require an explicit supported physical ownership model");
             return full;

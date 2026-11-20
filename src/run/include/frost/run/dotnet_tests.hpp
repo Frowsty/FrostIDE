@@ -9,7 +9,7 @@ struct DotnetTestRequest {
     build::ManagedProjectRequest project{};
     DotnetTestPlatform platform = DotnetTestPlatform::VSTest;
     std::string reportDirectory{}; // Absolute private per-invocation directory; caller creates it.
-    std::vector<std::string> selected{}; // Exact adapter-reported fully qualified VSTest names.
+    std::vector<std::string> selected{}; // TRX TestMethod identities only; discovery display strings are never fully qualified identities.
     bool discover = false;
     bool build = false; // Explicit UI choice. Restore remains a separate operation.
 };
