@@ -300,6 +300,8 @@ void ShellWindow::teardown() {
     if (m_tornDown) {
         return;
     }
+    // Focus mode is temporary: restore its layout before composition-root session capture.
+    if (m_distractionFree) setDistractionFree(false);
     m_tornDown = true;
     for (const std::function<void()>& hook : std::exchange(m_teardownHooks, {})) {
         hook();
