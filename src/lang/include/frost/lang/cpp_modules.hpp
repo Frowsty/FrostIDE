@@ -5,6 +5,7 @@
 #include "frost/lang/json.hpp"
 #include "frost/io/process.hpp"
 #include <functional>
+#include <map>
 #include <chrono>
 #include "frost/io/file_system.hpp"
 namespace frost::lang {
@@ -27,6 +28,22 @@ struct CppModuleGraph {
 [[nodiscard]] Result<CppModuleGraph> parseCppModuleGraph(std::string_view report);
 // Validate the real llvm::cl::PrintVersionMessage banner against the compiled SDK pin.
 [[nodiscard]] Result<void> validateCppModuleScannerVersion(std::string_view banner);
+struct CppModuleInputs {
+    struct Image { std::string physicalPath, sha256; };
+    std::map<std::string, Image> files;
+    std::map<std::string, std::vector<io::DirEntry>> directories;
+    std::map<std::string, std::string> physicalDirectories;
+    std::vector<std::string> absent;
+};
+// Conservative saved-input profile: snapshot whole project and explicit CDB source/include
+// trees, with all config bytes, physical identities and namespace additions/removals.
+// Symlink trees, PCH/module/driver config/response inputs and 256MiB/32768-file overflow refuse.
+// The installed compiler/system SDK is application-owned; this receipt covers mutable project
+// and explicit include inputs. No claim is made about replacing the installed system SDK mid-run.
+[[nodiscard]] Result<CppModuleInputs> captureCppModuleInputs(io::IFileSystem& fs, std::string projectRoot,
+                                                           std::string_view database, std::stop_token stop = {});
+[[nodiscard]] Result<void> validateCppModuleInputs(io::IFileSystem& fs, const CppModuleInputs& inputs,
+                                                  std::stop_token stop = {});
 struct CppModuleScanRequest {
     std::string scanner; // Absolute pinned clang-scan-deps, from the application toolchain.
     std::string privateDatabasePath; // Captured arguments-form CDB in an owned directory.

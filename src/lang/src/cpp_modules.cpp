@@ -2,6 +2,8 @@
 // P1689 decoding and contained clang-scan-deps invocation for CPP-15.
 #include "frost/lang/cpp_modules.hpp"
 #include "frost/io/path.hpp"
+#include "frost/io/spawn_log.hpp"
+#include "frost/lang/uri.hpp"
 #include <algorithm>
 #include <set>
 namespace frost::lang {
@@ -80,6 +82,112 @@ std::vector<std::string> CppModuleGraph::interfaceTargets(const CppModuleRequire
     targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
     if (targets.size() != 1) targets.clear();
     return targets;
+}
+Result<void> validateCppModuleInputs(io::IFileSystem& fs, const CppModuleInputs& inputs, std::stop_token stop) {
+    for (const auto& [path, image] : inputs.files) {
+        if (stop.stop_requested()) return fail(ErrorCode::Cancelled, "Module input validation cancelled");
+        auto physical = fs.physicalPath(path);
+        auto bytes = fs.readFileSnapshot(path, 64U * 1024U * 1024U);
+        if (!physical || documentKey(*physical) != documentKey(image.physicalPath) || !bytes || io::sha256Hex(*bytes) != image.sha256)
+            return fail(ErrorCode::Busy, "Module input changed: " + path);
+    }
+    for (const auto& [path, names] : inputs.directories) {
+        if (stop.stop_requested()) return fail(ErrorCode::Cancelled, "Module namespace validation cancelled");
+        auto physical = fs.physicalPath(path);
+        if (!physical || documentKey(*physical) != documentKey(inputs.physicalDirectories.at(path)))
+            return fail(ErrorCode::Busy, "Module directory identity changed: " + path);
+        auto entries = fs.listDirectory(path);
+        if (!entries) return std::unexpected(entries.error());
+        std::ranges::sort(*entries, {}, &io::DirEntry::name);
+        if (*entries != names) return fail(ErrorCode::Busy, "Module input namespace changed: " + path);
+    }
+    for (const auto& path : inputs.absent) {
+        auto exists = fs.exists(path);
+        if (!exists || *exists) return fail(ErrorCode::Busy, "Module input appeared: " + path);
+    }
+    return {};
+}
+Result<CppModuleInputs> captureCppModuleInputs(io::IFileSystem& fs, std::string projectRoot,
+                                              std::string_view database, std::stop_token stop) {
+    auto parsed = parseJson(database);
+    if (!parsed || !parsed->isArray() || parsed->size() == 0 || !io::isAbsolutePath(projectRoot))
+        return fail(ErrorCode::InvalidArgument, "Module capture needs an absolute project and captured CDB");
+    CppModuleInputs result;
+    std::size_t total = 0;
+    std::function<Result<void>(std::string)> walk;
+    walk = [&](std::string path) -> Result<void> {
+        if (stop.stop_requested()) return fail(ErrorCode::Cancelled, "Module input capture cancelled");
+        auto normalized = io::normalizePath(path);
+        if (!normalized) return std::unexpected(normalized.error());
+        path = *normalized;
+        if (result.directories.contains(path) || result.files.contains(path)) return {};
+        auto physical = fs.physicalPath(path);
+        auto status = fs.status(path);
+        if (!physical || !status) return fail(ErrorCode::Unsupported, "Module input cannot be resolved: " + path);
+        if (documentKey(*physical) != documentKey(path)) return fail(ErrorCode::Unsupported, "Module input aliases are outside capture profile: " + path);
+        if (result.files.size() + result.directories.size() >= 32768)
+            return fail(ErrorCode::OutOfRange, "Module input namespace exceeds capture budget");
+        if (status->type == io::FileType::Directory) {
+            auto entries = fs.listDirectory(path);
+            if (!entries) return std::unexpected(entries.error());
+            std::ranges::sort(*entries, {}, &io::DirEntry::name);
+            result.directories.emplace(path, *entries);
+            result.physicalDirectories.emplace(path, *physical);
+            for (const auto& entry : *entries) {
+                if (entry.name == ".git") continue;
+                if (entry.type == io::FileType::Symlink || entry.type == io::FileType::Other)
+                    return fail(ErrorCode::Unsupported, "Linked or special module input tree: " + path);
+                auto child = io::joinPath(path, entry.name);
+                if (!child) return std::unexpected(child.error());
+                if (auto captured = walk(*child); !captured) return captured;
+            }
+        } else if (status->type == io::FileType::Regular) {
+            auto bytes = fs.readFileSnapshot(path, 64U * 1024U * 1024U);
+            if (!bytes) return std::unexpected(bytes.error());
+            total += bytes->size();
+            if (total > 256U * 1024U * 1024U) return fail(ErrorCode::OutOfRange, "Module input capture exceeds 256 MiB");
+            result.files.emplace(path, CppModuleInputs::Image{*physical, io::sha256Hex(*bytes)});
+        } else return fail(ErrorCode::Unsupported, "Unsupported module input type");
+        return {};
+    };
+    if (auto captured = walk(std::move(projectRoot)); !captured) return std::unexpected(captured.error());
+    for (const auto& row : parsed->items()) {
+        const auto* directory = textMember(row, "directory");
+        const auto* file = textMember(row, "file");
+        const auto* arguments = row.find("arguments");
+        if (!directory || !file || !io::isAbsolutePath(*directory) || !io::isAbsolutePath(*file) ||
+            !arguments || !arguments->isArray())
+            return fail(ErrorCode::Unsupported, "Module capture requires absolute arguments-form CDB");
+        if (auto captured = walk(std::string(io::parentPath(*file))); !captured)
+            return std::unexpected(captured.error());
+        for (std::size_t i = 1; i < arguments->size(); ++i) {
+            const auto* arg = arguments->items()[i].asString();
+            if (!arg) return fail(ErrorCode::Corrupt, "Invalid module compiler argument");
+            if (arg->starts_with('@') || arg->starts_with("--config") || arg->starts_with("-fmodule") ||
+                arg->starts_with("-include-pch") || arg->starts_with("/Yu") || arg->starts_with("/Fp"))
+                return fail(ErrorCode::Unsupported, "Module capture refuses response/PCH/BMI/driver config inputs");
+            std::string value;
+            for (std::string_view flag : {"-isystem", "-iquote", "-idirafter", "-include", "-imacros", "/external:I", "/FI", "-I", "/I"}) {
+                if (*arg == flag) {
+                    if (++i == arguments->size() || !arguments->items()[i].asString())
+                        return fail(ErrorCode::Corrupt, "Module include flag has no path");
+                    value = *arguments->items()[i].asString();
+                    break;
+                }
+                if (arg->starts_with(flag)) { value = arg->substr(flag.size()); break; }
+            }
+            if (value.empty()) continue;
+            if (value.starts_with('=')) value.erase(0, 1);
+            auto path = io::isAbsolutePath(value) ? io::normalizePath(value) : io::joinPath(*directory, value);
+            if (!path) return std::unexpected(path.error());
+            auto exists = fs.exists(*path);
+            if (!exists) return std::unexpected(exists.error());
+            if (!*exists) result.absent.push_back(*path);
+            else if (auto captured = walk(*path); !captured) return std::unexpected(captured.error());
+        }
+    }
+    if (auto valid = validateCppModuleInputs(fs, result, stop); !valid) return std::unexpected(valid.error());
+    return result;
 }
 Result<void> validateCppModuleScannerVersion(std::string_view banner) {
     const std::string expected = "LLVM version " FROST_PINNED_LLVM_VERSION;
