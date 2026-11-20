@@ -56,6 +56,34 @@ Recipes, authored native tests and unit tests do not constitute runtime acceptan
 conformance must be exercised against the actual installed adapter and compiled interpreter;
 engine-only owned-Play lifecycle checks cannot be reported as standalone passes.
 
+### Coroutine thread identities
+
+Standalone Lua Debug 2.3.0 does not satisfy Appendix B's coroutine-as-thread gate. In a Windows
+session using the published adapter and the pinned external Lua 5.4.9, the main breakpoint and a
+later breakpoint inside a newly created coroutine both reported DAP thread ID 1. At the second
+stop, `threads` returned only ID 1 and `stackTrace(1)` exposed the active coroutine's frame. A
+second live coroutine was visible through a bound Lua variable as `thread (suspended)` with
+`variablesReference=0`. Requesting `stackTrace(2)` failed with `Not found thread [2]`. The active
+coroutine's local value was readable, and the owned Lua process exited zero after continuing.
+
+The packaged `script/backend/master/mgr.lua` allocates thread IDs for connected debugger workers.
+`master/request.lua` routes `threads` and `stackTrace` through that worker table. `worker.lua`
+can incorporate coroutine ancestry into a worker's stack and encodes the traversal index into its
+frame IDs. That index belongs to a stack walk. It carries no lifetime or suspended-stack identity.
+The thread value display in `worker/variables.lua` reports status for a reachable value. It
+provides neither a registry of coroutines nor a handle for stack requests. The published launch
+configuration and request handlers offer no switch or coroutine listing request.
+
+The viable route is provider support for identities derived from actual Lua coroutine objects.
+The provider must retain stable identities for live coroutines without keeping otherwise dead
+objects alive, emit their creation and exit, and route stack and scope requests to the selected
+coroutine at a current stop. The tracker must cover coroutine creation through the Lua C API as
+well as the Lua standard library. An upstream change or a separately reviewed and pinned provider
+build can expose these through ordinary DAP threads so FrostIDE can use its existing selector.
+Acceptance must cover a coroutine created after launch, an independently selectable suspended
+coroutine, correct per-coroutine stacks and locals, and identity removal on completion. The real
+thread assertion remains a failing acceptance check with Lua Debug 2.3.0.
+
 Primary sources: [Lua archive](https://www.lua.org/ftp/), [Lua license](https://www.lua.org/license.html),
 [Lua5.4.9 source](https://www.lua.org/source/5.4/),
 [lua-debug descriptor](https://github.com/actboy168/lua-debug/blob/master/extension/js/descriptorFactory.js),
