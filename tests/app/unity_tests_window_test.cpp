@@ -148,13 +148,13 @@ TEST(UnityTestsWindow, FirstSnapshotMustPreserveAcknowledgedExecutionBeforePubli
     const std::string job(requests[2].payload.stringAt("job"));
     const std::string executionA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     const std::string executionB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
-    deliver(2, state(job, "running").set("execution", executionA));
+    deliver(2, state(job, "running").set("catalog", discovery).set("execution", executionA));
     ASSERT_EQ(requests.size(), 4u);
     auto failed = row();
     failed.set("outcome", "Failed");
     deliver(
         3,
-        page(job).set("state", "finished").set("execution", executionB).set("cases", lang::Json::array().push(failed)));
+        page(job).set("catalog", discovery).set("state", "finished").set("execution", executionB).set("cases", lang::Json::array().push(failed)));
     EXPECT_EQ(table->rowCount(), 0);
     widget->findChild<QPushButton*>("unityTestsRunSelected")->click();
     widget->findChild<QPushButton*>("unityTestsRunFailed")->click();
@@ -162,12 +162,105 @@ TEST(UnityTestsWindow, FirstSnapshotMustPreserveAcknowledgedExecutionBeforePubli
     // Explicit observation can reacquire the actual original receipt; the rejected page did not.
     widget->findChild<QPushButton*>("unityTestsObserve")->click();
     ASSERT_EQ(requests.size(), 5u);
-    deliver(4, state(job, "finished").set("execution", executionA));
+    deliver(4, state(job, "finished").set("catalog", discovery).set("execution", executionA));
     ASSERT_EQ(requests.size(), 6u);
     deliver(
         5,
-        page(job).set("state", "finished").set("execution", executionA).set("cases", lang::Json::array().push(failed)));
+        page(job).set("catalog", discovery).set("state", "finished").set("execution", executionA).set("cases", lang::Json::array().push(failed)));
     ASSERT_EQ(table->rowCount(), 1);
     EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("Failed"));
+}
+TEST(UnityTestsWindow, RunReceiptMustMatchRequestedExecutionInReplyAndRecovery) {
+    constexpr auto execution = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    for (bool recover : {false, true}) {
+        for (const auto* variant : {"discovered", "empty execution", "nil execution", "owner", "catalog", "mode",
+                                    "failed receipt", "valid"}) {
+            SCOPED_TRACE(variant);
+            SCOPED_TRACE(recover);
+            UnityEditorIdentity identity;
+            identity.root = "/fixture";
+            identity.instance = std::string(32, 'd');
+            identity.session = std::string(32, 'e');
+            identity.generation = 1;
+            identity.epoch = std::make_shared<std::atomic_uint64_t>(0);
+            identity.tests = true;
+            struct Request {
+                lang::Json payload;
+                std::function<void(Result<lang::Json>)> done;
+            };
+            std::vector<Request> requests;
+            UnityTestsWindowContext context;
+            context.selected = [&]() { return std::optional<UnityEditorIdentity>{identity}; };
+            context.request = [&](const auto&, const auto& payload, auto done) {
+                requests.push_back({payload, std::move(done)});
+            };
+            std::unique_ptr<QWidget> widget(createUnityTestsWidget(nullptr, std::move(context)));
+            const auto deliver = [&](size_t index, lang::Json response) {
+                auto done = std::move(requests.at(index).done);
+                done(std::move(response));
+            };
+            widget->findChild<QPushButton*>("unityTestsDiscover")->click();
+            ASSERT_EQ(requests.size(), 1u);
+            const std::string discovery(requests[0].payload.stringAt("job"));
+            deliver(0, state(discovery));
+            ASSERT_EQ(requests.size(), 2u);
+            deliver(1, page(discovery));
+            auto* table = widget->findChild<QTableWidget*>();
+            ASSERT_EQ(table->rowCount(), 1);
+            auto* run = widget->findChild<QPushButton*>("unityTestsRunAll");
+            run->click();
+            ASSERT_EQ(requests.size(), 3u);
+            const std::string job(requests[2].payload.stringAt("job"));
+            auto receipt = state(job, "finished").set("catalog", discovery).set("execution", execution);
+            const std::string_view scenario(variant);
+            if (scenario == "discovered")
+                receipt.set("state", "discovered").set("execution", "");
+            else if (scenario == "empty execution")
+                receipt.set("execution", "");
+            else if (scenario == "nil execution")
+                receipt.set("execution", "00000000-0000-0000-0000-000000000000");
+            else if (scenario == "owner")
+                receipt.set("owner", std::string(32, 'b'));
+            else if (scenario == "catalog")
+                receipt.set("catalog", std::string(32, 'c'));
+            else if (scenario == "mode")
+                receipt.set("mode", "PlayMode");
+            else if (scenario == "failed receipt")
+                receipt.set("ok", false);
+
+            if (recover) {
+                identity.epoch->store(1);
+                identity.revision = 1;
+                identity.generation = 2;
+                identity.session = std::string(32, 'f');
+                deliver(2, receipt);
+                widget->findChild<QPushButton*>("unityTestsObserve")->click();
+                ASSERT_EQ(requests.size(), 4u);
+                EXPECT_EQ(requests[3].payload.stringAt("op"), "observe");
+            }
+
+            const size_t receiptIndex = recover ? 3 : 2;
+            deliver(receiptIndex, std::move(receipt));
+            if (scenario == "valid") {
+                ASSERT_EQ(requests.size(), receiptIndex + 2);
+                const auto& snapshot = requests.back().payload;
+                EXPECT_EQ(snapshot.stringAt("op"), "snapshot");
+                EXPECT_EQ(snapshot.stringAt("job"), job);
+                auto failed = row().set("outcome", "Failed");
+                deliver(receiptIndex + 1, page(job)
+                                              .set("catalog", discovery)
+                                              .set("state", "finished")
+                                              .set("execution", execution)
+                                              .set("cases", lang::Json::array().push(failed)));
+                ASSERT_EQ(table->rowCount(), 1);
+                EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("Failed"));
+            } else {
+                ASSERT_EQ(requests.size(), receiptIndex + 1);
+                EXPECT_FALSE(run->isEnabled());
+                ASSERT_EQ(table->rowCount(), 1);
+                EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("Discovered"));
+            }
+        }
+    }
 }
 } // namespace frost::app

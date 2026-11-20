@@ -31,8 +31,13 @@ namespace UnityEditor.TestTools.TestRunner.Api {
     public sealed class TestRunnerApi:UnityEngine.ScriptableObject {
         public static TestRunnerApi Last;public static ITestAdaptor Tree;public ICallbacks callbacks;public ExecutionSettings executed;public string execution;public bool cancelAccepted;
         public void RegisterCallbacks<T>(T value)where T:ICallbacks{callbacks=value;Last=this;}public void UnregisterCallbacks<T>(T value)where T:ICallbacks{if(Object.ReferenceEquals(callbacks,value))callbacks=null;}
-        public void RetrieveTestList(TestMode mode,Action<ITestAdaptor> callback){callback(Tree);}
-        public string Execute(ExecutionSettings settings){executed=settings;execution=Guid.NewGuid().ToString();return execution;}
+        public static readonly Queue<Action<ITestAdaptor>> DeferredDiscovery=new Queue<Action<ITestAdaptor>>();
+        public static bool DeferDiscovery;
+        public void RetrieveTestList(TestMode mode,Action<ITestAdaptor> callback){
+            if(DeferDiscovery)DeferredDiscovery.Enqueue(callback);
+            else callback(Tree);
+        }
+        public string Execute(ExecutionSettings settings){executed=settings;execution=Guid.NewGuid().ToString("N").ToUpperInvariant();return execution;}
         public static bool CancelTestRun(string id){if(Last==null||Last.execution!=id)return false;Last.cancelAccepted=true;return true;}
     }
     public sealed class FakeTest:ITestAdaptor {public bool IsSuite{get;set;}public IEnumerable<ITestAdaptor> Children{get;set;}=new ITestAdaptor[0];public string UniqueName{get;set;}public string Name{get;set;}public string FullName{get;set;} }
