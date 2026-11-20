@@ -5,3 +5,6 @@ compiler=msvc
 compiler.version=194
 compiler.runtime=dynamic
 build_type=Debug
+
+[conf]
+tools.cmake.cmaketoolchain:generator=Ninja
