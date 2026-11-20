@@ -511,5 +511,20 @@ TEST(MonoDap, OwnedExceptionFilterProducesActualExceptionStopAndClearsBeforeDeta
     EXPECT_EQ(runtime.clears.load(), 1);
     EXPECT_TRUE(runtime.disposed);
 }
+TEST(MonoDap, ExceptionInfoRetainsStopTimeModeAfterFilterChange) {
+    ScriptedMono runtime(false, false, false, true, true);
+    std::promise<void> stopped; auto stop = stopped.get_future();
+    DapHandlers handlers;
+    handlers.onEvent = [&](std::string_view name, const rpc::Json&) { if (name == "stopped") stopped.set_value(); };
+    auto client = monoAdapterFactory(runtime.target())(std::move(handlers)); ASSERT_TRUE(client);
+    ASSERT_TRUE(requestSync(**client, "attach"));
+    ASSERT_TRUE(requestSync(**client, "setExceptionBreakpoints", rpc::Json::object().set("filters", rpc::Json::array({"all"}))));
+    ASSERT_TRUE(requestSync(**client, "continue"));
+    ASSERT_EQ(stop.wait_for(5s), std::future_status::ready);
+    ASSERT_TRUE(requestSync(**client, "setExceptionBreakpoints", rpc::Json::object().set("filters", rpc::Json::array({"uncaught"}))));
+    auto info = requestSync(**client, "exceptionInfo", rpc::Json::object().set("threadId", 1));
+    ASSERT_TRUE(info); EXPECT_EQ(info->stringAt("breakMode"), "always");
+    EXPECT_TRUE(requestSync(**client, "disconnect")); EXPECT_EQ(runtime.clears.load(), 2);
+}
 } // namespace
 } // namespace frost::debug::mono

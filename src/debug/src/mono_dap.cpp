@@ -53,7 +53,7 @@ struct Worker : std::enable_shared_from_this<Worker> {
     bool stepPending = false;
     std::optional<std::uint32_t> exceptionRequest;
     std::uint32_t exceptionObject = 0;
-    bool catchExceptions = false;
+    bool catchExceptions = false, stoppedCaughtExceptions = false;
     bool admitted = false;
     bool detached = false;
     bool protocolHealthy = true;
@@ -291,6 +291,7 @@ struct Worker : std::enable_shared_from_this<Worker> {
             return fail(ErrorCode::Corrupt, "Mono stop is outside verified source locations");
         stoppedThread = event->thread;
         exceptionObject = event->kind == 13 ? event->exception : 0;
+        stoppedCaughtExceptions = event->kind == 13 && catchExceptions;
         frames.clear();
         rpc::Json body = rpc::Json::object()
                              .set("reason", event->kind == 10 ? "breakpoint" : event->kind == 13 ? "exception" : "step")
@@ -479,13 +480,14 @@ struct Worker : std::enable_shared_from_this<Worker> {
             if (!exceptionObject || !stoppedThread || args.integerAt("threadId") != stoppedThread || session.state().phase() != Phase::Suspended)
                 return fail(ErrorCode::InvalidArgument, "no current Mono exception stop");
             return rpc::Json::object().set("exceptionId", "Mono object " + std::to_string(exceptionObject))
-                .set("breakMode", catchExceptions ? "always" : "unhandled");
+                .set("breakMode", stoppedCaughtExceptions ? "always" : "unhandled");
         }
         if (command == "setBreakpoints")
             return setBreakpoints(args);
         if (command == "configurationDone" || command == "continue") {
             stoppedThread = 0;
             exceptionObject = 0;
+            stoppedCaughtExceptions = false;
             frames.clear();
             if (!stream || !call(session.resume()))
                 return fail(ErrorCode::IoError, "Mono resume failed");
@@ -522,6 +524,7 @@ struct Worker : std::enable_shared_from_this<Worker> {
                 return fail(ErrorCode::IoError, "Mono resume after step failed");
             stoppedThread = 0;
             exceptionObject = 0;
+            stoppedCaughtExceptions = false;
             frames.clear();
             return rpc::Json::object();
         }
