@@ -60,6 +60,10 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R19 staging parent ownership correction
+
+- Corrected both app sandboxParent helpers to own the parent path as std::string before fallback or suffix composition. This fixes the reviewed string_view compile error and temporary fallback lifetime. Native path traversal/helper deployment fixes remain coordinated with the IO owner; source review continues. No builds/tests/execution.
+
 ## 2026-11-20: R19 real sample and opt-in native sandbox join
 
 - Added a genuine bounded stdio text-statistics provider, offline pin-manifest preparer and normal public-API sandbox onboarding acceptance source. The sample advertises only its implemented buffer-count command; no semantics are simulated. Optional future CMake sample target; no code was built/run.

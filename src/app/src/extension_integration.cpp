@@ -29,7 +29,7 @@ namespace frost::app {
 namespace {
 QString q(std::string_view s) { return QString::fromUtf8(s.data(), static_cast<qsizetype>(s.size())); }
 std::string sandboxParent(const WorkbenchOptions& options) {
-    auto parent = io::parentPath(options.applicationSettingsFile);
+    std::string parent(io::parentPath(options.applicationSettingsFile));
     if (parent.empty())
         parent = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation).toStdString();
     return parent.empty() ? std::string{} : parent + "/extension-sandboxes";
