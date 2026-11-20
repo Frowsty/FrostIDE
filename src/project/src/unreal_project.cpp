@@ -79,15 +79,21 @@ struct Inventory {
             std::ranges::transform(value,value.begin(),[](unsigned char c){return c>='A'&&c<='Z'?static_cast<char>(c+'a'-'A'):static_cast<char>(c);});
         while(value.size()>1&&value.back()=='/')value.pop_back();return value;
     }
+    bool contained(std::string_view physical) const {
+        const auto actual=key(std::string(physical)),root=key(physicalRoot);
+        return actual==root||(root=="/"?actual.starts_with("/"):actual.starts_with(root+"/"));
+    }
     Result<bool> admit(const std::string& path,io::FileType type) {
+        auto parentPhysical=fs.physicalPath(io::parentPath(path));
+        if(!parentPhysical){if(parentPhysical.error().code()==ErrorCode::NotFound)return false;return std::unexpected(parentPhysical.error());}
+        if(!contained(*parentPhysical))return fail(ErrorCode::PermissionDenied,"Unreal metadata parent escaped the physical project root");
         auto parent=fs.listDirectory(io::parentPath(path));
         if(!parent){if(parent.error().code()==ErrorCode::NotFound)return false;return std::unexpected(parent.error());}
         const auto found=std::ranges::find(*parent,io::fileName(path),&io::DirEntry::name);
         if(found==parent->end())return false;
         if(found->type!=type)return fail(ErrorCode::PermissionDenied,"Unreal metadata input is a link or wrong entry type");
         auto physical=fs.physicalPath(path);if(!physical)return std::unexpected(physical.error());
-        const auto actual=key(*physical),root=key(physicalRoot);
-        if(actual!=root&&!(root=="/"?actual.starts_with("/"):actual.starts_with(root+"/")))return fail(ErrorCode::PermissionDenied,"Unreal metadata input escaped the physical project root");
+        if(!contained(*physical))return fail(ErrorCode::PermissionDenied,"Unreal metadata input escaped the physical project root");
         return true;
     }
     Result<std::vector<io::DirEntry>> list(const std::string& path, unsigned depth) {
