@@ -18,6 +18,12 @@ Result<UnityEventPage> parseUnityEvents(const lang::Json& response, std::int64_t
     std::int64_t expected = std::max(cursor + 1, *first);
     for (const auto& row : entries->items()) {
         if (!row.isObject() || row.integerAt("sequence") != expected) return fail(ErrorCode::Corrupt, "Unity event sequence is not contiguous");
+        for (const auto key : {"kind", "level", "message", "stack", "file", "assembly"}) {
+            const auto* field = row.find(key);
+            if (!field || !field->asString()) return fail(ErrorCode::Corrupt, "Unity event text field has the wrong type");
+        }
+        const auto truncated = row.boolAt("truncated");
+        if (!truncated) return fail(ErrorCode::Corrupt, "Unity event truncation flag is missing or invalid");
         UnityBridgeEvent event;
         event.sequence = expected++;
         event.kind = row.stringAt("kind"); event.level = row.stringAt("level");
@@ -30,7 +36,7 @@ Result<UnityEventPage> parseUnityEvents(const lang::Json& response, std::int64_t
             event.message.size() > 2048 || event.stack.size() > 8192 || event.file.size() > 2048 || event.assembly.size() > 2048)
             return fail(ErrorCode::Corrupt, "Unity event fields exceed the journal contract");
         event.line = static_cast<int>(*line); event.column = static_cast<int>(*column);
-        event.truncated = row.boolAt("truncated").value_or(false);
+        event.truncated = *truncated;
         page.events.push_back(std::move(event));
     }
     if (*next != (page.events.empty() ? cursor : page.events.back().sequence) ||

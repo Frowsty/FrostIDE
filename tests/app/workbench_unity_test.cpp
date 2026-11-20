@@ -213,7 +213,7 @@ private:
                 const bool initial = command == "events:0";
                 auto events = frost::lang::Json::array();
                 if (initial) events.push(frost::lang::Json::object().set("sequence", 1).set("kind", "compiler").set("level", "error")
-                    .set("message", "CS1002: fixture compiler error").set("stack", "").set("file", "Assets/a.cs").set("assembly", "Assembly-CSharp.dll").set("line", 1).set("column", 2));
+                    .set("message", "CS1002: fixture compiler error").set("stack", "").set("file", "Assets/a.cs").set("assembly", "Assembly-CSharp.dll").set("line", 1).set("column", 2).set("truncated", false));
                 result.set("eventFirst", 1).set("eventNext", 1).set("eventLast", 1).set("eventLost", 0)
                     .set("projectVersion", 2).set("compiling", false).set("events", std::move(events));
             }
