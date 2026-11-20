@@ -4,6 +4,7 @@
 // mouse, the wheel, the selection and the clipboard.
 
 #include "frost/ui/terminal/terminal_view.hpp"
+#include "terminal_accessibility.hpp"
 
 #include "frost/core/log.hpp"
 #include "frost/term/keys.hpp"
@@ -206,6 +207,7 @@ TerminalView::TerminalView(QWidget* parent)
     font.setFixedPitch(true);
     font.setPointSizeF(13);
     m_font = std::move(font);
+    initializeTerminalAccessibility(*this);
     updateMetrics();
 }
 
@@ -325,6 +327,7 @@ void TerminalView::onScreenChanged() {
             m_selection->end.row -= delta;
         }
     }
+    notifyTerminalAccessibility(*this, true);
     updateScrollBar();
     update();
 }
@@ -340,6 +343,7 @@ void TerminalView::setScrollOffset(int lines) {
     }
     m_scrollOffset = clamped;
     updateScrollBar();
+    notifyTerminalAccessibility(*this, true);
     update();
 }
 
@@ -667,6 +671,7 @@ void TerminalView::mousePressEvent(QMouseEvent* event) {
         const ScreenPos pos = cellAt(event->position());
         m_selection = Selection{pos, pos};
         m_selecting = true;
+        notifyTerminalAccessibility(*this, false);
         update();
     } else if (event->button() == Qt::MiddleButton) {
         pasteClipboard();
@@ -680,6 +685,7 @@ void TerminalView::mouseMoveEvent(QMouseEvent* event) {
     }
     if (m_selecting && m_selection) {
         m_selection->end = cellAt(event->position());
+        notifyTerminalAccessibility(*this, false);
         update();
         return;
     }
@@ -704,6 +710,7 @@ void TerminalView::mouseReleaseEvent(QMouseEvent* event) {
         if (m_selection && m_selection->anchor == m_selection->end) {
             m_selection.reset(); // A click without a drag selects nothing.
         }
+        notifyTerminalAccessibility(*this, false);
         update();
     }
 }
@@ -804,6 +811,7 @@ QString TerminalView::selectedText() const {
 void TerminalView::select(ScreenPos from, ScreenPos to) {
     m_selection = Selection{from, to};
     m_selecting = false;
+    notifyTerminalAccessibility(*this, false);
     update();
 }
 
@@ -821,6 +829,7 @@ void TerminalView::clearSelection() {
     if (m_selection) {
         m_selection.reset();
         m_selecting = false;
+        notifyTerminalAccessibility(*this, false);
         update();
     }
 }
