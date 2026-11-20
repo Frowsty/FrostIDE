@@ -105,9 +105,12 @@ enum class RunType : std::uint8_t {
     FrostEditor,
     FrostPlayer,
     LuaScript,
-    LuaRepl
+    LuaRepl,
+    Remote
 };
 
+// Remote: target is an application-owned endpoint id; program/cwd are absolute Linux paths.
+// Run only; no implicit local tasks, build, Debug or transport/credential settings in project files.
 // JSON spelling, including "frost-editor" and "frost-player" (RUN-11).
 [[nodiscard]] std::string_view toString(RunType type) noexcept;
 // The type for its JSON spelling; nullopt for anything else. Case-sensitive.
@@ -202,7 +205,7 @@ struct RunConfiguration {
 // retain version 1 or 2 when no RUN-11 types are present (header comment, "Version 3").
 // Version5 adds standalone Lua script/REPL types and interpreterArguments; older configurations
 // keep their existing version and round-trip unchanged. No LuaLS runtime setting is an executable.
-inline constexpr int kRunConfigurationsVersion = 5;
+inline constexpr int kRunConfigurationsVersion = 6;
 [[nodiscard]] bool isLuaRunType(RunType type) noexcept;
 
 // Whether this is a RUN-11 editor/player configuration. Pure, constant time.

@@ -17,7 +17,7 @@
 #   run_tree_child         the helper program that builds that tree (not a test itself).
 
 frost_add_test(run_unit_tests
-    SOURCES unreal_run_test.cpp vs_import_test.cpp run_configuration_test.cpp run_types_test.cpp frostengine_run_test.cpp engine_debug_mode_test.cpp engine_session_configurations_test.cpp native_profile_test.cpp native_coverage_test.cpp
+    SOURCES remote_run_configuration_test.cpp unreal_run_test.cpp vs_import_test.cpp run_configuration_test.cpp run_types_test.cpp frostengine_run_test.cpp engine_debug_mode_test.cpp engine_session_configurations_test.cpp native_profile_test.cpp native_coverage_test.cpp
     DEPS frost::run frost::project frost::rpc frost::io frost::core)
 target_include_directories(run_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 

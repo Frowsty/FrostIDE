@@ -224,6 +224,7 @@ void Workbench::createRunService() {
     const auto nativeSelected = [selectedType] { return selectedType() == run::RunType::Native; };
     debugHooks.alternateAvailable = [this, selectedType] {
         const auto type = selectedType();
+        if(type==run::RunType::Remote)return false;
         if (type && run::isFrostEngineRunType(*type))
             return m_engineRunDebug != nullptr;
         return m_cmake != nullptr || type == run::RunType::Native || (type && run::isLuaRunType(*type)) ||
@@ -236,6 +237,7 @@ void Workbench::createRunService() {
      */
     debugHooks.startOverride = [this, selectedType]() -> std::optional<Result<void>> {
         const auto type = selectedType();
+        if(type==run::RunType::Remote)return Result<void>(fail(ErrorCode::Unsupported,"Named remote targets support Run; remote debugger preparation is unavailable"));
         if (type && run::isFrostEngineRunType(*type))
             return startSelectedDebugConfiguration();
         if (type && run::isLuaRunType(*type))

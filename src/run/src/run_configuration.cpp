@@ -337,6 +337,7 @@ Result<void> checkForSave(std::span<const RunConfiguration> configurations) {
 std::string_view toString(RunType type) noexcept {
     switch (type) {
     case RunType::Native: return "native";
+    case RunType::Remote: return "remote";
     case RunType::LuaScript: return "lua-script";
     case RunType::LuaRepl: return "lua-repl";
     case RunType::CMakeTarget: return "cmake-target";
@@ -352,7 +353,7 @@ std::string_view toString(RunType type) noexcept {
 std::optional<RunType> parseRunType(std::string_view text) noexcept {
     for (const RunType type :
          {RunType::Native, RunType::CMakeTarget, RunType::MSBuild, RunType::Compound, RunType::Attach,
-          RunType::FrostEditor, RunType::FrostPlayer, RunType::LuaScript, RunType::LuaRepl}) {
+          RunType::FrostEditor, RunType::FrostPlayer, RunType::LuaScript, RunType::LuaRepl, RunType::Remote}) {
         if (toString(type) == text) {
             return type;
         }
@@ -465,8 +466,14 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
             return invalid(configuration, "this executable configuration has nothing to build");
         }
         break;
-    case RunType::CMakeTarget:
-        if (configuration.target.empty() || hasNul(configuration.target)) {
+    case RunType::Remote:
+        if(configuration.target.empty() || configuration.target.size()>128 || !std::ranges::all_of(configuration.target,idCharacter) ||
+            !io::isAbsolutePath(configuration.program,io::PathStyle::Posix) || hasNul(configuration.program) ||
+            !io::isAbsolutePath(configuration.workingDirectory,io::PathStyle::Posix) || hasNul(configuration.workingDirectory) ||
+            configuration.beforeLaunch!=BeforeLaunch::None || !configuration.beforeLaunchTasks.empty())
+            return invalid(configuration,"remote Run needs a named endpoint id, absolute Linux program/cwd, and no implicit build/local tasks");
+        break;
+    case RunType::CMakeTarget:        if (configuration.target.empty() || hasNul(configuration.target)) {
             return invalid(configuration, "a cmake-target configuration needs a target name");
         }
         break;
@@ -535,10 +542,10 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
             return invalid(configuration, "a before-launch task argument contains NUL");
         }
     }
-    if (!configuration.program.empty() && !io::normalizePath(configuration.program)) {
+    if (configuration.type!=RunType::Remote && !configuration.program.empty() && !io::normalizePath(configuration.program)) {
         return invalid(configuration, std::format("the program '{}' is not an absolute path", configuration.program));
     }
-    if (!configuration.workingDirectory.empty() && !io::normalizePath(configuration.workingDirectory)) {
+    if (configuration.type!=RunType::Remote && !configuration.workingDirectory.empty() && !io::normalizePath(configuration.workingDirectory)) {
         return invalid(configuration, std::format("the working directory '{}' is not an absolute path",
                                                   configuration.workingDirectory));
     }
@@ -594,6 +601,7 @@ Result<std::vector<RunConfiguration>> parseRunConfigurations(std::string_view js
         if (!configuration) {
             return std::unexpected(std::move(configuration.error()));
         }
+        if(configuration->type==RunType::Remote && *version<6)return corrupt(index,"named remote Run requires store version 6");
         if (isLuaRunType(configuration->type) && *version < 5)
             return corrupt(index, "standalone Lua requires store version 5");
         if (configuration->engineDebugMode == EngineDebugMode::NativeAndLua && *version < 4)
@@ -639,7 +647,8 @@ std::string serializeRunConfigurations(std::span<const RunConfiguration> configu
     const bool mixed = std::ranges::any_of(
         configurations, [](const auto& c) { return c.engineDebugMode == EngineDebugMode::NativeAndLua; });
     const bool lua = std::ranges::any_of(configurations, [](const auto& c) { return isLuaRunType(c.type); });
-    const int version = lua      ? 5
+    const bool remote=std::ranges::any_of(configurations,[](const auto& c){return c.type==RunType::Remote;});
+    const int version = remote ? 6 : lua      ? 5
                         : mixed  ? 4
                         : engine ? 3
                                  : (std::ranges::any_of(configurations, usesRun5Features) ? 2 : 1);

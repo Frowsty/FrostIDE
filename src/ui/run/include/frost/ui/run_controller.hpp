@@ -98,6 +98,8 @@ struct RunControllerHooks {
     // Optional final resolver for generated native tools; captures physical project identity.
     std::function<std::function<Result<run::LaunchPlan>(run::LaunchPlan)>(const run::RunConfiguration&)>
         nativeLaunchPlanFor{};
+    // GUI captures immutable named endpoint launcher/admission; missing hook refuses Remote Run.
+    std::function<Result<run::RunHandlers>(const run::RunConfiguration&)> prepareRemoteRun{};
     // RUN-11, GUI thread: called after trust gating, before RunManager accepts an engine run.
     // The app reserves its session generation and adds authenticated server launch options to a
     // transient copy (never saved). Missing hook refuses engine runs. Errors prevent launch.
