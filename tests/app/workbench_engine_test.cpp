@@ -1284,4 +1284,40 @@ TEST(WorkbenchEngine, UnityUnsupportedBackendNeverStartsSourceVerifier) {
     EXPECT_FALSE(rig.workbench->debugController()->debugging());
 }
 
+TEST(WorkbenchEngine, UnitySelectionCannotRenewRevokedTrustConsent) {
+    WorkDir dir("unity-debug-trust-revision", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    WorkbenchRig* active = nullptr;
+    RigOptions options;
+    options.disableProjectEvaluation = true;
+    options.launcher = &launcher;
+    options.workbench.selectUnityDebug = [&](std::string_view) {
+        EXPECT_TRUE(active->trust->untrust(dir.path()));
+        EXPECT_TRUE(active->trust->trust(dir.path()));
+        return std::optional{frost::app::UnityMonoDebugSelection{.player = true, .pid = 1, .port = 5555,
+            .assembly = dir.join("module.dll"), .pdb = dir.join("module.pdb"), .dotnet = dir.join("dotnet.exe")}};
+    };
+    WorkbenchRig rig(dir, options);
+    active = &rig;
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                dir.join("missing-csharp-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                dir.join("missing-lua-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    const auto before = rig.trust->snapshot(dir.path()).revision;
+    auto id = rig.workbench->registry().find("debug.attachUnity");
+    ASSERT_TRUE(id);
+    frost::input::ActionContext context;
+    context.trusted = true;
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
+#ifdef _WIN32
+    EXPECT_GT(rig.trust->snapshot(dir.path()).revision, before);
+#else
+    EXPECT_EQ(rig.trust->snapshot(dir.path()).revision, before); // Unsupported platform refuses before selection.
+#endif
+    EXPECT_TRUE(launcher.launches().empty());
+    EXPECT_FALSE(rig.workbench->debugController()->debugging());
+}
+
 } // namespace
