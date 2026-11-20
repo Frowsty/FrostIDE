@@ -994,7 +994,9 @@ void GitIntegration::showResolveConflictsDialog() {
         return true;
     };
 
-    QDialog dialog(m_workbench.m_window);
+    const QPointer<GitIntegration> owner(this);
+    QDialog dialog;
+    connect(this, &QObject::destroyed, &dialog, &QDialog::reject);
     dialog.setObjectName(QStringLiteral("gitResolveConflictsDialog"));
     dialog.setWindowTitle(tr("Resolve Conflicts"));
     dialog.resize(760, 480);
