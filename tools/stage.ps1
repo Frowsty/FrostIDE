@@ -142,7 +142,7 @@ if (-not $SkipBuild) {
 }
 
 $binDir = Join-Path $BuildDir "src\app\$Config"
-foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
+foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $binDir $name))) { Fail "the build tree has no $name in $binDir" }
 }
 $visualizers = Join-Path $binDir 'visualizers'
@@ -201,6 +201,7 @@ if ($QtSourceArchive) {
 $bundle = $Config -ne 'Debug' -or $BundleTools
 $llvmRel = "llvm-$($lock.windows.llvm.version)"
 $clangdSource = Join-Path $SdkRoot "$llvmRel\bin\clangd.exe"
+$scanDepsSource = Join-Path $SdkRoot "$llvmRel\bin\clang-scan-deps.exe"
 $clangLibSource = Join-Path $SdkRoot "$llvmRel\lib\clang"
 $lldbRel = "lldb-$($lock.windows.lldb.version)"
 $lldbSourceDir = Join-Path $SdkRoot "$lldbRel\bin"
@@ -208,6 +209,7 @@ $lldbFiles = @('lldb-dap.exe', 'liblldb.dll', 'lldb-argdumper.exe')
 $lualsRel = "luals-$($lock.windows.luals.version)"
 $lualsSource = Join-Path $SdkRoot $lualsRel
 if ($bundle) {
+    if (-not (Test-Path -LiteralPath $scanDepsSource -PathType Leaf)) { Fail "missing bundled clang-scan-deps: $scanDepsSource" }
     if (-not (Test-Path -LiteralPath $clangdSource -PathType Leaf)) { Fail "missing bundled clangd: $clangdSource" }
     if (-not (Test-Path -LiteralPath $clangLibSource -PathType Container)) {
         Fail "missing bundled clangd resource directory: $clangLibSource"
@@ -276,7 +278,7 @@ Copy-Item -LiteralPath (Join-Path $binDir 'lua54') -Destination $Destination -Re
 New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'licenses') | Out-Null
 Copy-Item -LiteralPath (Join-Path $binDir 'licenses\Lua') -Destination (Join-Path $Destination 'licenses') -Recurse
 # 3. FrostIDE's own files.
-foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
+foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
 }
 if ($asanRuntime) {
@@ -316,6 +318,7 @@ if ($bundle) {
     $llvmBinDest = Join-Path $Destination "$llvmRel\bin"
     New-Item -ItemType Directory -Force -Path $llvmBinDest | Out-Null
     Copy-Item -LiteralPath $clangdSource -Destination $llvmBinDest -Force
+    Copy-Item -LiteralPath $scanDepsSource -Destination $llvmBinDest -Force
     $llvmLibDest = Join-Path $Destination "$llvmRel\lib"
     New-Item -ItemType Directory -Force -Path $llvmLibDest | Out-Null
     Copy-Item -LiteralPath $clangLibSource -Destination $llvmLibDest -Recurse -Force
@@ -422,7 +425,7 @@ else {
     Write-Host 'stage: local Debug preview; dependency source/notice packaging was not requested'
 }
 if ($bundle) {
-    foreach ($name in @("$llvmRel\bin\clangd.exe", "$lldbRel\bin\lldb-dap.exe", "$lualsRel\bin\lua-language-server.exe",
+    foreach ($name in @("$llvmRel\bin\clangd.exe", "$llvmRel\bin\clang-scan-deps.exe", "$lldbRel\bin\lldb-dap.exe", "$lualsRel\bin\lua-language-server.exe",
             'managed\CSharpLanguageServer.dll', 'FrostManagedDebug\adapter\netcoredbg.exe', 'licenses\luals-LICENSE.txt')) {
         if (-not (Test-Path -LiteralPath (Join-Path $Destination $name) -PathType Leaf)) { Fail "the staged folder has no $name" }
     }

@@ -944,11 +944,12 @@ Json exportSarifJson(const InspectionReport& report) {
         rulesArray.push(Json::object().set("id", finding.ruleId).set("defaultConfiguration", std::move(defaultConfig)));
     }
 
-    Json driver = Json::object().set("name", "clang-tidy");
+    Json driver = Json::object().set("name", report.toolName);
     if (!report.toolVersion.empty()) {
         driver.set("version", report.toolVersion);
     }
-    driver.set("informationUri", "https://clang.llvm.org/extra/clang-tidy/").set("rules", std::move(rulesArray));
+    if (!report.informationUri.empty()) driver.set("informationUri", report.informationUri);
+    driver.set("rules", std::move(rulesArray));
 
     Json tool = Json::object().set("driver", std::move(driver));
 
@@ -990,6 +991,7 @@ Json exportSarifJson(const InspectionReport& report) {
 
     Json run = Json::object()
                    .set("tool", std::move(tool))
+                   .set("columnKind", report.columnKind)
                    .set("invocations", std::move(invocations))
                    .set("results", std::move(resultsArray));
 

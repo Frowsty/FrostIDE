@@ -263,7 +263,10 @@ frost_add_test(app_workbench_cpp_editor_tests QT
 target_include_directories(app_workbench_cpp_editor_tests PRIVATE ${FROST_SOURCE_DIR}/tests
     ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_cpp_editor_tests PRIVATE ${_frost_workbench_definitions})
-add_dependencies(app_workbench_cpp_editor_tests frost-clang)
+target_compile_definitions(app_workbench_cpp_editor_tests PRIVATE
+    FROST_ANALYZER_BINARY="$<TARGET_FILE:frost-analyzer>"
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+add_dependencies(app_workbench_cpp_editor_tests frost-clang frost-analyzer)
 
 # R6 uses mandatory isolated real engines; these cases belong only to the corpus tier.
 include("${FROST_SOURCE_DIR}/tests/support/EngineCorpus.cmake")
@@ -447,3 +450,13 @@ target_compile_definitions(app_unit_tests_window_tests PRIVATE
     FROST_TEST_LUA_INTERPRETER="${_frost_ui_lua}"
     FROST_LUA_DISCOVERY_BRIDGE="${FROST_SOURCE_DIR}/tools/luaunit-discovery.lua"
     FROST_LUA_FRAMEWORK_FIXTURES="${FROST_SOURCE_DIR}/tests/run/fixtures/lua")
+
+# CPP-15 deferred real scanner + tracked dependency + normal action/navigation journeys.
+frost_add_test(app_workbench_cpp_modules_tests QT
+    SOURCES workbench_cpp_modules_test.cpp
+    DEPS frost::app frost::lang frost::io frost::sched
+    LABELS integration clangd)
+target_include_directories(app_workbench_cpp_modules_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
+target_compile_definitions(app_workbench_cpp_modules_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+add_dependencies(app_workbench_cpp_modules_tests frost-clang)

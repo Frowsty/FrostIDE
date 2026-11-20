@@ -49,6 +49,8 @@ frost_add_test(lang_unit_tests
     SOURCES
         cpp_rename_plan_test.cpp
         cpp_refactoring_plan_test.cpp
+        cpp_index_test.cpp
+        analyzer_host_test.cpp
         scope_fixes_test.cpp
         inspection_scope_fixes_test.cpp
         clangd_actions_test.cpp
@@ -236,3 +238,17 @@ target_compile_definitions(lang_inspection_corpus_tests PRIVATE
     FROST_CORPUS_FROSTENGINE_PRESET="${_frost_lang_engine_preset}"
     FROST_TEST_PYTHON="${_frost_lang_python}"
     FROST_VALIDATE_SARIF="${FROST_SOURCE_DIR}/tools/validate_sarif.py")
+
+# CPP-15 protocol tests; real-tool acceptance is registered separately.
+frost_add_test(lang_cpp_modules_tests
+    SOURCES cpp_modules_test.cpp
+    DEPS frost::lang frost::io frost::core
+    LABELS unit)
+
+# CPP-15 pinned clang-scan-deps/clang++ acceptance. Not executed during source-only phase.
+frost_add_test(lang_cpp_modules_real_tests
+    SOURCES cpp_modules_real_test.cpp
+    DEPS frost::lang frost::io frost::core
+    LABELS integration)
+target_include_directories(lang_cpp_modules_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(lang_cpp_modules_real_tests PRIVATE FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")

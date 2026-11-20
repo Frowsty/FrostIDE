@@ -702,6 +702,10 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                     roundError = Error(ErrorCode::Timeout, "clangd did not answer initialize in time");
                 } else if (!initialized) {
                     roundError = std::move(initialized.error());
+                } else if (self->options.requireFrostPlatform &&
+                           (!initialized->frostPlatform || initialized->frostLlvmVersion != pinnedLlvmVersion())) {
+                    roundError = Error(ErrorCode::Unsupported,
+                                       "Bundled frost-clang did not advertise the pinned Frost platform protocol");
                 } else {
                     LockGuard lock(self->mutex);
                     self->capabilities = *initialized;

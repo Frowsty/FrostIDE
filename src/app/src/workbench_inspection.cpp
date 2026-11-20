@@ -174,6 +174,8 @@ void Workbench::inspectCppCodeAsync(std::string_view scopeDirectory,
     lang::ClangdSearch search = lang::defaultClangdSearch(settings->get(settings::key::toolsClangTidyPath));
     std::vector<std::string> plugins = settings->get(settings::key::toolsClangTidyPlugins);
 
+    ++m_cppAnalyzerTicket;
+    m_cppAnalyzerRunning = false;
     m_cppInspectionStop.request_stop();
     m_cppInspectionStop = std::stop_source{};
     const std::stop_token stop = m_cppInspectionStop.get_token();
@@ -204,6 +206,7 @@ void Workbench::inspectCppCodeAsync(std::string_view scopeDirectory,
                     return;
                 }
 
+                self->m_cppAnalyzerExportCheck = {};
                 self->m_lastCppInspectionReport = *result;
                 const std::vector<build::BuildDiagnostic> rows = toProblems(self->m_services.fs, *result);
                 if (self->m_problems)
@@ -251,6 +254,9 @@ Result<void> Workbench::exportCppInspectionSarif(std::string_view outputPath) {
     const auto trust = m_services.trust.snapshot(m_projectRoot);
     if (!trust.trusted || !m_cppInspectionTrustRevision || trust.revision != *m_cppInspectionTrustRevision)
         return fail(ErrorCode::Untrusted, "Project trust changed after the inspection; run Inspect Code again");
+    if (m_cppAnalyzerExportCheck) {
+        if (auto current = m_cppAnalyzerExportCheck(); !current) return current;
+    }
     auto normalized = io::normalizePath(outputPath);
     if (!normalized)
         return std::unexpected(normalized.error());

@@ -17,6 +17,7 @@
 //   3. --plan-local-rename: read-only canonical local/parameter rename proposals (REF-4 preparation).
 
 #include "ast_refactoring_plan.hpp"
+#include "analyzer.hpp"
 #include "binding_map.hpp"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
@@ -45,6 +46,9 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "local_rename_plan.hpp"
+#include "semantic_command.hpp"
+#include "semantic_index.hpp"
+#include "semantic_preprocess.hpp"
 #include "tidy_fixes_decode.hpp"
 
 #include <cstdlib>
@@ -62,6 +66,7 @@ public:
     void initializeLSP(clang::clangd::LSPBinder& bind, const llvm::json::Object& /*clientCaps*/,
                        llvm::json::Object& serverCaps) override {
         serverCaps["frostClangFeatureModule"] = llvm::json::Object{
+            {"schema", 1},
             {"engine", "frost-clang"},
             {"llvmVersion", LLVM_VERSION_STRING},
             {"methods", llvm::json::Array{"frost/clangInfo", "frost/spikePing"}},
@@ -228,6 +233,13 @@ private:
 };
 
 std::string detectClangResourceDir() {
+    static int executableAnchor = 0;
+    llvm::SmallString<256> bundled(llvm::sys::fs::getMainExecutable("frost-clang", &executableAnchor));
+    llvm::sys::path::remove_filename(bundled);
+    llvm::sys::path::append(bundled, std::string("llvm-") + LLVM_VERSION_STRING, "lib", "clang",
+                            std::to_string(LLVM_VERSION_MAJOR));
+    if (llvm::sys::fs::is_directory(bundled))
+        return std::string(bundled.str());
     if (const char* llvmRoot = std::getenv("FROST_LLVM_ROOT"); llvmRoot != nullptr && *llvmRoot != '\0') {
         llvm::SmallString<256> candidate(llvmRoot);
         llvm::sys::path::append(candidate, "lib", "clang", std::to_string(LLVM_VERSION_MAJOR));
@@ -323,14 +335,24 @@ int runSymbolRewriter(int argc, char* argv[]) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    if (argc == 2 && std::string_view(argv[1]) == "--preprocess-unit")
+        return frost::clang_engine::runSemanticPreprocess(detectClangResourceDir());
+    if (argc == 2 && std::string_view(argv[1]) == "--index-unit") {
+        return frost::clang_engine::runSemanticIndex(detectClangResourceDir());
+    }
     if (argc >= 2 && std::string_view(argv[1]) == "--binding-map") {
         return frost::clang_engine::runBindingMap(argc, argv, detectClangResourceDir());
     }
 #ifdef FROST_CLANG_PLAN_TESTS
+    if (argc == 2 && std::string_view(argv[1]) == "--check-semantic-command") {
+        return frost::clang_engine::checkSemanticCommand(detectClangResourceDir());
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--check-local-rename-planner") {
         return frost::clang_engine::checkLocalRenamePlanner(detectClangResourceDir());
     }
 #endif
+    if (argc == 2 && std::string_view(argv[1]) == "--analyze-unit")
+        return frost::clang_engine::runAnalyzerUnit(detectClangResourceDir());
     if (argc == 2 && std::string_view(argv[1]) == "--decode-tidy-fixes") {
         return frost::clang_engine::runTidyFixesDecode();
     }
@@ -345,6 +367,22 @@ int main(int argc, char* argv[]) {
     }
     if (argc >= 2 && std::string_view(argv[1]) == "--rewrite-symbol") {
         return runSymbolRewriter(argc, argv);
+    }
+    // clangdMain would otherwise search lib/clang relative to the helper, while packaging keeps
+    // the pinned resource directory under llvm-<version>. Preserve an explicit caller override.
+    bool explicitResource = false;
+    for (int index = 1; index < argc; ++index) {
+        const llvm::StringRef argument(argv[index]);
+        explicitResource |= argument == "--resource-dir" || argument == "-resource-dir" ||
+                            argument.starts_with("--resource-dir=") || argument.starts_with("-resource-dir=");
+    }
+    const auto resource = detectClangResourceDir();
+    if (!explicitResource && !resource.empty()) {
+        std::string option = "--resource-dir=" + resource;
+        std::vector<char*> arguments(argv, argv + argc);
+        arguments.push_back(option.data());
+        arguments.push_back(nullptr);
+        return clang::clangd::clangdMain(argc + 1, arguments.data());
     }
     return clang::clangd::clangdMain(argc, argv);
 }

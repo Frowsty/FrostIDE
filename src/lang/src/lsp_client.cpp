@@ -149,6 +149,12 @@ ServerCapabilities parseInitializeResult(const Json& result) {
         return out;
     }
     out.raw = *capabilities;
+    if (const auto* frost = capabilities->find("frostClangFeatureModule"); frost && frost->isObject()) {
+        const auto* schema = frost->find("schema");
+        out.frostPlatform = frost->stringAt("engine") == "frost-clang" && schema && schema->asUnsigned() == 1;
+        if (out.frostPlatform)
+            out.frostLlvmVersion = std::string(frost->stringAt("llvmVersion"));
+    }
     /*
      * positionEncoding (LSP 3.17) is the negotiated encoding; when a server omits it, the
      * specification's default is UTF-16. FrostIDE no longer offers clangd's deprecated

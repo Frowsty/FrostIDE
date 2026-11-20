@@ -32,9 +32,13 @@ frost_add_library(lang LAYER lang
         src/clangd_locator.cpp
         src/clangd_service.cpp
         src/cmake_compile_commands.cpp
+        src/cpp_modules.cpp
         src/cpp_rename_plan.cpp
         src/cmake_language.cpp
         src/cpp_refactoring_plan.cpp
+        src/cpp_preprocessor.cpp
+        src/cpp_index.cpp
+        src/cpp_index_store.cpp
         src/code_assist.cpp
         src/code_vision.cpp
         src/compile_commands.cpp
@@ -47,6 +51,11 @@ frost_add_library(lang LAYER lang
         src/frost_engine_assets.cpp
         src/frost_engine_lua.cpp
         src/fuzzy.cpp
+        src/analyzer.cpp
+        src/analyzer_process.cpp
+        src/analyzer_profile.cpp
+        src/analyzer_report.cpp
+        src/analyzer_sarif.cpp
         src/inspection.cpp
         src/inspection_scope_fixes.cpp
         src/inspection_scope_runner.cpp
@@ -74,7 +83,7 @@ frost_add_library(lang LAYER lang
         src/symbols.cpp
         src/uri.cpp
         src/workspace_edit.cpp
-    DEPS frost::project frost::settings frost::text frost::rpc frost::io frost::sched frost::core frost::syntax)
+    DEPS frost::project frost::settings frost::text frost::rpc frost::io frost::sched frost::core frost::syntax frost::storage)
 target_compile_definitions(frost_lang PRIVATE FROST_PINNED_LLVM_VERSION="${_frost_llvm_version}"
     FROST_PINNED_LUALS_VERSION="${_frost_luals_version}")
 if(WIN32)
