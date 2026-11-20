@@ -22,6 +22,12 @@
   queries, inspection metadata may be unavailable, and C2 run_tests currently binds CTest. Real CLI
   schemas/handshake, hooks/settings merge, platform ACL/cancellation/budgets and provider behavior
   require the resumed local acceptance phase. No complete C2/C3 parity or release claim.
+## 2026-11-20 — LTR19 focused integration source review
+
+- Astra_unreal source-cleared dc28ac55 profile parser/admission, actual running-profile browser URL,
+  evaluated framework lists and owned-run diagnostic UI/cancellation. Corrected its cosmetic label
+  encoding finding. Core770a23b5 review remains pending separately; no runtime claim.
+
 ## 2026-11-20 — R19 LTR19 framework/profile/diagnostic entry points (source review pending)
 
 - Added normal managed.diagnostics action and .NET Project button for exact running generated

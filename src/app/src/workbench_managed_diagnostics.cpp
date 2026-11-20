@@ -47,7 +47,7 @@ void Workbench::showManagedDiagnostics() {
     auto* process = new QComboBox(&dialog);
     process->setObjectName(QStringLiteral("managedDiagnosticTarget"));
     for (const auto& target : targets)
-        process->addItem(QString::fromStdString(target.configuration.name) + tr(" â€” PID %1").arg(target.processId));
+        process->addItem(QString::fromStdString(target.configuration.name) + tr(" — PID %1").arg(target.processId));
     form->addRow(tr("Owned managed run"), process);
     auto* kind = new QComboBox(&dialog);
     kind->addItems(
@@ -207,7 +207,7 @@ void Workbench::showManagedDiagnostics() {
                         status->setText(QString::fromStdString(result.error().message()));
                         return;
                     }
-                    status->setText(tr("Captured snapshot â€” PID %1; %2")
+                    status->setText(tr("Captured snapshot — PID %1; %2")
                                         .arg(result->processId)
                                         .arg(QString::fromStdString(result->artifact.path)));
                     output->setPlainText(QString::fromStdString(result->report));
