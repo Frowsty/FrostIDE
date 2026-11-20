@@ -378,7 +378,7 @@ void Workbench::editorClosed(DocumentEditorView& view) {
     if (m_lua && isLuaSource(path))
         (void)m_lua->closeDocument(path);
     m_language->editorChanged();
-    if (m_bridge && m_bridge->handlesJsonDocument(path)) {
+    if (m_bridge && (m_bridge->handlesJsonDocument(path) || lang::isCMakeSource(path))) {
         m_bridge->closeJsonDocument(path);
         QMetaObject::invokeMethod(this, [this] { refreshLiveProblems(); }, Qt::QueuedConnection);
     }

@@ -77,6 +77,12 @@ struct LineMarker {
     friend bool operator==(const LineMarker&, const LineMarker&) = default;
 };
 
+// Actual source-coverage count for a saved observed source snapshot; independent of diagnostics.
+struct CoverageMarker {
+    LineIndex line;
+    std::uint64_t hits = 0;
+};
+
 /*
  * A VCS change marker (M5, ADR 0048): `lineCount` buffer lines from `firstLine` were added or
  * modified against the file's HEAD version; a Deleted marker has lineCount 0 and marks the line the
@@ -313,6 +319,10 @@ public:
 
     // Gutter markers (sorted by line on the way in; replaces the previous set).
     void setLineMarkers(std::vector<LineMarker> markers);
+    // Owner GUI thread. Coverage is cleared by every text edit/reload; it never shifts with edits.
+    // Caller must admit source identity before installing observed tool counts. O(n log n).
+    void setCoverageMarkers(std::vector<CoverageMarker> markers);
+    [[nodiscard]] const std::vector<CoverageMarker>& coverageMarkers() const noexcept { return m_coverageMarkers; }
     [[nodiscard]] const std::vector<LineMarker>& lineMarkers() const noexcept { return m_markers; }
     // Bookmarks use document anchors so insert/delete/Undo preserve the marked text.
     void setBookmarks(std::vector<LineIndex> lines);
@@ -760,6 +770,7 @@ private:
     GoToLinePopup* m_goToLine = nullptr;
 
     std::vector<LineMarker> m_markers;
+    std::vector<CoverageMarker> m_coverageMarkers;
     std::vector<LineIndex> m_bookmarks;
     std::vector<text::AnchorId> m_bookmarkAnchors;
     QLabel* m_stickyScope = nullptr;

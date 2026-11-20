@@ -107,6 +107,15 @@ enum class EvaluationSource : unsigned char { ProjectHost, MsBuildCli };
 [[nodiscard]] std::string_view toString(EvaluationSource source) noexcept;
 
 // MSBuild's evaluated file items of one project in one project configuration (see above).
+// Actual active MSBuild property origin supplied by Microsoft.Build; absent for globals/environment.
+struct EvaluatedPropertyDefinition {
+    std::string name, value, path;
+    std::size_t line = 0, column = 0; // One-based engine XML locations, zero when unavailable.
+};
+struct EvaluatedImportDefinition {
+    std::string sourcePath, expression, importedPath;
+    std::size_t line = 0;
+};
 struct EvaluatedProjectItems {
     std::string projectPath;   // Absolute.
     std::string configuration; // The project configuration evaluated, "Debug".
@@ -115,6 +124,8 @@ struct EvaluatedProjectItems {
     std::string msbuildVersion = {};        // The evaluating Microsoft.Build's file version, or "".
     std::vector<ProjectItem> items = {};    // Evaluation order, each path once, absolute and normalised.
     std::vector<std::string> imports = {};  // The imports in evaluation order; empty for MsBuildCli.
+    std::vector<EvaluatedPropertyDefinition> propertyDefinitions = {};
+    std::vector<EvaluatedImportDefinition> importDefinitions = {};
     std::vector<std::string> warnings = {}; // Non-fatal problems of the evaluation, for the log.
 };
 

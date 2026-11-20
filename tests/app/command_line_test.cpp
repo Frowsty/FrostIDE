@@ -18,6 +18,23 @@ frost::Result<frost::app::CommandLine> parse(std::vector<std::string_view> args)
     return frost::app::parseCommandLine(args);
 }
 
+TEST(CommandLine, DiffMergeAndWaitAreExplicitAndRejectAmbiguousCombinations) {
+    const auto diff = parse({"--diff", "left", "right"});
+    ASSERT_TRUE(diff);
+    EXPECT_EQ(diff->tool, frost::app::CliTool::Diff);
+    const auto merge = parse({"merge", "base", "ours", "theirs", "output"});
+    ASSERT_TRUE(merge);
+    EXPECT_EQ(merge->tool, frost::app::CliTool::Merge);
+    EXPECT_TRUE(parse({"--wait", "COMMIT_EDITMSG"})->wait);
+    EXPECT_FALSE(parse({"--wait"}));
+    EXPECT_FALSE(parse({"--wait", "one", "two"}));
+    EXPECT_FALSE(parse({"--diff", "one"}));
+    EXPECT_FALSE(parse({"--diff", "one", "two", "--wait"}));
+    EXPECT_FALSE(parse({"--merge", "base", "ours", "theirs"}));
+    EXPECT_FALSE(parse({"--version", "--diff", "one", "two"}));
+    EXPECT_EQ(parse({"--", "diff"})->tool, frost::app::CliTool::Open);
+}
+
 TEST(CommandLine, NoArgumentsStartsGui) {
     const auto parsed = parse({});
     ASSERT_TRUE(parsed.has_value());

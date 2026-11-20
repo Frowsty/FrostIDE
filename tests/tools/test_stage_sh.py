@@ -44,12 +44,16 @@ class StageShTest(TempDirTestCase):
         self._executable(bin_dir / "crashpad_handler", b"\x7fELF crashpad fixture")
         (bin_dir / "resources" / "themes").mkdir(parents=True)
         (bin_dir / "resources" / "themes" / "glacier-dark.ftheme").write_bytes(b"theme fixture")
+        for name in ('lua54/lua', 'lua54/liblua54.so', 'licenses/Lua/lua.h'):
+            path = bin_dir / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'Lua fixture')
         return build
 
     def _fake_sdk(self) -> Path:
         """An SDK root holding every bundled tool, LuaLS with an install marker and a stale log."""
         sdk = self.tmp / "sdk"
-        for name in (f"{LLVM}/bin/clangd", f"{LLVM}/bin/clang-scan-deps", f"{LLDB}/bin/lldb-dap", f"{LLDB}/bin/lldb-argdumper",
+        for name in (f"{LLVM}/bin/llvm-cov", f"{LLVM}/bin/llvm-profdata", f"{LLVM}/bin/clangd", f"{LLVM}/bin/clang-scan-deps", f"{LLDB}/bin/lldb-dap", f"{LLDB}/bin/lldb-argdumper",
                      f"{LUALS}/bin/lua-language-server"):
             self._executable(sdk / name, b"fixture " + name.encode())
         for name in (f"{LLVM}/lib/clang/23/include/stddef.h", f"{LLDB}/lib/liblldb.so.23.1.4", f"{LUALS}/main.lua",
@@ -58,6 +62,11 @@ class StageShTest(TempDirTestCase):
             (sdk / name).parent.mkdir(parents=True, exist_ok=True)
             (sdk / name).write_bytes(b"fixture " + name.encode())
         (sdk / LLDB / "lib" / "liblldb.so").symlink_to("liblldb.so.23.1.4")
+        qt_version = json.loads((TOOLS.parent / 'sdk/sdk.lock.json').read_text())['qt']['version']
+        for name in ('lib/libQt6Core.so.6', 'plugins/platforms/libqxcb.so', 'plugins/platforms/libqoffscreen.so', 'plugins/tls/libqopensslbackend.so'):
+            path = sdk / 'qt' / qt_version / 'gcc_64' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile('/bin/true', path)
         return sdk
 
     def _stage(self, build: Path, sdk: Path, destination: Path, *extra: str) -> subprocess.CompletedProcess:
@@ -76,18 +85,18 @@ class StageShTest(TempDirTestCase):
         for name in ("frost", "frost-clang", "crashpad_handler", "resources/themes/glacier-dark.ftheme", "LICENSE", "NOTICE",
                      "licenses/luals-LICENSE.txt", "licenses/tree-sitter-LICENSE",
                      "unity/com.frostide.editor/package.json",
-                     f"{LLVM}/bin/clangd", f"{LLVM}/bin/clang-scan-deps", f"{LLVM}/lib/clang/23/include/stddef.h", f"{LLDB}/bin/lldb-dap",
+                     f"{LLVM}/bin/llvm-cov", f"{LLVM}/bin/llvm-profdata", f"{LLVM}/bin/clangd", f"{LLVM}/bin/clang-scan-deps", f"{LLVM}/lib/clang/23/include/stddef.h", f"{LLDB}/bin/lldb-dap",
                      f"{LLDB}/bin/lldb-argdumper", f"{LLDB}/lib/liblldb.so.23.1.4", f"{LUALS}/bin/lua-language-server",
                      f"{LUALS}/main.lua", f"{LUALS}/script/files.lua"):
             self.assertTrue((destination / name).is_file(), name)
         self.assertTrue(os.access(destination / LUALS / "bin" / "lua-language-server", os.X_OK))
-        self.assertEqual((destination / "frost").read_bytes(), Path("/bin/true").read_bytes())
+        self.assertEqual((destination / "frost.bin").read_bytes(), Path("/bin/true").read_bytes())
         self.assertTrue((destination / LLDB / "lib" / "liblldb.so").is_symlink(), "the soname link is kept")
         self.assertFalse((destination / LUALS / ".frost-installed").exists(), "the SDK's install marker")
         self.assertFalse((destination / LUALS / "log").exists(), "a log a run left in the SDK")
 
     def test_a_missing_bundled_tool_fails_before_staging(self) -> None:
-        cases = {"clang-scan-deps": f"{LLVM}/bin/clang-scan-deps", "clangd": f"{LLVM}/bin/clangd", "clangd resource directory": f"{LLVM}/lib/clang",
+        cases = {"clang-scan-deps": f"{LLVM}/bin/clang-scan-deps", "LLVM coverage tool": f"{LLVM}/bin/llvm-cov", "clangd": f"{LLVM}/bin/clangd", "clangd resource directory": f"{LLVM}/lib/clang",
                  "lldb-dap file": f"{LLDB}/bin/lldb-dap", "LuaLS file": f"{LUALS}/bin/lua-language-server"}
         for tool, missing in cases.items():
             with self.subTest(tool=tool):

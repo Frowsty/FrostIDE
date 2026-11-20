@@ -17,6 +17,9 @@
 
 frost_add_library(run LAYER run
     SOURCES
+        src/native_analysis.cpp
+        src/native_coverage.cpp
+        src/native_profile.cpp
         src/vs_import.cpp
         src/engine_session_configurations.cpp
         src/run_configuration.cpp

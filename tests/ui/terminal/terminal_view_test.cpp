@@ -14,6 +14,7 @@
 
 #include "shell/shell_rig.hpp"
 #include <QApplication>
+#include <QAccessible>
 #include <QClipboard>
 #include <QFocusEvent>
 #include <QInputMethodEvent>
@@ -143,6 +144,55 @@ TEST(TerminalToolWindow, KittyModeForwardsShiftEnter) {
     }));
     sendKey(t.view(), Qt::Key_Return, Qt::ShiftModifier, QStringLiteral("\r"));
     EXPECT_TRUE(t.pty()->waitForInput("\x1b[13;2u", 5s)) << t.pty()->input();
+}
+
+TEST(TerminalToolWindow, NativeAccessibilityReadsActualWideCellsAndSelectsOutput) {
+    TerminalRig t;
+    t.pty()->print("A\xf0\x9f\x98\x80" "B");
+    ASSERT_TRUE(waitFor([&] { return t.view()->session()->read([](const frost::term::VtScreen& screen) { return screen.screenText().starts_with("A\xf0\x9f\x98\x80" "B"); }); }));
+    auto* accessible = QAccessible::queryAccessibleInterface(t.view());
+    ASSERT_NE(accessible, nullptr);
+    EXPECT_EQ(accessible->role(), QAccessible::Terminal);
+    EXPECT_TRUE(accessible->state().readOnly);
+    EXPECT_EQ(accessible->editableTextInterface(), nullptr);
+    auto* text = accessible->textInterface();
+    ASSERT_NE(text, nullptr);
+    EXPECT_EQ(text->text(0, 4), QString::fromUtf8("A\xf0\x9f\x98\x80" "B"));
+    text->addSelection(1, 3);
+    EXPECT_EQ(t.view()->selectedText(), QString::fromUtf8("\xf0\x9f\x98\x80"));
+    int begin = -1, end = -1;
+    text->selection(0, &begin, &end);
+    EXPECT_EQ(begin, 1); EXPECT_EQ(end, 3);
+    const auto rect = text->characterRect(1);
+    EXPECT_GT(rect.width(), t.view()->cellSize().width());
+    EXPECT_EQ(text->offsetAtPoint(rect.center()), 1);
+    text->removeSelection(0);
+    EXPECT_FALSE(t.view()->hasSelection());
+}
+TEST(TerminalToolWindow, NativeAccessibilityRetainsHistoryOffsetsAcrossViewportScrolling) {
+    TerminalRig t;
+    t.pty()->print("HISTORY-FIRST\r\n");
+    const auto rows = t.view()->gridSize().rows;
+    std::string output;
+    for (int row = 0; row < rows + 2; ++row) output += "later\r\n";
+    output += "HISTORY-LAST";
+    t.pty()->print(output);
+    ASSERT_TRUE(waitFor([&] { return t.view()->session()->read([](const frost::term::VtScreen& screen) {
+        return screen.scrollbackSize() > 0 && screen.screenText().find("HISTORY-LAST") != std::string::npos;
+    }); }));
+    auto* accessible = QAccessible::queryAccessibleInterface(t.view());
+    ASSERT_NE(accessible, nullptr);
+    auto* text = accessible->textInterface();
+    ASSERT_NE(text, nullptr);
+    const auto before = text->text(0, -1);
+    ASSERT_TRUE(before.startsWith(QStringLiteral("HISTORY-FIRST")));
+    EXPECT_TRUE(text->characterRect(0).isEmpty());
+    text->scrollToSubstring(0, 13);
+    EXPECT_GT(t.view()->scrollOffset(), 0);
+    EXPECT_EQ(text->text(0, -1), before);
+    EXPECT_FALSE(text->characterRect(0).isEmpty());
+    text->addSelection(0, 13);
+    EXPECT_EQ(t.view()->selectedText(), QStringLiteral("HISTORY-FIRST"));
 }
 
 #ifdef _WIN32

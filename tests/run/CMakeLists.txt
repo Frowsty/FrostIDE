@@ -17,7 +17,7 @@
 #   run_tree_child         the helper program that builds that tree (not a test itself).
 
 frost_add_test(run_unit_tests
-    SOURCES engine_session_configurations_test.cpp vs_import_test.cpp run_configuration_test.cpp run_types_test.cpp frostengine_run_test.cpp engine_debug_mode_test.cpp
+    SOURCES engine_session_configurations_test.cpp native_profile_test.cpp native_coverage_test.cpp vs_import_test.cpp run_configuration_test.cpp run_types_test.cpp frostengine_run_test.cpp engine_debug_mode_test.cpp
     DEPS frost::run frost::project frost::rpc frost::io frost::core)
 target_include_directories(run_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 
@@ -167,3 +167,19 @@ target_compile_definitions(run_lua_framework_real_tests PRIVATE
     FROST_LUA_DISCOVERY_BRIDGE="${FROST_SOURCE_DIR}/tools/luaunit-discovery.lua"
     FROST_LUA_FRAMEWORK_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/lua"
     FROST_IO_TEST_CHILD="$<TARGET_FILE:io_test_child>")
+
+# RUN-12 later real instrumented compiler/profile/export journey; not an executed result.
+frost_add_test(run_native_coverage_real_tests
+    SOURCES native_coverage_real_test.cpp
+    DEPS frost::run frost::io frost::core
+    LABELS integration)
+target_include_directories(run_native_coverage_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(run_native_coverage_real_tests PRIVATE FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+
+# RUN-13 real installed OS tooling. Missing permission/tool is a future explicit failure, not fabricated data.
+string(UUID _frost_profile_uuid NAMESPACE "caa7b8ce-6a30-4ef4-ae2d-3b2505fb4919" NAME "${CMAKE_BINARY_DIR}" TYPE SHA1)
+frost_add_test(run_native_profile_real_tests SOURCES native_profile_real_test.cpp
+    DEPS frost::run frost::build frost::io frost::core LABELS integration)
+target_include_directories(run_native_profile_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(run_native_profile_real_tests PRIVATE FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+    FROST_TEST_PROFILE_UUID="${_frost_profile_uuid}")
