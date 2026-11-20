@@ -97,7 +97,7 @@ def owned_pidfd(pid):
                 return None
         opened.remove(target_fd)
         return target_fd
-    except (FileNotFoundError, ProcessLookupError, PermissionError):
+    except OSError:
         return None
     finally:
         for fd in opened:
@@ -145,6 +145,13 @@ def run():
         raise RuntimeError("remote guardian supports Linux/WSL targets only")
     if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
         raise RuntimeError("Linux pidfd process-identity ownership requires Python >=3.9 and kernel pidfd support")
+    probe = os.pidfd_open(os.getpid(), 0)
+    try:
+        signal.pidfd_send_signal(probe, 0, None, 0)
+        if bound_pid(probe) != os.getpid():
+            raise RuntimeError("Linux pidfd identity binding is unavailable")
+    finally:
+        os.close(probe)
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER, Linux prctl(2).
         raise RuntimeError("Linux child-subreaper ownership unavailable")
