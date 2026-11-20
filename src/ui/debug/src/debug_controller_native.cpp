@@ -2,6 +2,7 @@
 // Native backend selection, launch and attach; presentation/lifecycle remain in DebugController.
 #include "frost/debug/dbgeng_dap.hpp"
 #include "frost/debug/gdb_dap.hpp"
+#include "frost/debug/coreclr_dap.hpp"
 #include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/ui/debug_controller.hpp"
@@ -248,7 +249,9 @@ Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& targe
 }
 
 Result<void> DebugController::attachTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
-                                           rpc::Json attachArguments, const std::function<bool()>& ownerAdmission) {
+                                           rpc::Json attachArguments, const std::function<bool()>& ownerAdmission,
+                                           std::function<Result<void>()> processAdmission,
+                                           std::function<void()> releaseAuthorization) {
     const bool admitted = ownerAdmission ? ownerAdmission() : (!m_hooks.mayStart || m_hooks.mayStart());
     if (m_pendingRun || m_alternatePending || !admitted)
         return fail(ErrorCode::Busy, "another run or debug launch is already pending");
@@ -308,7 +311,14 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
     auto started = startSession(
         target.name.empty() ? std::string(io::fileName(target.program)) : target.name, target.program, displayAdapter,
         [this, target, factory = std::move(factory), arguments = std::move(attachArguments),
-         adapterId](debug::DebugSessionCallbacks callbacks) mutable {
+         adapterId, processAdmission = std::move(processAdmission),
+         releaseAuthorization = std::move(releaseAuthorization)](debug::DebugSessionCallbacks callbacks) mutable {
+            if (adapterId == "coreclr") {
+                return debug::attachCoreClrSession(*m_options.trust, target,
+                                                   arguments.integerAt("processId").value_or(0), std::move(factory),
+                                                   std::move(processAdmission), m_breakpoints.sessionLines(),
+                                                   std::move(callbacks), std::move(releaseAuthorization));
+            }
             if (adapterId == "gdb") {
                 return debug::attachGdbDebugSession(*m_options.trust, target, arguments.integerAt("pid").value_or(0),
                                                     std::move(factory), m_breakpoints.sessionLines(),
