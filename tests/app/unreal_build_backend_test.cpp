@@ -59,5 +59,41 @@ TEST(UnrealBuildBackend, TrustRevocationDuringSavePreventsUbtAndFailureUsesActua
     EXPECT_FALSE(outcome->succeeded()); EXPECT_EQ(outcome->result.exitCode, 7);
     ASSERT_EQ(launcher.launches().size(), 1U);
 }
+TEST(UnrealBuildBackend, RevokeAndRegrantDuringSaveDoesNotRestoreOldOperationAuthority) {
+    io::MemFs fs(systemClock()); io::ScriptedProcessLauncher launcher;
+    auto trust = project::TrustStore::open(fs, at("data/trust.txt")); ASSERT_TRUE(trust);
+    ASSERT_TRUE((*trust)->trust(at()));
+    auto admission = build::BuildService::create(fs, launcher, **trust);
+    std::optional<build::BuildOutcome> outcome;
+    build::BuildServiceCallbacks callbacks; callbacks.onFinished = [&](const auto& value) { outcome=value; };
+    UnrealBuildBackend backend({.projectFile=at("Oracle.uproject")}, fs, launcher, **trust, *admission, callbacks);
+    ASSERT_TRUE(backend.configure({.tool=at("UBT"), .projectFile=at("Oracle.uproject"), .target="OracleEditor"}));
+    build::SaveAllCompletion complete; backend.setSaveAllHook([&](auto done) { complete=std::move(done); });
+    ASSERT_TRUE(backend.build(build::BuildAction::Build, {}));
+    ASSERT_TRUE((*trust)->untrust(at())); ASSERT_TRUE((*trust)->trust(at()));
+    complete({});
+    ASSERT_TRUE(pump([&] { return outcome.has_value(); }));
+    EXPECT_FALSE(outcome->succeeded()); ASSERT_TRUE(outcome->error);
+    EXPECT_EQ(outcome->error->code(), ErrorCode::Untrusted); EXPECT_TRUE(launcher.launches().empty());
+}
+TEST(UnrealBuildBackend, ActiveChildIsCancelledWhenTrustRevisionChanges) {
+    io::MemFs fs(systemClock()); io::ScriptedProcessLauncher launcher;
+    auto trust = project::TrustStore::open(fs, at("data/trust.txt")); ASSERT_TRUE(trust);
+    ASSERT_TRUE((*trust)->trust(at()));
+    auto admission = build::BuildService::create(fs, launcher, **trust);
+    std::optional<build::BuildOutcome> outcome;
+    build::BuildServiceCallbacks callbacks; callbacks.onFinished = [&](const auto& value) { outcome=value; };
+    UnrealBuildBackend backend({.projectFile=at("Oracle.uproject")}, fs, launcher, **trust, *admission, callbacks);
+    ASSERT_TRUE(backend.configure({.tool=at("UBT"), .projectFile=at("Oracle.uproject"), .target="OracleEditor"}));
+    launcher.expect({.expectExecutable=at("UBT"), .neverExits=true});
+    ASSERT_TRUE(backend.build(build::BuildAction::Build, {}));
+    ASSERT_TRUE(pump([&] { return backend.state() == build::BuildState::Running; }));
+    ASSERT_TRUE((*trust)->untrust(at())); ASSERT_TRUE((*trust)->trust(at()));
+    ASSERT_TRUE(pump([&] { return outcome.has_value(); }));
+    EXPECT_FALSE(outcome->succeeded());
+    ASSERT_EQ(launcher.launches().size(), 1U); EXPECT_TRUE(launcher.launches().front().terminated);
+    EXPECT_TRUE(backend.diagnostics().empty());
+}
+
 }
 } // namespace frost::app

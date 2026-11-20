@@ -21,49 +21,53 @@ namespace frost::app {
 void UnrealBuildBackend::attachMenu(ui::ShellWindow& window, std::function<Result<void>(std::string)> addEditor) {
     m_menu = new QMenu(tr("Unreal"), &window);
     window.menuBar()->addMenu(m_menu);
-    auto report = [&window](Result<void> result) {
-        if (!result) QMessageBox::warning(&window, tr("Unreal"), QString::fromStdString(result.error().message()));
+    const QPointer<UnrealBuildBackend> self(this);
+    const QPointer<ui::ShellWindow> host(&window);
+    auto report = [host](Result<void> result) {
+        if (host && !result) QMessageBox::warning(host.data(), tr("Unreal"), QString::fromStdString(result.error().message()));
     };
-    connect(m_menu->addAction(tr("Select installed native visualizer…")), &QAction::triggered, this, [this, &window] {
-        const auto file = QFileDialog::getOpenFileName(&window, tr("Select installed Unreal .natvis file"), {}, tr("Native visualizer (*.natvis)"));
+    connect(m_menu->addAction(tr("Select installed native visualizer…")), &QAction::triggered, this, [this, self, host] {
+        const auto file = QFileDialog::getOpenFileName(host.data(), tr("Select installed Unreal .natvis file"), {}, tr("Native visualizer (*.natvis)"));
+        if (!self || !host) return;
         if (!file.isEmpty()) m_visualizer = file.toUtf8().toStdString();
     });
     if (addEditor) connect(m_menu->addAction(tr("Add native Editor run/debug configuration…")), &QAction::triggered, this,
-        [&window, report, addEditor=std::move(addEditor)] {
-            const auto editor = QFileDialog::getOpenFileName(&window, tr("Select installed Unreal Editor executable"));
+        [self, host, report, addEditor=std::move(addEditor)] {
+            const auto editor = QFileDialog::getOpenFileName(host.data(), tr("Select installed Unreal Editor executable"));
+            if (!self || !host) return;
             if (!editor.isEmpty()) report(addEditor(editor.toUtf8().toStdString()));
         });
-    connect(m_menu->addAction(tr("Select build tools and target…")), &QAction::triggered, this, [this, &window, report] {
+    connect(m_menu->addAction(tr("Select build tools and target…")), &QAction::triggered, this, [this, self, host, report] {
         if (m_state != build::BuildState::Idle) { report(fail(ErrorCode::Busy, "Stop the current Unreal operation first")); return; }
         auto selected = m_request;
-        const auto tool = QFileDialog::getOpenFileName(&window, tr("Select installed UBT executable or dotnet host"));
-        if (tool.isEmpty()) return;
+        const auto tool = QFileDialog::getOpenFileName(host.data(), tr("Select installed UBT executable or dotnet host"));
+        if (!self || !host || tool.isEmpty()) return;
         selected.tool = tool.toUtf8().toStdString();
         bool ok = false;
-        const auto mode = QInputDialog::getItem(&window, tr("UBT invocation"), tr("Selected executable is:"),
+        const auto mode = QInputDialog::getItem(host.data(), tr("UBT invocation"), tr("Selected executable is:"),
             {tr("UBT executable"), tr("dotnet host")}, 0, false, &ok);
-        if (!ok) return;
+        if (!self || !host || !ok) return;
         selected.buildToolAssembly.clear();
         if (mode == tr("dotnet host")) {
-            const auto assembly = QFileDialog::getOpenFileName(&window, tr("Select installed UnrealBuildTool DLL"), {}, tr("Assembly (*.dll)"));
-            if (assembly.isEmpty()) return;
+            const auto assembly = QFileDialog::getOpenFileName(host.data(), tr("Select installed UnrealBuildTool DLL"), {}, tr("Assembly (*.dll)"));
+            if (!self || !host || assembly.isEmpty()) return;
             selected.buildToolAssembly = assembly.toUtf8().toStdString();
         }
-        selected.target = QInputDialog::getText(&window, tr("UBT target"), tr("Target name from the project's Target.cs (for example MyGameEditor):"),
+        selected.target = QInputDialog::getText(host.data(), tr("UBT target"), tr("Target name from the project's Target.cs (for example MyGameEditor):"),
             QLineEdit::Normal, QString::fromStdString(selected.target), &ok).toUtf8().toStdString();
-        if (!ok) return;
-        const auto platform = QInputDialog::getItem(&window, tr("UBT platform"), tr("Target platform:"), {QStringLiteral("Win64"), QStringLiteral("Linux")},
+        if (!self || !host || !ok) return;
+        const auto platform = QInputDialog::getItem(host.data(), tr("UBT platform"), tr("Target platform:"), {QStringLiteral("Win64"), QStringLiteral("Linux")},
 #ifdef _WIN32
             0,
 #else
             1,
 #endif
             false, &ok);
-        if (!ok) return;
+        if (!self || !host || !ok) return;
         selected.platform = platform == QStringLiteral("Linux") ? build::UnrealPlatform::Linux : build::UnrealPlatform::Win64;
-        const auto configuration = QInputDialog::getItem(&window, tr("UBT configuration"), tr("Configuration:"),
+        const auto configuration = QInputDialog::getItem(host.data(), tr("UBT configuration"), tr("Configuration:"),
             {QStringLiteral("DebugGame"), QStringLiteral("Development"), QStringLiteral("Shipping")}, 1, false, &ok);
-        if (!ok) return;
+        if (!self || !host || !ok) return;
         selected.configuration = configuration == QStringLiteral("DebugGame") ? build::UnrealConfiguration::DebugGame :
             configuration == QStringLiteral("Shipping") ? build::UnrealConfiguration::Shipping : build::UnrealConfiguration::Development;
         selected.operation = build::UnrealOperation::Build;
@@ -72,10 +76,10 @@ void UnrealBuildBackend::attachMenu(ui::ShellWindow& window, std::function<Resul
     for (const auto& item : {std::pair{tr("Generate project files"), build::UnrealOperation::GenerateProjectFiles},
                             std::pair{tr("Generate compilation database"), build::UnrealOperation::GenerateCompileDatabase}})
         connect(m_menu->addAction(item.first), &QAction::triggered, this, [this, operation=item.second, report] { report(buildTarget(operation)); });
-    connect(m_menu->addAction(tr("Run UHT with selected manifest…")), &QAction::triggered, this, [this, &window, report] {
+    connect(m_menu->addAction(tr("Run UHT with selected manifest…")), &QAction::triggered, this, [this, self, host, report] {
         if (m_state != build::BuildState::Idle) { report(fail(ErrorCode::Busy, "Stop the current Unreal operation first")); return; }
-        const auto manifest = QFileDialog::getOpenFileName(&window, tr("Select existing UHT manifest"), {}, tr("UHT manifest (*.uhtmanifest)"));
-        if (manifest.isEmpty()) return;
+        const auto manifest = QFileDialog::getOpenFileName(host.data(), tr("Select existing UHT manifest"), {}, tr("UHT manifest (*.uhtmanifest)"));
+        if (!self || !host || manifest.isEmpty()) return;
         m_request.headerManifest = manifest.toUtf8().toStdString();
         report(buildTarget(build::UnrealOperation::HeaderTool));
     });
@@ -84,7 +88,11 @@ UnrealBuildBackend::UnrealBuildBackend(project::UnrealProject model, io::IFileSy
                                                io::IProcessLauncher& launcher, project::TrustStore& trust,
                                                build::BuildService& admission, build::BuildServiceCallbacks callbacks)
     : m_model(std::move(model)), m_root(io::parentPath(m_model.projectFile)), m_fs(fs), m_launcher(launcher), m_trust(trust), m_admission(admission),
-      m_callbacks(std::move(callbacks)) { m_request.projectFile = m_model.projectFile; }
+      m_callbacks(std::move(callbacks)) {
+    m_request.projectFile = m_model.projectFile;
+    m_trustWatch.setInterval(25);
+    connect(&m_trustWatch, &QTimer::timeout, this, [this] { checkTrustRevision(); });
+}
 
 UnrealBuildBackend::~UnrealBuildBackend() {
     delete m_menu.data();
@@ -105,6 +113,19 @@ Result<void> UnrealBuildBackend::closeSolution() {
 }
 Result<void> UnrealBuildBackend::setActiveConfiguration(std::size_t) {
     return fail(ErrorCode::Unsupported, "Select the Unreal target and configuration from the Unreal menu");
+}
+bool UnrealBuildBackend::admitted() const {
+    const auto snapshot = m_trust.snapshot(m_root);
+    return m_trustRevision && snapshot.trusted && snapshot.revision == *m_trustRevision;
+}
+void UnrealBuildBackend::checkTrustRevision() {
+    if (m_state == build::BuildState::Idle || m_state == build::BuildState::NeedsTrust || admitted()) return;
+    m_diagnostics.clear();
+    if (m_callbacks.onDiagnosticsCleared) m_callbacks.onDiagnosticsCleared();
+    m_outcome.error = Error(ErrorCode::Untrusted, "Unreal operation trust revision changed");
+    m_cancelled = true;
+    if (m_session) { setState(build::BuildState::Cancelling); m_session->cancel(); }
+    else { ++m_generation; finish(m_outcome.error); }
 }
 void UnrealBuildBackend::setState(build::BuildState state) {
     m_state = state;
@@ -152,6 +173,10 @@ Result<void> UnrealBuildBackend::buildTarget(build::UnrealOperation operation) {
     return {};
 }
 void UnrealBuildBackend::saveAndStart() {
+    const auto trust = m_trust.snapshot(m_root);
+    if (!trust.trusted) { finish(Error(ErrorCode::Untrusted, "Unreal project trust changed")); return; }
+    m_trustRevision = trust.revision;
+    m_trustWatch.start();
     setState(build::BuildState::SavingDocuments);
     const auto generation = m_generation;
     QPointer<UnrealBuildBackend> self(this);
@@ -186,8 +211,8 @@ void UnrealBuildBackend::next() {
         finish();
         return;
     }
-    if (!m_trust.isTrusted(m_root)) {
-        finish(fail(ErrorCode::PermissionDenied, "project trust was revoked").error());
+    if (!admitted()) {
+        finish(fail(ErrorCode::Untrusted, "Unreal operation trust revision changed").error());
         return;
     }
     setState(build::BuildState::Starting);
@@ -200,7 +225,7 @@ void UnrealBuildBackend::next() {
         QMetaObject::invokeMethod(
             self,
             [self, stream, line = std::string(line)] {
-                if (self && self->m_callbacks.onOutput)
+                if (self && self->admitted() && self->m_callbacks.onOutput)
                     self->m_callbacks.onOutput(stream == build::OutputStream::Stdout ? build::BuildOutputKind::Stdout
                                                                                      : build::BuildOutputKind::Stderr,
                                                line);
@@ -213,7 +238,7 @@ void UnrealBuildBackend::next() {
         QMetaObject::invokeMethod(
             self,
             [self, diagnostic] {
-                if (!self)
+                if (!self || !self->admitted())
                     return;
                 build::DiagnosticResolver resolver(self->m_fs, self->m_root);
                 auto resolved = resolver.resolve(diagnostic);
@@ -231,6 +256,12 @@ void UnrealBuildBackend::next() {
             [self, result] {
                 if (!self)
                     return;
+                if (!self->admitted()) {
+                    self->m_diagnostics.clear();
+                    if (self->m_callbacks.onDiagnosticsCleared) self->m_callbacks.onDiagnosticsCleared();
+                    self->finish(Error(ErrorCode::Untrusted, "Unreal operation trust revision changed"));
+                    return;
+                }
                 self->m_outcome.result = result;
                 if (result.success && !self->m_cancelled)
                     self->next();
@@ -241,6 +272,7 @@ void UnrealBuildBackend::next() {
     };
     build::BuildSessionOptions options;
     options.parser = build::makeCompilerOutputParser;
+    if (!admitted()) { finish(Error(ErrorCode::Untrusted, "Unreal operation trust revision changed")); return; }
     auto session = build::BuildSession::start(m_launcher, spec, true, std::move(callbacks), systemClock(), options);
     if (!session) {
         finish(session.error());
@@ -250,6 +282,8 @@ void UnrealBuildBackend::next() {
     setState(build::BuildState::Running);
 }
 void UnrealBuildBackend::finish(std::optional<Error> error) {
+    m_trustWatch.stop();
+    m_trustRevision.reset();
     m_session.reset();
     m_outcome.error = std::move(error);
     if (m_outcome.error)

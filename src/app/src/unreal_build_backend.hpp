@@ -7,6 +7,7 @@
 
 #include <QObject>
 #include <QPointer>
+#include <QTimer>
 class QMenu;
 class QWidget;
 namespace frost::ui {
@@ -50,6 +51,8 @@ public:
 
 private:
     void setState(build::BuildState state);
+    bool admitted() const;
+    void checkTrustRevision();
     void saveAndStart();
     void next();
     void finish(std::optional<Error> error = {});
@@ -73,5 +76,7 @@ private:
     bool m_cancelled = false;
     std::uint64_t m_generation = 0;
     QPointer<QMenu> m_menu;
+    QTimer m_trustWatch;
+    std::optional<std::uint64_t> m_trustRevision;
 };
 } // namespace frost::app
