@@ -116,7 +116,7 @@ struct BreakpointMarker {
  */
 struct EditorFileInfo {
     std::string encoding = "UTF-8";
-    std::string lineSeparator;
+    std::string lineSeparator{};
     bool readOnly = false;
     bool largeFile = false;
 

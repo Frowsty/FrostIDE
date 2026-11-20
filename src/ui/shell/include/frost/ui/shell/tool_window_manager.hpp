@@ -181,7 +181,7 @@ private:
         bool pinned = true;
         QWidget* floatingHost = nullptr;
         bool floating = false;
-        std::string geometry;
+        std::string geometry{};
     };
     struct Side {
         QWidget* panel = nullptr;

@@ -121,15 +121,16 @@ bool LanguageController::advanceLiveTemplate() {
         static_cast<std::int64_t>(snapshot->size().value()) - static_cast<std::int64_t>(m_templateDocumentSize);
     const auto length = static_cast<std::int64_t>(m_liveTemplate->expected.text.size()) + delta;
     const auto caret = m_services.host.caretOffset().value();
-    if (length < 0 || length > 256 * 1024 || m_templateBase.value() + length > snapshot->size().value() ||
-        caret < m_templateBase.value() || caret > m_templateBase.value() + length) {
+    const auto base = m_templateBase.value();
+    const auto documentSize = snapshot->size().value();
+    if (length < 0 || length > 256 * 1024 || base > documentSize ||
+        static_cast<std::uint64_t>(length) > documentSize - base || caret < base ||
+        caret - base > static_cast<std::uint64_t>(length)) {
         cancel();
         return false;
     }
-    const auto edited =
-        snapshot->text({m_templateBase, ByteOffset{m_templateBase.value() + static_cast<std::uint64_t>(length)}});
-    auto advanced =
-        fl::advanceTemplate(*m_liveTemplate, edited, static_cast<std::uint32_t>(caret - m_templateBase.value()));
+    const auto edited = snapshot->text({m_templateBase, ByteOffset{base + static_cast<std::uint64_t>(length)}});
+    auto advanced = fl::advanceTemplate(*m_liveTemplate, edited, static_cast<std::uint32_t>(caret - base));
     if (!advanced) {
         cancel();
         return false;

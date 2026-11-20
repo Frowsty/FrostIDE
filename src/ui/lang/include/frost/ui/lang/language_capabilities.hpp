@@ -38,7 +38,7 @@ struct LanguageCapabilities {
     bool clangdTweaks = false;
 };
 
-inline constexpr std::array<LanguageCapabilities, 6> kLanguageCapabilities{{
+inline constexpr std::array<LanguageCapabilities, 7> kLanguageCapabilities{{
     {.languageId = "cpp",
      .serverName = "clangd",
      .postfix = true,

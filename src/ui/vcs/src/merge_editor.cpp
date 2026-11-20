@@ -3,6 +3,7 @@
 #include "frost/ui/vcs/merge_editor.hpp"
 #include "frost/ui/editor/editor_key_routing.hpp"
 #include "frost/diff/merge.hpp"
+#include "frost/input/simulated_keyboard.hpp"
 #include "frost/text/text_shaper.hpp"
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/nav/merge_layout.hpp"
@@ -12,6 +13,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QObject>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSplitter>
@@ -91,9 +93,9 @@ Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply, E
         theirsPane->verticalScrollBar()->setValue(val);
         syncingScroll = false;
     };
-    connect(yoursPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
-    connect(resultPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
-    connect(theirsPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
+    QObject::connect(yoursPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
+    QObject::connect(resultPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
+    QObject::connect(theirsPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
 
     std::vector<std::size_t> changedChunks;
     for (std::size_t c = 0; c < panes.chunkCount(); ++c) {
@@ -187,8 +189,8 @@ Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply, E
         applyBtn->setEnabled(blocker.isEmpty());
         applyBtn->setToolTip(blocker);
     };
-    connect(resultPane, &ui::EditorView::textChanged, &mergeDialog, [&] { manualResolved = false; refreshApply(); });
-    connect(useEdited, &QPushButton::clicked, &mergeDialog, [&] {
+    QObject::connect(resultPane, &ui::EditorView::textChanged, &mergeDialog, [&] { manualResolved = false; refreshApply(); });
+    QObject::connect(useEdited, &QPushButton::clicked, &mergeDialog, [&] {
         if (ui::hasConflictMarkers(resultDocument.committedText().text())) {
             statusLabel->setText(tr("Remove conflict markers before accepting an edited result."));
             return;
@@ -200,31 +202,31 @@ Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply, E
     refreshMergeState();
     refreshApply();
 
-    connect(acceptLeftBtn, &QPushButton::clicked, &mergeDialog, [&] {
+    QObject::connect(acceptLeftBtn, &QPushButton::clicked, &mergeDialog, [&] {
         const int row = chunkList->currentRow();
         if (row >= 0 && static_cast<std::size_t>(row) < changedChunks.size()) {
             static_cast<void>(model.resolve(changedChunks[static_cast<std::size_t>(row)], diff::Take::Ours));
             refreshMergeState();
         }
     });
-    connect(acceptRightBtn, &QPushButton::clicked, &mergeDialog, [&] {
+    QObject::connect(acceptRightBtn, &QPushButton::clicked, &mergeDialog, [&] {
         const int row = chunkList->currentRow();
         if (row >= 0 && static_cast<std::size_t>(row) < changedChunks.size()) {
             static_cast<void>(model.resolve(changedChunks[static_cast<std::size_t>(row)], diff::Take::Theirs));
             refreshMergeState();
         }
     });
-    connect(acceptAllLeftBtn, &QPushButton::clicked, &mergeDialog, [&] {
+    QObject::connect(acceptAllLeftBtn, &QPushButton::clicked, &mergeDialog, [&] {
         for (const std::size_t c : changedChunks)
             static_cast<void>(model.resolve(c, diff::Take::Ours));
         refreshMergeState();
     });
-    connect(acceptAllRightBtn, &QPushButton::clicked, &mergeDialog, [&] {
+    QObject::connect(acceptAllRightBtn, &QPushButton::clicked, &mergeDialog, [&] {
         for (const std::size_t c : changedChunks)
             static_cast<void>(model.resolve(c, diff::Take::Theirs));
         refreshMergeState();
     });
-    connect(applyBtn, &QPushButton::clicked, &mergeDialog, [&] {
+    QObject::connect(applyBtn, &QPushButton::clicked, &mergeDialog, [&] {
         if (const QString blocker = applyBlocker(); !blocker.isEmpty()) {
             statusLabel->setText(blocker);
             return;
@@ -234,7 +236,7 @@ Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply, E
         if (applied) mergeDialog.accept();
         else statusLabel->setText(QString::fromStdString(applied.error().message()));
     });
-    connect(cancelBtn, &QPushButton::clicked, &mergeDialog, &QDialog::reject);
+    QObject::connect(cancelBtn, &QPushButton::clicked, &mergeDialog, &QDialog::reject);
 
     ui::installDialogChrome(&mergeDialog, true);
     return mergeDialog.exec() == QDialog::Accepted;

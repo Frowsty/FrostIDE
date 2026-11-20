@@ -301,7 +301,7 @@ void EditorView::setTheme(std::shared_ptr<const Theme> theme) {
             if (!name || !color ||
                 !(name->starts_with("Editor.") || name->starts_with("Syntax.") || name->starts_with("Semantic.")))
                 continue;
-            const auto key = findName(kColorNameIndex, *name);
+            const auto key = colorKeyByName(*name);
             const auto rgba = parseHexColor(*color);
             if (key && rgba && rgba->opaque())
                 data.colors[static_cast<std::size_t>(*key)] = *rgba;

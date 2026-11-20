@@ -15,12 +15,13 @@
 
 #include <iterator>
 #include <set>
+#include <span>
 
 namespace frost::ui {
 namespace {
 using IndexedFiles = std::vector<std::pair<std::string, std::string>>;
 Result<IndexedFiles> indexedFileCandidates(std::shared_ptr<const nav::ProjectFiles> snapshot,
-    const std::vector<std::string>& recents, const std::string& root, const std::string& pattern,
+    std::span<const std::string> recents, const std::string& root, const std::string& pattern,
     std::size_t limit, std::stop_token stop) {
     if (stop.stop_requested()) return fail(ErrorCode::Cancelled, "File search cancelled");
     IndexedFiles candidates;
@@ -380,7 +381,7 @@ ListPopup* Workbench::showSearchEverywhere(const QString& query, SearchEverywher
     auto* pollFiles = new QTimer(popup);
     pollFiles->setInterval(16);
     const QPointer<Workbench> owner(this);
-    connect(pollFiles, &QTimer::timeout, popup, [owner, popup, fileQuery] {
+    connect(pollFiles, &QTimer::timeout, popup, [owner, fileQuery] {
         if (!fileQuery->pending || !fileQuery->pending->ready()) return;
         auto result = fileQuery->pending->join();
         fileQuery->pending.reset();
@@ -476,13 +477,14 @@ ListPopup* Workbench::showSearchEverywhere(const QString& query, SearchEverywher
             popup->setItems(buildSyncItems(location, utf8, cat, &state->symbols, state->files));
         };
         if (cat == SearchEverywhereCategory::All || cat == SearchEverywhereCategory::Files) {
+            const auto recents = m_recentFiles.paths();
             if (m_services.scheduler) {
                 fileQuery->pending.emplace(m_services.scheduler->spawn(sched::Lane::Interactive,
-                    indexedFiles(*m_services.scheduler, m_files, m_recentFiles.paths(), m_root, location.pattern,
+                    indexedFiles(*m_services.scheduler, m_files, {recents.begin(), recents.end()}, m_root, location.pattern,
                                  cat == SearchEverywhereCategory::Files ? 50 : 8, fileQuery->stop.get_token())));
             } else {
                 // Small embedders/tests without a scheduler use the immutable index directly.
-                if (auto hits = indexedFileCandidates(m_files, m_recentFiles.paths(), m_root, location.pattern,
+                if (auto hits = indexedFileCandidates(m_files, recents, m_root, location.pattern,
                         cat == SearchEverywhereCategory::Files ? 50 : 8, {})) fileQuery->files = std::move(*hits);
             }
         }

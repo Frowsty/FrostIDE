@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Editor-backed side-by-side comparison, with normal history/find/edit commands and guarded Apply.
 #include "frost/ui/vcs/diff_viewer.hpp"
+#include "frost/input/simulated_keyboard.hpp"
 #include "frost/ui/frost_style.hpp"
 #include "frost/ui/vcs/git_controller.hpp"
 #include <QGridLayout>

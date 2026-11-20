@@ -423,7 +423,7 @@ sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, 
     if (!result) {
         co_return std::unexpected(std::move(result.error()));
     }
-    GotoOutcome outcome{.result = std::move(*result), .metadata = false};
+    GotoOutcome outcome{.result = std::move(*result), .diagnostics = {}};
     if (askMetadata && !outcome.result.showUsages && outcome.result.locations.empty()) {
         const bool noCache = cacheDir.empty();
         auto metadata = co_await metadataSourceTask(server, fs, std::move(cacheDir), path, position, token, "auto", false, std::move(workspaceRoot));

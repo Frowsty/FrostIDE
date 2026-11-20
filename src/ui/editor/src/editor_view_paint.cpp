@@ -770,8 +770,8 @@ EditorDisplayList EditorView::buildDisplayList() {
         const auto coverage = std::ranges::lower_bound(m_coverageMarkers, row.line, {}, &CoverageMarker::line);
         if (coverage != m_coverageMarkers.end() && coverage->line == row.line) {
             // A narrow count stripe shares the gutter but never replaces diagnostic/test markers.
-            const double x = gutter - (kMarkerColumn + kFoldColumn) * zoom;
-            list.gutterText.push_back(DisplayText{QPointF(x, baseline), QStringLiteral("|"),
+            const double coverageX = gutter - (kMarkerColumn + kFoldColumn) * zoom;
+            list.gutterText.push_back(DisplayText{QPointF(coverageX, baseline), QStringLiteral("|"),
                                                   coverage->hits ? m_colors.changeAdded : m_colors.changeDeleted, false,
                                                   std::nullopt, row.buffer, std::nullopt, false});
         }

@@ -23,7 +23,8 @@ bool MarkdownPreview::setSourceMarkdown(const QString& text) {
     }
     document()->clear();
     document()->setBaseUrl(QUrl());
-    document()->setMarkdown(text, QTextDocument::MarkdownDialectGitHub | QTextDocument::MarkdownNoHTML);
+    document()->setMarkdown(text, QTextDocument::MarkdownFeatures{QTextDocument::MarkdownDialectGitHub,
+                                                                  QTextDocument::MarkdownNoHTML});
     return true;
 }
 QVariant MarkdownPreview::loadResource(int, const QUrl&) { return {}; }

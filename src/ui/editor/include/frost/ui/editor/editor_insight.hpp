@@ -126,9 +126,9 @@ enum class DecorationStyle : std::uint8_t { WavyUnderline, DottedUnderline, Unde
 struct EditorDecoration {
     text::ByteRange range;
     DecorationStyle style = DecorationStyle::WavyUnderline;
-    std::optional<InsightSeverity> severity;
-    QColor color;
-    std::string tooltip;
+    std::optional<InsightSeverity> severity = std::nullopt;
+    QColor color{};
+    std::string tooltip{};
     friend bool operator==(const EditorDecoration&, const EditorDecoration&) = default;
 };
 
