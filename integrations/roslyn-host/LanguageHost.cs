@@ -155,7 +155,7 @@ internal sealed class LanguageHost
             return new { capabilities = new { positionEncoding = "utf-16", experimental = new { frostLibrarySources = 1 }, textDocumentSync = new { openClose = true, change = 2, save = new { includeText = false } },
                 completionProvider = new { triggerCharacters = new[] { "." } }, hoverProvider = true, definitionProvider = true, referencesProvider = true,
                 renameProvider = new { prepareProvider = true }, documentFormattingProvider = true, documentSymbolProvider = true, codeLensProvider = new { resolveProvider = false },
-                signatureHelpProvider = new { triggerCharacters = new[] { "(", "," } }, codeActionProvider = new { codeActionKinds = new[] { "refactor.rewrite" } } }, serverInfo = new { name = "FrostRoslynHost", version = "1" } };
+                signatureHelpProvider = new { triggerCharacters = new[] { "(", "," } }, codeActionProvider = new { codeActionKinds = new[] { "refactor.rewrite", "refactor.extract", "refactor.inline" } } }, serverInfo = new { name = "FrostRoslynHost", version = "1" } };
         case "initialized": return null;
         case "shutdown": shutdown = true; return null;
         case "exit": stop.Cancel(); return null;
