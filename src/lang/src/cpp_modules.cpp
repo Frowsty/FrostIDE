@@ -197,7 +197,11 @@ Result<CppModuleInputs> captureCppModuleInputs(io::IFileSystem& fs, std::string 
                 arg->starts_with("-Xclang") || arg->starts_with("-ivfsoverlay") || arg->starts_with("-isysroot") ||
                 arg->starts_with("--sysroot") || arg->starts_with("-resource-dir") || arg->starts_with("-fplugin") ||
                 arg->starts_with("-fpass-plugin") || arg->starts_with("/reference") || arg->starts_with("/ifcSearchDir") ||
-                arg->starts_with("-F") || arg->starts_with("-iframework"))
+                arg->starts_with("-F") || arg->starts_with("-iframework") || arg->starts_with("/imsvc") ||
+                arg->starts_with("/clang:") || arg->starts_with("-iprefix") || arg->starts_with("-iwithprefix") ||
+                arg->starts_with("-internal-isystem") || arg->starts_with("-isystem-after") ||
+                arg->starts_with("--gcc-toolchain") || arg->starts_with("-gcc-toolchain") ||
+                arg->starts_with("/winsysroot") || arg->starts_with("/external:env"))
                 return fail(ErrorCode::Unsupported, "Module capture refuses response/PCH/BMI/driver config inputs");
             std::string value;
             for (std::string_view flag : {"-isystem", "-iquote", "-idirafter", "-include", "-imacros", "/external:I", "/FI", "-I", "/I"}) {
@@ -216,7 +220,14 @@ Result<CppModuleInputs> captureCppModuleInputs(io::IFileSystem& fs, std::string 
             auto exists = fs.exists(*path);
             if (!exists) return std::unexpected(exists.error());
             if (!*exists) result.absent.push_back(*path);
-            else if (auto captured = walk(*path); !captured) return std::unexpected(captured.error());
+            else {
+                auto status = fs.status(*path);
+                if (!status) return std::unexpected(status.error());
+                // A forced file may quote-include siblings outside every project/-I root.
+                const auto tree = status->type == io::FileType::Regular
+                                      ? std::string(io::parentPath(*path)) : *path;
+                if (auto captured = walk(tree); !captured) return std::unexpected(captured.error());
+            }
         }
     }
     if (auto valid = validateCppModuleInputs(fs, result, stop); !valid) return std::unexpected(valid.error());
