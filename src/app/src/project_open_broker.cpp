@@ -51,7 +51,8 @@ Result<std::string> externalProjectRoot(std::string_view project) {
     if (!info.exists())
         return fail(ErrorCode::NotFound, "project path does not exist");
     if (info.isFile()) {
-        if (info.suffix().compare(QStringLiteral("frostproj"), Qt::CaseInsensitive) != 0)
+        if (info.suffix().compare(QStringLiteral("frostproj"), Qt::CaseInsensitive) != 0 &&
+            info.suffix().compare(QStringLiteral("uproject"), Qt::CaseInsensitive) != 0)
             return fail(ErrorCode::InvalidArgument, "project must be a folder or .frostproj file");
         // Resolve the project file itself before taking its parent: a symlink may point to
         // a different directory than the link. Workbench opens that same canonical file.
@@ -72,7 +73,7 @@ std::optional<std::string> inferExternalProjectRootForFile(std::string_view file
     if (!fileInfo.exists() || !fileInfo.isFile())
         return std::nullopt;
     const QString suffix = fileInfo.suffix().toLower();
-    if (suffix == QStringLiteral("frostproj") || suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx") ||
+    if (suffix == QStringLiteral("frostproj") || suffix == QStringLiteral("uproject") || suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx") ||
         fileInfo.fileName().compare(QStringLiteral("CMakeLists.txt"), Qt::CaseInsensitive) == 0 ||
         fileInfo.fileName() == QStringLiteral("compile_commands.json") ||
         fileInfo.fileName() == QStringLiteral("Makefile") || fileInfo.fileName() == QStringLiteral("makefile") ||
@@ -130,7 +131,7 @@ std::optional<std::string> inferExternalProjectRootForFile(std::string_view file
         const QDir dir(ancestor.path);
         if (QFileInfo(dir.filePath(QStringLiteral(".luarc.json"))).isFile() ||
             QFileInfo(dir.filePath(QStringLiteral("ProjectSettings"))).isDir() || hasEntryWithSuffix(dir, u"sln") ||
-            hasEntryWithSuffix(dir, u"slnx") || QFileInfo(dir.filePath(QStringLiteral("CMakeLists.txt"))).isFile() ||
+            hasEntryWithSuffix(dir, u"slnx") || hasEntryWithSuffix(dir, u"uproject") || QFileInfo(dir.filePath(QStringLiteral("CMakeLists.txt"))).isFile() ||
             QFileInfo(dir.filePath(QStringLiteral("compile_commands.json"))).isFile() ||
             QFileInfo(dir.filePath(QStringLiteral("Makefile"))).isFile() ||
             QFileInfo(dir.filePath(QStringLiteral("makefile"))).isFile() ||

@@ -714,7 +714,7 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
             const bool project =
                 cmakeProject || standaloneProject || file.isDir() ||
                 (file.isFile() && (suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx") ||
-                                   suffix == QStringLiteral("frostproj")));
+                                   suffix == QStringLiteral("frostproj") || suffix == QStringLiteral("uproject")));
             (project ? projects : files).push_back(std::move(absolute));
         }
         if (!parsed->project.empty()) {

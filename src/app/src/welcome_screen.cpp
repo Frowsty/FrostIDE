@@ -328,6 +328,8 @@ QString projectTypeBadge(const QFileInfo& info) {
         return QStringLiteral("SLN");
     if (suffix == QStringLiteral("slnx"))
         return QStringLiteral("SLNX");
+    if (suffix == QStringLiteral("uproject"))
+        return QStringLiteral("Unreal");
     if (suffix == QStringLiteral("csproj"))
         return QStringLiteral("C#");
     if (suffix == QStringLiteral("vcxproj"))

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/project/unreal_project.hpp"
 #include "frost/io/path.hpp"
+#include "frost/io/file_system.hpp"
 #include "json.hpp"
 #include <algorithm>
 #include <set>
@@ -51,6 +52,20 @@ Result<std::vector<UnrealModule>> modules(const JsonNode& root) {
     }
     return result;
 }
+}
+Result<UnrealProject> readUnrealProject(io::IFileSystem& fs, std::string_view absoluteProject) {
+    auto reader = fs.openRandomAccess(absoluteProject);
+    if (!reader) return std::unexpected(reader.error());
+    if ((*reader)->size() > 4 * 1024 * 1024) return fail(ErrorCode::InvalidArgument, "Unreal descriptor exceeds 4 MiB");
+    std::string bytes;
+    while (bytes.size() < (*reader)->size()) {
+        auto chunk = (*reader)->read(bytes.size(), static_cast<std::size_t>(std::min<std::uint64_t>(
+            io::IRandomAccessReader::kMaximumReadBytes, (*reader)->size() - bytes.size())));
+        if (!chunk) return std::unexpected(chunk.error());
+        if (chunk->empty()) return fail(ErrorCode::Busy, "Unreal descriptor changed during read");
+        bytes += *chunk;
+    }
+    return parseUnrealProject(bytes, absoluteProject);
 }
 Result<UnrealProject> parseUnrealProject(std::string_view json, std::string_view absoluteProject) {
     if (!io::isAbsolutePath(absoluteProject) || !absoluteProject.ends_with(".uproject") || absoluteProject.find('\0') != std::string_view::npos)

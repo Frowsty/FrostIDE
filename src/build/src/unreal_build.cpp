@@ -65,6 +65,8 @@ Result<std::unique_ptr<BuildSession>> startUnrealBuild(io::IProcessLauncher& lau
     auto spec = unrealBuildSpec(request);
     if (!spec) return std::unexpected(spec.error());
     if (!trust.isTrusted(io::parentPath(request.projectFile))) return fail(ErrorCode::Untrusted, "Unreal project directory is not trusted");
-    return BuildSession::start(launcher, *spec, true, std::move(callbacks), clock);
+    BuildSessionOptions options;
+    options.parser = makeCompilerOutputParser;
+    return BuildSession::start(launcher, *spec, true, std::move(callbacks), clock, options);
 }
 } // namespace frost::build

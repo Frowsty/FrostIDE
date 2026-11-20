@@ -59,6 +59,7 @@
 #include "project_edit_process.hpp"
 #include "settings_dialog.hpp"
 #include "standalone_build_backend.hpp"
+#include "unreal_build_backend.hpp"
 #include "unity_control.hpp"
 #include <QApplication>
 #include <QCoreApplication>

@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+namespace frost::io { class IFileSystem; }
 namespace frost::project {
 struct UnrealModule { std::string name; std::string type; std::string loadingPhase; };
 struct UnrealPluginReference { std::string name; bool enabled = false; bool optional = false; };
@@ -20,6 +21,8 @@ struct UnrealInstallation { std::string association; std::string root; };
 // Pure, bounded parsers; unknown fields are retained by the user's original file, never rewritten.
 // Known fields have strict types and duplicate JSON keys/names are refused (Corrupt).
 // Unsupported descriptor versions return Unsupported. No Pre/PostBuildSteps are interpreted.
+// Bounded retained regular-file read; blocking, worker-only. No whole-file fallback.
+[[nodiscard]] Result<UnrealProject> readUnrealProject(io::IFileSystem& fs, std::string_view absoluteProject);
 [[nodiscard]] Result<UnrealProject> parseUnrealProject(std::string_view json, std::string_view absoluteProject);
 [[nodiscard]] Result<UnrealPluginDescriptor> parseUnrealPluginDescriptor(std::string_view json);
 // Exact association lookup in user-supplied installed metadata. Missing/ambiguous associations

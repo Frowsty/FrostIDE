@@ -184,6 +184,7 @@ struct ManagedSourceSnapshot;
 class LanguageBridge;
 class CMakeIntegration;
 class StandaloneBuildBackend;
+class UnrealBuildBackend;
 class ProjectEditProcess;
 class EngineIntegration;
 class EngineLuaDebugCoordinator;
@@ -1109,6 +1110,7 @@ private:
     std::unique_ptr<run::RunManager> m_runManager;
     std::unique_ptr<CMakeIntegration> m_cmake;
     std::unique_ptr<StandaloneBuildBackend> m_standalone;
+    std::unique_ptr<UnrealBuildBackend> m_unreal;
     // RUN-3: a CMake target chosen in the run configuration combo that the targets window could not
     // take yet (it showed an older model); connectCMakeRunConfigurations applies it. "" for none.
     std::string m_pendingCMakeTarget;
