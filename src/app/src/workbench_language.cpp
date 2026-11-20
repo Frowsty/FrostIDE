@@ -23,6 +23,8 @@
 
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
+#include "engine_integration.hpp"
+#include "engine_json_schema_reader.hpp"
 #include "language_bridge.hpp"
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -76,7 +78,10 @@ ByteOffset mapThrough(ByteOffset offset, std::span<const lang::ByteEdit> edits) 
 LanguageBridge::LanguageBridge(Workbench& workbench)
     : m_workbench(workbench), m_applier(static_cast<lang::IWorkspaceDocuments&>(*this), workbench.m_services.fs,
                                         lang::PositionEncoding::Utf16) {
-    m_server.setJsonServer(m_json);
+    m_server.setJsonServer(m_json,[schemas=m_json](std::string_view path){return schemas->handles(path);});
+    m_json->setDeclarationReader([fs=&workbench.m_services.fs](std::string_view root,std::string_view path) {
+        return readEngineSchemaDeclaration(*fs,root,path);
+    });
     // Borrowed services outlive the workbench; its pool drains outstanding requests on shutdown.
     m_cmakeLanguage = std::make_shared<lang::CMakeLanguageService>(
         *workbench.m_pool, [fs = &workbench.m_services.fs](std::string_view path, std::size_t limit) {
@@ -90,7 +95,7 @@ LanguageBridge::LanguageBridge(Workbench& workbench)
 
 LanguageBridge::~LanguageBridge() = default;
 std::vector<lang::LiveDiagnostic> LanguageBridge::jsonDiagnostics(std::string_view path) const {
-    if (!lang::hasBundledJsonSchema(path) && !lang::isCMakeSource(path))
+    if (!m_json->handles(path) && !lang::isCMakeSource(path))
         return {};
     const auto* view = m_workbench.m_editors->find(path);
     if (!view)
@@ -100,7 +105,9 @@ std::vector<lang::LiveDiagnostic> LanguageBridge::jsonDiagnostics(std::string_vi
     return m_json->diagnostics(path);
 }
 void Workbench::syncJsonDocument(DocumentEditorView& view) {
-    if (!m_bridge || (!lang::hasBundledJsonSchema(view.path()) && !lang::isCMakeSource(view.path())))
+    if (m_engine)
+        m_engine->documentEdited(view.path(), view.editor().editor().text().version());
+    if (!m_bridge || (!m_bridge->handlesJsonDocument(view.path()) && !lang::isCMakeSource(view.path())))
         return;
     lang::FileDiagnostics set;
     set.file = view.path();
@@ -330,7 +337,7 @@ std::optional<text::Snapshot> LanguageBridge::snapshot() const {
         return std::nullopt;
     }
     auto text = editor->editor().text();
-    if (lang::hasBundledJsonSchema(documentPath()))
+    if (m_json->handles(documentPath()))
         m_json->updateDocument(documentPath(), text);
     return text;
 }
@@ -338,7 +345,7 @@ std::optional<text::Snapshot> LanguageBridge::snapshot() const {
 std::int64_t LanguageBridge::documentVersion() const {
     const lang::ClangdService* clangd = m_workbench.m_clangd.get();
     const std::string path = documentPath();
-    if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path) || project::isMSBuildSource(path)) {
+    if (m_json->handles(path) || lang::isCMakeSource(path) || project::isMSBuildSource(path)) {
         const auto text = snapshot();
         return text ? static_cast<std::int64_t>(text->version()) : 0;
     }
@@ -356,6 +363,7 @@ std::string LanguageBridge::structureIdentity() const {
     const auto* view = m_workbench.currentView();
     const std::string path = documentPath();
     const auto key = reinterpret_cast<std::uintptr_t>(view);
+    if(ui::lang::languageIdForPath(path)=="json")return std::format("{}:json:{}",key,m_json->schemaGeneration());
     if (isManagedSource(path) && m_workbench.m_managed)
         return std::format("{}:{}:{}:{}", key, reinterpret_cast<std::uintptr_t>(m_workbench.m_managed.get()),
                            m_workbench.m_managed->restarts(), static_cast<int>(m_workbench.m_managed->state()));
@@ -624,7 +632,7 @@ sched::Task<void> readCompileDatabaseTask(io::IFileSystem* fs, std::string datab
 
 ui::lang::ServerReadiness Workbench::languageReadiness(std::string_view path) {
     using Readiness = ui::lang::ServerReadiness;
-    if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path) || project::isMSBuildSource(path))
+    if ((m_bridge && m_bridge->handlesJsonDocument(path)) || lang::isCMakeSource(path) || project::isMSBuildSource(path))
         return Readiness::Unknown;
     if (isLuaSource(path))
         return m_lua && m_lua->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;

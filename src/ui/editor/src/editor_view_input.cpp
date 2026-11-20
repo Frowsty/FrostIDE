@@ -659,6 +659,13 @@ QMenu* EditorView::createContextMenu(QWidget* parent) {
         return act;
     };
 
+    if (property("engineAssetContext").toBool()) {
+        addRouted(QStringLiteral("Show Asset in FrostEditor"), QStringLiteral("contextShowInFrostEditor"),
+                  QStringLiteral("engine.showInEditor"));
+        addRouted(QStringLiteral("Open Asset in FrostEditor"), QStringLiteral("contextOpenInFrostEditor"),
+                  QStringLiteral("engine.openInEditor"));
+        menu->addSeparator();
+    }
     addRouted(QStringLiteral("Show Context Actions"), QStringLiteral("contextShowIntentions"),
               QStringLiteral("code.showIntentions"));
     menu->addSeparator();

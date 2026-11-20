@@ -3,6 +3,7 @@
 #pragma once
 
 #include "frost/core/error.hpp"
+#include "frost/document/refactoring_transaction.hpp"
 #include "frost/lang/json.hpp"
 #include "frost/run/run_manager.hpp"
 
@@ -33,6 +34,11 @@ public:
     // Cancels project/session work and owned runs; a paired external editor remains alive.
     void cancel();
     void trustChanged();
+    // GUI actions use only current authenticated commands and engine-listed asset identities.
+    [[nodiscard]] Result<void> refreshPerformance();
+    [[nodiscard]] Result<void> showInFrostEditor(std::string path, bool openAsset = false);
+    void invalidatePerformanceLenses();
+    [[nodiscard]] bool isListedAsset(std::string_view absolutePath) const;
     // GUI native adapter observer; publishes typed actual event evidence to the exact R6 lease.
     void updateNativeDebuggerPause();
     void shutdown();
@@ -45,6 +51,30 @@ public:
     [[nodiscard]] Result<std::uint64_t> command(std::string method, lang::Json params);
     [[nodiscard]] Result<build::RunId> startEditor();
     [[nodiscard]] Result<void> validateScript();
+    [[nodiscard]] Result<void> refreshDocumentSchemas();
+    [[nodiscard]] Result<void> validateDocument();
+    [[nodiscard]] Result<void> refreshTableSchema();
+    [[nodiscard]] Result<void> requestDocumentTool(std::string method);
+    [[nodiscard]] Result<void> validateContent();
+    void documentEdited(std::string_view path,std::uint64_t version);
+    void clearDocumentTools();
+    void registerDocumentActions();
+    void registerTemplateActions();
+    // GUI explicit commands; current snapshots/trust/session guard final diagnostics and PNG display.
+    [[nodiscard]] Result<void> shaderPreview(bool preview, std::string absolutePath = {});
+    void installShaderPreviewActions();
+    void invalidateShaderPreview();
+    // Actual authenticated content command; callback runs on GUI only for the retained session.
+    [[nodiscard]] Result<std::uint64_t> contentCommand(std::string method, lang::Json params,
+                                                       std::function<void(Result<lang::Json>)> completed);
+    [[nodiscard]] Result<void> findAssetUsagesForDocument(std::string_view absolutePath, bool reveal = true);
+    void invalidateAssetUsages();
+    [[nodiscard]] Result<void> recoverAssetMoveAfterNativeSettlement();
+    // GUI-only authenticated preparation; bounded nonpumping reply waits and modal preview. No disk effects.
+    // Exact lease and reversible receipt remain tied to the original session and project trust.
+    [[nodiscard]] Result<void> prepareAssetMove(document::RefactoringPlan& plan, std::string oldPath,
+                                                std::string newPath);
+    [[nodiscard]] Result<void> showSerializedProperties();
     [[nodiscard]] Result<void> cancelRequest();
     [[nodiscard]] lang::Json snapshot() const;
     // GUI-only immutable CLI/project capture; returned admission is worker-safe and revision-bound.
@@ -60,6 +90,10 @@ public:
     [[nodiscard]] std::function<Result<void>()> launchAdmissionFor(const run::RunConfiguration& configuration) const;
     [[nodiscard]] std::function<Result<run::LaunchPlan>(run::LaunchPlan)>
     launchPlanFor(const run::RunConfiguration& configuration) const;
+    // Independent native export/multiplayer children retain final trust and physical project identity.
+    [[nodiscard]] std::function<Result<void>()> sessionToolAdmissionFor(const run::RunConfiguration&) const;
+    [[nodiscard]] std::function<Result<run::LaunchPlan>(run::LaunchPlan)>
+    sessionToolPlanFor(const run::RunConfiguration&) const;
     void runAccepted(run::RunId id, const run::RunConfiguration& configuration);
     void processStarted(const run::RunStatus& run);
     void processOutput(run::RunId run, run::OutputStream stream, std::string_view bytes);

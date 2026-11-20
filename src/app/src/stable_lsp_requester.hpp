@@ -28,9 +28,10 @@ public:
         if (m_lua && m_applyEditHandler)
             m_lua->setApplyEditHandler(m_applyEditHandler);
     }
-    void setJsonServer(std::shared_ptr<lang::ILspRequester> server) {
+    void setJsonServer(std::shared_ptr<lang::ILspRequester> server, std::function<bool(std::string_view)> handles = {}) {
         LockGuard lock(m_mutex);
         m_json = std::move(server);
+        m_jsonHandles=std::move(handles);
     }
     void setCMakeServer(std::shared_ptr<lang::ILspRequester> server) {
         LockGuard lock(m_mutex);
@@ -59,7 +60,7 @@ public:
         LockGuard lock(m_mutex);
         m_activeLua = isLua(path);
         m_activeManaged = isCSharp(path);
-        m_activeJson = lang::hasBundledJsonSchema(path);
+        m_activeJson = m_jsonHandles?m_jsonHandles(path):lang::hasBundledJsonSchema(path);
         m_activeCMake = isCMake(path);
         m_activeMSBuild = project::isMSBuildSource(path);
         m_hasActive = m_activeLua || m_activeManaged || m_activeJson || m_activeCMake || m_activeMSBuild || isCpp(path);
@@ -137,7 +138,7 @@ private:
             LockGuard lock(m_mutex);
             return isLua(*path)                        ? m_lua
                    : isCSharp(*path)                   ? m_managed
-                   : lang::hasBundledJsonSchema(*path) ? m_json
+                   : (m_jsonHandles ? m_jsonHandles(*path) : lang::hasBundledJsonSchema(*path)) ? m_json
                    : project::isMSBuildSource(*path)      ? m_msbuild
                    : isCMake(*path)                    ? m_cmake
                    : isCpp(*path)                      ? m_server
@@ -164,6 +165,7 @@ private:
     std::shared_ptr<lang::ILspRequester> m_lua FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_managed FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_json FROST_GUARDED_BY(m_mutex);
+    std::function<bool(std::string_view)> m_jsonHandles FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_cmake FROST_GUARDED_BY(m_mutex);
     bool m_activeJson FROST_GUARDED_BY(m_mutex) = false;
     bool m_activeCMake FROST_GUARDED_BY(m_mutex) = false;

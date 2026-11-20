@@ -38,7 +38,7 @@ struct LanguageCapabilities {
     bool clangdTweaks = false;
 };
 
-inline constexpr std::array<LanguageCapabilities, 5> kLanguageCapabilities{{
+inline constexpr std::array<LanguageCapabilities, 6> kLanguageCapabilities{{
     {.languageId = "cpp",
      .serverName = "clangd",
      .postfix = true,
@@ -61,6 +61,7 @@ inline constexpr std::array<LanguageCapabilities, 5> kLanguageCapabilities{{
      .clangdTweaks = false},
     {.languageId = "cmake", .serverName = "CMake", .postfix = true, .liveTemplates = true},
     {.languageId = "lua", .serverName = "LuaLS", .liveTemplates = true},
+    {.languageId = "json", .serverName = "the selected JSON schema service"},
     {.languageId = "plaintext", .serverName = ""},
 }};
 
@@ -97,6 +98,7 @@ inline constexpr std::array<LanguageCapabilities, 5> kLanguageCapabilities{{
     if (e == "lua") {
         return "lua";
     }
+    if(e=="json"||e=="jsonc"||e=="fmat"||e=="fscene")return "json";
     return "plaintext";
 }
 

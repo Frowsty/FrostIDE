@@ -519,6 +519,8 @@ public:
     [[nodiscard]] Result<build::RunId> startEngineEditor();
     [[nodiscard]] Result<void> validateEngineScript();
     [[nodiscard]] Result<void> cancelEngineRequest();
+    [[nodiscard]] Result<void> refreshEnginePerformance();
+    [[nodiscard]] Result<void> showAssetInFrostEditor(std::string path, bool openAsset = false);
     // Paired-engine Lua debugging never grants ownership of an external host process.
     [[nodiscard]] Result<void> startEngineLuaDebug(bool startPlay = true);
     [[nodiscard]] ui::MixedDebugSnapshot mixedDebugSnapshot() const;
@@ -653,6 +655,9 @@ public:
     [[nodiscard]] Result<document::RefactoringOutcome> undoRefactoring();
     [[nodiscard]] Result<document::RefactoringOutcome> redoRefactoring();
     [[nodiscard]] Result<document::RefactoringOutcome> resumeRefactoring();
+    // Explicit restart recovery: replay only owned native decisions, then verify a stranded
+    // engine lease against actual full images. Never creates a new asset move decision.
+    [[nodiscard]] Result<void> recoverRefactoringJournal(bool explicitRequest = true);
     [[nodiscard]] bool canUndoRefactoring() const noexcept;
     [[nodiscard]] bool canRedoRefactoring() const noexcept;
     [[nodiscard]] bool refactoringPending() const noexcept;
@@ -818,6 +823,7 @@ private:
     void prepareNativeAnalysis(const run::RunConfiguration& configuration, std::stop_token stop,
                                std::function<void(Result<run::LaunchPlan>)> done);
     void registerRefactoringActions();
+    [[nodiscard]] Result<void> ensureRefactoringCoordinator(const std::string& target);
     void registerCppRefactoringActions();
     void registerCppIndexActions();
     void showCppIndex(std::string operation, std::string symbol = {});
@@ -1081,10 +1087,12 @@ private:
         std::vector<document::FileRename> renames;
         std::vector<std::string> mutationPaths;
         bool applied = false;
+        std::shared_ptr<document::RefactoringExternalGuard> external;
     };
     std::vector<RefactoringPaths> m_refactoringPaths;
     TransactionId m_pendingRefactoring;
     bool m_refactoringRecoveryChecked = false;
+    bool m_refactoringExecuting = false;
     TransactionId m_refactoringAdmissionToken;
     std::shared_ptr<CppRenameAdmission> m_cppRenameAdmission;
     std::stop_source m_cppRenameStop;

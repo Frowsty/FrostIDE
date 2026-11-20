@@ -9,6 +9,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <set>
 namespace frost::lang {
 namespace {
 // Bundled JSON Schema structural profiles. Sources: CMake cmake-presets(7), LuaLS
@@ -50,7 +51,7 @@ const Json& schemaFor(std::string_view path) {
                                     .value();
     static const Json meta =
         rpc::parseJson(
-            R"schema({"type":"object","properties":{"Handle":{"type":"integer","minimum":0},"Type":{"type":"string"},"Path":{"type":"string"},"ImporterVersion":{"type":"integer","minimum":0},"Settings":{"type":"object"}}})schema")
+            R"schema({"type":"object","properties":{"Handle":{"type":"integer","minimum":0,"x-engine-reference":"asset"},"Type":{"type":"string"},"Path":{"type":"string"},"ImporterVersion":{"type":"integer","minimum":0},"Settings":{"type":"object"}}})schema")
             .value();
     static const Json data =
         rpc::parseJson(
@@ -58,7 +59,7 @@ const Json& schemaFor(std::string_view path) {
             .value();
     static const Json table =
         rpc::parseJson(
-            R"schema({"type":"object","properties":{"Format":{"type":"string","enum":["FrostDataTable"]},"Version":{"type":"integer","minimum":1},"Schema":{"type":["string","object","integer"]},"Rows":{"type":"array","items":{"type":"object"}}}})schema")
+            R"schema({"type":"object","properties":{"Format":{"type":"string","enum":["FrostDataTable"]},"Version":{"type":"integer","minimum":1},"Schema":{"type":["string","object","integer"],"x-engine-reference":"asset","x-engine-assetTypes":["DataSchema"]},"Rows":{"type":"array","items":{"type":"object"}}}})schema")
             .value();
     const auto name = io::fileName(path);
     if (name == "CMakePresets.json" || name == "CMakeUserPresets.json")
@@ -153,7 +154,7 @@ struct Scanner {
 const Json* fieldSchema(const Json& root, std::span<const std::string> path) {
     const Json* schema = &root;
     for (const auto& component : path) {
-        if (schema->stringAt("type") == "array")
+        if (schema->find("items") && !component.empty() && std::ranges::all_of(component,[](unsigned char c){return c>='0'&&c<='9';}))
             schema = schema->find("items");
         else {
             const auto* properties = schema->find("properties");
@@ -164,6 +165,111 @@ const Json* fieldSchema(const Json& root, std::span<const std::string> path) {
     }
     return schema;
 }
+bool profileContains(std::string_view root,std::string_view path) {
+    const auto key=documentKey(path);const auto normalized=documentKey(root);
+    if(normalized.empty()||!key.starts_with(normalized)||key.size()<=normalized.size()||(key[normalized.size()]!='/'&&key[normalized.size()]!='\\'))return false;
+    for(std::size_t start=0;start<=key.size();) {
+        const auto end=key.find_first_of("/\\",start);if(std::string_view(key).substr(start,end==key.npos?end:end-start)=="..")return false;
+        if(end==key.npos)break;start=end+1;
+    }
+    return true;
+}
+bool safeIndexedPath(std::string_view path) {
+    if(!path.starts_with("Assets/")||path.find_first_of("\\:\r\n")!=path.npos)return false;
+    for(std::size_t start=0;start<=path.size();) {
+        const auto end=path.find('/',start);const auto part=path.substr(start,end==path.npos?end:end-start);
+        if(part.empty()||part=="."||part=="..")return false;
+        for(unsigned char c:part)if(c<32||c==127)return false;
+        if(end==path.npos)break;start=end+1;
+    }
+    return true;
+}
+std::optional<std::uint64_t> exactJsonId(const Json& value) {
+    if(value.kind()==Json::Kind::Integer)return value.asUnsigned();
+    const auto* text=value.asString();if(!text||text->empty())return {};
+    std::string_view digits=*text;int base=10;if(digits.starts_with("0x")||digits.starts_with("0X")){digits.remove_prefix(2);base=16;}
+    std::uint64_t id=0;const auto parsed=std::from_chars(digits.data(),digits.data()+digits.size(),id,base);
+    return parsed.ec==std::errc{}&&parsed.ptr==digits.data()+digits.size()?std::optional(id):std::nullopt;
+}
+struct CapturedJsonEntity { std::uint64_t id=0;std::string name;std::size_t begin=0,end=0; };
+std::vector<CapturedJsonEntity> capturedEntities(const Scanner& scan,std::string_view source) {
+    std::map<std::string,CapturedJsonEntity,std::less<>> rows;
+    for(const auto& node:scan.nodes) {
+        if(node.path.size()<3||node.path[0]!="Entities"||rows.size()>10000)continue;
+        const bool id=node.path.size()==3&&node.path[2]=="ID";
+        const bool name=node.path.size()==5&&node.path[2]=="Components"&&node.path[3]=="Tag"&&node.path[4]=="Tag";
+        if(!id&&!name)continue;auto value=rpc::parseJson(source.substr(node.begin,node.end-node.begin));if(!value)continue;
+        auto& row=rows[node.path[1]];
+        if(id){if(auto exact=exactJsonId(*value)){row.id=*exact;row.begin=node.begin;row.end=node.end;}}
+        else if(const auto* text=value->asString())row.name=*text;
+    }
+    std::vector<CapturedJsonEntity> entities;for(auto& [key,row]:rows)if(row.id)entities.push_back(std::move(row));return entities;
+}
+std::optional<Json> tableReference(const text::Snapshot& snapshot) {
+    if(snapshot.size().value()>256*1024)return {};
+    const auto source=snapshot.text();Scanner scan{source};scan.value();
+    for(const auto& node:scan.nodes)if(node.path==std::vector<std::string>{"Schema"}) {
+        const auto parsed=rpc::parseJson(std::string_view(source).substr(node.begin,node.end-node.begin));
+        if(parsed)return *parsed;return {};
+    }
+    return {};
+}
+void markDataDeclaration(Json& shape,const std::string& source,std::vector<std::string> path) {
+    auto names=Json::array();for(const auto& name:path)names.push(name);
+    shape.set("x-engine-declaration",source).set("x-engine-columnPath",names);
+    if(auto* properties=shape.find("properties"))for(const auto& key:properties->keys()) {
+        auto child=path;child.push_back(key);markDataDeclaration(*properties->find(key),source,std::move(child));
+    }
+    if(auto* items=shape.find("items"))markDataDeclaration(*items,source,path);
+}
+std::optional<text::ByteRange> dataColumnDeclaration(const text::Snapshot& snapshot,const Json& names) {
+    if(snapshot.size().value()>2*1024*1024||!names.isArray()||!names.size())return {};
+    const auto source=snapshot.text();auto document=rpc::parseJson(source);if(!document)return {};
+    const Json* owner=&*document;std::vector<std::string> path;
+    for(std::size_t depth=0;depth<names.size();++depth) {
+        const Json* columns=owner->find(depth?"Fields":"Columns");
+        if(!columns&&depth)if(const auto* element=owner->find("Element")){owner=element;path.push_back("Element");columns=owner->find("Fields");}
+        if(!columns||!columns->isArray())return {};path.push_back(depth?"Fields":"Columns");
+        const Json* match=nullptr;std::size_t index=0;
+        for(std::size_t i=0;i<columns->size();++i)if(columns->items()[i].stringAt("Name")==*names.items()[depth].asString()) {
+            if(match)return {};match=&columns->items()[i];index=i;
+        }
+        if(!match)return {};owner=match;path.push_back(std::to_string(index));
+    }
+    path.push_back("Name");Scanner scan{source};scan.value();
+    const auto found=std::ranges::find(scan.nodes,path,&Node::path);
+    return found==scan.nodes.end()?std::nullopt:std::optional(text::ByteRange{ByteOffset{found->begin},ByteOffset{found->end}});
+}
+Result<Json> dataColumnShape(const Json& definition,unsigned depth=0) {
+    if(!definition.isObject()||depth>8)return fail(ErrorCode::Corrupt,"Malformed actual data column definition");
+    const auto type=definition.stringAt("Type");auto shape=Json::object();
+    if(type=="Bool")shape.set("type","boolean");
+    else if(type=="Int")shape.set("type","integer");
+    else if(type=="Float")shape.set("type","number");
+    else if(type=="String"||type=="Name"||type=="Enum")shape.set("type","string");
+    else if(type=="Ref")shape.set("type",Json::array({"string","null"}));
+    else if(type=="Asset") {
+        shape.set("type",Json::array({"string","object","integer","null"})).set("x-engine-reference","asset");
+        auto types=Json::array();if(const auto type=definition.stringAt("AssetType");!type.empty())types.push(std::string(type));shape.set("x-engine-assetTypes",types);
+    }
+    else if(type=="Color"||type=="Vec2")shape.set("type","array").set("items",Json::object().set("type","number"));
+    else if(type=="List") {
+        const auto* element=definition.find("Element");if(!element)return fail(ErrorCode::Corrupt,"Actual list column omitted Element");
+        auto child=dataColumnShape(*element,depth+1);if(!child)return std::unexpected(child.error());shape.set("type","array").set("items",*child);
+    } else if(type=="Struct") {
+        const auto* fields=definition.find("Fields");if(!fields||!fields->isArray()||fields->size()>256)return fail(ErrorCode::Corrupt,"Actual struct column omitted bounded Fields");
+        auto properties=Json::object();for(const auto& field:fields->items()) {
+            const auto name=field.stringAt("Name");if(name.empty()||properties.find(name))return fail(ErrorCode::Corrupt,"Invalid actual struct field name");
+            auto child=dataColumnShape(field,depth+1);if(!child)return std::unexpected(child.error());properties.set(std::string(name),*child);
+        }
+        shape.set("type","object").set("properties",properties);
+    } else return fail(ErrorCode::Unsupported,"Actual data column type has no structural editing profile");
+    if(type=="Enum") {const auto* values=definition.find("Values");if(!values||!values->isArray())return fail(ErrorCode::Corrupt,"Actual enum omitted Values");for(const auto& value:values->items())if(!value.isString())return fail(ErrorCode::Corrupt,"Actual enum values must be strings");shape.set("enum",*values);}
+    if(const auto* minimum=definition.find("Min"))shape.set("minimum",*minimum);
+    if(const auto* maximum=definition.find("Max"))shape.set("maximum",*maximum);
+    if(const auto* description=definition.find("Description"))shape.set("description",*description);
+    return shape;
+}
 bool typeMatches(const Json& value, std::string_view type) {
     return type == "object"    ? value.isObject()
            : type == "array"   ? value.isArray()
@@ -173,6 +279,42 @@ bool typeMatches(const Json& value, std::string_view type) {
            : type == "number"  ? value.isNumber()
            : type == "null"    ? value.isNull()
                                : true;
+}
+// Dynamic selected-engine schemas are untrusted protocol data. Validate every consumed
+// keyword before publishing the complete replacement; unknown keywords stay inert.
+bool admissibleEngineShape(const Json& schema,unsigned depth,std::size_t& nodes) {
+    if(!schema.isObject()||depth>64||++nodes>10000)return false;
+    const auto typeName=[](const Json& type) {
+        const auto name=type.asString();
+        return name&&(*name=="object"||*name=="array"||*name=="string"||*name=="boolean"||*name=="integer"||*name=="number"||*name=="null");
+    };
+    if(const auto* type=schema.find("type")) {
+        if(type->isArray()){if(type->size()==0)return false;for(const auto& value:type->items())if(!typeName(value))return false;}
+        else if(!typeName(*type))return false;
+    }
+    if(const auto* minimum=schema.find("minimum");minimum&&!minimum->isNumber())return false;
+    if(const auto* maximum=schema.find("maximum");maximum&&!maximum->isNumber())return false;
+    if(const auto* choices=schema.find("enum");choices&&!choices->isArray())return false;
+    for(const auto* keyword:{"x-engine-enumNames","x-engine-assetTypes"})if(const auto* values=schema.find(keyword)) {
+        if(!values->isArray())return false;for(const auto& value:values->items())if(!value.isString())return false;
+    }
+    if(const auto* reference=schema.find("x-engine-reference");reference&&(!reference->isString()||(*reference->asString()!="asset"&&*reference->asString()!="entity")))return false;
+    if(const auto* declaration=schema.find("x-engine-declaration");declaration&&(!declaration->isString()||!safeIndexedPath(*declaration->asString())||!declaration->asString()->ends_with(".fschema")))return false;
+    if(const auto* path=schema.find("x-engine-columnPath")) {
+        if(!path->isArray()||!path->size()||path->size()>8)return false;
+        for(const auto& name:path->items())if(!name.isString()||name.asString()->empty()||name.asString()->size()>64)return false;
+    }
+    if(const auto* description=schema.find("description");description&&!description->isString())return false;
+    if(const auto* required=schema.find("required")) {
+        if(!required->isArray())return false;
+        for(const auto& key:required->items())if(!key.isString())return false;
+    }
+    if(const auto* properties=schema.find("properties")) {
+        if(!properties->isObject())return false;
+        for(const auto& property:properties->items())if(!admissibleEngineShape(property,depth+1,nodes))return false;
+    }
+    if(const auto* items=schema.find("items");items&&!admissibleEngineShape(*items,depth+1,nodes))return false;
+    return true;
 }
 void validate(const Json& schema, const Json& value, std::vector<std::string> path,
               std::vector<std::pair<std::vector<std::string>, std::string>>& errors, unsigned depth = 0) {
@@ -196,6 +338,8 @@ void validate(const Json& schema, const Json& value, std::vector<std::string> pa
     if (const auto* minimum = schema.find("minimum");
         minimum && value.isNumber() && *value.asDouble() < *minimum->asDouble())
         errors.push_back({path, "Value is below the schema minimum " + minimum->dump()});
+    if (const auto* maximum = schema.find("maximum"); maximum && value.isNumber() && *value.asDouble() > *maximum->asDouble())
+        errors.push_back({path, "Value is above the schema maximum " + maximum->dump()});
     if (value.isObject()) {
         if (const auto* required = schema.find("required"))
             for (const auto& key : required->items())
@@ -241,28 +385,102 @@ void JsonSchemaService::updateDocument(std::string path, text::Snapshot snapshot
         m_documents.erase(m_documents.begin());
     m_documents.insert_or_assign(documentKey(path), std::move(snapshot));
 }
+Result<void> JsonSchemaService::installEngineSchemas(std::string projectRoot,const Json& actualExport) {
+    if(!io::isAbsolutePath(projectRoot)||actualExport.stringAt("protocol")!="frostengine.document-schemas"||actualExport.integerAt("version")!=1)
+        return fail(ErrorCode::Corrupt,"Unsupported engine document schema contract");
+    const auto* entries=actualExport.find("schemas");
+    if(!entries||!entries->isArray()||entries->size()>64||actualExport.dump().size()>2*1024*1024)
+        return fail(ErrorCode::OutOfRange,"Engine document schemas exceed their bounded structural profile");
+    std::map<std::string,Json,std::less<>> schemas;std::size_t shapeNodes=0;
+    for(const auto& entry:entries->items()) {
+        const auto extension=entry.stringAt("extension");const auto* schema=entry.find("schema");
+        if(extension.size()<2||extension.size()>32||extension.front()!='.'||!schema||!schema->isObject()||entry.stringAt("serializer").empty())
+            return fail(ErrorCode::Corrupt,"Invalid engine document schema descriptor");
+        if(!admissibleEngineShape(*schema,0,shapeNodes))return fail(ErrorCode::Corrupt,"Malformed or oversized engine schema keyword shape");
+        for(char c:extension.substr(1))if(!((c>='a'&&c<='z')||(c>='0'&&c<='9')))
+            return fail(ErrorCode::Corrupt,"Engine schema extension must be a literal lowercase suffix");
+        if(!schemas.emplace(std::string(extension),*schema).second)return fail(ErrorCode::Corrupt,"Duplicate engine document schema suffix");
+    }
+    LockGuard lock(m_mutex);m_engineRoot=documentKey(projectRoot);m_engineTableSchemas.clear();m_engineSchemas=std::move(schemas);++m_schemaGeneration;return {};
+}
+Result<void> JsonSchemaService::installEngineTableSchema(std::string path,const text::Snapshot& snapshot,const Json& reply) {
+    if(!path.ends_with(".ftable")||reply.stringAt("protocol")!="frostengine.table-schema"||reply.integerAt("version")!=1||reply.dump().size()>2*1024*1024)
+        return fail(ErrorCode::Corrupt,"Unsupported actual table-schema envelope");
+    const auto reference=tableReference(snapshot);const auto* echoed=reply.find("reference");const auto* info=reply.find("schemaInfo");
+    if(!reference||!echoed||*reference!=*echoed||!info||!info->isObject()||!info->stringAt("resolveError").empty())return fail(ErrorCode::Corrupt,"Actual schema.info differs from captured table reference or cannot resolve");
+    const auto* columns=info->find("columns");if(!columns||!columns->isArray()||columns->size()>256)return fail(ErrorCode::Corrupt,"Actual schema.info omitted bounded columns");
+    auto properties=Json::object().set("Key",Json::object().set("type","string"));
+    for(const auto& column:columns->items()) {
+        const auto name=column.stringAt("name");const auto* definition=column.find("definition");
+        if(name.empty()||properties.find(name)||!definition||definition->stringAt("Name")!=name||definition->stringAt("Type")!=column.stringAt("type"))return fail(ErrorCode::Corrupt,"Actual schema.info column identity is malformed");
+        auto shape=dataColumnShape(*definition);if(!shape)return std::unexpected(shape.error());
+        if(const auto* value=column.find("default"))shape->set("default",*value);
+        std::string description(shape->stringAt("description"));description+="\nDeclared in: "+std::string(column.stringAt("declaredIn"));shape->set("description",description);
+        const auto origin=column.stringAt("declaredIn");
+        if(safeIndexedPath(origin)&&origin.ends_with(".fschema"))markDataDeclaration(*shape,std::string(origin),{std::string(name)});
+        properties.set(std::string(name),*shape);
+    }
+    auto schema=schemaFor(path);schema.find("properties")->find("Rows")->set("items",Json::object().set("type","object").set("properties",properties));
+    std::size_t nodes=0;if(!admissibleEngineShape(schema,0,nodes))return fail(ErrorCode::Corrupt,"Malformed actual data editing shape");
+    LockGuard lock(m_mutex);const auto key=documentKey(path);
+    if(m_engineRoot.empty()||!key.starts_with(m_engineRoot)||key.size()<=m_engineRoot.size()||(key[m_engineRoot.size()]!='/'&&key[m_engineRoot.size()]!='\\'))return fail(ErrorCode::Cancelled,"Selected engine project changed");
+    if(m_engineTableSchemas.size()>=64&&!m_engineTableSchemas.contains(key))m_engineTableSchemas.erase(m_engineTableSchemas.begin());
+    m_engineTableSchemas.insert_or_assign(key,std::pair{*reference,std::move(schema)});++m_schemaGeneration;return {};
+}
+void JsonSchemaService::setDeclarationReader(DeclarationReader reader) {LockGuard lock(m_mutex);m_declarationReader=std::move(reader);}
+void JsonSchemaService::setAssetReferences(std::string root,JsonAssetReferenceProvider provider) {
+    LockGuard lock(m_mutex);
+    if(!io::isAbsolutePath(root)||!provider.resolve||!provider.complete){m_assetRoot.clear();m_assetReferences={};}
+    else {m_assetRoot=documentKey(root);m_assetReferences=std::move(provider);}
+    ++m_schemaGeneration;
+}
+void JsonSchemaService::clearEngineSchemas(){LockGuard lock(m_mutex);m_engineRoot.clear();m_engineSchemas.clear();m_engineTableSchemas.clear();++m_schemaGeneration;}
+std::uint64_t JsonSchemaService::schemaGeneration() const {LockGuard lock(m_mutex);return m_schemaGeneration;}
+std::optional<Json> JsonSchemaService::engineSchemaLocked(std::string_view path) const {
+    const auto key=documentKey(path);
+    // POSIX normalization preserves .. across potential symlinks; profiles refuse traversal.
+    for(std::size_t start=0;start<=key.size();) {
+        const auto end=key.find_first_of("/\\",start);
+        if(std::string_view(key).substr(start,end==key.npos?end:end-start)=="..")return {};
+        if(end==key.npos)break;start=end+1;
+    }
+    if(m_engineRoot.empty()||!key.starts_with(m_engineRoot)||key.size()<=m_engineRoot.size()||
+        (key[m_engineRoot.size()]!='/'&&key[m_engineRoot.size()]!='\\'))return {};
+    if(const auto installed=m_engineTableSchemas.find(key);installed!=m_engineTableSchemas.end())
+        if(const auto document=m_documents.find(key);document!=m_documents.end())
+            if(const auto reference=tableReference(document->second);reference&&*reference==installed->second.first)return installed->second.second;
+    for(const auto& [extension,schema]:m_engineSchemas)if(key.ends_with(extension))return schema;
+    return {};
+}
+bool JsonSchemaService::handles(std::string_view path) const {
+    if(hasBundledJsonSchema(path))return true;LockGuard lock(m_mutex);return engineSchemaLocked(path).has_value();
+}
 void JsonSchemaService::removeDocument(std::string_view path) {
     LockGuard lock(m_mutex);
+    m_engineTableSchemas.erase(documentKey(path));
     m_documents.erase(documentKey(path));
 }
 std::optional<ServerCapabilities> JsonSchemaService::serverCapabilities() const {
     ServerCapabilities capabilities;
     capabilities.completion = true;
     capabilities.hover = true;
+    capabilities.definition = true;
     capabilities.completionTriggerCharacters = {"\"", ":"};
     return capabilities;
 }
 std::vector<LiveDiagnostic> JsonSchemaService::diagnostics(std::string_view path) const {
     text::Snapshot snapshot;
+    Json selectedSchema;bool engine=false;
     {
         LockGuard lock(m_mutex);
         const auto found = m_documents.find(documentKey(path));
         if (found == m_documents.end())
             return {};
         snapshot = found->second;
+        if(auto schema=engineSchemaLocked(path)){selectedSchema=std::move(*schema);engine=true;}
+        else if(hasBundledJsonSchema(path))selectedSchema=schemaFor(path);
+        else return {};
     }
-    if (!hasBundledJsonSchema(path))
-        return {};
     const auto source = normalized(path, snapshot);
     auto parsed = source ? rpc::parseJson(*source) : Result<Json>(std::unexpected(source.error()));
     std::vector<std::pair<std::vector<std::string>, std::string>> errors;
@@ -271,7 +489,7 @@ std::vector<LiveDiagnostic> JsonSchemaService::diagnostics(std::string_view path
     if (!parsed)
         errors.push_back({{}, parsed.error().message()});
     else
-        validate(schemaFor(path), *parsed, {}, errors);
+        validate(selectedSchema, *parsed, {}, errors);
     std::vector<LiveDiagnostic> diagnostics;
     for (const auto& [nodePath, message] : errors) {
         auto node = std::ranges::find(scan.nodes, nodePath, &Node::path);
@@ -295,7 +513,7 @@ std::vector<LiveDiagnostic> JsonSchemaService::diagnostics(std::string_view path
         }
         LiveDiagnostic diagnostic;
         diagnostic.file = path;
-        diagnostic.source = "frost-json-schema";
+        diagnostic.source = engine?"frost-engine-schema-shape":"frost-json-schema";
         diagnostic.code = parsed ? "schema" : "syntax";
         diagnostic.message = message;
         diagnostic.range = text::ByteRange{ByteOffset{begin}, ByteOffset{end}};
@@ -313,15 +531,19 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
         co_return fail(ErrorCode::Cancelled);
     const auto* document = params.find("textDocument");
     auto path = uriToPath(document ? document->stringAt("uri") : std::string_view{});
-    if (!path || !hasBundledJsonSchema(*path))
+    if (!path || !handles(*path))
         co_return fail(ErrorCode::Unsupported, "No bundled JSON schema for this document");
     text::Snapshot snapshot;
+    Json selectedSchema;bool engine=false;std::string assetRoot,engineRoot;JsonAssetReferenceProvider assets;DeclarationReader reader;std::uint64_t generation=0;
     {
         LockGuard lock(m_mutex);
         const auto found = m_documents.find(documentKey(*path));
         if (found == m_documents.end())
             co_return fail(ErrorCode::Busy, "No captured JSON document");
-        snapshot = found->second;
+        snapshot = found->second;assetRoot=m_assetRoot;assets=m_assetReferences;engineRoot=m_engineRoot;reader=m_declarationReader;generation=m_schemaGeneration;
+        if(auto schema=engineSchemaLocked(*path)){selectedSchema=std::move(*schema);engine=true;}
+        else if(hasBundledJsonSchema(*path))selectedSchema=schemaFor(*path);
+        else co_return fail(ErrorCode::Busy,"Engine document schemas were withdrawn");
     }
     auto source = normalized(*path, snapshot);
     if (!source)
@@ -344,9 +566,64 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
             (node.keyBegin <= offset && offset <= node.keyEnd && node.keyEnd))
             if (!selected || node.path.size() >= selected->path.size())
                 selected = &node;
-    const auto& root = schemaFor(*path);
+    const Json* referenceShape=nullptr;const Node* referenceNode=nullptr;
+    const bool selectedKey=selected&&selected->keyEnd&&selected->keyBegin<=offset&&offset<=selected->keyEnd;
+    if(selected&&!selectedKey) {
+        auto context=selected->path;
+        for(;;) {
+            if(const auto* shape=fieldSchema(selectedSchema,context);shape&&!shape->stringAt("x-engine-reference").empty()) {
+                const auto node=std::ranges::find(scan.nodes,context,&Node::path);
+                if(node!=scan.nodes.end()){referenceShape=shape;referenceNode=&*node;}break;
+            }
+            if(context.empty())break;context.pop_back();
+        }
+    }
+    auto referenceValue=referenceNode?rpc::parseJson(std::string_view(*source).substr(referenceNode->begin,referenceNode->end-referenceNode->begin)):Result<Json>(Json{});
+    if(!referenceValue&&selected)referenceValue=rpc::parseJson(std::string_view(*source).substr(selected->begin,selected->end-selected->begin));
+    std::optional<JsonIndexedAsset> indexed;
+    if(referenceShape&&referenceShape->stringAt("x-engine-reference")=="asset"&&assets.resolve&&profileContains(assetRoot,*path)&&referenceValue) {
+        indexed=assets.resolve(*referenceValue);if(indexed&&(!indexed->handle||!safeIndexedPath(indexed->path)))indexed.reset();
+    }
+    const auto entities=referenceShape&&referenceShape->stringAt("x-engine-reference")=="entity"?capturedEntities(scan,*source):std::vector<CapturedJsonEntity>{};
+    if(method=="textDocument/definition") {
+        auto locations=Json::array();
+        if(indexed) {
+            const auto target=io::joinPath(assetRoot,indexed->path);const auto uri=target?pathToUri(*target):Result<std::string>(fail(ErrorCode::InvalidArgument));
+            if(uri)locations.push(Json::object().set("uri",*uri).set("range",toJson(LspRange{})));
+        } else if(referenceValue)if(const auto id=exactJsonId(*referenceValue)) {
+            const CapturedJsonEntity* match=nullptr;bool ambiguous=false;
+            for(const auto& entity:entities)if(entity.id==*id){ambiguous=match!=nullptr;match=&entity;if(ambiguous)break;}
+            if(match&&!ambiguous)locations.push(Json::object().set("uri",pathToUri(*path).value())
+                .set("range",toJson(LspRange{toLspPosition(snapshot,ByteOffset{match->begin},PositionEncoding::Utf16),toLspPosition(snapshot,ByteOffset{match->end},PositionEncoding::Utf16)})));
+        }
+        if(!locations.size()&&selected&&!engineRoot.empty()) {
+            auto context=selected->path;const Json* declaration=nullptr;
+            for(;;) {
+                const auto* shape=fieldSchema(selectedSchema,context);
+                if(shape&&shape->find("x-engine-declaration")&&shape->find("x-engine-columnPath")){declaration=shape;break;}
+                if(context.empty())break;context.pop_back();
+            }
+            if(declaration) {
+                const auto target=io::joinPath(engineRoot,declaration->stringAt("x-engine-declaration"));
+                if(target) {
+                    std::optional<text::Snapshot> captured;
+                    {LockGuard lock(m_mutex);if(m_engineRoot!=engineRoot||m_schemaGeneration!=generation)co_return fail(ErrorCode::Cancelled,"Selected engine schema changed");
+                        if(const auto open=m_documents.find(documentKey(*target));open!=m_documents.end())captured=open->second;}
+                    if(!captured&&reader){auto loaded=reader(engineRoot,*target);if(!loaded)co_return std::unexpected(loaded.error());captured=*loaded;}
+                    if(captured)if(const auto bytes=dataColumnDeclaration(*captured,*declaration->find("x-engine-columnPath"))) {
+                        const auto uri=pathToUri(*target);if(uri)locations.push(Json::object().set("uri",*uri).set("range",toJson(LspRange{
+                            toLspPosition(*captured,bytes->begin,PositionEncoding::Utf16),toLspPosition(*captured,bytes->end,PositionEncoding::Utf16)})));
+                    }
+                    {LockGuard lock(m_mutex);if(m_engineRoot!=engineRoot||m_schemaGeneration!=generation)co_return fail(ErrorCode::Cancelled,"Selected engine schema changed while reading its declaration");}
+                }
+            }
+        }
+        co_return locations;
+    }
+    const auto& root = selectedSchema;
     if (method == "textDocument/hover") {
         const auto* schema = selected ? fieldSchema(root, selected->path) : &root;
+        if(!schema&&referenceShape)schema=referenceShape;
         if (!schema)
             co_return Json{};
         auto description = std::string(schema->stringAt("description", "Bundled structural schema property."));
@@ -354,8 +631,12 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
             description += "\nType: " + type->dump();
         if (const auto* choices = schema->find("enum"))
             description += "\nValues: " + choices->dump();
+        if(const auto* value=schema->find("default"))description+="\nDefault: "+value->dump();
+        if(const auto* minimum=schema->find("minimum"))description+="\nMinimum: "+minimum->dump();
+        if(const auto* maximum=schema->find("maximum"))description+="\nMaximum: "+maximum->dump();
+        if(indexed)description+="\nActual indexed asset: "+indexed->path+" ("+indexed->type+", "+std::to_string(indexed->handle)+")";
         description += "\n";
-        description += bundledJsonSchemaCoverage(*path);
+        description += engine?"Actual engine serializer/default field shapes; semantic validation requires the selected engine's document.validate.":bundledJsonSchemaCoverage(*path);
         co_return Json::object().set("contents", Json::object().set("kind", "plaintext").set("value", description));
     }
     if (method != "textDocument/completion")
@@ -369,12 +650,46 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
     if (inKey && !context.empty())
         context.pop_back();
     const auto* schema = fieldSchema(root, context);
-    if (!schema)
+    if (!schema && !(referenceShape&&!objectKeys))
         co_return list;
     const auto range = [&](std::size_t begin, std::size_t end) {
         return toJson(LspRange{toLspPosition(snapshot, ByteOffset{begin}, PositionEncoding::Utf16),
                                toLspPosition(snapshot, ByteOffset{end}, PositionEncoding::Utf16)});
     };
+    if(!objectKeys&&referenceShape&&selected) {
+        const auto editRange=range(selected->begin,selected->end);auto references=Json::array();bool incomplete=false;
+        if(referenceShape->stringAt("x-engine-reference")=="asset"&&assets.complete&&profileContains(assetRoot,*path)) {
+            std::vector<std::string> types;if(const auto* accepted=referenceShape->find("x-engine-assetTypes"))for(const auto& type:accepted->items())types.push_back(*type.asString());
+            std::string prefix;auto literal=rpc::parseJson(std::string_view(*source).substr(selected->begin,selected->end-selected->begin));
+            if(literal&&literal->asString()&&!exactJsonId(*literal))prefix=*literal->asString();
+            auto actual=assets.complete(types,prefix,5001);incomplete=actual.size()>5000;if(incomplete)actual.resize(5000);
+            for(const auto& asset:actual)if(asset.handle&&safeIndexedPath(asset.path)&&(types.empty()||std::ranges::find(types,asset.type)!=types.end())) {
+                const bool handle=(!selected->path.empty()&&selected->path.back()=="Handle")||(referenceValue&&referenceValue->kind()==Json::Kind::Integer);
+                auto item=Json::object().set("label",asset.path).set("kind",17).set("detail",asset.type+" — "+std::to_string(asset.handle))
+                    .set("textEdit",Json::object().set("range",editRange).set("newText",handle?Json(asset.handle).dump():Json(asset.path).dump()));
+                // Asset handles are authoritative over path hints. A completion inside an
+                // object must update both members in the same completion Undo operation.
+                auto additional=Json::array();
+                if(referenceNode&&referenceNode->object)for(const auto& sibling:scan.nodes) {
+                    if(sibling.path.size()!=referenceNode->path.size()+1||!std::equal(referenceNode->path.begin(),referenceNode->path.end(),sibling.path.begin())||
+                        (sibling.path.back()!="Handle"&&sibling.path.back()!="Path")||(sibling.begin==selected->begin&&sibling.end==selected->end))continue;
+                    additional.push(Json::object().set("range",range(sibling.begin,sibling.end))
+                        .set("newText",sibling.path.back()=="Handle"?Json(asset.handle).dump():Json(asset.path).dump()));
+                }
+                if(additional.size()>128)continue;
+                if(additional.size())item.set("additionalTextEdits",additional);
+                references.push(std::move(item));
+            }
+        } else if(referenceShape->stringAt("x-engine-reference")=="entity") {
+            std::set<std::uint64_t> seen;
+            for(const auto& entity:entities)if(seen.insert(entity.id).second) {
+                if(references.size()==5000){incomplete=true;break;}
+                references.push(Json::object().set("label",entity.name.empty()?std::to_string(entity.id):entity.name+" ("+std::to_string(entity.id)+")").set("kind",6)
+                    .set("detail","Actual entity in the captured document").set("textEdit",Json::object().set("range",editRange).set("newText",Json(entity.id).dump())));
+            }
+        }
+        co_return Json::object().set("isIncomplete",incomplete).set("items",references);
+    }
     if (objectKeys) {
         const auto* properties = schema->find("properties");
         if (!properties)
@@ -394,6 +709,7 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
         }
     } else {
         const auto* choices = schema->find("enum");
+        if(!choices)choices=schema->find("x-engine-enumNames");
         Json values = choices                                 ? *choices
                       : schema->stringAt("type") == "boolean" ? Json::array({true, false})
                                                               : Json::array();

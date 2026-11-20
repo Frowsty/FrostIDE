@@ -10,6 +10,7 @@
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
+#include "frost/run/engine_session_configurations.hpp"
 #include "frost/run/run_configuration.hpp"
 #include "frost/run/run_manager.hpp"
 #include "frost/run/run_types.hpp"
@@ -100,7 +101,18 @@ void Workbench::createRunService() {
         return mayRunConfiguration(configuration);
     };
     hooks.launchAdmissionFor = [this](const run::RunConfiguration& configuration) {
+        if (run::isEngineSessionToolId(configuration.id))
+            return m_engine ? m_engine->sessionToolAdmissionFor(configuration)
+                            : std::function<Result<void>()>{[]() -> Result<void> {
+                                  return fail(ErrorCode::PermissionDenied, "Engine session tools are unavailable");
+                              }};
         return luaLaunchAdmissionFor(configuration);
+    };
+    hooks.nativeLaunchPlanFor =
+        [this](const run::RunConfiguration& configuration) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan)> {
+        return m_engine && run::isEngineSessionToolId(configuration.id)
+                   ? m_engine->sessionToolPlanFor(configuration)
+                   : std::function<Result<run::LaunchPlan>(run::LaunchPlan)>{};
     };
     hooks.prepareEngineConfiguration =
         [this](const run::RunConfiguration& configuration) -> Result<run::RunConfiguration> {

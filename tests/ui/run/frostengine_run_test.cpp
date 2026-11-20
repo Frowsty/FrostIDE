@@ -16,6 +16,7 @@
 #include <QLineEdit>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <optional>
@@ -217,5 +218,61 @@ TEST(FrostEngineRunUi, PhysicalProjectResolutionCannotReplaceExecutableOrExtraAr
     }
 }
 
+TEST(FrostEngineRunUi, GeneratedNativeChildrenUseDeferredAdmissionAfterUiTrustGate) {
+    io::ScriptedProcessLauncher launcher;
+    auto manager = run::RunManager::create(launcher);
+    run::RunConfiguration config;
+    config.id = "engine.multiplayer.server.selected";
+    config.name = "Selected server";
+    config.program = path("FrostRuntime");
+    config.arguments = {"--project", path("game"), "--server"};
+    bool initiallyAllowed = false;
+    std::atomic<unsigned> finalAdmissions{0};
+    RunControllerHooks hooks;
+    hooks.mayRunConfiguration = [&](const auto&) -> Result<void> {
+        initiallyAllowed = true;
+        return {};
+    };
+    hooks.launchAdmissionFor = [&](const auto&) -> std::function<Result<void>()> {
+        return [&]() -> Result<void> {
+            ++finalAdmissions;
+            return fail(ErrorCode::Untrusted, "captured project trust was revoked after UI admission");
+        };
+    };
+    RunController controller(nullptr, std::move(hooks));
+    controller.setRunManager(manager.get());
+    controller.setStoredConfigurations({config});
+    ASSERT_TRUE(controller.runConfiguration(config.id));
+    ASSERT_TRUE(manager->waitForIdle(30s));
+    EXPECT_TRUE(initiallyAllowed);
+    EXPECT_GT(finalAdmissions.load(), 0U);
+    EXPECT_TRUE(launcher.launches().empty());
+}
+TEST(FrostEngineRunUi, GeneratedNativeResolverFixesPhysicalProjectWithoutChangingStoredConfiguration) {
+    io::ScriptedProcessLauncher launcher;
+    run::RunConfiguration config;
+    config.id = "engine.export.selected";
+    config.name = "Selected export";
+    config.program = path("FrostEditor");
+    config.arguments = {"build.export", "--project", path("alias/Game.frostproj")};
+    launcher.expect({.expectExecutable = config.program});
+    auto manager = run::RunManager::create(launcher);
+    RunControllerHooks hooks;
+    hooks.nativeLaunchPlanFor = [](const auto&) -> std::function<Result<run::LaunchPlan>(run::LaunchPlan)> {
+        return [](run::LaunchPlan plan) -> Result<run::LaunchPlan> {
+            plan.arguments[2] = path("physical/Game.frostproj");
+            return plan;
+        };
+    };
+    RunController controller(nullptr, std::move(hooks));
+    controller.setRunManager(manager.get());
+    controller.setStoredConfigurations({config});
+    ASSERT_TRUE(controller.runConfiguration(config.id));
+    ASSERT_TRUE(manager->waitForIdle(30s));
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1);
+    EXPECT_EQ(launches[0].spec.arguments[2], path("physical/Game.frostproj"));
+    EXPECT_EQ(controller.configurations().all().front(), config);
+}
 } // namespace
 } // namespace frost::ui
