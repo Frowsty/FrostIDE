@@ -65,7 +65,7 @@ void Workbench::attachServices() {
             empty->setVisible(rows.empty());
             stop->setEnabled(tree->currentItem() && (selected.startsWith(QStringLiteral("run:")) || selected.startsWith(QStringLiteral("debug:"))));
         };
-        QObject::connect(tree, &QTreeWidget::currentItemChanged, pane, [tree, stop](QTreeWidgetItem* item, QTreeWidgetItem*) {
+        QObject::connect(tree, &QTreeWidget::currentItemChanged, pane, [stop](QTreeWidgetItem* item, QTreeWidgetItem*) {
             const auto key = item ? item->data(0, Qt::UserRole).toString() : QString();
             stop->setEnabled(key.startsWith(QStringLiteral("run:")) || key.startsWith(QStringLiteral("debug:")));
         });

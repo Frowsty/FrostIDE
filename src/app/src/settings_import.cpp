@@ -3,6 +3,8 @@
 // Container contract: https://learn.microsoft.com/visualstudio/ide/reference/import-and-export-settings-command
 #include "settings_import.hpp"
 #include "frost/input/keymap.hpp"
+#include "frost/ui/model/theme_registry.hpp"
+#include "frost/ui/model/rgba.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/settings/migration.hpp"
 #include "frost/ui/dialog_chrome.hpp"
@@ -271,6 +273,30 @@ Result<std::vector<settings::ConditionalSettingEdit>> prepareNativeScheme(settin
         if (!spec) return fail(ErrorCode::NotFound, "Scheme setting is not registered");
         auto value = doc->value(member.key, spec->schema);
         if (!value) return std::unexpected(value.error());
+        if (member.key == settings::key::editorSchemeColors.name) {
+            std::set<std::string> names;
+            for (const auto& row : std::get<settings::RecordList>(*value)) {
+                const auto& name = std::get<std::string>(*settings::findField(row, "name"));
+                const auto& color = std::get<std::string>(*settings::findField(row, "color"));
+                const auto rgba = ui::parseHexColor(color);
+                if (!names.insert(name).second || !(name.starts_with("Editor.") || name.starts_with("Syntax.") || name.starts_with("Semantic.")) || !ui::colorKeyByName(name) || !rgba || !rgba->opaque())
+                    return fail(ErrorCode::InvalidArgument, "Scheme requires unique known editor color names and opaque hex colors");
+            }
+        }
+        if (member.key == settings::key::keymapOverrides.name) {
+            input::KeymapPreferences preferences;
+            for (const auto& row : std::get<settings::RecordList>(*value)) {
+                input::ActionOverride override;
+                override.actionId = std::get<std::string>(*settings::findField(row, "action"));
+                for (const auto& shortcut : std::get<settings::StringList>(*settings::findField(row, "shortcuts"))) {
+                    auto parsed = input::parseSequence(shortcut, input::SyntaxMode::Strict);
+                    if (!parsed) return std::unexpected(parsed.error());
+                    override.sequences.push_back(std::move(*parsed));
+                }
+                preferences.overrides.push_back(std::move(override));
+            }
+            if (auto valid = input::validate(preferences); !valid) return std::unexpected(valid.error());
+        }
         const auto* old = current->find(member.key);
         edits.push_back({member.key, old ? std::optional<std::string>(current->rawValue(*old)) : std::nullopt, std::move(*value)});
     }
@@ -293,13 +319,13 @@ bool showNativeScheme(settings::SettingsStore& store, QWidget* parent) {
     auto* status = new QLabel(QStringLiteral("Edit font, size, named colors and keymap JSON. Apply validates all values together."), &dialog);
     status->setWordWrap(true);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
-    auto* import = buttons->addButton(QStringLiteral("Open Scheme..."), QDialogButtonBox::ActionRole);
+    auto* openButton = buttons->addButton(QStringLiteral("Open Scheme..."), QDialogButtonBox::ActionRole);
     auto* save = buttons->addButton(QStringLiteral("Export Scheme..."), QDialogButtonBox::ActionRole);
     layout->addWidget(status); layout->addWidget(editor); layout->addWidget(buttons);
     // Capture raw application values before editing; external changes cannot be overwritten silently.
     auto baseline = prepareNativeScheme(store, *exported);
     if (!baseline) return false;
-    QObject::connect(import, &QPushButton::clicked, &dialog, [&] {
+    QObject::connect(openButton, &QPushButton::clicked, &dialog, [&] {
         const auto path = QFileDialog::getOpenFileName(&dialog, QStringLiteral("Open FrostIDE Scheme"), {}, QStringLiteral("FrostIDE Scheme (*.json)"));
         if (path.isEmpty() || (hadParent && !owner)) return;
         QFile file(path);

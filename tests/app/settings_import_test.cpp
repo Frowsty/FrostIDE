@@ -82,3 +82,20 @@ TEST(SettingsImport, NativeSchemeRoundTripsAndRejectsUnrelatedOrInvalidMembers) 
     EXPECT_EQ(store->snapshot()->get(settings::key::editorFontSize), 19);
 }
 }
+namespace frost::app {
+TEST(SettingsImport, NativeSchemeRejectsIneffectiveColorsAndMalformedShortcuts) {
+    ManualClock clock;
+    io::MemFs fs(clock, io::PathStyle::Posix);
+    ASSERT_TRUE(fs.createDirectories("/validated"));
+    settings::SettingsPaths paths{.applicationFile = "/validated/settings.json"};
+    auto store = settings::SettingsStore::open(settings::builtinRegistry(), fs, paths, {.style = io::PathStyle::Posix}).value();
+    for (auto color : {"not-a-color", "#00112200"}) {
+        auto doc = settings::SettingsDocument::create(settings::kCurrentSchemaVersion);
+        ASSERT_TRUE(doc.set(settings::key::editorSchemeColors.name, settings::RecordList{settings::makeRecord({{"name", std::string("Editor.foreground")}, {"color", std::string(color)}})}));
+        EXPECT_FALSE(prepareNativeScheme(*store, doc.bytes()));
+    }
+    auto doc = settings::SettingsDocument::create(settings::kCurrentSchemaVersion);
+    ASSERT_TRUE(doc.set(settings::key::keymapOverrides.name, settings::RecordList{settings::makeRecord({{"action", std::string("editor.copy")}, {"shortcuts", settings::StringList{"bogus-key"}}})}));
+    EXPECT_FALSE(prepareNativeScheme(*store, doc.bytes()));
+}
+}
