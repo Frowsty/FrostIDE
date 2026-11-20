@@ -8175,3 +8175,11 @@ Normal NuGet and .NET Unit Tests panes now take project, configuration, TFM, RID
 ### R17 Roslyn local refactoring proposals (2026-11-20, source only)
 
 Added actual syntax/semantic local refactoring contributions to the ordinary C# Code Actions route: exact whole-return expression introduction and immediate single-reference var return inlining. Both produce versioned WorkspaceEdit proposals through the existing source/compiler/conflict checks and REF1 adoption path. Inlining refuses multiple uses, intervening statements, explicit types, comments/directives and resource declarations; unsupported transformations stay unavailable. Authored real stdio host proposals/refusal checks in the existing referenced-project overlay fixture; no source files are written by the host. This bounded increment does not claim general Extract Method, Change Signature, Move or Safe Delete support. Independent source review and all runtime validation remain pending; no builds/tests/SDK commands were executed.
+
+### R17 managed IDE source milestone (2026-11-20)
+
+The selected SDK project, configuration, target framework and runtime identifier drive the project pane, build, launch and managed tool windows. The owned Roslyn host supplies C# language services. Library navigation opens read-only source outside the workspace. The NuGet and test panes use SDK tools, and local CoreCLR launch and attach use netcoredbg. Language-server registrations share the existing document and trust checks.
+
+C# code actions present supported local, Extract Method, Move Type, signature and Safe Delete changes in the existing refactoring preview. File moves and project edits participate in the same Undo transaction. Actions refuse linked files, conditional project membership or ambiguous symbols when a safe rewrite cannot be represented. Support depends on the evaluated project and available Roslyn providers.
+
+GPT-6 Astra independently inspected the implementation and regression sources. The MoreLINQ 4.4.0 corpus is pinned at 6d97c3b1d482f98300f4446df14742b0e3fafbec. Building the corpus, comparing Roslyn diagnostics and test discovery, installing from a local NuGet feed, and hitting a netcoredbg breakpoint remain deferred to the requested test phase. This milestone does not certify an executable or an updater release.
