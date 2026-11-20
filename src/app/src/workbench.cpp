@@ -42,6 +42,7 @@
 #include "frost/ui/workbench/file_system_view.hpp"
 #include "frost/vcs/git_locator.hpp"
 
+#include "agent_integration.hpp"
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
 #include "engine_crash_observer.hpp"
@@ -918,6 +919,7 @@ void Workbench::shutdown() {
         m_engine->shutdown();
     if (m_unity)
         m_unity->shutdown();
+    stopAgentBridge();
     stopTerminal();
     if (m_standalone) {
         m_build->setBackend(m_buildBackend.get());

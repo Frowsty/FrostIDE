@@ -18,6 +18,8 @@
 #include "frost/ui/terminal/terminal_view.hpp"
 #include "frost/ui/tr.hpp"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QAction>
 #include <QEvent>
 #include <QHBoxLayout>
@@ -494,6 +496,42 @@ Result<int> TerminalToolWindow::newTabWithShell(const std::string& shellExecutab
     return index;
 }
 
+Result<int> TerminalToolWindow::newTabWithProcess(const io::ProcessSpec& spec, const QString& title) {
+    const auto context = m_env.context ? m_env.context() : TerminalContext{};
+    if (m_stopped || !m_env.launcher || (m_env.available && !m_env.available()))
+        return fail(ErrorCode::Cancelled, "terminal is unavailable");
+    const auto relative = QDir(QString::fromStdString(context.projectRoot)).relativeFilePath(QFileInfo(QString::fromStdString(spec.executable)).canonicalFilePath());
+    const bool inside = !relative.isEmpty() && relative != ".." && !relative.startsWith("../") && !QDir::isAbsolutePath(relative);
+    if (!context.trusted || context.projectRoot.empty() || spec.workingDirectory != context.projectRoot ||
+        !io::isAbsolutePath(spec.executable) || inside)
+        return fail(ErrorCode::Untrusted, "agent process requires an absolute application outside the trusted workspace");
+    auto* splitter = new QSplitter(Qt::Horizontal, m_stack);
+    auto* view = new TerminalView(splitter);
+    applyAppearance(*view);
+    splitter->addWidget(view);
+    const auto settings = m_env.settings ? m_env.settings() : term::TerminalSettings{};
+    auto started = view->start(*m_env.launcher, spec, settings.scrollbackLines);
+    if (!started) { delete splitter; return std::unexpected(started.error()); }
+    attachPaneSignals(view);
+    m_stack->addWidget(splitter);
+    Tab tab;
+    tab.splitter = splitter;
+    tab.view = view;
+    tab.panes.emplace_back(view);
+    tab.defaultName = title;
+    m_tabState.push_back(std::move(tab));
+    const int index = m_tabs->addTab(title);
+    m_openedOnce = true;
+    setCurrentIndex(index);
+    view->setFocus(Qt::OtherFocusReason);
+    emit tabsChanged();
+    return index;
+}
+Result<int> TerminalIntegration::openProcess(const io::ProcessSpec& spec, const QString& title) {
+    auto* window = showToolWindow(true);
+    if (!window) return fail(ErrorCode::NotFound, "the Terminal tool window is not available");
+    return window->newTabWithProcess(spec, title);
+}
 Result<TerminalView*> TerminalToolWindow::splitTab(int index, const std::string& workingDirectory) {
     if (index < 0 || index >= count()) {
         return fail(ErrorCode::NotFound, "no terminal tab at index");
