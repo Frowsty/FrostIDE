@@ -18,6 +18,12 @@ Locally merged main 7db564d3 into R18 integration 63f4cbc0. Retained compiler-ba
 - Actual registered semantic providers outrank the builtin source fallback. Named source/span/include/root/candidate limits and scheduler-free fallback are recorded in ADR0118. Lexer, physical source navigation/provenance, ambiguous/missing/macro limits, provider precedence and worker editor regressions are authored.
 - Independent Astra source review is requested. No builds, tests, shader/Unity feature execution, downloads/install, WSL or pushes occurred. Next: source-review corrections, additive R14 GLSL joins, then independent R19 other-language/extension branches.
 
+## 2026-11-20 R18 explicit Unity domain reload rebind
+
+- Added a Rebind Unity Mono After Reload action retaining only ephemeral profile/consent and original held process identity. It requires a different current domain of the same editor instance/root/PID, the original unchanged trust revision, a valid authenticated event reply and non-compiling state. The selected process is independently held again and its actual start/image identity must match before user confirmation.
+- Every explicit rebind recaptures and verifies PE/PDB/source bytes, resolves fresh domain/module/method IDs and restores only eligible current breakpoints. Old frame/value IDs are discarded; no automatic runtime-state survival or guaranteed resume after interrupted cleanup is claimed. Normal Editor attach also waits for authenticated non-compiling state; manual player selection retains its independent explicit process confirmation.
+- Authored reload policy refusal coverage for discovery-only/stale/compiling/wrong-instance/root/revoked consent and recycled PID/image. Authentication proof is published only after the current HMAC-bound event reply validates, and clears with the domain. Source review pending; no builds, tests or feature/Unity execution. Dependencies: source-cleared Unity test-channel commits 81595eea/d7da9a95 picked locally as 2ca0af51/1c6b783e to avoid transport conflicts.
+
 ## 2026-11-20 R18 Mono live-domain assembly resolution
 
 - Mono attach now obtains actual types for an admitted source through VM.GET_TYPES_FOR_SOURCE_FILE, validates the complete 2.58 Type.GET_INFO layout and collects its domain-bound assembly IDs alongside root-domain candidates. Selection still requires a unique exact loaded path and byte-identical original PE/PDB; source-name matches alone cannot admit a module. This permits verified user code loaded outside the root domain without guessing bridge AppDomain IDs.

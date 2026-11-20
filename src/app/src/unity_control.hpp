@@ -19,6 +19,8 @@ struct UnityEditorIdentity {
     std::shared_ptr<const std::atomic_uint64_t> epoch;
     std::uint64_t revision = 0;
     bool tests = false;
+    // Requires a current successful authenticated event reply, not the discovery label.
+    bool authenticated = false, compiling = false;
 };
 class UnityControlIntegration final : public QObject {
 public:

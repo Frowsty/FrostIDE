@@ -114,7 +114,9 @@ struct UnityControlIntegration::Impl {
     QPointer<QLabel> eventsStatus;
     std::vector<UnityBridgeEvent> journal;
     std::vector<build::BuildDiagnostic> compilerProblems;
-    std::string eventSession;
+    std::string eventSession, authenticatedSession;
+    std::uint64_t authenticatedTrustRevision = 0, authenticatedIdentityEpoch = 0;
+    bool authenticatedCompiling = false;
     std::shared_ptr<std::atomic_uint64_t> identityEpoch = std::make_shared<std::atomic_uint64_t>(1);
     std::int64_t eventCursor = 0, projectVersion = -1, lostEvents = 0;
     std::optional<bool> lastPlaying;
@@ -188,6 +190,7 @@ struct UnityControlIntegration::Impl {
     }
     void clearDomain(const std::string& id) {
         identityEpoch->fetch_add(1);
+        authenticatedSession.clear(); authenticatedTrustRevision = authenticatedIdentityEpoch = 0; authenticatedCompiling = false;
         clearSavedWork();
         eventSession = id; eventCursor = 0; projectVersion = -1; lostEvents = 0; lastPlaying.reset();
         journal.clear(); compilerProblems.clear(); droppedCompiler = 0;
@@ -628,6 +631,10 @@ struct UnityControlIntegration::Impl {
                             state.eventsStatus->setText(qs(page.error().message()));
                             return;
                         }
+                        state.authenticatedSession = target.id;
+                        state.authenticatedTrustRevision = trustRevision;
+                        state.authenticatedIdentityEpoch = state.identityEpoch->load();
+                        state.authenticatedCompiling = page->compiling;
                         state.publishEvents(*page);
                     }
                     QString observed = !playing ? QStringLiteral("Unity stopped")
@@ -766,7 +773,11 @@ std::optional<UnityEditorIdentity> UnityControlIntegration::selectedEditor() con
                                found->pid,
                                m_impl->identityEpoch,
                                m_impl->identityEpoch->load(),
-                               found->tests};
+                               found->tests,
+                               m_impl->authenticatedSession == found->id &&
+                                   m_impl->authenticatedTrustRevision == m_impl->workbench.m_services.trust.snapshot(found->root).revision &&
+                                   m_impl->authenticatedIdentityEpoch == m_impl->identityEpoch->load(),
+                               m_impl->authenticatedCompiling};
 }
 void UnityControlIntegration::requestTests(const UnityEditorIdentity& expected, const lang::Json& payload,
                                            std::function<void(Result<lang::Json>)> done) {

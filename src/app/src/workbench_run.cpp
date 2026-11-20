@@ -479,6 +479,18 @@ void Workbench::createRunService() {
     unityDebug.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startUnityDebug(); };
     if (auto added = m_registry.add(std::move(unityDebug)); !added)
         log::warn(kLog, "Unity debug action: {}", added.error().describe());
+    input::ActionSpec unityRebind;
+    unityRebind.id = "debug.rebindUnity";
+    unityRebind.name = "Rebind Unity Mono After Reload...";
+    unityRebind.description = "Reverify the same authenticated Editor process, recapture sources and restore eligible breakpoints";
+    unityRebind.group = "Debug";
+    unityRebind.executesProjectCode = true;
+    unityRebind.enabled = [this](const input::ActionContext&) {
+        return canStartLuaDebug() && !m_buildService->externalLaunchAdmissionBusy() && canRebindUnityDebug();
+    };
+    unityRebind.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startUnityDebug(true); };
+    if (auto added = m_registry.add(std::move(unityRebind)); !added)
+        log::warn(kLog, "Unity rebind action: {}", added.error().describe());
     input::ActionSpec attachProcess;
     attachProcess.id = "debug.attachToProcess";
     attachProcess.name = "Attach to Process...";

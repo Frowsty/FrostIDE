@@ -372,6 +372,7 @@ struct WorkbenchServices {
 };
 
 // Explicit local target inputs; an installed provider must independently verify process and source identity.
+struct UnityMonoDebugBinding;
 struct UnityMonoDebugSelection {
     bool player = false;
     bool il2cpp = false;
@@ -994,7 +995,8 @@ private:
     void offerProjectTrust();
     void offerLuaTrust();
     void startManagedDebug();
-    void startUnityDebug();
+    void startUnityDebug(bool rebind = false);
+    [[nodiscard]] bool canRebindUnityDebug() const;
     void invalidateManagedDebug();
     [[nodiscard]] bool managedDebugFrameAllowed(const debug::DebugFrame& frame) const;
     void validateManagedBreakpoint(std::string path, std::function<void(bool)> done);
@@ -1167,6 +1169,7 @@ private:
     std::unique_ptr<EngineDumpController> m_engineDumps;
     std::unique_ptr<EngineCrashObserver> m_engineCrashObserver;
     std::unique_ptr<UnityControlIntegration> m_unity;
+    std::shared_ptr<const UnityMonoDebugBinding> m_unityDebugBinding;
     std::unique_ptr<GitIntegration> m_git;
     std::unique_ptr<ui::BuildServiceBackend> m_buildBackend;
     // Declared before m_cmake, which runs through it, so it is destroyed after it (RUN-1).
