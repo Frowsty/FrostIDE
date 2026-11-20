@@ -44,7 +44,8 @@ def require_structure(baseline, candidate, location='lock'):
 
 def upgrade_plan(current, candidate, adr):
     if not adr.is_file() or adr.suffix != '.md': raise ValueError('upgrade requires a decision ADR')
-    old, new = json.loads(current.read_text()), json.loads(candidate.read_text())
+    old = json.loads(current.read_text(encoding='utf-8'))
+    new = json.loads(candidate.read_text(encoding='utf-8'))
     if old.get('schemaVersion') != 1 or new.get('schemaVersion') != 1:
         raise ValueError('unsupported lock schema')
     require_structure(old, new)
@@ -58,7 +59,7 @@ def upgrade_plan(current, candidate, adr):
             'requiredGates': list(RELEASE_GATES), 'status': 'runtime-verification-pending'}
 
 def release_gate(manifest_path, commit, lock):
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     if not re.fullmatch('[0-9a-f]{40}', commit): raise ValueError('full source commit required')
     if manifest.get('schema') != 1 or manifest.get('commit') != commit or manifest.get('lockSha256') != sha256(lock):
         raise ValueError('evidence does not identify this source commit and toolchain lock')
@@ -72,7 +73,7 @@ def release_gate(manifest_path, commit, lock):
         if relative.is_absolute() or not path.is_relative_to(manifest_path.parent.resolve()) or not path.is_file():
             raise ValueError(f'{name}: missing local evidence file')
         if entry.get('sha256') != sha256(path): raise ValueError(f'{name}: evidence hash mismatch')
-        record = json.loads(path.read_text())
+        record = json.loads(path.read_text(encoding='utf-8'))
         if (record.get('gate') != name or record.get('commit') != commit or
                 record.get('lockSha256') != manifest['lockSha256'] or record.get('status') != 'passed'):
             raise ValueError(f'{name}: evidence record is not bound to this gate/source/lock')
