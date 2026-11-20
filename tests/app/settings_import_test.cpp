@@ -51,3 +51,34 @@ TEST(SettingsImport, PreviewWritesNothingAndConditionalApplyIsAtomicAndReloadabl
 }
 }
 } // namespace frost::app
+namespace frost::app {
+TEST(SettingsImport, NativeSchemeRoundTripsAndRejectsUnrelatedOrInvalidMembers) {
+    ManualClock clock;
+    io::MemFs fs(clock, io::PathStyle::Posix);
+    ASSERT_TRUE(fs.createDirectories("/native"));
+    settings::SettingsPaths paths{.applicationFile = "/native/settings.json"};
+    const settings::StoreOptions options{.style = io::PathStyle::Posix};
+    auto store = settings::SettingsStore::open(settings::builtinRegistry(), fs, paths, options).value();
+    ASSERT_TRUE(store->set(settings::Scope::Application, settings::key::editorFontSize, std::int64_t{17}));
+    const auto exported = exportNativeScheme(*store);
+    ASSERT_TRUE(exported);
+    ASSERT_TRUE(store->set(settings::Scope::Application, settings::key::editorFontSize, std::int64_t{12}));
+    auto edits = prepareNativeScheme(*store, *exported);
+    ASSERT_TRUE(edits);
+    ASSERT_TRUE(store->applyConditional(settings::Scope::Application, *edits));
+    auto reopened = settings::SettingsStore::open(settings::builtinRegistry(), fs, paths, options).value();
+    EXPECT_EQ(reopened->snapshot()->get(settings::key::editorFontSize), 17);
+    auto doc = settings::SettingsDocument::parse(*exported).value();
+    ASSERT_TRUE(doc.set("unrelated.setting", true));
+    EXPECT_FALSE(prepareNativeScheme(*store, doc.bytes()));
+    EXPECT_FALSE(prepareNativeScheme(*store, std::string(1024 * 1024 + 1, ' ')));
+    EXPECT_FALSE(prepareNativeScheme(*store, R"({"schemaVersion":999,"editor.fontSize":17})"));
+    EXPECT_FALSE(prepareNativeScheme(*store, R"({"schemaVersion":1,"editor.fontSize":"wrong"})"));
+    EXPECT_FALSE(prepareNativeScheme(*store, R"({"schemaVersion":1,"editor.fontSize":12,"editor.fontSize":13})"));
+    auto stale = prepareNativeScheme(*store, *exported);
+    ASSERT_TRUE(stale);
+    ASSERT_TRUE(store->set(settings::Scope::Application, settings::key::editorFontSize, std::int64_t{19}));
+    EXPECT_FALSE(store->applyConditional(settings::Scope::Application, *stale));
+    EXPECT_EQ(store->snapshot()->get(settings::key::editorFontSize), 19);
+}
+}

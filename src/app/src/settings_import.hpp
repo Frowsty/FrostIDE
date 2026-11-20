@@ -27,3 +27,12 @@ struct ImportedVisualStudioSettings {
 // Successful Apply uses one atomic SettingsStore replacement; Cancel has no side effects.
 bool showSettingsImport(settings::SettingsStore& store, QWidget* parent);
 } // namespace frost::app
+namespace frost::app {
+// Native scheme is bounded JSON containing only font, size, colors and keymap settings.
+// Export reads the effective snapshot; preparation validates every member without writing.
+[[nodiscard]] Result<std::string> exportNativeScheme(const settings::SettingsStore& store);
+[[nodiscard]] Result<std::vector<settings::ConditionalSettingEdit>> prepareNativeScheme(
+    settings::SettingsStore& store, std::string bytes);
+// Edits native JSON, imports/exports it through file pickers, and conditionally applies once.
+bool showNativeScheme(settings::SettingsStore& store, QWidget* parent);
+}

@@ -10,6 +10,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFile>
+#include <QSaveFile>
 #include <QFileDialog>
 #include <QLabel>
 #include <QPlainTextEdit>
@@ -239,3 +240,94 @@ bool showSettingsImport(settings::SettingsStore& store, QWidget* parent) {
     return applied;
 }
 } // namespace frost::app
+
+namespace frost::app {
+namespace {
+constexpr std::string_view schemeKeys[] = {"editor.fontFamily", "editor.fontSize", "editor.schemeColors", "keymap.id", "keymap.overrides"};
+bool schemeKey(std::string_view key) { return std::ranges::find(schemeKeys, key) != std::end(schemeKeys); }
+}
+Result<std::string> exportNativeScheme(const settings::SettingsStore& store) {
+    auto doc = settings::SettingsDocument::create(settings::kCurrentSchemaVersion);
+    const auto snapshot = store.snapshot();
+    for (auto key : schemeKeys) {
+        if (auto result = doc.set(key, snapshot->value(key)); !result) return std::unexpected(result.error());
+    }
+    return doc.bytes();
+}
+Result<std::vector<settings::ConditionalSettingEdit>> prepareNativeScheme(settings::SettingsStore& store, std::string bytes) {
+    if (bytes.size() > 1024 * 1024) return fail(ErrorCode::InvalidArgument, "Scheme exceeds 1 MiB");
+    auto doc = settings::SettingsDocument::parse(std::move(bytes));
+    if (!doc) return std::unexpected(doc.error());
+    if (doc->schemaVersion() != settings::kCurrentSchemaVersion) return fail(ErrorCode::Unsupported, "Unsupported scheme version");
+    auto current = store.readScopeDocument(settings::Scope::Application);
+    if (!current) return std::unexpected(current.error());
+    std::vector<settings::ConditionalSettingEdit> edits;
+    std::set<std::string> seen;
+    for (const auto& member : doc->members()) {
+        if (!seen.insert(member.key).second) return fail(ErrorCode::InvalidArgument, "Duplicate scheme member");
+        if (member.key == settings::kSchemaVersionKey) continue;
+        if (!schemeKey(member.key)) return fail(ErrorCode::InvalidArgument, "Unsupported scheme member: " + member.key);
+        const auto* spec = store.registry().find(member.key);
+        if (!spec) return fail(ErrorCode::NotFound, "Scheme setting is not registered");
+        auto value = doc->value(member.key, spec->schema);
+        if (!value) return std::unexpected(value.error());
+        const auto* old = current->find(member.key);
+        edits.push_back({member.key, old ? std::optional<std::string>(current->rawValue(*old)) : std::nullopt, std::move(*value)});
+    }
+    if (edits.empty()) return fail(ErrorCode::InvalidArgument, "Scheme has no settings");
+    return edits;
+}
+bool showNativeScheme(settings::SettingsStore& store, QWidget* parent) {
+    const QPointer<QWidget> owner(parent);
+    const bool hadParent = parent != nullptr;
+    auto exported = exportNativeScheme(store);
+    if (!exported) return false;
+    QDialog dialog;
+    if (owner) QObject::connect(owner.data(), &QObject::destroyed, &dialog, &QDialog::reject);
+    ui::installDialogChrome(&dialog, true);
+    dialog.setWindowTitle(QStringLiteral("Custom Editor and Keymap Scheme"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* editor = new QPlainTextEdit(&dialog);
+    editor->setObjectName(QStringLiteral("nativeSchemeEditor"));
+    editor->setPlainText(QString::fromStdString(*exported));
+    auto* status = new QLabel(QStringLiteral("Edit font, size, named colors and keymap JSON. Apply validates all values together."), &dialog);
+    status->setWordWrap(true);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
+    auto* import = buttons->addButton(QStringLiteral("Open Scheme..."), QDialogButtonBox::ActionRole);
+    auto* save = buttons->addButton(QStringLiteral("Export Scheme..."), QDialogButtonBox::ActionRole);
+    layout->addWidget(status); layout->addWidget(editor); layout->addWidget(buttons);
+    // Capture raw application values before editing; external changes cannot be overwritten silently.
+    auto baseline = prepareNativeScheme(store, *exported);
+    if (!baseline) return false;
+    QObject::connect(import, &QPushButton::clicked, &dialog, [&] {
+        const auto path = QFileDialog::getOpenFileName(&dialog, QStringLiteral("Open FrostIDE Scheme"), {}, QStringLiteral("FrostIDE Scheme (*.json)"));
+        if (path.isEmpty() || (hadParent && !owner)) return;
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024) { status->setText(QStringLiteral("Cannot read scheme (limit 1 MiB).")); return; }
+        editor->setPlainText(QString::fromUtf8(file.readAll()));
+    });
+    QObject::connect(save, &QPushButton::clicked, &dialog, [&] {
+        const auto bytes = editor->toPlainText().toUtf8();
+        if (hadParent && !owner) return;
+        auto prepared = prepareNativeScheme(store, bytes.toStdString());
+        if (!prepared) { status->setText(QString::fromStdString(prepared.error().message())); return; }
+        const auto path = QFileDialog::getSaveFileName(&dialog, QStringLiteral("Export FrostIDE Scheme"), {}, QStringLiteral("FrostIDE Scheme (*.json)"));
+        if (path.isEmpty() || (hadParent && !owner)) return;
+        QSaveFile file(path);
+        if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) status->setText(QStringLiteral("Could not save scheme."));
+        else status->setText(QStringLiteral("Scheme exported."));
+    });
+    bool applied = false;
+    QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
+        if (hadParent && !owner) { dialog.reject(); return; }
+        auto edits = prepareNativeScheme(store, editor->toPlainText().toUtf8().toStdString());
+        if (!edits) { status->setText(QString::fromStdString(edits.error().message())); return; }
+        for (auto& edit : *edits) for (const auto& old : *baseline) if (edit.key == old.key) edit.expectedRaw = old.expectedRaw;
+        if (auto result = store.applyConditional(settings::Scope::Application, *edits); !result) { status->setText(QString::fromStdString(result.error().message())); return; }
+        applied = true; dialog.accept();
+    });
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialog.resize(760, 550); dialog.exec();
+    return applied;
+}
+}
