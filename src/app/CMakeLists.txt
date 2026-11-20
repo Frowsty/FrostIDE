@@ -97,6 +97,8 @@ frost_add_library(app LAYER app
         src/engine_request_helper.cpp
         src/engine_request_helper_session.cpp
         src/engine_request_helper.hpp
+        src/cli_editor.cpp
+        src/cli_editor.hpp
         src/project_open_broker.cpp
         src/project_open_broker.hpp
         src/project_properties_dialog.cpp

@@ -15,6 +15,9 @@ std::string_view usageText() noexcept {
     return "Usage: frost [options] [path...]\n"
            "\n"
            "Options:\n"
+           "  --wait               Open exactly one file; wait until its editor closes.\n"
+           "  --diff <left> <right> Compare two files (also: frost diff).\n"
+           "  --merge <base> <ours> <theirs> <output> Resolve and atomically save (also: frost merge).\n"
            "  --project <path>     Open a project folder or .frostproj first.\n"
            "  --line <number>      Open the file at a 1-based line (0 keeps its position).\n"
            "  --column <number>    Open the file at a 1-based column (0 keeps its position).\n"
@@ -52,6 +55,12 @@ Result<CommandLine> parseCommandLine(std::span<const std::string_view> args) {
     };
     for (std::size_t i = 0; i < args.size(); ++i) {
         const std::string_view arg = args[i];
+        if (!pathsOnly && (arg == "--diff" || arg == "--merge" || (i == 0 && (arg == "diff" || arg == "merge")))) {
+            if (result.tool != CliTool::Open)
+                return fail(ErrorCode::InvalidArgument, "choose only one diff or merge operation");
+            result.tool = (arg == "--diff" || arg == "diff") ? CliTool::Diff : CliTool::Merge;
+            continue;
+        }
         // Anything starting with '-' is an option, so typos such as -version or -h are
         // reported; a path that starts with '-' must follow "--".
         if (pathsOnly || !arg.starts_with('-')) {
@@ -85,6 +94,10 @@ Result<CommandLine> parseCommandLine(std::span<const std::string_view> args) {
                     result.column = *value;
                 }
             }
+        } else if (arg == "--wait") {
+            if (result.wait)
+                return fail(ErrorCode::InvalidArgument, "--wait may only be specified once");
+            result.wait = true;
         } else if (arg == "--column-utf16") {
             if (result.columnUtf16)
                 return fail(ErrorCode::InvalidArgument, "--column-utf16 may only be specified once");
@@ -115,6 +128,14 @@ Result<CommandLine> parseCommandLine(std::span<const std::string_view> args) {
             return std::unexpected(std::move(status.error()));
         }
     }
+    if (result.tool != CliTool::Open && (result.mode != Mode::Gui || result.wait || !result.project.empty() || explicitLine || explicitColumn || result.columnUtf16))
+        return fail(ErrorCode::InvalidArgument, "diff/merge cannot be combined with wait, project, location or non-GUI modes");
+    if (result.tool == CliTool::Diff && result.paths.size() != 2)
+        return fail(ErrorCode::InvalidArgument, "diff requires exactly two file paths");
+    if (result.tool == CliTool::Merge && result.paths.size() != 4)
+        return fail(ErrorCode::InvalidArgument, "merge requires base, ours, theirs and output paths");
+    if (result.wait && (result.mode != Mode::Gui || result.paths.size() != 1 || result.paths.front().empty()))
+        return fail(ErrorCode::InvalidArgument, "--wait requires exactly one file in GUI mode");
     if (result.columnUtf16 && (!explicitColumn || result.column == 0))
         return fail(ErrorCode::InvalidArgument, "--column-utf16 requires a positive --column");
     if (result.mode != Mode::Gui && (!result.project.empty() || explicitLine || explicitColumn || result.columnUtf16))
@@ -123,7 +144,7 @@ Result<CommandLine> parseCommandLine(std::span<const std::string_view> args) {
         return fail(ErrorCode::InvalidArgument, "--line and --column require exactly one file path");
     // FrostEngine passes a single argv item as path:line:column. Parse from the right so a
     // Windows drive colon and colons elsewhere in the path are preserved.
-    if (!explicitLine && !explicitColumn && result.paths.size() == 1) {
+    if (result.tool == CliTool::Open && !explicitLine && !explicitColumn && result.paths.size() == 1) {
         std::string& path = result.paths.front();
         const auto last = path.rfind(':');
         if (last != std::string::npos && last > 1) {
