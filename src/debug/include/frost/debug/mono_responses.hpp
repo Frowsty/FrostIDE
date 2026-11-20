@@ -54,7 +54,9 @@ struct MethodDebugInfo {
 [[nodiscard]] Result<std::vector<std::uint32_t>> decodeIds(std::span<const std::uint8_t> payload);
 [[nodiscard]] Result<StopEvent> decodeStop(std::span<const std::uint8_t> payload);
 [[nodiscard]] Result<std::vector<Frame>> decodeFrames(std::span<const std::uint8_t> payload);
-struct ScalarValue { std::string value, type; };
+struct ScalarValue {
+    std::string value, type;
+};
 // Pure bounded formatting of one actual primitive wire variant. Complex references require a
 // separate runtime query; Unsupported preserves that distinction from malformed primitive data.
 [[nodiscard]] Result<ScalarValue> decodeScalar(std::span<const std::uint8_t> payload);

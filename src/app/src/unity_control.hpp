@@ -6,9 +6,9 @@
 
 #include <QObject>
 
-#include <memory>
-#include <functional>
 #include <atomic>
+#include <functional>
+#include <memory>
 #include <optional>
 namespace frost::app {
 class Workbench;
@@ -29,7 +29,8 @@ public:
     [[nodiscard]] Result<void> announce(const lang::Json& message);
     [[nodiscard]] std::optional<UnityEditorIdentity> selectedEditor() const;
     // Entire encoded payload is authenticated by the existing one-shot root/session/epoch channel.
-    void requestTests(const UnityEditorIdentity& expected,const lang::Json& payload,std::function<void(Result<lang::Json>)> done);
+    void requestTests(const UnityEditorIdentity& expected, const lang::Json& payload,
+                      std::function<void(Result<lang::Json>)> done);
     void cancel();
     void shutdown();
 

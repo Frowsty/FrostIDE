@@ -17,10 +17,10 @@
 #pragma once
 
 #include "frost/core/error.hpp"
-#include "frost/vcs/side_by_side.hpp"
 #include "frost/text/document.hpp"
-#include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/editor/editor_key_routing.hpp"
+#include "frost/ui/editor/editor_view.hpp"
+#include "frost/vcs/side_by_side.hpp"
 
 #include <QColor>
 #include <QString>

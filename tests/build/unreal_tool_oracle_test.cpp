@@ -3,12 +3,16 @@
 #include "frost/build/unreal_build.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/project/standalone_project.hpp"
+
 #include <gtest/gtest.h>
+
 #include <chrono>
 namespace frost::build {
 TEST(UnrealInstalledOracle, ActualUbtBuildThenGeneratedHeaderAndCompilationDatabase) {
-    UnrealBuildRequest request{.tool=FROST_UNREAL_TOOL, .buildToolAssembly=FROST_UNREAL_UBT_ASSEMBLY,
-        .projectFile=FROST_UNREAL_PROJECT, .target=FROST_UNREAL_TARGET};
+    UnrealBuildRequest request{.tool = FROST_UNREAL_TOOL,
+                               .buildToolAssembly = FROST_UNREAL_UBT_ASSEMBLY,
+                               .projectFile = FROST_UNREAL_PROJECT,
+                               .target = FROST_UNREAL_TARGET};
 #ifndef _WIN32
     request.platform = UnrealPlatform::Linux;
 #endif

@@ -9,8 +9,8 @@
 
 #include "../../../src/ui/editor/src/editor_view_internal.hpp"
 #include "editor/editor_harness.hpp"
-#include <QAction>
 #include <QAccessible>
+#include <QAction>
 #include <QClipboard>
 #include <QInputMethodEvent>
 #include <QMenu>
@@ -68,14 +68,16 @@ TEST(EditorView, NativeAccessibilityReadsUtf16SelectionsAndEditsThroughUndo) {
     ASSERT_EQ(text->selectionCount(), 1);
     int begin = -1, end = -1;
     text->selection(0, &begin, &end);
-    EXPECT_EQ(begin, 1); EXPECT_EQ(end, 3);
+    EXPECT_EQ(begin, 1);
+    EXPECT_EQ(end, 3);
     auto* edit = accessible->editableTextInterface();
     ASSERT_NE(edit, nullptr);
     edit->replaceText(1, 3, QStringLiteral("replacement"));
     EXPECT_EQ(h.text(), "areplacementz\nnext");
     ASSERT_TRUE(h.view->perform(EditorAction::Undo));
     EXPECT_EQ(h.text(), "a\xF0\x9F\x98\x80z\nnext");
-    auto info = h.view->fileInfo(); info.readOnly = true;
+    auto info = h.view->fileInfo();
+    info.readOnly = true;
     h.view->setFileInfo(info);
     EXPECT_TRUE(accessible->state().readOnly);
     EXPECT_EQ(accessible->editableTextInterface(), nullptr);
@@ -102,11 +104,14 @@ TEST(EditorView, NativeAccessibilityExposesResolvedDiagnosticRunsAndCaretMessage
     ASSERT_NE(textInterface, nullptr);
     int start = -1, end = -1;
     EXPECT_EQ(textInterface->attributes(1, &start, &end), QStringLiteral("invalid:true;"));
-    EXPECT_EQ(start, 1); EXPECT_EQ(end, 2);
+    EXPECT_EQ(start, 1);
+    EXPECT_EQ(end, 2);
     EXPECT_EQ(textInterface->attributes(2, &start, &end), QStringLiteral("invalid:true;"));
-    EXPECT_EQ(start, 2); EXPECT_EQ(end, 4);
+    EXPECT_EQ(start, 2);
+    EXPECT_EQ(end, 4);
     EXPECT_TRUE(textInterface->attributes(4, &start, &end).isEmpty());
-    EXPECT_EQ(start, 4); EXPECT_EQ(end, 5);
+    EXPECT_EQ(start, 4);
+    EXPECT_EQ(end, 5);
     auto* actions = accessible->actionInterface();
     ASSERT_NE(actions, nullptr);
     EXPECT_TRUE(actions->actionNames().contains(QStringLiteral("nextDiagnostic")));
@@ -114,15 +119,18 @@ TEST(EditorView, NativeAccessibilityExposesResolvedDiagnosticRunsAndCaretMessage
     EXPECT_EQ(textInterface->cursorPosition(), 1);
     EXPECT_EQ(accessible->text(QAccessible::Description), QStringLiteral("Error: invalid expression"));
     textInterface->setCursorPosition(2);
-    EXPECT_EQ(accessible->text(QAccessible::Description), QStringLiteral("Error: invalid expression\nWarning: unused value"));
+    EXPECT_EQ(accessible->text(QAccessible::Description),
+              QStringLiteral("Error: invalid expression\nWarning: unused value"));
     textInterface->setCursorPosition(6);
     EXPECT_EQ(accessible->text(QAccessible::Description), QStringLiteral("Error: expected terminator"));
     textInterface->attributes(-1, &start, &end);
-    EXPECT_EQ(start, -1); EXPECT_EQ(end, -1);
+    EXPECT_EQ(start, -1);
+    EXPECT_EQ(end, -1);
     h.view->setDiagnostics(EditorDiagnosticSource::Live, {});
     EXPECT_TRUE(accessible->text(QAccessible::Description).isEmpty());
     EXPECT_TRUE(textInterface->attributes(2, &start, &end).isEmpty());
-    EXPECT_EQ(start, 0); EXPECT_EQ(end, 6);
+    EXPECT_EQ(start, 0);
+    EXPECT_EQ(end, 6);
 }
 
 TEST(EditorView, TypingAppearsInTheDocumentAndRepaints) {

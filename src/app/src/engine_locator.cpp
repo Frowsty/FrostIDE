@@ -55,8 +55,8 @@ std::optional<EngineInstallation> installation(io::IFileSystem& fs, std::string 
     if (auto playerPath = io::joinPath(io::parentPath(gui), playerName))
         if (auto existing = canonicalFile(fs, *playerPath))
             player = std::move(*existing);
-    return EngineInstallation{std::move(gui),    std::move(*cli),   std::move(root),
-                              std::move(preset), std::move(player), cliStatus, std::move(*physicalCli)};
+    return EngineInstallation{std::move(gui),    std::move(*cli), std::move(root),        std::move(preset),
+                              std::move(player), cliStatus,       std::move(*physicalCli)};
 }
 
 } // namespace

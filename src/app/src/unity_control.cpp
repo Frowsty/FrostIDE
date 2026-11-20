@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Trusted Unity editor discovery and acknowledged play controls.
 #include "unity_control.hpp"
-#include "unity_events.hpp"
-#include "frost/ui/toolwindows/problems.hpp"
 
 #include "frost/app/workbench.hpp"
 #include "frost/io/loopback_stream.hpp"
@@ -11,39 +9,41 @@
 #include "frost/project/trust_store.hpp"
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
+#include "frost/ui/toolwindows/problems.hpp"
 
 #include "project_open_broker.hpp"
-#include <QComboBox>
+#include "unity_events.hpp"
 #include <QCheckBox>
-#include <QLineEdit>
-#include <QTreeWidget>
-#include <QHeaderView>
-#include <QRegularExpression>
-#include <QJsonDocument>
-#include <QJsonArray>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QHeaderView>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageAuthenticationCode>
 #include <QMetaObject>
 #include <QPointer>
 #include <QPushButton>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QWidget>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <stop_token>
 #include <string>
 #include <thread>
 #include <vector>
-#include <map>
 namespace frost::app {
 namespace {
 using namespace std::chrono_literals;
@@ -122,92 +122,166 @@ struct UnityControlIntegration::Impl {
     std::optional<bool> lastPlaying;
     std::size_t droppedCompiler = 0;
     void clearSavedWork() {
-        saveTimer.stop(); pendingRefresh = pendingCompile = false; savedRoot.clear(); savedSession.clear(); savedTrustRevision = 0;
+        saveTimer.stop();
+        pendingRefresh = pendingCompile = false;
+        savedRoot.clear();
+        savedSession.clear();
+        savedTrustRevision = 0;
     }
     void revokeSaveConsent() {
-        clearSavedWork(); consentRoot.clear(); consentInstance.clear(); consentTrustRevision = 0;
-        if (refreshOnSave) refreshOnSave->setChecked(false);
-        if (compileOnSave) compileOnSave->setChecked(false);
+        clearSavedWork();
+        consentRoot.clear();
+        consentInstance.clear();
+        consentTrustRevision = 0;
+        if (refreshOnSave)
+            refreshOnSave->setChecked(false);
+        if (compileOnSave)
+            compileOnSave->setChecked(false);
     }
     void captureSaveConsent(QCheckBox* checkbox, bool enabled) {
         if (!enabled) {
-            if (checkbox == refreshOnSave) pendingRefresh = false;
-            if (checkbox == compileOnSave) pendingCompile = false;
-            if (!pendingRefresh && !pendingCompile) saveTimer.stop();
+            if (checkbox == refreshOnSave)
+                pendingRefresh = false;
+            if (checkbox == compileOnSave)
+                pendingCompile = false;
+            if (!pendingRefresh && !pendingCompile)
+                saveTimer.stop();
             return;
         }
         const auto found = std::ranges::find_if(live, [&](const auto& item) { return item.id == selected; });
         if (!trusted() || found == live.end() || !found->events) {
             checkbox->setChecked(false);
-            if (status) status->setText(QStringLiteral("Connect and select a compatible trusted Unity editor before enabling save actions"));
+            if (status)
+                status->setText(QStringLiteral(
+                    "Connect and select a compatible trusted Unity editor before enabling save actions"));
             return;
         }
         const auto trust = workbench.m_services.trust.snapshot(workbench.projectRoot());
-        if (!trust.trusted) { checkbox->setChecked(false); return; }
-        if (!consentRoot.empty() && (consentRoot != workbench.projectRoot() || consentInstance != found->instance || consentTrustRevision != trust.revision)) {
-            // The newly enabled action can acquire new consent; old checkboxes cannot silently inherit it.
-            revokeSaveConsent(); checkbox->setChecked(true); return;
+        if (!trust.trusted) {
+            checkbox->setChecked(false);
+            return;
         }
-        consentRoot = workbench.projectRoot(); consentInstance = found->instance; consentTrustRevision = trust.revision;
+        if (!consentRoot.empty() && (consentRoot != workbench.projectRoot() || consentInstance != found->instance ||
+                                     consentTrustRevision != trust.revision)) {
+            // The newly enabled action can acquire new consent; old checkboxes cannot silently inherit it.
+            revokeSaveConsent();
+            checkbox->setChecked(true);
+            return;
+        }
+        consentRoot = workbench.projectRoot();
+        consentInstance = found->instance;
+        consentTrustRevision = trust.revision;
     }
     void documentSaved(const document::SavedDocumentCompletion& completion) {
-        if (!trusted() || consentRoot != workbench.projectRoot()) return;
+        if (!trusted() || consentRoot != workbench.projectRoot())
+            return;
         const auto trust = workbench.m_services.trust.snapshot(consentRoot);
-        if (!trust.trusted || trust.revision != consentTrustRevision) { revokeSaveConsent(); return; }
+        if (!trust.trusted || trust.revision != consentTrustRevision) {
+            revokeSaveConsent();
+            return;
+        }
         const auto found = std::ranges::find_if(live, [&](const auto& item) { return item.id == selected; });
-        if (found == live.end() || !found->events || found->instance != consentInstance) return;
+        if (found == live.end() || !found->events || found->instance != consentInstance)
+            return;
         const auto physicalRoot = externalProjectRoot(workbench.projectRoot());
         const QFileInfo target(qs(completion.target));
-        if (!physicalRoot || !target.isFile()) return;
+        if (!physicalRoot || !target.isFile())
+            return;
         const auto relative = QDir(qs(*physicalRoot)).relativeFilePath(target.canonicalFilePath());
-        if (QDir::isAbsolutePath(relative) || relative == QStringLiteral("..") || relative.startsWith(QStringLiteral("../")) ||
-            !(relative.startsWith(QStringLiteral("Assets/")) || relative.startsWith(QStringLiteral("Packages/")))) return;
+        if (QDir::isAbsolutePath(relative) || relative == QStringLiteral("..") ||
+            relative.startsWith(QStringLiteral("../")) ||
+            !(relative.startsWith(QStringLiteral("Assets/")) || relative.startsWith(QStringLiteral("Packages/"))))
+            return;
         const bool refresh = refreshOnSave && refreshOnSave->isChecked();
-        const bool compile = compileOnSave && compileOnSave->isChecked() && target.suffix().compare(QStringLiteral("cs"), Qt::CaseInsensitive) == 0;
-        if (!refresh && !compile) return;
-        savedRoot = workbench.projectRoot(); savedSession = selected; savedTrustRevision = trust.revision;
-        pendingRefresh = pendingRefresh || refresh; pendingCompile = pendingCompile || compile;
+        const bool compile = compileOnSave && compileOnSave->isChecked() &&
+                             target.suffix().compare(QStringLiteral("cs"), Qt::CaseInsensitive) == 0;
+        if (!refresh && !compile)
+            return;
+        savedRoot = workbench.projectRoot();
+        savedSession = selected;
+        savedTrustRevision = trust.revision;
+        pendingRefresh = pendingRefresh || refresh;
+        pendingCompile = pendingCompile || compile;
         saveTimer.start(200); // Save All and nearby saves produce one follow-up per selected domain.
     }
     void flushSavedWork() {
         const auto trust = workbench.m_services.trust.snapshot(savedRoot);
         if (!trust.trusted || trust.revision != savedTrustRevision || trust.revision != consentTrustRevision) {
-            revokeSaveConsent(); if (status) status->setText(QStringLiteral("Unity save consent expired after trust changed; enable save actions again")); return;
+            revokeSaveConsent();
+            if (status)
+                status->setText(
+                    QStringLiteral("Unity save consent expired after trust changed; enable save actions again"));
+            return;
         }
         const auto found = std::ranges::find_if(live, [&](const auto& item) { return item.id == selected; });
-        if (!trusted() || savedRoot != workbench.projectRoot() || consentRoot != savedRoot || savedSession != selected ||
-            found == live.end() || !found->events || found->instance != consentInstance) { clearSavedWork(); return; }
-        if (busy) { saveTimer.start(200); return; }
-        if (pendingRefresh) { pendingRefresh = false; run("refresh", savedTrustRevision); }
-        else if (pendingCompile) { pendingCompile = false; run("recompile", savedTrustRevision); }
-        if (pendingRefresh || pendingCompile) saveTimer.start(200);
+        if (!trusted() || savedRoot != workbench.projectRoot() || consentRoot != savedRoot ||
+            savedSession != selected || found == live.end() || !found->events || found->instance != consentInstance) {
+            clearSavedWork();
+            return;
+        }
+        if (busy) {
+            saveTimer.start(200);
+            return;
+        }
+        if (pendingRefresh) {
+            pendingRefresh = false;
+            run("refresh", savedTrustRevision);
+        } else if (pendingCompile) {
+            pendingCompile = false;
+            run("recompile", savedTrustRevision);
+        }
+        if (pendingRefresh || pendingCompile)
+            saveTimer.start(200);
     }
     QString sourcePath(std::string_view file) const {
-        if (file.empty()) return {};
+        if (file.empty())
+            return {};
         const auto path = QDir(qs(workbench.projectRoot())).absoluteFilePath(qs(file));
         const QFileInfo info(path);
         return info.isFile() ? info.canonicalFilePath() : QString{};
     }
     void clearDomain(const std::string& id) {
         identityEpoch->fetch_add(1);
-        authenticatedSession.clear(); authenticatedTrustRevision = authenticatedIdentityEpoch = 0; authenticatedCompiling = false;
+        authenticatedSession.clear();
+        authenticatedTrustRevision = authenticatedIdentityEpoch = 0;
+        authenticatedCompiling = false;
         clearSavedWork();
-        eventSession = id; eventCursor = 0; projectVersion = -1; lostEvents = 0; lastPlaying.reset();
-        journal.clear(); compilerProblems.clear(); droppedCompiler = 0;
-        if (console) console->clear();
-        if (eventsStatus) eventsStatus->setText(QStringLiteral("Waiting for Unity event journal"));
-        if (workbench.problems()) workbench.problems()->model()->clear(ui::DiagnosticSource::Unity);
+        eventSession = id;
+        eventCursor = 0;
+        projectVersion = -1;
+        lostEvents = 0;
+        lastPlaying.reset();
+        journal.clear();
+        compilerProblems.clear();
+        droppedCompiler = 0;
+        if (console)
+            console->clear();
+        if (eventsStatus)
+            eventsStatus->setText(QStringLiteral("Waiting for Unity event journal"));
+        if (workbench.problems())
+            workbench.problems()->model()->clear(ui::DiagnosticSource::Unity);
     }
     void renderConsole() {
-        if (!console) return;
+        if (!console)
+            return;
         console->clear();
         std::map<std::string, QTreeWidgetItem*> duplicates;
         const QString query = filter ? filter->text() : QString{};
         const QString severity = level ? level->currentData().toString() : QString{};
         for (const auto& entry : journal) {
             if ((!severity.isEmpty() && severity != qs(entry.level)) ||
-                (!query.isEmpty() && !qs(entry.message + entry.stack + entry.file).contains(query, Qt::CaseInsensitive))) continue;
-            const auto key = lang::Json::array().push(entry.kind).push(entry.level).push(entry.message).push(entry.stack).push(entry.file).push(entry.line).push(entry.column).dump();
+                (!query.isEmpty() &&
+                 !qs(entry.message + entry.stack + entry.file).contains(query, Qt::CaseInsensitive)))
+                continue;
+            const auto key = lang::Json::array()
+                                 .push(entry.kind)
+                                 .push(entry.level)
+                                 .push(entry.message)
+                                 .push(entry.stack)
+                                 .push(entry.file)
+                                 .push(entry.line)
+                                 .push(entry.column)
+                                 .dump();
             if (collapse && collapse->isChecked()) {
                 if (const auto found = duplicates.find(key); found != duplicates.end()) {
                     auto* row = found->second;
@@ -215,21 +289,30 @@ struct UnityControlIntegration::Impl {
                     continue;
                 }
             }
-            auto* row = new QTreeWidgetItem(console, {qs(entry.level), qs(entry.message) + (entry.truncated ? QStringLiteral(" [truncated]") : QString{}), qs(entry.file), QStringLiteral("1")});
+            auto* row = new QTreeWidgetItem(
+                console,
+                {qs(entry.level), qs(entry.message) + (entry.truncated ? QStringLiteral(" [truncated]") : QString{}),
+                 qs(entry.file), QStringLiteral("1")});
             duplicates[key] = row;
             const auto path = sourcePath(entry.file);
             if (!entry.truncated && !path.isEmpty() && entry.line > 0) {
-                row->setData(0, Qt::UserRole, path); row->setData(0, Qt::UserRole + 1, entry.line); row->setData(0, Qt::UserRole + 2, entry.column);
+                row->setData(0, Qt::UserRole, path);
+                row->setData(0, Qt::UserRole + 1, entry.line);
+                row->setData(0, Qt::UserRole + 2, entry.column);
             }
             const QRegularExpression frame(QStringLiteral("\\(at (.+):(\\d+)\\)"));
             for (const auto& lineText : qs(entry.stack).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
                 auto* child = new QTreeWidgetItem(row, {QString{}, lineText});
                 const auto match = frame.match(lineText);
-                if (!match.hasMatch()) continue;
+                if (!match.hasMatch())
+                    continue;
                 const auto target = sourcePath(match.captured(1).toUtf8().toStdString());
                 const auto line = match.captured(2).toInt();
-                if (target.isEmpty() || line <= 0) continue;
-                child->setData(0, Qt::UserRole, target); child->setData(0, Qt::UserRole + 1, line); child->setData(0, Qt::UserRole + 2, 1);
+                if (target.isEmpty() || line <= 0)
+                    continue;
+                child->setData(0, Qt::UserRole, target);
+                child->setData(0, Qt::UserRole + 1, line);
+                child->setData(0, Qt::UserRole + 2, 1);
             }
         }
     }
@@ -240,28 +323,50 @@ struct UnityControlIntegration::Impl {
             workbench.problems()->model()->clear(ui::DiagnosticSource::Unity);
         }
         for (const auto& entry : page.events) {
-            if (entry.kind == "compilationStarted") { compilerProblems.clear(); droppedCompiler = 0; }
+            if (entry.kind == "compilationStarted") {
+                compilerProblems.clear();
+                droppedCompiler = 0;
+            }
             if (entry.kind == "compiler") {
                 build::BuildDiagnostic row;
                 row.diagnostic.message = entry.message;
                 row.diagnostic.severity = entry.level == "error" ? build::Severity::Error : build::Severity::Warning;
-                row.diagnostic.file = entry.file; row.diagnostic.line = entry.line; row.diagnostic.column = entry.column;
+                row.diagnostic.file = entry.file;
+                row.diagnostic.line = entry.line;
+                row.diagnostic.column = entry.column;
                 row.diagnostic.project = entry.assembly;
                 row.path = sourcePath(entry.file).toUtf8().toStdString();
                 row.jumpable = !entry.truncated && !row.path.empty() && entry.line > 0;
-                if (compilerProblems.size() < 4096) compilerProblems.push_back(std::move(row)); else ++droppedCompiler;
+                if (compilerProblems.size() < 4096)
+                    compilerProblems.push_back(std::move(row));
+                else
+                    ++droppedCompiler;
             }
             journal.push_back(entry);
         }
-        if (journal.size() > 2000) journal.erase(journal.begin(), journal.begin() + static_cast<std::ptrdiff_t>(journal.size() - 2000));
-        if (workbench.problems() && !page.events.empty()) workbench.problems()->model()->setProblems(ui::DiagnosticSource::Unity, compilerProblems);
+        if (journal.size() > 2000)
+            journal.erase(journal.begin(), journal.begin() + static_cast<std::ptrdiff_t>(journal.size() - 2000));
+        if (workbench.problems() && !page.events.empty())
+            workbench.problems()->model()->setProblems(ui::DiagnosticSource::Unity, compilerProblems);
         const bool changed = projectVersion != page.projectVersion;
-        eventCursor = page.next; projectVersion = page.projectVersion;
-        if (changed || std::ranges::any_of(page.events, [](const auto& entry) { return entry.kind == "compilationFinished"; })) workbench.checkUnityProjectContext();
-        if (eventsStatus) eventsStatus->setText(QStringLiteral("Domain %1 · project change %2 · %3 · %4 events unavailable%5 · %6 retained console events · %7 compiler rows omitted")
-            .arg(qs(eventSession).left(8)).arg(projectVersion).arg(page.compiling ? QStringLiteral("compiling") : QStringLiteral("not compiling"))
-            .arg(lostEvents).arg(lostEvents ? QStringLiteral("; compiler diagnostics may be incomplete") : QString{}).arg(journal.size()).arg(droppedCompiler));
-        if (!page.events.empty()) renderConsole();
+        eventCursor = page.next;
+        projectVersion = page.projectVersion;
+        if (changed ||
+            std::ranges::any_of(page.events, [](const auto& entry) { return entry.kind == "compilationFinished"; }))
+            workbench.checkUnityProjectContext();
+        if (eventsStatus)
+            eventsStatus->setText(
+                QStringLiteral("Domain %1 · project change %2 · %3 · %4 events unavailable%5 · %6 retained console "
+                               "events · %7 compiler rows omitted")
+                    .arg(qs(eventSession).left(8))
+                    .arg(projectVersion)
+                    .arg(page.compiling ? QStringLiteral("compiling") : QStringLiteral("not compiling"))
+                    .arg(lostEvents)
+                    .arg(lostEvents ? QStringLiteral("; compiler diagnostics may be incomplete") : QString{})
+                    .arg(journal.size())
+                    .arg(droppedCompiler));
+        if (!page.events.empty())
+            renderConsole();
     }
     void cancel() {
         revokeSaveConsent();
@@ -330,8 +435,10 @@ struct UnityControlIntegration::Impl {
             return fail(ErrorCode::InvalidArgument, "project is not a Unity project");
         auto it = std::ranges::find_if(live, [&](const auto& s) { return s.id == id; });
         if (it != live.end()) {
-            if (it->tests != (json.integerAt("testVersion").value_or(0) == 1) || it->events != (json.integerAt("eventVersion").value_or(0) == 1) || it->root != root || it->instance != instance || it->generation != *generation || it->token != token ||
-                it->pid != *pid || it->port != *port)
+            if (it->tests != (json.integerAt("testVersion").value_or(0) == 1) ||
+                it->events != (json.integerAt("eventVersion").value_or(0) == 1) || it->root != root ||
+                it->instance != instance || it->generation != *generation || it->token != token || it->pid != *pid ||
+                it->port != *port)
                 return fail(ErrorCode::InvalidArgument, "Unity session changed identity");
             it->seen = std::chrono::steady_clock::now();
             return {};
@@ -365,7 +472,9 @@ struct UnityControlIntegration::Impl {
         if (live.size() >= 16)
             return fail(ErrorCode::Busy, "too many Unity sessions");
         live.push_back({root, instance, id, token, static_cast<int>(*generation), static_cast<int>(*pid),
-                        static_cast<std::uint16_t>(*port), std::chrono::steady_clock::now(), json.integerAt("eventVersion").value_or(0) == 1, json.integerAt("testVersion").value_or(0) == 1});
+                        static_cast<std::uint16_t>(*port), std::chrono::steady_clock::now(),
+                        json.integerAt("eventVersion").value_or(0) == 1,
+                        json.integerAt("testVersion").value_or(0) == 1});
         if (!reconnect && awaiting && awaiting->instance == instance && *generation >= awaiting->generation &&
             (awaitingExplicit || live.size() == 1)) {
             reconnect = true;
@@ -400,7 +509,8 @@ struct UnityControlIntegration::Impl {
     void expire() {
         if (!consentRoot.empty()) {
             const auto trust = workbench.m_services.trust.snapshot(consentRoot);
-            if (!trust.trusted || trust.revision != consentTrustRevision) revokeSaveConsent();
+            if (!trust.trusted || trust.revision != consentTrustRevision)
+                revokeSaveConsent();
         }
         if (!trusted()) {
             if (!live.empty() || busy || awaiting)
@@ -686,7 +796,9 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
                                          {"Pause", "pause"},
                                          {"Resume", "resume"},
                                          {"Step", "step"},
-                                         {"Stop", "stop"}, {"Refresh Assets", "refresh"}, {"Recompile", "recompile"}}) {
+                                         {"Stop", "stop"},
+                                         {"Refresh Assets", "refresh"},
+                                         {"Recompile", "recompile"}}) {
         auto* button = new QPushButton(QString::fromLatin1(title), panel);
         row->addWidget(button);
         connect(button, &QPushButton::clicked, this, [this, command] { m_impl->run(command); });
@@ -696,7 +808,8 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
     layout->addWidget(m_impl->status);
     layout->addWidget(new QLabel(QStringLiteral("Unity Console"), panel));
     auto* consoleTools = new QHBoxLayout;
-    m_impl->filter = new QLineEdit(panel); m_impl->filter->setPlaceholderText(QStringLiteral("Filter Unity output"));
+    m_impl->filter = new QLineEdit(panel);
+    m_impl->filter->setPlaceholderText(QStringLiteral("Filter Unity output"));
     m_impl->level = new QComboBox(panel);
     m_impl->level->addItem(QStringLiteral("All levels"), QString{});
     m_impl->level->addItem(QStringLiteral("Errors"), QStringLiteral("error"));
@@ -705,40 +818,56 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
     m_impl->collapse = new QCheckBox(QStringLiteral("Collapse"), panel);
     m_impl->clearOnPlay = new QCheckBox(QStringLiteral("Clear on Play"), panel);
     auto* clear = new QPushButton(QStringLiteral("Clear Console View"), panel);
-    consoleTools->addWidget(m_impl->filter); consoleTools->addWidget(m_impl->level);
-    consoleTools->addWidget(m_impl->collapse); consoleTools->addWidget(m_impl->clearOnPlay); consoleTools->addWidget(clear);
+    consoleTools->addWidget(m_impl->filter);
+    consoleTools->addWidget(m_impl->level);
+    consoleTools->addWidget(m_impl->collapse);
+    consoleTools->addWidget(m_impl->clearOnPlay);
+    consoleTools->addWidget(clear);
     layout->addLayout(consoleTools);
     m_impl->console = new QTreeWidget(panel);
     m_impl->console->setObjectName(QStringLiteral("unityConsole"));
-    m_impl->console->setHeaderLabels({QStringLiteral("Level"), QStringLiteral("Message / Stack Frame"), QStringLiteral("Source"), QStringLiteral("Count")});
+    m_impl->console->setHeaderLabels({QStringLiteral("Level"), QStringLiteral("Message / Stack Frame"),
+                                      QStringLiteral("Source"), QStringLiteral("Count")});
     m_impl->console->header()->setSectionResizeMode(1, QHeaderView::Stretch);
     layout->addWidget(m_impl->console);
-    m_impl->eventsStatus = new QLabel(QStringLiteral("Unity event stream unavailable until a compatible package connects"), panel);
-    m_impl->eventsStatus->setWordWrap(true); layout->addWidget(m_impl->eventsStatus);
+    m_impl->eventsStatus =
+        new QLabel(QStringLiteral("Unity event stream unavailable until a compatible package connects"), panel);
+    m_impl->eventsStatus->setWordWrap(true);
+    layout->addWidget(m_impl->eventsStatus);
     connect(m_impl->filter, &QLineEdit::textChanged, this, [this] { m_impl->renderConsole(); });
     connect(m_impl->level, &QComboBox::currentIndexChanged, this, [this] { m_impl->renderConsole(); });
     connect(m_impl->collapse, &QCheckBox::toggled, this, [this] { m_impl->renderConsole(); });
-    connect(clear, &QPushButton::clicked, this, [this] { m_impl->journal.clear(); m_impl->renderConsole(); });
+    connect(clear, &QPushButton::clicked, this, [this] {
+        m_impl->journal.clear();
+        m_impl->renderConsole();
+    });
     connect(m_impl->console, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* item, int) {
-        if (!item || !m_impl->trusted()) return;
+        if (!item || !m_impl->trusted())
+            return;
         const auto path = item->data(0, Qt::UserRole).toString();
         const int line = item->data(0, Qt::UserRole + 1).toInt();
-        if (!path.isEmpty() && line > 0) (void)openExternalFile(m_impl->workbench, path.toUtf8().toStdString(), line, std::max(1, item->data(0, Qt::UserRole + 2).toInt()), true);
+        if (!path.isEmpty() && line > 0)
+            (void)openExternalFile(m_impl->workbench, path.toUtf8().toStdString(), line,
+                                   std::max(1, item->data(0, Qt::UserRole + 2).toInt()), true);
     });
     auto* saveActions = new QHBoxLayout;
     m_impl->refreshOnSave = new QCheckBox(QStringLiteral("Refresh selected Unity editor after saved assets"), panel);
     m_impl->compileOnSave = new QCheckBox(QStringLiteral("Recompile selected Unity editor after saved C#"), panel);
     m_impl->refreshOnSave->setObjectName(QStringLiteral("unityRefreshOnSave"));
     m_impl->compileOnSave->setObjectName(QStringLiteral("unityCompileOnSave"));
-    saveActions->addWidget(m_impl->refreshOnSave); saveActions->addWidget(m_impl->compileOnSave);
+    saveActions->addWidget(m_impl->refreshOnSave);
+    saveActions->addWidget(m_impl->compileOnSave);
     layout->addLayout(saveActions);
-    connect(m_impl->refreshOnSave, &QCheckBox::toggled, this, [this](bool enabled) { m_impl->captureSaveConsent(m_impl->refreshOnSave, enabled); });
-    connect(m_impl->compileOnSave, &QCheckBox::toggled, this, [this](bool enabled) { m_impl->captureSaveConsent(m_impl->compileOnSave, enabled); });
+    connect(m_impl->refreshOnSave, &QCheckBox::toggled, this,
+            [this](bool enabled) { m_impl->captureSaveConsent(m_impl->refreshOnSave, enabled); });
+    connect(m_impl->compileOnSave, &QCheckBox::toggled, this,
+            [this](bool enabled) { m_impl->captureSaveConsent(m_impl->compileOnSave, enabled); });
     m_impl->saveTimer.setSingleShot(true);
     connect(&m_impl->saveTimer, &QTimer::timeout, this, [this] { m_impl->flushSavedWork(); });
     const QPointer<UnityControlIntegration> saveOwner(this);
     workbench.m_documents->setSavedObserver(this, [saveOwner](const document::SavedDocumentCompletion& completion) {
-        if (saveOwner) saveOwner->m_impl->documentSaved(completion);
+        if (saveOwner)
+            saveOwner->m_impl->documentSaved(completion);
     });
     auto added = workbench.m_window->toolWindows().add({"unityControls",
                                                         QStringLiteral("Unity"),
@@ -775,7 +904,8 @@ std::optional<UnityEditorIdentity> UnityControlIntegration::selectedEditor() con
                                m_impl->identityEpoch->load(),
                                found->tests,
                                m_impl->authenticatedSession == found->id &&
-                                   m_impl->authenticatedTrustRevision == m_impl->workbench.m_services.trust.snapshot(found->root).revision &&
+                                   m_impl->authenticatedTrustRevision ==
+                                       m_impl->workbench.m_services.trust.snapshot(found->root).revision &&
                                    m_impl->authenticatedIdentityEpoch == m_impl->identityEpoch->load(),
                                m_impl->authenticatedCompiling};
 }

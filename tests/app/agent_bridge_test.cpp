@@ -2,16 +2,17 @@
 // Offline C1 transport fixtures; local sockets only, no provider process or outbound connection.
 #include "../../src/app/src/agent_bridge.hpp"
 #include "../../src/app/src/agent_scope.hpp"
-#include <QHostAddress>
-#include <gtest/gtest.h>
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <gtest/gtest.h>
+
 #include <thread>
 namespace {
 bool pump(const std::function<bool()>& done) {
@@ -26,12 +27,17 @@ bool pump(const std::function<bool()>& done) {
 QByteArray masked(const QByteArray& payload, bool mask = true, unsigned char first = 0x81) {
     QByteArray frame(1, char(first));
     frame += char((mask ? 0x80 : 0) | (payload.size() < 126 ? payload.size() : 126));
-    if (payload.size() >= 126) { frame += char(payload.size() >> 8); frame += char(payload.size()); }
-    if (!mask) return frame + payload;
+    if (payload.size() >= 126) {
+        frame += char(payload.size() >> 8);
+        frame += char(payload.size());
+    }
+    if (!mask)
+        return frame + payload;
     const QByteArray key("abcd");
     frame += key;
     auto encoded = payload;
-    for (qsizetype i = 0; i < encoded.size(); ++i) encoded[i] = char(encoded[i] ^ key[i % 4]);
+    for (qsizetype i = 0; i < encoded.size(); ++i)
+        encoded[i] = char(encoded[i] ^ key[i % 4]);
     return frame + encoded;
 }
 struct Fixture {
@@ -39,18 +45,26 @@ struct Fixture {
     bool admitted = true;
     int calls = 0;
     frost::app::AgentBridge bridge{[this] { return admitted; },
-        [this](const QString&, const QJsonObject&, frost::app::AgentBridge::Reply reply) { ++calls; reply({{"fixture", true}}); }};
+                                   [this](const QString&, const QJsonObject&, frost::app::AgentBridge::Reply reply) {
+                                       ++calls;
+                                       reply({{"fixture", true}});
+                                   }};
     QJsonObject record() const {
         QFile file(QDir(directory.path()).filePath("ide/" + QString::number(bridge.port()) + ".lock"));
         EXPECT_TRUE(file.open(QIODevice::ReadOnly));
         return QJsonDocument::fromJson(file.readAll()).object();
     }
     void connect(QTcpSocket& client, QByteArray extra = {}, QByteArray token = {}) {
-        if (token.isEmpty()) token = record().value("authToken").toString().toLatin1();
+        if (token.isEmpty())
+            token = record().value("authToken").toString().toLatin1();
         client.connectToHost(QHostAddress::LocalHost, bridge.port());
         ASSERT_TRUE(pump([&] { return client.state() == QAbstractSocket::ConnectedState; }));
-        client.write("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: YWJjZGVmZ2hpamtsbW5vcA==\r\nSec-WebSocket-Protocol: mcp\r\nX-Claude-Code-Ide-Authorization: " + token + "\r\n" + extra + "\r\n");
-        ASSERT_TRUE(pump([&] { return client.bytesAvailable() > 0 || client.state() == QAbstractSocket::UnconnectedState; }));
+        client.write("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: "
+                     "websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: "
+                     "YWJjZGVmZ2hpamtsbW5vcA==\r\nSec-WebSocket-Protocol: mcp\r\nX-Claude-Code-Ide-Authorization: " +
+                     token + "\r\n" + extra + "\r\n");
+        ASSERT_TRUE(
+            pump([&] { return client.bytesAvailable() > 0 || client.state() == QAbstractSocket::UnconnectedState; }));
     }
 };
 TEST(AgentBridge, RefusesWithoutConsentAndPublishesWindowScopedPrivateRecord) {
@@ -64,7 +78,8 @@ TEST(AgentBridge, RefusesWithoutConsentAndPublishesWindowScopedPrivateRecord) {
     EXPECT_EQ(record.value("workspaceFolders").toArray(), QJsonArray{"/workspace"});
     EXPECT_EQ(record.value("authToken").toString().size(), 32);
     EXPECT_EQ(record.value("ideName"), "FrostIDE");
-    const auto lock = QDir(fixture.directory.path()).filePath("ide/" + QString::number(fixture.bridge.port()) + ".lock");
+    const auto lock =
+        QDir(fixture.directory.path()).filePath("ide/" + QString::number(fixture.bridge.port()) + ".lock");
     fixture.bridge.stop();
     EXPECT_FALSE(QFile::exists(lock));
 }
@@ -117,31 +132,39 @@ TEST(AgentScope, DeniesSiblingPrefixTraversalDirectoriesAndCredentialResources) 
     const auto sibling = QDir(temp.path()).filePath("workspace-other");
     ASSERT_TRUE(QDir().mkpath(root));
     ASSERT_TRUE(QDir().mkpath(sibling));
-    const auto write = [](const QString& path) { QFile file(path); return file.open(QIODevice::WriteOnly) && file.write("fixture") == 7; };
+    const auto write = [](const QString& path) {
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly) && file.write("fixture") == 7;
+    };
     ASSERT_TRUE(write(root + "/main.lua"));
     ASSERT_TRUE(write(sibling + "/secret.txt"));
     ASSERT_TRUE(write(root + "/.credentials.json"));
     auto& fs = frost::io::realFileSystem();
     EXPECT_TRUE(frost::app::agentWorkspaceResource(fs, root.toStdString(), (root + "/main.lua").toStdString()));
     EXPECT_FALSE(frost::app::agentWorkspaceResource(fs, root.toStdString(), (sibling + "/secret.txt").toStdString()));
-    EXPECT_FALSE(frost::app::agentWorkspaceResource(fs, root.toStdString(), (root + "/../workspace-other/secret.txt").toStdString()));
+    EXPECT_FALSE(frost::app::agentWorkspaceResource(fs, root.toStdString(),
+                                                    (root + "/../workspace-other/secret.txt").toStdString()));
     EXPECT_FALSE(frost::app::agentWorkspaceResource(fs, root.toStdString(), root.toStdString()));
-    EXPECT_FALSE(frost::app::agentWorkspaceResource(fs, root.toStdString(), (root + "/.credentials.json").toStdString()));
+    EXPECT_FALSE(
+        frost::app::agentWorkspaceResource(fs, root.toStdString(), (root + "/.credentials.json").toStdString()));
     EXPECT_FALSE(frost::app::agentWorkspaceResource(fs, root.toStdString(), "https://example.invalid/main.lua"));
-}TEST(AgentBridge, ReassemblesBoundedTextFragmentsAndRejectsUnexpectedContinuation) {
+}
+TEST(AgentBridge, ReassemblesBoundedTextFragmentsAndRejectsUnexpectedContinuation) {
     Fixture fixture;
     ASSERT_TRUE(fixture.bridge.start("/workspace", fixture.directory.path()));
     QTcpSocket client;
     fixture.connect(client);
     client.readAll();
-    const QByteArray init(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}})");
+    const QByteArray init(
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}})");
     client.write(masked(init.left(20), true, 0x01) + masked(init.mid(20), true, 0x80));
     ASSERT_TRUE(pump([&] { return client.bytesAvailable() > 0; }));
     EXPECT_TRUE(client.readAll().contains("FrostIDE"));
     client.write(masked("unexpected", true, 0x80));
     ASSERT_TRUE(pump([&] { return client.state() == QAbstractSocket::UnconnectedState; }));
     EXPECT_EQ(fixture.calls, 0);
-}TEST(AgentBridge, RejectsCompletedOversizedHandshakeBeforeDispatch) {
+}
+TEST(AgentBridge, RejectsCompletedOversizedHandshakeBeforeDispatch) {
     Fixture fixture;
     ASSERT_TRUE(fixture.bridge.start("/workspace", fixture.directory.path()));
     QTcpSocket client;
@@ -162,9 +185,11 @@ TEST(AgentBridge, DisconnectsSlowReaderBeforeControlOutputCanGrowWithoutBound) {
     // Small input chunks and event pumping avoid triggering the inbound frame/body cap. The
     // unread peer receive window eventually fills; every pong must share the outbound budget.
     for (int count = 0; count < 100000 && deadline.elapsed() < 10000 && fixture.bridge.clientCount(); ++count) {
-        if (client.bytesToWrite() < 4096) client.write(ping);
+        if (client.bytesToWrite() < 4096)
+            client.write(ping);
         QCoreApplication::processEvents();
     }
     EXPECT_TRUE(pump([&] { return fixture.bridge.clientCount() == 0; }));
     EXPECT_EQ(fixture.calls, 0);
-}}
+}
+} // namespace

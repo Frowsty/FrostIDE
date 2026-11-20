@@ -2,39 +2,48 @@
 // Supported .vssettings profile: explicit FontsAndColors category and mapped Global/Text Editor shortcuts.
 // Container contract: https://learn.microsoft.com/visualstudio/ide/reference/import-and-export-settings-command
 #include "settings_import.hpp"
+
 #include "frost/input/keymap.hpp"
-#include "frost/ui/model/theme_registry.hpp"
-#include "frost/ui/model/rgba.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/settings/migration.hpp"
 #include "frost/ui/dialog_chrome.hpp"
+#include "frost/ui/model/rgba.hpp"
+#include "frost/ui/model/theme_registry.hpp"
+
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFile>
-#include <QSaveFile>
 #include <QFileDialog>
 #include <QLabel>
 #include <QPlainTextEdit>
-#include <QPushButton>
 #include <QPointer>
+#include <QPushButton>
+#include <QSaveFile>
 #include <QVBoxLayout>
 #include <QXmlStreamReader>
+
 #include <algorithm>
 #include <map>
 #include <set>
 namespace frost::app {
 namespace {
 std::string utf8(QStringView value) { return value.toString().toUtf8().toStdString(); }
-std::string attr(const QXmlStreamAttributes& attributes, const char* name) { return utf8(attributes.value(QLatin1StringView(name))); }
+std::string attr(const QXmlStreamAttributes& attributes, const char* name) {
+    return utf8(attributes.value(QLatin1StringView(name)));
+}
 std::optional<std::string> colorRef(std::string_view text) {
-    if (text.size() != 10 || !text.starts_with("0x00")) return std::nullopt;
-    for (char c : text.substr(4)) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) return std::nullopt;
+    if (text.size() != 10 || !text.starts_with("0x00"))
+        return std::nullopt;
+    for (char c : text.substr(4))
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+            return std::nullopt;
     return "#" + std::string(text.substr(8, 2)) + std::string(text.substr(6, 2)) + std::string(text.substr(4, 2));
 }
 void putColor(settings::RecordList& colors, std::string name, std::string_view raw) {
     auto color = colorRef(raw);
-    if (!color) return; // Automatic/system COLORREF values are not literal RGB values.
+    if (!color)
+        return; // Automatic/system COLORREF values are not literal RGB values.
     auto record = settings::makeRecord({{"name", std::move(name)}, {"color", std::move(*color)}});
     const auto* field = settings::findField(record, "name");
     const auto& key = std::get<std::string>(*field);
@@ -42,18 +51,27 @@ void putColor(settings::RecordList& colors, std::string name, std::string_view r
         const auto* oldName = settings::findField(old, "name");
         return oldName && std::get<std::string>(*oldName) == key;
     });
-    if (existing == colors.end()) colors.push_back(std::move(record));
-    else *existing = std::move(record);
+    if (existing == colors.end())
+        colors.push_back(std::move(record));
+    else
+        *existing = std::move(record);
 }
-constexpr std::pair<std::string_view, std::string_view> commands[] = {
-    {"Edit.Copy", "editor.copy"}, {"Edit.Cut", "editor.cut"}, {"Edit.Paste", "editor.paste"},
-    {"Edit.Undo", "editor.undo"}, {"Edit.Redo", "editor.redo"}, {"Edit.SelectAll", "editor.selectAll"},
-    {"Edit.Find", "editor.find"}, {"Edit.Replace", "editor.replace"}, {"File.SaveSelectedItems", "file.saveDocument"},
-    {"File.SaveAll", "file.saveAll"}, {"Edit.GoTo", "editor.gotoLine"}, {"Edit.GoToAll", "search.everywhere"}
-};
-}
+constexpr std::pair<std::string_view, std::string_view> commands[] = {{"Edit.Copy", "editor.copy"},
+                                                                      {"Edit.Cut", "editor.cut"},
+                                                                      {"Edit.Paste", "editor.paste"},
+                                                                      {"Edit.Undo", "editor.undo"},
+                                                                      {"Edit.Redo", "editor.redo"},
+                                                                      {"Edit.SelectAll", "editor.selectAll"},
+                                                                      {"Edit.Find", "editor.find"},
+                                                                      {"Edit.Replace", "editor.replace"},
+                                                                      {"File.SaveSelectedItems", "file.saveDocument"},
+                                                                      {"File.SaveAll", "file.saveAll"},
+                                                                      {"Edit.GoTo", "editor.gotoLine"},
+                                                                      {"Edit.GoToAll", "search.everywhere"}};
+} // namespace
 Result<ImportedVisualStudioSettings> parseVisualStudioSettings(std::string_view bytes) {
-    if (bytes.size() > 1024 * 1024) return fail(ErrorCode::OutOfRange, "Settings import is limited to 1 MiB");
+    if (bytes.size() > 1024 * 1024)
+        return fail(ErrorCode::OutOfRange, "Settings import is limited to 1 MiB");
     QXmlStreamReader xml(QByteArray(bytes.data(), static_cast<qsizetype>(bytes.size())));
     ImportedVisualStudioSettings out;
     int depth = 0, fontsDepth = 0, categoryDepth = 0;
@@ -62,22 +80,30 @@ Result<ImportedVisualStudioSettings> parseVisualStudioSettings(std::string_view 
     std::map<std::string, settings::StringList> shortcuts;
     unsigned tokens = 0;
     bool root = false;
-    const auto warn = [&](std::string value) { if (out.warnings.size() < 64) out.warnings.push_back(std::move(value)); };
+    const auto warn = [&](std::string value) {
+        if (out.warnings.size() < 64)
+            out.warnings.push_back(std::move(value));
+    };
     while (!xml.atEnd()) {
         const auto type = xml.readNext();
-        if (++tokens > 50000) return fail(ErrorCode::OutOfRange, "Settings XML token limit exceeded");
+        if (++tokens > 50000)
+            return fail(ErrorCode::OutOfRange, "Settings XML token limit exceeded");
         if (type == QXmlStreamReader::DTD || type == QXmlStreamReader::EntityReference)
             return fail(ErrorCode::Unsupported, "Settings import does not accept DTDs or entities");
         if (type == QXmlStreamReader::StartElement) {
-            if (++depth > 64) return fail(ErrorCode::OutOfRange, "Settings XML nesting limit exceeded");
+            if (++depth > 64)
+                return fail(ErrorCode::OutOfRange, "Settings XML nesting limit exceeded");
             const auto name = xml.name();
             const auto attributes = xml.attributes();
             if (!root) {
-                if (name != QLatin1StringView("UserSettings")) return fail(ErrorCode::InvalidArgument, "Expected a .vssettings UserSettings root");
+                if (name != QLatin1StringView("UserSettings"))
+                    return fail(ErrorCode::InvalidArgument, "Expected a .vssettings UserSettings root");
                 root = true;
             }
-            if (name == QLatin1StringView("FontsAndColors")) fontsDepth = depth;
-            if (fontsDepth && name == QLatin1StringView("Category") && attributes.hasAttribute(QLatin1StringView("GUID"))) {
+            if (name == QLatin1StringView("FontsAndColors"))
+                fontsDepth = depth;
+            if (fontsDepth && name == QLatin1StringView("Category") &&
+                attributes.hasAttribute(QLatin1StringView("GUID"))) {
                 auto id = attr(attributes, "GUID");
                 if (out.fonts.size() >= 128 || !categoryIds.insert(id).second)
                     return fail(ErrorCode::InvalidArgument, "Too many or duplicate font categories");
@@ -87,7 +113,8 @@ Result<ImportedVisualStudioSettings> parseVisualStudioSettings(std::string_view 
                 if (attributes.hasAttribute(QLatin1StringView("FontSize"))) {
                     bool ok = false;
                     const auto size = attributes.value(QLatin1StringView("FontSize")).toLongLong(&ok);
-                    if (!ok || size < 4 || size > 96) return fail(ErrorCode::InvalidArgument, "Invalid imported font size");
+                    if (!ok || size < 4 || size > 96)
+                        return fail(ErrorCode::InvalidArgument, "Invalid imported font size");
                     font.size = size;
                 }
                 out.fonts.push_back(std::move(font));
@@ -98,17 +125,29 @@ Result<ImportedVisualStudioSettings> parseVisualStudioSettings(std::string_view 
                 auto& colors = out.fonts[*category].colors;
                 const auto item = attr(attributes, "Name");
                 std::string key;
-                if (item == "Plain Text") { key = "Editor.foreground"; putColor(colors, "Editor.background", attr(attributes, "Background")); }
-                else if (item == "Keyword") key = "Syntax.keyword";
-                else if (item == "Comment") key = "Syntax.comment";
-                else if (item == "String") key = "Syntax.string";
-                else if (item == "Number") key = "Syntax.number";
-                else if (item == "Identifier") key = "Syntax.identifier";
-                else if (item == "Operator") key = "Syntax.operator";
-                else if (item == "Line Number") key = "Editor.lineNumberForeground";
-                else warn("Unsupported color item: " + item);
-                if (!key.empty()) putColor(colors, key, attr(attributes, "Foreground"));
-                if (attr(attributes, "BoldFont") == "Yes") warn("Bold item styles are not imported: " + item);
+                if (item == "Plain Text") {
+                    key = "Editor.foreground";
+                    putColor(colors, "Editor.background", attr(attributes, "Background"));
+                } else if (item == "Keyword")
+                    key = "Syntax.keyword";
+                else if (item == "Comment")
+                    key = "Syntax.comment";
+                else if (item == "String")
+                    key = "Syntax.string";
+                else if (item == "Number")
+                    key = "Syntax.number";
+                else if (item == "Identifier")
+                    key = "Syntax.identifier";
+                else if (item == "Operator")
+                    key = "Syntax.operator";
+                else if (item == "Line Number")
+                    key = "Editor.lineNumberForeground";
+                else
+                    warn("Unsupported color item: " + item);
+                if (!key.empty())
+                    putColor(colors, key, attr(attributes, "Foreground"));
+                if (attr(attributes, "BoldFont") == "Yes")
+                    warn("Bold item styles are not imported: " + item);
             }
             if (name == QLatin1StringView("Shortcut")) {
                 const auto command = attr(attributes, "Command");
@@ -121,49 +160,72 @@ Result<ImportedVisualStudioSettings> parseVisualStudioSettings(std::string_view 
                     continue;
                 }
                 auto sequence = input::parseSequence(sequenceText.toUtf8().toStdString(), input::SyntaxMode::Lenient);
-                if (!sequence) { warn("Unsupported shortcut: " + sequenceText.toStdString()); continue; }
+                if (!sequence) {
+                    warn("Unsupported shortcut: " + sequenceText.toStdString());
+                    continue;
+                }
                 auto& values = shortcuts[std::string(mapping->second)];
                 const auto formatted = input::formatSequence(*sequence);
-                if (values.size() < 8 && std::ranges::find(values, formatted) == values.end()) values.push_back(formatted);
+                if (values.size() < 8 && std::ranges::find(values, formatted) == values.end())
+                    values.push_back(formatted);
             }
         } else if (type == QXmlStreamReader::EndElement) {
-            if (depth == categoryDepth) { category.reset(); categoryDepth = 0; }
-            if (depth == fontsDepth) fontsDepth = 0;
+            if (depth == categoryDepth) {
+                category.reset();
+                categoryDepth = 0;
+            }
+            if (depth == fontsDepth)
+                fontsDepth = 0;
             --depth;
         }
     }
-    if (xml.hasError() || !root) return fail(ErrorCode::InvalidArgument, "Malformed Visual Studio settings XML");
+    if (xml.hasError() || !root)
+        return fail(ErrorCode::InvalidArgument, "Malformed Visual Studio settings XML");
     for (auto& [action, values] : shortcuts)
         out.shortcuts.push_back(settings::makeRecord({{"action", action}, {"shortcuts", std::move(values)}}));
-    warn("Only the selected font/color category and mapped Global/Text Editor shortcuts are imported; other package settings remain unchanged.");
+    warn("Only the selected font/color category and mapped Global/Text Editor shortcuts are imported; other package "
+         "settings remain unchanged.");
     return out;
 }
-Result<std::vector<settings::ConditionalSettingEdit>> prepareVisualStudioImport(settings::SettingsStore& store,
-    const ImportedVisualStudioSettings& imported, std::size_t category) {
+Result<std::vector<settings::ConditionalSettingEdit>>
+prepareVisualStudioImport(settings::SettingsStore& store, const ImportedVisualStudioSettings& imported,
+                          std::size_t category) {
     auto doc = store.readScopeDocument(settings::Scope::Application);
-    if (!doc) return std::unexpected(doc.error());
+    if (!doc)
+        return std::unexpected(doc.error());
     std::vector<settings::ConditionalSettingEdit> edits;
     const auto add = [&](std::string_view key, settings::Value value) -> Result<void> {
         const auto* spec = store.registry().find(key);
-        if (!spec) return fail(ErrorCode::NotFound, "Imported setting is not registered");
-        if (auto valid = settings::validateValue(spec->schema, value); !valid) return valid;
+        if (!spec)
+            return fail(ErrorCode::NotFound, "Imported setting is not registered");
+        if (auto valid = settings::validateValue(spec->schema, value); !valid)
+            return valid;
         const auto* member = doc->find(key);
-        edits.push_back({std::string(key), member ? std::optional<std::string>(doc->rawValue(*member)) : std::nullopt, std::move(value)});
+        edits.push_back({std::string(key), member ? std::optional<std::string>(doc->rawValue(*member)) : std::nullopt,
+                         std::move(value)});
         return {};
     };
     if (!imported.fonts.empty()) {
-        if (category >= imported.fonts.size()) return fail(ErrorCode::InvalidArgument, "Select an imported font category");
+        if (category >= imported.fonts.size())
+            return fail(ErrorCode::InvalidArgument, "Select an imported font category");
         const auto& font = imported.fonts[category];
-        if (!font.font.empty()) if (auto value = add(settings::key::editorFontFamily.name, font.font); !value) return std::unexpected(value.error());
-        if (font.size) if (auto value = add(settings::key::editorFontSize.name, *font.size); !value) return std::unexpected(value.error());
-        if (!font.colors.empty()) if (auto value = add(settings::key::editorSchemeColors.name, font.colors); !value) return std::unexpected(value.error());
+        if (!font.font.empty())
+            if (auto value = add(settings::key::editorFontFamily.name, font.font); !value)
+                return std::unexpected(value.error());
+        if (font.size)
+            if (auto value = add(settings::key::editorFontSize.name, *font.size); !value)
+                return std::unexpected(value.error());
+        if (!font.colors.empty())
+            if (auto value = add(settings::key::editorSchemeColors.name, font.colors); !value)
+                return std::unexpected(value.error());
     }
     if (!imported.shortcuts.empty()) {
         settings::RecordList records;
         if (doc->find(settings::key::keymapOverrides.name)) {
             const auto* spec = store.registry().find(settings::key::keymapOverrides.name);
             auto current = doc->value(settings::key::keymapOverrides.name, spec->schema);
-            if (!current) return std::unexpected(current.error());
+            if (!current)
+                return std::unexpected(current.error());
             records = std::get<settings::RecordList>(*current);
         }
         for (const auto& row : imported.shortcuts) {
@@ -174,24 +236,31 @@ Result<std::vector<settings::ConditionalSettingEdit>> prepareVisualStudioImport(
             });
             records.push_back(row);
         }
-        if (auto value = add(settings::key::keymapOverrides.name, std::move(records)); !value) return std::unexpected(value.error());
+        if (auto value = add(settings::key::keymapOverrides.name, std::move(records)); !value)
+            return std::unexpected(value.error());
     }
-    if (edits.empty()) return fail(ErrorCode::Unsupported, "No supported settings were found in the selected category");
+    if (edits.empty())
+        return fail(ErrorCode::Unsupported, "No supported settings were found in the selected category");
     return edits;
 }
 bool showSettingsImport(settings::SettingsStore& store, QWidget* parent) {
     const bool hadParent = parent != nullptr;
     const QPointer<QWidget> owner(parent);
-    const auto path = QFileDialog::getOpenFileName(parent, QStringLiteral("Import Visual Studio Settings"), {}, QStringLiteral("Visual Studio settings (*.vssettings)"));
-    if (path.isEmpty() || (hadParent && !owner)) return false;
+    const auto path = QFileDialog::getOpenFileName(parent, QStringLiteral("Import Visual Studio Settings"), {},
+                                                   QStringLiteral("Visual Studio settings (*.vssettings)"));
+    if (path.isEmpty() || (hadParent && !owner))
+        return false;
     QFile file(path);
-    if (!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024) return false;
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024)
+        return false;
     const auto bytes = file.read(1024 * 1024 + 1);
-    auto imported = parseVisualStudioSettings(std::string_view(bytes.constData(), static_cast<std::size_t>(bytes.size())));
+    auto imported =
+        parseVisualStudioSettings(std::string_view(bytes.constData(), static_cast<std::size_t>(bytes.size())));
     // A nested event loop may destroy the settings owner. A parent must not delete this
     // stack object, and no callback may touch its borrowed store after that owner is gone.
     QDialog dialog;
-    if (owner) QObject::connect(owner.data(), &QObject::destroyed, &dialog, &QDialog::reject);
+    if (owner)
+        QObject::connect(owner.data(), &QObject::destroyed, &dialog, &QDialog::reject);
     ui::installDialogChrome(&dialog, true);
     dialog.setWindowTitle(QStringLiteral("Review Settings Import"));
     auto* layout = new QVBoxLayout(&dialog);
@@ -201,32 +270,60 @@ bool showSettingsImport(settings::SettingsStore& store, QWidget* parent) {
     auto* status = new QLabel(&dialog);
     status->setWordWrap(true);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
-    layout->addWidget(new QLabel(QStringLiteral("Choose the Visual Studio font/color category to apply to FrostIDE's editor. GUIDs are preserved; no category is guessed."), &dialog));
-    layout->addWidget(categories); layout->addWidget(preview); layout->addWidget(status); layout->addWidget(buttons);
+    layout->addWidget(new QLabel(QStringLiteral("Choose the Visual Studio font/color category to apply to FrostIDE's "
+                                                "editor. GUIDs are preserved; no category is guessed."),
+                                 &dialog));
+    layout->addWidget(categories);
+    layout->addWidget(preview);
+    layout->addWidget(status);
+    layout->addWidget(buttons);
     std::vector<settings::ConditionalSettingEdit> captured;
-    if (imported) for (const auto& font : imported->fonts)
-        categories->addItem(QString::fromStdString(font.id + "  " + font.font + "  (" + std::to_string(font.colors.size()) + " colors)"));
-    if (imported && imported->fonts.empty()) categories->addItem(QStringLiteral("Shortcuts only"));
+    if (imported)
+        for (const auto& font : imported->fonts)
+            categories->addItem(QString::fromStdString(font.id + "  " + font.font + "  (" +
+                                                       std::to_string(font.colors.size()) + " colors)"));
+    if (imported && imported->fonts.empty())
+        categories->addItem(QStringLiteral("Shortcuts only"));
     const auto refresh = [&] {
-        if (hadParent && !owner) { dialog.reject(); return; }
+        if (hadParent && !owner) {
+            dialog.reject();
+            return;
+        }
         captured.clear();
-        if (!imported) { status->setText(QString::fromStdString(imported.error().message())); buttons->button(QDialogButtonBox::Apply)->setEnabled(false); return; }
-        auto proposal = prepareVisualStudioImport(store, *imported, static_cast<std::size_t>(std::max(0, categories->currentIndex())));
-        if (!proposal) { status->setText(QString::fromStdString(proposal.error().message())); buttons->button(QDialogButtonBox::Apply)->setEnabled(false); return; }
+        if (!imported) {
+            status->setText(QString::fromStdString(imported.error().message()));
+            buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+            return;
+        }
+        auto proposal = prepareVisualStudioImport(store, *imported,
+                                                  static_cast<std::size_t>(std::max(0, categories->currentIndex())));
+        if (!proposal) {
+            status->setText(QString::fromStdString(proposal.error().message()));
+            buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+            return;
+        }
         captured = std::move(*proposal);
         QStringList lines;
         auto proposed = settings::SettingsDocument::create(settings::kCurrentSchemaVersion);
-        for (const auto& edit : captured) if (edit.value) (void)proposed.set(edit.key, *edit.value);
+        for (const auto& edit : captured)
+            if (edit.value)
+                (void)proposed.set(edit.key, *edit.value);
         lines << QString::fromStdString(proposed.bytes());
-        for (const auto& warning : imported->warnings) lines << QString::fromStdString(warning);
+        for (const auto& warning : imported->warnings)
+            lines << QString::fromStdString(warning);
         preview->setPlainText(lines.join(QLatin1Char('\n')));
-        status->setText(QStringLiteral("Apply replaces only these settings in one atomic application-file write. Existing editor scheme colors are replaced; unrelated shortcuts are retained."));
+        status->setText(
+            QStringLiteral("Apply replaces only these settings in one atomic application-file write. Existing editor "
+                           "scheme colors are replaced; unrelated shortcuts are retained."));
         buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
     };
     QObject::connect(categories, &QComboBox::currentIndexChanged, &dialog, [&](int) { refresh(); });
     bool applied = false;
     QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
-        if (hadParent && !owner) { dialog.reject(); return; }
+        if (hadParent && !owner) {
+            dialog.reject();
+            return;
+        }
         if (auto result = store.applyConditional(settings::Scope::Application, captured); !result) {
             status->setText(QString::fromStdString(result.error().message()));
             buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
@@ -245,42 +342,57 @@ bool showSettingsImport(settings::SettingsStore& store, QWidget* parent) {
 
 namespace frost::app {
 namespace {
-constexpr std::string_view schemeKeys[] = {"editor.fontFamily", "editor.fontSize", "editor.schemeColors", "keymap.id", "keymap.overrides"};
+constexpr std::string_view schemeKeys[] = {"editor.fontFamily", "editor.fontSize", "editor.schemeColors", "keymap.id",
+                                           "keymap.overrides"};
 bool schemeKey(std::string_view key) { return std::ranges::find(schemeKeys, key) != std::end(schemeKeys); }
-}
+} // namespace
 Result<std::string> exportNativeScheme(const settings::SettingsStore& store) {
     auto doc = settings::SettingsDocument::create(settings::kCurrentSchemaVersion);
     const auto snapshot = store.snapshot();
     for (auto key : schemeKeys) {
-        if (auto result = doc.set(key, snapshot->value(key)); !result) return std::unexpected(result.error());
+        if (auto result = doc.set(key, snapshot->value(key)); !result)
+            return std::unexpected(result.error());
     }
     return doc.bytes();
 }
-Result<std::vector<settings::ConditionalSettingEdit>> prepareNativeScheme(settings::SettingsStore& store, std::string bytes) {
-    if (bytes.size() > 1024 * 1024) return fail(ErrorCode::InvalidArgument, "Scheme exceeds 1 MiB");
+Result<std::vector<settings::ConditionalSettingEdit>> prepareNativeScheme(settings::SettingsStore& store,
+                                                                          std::string bytes) {
+    if (bytes.size() > 1024 * 1024)
+        return fail(ErrorCode::InvalidArgument, "Scheme exceeds 1 MiB");
     auto doc = settings::SettingsDocument::parse(std::move(bytes));
-    if (!doc) return std::unexpected(doc.error());
-    if (doc->schemaVersion() != settings::kCurrentSchemaVersion) return fail(ErrorCode::Unsupported, "Unsupported scheme version");
+    if (!doc)
+        return std::unexpected(doc.error());
+    if (doc->schemaVersion() != settings::kCurrentSchemaVersion)
+        return fail(ErrorCode::Unsupported, "Unsupported scheme version");
     auto current = store.readScopeDocument(settings::Scope::Application);
-    if (!current) return std::unexpected(current.error());
+    if (!current)
+        return std::unexpected(current.error());
     std::vector<settings::ConditionalSettingEdit> edits;
     std::set<std::string> seen;
     for (const auto& member : doc->members()) {
-        if (!seen.insert(member.key).second) return fail(ErrorCode::InvalidArgument, "Duplicate scheme member");
-        if (member.key == settings::kSchemaVersionKey) continue;
-        if (!schemeKey(member.key)) return fail(ErrorCode::InvalidArgument, "Unsupported scheme member: " + member.key);
+        if (!seen.insert(member.key).second)
+            return fail(ErrorCode::InvalidArgument, "Duplicate scheme member");
+        if (member.key == settings::kSchemaVersionKey)
+            continue;
+        if (!schemeKey(member.key))
+            return fail(ErrorCode::InvalidArgument, "Unsupported scheme member: " + member.key);
         const auto* spec = store.registry().find(member.key);
-        if (!spec) return fail(ErrorCode::NotFound, "Scheme setting is not registered");
+        if (!spec)
+            return fail(ErrorCode::NotFound, "Scheme setting is not registered");
         auto value = doc->value(member.key, spec->schema);
-        if (!value) return std::unexpected(value.error());
+        if (!value)
+            return std::unexpected(value.error());
         if (member.key == settings::key::editorSchemeColors.name) {
             std::set<std::string> names;
             for (const auto& row : std::get<settings::RecordList>(*value)) {
                 const auto& name = std::get<std::string>(*settings::findField(row, "name"));
                 const auto& color = std::get<std::string>(*settings::findField(row, "color"));
                 const auto rgba = ui::parseHexColor(color);
-                if (!names.insert(name).second || !(name.starts_with("Editor.") || name.starts_with("Syntax.") || name.starts_with("Semantic.")) || !ui::colorKeyByName(name) || !rgba || !rgba->opaque())
-                    return fail(ErrorCode::InvalidArgument, "Scheme requires unique known editor color names and opaque hex colors");
+                if (!names.insert(name).second ||
+                    !(name.starts_with("Editor.") || name.starts_with("Syntax.") || name.starts_with("Semantic.")) ||
+                    !ui::colorKeyByName(name) || !rgba || !rgba->opaque())
+                    return fail(ErrorCode::InvalidArgument,
+                                "Scheme requires unique known editor color names and opaque hex colors");
             }
         }
         if (member.key == settings::key::keymapOverrides.name) {
@@ -290,70 +402,107 @@ Result<std::vector<settings::ConditionalSettingEdit>> prepareNativeScheme(settin
                 override.actionId = std::get<std::string>(*settings::findField(row, "action"));
                 for (const auto& shortcut : std::get<settings::StringList>(*settings::findField(row, "shortcuts"))) {
                     auto parsed = input::parseSequence(shortcut, input::SyntaxMode::Strict);
-                    if (!parsed) return std::unexpected(parsed.error());
+                    if (!parsed)
+                        return std::unexpected(parsed.error());
                     override.sequences.push_back(std::move(*parsed));
                 }
                 preferences.overrides.push_back(std::move(override));
             }
-            if (auto valid = input::validate(preferences); !valid) return std::unexpected(valid.error());
+            if (auto valid = input::validate(preferences); !valid)
+                return std::unexpected(valid.error());
         }
         const auto* old = current->find(member.key);
-        edits.push_back({member.key, old ? std::optional<std::string>(current->rawValue(*old)) : std::nullopt, std::move(*value)});
+        edits.push_back(
+            {member.key, old ? std::optional<std::string>(current->rawValue(*old)) : std::nullopt, std::move(*value)});
     }
-    if (edits.empty()) return fail(ErrorCode::InvalidArgument, "Scheme has no settings");
+    if (edits.empty())
+        return fail(ErrorCode::InvalidArgument, "Scheme has no settings");
     return edits;
 }
 bool showNativeScheme(settings::SettingsStore& store, QWidget* parent) {
     const QPointer<QWidget> owner(parent);
     const bool hadParent = parent != nullptr;
     auto exported = exportNativeScheme(store);
-    if (!exported) return false;
+    if (!exported)
+        return false;
     QDialog dialog;
-    if (owner) QObject::connect(owner.data(), &QObject::destroyed, &dialog, &QDialog::reject);
+    if (owner)
+        QObject::connect(owner.data(), &QObject::destroyed, &dialog, &QDialog::reject);
     ui::installDialogChrome(&dialog, true);
     dialog.setWindowTitle(QStringLiteral("Custom Editor and Keymap Scheme"));
     auto* layout = new QVBoxLayout(&dialog);
     auto* editor = new QPlainTextEdit(&dialog);
     editor->setObjectName(QStringLiteral("nativeSchemeEditor"));
     editor->setPlainText(QString::fromStdString(*exported));
-    auto* status = new QLabel(QStringLiteral("Edit font, size, named colors and keymap JSON. Apply validates all values together."), &dialog);
+    auto* status = new QLabel(
+        QStringLiteral("Edit font, size, named colors and keymap JSON. Apply validates all values together."), &dialog);
     status->setWordWrap(true);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
     auto* openButton = buttons->addButton(QStringLiteral("Open Scheme..."), QDialogButtonBox::ActionRole);
     auto* save = buttons->addButton(QStringLiteral("Export Scheme..."), QDialogButtonBox::ActionRole);
-    layout->addWidget(status); layout->addWidget(editor); layout->addWidget(buttons);
+    layout->addWidget(status);
+    layout->addWidget(editor);
+    layout->addWidget(buttons);
     // Capture raw application values before editing; external changes cannot be overwritten silently.
     auto baseline = prepareNativeScheme(store, *exported);
-    if (!baseline) return false;
+    if (!baseline)
+        return false;
     QObject::connect(openButton, &QPushButton::clicked, &dialog, [&] {
-        const auto path = QFileDialog::getOpenFileName(&dialog, QStringLiteral("Open FrostIDE Scheme"), {}, QStringLiteral("FrostIDE Scheme (*.json)"));
-        if (path.isEmpty() || (hadParent && !owner)) return;
+        const auto path = QFileDialog::getOpenFileName(&dialog, QStringLiteral("Open FrostIDE Scheme"), {},
+                                                       QStringLiteral("FrostIDE Scheme (*.json)"));
+        if (path.isEmpty() || (hadParent && !owner))
+            return;
         QFile file(path);
-        if (!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024) { status->setText(QStringLiteral("Cannot read scheme (limit 1 MiB).")); return; }
+        if (!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024) {
+            status->setText(QStringLiteral("Cannot read scheme (limit 1 MiB)."));
+            return;
+        }
         editor->setPlainText(QString::fromUtf8(file.readAll()));
     });
     QObject::connect(save, &QPushButton::clicked, &dialog, [&] {
         const auto bytes = editor->toPlainText().toUtf8();
-        if (hadParent && !owner) return;
+        if (hadParent && !owner)
+            return;
         auto prepared = prepareNativeScheme(store, bytes.toStdString());
-        if (!prepared) { status->setText(QString::fromStdString(prepared.error().message())); return; }
-        const auto path = QFileDialog::getSaveFileName(&dialog, QStringLiteral("Export FrostIDE Scheme"), {}, QStringLiteral("FrostIDE Scheme (*.json)"));
-        if (path.isEmpty() || (hadParent && !owner)) return;
+        if (!prepared) {
+            status->setText(QString::fromStdString(prepared.error().message()));
+            return;
+        }
+        const auto path = QFileDialog::getSaveFileName(&dialog, QStringLiteral("Export FrostIDE Scheme"), {},
+                                                       QStringLiteral("FrostIDE Scheme (*.json)"));
+        if (path.isEmpty() || (hadParent && !owner))
+            return;
         QSaveFile file(path);
-        if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) status->setText(QStringLiteral("Could not save scheme."));
-        else status->setText(QStringLiteral("Scheme exported."));
+        if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
+            status->setText(QStringLiteral("Could not save scheme."));
+        else
+            status->setText(QStringLiteral("Scheme exported."));
     });
     bool applied = false;
     QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
-        if (hadParent && !owner) { dialog.reject(); return; }
+        if (hadParent && !owner) {
+            dialog.reject();
+            return;
+        }
         auto edits = prepareNativeScheme(store, editor->toPlainText().toUtf8().toStdString());
-        if (!edits) { status->setText(QString::fromStdString(edits.error().message())); return; }
-        for (auto& edit : *edits) for (const auto& old : *baseline) if (edit.key == old.key) edit.expectedRaw = old.expectedRaw;
-        if (auto result = store.applyConditional(settings::Scope::Application, *edits); !result) { status->setText(QString::fromStdString(result.error().message())); return; }
-        applied = true; dialog.accept();
+        if (!edits) {
+            status->setText(QString::fromStdString(edits.error().message()));
+            return;
+        }
+        for (auto& edit : *edits)
+            for (const auto& old : *baseline)
+                if (edit.key == old.key)
+                    edit.expectedRaw = old.expectedRaw;
+        if (auto result = store.applyConditional(settings::Scope::Application, *edits); !result) {
+            status->setText(QString::fromStdString(result.error().message()));
+            return;
+        }
+        applied = true;
+        dialog.accept();
     });
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    dialog.resize(760, 550); dialog.exec();
+    dialog.resize(760, 550);
+    dialog.exec();
     return applied;
 }
-}
+} // namespace frost::app

@@ -3,8 +3,8 @@
 #include "frost/app/workbench.hpp"
 #include "frost/build/msbuild_locator.hpp"
 #include "frost/io/path.hpp"
-#include "frost/lang/uri.hpp"
 #include "frost/lang/unity_assets.hpp"
+#include "frost/lang/uri.hpp"
 #include "frost/project/cmake_membership.hpp"
 #include "frost/project/vcxproj_rename.hpp"
 #include "frost/settings/keys.hpp"
@@ -163,7 +163,8 @@ Result<document::RefactoringPlan> Workbench::prepareProjectSourceRename(const st
             const bool unityProject = fs->exists(root + "/ProjectSettings/ProjectVersion.txt").value_or(false);
             if (unityProject && (lang::isUnityAssetsPath(root, oldPath) || lang::isUnityAssetsPath(root, newPath))) {
                 if (!lang::isUnityAssetsPath(root, oldPath) || !lang::isUnityAssetsPath(root, newPath))
-                    return fail(ErrorCode::Unsupported, "Move Unity assets within Assets so original GUID identity stays paired");
+                    return fail(ErrorCode::Unsupported,
+                                "Move Unity assets within Assets so original GUID identity stays paired");
                 if (auto paired = appendUnityMetaRename(*fs, *plan, oldPath, newPath); !paired)
                     return std::unexpected(paired.error());
             }

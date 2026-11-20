@@ -130,8 +130,9 @@ TEST(GitCommitChecks, SelectingRenameSourceChecksDestinationBytesToo) {
     repo.write("new.txt", "changed destination\n");
     CommitRequest request{.paths = {repo.path("old.txt")}, .message = "rename"};
     request.checksReviewed = true;
-    request.checks = {{.name = "Changes rename destination", .executable = repo.runner().gitPath(),
-        .arguments = {"restore", "--worktree", "--", "new.txt"}}};
+    request.checks = {{.name = "Changes rename destination",
+                       .executable = repo.runner().gitPath(),
+                       .arguments = {"restore", "--worktree", "--", "new.txt"}}};
     auto changed = repo.repository().commit(request);
     ASSERT_FALSE(changed);
     EXPECT_EQ(changed.error().code(), ErrorCode::Busy);
@@ -169,7 +170,8 @@ TEST(GitCommitChecks, IndexMutationRequiresReviewBeforeCommitAndHookStillRunsAft
     repo.write("a.txt", "changed\n");
     CommitRequest request{.paths = {repo.path("a.txt")}, .message = "checked"};
     request.checksReviewed = true;
-    request.checks = {{.name = "Stages a file", .executable = repo.runner().gitPath(), .arguments = {"add", "--", "a.txt"}}};
+    request.checks = {
+        {.name = "Stages a file", .executable = repo.runner().gitPath(), .arguments = {"add", "--", "a.txt"}}};
     auto changed = repo.repository().commit(request);
     ASSERT_FALSE(changed);
     EXPECT_EQ(changed.error().code(), ErrorCode::Busy);

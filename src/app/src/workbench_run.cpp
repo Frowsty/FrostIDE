@@ -130,7 +130,9 @@ void Workbench::createRunService() {
                    ? m_engine->sessionToolPlanFor(configuration)
                    : std::function<Result<run::LaunchPlan>(run::LaunchPlan)>{};
     };
-    hooks.prepareRemoteRun=[this](const run::RunConfiguration& configuration){return prepareRemoteRun(configuration);};
+    hooks.prepareRemoteRun = [this](const run::RunConfiguration& configuration) {
+        return prepareRemoteRun(configuration);
+    };
     hooks.nativeLaunchPlanWithCancellationFor = [this](const run::RunConfiguration& configuration)
         -> std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> {
         return configuration.id.starts_with("managed.sdk.")
@@ -247,7 +249,8 @@ void Workbench::createRunService() {
     const auto nativeSelected = [selectedType] { return selectedType() == run::RunType::Native; };
     debugHooks.alternateAvailable = [this, selectedType] {
         const auto type = selectedType();
-        if(type==run::RunType::Remote)return false;
+        if (type == run::RunType::Remote)
+            return false;
         if (type && run::isFrostEngineRunType(*type))
             return m_engineRunDebug != nullptr;
         return m_cmake != nullptr || type == run::RunType::Native || (type && run::isLuaRunType(*type)) ||
@@ -260,7 +263,9 @@ void Workbench::createRunService() {
      */
     debugHooks.startOverride = [this, selectedType]() -> std::optional<Result<void>> {
         const auto type = selectedType();
-        if(type==run::RunType::Remote)return Result<void>(fail(ErrorCode::Unsupported,"Named remote targets support Run; remote debugger preparation is unavailable"));
+        if (type == run::RunType::Remote)
+            return Result<void>(fail(ErrorCode::Unsupported,
+                                     "Named remote targets support Run; remote debugger preparation is unavailable"));
         if (type && run::isFrostEngineRunType(*type))
             return startSelectedDebugConfiguration();
         if (type && run::isLuaRunType(*type))
@@ -357,8 +362,9 @@ void Workbench::createRunService() {
         return {};
     };
     debugHooks.mayStart = [this] {
-        return !m_nativeAnalysisActive && !m_remoteBuildActive && !m_buildService->projectEditInProgress() && !m_runController->running() &&
-               (!m_runManager || m_runManager->activeRuns().empty()) && m_runService->activeRuns().empty() &&
+        return !m_nativeAnalysisActive && !m_remoteBuildActive && !m_buildService->projectEditInProgress() &&
+               !m_runController->running() && (!m_runManager || m_runManager->activeRuns().empty()) &&
+               m_runService->activeRuns().empty() &&
                (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
     debugHooks.startAlternate = [this, nativeSelected, prepareThenDebug,
@@ -485,7 +491,8 @@ void Workbench::createRunService() {
     input::ActionSpec unityRebind;
     unityRebind.id = "debug.rebindUnity";
     unityRebind.name = "Rebind Unity Mono After Reload...";
-    unityRebind.description = "Reverify the same authenticated Editor process, recapture sources and restore eligible breakpoints";
+    unityRebind.description =
+        "Reverify the same authenticated Editor process, recapture sources and restore eligible breakpoints";
     unityRebind.group = "Debug";
     unityRebind.executesProjectCode = true;
     unityRebind.enabled = [this](const input::ActionContext&) {
@@ -500,8 +507,12 @@ void Workbench::createRunService() {
     unityNative.description = "Launch a provided local player with native symbols and generated C++ breakpoints";
     unityNative.group = "Debug";
     unityNative.executesProjectCode = true;
-    unityNative.enabled = [this](const input::ActionContext&) { return canStartLuaDebug() && !m_buildService->externalLaunchAdmissionBusy(); };
-    unityNative.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startUnityIl2cppNativeDebug(); };
+    unityNative.enabled = [this](const input::ActionContext&) {
+        return canStartLuaDebug() && !m_buildService->externalLaunchAdmissionBusy();
+    };
+    unityNative.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
+        startUnityIl2cppNativeDebug();
+    };
     if (auto added = m_registry.add(std::move(unityNative)); !added)
         log::warn(kLog, "Unity native debug action: {}", added.error().describe());
     input::ActionSpec attachProcess;
@@ -560,9 +571,8 @@ bool Workbench::hasDebugActivity() const {
 }
 
 bool Workbench::canStartLuaDebug() const {
-    return !m_shutDown && !m_nativeAnalysisActive && !m_remoteBuildActive && !m_projectRoot.empty() &&
-           m_buildService && !m_buildService->projectEditInProgress() &&
-           m_buildService->state() == build::BuildState::Idle &&
+    return !m_shutDown && !m_nativeAnalysisActive && !m_remoteBuildActive && !m_projectRoot.empty() && m_buildService &&
+           !m_buildService->projectEditInProgress() && m_buildService->state() == build::BuildState::Idle &&
            (!m_cmake || (!m_cmake->running() && m_cmake->service().state() == build::BuildState::Idle)) &&
            m_runController && !m_runController->running() && m_runService && m_runService->activeRuns().empty() &&
            (!m_runManager || m_runManager->activeRuns().empty()) && m_debug && !m_debug->debugging() &&

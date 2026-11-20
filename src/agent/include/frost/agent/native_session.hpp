@@ -3,6 +3,7 @@
 #pragma once
 #include "frost/agent/protocol.hpp"
 #include "frost/io/async_process.hpp"
+
 #include <functional>
 #include <memory>
 namespace frost::agent {
@@ -17,11 +18,14 @@ public:
     };
     // Only after explicit user consent and a freshly checked auth route. Not a cold-start API.
     [[nodiscard]] static Result<std::unique_ptr<NativeSession>> start(io::IProcessLauncher& launcher,
-        io::AsyncContext context, const NativeLaunch& launch, const Json& freshAuthStatus, Observer observer);
+                                                                      io::AsyncContext context,
+                                                                      const NativeLaunch& launch,
+                                                                      const Json& freshAuthStatus, Observer observer);
     ~NativeSession();
     [[nodiscard]] Result<void> send(const Json& event);
     // Cancels pipe waits and terminates the owned process tree; asynchronous reactor cleanup.
     void stop();
+
 private:
     struct State;
     explicit NativeSession(std::shared_ptr<State> state);
@@ -30,4 +34,4 @@ private:
     static sched::Task<void> wait(std::shared_ptr<State> state);
     std::shared_ptr<State> m;
 };
-}
+} // namespace frost::agent

@@ -3,6 +3,7 @@
 #pragma once
 #include "frost/core/error.hpp"
 #include "frost/ui/editor/editor_view.hpp"
+
 #include <functional>
 #include <string>
 #include <string_view>
@@ -18,5 +19,5 @@ using MergeEditorApply = std::function<Result<void>(std::string_view)>;
 // services' borrowed dependencies outlive the call. false means Cancel, true means Apply succeeded.
 // No I/O occurs here; the callback owns admission, encoding, source-identity validation and writing.
 [[nodiscard]] Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply,
-    EditorServices services = {}, QWidget* parent = nullptr);
-}
+                                           EditorServices services = {}, QWidget* parent = nullptr);
+} // namespace frost::ui

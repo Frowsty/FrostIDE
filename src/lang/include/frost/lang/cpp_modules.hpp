@@ -1,15 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // CPP-15: tool-backed C++ module dependency graph. No source-text module inference.
 #pragma once
+#include "frost/io/file_system.hpp"
+#include "frost/io/process.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/json.hpp"
-#include "frost/io/process.hpp"
-#include <functional>
+
 #include <chrono>
-#include "frost/io/file_system.hpp"
+#include <functional>
 namespace frost::lang {
-struct CppModuleProvide { std::string name, sourcePath; bool interface = false; };
-struct CppModuleRequire { std::string name, sourcePath, lookupMethod; bool uniqueOnSourcePath = false; };
+struct CppModuleProvide {
+    std::string name, sourcePath;
+    bool interface = false;
+};
+struct CppModuleRequire {
+    std::string name, sourcePath, lookupMethod;
+    bool uniqueOnSourcePath = false;
+};
 struct CppModuleRule {
     std::string primaryOutput;
     std::vector<CppModuleProvide> provides;
@@ -28,7 +35,7 @@ struct CppModuleGraph {
 // Validate the real llvm::cl::PrintVersionMessage banner against the compiled SDK pin.
 [[nodiscard]] Result<void> validateCppModuleScannerVersion(std::string_view banner);
 struct CppModuleScanRequest {
-    std::string scanner; // Absolute pinned clang-scan-deps, from the application toolchain.
+    std::string scanner;             // Absolute pinned clang-scan-deps, from the application toolchain.
     std::string privateDatabasePath; // Captured arguments-form CDB in an owned directory.
     std::string databaseBytes;
     std::string workingDirectory;
@@ -43,5 +50,5 @@ struct CppModuleScanRequest {
 // project compiler inputs, so explicit current trust is mandatory. Caller owns captured CDB
 // lifetime and validates disk bytes/source snapshots in validateCurrent. Child trees are joined.
 [[nodiscard]] Result<CppModuleGraph> scanCppModules(io::IProcessLauncher& launcher, io::IFileSystem& fs,
-                                                   const CppModuleScanRequest& request);
+                                                    const CppModuleScanRequest& request);
 } // namespace frost::lang

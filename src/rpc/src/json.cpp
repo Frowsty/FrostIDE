@@ -70,7 +70,8 @@ bool convert(yyjson_val* value, Json& out, int depth, bool strict = false) {
                 return false;
             }
             const std::string_view name(yyjson_get_str(key), yyjson_get_len(key));
-            if (strict && !names.insert(std::string(name)).second) return false;
+            if (strict && !names.insert(std::string(name)).second)
+                return false;
             // A duplicate key replaces the earlier value in place for permissive callers.
             out.set(std::string(yyjson_get_str(key), yyjson_get_len(key)), std::move(converted));
         }
@@ -310,9 +311,11 @@ Result<Json> parseJson(std::string_view text) {
 Result<Json> parseJsonStrict(std::string_view text) {
     yyjson_read_err error{};
     DocPtr doc(yyjson_read_opts(const_cast<char*>(text.data()), text.size(), 0, nullptr, &error));
-    if (!doc) return fail(ErrorCode::Corrupt, std::format("invalid strict JSON at byte {}", error.pos));
+    if (!doc)
+        return fail(ErrorCode::Corrupt, std::format("invalid strict JSON at byte {}", error.pos));
     Json out;
-    if (!convert(yyjson_doc_get_root(doc.get()),out,0,true)) return fail(ErrorCode::Corrupt,"duplicate JSON key or nesting limit exceeded");
+    if (!convert(yyjson_doc_get_root(doc.get()), out, 0, true))
+        return fail(ErrorCode::Corrupt, "duplicate JSON key or nesting limit exceeded");
     return out;
 }
 

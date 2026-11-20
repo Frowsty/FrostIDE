@@ -47,18 +47,23 @@ TEST(FileTemplatesLua, ModuleCreatesOneLuaFileAndRefusesReservedBindings) {
     EXPECT_FALSE(lang::renderFileTemplate({lang::FileTemplateKind::LuaModule, "end", "", ""}));
 }
 TEST(FileTemplates, FrostComponentUsesRealDeferredModuleRegistrationAndReflectedField) {
-    auto files=lang::renderFileTemplate({lang::FileTemplateKind::FrostComponent,"HealthComponent","Author","Health state"});
-    ASSERT_TRUE(files);ASSERT_EQ(files->size(),2U);
-    EXPECT_EQ((*files)[0].name,"HealthComponent.hpp");EXPECT_EQ((*files)[1].name,"HealthComponent.cpp");
-    EXPECT_NE((*files)[0].contents.find("float Value = 0.0f;"),std::string::npos);
-    EXPECT_NE((*files)[1].contents.find("Frost::ComponentRegistry::Register<HealthComponent>"),std::string::npos);
-    EXPECT_NE((*files)[1].contents.find(".Field<&HealthComponent::Value>(\"Value\")"),std::string::npos);
-    EXPECT_NE((*files)[1].contents.find("Frost::ComponentRegistry::AddRegistrationModule("),std::string::npos);
-    EXPECT_NE((*files)[1].contents.find("&RegisterHealthComponentComponents"),std::string::npos);
-    EXPECT_FALSE(lang::renderFileTemplate({lang::FileTemplateKind::FrostComponent,"Game::Health","",""}));
+    auto files =
+        lang::renderFileTemplate({lang::FileTemplateKind::FrostComponent, "HealthComponent", "Author", "Health state"});
+    ASSERT_TRUE(files);
+    ASSERT_EQ(files->size(), 2U);
+    EXPECT_EQ((*files)[0].name, "HealthComponent.hpp");
+    EXPECT_EQ((*files)[1].name, "HealthComponent.cpp");
+    EXPECT_NE((*files)[0].contents.find("float Value = 0.0f;"), std::string::npos);
+    EXPECT_NE((*files)[1].contents.find("Frost::ComponentRegistry::Register<HealthComponent>"), std::string::npos);
+    EXPECT_NE((*files)[1].contents.find(".Field<&HealthComponent::Value>(\"Value\")"), std::string::npos);
+    EXPECT_NE((*files)[1].contents.find("Frost::ComponentRegistry::AddRegistrationModule("), std::string::npos);
+    EXPECT_NE((*files)[1].contents.find("&RegisterHealthComponentComponents"), std::string::npos);
+    EXPECT_FALSE(lang::renderFileTemplate({lang::FileTemplateKind::FrostComponent, "Game::Health", "", ""}));
 }
 TEST(FileTemplates, ComponentCommentBackslashesStayInsideBlockAndControlBytesRefuse) {
-    auto files=lang::renderFileTemplate({lang::FileTemplateKind::FrostComponent,"Health","Author\\","State\\"});
-    ASSERT_TRUE(files);EXPECT_NE(files->front().contents.find("Author: Author\\\n*/\n#pragma once"),std::string::npos);
-    EXPECT_FALSE(lang::renderFileTemplate({lang::FileTemplateKind::FrostComponent,"Health",std::string("bad\0author",10),""}));
+    auto files = lang::renderFileTemplate({lang::FileTemplateKind::FrostComponent, "Health", "Author\\", "State\\"});
+    ASSERT_TRUE(files);
+    EXPECT_NE(files->front().contents.find("Author: Author\\\n*/\n#pragma once"), std::string::npos);
+    EXPECT_FALSE(lang::renderFileTemplate(
+        {lang::FileTemplateKind::FrostComponent, "Health", std::string("bad\0author", 10), ""}));
 }

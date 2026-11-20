@@ -33,7 +33,8 @@ Result<Ticket> SessionGate::begin(Operation op, std::uint32_t requestId) {
         allowed = (phase == Phase::Suspended || phase == Phase::Reloading) && m_step.has_value();
         break;
     case Operation::Dispose:
-        allowed = (phase == Phase::Suspended || phase == Phase::Running) && !m_step && !m_exception && m_breakpoints.empty();
+        allowed =
+            (phase == Phase::Suspended || phase == Phase::Running) && !m_step && !m_exception && m_breakpoints.empty();
         break;
     }
     if (!allowed)
@@ -77,7 +78,8 @@ Result<void> SessionGate::complete(Ticket ticket, bool success, bool initiallySu
     case Operation::Suspend: return m_state.stopped();
     case Operation::Resume: break;
     case Operation::Breakpoint:
-        if (!eventRequest || m_breakpoints.size() >= 4096 || m_breakpoints.contains(eventRequest) || m_exception == eventRequest || m_step == eventRequest) {
+        if (!eventRequest || m_breakpoints.size() >= 4096 || m_breakpoints.contains(eventRequest) ||
+            m_exception == eventRequest || m_step == eventRequest) {
             close();
             return fail(ErrorCode::Corrupt, "invalid Mono breakpoint request");
         }
@@ -94,9 +96,11 @@ Result<void> SessionGate::complete(Ticket ticket, bool success, bool initiallySu
     case Operation::ClearStep: m_step.reset(); break;
     case Operation::Exception:
         if (!eventRequest || m_breakpoints.contains(eventRequest) || m_step == eventRequest) {
-            close(); return fail(ErrorCode::Corrupt, "invalid Mono exception request");
+            close();
+            return fail(ErrorCode::Corrupt, "invalid Mono exception request");
         }
-        m_exception = eventRequest; break;
+        m_exception = eventRequest;
+        break;
     case Operation::ClearException: m_exception.reset(); break;
     case Operation::Dispose: m_state.ended(); break;
     default: break;
@@ -104,7 +108,8 @@ Result<void> SessionGate::complete(Ticket ticket, bool success, bool initiallySu
     return {};
 }
 void SessionGate::stopped() {
-    if (m_pending && (m_pending->operation == Operation::Step || m_pending->operation == Operation::Breakpoint || m_pending->operation == Operation::Exception))
+    if (m_pending && (m_pending->operation == Operation::Step || m_pending->operation == Operation::Breakpoint ||
+                      m_pending->operation == Operation::Exception))
         m_unknownRequest = true;
     m_pending.reset();
     if (m_state.phase() == Phase::Running)
@@ -113,7 +118,8 @@ void SessionGate::stopped() {
         close();
 }
 void SessionGate::reload() noexcept {
-    if (m_pending && (m_pending->operation == Operation::Step || m_pending->operation == Operation::Breakpoint || m_pending->operation == Operation::Exception))
+    if (m_pending && (m_pending->operation == Operation::Step || m_pending->operation == Operation::Breakpoint ||
+                      m_pending->operation == Operation::Exception))
         m_unknownRequest = true;
     m_pending.reset();
     m_state.reload();
@@ -122,7 +128,8 @@ void SessionGate::reload() noexcept {
 }
 void SessionGate::close() noexcept {
     if (m_state.phase() != Phase::Ended || m_unknownRequest || m_step || m_exception || !m_breakpoints.empty() ||
-        (m_pending && (m_pending->operation == Operation::Step || m_pending->operation == Operation::Breakpoint || m_pending->operation == Operation::Exception)))
+        (m_pending && (m_pending->operation == Operation::Step || m_pending->operation == Operation::Breakpoint ||
+                       m_pending->operation == Operation::Exception)))
         m_unclean = true;
     m_pending.reset();
     m_step.reset();

@@ -6,12 +6,15 @@
 #include <limits>
 #ifdef _WIN32
 #include "frost/io/utf.hpp"
+
 #include <windows.h>
 #else
+#include <sys/stat.h>
+
 #include <array>
 #include <charconv>
 #include <fstream>
-#include <sys/stat.h>
+
 #include <unistd.h>
 #endif
 
@@ -70,7 +73,10 @@ Result<std::function<Result<void>()>> coreClrProcessAdmission(std::uint32_t pid,
     if (!expected)
         return std::unexpected(std::move(expected.error()));
     auto process = std::shared_ptr<void>(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid),
-                                         [](void* handle) { if (handle) CloseHandle(handle); });
+                                         [](void* handle) {
+                                             if (handle)
+                                                 CloseHandle(handle);
+                                         });
     if (!process)
         return fail(ErrorCode::PermissionDenied, "CoreCLR process is unavailable");
     std::function<Result<void>()> admission = [process = std::move(process), expected = std::move(*expected)] {

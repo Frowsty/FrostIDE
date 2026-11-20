@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // UX-16: restore only genuine durable revisions to the original buffer, preserving Save and Undo.
-#include "workbench_rig.hpp"
 #include "../../src/app/src/project_properties_dialog.hpp"
+#include "workbench_rig.hpp"
 #include <QApplication>
 #include <QDialog>
 #include <QListWidget>
@@ -10,11 +10,12 @@
 #include <gtest/gtest.h>
 namespace {
 using namespace frost;
-using app::test::WorkDir;
 using app::test::WorkbenchRig;
+using app::test::WorkDir;
 QDialog* historyDialog() {
     for (auto* widget : QApplication::topLevelWidgets())
-        if (widget->objectName() == QStringLiteral("localHistoryDialog")) return qobject_cast<QDialog*>(widget);
+        if (widget->objectName() == QStringLiteral("localHistoryDialog"))
+            return qobject_cast<QDialog*>(widget);
     return nullptr;
 }
 TEST(WorkbenchEditorExtras, StoredRevisionRestoresWithUndoAndDoesNotSilentlySave) {
@@ -38,16 +39,29 @@ TEST(WorkbenchEditorExtras, StoredRevisionRestoresWithUndoAndDoesNotSilentlySave
     poll.setInterval(10);
     QObject::connect(&poll, &QTimer::timeout, [&] {
         auto* dialog = historyDialog();
-        if (!dialog) return;
+        if (!dialog)
+            return;
         auto* list = dialog->findChild<QListWidget*>(QStringLiteral("localHistoryRevisionList"));
         auto* revert = dialog->findChild<QPushButton*>(QStringLiteral("localHistoryRevertButton"));
-        if (!list || !revert || list->count() < 2) return;
-        if (!selected) { selected = true; list->setCurrentRow(1); return; }
-        if (revert->isEnabled()) { restored = true; revert->click(); }
+        if (!list || !revert || list->count() < 2)
+            return;
+        if (!selected) {
+            selected = true;
+            list->setCurrentRow(1);
+            return;
+        }
+        if (revert->isEnabled()) {
+            restored = true;
+            revert->click();
+        }
     });
     QTimer watchdog;
     watchdog.setSingleShot(true);
-    QObject::connect(&watchdog, &QTimer::timeout, [&] { timeout = true; if (auto* dialog = historyDialog()) dialog->reject(); });
+    QObject::connect(&watchdog, &QTimer::timeout, [&] {
+        timeout = true;
+        if (auto* dialog = historyDialog())
+            dialog->reject();
+    });
     poll.start();
     watchdog.start(5000);
     ASSERT_EQ(rig.window->invoke("vcs.showLocalHistory"), input::InvokeResult::Ran);
@@ -64,10 +78,13 @@ TEST(WorkbenchEditorExtras, StoredRevisionRestoresWithUndoAndDoesNotSilentlySave
 TEST(WorkbenchEditorExtras, HistoryWorkerStopsBeforeOwnerDestructionCompletes) {
     WorkDir dir("history-owner-close");
     const auto path = dir.join("history.db");
-    { auto store = storage::LocalHistory::open(path); ASSERT_TRUE(store); }
+    {
+        auto store = storage::LocalHistory::open(path);
+        ASSERT_TRUE(store);
+    }
     auto* owner = new QWidget;
     QTimer::singleShot(0, [owner] { delete owner; });
     app::showLocalHistoryDialog(owner, path, "missing-key", dir.join("file.txt"), "current", {});
     EXPECT_EQ(historyDialog(), nullptr);
 }
-}
+} // namespace

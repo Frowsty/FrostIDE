@@ -948,7 +948,8 @@ Json exportSarifJson(const InspectionReport& report) {
     if (!report.toolVersion.empty()) {
         driver.set("version", report.toolVersion);
     }
-    if (!report.informationUri.empty()) driver.set("informationUri", report.informationUri);
+    if (!report.informationUri.empty())
+        driver.set("informationUri", report.informationUri);
     driver.set("rules", std::move(rulesArray));
 
     Json tool = Json::object().set("driver", std::move(driver));

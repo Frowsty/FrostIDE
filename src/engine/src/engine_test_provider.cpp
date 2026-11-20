@@ -57,8 +57,7 @@ Result<std::string> checkpoint(io::IFileSystem& fs, const EngineTestProviderOpti
         auto file = fs.physicalPath(*o.expectedProjectFile);
         if (!file)
             return std::unexpected(file.error());
-        if (!same(io::parentPath(*file), *root) ||
-            (status->type != io::FileType::Directory && !same(*file, *target)))
+        if (!same(io::parentPath(*file), *root) || (status->type != io::FileType::Directory && !same(*file, *target)))
             return fail(ErrorCode::PermissionDenied, "engine test project file changed");
         // Preserve the selected file, rather than allowing directory selection to choose another one.
         target = std::move(file);
@@ -75,9 +74,10 @@ struct AdmittedCommandResult {
     rpc::Json result;
     std::string target;
 };
-Result<AdmittedCommandResult> command(io::IFileSystem& fs, io::IProcessLauncher& launcher, const EngineTestProviderOptions& o,
-                          const std::function<bool()>& admitted, std::stop_token stop, std::string name,
-                          rpc::Json params, bool run, std::string_view expectedTarget = {}) {
+Result<AdmittedCommandResult> command(io::IFileSystem& fs, io::IProcessLauncher& launcher,
+                                      const EngineTestProviderOptions& o, const std::function<bool()>& admitted,
+                                      std::stop_token stop, std::string name, rpc::Json params, bool run,
+                                      std::string_view expectedTarget = {}) {
     auto target = checkpoint(fs, o, admitted, stop);
     if (!target)
         return std::unexpected(target.error());
@@ -120,8 +120,8 @@ Result<AdmittedCommandResult> command(io::IFileSystem& fs, io::IProcessLauncher&
     }
     return AdmittedCommandResult{std::move(*outcome->result), std::move(*target)};
 }
-Result<void> listingIdentity(io::IFileSystem& fs, const EngineTestProviderOptions& o,
-                             const EngineTestListing& listing, std::string_view admittedTarget) {
+Result<void> listingIdentity(io::IFileSystem& fs, const EngineTestProviderOptions& o, const EngineTestListing& listing,
+                             std::string_view admittedTarget) {
     auto root = fs.physicalPath(listing.projectPath), file = fs.physicalPath(listing.projectFile);
     if (!root)
         return std::unexpected(root.error());

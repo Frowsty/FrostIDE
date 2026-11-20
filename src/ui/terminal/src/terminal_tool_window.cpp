@@ -18,10 +18,10 @@
 #include "frost/ui/terminal/terminal_view.hpp"
 #include "frost/ui/tr.hpp"
 
-#include <QDir>
-#include <QFileInfo>
 #include <QAction>
+#include <QDir>
 #include <QEvent>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -248,7 +248,8 @@ void TerminalToolWindow::setupHeaderBar(QHBoxLayout& header) {
                 for (const auto& current : latest.profiles)
                     if (current.name == name) {
                         const auto opened = newTabWithShell(current.shell, current.workingDirectory, &current);
-                        if (opened) renameTab(*opened, fromUtf8(current.name));
+                        if (opened)
+                            renameTab(*opened, fromUtf8(current.name));
                         return;
                     }
             });
@@ -272,10 +273,12 @@ void TerminalToolWindow::setupHeaderBar(QHBoxLayout& header) {
     }
     m_shellMenu->addSeparator();
     m_shellMenu->addAction(text("Previous Command (OSC 133)"), this, [this] {
-        if (auto* pane = currentView()) (void)pane->navigateCommand(false);
+        if (auto* pane = currentView())
+            (void)pane->navigateCommand(false);
     });
     m_shellMenu->addAction(text("Next Command (OSC 133)"), this, [this] {
-        if (auto* pane = currentView()) (void)pane->navigateCommand(true);
+        if (auto* pane = currentView())
+            (void)pane->navigateCommand(true);
     });
     m_newTab->setMenu(m_shellMenu);
     m_newTab->setPopupMode(QToolButton::MenuButtonPopup);
@@ -381,7 +384,8 @@ void TerminalToolWindow::showMessage(const QString& message) {
 QString TerminalToolWindow::message() const { return count() == 0 ? m_message->text() : QString(); }
 
 Result<TerminalView*> TerminalToolWindow::createAndStartView(QWidget* parentWidget, const std::string& shellOverride,
-                                                             const std::string& workingDirectory, const term::TerminalProfile* profile) {
+                                                             const std::string& workingDirectory,
+                                                             const term::TerminalProfile* profile) {
     if (m_stopped || (m_env.available && !m_env.available())) {
         return fail(ErrorCode::Cancelled, "terminal is shutting down");
     }
@@ -394,8 +398,9 @@ Result<TerminalView*> TerminalToolWindow::createAndStartView(QWidget* parentWidg
         return failWith(Error(ErrorCode::InvalidArgument, "no terminal launcher"));
     }
     if (profile && (profile->shell.empty() || !io::isAbsolutePath(profile->shell) ||
-        (!profile->workingDirectory.empty() && !io::isAbsolutePath(profile->workingDirectory))))
-        return failWith(Error(ErrorCode::InvalidArgument, "personal terminal profiles require absolute shell and working-directory paths"));
+                    (!profile->workingDirectory.empty() && !io::isAbsolutePath(profile->workingDirectory))))
+        return failWith(Error(ErrorCode::InvalidArgument,
+                              "personal terminal profiles require absolute shell and working-directory paths"));
     const TerminalContext context = m_env.context ? m_env.context() : TerminalContext{};
     if (profile && !context.projectRoot.empty() && !context.trusted)
         return failWith(Error(ErrorCode::Untrusted, "trust the project before starting a personal terminal profile"));
@@ -415,8 +420,8 @@ Result<TerminalView*> TerminalToolWindow::createAndStartView(QWidget* parentWidg
     if (profile)
         launch->spec.arguments = profile->arguments;
     const auto current = m_env.context ? m_env.context() : TerminalContext{};
-    if (current.projectRoot != context.projectRoot || current.trusted != context.trusted || current.generation != context.generation || m_stopped ||
-        (m_env.available && !m_env.available()))
+    if (current.projectRoot != context.projectRoot || current.trusted != context.trusted ||
+        current.generation != context.generation || m_stopped || (m_env.available && !m_env.available()))
         return failWith(Error(ErrorCode::Cancelled, "terminal context changed before launch"));
     auto* view = new TerminalView(parentWidget);
     applyAppearance(*view);
@@ -467,8 +472,8 @@ Result<int> TerminalToolWindow::newTab(const std::string& workingDirectory) {
     return newTabWithShell({}, workingDirectory);
 }
 
-Result<int> TerminalToolWindow::newTabWithShell(const std::string& shellExecutable,
-                                                const std::string& workingDirectory, const term::TerminalProfile* profile) {
+Result<int> TerminalToolWindow::newTabWithShell(const std::string& shellExecutable, const std::string& workingDirectory,
+                                                const term::TerminalProfile* profile) {
     auto* splitter = new QSplitter(Qt::Horizontal, m_stack);
     splitter->setChildrenCollapsible(false);
     splitter->setHandleWidth(2);
@@ -500,18 +505,24 @@ Result<int> TerminalToolWindow::newTabWithProcess(const io::ProcessSpec& spec, c
     const auto context = m_env.context ? m_env.context() : TerminalContext{};
     if (m_stopped || !m_env.launcher || (m_env.available && !m_env.available()))
         return fail(ErrorCode::Cancelled, "terminal is unavailable");
-    const auto relative = QDir(QString::fromStdString(context.projectRoot)).relativeFilePath(QFileInfo(QString::fromStdString(spec.executable)).canonicalFilePath());
-    const bool inside = !relative.isEmpty() && relative != ".." && !relative.startsWith("../") && !QDir::isAbsolutePath(relative);
+    const auto relative = QDir(QString::fromStdString(context.projectRoot))
+                              .relativeFilePath(QFileInfo(QString::fromStdString(spec.executable)).canonicalFilePath());
+    const bool inside =
+        !relative.isEmpty() && relative != ".." && !relative.startsWith("../") && !QDir::isAbsolutePath(relative);
     if (!context.trusted || context.projectRoot.empty() || spec.workingDirectory != context.projectRoot ||
         !io::isAbsolutePath(spec.executable) || inside)
-        return fail(ErrorCode::Untrusted, "agent process requires an absolute application outside the trusted workspace");
+        return fail(ErrorCode::Untrusted,
+                    "agent process requires an absolute application outside the trusted workspace");
     auto* splitter = new QSplitter(Qt::Horizontal, m_stack);
     auto* view = new TerminalView(splitter);
     applyAppearance(*view);
     splitter->addWidget(view);
     const auto settings = m_env.settings ? m_env.settings() : term::TerminalSettings{};
     auto started = view->start(*m_env.launcher, spec, settings.scrollbackLines);
-    if (!started) { delete splitter; return std::unexpected(started.error()); }
+    if (!started) {
+        delete splitter;
+        return std::unexpected(started.error());
+    }
     attachPaneSignals(view);
     m_stack->addWidget(splitter);
     Tab tab;
@@ -529,7 +540,8 @@ Result<int> TerminalToolWindow::newTabWithProcess(const io::ProcessSpec& spec, c
 }
 Result<int> TerminalIntegration::openProcess(const io::ProcessSpec& spec, const QString& title) {
     auto* window = showToolWindow(true);
-    if (!window) return fail(ErrorCode::NotFound, "the Terminal tool window is not available");
+    if (!window)
+        return fail(ErrorCode::NotFound, "the Terminal tool window is not available");
     return window->newTabWithProcess(spec, title);
 }
 Result<TerminalView*> TerminalToolWindow::splitTab(int index, const std::string& workingDirectory) {

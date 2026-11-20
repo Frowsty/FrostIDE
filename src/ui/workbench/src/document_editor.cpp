@@ -5,10 +5,10 @@
 // with the document's state.
 
 #include "frost/ui/workbench/document_editor.hpp"
-#include "frost/ui/workbench/large_file_view.hpp"
 
 #include "frost/document/load_service.hpp"
 #include "frost/ui/icon_ids.hpp"
+#include "frost/ui/workbench/large_file_view.hpp"
 
 #include "workbench_util.hpp"
 #include <QHBoxLayout>

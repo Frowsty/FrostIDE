@@ -5,7 +5,6 @@
 // into the shell window (split from workbench.cpp, FND-12a).
 
 #include "frost/app/workbench.hpp"
-#include "project_open_broker.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/uri.hpp"
@@ -32,11 +31,12 @@
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "lua_unit_tests_window.hpp"
+#include "managed_tools_window.hpp"
 #include "project_edit_process.hpp"
+#include "project_open_broker.hpp"
 #include "project_properties_dialog.hpp"
 #include "settings_dialog.hpp"
 #include "unit_tests_window.hpp"
-#include "managed_tools_window.hpp"
 #include "unity_control.hpp"
 #include "unity_tests_window.hpp"
 #include <QCoreApplication>

@@ -255,7 +255,8 @@ Result<void> Workbench::exportCppInspectionSarif(std::string_view outputPath) {
     if (!trust.trusted || !m_cppInspectionTrustRevision || trust.revision != *m_cppInspectionTrustRevision)
         return fail(ErrorCode::Untrusted, "Project trust changed after the inspection; run Inspect Code again");
     if (m_cppAnalyzerExportCheck) {
-        if (auto current = m_cppAnalyzerExportCheck(); !current) return current;
+        if (auto current = m_cppAnalyzerExportCheck(); !current)
+            return current;
     }
     auto normalized = io::normalizePath(outputPath);
     if (!normalized)

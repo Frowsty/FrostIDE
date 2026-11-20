@@ -465,7 +465,7 @@ struct WorkbenchOptions {
     debug::AdapterFactory debugAdapterFactory{}; // Optional adapter override for integration tests.
     std::function<std::optional<UnityMonoDebugSelection>(std::string_view)> selectUnityDebug; // Test-only picker seam.
     std::function<std::optional<UnityIl2cppNativeSelection>(std::string_view)> selectUnityNativeDebug; // Test picker.
-    std::string managedPdbGuardPath;             // Test override; normally resolved beside the application.
+    std::string managedPdbGuardPath; // Test override; normally resolved beside the application.
     std::function<std::optional<ManagedDebugSelection>(std::string_view)> selectManagedDebug; // Test seam.
     std::function<QString(const QString&)> selectExistingProjectSource;                       // Test seam.
     // Replaces MSBuild (tests); empty runs MSBuild.
@@ -1302,8 +1302,8 @@ private:
     std::function<Result<void>()> m_cppAnalyzerExportCheck;
     std::shared_ptr<sched::ResourceGovernor> m_resourceGovernor;
     std::stop_source m_remoteStop;
-    bool m_remoteBuildActive=false;
-    std::uint64_t m_remoteBuildGeneration=0;
+    bool m_remoteBuildActive = false;
+    std::uint64_t m_remoteBuildGeneration = 0;
     std::shared_ptr<lang::ClangdService> m_clangd;
     // The root already told that clangd was not found (the notice appears once per project; ADR 0078).
     std::string m_clangdUnavailableNotifiedRoot;

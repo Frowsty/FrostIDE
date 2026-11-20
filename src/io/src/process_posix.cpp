@@ -664,7 +664,8 @@ Result<detail::SpawnedChild> spawnPosixChild(const ProcessSpec& spec) {
     }
     if (spec.sandbox) {
         auto enforcing = detail::prepareLinuxSandboxLaunch(spec);
-        if (!enforcing) return std::unexpected(enforcing.error());
+        if (!enforcing)
+            return std::unexpected(enforcing.error());
         return spawnPosixChild(*enforcing);
     }
     // Decided before any pipe is created, since a new pipe may take a free descriptor 0-2.

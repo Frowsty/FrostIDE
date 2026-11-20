@@ -4,12 +4,12 @@
 #include "frost/core/error.hpp"
 #include "frost/io/local_ipc.hpp"
 #include "frost/io/process.hpp"
-#include <QPointer>
-#include <map>
-#include <chrono>
 
 #include <QObject>
+#include <QPointer>
 
+#include <chrono>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -49,7 +49,7 @@ public:
     [[nodiscard]] Result<void> start(); // Call only after first frame.
     // Called on accepted application shutdown; completes close tickets through IPC before server exit.
     void finishWaits();
-    void projectChanged();              // Rebind on a project switch; already-owned roots remain unchanged.
+    void projectChanged(); // Rebind on a project switch; already-owned roots remain unchanged.
 private:
     [[nodiscard]] Result<std::string> accept(const std::string& request);
     void claimCurrent(unsigned attempts);
@@ -58,7 +58,10 @@ private:
     std::string m_root;
     std::unique_ptr<io::LocalIpcOwner> m_owner;
     bool m_firstFrame = false;
-    struct WaitTicket { QPointer<QObject> editor; std::chrono::steady_clock::time_point touched; };
+    struct WaitTicket {
+        QPointer<QObject> editor;
+        std::chrono::steady_clock::time_point touched;
+    };
     std::map<std::string, WaitTicket, std::less<>> m_waiting;
     QEventLoop* m_waitCloseLoop = nullptr;
     bool m_finishingWaits = false;

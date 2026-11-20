@@ -141,9 +141,8 @@ llvm::json::Object targetJson(const Target& target) {
 }
 
 llvm::json::Object nameLiteralJson(const NameLiteral& literal) {
-    return llvm::json::Object{{"range", rangeJson(literal.range)},
-                              {"decodedValue", literal.decodedValue},
-                              {"spelling", literal.spelling}};
+    return llvm::json::Object{
+        {"range", rangeJson(literal.range)}, {"decodedValue", literal.decodedValue}, {"spelling", literal.spelling}};
 }
 
 void printJson(llvm::json::Object object) {

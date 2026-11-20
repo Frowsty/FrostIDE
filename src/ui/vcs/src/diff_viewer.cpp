@@ -1,22 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 // Editor-backed side-by-side comparison, with normal history/find/edit commands and guarded Apply.
 #include "frost/ui/vcs/diff_viewer.hpp"
+
 #include "frost/input/simulated_keyboard.hpp"
 #include "frost/ui/frost_style.hpp"
 #include "frost/ui/vcs/git_controller.hpp"
+
 #include <QGridLayout>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
-#include <QPushButton>
 #include <QPointer>
+#include <QPushButton>
 #include <QScrollBar>
+
 #include <algorithm>
 
 namespace frost::ui {
 namespace {
 std::unique_ptr<EditorKeyRouting> standaloneRouting(const EditorServices& services) {
-    if (services.keys || services.actionHost) return {};
+    if (services.keys || services.actionHost)
+        return {};
     auto active = input::readActiveLayout();
     const auto layout = active ? *active : input::simulatedLayout(input::SimulatedLayoutId::EnUs);
 #ifdef _WIN32
@@ -27,7 +31,7 @@ std::unique_ptr<EditorKeyRouting> standaloneRouting(const EditorServices& servic
     auto routing = EditorKeyRouting::createStandalone(layout, input::currentKeymapPlatform(), platform);
     return routing ? std::move(*routing) : nullptr;
 }
-}
+} // namespace
 DiffColors DiffColors::current() {
     if (const FrostStyle* style = FrostStyle::current(); style != nullptr) {
         return DiffColors{style->color(ColorKey::DiffInsertedBackground), style->color(ColorKey::DiffDeletedBackground),
@@ -41,8 +45,14 @@ DiffColors DiffColors::current() {
 DiffViewer::DiffViewer(QWidget* parent, EditorServices services)
     : QWidget(parent), m_leftTitle(new QLabel(this)), m_rightTitle(new QLabel(this)),
       m_keys(standaloneRouting(services)), m_leftDocument(std::make_unique<text::Document>(text::TextBuffer{})),
-      m_rightDocument(std::make_unique<text::Document>(text::TextBuffer{})),
-      m_left(new EditorView(*m_leftDocument, "diff-left.cpp", [&] { if (m_keys) services.keys = m_keys.get(); return services; }(), {}, this)),
+      m_rightDocument(std::make_unique<text::Document>(text::TextBuffer{})), m_left(new EditorView(
+                                                                                 *m_leftDocument, "diff-left.cpp",
+                                                                                 [&] {
+                                                                                     if (m_keys)
+                                                                                         services.keys = m_keys.get();
+                                                                                     return services;
+                                                                                 }(),
+                                                                                 {}, this)),
       m_right(new EditorView(*m_rightDocument, "diff-right.cpp", services, {}, this)),
       m_apply(new QPushButton(tr("Apply Working Copy"), this)), m_status(new QLabel(this)) {
     m_services = services;
@@ -64,7 +74,8 @@ DiffViewer::DiffViewer(QWidget* parent, EditorServices services)
     connect(m_right->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { syncFrom(vcs::DiffSide::Right); });
     connect(m_right, &EditorView::textChanged, this, [this] { workingEdited(); });
     connect(m_apply, &QPushButton::clicked, this, [this] {
-        if (auto applied = applyWorkingCopy(); !applied) m_status->setText(QString::fromStdString(applied.error().message()));
+        if (auto applied = applyWorkingCopy(); !applied)
+            m_status->setText(QString::fromStdString(applied.error().message()));
     });
 }
 DiffViewer::~DiffViewer() {
@@ -74,13 +85,17 @@ DiffViewer::~DiffViewer() {
 }
 void DiffViewer::setDiff(vcs::SideBySideDiff diff, const QString& leftTitle, const QString& rightTitle) {
     if (hasWorkingEdits()) {
-        m_status->setText(tr("Working copy changed elsewhere. Apply validates the source before writing; your comparison edits were retained."));
+        m_status->setText(tr("Working copy changed elsewhere. Apply validates the source before writing; your "
+                             "comparison edits were retained."));
         return;
     }
     m_syncing = true;
     auto left = text::Document::fromUtf8(std::string(diff.left().bytes()));
     auto right = text::Document::fromUtf8(std::string(diff.right().bytes()));
-    if (!left || !right) { m_syncing = false; return; }
+    if (!left || !right) {
+        m_syncing = false;
+        return;
+    }
     delete m_left;
     delete m_right;
     *m_leftDocument = std::move(*left);
@@ -108,7 +123,8 @@ void DiffViewer::setDiff(vcs::SideBySideDiff diff, const QString& leftTitle, con
     m_status->clear();
     applyHighlights();
     m_current.reset();
-    if (!m_diff.blocks().empty()) goToBlock(0);
+    if (!m_diff.blocks().empty())
+        goToBlock(0);
 }
 QString DiffViewer::leftTitle() const { return m_leftTitle->text(); }
 QString DiffViewer::rightTitle() const { return m_rightTitle->text(); }
@@ -120,11 +136,13 @@ void DiffViewer::applyHighlights() {
     for (const auto& block : m_diff.blocks()) {
         const bool modified = block.kind() == vcs::LineChangeKind::Modified;
         for (auto line = block.hunk.a.begin; line < block.hunk.a.end; ++line)
-            left.push_back({.range = m_diff.left().lineRange(line), .style = DecorationStyle::Background,
-                .color = modified ? colors.modified : colors.deleted});
+            left.push_back({.range = m_diff.left().lineRange(line),
+                            .style = DecorationStyle::Background,
+                            .color = modified ? colors.modified : colors.deleted});
         for (auto line = block.hunk.b.begin; line < block.hunk.b.end; ++line)
-            right.push_back({.range = m_diff.right().lineRange(line), .style = DecorationStyle::Background,
-                .color = modified ? colors.modified : colors.inserted});
+            right.push_back({.range = m_diff.right().lineRange(line),
+                             .style = DecorationStyle::Background,
+                             .color = modified ? colors.modified : colors.inserted});
         for (const auto& inner : block.inner) {
             left.push_back({.range = inner.a, .style = DecorationStyle::Background, .color = colors.innerChange});
             right.push_back({.range = inner.b, .style = DecorationStyle::Background, .color = colors.innerChange});
@@ -137,16 +155,24 @@ int DiffViewer::highlightCount(vcs::DiffSide side) const {
     return static_cast<int>((side == vcs::DiffSide::Left ? m_left : m_right)->decorations().size());
 }
 bool DiffViewer::nextChange() {
-    auto next = m_diff.blockAfter(vcs::DiffSide::Right, LineIndex{static_cast<std::uint32_t>(m_right->status().line - 1)});
-    if (m_current && (!next || *next <= *m_current) && *m_current + 1 < m_diff.blocks().size()) next = *m_current + 1;
-    if (!next) return false;
-    goToBlock(*next); return true;
+    auto next =
+        m_diff.blockAfter(vcs::DiffSide::Right, LineIndex{static_cast<std::uint32_t>(m_right->status().line - 1)});
+    if (m_current && (!next || *next <= *m_current) && *m_current + 1 < m_diff.blocks().size())
+        next = *m_current + 1;
+    if (!next)
+        return false;
+    goToBlock(*next);
+    return true;
 }
 bool DiffViewer::previousChange() {
-    auto previous = m_diff.blockBefore(vcs::DiffSide::Right, LineIndex{static_cast<std::uint32_t>(m_right->status().line - 1)});
-    if (m_current && (!previous || *previous >= *m_current)) previous = *m_current > 0 ? std::optional<std::size_t>(*m_current - 1) : std::nullopt;
-    if (!previous) return false;
-    goToBlock(*previous); return true;
+    auto previous =
+        m_diff.blockBefore(vcs::DiffSide::Right, LineIndex{static_cast<std::uint32_t>(m_right->status().line - 1)});
+    if (m_current && (!previous || *previous >= *m_current))
+        previous = *m_current > 0 ? std::optional<std::size_t>(*m_current - 1) : std::nullopt;
+    if (!previous)
+        return false;
+    goToBlock(*previous);
+    return true;
 }
 void DiffViewer::goToBlock(std::size_t index) {
     m_current = index;
@@ -162,10 +188,12 @@ void DiffViewer::scrollToLine(vcs::DiffSide side, int line) {
     (side == vcs::DiffSide::Left ? m_left : m_right)->verticalScrollBar()->setValue(line);
 }
 void DiffViewer::syncFrom(vcs::DiffSide side) {
-    if (m_syncing) return;
+    if (m_syncing)
+        return;
     m_syncing = true;
     const auto other = side == vcs::DiffSide::Left ? m_right : m_left;
-    other->verticalScrollBar()->setValue(static_cast<int>(m_diff.mapLine(side, LineIndex{static_cast<std::uint32_t>(std::max(0, topLine(side)))}).value()));
+    other->verticalScrollBar()->setValue(static_cast<int>(
+        m_diff.mapLine(side, LineIndex{static_cast<std::uint32_t>(std::max(0, topLine(side)))}).value()));
     m_syncing = false;
 }
 void DiffViewer::setApplyHandler(ApplyHandler handler) {
@@ -178,19 +206,26 @@ bool DiffViewer::hasWorkingEdits() const {
     return m_applyHandler && m_rightDocument->committedText().text() != m_originalWorking;
 }
 void DiffViewer::workingEdited() {
-    if (m_syncing) return;
-    auto recomputed = vcs::SideBySideDiff::compute(std::string(m_diff.left().bytes()), m_rightDocument->committedText().text());
-    if (!recomputed) { m_status->setText(QString::fromStdString(recomputed.error().message())); return; }
+    if (m_syncing)
+        return;
+    auto recomputed =
+        vcs::SideBySideDiff::compute(std::string(m_diff.left().bytes()), m_rightDocument->committedText().text());
+    if (!recomputed) {
+        m_status->setText(QString::fromStdString(recomputed.error().message()));
+        return;
+    }
     m_diff = std::move(*recomputed);
     applyHighlights();
     m_current.reset();
     m_apply->setEnabled(hasWorkingEdits());
 }
 Result<void> DiffViewer::applyWorkingCopy() {
-    if (!m_applyHandler) return fail(ErrorCode::Unsupported, "This comparison is read-only");
+    if (!m_applyHandler)
+        return fail(ErrorCode::Unsupported, "This comparison is read-only");
     const auto current = m_rightDocument->committedText().text();
     auto applied = m_applyHandler(m_originalWorking, current);
-    if (!applied) return applied;
+    if (!applied)
+        return applied;
     m_originalWorking = current;
     m_right->markSaved();
     m_apply->setEnabled(false);
@@ -200,10 +235,17 @@ Result<void> DiffViewer::applyWorkingCopy() {
 bool DiffViewer::eventFilter(QObject* watched, QEvent* event) {
     if ((watched == m_left || watched == m_right) && event->type() == QEvent::KeyPress) {
         const auto* key = static_cast<QKeyEvent*>(event);
-        if (key->key() == Qt::Key_F7 && key->modifiers() == Qt::NoModifier) { nextChange(); return true; }
-        if (key->key() == Qt::Key_F7 && key->modifiers() == Qt::ShiftModifier) { previousChange(); return true; }
+        if (key->key() == Qt::Key_F7 && key->modifiers() == Qt::NoModifier) {
+            nextChange();
+            return true;
+        }
+        if (key->key() == Qt::Key_F7 && key->modifiers() == Qt::ShiftModifier) {
+            previousChange();
+            return true;
+        }
         if (key->matches(QKeySequence::Save) && m_applyHandler) {
-            if (auto saved = applyWorkingCopy(); !saved) m_status->setText(QString::fromStdString(saved.error().message()));
+            if (auto saved = applyWorkingCopy(); !saved)
+                m_status->setText(QString::fromStdString(saved.error().message()));
             return true;
         }
     }

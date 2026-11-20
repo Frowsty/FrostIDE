@@ -209,8 +209,8 @@ struct DiscoveredTestEntry {
                                                                                  std::string_view projectPath = {},
                                                                                  std::string_view solutionName = {});
 
-void showLocalHistoryDialog(QWidget* parent, const std::string& historyPath, const std::string& fileKey, const std::string& filePath,
-                            const std::string& currentContent,
+void showLocalHistoryDialog(QWidget* parent, const std::string& historyPath, const std::string& fileKey,
+                            const std::string& filePath, const std::string& currentContent,
                             std::function<Result<void>(const std::string& restoredContent)> onRestore);
 
 } // namespace frost::app

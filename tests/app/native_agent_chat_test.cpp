@@ -10,7 +10,12 @@ TEST(NativeAgentChat, CreatesTheCheckpointSelectorWithoutStartingASession) {
     struct ConfigEnvironment {
         bool existed = qEnvironmentVariableIsSet("CLAUDE_CONFIG_DIR");
         QByteArray previous = qgetenv("CLAUDE_CONFIG_DIR");
-        ~ConfigEnvironment() { if (existed) qputenv("CLAUDE_CONFIG_DIR", previous); else qunsetenv("CLAUDE_CONFIG_DIR"); }
+        ~ConfigEnvironment() {
+            if (existed)
+                qputenv("CLAUDE_CONFIG_DIR", previous);
+            else
+                qunsetenv("CLAUDE_CONFIG_DIR");
+        }
     } environment;
     qputenv("CLAUDE_CONFIG_DIR", QByteArray::fromStdString(dir.join("isolated-cli-config")));
     frost::app::test::WorkbenchRig rig(dir);
@@ -24,4 +29,4 @@ TEST(NativeAgentChat, CreatesTheCheckpointSelectorWithoutStartingASession) {
     EXPECT_FALSE(selector->accessibleName().isEmpty());
     EXPECT_FALSE(rig.workbench->agentBridgeActive());
 }
-}
+} // namespace

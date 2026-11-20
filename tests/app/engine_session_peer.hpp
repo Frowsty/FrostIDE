@@ -136,7 +136,7 @@ public:
         const auto found = m_replied.find(std::string(method));
         return found == m_replied.end() ? 0 : found->second;
     }
-    void enableDocumentTools() { m_documentTools=true; }
+    void enableDocumentTools() { m_documentTools = true; }
     void hold(std::string method) {
         std::lock_guard lock(m_mutex);
         m_held.insert(std::move(method));
@@ -504,7 +504,7 @@ private:
     std::uint16_t m_port = 0;
     std::jthread m_worker;
     std::uint16_t m_luaDebugPort = 0;
-    std::atomic<bool> m_documentTools=false;
+    std::atomic<bool> m_documentTools = false;
     mutable std::mutex m_mutex;
     std::vector<Json> m_requests;
     std::map<std::string, std::size_t> m_replied;

@@ -32,7 +32,8 @@ Result<std::vector<std::string>> Workbench::discoverProjectVisualizers(const deb
     const QPointer<UnrealBuildBackend> unreal(m_unreal.get());
     const auto unrealVisualizer = unreal ? unreal->visualizer() : std::string{};
     debug::NatvisDiscovery request;
-    if (!unrealVisualizer.empty()) request.files.push_back(unrealVisualizer);
+    if (!unrealVisualizer.empty())
+        request.files.push_back(unrealVisualizer);
     std::set<std::string> directories{root};
     auto addFile = [&](const std::string& path) {
         if (QString::fromStdString(path).endsWith(QStringLiteral(".natvis"), Qt::CaseInsensitive))
@@ -110,9 +111,9 @@ Result<std::vector<std::string>> Workbench::discoverProjectVisualizers(const deb
     if (!*result)
         return std::unexpected(result->error());
     const auto now = m_services.trust.snapshot(root);
-    if (m_projectRoot != root || !now.trusted || now.revision != trust.revision ||
-        m_unreal.get() != unreal.data() || (unreal && unreal->visualizer() != unrealVisualizer) ||
-        explorerSolutionModel() != solution || (m_cmake ? m_cmake->shownModel() : nullptr) != model)
+    if (m_projectRoot != root || !now.trusted || now.revision != trust.revision || m_unreal.get() != unreal.data() ||
+        (unreal && unreal->visualizer() != unrealVisualizer) || explorerSolutionModel() != solution ||
+        (m_cmake ? m_cmake->shownModel() : nullptr) != model)
         return fail(ErrorCode::Busy, "Project/trust changed during visualizer discovery");
     for (const auto& diagnostic : (**result).diagnostics)
         notify(QStringLiteral("Native visualizers"), QString::fromStdString(diagnostic), ui::NotificationKind::Warning);

@@ -8,9 +8,8 @@
 
 #include "debug/debug_test_util.hpp"
 #include "engine_unit_tests_source.hpp"
-#include "workbench_rig.hpp"
 #include "support/directory_link.hpp"
-#include <filesystem>
+#include "workbench_rig.hpp"
 #include <QLabel>
 #include <QPushButton>
 #include <QTabWidget>
@@ -18,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <filesystem>
 #include <memory>
 #include <stop_token>
 #include <thread>
@@ -226,24 +226,30 @@ TEST(EngineUnitTestsPhysicalSource, DiscoveryCliAliasRetargetBeforeFirstWorkerRe
     dir.write("second/FrostEditor-Cli", "same bytes");
     auto& fs = io::realFileSystem();
     std::error_code timeError;
-    const auto firstTime = std::filesystem::last_write_time(io::toStdPath(dir.join("first/FrostEditor-Cli")).value(), timeError);
+    const auto firstTime =
+        std::filesystem::last_write_time(io::toStdPath(dir.join("first/FrostEditor-Cli")).value(), timeError);
     ASSERT_FALSE(timeError) << timeError.message();
     std::filesystem::last_write_time(io::toStdPath(dir.join("second/FrostEditor-Cli")).value(), firstTime, timeError);
     ASSERT_FALSE(timeError) << timeError.message();
-    ASSERT_EQ(fs.status(dir.join("first/FrostEditor-Cli")).value(), fs.status(dir.join("second/FrostEditor-Cli")).value());
+    ASSERT_EQ(fs.status(dir.join("first/FrostEditor-Cli")).value(),
+              fs.status(dir.join("second/FrostEditor-Cli")).value());
     const auto alias = dir.join("tools");
     ASSERT_NO_FATAL_FAILURE(frost::test::makeDirectoryLink(alias, dir.join("first")));
     auto trusted = project::TrustStore::open(fs, dir.join("trust.txt"));
     ASSERT_TRUE(trusted);
     const auto root = dir.join("project");
     ASSERT_TRUE((*trusted)->trust(root));
-    EngineUnitTestsCapture input{root, fs.physicalPath(root).value(), lang::documentKey(fs.physicalPath(root).value()),
-                                dir.join("project/Game.frostproj"), io::joinPath(alias, "FrostEditor-Cli").value(),
-                                (*trusted)->snapshot(root).revision,
-                                std::make_shared<std::atomic<std::uint64_t>>(1),
-                                std::make_shared<std::atomic<bool>>(true), {},
-                                fs.status(dir.join("first/FrostEditor-Cli")).value(),
-                                fs.physicalPath(dir.join("first/FrostEditor-Cli")).value()};
+    EngineUnitTestsCapture input{root,
+                                 fs.physicalPath(root).value(),
+                                 lang::documentKey(fs.physicalPath(root).value()),
+                                 dir.join("project/Game.frostproj"),
+                                 io::joinPath(alias, "FrostEditor-Cli").value(),
+                                 (*trusted)->snapshot(root).revision,
+                                 std::make_shared<std::atomic<std::uint64_t>>(1),
+                                 std::make_shared<std::atomic<bool>>(true),
+                                 {},
+                                 fs.status(dir.join("first/FrostEditor-Cli")).value(),
+                                 fs.physicalPath(dir.join("first/FrostEditor-Cli")).value()};
     auto source = captureEngineTestsSource(fs, **trusted, input);
     ASSERT_TRUE(source);
     ASSERT_TRUE(fs.removeFile(alias));
@@ -295,11 +301,17 @@ TEST(EngineUnitTestsPhysicalSource, SameParentSelectedFileAliasLatchesOnFirstWor
     auto trusted = project::TrustStore::open(fs, dir.join("trust.txt"));
     ASSERT_TRUE(trusted);
     ASSERT_TRUE((*trusted)->trust(root));
-    EngineUnitTestsCapture input{root, root, lang::documentKey(root), alias, dir.join("FrostEditor-Cli"),
-                                (*trusted)->snapshot(root).revision,
-                                std::make_shared<std::atomic<std::uint64_t>>(1),
-                                std::make_shared<std::atomic<bool>>(true), {}, fs.status(dir.join("FrostEditor-Cli")).value(),
-                                fs.physicalPath(dir.join("FrostEditor-Cli")).value()};
+    EngineUnitTestsCapture input{root,
+                                 root,
+                                 lang::documentKey(root),
+                                 alias,
+                                 dir.join("FrostEditor-Cli"),
+                                 (*trusted)->snapshot(root).revision,
+                                 std::make_shared<std::atomic<std::uint64_t>>(1),
+                                 std::make_shared<std::atomic<bool>>(true),
+                                 {},
+                                 fs.status(dir.join("FrostEditor-Cli")).value(),
+                                 fs.physicalPath(dir.join("FrostEditor-Cli")).value()};
     auto source = captureEngineTestsSource(fs, **trusted, input);
     ASSERT_TRUE(source);
     const auto physicalFirst = fs.physicalPath(alias);

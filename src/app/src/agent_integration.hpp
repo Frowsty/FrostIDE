@@ -2,6 +2,7 @@
 // Consent-scoped C1 editor tools and opt-in unmodified CLI Agent Terminal ownership.
 #pragma once
 #include <QObject>
+
 #include <memory>
 namespace frost::app {
 class Workbench;
@@ -14,8 +15,9 @@ public:
     void mention();
     bool active() const;
     unsigned short port() const;
+
 private:
     struct State;
     std::unique_ptr<State> m;
 };
-}
+} // namespace frost::app

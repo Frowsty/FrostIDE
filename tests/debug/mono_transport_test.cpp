@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Test Mono loopback transport and selected-process verification.
+#include "frost/debug/mono_linux_peer.hpp"
 #include "frost/debug/mono_transport.hpp"
 #include "frost/debug/mono_windows_peer.hpp"
-#include "frost/debug/mono_linux_peer.hpp"
 
 #include <gtest/gtest.h>
 
@@ -387,7 +387,8 @@ TEST(MonoTransport, CancellationDuringPostReceiveVerificationDiscardsResult) {
 TEST(MonoTransport, LinuxSocketParserRequiresExactReverseEstablishedLoopbackAndUniqueInode) {
     const std::string row = "0: 0100007F:15B3 0100007F:C001 01 0:0 00:0 0 1000 0 12345 1\n";
     auto inode = linuxMonoSocketInode(row, 49153, 5555);
-    ASSERT_TRUE(inode); EXPECT_EQ(*inode, 12345u);
+    ASSERT_TRUE(inode);
+    EXPECT_EQ(*inode, 12345u);
     EXPECT_FALSE(linuxMonoSocketInode(row, 5555, 49153));
     EXPECT_FALSE(linuxMonoSocketInode(row + row, 49153, 5555));
     EXPECT_FALSE(linuxMonoSocketInode("0: 00000000:15B3 0100007F:C001 01 0:0 00:0 0 1000 0 12345\n", 49153, 5555));
@@ -405,16 +406,19 @@ TEST(MonoTransport, LinuxHeldProcessOwnsActualReverseSocketAndRevocationRefusesI
     EXPECT_FALSE((*peer)->identity().image.empty());
     std::jthread server([&] {
         const auto accepted = listener.acceptOne();
-        if (accepted == invalid) return;
+        if (accepted == invalid)
+            return;
         char byte = 0;
         static_cast<void>(recv(accepted, &byte, 1, 0));
         closeSocket(accepted);
     });
     auto stream = BinaryLoopback::connect(listener.port, std::chrono::steady_clock::now() + 3s, {},
-        [peer = *peer](auto local, auto remote, auto until, auto stop) { return peer->verify(local, remote, until, stop); });
+                                          [peer = *peer](auto local, auto remote, auto until, auto stop) {
+                                              return peer->verify(local, remote, until, stop);
+                                          });
     ASSERT_TRUE(stream);
     current.store(false);
-    const std::array<std::uint8_t,1> data{1};
+    const std::array<std::uint8_t, 1> data{1};
     EXPECT_FALSE((*stream)->write(data));
     (*stream)->close();
 }

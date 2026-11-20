@@ -220,13 +220,18 @@ TEST(WorkbenchTemplates, ScriptedHostMembershipAndClassFilesShareOneProductionAp
 } // namespace frost::app::test
 namespace frost::app::test {
 TEST(WorkbenchTemplates, FrostComponentRefusesFolderWithoutExecutableMembershipBeforeAnyCreation) {
-    WorkDir dir("templates-component-needs-executable");dir.write("workspace/keep.txt","unchanged");
-    WorkbenchRig rig(dir,optionsFor(dir));ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
+    WorkDir dir("templates-component-needs-executable");
+    dir.write("workspace/keep.txt", "unchanged");
+    WorkbenchRig rig(dir, optionsFor(dir));
+    ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
     ASSERT_TRUE(rig.workbench->openFolder(dir.join("workspace")));
-    auto spec=classSpec(dir);spec.file.kind=lang::FileTemplateKind::FrostComponent;spec.file.name="HealthComponent";
-    auto created=rig.workbench->createSourceTemplate(spec);ASSERT_FALSE(created);
-    EXPECT_EQ(created.error().code(),ErrorCode::Unsupported);
+    auto spec = classSpec(dir);
+    spec.file.kind = lang::FileTemplateKind::FrostComponent;
+    spec.file.name = "HealthComponent";
+    auto created = rig.workbench->createSourceTemplate(spec);
+    ASSERT_FALSE(created);
+    EXPECT_EQ(created.error().code(), ErrorCode::Unsupported);
     EXPECT_FALSE(io::realFileSystem().exists(dir.join("workspace/HealthComponent.hpp")).value_or(true));
     EXPECT_FALSE(io::realFileSystem().exists(dir.join("workspace/HealthComponent.cpp")).value_or(true));
 }
-}
+} // namespace frost::app::test

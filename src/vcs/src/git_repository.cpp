@@ -489,12 +489,14 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
         std::set<std::string> selected;
         for (const auto& path : request.paths) {
             auto relative = relativePath(path);
-            if (!relative) return std::unexpected(std::move(relative.error()));
+            if (!relative)
+                return std::unexpected(std::move(relative.error()));
             const auto* entry = selectedStatus.find(*relative);
             if (entry && entry->kind == GitEntryKind::RenamedOrCopied) {
                 selected.insert(entry->path);
                 selected.insert(entry->originalPath);
-            } else selected.insert(std::move(*relative));
+            } else
+                selected.insert(std::move(*relative));
         }
         return selected;
     };
@@ -503,7 +505,8 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
             auto after = m_fs->readFile(path);
             if ((!after && after.error().code() != ErrorCode::NotFound) ||
                 (after ? std::optional<std::string>(*after) : std::nullopt) != bytes)
-                return fail(ErrorCode::Busy, "Selected file changed during commit checks; review it before committing: " + path);
+                return fail(ErrorCode::Busy,
+                            "Selected file changed during commit checks; review it before committing: " + path);
         }
         return {};
     };
@@ -511,9 +514,11 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
         if (!request.checksReviewed)
             return fail(ErrorCode::InvalidArgument, "Review the configured commit-check commands before committing");
         auto selectionStatus = status(control.stop);
-        if (!selectionStatus) return std::unexpected(std::move(selectionStatus.error()));
+        if (!selectionStatus)
+            return std::unexpected(std::move(selectionStatus.error()));
         auto selection = expandedSelection(*selectionStatus);
-        if (!selection) return std::unexpected(std::move(selection.error()));
+        if (!selection)
+            return std::unexpected(std::move(selection.error()));
         checkedSelection = std::move(*selection);
         for (const auto& relative : *checkedSelection) {
             const auto path = absolutePath(relative);
@@ -523,20 +528,25 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
             checkedFiles[path] = bytes ? std::optional<std::string>(std::move(*bytes)) : std::nullopt;
         }
         const auto checkIndexPath = io::joinPath(m_info.gitDir, "index");
-        if (!checkIndexPath) return std::unexpected(std::move(checkIndexPath.error()));
+        if (!checkIndexPath)
+            return std::unexpected(std::move(checkIndexPath.error()));
         auto indexBefore = m_fs->readFile(*checkIndexPath);
         if (!indexBefore && indexBefore.error().code() != ErrorCode::NotFound)
             return std::unexpected(std::move(indexBefore.error()));
         checkedIndex.emplace(indexBefore ? std::optional<std::string>(*indexBefore) : std::nullopt);
         auto headBefore = git({"rev-parse", "--verify", "HEAD"}, control, kLocalTimeout, true);
-        if (!headBefore) return std::unexpected(std::move(headBefore.error()));
+        if (!headBefore)
+            return std::unexpected(std::move(headBefore.error()));
         checkedHead = headBefore->succeeded() ? std::string(trimGitText(headBefore->stdoutBytes)) : "";
         for (const auto& check : request.checks) {
-            if (!io::isAbsolutePath(check.executable) || check.name.empty() || check.timeout <= IClock::Duration::zero())
-                return fail(ErrorCode::InvalidArgument, "Commit checks need a name, absolute executable and positive timeout");
+            if (!io::isAbsolutePath(check.executable) || check.name.empty() ||
+                check.timeout <= IClock::Duration::zero())
+                return fail(ErrorCode::InvalidArgument,
+                            "Commit checks need a name, absolute executable and positive timeout");
         }
         for (const auto& check : request.checks) {
-            if (control.stop.stop_requested()) return fail(ErrorCode::Cancelled, "Commit checks cancelled");
+            if (control.stop.stop_requested())
+                return fail(ErrorCode::Cancelled, "Commit checks cancelled");
             if (auto trusted = requireTrust("Commit check"); !trusted)
                 return std::unexpected(std::move(trusted.error()));
             io::ProcessSpec spec;
@@ -550,15 +560,20 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
             spec.stdoutMode = io::Stdio::Pipe;
             spec.stderrMode = io::Stdio::Pipe;
             spec.killOnClose = true;
-            if (control.onLine) control.onLine(GitStream::Command, "Commit check: " + check.name + " - " + check.executable);
+            if (control.onLine)
+                control.onLine(GitStream::Command, "Commit check: " + check.name + " - " + check.executable);
             auto checked = io::runToCompletion(m_runner->launcher(), spec, {}, check.timeout, control.stop);
-            if (!checked) return std::unexpected(std::move(checked.error()).withContext("Commit check " + check.name));
+            if (!checked)
+                return std::unexpected(std::move(checked.error()).withContext("Commit check " + check.name));
             for (const auto line : splitLines(checked->stdoutBytes))
-                if (control.onLine) control.onLine(GitStream::Stdout, line);
+                if (control.onLine)
+                    control.onLine(GitStream::Stdout, line);
             for (const auto line : splitLines(checked->stderrBytes))
-                if (control.onLine) control.onLine(GitStream::Stderr, line);
+                if (control.onLine)
+                    control.onLine(GitStream::Stderr, line);
             const auto summary = std::format("Commit check {} exited with code {}", check.name, checked->exitCode);
-            if (control.onLine) control.onLine(GitStream::Stdout, summary);
+            if (control.onLine)
+                control.onLine(GitStream::Stdout, summary);
             checkOutput += summary + "\n" + checked->stdoutBytes + checked->stderrBytes;
             if (checked->exitCode != 0)
                 return fail(ErrorCode::IoError, summary + "\n" + checked->stdoutBytes + checked->stderrBytes);
@@ -566,7 +581,8 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
         if (auto trusted = requireTrust("Commit after checks"); !trusted)
             return std::unexpected(std::move(trusted.error()));
         auto headAfter = git({"rev-parse", "--verify", "HEAD"}, control, kLocalTimeout, true);
-        if (!headAfter) return std::unexpected(std::move(headAfter.error()));
+        if (!headAfter)
+            return std::unexpected(std::move(headAfter.error()));
         if (headBefore->exitCode != headAfter->exitCode || headBefore->stdoutBytes != headAfter->stdoutBytes)
             return fail(ErrorCode::Busy, "HEAD changed during commit checks; review the commit again");
         auto indexAfter = m_fs->readFile(*checkIndexPath);
@@ -574,9 +590,11 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
             (indexAfter ? std::optional<std::string>(*indexAfter) : std::nullopt) != *checkedIndex)
             return fail(ErrorCode::Busy, "The Git index changed during commit checks; review staged changes again");
         auto finalStatus = status(control.stop);
-        if (!finalStatus) return std::unexpected(std::move(finalStatus.error()));
+        if (!finalStatus)
+            return std::unexpected(std::move(finalStatus.error()));
         auto finalSelection = expandedSelection(*finalStatus);
-        if (!finalSelection) return std::unexpected(std::move(finalSelection.error()));
+        if (!finalSelection)
+            return std::unexpected(std::move(finalSelection.error()));
         if (*finalSelection != *checkedSelection)
             return fail(ErrorCode::Busy, "Selected rename/copy paths changed during checks; review the commit again");
         if (auto unchanged = checkFilesUnchanged(); !unchanged)
@@ -1299,7 +1317,8 @@ Result<GitOutput> GitRepository::rebaseBranch(std::string_view ontoBranch, const
 }
 
 Result<GitOutput> GitRepository::rebaseStep(RebaseStep step, const RunControl& control) const {
-    if (auto trusted = requireTrust("Rebase control"); !trusted) return std::unexpected(std::move(trusted.error()));
+    if (auto trusted = requireTrust("Rebase control"); !trusted)
+        return std::unexpected(std::move(trusted.error()));
     std::string argument;
     switch (step) {
     case RebaseStep::Continue: argument = "--continue"; break;
@@ -1308,7 +1327,8 @@ Result<GitOutput> GitRepository::rebaseStep(RebaseStep step, const RunControl& c
     default: return fail(ErrorCode::InvalidArgument, "Unknown rebase action");
     }
     auto output = git({"rebase", argument}, control, kHookTimeout);
-    if (output && !output->succeeded()) return std::unexpected(gitFailure("Rebase " + argument, *output));
+    if (output && !output->succeeded())
+        return std::unexpected(gitFailure("Rebase " + argument, *output));
     return output;
 }
 

@@ -5,4 +5,4 @@ namespace frost::ui {
 class TerminalView;
 void initializeTerminalAccessibility(TerminalView& view);
 void notifyTerminalAccessibility(TerminalView& view, bool outputChanged);
-}
+} // namespace frost::ui

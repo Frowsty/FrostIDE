@@ -47,7 +47,8 @@ TEST(WorkbenchFind, TodoActionUsesCurrentProjectDirtyTextAndIgnoredFileRules) {
     window->session()->wait();
     ASSERT_FALSE(window->session()->error());
     std::set<std::string> files;
-    for (const auto& file : window->session()->files()) files.insert(file.path);
+    for (const auto& file : window->session()->files())
+        files.insert(file.path);
     EXPECT_EQ(files, (std::set<std::string>{dir.join("open.txt"), dir.join("closed.txt")}));
     EXPECT_EQ(window->session()->matchCount(), 2u);
     EXPECT_EQ(dir.read("open.txt"), "original\n");

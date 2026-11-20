@@ -3,14 +3,13 @@
 // EditorTabs and EditorTabBar (frost/ui/shell/editor_tabs.hpp).
 
 #include "frost/ui/shell/editor_tabs.hpp"
-#include <QCloseEvent>
-#include <QPushButton>
 
 #include "frost/ui/icon_ids.hpp"
 
 #include "shell_util.hpp"
 #include <QApplication>
 #include <QClipboard>
+#include <QCloseEvent>
 #include <QContextMenuEvent>
 #include <QDir>
 #include <QFileInfo>
@@ -23,6 +22,7 @@
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPushButton>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QTimer>
@@ -811,12 +811,15 @@ QWidget* EditorTabs::floatingGroupWindow(EditorTabGroup* group) const {
 }
 
 bool EditorTabs::setGroupFloating(EditorTabGroup* group, bool floating) {
-    if (std::ranges::find(m_groups, group) == m_groups.end()) return false;
+    if (std::ranges::find(m_groups, group) == m_groups.end())
+        return false;
     auto it = std::ranges::find(m_floating, group, &FloatingGroup::group);
-    if ((it != m_floating.end()) == floating) return true;
+    if ((it != m_floating.end()) == floating)
+        return true;
     if (floating) {
         auto* splitter = qobject_cast<QSplitter*>(group->parentWidget());
-        if (!splitter) return false;
+        if (!splitter)
+            return false;
         const auto sizes = splitter->sizes();
         auto* slot = new QWidget;
         auto* layout = new QVBoxLayout(slot);
@@ -838,7 +841,8 @@ bool EditorTabs::setGroupFloating(EditorTabGroup* group, bool floating) {
     } else {
         const auto entry = *it;
         auto* splitter = qobject_cast<QSplitter*>(entry.slot->parentWidget());
-        if (!splitter) return false;
+        if (!splitter)
+            return false;
         const auto sizes = splitter->sizes();
         entry.host->removeEventFilter(this);
         splitter->replaceWidget(splitter->indexOf(entry.slot), group);
@@ -865,7 +869,8 @@ bool EditorTabs::eventFilter(QObject* watched, QEvent* event) {
     return QWidget::eventFilter(watched, event);
 }
 bool EditorTabs::split(Qt::Orientation orientation) {
-    if (isGroupFloating(m_active)) (void)setGroupFloating(m_active, false);
+    if (isGroupFloating(m_active))
+        (void)setGroupFloating(m_active, false);
     IEditorView* current = currentEditor();
     if (!current)
         return false;
@@ -905,7 +910,8 @@ bool EditorTabs::split(Qt::Orientation orientation) {
 bool EditorTabs::closeGroup() {
     if (m_groups.size() <= 1)
         return false;
-    if (isGroupFloating(m_active)) (void)setGroupFloating(m_active, false);
+    if (isGroupFloating(m_active))
+        (void)setGroupFloating(m_active, false);
     EditorTabGroup* closing = m_active;
     closing->closeAll();
     if (closing->count() != 0)
@@ -950,12 +956,13 @@ bool EditorTabs::closeGroup() {
 
 std::string EditorTabs::saveLayout() const {
     const std::function<QJsonObject(QWidget*)> encode = [&](QWidget* widget) -> QJsonObject {
-        for (const auto& floating : m_floating) if (widget == floating.slot) {
-            auto it = std::ranges::find(m_groups, floating.group);
-            return {{QStringLiteral("group"), static_cast<int>(it - m_groups.begin())},
-                    {QStringLiteral("floating"), true},
-                    {QStringLiteral("geometry"), QString::fromLatin1(floating.host->saveGeometry().toBase64())}};
-        }
+        for (const auto& floating : m_floating)
+            if (widget == floating.slot) {
+                auto it = std::ranges::find(m_groups, floating.group);
+                return {{QStringLiteral("group"), static_cast<int>(it - m_groups.begin())},
+                        {QStringLiteral("floating"), true},
+                        {QStringLiteral("geometry"), QString::fromLatin1(floating.host->saveGeometry().toBase64())}};
+            }
         if (auto* group = qobject_cast<EditorTabGroup*>(widget)) {
             auto it = std::ranges::find(m_groups, group);
             return {{QStringLiteral("group"), static_cast<int>(it - m_groups.begin())}};
@@ -992,8 +999,12 @@ bool EditorTabs::restoreLayout(const std::string& layout) {
             const int id = value.toInt(-1);
             if (!value.isDouble() || id < 0 || id >= 64 || std::ranges::find(ids, id) != ids.end())
                 return false;
-            if (node.contains(QStringLiteral("floating")) && !node.value(QStringLiteral("floating")).isBool()) return false;
-            if (node.contains(QStringLiteral("geometry")) && (!node.value(QStringLiteral("geometry")).isString() || node.value(QStringLiteral("geometry")).toString().size() > 8192)) return false;
+            if (node.contains(QStringLiteral("floating")) && !node.value(QStringLiteral("floating")).isBool())
+                return false;
+            if (node.contains(QStringLiteral("geometry")) &&
+                (!node.value(QStringLiteral("geometry")).isString() ||
+                 node.value(QStringLiteral("geometry")).toString().size() > 8192))
+                return false;
             ids.push_back(id);
             return true;
         }
@@ -1015,7 +1026,8 @@ bool EditorTabs::restoreLayout(const std::string& layout) {
         if (ids[static_cast<std::size_t>(i)] != i)
             return false;
 
-    while (!m_floating.empty()) (void)setGroupFloating(m_floating.front().group, false);
+    while (!m_floating.empty())
+        (void)setGroupFloating(m_floating.front().group, false);
     QWidget* welcome = m_groups.front()->emptyStateWidget();
     if (welcome == m_groups.front()->emptyState())
         welcome = nullptr;
@@ -1035,7 +1047,9 @@ bool EditorTabs::restoreLayout(const std::string& layout) {
         if (node.contains(QStringLiteral("group"))) {
             auto* group = makeGroup();
             ordered[static_cast<std::size_t>(node.value(QStringLiteral("group")).toInt())] = group;
-            if (node.value(QStringLiteral("floating")).toBool()) detached.emplace_back(node.value(QStringLiteral("group")).toInt(), node.value(QStringLiteral("geometry")).toString());
+            if (node.value(QStringLiteral("floating")).toBool())
+                detached.emplace_back(node.value(QStringLiteral("group")).toInt(),
+                                      node.value(QStringLiteral("geometry")).toString());
             return group;
         }
         auto* splitter = new QSplitter(node.value(QStringLiteral("vertical")).toBool() ? Qt::Vertical : Qt::Horizontal);
@@ -1068,7 +1082,8 @@ bool EditorTabs::restoreLayout(const std::string& layout) {
     for (const auto& [index, geometry] : detached) {
         auto* group = m_groups[static_cast<std::size_t>(index)];
         (void)setGroupFloating(group, true);
-        if (auto* host = floatingGroupWindow(group); host && !geometry.isEmpty()) host->restoreGeometry(QByteArray::fromBase64(geometry.toLatin1()));
+        if (auto* host = floatingGroupWindow(group); host && !geometry.isEmpty())
+            host->restoreGeometry(QByteArray::fromBase64(geometry.toLatin1()));
     }
     if (welcome)
         m_active->setEmptyStateWidget(welcome);

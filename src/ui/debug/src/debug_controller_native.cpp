@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Native backend selection, launch and attach; presentation/lifecycle remain in DebugController.
+#include "frost/debug/coreclr_dap.hpp"
 #include "frost/debug/dbgeng_dap.hpp"
 #include "frost/debug/gdb_dap.hpp"
-#include "frost/debug/coreclr_dap.hpp"
 #include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/ui/debug_controller.hpp"
@@ -125,10 +125,10 @@ Result<void> DebugController::startNativeTarget(const debug::DebugTarget& target
         }
         const auto trustRevision = m_options.trust->snapshot(resolvedTarget.program).revision;
         auto arguments = debug::dbgEngDapLaunchArguments({.native = resolvedTarget,
-                                                         .natvisFiles = std::move(files),
-                                                         .localSymbolPaths = {},
-                                                         .dumpFile = {},
-                                                         .processId = std::nullopt});
+                                                          .natvisFiles = std::move(files),
+                                                          .localSymbolPaths = {},
+                                                          .dumpFile = {},
+                                                          .processId = std::nullopt});
         if (!arguments)
             return std::unexpected(std::move(arguments.error()));
         auto factory = adapterFactory();
@@ -223,7 +223,8 @@ Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& targe
          arguments = std::move(arguments), adapterId, actualMode, readOnly,
          launchAdmission = std::move(launchAdmission), sourceAllowed = std::move(sourceAllowed)](
             debug::DebugSessionCallbacks callbacks) mutable -> Result<std::unique_ptr<debug::DebugSession>> {
-            auto options = adapterId == "lldb-dap" ? debug::lldbDapSessionOptions(actualMode) : debug::DebugSessionOptions{};
+            auto options =
+                adapterId == "lldb-dap" ? debug::lldbDapSessionOptions(actualMode) : debug::DebugSessionOptions{};
             options.sourceAllowed = std::move(sourceAllowed);
             options.adapterId = adapterId;
             options.targetMode = actualMode;
@@ -290,10 +291,10 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
         }
         const auto trustRevision = m_options.trust->snapshot(target.program).revision;
         auto arguments = debug::dbgEngDapLaunchArguments({.native = target,
-                                                         .natvisFiles = std::move(files),
-                                                         .localSymbolPaths = {},
-                                                         .dumpFile = {},
-                                                         .processId = std::nullopt});
+                                                          .natvisFiles = std::move(files),
+                                                          .localSymbolPaths = {},
+                                                          .dumpFile = {},
+                                                          .processId = std::nullopt});
         if (!arguments)
             return std::unexpected(std::move(arguments.error()));
         arguments->set("processId", pid);
@@ -321,8 +322,8 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
         adapterId == "coreclr" ? "CoreCLR" : (!typeView.empty() ? adapterId : std::string("Lua"));
     auto started = startSession(
         target.name.empty() ? std::string(io::fileName(target.program)) : target.name, target.program, displayAdapter,
-        [this, target, factory = std::move(factory), arguments = std::move(attachArguments),
-         adapterId, processAdmission = std::move(processAdmission),
+        [this, target, factory = std::move(factory), arguments = std::move(attachArguments), adapterId,
+         processAdmission = std::move(processAdmission),
          releaseAuthorization = std::move(releaseAuthorization)](debug::DebugSessionCallbacks callbacks) mutable {
             if (adapterId == "coreclr") {
                 return debug::attachCoreClrSession(*m_options.trust, target,

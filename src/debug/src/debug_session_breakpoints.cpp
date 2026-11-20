@@ -60,8 +60,8 @@ void DebugSession::State::sendBreakpoints(const std::string& path) {
             }
         }
         if (!admitted) {
-            breakpointsAnswered(activeLines,
-                fail(ErrorCode::Unsupported, "This profile only binds line breakpoints in generated C++ files"));
+            breakpointsAnswered(activeLines, fail(ErrorCode::Unsupported,
+                                                  "This profile only binds line breakpoints in generated C++ files"));
             if (!previouslySent) {
                 return;
             }

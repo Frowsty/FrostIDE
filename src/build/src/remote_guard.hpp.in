@@ -3,5 +3,5 @@
 #pragma once
 #include <string_view>
 namespace frost::build::detail {
-inline constexpr std::string_view kRemoteGuard=R"FROSTGUARD(@_frost_remote_guard@)FROSTGUARD";
+inline constexpr std::string_view kRemoteGuard = R"FROSTGUARD(@_frost_remote_guard@)FROSTGUARD";
 }

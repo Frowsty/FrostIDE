@@ -246,7 +246,11 @@ private:
     QSplitter* m_root;
     EditorTabGroup* m_active = nullptr;
     std::vector<EditorTabGroup*> m_groups;
-    struct FloatingGroup { EditorTabGroup* group; QWidget* slot; QWidget* host; };
+    struct FloatingGroup {
+        EditorTabGroup* group;
+        QWidget* slot;
+        QWidget* host;
+    };
     std::vector<FloatingGroup> m_floating;
     TitleColorProvider m_titleColors;
 };

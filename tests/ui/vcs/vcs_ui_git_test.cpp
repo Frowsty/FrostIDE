@@ -63,11 +63,13 @@ TEST(GitUiE2E, ReentrantReviewCannotSubstituteUnreviewedCheckOrMessage) {
     auto controller = controllerFor(repo);
     CommitToolWindow window(*controller);
     window.setMessage(QStringLiteral("reviewed message"));
-    window.setCommitChecks({{.name = "Reviewed version", .executable = repo.runner().gitPath(), .arguments = {"--version"}}});
+    window.setCommitChecks(
+        {{.name = "Reviewed version", .executable = repo.runner().gitPath(), .arguments = {"--version"}}});
     window.setConfirmHandler([&](const QString&, const QString& review) {
         EXPECT_TRUE(review.contains("Reviewed version"));
-        window.setCommitChecks({{.name = "Unreviewed failing command", .executable = repo.runner().gitPath(),
-            .arguments = {"rev-parse", "--verify", "refs/heads/nonexistent-review-test"}}});
+        window.setCommitChecks({{.name = "Unreviewed failing command",
+                                 .executable = repo.runner().gitPath(),
+                                 .arguments = {"rev-parse", "--verify", "refs/heads/nonexistent-review-test"}}});
         window.setMessage(QStringLiteral("unreviewed replacement"));
         return true;
     });
@@ -88,11 +90,13 @@ TEST(GitUiE2E, CommitChecksReviewIsRequiredAndFailureKeepsMessageAndSelection) {
     auto controller = controllerFor(repo);
     CommitToolWindow window(*controller);
     window.setMessage(QStringLiteral("checked commit"));
-    window.setCommitChecks({{.name = "Whitespace", .executable = repo.runner().gitPath(), .arguments = {"diff", "--check"}}});
+    window.setCommitChecks(
+        {{.name = "Whitespace", .executable = repo.runner().gitPath(), .arguments = {"diff", "--check"}}});
     window.setConfirmHandler([](const QString&, const QString&) { return false; });
     EXPECT_FALSE(window.commit());
     EXPECT_FALSE(controller->busy());
-    window.setConfirmHandler([](const QString&, const QString& text) { return text.contains("Whitespace") && text.contains("--check"); });
+    window.setConfirmHandler(
+        [](const QString&, const QString& text) { return text.contains("Whitespace") && text.contains("--check"); });
     EXPECT_TRUE(window.commit());
     ASSERT_TRUE(controller->waitForIdle(kWait));
     ASSERT_TRUE(controller->lastResult());

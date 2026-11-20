@@ -890,7 +890,8 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
         return std::unexpected(std::move(valid.error()));
     }
     auto sandbox = detail::prepareWindowsSandboxAttributes(spec);
-    if (!sandbox) return std::unexpected(sandbox.error());
+    if (!sandbox)
+        return std::unexpected(sandbox.error());
     SIZE_T memoryMaximum = 0;
     if (spec.residentMemoryLimitBytes) {
         auto limit = residentMemoryLimit(*spec.residentMemoryLimitBytes);
@@ -999,7 +1000,8 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
     }
     // A handle list must not be empty, and an attribute list needs at least one attribute: with
     // neither handles nor a job there is no list at all.
-    const DWORD attributeCount = (inherited.empty() ? 0 : 1) + (job.valid() ? 1 : 0) + (spec.pseudoTerminal ? 1 : 0) + (*sandbox ? 2 : 0);
+    const DWORD attributeCount =
+        (inherited.empty() ? 0 : 1) + (job.valid() ? 1 : 0) + (spec.pseudoTerminal ? 1 : 0) + (*sandbox ? 2 : 0);
     SIZE_T listSize = 0;
     std::vector<std::byte> listStorage;
     LPPROC_THREAD_ATTRIBUTE_LIST attributes = nullptr;
@@ -1041,9 +1043,9 @@ Result<detail::SpawnedChild> spawnWindowsChild(const ProcessSpec& spec) {
     if (*sandbox) {
 #if defined(PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY)
         if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-                &(*sandbox)->capabilities, sizeof(SECURITY_CAPABILITIES), nullptr, nullptr) ||
+                                       &(*sandbox)->capabilities, sizeof(SECURITY_CAPABILITIES), nullptr, nullptr) ||
             !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY,
-                &(*sandbox)->allPackagesPolicy, sizeof(DWORD), nullptr, nullptr))
+                                       &(*sandbox)->allPackagesPolicy, sizeof(DWORD), nullptr, nullptr))
             return fail(ErrorCode::Unsupported, "Cannot install LPAC restrictions; no ordinary launch fallback");
 #else
         return fail(ErrorCode::Unsupported, "LPAC startup attributes unavailable");

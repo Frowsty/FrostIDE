@@ -662,7 +662,8 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                 }
             }
             if (self->options.requireCompileCommands && !location) {
-                self->recordError(Error(ErrorCode::NotFound, "required compilation database is unavailable"), ClangdState::Failed);
+                self->recordError(Error(ErrorCode::NotFound, "required compilation database is unavailable"),
+                                  ClangdState::Failed);
                 co_return;
             }
             if (stop.stop_requested())

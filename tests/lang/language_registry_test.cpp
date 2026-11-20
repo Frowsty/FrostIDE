@@ -44,15 +44,25 @@ std::string manifest(Json d) {
 }
 std::string frame(std::string body) { return "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body; }
 TEST(LanguageRegistry, LuauIsAnExplicitIndependentLanguageAndNeverOverridesLuaJitLuaFiles) {
-    auto row=definition(); row.set("id","luau").set("languageId","luau").set("version","1.70.1")
-        .set("extensions",Json::array({".luau"})).set("arguments",Json::array({"lsp"}))
-        .set("configuration",Json::object().set("luau-lsp",Json::object().set("platform",Json::object().set("type","standard"))));
-    auto registry=LanguageServerRegistry::parse(manifest(row)); ASSERT_TRUE(registry);
-    auto* selected=registry->forPath(root()+"/typed.luau"); ASSERT_NE(selected,nullptr);
-    auto options=registeredLanguageOptions(*selected,root()+"/workspace");
-    EXPECT_EQ(options.languageId,"luau"); EXPECT_EQ(options.arguments,(std::vector<std::string>{"lsp"}));
-    EXPECT_TRUE(options.configurationIsSectionMap); EXPECT_EQ(registry->forPath(root()+"/jit.lua"),nullptr);
-    row.set("extensions",Json::array({".lua"})); EXPECT_FALSE(LanguageServerRegistry::parse(manifest(row)));
+    auto row = definition();
+    row.set("id", "luau")
+        .set("languageId", "luau")
+        .set("version", "1.70.1")
+        .set("extensions", Json::array({".luau"}))
+        .set("arguments", Json::array({"lsp"}))
+        .set("configuration",
+             Json::object().set("luau-lsp", Json::object().set("platform", Json::object().set("type", "standard"))));
+    auto registry = LanguageServerRegistry::parse(manifest(row));
+    ASSERT_TRUE(registry);
+    auto* selected = registry->forPath(root() + "/typed.luau");
+    ASSERT_NE(selected, nullptr);
+    auto options = registeredLanguageOptions(*selected, root() + "/workspace");
+    EXPECT_EQ(options.languageId, "luau");
+    EXPECT_EQ(options.arguments, (std::vector<std::string>{"lsp"}));
+    EXPECT_TRUE(options.configurationIsSectionMap);
+    EXPECT_EQ(registry->forPath(root() + "/jit.lua"), nullptr);
+    row.set("extensions", Json::array({".lua"}));
+    EXPECT_FALSE(LanguageServerRegistry::parse(manifest(row)));
 }
 TEST(LanguageRegistry, ParsesExplicitSelectorsAndSeparatesDeclaredVersionFromObservedServer) {
     auto parsed = LanguageServerRegistry::parse(manifest(definition()));

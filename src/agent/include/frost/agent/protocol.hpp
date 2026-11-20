@@ -4,6 +4,7 @@
 #include "frost/core/error.hpp"
 #include "frost/io/process.hpp"
 #include "frost/rpc/json.hpp"
+
 #include <chrono>
 #include <map>
 #include <optional>
@@ -30,6 +31,7 @@ public:
     // Stateful, single reader. On malformed/oversized input the entire framer fails closed.
     [[nodiscard]] Result<std::vector<Json>> feed(std::string_view bytes);
     [[nodiscard]] Result<void> finish() const;
+
 private:
     std::string m_line;
     bool m_failed = false;
@@ -45,6 +47,7 @@ public:
     [[nodiscard]] bool ready() const noexcept { return m_initialized && m_ide && m_mcp; }
     [[nodiscard]] bool supports(std::string_view subtype) const;
     [[nodiscard]] const std::string& sessionId() const noexcept { return m_session; }
+
 private:
     std::uint64_t m_next = 0;
     std::map<std::string, Time> m_pending;
@@ -63,8 +66,9 @@ public:
     // Returns {decision:block,reason:...} at most three times per unchanged error set, then warning.
     [[nodiscard]] Json evaluate(std::string errorFingerprint, std::string errorText, bool stopHookActive);
     void reset();
+
 private:
     std::string m_fingerprint;
     unsigned m_blocks = 0;
 };
-}
+} // namespace frost::agent

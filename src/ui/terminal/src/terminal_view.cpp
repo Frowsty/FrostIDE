@@ -4,12 +4,12 @@
 // mouse, the wheel, the selection and the clipboard.
 
 #include "frost/ui/terminal/terminal_view.hpp"
-#include "terminal_accessibility.hpp"
 
 #include "frost/core/log.hpp"
 #include "frost/term/keys.hpp"
 #include "frost/ui/key_translation.hpp"
 
+#include "terminal_accessibility.hpp"
 #include <QClipboard>
 #include <QFontMetricsF>
 #include <QGuiApplication>
@@ -353,18 +353,22 @@ bool TerminalView::navigateCommand(bool forward) {
     if (!m_session)
         return false;
     const auto target = m_session->read([&](const term::VtScreen& screen) -> std::optional<int> {
-        if (screen.altScreen()) return std::nullopt;
+        if (screen.altScreen())
+            return std::nullopt;
         const auto top = static_cast<std::int64_t>(screen.linesPushed()) - m_scrollOffset;
         std::optional<std::int64_t> found;
-        const auto oldest = static_cast<std::int64_t>(screen.linesPushed()) - static_cast<std::int64_t>(screen.scrollbackSize());
+        const auto oldest =
+            static_cast<std::int64_t>(screen.linesPushed()) - static_cast<std::int64_t>(screen.scrollbackSize());
         for (const auto& mark : screen.shellMarks()) {
             if (mark.kind != term::ShellMark::Kind::Prompt)
                 continue;
             const auto line = static_cast<std::int64_t>(mark.line);
             if (line < oldest)
                 continue;
-            if (forward && line > top && (!found || line < *found)) found = line;
-            if (!forward && line < top && (!found || line > *found)) found = line;
+            if (forward && line > top && (!found || line < *found))
+                found = line;
+            if (!forward && line < top && (!found || line > *found))
+                found = line;
         }
         if (!found)
             return std::nullopt;

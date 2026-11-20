@@ -75,7 +75,8 @@ std::optional<std::string> inferExternalProjectRootForFile(std::string_view file
     if (!fileInfo.exists() || !fileInfo.isFile())
         return std::nullopt;
     const QString suffix = fileInfo.suffix().toLower();
-    if (suffix == QStringLiteral("frostproj") || suffix == QStringLiteral("uproject") || suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx") ||
+    if (suffix == QStringLiteral("frostproj") || suffix == QStringLiteral("uproject") ||
+        suffix == QStringLiteral("sln") || suffix == QStringLiteral("slnx") ||
         fileInfo.fileName().compare(QStringLiteral("CMakeLists.txt"), Qt::CaseInsensitive) == 0 ||
         fileInfo.fileName() == QStringLiteral("compile_commands.json") ||
         fileInfo.fileName() == QStringLiteral("Makefile") || fileInfo.fileName() == QStringLiteral("makefile") ||
@@ -133,7 +134,8 @@ std::optional<std::string> inferExternalProjectRootForFile(std::string_view file
         const QDir dir(ancestor.path);
         if (QFileInfo(dir.filePath(QStringLiteral(".luarc.json"))).isFile() ||
             QFileInfo(dir.filePath(QStringLiteral("ProjectSettings"))).isDir() || hasEntryWithSuffix(dir, u"sln") ||
-            hasEntryWithSuffix(dir, u"slnx") || hasEntryWithSuffix(dir, u"uproject") || QFileInfo(dir.filePath(QStringLiteral("CMakeLists.txt"))).isFile() ||
+            hasEntryWithSuffix(dir, u"slnx") || hasEntryWithSuffix(dir, u"uproject") ||
+            QFileInfo(dir.filePath(QStringLiteral("CMakeLists.txt"))).isFile() ||
             QFileInfo(dir.filePath(QStringLiteral("compile_commands.json"))).isFile() ||
             QFileInfo(dir.filePath(QStringLiteral("Makefile"))).isFile() ||
             QFileInfo(dir.filePath(QStringLiteral("makefile"))).isFile() ||
@@ -216,9 +218,11 @@ Result<void> openExternalFile(Workbench& workbench, std::string_view path, int l
     }
     return {};
 }
-Result<void> forwardExternalOpen(std::string_view root, std::string_view file, int line, int column, bool columnUtf16, bool wait) {
+Result<void> forwardExternalOpen(std::string_view root, std::string_view file, int line, int column, bool columnUtf16,
+                                 bool wait) {
     auto payload = lang::Json::object().set("root", std::string(root)).set("file", std::string(file));
-    if (wait) payload.set("wait", true);
+    if (wait)
+        payload.set("wait", true);
     if (columnUtf16) {
         // A legacy owner requires top-level line and column, so it rejects this versioned
         // position instead of silently treating UTF-16 units as bytes.
@@ -238,7 +242,11 @@ Result<void> forwardExternalOpen(std::string_view root, std::string_view file, i
         if (!reply->starts_with("wait:") || reply->size() > 100)
             return fail(ErrorCode::Unsupported, "the project window does not support document-close waiting");
         const std::string ticket = reply->substr(5);
-        const auto poll = lang::Json::object().set("method", "document.wait").set("root", std::string(root)).set("ticket", ticket).dump();
+        const auto poll = lang::Json::object()
+                              .set("method", "document.wait")
+                              .set("root", std::string(root))
+                              .set("ticket", ticket)
+                              .dump();
         auto lastReply = std::chrono::steady_clock::now();
         for (;;) {
             auto state = io::requestLocalIpc(externalProjectKey(root), poll, 2s);
@@ -253,17 +261,23 @@ Result<void> forwardExternalOpen(std::string_view root, std::string_view file, i
                 return std::unexpected(std::move(state.error()));
             }
             lastReply = std::chrono::steady_clock::now();
-            if (*state == "retry:busy") { std::this_thread::sleep_for(200ms); continue; }
-            if (*state == "closed") return {};
-            if (*state != "open") return fail(ErrorCode::Cancelled, "document wait was cancelled by its owner");
+            if (*state == "retry:busy") {
+                std::this_thread::sleep_for(200ms);
+                continue;
+            }
+            if (*state == "closed")
+                return {};
+            if (*state != "open")
+                return fail(ErrorCode::Cancelled, "document wait was cancelled by its owner");
             std::this_thread::sleep_for(200ms);
         }
     }
-    if (*reply != "ok") return fail(ErrorCode::Busy, "window did not accept the open request");
+    if (*reply != "ok")
+        return fail(ErrorCode::Busy, "window did not accept the open request");
     return {};
 }
-Result<void> startExternalWaitOwner(io::IProcessLauncher& launcher, std::string_view executable,
-                                    std::string_view root, std::string_view file) {
+Result<void> startExternalWaitOwner(io::IProcessLauncher& launcher, std::string_view executable, std::string_view root,
+                                    std::string_view file) {
     if (!io::isAbsolutePath(executable) || !io::isAbsolutePath(root) || !io::isAbsolutePath(file))
         return fail(ErrorCode::InvalidArgument, "wait owner paths must be absolute");
     io::ProcessSpec spec;
@@ -274,7 +288,8 @@ Result<void> startExternalWaitOwner(io::IProcessLauncher& launcher, std::string_
     spec.stdoutMode = io::Stdio::Null;
     spec.stderrMode = io::Stdio::Null;
     auto child = launcher.launch(spec);
-    if (!child) return std::unexpected(std::move(child.error()));
+    if (!child)
+        return std::unexpected(std::move(child.error()));
     return {};
 }
 ProjectOpenBroker::ProjectOpenBroker(Workbench& workbench, MainWindow& window, std::string root,
@@ -331,14 +346,18 @@ Result<std::string> ProjectOpenBroker::accept(const std::string& request) {
         if (json->stringAt("root") != m_root || m_workbench.projectRoot().empty())
             return fail(ErrorCode::Cancelled, "the project window changed");
         const auto found = m_waiting.find(std::string(json->stringAt("ticket")));
-        if (found == m_waiting.end()) return fail(ErrorCode::NotFound, "unknown document wait ticket");
+        if (found == m_waiting.end())
+            return fail(ErrorCode::NotFound, "unknown document wait ticket");
         found->second.touched = now;
-        if (found->second.editor) return std::string("open");
+        if (found->second.editor)
+            return std::string("open");
         m_waiting.erase(found);
-        if (m_waiting.empty() && m_waitCloseLoop) m_waitCloseLoop->quit();
+        if (m_waiting.empty() && m_waitCloseLoop)
+            m_waitCloseLoop->quit();
         return std::string("closed");
     }
-    if (m_finishingWaits) return fail(ErrorCode::Cancelled, "the window is closing");
+    if (m_finishingWaits)
+        return fail(ErrorCode::Cancelled, "the window is closing");
     if (json->stringAt("method") == "unity.hello") {
         const std::string announcedRoot(json->stringAt("root"));
         if (announcedRoot.empty() || m_workbench.projectRoot().empty() ||
@@ -381,9 +400,13 @@ Result<std::string> ProjectOpenBroker::accept(const std::string& request) {
         QObject* editor = nullptr;
         for (auto* view : m_workbench.editors().views()) {
             const auto path = physicalInfoPath(QFileInfo(qs(view->path())));
-            if (path && canonical && lang::documentKey(*path) == lang::documentKey(*canonical)) { editor = &view->editor(); break; }
+            if (path && canonical && lang::documentKey(*path) == lang::documentKey(*canonical)) {
+                editor = &view->editor();
+                break;
+            }
         }
-        if (!editor) return fail(ErrorCode::NotFound, "opened document has no live editor to wait for");
+        if (!editor)
+            return fail(ErrorCode::NotFound, "opened document has no live editor to wait for");
         waitTicket = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
         m_waiting.emplace(waitTicket, WaitTicket{editor, now});
     }
@@ -396,10 +419,14 @@ Result<std::string> ProjectOpenBroker::accept(const std::string& request) {
 }
 void ProjectOpenBroker::finishWaits() {
     m_finishingWaits = true;
-    if (m_waiting.empty()) return;
+    if (m_waiting.empty())
+        return;
     // aboutToQuit follows an accepted close, after the ordinary Save/close veto handling. Keep
     // the authenticated server alive briefly to deliver actual close acknowledgements to clients.
-    for (auto& [ticket, view] : m_waiting) { (void)ticket; view.editor.clear(); }
+    for (auto& [ticket, view] : m_waiting) {
+        (void)ticket;
+        view.editor.clear();
+    }
     QEventLoop loop;
     m_waitCloseLoop = &loop;
     QTimer::singleShot(2000, &loop, &QEventLoop::quit);

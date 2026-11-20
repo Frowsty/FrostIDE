@@ -170,8 +170,7 @@ public:
     // disconnects the adapter without terminating that host. CoreCLR requires worker-safe process
     // admission captured from the selected local process and rechecked before the attach frame.
     [[nodiscard]] Result<void> attachTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
-                                            rpc::Json attachArguments,
-                                            const std::function<bool()>& ownerAdmission = {},
+                                            rpc::Json attachArguments, const std::function<bool()>& ownerAdmission = {},
                                             std::function<Result<void>()> processAdmission = {},
                                             std::function<void()> releaseAuthorization = {});
 

@@ -31,24 +31,21 @@ Result<io::ProcessSpec> dxcSpec(const DxcProfile& p) {
                     "Select a standalone .hlsl translation unit; ShaderLab generated variants are unsupported");
     constexpr std::array<std::string_view, 8> stages{"vs", "ps", "cs", "gs", "hs", "ds", "ms", "as"};
     const std::string_view target = p.target;
-    const bool validTarget = target.size() == 6 && target.substr(2, 3) == "_6_" &&
-                             target.back() >= '0' && target.back() <= '9' &&
-                             std::ranges::find(stages, target.substr(0, 2)) != stages.end();
+    const bool validTarget = target.size() == 6 && target.substr(2, 3) == "_6_" && target.back() >= '0' &&
+                             target.back() <= '9' && std::ranges::find(stages, target.substr(0, 2)) != stages.end();
     if (!identifier(p.entry) || !validTarget)
         return fail(ErrorCode::InvalidArgument,
                     "Use an HLSL entry identifier and explicit Shader Model 6 stage target");
     io::ProcessSpec spec;
     spec.executable = p.executable;
     spec.workingDirectory = p.root;
-    spec.arguments = {
-        "-E", p.entry, "-T", p.target, "-HV", "2021", "-fdiagnostics-format=msvc",
-        "-Fo",
+    spec.arguments = {"-E",    p.entry, "-T", p.target, "-HV", "2021", "-fdiagnostics-format=msvc", "-Fo",
 #ifdef _WIN32
-        "NUL",
+                      "NUL",
 #else
-        "/dev/null",
+                      "/dev/null",
 #endif
-        p.source};
+                      p.source};
     spec.stdinMode = io::Stdio::Null;
     spec.stdoutMode = io::Stdio::Pipe;
     spec.stderrMode = io::Stdio::MergeIntoStdout;

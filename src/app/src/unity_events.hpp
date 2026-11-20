@@ -2,6 +2,7 @@
 // Strict decoding of authenticated per-domain Unity event journal continuations.
 #pragma once
 #include "frost/lang/json.hpp"
+
 #include <vector>
 namespace frost::app {
 struct UnityBridgeEvent {
@@ -18,4 +19,4 @@ struct UnityEventPage {
 // At most eight entries; verifies sequence continuity, loss, limits and exact continuation semantics.
 // Pure O(response size), no process/file access; malformed pages never partially publish.
 [[nodiscard]] Result<UnityEventPage> parseUnityEvents(const lang::Json& response, std::int64_t cursor);
-}
+} // namespace frost::app

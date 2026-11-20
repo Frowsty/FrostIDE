@@ -5,4 +5,4 @@ namespace frost::ui {
 class EditorView;
 // Called once per fully constructed view; owns no editor/document and installs a process factory once.
 void initializeEditorAccessibility(EditorView& view);
-}
+} // namespace frost::ui

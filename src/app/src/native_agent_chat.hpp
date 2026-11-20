@@ -2,6 +2,7 @@
 // Explicit user-operated native AI Agent panel, independent from end-user Agent Terminal auth.
 #pragma once
 #include <QObject>
+
 #include <memory>
 namespace frost::app {
 class Workbench;
@@ -11,8 +12,9 @@ public:
     ~NativeAgentChat() override;
     void show();
     void stop();
+
 private:
     struct State;
     std::unique_ptr<State> m;
 };
-}
+} // namespace frost::app

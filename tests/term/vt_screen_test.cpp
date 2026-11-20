@@ -36,9 +36,11 @@ TEST(VtScreen, ShellMarksComeOnlyFromBoundedActualOsc133Sequences) {
     EXPECT_EQ(screen.shellMarks().size(), 4u);
     screen.feed("\x1b]133;" + std::string(8192, 'A') + "\a");
     EXPECT_EQ(screen.shellMarks().size(), 4u);
-    for (int i = 0; i < 4096; ++i) screen.feed("\x1b]133;A\a");
+    for (int i = 0; i < 4096; ++i)
+        screen.feed("\x1b]133;A\a");
     EXPECT_LE(screen.shellMarks().size(), 2048u);
-    screen.feed("\x1b" "c");
+    screen.feed("\x1b"
+                "c");
     EXPECT_TRUE(screen.shellMarks().empty());
 }
 

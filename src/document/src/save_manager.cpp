@@ -213,7 +213,8 @@ void SaveManager::applySettings(const settings::SettingsSnapshot& snapshot) {
 void SaveManager::setSavedObserver(const void* owner, std::function<void(const SavedDocumentCompletion&)> observer) {
     FROST_PRE(owner != nullptr);
     std::erase_if(m_savedObservers, [owner](const auto& entry) { return entry.first == owner; });
-    if (observer) m_savedObservers.emplace_back(owner, std::move(observer));
+    if (observer)
+        m_savedObservers.emplace_back(owner, std::move(observer));
 }
 Result<SaveOutcome> SaveManager::save(FileDocument& document, const SaveOptions& options) {
     if (document.untitled()) {
@@ -409,13 +410,17 @@ Result<SaveOutcome> SaveManager::saveTo(FileDocument& document, const std::strin
         outcome.settingsCheck = m_services.settings->checkSavedFile(path, *bytes);
     }
     sweepDirectory(io::parentPath(outcome.target, m_options.style), outcome.warnings);
-    const SavedDocumentCompletion completion{document.path(), outcome.target, options.reason, outcome.bytes, snapshot.version()};
+    const SavedDocumentCompletion completion{document.path(), outcome.target, options.reason, outcome.bytes,
+                                             snapshot.version()};
     std::vector<const void*> observers;
     observers.reserve(m_savedObservers.size());
-    for (const auto& observer : m_savedObservers) observers.push_back(observer.first);
+    for (const auto& observer : m_savedObservers)
+        observers.push_back(observer.first);
     for (const auto* owner : observers) {
-        const auto found = std::ranges::find_if(m_savedObservers, [owner](const auto& entry) { return entry.first == owner; });
-        if (found == m_savedObservers.end()) continue;
+        const auto found =
+            std::ranges::find_if(m_savedObservers, [owner](const auto& entry) { return entry.first == owner; });
+        if (found == m_savedObservers.end())
+            continue;
         auto observer = found->second; // Self-removal cannot invalidate the callback being invoked.
         observer(completion);
     }

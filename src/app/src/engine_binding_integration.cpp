@@ -115,8 +115,8 @@ struct EngineBindingIntegration::Impl {
             return;
         invalidate(true);
         setStatus("Binding sources settled; refreshing actual engine schema (rebuild may be required)");
-        const auto expected =
-            settlementStatus == document::RefactoringStatus::Undone ? applied.previousIdentity : applied.renamedIdentity;
+        const auto expected = settlementStatus == document::RefactoringStatus::Undone ? applied.previousIdentity
+                                                                                      : applied.renamedIdentity;
         retirement->jobs.push_back(workbench.m_pool->spawn(
             sched::Lane::Background, regenerateSchema(relay, applied, expected, revision, &workbench.m_services.fs,
                                                       &workbench.m_services.trust)));

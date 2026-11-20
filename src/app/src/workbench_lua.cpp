@@ -214,8 +214,7 @@ bool isInInspectionScope(std::string_view fileKey, std::string_view scopeKey) {
     constexpr char separator = io::kNativePathStyle == io::PathStyle::Windows ? '\\' : '/';
     if (scopeKey.empty() || !fileKey.starts_with(scopeKey))
         return false;
-    return fileKey.size() == scopeKey.size() || scopeKey.back() == separator ||
-           fileKey[scopeKey.size()] == separator;
+    return fileKey.size() == scopeKey.size() || scopeKey.back() == separator || fileKey[scopeKey.size()] == separator;
 }
 
 sched::Task<void> prepareLuaPlanTask(io::IFileSystem* fs, std::shared_ptr<WorkbenchLuaState> luaStatePtr,

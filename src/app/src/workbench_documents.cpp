@@ -13,13 +13,13 @@
 #include "frost/settings/editorconfig.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
-#include "frost/ui/workbench/workbench.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/tr.hpp"
 #include "frost/ui/vcs/change_markers.hpp"
+#include "frost/ui/workbench/workbench.hpp"
 
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
@@ -939,10 +939,12 @@ void Workbench::openLocation(const QString& path, int line, int column) {
 void Workbench::configureUnityInsights(ui::lang::EditorInsightBinding& binding) {
     binding.setUnityInsightInputs([self = QPointer<Workbench>(this)] {
         ui::lang::UnityInsightInputs inputs;
-        if (!self || self->m_shutDown || !self->m_nav || !self->m_managed || self->m_projectRoot.empty()) return inputs;
+        if (!self || self->m_shutDown || !self->m_nav || !self->m_managed || self->m_projectRoot.empty())
+            return inputs;
         const auto root = self->m_projectRoot;
         const auto trust = self->m_services.trust.snapshot(root);
-        if (!trust.trusted || !self->m_services.fs.exists(root + "/ProjectSettings/ProjectVersion.txt").value_or(false)) return inputs;
+        if (!trust.trusted || !self->m_services.fs.exists(root + "/ProjectSettings/ProjectVersion.txt").value_or(false))
+            return inputs;
         inputs.fs = &self->m_services.fs;
         inputs.files = self->m_nav->projectFiles().candidates();
         std::vector<std::pair<std::string, std::uint64_t>> versions;
@@ -950,13 +952,20 @@ void Workbench::configureUnityInsights(ui::lang::EditorInsightBinding& binding) 
             inputs.overlays.push_back({document->path(), document->document().snapshot().text.text()});
             versions.emplace_back(document->path(), document->document().snapshot().text.version());
         }
-        inputs.current = [self, root, trust, versions = std::move(versions), managed = self->m_managed, generation = self->m_evaluatedGeneration] {
-            if (!self || self->m_shutDown || self->m_projectRoot != root || self->m_managed != managed || self->m_evaluatedGeneration != generation) return false;
+        inputs.current = [self, root, trust, versions = std::move(versions), managed = self->m_managed,
+                          generation = self->m_evaluatedGeneration] {
+            if (!self || self->m_shutDown || self->m_projectRoot != root || self->m_managed != managed ||
+                self->m_evaluatedGeneration != generation)
+                return false;
             const auto now = self->m_services.trust.snapshot(root);
-            if (!now.trusted || now.revision != trust.revision || self->m_documents->documents().size() != versions.size()) return false;
+            if (!now.trusted || now.revision != trust.revision ||
+                self->m_documents->documents().size() != versions.size())
+                return false;
             const auto documents = self->m_documents->documents();
             for (std::size_t i = 0; i < documents.size(); ++i)
-                if (documents[i]->path() != versions[i].first || documents[i]->document().snapshot().text.version() != versions[i].second) return false;
+                if (documents[i]->path() != versions[i].first ||
+                    documents[i]->document().snapshot().text.version() != versions[i].second)
+                    return false;
             return true;
         };
         return inputs;

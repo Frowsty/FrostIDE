@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // FER-10 unit contract/refusal tests; real command fidelity is checked in the corpus target.
-#include "support/engine_test_fixture.hpp"
 #include "support/directory_link.hpp"
+#include "support/engine_test_fixture.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -318,7 +318,9 @@ public:
     Result<void> writeFileAtomic(std::string_view p, std::string_view b) override { return real.writeFileAtomic(p, b); }
     Result<io::FileStatus> status(std::string_view p) override { return real.status(p); }
     Result<std::vector<io::DirEntry>> listDirectory(std::string_view p) override { return real.listDirectory(p); }
-    Result<io::DirListing> listDirectoryWithDiagnostics(std::string_view p) override { return real.listDirectoryWithDiagnostics(p); }
+    Result<io::DirListing> listDirectoryWithDiagnostics(std::string_view p) override {
+        return real.listDirectoryWithDiagnostics(p);
+    }
     Result<void> createDirectories(std::string_view p) override { return real.createDirectories(p); }
     Result<void> removeFile(std::string_view p) override { return real.removeFile(p); }
     Result<void> removeDirectory(std::string_view p) override { return real.removeDirectory(p); }
@@ -348,7 +350,10 @@ TEST(EngineTestProvider, ListingIdentityUsesImmutableCommandTargetAfterPostComma
     auto reply = f.listingJson();
     reply.set("projectFile", fs.alias); // A legal structured lexical response spelling.
     bool retargeted = false;
-    fs.beforeListingIdentity = [&] { fs.selected = second; retargeted = true; };
+    fs.beforeListingIdentity = [&] {
+        fs.selected = second;
+        retargeted = true;
+    };
     io::ScriptedProcessLauncher launcher;
     f.queue(launcher, "test.list", reply);
     auto result = discoverEngineSceneTests(fs, launcher, f.options, [] { return true; });

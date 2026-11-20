@@ -2,19 +2,20 @@
 // Explicit Unity Editor/player Mono 2.58 attach through actual held source evidence and OS-owned endpoint identity.
 #include "frost/app/workbench.hpp"
 #include "frost/debug/mono_dap.hpp"
-#include "frost/debug/mono_windows_peer.hpp"
 #include "frost/debug/mono_linux_peer.hpp"
+#include "frost/debug/mono_windows_peer.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/debug_controller.hpp"
-#include "frost/ui/shell/shell_window.hpp"
 #include "frost/ui/shell/notifications.hpp"
+#include "frost/ui/shell/shell_window.hpp"
+
 #include "managed_snapshot_job.hpp"
-#include "mono_source_admission.hpp"
 #include "mono_adapter_preparation.hpp"
+#include "mono_source_admission.hpp"
 #include "unity_control.hpp"
 #include "unity_mono_rebind.hpp"
-#include <QCoreApplication>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -26,84 +27,144 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QSpinBox>
+
 #include <algorithm>
 namespace frost::app {
 namespace {
 using MonoCompletion = std::function<void(Result<MonoAdmittedModule>)>;
-[[maybe_unused]] sched::Task<void> prepareUnityModule(std::shared_ptr<ManagedSnapshotJob> job, io::IProcessLauncher* launcher,
-    project::TrustStore* trust, std::string root, std::uint64_t revision, UnityMonoDebugSelection selection,
-    std::string held, std::string guard, std::function<bool()> identityCurrent, MonoCompletion done) {
+[[maybe_unused]] sched::Task<void>
+prepareUnityModule(std::shared_ptr<ManagedSnapshotJob> job, io::IProcessLauncher* launcher, project::TrustStore* trust,
+                   std::string root, std::uint64_t revision, UnityMonoDebugSelection selection, std::string held,
+                   std::string guard, std::function<bool()> identityCurrent, MonoCompletion done) {
     const auto current = [job, trust, root, revision, identityCurrent] {
         const auto state = trust->snapshot(root);
         return !job->cancelled.load() && state.trusted && state.revision == revision && identityCurrent();
     };
-    auto result = admitMonoModule(*launcher, held, selection.dotnet, guard, root, selection.assembly, selection.pdb,
-        {}, current);
+    auto result =
+        admitMonoModule(*launcher, held, selection.dotnet, guard, root, selection.assembly, selection.pdb, {}, current);
     LockGuard lock(job->mutex);
-    if (job->target && !job->cancelled.load()) QMetaObject::invokeMethod(job->target,
-        [done = std::move(done), result = std::move(result)]() mutable { done(std::move(result)); }, Qt::QueuedConnection);
+    if (job->target && !job->cancelled.load())
+        QMetaObject::invokeMethod(
+            job->target, [done = std::move(done), result = std::move(result)]() mutable { done(std::move(result)); },
+            Qt::QueuedConnection);
     co_return;
 }
-}
+} // namespace
 bool Workbench::canRebindUnityDebug() const {
-    if (!m_unityDebugBinding || !m_unity) return false;
+    if (!m_unityDebugBinding || !m_unity)
+        return false;
     const auto editor = m_unity->selectedEditor();
     const auto trust = m_services.trust.snapshot(m_projectRoot);
     return editor && canRebindUnityMono(*m_unityDebugBinding, *editor, m_projectRoot, trust.trusted, trust.revision);
 }
 void Workbench::startUnityDebug(bool rebind) {
-    if (!m_window || !canStartLuaDebug() || m_buildService->externalLaunchAdmissionBusy()) return;
+    if (!m_window || !canStartLuaDebug() || m_buildService->externalLaunchAdmissionBusy())
+        return;
 #if !defined(_WIN32) && !defined(__linux__)
-    notify(QStringLiteral("Unity Debugger"), QStringLiteral("The verified Mono endpoint/source profile currently requires Windows or Linux. No adapter was started."), ui::NotificationKind::Error);
+    notify(
+        QStringLiteral("Unity Debugger"),
+        QStringLiteral(
+            "The verified Mono endpoint/source profile currently requires Windows or Linux. No adapter was started."),
+        ui::NotificationKind::Error);
     return;
 #else
     const auto root = m_projectRoot;
     const auto authorized = m_services.trust.snapshot(root);
-    if (!authorized.trusted) { notify(QStringLiteral("Unity Debugger"), QStringLiteral("Trust the Unity project before attaching."), ui::NotificationKind::Error); return; }
+    if (!authorized.trusted) {
+        notify(QStringLiteral("Unity Debugger"), QStringLiteral("Trust the Unity project before attaching."),
+               ui::NotificationKind::Error);
+        return;
+    }
     const auto editor = m_unity ? m_unity->selectedEditor() : std::nullopt;
     const auto previous = rebind ? m_unityDebugBinding : nullptr;
-    if (rebind && !canRebindUnityDebug()) return;
+    if (rebind && !canRebindUnityDebug())
+        return;
     std::optional<UnityMonoDebugSelection> selected;
-    if (previous) selected = previous->selection;
-    else if (m_options.selectUnityDebug) selected = m_options.selectUnityDebug(root);
+    if (previous)
+        selected = previous->selection;
+    else if (m_options.selectUnityDebug)
+        selected = m_options.selectUnityDebug(root);
     else {
         QDialog dialog;
         const QPointer<Workbench> owner(this);
         connect(this, &QObject::destroyed, &dialog, &QDialog::reject);
         dialog.setWindowTitle(QStringLiteral("Attach Unity Mono Debugger"));
         auto* form = new QFormLayout(&dialog);
-        auto* description = new QLabel(QStringLiteral("Verified Mono 2.58 profile: one loaded module and PDB, each below 1 MiB. Source frames use verified snapshots. Domain reload discards old frames and values; use Rebind Unity Mono After Reload to reverify the same Editor and restore eligible breakpoints. For a local IL2CPP player build, use Debug IL2CPP Generated C++ from the Run menu to launch with native symbols."), &dialog);
-        description->setWordWrap(true); form->addRow(description);
-        QComboBox host(&dialog); host.addItems({QStringLiteral("Selected Unity Editor"), QStringLiteral("Running Mono Player")});
+        auto* description = new QLabel(
+            QStringLiteral(
+                "Verified Mono 2.58 profile: one loaded module and PDB, each below 1 MiB. Source frames use verified "
+                "snapshots. Domain reload discards old frames and values; use Rebind Unity Mono After Reload to "
+                "reverify the same Editor and restore eligible breakpoints. For a local IL2CPP player build, use Debug "
+                "IL2CPP Generated C++ from the Run menu to launch with native symbols."),
+            &dialog);
+        description->setWordWrap(true);
+        form->addRow(description);
+        QComboBox host(&dialog);
+        host.addItems({QStringLiteral("Selected Unity Editor"), QStringLiteral("Running Mono Player")});
         QLineEdit pid(editor ? QString::number(editor->reportedPid) : QString{}, &dialog);
-        QSpinBox port(&dialog); port.setRange(0, 65535); port.setSpecialValueText(QStringLiteral("Enter known port"));
+        QSpinBox port(&dialog);
+        port.setRange(0, 65535);
+        port.setSpecialValueText(QStringLiteral("Enter known port"));
         QLineEdit assembly(&dialog), pdb(&dialog);
-        QLineEdit dotnet(QString::fromStdString(m_services.settings.snapshot()->get(settings::key::toolsManagedDotnetPath)), &dialog);
+        QLineEdit dotnet(
+            QString::fromStdString(m_services.settings.snapshot()->get(settings::key::toolsManagedDotnetPath)),
+            &dialog);
         QLineEdit verifier(QString::fromStdString(m_options.managedPdbGuardPath.empty()
-            ? (QCoreApplication::applicationDirPath() + QStringLiteral("/FrostManagedDebug/PdbGuard/PdbGuard.dll")).toStdString()
-            : m_options.managedPdbGuardPath), &dialog);
+                                                      ? (QCoreApplication::applicationDirPath() +
+                                                         QStringLiteral("/FrostManagedDebug/PdbGuard/PdbGuard.dll"))
+                                                            .toStdString()
+                                                      : m_options.managedPdbGuardPath),
+                           &dialog);
         form->addRow(QStringLiteral("Host"), &host);
-        form->addRow(QStringLiteral("Actual local process PID"), &pid); form->addRow(QStringLiteral("Known loopback debugger port"), &port);
-        form->addRow(QStringLiteral("Loaded managed module (absolute)"), &assembly); form->addRow(QStringLiteral("Matching portable PDB (absolute)"), &pdb);
+        form->addRow(QStringLiteral("Actual local process PID"), &pid);
+        form->addRow(QStringLiteral("Known loopback debugger port"), &port);
+        form->addRow(QStringLiteral("Loaded managed module (absolute)"), &assembly);
+        form->addRow(QStringLiteral("Matching portable PDB (absolute)"), &pdb);
         form->addRow(QStringLiteral("Installed .NET source-verifier host"), &dotnet);
         form->addRow(QStringLiteral("Original FrostIDE PDB verifier DLL"), &verifier);
         QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-        connect(&buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept); connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        connect(&buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         form->addRow(&buttons);
-        if (dialog.exec() != QDialog::Accepted || !owner) return;
-        bool validPid = false; const auto number = pid.text().toUInt(&validPid);
-        if (!validPid || !number) return;
-        selected = UnityMonoDebugSelection{host.currentIndex() == 1, false, number,
-            static_cast<std::uint16_t>(port.value()), assembly.text().toUtf8().toStdString(), pdb.text().toUtf8().toStdString(), dotnet.text().toUtf8().toStdString(), verifier.text().toUtf8().toStdString()};
+        if (dialog.exec() != QDialog::Accepted || !owner)
+            return;
+        bool validPid = false;
+        const auto number = pid.text().toUInt(&validPid);
+        if (!validPid || !number)
+            return;
+        selected = UnityMonoDebugSelection{host.currentIndex() == 1,
+                                           false,
+                                           number,
+                                           static_cast<std::uint16_t>(port.value()),
+                                           assembly.text().toUtf8().toStdString(),
+                                           pdb.text().toUtf8().toStdString(),
+                                           dotnet.text().toUtf8().toStdString(),
+                                           verifier.text().toUtf8().toStdString()};
     }
-    if (!selected) return;
-    if (selected->il2cpp) { notify(QStringLiteral("Unity Debugger"), QStringLiteral("Mono attach requires a Mono runtime. Use Debug IL2CPP Generated C++ to launch a local IL2CPP player with native symbols."), ui::NotificationKind::Error); return; }
+    if (!selected)
+        return;
+    if (selected->il2cpp) {
+        notify(QStringLiteral("Unity Debugger"),
+               QStringLiteral("Mono attach requires a Mono runtime. Use Debug IL2CPP Generated C++ to launch a local "
+                              "IL2CPP player with native symbols."),
+               ui::NotificationKind::Error);
+        return;
+    }
     const auto selection = *selected;
     const auto liveTrust = m_services.trust.snapshot(root);
-    if (m_projectRoot != root || !liveTrust.trusted || liveTrust.revision != authorized.revision || !canStartLuaDebug() || m_buildService->externalLaunchAdmissionBusy()) return;
-    if (!selection.pid || !selection.port || selection.assembly.empty() || selection.pdb.empty()) return;
-    if (!selection.player && (!editor || !editor->authenticated || editor->compiling || selection.pid != static_cast<std::uint32_t>(editor->reportedPid) || !editor->epoch || editor->epoch->load() != editor->revision)) {
-        notify(QStringLiteral("Unity Debugger"), QStringLiteral("Wait for an authenticated, non-compiling matching Unity Editor session before attaching."), ui::NotificationKind::Error); return;
+    if (m_projectRoot != root || !liveTrust.trusted || liveTrust.revision != authorized.revision ||
+        !canStartLuaDebug() || m_buildService->externalLaunchAdmissionBusy())
+        return;
+    if (!selection.pid || !selection.port || selection.assembly.empty() || selection.pdb.empty())
+        return;
+    if (!selection.player && (!editor || !editor->authenticated || editor->compiling ||
+                              selection.pid != static_cast<std::uint32_t>(editor->reportedPid) || !editor->epoch ||
+                              editor->epoch->load() != editor->revision)) {
+        notify(
+            QStringLiteral("Unity Debugger"),
+            QStringLiteral("Wait for an authenticated, non-compiling matching Unity Editor session before attaching."),
+            ui::NotificationKind::Error);
+        return;
     }
     const auto bundle = QCoreApplication::applicationDirPath();
 #ifdef _WIN32
@@ -113,10 +174,15 @@ void Workbench::startUnityDebug(bool rebind) {
     const auto held = (bundle + QStringLiteral("/frost_held_read")).toStdString();
     using SelectedPeer = debug::mono::LinuxPeer;
 #endif
-    const auto guard = !selection.verifier.empty() ? selection.verifier : m_options.managedPdbGuardPath.empty()
-        ? (bundle + QStringLiteral("/FrostManagedDebug/PdbGuard/PdbGuard.dll")).toStdString() : m_options.managedPdbGuardPath;
+    const auto guard = !selection.verifier.empty() ? selection.verifier
+                       : m_options.managedPdbGuardPath.empty()
+                           ? (bundle + QStringLiteral("/FrostManagedDebug/PdbGuard/PdbGuard.dll")).toStdString()
+                           : m_options.managedPdbGuardPath;
     if (!QFileInfo::exists(QString::fromStdString(held)) || !QFileInfo::exists(QString::fromStdString(guard))) {
-        notify(QStringLiteral("Unity Debugger"), QStringLiteral("The installed held-read/source-verification helper is unavailable."), ui::NotificationKind::Error); return;
+        notify(QStringLiteral("Unity Debugger"),
+               QStringLiteral("The installed held-read/source-verification helper is unavailable."),
+               ui::NotificationKind::Error);
+        return;
     }
     auto job = std::make_shared<ManagedSnapshotJob>();
     {
@@ -132,7 +198,11 @@ void Workbench::startUnityDebug(bool rebind) {
         return !job->cancelled.load() && state.trusted && state.revision == revision && identityCurrent();
     };
     auto peer = SelectedPeer::select(selection.pid, admitted);
-    if (!peer) { notify(QStringLiteral("Unity Debugger"), QString::fromStdString(peer.error().message()), ui::NotificationKind::Error); return; }
+    if (!peer) {
+        notify(QStringLiteral("Unity Debugger"), QString::fromStdString(peer.error().message()),
+               ui::NotificationKind::Error);
+        return;
+    }
     const auto identity = (*peer)->identity();
 #ifdef _WIN32
     const auto processIdentity = identity.creationTime;
@@ -140,64 +210,132 @@ void Workbench::startUnityDebug(bool rebind) {
     const auto processIdentity = identity.startTime;
 #endif
     if (previous && (!editor || !canRebindUnityMono(*previous, *editor, root, liveTrust.trusted, liveTrust.revision) ||
-        !sameUnityMonoProcess(*previous, identity.pid, processIdentity, identity.image))) {
-        notify(QStringLiteral("Unity Debugger"), QStringLiteral("The original Unity process or reload authorization changed."), ui::NotificationKind::Error); return;
+                     !sameUnityMonoProcess(*previous, identity.pid, processIdentity, identity.image))) {
+        notify(QStringLiteral("Unity Debugger"),
+               QStringLiteral("The original Unity process or reload authorization changed."),
+               ui::NotificationKind::Error);
+        return;
     }
-    QMessageBox confirmation(QMessageBox::Question, QStringLiteral("Confirm Unity Process"),
-        QStringLiteral("Attach the Mono 2.58 debugger to this held process?\n\nPID: %1\nImage: %2\nCreation identity: %3\nProject: %4\nPort: %5\nModule: %6\n\nThe adapter may suspend this host. Stop disconnects; it does not kill the Unity process.")
-            .arg(identity.pid).arg(QString::fromStdString(identity.image)).arg(processIdentity).arg(QString::fromStdString(root)).arg(selection.port).arg(QString::fromStdString(selection.assembly)),
+    QMessageBox confirmation(
+        QMessageBox::Question, QStringLiteral("Confirm Unity Process"),
+        QStringLiteral("Attach the Mono 2.58 debugger to this held process?\n\nPID: %1\nImage: %2\nCreation identity: "
+                       "%3\nProject: %4\nPort: %5\nModule: %6\n\nThe adapter may suspend this host. Stop disconnects; "
+                       "it does not kill the Unity process.")
+            .arg(identity.pid)
+            .arg(QString::fromStdString(identity.image))
+            .arg(processIdentity)
+            .arg(QString::fromStdString(root))
+            .arg(selection.port)
+            .arg(QString::fromStdString(selection.assembly)),
         QMessageBox::Yes | QMessageBox::Cancel, nullptr);
-    confirmation.setTextFormat(Qt::PlainText); confirmation.setDefaultButton(QMessageBox::Cancel);
-    const QPointer<Workbench> owner(this); connect(this, &QObject::destroyed, &confirmation, &QDialog::reject);
-    if (!m_options.selectUnityDebug && (confirmation.exec() != QMessageBox::Yes || !owner)) return;
-    if (!admitted() || m_projectRoot != root || !canStartLuaDebug() || m_buildService->externalLaunchAdmissionBusy()) return;
-    for (auto* view : m_editors->views()) if (view->document().dirty()) {
-        notify(QStringLiteral("Unity Debugger"), QStringLiteral("Save and let Unity compile dirty documents before capturing a loaded module."), ui::NotificationKind::Error); return;
-    }
-    m_managedDebugRoot = root; m_managedSnapshotJob = job;
-    auto finish = [this, job, root, selection, editor, processIdentity, revision = authorized.revision, peer = *peer, admitted](Result<MonoAdmittedModule> evidence) {
-        if (m_managedSnapshotJob != job) return;
-        if (!admitted() || m_projectRoot != root || m_debug->debugging() || m_buildService->externalLaunchAdmissionBusy()) { invalidateManagedDebug(); notify(QStringLiteral("Unity Debugger"), QStringLiteral("The authorized project or Unity session changed."), ui::NotificationKind::Error); return; }
-        if (!evidence) { m_managedSnapshotJob.reset(); notify(QStringLiteral("Unity Debugger"), QString::fromStdString(evidence.error().message()), ui::NotificationKind::Error); return; }
+    confirmation.setTextFormat(Qt::PlainText);
+    confirmation.setDefaultButton(QMessageBox::Cancel);
+    const QPointer<Workbench> owner(this);
+    connect(this, &QObject::destroyed, &confirmation, &QDialog::reject);
+    if (!m_options.selectUnityDebug && (confirmation.exec() != QMessageBox::Yes || !owner))
+        return;
+    if (!admitted() || m_projectRoot != root || !canStartLuaDebug() || m_buildService->externalLaunchAdmissionBusy())
+        return;
+    for (auto* view : m_editors->views())
+        if (view->document().dirty()) {
+            notify(QStringLiteral("Unity Debugger"),
+                   QStringLiteral("Save and let Unity compile dirty documents before capturing a loaded module."),
+                   ui::NotificationKind::Error);
+            return;
+        }
+    m_managedDebugRoot = root;
+    m_managedSnapshotJob = job;
+    auto finish = [this, job, root, selection, editor, processIdentity, revision = authorized.revision, peer = *peer,
+                   admitted](Result<MonoAdmittedModule> evidence) {
+        if (m_managedSnapshotJob != job)
+            return;
+        if (!admitted() || m_projectRoot != root || m_debug->debugging() ||
+            m_buildService->externalLaunchAdmissionBusy()) {
+            invalidateManagedDebug();
+            notify(QStringLiteral("Unity Debugger"), QStringLiteral("The authorized project or Unity session changed."),
+                   ui::NotificationKind::Error);
+            return;
+        }
+        if (!evidence) {
+            m_managedSnapshotJob.reset();
+            notify(QStringLiteral("Unity Debugger"), QString::fromStdString(evidence.error().message()),
+                   ui::NotificationKind::Error);
+            return;
+        }
         auto module = makeVerifiedMonoModule(selection.assembly, *evidence->snapshot, *evidence->map);
-        if (!module) { m_managedSnapshotJob.reset(); notify(QStringLiteral("Unity Debugger"), QString::fromStdString(module.error().message()), ui::NotificationKind::Error); return; }
+        if (!module) {
+            m_managedSnapshotJob.reset();
+            notify(QStringLiteral("Unity Debugger"), QString::fromStdString(module.error().message()),
+                   ui::NotificationKind::Error);
+            return;
+        }
         m_managedDebugSnapshot = std::make_shared<ManagedSourceSnapshot>(evidence->snapshot->source);
         std::vector<std::string> sources;
-        for (const auto& [path, bytes] : m_managedDebugSnapshot->sources) { (void)bytes; sources.push_back(path); }
+        for (const auto& [path, bytes] : m_managedDebugSnapshot->sources) {
+            (void)bytes;
+            sources.push_back(path);
+        }
         auto breakpoints = m_debug->breakpoints().sessionLines();
-        std::erase_if(breakpoints, [&sources](const auto& entry) { return std::find(sources.begin(), sources.end(), entry.first) == sources.end(); });
+        std::erase_if(breakpoints, [&sources](const auto& entry) {
+            return std::find(sources.begin(), sources.end(), entry.first) == sources.end();
+        });
         for (const auto& [path, lines] : breakpoints) {
             (void)path;
-            for (const auto& line : lines) if (line.enabled && (!line.condition.empty() || !line.hitCondition.empty() || !line.logMessage.empty())) {
-                invalidateManagedDebug(); notify(QStringLiteral("Unity Debugger"), QStringLiteral("This Mono profile does not support conditional, hit-count or log breakpoints."), ui::NotificationKind::Error); return;
-            }
+            for (const auto& line : lines)
+                if (line.enabled &&
+                    (!line.condition.empty() || !line.hitCondition.empty() || !line.logMessage.empty())) {
+                    invalidateManagedDebug();
+                    notify(
+                        QStringLiteral("Unity Debugger"),
+                        QStringLiteral("This Mono profile does not support conditional, hit-count or log breakpoints."),
+                        ui::NotificationKind::Error);
+                    return;
+                }
         }
         debug::mono::AdapterTarget adapter;
         adapter.module = *module;
-        adapter.connect = [peer, port = selection.port, admitted](debug::mono::MonoDeadline deadline, std::stop_token stop) -> Result<std::unique_ptr<debug::mono::BinaryLoopback>> {
-            if (!admitted()) return fail(ErrorCode::Cancelled, "Unity debug admission was revoked");
-            return debug::mono::BinaryLoopback::connect(port, deadline, stop,
-                [peer](std::uint16_t local, std::uint16_t remote, debug::mono::MonoDeadline until, std::stop_token token) { return peer->verify(local, remote, until, token); });
+        adapter.connect = [peer, port = selection.port,
+                           admitted](debug::mono::MonoDeadline deadline,
+                                     std::stop_token stop) -> Result<std::unique_ptr<debug::mono::BinaryLoopback>> {
+            if (!admitted())
+                return fail(ErrorCode::Cancelled, "Unity debug admission was revoked");
+            return debug::mono::BinaryLoopback::connect(
+                port, deadline, stop,
+                [peer](std::uint16_t local, std::uint16_t remote, debug::mono::MonoDeadline until,
+                       std::stop_token token) { return peer->verify(local, remote, until, token); });
         };
         debug::DebugTarget target;
         target.name = selection.player ? "Unity Mono Player" : "Unity Editor Mono";
-        target.program = peer->identity().image; target.workingDirectory = root; target.trustRoots = {root};
-        auto started = m_debug->attachManagedTarget(target, debug::mono::monoAdapterFactory(std::move(adapter)),
-            [this, admitted](const debug::DebugFrame& frame) { return admitted() && managedDebugFrameAllowed(frame); }, sources,
-            std::move(breakpoints),
+        target.program = peer->identity().image;
+        target.workingDirectory = root;
+        target.trustRoots = {root};
+        auto started = m_debug->attachManagedTarget(
+            target, debug::mono::monoAdapterFactory(std::move(adapter)),
+            [this, admitted](const debug::DebugFrame& frame) { return admitted() && managedDebugFrameAllowed(frame); },
+            sources, std::move(breakpoints),
             [this, admitted](std::string path, std::function<void(bool)> done) {
-                if (!admitted()) { done(false); return; }
-                validateManagedBreakpoint(std::move(path), [admitted, done = std::move(done)](bool valid) { done(valid && admitted()); });
-            }, admitted);
-        if (!started) { invalidateManagedDebug(); notify(QStringLiteral("Unity Debugger"), QString::fromStdString(started.error().message()), ui::NotificationKind::Error); }
-        else if (!selection.player && editor) {
+                if (!admitted()) {
+                    done(false);
+                    return;
+                }
+                validateManagedBreakpoint(
+                    std::move(path), [admitted, done = std::move(done)](bool valid) { done(valid && admitted()); });
+            },
+            admitted);
+        if (!started) {
+            invalidateManagedDebug();
+            notify(QStringLiteral("Unity Debugger"), QString::fromStdString(started.error().message()),
+                   ui::NotificationKind::Error);
+        } else if (!selection.player && editor) {
             m_unityDebugBinding = std::make_shared<UnityMonoDebugBinding>(UnityMonoDebugBinding{
                 selection, root, editor->instance, editor->session, peer->identity().image, revision, processIdentity});
         }
     };
     std::erase_if(m_managedSnapshotTasks, [](const auto& task) { return task.valid() && task.ready(); });
-    m_managedSnapshotTasks.push_back(m_pool->spawn(sched::Lane::Background,
-        prepareUnityModule(job, &m_services.launcher, &m_services.trust, root, authorized.revision, selection, held, guard, identityCurrent, std::move(finish))));
+    m_managedSnapshotTasks.push_back(
+        m_pool->spawn(sched::Lane::Background,
+                      prepareUnityModule(job, &m_services.launcher, &m_services.trust, root, authorized.revision,
+                                         selection, held, guard, identityCurrent, std::move(finish))));
 #endif
 }
-}
+} // namespace frost::app

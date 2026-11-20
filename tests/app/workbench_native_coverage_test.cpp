@@ -2,11 +2,11 @@
 // RUN-12 deferred real selected-configuration action -> genuine LLVM results -> source gutter journey.
 #include "frost/build/wsl_cmake.hpp"
 #include "frost/io/path.hpp"
-#include "frost/ui/debug_session_registry.hpp"
-#include "frost/ui/shell/notifications.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/run/native_analysis.hpp"
+#include "frost/ui/debug_session_registry.hpp"
 #include "frost/ui/run_controller.hpp"
+#include "frost/ui/shell/notifications.hpp"
 
 #include "workbench_rig.hpp"
 #include <QApplication>

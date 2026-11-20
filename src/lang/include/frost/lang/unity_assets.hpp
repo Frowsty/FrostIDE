@@ -4,15 +4,17 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/navigation.hpp"
-#include <stop_token>
+
 #include <cstddef>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
 namespace frost::lang {
-[[nodiscard]] bool isUnityAssetsPath(std::string_view root, std::string_view path, io::PathStyle style = io::kNativePathStyle);
+[[nodiscard]] bool isUnityAssetsPath(std::string_view root, std::string_view path,
+                                     io::PathStyle style = io::kNativePathStyle);
 [[nodiscard]] bool isUnityScriptAssociation(std::string_view path, std::string_view declaringType);
 struct UnityAssetSnapshot {
     std::string path, contents;
@@ -34,6 +36,7 @@ public:
     [[nodiscard]] std::optional<UnityAssetUsage> usageAt(std::string_view path, std::size_t offset) const;
     [[nodiscard]] std::optional<UnityAssetTarget> asset(std::string_view path) const;
     [[nodiscard]] const std::vector<std::string>& diagnostics() const { return m_diagnostics; }
+
 private:
     std::vector<UnityAssetTarget> m_targets;
     std::vector<UnityAssetUsage> m_usages;
@@ -44,8 +47,8 @@ private:
 struct UnityAssetMove {
     std::string from, to, expectedBytes;
 };
-[[nodiscard]] std::optional<std::vector<UnityAssetMove>> planUnityAssetMove(
-    std::span<const UnityAssetSnapshot> snapshots, std::string_view from, std::string_view to);
+[[nodiscard]] std::optional<std::vector<UnityAssetMove>>
+planUnityAssetMove(std::span<const UnityAssetSnapshot> snapshots, std::string_view from, std::string_view to);
 struct UnityAssetQuery {
     bool recognized = false;
     std::vector<Location> declarations;
@@ -55,6 +58,7 @@ struct UnityAssetQuery {
 // Runs on the language worker with the existing project source-index inventory and captured
 // dirty editor overlays. Never scans the project, starts Unity or reads generated project files.
 [[nodiscard]] UnityAssetQuery queryUnityAssets(io::IFileSystem& fs, std::span<const std::string> projectFiles,
-    std::span<const UnityAssetSnapshot> overlays, std::string_view path, std::size_t byteOffset,
-    std::stop_token stop = {}, std::string_view memberName = {}, std::string_view memberKind = {});
+                                               std::span<const UnityAssetSnapshot> overlays, std::string_view path,
+                                               std::size_t byteOffset, std::stop_token stop = {},
+                                               std::string_view memberName = {}, std::string_view memberKind = {});
 } // namespace frost::lang

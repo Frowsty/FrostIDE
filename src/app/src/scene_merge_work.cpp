@@ -45,7 +45,7 @@ public:
         return m_work.launcher.launch(spec);
     }
     Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
-                                                         const io::AsyncContext& context) override {
+                                                           const io::AsyncContext& context) override {
         if (auto valid = checkAdmission(); !valid)
             return std::unexpected(valid.error());
         return m_work.launcher.launchAsync(spec, context);

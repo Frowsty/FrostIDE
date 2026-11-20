@@ -193,9 +193,11 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
     if (ready) {
         // Real external metadata symbol from the evaluated reference pack, through the same host
         // endpoint normal F12 invokes. Reference assemblies may legitimately have no method IL.
-        auto library = pool.spawn(sched::Lane::UserVisible,
-            request(pool, service, "frost/managed/librarySource",
-                positionParams(*uri, 47).set("mode", "decompiled").set("allowSourceLink", false))).join();
+        auto library =
+            pool.spawn(sched::Lane::UserVisible,
+                       request(pool, service, "frost/managed/librarySource",
+                               positionParams(*uri, 47).set("mode", "decompiled").set("allowSourceLink", false)))
+                .join();
         ASSERT_TRUE(library) << library.error().describe();
         ASSERT_TRUE(library->isObject());
         EXPECT_EQ(library->stringAt("kind"), "decompiled");

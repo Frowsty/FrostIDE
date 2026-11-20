@@ -6,9 +6,9 @@
 #include <array>
 namespace frost::lang {
 Result<std::vector<GeneratedTemplateFile>> renderFileTemplate(const FileTemplateRequest& request) {
-    const auto control=[](unsigned char c){return c<32||c==127;};
-    if (std::ranges::any_of(request.author,control)||std::ranges::any_of(request.description,control))
-        return fail(ErrorCode::InvalidArgument,"Template comments cannot contain control bytes");
+    const auto control = [](unsigned char c) { return c < 32 || c == 127; };
+    if (std::ranges::any_of(request.author, control) || std::ranges::any_of(request.description, control))
+        return fail(ErrorCode::InvalidArgument, "Template comments cannot contain control bytes");
     if (request.name.empty() || request.name.size() > 256 || request.author.size() > 256 ||
         request.description.size() > 4096 || request.author.find_first_of("\r\n") != request.author.npos ||
         request.description.find_first_of("\r\n") != request.description.npos ||
@@ -92,21 +92,22 @@ Result<std::vector<GeneratedTemplateFile>> renderFileTemplate(const FileTemplate
     case FileTemplateKind::FrostComponent: {
         // ComponentRegistry permits Register<T> only inside a registration module. Match
         // the engine's own module TU pattern; callers must link this TU into an executable.
-        const std::string comment="// SPDX-License-Identifier: Apache-2.0\n/* " +
-            (request.description.empty()?"FrostEngine reflected gameplay component.":request.description)+
-            "\nAuthor: "+request.author+"\n*/\n";
-        result.push_back({name+".hpp",comment+"#pragma once\n\nstruct "+name+
-            " {\n    float Value = 0.0f;\n};\n"});
-        result.push_back({name+".cpp",comment+"#include \""+name+".hpp\"\n"+
-            "#include \"Frost/Scene/ComponentRegistry.h\"\n\nnamespace {\n"+
-            "void Register"+name+"Components() {\n"+
-            "    Frost::ComponentRegistry::Register<"+name+">(\""+name+"\")\n"+
-            "        .Description(\"Gameplay component.\")\n"+
-            "        .Category(\"Gameplay\")\n"+
-            "        .Field<&"+name+"::Value>(\"Value\").Description(\"Serialized gameplay value.\");\n"+
-            "}\n// The owning executable links this translation unit directly, retaining its module.\n"+
-            "[[maybe_unused]] const bool moduleAdded = Frost::ComponentRegistry::AddRegistrationModule(\n"+
-            "    \"Project."+name+"\", &Register"+name+"Components);\n}\n"});
+        const std::string comment =
+            "// SPDX-License-Identifier: Apache-2.0\n/* " +
+            (request.description.empty() ? "FrostEngine reflected gameplay component." : request.description) +
+            "\nAuthor: " + request.author + "\n*/\n";
+        result.push_back(
+            {name + ".hpp", comment + "#pragma once\n\nstruct " + name + " {\n    float Value = 0.0f;\n};\n"});
+        result.push_back(
+            {name + ".cpp",
+             comment + "#include \"" + name + ".hpp\"\n" +
+                 "#include \"Frost/Scene/ComponentRegistry.h\"\n\nnamespace {\n" + "void Register" + name +
+                 "Components() {\n" + "    Frost::ComponentRegistry::Register<" + name + ">(\"" + name + "\")\n" +
+                 "        .Description(\"Gameplay component.\")\n" + "        .Category(\"Gameplay\")\n" +
+                 "        .Field<&" + name + "::Value>(\"Value\").Description(\"Serialized gameplay value.\");\n" +
+                 "}\n// The owning executable links this translation unit directly, retaining its module.\n" +
+                 "[[maybe_unused]] const bool moduleAdded = Frost::ComponentRegistry::AddRegistrationModule(\n" +
+                 "    \"Project." + name + "\", &Register" + name + "Components);\n}\n"});
         break;
     }
     case FileTemplateKind::Source:

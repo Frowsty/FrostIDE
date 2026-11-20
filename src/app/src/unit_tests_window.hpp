@@ -107,7 +107,11 @@ unitTestsLocationOf(const std::string& testName, const std::string& caseName, co
 unitTestsDescribeSelection(const std::string& testName, const std::string& caseName, const run::DiscoveredTest* test,
                            const run::TestResult* result, const std::vector<run::DoctestCase>* doctestCases);
 
-struct AgentTestSnapshot { bool busy = false; std::uint64_t generation = 0; std::vector<run::TestResult> results; };
+struct AgentTestSnapshot {
+    bool busy = false;
+    std::uint64_t generation = 0;
+    std::vector<run::TestResult> results;
+};
 // Cached actual current CTest provider results. Unavailable/stale provider is an error, never a fabricated pass.
 [[nodiscard]] Result<AgentTestSnapshot> unitTestsAgentSnapshot(QWidget* widget);
 // Explicitly approved CTest Run All using the same current listing/trust/runner admission as the UI.

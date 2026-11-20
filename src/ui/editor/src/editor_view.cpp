@@ -14,8 +14,8 @@
 #include "frost/ui/editor/go_to_line.hpp"
 #include "frost/ui/frost_style.hpp"
 
-#include "editor_view_internal.hpp"
 #include "editor_accessibility.hpp"
+#include "editor_view_internal.hpp"
 #include <QMetaObject>
 
 #include <algorithm>

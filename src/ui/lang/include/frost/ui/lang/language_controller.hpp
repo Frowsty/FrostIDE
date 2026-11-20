@@ -118,7 +118,9 @@ class LanguageController final : public QObject {
 public:
     explicit LanguageController(LanguageServices services, QObject* parent = nullptr);
     ~LanguageController() override;
-    void setUnityAssetFiles(std::function<std::vector<std::string>()> files) { m_services.unityAssetFiles = std::move(files); }
+    void setUnityAssetFiles(std::function<std::vector<std::string>()> files) {
+        m_services.unityAssetFiles = std::move(files);
+    }
     void setCppRenameCheck(decltype(LanguageServices::cppRenameCheck) check) {
         m_services.cppRenameCheck = std::move(check);
     }
@@ -136,10 +138,10 @@ public:
     [[nodiscard]] Result<void> registerActions(input::ActionRegistry& registry);
 
     // --- The features (the action handlers) ---
-    using LocalCompletion = std::function<std::optional<::frost::lang::CompletionList>(std::string_view,
-        const text::Snapshot&, ByteOffset)>;
+    using LocalCompletion = std::function<std::optional<::frost::lang::CompletionList>(
+        std::string_view, const text::Snapshot&, ByteOffset)>;
     // Optional syntax-only host catalog; an answer owns completion and never reaches LSP resolve.
-    void setLocalCompletion(LocalCompletion completion) { m_localCompletion=std::move(completion); }
+    void setLocalCompletion(LocalCompletion completion) { m_localCompletion = std::move(completion); }
     void completeCode();
     void smartCompleteCode();
     void showParameterInfo();

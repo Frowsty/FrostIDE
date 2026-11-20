@@ -6,4 +6,4 @@
 namespace frost::app {
 // GUI thread; blocks until the viewer closes. 1 means merge cancelled, 0 means success.
 [[nodiscard]] Result<int> runCliEditor(const CommandLine& command);
-}
+} // namespace frost::app

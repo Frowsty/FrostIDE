@@ -12,8 +12,8 @@
 #include "frost/term/vt_screen.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <array>
+#include <charconv>
 #include <deque>
 #include <format>
 #include <span>
@@ -272,7 +272,8 @@ struct VtScreen::Impl {
             }
             return 1;
         }
-        if (self.owner.m_altScreen) return 1;
+        if (self.owner.m_altScreen)
+            return 1;
         const std::string_view value = self.shellOsc;
         if (value.empty() || (value.size() > 1 && value[1] != ';'))
             return 1;

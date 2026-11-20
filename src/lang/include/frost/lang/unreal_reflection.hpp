@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Public reflection macro vocabulary and navigation over actual Clang callback events.
 #pragma once
-#include "frost/lang/cpp_preprocessor.hpp"
 #include "frost/lang/completion.hpp"
+#include "frost/lang/cpp_preprocessor.hpp"
+
 #include <span>
 namespace frost::lang {
 struct UnrealReflectionMacro {

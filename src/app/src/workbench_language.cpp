@@ -80,9 +80,9 @@ ByteOffset mapThrough(ByteOffset offset, std::span<const lang::ByteEdit> edits) 
 LanguageBridge::LanguageBridge(Workbench& workbench)
     : m_workbench(workbench), m_applier(static_cast<lang::IWorkspaceDocuments&>(*this), workbench.m_services.fs,
                                         lang::PositionEncoding::Utf16) {
-    m_server.setJsonServer(m_json,[schemas=m_json](std::string_view path){return schemas->handles(path);});
-    m_json->setDeclarationReader([fs=&workbench.m_services.fs](std::string_view root,std::string_view path) {
-        return readEngineSchemaDeclaration(*fs,root,path);
+    m_server.setJsonServer(m_json, [schemas = m_json](std::string_view path) { return schemas->handles(path); });
+    m_json->setDeclarationReader([fs = &workbench.m_services.fs](std::string_view root, std::string_view path) {
+        return readEngineSchemaDeclaration(*fs, root, path);
     });
     if (!workbench.m_resourceGovernor)
         workbench.m_resourceGovernor = std::make_shared<sched::ResourceGovernor>();
@@ -115,8 +115,10 @@ LanguageBridge::LanguageBridge(Workbench& workbench)
             return fs->readFileSnapshot(path, limit);
         });
     m_server.setCMakeServer(m_cmakeLanguage);
-    m_msbuildLanguage = std::make_shared<lang::MSBuildLanguageService>(*workbench.m_pool,
-        [fs=&workbench.m_services.fs](std::string_view path,std::size_t limit) { return fs->readFileSnapshot(path,limit); });
+    m_msbuildLanguage = std::make_shared<lang::MSBuildLanguageService>(
+        *workbench.m_pool, [fs = &workbench.m_services.fs](std::string_view path, std::size_t limit) {
+            return fs->readFileSnapshot(path, limit);
+        });
     m_server.setMSBuildServer(m_msbuildLanguage);
 }
 
@@ -132,7 +134,8 @@ std::vector<lang::LiveDiagnostic> LanguageBridge::jsonDiagnostics(std::string_vi
     auto* view = m_workbench.m_editors->find(path);
     if (!view)
         return {};
-    if (lang::isCMakeSource(path)) return lang::inspectCMakeSource(path,view->editor().editor().text());
+    if (lang::isCMakeSource(path))
+        return lang::inspectCMakeSource(path, view->editor().editor().text());
     m_json->updateDocument(std::string(path), view->editor().editor().text());
     return m_json->diagnostics(path);
 }
@@ -192,31 +195,35 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
     if (label == "Rename" || label == "C++ Semantic Refactoring") {
         document::RefactoringPlan plan;
         plan.label = std::string(label);
-        const bool cmakeRename=label=="Rename" && std::ranges::any_of(edit.files,[](const auto& file){return lang::isCMakeSource(file.path);});
+        const bool cmakeRename = label == "Rename" && std::ranges::any_of(edit.files, [](const auto& file) {
+                                     return lang::isCMakeSource(file.path);
+                                 });
         if (cmakeRename) {
-            const auto capture=m_cmakeLanguage->renameCapture(edit);
-            if (!capture || !m_workbench.m_cmake || m_workbench.m_cmake->shownModel()!=capture->model ||
+            const auto capture = m_cmakeLanguage->renameCapture(edit);
+            if (!capture || !m_workbench.m_cmake || m_workbench.m_cmake->shownModel() != capture->model ||
                 m_workbench.m_cmake->service().modelStale())
-                return fail(ErrorCode::Busy,"CMake rename configuration changed; request a new preview");
-            plan.label="Rename CMake target";
-            for (const auto& [path,bytes]:capture->inputs) {
-                if (auto state=find(path)) {
-                    if (state->snapshot.text()!=bytes || state->changedOnDisk)
-                        return fail(ErrorCode::Busy,"CMake source changed after analysis: "+path);
-                    plan.bufferDependencies.push_back({path,bytes});
-                } else plan.dependencies.push_back({path,bytes});
+                return fail(ErrorCode::Busy, "CMake rename configuration changed; request a new preview");
+            plan.label = "Rename CMake target";
+            for (const auto& [path, bytes] : capture->inputs) {
+                if (auto state = find(path)) {
+                    if (state->snapshot.text() != bytes || state->changedOnDisk)
+                        return fail(ErrorCode::Busy, "CMake source changed after analysis: " + path);
+                    plan.bufferDependencies.push_back({path, bytes});
+                } else
+                    plan.dependencies.push_back({path, bytes});
             }
-            for (const auto& [path,bytes]:capture->provenance) plan.dependencies.push_back({path,bytes});
-            const auto root=m_workbench.m_projectRoot;
-            const auto trust=m_workbench.m_services.trust.snapshot(root);
+            for (const auto& [path, bytes] : capture->provenance)
+                plan.dependencies.push_back({path, bytes});
+            const auto root = m_workbench.m_projectRoot;
+            const auto trust = m_workbench.m_services.trust.snapshot(root);
             const QPointer<Workbench> self(&m_workbench);
-            plan.revalidateContext=[self,capture,root,trust]() -> Result<void> {
-                if (!self || self->m_shutDown || self->m_projectRoot!=root || !self->m_cmake ||
-                    self->m_cmake->shownModel()!=capture->model || self->m_cmake->service().modelStale())
-                    return fail(ErrorCode::Busy,"CMake configuration changed during preview");
-                const auto current=self->m_services.trust.snapshot(root);
-                if (current.revision!=trust.revision || current.trusted!=trust.trusted)
-                    return fail(ErrorCode::Untrusted,"Project trust changed during CMake preview");
+            plan.revalidateContext = [self, capture, root, trust]() -> Result<void> {
+                if (!self || self->m_shutDown || self->m_projectRoot != root || !self->m_cmake ||
+                    self->m_cmake->shownModel() != capture->model || self->m_cmake->service().modelStale())
+                    return fail(ErrorCode::Busy, "CMake configuration changed during preview");
+                const auto current = self->m_services.trust.snapshot(root);
+                if (current.revision != trust.revision || current.trusted != trust.trusted)
+                    return fail(ErrorCode::Untrusted, "Project trust changed during CMake preview");
                 return {};
             };
         }
@@ -289,7 +296,7 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
                 return fail(ErrorCode::Cancelled, "Semantic refactoring cancelled");
         }
         if (cmakeRename && !m_workbench.previewCppRefactoring(plan))
-            return fail(ErrorCode::Cancelled,"CMake target rename cancelled");
+            return fail(ErrorCode::Cancelled, "CMake target rename cancelled");
         auto applied = m_workbench.applyRefactoring(plan);
         if (!applied)
             return std::unexpected(std::move(applied.error()));
@@ -309,20 +316,24 @@ sched::Task<Result<lang::Json>> LanguageBridge::request(std::string method, lang
         auto path = lang::uriToPath(doc->stringAt("uri"));
         if (path && project::isMSBuildSource(*path)) {
             lang::MSBuildLanguageInput input;
-            input.path=*path;
-            for (const auto& [openPath,text] : openDocuments()) {
-                if (lang::documentKey(openPath)==lang::documentKey(*path)) input.source=text;
-                else if (project::isMSBuildSource(openPath)) input.openInputs.emplace_back(openPath,text);
+            input.path = *path;
+            for (const auto& [openPath, text] : openDocuments()) {
+                if (lang::documentKey(openPath) == lang::documentKey(*path))
+                    input.source = text;
+                else if (project::isMSBuildSource(openPath))
+                    input.openInputs.emplace_back(openPath, text);
             }
             // Only already-completed, trusted ProjectHost results are consumed. No request
             // starts evaluation, resolves property functions, or grants project trust.
             if (m_workbench.m_solutionEvaluation && m_workbench.m_services.trust.isTrusted(m_workbench.m_projectRoot))
                 for (const auto& evaluated : m_workbench.m_solutionEvaluation->results())
-                    if (lang::documentKey(evaluated.projectPath)==lang::documentKey(*path) ||
-                        std::ranges::any_of(evaluated.imports,[&](const auto& imported){return lang::documentKey(imported)==lang::documentKey(*path);}))
+                    if (lang::documentKey(evaluated.projectPath) == lang::documentKey(*path) ||
+                        std::ranges::any_of(evaluated.imports, [&](const auto& imported) {
+                            return lang::documentKey(imported) == lang::documentKey(*path);
+                        }))
                         input.evaluations.push_back(evaluated);
             m_msbuildLanguage->setInput(std::move(input));
-            return m_msbuildLanguage->request(std::move(method),std::move(params),token);
+            return m_msbuildLanguage->request(std::move(method), std::move(params), token);
         }
         if (path && syntax::shaderSourceKind(*path) != syntax::ShaderSourceKind::None &&
             (!m_workbench.m_registeredLanguages || !m_workbench.m_registeredLanguages->service(*path))) {
@@ -355,9 +366,11 @@ sched::Task<Result<lang::Json>> LanguageBridge::request(std::string method, lang
             }
             if (m_workbench.m_cmake && !m_workbench.m_cmake->service().modelStale()) {
                 input.model = m_workbench.m_cmake->shownModel();
-                if (input.model && !input.model->replyIndex.empty()) input.provenancePaths.push_back(input.model->replyIndex);
+                if (input.model && !input.model->replyIndex.empty())
+                    input.provenancePaths.push_back(input.model->replyIndex);
                 if (m_workbench.m_clangd)
-                    if (auto database=m_workbench.m_clangd->compileCommands()) input.provenancePaths.push_back(database->file);
+                    if (auto database = m_workbench.m_clangd->compileCommands())
+                        input.provenancePaths.push_back(database->file);
             }
             // Capture snapshots/model only. Bounded file reads and flattening run on the pool.
             m_cmakeLanguage->setInput(std::move(input));
@@ -404,7 +417,8 @@ std::int64_t LanguageBridge::documentVersion() const {
         const auto text = snapshot();
         return text ? static_cast<std::int64_t>(text->version()) : 0;
     }
-    if (isEngineShaderSource(path) || m_json->handles(path) || lang::isCMakeSource(path) || project::isMSBuildSource(path)) {
+    if (isEngineShaderSource(path) || m_json->handles(path) || lang::isCMakeSource(path) ||
+        project::isMSBuildSource(path)) {
 
         const auto text = snapshot();
         return text ? static_cast<std::int64_t>(text->version()) : 0;
@@ -426,7 +440,8 @@ std::string LanguageBridge::structureIdentity() const {
     const auto* view = m_workbench.currentView();
     const std::string path = documentPath();
     const auto key = reinterpret_cast<std::uintptr_t>(view);
-    if(ui::lang::languageIdForPath(path)=="json")return std::format("{}:json:{}",key,m_json->schemaGeneration());
+    if (ui::lang::languageIdForPath(path) == "json")
+        return std::format("{}:json:{}", key, m_json->schemaGeneration());
     if (isEngineShaderSource(path))
         return std::format("{}:{}", key,
                            m_workbench.m_engine ? m_workbench.m_engine->shaderLanguageIdentity() : "unavailable");
@@ -708,8 +723,10 @@ sched::Task<void> readCompileDatabaseTask(io::IFileSystem* fs, std::string datab
 ui::lang::ServerReadiness Workbench::languageReadiness(std::string_view path) {
     using Readiness = ui::lang::ServerReadiness;
     if (isEngineShaderSource(path))
-        return m_engine && m_engine->snapshot().boolAt("connected").value_or(false) ? Readiness::Unknown : Readiness::NotRunning;
-    if ((m_bridge && m_bridge->handlesJsonDocument(path)) || lang::isCMakeSource(path) || project::isMSBuildSource(path))
+        return m_engine && m_engine->snapshot().boolAt("connected").value_or(false) ? Readiness::Unknown
+                                                                                    : Readiness::NotRunning;
+    if ((m_bridge && m_bridge->handlesJsonDocument(path)) || lang::isCMakeSource(path) ||
+        project::isMSBuildSource(path))
         return Readiness::Unknown;
     if (syntax::shaderSourceKind(path) != syntax::ShaderSourceKind::None &&
         (!m_registeredLanguages || !m_registeredLanguages->service(path)))

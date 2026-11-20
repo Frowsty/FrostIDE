@@ -181,17 +181,24 @@ TEST(MonoProtocolSession, RejectsDuplicateAndInvalidStartupEvents) {
     }
 }
 TEST(MonoProtocolSession, DefersOwnedExceptionStopAndRejectsForeignRequestIdentity) {
-    ProtocolSession session; readyWithBreakpoint(session);
+    ProtocolSession session;
+    readyWithBreakpoint(session);
     ASSERT_TRUE(session.exceptions(2, false));
-    const std::vector<std::uint8_t> installed{0,0,0,15,0,0,0,4,0x80,0,0,0,0,0,10};
+    const std::vector<std::uint8_t> installed{0, 0, 0, 15, 0, 0, 0, 4, 0x80, 0, 0, 0, 0, 0, 10};
     ASSERT_TRUE(session.feed(installed));
     ASSERT_TRUE(session.resume());
-    const std::vector<std::uint8_t> stop{0,0,0,29,0,0,0,7,0,64,100,2,0,0,0,1,13,0,0,0,10,0,0,0,1,0,0,0,42};
-    auto early = session.feed(stop); ASSERT_TRUE(early); EXPECT_TRUE(early->empty());
-    const std::vector<std::uint8_t> ack{0,0,0,11,0,0,0,5,0x80,0,0};
-    auto completed = session.feed(ack); ASSERT_TRUE(completed); EXPECT_EQ(completed->size(), 2u);
+    const std::vector<std::uint8_t> stop{0, 0,  0, 29, 0, 0,  0, 7, 0, 64, 100, 2, 0, 0, 0,
+                                         1, 13, 0, 0,  0, 10, 0, 0, 0, 1,  0,   0, 0, 42};
+    auto early = session.feed(stop);
+    ASSERT_TRUE(early);
+    EXPECT_TRUE(early->empty());
+    const std::vector<std::uint8_t> ack{0, 0, 0, 11, 0, 0, 0, 5, 0x80, 0, 0};
+    auto completed = session.feed(ack);
+    ASSERT_TRUE(completed);
+    EXPECT_EQ(completed->size(), 2u);
     EXPECT_EQ(session.state().phase(), Phase::Suspended);
-    ProtocolSession foreign; readyWithBreakpoint(foreign);
+    ProtocolSession foreign;
+    readyWithBreakpoint(foreign);
     ASSERT_TRUE(foreign.resume());
     EXPECT_FALSE(foreign.feed(stop)); // Neither a breakpoint request nor an unowned exception is admissible.
 }

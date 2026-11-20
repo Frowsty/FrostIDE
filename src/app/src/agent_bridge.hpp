@@ -2,10 +2,12 @@
 // Per-window opt-in Claude Code WebSocket/MCP transport; no process launch or credential access.
 #pragma once
 #include "frost/core/error.hpp"
-#include <QObject>
+
 #include <QJsonObject>
+#include <QObject>
 #include <QTcpServer>
 #include <QTimer>
+
 #include <functional>
 #include <map>
 class QTcpSocket;
@@ -15,7 +17,10 @@ public:
     struct Reply {
         std::function<void(QJsonObject)> deliver;
         std::function<bool()> alive;
-        void operator()(QJsonObject result) const { if (deliver) deliver(std::move(result)); }
+        void operator()(QJsonObject result) const {
+            if (deliver)
+                deliver(std::move(result));
+        }
         [[nodiscard]] bool connected() const { return alive && alive(); }
     };
     using Dispatch = std::function<void(const QString&, const QJsonObject&, Reply)>;
@@ -27,8 +32,17 @@ public:
     void notify(const QString& method, const QJsonObject& params);
     [[nodiscard]] quint16 port() const { return m_server.serverPort(); }
     [[nodiscard]] int clientCount() const;
+
 private:
-    struct Client { QByteArray bytes; QByteArray fragments; bool fragmenting = false; bool upgraded = false; bool initialized = false; int pending = 0; qint64 seen = 0; };
+    struct Client {
+        QByteArray bytes;
+        QByteArray fragments;
+        bool fragmenting = false;
+        bool upgraded = false;
+        bool initialized = false;
+        int pending = 0;
+        qint64 seen = 0;
+    };
     void read(QTcpSocket* socket);
     void message(QTcpSocket* socket, const QByteArray& bytes);
     void send(QTcpSocket* socket, const QJsonObject& object);
@@ -41,4 +55,4 @@ private:
     QByteArray m_token;
     QString m_lock;
 };
-}
+} // namespace frost::app

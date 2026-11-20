@@ -4,7 +4,6 @@
 // registry and their handlers (split from workbench.cpp, FND-12a).
 
 #include "frost/app/workbench.hpp"
-#include "project_open_broker.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/ui/debug_actions.hpp"
@@ -24,6 +23,7 @@
 #include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "project_open_broker.hpp"
 #include "project_properties_dialog.hpp"
 #include "unity_control.hpp"
 #include <QDialog>
@@ -137,9 +137,10 @@ void Workbench::registerActions() {
             problems->setController(&replayController);
             output->setController(&replayController);
             connect(problems, &ui::ProblemsView::openLocation, this, &Workbench::openLocation);
-            connect(problems, &ui::ProblemsView::openUtf16Location, this, [this](const QString& path, int line, int column) {
-                (void)openExternalFile(*this, path.toUtf8().toStdString(), line, column, true);
-            });
+            connect(problems, &ui::ProblemsView::openUtf16Location, this,
+                    [this](const QString& path, int line, int column) {
+                        (void)openExternalFile(*this, path.toUtf8().toStdString(), line, column, true);
+                    });
             connect(output, &ui::BuildOutputPane::openLocation, this, &Workbench::openLocation);
             layout->addWidget(problems, 2);
             layout->addWidget(output, 1);
@@ -210,12 +211,23 @@ void Workbench::registerActions() {
     add(
         "code.inspectLua", "Inspect Lua Code...", [this] { (void)inspectLuaCode(); },
         [this] { return !m_projectRoot.empty(); });
-    add("code.inspectNativeCpp", "Analyze C++ Module (Frost)...", [this] {
-        if(auto* view=currentView(); view && isCFamilySource(view->path()))
-            inspectNativeCppAsync(std::string(io::parentPath(view->path())));
-    },[this] { return m_window && currentView() && isCFamilySource(currentView()->path()); });
-    add("code.dxcDiagnostics", "DXC HLSL Diagnostics...", [this] { showDxcDiagnostics(); }, [this] { return m_window && !m_projectRoot.empty(); });
-    add("code.cancelDxcDiagnostics", "Cancel DXC HLSL Diagnostics", [this] { m_dxcStop.request_stop(); ++m_dxcGeneration; }, [this] { return m_dxcGeneration > 0; });
+    add(
+        "code.inspectNativeCpp", "Analyze C++ Module (Frost)...",
+        [this] {
+            if (auto* view = currentView(); view && isCFamilySource(view->path()))
+                inspectNativeCppAsync(std::string(io::parentPath(view->path())));
+        },
+        [this] { return m_window && currentView() && isCFamilySource(currentView()->path()); });
+    add(
+        "code.dxcDiagnostics", "DXC HLSL Diagnostics...", [this] { showDxcDiagnostics(); },
+        [this] { return m_window && !m_projectRoot.empty(); });
+    add(
+        "code.cancelDxcDiagnostics", "Cancel DXC HLSL Diagnostics",
+        [this] {
+            m_dxcStop.request_stop();
+            ++m_dxcGeneration;
+        },
+        [this] { return m_dxcGeneration > 0; });
     input::ActionSpec inspectCpp;
     inspectCpp.id = "code.inspectCpp";
     inspectCpp.name = "Inspect C++ Module...";
@@ -509,12 +521,18 @@ void Workbench::registerActions() {
             log::warn(kLog, "action agent.atMention: {}", added.error().describe());
         }
     }
-    add("agent.connect", "Connect AI Agent to This Workspace...", [this] { enableAgentBridge(false); },
+    add(
+        "agent.connect", "Connect AI Agent to This Workspace...", [this] { enableAgentBridge(false); },
         [this] { return interactiveReady() && m_services.trust.isTrusted(m_projectRoot); });
-    add("agent.terminal", "Agent Terminal (runs Claude Code)...", [this] { enableAgentBridge(true); },
+    add(
+        "agent.terminal", "Agent Terminal (runs Claude Code)...", [this] { enableAgentBridge(true); },
         [this] { return interactiveReady() && m_terminal && m_services.trust.isTrusted(m_projectRoot); });
-    add("agent.chat", "AI Agent Native Chat...", [this] { showNativeAgent(); }, [this] { return interactiveReady() && m_services.trust.isTrusted(m_projectRoot); });
-    add("agent.disconnect", "Disconnect AI Agent", [this] { stopAgentBridge(); }, [this] { return agentBridgeActive(); });
+    add(
+        "agent.chat", "AI Agent Native Chat...", [this] { showNativeAgent(); },
+        [this] { return interactiveReady() && m_services.trust.isTrusted(m_projectRoot); });
+    add(
+        "agent.disconnect", "Disconnect AI Agent", [this] { stopAgentBridge(); },
+        [this] { return agentBridgeActive(); });
     registerRemoteActions();
     // No "window.services" alias for the Unit Tests window: the Services window is UX-9's, and
     // Alt+8 is bound to window.unitTests in the module defaults.

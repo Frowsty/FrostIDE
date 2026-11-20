@@ -6,5 +6,6 @@
 namespace frost::app {
 // GUI thread; returns an existing regular physical file within root. Never admits credentials/keychains.
 // Resolves junctions/symlinks on both sides; errors propagate without probing file contents.
-[[nodiscard]] Result<std::string> agentWorkspaceResource(io::IFileSystem& fs, std::string_view root, std::string_view resource);
-}
+[[nodiscard]] Result<std::string> agentWorkspaceResource(io::IFileSystem& fs, std::string_view root,
+                                                         std::string_view resource);
+} // namespace frost::app

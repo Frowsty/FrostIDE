@@ -18,9 +18,8 @@
 #include "frost/core/error.hpp"
 #include "frost/lang/cmake_language.hpp"
 #include "frost/lang/lsp_client.hpp"
-#include "frost/lang/shader_source.hpp"
 #include "frost/lang/msbuild_language.hpp"
-
+#include "frost/lang/shader_source.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/ui/lang/editor_language_host.hpp"
 

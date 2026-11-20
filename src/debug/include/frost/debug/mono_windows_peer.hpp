@@ -13,7 +13,11 @@ namespace frost::debug::mono {
 // `pid` and `creationTime` must come from an independently authenticated selected Editor/fixture.
 // `current` must recheck trust and the selected project/session generation without blocking.
 // This verifier binds TCP ownership; it does not authenticate the project bridge or source bytes.
-struct WindowsProcessIdentity { std::uint32_t pid = 0; std::uint64_t creationTime = 0; std::string image; };
+struct WindowsProcessIdentity {
+    std::uint32_t pid = 0;
+    std::uint64_t creationTime = 0;
+    std::string image;
+};
 class WindowsPeer final {
 public:
     // Holds an actual selected process before user confirmation; no endpoint is opened and no bytes sent.

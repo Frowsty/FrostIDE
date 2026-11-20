@@ -361,8 +361,7 @@ void Workbench::startNativeAnalysis(bool importProfiles, bool profile) {
     connect(admissionWatch, &QTimer::timeout, progress, revoke);
     admissionWatch->start();
     const QPointer<QProgressDialog> dialog(progress);
-    const auto finished = [self, dialog, generation, contextCurrent,
-                           token](Result<run::CoverageReport> result) {
+    const auto finished = [self, dialog, generation, contextCurrent, token](Result<run::CoverageReport> result) {
         if (!self)
             return;
         QMetaObject::invokeMethod(
@@ -456,8 +455,7 @@ void Workbench::startNativeAnalysis(bool importProfiles, bool profile) {
             },
             Qt::QueuedConnection);
     };
-    const auto finishedProfile = [self, dialog, generation,
-                                  contextCurrent](Result<run::NativeProfileReport> result) {
+    const auto finishedProfile = [self, dialog, generation, contextCurrent](Result<run::NativeProfileReport> result) {
         if (!self)
             return;
         QMetaObject::invokeMethod(

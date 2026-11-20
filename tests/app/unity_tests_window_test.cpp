@@ -153,9 +153,11 @@ TEST(UnityTestsWindow, FirstSnapshotMustPreserveAcknowledgedExecutionBeforePubli
     ASSERT_EQ(requests.size(), 4u);
     auto failed = row();
     failed.set("outcome", "Failed");
-    deliver(
-        3,
-        page(job).set("catalog", discovery).set("state", "finished").set("execution", executionB).set("cases", lang::Json::array().push(failed)));
+    deliver(3, page(job)
+                   .set("catalog", discovery)
+                   .set("state", "finished")
+                   .set("execution", executionB)
+                   .set("cases", lang::Json::array().push(failed)));
     EXPECT_EQ(table->rowCount(), 0);
     widget->findChild<QPushButton*>("unityTestsRunSelected")->click();
     widget->findChild<QPushButton*>("unityTestsRunFailed")->click();
@@ -165,9 +167,11 @@ TEST(UnityTestsWindow, FirstSnapshotMustPreserveAcknowledgedExecutionBeforePubli
     ASSERT_EQ(requests.size(), 5u);
     deliver(4, state(job, "finished").set("catalog", discovery).set("execution", executionA));
     ASSERT_EQ(requests.size(), 6u);
-    deliver(
-        5,
-        page(job).set("catalog", discovery).set("state", "finished").set("execution", executionA).set("cases", lang::Json::array().push(failed)));
+    deliver(5, page(job)
+                   .set("catalog", discovery)
+                   .set("state", "finished")
+                   .set("execution", executionA)
+                   .set("cases", lang::Json::array().push(failed)));
     ASSERT_EQ(table->rowCount(), 1);
     EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("Failed"));
 }

@@ -77,7 +77,8 @@ Result<void> Workbench::startStandaloneLuaDebug(run::RunConfiguration configurat
     if (configuration.type != run::RunType::LuaScript)
         return fail(ErrorCode::Unsupported, "Lua REPL is interactive Run only; debug a Lua script configuration");
     if (configuration.luaRuntime != "lua54")
-        return fail(ErrorCode::Unsupported, "The installed standalone DAP profile is Lua 5.4 only; LuaJIT/Luau Run and analysis do not establish a compatible debugger");
+        return fail(ErrorCode::Unsupported, "The installed standalone DAP profile is Lua 5.4 only; LuaJIT/Luau Run and "
+                                            "analysis do not establish a compatible debugger");
     if (!m_debug)
         return fail(ErrorCode::Unsupported, "the debug controller is unavailable");
     if (auto admitted = mayRunConfiguration(configuration); !admitted)

@@ -120,7 +120,7 @@ public:
     // O(count), blocking. offset==size returns empty; a read extending past EOF is shortened.
     // OutOfRange: offset>size or count>cap. OS failures propagate without a whole-file fallback.
     [[nodiscard]] virtual Result<std::string> read(std::uint64_t offset, std::size_t count,
-                                                 std::stop_token stop = {}) = 0;
+                                                   std::stop_token stop = {}) = 0;
 };
 
 using RandomAccessOpener = std::function<Result<std::unique_ptr<IRandomAccessReader>>(std::string_view)>;

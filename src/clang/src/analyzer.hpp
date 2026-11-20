@@ -3,12 +3,16 @@
 #pragma once
 #include "clang/AST/ASTContext.h"
 #include "llvm/Support/JSON.h"
+
 #include <optional>
 #include <set>
 #include <string>
 #include <vector>
 namespace frost::clang_engine {
-struct AnalyzerRule { const char *id, *title, *category, *level, *applicability, *settingKey; bool cfg; };
+struct AnalyzerRule {
+    const char *id, *title, *category, *level, *applicability, *settingKey;
+    bool cfg;
+};
 [[nodiscard]] const std::vector<AnalyzerRule>& analyzerRules();
 [[nodiscard]] llvm::json::Array analyzerRegistry();
 class AnalyzerResults {
@@ -27,4 +31,4 @@ public:
 void analyzeSemantics(AnalyzerResults&);
 void analyzeDataflow(AnalyzerResults&);
 [[nodiscard]] int runAnalyzerUnit(std::string_view resourceDirectory, bool sarif = false);
-}
+} // namespace frost::clang_engine

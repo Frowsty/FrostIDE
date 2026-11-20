@@ -74,7 +74,8 @@ void writeConfiguration(std::string& out, const RunConfiguration& configuration,
         std::string interpreterArguments;
         writeStringArray(interpreterArguments, configuration.interpreterArguments);
         member("interpreterArguments", interpreterArguments);
-        if (configuration.luaRuntime != "lua54") member("luaRuntime", rpc::Json(configuration.luaRuntime).dump());
+        if (configuration.luaRuntime != "lua54")
+            member("luaRuntime", rpc::Json(configuration.luaRuntime).dump());
     }
     std::string arguments;
     writeStringArray(arguments, configuration.arguments);
@@ -227,7 +228,8 @@ Result<RunConfiguration> readConfiguration(const rpc::Json& object, std::size_t 
         *field = std::move(*value);
     }
     if (const auto* runtime = object.find("luaRuntime")) {
-        if (!runtime->isString()) return corrupt(index, "luaRuntime is not a string");
+        if (!runtime->isString())
+            return corrupt(index, "luaRuntime is not a string");
         configuration.luaRuntime = *runtime->asString();
     }
     if (const auto* flags = object.find("interpreterArguments")) {
@@ -423,8 +425,9 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
     } else if (!configuration.engineProjectPath.empty()) {
         return invalid(configuration, "only a FrostEngine configuration has an engine project");
     }
-    if (configuration.luaRuntime != "lua54" && (!isLuaRunType(configuration.type) ||
-        (configuration.luaRuntime != "luajit" && configuration.luaRuntime != "luau")))
+    if (configuration.luaRuntime != "lua54" &&
+        (!isLuaRunType(configuration.type) ||
+         (configuration.luaRuntime != "luajit" && configuration.luaRuntime != "luau")))
         return invalid(configuration, "unknown Lua runtime or runtime set on a non-Lua configuration");
     if (!isLuaRunType(configuration.type) && !configuration.interpreterArguments.empty())
         return invalid(configuration, "interpreterArguments belong only to standalone Lua");
@@ -447,12 +450,14 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
         for (std::size_t i = 0; i < configuration.interpreterArguments.size(); ++i) {
             const auto& flag = configuration.interpreterArguments[i];
             if (configuration.luaRuntime == "luau") {
-                if (flag == "-O0" || flag == "-O1" || flag == "-O2" || flag == "-g0" || flag == "-g1" || flag == "-g2") continue;
+                if (flag == "-O0" || flag == "-O1" || flag == "-O2" || flag == "-g0" || flag == "-g1" || flag == "-g2")
+                    continue;
                 return invalid(configuration, "Luau interpreter flags support explicit -O0..2 and -g0..2 only");
             }
             if (flag == "-W" && configuration.luaRuntime == "luajit")
                 return invalid(configuration, "LuaJIT has no Lua 5.4 warning flag");
-            if (configuration.luaRuntime == "luajit" && (flag == "-joff" || flag == "-jon")) continue;
+            if (configuration.luaRuntime == "luajit" && (flag == "-joff" || flag == "-jon"))
+                continue;
             if (flag == "-E" || flag == "-W" || flag == "-v")
                 continue;
             if (flag == "-e" || flag == "-l") {
@@ -465,7 +470,8 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
             if (flag == "--" && configuration.type == RunType::LuaScript &&
                 i + 1 == configuration.interpreterArguments.size())
                 continue;
-            return invalid(configuration, "use the selected runtime's supported interpreter flags; REPL mode is added automatically");
+            return invalid(configuration,
+                           "use the selected runtime's supported interpreter flags; REPL mode is added automatically");
         }
         break;
     case RunType::FrostEditor:
@@ -482,13 +488,18 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
         }
         break;
     case RunType::Remote:
-        if(configuration.target.empty() || configuration.target.size()>128 || !std::ranges::all_of(configuration.target,idCharacter) ||
-            !io::isAbsolutePath(configuration.program,io::PathStyle::Posix) || hasNul(configuration.program) ||
-            !io::isAbsolutePath(configuration.workingDirectory,io::PathStyle::Posix) || hasNul(configuration.workingDirectory) ||
-            configuration.beforeLaunch!=BeforeLaunch::None || !configuration.beforeLaunchTasks.empty())
-            return invalid(configuration,"remote Run needs a named endpoint id, absolute Linux program/cwd, and no implicit build/local tasks");
+        if (configuration.target.empty() || configuration.target.size() > 128 ||
+            !std::ranges::all_of(configuration.target, idCharacter) ||
+            !io::isAbsolutePath(configuration.program, io::PathStyle::Posix) || hasNul(configuration.program) ||
+            !io::isAbsolutePath(configuration.workingDirectory, io::PathStyle::Posix) ||
+            hasNul(configuration.workingDirectory) || configuration.beforeLaunch != BeforeLaunch::None ||
+            !configuration.beforeLaunchTasks.empty())
+            return invalid(
+                configuration,
+                "remote Run needs a named endpoint id, absolute Linux program/cwd, and no implicit build/local tasks");
         break;
-    case RunType::CMakeTarget:        if (configuration.target.empty() || hasNul(configuration.target)) {
+    case RunType::CMakeTarget:
+        if (configuration.target.empty() || hasNul(configuration.target)) {
             return invalid(configuration, "a cmake-target configuration needs a target name");
         }
         break;
@@ -557,10 +568,12 @@ Result<void> validateRunConfiguration(const RunConfiguration& configuration) {
             return invalid(configuration, "a before-launch task argument contains NUL");
         }
     }
-    if (configuration.type!=RunType::Remote && !configuration.program.empty() && !io::normalizePath(configuration.program)) {
+    if (configuration.type != RunType::Remote && !configuration.program.empty() &&
+        !io::normalizePath(configuration.program)) {
         return invalid(configuration, std::format("the program '{}' is not an absolute path", configuration.program));
     }
-    if (configuration.type!=RunType::Remote && !configuration.workingDirectory.empty() && !io::normalizePath(configuration.workingDirectory)) {
+    if (configuration.type != RunType::Remote && !configuration.workingDirectory.empty() &&
+        !io::normalizePath(configuration.workingDirectory)) {
         return invalid(configuration, std::format("the working directory '{}' is not an absolute path",
                                                   configuration.workingDirectory));
     }
@@ -616,10 +629,12 @@ Result<std::vector<RunConfiguration>> parseRunConfigurations(std::string_view js
         if (!configuration) {
             return std::unexpected(std::move(configuration.error()));
         }
-        if(configuration->type==RunType::Remote && *version<6)return corrupt(index,"named remote Run requires store version 6");
+        if (configuration->type == RunType::Remote && *version < 6)
+            return corrupt(index, "named remote Run requires store version 6");
         if (isLuaRunType(configuration->type) && *version < 5)
             return corrupt(index, "standalone Lua requires store version 5");
-        if (configuration->luaRuntime != "lua54" && *version < 6) return corrupt(index, "Lua dialect profiles require store version 6");
+        if (configuration->luaRuntime != "lua54" && *version < 6)
+            return corrupt(index, "Lua dialect profiles require store version 6");
         if (configuration->engineDebugMode == EngineDebugMode::NativeAndLua && *version < 4)
             return corrupt(index, "native-and-lua Debug requires store version 4");
         if (!ids.insert(configuration->id).second) {
@@ -665,10 +680,11 @@ std::string serializeRunConfigurations(std::span<const RunConfiguration> configu
     const bool lua = std::ranges::any_of(configurations, [](const auto& c) { return isLuaRunType(c.type); });
     const bool remote = std::ranges::any_of(configurations, [](const auto& c) { return c.type == RunType::Remote; });
     const bool dialect = std::ranges::any_of(configurations, [](const auto& c) { return c.luaRuntime != "lua54"; });
-    const int version = (remote || dialect) ? 6 : lua ? 5
-                        : mixed  ? 4
-                        : engine ? 3
-                                 : (std::ranges::any_of(configurations, usesRun5Features) ? 2 : 1);
+    const int version = (remote || dialect) ? 6
+                        : lua               ? 5
+                        : mixed             ? 4
+                        : engine            ? 3
+                                            : (std::ranges::any_of(configurations, usesRun5Features) ? 2 : 1);
     std::string out = std::format("{{\n  \"version\": {},\n  \"configurations\": [", version);
     if (configurations.empty()) {
         out += "]\n}\n";

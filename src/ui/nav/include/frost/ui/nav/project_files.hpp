@@ -12,13 +12,12 @@
  * Thread safety: a plain value; build it anywhere, read it on one thread.
  */
 #pragma once
-#include "frost/search/path_index.hpp"
-
 #include "frost/core/error.hpp"
 #include "frost/io/file_system.hpp"
 #include "frost/io/tree_scan.hpp"
 #include "frost/sched/scheduler.hpp"
 #include "frost/sched/task.hpp"
+#include "frost/search/path_index.hpp"
 
 #include <cstddef>
 #include <memory>

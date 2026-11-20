@@ -2,6 +2,7 @@
 // Checks that Unreal Editor debugging uses the selected project's trust root.
 #include "frost/debug/unreal_debug.hpp"
 #include "frost/io/path.hpp"
+
 #include <gtest/gtest.h>
 namespace frost::debug {
 TEST(UnrealDebug, ProducesNativeTargetWithExplicitProjectTrustRoot) {

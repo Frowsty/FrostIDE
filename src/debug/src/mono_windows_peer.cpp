@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Bind a Mono loopback tuple to the retained selected Windows process.
 #include "frost/debug/mono_windows_peer.hpp"
+
 #include "frost/io/utf.hpp"
 
 #include <cstring>
@@ -46,22 +47,31 @@ bool identityMatches(const WindowsPeer::Impl& impl) {
 #endif
 WindowsProcessIdentity WindowsPeer::identity() const { return {m_impl->pid, m_impl->creation, m_impl->image}; }
 Result<std::shared_ptr<WindowsPeer>> WindowsPeer::select(std::uint32_t pid, std::function<bool()> current) {
-    if (!pid || !current) return fail(ErrorCode::InvalidArgument, "select a live Mono process");
+    if (!pid || !current)
+        return fail(ErrorCode::InvalidArgument, "select a live Mono process");
 #ifndef _WIN32
     return fail(ErrorCode::Unsupported, "Windows Mono process selection is unavailable on this platform");
 #else
-    auto impl = std::make_unique<Impl>(); impl->pid = pid; impl->current = std::move(current);
+    auto impl = std::make_unique<Impl>();
+    impl->pid = pid;
+    impl->current = std::move(current);
     impl->process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
-    if (!impl->process || !impl->current()) return fail(ErrorCode::PermissionDenied, "selected Mono process cannot be held");
+    if (!impl->process || !impl->current())
+        return fail(ErrorCode::PermissionDenied, "selected Mono process cannot be held");
     FILETIME created{}, exited{}, kernel{}, user{};
-    if (!GetProcessTimes(impl->process, &created, &exited, &kernel, &user)) return fail(ErrorCode::IoError, "selected process creation time is unavailable");
+    if (!GetProcessTimes(impl->process, &created, &exited, &kernel, &user))
+        return fail(ErrorCode::IoError, "selected process creation time is unavailable");
     impl->creation = std::uint64_t(created.dwLowDateTime) | (std::uint64_t(created.dwHighDateTime) << 32);
-    std::wstring image(32768, L'\0'); DWORD count = static_cast<DWORD>(image.size());
-    if (!QueryFullProcessImageNameW(impl->process, 0, image.data(), &count)) return fail(ErrorCode::IoError, "selected process image path is unavailable");
+    std::wstring image(32768, L'\0');
+    DWORD count = static_cast<DWORD>(image.size());
+    if (!QueryFullProcessImageNameW(impl->process, 0, image.data(), &count))
+        return fail(ErrorCode::IoError, "selected process image path is unavailable");
     auto path = io::fromWide(std::wstring_view(image.data(), count));
-    if (!path) return std::unexpected(path.error());
+    if (!path)
+        return std::unexpected(path.error());
     impl->image = std::move(*path);
-    if (!impl->current() || !identityMatches(*impl)) return fail(ErrorCode::Cancelled, "selected Mono process changed before confirmation");
+    if (!impl->current() || !identityMatches(*impl))
+        return fail(ErrorCode::Cancelled, "selected Mono process changed before confirmation");
     return std::shared_ptr<WindowsPeer>(new WindowsPeer(std::move(impl)));
 #endif
 }

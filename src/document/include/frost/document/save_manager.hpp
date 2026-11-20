@@ -69,8 +69,8 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
-#include <vector>
 #include <utility>
+#include <vector>
 
 namespace frost::document {
 

@@ -152,10 +152,9 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
           DebugSessionCallbacks sessionCallbacks, DebugSessionOptions options)
         : callbacks(std::move(sessionCallbacks)), launchArguments(std::move(arguments)),
           privateSession(options.privateSession), launchAdmission(std::move(options.launchAdmission)),
-          inspectionAdmission(std::move(options.inspectionAdmission)),
-          sourceAllowed(std::move(options.sourceAllowed)), adapterId(std::move(options.adapterId)),
-          attachHint(std::move(options.attachHint)), breakpoints(std::move(lines)),
-          functionBreakpoints(std::move(options.functionBreakpoints)),
+          inspectionAdmission(std::move(options.inspectionAdmission)), sourceAllowed(std::move(options.sourceAllowed)),
+          adapterId(std::move(options.adapterId)), attachHint(std::move(options.attachHint)),
+          breakpoints(std::move(lines)), functionBreakpoints(std::move(options.functionBreakpoints)),
           exceptionFilters(std::move(options.exceptionFilters)), throwTypes(std::move(options.throwTypes)),
           breakOnAbort(options.breakOnAbort), msvcExceptions(options.msvcExceptions),
           stepOutOfNoDebug(options.stepOutOfNoDebug), targetMode(options.targetMode), readOnly(options.readOnly) {}

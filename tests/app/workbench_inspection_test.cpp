@@ -153,35 +153,54 @@ TEST(WorkbenchInspection, InspectCppModulePublishesRealClangTidyFindingsAndExpor
 TEST(WorkbenchInspection, NativeAnalyzerPublishesActualCfgFindingsAndRefusesStaleExport) {
     frost::test::disableCrashDialogs();
     WorkDir dir("r13-native-problems");
-    auto& fs=fio::realFileSystem();
-    dir.write("guard.hpp","inline constexpr int guard=0;\n");
-    dir.write("sample.cpp","#include \"guard.hpp\"\nint f(){int* p=nullptr;return *p;}\n");
-    const auto source=dir.join("sample.cpp");
-    const auto compiler=fio::normalizePath(FROST_TEST_CXX_COMPILER).value();
-    std::vector<std::string> args={compiler};
+    auto& fs = fio::realFileSystem();
+    dir.write("guard.hpp", "inline constexpr int guard=0;\n");
+    dir.write("sample.cpp", "#include \"guard.hpp\"\nint f(){int* p=nullptr;return *p;}\n");
+    const auto source = dir.join("sample.cpp");
+    const auto compiler = fio::normalizePath(FROST_TEST_CXX_COMPILER).value();
+    std::vector<std::string> args = {compiler};
 #ifdef _WIN32
-    args.insert(args.end(),{"/std:c++20","/c",source});
+    args.insert(args.end(), {"/std:c++20", "/c", source});
 #else
-    args.insert(args.end(),{"-std=c++20","-c",source});
+    args.insert(args.end(), {"-std=c++20", "-c", source});
 #endif
-    ASSERT_TRUE(fl::writeCompileCommands(fs,dir.join("build"),std::vector<fl::CompileCommand>{{dir.path(),source,args}}));
-    frost::app::test::RigOptions options;options.workbench.clangd=true;options.workbench.clangdJobs=1;
-    WorkbenchRig rig(dir,options);ASSERT_TRUE(rig.trust->trust(dir.path()));
-    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application,frost::settings::key::cppAnalyzerEnabled,false));
-    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application,frost::settings::key::analysisPowerSave,true));
-    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application,frost::settings::key::toolsFrostAnalyzerPath,std::string(FROST_ANALYZER_BINARY)));
-    rig.show();ASSERT_TRUE(rig.workbench->openPath(dir.path()));ASSERT_TRUE(rig.workbench->openPath(source));
-    ASSERT_TRUE(waitFor([&]{return rig.workbench->clangd() && rig.workbench->clangd()->compileCommands().has_value();},60s));
-    const auto action=rig.workbench->registry().find("code.inspectNativeCpp");ASSERT_TRUE(action);
-    EXPECT_EQ(rig.workbench->registry().tryInvoke(*action,{}),frost::input::InvokeResult::Ran);
-    ASSERT_TRUE(waitFor([&] {
-        const auto& rows=rig.workbench->problems()->model()->problems();
-        return std::ranges::any_of(rows,[](const auto& row){return row.source==frost::ui::DiagnosticSource::Inspection && row.diagnostic.diagnostic.code=="frost-null-dereference";});
-    },120s));
-    const auto report=dir.join("native.sarif");ASSERT_TRUE(rig.workbench->exportCppInspectionSarif(report));
-    auto bytes=fs.readFile(report);ASSERT_TRUE(bytes);auto json=frost::rpc::parseJson(*bytes);ASSERT_TRUE(json);
+    ASSERT_TRUE(
+        fl::writeCompileCommands(fs, dir.join("build"), std::vector<fl::CompileCommand>{{dir.path(), source, args}}));
+    frost::app::test::RigOptions options;
+    options.workbench.clangd = true;
+    options.workbench.clangdJobs = 1;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(
+        rig.settings->set(frost::settings::Scope::Application, frost::settings::key::cppAnalyzerEnabled, false));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::analysisPowerSave, true));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsFrostAnalyzerPath,
+                                  std::string(FROST_ANALYZER_BINARY)));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(source));
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->clangd() && rig.workbench->clangd()->compileCommands().has_value(); }, 60s));
+    const auto action = rig.workbench->registry().find("code.inspectNativeCpp");
+    ASSERT_TRUE(action);
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*action, {}), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto& rows = rig.workbench->problems()->model()->problems();
+            return std::ranges::any_of(rows, [](const auto& row) {
+                return row.source == frost::ui::DiagnosticSource::Inspection &&
+                       row.diagnostic.diagnostic.code == "frost-null-dereference";
+            });
+        },
+        120s));
+    const auto report = dir.join("native.sarif");
+    ASSERT_TRUE(rig.workbench->exportCppInspectionSarif(report));
+    auto bytes = fs.readFile(report);
+    ASSERT_TRUE(bytes);
+    auto json = frost::rpc::parseJson(*bytes);
+    ASSERT_TRUE(json);
     ASSERT_TRUE(fl::validateSarifSchema(*json));
-    dir.write("guard.hpp","inline constexpr int guard=1;\n");
+    dir.write("guard.hpp", "inline constexpr int guard=1;\n");
     EXPECT_FALSE(rig.workbench->exportCppInspectionSarif(dir.join("stale.sarif")));
 }
 

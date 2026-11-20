@@ -4,11 +4,13 @@
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/clangd_service.hpp"
 #include "frost/lang/compile_commands.hpp"
+
 #include "support/crash_dialogs.hpp"
 #include "workbench_rig.hpp"
 #include <QDialog>
 #include <QLabel>
 #include <QTableWidget>
+
 #include <chrono>
 namespace {
 using namespace std::chrono_literals;
@@ -26,8 +28,9 @@ void moduleActionJourney(Mutation mutation) {
     const auto header = dir.join("shared/switch.hpp");
     // The header escapes the project and all -I roots: tracked real preprocessing must find it.
     dir.write("shared/switch.hpp", "#define FEATURE_ENABLED 1\n");
-    dir.write("project/unrelated-name.cppm", "module;\n#include \"../shared/switch.hpp\"\n"
-                                           "export module action_fixture;\nexport int answer() { return FEATURE_ENABLED; }\n");
+    dir.write("project/unrelated-name.cppm",
+              "module;\n#include \"../shared/switch.hpp\"\n"
+              "export module action_fixture;\nexport int answer() { return FEATURE_ENABLED; }\n");
     dir.write("project/consumer.cpp", "import action_fixture;\nint consume() { return answer(); }\n");
     const auto compilerDir = std::string(io::parentPath(FROST_TEST_CXX_COMPILER));
     const auto compiler = io::joinPath(compilerDir,
@@ -36,7 +39,8 @@ void moduleActionJourney(Mutation mutation) {
 #else
                                        "clang++"
 #endif
-                                       ).value();
+                                       )
+                              .value();
     const std::vector<lang::CompileCommand> commands{
         {root, module, {compiler, "-std=c++20", "-c", module, "-o", dir.join("project/interface.o")}},
         {root, consumer, {compiler, "-std=c++20", "-c", consumer, "-o", dir.join("project/consumer.o")}}};
@@ -49,18 +53,22 @@ void moduleActionJourney(Mutation mutation) {
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(root));
     ASSERT_TRUE(rig.workbench->openPath(consumer));
-    ASSERT_TRUE(waitFor([&] {
-        auto* service = rig.workbench->clangd();
-        return service && service->state() == lang::ClangdState::Running && service->compileCommands();
-    }, 90s));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            auto* service = rig.workbench->clangd();
+            return service && service->state() == lang::ClangdState::Running && service->compileCommands();
+        },
+        90s));
     const auto action = rig.workbench->registry().find("cpp.index.modules");
     ASSERT_TRUE(action);
     EXPECT_EQ(rig.workbench->registry().tryInvoke(*action, {}), frost::input::InvokeResult::Ran);
     QTableWidget* relationships = nullptr;
-    ASSERT_TRUE(waitFor([&] {
-        relationships = rig.window->findChild<QTableWidget*>(QStringLiteral("cppModuleRelationships"));
-        return relationships != nullptr;
-    }, 120s));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            relationships = rig.window->findChild<QTableWidget*>(QStringLiteral("cppModuleRelationships"));
+            return relationships != nullptr;
+        },
+        120s));
     int importRow = -1;
     for (int row = 0; row < relationships->rowCount(); ++row)
         if (relationships->item(row, 0)->text().contains(QStringLiteral(" -> action_fixture")) &&
@@ -78,15 +86,19 @@ void moduleActionJourney(Mutation mutation) {
     }
     emit relationships->cellDoubleClicked(importRow, 0);
     if (mutation == Mutation::None) {
-        ASSERT_TRUE(waitFor([&] {
-            auto* active = rig.window->tabs().currentEditor();
-            return active && active->path() == module;
-        }, 30s));
+        ASSERT_TRUE(waitFor(
+            [&] {
+                auto* active = rig.window->tabs().currentEditor();
+                return active && active->path() == module;
+            },
+            30s));
     } else {
-        ASSERT_TRUE(waitFor([&] {
-            auto* status = rig.window->findChild<QLabel*>(QStringLiteral("cppModuleNavigationStatus"));
-            return status && !status->text().isEmpty();
-        }, 30s));
+        ASSERT_TRUE(waitFor(
+            [&] {
+                auto* status = rig.window->findChild<QLabel*>(QStringLiteral("cppModuleNavigationStatus"));
+                return status && !status->text().isEmpty();
+            },
+            30s));
         ASSERT_NE(rig.window->tabs().currentEditor(), nullptr);
         EXPECT_EQ(rig.window->tabs().currentEditor()->path(), consumer);
     }

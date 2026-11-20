@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Git integration for the actual application workbench.
 #include "git_integration.hpp"
-#include "engine_integration.hpp"
-#include "scene_merge_work.hpp"
-#include "frost/document/refactoring_transaction.hpp"
-#include "unity_yaml_merge.hpp"
 
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
 #include "frost/diff/merge.hpp"
 #include "frost/document/load_service.hpp"
+#include "frost/document/refactoring_transaction.hpp"
 #include "frost/io/path.hpp"
 #include "frost/sched/lane.hpp"
 #include "frost/storage/fingerprint.hpp"
@@ -32,18 +29,21 @@
 #include "frost/ui/vcs/git_console.hpp"
 #include "frost/ui/vcs/git_controller.hpp"
 #include "frost/ui/vcs/git_log_window.hpp"
-#include "frost/ui/vcs/merge_guard.hpp"
 #include "frost/ui/vcs/merge_editor.hpp"
+#include "frost/ui/vcs/merge_guard.hpp"
 #include "frost/ui/vcs/vcs_colors.hpp"
 #include "frost/ui/workbench/file_system_view.hpp"
 #include "frost/ui/workbench/merge_view.hpp"
 #include "frost/vcs/git_locator.hpp"
 
+#include "engine_integration.hpp"
+#include "scene_merge_work.hpp"
+#include "unity_yaml_merge.hpp"
 #include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
-#include <QFontDatabase>
 #include <QFileDialog>
+#include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -78,10 +78,16 @@ constexpr auto kConsole = "gitConsole";
 
 bool writesWorkingTree(vcs::GitOperationKind kind) {
     switch (kind) {
-    case vcs::GitOperationKind::Rollback: case vcs::GitOperationKind::Checkout: case vcs::GitOperationKind::Pull:
-    case vcs::GitOperationKind::Merge: case vcs::GitOperationKind::Rebase: case vcs::GitOperationKind::Reset:
-    case vcs::GitOperationKind::CherryPick: case vcs::GitOperationKind::Revert:
-    case vcs::GitOperationKind::Stash: case vcs::GitOperationKind::Unstash: return true;
+    case vcs::GitOperationKind::Rollback:
+    case vcs::GitOperationKind::Checkout:
+    case vcs::GitOperationKind::Pull:
+    case vcs::GitOperationKind::Merge:
+    case vcs::GitOperationKind::Rebase:
+    case vcs::GitOperationKind::Reset:
+    case vcs::GitOperationKind::CherryPick:
+    case vcs::GitOperationKind::Revert:
+    case vcs::GitOperationKind::Stash:
+    case vcs::GitOperationKind::Unstash: return true;
     default: return false;
     }
 }
@@ -95,17 +101,22 @@ std::string fileKey(io::IFileSystem& fs, std::string_view path) {
 // outputs validate their parent too; the SaveManager remains responsible for atomic encoding/save.
 Result<std::string> comparisonTarget(io::IFileSystem& fs, std::string_view path) {
     auto normalized = io::normalizePath(path);
-    if (!normalized) return std::unexpected(std::move(normalized.error()));
+    if (!normalized)
+        return std::unexpected(std::move(normalized.error()));
     auto canonical = fs.canonicalPath(path);
     if (!canonical) {
-        if (canonical.error().code() != ErrorCode::NotFound) return std::unexpected(std::move(canonical.error()));
+        if (canonical.error().code() != ErrorCode::NotFound)
+            return std::unexpected(std::move(canonical.error()));
         auto parent = fs.canonicalPath(io::parentPath(path));
-        if (!parent) return std::unexpected(std::move(parent.error()));
+        if (!parent)
+            return std::unexpected(std::move(parent.error()));
         canonical = io::joinPath(*parent, io::fileName(path));
-        if (!canonical) return std::unexpected(std::move(canonical.error()));
+        if (!canonical)
+            return std::unexpected(std::move(canonical.error()));
     }
     if (vcs::vcsPathKey(*canonical) != vcs::vcsPathKey(*normalized))
-        return fail(ErrorCode::InvalidArgument, "Comparison writes require a canonical file path, not a symbolic alias");
+        return fail(ErrorCode::InvalidArgument,
+                    "Comparison writes require a canonical file path, not a symbolic alias");
     return canonical;
 }
 
@@ -392,8 +403,9 @@ void GitIntegration::installRepository(vcs::RepositoryInfo info, const std::stri
             &GitIntegration::showResolveConflictsDialog);
     window.toolWindows().setContent(kCommit, m_commit);
     m_diff = new ui::DiffViewer(nullptr, {.languages = &m_workbench.m_languages,
-        .scheduler = m_workbench.m_pool.get(), .clock = &m_workbench.m_services.clock,
-        .actionHost = &m_workbench.m_actionHost});
+                                          .scheduler = m_workbench.m_pool.get(),
+                                          .clock = &m_workbench.m_services.clock,
+                                          .actionHost = &m_workbench.m_actionHost});
     window.toolWindows().setContent(kDiff, m_diff);
     m_log = new ui::GitLogToolWindow(m_controller.get());
     connect(m_log, &ui::GitLogToolWindow::openCommitFileRequested, this,
@@ -633,7 +645,9 @@ void GitIntegration::showDiff(const std::string& path, bool index) {
     if (!m_controller || !m_diff)
         return;
     if (m_diff->hasWorkingEdits()) {
-        if (path != m_diffPath) m_workbench.notify(tr("Diff"), tr("Apply or undo the current comparison edits before switching files."), ui::NotificationKind::Warning);
+        if (path != m_diffPath)
+            m_workbench.notify(tr("Diff"), tr("Apply or undo the current comparison edits before switching files."),
+                               ui::NotificationKind::Warning);
         return;
     }
     m_diffPath = path;
@@ -657,70 +671,87 @@ void GitIntegration::showDiff(const std::string& path, bool index) {
             working = loaded->buffer.snapshot().text();
     }
     const auto expectedDisk = m_workbench.m_services.fs.readFile(path);
-    if (!expectedDisk && expectedDisk.error().code() != ErrorCode::NotFound) return;
+    if (!expectedDisk && expectedDisk.error().code() != ErrorCode::NotFound)
+        return;
     std::optional<storage::DiskBase> diskReceipt;
-    if (expectedDisk) diskReceipt = storage::DiskBase{.size = expectedDisk->size(), .fingerprint = storage::xxh3Hash128(*expectedDisk)};
+    if (expectedDisk)
+        diskReceipt =
+            storage::DiskBase{.size = expectedDisk->size(), .fingerprint = storage::xxh3Hash128(*expectedDisk)};
     const auto projectGeneration = m_projectGeneration;
     const QPointer<ui::DiffViewer> viewer(m_diff);
     const QPointer<GitIntegration> self(this);
     const auto generation = ++m_diffGeneration;
-    readBaseText(path, index,
-                 [self, viewer, generation, index, path, diskReceipt, projectGeneration,
-                  working = std::move(working)](Result<std::optional<std::string>> head) mutable {
-                     if (!self || self->m_diffGeneration != generation || !viewer || !head || viewer->hasWorkingEdits())
-                         return;
-                     auto diff = vcs::SideBySideDiff::compute(head->value_or(std::string()), std::move(working));
-                     if (diff) {
-                         viewer->setApplyHandler({});
-                         viewer->setDiff(std::move(*diff),
-                                         head->has_value() ? (index ? QObject::tr("Index") : QObject::tr("HEAD"))
-                                                           : QObject::tr("No base version"),
-                                         QObject::tr("Working copy"));
-                         viewer->leftPane()->setPath(path);
-                         viewer->rightPane()->setPath(path);
-                         viewer->setApplyHandler([self, path, diskReceipt, projectGeneration](std::string_view expected, std::string_view result) mutable -> Result<void> {
-                             if (!self || self->m_projectGeneration != projectGeneration)
-                                 return fail(ErrorCode::Cancelled, "The comparison's project changed");
-                             if (!self->m_controller || self->m_controller->busy() || self->m_shutdown ||
-                                 !self->m_workbench.m_services.trust.isTrusted(self->m_root) ||
-                                 !self->m_workbench.m_services.trust.isTrusted(self->m_controller->info().workTree) ||
-                                 !self->m_workbench.m_services.trust.isTrusted(path))
-                                 return fail(ErrorCode::Untrusted, "Apply requires an idle trusted repository");
-                             if (auto relative = self->m_controller->service().repository().relativePath(path); !relative)
-                                 return std::unexpected(std::move(relative.error()));
-                             if (auto allowed = self->allowWrite(path); !allowed) return allowed;
-                             auto& fs = self->m_workbench.m_services.fs;
-                             auto target = comparisonTarget(fs, path);
-                             if (!target) return std::unexpected(std::move(target.error()));
-                             if (!self->m_workbench.m_services.trust.isTrusted(*target))
-                                 return fail(ErrorCode::Untrusted, "The comparison target is not trusted");
-                             auto disk = fs.readFile(path);
-                             if ((!disk && disk.error().code() != ErrorCode::NotFound) ||
-                                 static_cast<bool>(disk) != diskReceipt.has_value() ||
-                                 (disk && (disk->size() != diskReceipt->size || storage::xxh3Hash128(*disk) != diskReceipt->fingerprint)))
-                                 return fail(ErrorCode::Busy, "The file changed on disk; reopen the comparison before applying");
-                             auto opened = self->m_workbench.m_documents->open(path);
-                             if (!opened) return std::unexpected(std::move(opened.error()));
-                             auto& document = **opened;
-                             if (document.document().committedText().text() != expected)
-                                 return fail(ErrorCode::Busy, "The open document changed; reopen the comparison before applying");
-                             auto change = document.document().replace({ByteOffset{0}, document.document().text().size()}, result, {});
-                             if (!change) return std::unexpected(std::move(change.error()));
-                             auto saved = self->m_workbench.m_documents->save(document);
-                             if (!saved) {
-                                 static_cast<void>(document.document().undo());
-                                 if (auto* view = self->m_workbench.m_editors->find(document)) view->reloadFromDocument();
-                                 return std::unexpected(std::move(saved.error()));
-                             }
-                             // SaveManager's receipt describes the exact encoded bytes it wrote; never
-                             // adopt a later independent disk read as the baseline for another Apply.
-                             diskReceipt = document.disk();
-                             if (auto* view = self->m_workbench.m_editors->find(document)) { view->reloadFromDocument(); view->markSaved(); }
-                             self->documentChanged();
-                             return {};
-                         });
-                     }
-                 });
+    readBaseText(
+        path, index,
+        [self, viewer, generation, index, path, diskReceipt, projectGeneration,
+         working = std::move(working)](Result<std::optional<std::string>> head) mutable {
+            if (!self || self->m_diffGeneration != generation || !viewer || !head || viewer->hasWorkingEdits())
+                return;
+            auto diff = vcs::SideBySideDiff::compute(head->value_or(std::string()), std::move(working));
+            if (diff) {
+                viewer->setApplyHandler({});
+                viewer->setDiff(std::move(*diff),
+                                head->has_value() ? (index ? QObject::tr("Index") : QObject::tr("HEAD"))
+                                                  : QObject::tr("No base version"),
+                                QObject::tr("Working copy"));
+                viewer->leftPane()->setPath(path);
+                viewer->rightPane()->setPath(path);
+                viewer->setApplyHandler([self, path, diskReceipt,
+                                         projectGeneration](std::string_view expected,
+                                                            std::string_view result) mutable -> Result<void> {
+                    if (!self || self->m_projectGeneration != projectGeneration)
+                        return fail(ErrorCode::Cancelled, "The comparison's project changed");
+                    if (!self->m_controller || self->m_controller->busy() || self->m_shutdown ||
+                        !self->m_workbench.m_services.trust.isTrusted(self->m_root) ||
+                        !self->m_workbench.m_services.trust.isTrusted(self->m_controller->info().workTree) ||
+                        !self->m_workbench.m_services.trust.isTrusted(path))
+                        return fail(ErrorCode::Untrusted, "Apply requires an idle trusted repository");
+                    if (auto relative = self->m_controller->service().repository().relativePath(path); !relative)
+                        return std::unexpected(std::move(relative.error()));
+                    if (auto allowed = self->allowWrite(path); !allowed)
+                        return allowed;
+                    auto& fs = self->m_workbench.m_services.fs;
+                    auto target = comparisonTarget(fs, path);
+                    if (!target)
+                        return std::unexpected(std::move(target.error()));
+                    if (!self->m_workbench.m_services.trust.isTrusted(*target))
+                        return fail(ErrorCode::Untrusted, "The comparison target is not trusted");
+                    auto disk = fs.readFile(path);
+                    if ((!disk && disk.error().code() != ErrorCode::NotFound) ||
+                        static_cast<bool>(disk) != diskReceipt.has_value() ||
+                        (disk && (disk->size() != diskReceipt->size ||
+                                  storage::xxh3Hash128(*disk) != diskReceipt->fingerprint)))
+                        return fail(ErrorCode::Busy, "The file changed on disk; reopen the comparison before applying");
+                    auto opened = self->m_workbench.m_documents->open(path);
+                    if (!opened)
+                        return std::unexpected(std::move(opened.error()));
+                    auto& document = **opened;
+                    if (document.document().committedText().text() != expected)
+                        return fail(ErrorCode::Busy,
+                                    "The open document changed; reopen the comparison before applying");
+                    auto change =
+                        document.document().replace({ByteOffset{0}, document.document().text().size()}, result, {});
+                    if (!change)
+                        return std::unexpected(std::move(change.error()));
+                    auto saved = self->m_workbench.m_documents->save(document);
+                    if (!saved) {
+                        static_cast<void>(document.document().undo());
+                        if (auto* view = self->m_workbench.m_editors->find(document))
+                            view->reloadFromDocument();
+                        return std::unexpected(std::move(saved.error()));
+                    }
+                    // SaveManager's receipt describes the exact encoded bytes it wrote; never
+                    // adopt a later independent disk read as the baseline for another Apply.
+                    diskReceipt = document.disk();
+                    if (auto* view = self->m_workbench.m_editors->find(document)) {
+                        view->reloadFromDocument();
+                        view->markSaved();
+                    }
+                    self->documentChanged();
+                    return {};
+                });
+            }
+        });
     m_workbench.m_window->toolWindows().show(kDiff);
 }
 
@@ -774,17 +805,22 @@ void GitIntegration::showResolveConflictsDialog() {
         std::uint64_t generation = 0;
     };
     const auto report = [this](std::string_view message) {
-        m_workbench.notify(tr("Resolve Conflicts"), QString::fromUtf8(message.data(), static_cast<qsizetype>(message.size())), ui::NotificationKind::Error);
+        m_workbench.notify(tr("Resolve Conflicts"),
+                           QString::fromUtf8(message.data(), static_cast<qsizetype>(message.size())),
+                           ui::NotificationKind::Error);
     };
     const auto readStages = [this](const std::string& relative) -> Result<std::string> {
-        if (!m_controller || m_controller->busy()) return fail(ErrorCode::Busy, "Wait for the Git operation to finish");
+        if (!m_controller || m_controller->busy())
+            return fail(ErrorCode::Busy, "Wait for the Git operation to finish");
         vcs::GitInvocation invocation;
         invocation.arguments = {"ls-files", "--unmerged", "-z", "--", relative};
         invocation.workingDirectory = m_controller->info().workTree;
         invocation.background = true;
         auto output = m_controller->service().repository().runner().run(invocation);
-        if (!output) return std::unexpected(std::move(output.error()));
-        if (!output->succeeded()) return std::unexpected(vcs::gitFailure("Read conflict stages", *output));
+        if (!output)
+            return std::unexpected(std::move(output.error()));
+        if (!output->succeeded())
+            return std::unexpected(vcs::gitFailure("Read conflict stages", *output));
         return std::move(output->stdoutBytes);
     };
     const auto extractSides = [&](const std::string& absolute, const std::string& relative) -> ConflictSides {
@@ -966,7 +1002,8 @@ void GitIntegration::showResolveConflictsDialog() {
                 report(changed.error().message());
                 return false;
             }
-            auto saved = disk ? m_workbench.m_documents->save(*document) : m_workbench.m_documents->saveAs(*document, absolute);
+            auto saved =
+                disk ? m_workbench.m_documents->save(*document) : m_workbench.m_documents->saveAs(*document, absolute);
             if (!saved) {
                 static_cast<void>(document->document().undo());
                 if (auto* view = m_workbench.m_editors->find(*document))
@@ -1022,7 +1059,7 @@ void GitIntegration::showResolveConflictsDialog() {
     actionColumn->addWidget(acceptYoursBtn);
     actionColumn->addWidget(acceptTheirsBtn);
     actionColumn->addWidget(mergeBtn);
-    auto* semanticBtn=new QPushButton(tr("Semantic Scene Merge…"),&dialog);
+    auto* semanticBtn = new QPushButton(tr("Semantic Scene Merge…"), &dialog);
     semanticBtn->setObjectName(QStringLiteral("semanticSceneMergeButton"));
     actionColumn->addWidget(semanticBtn);
     auto* unityBtn = new QPushButton(tr("UnityYAMLMerge…"), &dialog);
@@ -1056,13 +1093,15 @@ void GitIntegration::showResolveConflictsDialog() {
     if (list->count() > 0)
         list->setCurrentRow(0);
 
-    const auto updateDialogState = [list, acceptYoursBtn, acceptTheirsBtn, mergeBtn, semanticBtn, unityBtn, emptyLabel] {
+    const auto updateDialogState = [list, acceptYoursBtn, acceptTheirsBtn, mergeBtn, semanticBtn, unityBtn,
+                                    emptyLabel] {
         const bool hasSelection = list->currentItem() != nullptr;
         acceptYoursBtn->setEnabled(hasSelection);
         acceptTheirsBtn->setEnabled(hasSelection);
         mergeBtn->setEnabled(hasSelection);
-        const auto selected=hasSelection?list->currentItem()->data(Qt::UserRole + 1).toString():QString{};
-        semanticBtn->setEnabled(hasSelection&&(selected.endsWith(QStringLiteral(".fscene"))||selected.endsWith(QStringLiteral(".fprefab"))));
+        const auto selected = hasSelection ? list->currentItem()->data(Qt::UserRole + 1).toString() : QString{};
+        semanticBtn->setEnabled(hasSelection && (selected.endsWith(QStringLiteral(".fscene")) ||
+                                                 selected.endsWith(QStringLiteral(".fprefab"))));
         unityBtn->setEnabled(hasSelection && (selected.endsWith(QStringLiteral(".unity")) ||
                                               selected.endsWith(QStringLiteral(".prefab")) ||
                                               selected.endsWith(QStringLiteral(".meta"))));
@@ -1103,16 +1142,27 @@ void GitIntegration::showResolveConflictsDialog() {
         const std::string absPath = item->data(Qt::UserRole).toString().toStdString();
         const std::string relPath = item->data(Qt::UserRole + 1).toString().toStdString();
         const ConflictSides sides = extractSides(absPath, relPath);
-        if (!sides.valid) return;
+        if (!sides.valid)
+            return;
 
-        ui::EditorServices services{.languages = &m_workbench.m_languages, .scheduler = m_workbench.m_pool.get(),
-            .clock = &m_workbench.m_services.clock, .actionHost = &m_workbench.m_actionHost};
-        auto merged = ui::showMergeEditor({.base = sides.base, .ours = sides.ours, .theirs = sides.theirs, .path = absPath},
+        ui::EditorServices services{.languages = &m_workbench.m_languages,
+                                    .scheduler = m_workbench.m_pool.get(),
+                                    .clock = &m_workbench.m_services.clock,
+                                    .actionHost = &m_workbench.m_actionHost};
+        auto merged = ui::showMergeEditor(
+            {.base = sides.base, .ours = sides.ours, .theirs = sides.theirs, .path = absPath},
             [&](std::string_view resolved) -> Result<void> {
-                if (applyResolved(absPath, relPath, std::string(resolved), sides)) return {};
-                return fail(ErrorCode::Busy, "The merge could not be applied; source changes or write/stage errors are shown in notifications");
-            }, services, &dialog);
-        if (!merged) { report(merged.error().message()); return; }
+                if (applyResolved(absPath, relPath, std::string(resolved), sides))
+                    return {};
+                return fail(
+                    ErrorCode::Busy,
+                    "The merge could not be applied; source changes or write/stage errors are shown in notifications");
+            },
+            services, &dialog);
+        if (!merged) {
+            report(merged.error().message());
+            return;
+        }
         if (*merged) {
             delete list->takeItem(list->row(item));
             updateDialogState();
@@ -1120,28 +1170,34 @@ void GitIntegration::showResolveConflictsDialog() {
     };
 
     connect(semanticBtn, &QPushButton::clicked, &dialog, [&] {
-        auto* item=list->currentItem();
+        auto* item = list->currentItem();
         if (!item || !m_controller || m_controller->busy())
             return;
-        if(!m_workbench.m_engine){
+        if (!m_workbench.m_engine) {
             report("Open a trusted FrostEngine project with a built CLI to merge scenes semantically");
             return;
         }
-        auto tool=m_workbench.m_engine->captureDocumentToolSource();
+        auto tool = m_workbench.m_engine->captureDocumentToolSource();
         if (!tool) {
             report(tool.error().message());
             return;
         }
-        const auto absolute=item->data(Qt::UserRole).toString().toStdString();
-        const auto relative=item->data(Qt::UserRole+1).toString().toStdString();
-        const auto generation=m_projectGeneration;
-        SceneMergeWork work{m_workbench.m_services.fs,m_workbench.m_services.launcher,
-            m_controller->service().repository().runner(),std::move(*tool),m_controller->info().workTree,
-            m_controller->info().gitDir,absolute,relative};
-        auto prepared=sceneMergeInBackground(&dialog,[work](std::stop_token stop){return prepareSceneMerge(work,stop);});
-        if(!owner)
+        const auto absolute = item->data(Qt::UserRole).toString().toStdString();
+        const auto relative = item->data(Qt::UserRole + 1).toString().toStdString();
+        const auto generation = m_projectGeneration;
+        SceneMergeWork work{m_workbench.m_services.fs,
+                            m_workbench.m_services.launcher,
+                            m_controller->service().repository().runner(),
+                            std::move(*tool),
+                            m_controller->info().workTree,
+                            m_controller->info().gitDir,
+                            absolute,
+                            relative};
+        auto prepared =
+            sceneMergeInBackground(&dialog, [work](std::stop_token stop) { return prepareSceneMerge(work, stop); });
+        if (!owner)
             return;
-        if(!prepared){
+        if (!prepared) {
             report(prepared.error().message());
             return;
         }

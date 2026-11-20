@@ -3,10 +3,10 @@
 #pragma once
 #include "frost/core/mutex.hpp"
 #include "frost/lang/lsp_client.hpp"
+#include "frost/lang/workspace_edit.hpp"
 #include "frost/project/cmake_file_api.hpp"
 #include "frost/sched/scheduler.hpp"
 #include "frost/text/snapshot.hpp"
-#include "frost/lang/workspace_edit.hpp"
 
 #include <memory>
 #include <vector>

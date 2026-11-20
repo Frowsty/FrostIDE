@@ -162,10 +162,10 @@ struct EngineIntegration::Impl {
     std::uint64_t eventHistoryDropped = 0;
     std::deque<std::size_t> diagnosticSizes;
     std::vector<build::BuildDiagnostic> diagnostics;
-    std::map<std::string,std::vector<build::BuildDiagnostic>> documentDiagnostics;
-    std::map<std::string,std::uint64_t> documentVersions,documentRequests;
-    std::uint64_t documentRequestSerial=0;
-    bool documentSchemasRequested=false;
+    std::map<std::string, std::vector<build::BuildDiagnostic>> documentDiagnostics;
+    std::map<std::string, std::uint64_t> documentVersions, documentRequests;
+    std::uint64_t documentRequestSerial = 0;
+    bool documentSchemasRequested = false;
     std::uint64_t lastEventSequence = 0;
     std::shared_ptr<EngineRunAdmission> runAdmission;
     std::optional<run::RunId> ownedRun;
@@ -198,7 +198,7 @@ struct EngineIntegration::Impl {
     void clearAssetUsages();
     void publishDocumentProblems();
     void publishDocumentAssets();
-    [[nodiscard]] bool retainDocumentProblems(std::string key,std::vector<build::BuildDiagnostic> rows);
+    [[nodiscard]] bool retainDocumentProblems(std::string key, std::vector<build::BuildDiagnostic> rows);
     void attachSessionTools();
     void refreshSessionContext();
     void clearSessionTools();

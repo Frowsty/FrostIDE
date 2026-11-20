@@ -56,7 +56,7 @@ public:
     [[nodiscard]] Result<void> refreshTableSchema();
     [[nodiscard]] Result<void> requestDocumentTool(std::string method);
     [[nodiscard]] Result<void> validateContent();
-    void documentEdited(std::string_view path,std::uint64_t version);
+    void documentEdited(std::string_view path, std::uint64_t version);
     void clearDocumentTools();
     void registerDocumentActions();
     void registerTemplateActions();

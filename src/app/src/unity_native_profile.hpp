@@ -13,5 +13,7 @@ struct UnityNativeProfile {
 // Pure preparation over supplied filesystem/trust state. Does not launch or verify native symbol
 // identity: actual LLDB module/symbol results remain authoritative. Rejects aliases/outside roots.
 [[nodiscard]] Result<UnityNativeProfile> prepareUnityNativeProfile(io::IFileSystem& fs,
-    const project::TrustStore& trust, std::string_view root, const UnityIl2cppNativeSelection& selection);
+                                                                   const project::TrustStore& trust,
+                                                                   std::string_view root,
+                                                                   const UnityIl2cppNativeSelection& selection);
 } // namespace frost::app

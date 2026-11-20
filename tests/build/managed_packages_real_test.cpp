@@ -55,11 +55,11 @@ TEST(ManagedPackagesReal, LocalFeedRestoreSearchAndResolvedVersionsUseActualSdk)
     auto packed = run({"pack", library, "--no-restore", "--configuration", "Release", "--output", feed});
     ASSERT_TRUE(packed);
     ASSERT_EQ(packed->exitCode, 0) << packed->stdoutBytes << packed->stderrBytes;
-    ASSERT_TRUE(
-        fs.writeFileAtomic(consumer, "<Project "
-                                     "Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</"
-                                     "TargetFramework></PropertyGroup><ItemGroup><PackageReference "
-                                     "Include=\"FrostFixture.Local\" Version=\"1.2.3\"/></ItemGroup></Project>"));
+    ASSERT_TRUE(fs.writeFileAtomic(consumer,
+                                   "<Project "
+                                   "Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</"
+                                   "TargetFramework></PropertyGroup><ItemGroup><PackageReference "
+                                   "Include=\"FrostFixture.Local\" Version=\"1.2.3\"/></ItemGroup></Project>"));
     ManagedPackageRequest request;
     request.project = {dotnet, consumer, "Debug", "net10.0", {}};
     request.query = PackageQuery::Restore;

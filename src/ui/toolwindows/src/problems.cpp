@@ -414,7 +414,8 @@ bool ProblemsView::activate(const QModelIndex& index) {
     }
     if (m_model->problems()[static_cast<std::size_t>(source.row())].source == DiagnosticSource::Unity)
         emit openUtf16Location(qs(location->path), location->line, location->column);
-    else emit openLocation(qs(location->path), location->line, location->column);
+    else
+        emit openLocation(qs(location->path), location->line, location->column);
     return true;
 }
 

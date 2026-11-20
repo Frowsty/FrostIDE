@@ -500,32 +500,40 @@ TEST_F(ProjectHostReal, StopEndsTheHelper) {
 
 TEST_F(ProjectHostReal, PropertyAndDynamicImportOriginsMatchActualMsBuildEvaluation) {
     frost::test::ScratchDir scratch("sln18-language");
-    auto& fs=io::realFileSystem();
-    const auto project=io::joinPath(scratch.path(),"language.proj").value();
-    const auto debug=io::joinPath(scratch.path(),"Debug.props").value();
-    const auto release=io::joinPath(scratch.path(),"Release.props").value();
-    ASSERT_TRUE(fs.writeFileAtomic(project,"<Project>\n<Import Project=\"$(Configuration).props\" />\n</Project>\n"));
-    ASSERT_TRUE(fs.writeFileAtomic(debug,"<Project>\n<PropertyGroup><LanguageValue>debug-value</LanguageValue></PropertyGroup>\n</Project>\n"));
-    ASSERT_TRUE(fs.writeFileAtomic(release,"<Project>\n<PropertyGroup><LanguageValue>release-value</LanguageValue></PropertyGroup>\n</Project>\n"));
-    auto client=ProjectHostClient::start(io::realProcessLauncher(),{.hostPath=hostPath(),.msbuildPath=m_msbuild,
-        .environment={},.startTimeout=120s,.requestTimeout=300s});
+    auto& fs = io::realFileSystem();
+    const auto project = io::joinPath(scratch.path(), "language.proj").value();
+    const auto debug = io::joinPath(scratch.path(), "Debug.props").value();
+    const auto release = io::joinPath(scratch.path(), "Release.props").value();
+    ASSERT_TRUE(fs.writeFileAtomic(project, "<Project>\n<Import Project=\"$(Configuration).props\" />\n</Project>\n"));
+    ASSERT_TRUE(fs.writeFileAtomic(
+        debug, "<Project>\n<PropertyGroup><LanguageValue>debug-value</LanguageValue></PropertyGroup>\n</Project>\n"));
+    ASSERT_TRUE(fs.writeFileAtomic(
+        release,
+        "<Project>\n<PropertyGroup><LanguageValue>release-value</LanguageValue></PropertyGroup>\n</Project>\n"));
+    auto client = ProjectHostClient::start(io::realProcessLauncher(), {.hostPath = hostPath(),
+                                                                       .msbuildPath = m_msbuild,
+                                                                       .environment = {},
+                                                                       .startTimeout = 120s,
+                                                                       .requestTimeout = 300s});
     ASSERT_TRUE(client);
-    for (const auto* configuration:{"Debug","Release"}) {
-        ProjectEvaluationRequest request{.projectPath=project,.configuration=configuration,.platform="x64",.properties={"LanguageValue"}};
-        auto evaluated=(*client)->evaluate(request);
+    for (const auto* configuration : {"Debug", "Release"}) {
+        ProjectEvaluationRequest request{
+            .projectPath = project, .configuration = configuration, .platform = "x64", .properties = {"LanguageValue"}};
+        auto evaluated = (*client)->evaluate(request);
         ASSERT_TRUE(evaluated) << evaluated.error().describe();
-        auto oracle=test::runOracle(m_msbuild,request,{}, {"LanguageValue"},true);
+        auto oracle = test::runOracle(m_msbuild, request, {}, {"LanguageValue"}, true);
         ASSERT_TRUE(oracle);
-        const auto found=std::find_if(evaluated->propertyDefinitions.begin(),evaluated->propertyDefinitions.end(),
-            [](const auto& row){return row.name=="LanguageValue";});
-        ASSERT_NE(found,evaluated->propertyDefinitions.end());
-        EXPECT_EQ(found->value,oracle->properties.at("LanguageValue"));
+        const auto found = std::find_if(evaluated->propertyDefinitions.begin(), evaluated->propertyDefinitions.end(),
+                                        [](const auto& row) { return row.name == "LanguageValue"; });
+        ASSERT_NE(found, evaluated->propertyDefinitions.end());
+        EXPECT_EQ(found->value, oracle->properties.at("LanguageValue"));
         EXPECT_TRUE(oracle->imports.contains(detail::pathKey(found->path)));
-        EXPECT_EQ(found->line,2U);
-        const auto imported=std::find_if(evaluated->importDefinitions.begin(),evaluated->importDefinitions.end(),
-            [&](const auto& row){return row.sourcePath==project && row.expression=="$(Configuration).props";});
-        ASSERT_NE(imported,evaluated->importDefinitions.end());
-        EXPECT_EQ(imported->importedPath,found->path);
+        EXPECT_EQ(found->line, 2U);
+        const auto imported = std::find_if(
+            evaluated->importDefinitions.begin(), evaluated->importDefinitions.end(),
+            [&](const auto& row) { return row.sourcePath == project && row.expression == "$(Configuration).props"; });
+        ASSERT_NE(imported, evaluated->importDefinitions.end());
+        EXPECT_EQ(imported->importedPath, found->path);
     }
 }
 } // namespace

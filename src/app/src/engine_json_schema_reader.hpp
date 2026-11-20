@@ -6,5 +6,6 @@
 namespace frost::app {
 // Worker-safe as fs. Reads only a physical descendant, at most 2MiB, with lossless text
 // decoding and retained before/after root and file identities. No process or file mutation.
-[[nodiscard]] Result<text::Snapshot> readEngineSchemaDeclaration(io::IFileSystem&,std::string_view root,std::string_view path);
-}
+[[nodiscard]] Result<text::Snapshot> readEngineSchemaDeclaration(io::IFileSystem&, std::string_view root,
+                                                                 std::string_view path);
+} // namespace frost::app

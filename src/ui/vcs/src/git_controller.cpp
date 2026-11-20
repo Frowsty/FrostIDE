@@ -227,7 +227,8 @@ void GitController::rebaseBranch(const QString& ontoBranch) {
 }
 
 void GitController::rebaseStep(vcs::RebaseStep step) {
-    if (allow(vcs::GitOperationKind::Rebase)) m_service->rebaseStep(step);
+    if (allow(vcs::GitOperationKind::Rebase))
+        m_service->rebaseStep(step);
 }
 
 void GitController::deleteBranch(const QString& branch, bool force) {

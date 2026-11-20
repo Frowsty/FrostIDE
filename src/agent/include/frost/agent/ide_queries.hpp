@@ -2,6 +2,7 @@
 // Read-only C2 adapters over existing IDE protocol data and source-owned inspection metadata.
 #pragma once
 #include "frost/rpc/json.hpp"
+
 #include <functional>
 #include <optional>
 #include <string>
@@ -22,6 +23,6 @@ using IdeResourceAdmission = std::function<bool(std::string_view uri)>;
 // Emits flat root/relation records so ordinary MCP pagination can split large edge sets.
 // At most eight roots, 128 edges/direction and 1 MiB retained result; one owning completion. Errors
 // propagate from the real provider or report malformed/excessive data. O(returned JSON bytes).
-void hierarchyEdges(bool typeHierarchy, rpc::Json prepareParams, IdeQueryRequest request,
-    IdeResourceAdmission admitted, IdeQueryDone done);
-}
+void hierarchyEdges(bool typeHierarchy, rpc::Json prepareParams, IdeQueryRequest request, IdeResourceAdmission admitted,
+                    IdeQueryDone done);
+} // namespace frost::agent

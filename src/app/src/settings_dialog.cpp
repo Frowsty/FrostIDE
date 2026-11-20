@@ -9,9 +9,9 @@
 #include "frost/ui/icon_ids.hpp"
 #include "frost/ui/tr.hpp"
 
+#include "settings_import.hpp"
 #include "settings_keymap_page.hpp"
 #include "settings_lua_page.hpp"
-#include "settings_import.hpp"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -26,8 +26,8 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
-#include <QPushButton>
 #include <QPointer>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -432,14 +432,23 @@ void SettingsDialog::build() {
         }
         const QPointer<SettingsDialog> owner(this);
         const bool imported = showSettingsImport(m_store, this);
-        if (owner && imported) { owner->m_keymap.reloadPreferences(); owner->reload(); }
+        if (owner && imported) {
+            owner->m_keymap.reloadPreferences();
+            owner->reload();
+        }
     });
     auto* schemeButton = buttons->addButton(text("Custom Scheme / Export..."), QDialogButtonBox::ActionRole);
     connect(schemeButton, &QPushButton::clicked, this, [this] {
-        if (m_apply->isEnabled()) { m_status->setText(text("Apply or Reload pending changes before editing a scheme.")); return; }
+        if (m_apply->isEnabled()) {
+            m_status->setText(text("Apply or Reload pending changes before editing a scheme."));
+            return;
+        }
         const QPointer<SettingsDialog> owner(this);
         const bool applied = showNativeScheme(m_store, this);
-        if (owner && applied) { owner->m_keymap.reloadPreferences(); owner->reload(); }
+        if (owner && applied) {
+            owner->m_keymap.reloadPreferences();
+            owner->reload();
+        }
     });
     reloadButton->setToolTip(text("Discard pending changes and reload settings from disk"));
     m_apply = buttons->button(QDialogButtonBox::Apply);

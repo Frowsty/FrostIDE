@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Answers CMake language queries using source declarations and configured project data.
 #include "frost/lang/cmake_language.hpp"
-#include "frost/lang/cmake_refactoring.hpp"
 
+#include "frost/lang/cmake_refactoring.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/cmake_syntax.hpp"
 
@@ -193,7 +193,9 @@ sched::Task<Result<Json>> CMakeLanguageService::answer(sched::IScheduler& schedu
         for (const auto& file : input.model->inputs) {
             if (cancelled())
                 co_return fail(ErrorCode::Cancelled, "CMake input loading cancelled");
-            if ((method=="textDocument/rename" || method=="textDocument/prepareRename") ? file.cmake : (file.generated || file.external))
+            if ((method == "textDocument/rename" || method == "textDocument/prepareRename")
+                    ? file.cmake
+                    : (file.generated || file.external))
                 continue;
             if (++visited > kMaxInputs || bytes >= kMaxTotalInputBytes)
                 break;
@@ -209,38 +211,47 @@ sched::Task<Result<Json>> CMakeLanguageService::answer(sched::IScheduler& schedu
             input.inputs.emplace_back(file.path, std::move(*text));
         }
     if (method == "textDocument/rename" || method == "textDocument/prepareRename") {
-        const auto* value=params.find("position");
-        auto position=value?parsePosition(*value):std::nullopt;
-        if (!position) co_return fail(ErrorCode::InvalidArgument,"CMake rename requires a position");
-        const auto name=method=="textDocument/prepareRename" ? "frost_rename_preview_candidate" : std::string(params.stringAt("newName"));
-        auto proposal=planCMakeTargetRename(input,*position,name);
-        if (!proposal) co_return std::unexpected(proposal.error());
-        for (const auto& path:input.provenancePaths) {
+        const auto* value = params.find("position");
+        auto position = value ? parsePosition(*value) : std::nullopt;
+        if (!position)
+            co_return fail(ErrorCode::InvalidArgument, "CMake rename requires a position");
+        const auto name = method == "textDocument/prepareRename" ? "frost_rename_preview_candidate"
+                                                                 : std::string(params.stringAt("newName"));
+        auto proposal = planCMakeTargetRename(input, *position, name);
+        if (!proposal)
+            co_return std::unexpected(proposal.error());
+        for (const auto& path : input.provenancePaths) {
             auto contents = reader(path, 32U * 1024U * 1024U);
             if (!contents)
                 co_return std::unexpected(contents.error());
             proposal->provenance.emplace_back(path, std::move(*contents));
         }
-        if (method=="textDocument/prepareRename") {
-            for (const auto& file:proposal->edit.files) if (documentKey(file.path)==documentKey(input.path))
-                for (const auto& edit:file.edits)
-                    if (edit.range.start<=*position && *position<=edit.range.end) co_return toJson(edit.range);
-            co_return fail(ErrorCode::Unsupported,"Selected token is not a target reference");
+        if (method == "textDocument/prepareRename") {
+            for (const auto& file : proposal->edit.files)
+                if (documentKey(file.path) == documentKey(input.path))
+                    for (const auto& edit : file.edits)
+                        if (edit.range.start <= *position && *position <= edit.range.end)
+                            co_return toJson(edit.range);
+            co_return fail(ErrorCode::Unsupported, "Selected token is not a target reference");
         }
-        auto changes=Json::object();
-        for (const auto& file:proposal->edit.files) {
-            auto edits=Json::array();
-            for (const auto& edit:file.edits) edits.push(Json::object().set("range",toJson(edit.range)).set("newText",edit.newText));
-            changes.set(file.uri,std::move(edits));
+        auto changes = Json::object();
+        for (const auto& file : proposal->edit.files) {
+            auto edits = Json::array();
+            for (const auto& edit : file.edits)
+                edits.push(Json::object().set("range", toJson(edit.range)).set("newText", edit.newText));
+            changes.set(file.uri, std::move(edits));
         }
-        { LockGuard lock(state->mutex); state->capture=std::make_shared<CMakeRenameCapture>(std::move(*proposal)); }
-        co_return Json::object().set("changes",std::move(changes));
+        {
+            LockGuard lock(state->mutex);
+            state->capture = std::make_shared<CMakeRenameCapture>(std::move(*proposal));
+        }
+        co_return Json::object().set("changes", std::move(changes));
     }
     co_return queryCMakeLanguage(input, method, params, stop);
 }
 std::shared_ptr<const CMakeRenameCapture> CMakeLanguageService::renameCapture(const WorkspaceEdit& edit) const {
     LockGuard lock(m_renameState->mutex);
-    return m_renameState->capture && m_renameState->capture->edit==edit ? m_renameState->capture : nullptr;
+    return m_renameState->capture && m_renameState->capture->edit == edit ? m_renameState->capture : nullptr;
 }
 std::optional<ServerCapabilities> CMakeLanguageService::serverCapabilities() const {
     ServerCapabilities caps;

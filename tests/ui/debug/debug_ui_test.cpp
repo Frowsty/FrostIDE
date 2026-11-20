@@ -526,8 +526,8 @@ TEST_F(DebugUiTest, CoreClrAttachRequiresCapturedProcessAndUsesNonterminatingOwn
     ASSERT_FALSE(missing);
     EXPECT_TRUE(adapter.requests().empty());
     ASSERT_TRUE(controller->attachTarget(target(), debug::test::fakeFactory(adapter),
-                                          rpc::Json::object().set("type", "coreclr").set("processId", 123), {},
-                                          [] { return Result<void>{}; }));
+                                         rpc::Json::object().set("type", "coreclr").set("processId", 123), {},
+                                         [] { return Result<void>{}; }));
     ASSERT_TRUE(spinUntil([&] { return controller->state() == debug::DebugState::Running; }));
     EXPECT_EQ(adapter.argumentsOf("initialize").front().stringAt("adapterID"), "coreclr");
     EXPECT_EQ(adapter.argumentsOf("attach").front().integerAt("processId"), 123);

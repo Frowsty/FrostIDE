@@ -9,10 +9,10 @@
 #include "../../src/app/src/project_open_broker.hpp"
 #include "support/directory_link.hpp"
 #include "workbench_rig.hpp"
-#include <QCoreApplication>
-#include <QEvent>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QFile>
 #include <QLabel>
 #include <QPushButton>
@@ -807,12 +807,20 @@ TEST(ProjectOpenProcess, WaitTicketTracksActualEditorCloseAndRejectsReplay) {
         sender.join();
         return result;
     };
-    auto opened = request(frost::lang::Json::object().set("root", *root).set("file", dir.join("main.lua"))
-        .set("line", 0).set("column", 0).set("wait", true).dump());
+    auto opened = request(frost::lang::Json::object()
+                              .set("root", *root)
+                              .set("file", dir.join("main.lua"))
+                              .set("line", 0)
+                              .set("column", 0)
+                              .set("wait", true)
+                              .dump());
     ASSERT_TRUE(opened);
     ASSERT_TRUE(opened->starts_with("wait:"));
-    const auto poll = frost::lang::Json::object().set("method", "document.wait").set("root", *root)
-        .set("ticket", opened->substr(5)).dump();
+    const auto poll = frost::lang::Json::object()
+                          .set("method", "document.wait")
+                          .set("root", *root)
+                          .set("ticket", opened->substr(5))
+                          .dump();
     auto state = request(poll);
     ASSERT_TRUE(state);
     EXPECT_EQ(*state, "open");

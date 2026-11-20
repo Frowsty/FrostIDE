@@ -6,8 +6,8 @@
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Frontend/PreprocessorOutputOptions.h"
 #include "clang/Frontend/Utils.h"
-#include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/MacroArgs.h"
+#include "clang/Lex/PPCallbacks.h"
 #include "semantic_command.hpp"
 
 namespace frost::clang_engine {
@@ -114,15 +114,17 @@ public:
         auto& manager = preprocessor.getSourceManager();
         llvm::json::Array argumentTokens;
         const bool reflection = spelling == "UCLASS" || spelling == "USTRUCT" || spelling == "UENUM" ||
-            spelling == "UINTERFACE" || spelling == "UPROPERTY" || spelling == "UFUNCTION";
+                                spelling == "UINTERFACE" || spelling == "UPROPERTY" || spelling == "UFUNCTION";
         if (reflection && arguments && !name.getLocation().isMacroID()) {
             std::size_t count = 0;
             for (unsigned argument = 0; argument < arguments->getNumMacroArguments(); ++argument) {
                 llvm::json::Array values;
-                for (const clang::Token* token = arguments->getUnexpArgument(argument); !token->is(clang::tok::eof); ++token) {
+                for (const clang::Token* token = arguments->getUnexpArgument(argument); !token->is(clang::tok::eof);
+                     ++token) {
                     const auto value = preprocessor.getSpelling(*token);
                     if (++count > 4096 || !capture.charge(value.size())) {
-                        capture.error = "Reflection argument token budget exceeded"; return;
+                        capture.error = "Reflection argument token budget exceeded";
+                        return;
                     }
                     values.push_back(value);
                 }

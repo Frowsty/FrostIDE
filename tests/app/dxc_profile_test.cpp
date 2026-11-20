@@ -36,7 +36,8 @@ TEST(DxcProfile, ActualCompilerFormatLocationsRemainMessagesWithoutInferredSucce
     auto p = profile();
     auto rows = parseDxcDiagnostics("test.hlsl(4,9) :  error: use of undeclared identifier 'actual'\r\n"
                                     "    return actual;\r\n"
-                                    "           ^\r\n", p.root);
+                                    "           ^\r\n",
+                                    p.root);
     ASSERT_TRUE(rows);
     ASSERT_EQ(rows->size(), 1u);
     EXPECT_EQ(rows->front().diagnostic.line, 4);
@@ -62,7 +63,7 @@ TEST(DxcProfile, RealCommandRecipeUsesExactArgvAndBoundedDiagnosticCollection) {
     EXPECT_EQ(records[0].spec.executable, p.executable);
     EXPECT_FALSE(records[0].spec.rawArguments);
     const std::vector<std::string> expectedArguments{
-        "-E", p.entry, "-T", p.target, "-HV", "2021", "-fdiagnostics-format=msvc", "-Fo",
+        "-E",    p.entry, "-T", p.target, "-HV", "2021", "-fdiagnostics-format=msvc", "-Fo",
 #ifdef _WIN32
         "NUL",
 #else

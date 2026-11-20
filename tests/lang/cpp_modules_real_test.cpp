@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Deferred real pinned-tool oracle: scanner relationships, actual module compilation and navigation.
-#include "frost/lang/cpp_modules.hpp"
 #include "frost/io/path.hpp"
+#include "frost/lang/cpp_modules.hpp"
+
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 namespace frost::lang {
@@ -27,9 +28,8 @@ TEST(CppModulesReal, ScannerGraphMatchesBuiltModuleFixture) {
     const std::string sourceBytes = "import fixture_math;\nint consume() { return answer(); }\n";
     ASSERT_TRUE(fs.writeFileAtomic(module, moduleBytes));
     ASSERT_TRUE(fs.writeFileAtomic(source, sourceBytes));
-    const std::vector<CompileCommand> commands{
-        {root, module, {compiler, "-std=c++20", "-c", module, "-o", bmi}},
-        {root, source, {compiler, "-std=c++20", "-c", source, "-o", output}}};
+    const std::vector<CompileCommand> commands{{root, module, {compiler, "-std=c++20", "-c", module, "-o", bmi}},
+                                               {root, source, {compiler, "-std=c++20", "-c", source, "-o", output}}};
     const auto bytes = compileCommandsJson(commands);
     ASSERT_TRUE(fs.writeFileAtomic(databasePath, bytes));
     CppModuleScanRequest request;

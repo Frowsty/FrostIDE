@@ -2,8 +2,8 @@
 // File and project membership edits are prepared together, before any disk or editor effects.
 #include "workbench_source_rename.hpp"
 
-#include "frost/lang/uri.hpp"
 #include "frost/lang/unity_assets.hpp"
+#include "frost/lang/uri.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -177,21 +177,29 @@ Result<document::RefactoringPlan> prepareSourceFileRename(io::IFileSystem& fs, c
     return plan;
 }
 
-Result<void> appendUnityMetaRename(io::IFileSystem& fs, document::RefactoringPlan& plan,
-    const std::string& source, const std::string& target) {
+Result<void> appendUnityMetaRename(io::IFileSystem& fs, document::RefactoringPlan& plan, const std::string& source,
+                                   const std::string& target) {
     if (source.ends_with(".meta") || target.ends_with(".meta"))
         return fail(ErrorCode::InvalidArgument, "Rename the Unity asset, not its original .meta file");
     auto before = captureRefactoringInput(fs, source + ".meta");
     auto after = captureRefactoringInput(fs, target + ".meta");
-    if (!before) return std::unexpected(before.error());
-    if (!after) return std::unexpected(after.error());
-    if (!before->disk) return fail(ErrorCode::NotFound, "Unity asset has no original .meta; refresh Unity before renaming");
-    if (after->disk) return fail(ErrorCode::AlreadyExists, "Destination Unity .meta already exists");
+    if (!before)
+        return std::unexpected(before.error());
+    if (!after)
+        return std::unexpected(after.error());
+    if (!before->disk)
+        return fail(ErrorCode::NotFound, "Unity asset has no original .meta; refresh Unity before renaming");
+    if (after->disk)
+        return fail(ErrorCode::AlreadyExists, "Destination Unity .meta already exists");
     const lang::UnityAssetSnapshot input{before->path, *before->disk};
-    lang::UnityAssetIndex index; index.reset(std::span(&input, 1));
-    if (!index.diagnostics().empty()) return fail(ErrorCode::Unsupported, "Unity metadata GUID is missing or ambiguous");
-    if (auto dependency = appendRefactoringDependency(plan, *before); !dependency) return dependency;
-    if (auto dependency = appendRefactoringDependency(plan, *after); !dependency) return dependency;
+    lang::UnityAssetIndex index;
+    index.reset(std::span(&input, 1));
+    if (!index.diagnostics().empty())
+        return fail(ErrorCode::Unsupported, "Unity metadata GUID is missing or ambiguous");
+    if (auto dependency = appendRefactoringDependency(plan, *before); !dependency)
+        return dependency;
+    if (auto dependency = appendRefactoringDependency(plan, *after); !dependency)
+        return dependency;
     plan.renames.push_back({before->path, after->path, *before->disk});
     return {};
 }

@@ -24,7 +24,7 @@ struct EngineInstallation {
     std::string preset;
     std::string playerProgram;               // Empty when no real sibling FrostRuntime executable exists.
     std::optional<io::FileStatus> cliStatus; // Actual discovery-worker metadata; GUI snapshots never stat the tool.
-    std::string physicalCliProgram{}; // Discovery-worker receipt, separate from launch/display spelling.
+    std::string physicalCliProgram{};        // Discovery-worker receipt, separate from launch/display spelling.
 };
 
 struct EngineInstanceRecord {

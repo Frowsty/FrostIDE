@@ -7,14 +7,14 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/navigation.hpp"
-#include "frost/lang/unity_assets.hpp"
 #include "frost/lang/symbols.hpp"
+#include "frost/lang/unity_assets.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 
 #include "language_controller_internal.hpp"
-
 #include <QCryptographicHash>
+
 #include <algorithm>
 #include <cstdint>
 #include <format>
@@ -201,11 +201,16 @@ sched::Task<Result<MetadataSource>> librarySourceTask(fl::ILspRequester& server,
     auto uri = fl::pathToUri(path);
     if (!uri)
         co_return std::unexpected(uri.error());
-    auto result = co_await server.request("frost/managed/librarySource",
-        fl::Json::object().set("textDocument", fl::Json::object().set("uri", *uri))
-            .set("position", fl::Json::object().set("line", static_cast<std::int64_t>(position.line))
-                 .set("character", static_cast<std::int64_t>(position.character)))
-            .set("mode", mode).set("allowSourceLink", allowSourceLink), token);
+    auto result = co_await server.request(
+        "frost/managed/librarySource",
+        fl::Json::object()
+            .set("textDocument", fl::Json::object().set("uri", *uri))
+            .set("position", fl::Json::object()
+                                 .set("line", static_cast<std::int64_t>(position.line))
+                                 .set("character", static_cast<std::int64_t>(position.character)))
+            .set("mode", mode)
+            .set("allowSourceLink", allowSourceLink),
+        token);
     if (!result)
         co_return std::unexpected(result.error());
     if (!result->isObject())
@@ -215,9 +220,8 @@ sched::Task<Result<MetadataSource>> librarySourceTask(fl::ILspRequester& server,
     const auto digest = result->stringAt("sourceSha256");
     const auto extension = result->stringAt("extension");
     const auto validDigest = [](std::string_view value) {
-        return value.size() == 64 && std::ranges::all_of(value, [](char c) {
-            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-        });
+        return value.size() == 64 &&
+               std::ranges::all_of(value, [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
     };
     if (source.empty() || source.size() > 4 * 1024 * 1024 || !validDigest(identity) || !validDigest(digest) ||
         (extension != ".cs" && extension != ".il"))
@@ -239,8 +243,9 @@ sched::Task<Result<MetadataSource>> librarySourceTask(fl::ILspRequester& server,
             co_return std::unexpected(project.error());
         const auto root = fl::documentKey(*project);
         const auto cache = fl::documentKey(*normalized);
-        if (cache == root || (cache.size() > root.size() && cache.starts_with(root) &&
-            (root.back() == '/' || root.back() == '\\' || cache[root.size()] == '/' || cache[root.size()] == '\\')))
+        if (cache == root ||
+            (cache.size() > root.size() && cache.starts_with(root) &&
+             (root.back() == '/' || root.back() == '\\' || cache[root.size()] == '/' || cache[root.size()] == '\\')))
             co_return fail(ErrorCode::PermissionDenied, "library cache must be outside the workspace");
     }
     std::string ancestor = *normalized;
@@ -269,8 +274,9 @@ sched::Task<Result<MetadataSource>> librarySourceTask(fl::ILspRequester& server,
             co_return std::unexpected(project.error());
         const auto root = fl::documentKey(*project);
         const auto cache = fl::documentKey(*physical);
-        if (cache == root || (cache.size() > root.size() && cache.starts_with(root) &&
-            (root.back() == '/' || root.back() == '\\' || cache[root.size()] == '/' || cache[root.size()] == '\\')))
+        if (cache == root ||
+            (cache.size() > root.size() && cache.starts_with(root) &&
+             (root.back() == '/' || root.back() == '\\' || cache[root.size()] == '/' || cache[root.size()] == '\\')))
             co_return fail(ErrorCode::PermissionDenied, "library cache must be outside the workspace");
     }
     auto entries = fs.listDirectory(*normalized);
@@ -309,9 +315,12 @@ sched::Task<Result<MetadataSource>> librarySourceTask(fl::ILspRequester& server,
         if (auto wrote = fs.writeFileAtomic(*file, source); !wrote)
             co_return std::unexpected(wrote.error());
     }
-    co_return MetadataSource{.location = fl::Location{.path = *file, .uri = fl::pathToUri(*file).value_or(""),
-        .range = {.start = {.line = static_cast<std::uint32_t>(line), .character = 0},
-                  .end = {.line = static_cast<std::uint32_t>(line), .character = 0}}}, .offered = true};
+    co_return MetadataSource{
+        .location = fl::Location{.path = *file,
+                                 .uri = fl::pathToUri(*file).value_or(""),
+                                 .range = {.start = {.line = static_cast<std::uint32_t>(line), .character = 0},
+                                           .end = {.line = static_cast<std::uint32_t>(line), .character = 0}}},
+        .offered = true};
 }
 /*
  * Real metadata-as-source for the symbol at `position` (LTR-1): textDocument/definition answered
@@ -324,10 +333,11 @@ sched::Task<Result<MetadataSource>> metadataSourceTask(fl::ILspRequester& server
                                                        std::string cacheDir, std::string path, fl::LspPosition position,
                                                        std::stop_token token, std::string mode = "auto",
                                                        bool allowSourceLink = false, std::string workspaceRoot = {}) {
-    if (const auto caps = server.serverCapabilities(); caps && caps->raw.find("experimental") &&
+    if (const auto caps = server.serverCapabilities();
+        caps && caps->raw.find("experimental") &&
         caps->raw.find("experimental")->integerAt("frostLibrarySources").value_or(0) == 1)
-        co_return co_await librarySourceTask(server, fs, std::move(cacheDir), std::move(path), position,
-                                            token, std::move(mode), allowSourceLink, std::move(workspaceRoot));
+        co_return co_await librarySourceTask(server, fs, std::move(cacheDir), std::move(path), position, token,
+                                             std::move(mode), allowSourceLink, std::move(workspaceRoot));
     if (mode != "auto" && mode != "decompiled")
         co_return fail(ErrorCode::Unsupported, "this language server has no library IL/SourceLink/metadata provider");
     const auto uri = fl::pathToUri(path);
@@ -405,7 +415,9 @@ struct GotoOutcome {
 sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, io::IFileSystem& fs,
                                                      std::string cacheDir, bool askMetadata, std::string path,
                                                      fl::LspPosition position, std::vector<std::string> unityFiles,
-    std::vector<fl::UnityAssetSnapshot> unityOverlays, std::size_t offset, std::stop_token token, std::string workspaceRoot) {
+                                                     std::vector<fl::UnityAssetSnapshot> unityOverlays,
+                                                     std::size_t offset, std::stop_token token,
+                                                     std::string workspaceRoot) {
     if (!path.ends_with(".cs") && !unityFiles.empty()) {
         auto unity = fl::queryUnityAssets(fs, unityFiles, unityOverlays, path, offset, token);
         if (unity.recognized || !unity.diagnostics.empty()) {
@@ -426,7 +438,8 @@ sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, 
     GotoOutcome outcome{.result = std::move(*result), .diagnostics = {}};
     if (askMetadata && !outcome.result.showUsages && outcome.result.locations.empty()) {
         const bool noCache = cacheDir.empty();
-        auto metadata = co_await metadataSourceTask(server, fs, std::move(cacheDir), path, position, token, "auto", false, std::move(workspaceRoot));
+        auto metadata = co_await metadataSourceTask(server, fs, std::move(cacheDir), path, position, token, "auto",
+                                                    false, std::move(workspaceRoot));
         if (!metadata)
             co_return std::unexpected(std::move(metadata.error()));
         if (metadata->location) {
@@ -444,11 +457,14 @@ struct UnityUsagesOutcome {
     std::vector<std::string> diagnostics;
 };
 sched::Task<Result<UnityUsagesOutcome>> unityUsagesTask(fl::ILspRequester& server, io::IFileSystem& fs,
-    std::vector<std::pair<std::string, text::Snapshot>> open, std::vector<std::string> files,
-    std::string path, fl::LspPosition position, fl::PositionEncoding encoding, std::size_t offset, std::stop_token token) {
+                                                        std::vector<std::pair<std::string, text::Snapshot>> open,
+                                                        std::vector<std::string> files, std::string path,
+                                                        fl::LspPosition position, fl::PositionEncoding encoding,
+                                                        std::size_t offset, std::stop_token token) {
     UnityUsagesOutcome outcome;
     std::vector<fl::UnityAssetSnapshot> overlays;
-    for (const auto& [file, snapshot] : open) overlays.push_back({file, snapshot.text()});
+    for (const auto& [file, snapshot] : open)
+        overlays.push_back({file, snapshot.text()});
     fl::UnityAssetQuery unity;
     if (path.ends_with(".cs") && !files.empty()) {
         auto params = fl::textDocumentPosition(path, position);
@@ -457,25 +473,37 @@ sched::Task<Result<UnityUsagesOutcome>> unityUsagesTask(fl::ILspRequester& serve
             if (semantics && semantics->stringAt("contract") == "unity-source-semantics-v1") {
                 const auto* member = semantics->find("selectedMember");
                 if (member && member->isObject()) {
-                    const auto source = member->stringAt("sourcePath"), name = member->stringAt("name"), kind = member->stringAt("kind");
+                    const auto source = member->stringAt("sourcePath"), name = member->stringAt("name"),
+                               kind = member->stringAt("kind");
                     const auto* identity = member->find("identity");
-                    const bool inventoried = std::ranges::any_of(files, [&](const auto& file) { return fl::documentKey(file) == fl::documentKey(source); });
+                    const bool inventoried = std::ranges::any_of(
+                        files, [&](const auto& file) { return fl::documentKey(file) == fl::documentKey(source); });
                     if (inventoried && fl::isUnityScriptAssociation(source, member->stringAt("declaringType")) &&
-                        identity && !identity->stringAt("declarationId").empty() && !identity->stringAt("assembly").empty() &&
+                        identity && !identity->stringAt("declarationId").empty() &&
+                        !identity->stringAt("assembly").empty() &&
                         (kind == "field" || kind == "eventMethod" || kind == "asset"))
-                        unity = fl::queryUnityAssets(fs, files, overlays, source, 0, token, kind == "asset" ? std::string_view{} : name, kind);
+                        unity = fl::queryUnityAssets(fs, files, overlays, source, 0, token,
+                                                     kind == "asset" ? std::string_view{} : name, kind);
                 }
-            } else if (!semantics) outcome.diagnostics.push_back("Unity source-symbol asset usages require the owned Roslyn semantic provider");
+            } else if (!semantics)
+                outcome.diagnostics.push_back(
+                    "Unity source-symbol asset usages require the owned Roslyn semantic provider");
         }
-    } else unity = fl::queryUnityAssets(fs, files, overlays, path, offset, token);
+    } else
+        unity = fl::queryUnityAssets(fs, files, overlays, path, offset, token);
     outcome.diagnostics.insert(outcome.diagnostics.end(), unity.diagnostics.begin(), unity.diagnostics.end());
     if (path.ends_with(".cs") || !unity.recognized) {
         auto ordinary = co_await detail::runFindUsagesTask(server, fs, open, path, position, encoding, token);
-        if (ordinary) outcome.groups = std::move(*ordinary);
-        else if (!unity.recognized) co_return std::unexpected(ordinary.error());
-        else outcome.diagnostics.push_back("C# symbol usages unavailable; showing serialized asset GUID references only");
+        if (ordinary)
+            outcome.groups = std::move(*ordinary);
+        else if (!unity.recognized)
+            co_return std::unexpected(ordinary.error());
+        else
+            outcome.diagnostics.push_back(
+                "C# symbol usages unavailable; showing serialized asset GUID references only");
     }
-    for (auto& group : unity.usages) outcome.groups.push_back(std::move(group));
+    for (auto& group : unity.usages)
+        outcome.groups.push_back(std::move(group));
     co_return outcome;
 }
 } // namespace
@@ -501,23 +529,28 @@ void LanguageController::gotoDeclarationAtPosition(fl::LspPosition position) {
     const bool askMetadata = capabilities().languageId == "csharp";
     auto unityFiles = m_services.unityAssetFiles ? m_services.unityAssetFiles() : std::vector<std::string>{};
     std::vector<fl::UnityAssetSnapshot> unityOverlays;
-    for (const auto& [file, snapshot] : m_services.host.openDocuments()) unityOverlays.push_back({file, snapshot.text()});
+    for (const auto& [file, snapshot] : m_services.host.openDocuments())
+        unityOverlays.push_back({file, snapshot.text()});
     std::size_t offset = 0;
     if (const auto snapshot = m_services.host.snapshot()) {
-        if (const auto at = fl::fromLspPosition(*snapshot, position, m_services.server.encoding())) offset = at->value();
+        if (const auto at = fl::fromLspPosition(*snapshot, position, m_services.server.encoding()))
+            offset = at->value();
     }
     start<GotoOutcome>(
         m_navigationSlot,
-        [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir, workspaceRoot = m_services.host.libraryWorkspaceRoot(), askMetadata, path,
-         position, unityFiles = std::move(unityFiles), unityOverlays = std::move(unityOverlays), offset](std::stop_token token) {
-            return gotoDeclarationTask(server, fs, cacheDir, askMetadata, path, position, unityFiles, unityOverlays, offset, std::move(token), workspaceRoot);
+        [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir,
+         workspaceRoot = m_services.host.libraryWorkspaceRoot(), askMetadata, path, position,
+         unityFiles = std::move(unityFiles), unityOverlays = std::move(unityOverlays), offset](std::stop_token token) {
+            return gotoDeclarationTask(server, fs, cacheDir, askMetadata, path, position, unityFiles, unityOverlays,
+                                       offset, std::move(token), workspaceRoot);
         },
         [this, path, position, symbol](Result<GotoOutcome> outcome) {
             if (!outcome) {
                 report(outcome.error(), "Go to declaration");
                 return;
             }
-            if (!outcome->diagnostics.empty()) emit statusMessage(qs(outcome->diagnostics.front()));
+            if (!outcome->diagnostics.empty())
+                emit statusMessage(qs(outcome->diagnostics.front()));
             if (outcome->result.showUsages) {
                 findUsagesAt(path, position);
                 return;
@@ -575,9 +608,11 @@ void LanguageController::showLibrarySource(std::string mode, bool allowSourceLin
     }
     start<MetadataSource>(
         m_navigationSlot,
-        [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir, workspaceRoot = m_services.host.libraryWorkspaceRoot(), path,
-         position, mode = std::move(mode), allowSourceLink](std::stop_token token) {
-            return metadataSourceTask(server, fs, cacheDir, path, position, std::move(token), mode, allowSourceLink, workspaceRoot);
+        [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir,
+         workspaceRoot = m_services.host.libraryWorkspaceRoot(), path, position, mode = std::move(mode),
+         allowSourceLink](std::stop_token token) {
+            return metadataSourceTask(server, fs, cacheDir, path, position, std::move(token), mode, allowSourceLink,
+                                      workspaceRoot);
         },
         [this, symbol](Result<MetadataSource> source) {
             if (!source) {
@@ -666,11 +701,13 @@ void LanguageController::findUsagesAt(std::string path, fl::LspPosition position
     std::size_t offset = 0;
     if (m_services.host.documentPath() == path)
         if (const auto snapshot = m_services.host.snapshot())
-            if (const auto at = fl::fromLspPosition(*snapshot, position, m_services.server.encoding())) offset = at->value();
+            if (const auto at = fl::fromLspPosition(*snapshot, position, m_services.server.encoding()))
+                offset = at->value();
     start<UnityUsagesOutcome>(
         m_usagesSlot,
         [&server = m_services.server, &fs = m_services.fs, open = m_services.host.openDocuments(),
-         path = std::move(path), position, encoding = m_services.server.encoding(), unityFiles = std::move(unityFiles), offset](std::stop_token token) {
+         path = std::move(path), position, encoding = m_services.server.encoding(), unityFiles = std::move(unityFiles),
+         offset](std::stop_token token) {
             return unityUsagesTask(server, fs, open, unityFiles, path, position, encoding, offset, std::move(token));
         },
         [this, name](Result<UnityUsagesOutcome> groups) {
@@ -678,7 +715,8 @@ void LanguageController::findUsagesAt(std::string path, fl::LspPosition position
                 report(groups.error(), "Find usages");
                 return;
             }
-            if (!groups->diagnostics.empty()) emit statusMessage(qs(groups->diagnostics.front()));
+            if (!groups->diagnostics.empty())
+                emit statusMessage(qs(groups->diagnostics.front()));
             m_usages->setUsages(name.isEmpty() ? QStringLiteral("Usages") : QStringLiteral("Usages of '%1'").arg(name),
                                 std::move(groups->groups));
             if (m_usages->usageCount() == 0 && groups->diagnostics.empty()) {

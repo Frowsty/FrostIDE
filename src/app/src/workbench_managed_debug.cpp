@@ -13,8 +13,8 @@
 #include "cmake_integration.hpp"
 #include "engine_integration.hpp"
 #include "managed_debug_preparation.hpp"
-#include "managed_source_snapshot.hpp"
 #include "managed_snapshot_job.hpp"
+#include "managed_source_snapshot.hpp"
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>

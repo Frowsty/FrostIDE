@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Explicit native-parent engine package: prepare all tasks, then launch native host and dependent Lua.
 #pragma once
+#include "frost/lang/json.hpp"
+
 #include "engine_native_host.hpp"
 #include "workbench_engine_lua_debug.hpp"
-#include "frost/lang/json.hpp"
 #include <QObject>
 namespace frost::app {
 class EngineMixedLaunchCoordinator final : public QObject {

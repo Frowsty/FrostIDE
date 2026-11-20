@@ -13,7 +13,7 @@ struct MSBuildLanguageInput {
     std::vector<project::EvaluatedProjectItems> evaluations; // Last trusted engine results, explicitly labelled.
 };
 [[nodiscard]] Result<Json> queryMSBuildLanguage(const MSBuildLanguageInput& input, std::string_view method,
-                                               const Json& params, std::stop_token stop = {});
+                                                const Json& params, std::stop_token stop = {});
 class MSBuildLanguageService final : public ILspRequester {
 public:
     using InputReader = CMakeLanguageService::InputReader;
@@ -23,9 +23,10 @@ public:
     sched::Task<Result<Json>> request(std::string method, Json params, std::stop_token stop = {}) override;
     PositionEncoding encoding() const override { return PositionEncoding::Utf16; }
     std::optional<ServerCapabilities> serverCapabilities() const override;
+
 private:
-    static sched::Task<Result<Json>> answer(sched::IScheduler&, InputReader, MSBuildLanguageInput,
-                                            std::string, Json, std::stop_token);
+    static sched::Task<Result<Json>> answer(sched::IScheduler&, InputReader, MSBuildLanguageInput, std::string, Json,
+                                            std::stop_token);
     sched::IScheduler& m_scheduler;
     InputReader m_reader;
     mutable Mutex m_mutex;

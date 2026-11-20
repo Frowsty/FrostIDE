@@ -3,9 +3,10 @@
 
 #include "frost/debug/coreclr_dap.hpp"
 
-#include "frost/io/path.hpp"
 #include "frost/debug/lldb_dap.hpp"
+#include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"
+
 #include <limits>
 
 namespace frost::debug {
@@ -116,8 +117,7 @@ attachCoreClrSession(const project::TrustStore& trust, const DebugTarget& target
             release();
         return allowed;
     };
-    return DebugSession::start(std::move(factory),
-                               rpc::Json::object().set("processId", pid).set("justMyCode", false),
+    return DebugSession::start(std::move(factory), rpc::Json::object().set("processId", pid).set("justMyCode", false),
                                std::move(breakpoints), std::move(callbacks), std::move(options));
 }
 

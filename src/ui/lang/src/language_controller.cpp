@@ -369,12 +369,16 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
         {"navigate.superMethod", "Go to Super Method / Base", "Navigate", &LanguageController::gotoSuperMethod, true},
         {"navigate.typeDeclaration", "Go to Type Declaration", "Navigate", &LanguageController::gotoTypeDeclaration,
          true},
-        {"navigate.decompileSymbol", "Show Decompiled Library Source", "Navigate", &LanguageController::decompileExternalSymbol,
-         true, A::Managed, "Shows actual library source in a read-only profile cache"},
-        {"navigate.librarySourceLink", "Fetch Original Library Source (SourceLink)", "Navigate", &LanguageController::showExternalSourceLink,
-         true, A::LibrarySources, "Explicitly fetches public HTTPS SourceLink source and verifies its PDB checksum"},
-        {"navigate.libraryIl", "Show Library IL", "Navigate", &LanguageController::showExternalIl, true, A::LibrarySources},
-        {"navigate.assemblyMetadata", "Show Assembly Metadata", "Navigate", &LanguageController::showAssemblyMetadata, true, A::LibrarySources},
+        {"navigate.decompileSymbol", "Show Decompiled Library Source", "Navigate",
+         &LanguageController::decompileExternalSymbol, true, A::Managed,
+         "Shows actual library source in a read-only profile cache"},
+        {"navigate.librarySourceLink", "Fetch Original Library Source (SourceLink)", "Navigate",
+         &LanguageController::showExternalSourceLink, true, A::LibrarySources,
+         "Explicitly fetches public HTTPS SourceLink source and verifies its PDB checksum"},
+        {"navigate.libraryIl", "Show Library IL", "Navigate", &LanguageController::showExternalIl, true,
+         A::LibrarySources},
+        {"navigate.assemblyMetadata", "Show Assembly Metadata", "Navigate", &LanguageController::showAssemblyMetadata,
+         true, A::LibrarySources},
         {"refactor.rename", "Rename", "Refactor", &LanguageController::rename, true},
         {"refactor.this", "Refactor This...", "Refactor", &LanguageController::refactorThis, true, A::Always,
          "Rename and the refactorings the language server offers at the caret"},
@@ -452,7 +456,8 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
             spec.context = input::ContextRule{.all = {input::ContextKey::EditorFocus}, .none = {}};
             spec.enabled = [this, availability = entry.availability](const input::ActionContext&) {
                 const auto offered = m_services.server.serverCapabilities();
-                const bool library = offered && offered->raw.find("experimental") &&
+                const bool library =
+                    offered && offered->raw.find("experimental") &&
                     offered->raw.find("experimental")->integerAt("frostLibrarySources").value_or(0) == 1;
                 return hasDocument() && available(availability, capabilities()) &&
                        (availability != Availability::LibrarySources || library) &&

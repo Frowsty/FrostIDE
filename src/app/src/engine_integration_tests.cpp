@@ -7,8 +7,8 @@
 #include "engine_integration_internal.hpp"
 #include "engine_unit_tests_source.hpp"
 
-#include <utility>
 #include <mutex>
+#include <utility>
 
 namespace frost::app {
 
@@ -57,10 +57,12 @@ Result<EngineUnitTestsSource> captureEngineTestsSource(io::IFileSystem& fs, proj
             const auto selectedStatus = fs.status(*selected);
             if (selectedStatus) {
                 const auto parent = selectedStatus->type == io::FileType::Directory
-                                        ? *selected : std::string(io::parentPath(*selected));
+                                        ? *selected
+                                        : std::string(io::parentPath(*selected));
                 if (lang::documentKey(parent) == capture.projectKey &&
                     (selectedStatus->type == io::FileType::Directory ||
-                     (selectedStatus->type == io::FileType::Regular && lang::isFrostEngineProjectFileName(*selected)))) {
+                     (selectedStatus->type == io::FileType::Regular &&
+                      lang::isFrostEngineProjectFileName(*selected)))) {
                     std::lock_guard lock(selectedIdentity->mutex);
                     if (!selectedIdentity->physical)
                         selectedIdentity->physical = *selected;

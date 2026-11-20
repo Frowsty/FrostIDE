@@ -56,9 +56,8 @@ bool indexViewsCurrent(const DocumentEditorFactory& editors, const std::vector<I
     if (views.size() != stamps.size())
         return false;
     return std::ranges::all_of(views, [&stamps](DocumentEditorView* view) {
-        const auto stamp = std::ranges::find_if(stamps, [view](const IndexViewStamp& item) {
-            return item.editor.data() == &view->editor();
-        });
+        const auto stamp = std::ranges::find_if(
+            stamps, [view](const IndexViewStamp& item) { return item.editor.data() == &view->editor(); });
         return stamp != stamps.end() && stamp->path == view->path() && !view->document().dirty() &&
                stamp->version == view->document().document().version();
     });
@@ -95,7 +94,7 @@ struct IndexJob {
     std::string scanner, privateDatabase;
     std::uint64_t trustRevision = 0, generation = 0, commandIndex = 0;
     std::shared_ptr<sched::ResourceGovernor> governor;
-    bool inspectUnreal=false;
+    bool inspectUnreal = false;
 };
 using Done = std::function<void(Result<IndexResult>)>;
 using Progress = std::function<void(std::size_t, std::size_t)>;
@@ -154,8 +153,11 @@ sched::Task<void> indexTask(io::IFileSystem* fs, io::IProcessLauncher* launcher,
                 co_return;
             }
             if (job.inspectUnreal) {
-                auto issues=lang::inspectUnrealReflection(*output);
-                if(issues) result.unrealIssues=std::move(*issues); else result.unrealIssueError=issues.error().message();
+                auto issues = lang::inspectUnrealReflection(*output);
+                if (issues)
+                    result.unrealIssues = std::move(*issues);
+                else
+                    result.unrealIssueError = issues.error().message();
             }
             result.preprocessor = std::move(*output);
         } else {
@@ -562,14 +564,21 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
                         add(QStringLiteral("Expanded source"), result->preprocessor->text);
                         add(QStringLiteral("Include graph"), result->preprocessor->includes.dump());
                         add(QStringLiteral("Macro events"), result->preprocessor->macros.dump());
-                        if(result->unrealIssues || !result->unrealIssueError.empty()) {
-                            std::string report=result->unrealIssueError;
-                            if(result->unrealIssues) {
-                                report="Actual active Clang invocation tokens; only documented conflicting specifiers are checked. Unknown/version-specific specifiers are not rejected.\n";
-                                for(const auto& issue:*result->unrealIssues) report+=issue.path+":"+std::to_string(issue.line)+":"+std::to_string(issue.column)+": "+issue.macro+": "+issue.message+"\n";
-                                if(result->unrealIssues->empty()) report+="No supported conflicts in this captured command. This is not a complete UHT validation.\n";
+                        if (result->unrealIssues || !result->unrealIssueError.empty()) {
+                            std::string report = result->unrealIssueError;
+                            if (result->unrealIssues) {
+                                report =
+                                    "Actual active Clang invocation tokens; only documented conflicting specifiers are "
+                                    "checked. Unknown/version-specific specifiers are not rejected.\n";
+                                for (const auto& issue : *result->unrealIssues)
+                                    report += issue.path + ":" + std::to_string(issue.line) + ":" +
+                                              std::to_string(issue.column) + ": " + issue.macro + ": " + issue.message +
+                                              "\n";
+                                if (result->unrealIssues->empty())
+                                    report += "No supported conflicts in this captured command. This is not a complete "
+                                              "UHT validation.\n";
                             }
-                            add(QStringLiteral("Unreal reflection inspections"),report);
+                            add(QStringLiteral("Unreal reflection inspections"), report);
                         }
                     } else {
                         layout->addWidget(new QLabel(

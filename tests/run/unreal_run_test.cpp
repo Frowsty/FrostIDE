@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Checks that the native Unreal Editor run configuration preserves the project argument.
-#include "frost/run/unreal_run.hpp"
 #include "frost/io/path.hpp"
+#include "frost/run/unreal_run.hpp"
+
 #include <gtest/gtest.h>
 namespace frost::run {
 TEST(UnrealRun, UsesExistingNativeRunTypeWithLiteralProjectArgument) {
     const auto root = io::kNativePathStyle == io::PathStyle::Windows ? "C:/Synthetic" : "/Synthetic";
-    UnrealEditorRunRequest input{"unreal.editor", "Synthetic Editor", io::joinPath(root, "Tools/UnrealEditor").value(), io::joinPath(root, "Game With Spaces/Oracle.uproject").value(), {"-log"}};
+    UnrealEditorRunRequest input{"unreal.editor",
+                                 "Synthetic Editor",
+                                 io::joinPath(root, "Tools/UnrealEditor").value(),
+                                 io::joinPath(root, "Game With Spaces/Oracle.uproject").value(),
+                                 {"-log"}};
     auto result = unrealEditorRunConfiguration(input);
     ASSERT_TRUE(result);
     EXPECT_EQ(result->type, RunType::Native);

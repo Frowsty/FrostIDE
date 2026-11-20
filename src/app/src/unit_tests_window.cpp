@@ -241,18 +241,28 @@ public:
     }
 
     Result<AgentTestSnapshot> agentSnapshot() const {
-        if (!listingCurrent()) return fail(ErrorCode::Busy, "test listing is unavailable or stale");
+        if (!listingCurrent())
+            return fail(ErrorCode::Busy, "test listing is unavailable or stale");
         AgentTestSnapshot snapshot;
-        snapshot.busy = m_runner->busy(); snapshot.generation = m_agentRunGeneration;
-        for (const auto& name : m_tree->testNames()) if (const auto* result = m_tree->result(name)) snapshot.results.push_back(*result);
+        snapshot.busy = m_runner->busy();
+        snapshot.generation = m_agentRunGeneration;
+        for (const auto& name : m_tree->testNames())
+            if (const auto* result = m_tree->result(name))
+                snapshot.results.push_back(*result);
         return snapshot;
     }
-    void agentCancel(std::uint64_t generation) { if (generation == m_agentRunGeneration && m_runner->busy()) m_runner->cancel(); }
-    Result<std::uint64_t> agentRunAll() {
-        if (!listingCurrent() || m_runner->busy()) return fail(ErrorCode::Busy, "refresh Unit Tests and wait for the current run");
-        requestRun({});
-        return m_runner->busy() ? Result<std::uint64_t>(m_agentRunGeneration) : fail(ErrorCode::IoError, "test runner did not start; inspect Unit Tests output");
+    void agentCancel(std::uint64_t generation) {
+        if (generation == m_agentRunGeneration && m_runner->busy())
+            m_runner->cancel();
     }
+    Result<std::uint64_t> agentRunAll() {
+        if (!listingCurrent() || m_runner->busy())
+            return fail(ErrorCode::Busy, "refresh Unit Tests and wait for the current run");
+        requestRun({});
+        return m_runner->busy() ? Result<std::uint64_t>(m_agentRunGeneration)
+                                : fail(ErrorCode::IoError, "test runner did not start; inspect Unit Tests output");
+    }
+
 private:
     [[nodiscard]] bool currentGutterCase(const run::GutterTestCase& tc) const {
         const auto* test = m_tree->test(tc.test.name);
@@ -1008,13 +1018,18 @@ Result<void> configureTestFramework(QWidget* unitTestsWidget, const std::string&
 
 Result<AgentTestSnapshot> unitTestsAgentSnapshot(QWidget* widget) {
     auto* window = ctestProvider(widget);
-    if (!window) return fail(ErrorCode::Unsupported, "no unambiguous current CTest provider");
+    if (!window)
+        return fail(ErrorCode::Unsupported, "no unambiguous current CTest provider");
     return window->agentSnapshot();
 }
 Result<std::uint64_t> runUnitTestsForAgent(QWidget* widget) {
     auto* window = ctestProvider(widget);
-    if (!window) return fail(ErrorCode::Unsupported, "no unambiguous current CTest provider");
+    if (!window)
+        return fail(ErrorCode::Unsupported, "no unambiguous current CTest provider");
     return window->agentRunAll();
 }
-void cancelUnitTestsForAgent(QWidget* widget, std::uint64_t generation) { if (auto* window = ctestProvider(widget)) window->agentCancel(generation); }
+void cancelUnitTestsForAgent(QWidget* widget, std::uint64_t generation) {
+    if (auto* window = ctestProvider(widget))
+        window->agentCancel(generation);
+}
 } // namespace frost::app

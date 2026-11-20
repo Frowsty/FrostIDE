@@ -18,6 +18,7 @@
 #include "frost/input/keymap.hpp"
 #include "frost/input/simulated_keyboard.hpp"
 #include "frost/io/path.hpp"
+#include "frost/lang/unreal_reflection.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/debug_actions.hpp"
 #include "frost/ui/debug_retirement.hpp"
@@ -43,7 +44,6 @@
 #include "frost/vcs/git_locator.hpp"
 
 #include "agent_integration.hpp"
-#include "native_agent_chat.hpp"
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
 #include "engine_crash_observer.hpp"
@@ -61,12 +61,12 @@
 #include "managed_build_backend.hpp"
 #include "managed_debug_preparation.hpp"
 #include "multi_session_debug.hpp"
+#include "native_agent_chat.hpp"
 #include "project_edit_process.hpp"
 #include "settings_dialog.hpp"
 #include "standalone_build_backend.hpp"
-#include "unreal_build_backend.hpp"
-#include "frost/lang/unreal_reflection.hpp"
 #include "unity_control.hpp"
+#include "unreal_build_backend.hpp"
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDialog>
@@ -246,9 +246,11 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                                    m_options.metadataCacheDirectory,
                                    // Empty answers say why: no server, fallback flags, indexing (R0 follow-up 4).
                                    [this](std::string_view path) { return languageReadiness(path); }});
-    m_language->setLocalCompletion([this](std::string_view path,const text::Snapshot& snapshot,ByteOffset caret) -> std::optional<lang::CompletionList> {
-        if (!m_unreal || !isCFamilySource(path) || snapshot.size().value()>256*1024) return {};
-        return lang::unrealSpecifierCompletions(snapshot.text(),static_cast<std::size_t>(caret.value()));
+    m_language->setLocalCompletion([this](std::string_view path, const text::Snapshot& snapshot,
+                                          ByteOffset caret) -> std::optional<lang::CompletionList> {
+        if (!m_unreal || !isCFamilySource(path) || snapshot.size().value() > 256 * 1024)
+            return {};
+        return lang::unrealSpecifierCompletions(snapshot.text(), static_cast<std::size_t>(caret.value()));
     });
     m_language->setUnityAssetFiles([this] {
         // The inventory is owned by normal project navigation; never crawl Library or generated solutions.
@@ -293,7 +295,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             m_dxcStop.request_stop();
             ++m_dxcGeneration;
             m_dxcTrustRevision.reset();
-            if (m_problems) m_problems->model()->setProblems(ui::DiagnosticSource::Dxc, {});
+            if (m_problems)
+                m_problems->model()->setProblems(ui::DiagnosticSource::Dxc, {});
         }
         if (m_cppInspectionTrustRevision && (!trusted || trust.revision != *m_cppInspectionTrustRevision)) {
             m_cppInspectionStop.request_stop();
@@ -529,7 +532,7 @@ void Workbench::createBuildService() {
     m_buildBackend = std::make_unique<ui::BuildServiceBackend>(*m_buildService);
     m_build->setBackend(m_buildBackend.get());
     m_build->setSaveAllHandler(this);
-    m_build->setBuildAdmission([this]{return !m_remoteBuildActive;});
+    m_build->setBuildAdmission([this] { return !m_remoteBuildActive; });
     m_buildActions = new ui::BuildActions(*m_build, this);
     if (auto registered = m_buildActions->registerActions(m_registry); !registered) {
         log::warn(kLog, "build actions: {}", registered.error().describe());

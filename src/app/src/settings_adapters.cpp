@@ -57,7 +57,8 @@ Result<ui::ShellLayout> StoreShellSettings::load() const {
         entry.visible = *visible;
         entry.size =
             static_cast<int>(std::clamp<std::int64_t>(field<std::int64_t>(record, "size").value_or(0), 0, 100000));
-        entry.side = static_cast<int>(std::clamp<std::int64_t>(field<std::int64_t>(record, "side").value_or(-1), -1, 2));
+        entry.side =
+            static_cast<int>(std::clamp<std::int64_t>(field<std::int64_t>(record, "side").value_or(-1), -1, 2));
         entry.floating = field<bool>(record, "floating").value_or(false);
         entry.pinned = field<bool>(record, "pinned");
         entry.geometry = field<std::string>(record, "geometry").value_or("");

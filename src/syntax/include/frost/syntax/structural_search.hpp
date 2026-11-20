@@ -4,6 +4,7 @@
 #include "frost/core/error.hpp"
 #include "frost/syntax/language.hpp"
 #include "frost/text/snapshot.hpp"
+
 #include <map>
 #include <optional>
 #include <stop_token>
@@ -11,8 +12,14 @@
 #include <string_view>
 #include <vector>
 namespace frost::syntax {
-struct StructuralCapture { text::ByteRange range; std::string text; };
-struct StructuralMatch { text::ByteRange range; std::map<std::string, StructuralCapture, std::less<>> captures; };
+struct StructuralCapture {
+    text::ByteRange range;
+    std::string text;
+};
+struct StructuralMatch {
+    text::ByteRange range;
+    std::map<std::string, StructuralCapture, std::less<>> captures;
+};
 struct StructuralResult {
     text::Snapshot before;
     std::vector<StructuralMatch> matches;
@@ -29,5 +36,7 @@ struct StructuralResult {
  * and a two-second parse/query deadline each; cancellation/limits return errors, never a subset.
  */
 [[nodiscard]] Result<StructuralResult> structuralSearch(LanguageId language, text::Snapshot source,
-    std::string_view pattern, std::optional<std::string_view> replacement = {}, std::stop_token stop = {});
+                                                        std::string_view pattern,
+                                                        std::optional<std::string_view> replacement = {},
+                                                        std::stop_token stop = {});
 } // namespace frost::syntax

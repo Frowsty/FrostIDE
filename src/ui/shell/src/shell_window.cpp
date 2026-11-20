@@ -301,7 +301,8 @@ void ShellWindow::teardown() {
         return;
     }
     // Focus mode is temporary: restore its layout before composition-root session capture.
-    if (m_distractionFree) setDistractionFree(false);
+    if (m_distractionFree)
+        setDistractionFree(false);
     m_tornDown = true;
     for (const std::function<void()>& hook : std::exchange(m_teardownHooks, {})) {
         hook();
@@ -442,7 +443,8 @@ void ShellWindow::addShellAction(std::string_view id, std::string_view name, std
 }
 
 void ShellWindow::setDistractionFree(bool enabled) {
-    if (enabled == m_distractionFree) return;
+    if (enabled == m_distractionFree)
+        return;
     m_distractionFree = enabled;
     if (enabled) {
         m_modeToolbar = !m_toolbar->isHidden();
@@ -450,7 +452,8 @@ void ShellWindow::setDistractionFree(bool enabled) {
         m_modeTools.clear();
         if (const auto layout = m_env.settings.load(); layout)
             for (const auto& tool : layout->toolWindows)
-                if (m_toolWindows->isVisible(tool.id)) m_modeTools.push_back(tool.id);
+                if (m_toolWindows->isVisible(tool.id))
+                    m_modeTools.push_back(tool.id);
         m_toolbar->hide();
         statusBar()->hide();
         m_toolWindows->hideAll();
@@ -458,7 +461,8 @@ void ShellWindow::setDistractionFree(bool enabled) {
     } else {
         m_toolbar->setVisible(m_modeToolbar);
         statusBar()->setVisible(m_modeStatus);
-        for (const auto& id : m_modeTools) m_toolWindows->show(id, false);
+        for (const auto& id : m_modeTools)
+            m_toolWindows->show(id, false);
         m_modeTools.clear();
     }
 }
@@ -466,12 +470,15 @@ void ShellWindow::setDistractionFree(bool enabled) {
 void ShellWindow::registerActions() {
     namespace a = actions;
     addShellAction("window.fullScreen", "Toggle Full Screen", "View", [this] {
-        if (isFullScreen()) setWindowState(m_beforeFullScreen);
-        else { m_beforeFullScreen = windowState(); showFullScreen(); }
+        if (isFullScreen())
+            setWindowState(m_beforeFullScreen);
+        else {
+            m_beforeFullScreen = windowState();
+            showFullScreen();
+        }
     });
-    addShellAction("window.distractionFree", "Toggle Distraction Free Mode", "View", [this] {
-        setDistractionFree(!distractionFree());
-    });
+    addShellAction("window.distractionFree", "Toggle Distraction Free Mode", "View",
+                   [this] { setDistractionFree(!distractionFree()); });
     const auto hasTabs = [this] { return m_tabs != nullptr && m_tabs->count() > 0; };
     const auto hasAnyTabs = [this] { return m_tabs != nullptr && m_tabs->totalCount() > 0; };
     const auto hasEditor = [this] { return m_tabs != nullptr && m_tabs->currentEditor() != nullptr; };

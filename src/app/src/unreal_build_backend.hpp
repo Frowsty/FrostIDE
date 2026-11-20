@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // GUI-thread backend for explicitly selected installed Unreal tooling, ADR0114.
 #pragma once
-#include "frost/project/unreal_project.hpp"
 #include "frost/build/unreal_build.hpp"
+#include "frost/project/unreal_project.hpp"
 #include "frost/ui/toolwindows/build_controller.hpp"
 
 #include <QObject>
@@ -25,8 +25,8 @@ namespace frost::app {
 class UnrealBuildBackend final : public QObject, public ui::IBuildBackend {
 public:
     UnrealBuildBackend(project::UnrealProject model, io::IFileSystem& fs, io::IProcessLauncher& launcher,
-                           project::TrustStore& trust, build::BuildService& admission,
-                           build::BuildServiceCallbacks callbacks = {});
+                       project::TrustStore& trust, build::BuildService& admission,
+                       build::BuildServiceCallbacks callbacks = {});
     ~UnrealBuildBackend();
     Result<void> openSolution(std::shared_ptr<const project::SolutionModel>) override;
     Result<void> closeSolution() override;
@@ -47,8 +47,8 @@ public:
     std::vector<build::BuildDiagnostic> diagnostics() const override { return m_diagnostics; }
     const project::UnrealProject& model() const { return m_model; }
     void attachMenu(ui::ShellWindow& window, std::function<Result<void>(std::string)> addEditor = {},
-        std::function<void(const std::string&)> openFile = {}, std::function<void()> semanticProfileChanged = {},
-        std::function<void()> inspectReflection = {});
+                    std::function<void(const std::string&)> openFile = {},
+                    std::function<void()> semanticProfileChanged = {}, std::function<void()> inspectReflection = {});
     Result<void> selectCompileDatabase(std::string file);
     const std::string& compileDatabase() const { return m_databaseFile; }
     std::string configurationIdentity() const;

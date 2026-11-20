@@ -1221,9 +1221,8 @@ int checkLocalRenamePlanner(std::string_view resourceDirectory) {
         const bool refused =
             limit.slots ? !slotFits(limit.value, limit.value) : !valueFits(limit.value + 1, limit.value);
         record(limit.name, "pure-production-budget", admitted && refused,
-               llvm::json::Object{{"limit", limit.value},
-                                  {"atBoundaryAdmitted", admitted},
-                                  {"aboveBoundaryRefused", refused}});
+               llvm::json::Object{
+                   {"limit", limit.value}, {"atBoundaryAdmitted", admitted}, {"aboveBoundaryRefused", refused}});
     }
     const bool dependencyAt = dependencyFits(kFiles - 1, kDependencyBytes - 1, 1);
     const bool dependencyOver = !dependencyFits(kFiles - 1, kDependencyBytes, 1);

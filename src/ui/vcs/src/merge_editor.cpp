@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Shared three-way merge UI for Git conflicts and command-line comparisons, using real editor undo.
 #include "frost/ui/vcs/merge_editor.hpp"
-#include "frost/ui/editor/editor_key_routing.hpp"
+
 #include "frost/diff/merge.hpp"
 #include "frost/input/simulated_keyboard.hpp"
 #include "frost/text/text_shaper.hpp"
 #include "frost/ui/dialog_chrome.hpp"
+#include "frost/ui/editor/editor_key_routing.hpp"
 #include "frost/ui/nav/merge_layout.hpp"
 #include "frost/ui/vcs/merge_guard.hpp"
+
 #include <QCoreApplication>
 #include <QDialog>
 #include <QHBoxLayout>
@@ -18,10 +20,13 @@
 #include <QScrollBar>
 #include <QSplitter>
 #include <QVBoxLayout>
+
 #include <algorithm>
 namespace frost::ui {
-Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply, EditorServices services, QWidget* parent) {
-    if (!apply) return fail(ErrorCode::InvalidArgument, "A merge result needs an admitted Apply callback");
+Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply, EditorServices services,
+                             QWidget* parent) {
+    if (!apply)
+        return fail(ErrorCode::InvalidArgument, "A merge result needs an admitted Apply callback");
     std::unique_ptr<EditorKeyRouting> standalone;
     if (!services.keys && !services.actionHost) {
         auto active = input::readActiveLayout();
@@ -32,7 +37,8 @@ Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply, E
         constexpr auto platform = input::KeyPlatform::X11;
 #endif
         auto routing = EditorKeyRouting::createStandalone(layout, input::currentKeymapPlatform(), platform);
-        if (!routing) return std::unexpected(std::move(routing.error()));
+        if (!routing)
+            return std::unexpected(std::move(routing.error()));
         standalone = std::move(*routing);
         services.keys = standalone.get();
     }
@@ -40,22 +46,29 @@ Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply, E
     auto baseSeq = diff::LineSequence::fromBytes(inputs.base, diff::LineSplit::Lsp);
     auto oursSeq = diff::LineSequence::fromBytes(inputs.ours, diff::LineSplit::Lsp);
     auto theirsSeq = diff::LineSequence::fromBytes(inputs.theirs, diff::LineSplit::Lsp);
-    if (!baseSeq) return std::unexpected(std::move(baseSeq.error()));
-    if (!oursSeq) return std::unexpected(std::move(oursSeq.error()));
-    if (!theirsSeq) return std::unexpected(std::move(theirsSeq.error()));
+    if (!baseSeq)
+        return std::unexpected(std::move(baseSeq.error()));
+    if (!oursSeq)
+        return std::unexpected(std::move(oursSeq.error()));
+    if (!theirsSeq)
+        return std::unexpected(std::move(theirsSeq.error()));
     auto modelRes = diff::MergeModel::create(std::move(*baseSeq), std::move(*oursSeq), std::move(*theirsSeq));
-    if (!modelRes) return std::unexpected(std::move(modelRes.error()));
+    if (!modelRes)
+        return std::unexpected(std::move(modelRes.error()));
     diff::MergeModel model = std::move(*modelRes);
     text::MonospaceTextShaper shaper;
     auto panesRes = ui::nav::MergePanes::create(model, shaper);
-    if (!panesRes) return std::unexpected(std::move(panesRes.error()));
+    if (!panesRes)
+        return std::unexpected(std::move(panesRes.error()));
     ui::nav::MergePanes panes = std::move(*panesRes);
 
     auto yoursDocument = text::Document::fromUtf8(inputs.ours);
     auto theirsDocument = text::Document::fromUtf8(inputs.theirs);
     text::Document resultDocument(text::TextBuffer{});
-    if (!yoursDocument) return std::unexpected(std::move(yoursDocument.error()));
-    if (!theirsDocument) return std::unexpected(std::move(theirsDocument.error()));
+    if (!yoursDocument)
+        return std::unexpected(std::move(yoursDocument.error()));
+    if (!theirsDocument)
+        return std::unexpected(std::move(theirsDocument.error()));
     QDialog mergeDialog(parent);
     mergeDialog.setObjectName(QStringLiteral("gitThreeWayMergeDialog"));
     mergeDialog.setWindowTitle(tr("Merge Conflicts — %1").arg(QString::fromStdString(inputs.path)));
@@ -80,7 +93,8 @@ Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply, E
     mLayout->addWidget(splitter, 1);
     const auto setResult = [&](std::string_view text) {
         auto changed = resultDocument.replace({ByteOffset{0}, resultDocument.text().size()}, text, {});
-        if (changed) static_cast<void>(resultPane->followExternalChange(*changed));
+        if (changed)
+            static_cast<void>(resultPane->followExternalChange(*changed));
     };
     bool manualResolved = false;
     bool syncingScroll = false;
@@ -181,22 +195,26 @@ Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply, E
     };
     // FND-3: Apply refuses while chunks are unresolved or conflict markers remain in the result.
     const auto applyBlocker = [&] {
-        return QString::fromStdString(
-            ui::mergeApplyBlocker(manualResolved ? 0U : model.unresolvedCount(), resultDocument.committedText().text()));
+        return QString::fromStdString(ui::mergeApplyBlocker(manualResolved ? 0U : model.unresolvedCount(),
+                                                            resultDocument.committedText().text()));
     };
     const auto refreshApply = [&] {
         const QString blocker = applyBlocker();
         applyBtn->setEnabled(blocker.isEmpty());
         applyBtn->setToolTip(blocker);
     };
-    QObject::connect(resultPane, &ui::EditorView::textChanged, &mergeDialog, [&] { manualResolved = false; refreshApply(); });
+    QObject::connect(resultPane, &ui::EditorView::textChanged, &mergeDialog, [&] {
+        manualResolved = false;
+        refreshApply();
+    });
     QObject::connect(useEdited, &QPushButton::clicked, &mergeDialog, [&] {
         if (ui::hasConflictMarkers(resultDocument.committedText().text())) {
             statusLabel->setText(tr("Remove conflict markers before accepting an edited result."));
             return;
         }
         manualResolved = true;
-        statusLabel->setText(tr("Edited result marked resolved. Apply validates the file and Git stages before writing."));
+        statusLabel->setText(
+            tr("Edited result marked resolved. Apply validates the file and Git stages before writing."));
         refreshApply();
     });
     refreshMergeState();
@@ -233,12 +251,14 @@ Result<bool> showMergeEditor(MergeEditorInputs inputs, MergeEditorApply apply, E
         }
         const std::string mergedText = resultDocument.committedText().text();
         auto applied = apply(mergedText);
-        if (applied) mergeDialog.accept();
-        else statusLabel->setText(QString::fromStdString(applied.error().message()));
+        if (applied)
+            mergeDialog.accept();
+        else
+            statusLabel->setText(QString::fromStdString(applied.error().message()));
     });
     QObject::connect(cancelBtn, &QPushButton::clicked, &mergeDialog, &QDialog::reject);
 
     ui::installDialogChrome(&mergeDialog, true);
     return mergeDialog.exec() == QDialog::Accepted;
 }
-}
+} // namespace frost::ui

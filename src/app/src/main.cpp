@@ -36,7 +36,6 @@
 // log at once, and the stall watchdog and the crash handler only after the first frame, on the
 // GUI thread and the "frost-diag" thread, so neither delays B1.
 
-#include "cli_editor.hpp"
 #include "frost/app/command_line.hpp"
 #include "frost/app/diagnostics_qt.hpp"
 #include "frost/app/main_window.hpp"
@@ -65,6 +64,7 @@
 #include "frost/ui/tr.hpp"
 
 #include "automation_endpoint.hpp"
+#include "cli_editor.hpp"
 #include "engine_request_helper.hpp"
 #include "project_open_broker.hpp"
 #include <QAbstractEventDispatcher>
@@ -574,7 +574,10 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));
         if (parsed->tool != frost::app::CliTool::Open) {
             auto result = frost::app::runCliEditor(*parsed);
-            if (!result) { reportExternalOpenFailure(consoleCodePage, result.error().message()); return 2; }
+            if (!result) {
+                reportExternalOpenFailure(consoleCodePage, result.error().message());
+                return 2;
+            }
             return *result;
         }
         // Reserve the explicit project's endpoint before opening any windows. A second launch
@@ -658,10 +661,18 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
             if (parsed->wait) {
                 owner->reset(); // Let the ordinary child claim the endpoint; this process is only the waiter.
                 auto started = frost::app::startExternalWaitOwner(frost::io::realProcessLauncher(),
-                    QCoreApplication::applicationFilePath().toStdString(), externalRoot, externalFile);
-                if (!started) { reportExternalOpenFailure(consoleCodePage, started.error().message()); return 2; }
-                auto waited = frost::app::forwardExternalOpen(externalRoot, externalFile, parsed->line, parsed->column, parsed->columnUtf16, true);
-                if (!waited) { reportExternalOpenFailure(consoleCodePage, waited.error().message()); return 2; }
+                                                                  QCoreApplication::applicationFilePath().toStdString(),
+                                                                  externalRoot, externalFile);
+                if (!started) {
+                    reportExternalOpenFailure(consoleCodePage, started.error().message());
+                    return 2;
+                }
+                auto waited = frost::app::forwardExternalOpen(externalRoot, externalFile, parsed->line, parsed->column,
+                                                              parsed->columnUtf16, true);
+                if (!waited) {
+                    reportExternalOpenFailure(consoleCodePage, waited.error().message());
+                    return 2;
+                }
                 return 0;
             }
             reserved = std::move(*owner);

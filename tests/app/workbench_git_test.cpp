@@ -15,11 +15,11 @@
 
 #include "vcs/git_fixture.hpp"
 #include "workbench_rig.hpp"
-#include <QFileInfo>
 #include <QApplication>
 #include <QDialog>
-#include <QListWidget>
+#include <QFileInfo>
 #include <QLabel>
+#include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProgressDialog>
@@ -111,7 +111,8 @@ TEST(WorkbenchGit, ThreeWayResultUsesMainEditorHistoryAndStagesOnlyTheChosenOutp
             const auto closeMerge = qScopeGuard([merge] { merge->reject(); });
             auto* editor = merge->findChild<ui::EditorView*>(QStringLiteral("mergeResult"));
             ASSERT_NE(editor, nullptr);
-            auto edited = editor->document().replace({ByteOffset{0}, editor->document().text().size()}, "int value = 4;\n", {});
+            auto edited =
+                editor->document().replace({ByteOffset{0}, editor->document().text().size()}, "int value = 4;\n", {});
             ASSERT_TRUE(edited);
             ASSERT_TRUE(editor->followExternalChange(*edited));
             ASSERT_TRUE(editor->perform(ui::EditorAction::Undo));
@@ -215,7 +216,10 @@ TEST(WorkbenchGit, AsyncDiffReloadCannotDiscardEditsMadeWhileBaseReadWasQueued) 
     auto enteredFuture = entered->get_future();
     auto releaseFuture = release->get_future().share();
     bool released = false;
-    const auto unblock = qScopeGuard([&] { if (!released) release->set_value(); });
+    const auto unblock = qScopeGuard([&] {
+        if (!released)
+            release->set_value();
+    });
     controller(rig)->service().readHeadContent(repo.path("a.cpp"), [entered, releaseFuture](auto) {
         entered->set_value();
         releaseFuture.wait();
@@ -297,8 +301,7 @@ TEST(WorkbenchGit, IndexDiffComparesStagedContentWithUnsavedEditor) {
     EXPECT_TRUE(diff->leftText().contains(QStringLiteral("staged")));
     EXPECT_TRUE(diff->rightText().contains(QStringLiteral("unsaved staged")));
     ASSERT_TRUE(rig.view()->editor().typeText("later "));
-    EXPECT_TRUE(waitFor(
-        [&] { return diff->rightText().contains(QStringLiteral("unsaved later staged")); }, 10s));
+    EXPECT_TRUE(waitFor([&] { return diff->rightText().contains(QStringLiteral("unsaved later staged")); }, 10s));
 }
 
 TEST(WorkbenchGit, HookFailureKeepsSelectionMessageAndOtherStagedFiles) {

@@ -72,7 +72,7 @@ void Workbench::showSourceTemplateDialog() {
     kind->addItems({"C++ class (header and source)", "C++ source", "C++ header", "CMake script", "Lua module"});
     if (model)
         kind->addItems({"New CMake executable target", "New CMake static library target"});
-    const auto componentIndex=kind->count();
+    const auto componentIndex = kind->count();
     kind->addItem("FrostEngine C++ component (CMake executable)");
     form->addRow("Template:", kind);
     auto* name = new QLineEdit(&dialog);
@@ -119,7 +119,8 @@ void Workbench::showSourceTemplateDialog() {
         &dialog);
     explanation->setWordWrap(true);
     layout->addWidget(explanation);
-    connect(kind, &QComboBox::currentIndexChanged, &dialog, [&](int index) { membership->setEnabled(index < 5 || index == componentIndex); });
+    connect(kind, &QComboBox::currentIndexChanged, &dialog,
+            [&](int index) { membership->setEnabled(index < 5 || index == componentIndex); });
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     layout->addWidget(buttons);
     buttons->button(QDialogButtonBox::Ok)->setText("Prepare preview");
@@ -136,12 +137,12 @@ void Workbench::showSourceTemplateDialog() {
     SourceTemplateSpec spec;
     const auto selected = kind->currentIndex();
     spec.file.kind = selected == componentIndex ? lang::FileTemplateKind::FrostComponent
-                     : selected == 1   ? lang::FileTemplateKind::Source
-                     : selected == 2 ? lang::FileTemplateKind::Header
-                     : selected == 3 ? lang::FileTemplateKind::CMakeScript
-                     : selected == 4 ? lang::FileTemplateKind::LuaModule
-                     : selected == 5 ? lang::FileTemplateKind::Executable
-                                     : lang::FileTemplateKind::Class;
+                     : selected == 1            ? lang::FileTemplateKind::Source
+                     : selected == 2            ? lang::FileTemplateKind::Header
+                     : selected == 3            ? lang::FileTemplateKind::CMakeScript
+                     : selected == 4            ? lang::FileTemplateKind::LuaModule
+                     : selected == 5            ? lang::FileTemplateKind::Executable
+                                                : lang::FileTemplateKind::Class;
     spec.file.name = name->text().trimmed().toUtf8().toStdString();
     spec.file.author = author->text().toUtf8().toStdString();
     spec.file.description = description->text().toUtf8().toStdString();

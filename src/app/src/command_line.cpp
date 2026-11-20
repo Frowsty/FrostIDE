@@ -128,8 +128,10 @@ Result<CommandLine> parseCommandLine(std::span<const std::string_view> args) {
             return std::unexpected(std::move(status.error()));
         }
     }
-    if (result.tool != CliTool::Open && (result.mode != Mode::Gui || result.wait || !result.project.empty() || explicitLine || explicitColumn || result.columnUtf16))
-        return fail(ErrorCode::InvalidArgument, "diff/merge cannot be combined with wait, project, location or non-GUI modes");
+    if (result.tool != CliTool::Open && (result.mode != Mode::Gui || result.wait || !result.project.empty() ||
+                                         explicitLine || explicitColumn || result.columnUtf16))
+        return fail(ErrorCode::InvalidArgument,
+                    "diff/merge cannot be combined with wait, project, location or non-GUI modes");
     if (result.tool == CliTool::Diff && result.paths.size() != 2)
         return fail(ErrorCode::InvalidArgument, "diff requires exactly two file paths");
     if (result.tool == CliTool::Merge && result.paths.size() != 4)

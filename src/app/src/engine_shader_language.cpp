@@ -163,7 +163,8 @@ void EngineIntegration::requestShaderLanguage(std::string method, lang::Json par
             }
             total += text.size().value();
             captured.emplace(openDocument->path(), text.text());
-            stamps.emplace(openDocument->path(), std::pair{openDocument.get(), static_cast<std::uint64_t>(text.version())});
+            stamps.emplace(openDocument->path(),
+                           std::pair{openDocument.get(), static_cast<std::uint64_t>(text.version())});
         }
     const auto epoch = impl.epoch, sessionEpoch = impl.sessionEpoch, trust = impl.trustRevision,
                generation = impl.shaderPreviewGeneration;

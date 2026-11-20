@@ -2,21 +2,22 @@
 // R15 editor extras: live bounded Markdown preview, registered in the production action system.
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
-#include "frost/ui/editor/markdown_preview.hpp"
 #include "frost/ui/dialog_chrome.hpp"
+#include "frost/ui/editor/markdown_preview.hpp"
 #include "frost/ui/find/find_feature.hpp"
 #include "frost/ui/find/find_popup.hpp"
-#include <QLineEdit>
-#include <QToolButton>
+
+#include <QCheckBox>
 #include <QDialog>
 #include <QFileDialog>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QJsonArray>
-#include <QPlainTextEdit>
-#include <QCheckBox>
 #include <QLabel>
+#include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
 namespace frost::app {
 void Workbench::registerEditorExtrasActions() {
@@ -29,8 +30,10 @@ void Workbench::registerEditorExtrasActions() {
         spec.enabled = [this](const input::ActionContext&) { return currentView() != nullptr; };
         spec.handler = [this, direction](const input::ActionContext&, const input::InvokeInfo&) {
             if (auto* view = currentView()) {
-                if (direction == 0) view->editor().toggleBookmark();
-                else (void)view->editor().navigateBookmark(direction > 0);
+                if (direction == 0)
+                    view->editor().toggleBookmark();
+                else
+                    (void)view->editor().navigateBookmark(direction > 0);
             }
         };
         if (auto added = m_registry.add(std::move(spec)); !added)
@@ -46,9 +49,11 @@ void Workbench::registerEditorExtrasActions() {
     todos.context.none = input::ContextKeys{input::ContextKey::DialogFocus};
     todos.enabled = [this](const input::ActionContext&) { return m_find && !m_projectRoot.empty(); };
     todos.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
-        if (!m_find || m_projectRoot.empty()) return;
+        if (!m_find || m_projectRoot.empty())
+            return;
         auto* popup = m_find->showPopup(false);
-        if (!popup) return;
+        if (!popup)
+            return;
         popup->scopeButton(search::ScopeKind::Directory)->click();
         popup->directoryField()->setText(QString::fromStdString(m_projectRoot));
         popup->queryField()->setText(QStringLiteral("\\b(TODO|FIXME)\\b"));
@@ -68,25 +73,31 @@ void Workbench::registerEditorExtrasActions() {
     freeze.context.none = input::ContextKeys{input::ContextKey::DialogFocus};
     freeze.enabled = [this](const input::ActionContext&) { return m_window != nullptr; };
     freeze.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
-        if (!m_window) return;
+        if (!m_window)
+            return;
         const QPointer<Workbench> owner(this);
-        const auto path = QFileDialog::getOpenFileName(m_window, QStringLiteral("Open Freeze Report"), {}, QStringLiteral("Freeze reports (*.json)"));
-        if (!owner || path.isEmpty()) return;
+        const auto path = QFileDialog::getOpenFileName(m_window, QStringLiteral("Open Freeze Report"), {},
+                                                       QStringLiteral("Freeze reports (*.json)"));
+        if (!owner || path.isEmpty())
+            return;
         const auto status = m_services.fs.status(path.toStdString());
         if (!status || status->type != io::FileType::Regular || status->size > 8 * 1024 * 1024) {
-            notify(QStringLiteral("Freeze report"), QStringLiteral("Choose a regular JSON report no larger than 8 MiB."), ui::NotificationKind::Error);
+            notify(QStringLiteral("Freeze report"),
+                   QStringLiteral("Choose a regular JSON report no larger than 8 MiB."), ui::NotificationKind::Error);
             return;
         }
         const auto bytes = m_services.fs.readFileSnapshot(path.toStdString(), 8 * 1024 * 1024);
         if (!bytes || bytes->size() > 8 * 1024 * 1024) {
-            notify(QStringLiteral("Freeze report"), QStringLiteral("Cannot read the selected report."), ui::NotificationKind::Error);
+            notify(QStringLiteral("Freeze report"), QStringLiteral("Cannot read the selected report."),
+                   ui::NotificationKind::Error);
             return;
         }
         const auto json = QJsonDocument::fromJson(QByteArray::fromStdString(*bytes));
         const auto report = json.object();
         if (!json.isObject() || report.value("schema").toString() != QStringLiteral("frost-freeze-report/1") ||
             !report.value("samples").isArray() || !report.value("modules").isArray()) {
-            notify(QStringLiteral("Freeze report"), QStringLiteral("Unsupported or malformed freeze report."), ui::NotificationKind::Error);
+            notify(QStringLiteral("Freeze report"), QStringLiteral("Unsupported or malformed freeze report."),
+                   ui::NotificationKind::Error);
             return;
         }
         auto* dialog = new QDialog(m_window);
@@ -94,8 +105,13 @@ void Workbench::registerEditorExtrasActions() {
         dialog->setWindowTitle(QStringLiteral("Freeze Report - ") + path);
         dialog->resize(900, 650);
         auto* layout = new QVBoxLayout(dialog);
-        auto* summary = new QLabel(QStringLiteral("Duration: %1 ms - Samples: %2 - Modules: %3\nRaw recorded stacks and module identities below; no symbolizer or report-supplied path is executed.")
-            .arg(report.value("duration_ms").toDouble()).arg(report.value("samples").toArray().size()).arg(report.value("modules").toArray().size()), dialog);
+        auto* summary =
+            new QLabel(QStringLiteral("Duration: %1 ms - Samples: %2 - Modules: %3\nRaw recorded stacks and module "
+                                      "identities below; no symbolizer or report-supplied path is executed.")
+                           .arg(report.value("duration_ms").toDouble())
+                           .arg(report.value("samples").toArray().size())
+                           .arg(report.value("modules").toArray().size()),
+                       dialog);
         summary->setTextFormat(Qt::PlainText);
         summary->setWordWrap(true);
         layout->addWidget(summary);
@@ -127,7 +143,8 @@ void Workbench::registerEditorExtrasActions() {
         dialog->setWindowTitle(QStringLiteral("Markdown Preview"));
         dialog->resize(800, 650);
         auto* layout = new QVBoxLayout(dialog);
-        auto* notice = new QLabel(QStringLiteral("Embedded resources and raw HTML are disabled. Web links open only when clicked."), dialog);
+        auto* notice = new QLabel(
+            QStringLiteral("Embedded resources and raw HTML are disabled. Web links open only when clicked."), dialog);
         notice->setWordWrap(true);
         layout->addWidget(notice);
         auto* browser = new ui::MarkdownPreview(dialog);
@@ -139,7 +156,8 @@ void Workbench::registerEditorExtrasActions() {
                 return;
             const auto snapshot = source->editor().editor().text();
             if (snapshot.size().value() > 512 * 1024) {
-                browser->setPlainText(QStringLiteral("Markdown preview is limited to 512 KiB. The source remains editable."));
+                browser->setPlainText(
+                    QStringLiteral("Markdown preview is limited to 512 KiB. The source remains editable."));
                 return;
             }
             (void)browser->setSourceMarkdown(QString::fromStdString(snapshot.text()));
@@ -157,4 +175,4 @@ void Workbench::registerEditorExtrasActions() {
     if (auto added = m_registry.add(std::move(preview)); !added)
         log::warn("workbench", "Markdown preview action: {}", added.error().describe());
 }
-}
+} // namespace frost::app

@@ -12,14 +12,20 @@ struct WindowsSandboxAttributes {
     alignas(DWORD) unsigned char networkSid[SECURITY_MAX_SID_SIZE]{};
     DWORD allPackagesPolicy = 1; // PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT
     std::vector<HANDLE> pinnedPaths;
-    ~WindowsSandboxAttributes() { for (auto handle : pinnedPaths) CloseHandle(handle); if (appSid) FreeSid(appSid); }
+    ~WindowsSandboxAttributes() {
+        for (auto handle : pinnedPaths)
+            CloseHandle(handle);
+        if (appSid)
+            FreeSid(appSid);
+    }
 };
-[[nodiscard]] Result<std::unique_ptr<WindowsSandboxAttributes>> prepareWindowsSandboxAttributes(const ProcessSpec& spec);
-}
+[[nodiscard]] Result<std::unique_ptr<WindowsSandboxAttributes>>
+prepareWindowsSandboxAttributes(const ProcessSpec& spec);
+} // namespace frost::io::detail
 #else
 namespace frost::io::detail {
 [[nodiscard]] Result<ProcessSpec> prepareLinuxSandboxLaunch(const ProcessSpec& spec);
 // Owned helper only: applies irreversible native restrictions to the current helper process.
 [[nodiscard]] Result<void> enforceLinuxSandbox(const ProcessSandboxProfile& profile);
-}
+} // namespace frost::io::detail
 #endif

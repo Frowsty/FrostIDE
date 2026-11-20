@@ -16,8 +16,8 @@
 //      untouched).
 //   3. --plan-local-rename: read-only canonical local/parameter rename proposals (REF-4 preparation).
 
-#include "ast_refactoring_plan.hpp"
 #include "analyzer.hpp"
+#include "ast_refactoring_plan.hpp"
 #include "binding_map.hpp"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"

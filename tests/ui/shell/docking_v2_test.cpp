@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Own floating/docked widget ownership and layout restoration, without launching a feature process.
 #include "frost/ui/shell/tool_window_manager.hpp"
+
 #include <QLabel>
 #include <QToolButton>
 #include <gtest/gtest.h>
@@ -10,7 +11,9 @@ TEST(DockingV2, FloatingRetainsContentAndCoexistsWithDockedSide) {
     QWidget host;
     auto* center = new QWidget;
     ToolWindowManager manager(host, *center, settings);
-    ASSERT_TRUE(manager.add({.id = "first", .title = QStringLiteral("First"), .createContent = [] { return new QLabel(QStringLiteral("actual content")); }}));
+    ASSERT_TRUE(manager.add({.id = "first", .title = QStringLiteral("First"), .createContent = [] {
+                                 return new QLabel(QStringLiteral("actual content"));
+                             }}));
     ASSERT_TRUE(manager.add({.id = "second", .title = QStringLiteral("Second")}));
     manager.show("first", false);
     auto* content = manager.content("first");
@@ -55,7 +58,11 @@ TEST(DockingV2, SideModeVisibilityAndGeometryRestoreFromSameSettings) {
 TEST(DockingV2, HiddenRestoreDoesNotOverwriteSavedModeSizeOrPin) {
     ShellLayout initial;
     auto& saved = initial.entry("services");
-    saved.side = 1; saved.floating = true; saved.size = 417; saved.pinned = false; saved.visible = false;
+    saved.side = 1;
+    saved.floating = true;
+    saved.size = 417;
+    saved.pinned = false;
+    saved.visible = false;
     InMemoryShellSettings settings(initial);
     QWidget host;
     auto* center = new QWidget;
@@ -75,7 +82,10 @@ TEST(DockingV2, HiddenRestoreDoesNotOverwriteSavedModeSizeOrPin) {
 TEST(DockingV2, ShowingUnpinnedFloatingWindowRestoresItsStripe) {
     ShellLayout initial;
     auto& saved = initial.entry("services");
-    saved.side = 1; saved.floating = true; saved.pinned = false; saved.visible = false;
+    saved.side = 1;
+    saved.floating = true;
+    saved.pinned = false;
+    saved.visible = false;
     InMemoryShellSettings settings(initial);
     QWidget host;
     auto* center = new QWidget;
@@ -89,4 +99,5 @@ TEST(DockingV2, ShowingUnpinnedFloatingWindowRestoresItsStripe) {
     EXPECT_TRUE(button->isVisibleTo(&host));
     manager.hide("services");
     EXPECT_FALSE(button->isVisibleTo(&host));
-}} // namespace frost::ui
+}
+} // namespace frost::ui

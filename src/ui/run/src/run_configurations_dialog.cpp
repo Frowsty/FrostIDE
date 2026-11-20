@@ -155,10 +155,10 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     m_import->setObjectName(QStringLiteral("runConfigurationImportVisualStudio"));
     m_import->setEnabled(false);
     left->addWidget(m_import);
-    m_addRemote=new QPushButton(tr("Add remote Run..."),this);
+    m_addRemote = new QPushButton(tr("Add remote Run..."), this);
     m_addRemote->setObjectName(QStringLiteral("remoteRunConfigurationButton"));
     left->addWidget(m_addRemote);
-    connect(m_addRemote,&QPushButton::clicked,this,[this]{addRemote();});
+    connect(m_addRemote, &QPushButton::clicked, this, [this] { addRemote(); });
     connect(m_import, &QPushButton::clicked, this, [this] {
         const auto file =
             QFileDialog::getOpenFileName(this, tr("Import Visual Studio configurations"), {},
@@ -214,10 +214,10 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     form->addRow(tr("Name:"), m_name);
     form->addRow(tr("Type:"), m_type);
     form->addRow(tr("Target:"), m_target);
-    m_remoteEndpoint=new QLineEdit(this);
+    m_remoteEndpoint = new QLineEdit(this);
     m_remoteEndpoint->setObjectName(QStringLiteral("runConfigurationRemoteEndpoint"));
     m_remoteEndpoint->setPlaceholderText(tr("Application remote target id"));
-    form->addRow(tr("Remote endpoint:"),m_remoteEndpoint);
+    form->addRow(tr("Remote endpoint:"), m_remoteEndpoint);
     form->addRow(tr("Program:"), m_program);
     m_luaScript = new QLineEdit(this);
     m_luaScript->setObjectName(QStringLiteral("runConfigurationLuaScript"));
@@ -225,11 +225,15 @@ RunConfigurationsDialog::RunConfigurationsDialog(const run::RunConfigurationSet&
     m_interpreterArguments = new QLineEdit(this);
     m_interpreterArguments->setObjectName(QStringLiteral("runConfigurationInterpreterArguments"));
     m_interpreterArguments->setToolTip(
-        tr("Explicit CLI profile: Lua 5.4 -E/-W/-v/-e/-l; LuaJIT -E/-v/-e/-l/-jon/-joff; Luau -O0..2/-g0..2. REPL flags follow the selected runtime."));
+        tr("Explicit CLI profile: Lua 5.4 -E/-W/-v/-e/-l; LuaJIT -E/-v/-e/-l/-jon/-joff; Luau -O0..2/-g0..2. REPL "
+           "flags follow the selected runtime."));
     m_luaRuntime = new QComboBox(this);
     m_luaRuntime->setObjectName(QStringLiteral("runConfigurationLuaRuntime"));
-    m_luaRuntime->addItem(tr("Lua 5.4"), "lua54"); m_luaRuntime->addItem(tr("LuaJIT"), "luajit"); m_luaRuntime->addItem(tr("Luau"), "luau");
-    m_luaRuntime->setToolTip(tr("Explicit interpreter/CLI profile. Analysis settings are separate; only Lua 5.4 has the configured DAP profile."));
+    m_luaRuntime->addItem(tr("Lua 5.4"), "lua54");
+    m_luaRuntime->addItem(tr("LuaJIT"), "luajit");
+    m_luaRuntime->addItem(tr("Luau"), "luau");
+    m_luaRuntime->setToolTip(tr("Explicit interpreter/CLI profile. Analysis settings are separate; only Lua 5.4 has "
+                                "the configured DAP profile."));
     form->addRow(tr("Lua runtime:"), m_luaRuntime);
     form->addRow(tr("Lua script:"), m_luaScript);
     form->addRow(tr("Interpreter flags:"), m_interpreterArguments);
@@ -373,8 +377,8 @@ void RunConfigurationsDialog::showConfiguration(int row) {
     const run::RunType shownType = valid ? m_configurations[static_cast<std::size_t>(row)].type : run::RunType::Native;
     const bool compoundType = shownType == run::RunType::Compound;
     const bool attachType = shownType == run::RunType::Attach;
-    const bool remoteType=shownType==run::RunType::Remote;
-    m_form->setRowVisible(m_remoteEndpoint,remoteType);
+    const bool remoteType = shownType == run::RunType::Remote;
+    m_form->setRowVisible(m_remoteEndpoint, remoteType);
     m_remoteEndpoint->setEnabled(valid);
     const bool launches = !compoundType && !attachType;
     for (QWidget* field : std::initializer_list<QWidget*>{m_target, m_program, m_arguments, m_workingDirectory,
@@ -422,7 +426,7 @@ void RunConfigurationsDialog::showConfiguration(int row) {
                               : typeLabel(configuration.type));
     m_target->setText(configuration.target.empty() ? tr("(none)") : qs(configuration.target));
     m_program->setText(qs(configuration.program));
-    m_remoteEndpoint->setText(configuration.type==run::RunType::Remote?qs(configuration.target):QString{});
+    m_remoteEndpoint->setText(configuration.type == run::RunType::Remote ? qs(configuration.target) : QString{});
     m_luaScript->setText(qs(configuration.target));
     m_luaRuntime->setEnabled(run::isLuaRunType(configuration.type));
     m_interpreterArguments->setText(formatRunArguments(configuration.interpreterArguments));
@@ -436,19 +440,25 @@ void RunConfigurationsDialog::showConfiguration(int row) {
     m_remove->setToolTip(generated ? tr("Generated from the project; it comes back with the next generation.")
                                    : tr("Remove this configuration"));
     const bool native = configuration.type == run::RunType::Native || run::isFrostEngineRunType(configuration.type) ||
-                        run::isLuaRunType(configuration.type) || configuration.type==run::RunType::Remote;
+                        run::isLuaRunType(configuration.type) || configuration.type == run::RunType::Remote;
     const bool msbuild = configuration.type == run::RunType::MSBuild;
     m_program->setReadOnly(!native);
-    m_workingDirectory->setPlaceholderText(remoteType?tr("Absolute Linux working directory"):tr("The program's folder"));
-    m_program->setPlaceholderText(remoteType ? tr("Absolute Linux program path") : native ? tr("Absolute path of the program")
-                                         : tr("The target's build output, resolved after the build"));
+    m_workingDirectory->setPlaceholderText(remoteType ? tr("Absolute Linux working directory")
+                                                      : tr("The program's folder"));
+    m_program->setPlaceholderText(remoteType ? tr("Absolute Linux program path")
+                                  : native   ? tr("Absolute path of the program")
+                                             : tr("The target's build output, resolved after the build"));
     for (QLineEdit* edit : {m_arguments, m_workingDirectory}) {
         edit->setReadOnly(msbuild);
     }
     m_environment->setReadOnly(msbuild);
     m_tasks->setPlainText(formatTasks(configuration.beforeLaunchTasks));
     m_tasks->setReadOnly(msbuild || remoteType);
-    if(remoteType){m_form->setRowVisible(m_target,false);m_form->setRowVisible(m_beforeLaunch,false);m_form->setRowVisible(m_tasks,false);}
+    if (remoteType) {
+        m_form->setRowVisible(m_target, false);
+        m_form->setRowVisible(m_beforeLaunch, false);
+        m_form->setRowVisible(m_tasks, false);
+    }
     m_tasks->setPlaceholderText(msbuild ? tr("MSBuild projects take no before-launch tasks yet (the RunService "
                                              "runs them)")
                                         : tr("None"));
@@ -460,8 +470,10 @@ void RunConfigurationsDialog::showConfiguration(int row) {
                   .arg(qs(configuration.type == run::RunType::MSBuild ? std::string(io::fileName(configuration.target))
                                                                       : configuration.target))
             : tr("Nothing"));
-    if(remoteType) {
-        m_note->setText(tr("Run uses the separately approved application endpoint. Program and working directory are absolute Linux paths; argv and environment stay remote. Debug and implicit local before-launch tasks are unavailable."));
+    if (remoteType) {
+        m_note->setText(tr(
+            "Run uses the separately approved application endpoint. Program and working directory are absolute Linux "
+            "paths; argv and environment stay remote. Debug and implicit local before-launch tasks are unavailable."));
     } else if (msbuild) {
         m_note->setText(tr("MSBuild projects run with the debugger settings MSBuild evaluates for them (the .vcxproj "
                            "and .vcxproj.user LocalDebugger* properties). Edit them on the project's Properties, "
@@ -500,10 +512,11 @@ void RunConfigurationsDialog::storeFields() {
     run::RunConfiguration& configuration = m_configurations[static_cast<std::size_t>(m_row)];
     configuration.name = utf8(m_name->text().trimmed());
     if (configuration.type == run::RunType::Native || run::isFrostEngineRunType(configuration.type) ||
-        run::isLuaRunType(configuration.type) || configuration.type==run::RunType::Remote) {
+        run::isLuaRunType(configuration.type) || configuration.type == run::RunType::Remote) {
         configuration.program = utf8(m_program->text().trimmed());
     }
-    if(configuration.type==run::RunType::Remote)configuration.target=utf8(m_remoteEndpoint->text().trimmed());
+    if (configuration.type == run::RunType::Remote)
+        configuration.target = utf8(m_remoteEndpoint->text().trimmed());
     if (run::isLuaRunType(configuration.type)) {
         configuration.target =
             configuration.type == run::RunType::LuaScript ? utf8(m_luaScript->text().trimmed()) : std::string{};
@@ -598,7 +611,8 @@ std::string RunConfigurationsDialog::copySelected() {
     }
     const run::RunConfiguration source = m_configurations[static_cast<std::size_t>(row)];
     if (run::isLuaRunType(source.type) || source.type == run::RunType::Compound ||
-        source.type == run::RunType::Attach || source.type==run::RunType::Remote || run::isFrostEngineRunType(source.type)) {
+        source.type == run::RunType::Attach || source.type == run::RunType::Remote ||
+        run::isFrostEngineRunType(source.type)) {
         run::RunConfiguration same = source;
         same.name = utf8(tr("%1 (copy)").arg(qs(source.name)));
         same.id = run::uniqueRunConfigurationId(run::runConfigurationIdFor(run::toString(source.type), same.name),
@@ -621,7 +635,7 @@ std::string RunConfigurationsDialog::copySelected() {
     return m_configurations.back().id;
 }
 
-std::string RunConfigurationsDialog::addRemote() {return addOfType(run::RunType::Remote);}
+std::string RunConfigurationsDialog::addRemote() { return addOfType(run::RunType::Remote); }
 
 std::string RunConfigurationsDialog::addCompound() { return addOfType(run::RunType::Compound); }
 
@@ -652,9 +666,10 @@ std::string RunConfigurationsDialog::addOfType(run::RunType type) {
         configuration.target = type == run::RunType::LuaScript ? m_luaScriptDefault : std::string{};
         configuration.workingDirectory = m_luaWorkingDirectoryDefault;
     }
-    configuration.name = utf8((type==run::RunType::Remote || run::isLuaRunType(type) || run::isFrostEngineRunType(type)) ? typeLabel(type)
-                              : type == run::RunType::Compound                             ? tr("Unnamed compound")
-                                                                                           : tr("Unnamed attach"));
+    configuration.name = utf8(
+        (type == run::RunType::Remote || run::isLuaRunType(type) || run::isFrostEngineRunType(type)) ? typeLabel(type)
+        : type == run::RunType::Compound ? tr("Unnamed compound")
+                                         : tr("Unnamed attach"));
     configuration.id = run::uniqueRunConfigurationId(
         run::runConfigurationIdFor(run::toString(type), configuration.name), m_configurations);
     m_configurations.push_back(std::move(configuration));

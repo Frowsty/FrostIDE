@@ -2,6 +2,7 @@
 // Clean-room import of the documented open .vssettings XML container; arbitrary package XML is not executed.
 #pragma once
 #include "frost/settings/store.hpp"
+
 #include <string>
 #include <vector>
 class QWidget;
@@ -21,8 +22,9 @@ struct ImportedVisualStudioSettings {
 [[nodiscard]] Result<ImportedVisualStudioSettings> parseVisualStudioSettings(std::string_view xml);
 // Captures application raw expectations for preview. Unrelated keymap overrides survive import.
 // Apply the returned edits exactly once through SettingsStore::applyConditional after user review.
-[[nodiscard]] Result<std::vector<settings::ConditionalSettingEdit>> prepareVisualStudioImport(
-    settings::SettingsStore& store, const ImportedVisualStudioSettings& imported, std::size_t category);
+[[nodiscard]] Result<std::vector<settings::ConditionalSettingEdit>>
+prepareVisualStudioImport(settings::SettingsStore& store, const ImportedVisualStudioSettings& imported,
+                          std::size_t category);
 // Opens a bounded file picker, explicit category selector and reviewable import preview.
 // Successful Apply uses one atomic SettingsStore replacement; Cancel has no side effects.
 bool showSettingsImport(settings::SettingsStore& store, QWidget* parent);
@@ -31,8 +33,8 @@ namespace frost::app {
 // Native scheme is bounded JSON containing only font, size, colors and keymap settings.
 // Export reads the effective snapshot; preparation validates every member without writing.
 [[nodiscard]] Result<std::string> exportNativeScheme(const settings::SettingsStore& store);
-[[nodiscard]] Result<std::vector<settings::ConditionalSettingEdit>> prepareNativeScheme(
-    settings::SettingsStore& store, std::string bytes);
+[[nodiscard]] Result<std::vector<settings::ConditionalSettingEdit>> prepareNativeScheme(settings::SettingsStore& store,
+                                                                                        std::string bytes);
 // Edits native JSON, imports/exports it through file pickers, and conditionally applies once.
 bool showNativeScheme(settings::SettingsStore& store, QWidget* parent);
-}
+} // namespace frost::app

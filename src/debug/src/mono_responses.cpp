@@ -77,14 +77,20 @@ Result<std::uint32_t> decodeTypeAssembly258(std::span<const std::uint8_t> payloa
     std::string text;
     std::uint32_t assembly = 0, module = 0, ignored = 0, count = 0;
     std::uint8_t byte = 0;
-    if (!r.string(text) || !r.string(text) || !r.string(text) || !r.u32(assembly) || !assembly ||
-        !r.u32(module) || !module || !r.u32(ignored) || !r.u32(ignored) || !r.u32(ignored) ||
-        !r.byte(byte) || !r.u32(ignored) || !r.byte(byte) || !r.u32(count) || count > 4096)
+    if (!r.string(text) || !r.string(text) || !r.string(text) || !r.u32(assembly) || !assembly || !r.u32(module) ||
+        !module || !r.u32(ignored) || !r.u32(ignored) || !r.u32(ignored) || !r.byte(byte) || !r.u32(ignored) ||
+        !r.byte(byte) || !r.u32(count) || count > 4096)
         return fail(ErrorCode::Corrupt, "invalid Mono type info");
-    for (std::uint32_t i = 0; i < count; ++i) if (!r.u32(ignored) || !ignored) return fail(ErrorCode::Corrupt, "invalid nested Mono type");
-    if (!r.u32(ignored) || !r.u32(count) || count > 4096) return fail(ErrorCode::Corrupt, "invalid generic Mono type info");
-    for (std::uint32_t i = 0; i < count; ++i) if (!r.u32(ignored) || !ignored) return fail(ErrorCode::Corrupt, "invalid generic Mono type");
-    if (!r.done()) return fail(ErrorCode::Corrupt, "trailing Mono type info");
+    for (std::uint32_t i = 0; i < count; ++i)
+        if (!r.u32(ignored) || !ignored)
+            return fail(ErrorCode::Corrupt, "invalid nested Mono type");
+    if (!r.u32(ignored) || !r.u32(count) || count > 4096)
+        return fail(ErrorCode::Corrupt, "invalid generic Mono type info");
+    for (std::uint32_t i = 0; i < count; ++i)
+        if (!r.u32(ignored) || !ignored)
+            return fail(ErrorCode::Corrupt, "invalid generic Mono type");
+    if (!r.done())
+        return fail(ErrorCode::Corrupt, "trailing Mono type info");
     return assembly;
 }
 
@@ -119,10 +125,12 @@ Result<StopEvent> decodeStop(std::span<const std::uint8_t> payload) {
     std::uint32_t count = 0;
     StopEvent e;
     if (!r.byte(policy) || policy != 2 || !r.u32(count) || count != 1 || !r.byte(e.kind) ||
-        (e.kind != 10 && e.kind != 11 && e.kind != 13) || !r.u32(e.request) || !e.request || !r.u32(e.thread) || !e.thread)
+        (e.kind != 10 && e.kind != 11 && e.kind != 13) || !r.u32(e.request) || !e.request || !r.u32(e.thread) ||
+        !e.thread)
         return fail(ErrorCode::Corrupt, "invalid Mono stop event");
     if (e.kind == 13) {
-        if (!r.u32(e.exception) || !e.exception || !r.done()) return fail(ErrorCode::Corrupt, "invalid Mono exception event");
+        if (!r.u32(e.exception) || !e.exception || !r.done())
+            return fail(ErrorCode::Corrupt, "invalid Mono exception event");
     } else if (!r.u32(e.method) || !e.method || !r.u64(e.rawOffset) || !r.done())
         return fail(ErrorCode::Corrupt, "invalid Mono stop location");
     return e;
@@ -151,17 +159,22 @@ Result<ScalarValue> decodeScalar(std::span<const std::uint8_t> payload) {
     // https://github.com/mono/mono/blob/main/mono/mini/debugger-agent.c
     Reader r(payload);
     std::uint8_t tag = 0;
-    if (!r.byte(tag)) return fail(ErrorCode::Corrupt, "missing Mono value type");
+    if (!r.byte(tag))
+        return fail(ErrorCode::Corrupt, "missing Mono value type");
     if (tag == 0xf0) {
-        if (!r.done()) return fail(ErrorCode::Corrupt, "trailing Mono null data");
+        if (!r.done())
+            return fail(ErrorCode::Corrupt, "trailing Mono null data");
         return ScalarValue{"null", "null"};
     }
-    if (tag < 2 || tag > 13) return fail(ErrorCode::Unsupported, "Mono reference or structured value requires expansion");
+    if (tag < 2 || tag > 13)
+        return fail(ErrorCode::Unsupported, "Mono reference or structured value requires expansion");
     std::uint32_t bits = 0;
     std::uint64_t wide = 0;
     if (tag == 10 || tag == 11 || tag == 13) {
-        if (!r.u64(wide) || !r.done()) return fail(ErrorCode::Corrupt, "invalid Mono wide primitive");
-    } else if (!r.u32(bits) || !r.done()) return fail(ErrorCode::Corrupt, "invalid Mono primitive");
+        if (!r.u64(wide) || !r.done())
+            return fail(ErrorCode::Corrupt, "invalid Mono wide primitive");
+    } else if (!r.u32(bits) || !r.done())
+        return fail(ErrorCode::Corrupt, "invalid Mono primitive");
     if ((tag == 2 && bits > 1) || ((tag == 4 || tag == 5) && bits > 127 && bits < 0xffffff80U) ||
         ((tag == 3 || tag == 6 || tag == 7) && bits > 32767 && bits < 0xffff8000U))
         return fail(ErrorCode::Corrupt, "invalid Mono narrow primitive extension");
@@ -171,7 +184,8 @@ Result<ScalarValue> decodeScalar(std::span<const std::uint8_t> payload) {
         const auto code = bits & 0xffffU;
         constexpr char hex[] = "0123456789ABCDEF";
         std::string value = "U+0000";
-        for (unsigned i = 0; i < 4; ++i) value[5 - i] = hex[(code >> (i * 4)) & 15];
+        for (unsigned i = 0; i < 4; ++i)
+            value[5 - i] = hex[(code >> (i * 4)) & 15];
         return ScalarValue{value, "System.Char"};
     }
     case 4: return ScalarValue{std::to_string(static_cast<std::int8_t>(bits & 255)), "System.SByte"};
@@ -184,10 +198,11 @@ Result<ScalarValue> decodeScalar(std::span<const std::uint8_t> payload) {
     case 11: return ScalarValue{std::to_string(wide), "System.UInt64"};
     default: {
         std::array<char, 128> buffer{};
-        const auto converted = tag == 12
-            ? std::to_chars(buffer.data(), buffer.data() + buffer.size(), std::bit_cast<float>(bits))
-            : std::to_chars(buffer.data(), buffer.data() + buffer.size(), std::bit_cast<double>(wide));
-        if (converted.ec != std::errc{}) return fail(ErrorCode::Corrupt, "unrepresentable Mono floating value");
+        const auto converted =
+            tag == 12 ? std::to_chars(buffer.data(), buffer.data() + buffer.size(), std::bit_cast<float>(bits))
+                      : std::to_chars(buffer.data(), buffer.data() + buffer.size(), std::bit_cast<double>(wide));
+        if (converted.ec != std::errc{})
+            return fail(ErrorCode::Corrupt, "unrepresentable Mono floating value");
         return ScalarValue{std::string(buffer.data(), converted.ptr), tag == 12 ? "System.Single" : "System.Double"};
     }
     }

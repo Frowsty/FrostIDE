@@ -121,9 +121,9 @@ struct EvaluatedProjectItems {
     std::string configuration; // The project configuration evaluated, "Debug".
     std::string platform;      // The project platform evaluated, "x64".
     EvaluationSource source = EvaluationSource::ProjectHost;
-    std::string msbuildVersion = {};        // The evaluating Microsoft.Build's file version, or "".
-    std::vector<ProjectItem> items = {};    // Evaluation order, each path once, absolute and normalised.
-    std::vector<std::string> imports = {};  // The imports in evaluation order; empty for MsBuildCli.
+    std::string msbuildVersion = {};       // The evaluating Microsoft.Build's file version, or "".
+    std::vector<ProjectItem> items = {};   // Evaluation order, each path once, absolute and normalised.
+    std::vector<std::string> imports = {}; // The imports in evaluation order; empty for MsBuildCli.
     std::vector<EvaluatedPropertyDefinition> propertyDefinitions = {};
     std::vector<EvaluatedImportDefinition> importDefinitions = {};
     std::vector<std::string> warnings = {}; // Non-fatal problems of the evaluation, for the log.

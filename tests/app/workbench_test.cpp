@@ -133,7 +133,6 @@ TEST(Workbench, ServicesStartsEmptyAndRegistersNavigationAction) {
     auto* tree = content->findChild<QTreeWidget*>(QStringLiteral("servicesTree"));
     ASSERT_NE(tree, nullptr);
     EXPECT_EQ(tree->topLevelItemCount(), 0);
-
 }
 TEST(Workbench, ExplicitEditorSaveReportsCommittedWarning) {
     WorkDir dir("save-warning");

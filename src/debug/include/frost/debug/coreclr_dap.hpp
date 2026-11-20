@@ -41,8 +41,7 @@ struct CoreClrTarget {
 // admission retains its Windows process handle, or checks Linux /proc start time and image.
 // It must outlive the session; failed reads, exit and identity changes fail closed. O(path size).
 // No runtime-kind inference is made: the actual CoreCLR adapter decides whether it can attach.
-[[nodiscard]] Result<std::function<Result<void>()>> coreClrProcessAdmission(std::uint32_t pid,
-                                                                           std::string executable);
+[[nodiscard]] Result<std::function<Result<void>()>> coreClrProcessAdmission(std::uint32_t pid, std::string executable);
 
 // Attaches netcoredbg to a real local process. The caller supplies captured process admission;
 // trust and identity are checked before adapter creation and again by the DAP writer. Stop only

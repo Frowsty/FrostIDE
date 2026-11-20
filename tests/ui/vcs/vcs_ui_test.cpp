@@ -199,9 +199,8 @@ TEST(DiffViewer, StaleApplyFailureRetainsEditableOutputAndUndoHistory) {
     auto diff = vcs::SideBySideDiff::compute("base\n", "working\n");
     ASSERT_TRUE(diff);
     viewer.setDiff(std::move(*diff), "HEAD", "Working copy");
-    viewer.setApplyHandler([](std::string_view, std::string_view) -> Result<void> {
-        return fail(ErrorCode::Busy, "Source changed");
-    });
+    viewer.setApplyHandler(
+        [](std::string_view, std::string_view) -> Result<void> { return fail(ErrorCode::Busy, "Source changed"); });
     ASSERT_TRUE(viewer.rightPane()->typeText("resolved "));
     auto failed = viewer.applyWorkingCopy();
     ASSERT_FALSE(failed);

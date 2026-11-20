@@ -45,11 +45,15 @@ void LanguageController::requestCompletion(fl::CompletionTrigger trigger) {
     m_lookupPath = path;
     m_lookupWordStart = ByteOffset{caret.value() - typed};
     if (m_localCompletion) {
-        const auto snapshot=m_services.host.snapshot();
-        if (snapshot) if (auto local=m_localCompletion(path,*snapshot,caret)) {
-            m_completionSlot.cancel(); m_resolveSlot.cancel();
-            m_completion->setList(std::move(*local)); updateLookupPrefix(); return;
-        }
+        const auto snapshot = m_services.host.snapshot();
+        if (snapshot)
+            if (auto local = m_localCompletion(path, *snapshot, caret)) {
+                m_completionSlot.cancel();
+                m_resolveSlot.cancel();
+                m_completion->setList(std::move(*local));
+                updateLookupPrefix();
+                return;
+            }
     }
     const fl::LspPosition position = positionAt(caret);
     start<fl::CompletionList>(

@@ -8,6 +8,7 @@
 
 #include "debug_test_util.hpp"
 #include <gtest/gtest.h>
+
 #include <atomic>
 
 namespace frost::debug {
@@ -109,7 +110,8 @@ TEST(CoreClrDap, LaunchRechecksTrustAtTheActualDapWriter) {
     ASSERT_TRUE(trust);
     ASSERT_TRUE((*trust)->trust(root));
     CoreClrTarget target{.dotnet = test::workPath("sdk/dotnet"),
-                         .assembly = test::workPath("project/App.dll"), .workingDirectory = root};
+                         .assembly = test::workPath("project/App.dll"),
+                         .workingDirectory = root};
     FakeDebugAdapter adapter;
     adapter.on("initialize", [&](const rpc::Json&) {
         EXPECT_TRUE((*trust)->untrust(root));
@@ -143,8 +145,8 @@ TEST(CoreClrDap, AttachUsesCoreClrIdentityAndDisconnectsWithoutTerminatingTheHos
         return FakeDebugAdapter::Reply{.events = {{"initialized", rpc::Json::object()}}};
     });
     test::SessionRecorder recorder;
-    auto session = attachCoreClrSession(**trust, target, 123, test::fakeFactory(adapter), [] { return Result<void>{}; },
-                                        {}, recorder.callbacks());
+    auto session = attachCoreClrSession(
+        **trust, target, 123, test::fakeFactory(adapter), [] { return Result<void>{}; }, {}, recorder.callbacks());
     ASSERT_TRUE(session);
     ASSERT_TRUE(adapter.waitForRequest("attach"));
     EXPECT_EQ(adapter.argumentsOf("initialize").front().stringAt("adapterID"), "coreclr");
@@ -180,8 +182,8 @@ TEST(CoreClrDap, AttachRechecksCapturedProcessAfterInitialize) {
         return {};
     };
     test::SessionRecorder recorder;
-    auto session = attachCoreClrSession(**trust, target, 123, test::fakeFactory(adapter), admission, {},
-                                        recorder.callbacks());
+    auto session =
+        attachCoreClrSession(**trust, target, 123, test::fakeFactory(adapter), admission, {}, recorder.callbacks());
     ASSERT_TRUE(session);
     ASSERT_TRUE(test::waitUntil([&] { return recorder.hasEnded(); }));
     EXPECT_TRUE(adapter.argumentsOf("attach").empty());
@@ -216,8 +218,8 @@ TEST(CoreClrDap, RequestOnlyGrantRemainsUntilWriterAdmissionThenEndsBeforeAttach
         (*trust)->endSessionTrust(root);
         ++releases;
     };
-    auto session = attachCoreClrSession(**trust, target, 123, test::fakeFactory(adapter), [] { return Result<void>{}; },
-                                        {}, {}, release);
+    auto session = attachCoreClrSession(
+        **trust, target, 123, test::fakeFactory(adapter), [] { return Result<void>{}; }, {}, {}, release);
     ASSERT_TRUE(session);
     ASSERT_TRUE(adapter.waitForRequest("attach"));
     EXPECT_EQ(releases.load(), 1);
