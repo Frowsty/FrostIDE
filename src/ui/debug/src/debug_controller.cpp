@@ -668,8 +668,8 @@ void DebugController::onEnded(std::uint64_t endingGeneration, const debug::Debug
     const bool endedHere = m_generation == endingGeneration;
     if (endedHere)
         endSession();
-    // The legacy untagged summary must not overwrite a reentrantly started session's UI.
-    if (endedHere && m_generation == endingGeneration + 1)
+    // The legacy untagged summary belongs to a live controller with no reentrantly started session.
+    if (endedHere && !m_shutdown && m_generation == endingGeneration + 1)
         emit sessionEnded(summary);
 }
 

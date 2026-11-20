@@ -104,7 +104,8 @@ protected:
                                            -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
                                            ++factoryCalls;
                                            return debug::makeDapClient(adapter.transport(), std::move(handlers));
-                                       }};
+                                       },
+                                       .retirements = {}};
         DebugControllerHooks hooks{
             .openSource = [this](const QString& path, int line) -> EditorView* {
                 opened.emplace_back(path, line);
@@ -308,7 +309,8 @@ TEST_F(DebugUiTest, InstructionLoadedSourceNeverSubstitutesCurrentDiskBytes) {
     instruction.address = "0x1234";
     instruction.instruction = "mov eax, 7";
     instruction.line = 2;
-    instruction.location = debug::dap::Source{.path = source, .sourceReference = 99};
+    instruction.location =
+        debug::dap::Source{.name = {}, .path = source, .sourceReference = 99, .presentationHint = {}};
     const auto openedBefore = opened.size();
     ASSERT_TRUE(controller->navigateInstruction(instruction));
     auto* loaded = window.findChild<QPlainTextEdit*>(QStringLiteral("debugLoadedSource"));
@@ -501,7 +503,8 @@ TEST_F(DebugUiTest, ConfiguredSourceMapIsValidatedBeforeLaunchingTheAdapter) {
         .adapterFactory = [this](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
             ++factoryCalls;
             return debug::makeDapClient(adapter.transport(), std::move(handlers));
-        }};
+        },
+        .retirements = {}};
     controller = std::make_unique<DebugController>(breakpoints, std::move(options));
     EXPECT_FALSE(controller->startTarget(target()));
     EXPECT_EQ(factoryCalls, 0);
@@ -886,7 +889,8 @@ TEST_F(DebugUiTest, ShutdownRejectsADelayedAlternateBuildCompletion) {
         .adapterFactory = [this](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
             ++factoryCalls;
             return debug::makeDapClient(adapter.transport(), std::move(handlers));
-        }};
+        },
+        .retirements = {}};
     DebugControllerHooks hooks;
     hooks.alternateAvailable = [] { return true; };
     hooks.startAlternate = [&](auto done) -> Result<void> {
@@ -1011,7 +1015,7 @@ TEST_F(DebugUiTest, AnUntrustedRootIsRefusedBeforeLldbDapStarts) {
     EXPECT_EQ(controller->debug().error().code(), ErrorCode::InvalidArgument) << "no solution is open";
 
     // Without a test factory the controller looks for lldb-dap; a missing one is an error, not a launch.
-    DebugController plain(breakpoints, DebugControllerOptions{.trust = trust.get(), .fs = &fs});
+    DebugController plain(breakpoints, DebugControllerOptions{.trust = trust.get(), .fs = &fs, .retirements = {}});
     EXPECT_FALSE(plain.startTarget(target()).has_value());
     EXPECT_FALSE(plain.debugging());
 }
