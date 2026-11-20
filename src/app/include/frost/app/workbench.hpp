@@ -842,6 +842,7 @@ private:
     [[nodiscard]] Result<void> startSelectedDebugConfiguration();
     void attachLanguage();
     void attachServices();
+    void attachHosting();
     void attachEngineBindings();
     // GUI retirement is nonblocking; the destructor drains after feature teardown, before services.
     void retireEngineBindingWork(std::shared_ptr<EngineBindingRetirement> retirement);

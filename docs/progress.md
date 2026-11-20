@@ -18,6 +18,13 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R16 native text accessibility and explicit hosted-review CLI profiles
+
+- Custom editor and terminal viewport now expose real text through Qt native accessibility factories. Editor offsets/selections use UTF-16 mappings over actual snapshots, editing retains undo and read-only admission, and geometry follows the actual viewport. Terminal exposes actual visible cells, wide/combining characters, program-owned caret, output selection and output notifications; it never pretends terminal output is editable. Astra source-reviewed 311dc966/d0fd127b without actionable findings. Windows/Linux screen-reader acceptance, diagnostic text navigation and whole-scrollback accessibility remain unexecuted/additional work.
+- Added an explicit Pull Requests tool window using separately installed gh/glab executables, an explicit host/repository and real provider output. Account identity, bounded open-review pages, metadata, head-checked provider patches, checkout, comments, approval and GitHub request-changes use documented commands/API fields (ADR 0107). Opening/invalidation launches nothing. Review/checkout confirmation names the exact action, target, commit and body; review JSON uses stdin. Project/trust admission, generation invalidation, cancellation and mutex-gated worker callbacks prevent old-project completions from reappearing.
+- Authored tests cover native editor UTF-16/emoji selection/edit/undo/read-only behavior, terminal wide-cell output/selection/geometry, both provider JSON contracts, malformed/duplicate identity rows, exact commit-pinned review bodies, refused/cancelled launches, actual CLI errors, changed-head diff rejection and zero-launch UI construction. No builds, tests, features, provider requests, outbound messages or WSL ran. Hosting sources await independent review; no complete UX14/UX19 or R16 runtime gate is claimed.
+- Remaining hosted-VCS scope includes inline anchored comments, repository sharing/sign-in UX, worktree/LFS/signing depth and runtime provider conformance. Root coordinates the remaining R16 tracks and integration. C1 has a separate owner; this branch does not implement or claim its secure transport.
+
 ## 2026-11-20 R13 C++ analysis implementation integrated
 
 The default C++ bundle registers the Clang-backed index, native analyzer, preprocessor views and module actions. The SQLite index distinguishes build configurations. The analyzer emits SARIF for 33 AST checks and five control-flow checks. Idle, save and manual analysis share Workbench Problems publication and cancellation.
