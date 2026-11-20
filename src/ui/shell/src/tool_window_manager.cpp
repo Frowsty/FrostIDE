@@ -1175,6 +1175,7 @@ void ToolWindowManager::setVisible(Window& window, bool visible, bool focus) {
         if (!visible) window.geometry = window.floatingHost->saveGeometry().toBase64().toStdString();
         window.button->setChecked(visible);
         window.button->setVisible(window.pinned || visible);
+        updateSidebarVisibility();
         window.floatingHost->setVisible(visible);
         if (visible) {
             m_lastActive = window.spec.id;

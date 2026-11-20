@@ -2,6 +2,7 @@
 // Own floating/docked widget ownership and layout restoration, without launching a feature process.
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include <QLabel>
+#include <QToolButton>
 #include <gtest/gtest.h>
 namespace frost::ui {
 TEST(DockingV2, FloatingRetainsContentAndCoexistsWithDockedSide) {
@@ -71,4 +72,21 @@ TEST(DockingV2, HiddenRestoreDoesNotOverwriteSavedModeSizeOrPin) {
     EXPECT_EQ(restored->size, 417);
     EXPECT_EQ(restored->pinned, false);
 }
-} // namespace frost::ui
+TEST(DockingV2, ShowingUnpinnedFloatingWindowRestoresItsStripe) {
+    ShellLayout initial;
+    auto& saved = initial.entry("services");
+    saved.side = 1; saved.floating = true; saved.pinned = false; saved.visible = false;
+    InMemoryShellSettings settings(initial);
+    QWidget host;
+    auto* center = new QWidget;
+    ToolWindowManager manager(host, *center, settings);
+    ASSERT_TRUE(manager.add({.id = "services", .title = QStringLiteral("Services")}));
+    host.show();
+    auto* button = manager.stripeButton("services");
+    ASSERT_NE(button, nullptr);
+    EXPECT_FALSE(button->isVisibleTo(&host));
+    manager.show("services", false);
+    EXPECT_TRUE(button->isVisibleTo(&host));
+    manager.hide("services");
+    EXPECT_FALSE(button->isVisibleTo(&host));
+}} // namespace frost::ui
