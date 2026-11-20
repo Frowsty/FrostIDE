@@ -9,6 +9,8 @@
 #include "../../src/app/src/project_open_broker.hpp"
 #include "support/directory_link.hpp"
 #include "workbench_rig.hpp"
+#include <QCoreApplication>
+#include <QEvent>
 #include <QComboBox>
 #include <QElapsedTimer>
 #include <QFile>
@@ -780,4 +782,49 @@ TEST(ProjectOpenProcess, ScriptPathWithoutProjectFlagInfersProjectRootAndReusesE
     EXPECT_EQ(rig.workbench->currentView()->path(), script2);
     EXPECT_EQ(rig.window->tabs().count(), 2);
 }
+
+TEST(ProjectOpenProcess, WaitTicketTracksActualEditorCloseAndRejectsReplay) {
+    WorkDir dir("wait-editor-close");
+    dir.write("Game.frostproj", "{}");
+    dir.write("main.lua", "print('real document')\n");
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openExternalProject(dir.path()));
+    const auto root = frost::app::externalProjectRoot(dir.path());
+    ASSERT_TRUE(root);
+    auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(*root));
+    ASSERT_TRUE(owner);
+    frost::app::ProjectOpenBroker broker(*rig.workbench, *rig.window, *root, std::move(*owner));
+    ASSERT_TRUE(broker.start());
+    const auto request = [&](std::string payload) {
+        std::atomic<bool> done{false};
+        frost::Result<std::string> result = frost::fail(frost::ErrorCode::Unknown, "not sent");
+        std::jthread sender([&] {
+            result = frost::io::requestLocalIpc(frost::app::externalProjectKey(*root), payload, 5s);
+            done.store(true, std::memory_order_release);
+        });
+        EXPECT_TRUE(waitFor([&] { return done.load(std::memory_order_acquire); }, 8s));
+        sender.join();
+        return result;
+    };
+    auto opened = request(frost::lang::Json::object().set("root", *root).set("file", dir.join("main.lua"))
+        .set("line", 0).set("column", 0).set("wait", true).dump());
+    ASSERT_TRUE(opened);
+    ASSERT_TRUE(opened->starts_with("wait:"));
+    const auto poll = frost::lang::Json::object().set("method", "document.wait").set("root", *root)
+        .set("ticket", opened->substr(5)).dump();
+    auto state = request(poll);
+    ASSERT_TRUE(state);
+    EXPECT_EQ(*state, "open");
+    ASSERT_EQ(rig.window->tabs().count(), 1);
+    ASSERT_TRUE(rig.window->tabs().close(0));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    state = request(poll);
+    ASSERT_TRUE(state);
+    EXPECT_EQ(*state, "closed");
+    const auto replay = request(poll);
+    ASSERT_FALSE(replay);
+    EXPECT_NE(replay.error().message().find("unknown document wait ticket"), std::string::npos);
+}
+
 } // namespace
