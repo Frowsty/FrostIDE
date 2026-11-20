@@ -34,6 +34,7 @@ struct CppModuleInputs {
     std::map<std::string, std::vector<io::DirEntry>> directories;
     std::map<std::string, std::string> physicalDirectories;
     std::vector<std::string> absent;
+    std::map<std::string, std::string> includeEnvironment;
 };
 // Conservative saved-input profile: snapshot whole project and explicit CDB source/include
 // trees, with all config bytes, physical identities and namespace additions/removals.

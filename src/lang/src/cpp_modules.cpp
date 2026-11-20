@@ -6,6 +6,7 @@
 #include "frost/lang/uri.hpp"
 #include <algorithm>
 #include <set>
+#include <cstdlib>
 namespace frost::lang {
 namespace {
 const std::string* textMember(const Json& row, std::string_view name) {
@@ -84,6 +85,11 @@ std::vector<std::string> CppModuleGraph::interfaceTargets(const CppModuleRequire
     return targets;
 }
 Result<void> validateCppModuleInputs(io::IFileSystem& fs, const CppModuleInputs& inputs, std::stop_token stop) {
+    for (const auto& [name, value] : inputs.includeEnvironment) {
+        const auto* current = std::getenv(name.c_str());
+        if ((current ? std::string(current) : std::string{}) != value)
+            return fail(ErrorCode::Busy, "Module include environment changed: " + name);
+    }
     for (const auto& [path, image] : inputs.files) {
         if (stop.stop_requested()) return fail(ErrorCode::Cancelled, "Module input validation cancelled");
         auto physical = fs.physicalPath(path);
@@ -151,6 +157,27 @@ Result<CppModuleInputs> captureCppModuleInputs(io::IFileSystem& fs, std::string 
         return {};
     };
     if (auto captured = walk(std::move(projectRoot)); !captured) return std::unexpected(captured.error());
+    for (const auto* name : {"CPATH", "CPLUS_INCLUDE_PATH", "C_INCLUDE_PATH", "OBJC_INCLUDE_PATH", "INCLUDE"}) {
+        const auto* environment = std::getenv(name);
+        const std::string value = environment ? environment : "";
+        result.includeEnvironment.emplace(name, value);
+        std::string_view remaining(value);
+        const char separator = io::kNativePathStyle == io::PathStyle::Windows ? ';' : ':';
+        while (!remaining.empty()) {
+            const auto end = remaining.find(separator);
+            const auto root = remaining.substr(0, end);
+            if (!root.empty()) {
+                if (!io::isAbsolutePath(root))
+                    return fail(ErrorCode::Unsupported, "Relative include environment is outside module capture profile");
+                auto exists = fs.exists(root);
+                if (!exists) return std::unexpected(exists.error());
+                if (!*exists) result.absent.emplace_back(root);
+                else if (auto captured = walk(std::string(root)); !captured) return std::unexpected(captured.error());
+            } else return fail(ErrorCode::Unsupported, "Current-directory include environment is outside module capture profile");
+            if (end == remaining.npos) break;
+            remaining.remove_prefix(end + 1);
+        }
+    }
     for (const auto& row : parsed->items()) {
         const auto* directory = textMember(row, "directory");
         const auto* file = textMember(row, "file");
@@ -164,7 +191,11 @@ Result<CppModuleInputs> captureCppModuleInputs(io::IFileSystem& fs, std::string 
             const auto* arg = arguments->items()[i].asString();
             if (!arg) return fail(ErrorCode::Corrupt, "Invalid module compiler argument");
             if (arg->starts_with('@') || arg->starts_with("--config") || arg->starts_with("-fmodule") ||
-                arg->starts_with("-include-pch") || arg->starts_with("/Yu") || arg->starts_with("/Fp"))
+                arg->starts_with("-include-pch") || arg->starts_with("/Yu") || arg->starts_with("/Fp") ||
+                arg->starts_with("-Xclang") || arg->starts_with("-ivfsoverlay") || arg->starts_with("-isysroot") ||
+                arg->starts_with("--sysroot") || arg->starts_with("-resource-dir") || arg->starts_with("-fplugin") ||
+                arg->starts_with("-fpass-plugin") || arg->starts_with("/reference") || arg->starts_with("/ifcSearchDir") ||
+                arg->starts_with("-F") || arg->starts_with("-iframework"))
                 return fail(ErrorCode::Unsupported, "Module capture refuses response/PCH/BMI/driver config inputs");
             std::string value;
             for (std::string_view flag : {"-isystem", "-iquote", "-idirafter", "-include", "-imacros", "/external:I", "/FI", "-I", "/I"}) {
