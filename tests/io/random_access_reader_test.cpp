@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Actual native retained-reader fixture: large offsets, bounds, cancellation and mutation.
 #include "frost/io/file_system.hpp"
+#include "frost/io/path.hpp"
 
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
@@ -16,12 +17,13 @@ TEST(RandomAccessReader, ActualLargeFixtureReadsHighOffsetsWithoutWholeFileAlloc
     ASSERT_TRUE(fs.writeFileAtomic(path, "header\n"));
     // Materialized only when this deferred test runs. No gigabyte string/line table exists.
     constexpr std::uint64_t size = (std::uint64_t{1} << 30) + 17;
-    const auto native = std::filesystem::u8path(path);
+    const auto native = toStdPath(path);
+    ASSERT_TRUE(native);
     std::error_code error;
-    std::filesystem::resize_file(native, size, error);
+    std::filesystem::resize_file(*native, size, error);
     ASSERT_FALSE(error);
     {
-        std::fstream output(native, std::ios::in | std::ios::out | std::ios::binary);
+        std::fstream output(*native, std::ios::in | std::ios::out | std::ios::binary);
         ASSERT_TRUE(output);
         output.seekp(static_cast<std::streamoff>(size - 5));
         output.write("tail!", 5);
@@ -93,8 +95,10 @@ TEST(RandomAccessReader, InPlaceMutationInvalidatesRetainedGeneration) {
     ASSERT_TRUE(realFileSystem().writeFileAtomic(path, "old"));
     auto opened = realFileSystem().openRandomAccess(path);
     ASSERT_TRUE(opened);
+    const auto native = toStdPath(path);
+    ASSERT_TRUE(native);
     {
-        std::ofstream output(std::filesystem::u8path(path), std::ios::binary | std::ios::app);
+        std::ofstream output(*native, std::ios::binary | std::ios::app);
         output << "growth";
     }
     auto page = (*opened)->read(0, 3);

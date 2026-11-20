@@ -4,6 +4,7 @@
 #include "frost/io/file_transaction_replace.hpp"
 #include "frost/io/os_error.hpp"
 #include "frost/io/path.hpp"
+#include "frost/io/spawn_log.hpp"
 
 #include "file_transaction_replace_testing.hpp"
 #include "support/scratch_dir.hpp"
@@ -543,9 +544,11 @@ TEST_F(FileTransactionReplace, NonInheritablePrivateStoreRefusesBeforeWritingAny
 }
 
 TEST_F(FileTransactionReplace, ObservedAlternateStreamRefusesWithoutPretendingItIsAbsent) {
-    auto wide = toWin32Path(target + ":extra");
+    auto wide = toWin32Path(target);
     ASSERT_TRUE(wide);
-    HANDLE stream = CreateFileW(wide->c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    // The ordinary FrostIDE path API deliberately rejects ADS syntax. Append it only at the native oracle.
+    const auto streamPath = *wide + L":extra";
+    HANDLE stream = CreateFileW(streamPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                 nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     ASSERT_NE(stream, INVALID_HANDLE_VALUE);
     DWORD written = 0;
