@@ -7,6 +7,7 @@
 
 frost_add_library(ui_terminal LAYER ui
     SOURCES
+        src/terminal_accessibility.cpp
         src/terminal_colors.cpp
         src/terminal_tool_window.cpp
         src/terminal_view.cpp

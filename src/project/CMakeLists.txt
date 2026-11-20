@@ -44,6 +44,7 @@ frost_add_library(project LAYER project
         src/trust_store.cpp
         src/vcxproj_reader.cpp
         src/vcxproj_rename.cpp
+        src/msbuild_source.cpp
         src/xml.cpp
     DEPS frost::io)
 target_link_libraries(frost_project PRIVATE pugixml::pugixml yyjson::yyjson)

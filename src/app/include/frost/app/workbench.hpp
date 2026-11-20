@@ -200,6 +200,7 @@ class EngineDumpController;
 class EngineCrashObserver;
 class UnityControlIntegration;
 class GitIntegration;
+class AgentIntegration;
 struct GitClone;
 struct CompileDatabaseState; // workbench_language.cpp
 struct CppRenameAdmission;   // workbench_cpp_rename.cpp
@@ -610,6 +611,12 @@ public:
     // The open solution, or nullptr (no project, or a folder project).
     [[nodiscard]] std::shared_ptr<const project::SolutionModel> solution() const { return m_solution; }
 
+    // Explicit per-window C1 consent; never starts from startup or project configuration.
+    void enableAgentBridge(bool launchTerminal);
+    void stopAgentBridge();
+    void mentionAgentSelection();
+    [[nodiscard]] bool agentBridgeActive() const;
+
     // --- Saving and external changes ---
 
     // Saves `view`'s document. Errors: SaveManager::save's (also shown as a notification).
@@ -793,6 +800,7 @@ private:
     [[nodiscard]] bool canStartLuaDebug() const;
     friend class UnityControlIntegration;
     friend class GitIntegration;
+    friend class AgentIntegration;
 
     // IDocumentEditorListener.
     void editorOpened(DocumentEditorView& view) override;
@@ -847,6 +855,7 @@ private:
     [[nodiscard]] Result<void> startSelectedDebugConfiguration();
     void attachLanguage();
     void attachServices();
+    void attachHosting();
     void attachEngineBindings();
     // GUI retirement is nonblocking; the destructor drains after feature teardown, before services.
     void retireEngineBindingWork(std::shared_ptr<EngineBindingRetirement> retirement);
@@ -1219,6 +1228,7 @@ private:
 
     std::unique_ptr<term::RealPtyLauncher> m_terminalLauncher;
     std::unique_ptr<ui::TerminalIntegration> m_terminal;
+    std::unique_ptr<AgentIntegration> m_agent;
     std::unique_ptr<ui::FindFeature> m_find;
     QPointer<ui::ShellWindow> m_window;
     std::unique_ptr<ui::Workbench> m_nav;

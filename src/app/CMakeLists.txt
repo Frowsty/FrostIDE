@@ -97,6 +97,15 @@ frost_add_library(app LAYER app
         src/engine_request_helper.cpp
         src/engine_request_helper_session.cpp
         src/engine_request_helper.hpp
+        src/cli_editor.cpp
+        src/cli_editor.hpp
+
+        src/agent_scope.cpp
+        src/agent_scope.hpp
+        src/agent_bridge.cpp
+        src/agent_bridge.hpp
+        src/agent_integration.cpp
+        src/agent_integration.hpp
         src/project_open_broker.cpp
         src/project_open_broker.hpp
         src/project_properties_dialog.cpp
@@ -117,6 +126,9 @@ frost_add_library(app LAYER app
         src/settings_dialog.hpp
         src/settings_import.cpp
         src/settings_import.hpp
+        src/hosting_cli.cpp
+        src/hosting_panel.cpp
+        src/workbench_hosting.cpp
         src/workbench_services.cpp
         src/settings_keymap_page.cpp
         src/settings_keymap_page.hpp
@@ -273,7 +285,7 @@ set_target_properties(frost_app_shared PROPERTIES OUTPUT_NAME frost_app ARCHIVE_
 # FrostProcess.AppDllEmbedsNoManifest and AppDllHasNoDependentLoadFlags check both.
 target_link_options(frost_app_shared PRIVATE /MANIFEST:NO)
 # CommandLineToArgvW (shell32) and MessageBoxW (user32) in main.cpp.
-target_link_libraries(frost_app_shared PRIVATE shell32 user32)
+target_link_libraries(frost_app_shared PRIVATE shell32 user32 advapi32)
 # The spawn log in Debug test builds only (FROST_ENABLE_SPAWN_LOG, frost/io/spawn_log.hpp).
 if(FROST_ENABLE_SPAWN_LOG)
     target_compile_definitions(frost_app_shared PRIVATE $<$<CONFIG:Debug>:FROST_SPAWN_LOG=1>)

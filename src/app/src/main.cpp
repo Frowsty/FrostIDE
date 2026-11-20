@@ -36,6 +36,7 @@
 // log at once, and the stall watchdog and the crash handler only after the first frame, on the
 // GUI thread and the "frost-diag" thread, so neither delays B1.
 
+#include "cli_editor.hpp"
 #include "frost/app/command_line.hpp"
 #include "frost/app/diagnostics_qt.hpp"
 #include "frost/app/main_window.hpp"
@@ -571,11 +572,17 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
         QApplication app(qtArgc, argv);
         QApplication::setApplicationName(QStringLiteral("FrostIDE"));
         QApplication::setApplicationVersion(QString::fromUtf8(frost::build_info::kVersion));
+        if (parsed->tool != frost::app::CliTool::Open) {
+            auto result = frost::app::runCliEditor(*parsed);
+            if (!result) { reportExternalOpenFailure(consoleCodePage, result.error().message()); return 2; }
+            return *result;
+        }
         // Reserve the explicit project's endpoint before opening any windows. A second launch
         // waits for its first frame and forwards there rather than touching its dirty documents.
         std::string externalRoot;
         std::string externalFile;
         std::unique_ptr<frost::io::LocalIpcOwner> reserved;
+
         if (parsed->project.empty()) {
             if (parsed->paths.size() == 1) {
                 if (auto inferred = frost::app::inferExternalProjectRootForFile(parsed->paths.front())) {
@@ -606,6 +613,10 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                 }
             }
         }
+        if (parsed->wait && parsed->project.empty() && parsed->paths.size() == 1) {
+            const QFileInfo file(QString::fromStdString(parsed->paths.front()));
+            parsed->project = QDir::toNativeSeparators(file.absolutePath()).toStdString();
+        }
         if (!parsed->project.empty()) {
             if (parsed->paths.size() > 1) {
                 reportExternalOpenFailure(consoleCodePage, "--project accepts at most one file");
@@ -633,7 +644,7 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
             if (!owner) {
                 if (owner.error().code() == frost::ErrorCode::Busy) {
                     auto sent = frost::app::forwardExternalOpen(externalRoot, externalFile, parsed->line,
-                                                                parsed->column, parsed->columnUtf16);
+                                                                parsed->column, parsed->columnUtf16, parsed->wait);
                     if (sent)
                         return 0;
                     reportExternalOpenFailure(consoleCodePage,
@@ -643,6 +654,15 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                 reportExternalOpenFailure(consoleCodePage,
                                           std::format("cannot reserve project window: {}", owner.error().message()));
                 return 2;
+            }
+            if (parsed->wait) {
+                owner->reset(); // Let the ordinary child claim the endpoint; this process is only the waiter.
+                auto started = frost::app::startExternalWaitOwner(frost::io::realProcessLauncher(),
+                    QCoreApplication::applicationFilePath().toStdString(), externalRoot, externalFile);
+                if (!started) { reportExternalOpenFailure(consoleCodePage, started.error().message()); return 2; }
+                auto waited = frost::app::forwardExternalOpen(externalRoot, externalFile, parsed->line, parsed->column, parsed->columnUtf16, true);
+                if (!waited) { reportExternalOpenFailure(consoleCodePage, waited.error().message()); return 2; }
+                return 0;
             }
             reserved = std::move(*owner);
         }
@@ -717,6 +737,10 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                                    suffix == QStringLiteral("frostproj")));
             (project ? projects : files).push_back(std::move(absolute));
         }
+        if (parsed->wait && parsed->project.empty() && parsed->paths.size() == 1) {
+            const QFileInfo file(QString::fromStdString(parsed->paths.front()));
+            parsed->project = QDir::toNativeSeparators(file.absolutePath()).toStdString();
+        }
         if (!parsed->project.empty()) {
             const QFileInfo project(
                 QString::fromUtf8(parsed->project.data(), static_cast<qsizetype>(parsed->project.size())));
@@ -757,6 +781,7 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                                              std::move(reserved));
         QObject::connect(&workbench, &frost::app::Workbench::projectChanged, &broker,
                          [&broker](const QString&) { broker.projectChanged(); });
+        QObject::connect(&app, &QCoreApplication::aboutToQuit, &broker, [&broker] { broker.finishWaits(); });
         workbench.markInteractiveStartupComplete();
         // Without arguments: the last project (general.reopenLastProject) or the launcher.
         const bool startInLauncher =

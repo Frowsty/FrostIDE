@@ -128,6 +128,7 @@ protected:
     bool focusNextPrevChild(bool next) override;
 
 private:
+    friend class AccessibleTerminal;
     void onScreenChanged();
     void updateMetrics();
     void updateGrid();

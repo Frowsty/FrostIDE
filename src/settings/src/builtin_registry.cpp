@@ -428,6 +428,7 @@ struct Entry {
          text("Lua 5.4"), kApplicationAndPersonal},
 
         // Tool paths (Application-only executes keys).
+        toolPath("tools.claude.path", "Claude Code", "Absolute separately installed native Claude Code executable; launching and editor sharing require per-window consent."),
         toolPath("tools.msbuild.path", "MSBuild", "MSBuild.exe to build solutions with; empty finds it with vswhere."),
         toolPath("tools.vcpkg.path", "vcpkg",
                  "Absolute user-installed vcpkg executable; dependency operations require explicit consent."),

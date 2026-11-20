@@ -225,6 +225,10 @@ class StageScriptTest(TempDirTestCase):
         (bin_dir / "dbgmodel.dll").write_bytes(b"MZ-NOT-FOR-REDISTRIBUTION")
         (bin_dir / "platforms" / "qoffscreend.dll").write_bytes(b"MZ")
         (bin_dir / "resources" / "themes" / "dark.json").write_text("{}", encoding="utf-8")
+        for name in ('lua54/lua.exe', 'lua54/lua54.dll', 'licenses/Lua/lua.h'):
+            path = bin_dir / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'Lua fixture')
         return build
 
     def _stage(self, build: Path, destination: Path, *extra: str) -> subprocess.CompletedProcess:

@@ -369,7 +369,7 @@ void Workbench::editorClosed(DocumentEditorView& view) {
     if (m_registeredLanguages)
         m_registeredLanguages->close(path);
     m_language->editorChanged();
-    if (lang::hasBundledJsonSchema(path) && m_bridge) {
+    if ((lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path)) && m_bridge) {
         m_bridge->closeJsonDocument(path);
         QMetaObject::invokeMethod(this, [this] { refreshLiveProblems(); }, Qt::QueuedConnection);
     }

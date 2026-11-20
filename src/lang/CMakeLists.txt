@@ -35,6 +35,7 @@ frost_add_library(lang LAYER lang
         src/cpp_modules.cpp
         src/cpp_rename_plan.cpp
         src/cmake_language.cpp
+        src/cmake_refactoring.cpp
         src/cpp_refactoring_plan.cpp
         src/cpp_preprocessor.cpp
         src/cpp_index.cpp
@@ -71,6 +72,8 @@ frost_add_library(lang LAYER lang
         src/managed_service.cpp
         src/lsp_types.cpp
         src/language_registry.cpp
+
+        src/msbuild_language.cpp
         src/msbuild_compile_commands.cpp
         src/msvc_environment.cpp
         src/navigation.cpp

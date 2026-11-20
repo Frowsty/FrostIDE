@@ -42,6 +42,7 @@
 #include "frost/ui/workbench/file_system_view.hpp"
 #include "frost/vcs/git_locator.hpp"
 
+#include "agent_integration.hpp"
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
 #include "engine_crash_observer.hpp"
@@ -221,7 +222,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     m_language = std::make_unique<ui::lang::LanguageController>(
         ui::lang::LanguageServices{*m_bridge, *m_pool, *m_bridge, m_bridge->applier(), m_services.fs,
                                    [this](std::string_view path) -> std::vector<lang::LiveDiagnostic> {
-                                       if (lang::hasBundledJsonSchema(path))
+                                       if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path))
                                            return m_bridge->jsonDiagnostics(path);
                                        std::optional<lang::FileDiagnostics> set;
                                        if (isManagedSource(path) && m_managed)
@@ -922,6 +923,7 @@ void Workbench::shutdown() {
         m_engine->shutdown();
     if (m_unity)
         m_unity->shutdown();
+    stopAgentBridge();
     stopTerminal();
     if (m_standalone) {
         m_build->setBackend(m_buildBackend.get());

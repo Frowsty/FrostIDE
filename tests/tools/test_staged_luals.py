@@ -223,6 +223,10 @@ class StagedLuaLanguageServerTest(TempDirTestCase):
                                  timeout=120, check=False)
         self.assertIn(LOCK["version"], version.stdout + version.stderr, "the staged LuaLS's own --version")
 
+        if not WINDOWS:
+            relocated = self.tmp / 'relocated package with spaces'
+            self.stage.rename(relocated)
+            self.stage = relocated
         profile, spawn_log, project = self.tmp / "profile", self.tmp / "spawn-log", self.tmp / "project"
         project.mkdir()
         source = project / "main.lua"
@@ -235,6 +239,17 @@ class StagedLuaLanguageServerTest(TempDirTestCase):
                                    cwd=str(self.tmp), start_new_session=not WINDOWS)
         self.started.append(process.pid)
         self.children.append(process)
+
+        if not WINDOWS:
+            def loaded_packaged_qt():
+                maps = Path(f'/proc/{process.pid}/maps')
+                if not maps.exists(): return False
+                qt_maps = [line for line in maps.read_text().splitlines() if '/libQt6' in line]
+                return qt_maps if qt_maps else False
+            qt_maps = wait_for(loaded_packaged_qt, 'relocated packaged Qt libraries')
+            for mapping in qt_maps:
+                self.assertIn(str(self.stage / 'qt/lib'), mapping)
+                self.assertNotIn(str(self.sdk), mapping)
 
         def luals_start() -> dict | None:
             if process.poll() is not None:
