@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/lang/cmake_language.hpp"
+#include "frost/lang/cmake_refactoring.hpp"
 
 #include "frost/lang/uri.hpp"
 #include "frost/project/cmake_syntax.hpp"
@@ -151,7 +152,7 @@ Result<Json> queryCMakeLanguage(const CMakeLanguageInput& input, std::string_vie
 }
 sched::Task<Result<Json>> CMakeLanguageService::request(std::string method, Json params, std::stop_token stop) {
     LockGuard lock(m_mutex);
-    return answer(m_scheduler, m_reader, m_input, std::move(method), std::move(params), stop);
+    return answer(m_scheduler, m_reader, m_input, std::move(method), std::move(params), stop, m_renameState);
 }
 void CMakeLanguageService::setInput(CMakeLanguageInput input) {
     LockGuard lock(m_mutex);
@@ -159,7 +160,7 @@ void CMakeLanguageService::setInput(CMakeLanguageInput input) {
 }
 sched::Task<Result<Json>> CMakeLanguageService::answer(sched::IScheduler& scheduler, InputReader reader,
                                                        CMakeLanguageInput input, std::string method, Json params,
-                                                       std::stop_token stop) {
+                                                       std::stop_token stop, std::shared_ptr<CMakeRenameState> state) {
     co_await scheduler.schedule(sched::Lane::Background);
     const auto cancelled = [&] { return stop.stop_requested() || scheduler.stopToken().stop_requested(); };
     if (cancelled())
@@ -206,11 +207,43 @@ sched::Task<Result<Json>> CMakeLanguageService::answer(sched::IScheduler& schedu
             bytes += text->size();
             input.inputs.emplace_back(file.path, std::move(*text));
         }
+    if (method == "textDocument/rename" || method == "textDocument/prepareRename") {
+        const auto* value=params.find("position");
+        auto position=value?parsePosition(*value):std::nullopt;
+        if (!position) co_return fail(ErrorCode::InvalidArgument,"CMake rename requires a position");
+        const auto name=method=="textDocument/prepareRename" ? "frost_rename_preview_candidate" : std::string(params.stringAt("newName"));
+        auto proposal=planCMakeTargetRename(input,*position,name);
+        if (!proposal) co_return std::unexpected(proposal.error());
+        for (const auto& path:input.provenancePaths) {
+            auto bytes=reader(path,32U*1024U*1024U);
+            if (!bytes) co_return std::unexpected(bytes.error());
+            proposal->provenance.emplace_back(path,std::move(*bytes));
+        }
+        if (method=="textDocument/prepareRename") {
+            for (const auto& file:proposal->edit.files) if (documentKey(file.path)==documentKey(input.path))
+                for (const auto& edit:file.edits)
+                    if (edit.range.start<=*position && *position<=edit.range.end) co_return toJson(edit.range);
+            co_return fail(ErrorCode::Unsupported,"Selected token is not a target reference");
+        }
+        auto changes=Json::object();
+        for (const auto& file:proposal->edit.files) {
+            auto edits=Json::array();
+            for (const auto& edit:file.edits) edits.push(Json::object().set("range",toJson(edit.range)).set("newText",edit.newText));
+            changes.set(file.uri,std::move(edits));
+        }
+        { LockGuard lock(state->mutex); state->capture=std::make_shared<CMakeRenameCapture>(std::move(*proposal)); }
+        co_return Json::object().set("changes",std::move(changes));
+    }
     co_return queryCMakeLanguage(input, method, params, stop);
+}
+std::shared_ptr<const CMakeRenameCapture> CMakeLanguageService::renameCapture(const WorkspaceEdit& edit) const {
+    LockGuard lock(m_renameState->mutex);
+    return m_renameState->capture && m_renameState->capture->edit==edit ? m_renameState->capture : nullptr;
 }
 std::optional<ServerCapabilities> CMakeLanguageService::serverCapabilities() const {
     ServerCapabilities caps;
     caps.completion = caps.definition = caps.hover = true;
+    caps.rename = caps.prepareRename = true;
     caps.serverName = "FrostIDE CMake source analysis";
     caps.completionTriggerCharacters = {"$", "{"};
     return caps;
