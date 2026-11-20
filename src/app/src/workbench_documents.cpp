@@ -387,11 +387,11 @@ void Workbench::editorClosed(DocumentEditorView& view) {
         (void)m_lua->closeDocument(path);
     if (m_registeredLanguages)
         m_registeredLanguages->close(path);
-    m_language->editorChanged();
     if (m_bridge && (m_bridge->handlesJsonDocument(path) || lang::isCMakeSource(path))) {
         m_bridge->closeJsonDocument(path);
         QMetaObject::invokeMethod(this, [this] { refreshLiveProblems(); }, Qt::QueuedConnection);
     }
+    m_language->editorChanged();
     m_liveMarkers.erase(lang::documentKey(path));
     // A dirty document whose close the user confirmed closes unsaved; otherwise the registry closes
     // a clean document when its last view goes and keeps a dirty one journaled.
@@ -497,6 +497,7 @@ void Workbench::documentChanged(const std::string& path) {
         syncClangdDocument(*view);
         syncLuaDocument(*view);
         syncManagedDocument(*view);
+        syncJsonDocument(*view);
         for (DocumentEditorView* peer : m_editors->views()) {
             if (&peer->document() == &view->document()) {
                 if (auto* binding = peer->editor().findChild<ui::lang::EditorInsightBinding*>())
@@ -630,6 +631,9 @@ Result<void> Workbench::saveAs(DocumentEditorView& view, std::string_view target
         (void)m_managed->closeDocument(oldPath);
     if (m_lua && isLuaSource(oldPath))
         (void)m_lua->closeDocument(oldPath);
+    const bool validated = m_bridge->handlesJsonDocument(oldPath) || lang::isCMakeSource(oldPath);
+    if (validated)
+        m_bridge->closeJsonDocument(oldPath);
     m_liveMarkers.erase(lang::documentKey(oldPath));
     std::erase(m_discarded, oldPath);
 
@@ -637,6 +641,8 @@ Result<void> Workbench::saveAs(DocumentEditorView& view, std::string_view target
         if (&peer->document() != &document)
             continue;
         peer->setPath(newPath);
+        if (validated)
+            peer->editor().setDiagnostics(ui::EditorDiagnosticSource::SnapshotValidation, {});
         delete peer->editor().findChild<ui::EditorChangeMarkers*>();
         if (m_git)
             m_git->attachEditor(*peer);
@@ -659,7 +665,10 @@ Result<void> Workbench::saveAs(DocumentEditorView& view, std::string_view target
         syncClangdDocument(*updated);
         syncLuaDocument(*updated);
         syncManagedDocument(*updated);
+        syncJsonDocument(*updated);
     }
+    if (validated)
+        refreshLiveProblems();
     if (isManagedSource(newPath) && !m_managed)
         offerManagedTrust();
     if (isLuaSource(newPath) && !m_lua)
@@ -706,6 +715,9 @@ void Workbench::rebindRenamedDocument(const std::string& oldPath, const std::str
         (void)m_managed->closeDocument(oldPath);
     if (m_lua && isLuaSource(oldPath))
         (void)m_lua->closeDocument(oldPath);
+    const bool validated = m_bridge->handlesJsonDocument(oldPath) || lang::isCMakeSource(oldPath);
+    if (validated)
+        m_bridge->closeJsonDocument(oldPath);
     m_liveMarkers.erase(lang::documentKey(oldPath));
     std::erase(m_discarded, oldPath);
 
@@ -716,6 +728,8 @@ void Workbench::rebindRenamedDocument(const std::string& oldPath, const std::str
     for (DocumentEditorView* peer : m_editors->views()) {
         if (&peer->document() != doc)
             continue;
+        if (validated)
+            peer->editor().setDiagnostics(ui::EditorDiagnosticSource::SnapshotValidation, {});
         delete peer->editor().findChild<ui::EditorChangeMarkers*>();
         if (m_git)
             m_git->attachEditor(*peer);
@@ -739,7 +753,10 @@ void Workbench::rebindRenamedDocument(const std::string& oldPath, const std::str
         syncClangdDocument(*updated);
         syncLuaDocument(*updated);
         syncManagedDocument(*updated);
+        syncJsonDocument(*updated);
     }
+    if (validated)
+        refreshLiveProblems();
     if (isManagedSource(newPath) && !m_managed)
         offerManagedTrust();
     if (isLuaSource(newPath) && !m_lua)

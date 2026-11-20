@@ -24,9 +24,12 @@
 #include "frost/ui/lang/editor_language_host.hpp"
 
 #include "stable_lsp_requester.hpp"
+#include <QTimer>
 
+#include <map>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -39,6 +42,7 @@ class EditorView;
 namespace frost::app {
 
 class Workbench;
+class DocumentEditorView;
 
 class LanguageBridge final : public lang::ILspRequester,
                              public ui::lang::IEditorLanguageHost,
@@ -66,20 +70,18 @@ public:
     }
     void setActivePath(std::string_view path);
 
-    void closeJsonDocument(std::string_view path) { m_json->removeDocument(path); }
+    void closeJsonDocument(std::string_view path);
     [[nodiscard]] bool handlesJsonDocument(std::string_view path) const { return m_json->handles(path); }
-    [[nodiscard]] Result<void> installEngineDocumentSchemas(std::string root, const lang::Json& schemas) {
-        return m_json->installEngineSchemas(std::move(root), schemas);
-    }
+    [[nodiscard]] Result<void> installEngineDocumentSchemas(std::string root, const lang::Json& schemas);
     [[nodiscard]] Result<void> installEngineTableSchema(std::string path, const text::Snapshot& snapshot,
-                                                        const lang::Json& reply) {
-        return m_json->installEngineTableSchema(std::move(path), snapshot, reply);
-    }
+                                                        const lang::Json& reply);
     void setJsonAssetReferences(std::string root, lang::JsonAssetReferenceProvider provider) {
         m_json->setAssetReferences(std::move(root), std::move(provider));
     }
-    void clearEngineDocumentSchemas() { m_json->clearEngineSchemas(); }
-    [[nodiscard]] std::vector<lang::LiveDiagnostic> jsonDiagnostics(std::string_view path) const;
+    void clearEngineDocumentSchemas();
+    void syncSnapshotValidation(DocumentEditorView& view);
+    void stopSnapshotValidation();
+    [[nodiscard]] std::vector<lang::LiveDiagnostic> snapshotDiagnostics(std::string_view path) const;
     // ILspRequester: the server for the document.
     [[nodiscard]] sched::Task<Result<lang::Json>> request(std::string method, lang::Json params,
                                                           std::stop_token token = {}) override;
@@ -121,6 +123,20 @@ private:
     [[nodiscard]] static Result<void> applyTo(ui::EditorView& editor, std::span<const lang::ByteEdit> edits,
                                               std::optional<ByteOffset> caret);
 
+    void invalidateJsonValidation();
+    void paintSnapshotValidation(DocumentEditorView& view) const;
+    void startSnapshotValidation();
+    void finishSnapshotValidation(const std::string& key, std::uint64_t serial,
+                                  Result<std::vector<lang::LiveDiagnostic>> result);
+
+    struct ValidationDocument {
+        std::string path;
+        std::uint64_t version = 0;
+        std::uint64_t serial = 0;
+        std::optional<text::Snapshot> pending;
+        std::vector<lang::LiveDiagnostic> diagnostics;
+    };
+
     Workbench& m_workbench;
     StableLspRequester m_server;
     std::shared_ptr<lang::JsonSchemaService> m_json = std::make_shared<lang::JsonSchemaService>();
@@ -128,6 +144,12 @@ private:
     std::shared_ptr<lang::MSBuildLanguageService> m_msbuildLanguage;
     std::shared_ptr<lang::ShaderSourceService> m_shaderSource;
     lang::WorkspaceEditApplier m_applier;
+    QTimer m_validationTimer;
+    std::stop_source m_validationStop;
+    std::map<std::string, ValidationDocument, std::less<>> m_validationDocuments;
+    std::uint64_t m_validationSerial = 0;
+    bool m_validationRunning = false;
+    std::string m_validationError;
 };
 
 } // namespace frost::app

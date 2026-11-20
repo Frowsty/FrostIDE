@@ -30,12 +30,10 @@ TEST(JsonSchema, NestedPresetErrorsUseExactCapturedValueRanges) {
     const auto path = root + "CMakePresets.json";
     const auto text = snapshot(R"({"version":"6","configurePresets":[{"name":false,"binaryDir":"build"}]})");
     service.updateDocument(path, text);
-    const auto errors = service.diagnostics(path);
+    const auto errors = service.snapshotIssues(path);
     ASSERT_EQ(errors.size(), 2U);
-    ASSERT_TRUE(errors[0].range);
-    ASSERT_TRUE(errors[1].range);
-    EXPECT_EQ(text.text(*errors[0].range), "\"6\"");
-    EXPECT_EQ(text.text(*errors[1].range), "false");
+    EXPECT_EQ(text.text(errors[0].range), "\"6\"");
+    EXPECT_EQ(text.text(errors[1].range), "false");
     EXPECT_EQ(errors[0].source, "frost-json-schema");
 }
 TEST(JsonSchema, IncompleteNestedObjectCompletesPropertiesOffline) {
@@ -59,21 +57,21 @@ TEST(JsonSchema, LuaRuntimeEnumsReplaceWholeLiteralAndJsoncCommentsStayInert) {
     EXPECT_TRUE(
         std::ranges::any_of(result->items(), [](const auto& item) { return item.stringAt("label") == "\"Lua 5.4\""; }));
     service.updateDocument(path, snapshot("{/*docs*/\"runtime.version\":\"Lua 5.4\",}"));
-    EXPECT_TRUE(service.diagnostics(path).empty());
+    EXPECT_TRUE(service.snapshotIssues(path).empty());
 }
 TEST(JsonSchema, EngineProfilesValidateKnownFieldsWithoutInventingUnknownComponentErrors) {
     JsonSchemaService service;
     const auto path = root + "Game.frostproj";
     service.updateDocument(path, snapshot(R"({"General":{"Name":42},"CustomFutureEngineSetting":{"anything":true}})"));
-    EXPECT_EQ(service.diagnostics(path).size(), 1U);
+    EXPECT_EQ(service.snapshotIssues(path).size(), 1U);
     service.updateDocument(path,
                            snapshot(R"({"General":{"Name":"Game"},"CustomFutureEngineSetting":{"anything":true}})"));
-    EXPECT_TRUE(service.diagnostics(path).empty());
+    EXPECT_TRUE(service.snapshotIssues(path).empty());
     service.removeDocument(path);
-    EXPECT_TRUE(service.diagnostics(path).empty());
+    EXPECT_TRUE(service.snapshotIssues(path).empty());
     EXPECT_FALSE(hasBundledJsonSchema(root + "unrelated.json"));
     service.updateDocument(root + "asset.fmeta", snapshot(R"({"Handle":13957500353814115645,"Type":"Scene"})"));
-    EXPECT_TRUE(service.diagnostics(root + "asset.fmeta").empty());
+    EXPECT_TRUE(service.snapshotIssues(root + "asset.fmeta").empty());
 }
 TEST(JsonSchema, InvalidPositionAndCancellationRefuseWithoutClampingIntoAnotherValue) {
     JsonSchemaService service;
@@ -102,13 +100,13 @@ TEST(JsonSchema, SelectedEngineSchemasStayWithinTheirProjectAndAreWithdrawn) {
     EXPECT_FALSE(service.handles(project + "/../Elsewhere/a.fmat"));
     const auto path = project + "/Assets/a.fmat";
     service.updateDocument(path, snapshot(R"({"Program":42,"FutureProperty":true})"));
-    auto diagnostics = service.diagnostics(path);
+    auto diagnostics = service.snapshotIssues(path);
     ASSERT_EQ(diagnostics.size(), 1U);
     EXPECT_EQ(diagnostics[0].source, "frost-engine-schema-shape");
     service.clearEngineSchemas();
     EXPECT_GT(service.schemaGeneration(), generation);
     EXPECT_FALSE(service.handles(path));
-    EXPECT_TRUE(service.diagnostics(path).empty());
+    EXPECT_TRUE(service.snapshotIssues(path).empty());
 }
 TEST(JsonSchema, MalformedNestedEngineSchemaKeywordsNeverReplaceAdmittedShapes) {
     JsonSchemaService service;
@@ -157,7 +155,7 @@ TEST(JsonSchema, ActualInheritedTableColumnsCompleteAndHoverWithDefaultsAndBound
     const auto text = snapshot(R"({"Schema":"Assets/Weapon.fschema","Rows":[{"Damage":101}]})");
     service.updateDocument(path, text);
     ASSERT_TRUE(service.installEngineTableSchema(path, text, actualTableSchema()));
-    auto diagnostics = service.diagnostics(path);
+    auto diagnostics = service.snapshotIssues(path);
     ASSERT_EQ(diagnostics.size(), 1U);
     EXPECT_NE(diagnostics[0].message.find("maximum"), std::string::npos);
     auto hover = sched::syncWait(service.request(
@@ -199,11 +197,11 @@ TEST(JsonSchema, ReflectedAlternateEncodingsStayValidAndFlagNamesCompleteInsideA
     const auto path = project + "/a.fscene";
     const auto schema =
         rpc::parseJson(
-            R"({"protocol":"frostengine.document-schemas","version":1,"schemas":[{"extension":".fscene","serializer":"actual","schema":{"type":"object","properties":{"Asset":{"type":["object","integer","string","null"],"x-engine-reference":"asset","x-engine-assetTypes":["Texture2D"]},"Target":{"type":["integer","string","null"],"x-engine-reference":"entity"},"Mode":{"type":["integer","string"],"x-engine-enumNames":["On","Off"]},"Flags":{"type":["array","string","integer"],"items":{"type":["string","integer"],"x-engine-enumNames":["First","Second"]}}}}]})")
+            R"({"protocol":"frostengine.document-schemas","version":1,"schemas":[{"extension":".fscene","serializer":"actual","schema":{"type":"object","properties":{"Asset":{"type":["object","integer","string","null"],"x-engine-reference":"asset","x-engine-assetTypes":["Texture2D"]},"Target":{"type":["integer","string","null"],"x-engine-reference":"entity"},"Mode":{"type":["integer","string"],"x-engine-enumNames":["On","Off"]},"Flags":{"type":["array","string","integer"],"items":{"type":["string","integer"],"x-engine-enumNames":["First","Second"]}}}}}]})")
             .value();
     ASSERT_TRUE(service.installEngineSchemas(project, schema));
     service.updateDocument(path, snapshot(R"({"Asset":"Assets/Texture.png","Target":null,"Mode":1,"Flags":3})"));
-    EXPECT_TRUE(service.diagnostics(path).empty());
+    EXPECT_TRUE(service.snapshotIssues(path).empty());
     const auto text = snapshot(R"({"Flags":[""]})");
     auto result = complete(service, path, text, ByteOffset{text.text().find("\"\"") + 1});
     ASSERT_TRUE(result);
@@ -220,7 +218,7 @@ TEST(JsonSchema, ActualVectorInputShapeAllowsEngineSpecialFloatStrings) {
             .value();
     ASSERT_TRUE(service.installEngineSchemas(project, schema));
     service.updateDocument(path, snapshot(R"({"Vector":["nan","inf","-inf",0]})"));
-    EXPECT_TRUE(service.diagnostics(path).empty());
+    EXPECT_TRUE(service.snapshotIssues(path).empty());
 }
 Json referenceSchemas() {
     return rpc::parseJson(
@@ -412,7 +410,7 @@ TEST(JsonSchema, SessionSchemaLossKeepsOnlyLabeledProjectIndexSnapshotLookupsUnt
     const auto material = project + "/Assets/Material.fmat", meta = project + "/Assets/Texture.png.fmeta";
     ASSERT_TRUE(service.installEngineSchemas(project, actualSchemas()));
     service.updateDocument(material, snapshot(R"({"Program":42})"));
-    ASSERT_EQ(service.diagnostics(material).size(), 1U);
+    ASSERT_EQ(service.snapshotIssues(material).size(), 1U);
     JsonAssetReferenceProvider provider;
     provider.resolve = [](const Json& value) -> std::optional<JsonIndexedAsset> {
         if (value.asUnsigned() == 42U)
@@ -429,7 +427,7 @@ TEST(JsonSchema, SessionSchemaLossKeepsOnlyLabeledProjectIndexSnapshotLookupsUnt
     // EngineIntegration's admitted disconnect calls this revocation boundary (also covered
     // by its HMAC-session disconnect regression). The actual CLI index is project scoped.
     service.clearEngineSchemas();
-    EXPECT_TRUE(service.diagnostics(material).empty());
+    EXPECT_TRUE(service.snapshotIssues(material).empty());
     EXPECT_FALSE(service.handles(material));
     auto definition = sched::syncWait(service.request("textDocument/definition", params));
     ASSERT_TRUE(definition);

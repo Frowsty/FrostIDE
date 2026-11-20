@@ -290,10 +290,13 @@ void EditorView::setDiagnostics(EditorDiagnosticSource source, std::vector<Edito
 std::vector<ActiveDiagnostic> EditorView::diagnostics() const {
     const text::Snapshot& snapshot = m_editor->text();
     const std::vector<ActiveDiagnostic>& live = m_diagnostics[static_cast<std::size_t>(EditorDiagnosticSource::Live)];
+    const auto& validation = m_diagnostics[static_cast<std::size_t>(EditorDiagnosticSource::SnapshotValidation)];
     std::vector<ActiveDiagnostic> out = live;
+    out.insert(out.end(), validation.begin(), validation.end());
+    const auto liveCount = out.size();
     for (const ActiveDiagnostic& build : m_diagnostics[static_cast<std::size_t>(EditorDiagnosticSource::Build)]) {
         const LineIndex line = snapshot.lineAt(build.range.begin);
-        const bool duplicate = std::ranges::any_of(live, [&](const ActiveDiagnostic& d) {
+        const bool duplicate = std::ranges::any_of(std::span(out).first(liveCount), [&](const ActiveDiagnostic& d) {
             return d.message == build.message && snapshot.lineAt(d.range.begin) == line;
         });
         if (!duplicate) {

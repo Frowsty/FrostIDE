@@ -229,7 +229,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
         ui::lang::LanguageServices{*m_bridge, *m_pool, *m_bridge, m_bridge->applier(), m_services.fs,
                                    [this](std::string_view path) -> std::vector<lang::LiveDiagnostic> {
                                        if (m_bridge->handlesJsonDocument(path) || lang::isCMakeSource(path))
-                                           return m_bridge->jsonDiagnostics(path);
+                                           return m_bridge->snapshotDiagnostics(path);
                                        std::optional<lang::FileDiagnostics> set;
                                        if (isManagedSource(path) && m_managed)
                                            set = m_managed->diagnostics().forFile(path);
@@ -935,6 +935,8 @@ void Workbench::shutdown() {
         return;
     }
     m_shutDown = true;
+    if (m_bridge)
+        m_bridge->stopSnapshotValidation();
     m_nativeAnalysisStop.request_stop();
     m_dxcStop.request_stop();
     m_cppRenameStop.request_stop();

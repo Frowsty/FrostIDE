@@ -9,8 +9,10 @@
 #include <gtest/gtest.h>
 namespace frost::lang {
 namespace {
+constexpr auto kProjectRoot = io::kNativePathStyle == io::PathStyle::Windows ? "C:/project" : "/project";
+
 std::string projectPath(std::string_view leaf) {
-    return io::joinPath(io::kNativePathStyle == io::PathStyle::Windows ? "C:/project" : "/project", leaf).value();
+    return io::joinPath(kProjectRoot, leaf).value();
 }
 Json position(unsigned line, unsigned character) {
     return Json::object().set("position", toJson(LspPosition{line, character}));
@@ -67,7 +69,7 @@ CMakeLanguageInput cmakeInput(std::string source) {
     input.path = projectPath("CMakeLists.txt");
     input.source = text::TextBuffer::fromUtf8(std::move(source)).value().snapshot();
     auto model = std::make_shared<project::CMakeProject>();
-    model->sourceDirectory = projectPath("");
+    model->sourceDirectory = kProjectRoot;
     model->inputsAvailable = true;
     model->inputs.push_back({input.path});
     project::CMakeTarget target;
@@ -141,10 +143,13 @@ TEST(CMakeRefactoring, GeneratedDynamicMetadataIsReadOnlyCapturedEvidence) {
 }
 TEST(CMakeRefactoring, ParserInspectionsReportConcreteSourceFacts) {
     auto source = text::TextBuffer::fromUtf8("add_custom_target(alpha)\nadd_custom_target(alpha)\n").value();
-    auto diagnostics = inspectCMakeSource(projectPath("CMakeLists.txt"), source.snapshot());
-    ASSERT_EQ(diagnostics.size(), 1U);
-    EXPECT_EQ(diagnostics[0].code, "cmake.duplicate-target");
-    EXPECT_EQ(diagnostics[0].line, 2);
+    auto issues = inspectCMakeSource(source.snapshot());
+    ASSERT_TRUE(issues);
+    ASSERT_EQ(issues->size(), 1U);
+    EXPECT_EQ(issues->front().code, "cmake.duplicate-target");
+    EXPECT_EQ(issues->front().range.begin, ByteOffset{25});
+    EXPECT_EQ(issues->front().range.end, ByteOffset{25});
+    EXPECT_EQ(source.snapshot().lineAt(issues->front().range.begin), LineIndex{1});
 }
 } // namespace
 } // namespace frost::lang

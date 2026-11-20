@@ -2,9 +2,9 @@
 // Defines schema-backed language services for workspace JSON files.
 #pragma once
 #include "frost/core/mutex.hpp"
-#include "frost/lang/diagnostics.hpp"
 #include "frost/lang/json_engine_references.hpp"
 #include "frost/lang/lsp_client.hpp"
+#include "frost/lang/snapshot_validator.hpp"
 
 #include <map>
 namespace frost::lang {
@@ -13,6 +13,8 @@ namespace frost::lang {
 // legal for forward compatibility; bundled documented properties are validated/completed.
 [[nodiscard]] bool hasBundledJsonSchema(std::string_view path);
 [[nodiscard]] std::string_view bundledJsonSchemaCoverage(std::string_view path);
+[[nodiscard]] Result<std::vector<SnapshotValidationIssue>>
+inspectJsonSnapshot(std::string_view path, const text::Snapshot& source, const Json* engineSchema = nullptr);
 class JsonSchemaService final : public ILspRequester {
 public:
     // Caller authenticates/rechecks the selected engine identity. One selected project at a time;
@@ -32,7 +34,8 @@ public:
     [[nodiscard]] std::uint64_t schemaGeneration() const;
     void updateDocument(std::string path, text::Snapshot snapshot);
     void removeDocument(std::string_view path);
-    [[nodiscard]] std::vector<LiveDiagnostic> diagnostics(std::string_view path) const;
+    [[nodiscard]] std::optional<Json> snapshotValidationSchema(std::string_view path) const;
+    [[nodiscard]] std::vector<SnapshotValidationIssue> snapshotIssues(std::string_view path) const;
     [[nodiscard]] sched::Task<Result<Json>> request(std::string method, Json params,
                                                     std::stop_token token = {}) override;
     [[nodiscard]] PositionEncoding encoding() const override { return PositionEncoding::Utf16; }

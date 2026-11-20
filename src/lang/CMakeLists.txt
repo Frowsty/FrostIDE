@@ -27,6 +27,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FROST_SOURCE_D
 frost_add_library(lang LAYER lang
     SOURCES
         src/json_schema.cpp
+        src/snapshot_validator.cpp
         src/json_entity_hierarchy.cpp
         src/cl_command_lines_provider.cpp
         src/clangd_actions.cpp
@@ -101,3 +102,7 @@ if(WIN32)
     # advapi32: RegGetValueW (the Windows SDK root); shell32: SHGetFolderPathW (vswhere's folder).
     target_link_libraries(frost_lang PRIVATE advapi32 shell32 ole32)
 endif()
+
+frost_add_executable(frost_snapshot_validator LAYER lang OUTPUT_NAME frost-snapshot-validator
+    SOURCES src/snapshot_validator_main.cpp
+    DEPS frost::lang frost::text frost::rpc frost::core)

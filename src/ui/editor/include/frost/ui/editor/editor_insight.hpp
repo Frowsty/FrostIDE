@@ -75,7 +75,7 @@ inline constexpr std::size_t kInsightSeverityCount = 4;
 [[nodiscard]] std::string_view toString(InsightSeverity severity) noexcept;
 
 // Where a diagnostic came from; each source replaces only its own set.
-enum class EditorDiagnosticSource : std::uint8_t { Build, Live };
+enum class EditorDiagnosticSource : std::uint8_t { Build, Live, SnapshotValidation };
 
 /*
  * A problem to show in the editor (squiggle, stripe mark, gutter marker, inspection count, F2).

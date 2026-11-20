@@ -95,14 +95,7 @@ void EngineIntegration::clearDocumentTools() {
     if (!impl.workbench.m_bridge)
         return;
     auto& workbench = impl.workbench;
-    std::vector<DocumentEditorView*> previous;
-    if (workbench.m_editors)
-        for (auto* view : workbench.m_editors->views())
-            if (workbench.m_bridge->handlesJsonDocument(view->path()))
-                previous.push_back(view);
     workbench.m_bridge->clearEngineDocumentSchemas();
-    for (auto* view : previous)
-        view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live, {});
     if (workbench.m_language)
         workbench.updateLanguageTarget();
     workbench.refreshLiveProblems();

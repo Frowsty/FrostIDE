@@ -103,6 +103,14 @@ frost_apply_compile_options(engine_discovery_stall_child TEST)
 target_compile_definitions(lang_unit_tests PRIVATE FROST_DISCOVERY_STALL_CHILD="$<TARGET_FILE:engine_discovery_stall_child>")
 add_dependencies(lang_unit_tests engine_discovery_stall_child)
 
+frost_add_test(lang_snapshot_validator_tests
+    SOURCES snapshot_validator_test.cpp
+    DEPS frost::lang frost::text frost::io
+    LABELS integration snapshot_validator)
+target_compile_definitions(lang_snapshot_validator_tests PRIVATE
+    FROST_SNAPSHOT_VALIDATOR="$<TARGET_FILE:frost_snapshot_validator>")
+add_dependencies(lang_snapshot_validator_tests frost_snapshot_validator)
+
 frost_add_test(lang_clangd_tests
     SOURCES
         clangd_test.cpp

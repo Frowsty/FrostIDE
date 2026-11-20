@@ -159,12 +159,19 @@ add_dependencies(app_multi_session_debug_real_tests debug_test_scenarios)
 # Persistent engine regressions use real loopback sockets; serialize them with the other
 # integration cases. Filesystem-only discovery and protocol doubles remain in the unit target.
 frost_add_test(app_engine_session_tests QT
-    SOURCES workbench_engine_test.cpp workbench_engine_lua_debug_test.cpp
+    SOURCES workbench_engine_test.cpp workbench_engine_lua_debug_test.cpp workbench_snapshot_validation_test.cpp
     DEPS frost::app frost::build frost::io frost::ui_find
     THIRD_PARTY Qt6::Network unofficial-sodium::sodium
     LABELS integration)
 target_include_directories(app_engine_session_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src ${FROST_SOURCE_DIR}/src/io/src)
 target_compile_definitions(app_engine_session_tests PRIVATE ${_frost_workbench_definitions})
+add_custom_target(frost_test_snapshot_validator_adjacent
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:app_engine_session_tests>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:frost_snapshot_validator>" "$<TARGET_FILE_DIR:app_engine_session_tests>"
+    DEPENDS frost_snapshot_validator VERBATIM)
+add_dependencies(app_engine_session_tests frost_test_snapshot_validator_adjacent)
+add_dependencies(app_workbench_tests frost_test_snapshot_validator_adjacent)
 # Exercise the release floor across independent processes, including a stale reader.
 if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{FROST_SDK}/py/Scripts/python.exe")
     set(Python3_EXECUTABLE "$ENV{FROST_SDK}/py/Scripts/python.exe")
@@ -478,6 +485,7 @@ frost_add_test(app_workbench_project_language_tests QT
     LABELS integration cmake)
 target_include_directories(app_workbench_project_language_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_project_language_tests PRIVATE ${_frost_workbench_definitions})
+add_dependencies(app_workbench_project_language_tests frost_test_snapshot_validator_adjacent)
 
 # Original helper boundary coverage; tests launch it only in an explicitly resumed test phase.
 frost_add_test(app_mono_held_reader_tests QT

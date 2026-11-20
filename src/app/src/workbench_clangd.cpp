@@ -771,8 +771,9 @@ void Workbench::refreshLiveProblems() {
     }
     if (m_bridge)
         for (const auto* view : m_editors->uniqueDocumentViews()) {
-            auto json = m_bridge->jsonDiagnostics(view->path());
-            live.insert(live.end(), std::make_move_iterator(json.begin()), std::make_move_iterator(json.end()));
+            auto validation = m_bridge->snapshotDiagnostics(view->path());
+            live.insert(live.end(), std::make_move_iterator(validation.begin()),
+                        std::make_move_iterator(validation.end()));
         }
     if (m_registeredLanguages) {
         auto registered = m_registeredLanguages->problems();

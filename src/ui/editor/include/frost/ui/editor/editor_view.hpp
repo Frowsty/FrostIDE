@@ -796,7 +796,7 @@ private:
     // Insight (ADR 0047): every range is in the current text.
     std::vector<SemanticSpan> m_semantic;
     std::vector<text::ByteRange> m_inactive;
-    std::array<std::vector<ActiveDiagnostic>, 2> m_diagnostics; // By EditorDiagnosticSource.
+    std::array<std::vector<ActiveDiagnostic>, 3> m_diagnostics; // By EditorDiagnosticSource.
     std::map<std::string, std::vector<EditorDecoration>, std::less<>> m_decorations;
     std::vector<UsageHighlight> m_usages;
     std::vector<EditorInlayHint> m_inlayHints;

@@ -6,6 +6,7 @@
 #include "frost/lang/json_entity_hierarchy.hpp"
 #include "frost/lang/lsp_types.hpp"
 #include "frost/lang/uri.hpp"
+#include "snapshot_validator_protocol.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -607,7 +608,7 @@ bool admissibleEngineShape(const Json& schema, unsigned depth, std::size_t& node
 }
 void validate(const Json& schema, const Json& value, std::vector<std::string> path,
               std::vector<std::pair<std::vector<std::string>, std::string>>& errors, unsigned depth = 0) {
-    if (depth > 128 || errors.size() >= 256)
+    if (depth > 128 || errors.size() >= kSnapshotValidationMaxIssues)
         return;
     if (const auto* type = schema.find("type")) {
         const bool valid = type->isArray()
@@ -633,7 +634,7 @@ void validate(const Json& schema, const Json& value, std::vector<std::string> pa
     if (value.isObject()) {
         if (const auto* required = schema.find("required"))
             for (const auto& key : required->items())
-                if (!value.find(*key.asString()))
+                if (errors.size() < kSnapshotValidationMaxIssues && !value.find(*key.asString()))
                     errors.push_back({path, "Missing required property " + *key.asString()});
         if (const auto* properties = schema.find("properties"))
             for (std::size_t i = 0; i < value.size(); ++i)
@@ -652,7 +653,7 @@ void validate(const Json& schema, const Json& value, std::vector<std::string> pa
     }
 }
 Result<std::string> normalized(std::string_view path, const text::Snapshot& snapshot) {
-    if (snapshot.size().value() > 2U * 1024U * 1024U)
+    if (snapshot.size().value() > kSnapshotValidationMaxJsonBytes)
         return fail(ErrorCode::OutOfRange, "Offline JSON profile limit: 2 MiB");
     auto source = snapshot.text();
     return io::fileName(path).starts_with(".luarc.") ? rpc::normalizeJsonComments(source)
@@ -767,7 +768,8 @@ void JsonSchemaService::setAssetReferences(std::string root, JsonAssetReferenceP
         m_assetRoot.clear();
         m_assetReferences = {};
     } else {
-        m_assetRoot = documentKey(root);
+        // Keep the configured spelling for definition URIs. profileContains compares document keys.
+        m_assetRoot = std::move(root);
         m_assetReferences = std::move(provider);
     }
     ++m_schemaGeneration;
@@ -827,35 +829,46 @@ std::optional<ServerCapabilities> JsonSchemaService::serverCapabilities() const 
     capabilities.completionTriggerCharacters = {"\"", ":"};
     return capabilities;
 }
-std::vector<LiveDiagnostic> JsonSchemaService::diagnostics(std::string_view path) const {
+std::optional<Json> JsonSchemaService::snapshotValidationSchema(std::string_view path) const {
+    LockGuard lock(m_mutex);
+    return engineSchemaLocked(path);
+}
+std::vector<SnapshotValidationIssue> JsonSchemaService::snapshotIssues(std::string_view path) const {
     text::Snapshot snapshot;
-    Json selectedSchema;
-    bool engine = false;
+    std::optional<Json> engineSchema;
     {
         LockGuard lock(m_mutex);
         const auto found = m_documents.find(documentKey(path));
         if (found == m_documents.end())
             return {};
         snapshot = found->second;
-        if (auto schema = engineSchemaLocked(path)) {
-            selectedSchema = std::move(*schema);
-            engine = true;
-        } else if (hasBundledJsonSchema(path))
-            selectedSchema = schemaFor(path);
-        else
-            return {};
+        engineSchema = engineSchemaLocked(path);
     }
+    return inspectJsonSnapshot(path, snapshot, engineSchema ? &*engineSchema : nullptr)
+        .value_or(std::vector<SnapshotValidationIssue>{});
+}
+Result<std::vector<SnapshotValidationIssue>> inspectJsonSnapshot(std::string_view path, const text::Snapshot& snapshot,
+                                                                const Json* engineSchema) {
+    std::size_t shapeNodes = 0;
+    if (engineSchema && !admissibleEngineShape(*engineSchema, 0, shapeNodes))
+        return fail(ErrorCode::Corrupt, "Malformed or oversized engine schema keyword shape");
+    if (!engineSchema && !hasBundledJsonSchema(path))
+        return fail(ErrorCode::Unsupported, "No bundled JSON schema for this document");
+    if (snapshot.size().value() > kSnapshotValidationMaxJsonBytes)
+        return fail(ErrorCode::OutOfRange, "Offline JSON profile limit: 2 MiB");
     const auto source = normalized(path, snapshot);
     auto parsed = source ? rpc::parseJson(*source) : Result<Json>(std::unexpected(source.error()));
     std::vector<std::pair<std::vector<std::string>, std::string>> errors;
     Scanner scan{source ? std::string_view(*source) : std::string_view{}};
-    scan.value();
     if (!parsed)
         errors.push_back({{}, parsed.error().message()});
-    else
-        validate(selectedSchema, *parsed, {}, errors);
-    std::vector<LiveDiagnostic> diagnostics;
-    for (const auto& [nodePath, message] : errors) {
+    else {
+        validate(engineSchema ? *engineSchema : schemaFor(path), *parsed, {}, errors);
+        if (!errors.empty())
+            scan.value();
+    }
+    std::vector<SnapshotValidationIssue> issues;
+    for (auto& [nodePath, message] : errors) {
         auto node = std::ranges::find(scan.nodes, nodePath, &Node::path);
         auto begin = node == scan.nodes.end() ? 0 : node->begin;
         auto end = node == scan.nodes.end() ? std::min<std::size_t>(1, snapshot.size().value()) : node->end;
@@ -875,20 +888,12 @@ std::vector<LiveDiagnostic> JsonSchemaService::diagnostics(std::string_view path
             while (end < snapshot.size().value() && !snapshot.isCharBoundary(ByteOffset{end}))
                 ++end;
         }
-        LiveDiagnostic diagnostic;
-        diagnostic.file = path;
-        diagnostic.source = engine ? "frost-engine-schema-shape" : "frost-json-schema";
-        diagnostic.code = parsed ? "schema" : "syntax";
-        diagnostic.message = message;
-        diagnostic.range = text::ByteRange{ByteOffset{begin}, ByteOffset{end}};
-        diagnostic.textVersion = snapshot.version();
-        diagnostic.lspRange = {toLspPosition(snapshot, ByteOffset{begin}, PositionEncoding::Utf16),
-                               toLspPosition(snapshot, ByteOffset{end}, PositionEncoding::Utf16)};
-        diagnostic.line = static_cast<int>(diagnostic.lspRange.start.line) + 1;
-        diagnostic.column = static_cast<int>(diagnostic.lspRange.start.character) + 1;
-        diagnostics.push_back(std::move(diagnostic));
+        issues.push_back({engineSchema ? "frost-engine-schema-shape" : "frost-json-schema",
+                          parsed ? "schema" : "syntax", std::move(message), {ByteOffset{begin}, ByteOffset{end}}});
+        if (issues.size() == kSnapshotValidationMaxIssues)
+            break;
     }
-    return diagnostics;
+    return issues;
 }
 sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json params, std::stop_token token) {
     if (token.stop_requested())

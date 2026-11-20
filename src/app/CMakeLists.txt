@@ -201,6 +201,7 @@ frost_add_library(app LAYER app
         src/engine_native_debug.hpp
         src/workbench_managed_refactoring.cpp
         src/workbench_language.cpp
+        src/validator_client.cpp
         src/language_registry_integration.cpp
         src/extension_integration.cpp
         src/workbench_refactoring.cpp
@@ -299,6 +300,9 @@ frost_add_executable(frostide_mcp LAYER app
     DEPS frost::agent frost::rpc frost::io frost::core)
 set_target_properties(frostide_mcp PROPERTIES OUTPUT_NAME "frostide-mcp")
 
+# Keep the worker beside the IDE and include both in FrostLayers' runtime-DLL group.
+set_target_properties(frost_snapshot_validator PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+
 if(NOT WIN32)
     frost_add_executable(frost LAYER app
         SOURCES src/main.cpp
@@ -319,7 +323,7 @@ if(NOT WIN32)
     frost_stage_lua_test_bridge(frost)
     include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
     frost_stage_lua_runtime(frost)
-    add_dependencies(frost frostide_mcp)
+    add_dependencies(frost frostide_mcp frost_snapshot_validator)
     frost_deploy_extension_sandbox(frost)
     return()
 endif()
@@ -420,6 +424,6 @@ frost_stage_lua_runtime(frost)
 frost_stage_lua_test_bridge(frost)
 
 
-add_dependencies(frost frostide_mcp)
+add_dependencies(frost frostide_mcp frost_snapshot_validator)
 # Optional extension profiles require the owned native helper next to the calling app on Linux.
 frost_deploy_extension_sandbox(frost)

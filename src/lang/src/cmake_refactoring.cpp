@@ -227,49 +227,26 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
         return fail(ErrorCode::Unsupported, "A unique configured literal target definition is required");
     return result;
 }
-std::vector<LiveDiagnostic> inspectCMakeSource(std::string_view path, const text::Snapshot& source) {
-
-    std::vector<LiveDiagnostic> result;
-    if (source.size().value() > CMakeLanguageService::kMaxInputBytes) {
-        LiveDiagnostic diagnostic;
-        diagnostic.file = path;
-        diagnostic.line = 1;
-        diagnostic.column = 1;
-        diagnostic.severity = DiagnosticSeverity::Information;
-        diagnostic.code = "cmake.analysis-budget";
-        diagnostic.source = "FrostIDE CMake source parser";
-        diagnostic.message = "CMake source inspection unavailable: document exceeds the 256 KiB analysis budget";
-        result.push_back(std::move(diagnostic));
-        return result;
-    }
+Result<std::vector<SnapshotValidationIssue>> inspectCMakeSource(const text::Snapshot& source) {
+    if (source.size().value() > CMakeLanguageService::kMaxInputBytes)
+        return fail(ErrorCode::OutOfRange, "CMake source exceeds the 256 KiB analysis budget");
+    constexpr std::string_view provider = "FrostIDE CMake source parser";
     auto parsed = project::scanCMakeSyntax(source.text());
-    if (!parsed) {
-        LiveDiagnostic diagnostic;
-        diagnostic.message = parsed.error().describe();
-        diagnostic.code = "cmake.syntax";
-        diagnostic.source = "FrostIDE CMake source parser";
-        diagnostic.severity = DiagnosticSeverity::Error;
-        diagnostic.file = path;
-        diagnostic.line = 1;
-        diagnostic.column = 1;
-        result.push_back(std::move(diagnostic));
-        return result;
-    }
+    if (!parsed)
+        return std::vector<SnapshotValidationIssue>{{provider, "cmake.syntax", parsed.error().describe(), {}}};
     std::set<std::string> targets;
+    std::vector<SnapshotValidationIssue> result;
     for (const auto& command : *parsed)
         if (declaration(command.name) && command.scopeDepth == 0 && !command.arguments.empty() &&
             command.arguments[0].isLiteral && !targets.insert(command.arguments[0].literal).second) {
-            LiveDiagnostic diagnostic;
-            diagnostic.lspRange = {{static_cast<std::uint32_t>(command.line - 1), 0},
-                                   {static_cast<std::uint32_t>(command.line - 1), 0}};
-            diagnostic.message = "Duplicate unconditional literal target declaration: " + command.arguments[0].literal;
-            diagnostic.code = "cmake.duplicate-target";
-            diagnostic.source = "FrostIDE CMake source parser";
-            diagnostic.file = path;
-            diagnostic.line = static_cast<int>(command.line);
-            diagnostic.column = 1;
-            diagnostic.severity = DiagnosticSeverity::Error;
-            result.push_back(std::move(diagnostic));
+            const auto& target = command.arguments.front();
+            const auto line = source.lineInfo(LineIndex{static_cast<std::uint32_t>(command.line - 1)});
+            const auto start = line->content.begin;
+            result.push_back({provider, "cmake.duplicate-target",
+                              "Duplicate unconditional literal target declaration: " + target.literal,
+                              {start, start}});
+            if (result.size() == kSnapshotValidationMaxIssues)
+                break;
         }
     return result;
 }

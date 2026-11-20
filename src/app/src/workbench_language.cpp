@@ -120,6 +120,9 @@ LanguageBridge::LanguageBridge(Workbench& workbench)
             return fs->readFileSnapshot(path, limit);
         });
     m_server.setMSBuildServer(m_msbuildLanguage);
+    m_validationTimer.setSingleShot(true);
+    m_validationTimer.setInterval(100);
+    QObject::connect(&m_validationTimer, &QTimer::timeout, &workbench, [this] { startSnapshotValidation(); });
 }
 
 LanguageBridge::~LanguageBridge() = default;
@@ -128,30 +131,11 @@ void LanguageBridge::setActivePath(std::string_view path) {
     if (m_workbench.m_engine)
         m_workbench.m_engine->scheduleShaderDiagnostics(std::string(path));
 }
-std::vector<lang::LiveDiagnostic> LanguageBridge::jsonDiagnostics(std::string_view path) const {
-    if (!m_json->handles(path) && !lang::isCMakeSource(path))
-        return {};
-    auto* view = m_workbench.m_editors->find(path);
-    if (!view)
-        return {};
-    if (lang::isCMakeSource(path))
-        return lang::inspectCMakeSource(path, view->editor().editor().text());
-    m_json->updateDocument(std::string(path), view->editor().editor().text());
-    return m_json->diagnostics(path);
-}
 void Workbench::syncJsonDocument(DocumentEditorView& view) {
     if (m_engine)
         m_engine->documentEdited(view.path(), view.editor().editor().text().version());
-    if (!m_bridge || (!m_bridge->handlesJsonDocument(view.path()) && !lang::isCMakeSource(view.path())))
-        return;
-    lang::FileDiagnostics set;
-    set.file = view.path();
-    set.diagnostics = m_bridge->jsonDiagnostics(view.path());
-    set.textVersion = view.editor().editor().text().version();
-    for (auto* peer : m_editors->views())
-        if (lang::documentKey(peer->path()) == lang::documentKey(view.path()))
-            peer->editor().setDiagnostics(ui::EditorDiagnosticSource::Live, ui::lang::toEditorDiagnostics(set));
-    refreshLiveProblems();
+    if (m_bridge && !m_shutDown)
+        m_bridge->syncSnapshotValidation(view);
 }
 
 lang::IWorkspaceEditApplier& LanguageBridge::applier() noexcept { return *this; }
