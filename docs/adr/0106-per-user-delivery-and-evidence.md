@@ -11,9 +11,24 @@ D41 permits a zip plus self-registration. The implementation-first instruction d
 ## Decision
 
 Keep tools/stage.ps1 and tools/stage.sh as payload producers. Windows tools/install_user.py copies a
-fresh stage into a fresh per-user directory and optionally registers the project ProgID under HKCU.
-OpenWithProgids offers the application without overriding the user's default. Uninstall removes only
-manifest-listed unchanged files and their empty ancestor directories; modified and foreign files stay.
+fresh stage into a fresh per-user directory. The optional HKCU registration offers FrostIDE in Open
+with for `.frostproj`, `.sln`, `.slnx` and `.lua` without replacing the user's default. Explorer
+offers an additional verb on `.txt` files whose `System.FileName` equals `CMakeLists.txt`. The verb
+passes the selected file to FrostIDE's ordinary project open entry point. Other text files retain
+their existing associations. The CLI notifies the Windows Shell of association changes.
+The install manifest records the registry values and keys it added. A conflicting registration
+fails without replacement, partial writes roll back, and uninstall checks the saved ownership and
+current command before removing unchanged values. Legacy manifests retain `.frostproj` cleanup.
+Uninstall removes manifest-listed unchanged files and their empty ancestor directories. Modified
+and foreign files stay.
+On Linux, extract the archive to its final location and run `python3 install_desktop.py register`
+from the extracted directory. It offers the packaged launcher for project files, Visual Studio
+solutions, CMake and Lua through the user's desktop and MIME databases. It leaves the user's
+`mimeapps.list` and default choices intact. Before creating registration files, the helper
+requires `update-mime-database` and `update-desktop-database` (`shared-mime-info` and
+`desktop-file-utils` on Ubuntu). Both caches are refreshed before registration succeeds. Run
+`python3 install_desktop.py unregister` before moving or removing the archive. It removes the
+registration files whose contents still match the receipt and preserves modified files.
 The Python helper is a local administrative delivery tool, requiring an installed Python interpreter;
 it is not an MSI, signed installer, automatic updater, or standalone bootstrap executable.
 

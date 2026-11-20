@@ -60,6 +60,7 @@ system_phase() {
     # libarchive-tools: bsdtar, which tools/qt-fetch.py uses to extract Qt's .7z archives.
     # Autotools: the pinned libsodium vcpkg port regenerates its configure script.
     # libxcb*, libxkbcommon*, libfontconfig, libgl/egl: Qt's xcb and offscreen platform plugins.
+    # shared-mime-info and desktop-file-utils: the per-user registration cache updaters.
     apt-get install -y -q --no-install-recommends \
         g++-14 libstdc++-14-dev zstd xz-utils libarchive-tools zip unzip rsync gdb python3-venv pkg-config make \
         autoconf autoconf-archive automake libtool \
@@ -67,7 +68,7 @@ system_phase() {
         libxkbcommon0 libxkbcommon-x11-0 libx11-xcb1 libxcb1 libxcb-cursor0 libxcb-icccm4 \
         libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
         libxcb-xinerama0 libxcb-xkb1 libxcb-xinput0 libxcb-sync1 libxcb-xfixes0 libxrender1 \
-        libsm6 libice6 curl ca-certificates git
+        libsm6 libice6 curl ca-certificates git shared-mime-info desktop-file-utils
     echo "system phase complete"
 }
 

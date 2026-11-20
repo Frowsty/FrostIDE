@@ -85,7 +85,7 @@ if(WIN32)
     list(APPEND _frost_tool_suites windows_scripts)
 else()
     # tools/stage.sh on fixture trees (bash, ldd); the Windows stage is windows_scripts'.
-    list(APPEND _frost_tool_suites stage_sh)
+    list(APPEND _frost_tool_suites stage_sh install_desktop)
 endif()
 # The R0 exit criterion (test_staged_luals.py): this tree's Debug build staged with the bundled tools,
 # frost run offscreen on a fresh profile, LuaLS started from the stage and its diagnostic shown.
@@ -103,6 +103,9 @@ set_tests_properties(tools.staged_luals PROPERTIES
 # Each suite runs as a script (its directory goes first on sys.path) in the build directory: ctest
 # labels only tests that run there with mod.tools (tests/CMakeLists.txt checks this).
 list(APPEND _frost_tool_suites delivery)
+if(WIN32)
+    list(APPEND _frost_tool_suites install_user_registry)
+endif()
 foreach(suite IN LISTS _frost_tool_suites)
     add_test(NAME tools.${suite}
         COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_${suite}.py -v)

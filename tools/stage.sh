@@ -162,6 +162,7 @@ cp -R -- "$bin_dir/licenses/Lua" "$dest/licenses/Lua"
 cp -- "$bin_dir/frost" "$bin_dir/frost-clang" "$bin_dir/frost-analyzer" "$bin_dir/frostide-mcp" "$bin_dir/frost-snapshot-validator" "$bin_dir/frost_held_read" "$bin_dir/crashpad_handler" "$bin_dir/frost-extension-sandbox" "$dest/" || fail "cannot copy frost"
 cp -R -- "$bin_dir/resources" "$dest/resources" || fail "cannot copy the resources"
 cp -- "$REPO/LICENSE" "$REPO/NOTICE" "$dest/" || fail "cannot copy the licences"
+cp -- "$REPO/tools/install_desktop.py" "$dest/" || fail "cannot copy the desktop registration helper"
 mkdir -p -- "$dest/licenses"
 while IFS= read -r -d '' file; do
     relative="${file#"$REPO/third_party/"}"

@@ -88,7 +88,8 @@ class StageShTest(TempDirTestCase):
         result = self._stage(build, sdk, destination)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"stage: ok {destination}", result.stdout)
-        for name in ("resources/themes/glacier-dark.ftheme", "LICENSE", "NOTICE",
+        self.assertEqual((destination / "install_desktop.py").read_bytes(), (TOOLS / "install_desktop.py").read_bytes())
+        for name in ("resources/themes/glacier-dark.ftheme", "LICENSE", "NOTICE", "install_desktop.py",
                      "licenses/luals-LICENSE.txt", "licenses/tree-sitter-LICENSE",
                      "lua54/lua", "lua54/liblua54.so", "licenses/Lua/lua.h",
                      "qt/lib/libQt6Core.so.6", "qt/plugins/platforms/libqxcb.so",
