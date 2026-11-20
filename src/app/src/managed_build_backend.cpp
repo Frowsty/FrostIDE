@@ -13,8 +13,10 @@
 #include <atomic>
 namespace frost::app {
 struct ManagedBuildJob {
+    explicit ManagedBuildJob(ManagedBuildBackend* receiver) : target(receiver) {}
+
     Mutex mutex;
-    ManagedBuildBackend* target FROST_GUARDED_BY(mutex) = nullptr;
+    ManagedBuildBackend* target FROST_GUARDED_BY(mutex);
     build::BuildSession* session FROST_GUARDED_BY(mutex) = nullptr;
     std::stop_source stop;
     build::BuildService* admission = nullptr;
@@ -169,8 +171,7 @@ Result<void> ManagedBuildBackend::build(build::BuildAction action, std::optional
     m_diagnostics.clear();
     if (m_callbacks.onDiagnosticsCleared)
         m_callbacks.onDiagnosticsCleared();
-    m_job = std::make_shared<ManagedBuildJob>();
-    m_job->target = this;
+    m_job = std::make_shared<ManagedBuildJob>(this);
     m_job->admission = &m_admission;
     m_job->reserved = true;
     setState(build::BuildState::SavingDocuments);

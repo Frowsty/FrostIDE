@@ -36,8 +36,10 @@
 #include <variant>
 namespace frost::app {
 struct ManagedModelJob {
+    explicit ManagedModelJob(Workbench* receiver) : target(receiver) {}
+
     Mutex mutex;
-    Workbench* target FROST_GUARDED_BY(mutex) = nullptr;
+    Workbench* target FROST_GUARDED_BY(mutex);
     std::stop_source stop;
 };
 namespace {
@@ -143,8 +145,8 @@ sched::Task<void> evaluateManaged(std::shared_ptr<ManagedModelJob> job, io::IFil
         if (!finalLaunchExists || *finalLaunchExists != *launchExists)
             return fail(ErrorCode::Busy, "launchSettings presence changed during evaluation");
         if (launchBytes) {
-            auto bytes = fs->readFileSnapshot(*launchPath, 1024 * 1024);
-            if (!bytes || *bytes != *launchBytes)
+            auto finalLaunchBytes = fs->readFileSnapshot(*launchPath, 1024 * 1024);
+            if (!finalLaunchBytes || *finalLaunchBytes != *launchBytes)
                 return fail(ErrorCode::Busy, "launchSettings changed during evaluation");
             receipts.emplace(*launchPath, *launchBytes);
         }
@@ -206,8 +208,7 @@ Result<void> Workbench::configureManagedProject(build::ManagedProjectRequest req
     const auto generation = m_managedModelGeneration;
     const auto root = m_projectRoot;
     const auto revision = m_services.trust.snapshot(root).revision;
-    auto job = std::make_shared<ManagedModelJob>();
-    job->target = this;
+    auto job = std::make_shared<ManagedModelJob>(this);
     m_managedContextTrustRevision = revision;
     m_managedModelJob = job;
     auto completed = [this, job, root, revision, generation, request](Result<ModelResult> result) mutable {
@@ -343,14 +344,6 @@ void Workbench::attachManagedProjectView() {
     auto* diagnostics = new QPushButton(QStringLiteral("Collect .NET diagnostics..."), panel);
     layout->addWidget(diagnostics);
     connect(diagnostics, &QPushButton::clicked, this, [this] { showManagedDiagnostics(); });
-    input::ActionSpec diagnosticsAction;
-    diagnosticsAction.id = "managed.diagnostics";
-    diagnosticsAction.name = ".NET Diagnostics...";
-    diagnosticsAction.group = ".NET";
-    diagnosticsAction.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
-        showManagedDiagnostics();
-    };
-    (void)m_registry.add(std::move(diagnosticsAction));
     auto* status = new QLabel(QStringLiteral("No evaluated .NET context"), panel);
     status->setTextFormat(Qt::PlainText);
     status->setWordWrap(true);
@@ -471,14 +464,6 @@ void Workbench::attachManagedProjectView() {
     spec.side = ui::ToolWindowSide::Left;
     spec.createContent = [panel = QPointer<QWidget>(panel)] { return panel.data(); };
     (void)m_window->toolWindows().add(std::move(spec));
-    input::ActionSpec action;
-    action.id = "managed.projectModel";
-    action.name = ".NET Project";
-    action.group = ".NET";
-    action.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
-        m_window->toolWindows().show("managedProject");
-    };
-    (void)m_registry.add(std::move(action));
 }
 void Workbench::managedProjectInputChanged(std::string_view path) {
     if (!m_managedEvaluation)

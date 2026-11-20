@@ -48,7 +48,23 @@ constexpr std::string_view kLog = "workbench";
 void Workbench::registerActions() {
     registerRefactoringActions();
     registerEditorExtrasActions();
-    attachManagedProjectView();
+    input::ActionSpec managedModel;
+    managedModel.id = "managed.projectModel";
+    managedModel.name = ".NET Project";
+    managedModel.group = ".NET";
+    managedModel.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
+        if (m_window)
+            m_window->toolWindows().show("managedProject");
+    };
+    (void)m_registry.add(std::move(managedModel));
+    input::ActionSpec managedDiagnostics;
+    managedDiagnostics.id = "managed.diagnostics";
+    managedDiagnostics.name = ".NET Diagnostics...";
+    managedDiagnostics.group = ".NET";
+    managedDiagnostics.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
+        showManagedDiagnostics();
+    };
+    (void)m_registry.add(std::move(managedDiagnostics));
     input::ActionSpec managedContext;
     managedContext.id = "managed.projectContext";
     managedContext.name = ".NET Project Context...";

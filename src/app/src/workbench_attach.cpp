@@ -204,6 +204,7 @@ void Workbench::attach(ui::ShellWindow& window) {
     }
 
     attachToolWindows();
+    attachManagedProjectView();
     attachNavigationBar();
     m_engine = std::make_unique<EngineIntegration>(*this);
     m_engineLuaDebug = std::make_unique<EngineLuaDebugCoordinator>(*m_engine, this);
