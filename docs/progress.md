@@ -3,6 +3,14 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R15 workflow implementation integrated
+
+R15 integrates independently of R13 and R14. The editor now offers Markdown preview with external resources blocked, anchored bookmarks, sticky scope labels, TODO search, history restore as an undoable buffer edit, and a paged read-only UTF-8 view for files of 128 MiB or larger. The shell supports floating editor groups and tools, persistent docking, Services, fullscreen, and temporary distraction-free mode. Indexed file search preserves recent-file order. Settings support previewed Visual Studio imports and native editor/keymap schemes.
+
+Git commit checks retain the approved commands and staged input identity. Diff and three-way merge use editor documents and retain edits across asynchronous refreshes. Terminal profiles and OSC command markers consume the selected shell's actual configuration and output.
+
+GPT-6.1 Sol authored the implementations and regression tests. GPT-6 Astra reviewed the source and the combined feature registrations. Runtime tests, large-file and search budgets, installation, and releases remain deferred. R12 is the last consecutive completed implementation round. R13 C++ analysis and R14 engine content remain in progress on their integration branches.
+
 ## 2026-11-20: R15 shell, indexed search, schemes and docking source checkpoint
 
 - Search Everywhere uses immutable indexed file snapshots with cancellable bounded result retention; separator-only patterns retain fuzzy scoring, while empty queries preserve recent-file order. Those earlier search corrections were independently source-reviewed.
