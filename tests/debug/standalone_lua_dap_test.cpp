@@ -8,8 +8,64 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <latch>
 namespace frost::debug {
 namespace {
+// The scripted adapter can reply only after the writer has transmitted the launch.
+class LaunchGatedAdapter final : public io::IProcess {
+public:
+    explicit LaunchGatedAdapter(std::unique_ptr<io::IProcess> process) : m_process(std::move(process)) {}
+    static constexpr io::ProcessId kPid = 4180;
+    io::ProcessId pid() const noexcept override { return kPid; }
+    Result<void> writeStdin(std::string_view bytes) override {
+        auto result = m_process->writeStdin(bytes);
+        if (result && bytes.find("\"command\":\"launch\"") != std::string_view::npos)
+            release();
+        return result;
+    }
+    void closeStdin() noexcept override {
+        m_process->closeStdin();
+        release();
+    }
+    Result<std::size_t> readStdout(std::span<char> buffer) override {
+        m_launch.wait();
+        return m_process->readStdout(buffer);
+    }
+    Result<std::size_t> readStderr(std::span<char> buffer) override { return m_process->readStderr(buffer); }
+    Result<io::ExitStatus> wait(std::optional<IClock::Duration> timeout) override { return m_process->wait(timeout); }
+    Result<void> terminate() override { return m_process->terminate(); }
+    Result<io::ProcessResult> communicate(std::string_view input, IClock::Duration timeout) override {
+        return m_process->communicate(input, timeout);
+    }
+    void abandonOutput() noexcept override { m_process->abandonOutput(); }
+
+private:
+    void release() {
+        if (!m_released.exchange(true))
+            m_launch.count_down();
+    }
+    std::unique_ptr<io::IProcess> m_process;
+    std::atomic<bool> m_released = false;
+    std::latch m_launch{1};
+};
+
+class LaunchGatedLauncher final : public io::IProcessLauncher {
+public:
+    io::ScriptedProcessLauncher scripted;
+    std::string adapter;
+
+    Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& spec) override {
+        auto launched = scripted.launch(spec);
+        if (launched && spec.executable == adapter)
+            return std::make_unique<LaunchGatedAdapter>(std::move(*launched));
+        return launched;
+    }
+    Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
+                                                           const io::AsyncContext& context) override {
+        return scripted.launchAsync(spec, context);
+    }
+};
+
 TEST(StandaloneLuaDap, ExplicitLuaExeAndArg0NeverFallBackToAdapterBundledInterpreter) {
     StandaloneLuaTarget target;
     target.interpreter = test::workPath("sdk/selected-lua");
@@ -79,6 +135,59 @@ TEST(StandaloneLuaDap, UnsolicitedTerminalRequestClosesTheAdapterWithoutLaunchin
     const auto launches = launcher.launches();
     ASSERT_EQ(launches.size(), 1U);
     EXPECT_TRUE(launches.front().terminated);
+}
+
+TEST(StandaloneLuaDap, AdmittedLaunchRequiresAnObjectForAnEmptyTerminalEnvironment) {
+    for (const auto& environment :
+         {rpc::Json(), rpc::Json(false), rpc::Json(""), rpc::Json::array(), rpc::Json::object()}) {
+        SCOPED_TRACE(environment.dump());
+        const bool valid = environment.isObject();
+        LaunchGatedLauncher launcher;
+        launcher.adapter = test::workPath("installed-lua-debug/bin/lua-debug");
+        StandaloneLuaTarget target;
+        target.interpreter = test::workPath("sdk/lua");
+        target.script = test::workPath("project/main.lua");
+        target.workingDirectory = test::workPath("project");
+        const auto bootstrap = test::workPath("installed-lua-debug/script/launch.lua");
+        const auto pid = std::to_string(LaunchGatedAdapter::kPid);
+#ifdef _WIN32
+        const auto code = "dofile[[" + bootstrap + "]] DBG[[" + pid + "]]";
+#else
+        const auto code = "dofile\"" + bootstrap + "\" DBG\"" + pid + "\"";
+#endif
+        auto arguments = rpc::Json::object()
+                             .set("kind", "integrated")
+                             .set("cwd", target.workingDirectory)
+                             .set("args", rpc::Json::array({target.interpreter, "-e", code, target.script}))
+                             .set("env", environment);
+        const auto request = rpc::Json::object()
+                                 .set("seq", 1)
+                                 .set("type", "request")
+                                 .set("command", "runInTerminal")
+                                 .set("arguments", std::move(arguments));
+        launcher.scripted.expect({.expectExecutable = launcher.adapter,
+                                  .stdoutBytes = rpc::encodeFrame(request.dump()),
+                                  .outputHeld = !valid});
+        launcher.scripted.expect({.expectExecutable = target.interpreter});
+        auto launch = standaloneLuaLaunchArguments(target);
+        ASSERT_TRUE(launch);
+        std::atomic<bool> closed = false;
+        auto client = standaloneLuaAdapterFactory(launcher, launcher.adapter,
+                                                  target)({.onClosed = [&](const Error&) { closed = true; }});
+        ASSERT_TRUE(client);
+        ASSERT_GT((*client)->request("launch", std::move(*launch), [](Result<rpc::Json>) {}), 0);
+        ASSERT_TRUE(test::waitUntil([&] { return closed.load(); }));
+        const auto launches = launcher.scripted.launches();
+        ASSERT_EQ(launches.size(), valid ? 2U : 1U);
+        EXPECT_NE(launches.front().stdinBytes.find("\"command\":\"launch\""), std::string::npos);
+        if (valid) {
+            EXPECT_TRUE(launches[1].launched);
+            EXPECT_TRUE(launches[1].spec.environment.empty());
+        } else {
+            EXPECT_TRUE(launches.front().terminated);
+            EXPECT_EQ(launcher.scripted.pendingScripts(), 1U);
+        }
+    }
 }
 
 } // namespace
