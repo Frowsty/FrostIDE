@@ -27,6 +27,7 @@ frost_add_library(engine LAYER engine
         src/engine_test_parsers.cpp
         src/engine_test_provider.cpp
         src/handle.cpp
+        src/performance.cpp
         src/project_content.cpp
         src/schema.cpp
         src/session.cpp

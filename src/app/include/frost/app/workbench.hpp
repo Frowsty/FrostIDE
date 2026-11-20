@@ -515,6 +515,8 @@ public:
     [[nodiscard]] Result<build::RunId> startEngineEditor();
     [[nodiscard]] Result<void> validateEngineScript();
     [[nodiscard]] Result<void> cancelEngineRequest();
+    [[nodiscard]] Result<void> refreshEnginePerformance();
+    [[nodiscard]] Result<void> showAssetInFrostEditor(std::string path, bool openAsset = false);
     // Paired-engine Lua debugging never grants ownership of an external host process.
     [[nodiscard]] Result<void> startEngineLuaDebug(bool startPlay = true);
     [[nodiscard]] ui::MixedDebugSnapshot mixedDebugSnapshot() const;

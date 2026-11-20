@@ -16,6 +16,7 @@
 #include "engine_request_helper.hpp"
 #include "engine_session_peer.hpp"
 #include "workbench_rig.hpp"
+#include <QCheckBox>
 #include <QLabel>
 #include <QDialog>
 #include <QComboBox>
@@ -975,6 +976,117 @@ TEST(WorkbenchEngine, OwnedAuthenticationDeadlineIncludesAStalledChallengeAndRel
     EXPECT_EQ(peer.authenticated.load(), 0U);
 }
 
+TEST(WorkbenchEngine, QueuedGeneratedNativeExportCannotLaunchAfterTrustOrProjectInvalidation) {
+    for (const bool revokeTrust : {true, false}) {
+        WorkDir dir("engine-export-final-admission");
+        dir.write("project/Game.frostproj", "{}");
+        dir.write("other/Other.frostproj", "{}");
+        const auto program = editorProgram(dir);
+        EngineRunLauncher launcher;
+        WorkbenchRig rig(dir, runOptions(dir, launcher, program));
+        ASSERT_TRUE(openTrusted(rig, dir.join("project")));
+        ASSERT_TRUE(waitForConfiguration(rig));
+        const auto& configs = rig.workbench->runController()->configurations().all();
+        const auto selected =
+            std::ranges::find_if(configs, [](const auto& config) { return config.id.starts_with("engine.export."); });
+        ASSERT_NE(selected, configs.end());
+        const auto exportId = selected->id;
+        auto entered = std::make_shared<std::promise<void>>();
+        auto enteredFuture = entered->get_future();
+        auto released = std::make_shared<std::promise<void>>();
+        auto releasedFuture = released->get_future().share();
+        frost::run::RunConfiguration blocker;
+        blocker.id = "dispatcher-gate";
+        blocker.name = "dispatcher gate";
+        blocker.program = program;
+        frost::run::RunHandlers handlers;
+        handlers.launchAdmission = [entered, releasedFuture]() -> frost::Result<void> {
+            entered->set_value();
+            // Bounded failure also guarantees fixture teardown cannot hang on an early ASSERT.
+            if (releasedFuture.wait_for(5s) != std::future_status::ready)
+                return frost::fail(frost::ErrorCode::Timeout, "fixture gate not released");
+            return frost::fail(frost::ErrorCode::Cancelled, "fixture dispatcher gate completed");
+        };
+        auto* manager = rig.workbench->runManager();
+        ASSERT_NE(manager, nullptr);
+        ASSERT_TRUE(manager->start(blocker, std::move(handlers)));
+        ASSERT_EQ(enteredFuture.wait_for(3s), std::future_status::ready);
+        ASSERT_TRUE(rig.workbench->runController()->runConfiguration(exportId));
+        if (revokeTrust)
+            ASSERT_TRUE(rig.trust->untrust(dir.join("project")));
+        else
+            ASSERT_TRUE(openTrusted(rig, dir.join("other")));
+        released->set_value();
+        ASSERT_TRUE(manager->waitForIdle(5s));
+        EXPECT_TRUE(launcher.runs.launches().empty())
+            << "queued export must reach production final admission before launch";
+    }
+}
+TEST(WorkbenchEngine, UnexpectedDisconnectClearsMeasuredLensesAndPendingRequestBeforeReplacement) {
+    WorkDir dir("engine-performance-loss");
+    dir.write("project/Game.frostproj", "{}");
+    dir.write("project/main.cpp", "abc");
+    EngineSessionPeer first(dir.join("project"));
+    EngineSessionPeer replacement(dir.join("project"), 'b');
+    first.performanceTools = replacement.performanceTools = true;
+    const auto report =
+        Json::object()
+            .set("frame", Json::object().set("frames", 2).set("fps", 50.0))
+            .set("profiler", Json::object()
+                                 .set("sourceProvenance", "macro-source-location/v1")
+                                 .set("sourceScopes",
+                                      Json::array().push(
+                                          Json::object()
+                                              .set("name", "measured-site")
+                                              .set("file", dir.join("project/main.cpp"))
+                                              .set("function", "compiled-function")
+                                              .set("line", 1)
+                                              .set("sourceSha256",
+                                                   "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+                                              .set("calls", 2)
+                                              .set("msPerFrame", 1.0)
+                                              .set("callsPerFrame", 1.0)
+                                              .set("averageMs", 1.0)
+                                              .set("maxMs", 1.0))));
+    first.result("stats.get", report);
+    replacement.result("stats.get", report);
+    advertise(dir, first);
+    advertise(dir, replacement);
+    WorkbenchRig rig(dir, peerOptions(dir));
+    ASSERT_TRUE(openTrusted(rig, dir.join("project")));
+    ASSERT_TRUE(pairPeer(rig, first));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project/main.cpp")));
+    auto* view = rig.workbench->currentView();
+    ASSERT_NE(view, nullptr);
+    const auto hasLens = [&] {
+        return std::ranges::any_of(view->editor().codeVisionLenses(),
+                                   [](const auto& lens) { return lens.actionId == "engine.performance"; });
+    };
+    ASSERT_TRUE(rig.workbench->refreshEnginePerformance());
+    ASSERT_TRUE(waitFor(hasLens, 5s));
+    rig.window->toolWindows().show("enginePerformance");
+    auto* panel = rig.window->toolWindows().content("enginePerformance");
+    ASSERT_NE(panel, nullptr);
+    auto* tree = panel->findChild<QTreeWidget*>(QStringLiteral("enginePerformanceTree"));
+    auto* automatic = panel->findChild<QCheckBox*>();
+    ASSERT_NE(tree, nullptr);
+    ASSERT_NE(automatic, nullptr);
+    ASSERT_GT(tree->topLevelItemCount(), 0);
+    automatic->setChecked(true);
+    first.hold("stats.get");
+    ASSERT_TRUE(rig.workbench->refreshEnginePerformance());
+    ASSERT_TRUE(waitFor([&] { return first.requests("stats.get").size() >= 2; }, 3s));
+    first.stop(); // Unexpected transport loss, rather than the explicit Disconnect action.
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->engineState().boolAt("connected") == false; }, 5s));
+    EXPECT_FALSE(hasLens());
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+    EXPECT_FALSE(automatic->isChecked());
+    EXPECT_FALSE(rig.workbench->engineState().boolAt("performanceAvailable").value_or(true));
+    ASSERT_TRUE(pairPeer(rig, replacement));
+    ASSERT_TRUE(rig.workbench->refreshEnginePerformance()) << "lost pending request must not leave Busy set";
+    ASSERT_TRUE(waitFor(hasLens, 5s));
+    EXPECT_EQ(replacement.requests("stats.get").size(), 1);
+}
 TEST(WorkbenchEngine, RePairDropsQueuedReplyFromPreviousAuthenticatedInstance) {
     WorkDir dir("engine-repair-stale-result");
     dir.write("project/Game.frostproj", "{}");

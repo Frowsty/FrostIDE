@@ -5,8 +5,10 @@
 #include "frost/app/workbench.hpp"
 #include "frost/engine/asset_index.hpp"
 #include "frost/engine/command_policy.hpp"
+#include "frost/engine/performance.hpp"
 #include "frost/engine/project_content.hpp"
 #include "frost/engine/session.hpp"
+#include "frost/text/snapshot.hpp"
 #include "frost/ui/shell/engine_state.hpp"
 
 #include "engine_crash_observer.hpp"
@@ -24,9 +26,12 @@
 #include <variant>
 
 class QComboBox;
+class QCheckBox;
 class QLabel;
 class QPushButton;
 class QTimer;
+class QTreeWidget;
+
 namespace frost::ui {
 class EngineConsole;
 class EngineView;
@@ -37,6 +42,7 @@ struct EngineNativeHostState;
 
 inline constexpr std::string_view kEngineConsoleWindow = "frostEngine";
 inline constexpr std::string_view kEngineProjectWindow = "engineProject";
+inline constexpr std::string_view kEnginePerformanceWindow = "enginePerformance";
 
 struct EnginePolicyState {
     std::mutex mutex;
@@ -50,6 +56,7 @@ struct EngineRunAdmission {
     std::atomic<bool> active{true};
     std::string id, program, project, root, configDirectory;
     std::uint64_t trustRevision = 0;
+
     project::TrustStore* trust = nullptr;
     io::IFileSystem* fs = nullptr;
     std::string projectKey;
@@ -82,6 +89,11 @@ struct EngineEventQueue {
     std::atomic<bool> active{true};
 };
 
+// Shared by the native admission/resolver factories for one exact generated child.
+struct EngineToolResolution {
+    std::mutex mutex;
+    std::optional<std::string> project;
+};
 struct EngineIntegration::Impl {
     EngineIntegration& owner;
     Workbench& workbench;
@@ -99,6 +111,7 @@ struct EngineIntegration::Impl {
     std::uint64_t epoch = 0, sessionEpoch = 0, discoveryGeneration = 0, contentGeneration = 0;
     std::string root, physicalRoot, projectKey, selectedProject, automationDirectory, chosenProgram;
     std::uint64_t trustRevision = 0;
+    std::map<std::string, std::shared_ptr<EngineToolResolution>, std::less<>> toolResolutions;
     std::shared_ptr<std::atomic<bool>> physicalAdmission = std::make_shared<std::atomic<bool>>(true);
     std::shared_ptr<std::atomic<std::uint64_t>> testsSourceRevision = std::make_shared<std::atomic<std::uint64_t>>(1);
     std::stop_source workStop;
@@ -128,6 +141,16 @@ struct EngineIntegration::Impl {
     std::map<std::uint64_t, std::string> requests;
     lang::Json lastReply;
     std::string lastError;
+    QPointer<QWidget> performancePanel;
+    QPointer<QTreeWidget> performanceTree;
+    QPointer<QLabel> performanceStatus;
+    QTimer* performanceTimer = nullptr;
+    QPointer<QCheckBox> performanceAutomatic;
+    bool performancePending = false;
+    std::uint64_t performanceRevision = 0;
+    std::optional<engine::EnginePerformanceSample> performanceSample;
+    std::map<std::string, text::Snapshot, std::less<>> performanceSources;
+    std::map<std::string, std::string, std::less<>> performanceSourceDigests;
     std::deque<std::pair<lang::Json, std::size_t>> eventHistory;
     std::size_t eventHistoryBytes = 0, diagnosticBytes = 0;
     std::uint64_t eventHistoryDropped = 0;
@@ -169,6 +192,12 @@ struct EngineIntegration::Impl {
     void clearAssetUsages();
     void publishDocumentProblems();
     [[nodiscard]] bool retainDocumentProblems(std::string key,std::vector<build::BuildDiagnostic> rows);
+    void attachSessionTools();
+    void refreshSessionContext();
+    void clearSessionTools();
+    void clearPerformanceLenses();
+    void capturePerformanceSources(std::uint64_t revision);
+    void publishPerformanceLenses();
     void refreshProjectContent();
     void openAsset(std::string relative);
     void openProjectSettingsDocument();

@@ -64,6 +64,7 @@ bool EngineIntegration::Impl::admitted(std::uint64_t expectedEpoch, std::string_
 void EngineIntegration::Impl::invalidate(bool stopOwned) {
     testsSourceRevision->fetch_add(1);
     ++epoch;
+    toolResolutions.clear();
     physicalAdmission->store(false);
     physicalAdmission = std::make_shared<std::atomic<bool>>(true);
     ++discoveryGeneration;
@@ -144,7 +145,7 @@ void EngineIntegration::Impl::projectChanged() {
                                       260});
             projectRegistered = added.has_value();
         }
-        for (const auto id : {kEngineConsoleWindow, kEngineProjectWindow}) {
+        for (const auto id : {kEngineConsoleWindow, kEngineProjectWindow, kEnginePerformanceWindow}) {
             if (!available)
                 windows.hide(id);
             if (auto* button = windows.stripeButton(id))
@@ -241,6 +242,7 @@ Result<void> EngineIntegration::Impl::refresh() {
 }
 
 void EngineIntegration::Impl::updateControls() {
+    refreshSessionContext();
     const bool trusted = !root.empty() && workbench.m_services.trust.snapshot(root).trusted;
     const bool ready = available && trusted && admitted(epoch, root, trustRevision);
     if (refreshButton)
@@ -529,6 +531,7 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
         if (auto added = workbench.m_registry.add(std::move(action)); !added)
             log::warn("engine", "Cannot register engine action: {}", added.error().describe());
     }
+    impl.attachSessionTools();
     impl.startupWatch = new QTimer(this);
     impl.startupWatch->setInterval(100);
     connect(impl.startupWatch, &QTimer::timeout, this, [this] { m_impl->checkOwnedStartup(); });

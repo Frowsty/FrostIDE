@@ -40,6 +40,7 @@ public:
 signals:
     void refreshRequested();
     void serializedPropertiesRequested();
+    void showInEditor(const QString& relativePath, const QString& handle, bool openAsset);
     void findAssetUsages(const QString& relativePath, const QString& handle);
     void openAssetUsage(const QString& relativePath);
     // Project-relative engine-reported path and exact decimal handle. Receiver must validate

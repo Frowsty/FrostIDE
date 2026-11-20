@@ -74,6 +74,23 @@ EngineView::EngineView(QWidget* parent) : QWidget(parent) {
     properties->setObjectName(QStringLiteral("engineSerializedPropertiesButton"));
     layout->addWidget(properties);
     connect(properties, &QPushButton::clicked, this, &EngineView::serializedPropertiesRequested);
+    for (const bool open : {false, true}) {
+        auto* show = new QPushButton(open ? tr("Open in FrostEditor") : tr("Show in FrostEditor"), this);
+        show->setObjectName(open ? QStringLiteral("engineOpenInEditor") : QStringLiteral("engineShowInEditor"));
+        layout->addWidget(show);
+        connect(show, &QPushButton::clicked, this, [this, open] {
+            const auto* item = m_tree->currentItem();
+            if (!m_content || !item)
+                return;
+            const auto path = item->data(0, kPathRole).toString();
+            const auto handle = item->data(0, kHandleRole).toString();
+            for (const auto& asset : m_content->assets)
+                if (qs(asset.path) == path && QString::number(static_cast<qulonglong>(asset.handle.value)) == handle) {
+                    emit showInEditor(path, handle, open);
+                    return;
+                }
+        });
+    }
     m_usageStatus = new QLabel(this);
     m_usageStatus->setWordWrap(true);
     m_usageStatus->setTextFormat(Qt::PlainText);

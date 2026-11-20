@@ -34,6 +34,11 @@ public:
     // Cancels project/session work and owned runs; a paired external editor remains alive.
     void cancel();
     void trustChanged();
+    // GUI actions use only current authenticated commands and engine-listed asset identities.
+    [[nodiscard]] Result<void> refreshPerformance();
+    [[nodiscard]] Result<void> showInFrostEditor(std::string path, bool openAsset = false);
+    void invalidatePerformanceLenses();
+    [[nodiscard]] bool isListedAsset(std::string_view absolutePath) const;
     // GUI native adapter observer; publishes typed actual event evidence to the exact R6 lease.
     void updateNativeDebuggerPause();
     void shutdown();
@@ -78,6 +83,10 @@ public:
     [[nodiscard]] std::function<Result<void>()> launchAdmissionFor(const run::RunConfiguration& configuration) const;
     [[nodiscard]] std::function<Result<run::LaunchPlan>(run::LaunchPlan)>
     launchPlanFor(const run::RunConfiguration& configuration) const;
+    // Independent native export/multiplayer children retain final trust and physical project identity.
+    [[nodiscard]] std::function<Result<void>()> sessionToolAdmissionFor(const run::RunConfiguration&) const;
+    [[nodiscard]] std::function<Result<run::LaunchPlan>(run::LaunchPlan)>
+    sessionToolPlanFor(const run::RunConfiguration&) const;
     void runAccepted(run::RunId id, const run::RunConfiguration& configuration);
     void processStarted(const run::RunStatus& run);
     void processOutput(run::RunId run, run::OutputStream stream, std::string_view bytes);

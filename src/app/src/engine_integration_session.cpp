@@ -51,6 +51,7 @@ void EngineIntegration::Impl::retireSession() {
 void EngineIntegration::Impl::clearSession(bool clearOutput, bool preserveCrashObservation) {
     owner.clearDocumentTools();
     clearAssetUsages();
+    clearSessionTools();
     if (!preserveCrashObservation)
         revokeCrashObservation();
     ++sessionEpoch;
@@ -359,6 +360,7 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
                 impl.retainedNativeBinding.reset();
             }
             impl.owner.clearDocumentTools();
+            impl.clearSessionTools();
             impl.identity.reset();
             impl.state.reset();
             impl.requests.clear();
@@ -522,6 +524,10 @@ lang::Json EngineIntegration::snapshot() const {
                    .set("lastReply", impl.lastReply)
                    .set("lastError", impl.lastError)
                    .set("sentCommandCount", impl.session ? impl.session->sentCommandCount() : std::uint64_t{0});
+    out.set("performanceAvailable", current && impl.performanceSample.has_value());
+    if (current && impl.performanceSample)
+        out.set("performance", impl.performanceSample->measured)
+            .set("performanceSourceProvenance", impl.performanceSample->sourceProvenanceAvailable);
     auto instances = lang::Json::array();
     for (const auto& instance : impl.instances)
         if (current)

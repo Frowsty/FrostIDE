@@ -163,6 +163,7 @@ void Workbench::editorOpened(DocumentEditorView& view) {
     syncJsonDocument(view);
     connect(&view.editor(), &ui::EditorView::textChanged, this,
             [this, current = &view] { syncJsonDocument(*current); });
+    view.editor().setProperty("engineAssetContext", m_engine && m_engine->isListedAsset(view.path()));
     refreshMarkers(view);
     if (m_documentRegistry->viewCount(view.path()) == 1) {
         syncClangdDocument(view);
@@ -227,7 +228,9 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             auto result = m_engine->findAssetUsagesForDocument(targetView->path());
             if (!result)
                 notify(text("Engine asset usages"), qs(result.error().message()), ui::NotificationKind::Error);
-        } else if (lens.actionId == "navigate.findUsages")
+        } else if (lens.actionId == "engine.performance" && m_window)
+            m_window->toolWindows().show("enginePerformance");
+        else if (lens.actionId == "navigate.findUsages")
             m_language->findUsages();
         else if (lens.actionId == "navigate.implementation")
             m_language->gotoImplementation();
@@ -444,6 +447,8 @@ bool Workbench::editorCloseRequested(DocumentEditorView& view) {
 void Workbench::documentChanged(const std::string& path) {
     if (m_engine)
         m_engine->invalidateAssetUsages();
+    if (m_engine)
+        m_engine->invalidatePerformanceLenses();
     if (m_engineBindings && (isCFamilySource(path) || isLuaSource(path)))
         m_engineBindings->cancel();
     invalidateManagedDebug();

@@ -109,6 +109,7 @@ public:
     std::atomic<bool> stallChallenge{false}, closed{false}, heartbeats{true};
     std::atomic<std::int64_t> processId{0};
     std::atomic<unsigned> authenticated{0};
+    bool performanceTools = false; // Set before pairing; opt-in additive FER-14 fixture schema.
     std::vector<Json> requests(std::string_view method) const {
         std::lock_guard lock(m_mutex);
         std::vector<Json> found;
@@ -242,6 +243,16 @@ private:
                                                     .set("requiresMutationPermission", mutation)
                                                     .set("requiredCapabilities", Json::array({"session.v2"}))));
         }
+        if (performanceTools)
+            commands.push(Json::object()
+                              .set("name", "stats.get")
+                              .set("category", "Fixture")
+                              .set("flags", Json::array({"RequiresEditor"}))
+                              .set("idePolicy", Json::object()
+                                                    .set("allowed", true)
+                                                    .set("states", Json::array({"Edit", "Play", "Paused"}))
+                                                    .set("requiresMutationPermission", false)
+                                                    .set("requiredCapabilities", Json::array({"session.v2"}))));
         // Present in schema, deliberately outside IDE policy: the refusal test must not send it.
         commands.push(Json::object()
                           .set("name", "scene.delete")
