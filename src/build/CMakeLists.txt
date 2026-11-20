@@ -34,6 +34,7 @@ set(frost_build_sources
     src/managed_project.cpp
     src/unreal_build.cpp
     src/managed_packages.cpp
+    src/managed_launch_settings.cpp
     src/managed_evaluation.cpp
     src/msbuild_compile.cpp
     src/msbuild_driver.cpp

@@ -195,3 +195,6 @@ target_compile_definitions(build_managed_evaluation_tests PRIVATE
 frost_add_managed_fixture_test(build_managed_packages_tests SOURCES managed_packages_real_test.cpp
     DEPS frost::build frost::project frost::io frost::core LABELS integration managed nuget)
 target_include_directories(build_managed_packages_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+
+frost_add_test(build_managed_launch_settings_tests SOURCES managed_launch_settings_test.cpp
+    DEPS frost::build frost::io frost::core LABELS unit managed)

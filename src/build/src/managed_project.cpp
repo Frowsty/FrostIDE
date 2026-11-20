@@ -115,8 +115,8 @@ Result<std::string> managedConsoleTarget(const ManagedProjectRequest& request,
         (!request.runtimeIdentifier.empty() && properties.runtimeIdentifier != request.runtimeIdentifier))
         return fail(ErrorCode::InvalidArgument,
                     "evaluated managed target does not match the selected framework or RID");
-    if (properties.outputType != "Exe")
-        return fail(ErrorCode::Unsupported, "only managed console executable projects are supported");
+    if (properties.outputType != "Exe" && properties.outputType != "WinExe")
+        return fail(ErrorCode::Unsupported, "managed launch requires an evaluated Exe or WinExe entry point");
     if (!io::isAbsolutePath(properties.targetPath) || properties.targetPath.find('\0') != std::string::npos ||
         !std::string_view(properties.targetPath).ends_with(".dll"))
         return fail(ErrorCode::InvalidArgument, "managed executable target must be an absolute DLL path");

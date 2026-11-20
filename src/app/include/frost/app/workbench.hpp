@@ -742,6 +742,7 @@ public:
     }
     [[nodiscard]] Result<void> configureManagedProject(build::ManagedProjectRequest request);
     void showManagedProjectContext();
+    void showManagedDiagnostics();
     void attachManagedProjectView();
     void clearManagedProjectContext();
     void onManagedFilesChanged(const io::FileChangeBatch&);

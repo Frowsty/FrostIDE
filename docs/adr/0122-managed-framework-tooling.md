@@ -37,3 +37,28 @@ compares reports with independent tool invocations, validates artifact receipts 
 target remains alive after attachment/refusal. This authored source is not executed evidence.
 Framework-specific UI/profile/registry integration follows separately; this core slice alone does
 not complete LTR19.
+
+
+The framework/profile increment requests actual SDK properties (Web SDK, WPF/Forms/MAUI,
+platform, Razor) and evaluated RazorComponent/RazorGenerate/Page/ApplicationDefinition/
+AvaloniaXaml/MauiXaml/Content items with metadata. Missing evaluated lists remain unknown.
+The existing project tree exposes these actual files; extension-based workload inference is
+forbidden. Exe and WinExe DLL entry points reuse the evaluated build/run target pipeline.
+Installed workloads and platform compatibility still determine whether an actual build succeeds.
+
+Captured Properties/launchSettings.json Project profiles supply arguments, environment,
+applicationUrl and working directory to generated Run configurations. Their exact bytes and
+presence are revalidated before launch, along with SDK import receipts and the current selected
+configuration lease. IISExpress/Docker/other command providers and unknown execution overrides
+remain visible and unavailable. No implicit environment expansion or hot reload is substituted.
+The profile browser button opens only explicit HTTP(S) URLs for an exact running profile, after
+admission. It is user-invoked; it makes no server-readiness claim and attaches no JS debugger.
+Managed debug's dedicated verified-PDB flow remains separate; profile-selected Debug is not
+claimed by this increment.
+
+Razor/Blazor and XAML semantic services/designers, browser/JS debugging, MAUI device deployment,
+framework-specific inspections and specialized F#/VB tooling are not implemented by listing SDK
+items. Semantic requests can use an explicitly installed pinned/licensed generic registry provider;
+there is no bundled Razor/XAML/F#/VB provider and no claim that ordinary C# Roslyn handles them.
+This slice adds evaluated framework visibility, supported Project profile Run/browser and owned
+managed-run diagnostics; the remaining LTR19 framework semantics are still open.

@@ -22,6 +22,22 @@
   queries, inspection metadata may be unavailable, and C2 run_tests currently binds CTest. Real CLI
   schemas/handshake, hooks/settings merge, platform ACL/cancellation/budgets and provider behavior
   require the resumed local acceptance phase. No complete C2/C3 parity or release claim.
+## 2026-11-20 — R19 LTR19 framework/profile/diagnostic entry points (source review pending)
+
+- Added normal managed.diagnostics action and .NET Project button for exact running generated
+  SDK configurations. Capture retains coreCLR PID/image evidence, selected context/trust lease,
+  assembly identity, full-GC consent and cancellation. Actual report/CSV snapshot is displayed.
+- Actual SDK framework properties and evaluated Razor/XAML/Content items appear in the existing
+  project tree. Captured launchSettings Project profiles generate Run configurations; byte/presence
+  changes refuse old launch admission. Unsupported command/options stay visible. Exe/WinExe entry
+  points share existing actual target validation. Explicit running-profile HTTP(S) browser action
+  makes no readiness/browser-debug claim.
+- Authored later real SDK Workbench profile/escaping receipt fixture plus parser cases. No execution.
+  Independent source review pending for this increment and preceding770a23b5.
+- LTR19 remains incomplete: bundled Razor/XAML/F#/VB semantics, designers, browser debugging,
+  MAUI deployment and specialized framework inspections are still open. Existing registry can host
+  explicitly installed licensed providers; listing files does not implement those capabilities.
+
 ## 2026-11-20 — R19 LTR19 managed diagnostic core (implementation in progress)
 
 - Isolated `codex/r19-managed-frameworks` from reviewed R17 integration; main untouched.

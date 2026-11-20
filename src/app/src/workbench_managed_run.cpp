@@ -5,6 +5,8 @@
 #include "frost/lang/uri.hpp"
 
 #include <QCryptographicHash>
+
+#include <algorithm>
 namespace frost::app {
 std::vector<run::RunConfiguration> Workbench::managedRunConfigurations() const {
     const auto model = managedProjectEvaluation();
@@ -30,18 +32,45 @@ std::vector<run::RunConfiguration> Workbench::managedRunConfigurations() const {
     build->arguments.push_back("--no-restore");
     config.beforeLaunchTasks.push_back(
         {.program = build->executable, .arguments = build->arguments, .workingDirectory = build->workingDirectory});
-    return {std::move(config)};
+    std::vector<run::RunConfiguration> configurations{config};
+    for (const auto& profile : model->launchProfiles) {
+        if (!profile.unavailable.empty())
+            continue;
+        auto candidate = config;
+        candidate.id +=
+            ".profile." + QCryptographicHash::hash(QByteArray::fromStdString(profile.name), QCryptographicHash::Sha256)
+                              .toHex()
+                              .toStdString();
+        candidate.name += " — " + profile.name;
+        candidate.arguments.insert(candidate.arguments.end(), profile.arguments.begin(), profile.arguments.end());
+        if (!profile.workingDirectory.empty()) {
+            auto directory = io::isAbsolutePath(profile.workingDirectory)
+                                 ? io::normalizePath(profile.workingDirectory)
+                                 : io::joinPath(io::parentPath(model->request.project), profile.workingDirectory);
+            if (!directory)
+                continue;
+            candidate.workingDirectory = *directory;
+        }
+        auto environment = profile.environment;
+        if (!profile.applicationUrl.empty())
+            environment["ASPNETCORE_URLS"] = profile.applicationUrl;
+        environment["DOTNET_LAUNCH_PROFILE"] = profile.name;
+        for (const auto& [name, value] : environment)
+            candidate.environment.push_back({name, value});
+        configurations.push_back(std::move(candidate));
+    }
+    return configurations;
 }
 std::function<Result<void>()> Workbench::managedRunAdmissionFor(const run::RunConfiguration& config) const {
     const auto model = managedProjectEvaluation();
     const auto generated = managedRunConfigurations();
-    const bool matches = model && generated.size() == 1 && generated.front() == config;
+    const bool matches = model && std::ranges::find(generated, config) != generated.end();
     auto* fs = &m_services.fs;
     auto* trust = &m_services.trust;
     const auto root = m_projectRoot;
     const auto revision = m_managedContextTrustRevision;
     const auto lease = m_managedContextLease;
-    return [model, matches, fs, trust, root, revision, lease]() -> Result<void> {
+    return [model, matches, fs, trust, root, revision, lease, config]() -> Result<void> {
         if (!matches || !lease->load())
             return fail(ErrorCode::PermissionDenied, "Managed run no longer matches its selected SDK context");
         const auto current = trust->snapshot(root);
@@ -51,6 +80,17 @@ std::function<Result<void>()> Workbench::managedRunAdmissionFor(const run::RunCo
             auto physical = fs->physicalPath(path);
             if (!physical || lang::documentKey(*physical) != lang::documentKey(path))
                 return fail(ErrorCode::PermissionDenied, "Managed run physical project changed");
+        }
+        if (!io::isAbsolutePath(config.workingDirectory))
+            return fail(ErrorCode::InvalidArgument, "Managed working directory must be absolute");
+        auto directory = fs->physicalPath(config.workingDirectory);
+        if (!directory || lang::documentKey(*directory) != lang::documentKey(config.workingDirectory) ||
+            !trust->isTrusted(*directory))
+            return fail(ErrorCode::PermissionDenied, "Managed profile working directory changed or is untrusted");
+        if (!model->launchSettingsPath.empty()) {
+            auto present = fs->exists(model->launchSettingsPath);
+            if (!present || *present != model->launchSettingsPresent)
+                return fail(ErrorCode::Busy, "launchSettings presence changed; refresh .NET Project Context");
         }
         if (model->inputFiles.empty())
             return fail(ErrorCode::PermissionDenied, "Managed run has no captured SDK input receipts");
@@ -89,7 +129,7 @@ Workbench::managedRunPlanFor(const run::RunConfiguration& config) const {
         auto target = build::managedConsoleTarget(model->request, *properties);
         if (!target)
             return std::unexpected(target.error());
-        if (config.arguments.size() != 1 || *target != config.arguments.front())
+        if (config.arguments.empty() || *target != config.arguments.front())
             return fail(ErrorCode::Busy, "Managed TargetPath changed during build; refresh .NET Project Context");
         auto physical = fs->physicalPath(*target);
         if (!physical)

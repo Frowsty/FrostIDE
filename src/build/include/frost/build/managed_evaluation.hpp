@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Authoritative SDK-style project snapshots from dotnet MSBuild structured evaluation.
 #pragma once
+#include "frost/build/managed_launch_settings.hpp"
 #include "frost/build/managed_project.hpp"
 
 #include <map>
@@ -19,6 +20,9 @@ struct ManagedProjectEvaluation {
     std::map<std::string, std::string, std::less<>> properties; // Actual IsTestProject/CPM/compiler facts.
     // Optional execution receipts captured by an owning worker around a second SDK evaluation.
     std::map<std::string, std::string, std::less<>> inputFiles = {};
+    std::string launchSettingsPath = {};
+    bool launchSettingsPresent = false;
+    std::vector<ManagedLaunchProfile> launchProfiles = {};
 };
 // Pure bounded command/parser pair. The inner evaluation explicitly selects its TFM; no restore
 // or build target runs. All item metadata is MSBuild output, including linked and evaluation-time generated sources.

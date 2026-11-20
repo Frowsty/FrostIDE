@@ -213,6 +213,7 @@ frost_add_library(app LAYER app
         src/workbench_managed.cpp
         src/workbench_managed_model.cpp
         src/managed_build_backend.cpp
+        src/workbench_managed_diagnostics.cpp
         src/workbench_managed_run.cpp
         src/managed_debug_preparation.cpp
         src/managed_source_snapshot.cpp
