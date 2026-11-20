@@ -7996,3 +7996,14 @@ with a pointer.
   the modal lifetime and bounded report-read findings were fixed. Commits: dd193193, 040ef30a,
   97e679b1 on codex/r15-editor-extras. No builds, tests, feature runs, WSL, benchmarks, probes or
   verification runners were executed. Runtime acceptance remains deferred by user instruction.
+
+## 2026-11-20: R19 DBG-16 hot reload decision (source only)
+
+- ADR 0110 records distinct native restart, FrostEngine Lua reload, CoreCLR and Unity code-update
+  boundaries against the actual IDE capability/session contracts. The reviewed netcoredbg payload
+  excludes its hot-reload hook. No new hot-reload capability, engine command or state-preservation
+  claim is introduced; provider implementation and runtime acceptance remain explicit follow-up work.
+- The decision requires exact profile/process/module/generation admission, actual apply outcomes,
+  symbol/breakpoint revalidation, uncertain-outcome handling and explicit restart ownership.
+- No builds, configuration, tests, feature runs, WSL, installs or licence acceptance were performed.
+  Independent source review is pending on codex/r19-hot-reload-decision.
