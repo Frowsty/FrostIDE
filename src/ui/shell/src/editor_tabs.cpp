@@ -3,6 +3,8 @@
 // EditorTabs and EditorTabBar (frost/ui/shell/editor_tabs.hpp).
 
 #include "frost/ui/shell/editor_tabs.hpp"
+#include <QCloseEvent>
+#include <QPushButton>
 
 #include "frost/ui/icon_ids.hpp"
 
@@ -698,6 +700,8 @@ void EditorTabGroup::showContextMenu(int index, QPoint globalPos) {
     });
     connect(menu.addAction(text("Close Editor Group")), &QAction::triggered, this,
             [this] { emit closeGroupRequested(); });
+    connect(menu.addAction(text("Move Editor Group to Separate Window / Dock")), &QAction::triggered, this,
+            [this] { emit floatGroupRequested(); });
     menu.addSeparator();
     const bool pinned = isPinned(index);
     connect(menu.addAction(pinned ? text("Unpin Tab") : text("Pin Tab")), &QAction::triggered, this,
@@ -752,6 +756,12 @@ EditorTabs::EditorTabs(IEditorFactory& factory, QWidget* parent)
 EditorTabs::~EditorTabs() {
     disconnect(qApp, nullptr, this, nullptr);
     m_active = nullptr;
+    for (auto& floating : m_floating) {
+        floating.host->removeEventFilter(this);
+        floating.group->setParent(this);
+        delete floating.host;
+    }
+    m_floating.clear();
     const auto groups = std::exchange(m_groups, {});
     for (EditorTabGroup* group : groups)
         disconnect(group, nullptr, this, nullptr);
@@ -777,6 +787,10 @@ EditorTabGroup* EditorTabs::makeGroup() {
         setActiveGroup(group);
         (void)closeGroup();
     });
+    connect(group, &EditorTabGroup::floatGroupRequested, this, [this, group] {
+        setActiveGroup(group);
+        (void)setGroupFloating(group, !isGroupFloating(group));
+    });
     return group;
 }
 
@@ -787,7 +801,71 @@ void EditorTabs::setActiveGroup(EditorTabGroup* group) {
     emit currentEditorChanged(group->currentEditor());
 }
 
+bool EditorTabs::isGroupFloating(EditorTabGroup* group) const {
+    return std::ranges::any_of(m_floating, [group](const auto& item) { return item.group == group; });
+}
+
+QWidget* EditorTabs::floatingGroupWindow(EditorTabGroup* group) const {
+    const auto it = std::ranges::find(m_floating, group, &FloatingGroup::group);
+    return it == m_floating.end() ? nullptr : it->host;
+}
+
+bool EditorTabs::setGroupFloating(EditorTabGroup* group, bool floating) {
+    if (std::ranges::find(m_groups, group) == m_groups.end()) return false;
+    auto it = std::ranges::find(m_floating, group, &FloatingGroup::group);
+    if ((it != m_floating.end()) == floating) return true;
+    if (floating) {
+        auto* splitter = qobject_cast<QSplitter*>(group->parentWidget());
+        if (!splitter) return false;
+        const auto sizes = splitter->sizes();
+        auto* slot = new QWidget;
+        auto* layout = new QVBoxLayout(slot);
+        auto* dock = new QPushButton(text("Dock Editor Group"), slot);
+        layout->addWidget(dock);
+        layout->addStretch();
+        splitter->replaceWidget(splitter->indexOf(group), slot);
+        splitter->setSizes(sizes);
+        auto* host = new QWidget(this, Qt::Window);
+        host->setWindowTitle(text("FrostIDE — Editor"));
+        auto* hostLayout = new QVBoxLayout(host);
+        hostLayout->setContentsMargins(0, 0, 0, 0);
+        hostLayout->addWidget(group);
+        host->resize(900, 650);
+        host->installEventFilter(this);
+        m_floating.push_back({group, slot, host});
+        connect(dock, &QPushButton::clicked, this, [this, group] { (void)setGroupFloating(group, false); });
+        host->show();
+    } else {
+        const auto entry = *it;
+        auto* splitter = qobject_cast<QSplitter*>(entry.slot->parentWidget());
+        if (!splitter) return false;
+        const auto sizes = splitter->sizes();
+        entry.host->removeEventFilter(this);
+        splitter->replaceWidget(splitter->indexOf(entry.slot), group);
+        splitter->setSizes(sizes);
+        group->show();
+        m_floating.erase(it);
+        delete entry.slot;
+        entry.host->hide();
+        entry.host->deleteLater();
+    }
+    return true;
+}
+
+bool EditorTabs::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::Close) {
+        const auto it = std::ranges::find(m_floating, watched, &FloatingGroup::host);
+        if (it != m_floating.end()) {
+            auto* group = it->group;
+            static_cast<QCloseEvent*>(event)->ignore();
+            (void)setGroupFloating(group, false);
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
 bool EditorTabs::split(Qt::Orientation orientation) {
+    if (isGroupFloating(m_active)) (void)setGroupFloating(m_active, false);
     IEditorView* current = currentEditor();
     if (!current)
         return false;
@@ -827,6 +905,7 @@ bool EditorTabs::split(Qt::Orientation orientation) {
 bool EditorTabs::closeGroup() {
     if (m_groups.size() <= 1)
         return false;
+    if (isGroupFloating(m_active)) (void)setGroupFloating(m_active, false);
     EditorTabGroup* closing = m_active;
     closing->closeAll();
     if (closing->count() != 0)
@@ -871,6 +950,12 @@ bool EditorTabs::closeGroup() {
 
 std::string EditorTabs::saveLayout() const {
     const std::function<QJsonObject(QWidget*)> encode = [&](QWidget* widget) -> QJsonObject {
+        for (const auto& floating : m_floating) if (widget == floating.slot) {
+            auto it = std::ranges::find(m_groups, floating.group);
+            return {{QStringLiteral("group"), static_cast<int>(it - m_groups.begin())},
+                    {QStringLiteral("floating"), true},
+                    {QStringLiteral("geometry"), QString::fromLatin1(floating.host->saveGeometry().toBase64())}};
+        }
         if (auto* group = qobject_cast<EditorTabGroup*>(widget)) {
             auto it = std::ranges::find(m_groups, group);
             return {{QStringLiteral("group"), static_cast<int>(it - m_groups.begin())}};
@@ -907,6 +992,8 @@ bool EditorTabs::restoreLayout(const std::string& layout) {
             const int id = value.toInt(-1);
             if (!value.isDouble() || id < 0 || id >= 64 || std::ranges::find(ids, id) != ids.end())
                 return false;
+            if (node.contains(QStringLiteral("floating")) && !node.value(QStringLiteral("floating")).isBool()) return false;
+            if (node.contains(QStringLiteral("geometry")) && (!node.value(QStringLiteral("geometry")).isString() || node.value(QStringLiteral("geometry")).toString().size() > 8192)) return false;
             ids.push_back(id);
             return true;
         }
@@ -928,6 +1015,7 @@ bool EditorTabs::restoreLayout(const std::string& layout) {
         if (ids[static_cast<std::size_t>(i)] != i)
             return false;
 
+    while (!m_floating.empty()) (void)setGroupFloating(m_floating.front().group, false);
     QWidget* welcome = m_groups.front()->emptyStateWidget();
     if (welcome == m_groups.front()->emptyState())
         welcome = nullptr;
@@ -942,10 +1030,12 @@ bool EditorTabs::restoreLayout(const std::string& layout) {
     while (m_root->count())
         delete m_root->widget(0);
     std::vector<EditorTabGroup*> ordered(ids.size());
+    std::vector<std::pair<int, QString>> detached;
     const std::function<QWidget*(const QJsonObject&)> build = [&](const QJsonObject& node) -> QWidget* {
         if (node.contains(QStringLiteral("group"))) {
             auto* group = makeGroup();
             ordered[static_cast<std::size_t>(node.value(QStringLiteral("group")).toInt())] = group;
+            if (node.value(QStringLiteral("floating")).toBool()) detached.emplace_back(node.value(QStringLiteral("group")).toInt(), node.value(QStringLiteral("geometry")).toString());
             return group;
         }
         auto* splitter = new QSplitter(node.value(QStringLiteral("vertical")).toBool() ? Qt::Vertical : Qt::Horizontal);
@@ -975,6 +1065,11 @@ bool EditorTabs::restoreLayout(const std::string& layout) {
     for (auto* pane : m_groups)
         pane->setGroupCloseVisible(m_groups.size() > 1);
     m_active = m_groups.front();
+    for (const auto& [index, geometry] : detached) {
+        auto* group = m_groups[static_cast<std::size_t>(index)];
+        (void)setGroupFloating(group, true);
+        if (auto* host = floatingGroupWindow(group); host && !geometry.isEmpty()) host->restoreGeometry(QByteArray::fromBase64(geometry.toLatin1()));
+    }
     if (welcome)
         m_active->setEmptyStateWidget(welcome);
     emit currentEditorChanged(nullptr);

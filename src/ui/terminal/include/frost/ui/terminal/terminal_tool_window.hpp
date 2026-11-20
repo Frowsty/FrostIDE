@@ -14,6 +14,7 @@
 #include <QString>
 #include <QWidget>
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -39,6 +40,7 @@ struct TerminalContext {
     // Absolute, "" without a project.
     std::string projectRoot;
     bool trusted = false;
+    std::uint64_t generation = 0; // Owner trust/context revision; rechecked immediately before launch.
 };
 
 // What the terminal needs. The launcher (and the appearance manager, when set) must outlive every
@@ -93,7 +95,8 @@ public:
      */
     [[nodiscard]] Result<int> newTab(const std::string& workingDirectory = {});
     [[nodiscard]] Result<int> newTabWithShell(const std::string& shellExecutable,
-                                              const std::string& workingDirectory = {});
+                                              const std::string& workingDirectory = {},
+                                              const term::TerminalProfile* profile = nullptr);
     [[nodiscard]] Result<TerminalView*> splitTab(int index, const std::string& workingDirectory = {});
     [[nodiscard]] Result<TerminalView*> splitCurrentTab(const std::string& workingDirectory = {});
     // Closes tab `index` (ending its shell's tree). Out of range: nothing.
@@ -144,7 +147,8 @@ private:
     void setupHeaderBar(QHBoxLayout& header);
     void setupFindBar();
     [[nodiscard]] Result<TerminalView*> createAndStartView(QWidget* parentWidget, const std::string& shellOverride,
-                                                           const std::string& workingDirectory);
+                                                           const std::string& workingDirectory,
+                                                           const term::TerminalProfile* profile = nullptr);
     void attachPaneSignals(TerminalView* pane);
     void onPaneExited(TerminalView* pane);
     bool runFind(bool forward, bool stayAtCurrent);

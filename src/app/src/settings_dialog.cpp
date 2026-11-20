@@ -11,6 +11,7 @@
 
 #include "settings_keymap_page.hpp"
 #include "settings_lua_page.hpp"
+#include "settings_import.hpp"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -26,6 +27,7 @@
 #include <QPainterPath>
 #include <QPen>
 #include <QPushButton>
+#include <QPointer>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -422,6 +424,23 @@ void SettingsDialog::build() {
     auto* buttons =
         new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply, this);
     auto* reloadButton = buttons->addButton(text("Reload"), QDialogButtonBox::ActionRole);
+    auto* importButton = buttons->addButton(text("Import Visual Studio Settings..."), QDialogButtonBox::ActionRole);
+    connect(importButton, &QPushButton::clicked, this, [this] {
+        if (m_apply->isEnabled()) {
+            m_status->setText(text("Apply or Reload pending changes before importing a scheme."));
+            return;
+        }
+        const QPointer<SettingsDialog> owner(this);
+        const bool imported = showSettingsImport(m_store, this);
+        if (owner && imported) { owner->m_keymap.reloadPreferences(); owner->reload(); }
+    });
+    auto* schemeButton = buttons->addButton(text("Custom Scheme / Export..."), QDialogButtonBox::ActionRole);
+    connect(schemeButton, &QPushButton::clicked, this, [this] {
+        if (m_apply->isEnabled()) { m_status->setText(text("Apply or Reload pending changes before editing a scheme.")); return; }
+        const QPointer<SettingsDialog> owner(this);
+        const bool applied = showNativeScheme(m_store, this);
+        if (owner && applied) { owner->m_keymap.reloadPreferences(); owner->reload(); }
+    });
     reloadButton->setToolTip(text("Discard pending changes and reload settings from disk"));
     m_apply = buttons->button(QDialogButtonBox::Apply);
     outer->addWidget(buttons);

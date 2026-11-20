@@ -36,7 +36,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -104,8 +107,34 @@ struct SafeWriteResult {
     std::optional<Error> warning = std::nullopt; // Bytes committed, but post-publication recovery work remains.
 };
 
+// A retained regular-file identity for bounded background reads. One worker owns the reader;
+// destruction closes its handle. read() checks identity/size/write metadata before and after,
+// returns Busy on mutation/replacement, Cancelled at chunk boundaries, and never allocates more
+// than kMaximumReadBytes. No mappings, global line tables or whole-file fallback.
+class IRandomAccessReader {
+public:
+    static constexpr std::size_t kMaximumReadBytes = 64 * 1024;
+    virtual ~IRandomAccessReader() = default;
+    // Size captured on admission. O(1), no I/O.
+    [[nodiscard]] virtual std::uint64_t size() const noexcept = 0;
+    // O(count), blocking. offset==size returns empty; a read extending past EOF is shortened.
+    // OutOfRange: offset>size or count>cap. OS failures propagate without a whole-file fallback.
+    [[nodiscard]] virtual Result<std::string> read(std::uint64_t offset, std::size_t count,
+                                                 std::stop_token stop = {}) = 0;
+};
+
+using RandomAccessOpener = std::function<Result<std::unique_ptr<IRandomAccessReader>>(std::string_view)>;
+
 class IFileSystem {
 public:
+    // Opens a retained regular-file reader. Blocking: call on a worker. Default Unsupported for
+    // doubles; production checks native handle identity on every page. The filesystem need not
+    // outlive the returned reader. No file contents are read during open.
+    [[nodiscard]] virtual Result<std::unique_ptr<IRandomAccessReader>> openRandomAccess(std::string_view path);
+    // Copies an admission operation that owns all its dependencies and may outlive this filesystem.
+    // Obtaining it performs no I/O. The default reports Unsupported; doubles must own captured state.
+    [[nodiscard]] virtual RandomAccessOpener randomAccessOpener() const;
+
     /*
      * Returns the whole file. Errors: NotFound, PermissionDenied, Busy (Windows sharing
      * violation; on POSIX a write lease that is still held after 90 s), InvalidArgument (a

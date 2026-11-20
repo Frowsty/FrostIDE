@@ -100,6 +100,27 @@ struct TerminalRig {
     std::unique_ptr<TerminalIntegration> integration;
 };
 
+TEST(TerminalToolWindow, PersonalProfilePassesArgvOnlyForCurrentTrustedContext) {
+    FakePtyLauncher launcher;
+    auto env = fakeEnvironment(launcher, TerminalContext{kRoot, false, 1});
+    TerminalToolWindow restricted(env);
+    const frost::term::TerminalProfile profile{"Custom", kShell, {"-NoLogo", "-NoExit"}, kRoot};
+    EXPECT_FALSE(restricted.newTabWithShell(profile.shell, profile.workingDirectory, &profile));
+    EXPECT_EQ(launcher.count(), 0u);
+    env.context = [] { return TerminalContext{kRoot, true, 2}; };
+    TerminalToolWindow trusted(env);
+    ASSERT_TRUE(trusted.newTabWithShell(profile.shell, profile.workingDirectory, &profile));
+    ASSERT_EQ(launcher.count(), 1u);
+    EXPECT_EQ(launcher.specs()[0].arguments, profile.arguments);
+    EXPECT_EQ(launcher.specs()[0].workingDirectory, kRoot);
+    trusted.closeAllTabs();
+    std::uint64_t generation = 0;
+    env.context = [&] { return TerminalContext{kRoot, true, ++generation}; };
+    TerminalToolWindow changed(env);
+    EXPECT_FALSE(changed.newTabWithShell(profile.shell, profile.workingDirectory, &profile));
+    EXPECT_EQ(launcher.count(), 1u);
+}
+
 TEST(TerminalToolWindow, AltF12ActionOpensTheBottomWindowWithOneTab) {
     TerminalRig t;
     ASSERT_NE(t.toolWindow(), nullptr);

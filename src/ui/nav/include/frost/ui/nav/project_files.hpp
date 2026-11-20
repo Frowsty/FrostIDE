@@ -12,6 +12,7 @@
  * Thread safety: a plain value; build it anywhere, read it on one thread.
  */
 #pragma once
+#include "frost/search/path_index.hpp"
 
 #include "frost/core/error.hpp"
 #include "frost/io/file_system.hpp"
@@ -86,6 +87,7 @@ public:
     [[nodiscard]] const std::vector<std::string>& candidates() const noexcept { return m_candidates; }
     [[nodiscard]] const std::vector<std::string>& displayCandidates() const noexcept { return m_display; }
     [[nodiscard]] std::size_t fileCount() const noexcept { return m_fileCount; }
+    [[nodiscard]] const search::PathIndex& searchIndex() const noexcept { return m_searchIndex; }
 
 private:
     bool rebuildCandidates(const std::stop_token& token = {});
@@ -96,6 +98,7 @@ private:
     std::vector<std::string> m_solutionFiles;
     std::vector<std::string> m_candidates;
     std::vector<std::string> m_display;
+    search::PathIndex m_searchIndex;
     std::size_t m_fileCount = 0;
 };
 

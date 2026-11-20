@@ -12,6 +12,7 @@
 set(frost_io_sources
     src/async_process.cpp
     src/change_coalescer.cpp
+    src/random_access_reader.cpp
     src/file_system.cpp
     src/file_transaction_plan.cpp
     src/file_transaction_prepare.cpp

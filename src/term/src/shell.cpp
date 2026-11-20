@@ -208,6 +208,22 @@ TerminalSettings terminalSettings(const settings::SettingsSnapshot& snapshot) {
     out.shell = snapshot.get(settings::key::terminalShell);
     out.scrollbackLines =
         static_cast<std::size_t>(std::max<std::int64_t>(snapshot.get(settings::key::terminalScrollbackLines), 0));
+    for (const auto& record : snapshot.get(settings::key::terminalProfiles)) {
+        TerminalProfile profile;
+        const auto stringField = [&](std::string_view key) {
+            const auto* value = settings::findField(record, key);
+            const auto* string = value ? std::get_if<std::string>(value) : nullptr;
+            return string ? *string : std::string();
+        };
+        profile.name = stringField("name");
+        profile.shell = stringField("shell");
+        profile.workingDirectory = stringField("workingDirectory");
+        if (const auto* value = settings::findField(record, "arguments"))
+            if (const auto* arguments = std::get_if<settings::StringList>(value))
+                profile.arguments = *arguments;
+        if (!profile.name.empty())
+            out.profiles.push_back(std::move(profile)); // Invalid paths are shown and refused at launch.
+    }
     return out;
 }
 

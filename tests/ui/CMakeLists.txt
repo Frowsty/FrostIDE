@@ -164,6 +164,7 @@ _frost_ui_test_wiring(ui_tests)
 frost_add_test(ui_shell_tests QT
     SOURCES
         shell/editor_tabs_test.cpp
+        shell/docking_v2_test.cpp
         shell/engine_controls_test.cpp
         shell/notifications_test.cpp
         shell/shell_window_test.cpp
@@ -179,6 +180,7 @@ _frost_ui_test_wiring(ui_cmake_tests)
 frost_add_test(ui_editor_tests QT
     SOURCES
         editor/editor_features_test.cpp
+        editor/editor_extras_test.cpp
         editor/editor_insight_test.cpp
         editor/editor_rhi_parity_test.cpp
         editor/editor_rhi_test.cpp
@@ -196,7 +198,7 @@ frost_add_test(ui_nav_tests
     DEPS frost::ui_nav frost::document frost::diff frost::text frost::io frost::sched)
 
 frost_add_test(ui_workbench_tests QT
-    SOURCES workbench/workbench_test.cpp
+    SOURCES workbench/workbench_test.cpp workbench/large_file_view_test.cpp
     DEPS frost::ui_workbench frost::ui_nav frost::ui_shell frost::ui frost::document frost::storage frost::input
          frost::io)
 _frost_ui_test_wiring(ui_workbench_tests)

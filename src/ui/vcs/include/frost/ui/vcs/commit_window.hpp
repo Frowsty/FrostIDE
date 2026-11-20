@@ -116,6 +116,11 @@ public:
 
     // Open dirty documents supplement the disk status so unsaved-only edits can be selected.
     void setUnsavedPaths(std::vector<std::string> paths);
+    // Session-local user configuration, never supplied by repository files. The exact commands
+    // are reviewed again when Commit/Amend starts. GUI thread; no process starts here.
+    void setCommitChecks(std::vector<vcs::CommitCheck> checks) { m_checks = std::move(checks); }
+    [[nodiscard]] const std::vector<vcs::CommitCheck>& commitChecks() const noexcept { return m_checks; }
+    void configureChecks();
     void setConfirmHandler(ConfirmHandler handler) { m_confirm = std::move(handler); }
 
     // The actions behind the buttons; each returns false when it could not start.
@@ -151,6 +156,8 @@ private:
     QPlainTextEdit* m_message;
     QToolButton* m_historyButton;
     QCheckBox* m_amend;
+    QPushButton* m_checksButton = nullptr;
+    std::vector<vcs::CommitCheck> m_checks;
     QPushButton* m_commit;
     QPushButton* m_commitAndPush;
     QPushButton* m_rollback;

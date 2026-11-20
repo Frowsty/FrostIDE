@@ -58,6 +58,10 @@ struct Entry {
     const ScopeMask editorConfig = kAllScopesWithEditorConfig;
     return {
         // Editor: font.
+        {"editor.schemeColors", "Editor color scheme", "Explicit editor and syntax color overrides imported or edited by the user.", "Editor/Color Scheme",
+         recordListSchema({FieldSpec{.name = "name", .type = FieldType::String, .required = true},
+                           FieldSpec{.name = "color", .type = FieldType::String, .required = true}}, 128),
+         Value(RecordList{}), kApplicationOnly},
         {"editor.fontFamily", "Font",
          "The editor font family. FrostIDE bundles JetBrains Mono, Fira Code, Cascadia Code, Cascadia Mono, "
          "Source Code Pro, IBM Plex Mono, Inconsolata, Intel One Mono, CommitMono, and Fantasque Sans Mono.",
@@ -241,7 +245,11 @@ struct Entry {
                            FieldSpec{.name = "size",
                                      .type = FieldType::Integer,
                                      .required = false,
-                                     .description = "Its width or height in pixels; 0 or absent uses the default."}},
+                                       .description = "Its width or height in pixels; 0 or absent uses the default."},
+                             FieldSpec{.name = "side", .type = FieldType::Integer, .required = false},
+                             FieldSpec{.name = "floating", .type = FieldType::Bool, .required = false},
+                             FieldSpec{.name = "pinned", .type = FieldType::Bool, .required = false},
+                             FieldSpec{.name = "geometry", .type = FieldType::String, .required = false}},
                           64),
          Value(RecordList{}), kApplicationOnly, false, true},
 
@@ -471,6 +479,14 @@ struct Entry {
          "Build, Execution, Deployment/Debugger", stringSchema(4096, StringHint::Path), text(""), kApplicationOnly},
 
         // Terminal (ADR 0051).
+        {"terminal.profiles", "Personal terminal profiles",
+         "Named absolute shell executables, argument arrays and optional working directories. Application-only; custom profiles require trust when a project is open.",
+         "Tools/Terminal",
+         recordListSchema({FieldSpec{.name = "name", .type = FieldType::String, .required = true, .description = "Profile label"},
+                           FieldSpec{.name = "shell", .type = FieldType::String, .required = true, .description = "Absolute executable path"},
+                           FieldSpec{.name = "arguments", .type = FieldType::StringList, .required = false, .description = "One argv element per item"},
+                           FieldSpec{.name = "workingDirectory", .type = FieldType::String, .required = false, .description = "Absolute initial folder"}}, 64),
+         Value(RecordList{}), kApplicationOnly, true},
         {"terminal.shell", "Shell path",
          "The shell the terminal starts, as an absolute path; empty uses PowerShell 7, Windows PowerShell or "
          "cmd.exe on Windows and $SHELL or /bin/bash on Linux.",
