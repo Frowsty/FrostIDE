@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Exercises Windows installer registration with HKCU redirected for this process.
 """Windows installer contracts against a process-local redirect of HKCU."""
 import ctypes as c
 from ctypes import wintypes as w

@@ -82,7 +82,7 @@ TEST(ProjectPaths, ExpandsWildcardsWithinLimits) {
     EXPECT_EQ(all->paths.size(), 5u);
     EXPECT_TRUE(all->warning.empty()) << all->warning;
 
-    auto capped = expandWildcard(tree.fs, *pattern, WildcardLimits{.maxDirectories = 100, .maxFiles = 2});
+    auto capped = expandWildcard(tree.fs, *pattern, WildcardLimits{.maxDirectories = 100, .maxFiles = 2, .stop = {}});
     ASSERT_TRUE(capped.has_value());
     EXPECT_EQ(capped->paths.size(), 2u);
     EXPECT_NE(capped->warning.find("stopped"), std::string::npos) << capped->warning;

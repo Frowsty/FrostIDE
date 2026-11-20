@@ -944,7 +944,7 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
         QJsonArray events;
         if (params.value("after").toInteger() < m->notificationRevision)
             events.append(QJsonObject{{"jsonrpc", "2.0"}, {"method", "notifications/tools/list_changed"}});
-        reply(answer(id, {{"revision", m->notificationRevision}, {"notifications", events}}));
+        reply(answer(id, {{"revision", static_cast<qint64>(m->notificationRevision)}, {"notifications", events}}));
         return;
     }
     if (method == "ping" || method.startsWith("notifications/")) {
