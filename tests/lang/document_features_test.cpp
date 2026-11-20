@@ -210,7 +210,9 @@ TEST(SaveActionWait, CapturingFactorySurvivesTimeoutUntilDeferredCoroutineComple
             sawCancellation = token.stop_requested();
             co_return 42;
         };
-        auto factory = std::bind_front(std::move(coroutine), payloadLifetime);
+        auto factory = [coroutine = std::move(coroutine), payloadLifetime](std::stop_token token) {
+            return coroutine(payloadLifetime, token);
+        };
         auto result = fl::waitForResult<int>(executor, std::move(factory), 0ms);
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error().code(), frost::ErrorCode::Timeout);
