@@ -35,6 +35,7 @@ internal sealed class UnitySemanticFeature : ISemanticFeature, ISemanticContribu
         !method.IsGenericMethod && method.MethodKind == MethodKind.Ordinary && method.Parameters.Length == 0 &&
         (method.ReturnsVoid || (method.Name == "Start" && SymbolEqualityComparer.Default.Equals(method.ReturnType, compilation.GetTypeByMetadataName("System.Collections.IEnumerator"))));
     private static bool SerializableType(ITypeSymbol type, Compilation compilation, int depth = 0) {
+        if (depth > 0 && (type is IArrayTypeSymbol || (type is INamedTypeSymbol container && SymbolEqualityComparer.Default.Equals(container.OriginalDefinition, compilation.GetTypeByMetadataName("System.Collections.Generic.List`1"))))) return false;
         if (depth > 8 || type.TypeKind is TypeKind.Error or TypeKind.Pointer or TypeKind.TypeParameter) return false;
         if (type.SpecialType is SpecialType.System_String or SpecialType.System_Boolean or SpecialType.System_Char or
             SpecialType.System_Byte or SpecialType.System_SByte or SpecialType.System_Int16 or SpecialType.System_UInt16 or
@@ -193,6 +194,3 @@ internal sealed class UnitySemanticFeature : ISemanticFeature, ISemanticContribu
         return result;
     }
 }
-
-
-
