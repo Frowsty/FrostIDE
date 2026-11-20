@@ -1,3 +1,8 @@
+## 2026-11-20: R18 source integration joins reviewed managed and Unity semantics
+
+- Merged reviewed R17 `0e1052f1` into the existing R18 shader/link integration, then adopted reviewed Unity source commits `dab342c5`, `51b649ae` and `b1dc8572`. The real owned RoslynHost contribution interface now composes normal completion, diagnostics, intentions and CodeLenses with authoritative Unity semantics.
+- Reconciled additive Go to Declaration inputs: Unity original YAML/source-index snapshots remain intact, while managed metadata navigation retains its captured workspace-root admission. The corresponding usages helper retains its independent original signature.
+- Source-only joins retain the governed language registry and specialized built-in routes, navigation-owned Save All, existing specialized workbench/CMake targets, Unity package staging/installation and owned managed payload staging. No R14 dynamic-schema integration was added. All authored tests and runtime/Unity acceptance remain deferred; no build, configuration, test, feature, WSL, download or push was executed.
 # FrostIDE progress log
 
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,

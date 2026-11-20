@@ -445,7 +445,7 @@ struct UnityUsagesOutcome {
 };
 sched::Task<Result<UnityUsagesOutcome>> unityUsagesTask(fl::ILspRequester& server, io::IFileSystem& fs,
     std::vector<std::pair<std::string, text::Snapshot>> open, std::vector<std::string> files,
-    std::string path, fl::LspPosition position, fl::PositionEncoding encoding, std::size_t offset, std::stop_token token, std::string workspaceRoot) {
+    std::string path, fl::LspPosition position, fl::PositionEncoding encoding, std::size_t offset, std::stop_token token) {
     UnityUsagesOutcome outcome;
     std::vector<fl::UnityAssetSnapshot> overlays;
     for (const auto& [file, snapshot] : open) overlays.push_back({file, snapshot.text()});
