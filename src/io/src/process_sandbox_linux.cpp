@@ -31,7 +31,7 @@ Result<ProcessSpec> prepareLinuxSandboxLaunch(const ProcessSpec& original) {
     std::array<char, 4096> self{};
     const auto count = readlink("/proc/self/exe", self.data(), self.size());
     if (count <= 0 || static_cast<std::size_t>(count) >= self.size()) return fail(ErrorCode::Unsupported, "Cannot identify owned sandbox helper location");
-    std::string helper(self.data(), count);
+    std::string helper(self.data(), static_cast<std::size_t>(count));
     const auto slash = helper.rfind('/'); if (slash == helper.npos) return fail(ErrorCode::Unsupported, "Invalid owned helper directory");
     helper.resize(slash + 1); helper += "frost-extension-sandbox";
     struct stat status{};
