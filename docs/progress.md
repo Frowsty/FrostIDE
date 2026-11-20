@@ -27,6 +27,11 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R19 explicit remote toolchains source freeze
+
+- Added application-owned approved WSL/SSH endpoint records, exact path mappings, distinct Remote Run configurations and a structured guardian protocol with identity-bound descendant cleanup. Windows WSL CMake profiles use explicit pinned tool paths, shared build admission and resource leases; normal UI exposes configure/build/clean/list actions and mapped diagnostics.
+- Authored deferred actual guardian/transport fixtures and a real WSL configure/build/run/generated-CDB oracle. Output relay bounds, unique profile selection and bounded registry-save validation address independent application-review findings. ADR 0115 records the narrow scope and cleanup acknowledgement contract.
+- Focused endpoint/mapping/guardian source review cleared through 052cd2b9; final application review continues through 0825d09c. No build, test, feature, WSL or SSH execution occurred. Normal UI and process-lifecycle acceptance remain deferred; missing explicit fixture endpoints are skips, not acceptance. Branch and fixtures are frozen for independent review.
 ## 2026-11-20 R16 C++, Lua and FrostEngine implementation milestone
 
 R16 adds LLVM native coverage with per-line editor counts, owned CPU profiling through ETW or perf, MSBuild property/import locations and previewed CMake target rename. Hosted GitHub and GitLab review supports changed files, pinned inline comments, discussion refresh and replies. A trust or selection change during submission requires a refresh before retry. The editor and terminal expose text, diagnostic navigation and retained scrollback through their accessibility interfaces.
