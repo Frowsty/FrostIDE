@@ -312,6 +312,7 @@ void Workbench::attach(ui::ShellWindow& window) {
         !registered)
         log::warn(kLog, "debug tool window: {}", registered.error().describe());
     attachLanguage();
+    attachServices();
     attachEngineBindings();
     attachResolveContext(); // CPP-3.
     connect(&window.tabs(), &ui::EditorTabs::currentEditorChanged, this, [this](ui::IEditorView*) {
