@@ -164,6 +164,42 @@ const Json* fieldSchema(const Json& root, std::span<const std::string> path) {
     }
     return schema;
 }
+std::optional<Json> tableReference(const text::Snapshot& snapshot) {
+    if(snapshot.size().value()>256*1024)return {};
+    const auto source=snapshot.text();Scanner scan{source};scan.value();
+    for(const auto& node:scan.nodes)if(node.path==std::vector<std::string>{"Schema"}) {
+        const auto parsed=rpc::parseJson(std::string_view(source).substr(node.begin,node.end-node.begin));
+        if(parsed)return *parsed;return {};
+    }
+    return {};
+}
+Result<Json> dataColumnShape(const Json& definition,unsigned depth=0) {
+    if(!definition.isObject()||depth>8)return fail(ErrorCode::Corrupt,"Malformed actual data column definition");
+    const auto type=definition.stringAt("Type");auto shape=Json::object();
+    if(type=="Bool")shape.set("type","boolean");
+    else if(type=="Int")shape.set("type","integer");
+    else if(type=="Float")shape.set("type","number");
+    else if(type=="String"||type=="Name"||type=="Enum")shape.set("type","string");
+    else if(type=="Ref")shape.set("type",Json::array({"string","null"}));
+    else if(type=="Asset")shape.set("type",Json::array({"string","object","integer","null"}));
+    else if(type=="Color"||type=="Vec2")shape.set("type","array").set("items",Json::object().set("type","number"));
+    else if(type=="List") {
+        const auto* element=definition.find("Element");if(!element)return fail(ErrorCode::Corrupt,"Actual list column omitted Element");
+        auto child=dataColumnShape(*element,depth+1);if(!child)return std::unexpected(child.error());shape.set("type","array").set("items",*child);
+    } else if(type=="Struct") {
+        const auto* fields=definition.find("Fields");if(!fields||!fields->isArray()||fields->size()>256)return fail(ErrorCode::Corrupt,"Actual struct column omitted bounded Fields");
+        auto properties=Json::object();for(const auto& field:fields->items()) {
+            const auto name=field.stringAt("Name");if(name.empty()||properties.find(name))return fail(ErrorCode::Corrupt,"Invalid actual struct field name");
+            auto child=dataColumnShape(field,depth+1);if(!child)return std::unexpected(child.error());properties.set(std::string(name),*child);
+        }
+        shape.set("type","object").set("properties",properties);
+    } else return fail(ErrorCode::Unsupported,"Actual data column type has no structural editing profile");
+    if(type=="Enum") {const auto* values=definition.find("Values");if(!values||!values->isArray())return fail(ErrorCode::Corrupt,"Actual enum omitted Values");for(const auto& value:values->items())if(!value.isString())return fail(ErrorCode::Corrupt,"Actual enum values must be strings");shape.set("enum",*values);}
+    if(const auto* minimum=definition.find("Min"))shape.set("minimum",*minimum);
+    if(const auto* maximum=definition.find("Max"))shape.set("maximum",*maximum);
+    if(const auto* description=definition.find("Description"))shape.set("description",*description);
+    return shape;
+}
 bool typeMatches(const Json& value, std::string_view type) {
     return type == "object"    ? value.isObject()
            : type == "array"   ? value.isArray()
@@ -187,6 +223,7 @@ bool admissibleEngineShape(const Json& schema,unsigned depth,std::size_t& nodes)
         else if(!typeName(*type))return false;
     }
     if(const auto* minimum=schema.find("minimum");minimum&&!minimum->isNumber())return false;
+    if(const auto* maximum=schema.find("maximum");maximum&&!maximum->isNumber())return false;
     if(const auto* choices=schema.find("enum");choices&&!choices->isArray())return false;
     if(const auto* description=schema.find("description");description&&!description->isString())return false;
     if(const auto* required=schema.find("required")) {
@@ -222,6 +259,8 @@ void validate(const Json& schema, const Json& value, std::vector<std::string> pa
     if (const auto* minimum = schema.find("minimum");
         minimum && value.isNumber() && *value.asDouble() < *minimum->asDouble())
         errors.push_back({path, "Value is below the schema minimum " + minimum->dump()});
+    if (const auto* maximum = schema.find("maximum"); maximum && value.isNumber() && *value.asDouble() > *maximum->asDouble())
+        errors.push_back({path, "Value is above the schema maximum " + maximum->dump()});
     if (value.isObject()) {
         if (const auto* required = schema.find("required"))
             for (const auto& key : required->items())
@@ -283,14 +322,39 @@ Result<void> JsonSchemaService::installEngineSchemas(std::string projectRoot,con
             return fail(ErrorCode::Corrupt,"Engine schema extension must be a literal lowercase suffix");
         if(!schemas.emplace(std::string(extension),*schema).second)return fail(ErrorCode::Corrupt,"Duplicate engine document schema suffix");
     }
-    LockGuard lock(m_mutex);m_engineRoot=documentKey(projectRoot);m_engineSchemas=std::move(schemas);++m_schemaGeneration;return {};
+    LockGuard lock(m_mutex);m_engineRoot=documentKey(projectRoot);m_engineTableSchemas.clear();m_engineSchemas=std::move(schemas);++m_schemaGeneration;return {};
 }
-void JsonSchemaService::clearEngineSchemas(){LockGuard lock(m_mutex);m_engineRoot.clear();m_engineSchemas.clear();++m_schemaGeneration;}
+Result<void> JsonSchemaService::installEngineTableSchema(std::string path,const text::Snapshot& snapshot,const Json& reply) {
+    if(!path.ends_with(".ftable")||reply.stringAt("protocol")!="frostengine.table-schema"||reply.integerAt("version")!=1||reply.dump().size()>2*1024*1024)
+        return fail(ErrorCode::Corrupt,"Unsupported actual table-schema envelope");
+    const auto reference=tableReference(snapshot);const auto* echoed=reply.find("reference");const auto* info=reply.find("schemaInfo");
+    if(!reference||!echoed||*reference!=*echoed||!info||!info->isObject()||!info->stringAt("resolveError").empty())return fail(ErrorCode::Corrupt,"Actual schema.info differs from captured table reference or cannot resolve");
+    const auto* columns=info->find("columns");if(!columns||!columns->isArray()||columns->size()>256)return fail(ErrorCode::Corrupt,"Actual schema.info omitted bounded columns");
+    auto properties=Json::object().set("Key",Json::object().set("type","string"));
+    for(const auto& column:columns->items()) {
+        const auto name=column.stringAt("name");const auto* definition=column.find("definition");
+        if(name.empty()||properties.find(name)||!definition||definition->stringAt("Name")!=name||definition->stringAt("Type")!=column.stringAt("type"))return fail(ErrorCode::Corrupt,"Actual schema.info column identity is malformed");
+        auto shape=dataColumnShape(*definition);if(!shape)return std::unexpected(shape.error());
+        if(const auto* value=column.find("default"))shape->set("default",*value);
+        std::string description(shape->stringAt("description"));description+="\nDeclared in: "+std::string(column.stringAt("declaredIn"));shape->set("description",description);
+        properties.set(std::string(name),*shape);
+    }
+    auto schema=schemaFor(path);schema.find("properties")->find("Rows")->set("items",Json::object().set("type","object").set("properties",properties));
+    std::size_t nodes=0;if(!admissibleEngineShape(schema,0,nodes))return fail(ErrorCode::Corrupt,"Malformed actual data editing shape");
+    LockGuard lock(m_mutex);const auto key=documentKey(path);
+    if(m_engineRoot.empty()||!key.starts_with(m_engineRoot)||key.size()<=m_engineRoot.size()||(key[m_engineRoot.size()]!='/'&&key[m_engineRoot.size()]!='\\'))return fail(ErrorCode::Cancelled,"Selected engine project changed");
+    if(m_engineTableSchemas.size()>=64&&!m_engineTableSchemas.contains(key))m_engineTableSchemas.erase(m_engineTableSchemas.begin());
+    m_engineTableSchemas.insert_or_assign(key,std::pair{*reference,std::move(schema)});++m_schemaGeneration;return {};
+}
+void JsonSchemaService::clearEngineSchemas(){LockGuard lock(m_mutex);m_engineRoot.clear();m_engineSchemas.clear();m_engineTableSchemas.clear();++m_schemaGeneration;}
 std::uint64_t JsonSchemaService::schemaGeneration() const {LockGuard lock(m_mutex);return m_schemaGeneration;}
 std::optional<Json> JsonSchemaService::engineSchemaLocked(std::string_view path) const {
     const auto key=documentKey(path);
     if(m_engineRoot.empty()||!key.starts_with(m_engineRoot)||key.size()<=m_engineRoot.size()||
         (key[m_engineRoot.size()]!='/'&&key[m_engineRoot.size()]!='\\'))return {};
+    if(const auto installed=m_engineTableSchemas.find(key);installed!=m_engineTableSchemas.end())
+        if(const auto document=m_documents.find(key);document!=m_documents.end())
+            if(const auto reference=tableReference(document->second);reference&&*reference==installed->second.first)return installed->second.second;
     for(const auto& [extension,schema]:m_engineSchemas)if(key.ends_with(extension))return schema;
     return {};
 }
@@ -299,6 +363,7 @@ bool JsonSchemaService::handles(std::string_view path) const {
 }
 void JsonSchemaService::removeDocument(std::string_view path) {
     LockGuard lock(m_mutex);
+    m_engineTableSchemas.erase(documentKey(path));
     m_documents.erase(documentKey(path));
 }
 std::optional<ServerCapabilities> JsonSchemaService::serverCapabilities() const {
@@ -416,6 +481,9 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
             description += "\nType: " + type->dump();
         if (const auto* choices = schema->find("enum"))
             description += "\nValues: " + choices->dump();
+        if(const auto* value=schema->find("default"))description+="\nDefault: "+value->dump();
+        if(const auto* minimum=schema->find("minimum"))description+="\nMinimum: "+minimum->dump();
+        if(const auto* maximum=schema->find("maximum"))description+="\nMaximum: "+maximum->dump();
         description += "\n";
         description += engine?"Actual engine serializer/default field shapes; semantic validation requires the selected engine's document.validate.":bundledJsonSchemaCoverage(*path);
         co_return Json::object().set("contents", Json::object().set("kind", "plaintext").set("value", description));

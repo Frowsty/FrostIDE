@@ -33,5 +33,14 @@ TEST(DocumentTools, ContentSeverityAndUnknownCoordinatesArePreserved) {
     auto parsed=parseDocumentValidation(reply);ASSERT_TRUE(parsed);EXPECT_TRUE(parsed->valid);
     ASSERT_EQ(parsed->issues.size(),1U);EXPECT_EQ(parsed->issues[0].severity,"warning");EXPECT_EQ(parsed->issues[0].line,0U);
 }
+TEST(DocumentTools, ActualDataRowAndFieldLocationsRemainVisible) {
+    auto issue=rpc::Json::object().set("severity","error").set("code","D016").set("message","actual data error")
+        .set("location",rpc::Json::object().set("asset","Assets/test.ftable").set("rowKey","Sword").set("field","Damage"));
+    auto reply=rpc::Json::object().set("protocol","frostengine.document-validation").set("version",1)
+        .set("path","Assets/test.ftable").set("valid",false).set("errors",1).set("warnings",0).set("issues",rpc::Json::array({issue}));
+    auto result=parseDocumentValidation(reply,"Assets/test.ftable");ASSERT_TRUE(result);ASSERT_EQ(result->issues.size(),1U);
+    EXPECT_NE(result->issues[0].location.find("row Sword"),std::string::npos);
+    EXPECT_NE(result->issues[0].location.find("field Damage"),std::string::npos);
+}
 }
 }

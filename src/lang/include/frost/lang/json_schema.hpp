@@ -17,6 +17,8 @@ public:
     // clear on disconnect/trust/project change. Only the documented bounded structural subset is
     // interpreted locally; authoritative semantic diagnostics still come from document.validate.
     [[nodiscard]] Result<void> installEngineSchemas(std::string projectRoot, const Json& actualExport);
+    // Retains actual schema.info row shape only while this captured table Schema reference matches.
+    [[nodiscard]] Result<void> installEngineTableSchema(std::string absolutePath,const text::Snapshot&,const Json& actualExport);
     void clearEngineSchemas();
     [[nodiscard]] bool handles(std::string_view path) const;
     [[nodiscard]] std::uint64_t schemaGeneration() const;
@@ -34,6 +36,7 @@ private:
     std::map<std::string, text::Snapshot, std::less<>> m_documents;
     std::string m_engineRoot;
     std::map<std::string, Json, std::less<>> m_engineSchemas;
+    std::map<std::string,std::pair<Json,Json>,std::less<>> m_engineTableSchemas;
     std::uint64_t m_schemaGeneration=0;
 };
 } // namespace frost::lang

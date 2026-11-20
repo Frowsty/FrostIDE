@@ -62,6 +62,7 @@ public:
     void closeJsonDocument(std::string_view path) { m_json->removeDocument(path); }
     [[nodiscard]] bool handlesJsonDocument(std::string_view path) const { return m_json->handles(path); }
     [[nodiscard]] Result<void> installEngineDocumentSchemas(std::string root, const lang::Json& schemas) { return m_json->installEngineSchemas(std::move(root),schemas); }
+    [[nodiscard]] Result<void> installEngineTableSchema(std::string path,const text::Snapshot& snapshot,const lang::Json& reply) { return m_json->installEngineTableSchema(std::move(path),snapshot,reply); }
     void clearEngineDocumentSchemas() { m_json->clearEngineSchemas(); }
     [[nodiscard]] std::vector<lang::LiveDiagnostic> jsonDiagnostics(std::string_view path) const;
     // ILspRequester: the server for the document.

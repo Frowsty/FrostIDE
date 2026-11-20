@@ -121,5 +121,33 @@ TEST(JsonSchema, ActualEngineKeysCompleteAndInvalidReplacementKeepsPriorSchema) 
     auto invalid=actualSchemas();invalid.set("version",2);
     EXPECT_FALSE(service.installEngineSchemas(project,invalid));EXPECT_TRUE(service.handles(path));
 }
+Json actualTableSchema() {
+    return rpc::parseJson(R"({"protocol":"frostengine.table-schema","version":1,"path":"Assets/Weapons.ftable","reference":"Assets/Weapon.fschema","schemaInfo":{"path":"Assets/Weapon.fschema","resolveError":"","columns":[{"name":"Damage","type":"Int","declaredIn":"Assets/BaseWeapon.fschema","default":1,"definition":{"Name":"Damage","Type":"Int","Description":"Actual damage documentation","Min":0,"Max":100}},{"name":"Mode","type":"Enum","declaredIn":"Assets/Weapon.fschema","default":"Melee","definition":{"Name":"Mode","Type":"Enum","Values":["Melee","Magic"]}}]}})").value();
+}
+TEST(JsonSchema, ActualInheritedTableColumnsCompleteAndHoverWithDefaultsAndBounds) {
+    JsonSchemaService service;const auto project=root+"Game";const auto path=project+"/Assets/Weapons.ftable";
+    ASSERT_TRUE(service.installEngineSchemas(project,actualSchemas()));
+    const auto text=snapshot(R"({"Schema":"Assets/Weapon.fschema","Rows":[{"Damage":101}]})");
+    service.updateDocument(path,text);ASSERT_TRUE(service.installEngineTableSchema(path,text,actualTableSchema()));
+    auto diagnostics=service.diagnostics(path);ASSERT_EQ(diagnostics.size(),1U);
+    EXPECT_NE(diagnostics[0].message.find("maximum"),std::string::npos);
+    auto hover=sched::syncWait(service.request("textDocument/hover",textDocumentPosition(path,toLspPosition(text,ByteOffset{text.text().find("Damage")+2},PositionEncoding::Utf16)).value()));
+    ASSERT_TRUE(hover);const auto docs=hover->find("contents")->stringAt("value");
+    EXPECT_NE(docs.find("Actual damage documentation"),std::string::npos);EXPECT_NE(docs.find("Default: 1"),std::string::npos);
+    EXPECT_NE(docs.find("Maximum: 100"),std::string::npos);EXPECT_NE(docs.find("Assets/BaseWeapon.fschema"),std::string::npos);
+    const auto incomplete=snapshot(R"({"Schema":"Assets/Weapon.fschema","Rows":[{)");
+    auto result=complete(service,path,incomplete,incomplete.size());ASSERT_TRUE(result);
+    EXPECT_TRUE(std::ranges::any_of(result->items(),[](const auto& item){return item.stringAt("label")=="Damage";}));
+}
+TEST(JsonSchema, ChangedTableSchemaReferenceWithdrawsOldColumnsAndMalformedExportCannotReplace) {
+    JsonSchemaService service;const auto project=root+"Game";const auto path=project+"/Assets/Weapons.ftable";
+    ASSERT_TRUE(service.installEngineSchemas(project,actualSchemas()));
+    const auto text=snapshot(R"({"Schema":"Assets/Weapon.fschema","Rows":[]})");service.updateDocument(path,text);
+    ASSERT_TRUE(service.installEngineTableSchema(path,text,actualTableSchema()));
+    auto wrong=actualTableSchema();wrong.set("reference","Assets/Other.fschema");EXPECT_FALSE(service.installEngineTableSchema(path,text,wrong));
+    const auto changed=snapshot(R"({"Schema":"Assets/Other.fschema","Rows":[{)");
+    auto result=complete(service,path,changed,changed.size());ASSERT_TRUE(result);
+    EXPECT_TRUE(std::ranges::none_of(result->items(),[](const auto& item){return item.stringAt("label")=="Damage";}));
+}
 } // namespace
 } // namespace frost::lang

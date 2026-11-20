@@ -18,6 +18,8 @@ Result<DocumentValidation> parseDocumentValidation(const rpc::Json& reply,std::s
         const auto* location=item.find("location");if(!item.isObject()||!location||!location->isObject()||issue.message.empty()||
             (issue.severity!="error"&&issue.severity!="warning"&&issue.severity!="info"))return fail(ErrorCode::Corrupt,"Malformed engine validation issue");
         issue.asset=location->stringAt("asset");issue.location=location->stringAt("jsonPath");
+        if(const auto row=location->stringAt("rowKey");!row.empty())issue.location+=" row "+std::string(row);
+        if(const auto field=location->stringAt("field");!field.empty())issue.location+=" field "+std::string(field);
         if(!expectedAsset.empty()&&issue.asset!=expectedAsset)return fail(ErrorCode::Corrupt,"Document validator returned another asset");
         if(!issue.asset.empty()) {
             if((!expectedAsset.empty()&&!issue.asset.starts_with("Assets/"))||issue.asset.find('\\')!=issue.asset.npos||io::isAbsolutePath(issue.asset))return fail(ErrorCode::Corrupt,"Engine validation asset is outside the relative project namespace");

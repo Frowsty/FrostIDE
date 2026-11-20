@@ -1535,4 +1535,26 @@ TEST(WorkbenchEngineTemplates, DialogUsesNarrowGeneratorAndChangedTrustPreventsS
     EXPECT_EQ(rig.workbench->registry().tryInvoke(*id,context),frost::input::InvokeResult::Ran);deadline.stop();
     EXPECT_EQ(visits,2);EXPECT_EQ(peer.requests("document.create-template").size(),1U);
 }
+TEST(WorkbenchEngineDocuments, ActualTableSchemaReplyFeedsCapturedRowProblems) {
+    WorkDir dir("engine-table-schema-profile");dir.write("project/Game.frostproj","{}");
+    const std::string source=R"({"Schema":"Assets/Weapon.fschema","Rows":[{"Damage":101}]})";
+    dir.write("project/Assets/Weapons.ftable",source);
+    EngineSessionPeer peer(dir.join("project"));peer.enableDocumentTools();
+    peer.result("document.schemas",Json::object().set("protocol","frostengine.document-schemas").set("version",1).set("schemas",Json::array()));
+    peer.result("document.table-schema",frost::rpc::parseJson(R"({"protocol":"frostengine.table-schema","version":1,"path":"Assets/Weapons.ftable","reference":"Assets/Weapon.fschema","schemaInfo":{"resolveError":"","columns":[{"name":"Damage","type":"Int","declaredIn":"Assets/BaseWeapon.fschema","default":1,"definition":{"Name":"Damage","Type":"Int","Max":100}}]}})").value());
+    advertise(dir,peer);WorkbenchRig rig(dir,peerOptions(dir));ASSERT_TRUE(openTrusted(rig,dir.join("project")));ASSERT_TRUE(pairPeer(rig,peer));
+    ASSERT_TRUE(waitFor([&]{return peer.replies("document.schemas")==1;},3s));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project/Assets/Weapons.ftable")));
+    auto id=rig.workbench->registry().find("engine.document.tableSchema");ASSERT_TRUE(id);
+    frost::input::ActionContext context;context.trusted=true;
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*id,context),frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&]{
+        const auto& rows=rig.workbench->problems()->model()->problems();
+        return std::ranges::any_of(rows,[](const auto& row){return row.source==frost::ui::DiagnosticSource::Live&&row.diagnostic.message.find("maximum")!=std::string::npos;});
+    },3s));
+    const auto captured=peer.requests("document.table-schema");ASSERT_EQ(captured.size(),1U);
+    ASSERT_NE(captured.front().find("params"),nullptr);
+    EXPECT_EQ(captured.front().find("params")->stringAt("source"),source);
+    EXPECT_EQ(dir.read("project/Assets/Weapons.ftable"),source);
+}
 } // namespace

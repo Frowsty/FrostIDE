@@ -70,10 +70,11 @@ void EngineIntegration::registerDocumentActions() {
     for(const auto& [id,label,operation]:{
         std::tuple{"engine.document.schemas","Refresh Engine Document Schemas",0},
         std::tuple{"engine.document.validate","Validate Captured Engine Document",1},
-        std::tuple{"engine.content.validate","Validate On-Disk Engine Project",2}}) {
+        std::tuple{"engine.content.validate","Validate On-Disk Engine Project",2},
+        std::tuple{"engine.document.tableSchema","Load Actual Data Table Row Schema",3}}) {
         input::ActionSpec action;action.id=id;action.name=label;action.group="FrostEngine";
         action.handler=[this,operation](const input::ActionContext&,const input::InvokeInfo&) {
-            auto result=operation==0?refreshDocumentSchemas():operation==1?validateDocument():validateContent();
+            auto result=operation==0?refreshDocumentSchemas():operation==1?validateDocument():operation==2?validateContent():refreshTableSchema();
             if(!result)m_impl->setStatus(displayDocument(result.error().message()));
         };(void)registry.add(std::move(action));
     }
@@ -99,10 +100,13 @@ Result<void> EngineIntegration::refreshDocumentSchemas() {
     });
     if(!requested)return std::unexpected(requested.error());return {};
 }
-Result<void> EngineIntegration::validateDocument() {
+Result<void> EngineIntegration::validateDocument() { return requestDocumentTool("document.validate"); }
+Result<void> EngineIntegration::refreshTableSchema() { return requestDocumentTool("document.table-schema"); }
+Result<void> EngineIntegration::requestDocumentTool(std::string method) {
     auto& impl=*m_impl;if(!impl.session||!impl.identity)return fail(ErrorCode::Busy,"Pair an editor before validating a document");
-    auto* view=impl.workbench.currentView();if(!view||(!view->path().ends_with(".fmat")&&!view->path().ends_with(".fscene")))
-        return fail(ErrorCode::Unsupported,"Open a supported engine material (.fmat) or scene (.fscene)");
+    auto* view=impl.workbench.currentView();if(!view||(!view->path().ends_with(".fmat")&&!view->path().ends_with(".fscene")&&!view->path().ends_with(".fschema")&&!view->path().ends_with(".ftable")))
+        return fail(ErrorCode::Unsupported,"Open a supported engine material, scene, data schema or table");
+    if(method=="document.table-schema"&&!view->path().ends_with(".ftable"))return fail(ErrorCode::Unsupported,"Open a data table to load its actual resolved row schema");
     const auto source=view->document().document().text();if(source.size().value()>256*1024)return fail(ErrorCode::OutOfRange,"Engine dirty-image validation is limited to 256 KiB");
     const auto path=view->path(),root=impl.root,physicalRoot=impl.physicalRoot,projectKey=impl.projectKey;const auto admission=impl.physicalAdmission;
     const auto epoch=impl.epoch,sessionEpoch=impl.sessionEpoch,revision=impl.trustRevision;const auto stop=impl.workStop.get_token();
@@ -110,18 +114,18 @@ Result<void> EngineIntegration::validateDocument() {
     if(impl.documentRequests.size()>=128&&!impl.documentRequests.contains(key))impl.documentRequests.clear();
     impl.documentRequests[key]=serial;
     auto* fs=&impl.workbench.m_services.fs;QPointer<EngineIntegration> self(this);
-    impl.background([self,fs,root,physicalRoot,projectKey,admission,epoch,sessionEpoch,revision,stop,path,key,source,serial] {
+    impl.background([self,fs,root,physicalRoot,projectKey,admission,epoch,sessionEpoch,revision,stop,path,key,source,serial,method] {
         if(stop.stop_requested()||!retainEngineProjectIdentity(*fs,root,projectKey,admission))return;
         auto physical=fs->physicalPath(path);if(!physical)return;
         const auto relative=QDir(displayDocument(physicalRoot)).relativeFilePath(displayDocument(*physical));const auto portable=QDir::fromNativeSeparators(relative).toUtf8().toStdString();
         if(!portable.starts_with("Assets/")||portable.find("../")!=portable.npos)return;
         if(!self)return;
-        QMetaObject::invokeMethod(self.data(),[self,root,epoch,sessionEpoch,revision,path,key,physical=*physical,portable,source,serial] {
+        QMetaObject::invokeMethod(self.data(),[self,root,epoch,sessionEpoch,revision,path,key,physical=*physical,portable,source,serial,method] {
             if(!self)return;auto& impl=*self->m_impl;
             if(impl.sessionEpoch!=sessionEpoch||!impl.admitted(epoch,root,revision))return;
             auto* current=impl.workbench.m_editors->find(path);if(!current||current->document().document().text().version()!=source.version())return;
-            auto requested=self->contentCommand("document.validate",lang::Json::object().set("path",portable).set("source",source.text()),
-                [self,path,key,physical,portable,source,serial](Result<lang::Json> reply) {
+            auto requested=self->contentCommand(method,lang::Json::object().set("path",portable).set("source",source.text()),
+                [self,path,key,physical,portable,source,serial,method](Result<lang::Json> reply) {
                     if(!self)return;auto& impl=*self->m_impl;
                     if(impl.documentRequests[key]!=serial)return;
                     auto* view=impl.workbench.m_editors->find(path);auto actual=impl.workbench.m_services.fs.physicalPath(path);
@@ -129,6 +133,13 @@ Result<void> EngineIntegration::validateDocument() {
                         impl.setStatus(QStringLiteral("Document changed; stale engine validation was discarded"));return;
                     }
                     if(!reply){impl.setStatus(displayDocument(reply.error().message()));return;}
+                    if(method=="document.table-schema") {
+                        if(reply->stringAt("path")!=portable){impl.setStatus(QStringLiteral("Actual table schema reply names another image"));return;}
+                        auto installed=impl.workbench.m_bridge->installEngineTableSchema(path,source,*reply);
+                        if(!installed){impl.setStatus(displayDocument(installed.error().message()));return;}
+                        impl.workbench.syncJsonDocument(*view);impl.workbench.updateLanguageTarget();
+                        impl.setStatus(QStringLiteral("Actual schema.info inherited columns, defaults and constraints loaded for this captured Schema reference"));return;
+                    }
                     auto parsed=engine::parseDocumentValidation(*reply,portable);if(!parsed){impl.setStatus(displayDocument(parsed.error().message()));return;}
                     std::vector<build::BuildDiagnostic> rows;for(const auto& issue:parsed->issues)rows.push_back(rowFor(issue,path,&source));
                     impl.documentVersions[key]=source.version();const bool retained=impl.retainDocumentProblems(key,std::move(rows));

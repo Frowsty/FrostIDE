@@ -229,7 +229,7 @@ private:
         for (const std::string_view name :
              {"play.start", "play.stop", "play.state", "play.pause", "play.step", "play.simulate", "script.validate",
               "test.run", "log.get", "editor.focus", "assets.recover-move-plan", "document.schemas",
-              "document.validate", "document.validate-content", "document.create-template"}) {
+              "document.validate", "document.validate-content", "document.create-template", "document.table-schema"}) {
             if (name.starts_with("document.") && !m_documentTools.load())
                 continue;
             const bool mutation = (name.starts_with("play.") && name != "play.state") || name == "test.run" ||
