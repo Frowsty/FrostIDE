@@ -163,6 +163,8 @@ Result<CppModuleInputs> captureCppModuleInputs(io::IFileSystem& fs, std::string 
         result.includeEnvironment.emplace(name, value);
         std::string_view remaining(value);
         const char separator = io::kNativePathStyle == io::PathStyle::Windows ? ';' : ':';
+        if (!value.empty() && value.back() == separator)
+            return fail(ErrorCode::Unsupported, "Current-directory include environment is outside module capture profile");
         while (!remaining.empty()) {
             const auto end = remaining.find(separator);
             const auto root = remaining.substr(0, end);
