@@ -40,6 +40,50 @@ using frost::app::test::waitFor;
 using frost::app::test::WorkbenchRig;
 using frost::app::test::WorkDir;
 
+// Future real SDK model -> normal generated profile configuration -> stale admission journey.
+TEST(WorkbenchManaged, ActualSdkFrameworkItemsAndLaunchProfilesRetainReceipts) {
+    ASSERT_TRUE(frost::test::sdkTestMayStart());
+    const auto dotnet = qgetenv("FROST_TEST_CSHARP_DOTNET").toStdString();
+    ASSERT_TRUE(frost::io::isAbsolutePath(dotnet));
+    WorkDir dir("managed-framework-profile");
+    dir.write("NuGet.Config", "<configuration><packageSources><clear/></packageSources></configuration>");
+    dir.write(
+        "Web.csproj",
+        R"(<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>)");
+    dir.write("Program.cs",
+              "var app = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder(args).Build(); app.Run();");
+    dir.write("Components/Real.razor", "<h1>Actual component</h1>");
+    dir.write(
+        "Properties/launchSettings.json",
+        R"({"profiles":{"local":{"commandName":"Project","applicationUrl":"http://localhost:5142","environmentVariables":{"ASPNETCORE_ENVIRONMENT":"Development"},"commandLineArgs":"--profile-evidence actual"},"iis":{"commandName":"IISExpress"}}})");
+    frost::app::test::RigOptions options;
+    options.workbench.clangd = false;
+    options.workbench.git = false;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    ASSERT_TRUE(rig.workbench->configureManagedProject({dotnet, dir.join("Web.csproj"), "Debug", "net10.0", {}}));
+    ASSERT_TRUE(waitFor([&] { return static_cast<bool>(rig.workbench->managedProjectEvaluation()); }, 60s));
+    auto model = rig.workbench->managedProjectEvaluation();
+    ASSERT_TRUE(model);
+    EXPECT_EQ(model->properties.at("UsingMicrosoftNETSdkWeb"), "true");
+    ASSERT_TRUE(model->items.contains("RazorComponent"));
+    EXPECT_TRUE(std::ranges::any_of(model->items.at("RazorComponent"),
+                                    [](const auto& item) { return item.identity.ends_with("Real.razor"); }));
+    ASSERT_EQ(model->launchProfiles.size(), 2u);
+    EXPECT_FALSE(model->launchProfiles[1].unavailable.empty());
+    auto configurations = rig.workbench->managedRunConfigurations();
+    ASSERT_EQ(configurations.size(), 2u);
+    EXPECT_EQ(configurations[1].arguments.back(), "actual");
+    auto admission = rig.workbench->managedRunAdmissionFor(configurations[1]);
+    ASSERT_TRUE(admission());
+    dir.write("Properties/launchSettings.json",
+              R"({"profiles":{"local":{"commandName":"Project","applicationUrl":"http://localhost:9999"}}})");
+    EXPECT_FALSE(admission());
+    EXPECT_TRUE(rig.workbench->registry().find("managed.diagnostics"));
+}
+
 TEST(WorkbenchManaged, RealConsoleProjectBuildsAndDebugsWithVerifiedSource) {
     if (!frost::test::sdkTestMayStart())
         GTEST_SKIP() << "NuGet migration marker absent";

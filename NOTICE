@@ -103,3 +103,11 @@ Optional external acceptance fixtures (not bundled product dependencies):
 - Boost.Test from Boost 1.85.0, Boost contributors, BSL-1.0.
 Provisioned packages must retain their upstream licence notices. See
  docs/adr/0093-framework-protocol-fixtures.md and the fixture profiles.json.
+
+Additional tree-sitter generated grammar sources (ADR0119): Python 0.25.0,
+JavaScript 0.25.0, TypeScript/TSX 0.23.2, YAML 0.7.2, TOML 0.7.0 and
+PowerShell 0.26.6. These source recipes are immutable in
+third_party/language-grammars.lock.json. Original MIT notices and copyright
+holders are retained byte-exact under third_party/language-grammar-licenses;
+the MIT permission text applies with those notices. No upstream build hooks
+or generators are run by the source recipes.

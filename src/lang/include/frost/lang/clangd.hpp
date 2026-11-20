@@ -185,6 +185,9 @@ struct ClangdServiceOptions {
     bool requireFrostPlatform = false; // Bundled engine must advertise its actual pinned feature-module protocol.
     ClangdLaunchOptions launch;
     std::shared_ptr<ICompileCommandsProvider> compileCommands; // May be null: clangd's fallback flags.
+    // Explicit configured profiles (e.g. Unreal) refuse missing/invalid databases before launch.
+    // Default preserves existing callers' fallback behavior.
+    bool requireCompileCommands = false;
     RestartPolicy restart;
     IClock::Duration initializeTimeout = std::chrono::seconds(60);
     IClock::Duration shutdownTimeout = std::chrono::seconds(5);

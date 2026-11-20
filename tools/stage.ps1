@@ -142,7 +142,7 @@ if (-not $SkipBuild) {
 }
 
 $binDir = Join-Path $BuildDir "src\app\$Config"
-foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'frost_held_read.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
+foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'frostide-mcp.exe', 'frost_held_read.exe', 'conpty.dll', 'OpenConsole.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $binDir $name))) { Fail "the build tree has no $name in $binDir" }
 }
 $visualizers = Join-Path $binDir 'visualizers'
@@ -283,7 +283,7 @@ Copy-Item -LiteralPath (Join-Path $binDir 'lua54') -Destination $Destination -Re
 New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'licenses') | Out-Null
 Copy-Item -LiteralPath (Join-Path $binDir 'licenses\Lua') -Destination (Join-Path $Destination 'licenses') -Recurse
 # 3. FrostIDE's own files.
-foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'frost_held_read.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
+foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'frostide-mcp.exe', 'frost_held_read.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
 }
 if ($asanRuntime) {
@@ -397,7 +397,7 @@ if ($bundle) { Copy-Item -LiteralPath (Join-Path $lualsSource 'LICENSE') -Destin
 
 # 6. The checks.
 $plugin = if ($Config -eq 'Debug') { 'platforms\qwindowsd.dll' } else { 'platforms\qwindows.dll' }
-foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'frost_held_read.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe', 'LICENSE', 'NOTICE', $plugin)) {
+foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'frostide-mcp.exe', 'frost_held_read.exe', 'conpty.dll', 'OpenConsole.exe', 'LICENSE', 'NOTICE', $plugin)) {
     if (-not (Test-Path -LiteralPath (Join-Path $Destination $name))) { Fail "the staged folder has no $name" }
 }
 if ((Get-FileHash -LiteralPath $tlsSource -Algorithm SHA256).Hash -ne

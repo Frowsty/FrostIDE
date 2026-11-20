@@ -80,7 +80,8 @@ function(frost_add_managed_fixture_test name)
     elseif(name STREQUAL "run_dotnet_adapter_tests")
         set(cases "\"DotnetTestsReal.ActualAdapterDiscoveryReportsAndFailedMethodSelectionAgree\":[\"sdk\"]")
     elseif(name STREQUAL "app_workbench_managed_tests")
-        set(cases "\"WorkbenchManaged.RealConsoleProjectBuildsAndDebugsWithVerifiedSource\":[\"sdk\",\"debugger\"],\n"
+        set(cases "\"WorkbenchManaged.ActualSdkFrameworkItemsAndLaunchProfilesRetainReceipts\":[\"sdk\"],\n"
+            "\"WorkbenchManaged.RealConsoleProjectBuildsAndDebugsWithVerifiedSource\":[\"sdk\",\"debugger\"],\n"
             "\"WorkbenchManaged.TrustAndUnsavedCrossProjectRenameReachEditors\":[\"sdk\",\"server\"],\n"
             "\"WorkbenchManaged.UnityGenerationReloadReplaysDirtyDocuments\":[\"sdk\",\"server\"]")
     else()

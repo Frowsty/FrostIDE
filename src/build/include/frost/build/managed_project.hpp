@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Typed SDK-project evaluation and build command construction for managed console projects.
+// Typed SDK-project evaluation and build command construction for managed SDK executable projects.
 #pragma once
 
 #include "frost/build/build_session.hpp"

@@ -1,3 +1,85 @@
+## 2026-11-20 — R19 cumulative source handoff
+
+- LTR-15 and LTR-16 add Unreal project discovery, trusted local build and native debug, reflection completion and explicit Blueprint observations through the partner protocol. The local-only Unreal plug-in is omitted. Unreal Live Coding and Automation remain open.
+- LTR-18 adds pinned grammar source recipes and extension registry routes. LTR-19 adds evaluated .NET framework and launch profiles, plus opt-in diagnostics for an admitted running process. Broader Razor, XAML and MAUI tooling, F# and VB semantics, designers and browser debugging remain open.
+- REF-15 adds syntax-based structural search and previewed transactional replacement. LUA-16 adds explicit LuaJIT and Luau run profiles and distinct analysis routes. Non-Lua54 debugging remains outside the existing debugger ABI.
+- CMK-16 and RUN-15 add named WSL CMake profiles and governed WSL/Linux SSH run targets. DBG-16 records the native restart and provider-specific reload boundaries. Native hot reload remains open. R18's separate IL2CPP profile launches a supplied local player under LLDB for generated C++ debugging with native symbols. Verified Mono attach uses its own held-process and source evidence. IL2CPP managed sequence points and values remain open.
+- FEC-16 adds guarded engine scene and prefab merge from actual Git stages. The FrostEngine corpus is pinned at `0e7b37374a7d4d1c574a681f4b76a3a1213f93ee`. Independent UnityYAMLMerge and DXC routes, Unity test metadata, and MoreLINQ 4.4.0 at `6d97c3b1d482f98300f4446df14742b0e3fafbec` are included in the assembled source.
+- UX-18 adds scoped C2 tools and user-operated native C3 chat. UX-20 adds public extension contributions, a sample and opt-in native sandbox profiles. Provider protocol acceptance and platform sandbox acceptance remain deferred.
+- This is a source handoff with authored regression fixtures. Build, test, runtime, corpus and release acceptance remain deferred.
+
+## 2026-11-20 — C2 actual hierarchy edges
+
+- Existing LSP services now supply immediate incoming/outgoing calls and super/subtype edges,
+  retaining opaque provider handles only for follow-up requests. Flat records use ordinary MCP
+  pagination; root/edge counts, retained bytes and workspace authorization are bounded.
+- Authored offline fixtures cover both directions, actual ranges, escaping resources, provider
+  failures, response bounds, pagination and consent revocation. Source review pending; no builds,
+  tests, features, provider processes or data transmissions performed.
+## 2026-11-20 — C2 inspection metadata adapter
+
+- inspection_info now returns exact source-owned metadata from the same analyzer rule registry used
+  by frost-analyzer and the settings UI, plus the actual configured severity. It does not claim an
+  analyzer run, installed binary or synthesized external-tool catalog. Unknown ids remain unavailable.
+- Exact-id/provenance/unknown-id regressions authored; source review and execution remain pending.
+  Hierarchy edge adapter follows separately. No builds, tests, provider or analyzer runs performed.
+## 2026-11-20 — R19 native source review repairs
+
+- Corrected proxy cwd fromStdPath Result propagation and constructed the actual named native
+  checkpoint selector. Authored regression coverage for omitted --root using the real local proxy
+  fixture and for checkpoint UI construction without connecting or starting a provider.
+- Astra_native findings applied; independent recheck and all runtime/test execution remain pending.
+  No provider/subprocess feature execution, prompt, data transfer, builds, tests, installs or WSL runs.
+## 2026-11-20 — R19 UX-18 source (codex/r19-agent-native)
+
+- 49caa7ce: Qt-free native auth/protocol/control/hook/limit core and private stdio/local-IPC proxy.
+- dca99e9a: actual per-window C2 scoped tools/tasks/paging/hooks, build/debug/current-CTest data,
+  reversible concrete edit previews with existing C++ rename admission, proxy discovery/staging,
+  explicit native Connect/Send/provider-cost consent and native auth enforcement. Added question/plan
+  controls, own session identities, read-only transcript viewer, bounded I/O/UI queues and scoped
+  dry-run CLI rewind/fork controls. Native built-in filesystem/shell tools remain disabled; model
+  reads/proposals use scoped MCP. MCP edits use the IDE's shared Undo, not invented CLI checkpoints.
+- Offline fixtures authored for auth/arguments, framing/init/control deadlines, pagination/Stop loops,
+  private records and real local proxy token exchange. No builds/tests/features/provider processes,
+  prompts, data transfer, installs/downloads or WSL runs. Initial Astra stdin-pipe and Json string
+  pointer findings fixed; full independent adapter/UI source recheck pending on dca99e9a.
+- Remaining adapter scope is explicit in ADR0113: hierarchy prepared roots need expanded edge
+  queries, inspection metadata may be unavailable, and C2 run_tests currently binds CTest. Real CLI
+  schemas/handshake, hooks/settings merge, platform ACL/cancellation/budgets and provider behavior
+  require the resumed local acceptance phase. No complete C2/C3 parity or release claim.
+## 2026-11-20 — LTR19 focused integration source review
+
+- Astra_unreal source-cleared dc28ac55 profile parser/admission, actual running-profile browser URL,
+  evaluated framework lists and owned-run diagnostic UI/cancellation. Corrected its cosmetic label
+  encoding finding. Core 770a23b5 and final UI source review are complete; no runtime claim.
+
+## 2026-11-20 — R19 LTR19 framework/profile/diagnostic entry points (source review complete)
+
+- Added normal managed.diagnostics action and .NET Project button for exact running generated
+  SDK configurations. Capture retains coreCLR PID/image evidence, selected context/trust lease,
+  assembly identity, full-GC consent and cancellation. Actual report/CSV snapshot is displayed.
+- Actual SDK framework properties and evaluated Razor/XAML/Content items appear in the existing
+  project tree. Captured launchSettings Project profiles generate Run configurations; byte/presence
+  changes refuse old launch admission. Unsupported command/options stay visible. Exe/WinExe entry
+  points share existing actual target validation. Explicit running-profile HTTP(S) browser action
+  makes no readiness/browser-debug claim.
+- Authored later real SDK Workbench profile/escaping receipt fixture plus parser cases. No execution.
+  Independent source review cleared this increment and preceding 770a23b5.
+- LTR19 remains incomplete: bundled Razor/XAML/F#/VB semantics, designers, browser debugging,
+  MAUI deployment and specialized framework inspections are still open. Existing registry can host
+  explicitly installed licensed providers; listing files does not implement those capabilities.
+
+## 2026-11-20 — R19 LTR19 managed diagnostic core (implementation in progress)
+
+- Isolated `codex/r19-managed-frameworks` from reviewed R17 integration; main untouched.
+- Actual installed trace/counters/gcdump adapter source now includes exact-version/capability gates,
+  retained target/context admission and live collector cancellation, private artifact receipts,
+  real reports/CSV and explicit full-GC consent (ADR0122). No package/tool download.
+- Authored pure admission/argv and opt-in real EventPipe oracle fixtures; not executed. Independent
+  source review pending. UI, launchSettings/framework facts and registry presentation remain next;
+  this core slice is not an LTR19 completion claim.
+- No builds, tests, runtime/profile/SDK probes or verification executed under implementation-first.
+
 ## 2026-11-20 R18 Unity source milestone handoff
 
 - The Run menu exposes verified Mono 2.58 attach for a selected Editor or local Mono player on Windows and Linux. Explicit Editor rebind after domain reload reverifies the same process and recaptures PE/PDB/source evidence before restoring eligible breakpoints. The separate IL2CPP action launches a supplied local player with LLDB, native symbols and a generated C++ source directory. Managed IL2CPP C# sequence points, values and script debugging remain deferred.
@@ -15,6 +97,49 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R19 Linux production helper deployment join
+
+- Added sandbox helper deployment to the real non-Windows frost target before its CMake early return. Existing Windows/no-op call remains; native/sample fixtures retain their deployment. Extended authored source regression to check the Linux target declaration/deployment ordering, sibling output destination, install/bin path and normal stage source/copy/check. This addresses Astra's production-path finding; no configure/build/Linux execution occurred.
+
+## 2026-11-20: R19 integration import
+
+- Imported the eleven cleared R19 grammar/extension/sample/native-sandbox commits onto924e8937 without replaying old R17 registry commits. Conflict joins preserve all existing Frost asset syntax aliases, MSBuild source list, Unreal/project/coverage fixtures, MCP executable dependency and staging/LLVM payload checks, Lua dialect tool suites, and accumulated progress entries. MCP is now explicitly copied beside its existing stage prerequisite/check; stage.sh executable mode retained.
+- Existing managed/GLSL/requester routing, Unreal, remote v6 and core auth sources were not replaced. Normal debug paths retain the generic external preparation lease addition. Added the separately authorized Git semantic-conflict owner declaration and parentless dialog rejection, leaving other dialogs unchanged. Removed extra EOF blank lines introduced by native imports. Independent conflict/lifetime source review requested. No push, builds, tests, feature/OS execution or WSL.
+
+## 2026-11-20: R19 pending DAP preparation ownership
+
+- Added one generation-owned external preparation lease to the normal debug controller. Pending extension preparation enables normal Stop, blocks other starts and cancels on Stop/shutdown; only its exact current lease may adopt. Repeated extension Debug explicitly cancels the previous owned request before replacement; contribution/workspace revocation also cancels it. Cancellation revokes actual launch authority and late prepared children cannot adopt.
+- Authored single-owner, Stop/late completion, replacement generation and shutdown regression. Source review requested; no execution.
+
+## 2026-11-20: R19 paired native source freeze
+
+- Integrated IO owner native enforcement59df7ce3 and final source/fixtures/deployment315e520a as localbeca3d14/fb479a4a. Added the app sample fixture's enforcing-helper deployment call; frost and native IO fixture deployment remain owner-provided. Corrected staging-parent ownershipf57ad0db is independently source-cleared. Native path traversal now advances its separator and bounds pinned handles.
+- Entire extension/sample/native source remains unexecuted. Independent paired source review and platform enforcement acceptance remain pending; no builds/tests/features, ACL/container creation or OS probes occurred. Source frozen for integration and review.
+
+## 2026-11-20: R19 staging parent ownership correction
+
+- Corrected both app sandboxParent helpers to own the parent path as std::string before fallback or suffix composition. This fixes the reviewed string_view compile error and temporary fallback lifetime. Native path traversal/helper deployment fixes remain coordinated with the IO owner; source review continues. No builds/tests/execution.
+
+## 2026-11-20: R19 real sample and opt-in native sandbox join
+
+- Added a genuine bounded stdio text-statistics provider, offline pin-manifest preparer and normal public-API sandbox onboarding acceptance source. The sample advertises only its implemented buffer-count command; no semantics are simulated. Optional future CMake sample target; no code was built/run.
+- Joined explicit read-only-stdio exact pinned runtime file grants to native sandbox profile/staging API3046af52 (local cherry-pick4b7596c9). Windows private staging uses only captured verified bytes, never original ACL changes; native enforcement commit is pending from its owner. Linux and Windows launch failures cannot downgrade to ordinary execution. Added grant/selector/capability refusals; actual command observations reset on catalog epoch changes. Pair source review and OS enforcement acceptance remain pending/unexecuted.
+
+## 2026-11-20: R19 UX-20 public extension contribution API
+
+- Added bounded versioned capability-declared data contributions for existing governed language servers, actual advertised provider commands and explicit pinned local stdio DAP launch. Added import/review, command and debug palette actions plus public Workbench entry points. No installer or in-process extension code.
+- Captured/rechecked trust revision, physical workspace and exact saved source for DAP; removing/changing contributions cancels observations and retires owned services/sessions. Added pure contract, retained-authority revocation and product refusal/persistence fixtures. ADR0121 records API shape and explicit limits. Independent source review requested; no build/test/feature execution.
+
+## 2026-11-20: R19 LTR-18 real grammar source recipes
+
+- Audited actual official generated grammar sources for Python, JavaScript/JSX, TypeScript/TSX, YAML, TOML and PowerShell. Added exact commit/archive/member hashes, original MIT evidence, future-configure source-only CMake recipes, actual language/query routing and offline license/SBOM governance. Existing all-language checks gain real profiles and representative samples; dedicated parse/query and license-negative regressions are authored.
+- ADR0119 records provenance, the parent-authorized source audit and no-generator/no-upstream-build policy. Astra source review cleared 575333a1. No configure/build, tests, feature/parser execution, installation, source generation, WSL or pushes occurred. Next: source review corrections, then governed public extension and real DAP onboarding contributions.
+
+## 2026-11-20: R19 explicit remote toolchains source freeze
+
+- Added application-owned approved WSL/SSH endpoint records, exact path mappings, distinct Remote Run configurations and a structured guardian protocol with identity-bound descendant cleanup. Windows WSL CMake profiles use explicit pinned tool paths, shared build admission and resource leases; normal UI exposes configure/build/clean/list actions and mapped diagnostics.
+- Authored deferred actual guardian/transport fixtures and a real WSL configure/build/run/generated-CDB oracle. Output relay bounds, unique profile selection and bounded registry-save validation address independent application-review findings. ADR 0115 records the narrow scope and cleanup acknowledgement contract.
+- Focused endpoint/mapping/guardian source review cleared through 052cd2b9; final application review cleared through 86ff4d17. No build, test, feature, WSL or SSH execution occurred. Normal UI and process-lifecycle acceptance remain deferred; missing explicit fixture endpoints are skips, not acceptance. Branch and fixtures are frozen after independent source review.
 ## 2026-11-20: Published R17 main joined into R18 integration
 
 Locally merged main 7db564d3 into R18 integration 63f4cbc0. Retained compiler-backed engine GLSL plus independent HLSL/ShaderLab source routes and registered providers, dynamic engine JSON schema declarations, both Unity and Engine Shader Problems/automation scopes, managed semantic/library modules and the retained context-stamped managed requester. Both histories, all fixture targets, held-reader staging and LLVM coverage tooling remain. Only source conflict review and git diff --check performed; no builds, tests, feature execution, WSL or push. Independent Astra composed-join review pending.
@@ -8222,6 +8347,31 @@ with a pointer.
   97e679b1 on codex/r15-editor-extras. No builds, tests, feature runs, WSL, benchmarks, probes or
   verification runners were executed. Runtime acceptance remains deferred by user instruction.
 
+## 2026-11-20: R19 DBG-16 hot reload decision (source only)
+
+- ADR 0110 records distinct native restart, FrostEngine Lua reload, CoreCLR and Unity code-update
+  boundaries against the actual IDE capability/session contracts. The reviewed netcoredbg payload
+  excludes its hot-reload hook. No new hot-reload capability, engine command or state-preservation
+  claim is introduced; provider implementation and runtime acceptance remain explicit follow-up work.
+- The decision requires exact profile/process/module/generation admission, actual apply outcomes,
+  symbol/breakpoint revalidation, uncertain-outcome handling and explicit restart ownership.
+- No builds, configuration, tests, feature runs, WSL, installs or licence acceptance were performed.
+  Independent source review is pending on codex/r19-hot-reload-decision.
+
+## 2026-11-20: R19 REF-15 structural search/replace checkpoint (source only)
+
+- Added actual pinned-parser S-expression structural queries with one @match, named captures and
+  literal equality/set predicates. Replacements expand exact captured bytes, refuse ambiguous or
+  overlapping matches and require an error-free complete reparse. This is explicitly syntax-only;
+  semantic/type/binding/regex constraints refuse rather than silently switching to text search.
+- Normal Search/Refactor actions capture current/open/indexed-project same-language scopes, parse
+  on workers with cancellation and byte/match/time ceilings, preserve disk encoding and dirty
+  overlays, and use the existing complete preview and one REF-1 global Undo/Redo transaction.
+  Captured search rows navigate only to matching live source. No files are written before Apply.
+- Authored actual C++/Lua grammar regressions and normal Workbench preview/Undo/cancellation
+  journeys. docs/protocols/structural-patterns.md specifies syntax and concrete scope/semantic limits.
+  No builds, configuration, tests, feature executions, WSL, installs or pushes ran. Independent
+  source review and runtime acceptance are pending on codex/r19-structural-search.
 ### R17 selected SDK context checkpoint (2026-11-20)
 
 Owned RoslynHost now receives the selected evaluated project, configuration and TFM. The normal .NET project pane, Build/Problems backend and generated console run configuration consume the actual SDK evaluation with captured project/import bytes, trust and physical identity admission, cancellation and stale-context invalidation. Late JSON-RPC cancellation and completion dispose under the same lifetime gate. Added source-authored context/build/run fixtures and an exact Apache-2.0 MoreLINQ v4.4.0 corpus pin with a deferred SDK/host comparison fixture; no corpus was fetched. Semantic contribution interfaces are additive for the independently owned Unity/library modules.
@@ -8249,6 +8399,11 @@ Source checkpoint only; independent review is pending for these additions. No bu
 
 Implemented ordinary completion, declaration/definition, hover, Structure and idle diagnostics through authenticated native shader.language (producer 08897089), using compiler AST identities and actual include provenance. Governed asynchronous requests preserve cancellation/deadline semantics without blocking workers; trust/session/state/source changes invalidate observations. Retained dirty documents without views validate document identity, version and bytes. Authored normal key-entry real-engine journey, strict projection/routing tests and single-dispatcher response/cancellation/timeout/late-reply regressions. ADR0103 records bounded ownership/scope and unsupported operations. Independent Astra native and IDE source reviews cleared. No builds, tests, feature execution or WSL run; runtime acceptance remains open.
 
+### R19 FEC-16 semantic scene/prefab merge — authored source increment
+
+Resolve Conflicts now exposes Semantic Scene Merge for actual `.fscene`/`.fprefab` Git conflicts. Worker capture reads immutable stage OIDs, retains explicit missing-base identity and exact index/disk receipts, requires lossless UTF8 and the selected actual project/tool admission, and calls real `document.merge-scene` using a private params file. Engine reports alone provide merge semantics/diagnostics. Conflict choices require revalidation before Apply; the existing DiffViewer shows ours versus retained engine output. Apply rechecks source/trust/project/physical target, uses REF1/global file Undo, then normal Git staging. A failed Git stage is reported separately and retains the file/history. Undo changes the file; it does not rewrite Git's index. Missing-side whole-file conflicts remain in the normal text/accept-side resolver. Bounded source files (1 MiB each) and output (4 MiB) fail closed; no fallback merge authority is fabricated.
+
+Authored regression sources cover genuine engine serializer/prefab merging, unknown fields/exact IDs, conflicts/ambiguous IDs/absent ancestor/cyclic parent repairs, strict DTO hash/counter/presence admission, real throwaway Git source receipts and private-file transport, UI revalidation and owner-loss cancellation. No build/test/runtime/WSL execution was performed. Source review is pending; this entry does not mark R19 green or update the R14 engine corpus pin.
 ### R17 selected SDK context defaults for managed tools (2026-11-20, source only)
 
 Normal NuGet and .NET Unit Tests panes now take project, configuration, TFM, RID and SDK defaults from the current immutable actual SDK evaluation, for standalone and solution-selected projects. The selected project precedes the remaining solution projects. Explicit per-project NuGet actions retain their project choice without inheriting another project's TFM. Clearing or replacing the actual selection cancels pending work, clears old rows and refreshes defaults; operation and REF1 preview admission capture the exact immutable context identity. A pre-timer click rechecks selection before launching. Authored normal Workbench pane coverage for initial selection, project/configuration/TFM/RID replacement and an in-flight scripted SDK query cancellation. Independent source review pending; no builds, tests or SDK commands executed.
@@ -8264,6 +8419,18 @@ The selected SDK project, configuration, target framework and runtime identifier
 C# code actions present supported local, Extract Method, Move Type, signature and Safe Delete changes in the existing refactoring preview. File moves and project edits participate in the same Undo transaction. Actions refuse linked files, conditional project membership or ambiguous symbols when a safe rewrite cannot be represented. Support depends on the evaluated project and available Roslyn providers.
 
 GPT-6 Astra independently inspected the implementation and regression sources. The MoreLINQ 4.4.0 corpus is pinned at 6d97c3b1d482f98300f4446df14742b0e3fafbec. Building the corpus, comparing Roslyn diagnostics and test discovery, installing from a local NuGet feed, and hitting a netcoredbg breakpoint remain deferred to the requested test phase. This milestone does not certify an executable or an updater release.
+## 2026-11-20: R19 LUA-16 dialect profile checkpoint (source only)
+
+- Added explicit persisted lua54/LuaJIT/Luau Run/REPL profiles and normal dialog selection; non-default
+  profiles require store version 6. Luau uses its actual -a script-argument boundary and native REPL;
+  LuaJIT flags remain distinct. Non-Lua54 debugging refuses the existing Lua54 ABI before any adapter.
+- Kept LuaJIT LuaLS analysis selection separate from execution. Added an offline immutable-source,
+  license-receipted recipe and local Luau LSP manifest producer for normal registry onboarding of
+  .luau, languageId luau, with no LuaLS or engine fallback. ADR 0124 states the unsigned-source,
+  dependency/native-grammar/debugger limits and deferred verification explicitly.
+- Authored model/argv/store, registry routing, normal Run/refused-Debug and source-recipe regressions,
+  plus Luau typed and LuaJIT FFI fixtures. No build/configuration, tests, interpreters, WSL, installs,
+  binary/source archive downloads or pushes ran. Independent source review remains pending.
 
 ### R18 UNITY-04 UnityYAMLMerge — source-authored bounded workflow
 

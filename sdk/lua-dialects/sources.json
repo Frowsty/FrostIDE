@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "sources": {
+    "luau": {"repository":"https://github.com/luau-lang/luau", "commit":"fb63edcceadafc7144d3de7a6ccb0fee83978cf0", "version":"0.690", "license":"MIT", "licensePath":"LICENSE.txt", "licenseSha256":"1597b423ca8f9c76225b498071f03b2b3609c4960b8dc30e63b230490fc82efd", "upstreamCommitSignatureVerified":true},
+    "luajit": {"repository":"https://github.com/LuaJIT/LuaJIT", "commit":"96f7b297326e9fd454b7186c6858b2773f94a0dc", "version":"2.1-96f7b297", "license":"MIT", "licensePath":"COPYRIGHT", "licenseSha256":"6cda3076a8c09b31bb1f90da614ea89e7ee194589626eeac613e522849604e47", "upstreamCommitSignatureVerified":false},
+    "luau-lsp": {"repository":"https://github.com/JohnnyMorganz/luau-lsp", "commit":"0382dc76ca9b73df3c8e7c9cd85a8dd493cbd0ae", "version":"1.70.1", "license":"MIT", "licensePath":"LICENSE.md", "licenseSha256":"5bf374ce7ab54c8d75f14e21f04932cae10708189afaec95321aed1a47701935", "upstreamCommitSignatureVerified":false}
+  }
+}

@@ -188,8 +188,10 @@ struct ManagedSourceSnapshot;
 
 class LanguageBridge;
 class LanguageRegistryIntegration;
+class ExtensionIntegration;
 class CMakeIntegration;
 class StandaloneBuildBackend;
+class UnrealBuildBackend;
 class ProjectEditProcess;
 class EngineIntegration;
 class EngineLuaDebugCoordinator;
@@ -206,6 +208,8 @@ class EngineCrashObserver;
 class UnityControlIntegration;
 class GitIntegration;
 class AgentIntegration;
+class AgentTools;
+class NativeAgentChat;
 struct GitClone;
 struct CompileDatabaseState; // workbench_language.cpp
 struct CppRenameAdmission;   // workbench_cpp_rename.cpp
@@ -407,6 +411,9 @@ struct WorkbenchOptions {
     std::string sessionDirectory;
     // settings.openApplicationFile's target (absolute); "" disables the action.
     std::string applicationSettingsFile;
+    // Application-owned R19 endpoint/profile registries. Empty derives beside application settings.
+    std::string remoteTargetsPath;
+    std::string wslCMakeProfilesPath;
     // Watches the project folder for external changes (the real file watcher; off in most tests).
     bool watchFiles = false;
     // Where FrostIDE-written compile_commands.json files go (absolute; one directory per solution);
@@ -640,6 +647,9 @@ public:
     void stopAgentBridge();
     void mentionAgentSelection();
     [[nodiscard]] bool agentBridgeActive() const;
+    [[nodiscard]] unsigned short agentBridgePort() const;
+    void showNativeAgent();
+    void stopNativeAgent();
 
     // --- Saving and external changes ---
 
@@ -749,6 +759,7 @@ public:
     }
     [[nodiscard]] Result<void> configureManagedProject(build::ManagedProjectRequest request);
     void showManagedProjectContext();
+    void showManagedDiagnostics();
     void attachManagedProjectView();
     void clearManagedProjectContext();
     void onManagedFilesChanged(const io::FileChangeBatch&);
@@ -797,6 +808,13 @@ public:
     // Application-only local onboarding. Validates manifest without launching during parsing.
     [[nodiscard]] Result<void> setLanguageServerRegistry(std::string manifest);
     [[nodiscard]] lang::Json languageServerRegistryState() const;
+    // Owner-thread public contribution API v1 (ADR0121). Application-only data, no native code
+    // loading. Commands schedule actual provider requests; debug requires a saved admitted source.
+    // Shutdown/remove/change cancels owned observations; returned JSON is declared metadata.
+    [[nodiscard]] Result<void> setExtensionCatalog(std::string manifest);
+    [[nodiscard]] lang::Json extensionCatalogState() const;
+    [[nodiscard]] Result<void> debugWithExtension(std::string contributionId);
+    [[nodiscard]] Result<void> executeExtensionCommand(std::string contributionId);
     // WorkbenchOptions::metadataCacheDirectory, as the language features got it.
     [[nodiscard]] const std::string& metadataCacheDirectory() const noexcept {
         return m_options.metadataCacheDirectory;
@@ -841,12 +859,16 @@ private:
     bool confirmSourceTemplatePlan(const document::RefactoringPlan&);
     friend class LanguageBridge;
     friend class LanguageRegistryIntegration;
+    friend class ExtensionIntegration;
     friend class EngineIntegration;
     friend class EngineBindingIntegration;
+    [[nodiscard]] bool hasDebugActivity() const;
     [[nodiscard]] bool canStartLuaDebug() const;
     friend class UnityControlIntegration;
     friend class GitIntegration;
     friend class AgentIntegration;
+    friend class AgentTools;
+    friend class NativeAgentChat;
 
     // IDocumentEditorListener.
     void editorOpened(DocumentEditorView& view) override;
@@ -869,6 +891,10 @@ private:
     [[nodiscard]] Result<void> ensureRefactoringCoordinator(const std::string& target);
     void registerCppRefactoringActions();
     void registerCppIndexActions();
+    void registerRemoteActions();
+    void editRemoteTargets();
+    void showWslCMake();
+    [[nodiscard]] Result<run::RunHandlers> prepareRemoteRun(const run::RunConfiguration& configuration);
     void showCppIndex(std::string operation, std::string symbol = {});
     void showCppRefactoring(std::string operation);
     void showCppInspectionScopeFixes();
@@ -877,6 +903,8 @@ private:
     [[nodiscard]] Result<std::function<Result<void>(const lang::WorkspaceEdit&)>> beginCppProviderRefactoring();
     [[nodiscard]] bool previewCppRefactoring(const document::RefactoringPlan& plan);
     void registerLuaRefactoringActions();
+    void registerStructuralSearchActions();
+    void showStructuralSearch(bool replace);
     void showLuaRefactoring(std::string operation);
     void renameLuaModule();
     void publishRefactoringOutcome(const document::RefactoringOutcome& outcome);
@@ -1185,6 +1213,7 @@ private:
     bool m_nativeAnalysisActive = false;
     std::unique_ptr<CMakeIntegration> m_cmake;
     std::unique_ptr<StandaloneBuildBackend> m_standalone;
+    std::unique_ptr<UnrealBuildBackend> m_unreal;
     // RUN-3: a CMake target chosen in the run configuration combo that the targets window could not
     // take yet (it showed an older model); connectCMakeRunConfigurations applies it. "" for none.
     std::string m_pendingCMakeTarget;
@@ -1247,6 +1276,7 @@ private:
     std::string m_managedServerPath;
     std::shared_ptr<lang::LuaService> m_lua;
     std::uint64_t m_luaListener = 0;
+    std::stop_source m_structuralStop;
     std::vector<sched::JoinHandle<void>> m_retiredLua;
     QPointer<ui::TrustDialog> m_luaTrustDialog;
     QTimer m_luaTrustWatch;
@@ -1271,6 +1301,9 @@ private:
     bool m_cppAnalyzerRunning = false;
     std::function<Result<void>()> m_cppAnalyzerExportCheck;
     std::shared_ptr<sched::ResourceGovernor> m_resourceGovernor;
+    std::stop_source m_remoteStop;
+    bool m_remoteBuildActive=false;
+    std::uint64_t m_remoteBuildGeneration=0;
     std::shared_ptr<lang::ClangdService> m_clangd;
     // The root already told that clangd was not found (the notice appears once per project; ADR 0078).
     std::string m_clangdUnavailableNotifiedRoot;
@@ -1299,6 +1332,7 @@ private:
     sched::LatestWins m_searchSymbolsSlot;
     std::unique_ptr<LanguageBridge> m_bridge;
     std::unique_ptr<LanguageRegistryIntegration> m_registeredLanguages;
+    std::unique_ptr<ExtensionIntegration> m_extensions;
     std::unique_ptr<ui::lang::LanguageController> m_language;
     // Text the user typed into the current editor during this key press (for textTyped).
     std::string m_typed;
@@ -1308,6 +1342,7 @@ private:
     std::unique_ptr<term::RealPtyLauncher> m_terminalLauncher;
     std::unique_ptr<ui::TerminalIntegration> m_terminal;
     std::unique_ptr<AgentIntegration> m_agent;
+    std::unique_ptr<NativeAgentChat> m_nativeAgent;
     std::unique_ptr<ui::FindFeature> m_find;
     QPointer<ui::ShellWindow> m_window;
     std::unique_ptr<ui::Workbench> m_nav;

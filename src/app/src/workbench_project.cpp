@@ -16,6 +16,8 @@
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/standalone_project.hpp"
+#include "frost/run/unreal_run.hpp"
+#include "frost/run/run_types.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/debug_controller.hpp"
 #include "frost/ui/lang/language_controller.hpp"
@@ -38,10 +40,14 @@
 #include "language_bridge.hpp"
 #include "project_edit_process.hpp"
 #include "standalone_build_backend.hpp"
+#include "unreal_build_backend.hpp"
 #include "unity_control.hpp"
 #include "workbench_project_helpers.hpp"
 #include "workbench_source_rename_preview.hpp"
 #include <QDialog>
+#include <QEventLoop>
+#include <QMetaObject>
+#include <thread>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QPointer>
@@ -105,7 +111,7 @@ Result<void> Workbench::openPath(std::string_view path, FileLocation at) {
     }
     if (!hasProject() && extensionOf(canonical) == ".csproj")
         return openFolder(std::string(io::parentPath(canonical)), false, canonical);
-    if (extensionOf(canonical) == ".frostproj")
+    if (extensionOf(canonical) == ".frostproj" || extensionOf(canonical) == ".uproject")
         return openFolder(std::string(io::parentPath(canonical)), false, canonical);
     const auto marker = io::fileName(canonical);
     if (!hasProject() &&
@@ -138,7 +144,7 @@ Result<void> Workbench::openExternalProject(std::string_view path) {
     auto status = m_services.fs.status(canonical);
     if (!status)
         return std::unexpected(std::move(status.error()));
-    if (status->type == io::FileType::Regular && extensionOf(canonical) == ".frostproj")
+    if (status->type == io::FileType::Regular && (extensionOf(canonical) == ".frostproj" || extensionOf(canonical) == ".uproject"))
         return openPath(canonical);
     const auto marker = io::fileName(canonical);
     if (status->type == io::FileType::Regular &&
@@ -244,6 +250,29 @@ Result<void> Workbench::openSolution(const std::string& path) {
 Result<void> Workbench::openFolder(const std::string& path, bool discoverSolution, std::string recentPath) {
     if (m_solutionLoading || m_shutDown)
         return fail(ErrorCode::Busy, "A solution is loading or the Workbench is closing");
+    std::optional<project::UnrealProject> unreal;
+    if (extensionOf(recentPath) == ".uproject") {
+        // Descriptor reads run off the GUI thread over retained bounded regular-file handles.
+        // Keep open/close reentry excluded while the nested dispatcher admits the result.
+        m_solutionLoading = true;
+        QPointer<Workbench> owner(this);
+        QEventLoop loop;
+        std::optional<Result<project::UnrealProject>> loaded;
+        auto* fs = &m_services.fs;
+        std::jthread worker([&loop, &loaded, fs, file=recentPath] {
+            auto result = project::readUnrealProject(*fs, file);
+            QMetaObject::invokeMethod(&loop, [&loop, &loaded, result=std::move(result)]() mutable {
+                loaded = std::move(result); loop.quit();
+            }, Qt::QueuedConnection);
+        });
+        loop.exec();
+        worker.join();
+        if (!owner) return fail(ErrorCode::Cancelled, "Unreal project open was cancelled");
+        m_solutionLoading = false;
+        if (m_shutDown) return fail(ErrorCode::Cancelled, "Workbench is closing");
+        if (!loaded || !*loaded) return loaded ? Result<void>(std::unexpected(loaded->error())) : fail(ErrorCode::Cancelled, "Unreal descriptor read was cancelled");
+        unreal = std::move(**loaded);
+    }
     // A folder with one solution opens that solution (.sln before .slnx of the same name).
     if (Result<std::vector<io::DirEntry>> entries = m_services.fs.listDirectory(path); discoverSolution && entries) {
         std::vector<std::string> solutions;
@@ -290,7 +319,7 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
     const bool explicitStandalone = io::fileName(recentPath) == "compile_commands.json" ||
                                     io::fileName(recentPath) == "Makefile" || io::fileName(recentPath) == "makefile" ||
                                     io::fileName(recentPath) == "GNUmakefile";
-    if (m_window && !explicitStandalone && lists && m_services.fs.exists(*lists).value_or(false)) {
+    if (m_window && !unreal && !explicitStandalone && lists && m_services.fs.exists(*lists).value_or(false)) {
         m_cmake = std::make_unique<CMakeIntegration>(
             m_services.fs, m_services.launcher, m_services.trust, m_services.settings, *m_build, *m_buildService,
             *m_window, *m_runWindow, *m_runManager, m_options.cmakeStatePath,
@@ -323,7 +352,7 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
             return std::unexpected(std::move(opened.error()));
         }
     }
-    if (!m_cmake) {
+    if (!m_cmake && !unreal) {
         auto standalone = project::readStandaloneProject(m_services.fs, path, false);
         if (!standalone)
             return std::unexpected(standalone.error());
@@ -339,6 +368,31 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
             if (m_window)
                 m_standalone->attachMenu(*m_window);
         }
+    }
+    if (unreal) {
+        m_unreal = std::make_unique<UnrealBuildBackend>(std::move(*unreal), m_services.fs, m_services.launcher, m_services.trust, *m_buildService);
+        const QPointer<UnrealBuildBackend> identity(m_unreal.get());
+        m_unreal->setCallbacks(m_build->serviceCallbacks([identity] { return !identity.isNull(); }));
+        m_build->setBackend(m_unreal.get());
+        if (m_window) m_unreal->attachMenu(*m_window, [this, file=m_unreal->model().projectFile](std::string editor) -> Result<void> {
+            if (!m_runController || !m_unreal || m_unreal->model().projectFile != file)
+                return fail(ErrorCode::Cancelled, "Unreal project changed");
+            run::UnrealEditorRunRequest request;
+            request.id = run::uniqueRunConfigurationId("unreal.editor", m_runController->configurations().all());
+            request.name = "Unreal Editor";
+            request.editor = std::move(editor);
+            request.projectFile = file;
+            auto configuration = run::unrealEditorRunConfiguration(request);
+            if (!configuration) return std::unexpected(configuration.error());
+            auto stored = m_runController->configurations().stored();
+            stored.push_back(*configuration);
+            if (auto saved = saveRunConfigurations(stored); !saved) return saved;
+            m_runController->setStoredConfigurations(std::move(stored));
+            return m_runController->selectConfiguration(configuration->id);
+        }, [self=QPointer<Workbench>(this), file=m_unreal->model().projectFile](const std::string& path) {
+            if (self && self->m_unreal && self->m_unreal->model().projectFile == file) (void)self->openPath(path);
+        }, [self=QPointer<Workbench>(this)] { if (self) self->restartClangd(); },
+        [self=QPointer<Workbench>(this)] { if (self && self->m_unreal) self->showCppIndex("preprocess"); });
     }
     if (m_nav) {
         if (auto opened = m_nav->openProject(path); !opened) {
@@ -595,7 +649,8 @@ bool Workbench::closeForOpen() {
     if (anyDebugSessionActive() ||
         (m_solution && (m_buildService->state() != build::BuildState::Idle || !m_runService->activeRuns().empty())) ||
         (m_cmake && (m_cmake->service().state() != build::BuildState::Idle || m_cmake->running())) ||
-        (m_standalone && m_standalone->state() != build::BuildState::Idle)) {
+        (m_standalone && m_standalone->state() != build::BuildState::Idle) ||
+        (m_unreal && m_unreal->state() != build::BuildState::Idle)) {
         notify(text("The project stays open"), text("Stop the build and running programs before closing the project."),
                ui::NotificationKind::Warning);
         return false;
@@ -647,6 +702,10 @@ bool Workbench::closeForOpen() {
     if (m_cmake) {
         m_build->setBackend(m_buildBackend.get());
         m_cmake.reset();
+    }
+    if (m_unreal) {
+        m_build->setBackend(m_buildBackend.get());
+        m_unreal.reset();
     }
     if (m_standalone) {
         m_build->setBackend(m_buildBackend.get());
@@ -715,7 +774,7 @@ bool Workbench::restoreLastProject() {
 
 Result<void> Workbench::openProjectIdentity(const std::string& path) {
     const auto marker = io::fileName(path);
-    if (marker == "compile_commands.json" || marker == "Makefile" || marker == "makefile" || marker == "GNUmakefile")
+    if (extensionOf(path) == ".uproject" || marker == "compile_commands.json" || marker == "Makefile" || marker == "makefile" || marker == "GNUmakefile")
         return openFolder(std::string(io::parentPath(path)), false, path);
     return io::fileName(path) == "CMakeLists.txt" ? openCMakeProject(path) : openPath(path);
 }
@@ -726,13 +785,13 @@ Result<void> Workbench::reopenRoot(const std::string& root) {
         return openProjectIdentity(root);
     if (io::fileName(root) == "CMakeLists.txt")
         return openCMakeProject(root);
-    if (isSolutionFile(root) || extensionOf(root) == ".frostproj")
+    if (isSolutionFile(root) || extensionOf(root) == ".frostproj" || extensionOf(root) == ".uproject")
         return openPath(root);
     // Older session stores keep roots; the recent projects say which solution in it the user opened.
     const std::string key = lang::documentKey(root);
     for (const std::string& recent : recentProjects(*m_services.settings.snapshot())) {
         const std::string recentRoot =
-            isSolutionFile(recent) || extensionOf(recent) == ".frostproj" || io::fileName(recent) == "CMakeLists.txt" ||
+            isSolutionFile(recent) || extensionOf(recent) == ".frostproj" || extensionOf(recent) == ".uproject" || io::fileName(recent) == "CMakeLists.txt" ||
                     io::fileName(recent) == "compile_commands.json" || io::fileName(recent) == "Makefile" ||
                     io::fileName(recent) == "makefile" || io::fileName(recent) == "GNUmakefile"
                 ? std::string(io::parentPath(recent))

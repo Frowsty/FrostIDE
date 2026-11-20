@@ -23,13 +23,11 @@
 # runs frost.exe beside the test). app_tests runs offscreen Qt only and takes no lock.
 
 frost_add_test(app_tests QT
-    SOURCES agent_bridge_test.cpp command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp engine_shader_requester_test.cpp stall_hooks_test.cpp
-            workbench_project_helpers_test.cpp cmake_kit_test.cpp standalone_build_backend_test.cpp
-            unity_events_test.cpp unity_tests_window_test.cpp settings_import_test.cpp hosting_cli_test.cpp hosting_review_test.cpp managed_tools_window_test.cpp
-
-            dxc_profile_test.cpp
+    SOURCES command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp stall_hooks_test.cpp workbench_project_helpers_test.cpp cmake_kit_test.cpp standalone_build_backend_test.cpp unreal_build_backend_test.cpp unreal_partner_window_test.cpp settings_import_test.cpp agent_bridge_test.cpp engine_shader_requester_test.cpp hosting_cli_test.cpp hosting_review_test.cpp native_agent_chat_test.cpp agent_private_test.cpp managed_tools_window_test.cpp unity_events_test.cpp unity_tests_window_test.cpp dxc_profile_test.cpp
     DEPS frost::app frost::diag frost::io)
 target_link_libraries(app_tests PRIVATE Qt6::Network)
+add_dependencies(app_tests frostide_mcp)
+target_compile_definitions(app_tests PRIVATE FROST_MCP_PROXY_PATH="$<TARGET_FILE:frostide_mcp>")
 # tests/support/scratch_dir.hpp (the persistent services' data directory).
 target_include_directories(app_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 
@@ -106,10 +104,13 @@ frost_add_test(app_workbench_tests QT
             workbench_binding_test.cpp
             workbench_engine_mixed_test.cpp
             engine_crash_cleanup_test.cpp engine_native_host_test.cpp engine_tests_lifetime_test.cpp
+            scene_merge_dialog_test.cpp
             source_rename_plan_test.cpp
             language_registry_integration_test.cpp
+            extension_integration_test.cpp
         workbench_templates_test.cpp
         workbench_lua_refactoring_test.cpp
+        workbench_structural_search_test.cpp
     DEPS frost::app frost::build frost::io frost::ui_find
     THIRD_PARTY Qt6::Network)
 target_include_directories(app_workbench_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src ${FROST_SOURCE_DIR}/src/io/src)
@@ -179,7 +180,7 @@ set_tests_properties(UpdateState.IndependentProcessesPreserveHigherFloor PROPERT
 # Real isolated scratch Git repositories, never the user's project or remotes.
 file(TO_CMAKE_PATH "${FROST_GIT_EXECUTABLE}" _frost_app_git)
 frost_add_test(app_workbench_git_tests QT
-    SOURCES workbench_git_test.cpp unity_yaml_merge_test.cpp
+    SOURCES workbench_git_test.cpp scene_merge_sources_test.cpp unity_yaml_merge_test.cpp
     DEPS frost::app frost::ui_vcs frost::vcs frost::io
     LABELS integration git)
 target_include_directories(app_workbench_git_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
@@ -465,6 +466,11 @@ target_compile_definitions(app_workbench_cpp_modules_tests PRIVATE ${_frost_work
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 add_dependencies(app_workbench_cpp_modules_tests frost-clang)
 
+# Explicit synthetic loopback partner; does not locate/load an Unreal installation or plug-in.
+frost_add_test(app_unreal_partner_protocol_tests QT
+    SOURCES unreal_partner_protocol_test.cpp
+    DEPS frost::app frost::io Qt6::Network
+    LABELS integration unreal)
 # R16 normal .props/.targets navigation plus actual-configured CMK-9 atomic/stale-preview journeys.
 frost_add_test(app_workbench_project_language_tests QT
     SOURCES workbench_project_language_test.cpp
@@ -483,10 +489,28 @@ target_compile_definitions(app_mono_held_reader_tests PRIVATE FROST_HELD_READER=
 add_dependencies(app_mono_held_reader_tests frost_held_read)
 # RUN-12 later genuine instrumented selected-run/action/gutter journey.
 frost_add_test(app_workbench_native_coverage_tests QT SOURCES workbench_native_coverage_test.cpp
-    DEPS frost::app frost::run frost::lang frost::io frost::sched LABELS integration)
+    DEPS frost::app frost::build frost::run frost::lang frost::io frost::sched LABELS integration)
 target_include_directories(app_workbench_native_coverage_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_native_coverage_tests PRIVATE ${_frost_workbench_definitions}
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+
+# Explicit native sandbox/sample acceptance. Never simulated or silently downgraded.
+if(TARGET frost-extension-text-statistics)
+    set(FROST_EXTENSION_SAMPLE_RUNTIME "" CACHE STRING "Explicit approved runtime files for native sample sandbox acceptance")
+    string(REPLACE ";" "|" _frost_sample_runtime "${FROST_EXTENSION_SAMPLE_RUNTIME}")
+    file(TO_CMAKE_PATH "${_frost_sample_runtime}" _frost_sample_runtime)
+    frost_add_test(app_extension_sample_tests QT
+        SOURCES extension_sample_onboarding_test.cpp
+        DEPS frost::app frost::lang frost::io
+        LABELS integration sandbox)
+    target_include_directories(app_extension_sample_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(app_extension_sample_tests PRIVATE ${_frost_workbench_definitions}
+        FROST_EXTENSION_SAMPLE_PATH="$<TARGET_FILE:frost-extension-text-statistics>"
+        FROST_EXTENSION_SAMPLE_LICENSE="${FROST_SOURCE_DIR}/LICENSE"
+        FROST_EXTENSION_SAMPLE_RUNTIME="${_frost_sample_runtime}")
+    add_dependencies(app_extension_sample_tests frost-extension-text-statistics)
+    frost_deploy_extension_sandbox(app_extension_sample_tests)
+endif()
 # Source-authored opt-in actual installed DXC evidence: no discovery, download, or default execution.
 set(FROST_TEST_DXC "" CACHE FILEPATH "Explicit installed DXC for compiler diagnostic acceptance")
 if(FROST_TEST_DXC)

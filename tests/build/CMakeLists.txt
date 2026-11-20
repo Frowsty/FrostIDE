@@ -38,6 +38,7 @@ frost_add_test(build_unit_tests
         json_test.cpp
         line_splitter_test.cpp
         managed_project_test.cpp managed_evaluation_test.cpp managed_packages_test.cpp
+        unreal_build_test.cpp
         msbuild_compile_test.cpp
         msbuild_driver_test.cpp
         msbuild_locator_test.cpp
@@ -142,6 +143,46 @@ target_compile_definitions(build_dependencies_real_tests PRIVATE
     FROST_DEPENDENCY_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/dependencies"
     FROST_DEPENDENCY_WORK_PATH="${CMAKE_CURRENT_BINARY_DIR}/dependency-work")
 
+# ADR0114: deferred local installed Unreal oracle. No discovery/download/license acceptance.
+option(FROST_UNREAL_ORACLE "Enable explicit installed Unreal UBT/UHT oracle (executes project code)" OFF)
+if(FROST_UNREAL_ORACLE)
+    foreach(field TOOL PROJECT TARGET GENERATED_HEADER COMPILE_DATABASE)
+        set(FROST_UNREAL_${field} "" CACHE STRING "Explicit Unreal oracle ${field}")
+        if(NOT FROST_UNREAL_${field})
+            message(FATAL_ERROR "FROST_UNREAL_ORACLE requires FROST_UNREAL_${field}")
+        endif()
+    endforeach()
+    set(FROST_UNREAL_UBT_ASSEMBLY "" CACHE FILEPATH "Explicit UBT DLL when TOOL is dotnet")
+    frost_add_test(build_unreal_oracle_tests
+        SOURCES unreal_tool_oracle_test.cpp
+        DEPS frost::build frost::project frost::io
+        LABELS integration unreal)
+    foreach(field TOOL UBT_ASSEMBLY PROJECT TARGET GENERATED_HEADER COMPILE_DATABASE)
+        target_compile_definitions(build_unreal_oracle_tests PRIVATE FROST_UNREAL_${field}="${FROST_UNREAL_${field}}")
+    endforeach()
+endif()
+
+# R19 pure endpoint/mapping/transport specification cases; real transport fixtures are separate.
+frost_add_test(build_remote_target_tests
+    SOURCES remote_target_test.cpp wsl_cmake_test.cpp
+    DEPS frost::build frost::io frost::rpc
+    LABELS unit)
+
+# R19 actual Linux guardian plus explicitly selected real WSL/SSH transport acceptance.
+# Missing externally authorized endpoints are reported skipped, never counted as remote acceptance.
+if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{FROST_SDK}/py/Scripts/python.exe")
+    set(Python3_EXECUTABLE "$ENV{FROST_SDK}/py/Scripts/python.exe")
+endif()
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+file(TO_CMAKE_PATH "${Python3_EXECUTABLE}" _frost_remote_test_python)
+frost_add_test(build_remote_process_real_tests
+    SOURCES remote_process_real_test.cpp wsl_cmake_real_test.cpp
+    DEPS frost::build frost::io frost::rpc
+    LABELS integration remote)
+target_include_directories(build_remote_process_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(build_remote_process_real_tests PRIVATE
+    FROST_REMOTE_TEST_PYTHON="${_frost_remote_test_python}"
+    FROST_REMOTE_GUARD_SOURCE="${FROST_SOURCE_DIR}/src/build/resources/remote_guard.py")
 # R17 authoritative SDK snapshot acceptance uses only configured tools and self-authored sources.
 include("${FROST_SOURCE_DIR}/tests/support/ManagedFixtures.cmake")
 frost_add_managed_fixture_test(build_managed_evaluation_tests SOURCES managed_evaluation_real_test.cpp
@@ -154,3 +195,6 @@ target_compile_definitions(build_managed_evaluation_tests PRIVATE
 frost_add_managed_fixture_test(build_managed_packages_tests SOURCES managed_packages_real_test.cpp
     DEPS frost::build frost::project frost::io frost::core LABELS integration managed nuget)
 target_include_directories(build_managed_packages_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+
+frost_add_test(build_managed_launch_settings_tests SOURCES managed_launch_settings_test.cpp
+    DEPS frost::build frost::io frost::core LABELS unit managed)

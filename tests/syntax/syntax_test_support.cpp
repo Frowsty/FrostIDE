@@ -140,6 +140,13 @@ end
 
 std::string_view sample(LanguageId language) noexcept {
     switch (language) {
+    case LanguageId::Python: return "# source\ndef greet(name):\n    return name\n";
+    case LanguageId::JavaScript: return "// source\nfunction greet(name) { return name; }\n";
+    case LanguageId::TypeScript: return "// source\nfunction greet(name: string): string { return name; }\n";
+    case LanguageId::Tsx: return "const view = <div>Hello</div>;\n";
+    case LanguageId::Yaml: return "# source\nname: value\nitems:\n  - one\n";
+    case LanguageId::Toml: return "# source\n[project]\nname = \"value\"\n";
+    case LanguageId::PowerShell: return "# source\nfunction Get-Value { return 42 }\n";
     case LanguageId::C: return kC;
     case LanguageId::Cpp: return kCpp;
     case LanguageId::CSharp: return kCSharp;

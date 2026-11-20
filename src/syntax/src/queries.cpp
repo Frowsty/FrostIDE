@@ -79,6 +79,48 @@ constexpr unsigned char kLuaOutline[] = {
 #include "queries_lua_outline_scm.inc"
 };
 
+constexpr unsigned char kPythonHighlights[] = {
+#include "queries_python_highlights_scm.inc"
+};
+constexpr unsigned char kPythonOutline[] = {
+#include "queries_python_outline_scm.inc"
+};
+constexpr unsigned char kJavaScriptHighlights[] = {
+#include "queries_javascript_highlights_scm.inc"
+};
+constexpr unsigned char kJavaScriptOutline[] = {
+#include "queries_javascript_outline_scm.inc"
+};
+constexpr unsigned char kTypeScriptHighlights[] = {
+#include "queries_typescript_highlights_scm.inc"
+};
+constexpr unsigned char kTypeScriptOutline[] = {
+#include "queries_typescript_outline_scm.inc"
+};
+constexpr unsigned char kTsxHighlights[] = {
+#include "queries_tsx_highlights_scm.inc"
+};
+constexpr unsigned char kTsxOutline[] = {
+#include "queries_tsx_outline_scm.inc"
+};
+constexpr unsigned char kYamlHighlights[] = {
+#include "queries_yaml_highlights_scm.inc"
+};
+constexpr unsigned char kYamlOutline[] = {
+#include "queries_yaml_outline_scm.inc"
+};
+constexpr unsigned char kTomlHighlights[] = {
+#include "queries_toml_highlights_scm.inc"
+};
+constexpr unsigned char kTomlOutline[] = {
+#include "queries_toml_outline_scm.inc"
+};
+constexpr unsigned char kPowerShellHighlights[] = {
+#include "queries_powershell_highlights_scm.inc"
+};
+constexpr unsigned char kPowerShellOutline[] = {
+#include "queries_powershell_outline_scm.inc"
+};
 template<std::size_t N>
 [[nodiscard]] std::string_view view(const unsigned char (&bytes)[N]) noexcept {
     return std::string_view(reinterpret_cast<const char*>(bytes), N);
@@ -291,6 +333,13 @@ std::string_view querySource(LanguageId language, QueryKind kind) noexcept {
     }
     const bool highlights = kind == QueryKind::Highlights;
     switch (language) {
+    case LanguageId::Python: return highlights ? view(kPythonHighlights) : view(kPythonOutline);
+    case LanguageId::JavaScript: return highlights ? view(kJavaScriptHighlights) : view(kJavaScriptOutline);
+    case LanguageId::TypeScript: return highlights ? view(kTypeScriptHighlights) : view(kTypeScriptOutline);
+    case LanguageId::Tsx: return highlights ? view(kTsxHighlights) : view(kTsxOutline);
+    case LanguageId::Yaml: return highlights ? view(kYamlHighlights) : view(kYamlOutline);
+    case LanguageId::Toml: return highlights ? view(kTomlHighlights) : view(kTomlOutline);
+    case LanguageId::PowerShell: return highlights ? view(kPowerShellHighlights) : view(kPowerShellOutline);
     case LanguageId::C: return highlights ? view(kCHighlights) : view(kCOutline);
     case LanguageId::Cpp: return highlights ? view(kCppHighlights) : view(kCppOutline);
     case LanguageId::CSharp: return highlights ? view(kCSharpHighlights) : view(kCSharpOutline);
@@ -323,6 +372,8 @@ Result<CompiledQuery> compileQuery(const TSLanguage* grammar, std::string_view s
     for (std::uint32_t id = 0; id < captures; ++id) {
         const std::string_view name = captureNameOf(query, id);
         const bool internal = name.starts_with('_');
+        if (kind == QueryKind::Structural)
+            continue;
         if (kind == QueryKind::Highlights) {
             const std::optional<HighlightKind> highlight = internal ? std::nullopt : highlightKindFromCapture(name);
             if (!internal && !highlight) {

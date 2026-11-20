@@ -146,9 +146,13 @@ void DebugController::shutdown() {
     if (m_pendingRun && m_service)
         m_service->stop(*m_pendingRun);
     m_pendingRun.reset();
-    if (m_alternatePending && m_hooks.stopAlternate)
-        m_hooks.stopAlternate();
+    auto externalCancel = std::move(m_externalPreparationCancel);
+    const bool alternate = m_alternatePending;
     m_alternatePending = false;
+    if (externalCancel)
+        externalCancel();
+    else if (alternate && m_hooks.stopAlternate)
+        m_hooks.stopAlternate();
     m_killTimer.stop();
     if (m_session && (m_session->targetMode() == debug::DebugTargetMode::Attach || m_session->readOnly()))
         m_options.retirements->retire(std::move(m_session), kStopTimeout);
@@ -215,6 +219,27 @@ void DebugController::setStopHandler(std::function<Result<void>()> handler) {
     m_stopHandlerGeneration = m_generation;
 }
 
+Result<std::uint64_t> DebugController::beginExternalPreparation(std::function<void()> cancel) {
+    if (m_shutdown)
+        return fail(ErrorCode::Cancelled, "Debugger is shutting down");
+    if (!cancel)
+        return fail(ErrorCode::InvalidArgument, "Preparation cancellation is required");
+    if (debugging() || (m_hooks.mayStart && !m_hooks.mayStart()))
+        return fail(ErrorCode::Busy, "Another run or debug operation owns preparation");
+    m_externalPreparationCancel = std::move(cancel);
+    m_alternatePending = true;
+    const auto generation = ++m_generation;
+    emit stateChanged();
+    return generation;
+}
+bool DebugController::finishExternalPreparation(std::uint64_t generation) {
+    if (m_shutdown || !m_alternatePending || !m_externalPreparationCancel || generation != m_generation)
+        return false;
+    m_externalPreparationCancel = {};
+    m_alternatePending = false;
+    emit stateChanged();
+    return true;
+}
 void DebugController::stop() {
     if (m_session && !readOnlySession() && m_stopHandler && m_stopHandlerGeneration == m_generation) {
         const auto handler = m_stopHandler;
@@ -227,7 +252,10 @@ void DebugController::stop() {
     if (m_alternatePending) {
         ++m_generation;
         m_alternatePending = false;
-        if (m_hooks.stopAlternate)
+        auto externalCancel = std::move(m_externalPreparationCancel);
+        if (externalCancel)
+            externalCancel();
+        else if (m_hooks.stopAlternate)
             m_hooks.stopAlternate();
         emit stateChanged();
     }

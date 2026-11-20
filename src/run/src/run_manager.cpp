@@ -22,7 +22,6 @@ namespace frost::run {
 
 namespace {
 
-#ifndef _WIN32
 // Characters a POSIX shell word may hold unquoted (displayCommandLine).
 bool shellSafe(char c) noexcept {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
@@ -44,19 +43,19 @@ void appendPosixWord(std::string& out, std::string_view word) {
     }
     out += '\'';
 }
-#endif
 
 // The plan with its paths checked and normalised; an empty working directory becomes the program's folder.
 Result<LaunchPlan> normalizePlan(LaunchPlan plan) {
-    auto program = io::normalizePath(plan.program);
+    const auto pathStyle=plan.remoteTarget.empty()?io::kNativePathStyle:io::PathStyle::Posix;
+    auto program = io::normalizePath(plan.program,pathStyle);
     if (!program) {
         return fail(ErrorCode::InvalidArgument, std::format("the program '{}' is not an absolute path", plan.program));
     }
     plan.program = std::move(*program);
     if (plan.workingDirectory.empty()) {
-        plan.workingDirectory = std::string(io::parentPath(plan.program));
+        plan.workingDirectory = std::string(io::parentPath(plan.program,pathStyle));
     } else {
-        auto directory = io::normalizePath(plan.workingDirectory);
+        auto directory = io::normalizePath(plan.workingDirectory,pathStyle);
         if (!directory) {
             return fail(ErrorCode::InvalidArgument,
                         std::format("the working directory '{}' is not an absolute path", plan.workingDirectory));
@@ -131,10 +130,12 @@ Result<LaunchPlan> launchPlanFor(const RunConfiguration& configuration) {
     }
     if (isLuaRunType(configuration.type)) {
         arguments = configuration.interpreterArguments;
-        if (configuration.type == RunType::LuaRepl)
-            arguments.push_back("-i");
+        if (configuration.type == RunType::LuaRepl) {
+            if (configuration.luaRuntime != "luau") arguments.push_back("-i");
+        }
         else {
             arguments.push_back(configuration.target);
+            if (configuration.luaRuntime == "luau" && !configuration.arguments.empty()) arguments.push_back("-a");
             arguments.insert(arguments.end(), configuration.arguments.begin(), configuration.arguments.end());
         }
     }
@@ -144,10 +145,15 @@ Result<LaunchPlan> launchPlanFor(const RunConfiguration& configuration) {
     return normalizePlan(LaunchPlan{.program = configuration.program,
                                     .arguments = std::move(arguments),
                                     .workingDirectory = workingDirectory,
-                                    .environment = configuration.environment});
+                                    .environment = configuration.environment,
+                                    .remoteTarget = configuration.type==RunType::Remote ? configuration.target : std::string{}});
 }
 
 std::string displayCommandLine(const LaunchPlan& plan) {
+    if(!plan.remoteTarget.empty()) {
+        std::string out="["+plan.remoteTarget+"] ";appendPosixWord(out,plan.program);
+        for(const auto& argument:plan.arguments){out+=' ';appendPosixWord(out,argument);}return out;
+    }
 #ifdef _WIN32
     if (auto line = io::buildWindowsCommandLine(plan.program, plan.arguments)) {
         return std::move(*line);
@@ -597,7 +603,15 @@ struct RunManager::State : std::enable_shared_from_this<RunManager::State> {
             }
         };
         // Launched without `mutex`: queries and stop() stay responsive while CreateProcessW runs.
-        auto started = build::RunSession::start(launcher, specFor(plan), std::move(callbacks), clock, options.session);
+        auto* selectedLauncher=&launcher;
+        if(!plan.remoteTarget.empty()) {
+            if(!launchHandlers || !launchHandlers->remoteLauncher || launchHandlers->remoteTargetId!=plan.remoteTarget) {
+                if(auto run=extract(id))finishWithout(std::move(*run),Error(ErrorCode::Untrusted,"Remote plan has no matching approved endpoint launcher"),false);
+                return;
+            }
+            selectedLauncher=launchHandlers->remoteLauncher.get();
+        }
+        auto started = build::RunSession::start(*selectedLauncher, specFor(plan), std::move(callbacks), clock, options.session);
         if (!started) {
             if (auto run = extract(id)) {
                 Error error = std::move(started.error());
@@ -737,6 +751,12 @@ Result<RunId> RunManager::start(const RunConfiguration& configuration, RunHandle
                     std::format("run configuration '{}' is a {} configuration, which has no program to start",
                                 configuration.name, toString(configuration.type)));
     }
+    if(configuration.type==RunType::Remote && (!handlers.remoteLauncher || handlers.remoteTargetId!=configuration.target || !handlers.launchAdmission))
+        return fail(ErrorCode::Untrusted,"Remote Run requires a matching approved endpoint launcher and current project admission");
+    if(configuration.type!=RunType::Remote && (handlers.remoteLauncher || !handlers.remoteTargetId.empty()))
+        return fail(ErrorCode::InvalidArgument,"A local configuration cannot carry a remote endpoint binding");
+    if(configuration.type==RunType::Remote && mode!=RunMode::Run)
+        return fail(ErrorCode::Unsupported,"Named remote targets currently support Run only, not local debugger preparation");
     State& state = *m_state;
     const bool before = needsBeforeLaunch(configuration);
     if (before && !state.options.beforeLaunch) {

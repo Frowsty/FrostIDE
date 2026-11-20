@@ -43,6 +43,7 @@
 #include "frost/vcs/git_locator.hpp"
 
 #include "agent_integration.hpp"
+#include "native_agent_chat.hpp"
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
 #include "engine_crash_observer.hpp"
@@ -52,6 +53,7 @@
 #include "engine_mixed_launch.hpp"
 #include "engine_run_debug.hpp"
 #include "engine_unit_tests_window.hpp"
+#include "extension_integration.hpp"
 #include "git_clone.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
@@ -62,6 +64,8 @@
 #include "project_edit_process.hpp"
 #include "settings_dialog.hpp"
 #include "standalone_build_backend.hpp"
+#include "unreal_build_backend.hpp"
+#include "frost/lang/unreal_reflection.hpp"
 #include "unity_control.hpp"
 #include <QApplication>
 #include <QCoreApplication>
@@ -242,6 +246,10 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                                    m_options.metadataCacheDirectory,
                                    // Empty answers say why: no server, fallback flags, indexing (R0 follow-up 4).
                                    [this](std::string_view path) { return languageReadiness(path); }});
+    m_language->setLocalCompletion([this](std::string_view path,const text::Snapshot& snapshot,ByteOffset caret) -> std::optional<lang::CompletionList> {
+        if (!m_unreal || !isCFamilySource(path) || snapshot.size().value()>256*1024) return {};
+        return lang::unrealSpecifierCompletions(snapshot.text(),static_cast<std::size_t>(caret.value()));
+    });
     m_language->setUnityAssetFiles([this] {
         // The inventory is owned by normal project navigation; never crawl Library or generated solutions.
         if (!m_nav || m_projectRoot.empty() ||
@@ -262,6 +270,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
         log::warn(kLog, "language actions: {}", registered.error().describe());
     }
 
+    m_extensions = std::make_unique<ExtensionIntegration>(*this);
     m_registeredLanguages = std::make_unique<LanguageRegistryIntegration>(*this);
 
     m_luaTrustWatch.setParent(this);
@@ -470,6 +479,7 @@ Workbench::~Workbench() {
     if (m_documentRegistry) {
         m_documentRegistry->unsubscribe(m_registryListener);
     }
+    m_structuralStop.request_stop();
     for (auto& stopped : m_retiredLua)
         if (stopped.valid())
             stopped.join();
@@ -519,6 +529,7 @@ void Workbench::createBuildService() {
     m_buildBackend = std::make_unique<ui::BuildServiceBackend>(*m_buildService);
     m_build->setBackend(m_buildBackend.get());
     m_build->setSaveAllHandler(this);
+    m_build->setBuildAdmission([this]{return !m_remoteBuildActive;});
     m_buildActions = new ui::BuildActions(*m_build, this);
     if (auto registered = m_buildActions->registerActions(m_registry); !registered) {
         log::warn(kLog, "build actions: {}", registered.error().describe());
@@ -914,6 +925,7 @@ bool Workbench::anyDebugSessionActive() const {
 }
 
 void Workbench::shutdown() {
+    m_remoteStop.request_stop();
     m_luaRuntimeStop.request_stop();
     m_solutionLoadStop.request_stop();
     if (m_shutDown) {
@@ -975,6 +987,7 @@ void Workbench::shutdown() {
         m_engine->shutdown();
     if (m_unity)
         m_unity->shutdown();
+    stopNativeAgent();
     stopAgentBridge();
     stopTerminal();
     if (m_standalone) {
@@ -1013,6 +1026,8 @@ void Workbench::shutdown() {
     if (auto closed = m_documents->closeJournal(); !closed) {
         log::warn(kLog, "hot-exit journal: {}", closed.error().describe());
     }
+    if (m_extensions)
+        m_extensions->shutdown();
     if (m_registeredLanguages)
         m_registeredLanguages->shutdown();
     stopLua();

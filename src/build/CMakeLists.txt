@@ -32,12 +32,17 @@ set(frost_build_sources
     src/json.cpp
     src/line_splitter.cpp
     src/managed_project.cpp
+    src/unreal_build.cpp
     src/managed_packages.cpp
+    src/managed_launch_settings.cpp
     src/managed_evaluation.cpp
     src/msbuild_compile.cpp
     src/msbuild_driver.cpp
     src/msbuild_locator.cpp
     src/output_parsers.cpp
+    src/remote_process.cpp
+    src/remote_target.cpp
+    src/wsl_cmake.cpp
     src/run_service.cpp
     src/run_session.cpp
     src/run_target.cpp
@@ -47,7 +52,7 @@ set(frost_build_sources
 
 frost_add_library(build LAYER build
     SOURCES ${frost_build_sources}
-    DEPS frost::project frost::settings frost::io frost::sched)
+    DEPS frost::project frost::settings frost::io frost::sched frost::rpc)
 # The cmake and Ninja versions pinned in sdk/sdk.lock.json, so findCMakeTools can name the pinned
 # SDK's tools (cmake_toolchain.hpp, step 2).
 file(READ "${FROST_SOURCE_DIR}/sdk/sdk.lock.json" _frost_build_sdk_lock)
@@ -69,3 +74,9 @@ if(WIN32)
     # RegGetValueW (the Windows SDK root, toolchain.hpp).
     target_link_libraries(frost_build PRIVATE shell32 advapi32)
 endif()
+
+# R19 carries the reviewed Linux guardian as static bootstrap data, not a user/project script.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/resources/remote_guard.py" _frost_remote_guard)
+configure_file(src/remote_guard.hpp.in "${CMAKE_CURRENT_BINARY_DIR}/generated/remote_guard.hpp" @ONLY)
+target_include_directories(frost_build PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/resources/remote_guard.py")

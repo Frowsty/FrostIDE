@@ -33,6 +33,7 @@ frost_add_library(debug LAYER debug
         src/coreclr_process.cpp
         src/standalone_lua_dap.cpp
         src/cmake_dap.cpp
+        src/unreal_debug.cpp
         src/dap_client.cpp
         src/dap_types.cpp
         src/dbgeng_dap.cpp

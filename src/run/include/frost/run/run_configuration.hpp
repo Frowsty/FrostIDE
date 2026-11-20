@@ -105,9 +105,12 @@ enum class RunType : std::uint8_t {
     FrostEditor,
     FrostPlayer,
     LuaScript,
-    LuaRepl
+    LuaRepl,
+    Remote
 };
 
+// Remote: target is an application-owned endpoint id; program/cwd are absolute Linux paths.
+// Run only; no implicit local tasks, build, Debug or transport/credential settings in project files.
 // JSON spelling, including "frost-editor" and "frost-player" (RUN-11).
 [[nodiscard]] std::string_view toString(RunType type) noexcept;
 // The type for its JSON spelling; nullopt for anything else. Case-sensitive.
@@ -175,6 +178,8 @@ struct RunConfiguration {
     // is the absolute script for LuaScript, empty for LuaRepl. Interpreter argv precedes the
     // script (lua-debug arg0); arguments remain script argv (lua-debug arg), never a shell string.
     std::vector<std::string> interpreterArguments{};
+    // Explicit executable/CLI ABI profile, independent of LuaLS analysis runtime. Never guessed from filename.
+    std::string luaRuntime = "lua54"; // lua54, luajit, luau; non-default profiles require store version 6.
 
     friend bool operator==(const RunConfiguration&, const RunConfiguration&) = default;
 };
@@ -202,7 +207,8 @@ struct RunConfiguration {
 // retain version 1 or 2 when no RUN-11 types are present (header comment, "Version 3").
 // Version5 adds standalone Lua script/REPL types and interpreterArguments; older configurations
 // keep their existing version and round-trip unchanged. No LuaLS runtime setting is an executable.
-inline constexpr int kRunConfigurationsVersion = 5;
+// Version6 adds explicit non-default luaRuntime profiles; version5 remains the Lua54 default.
+inline constexpr int kRunConfigurationsVersion = 6;
 [[nodiscard]] bool isLuaRunType(RunType type) noexcept;
 
 // Whether this is a RUN-11 editor/player configuration. Pure, constant time.

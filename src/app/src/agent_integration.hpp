@@ -13,6 +13,7 @@ public:
     void stop();
     void mention();
     bool active() const;
+    unsigned short port() const;
 private:
     struct State;
     std::unique_ptr<State> m;

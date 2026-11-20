@@ -46,6 +46,7 @@
 
 #include <QString>
 
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
@@ -105,6 +106,13 @@ unitTestsLocationOf(const std::string& testName, const std::string& caseName, co
 [[nodiscard]] UnitTestsSelectionDetails
 unitTestsDescribeSelection(const std::string& testName, const std::string& caseName, const run::DiscoveredTest* test,
                            const run::TestResult* result, const std::vector<run::DoctestCase>* doctestCases);
+
+struct AgentTestSnapshot { bool busy = false; std::uint64_t generation = 0; std::vector<run::TestResult> results; };
+// Cached actual current CTest provider results. Unavailable/stale provider is an error, never a fabricated pass.
+[[nodiscard]] Result<AgentTestSnapshot> unitTestsAgentSnapshot(QWidget* widget);
+// Explicitly approved CTest Run All using the same current listing/trust/runner admission as the UI.
+[[nodiscard]] Result<std::uint64_t> runUnitTestsForAgent(QWidget* widget);
+void cancelUnitTestsForAgent(QWidget* widget, std::uint64_t generation);
 
 // Creates the window's widget (header comment). Its object name is "unitTestsToolWindow".
 [[nodiscard]] QWidget* createUnitTestsToolWindowWidget(QWidget* parent, UnitTestsWindowContext context);

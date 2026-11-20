@@ -13,6 +13,8 @@
 
 #include "managed_build_backend.hpp"
 #include "managed_trust_watch.hpp"
+#include <QCryptographicHash>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -26,6 +28,7 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <QTreeWidget>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -78,6 +81,24 @@ sched::Task<void> evaluateManaged(std::shared_ptr<ManagedModelJob> job, io::IFil
         auto parsed = build::parseManagedProjectEvaluation(request, output->stdoutBytes);
         if (!parsed)
             return std::unexpected(parsed.error());
+        auto launchPath = io::joinPath(io::parentPath(request.project), "Properties/launchSettings.json");
+        if (!launchPath)
+            return std::unexpected(launchPath.error());
+        auto launchExists = fs->exists(*launchPath);
+        if (!launchExists)
+            return std::unexpected(launchExists.error());
+        std::optional<std::string> launchBytes;
+        std::vector<build::ManagedLaunchProfile> launchProfiles;
+        if (*launchExists) {
+            auto bytes = fs->readFileSnapshot(*launchPath, 1024 * 1024);
+            if (!bytes)
+                return std::unexpected(bytes.error());
+            auto profiles = build::parseManagedLaunchSettings(*bytes);
+            if (!profiles)
+                return std::unexpected(profiles.error());
+            launchBytes = std::move(*bytes);
+            launchProfiles = std::move(*profiles);
+        }
         std::set<std::string> inputs{request.project};
         auto imported = parsed->properties.find("MSBuildAllProjects");
         if (imported != parsed->properties.end())
@@ -118,6 +139,18 @@ sched::Task<void> evaluateManaged(std::shared_ptr<ManagedModelJob> job, io::IFil
                     return fail(ErrorCode::Busy, "Managed import set changed during evaluation; retry");
         if (!current())
             return fail(ErrorCode::Cancelled, "Managed context changed before publication");
+        auto finalLaunchExists = fs->exists(*launchPath);
+        if (!finalLaunchExists || *finalLaunchExists != *launchExists)
+            return fail(ErrorCode::Busy, "launchSettings presence changed during evaluation");
+        if (launchBytes) {
+            auto bytes = fs->readFileSnapshot(*launchPath, 1024 * 1024);
+            if (!bytes || *bytes != *launchBytes)
+                return fail(ErrorCode::Busy, "launchSettings changed during evaluation");
+            receipts.emplace(*launchPath, *launchBytes);
+        }
+        finalModel->launchSettingsPath = *launchPath;
+        finalModel->launchSettingsPresent = *launchExists;
+        finalModel->launchProfiles = std::move(launchProfiles);
         finalModel->inputFiles = std::move(receipts);
         return ModelResult{std::move(*finalModel)};
     }();
@@ -307,6 +340,17 @@ void Workbench::attachManagedProjectView() {
         else if (m_managedDesiredContext)
             (void)configureManagedProject(*m_managedDesiredContext);
     });
+    auto* diagnostics = new QPushButton(QStringLiteral("Collect .NET diagnostics..."), panel);
+    layout->addWidget(diagnostics);
+    connect(diagnostics, &QPushButton::clicked, this, [this] { showManagedDiagnostics(); });
+    input::ActionSpec diagnosticsAction;
+    diagnosticsAction.id = "managed.diagnostics";
+    diagnosticsAction.name = ".NET Diagnostics...";
+    diagnosticsAction.group = ".NET";
+    diagnosticsAction.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
+        showManagedDiagnostics();
+    };
+    (void)m_registry.add(std::move(diagnosticsAction));
     auto* status = new QLabel(QStringLiteral("No evaluated .NET context"), panel);
     status->setTextFormat(Qt::PlainText);
     status->setWordWrap(true);
@@ -316,6 +360,57 @@ void Workbench::attachManagedProjectView() {
     tree->setColumnCount(2);
     tree->setHeaderLabels({QStringLiteral("Evaluated item/property"), QStringLiteral("Actual SDK value")});
     layout->addWidget(tree);
+    auto* browser = new QPushButton(QStringLiteral("Open running profile URL"), panel);
+    browser->setObjectName(QStringLiteral("managedProfileBrowser"));
+    browser->setToolTip(
+        QStringLiteral("Explicit launchSettings URL; no HTTP readiness or browser debugger is inferred"));
+    layout->addWidget(browser);
+    connect(browser, &QPushButton::clicked, this, [this, tree, status] {
+        const auto model = managedProjectEvaluation();
+        auto* row = tree->currentItem();
+        if (!model || !row || !m_runManager)
+            return;
+        bool selected = false;
+        const auto index = row->data(0, Qt::UserRole + 2).toUInt(&selected);
+        if (!selected || index >= model->launchProfiles.size())
+            return;
+        const auto& profile = model->launchProfiles[index];
+        if (!profile.launchBrowser || !profile.unavailable.empty()) {
+            status->setText(QStringLiteral("Selected profile does not request a supported browser launch"));
+            return;
+        }
+        const auto suffix =
+            ".profile." + QCryptographicHash::hash(QByteArray::fromStdString(profile.name), QCryptographicHash::Sha256)
+                              .toHex()
+                              .toStdString();
+        const auto configurations = managedRunConfigurations();
+        auto configuration =
+            std::ranges::find_if(configurations, [&](const auto& config) { return config.id.ends_with(suffix); });
+        if (configuration == configurations.end())
+            return;
+        const auto active = m_runManager->activeRun(configuration->id);
+        const auto running = active ? m_runManager->status(*active) : std::nullopt;
+        if (!running || running->phase != run::RunPhase::Running || running->configuration != *configuration) {
+            status->setText(QStringLiteral("Start this exact Project profile before opening its browser URL"));
+            return;
+        }
+        const auto allowed = managedRunAdmissionFor(*configuration)();
+        if (!allowed) {
+            status->setText(QString::fromStdString(allowed.error().message()));
+            return;
+        }
+        const auto urls = QString::fromStdString(profile.applicationUrl).split(';', Qt::SkipEmptyParts);
+        QUrl url(QString::fromStdString(profile.launchUrl));
+        if (url.isRelative() && !urls.empty())
+            url = QUrl(urls.front()).resolved(url);
+        if (!url.isValid() || (url.scheme() != QStringLiteral("http") && url.scheme() != QStringLiteral("https")) ||
+            url.host().isEmpty() || !url.userInfo().isEmpty()) {
+            status->setText(QStringLiteral("Profile has no valid absolute HTTP(S) browser URL"));
+            return;
+        }
+        if (!QDesktopServices::openUrl(url))
+            status->setText(QStringLiteral("System browser launch failed"));
+    });
     connect(select, &QPushButton::clicked, this, [this] { showManagedProjectContext(); });
     connect(this, &Workbench::managedProjectChanged, tree, [this, tree, status] {
         tree->clear();
@@ -329,6 +424,20 @@ void Workbench::attachManagedProjectView() {
         auto* properties = new QTreeWidgetItem(tree, {QStringLiteral("Properties")});
         for (const auto& [key, value] : model->properties)
             new QTreeWidgetItem(properties, {QString::fromStdString(key), QString::fromStdString(value)});
+        auto* profiles = new QTreeWidgetItem(tree, {QStringLiteral("launchSettings profiles")});
+        for (std::size_t profileIndex = 0; profileIndex < model->launchProfiles.size(); ++profileIndex) {
+            const auto& profile = model->launchProfiles[profileIndex];
+            auto* row = new QTreeWidgetItem(
+                profiles, {QString::fromStdString(profile.name), profile.unavailable.empty()
+                                                                     ? QStringLiteral("Project Run configuration")
+                                                                     : QString::fromStdString(profile.unavailable)});
+            row->setData(0, Qt::UserRole + 2, static_cast<uint>(profileIndex));
+            row->setToolTip(0, QString::fromStdString(profile.applicationUrl + "\n" + profile.launchUrl));
+        }
+        new QTreeWidgetItem(tree,
+                            {QStringLiteral("Framework semantics"),
+                             QStringLiteral("Razor/Blazor/XAML/F#/VB require an explicit installed language-server "
+                                            "registry provider; no designer or browser debugger is inferred")});
         std::size_t remaining = 4000;
         for (const auto& [kind, items] : model->items) {
             auto* group = new QTreeWidgetItem(
@@ -375,6 +484,13 @@ void Workbench::managedProjectInputChanged(std::string_view path) {
     if (!m_managedEvaluation)
         return;
     const auto key = lang::documentKey(path);
+    if (!m_managedEvaluation->launchSettingsPath.empty() &&
+        key == lang::documentKey(m_managedEvaluation->launchSettingsPath)) {
+        auto request = m_managedEvaluation->request;
+        clearManagedProjectContext();
+        m_managedDesiredContext = std::move(request);
+        return;
+    }
     for (const auto& [input, bytes] : m_managedEvaluation->inputFiles) {
         static_cast<void>(bytes);
         if (lang::documentKey(input) == key) {

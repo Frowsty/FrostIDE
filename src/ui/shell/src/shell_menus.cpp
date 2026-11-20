@@ -220,6 +220,7 @@ constexpr std::array kBuildMenu{
     act("build.cancelBuild"),
     sep(),
     act("build.configurationManager"),
+    act("cmake.wsl"),
     act("project.manageNuGetPackages"),
     act("project.addProjectReference"),
 };
@@ -234,6 +235,7 @@ constexpr std::array kRunMenu{
     act("run.importCoverage"),
     act("run.profile"),
     act("run.stopNativeAnalysis"),
+    act("remote.targets"),
     act("run.runCompound"),
     act("run.selectConfiguration"),
     act("run.selectDebugConfiguration"),

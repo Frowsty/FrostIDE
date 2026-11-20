@@ -254,7 +254,7 @@ Result<void> BuildController::setActiveConfiguration(std::size_t index) {
 
 Result<void> BuildController::build(build::BuildAction action, std::optional<project::ProjectId> project) {
     if (!buildAdmitted()) {
-        auto blocked = fail(ErrorCode::Busy, "a Lua debug launch is pending");
+        auto blocked = fail(ErrorCode::Busy, "another exclusive execution or debugger preparation is active");
         reportFailure(blocked.error());
         return blocked;
     }
@@ -270,7 +270,7 @@ Result<void> BuildController::build(build::BuildAction action, std::optional<pro
 
 Result<void> BuildController::compileFile(std::string_view path) {
     if (!buildAdmitted()) {
-        auto blocked = fail(ErrorCode::Busy, "a Lua debug launch is pending");
+        auto blocked = fail(ErrorCode::Busy, "another exclusive execution or debugger preparation is active");
         reportFailure(blocked.error());
         return blocked;
     }

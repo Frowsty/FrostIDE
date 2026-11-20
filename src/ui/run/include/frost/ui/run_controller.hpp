@@ -98,6 +98,8 @@ struct RunControllerHooks {
     // Optional final physical-target resolver for owned generated native recipes.
     std::function<std::function<Result<run::LaunchPlan>(run::LaunchPlan)>(const run::RunConfiguration&)>
         nativeLaunchPlanFor{};
+    // GUI captures immutable named endpoint launcher/admission; missing hook refuses Remote Run.
+    std::function<Result<run::RunHandlers>(const run::RunConfiguration&)> prepareRemoteRun{};
     // Owned native resolution that invokes a tool receives the run cancellation token.
     std::function<std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)>(
         const run::RunConfiguration&)>

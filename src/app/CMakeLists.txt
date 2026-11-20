@@ -45,6 +45,10 @@ frost_add_library(app LAYER app
         src/cmake_build_backend.hpp
         src/standalone_build_backend.hpp
         src/standalone_build_backend.cpp
+        src/unreal_build_backend.hpp
+        src/unreal_build_backend.cpp
+        src/unreal_partner_window.hpp
+        src/unreal_partner_window.cpp
         src/cmake_integration.hpp
         src/cmake_integration.cpp
         src/cmake_kit_dialog.cpp
@@ -111,6 +115,8 @@ frost_add_library(app LAYER app
         src/unity_tests_window.cpp
         src/unity_tests_window.hpp
         src/unity_control.hpp
+        src/scene_merge_work.cpp
+        src/scene_merge_dialog.cpp
         src/unity_yaml_merge.cpp
         src/unity_yaml_merge_dialog.cpp
         src/git_integration.cpp
@@ -123,6 +129,12 @@ frost_add_library(app LAYER app
 
         src/agent_scope.cpp
         src/agent_scope.hpp
+        src/agent_private.cpp
+        src/agent_private.hpp
+        src/agent_tools.cpp
+        src/agent_tools.hpp
+        src/native_agent_chat.cpp
+        src/native_agent_chat.hpp
         src/agent_bridge.cpp
         src/agent_bridge.hpp
         src/agent_integration.cpp
@@ -167,6 +179,8 @@ frost_add_library(app LAYER app
         src/workbench_clone.cpp
         src/workbench_prompts.cpp
         src/workbench_native_analysis.cpp
+        src/remote_dialogs.cpp
+        src/workbench_remote.cpp
         src/workbench_run.cpp
         src/workbench_lua_runtime.cpp
         src/workbench_visualizers.cpp
@@ -188,6 +202,7 @@ frost_add_library(app LAYER app
         src/workbench_managed_refactoring.cpp
         src/workbench_language.cpp
         src/language_registry_integration.cpp
+        src/extension_integration.cpp
         src/workbench_refactoring.cpp
         src/workbench_cpp_rename.cpp
         src/workbench_cpp_refactoring.cpp
@@ -197,6 +212,7 @@ frost_add_library(app LAYER app
         src/workbench_save_actions.cpp
         src/workbench_lua.cpp
         src/workbench_lua_refactoring.cpp
+        src/workbench_structural_search.cpp
         src/workbench_lua_module.cpp
         src/dxc_profile.cpp
         src/dxc_profile.hpp
@@ -207,6 +223,7 @@ frost_add_library(app LAYER app
         src/workbench_managed.cpp
         src/workbench_managed_model.cpp
         src/managed_build_backend.cpp
+        src/workbench_managed_diagnostics.cpp
         src/workbench_managed_run.cpp
         src/managed_debug_preparation.cpp
         src/managed_source_snapshot.cpp
@@ -240,7 +257,7 @@ frost_add_library(app LAYER app
         ${frost_startup_core_sources}
     DEPS frost::ui_vcs frost::vcs frost::ui_find frost::ui_debug frost::debug frost::ui_cmake frost::ui_terminal frost::term frost::ui_workbench frost::ui_nav frost::ui_lang frost::ui_run frost::ui_toolwindows frost::ui_editor
          frost::ui_shell frost::ui frost::engine frost::lang frost::run frost::build frost::document frost::project frost::settings
-         frost::update frost::syntax frost::storage frost::text frost::input frost::rpc frost::io frost::sched frost::diag frost::core
+         frost::agent frost::update frost::syntax frost::storage frost::text frost::input frost::rpc frost::io frost::sched frost::diag frost::core
     THIRD_PARTY Qt6::Widgets Qt6::Network)
 target_compile_definitions(frost_app PRIVATE
     FROST_UPDATE_PUBLIC_KEY_HEX="${FROST_UPDATE_PUBLIC_KEY_HEX}"
@@ -276,6 +293,12 @@ function(frost_stage_lua_test_bridge target)
         VERBATIM)
 endfunction()
 
+# Separate Qt-free stdio MCP proxy. No provider process or network transport is linked here.
+frost_add_executable(frostide_mcp LAYER app
+    SOURCES src/frostide_mcp_main.cpp src/agent_private.cpp
+    DEPS frost::agent frost::rpc frost::io frost::core)
+set_target_properties(frostide_mcp PROPERTIES OUTPUT_NAME "frostide-mcp")
+
 if(NOT WIN32)
     frost_add_executable(frost LAYER app
         SOURCES src/main.cpp
@@ -296,6 +319,8 @@ if(NOT WIN32)
     frost_stage_lua_test_bridge(frost)
     include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
     frost_stage_lua_runtime(frost)
+    add_dependencies(frost frostide_mcp)
+    frost_deploy_extension_sandbox(frost)
     return()
 endif()
 
@@ -393,3 +418,8 @@ include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
 frost_stage_lua_runtime(frost)
 
 frost_stage_lua_test_bridge(frost)
+
+
+add_dependencies(frost frostide_mcp)
+# Optional extension profiles require the owned native helper next to the calling app on Linux.
+frost_deploy_extension_sandbox(frost)

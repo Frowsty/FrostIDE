@@ -296,6 +296,7 @@ Result<void> Workbench::recoverRefactoringJournal(bool explicitRequest) {
 void Workbench::registerRefactoringActions() {
     registerCppRefactoringActions();
     registerLuaRefactoringActions();
+    registerStructuralSearchActions();
     registerCppIndexActions();
     input::ActionSpec recover;
     recover.id = "refactor.recoverJournal";

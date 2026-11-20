@@ -85,6 +85,7 @@ public:
     [[nodiscard]] lang::Json snapshot() const;
     // GUI-only immutable CLI/project capture; returned admission is worker-safe and revision-bound.
     [[nodiscard]] Result<EngineUnitTestsSource> captureEngineUnitTestsSource() const;
+    [[nodiscard]] Result<EngineUnitTestsSource> captureDocumentToolSource() const;
     // GUI cached capture. Returned live/historical admission closures are worker-safe and QObject-free.
     [[nodiscard]] Result<EngineCrashObservationSource> captureCrashObservationSource() const;
     // GUI-only current authenticated binding; registry selection and stale retained proofs grant no match.

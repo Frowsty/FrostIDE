@@ -95,7 +95,7 @@ void Workbench::createRunService() {
     hooks.confirmRerun = [this](const QString& project) { return m_services.prompts.confirmRerun(m_window, project); };
     hooks.reportError = [this](const QString& message) { notify(text("Run"), message, ui::NotificationKind::Error); };
     hooks.mayRun = [this] {
-        return !m_nativeAnalysisActive && !m_buildService->projectEditInProgress() &&
+        return !m_nativeAnalysisActive && !m_remoteBuildActive && !m_buildService->projectEditInProgress() &&
                (!m_debug || (!m_debug->debugging() && !m_debug->rerunPending()));
     };
     hooks.alternateAvailable = [this] { return m_cmake != nullptr; };
@@ -130,6 +130,7 @@ void Workbench::createRunService() {
                    ? m_engine->sessionToolPlanFor(configuration)
                    : std::function<Result<run::LaunchPlan>(run::LaunchPlan)>{};
     };
+    hooks.prepareRemoteRun=[this](const run::RunConfiguration& configuration){return prepareRemoteRun(configuration);};
     hooks.nativeLaunchPlanWithCancellationFor = [this](const run::RunConfiguration& configuration)
         -> std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> {
         return configuration.id.starts_with("managed.sdk.")
@@ -246,6 +247,7 @@ void Workbench::createRunService() {
     const auto nativeSelected = [selectedType] { return selectedType() == run::RunType::Native; };
     debugHooks.alternateAvailable = [this, selectedType] {
         const auto type = selectedType();
+        if(type==run::RunType::Remote)return false;
         if (type && run::isFrostEngineRunType(*type))
             return m_engineRunDebug != nullptr;
         return m_cmake != nullptr || type == run::RunType::Native || (type && run::isLuaRunType(*type)) ||
@@ -258,6 +260,7 @@ void Workbench::createRunService() {
      */
     debugHooks.startOverride = [this, selectedType]() -> std::optional<Result<void>> {
         const auto type = selectedType();
+        if(type==run::RunType::Remote)return Result<void>(fail(ErrorCode::Unsupported,"Named remote targets support Run; remote debugger preparation is unavailable"));
         if (type && run::isFrostEngineRunType(*type))
             return startSelectedDebugConfiguration();
         if (type && run::isLuaRunType(*type))
@@ -354,7 +357,7 @@ void Workbench::createRunService() {
         return {};
     };
     debugHooks.mayStart = [this] {
-        return !m_nativeAnalysisActive && !m_buildService->projectEditInProgress() && !m_runController->running() &&
+        return !m_nativeAnalysisActive && !m_remoteBuildActive && !m_buildService->projectEditInProgress() && !m_runController->running() &&
                (!m_runManager || m_runManager->activeRuns().empty()) && m_runService->activeRuns().empty() &&
                (!m_managedDebugPreparation || !m_managedDebugPreparation->active()) && !m_managedSnapshotJob;
     };
@@ -517,11 +520,7 @@ void Workbench::createRunService() {
     if (auto added = m_registry.add(std::move(attachProcess)); !added)
         log::warn(kLog, "attach process action: {}", added.error().describe());
     ui::RunActionHooks actionHooks;
-    actionHooks.debugging = [this] {
-        return (m_debugSessions && (m_debugSessions->anyDebugging() || m_debugSessions->anyRerunPending() ||
-                                    m_debugSessions->hasPendingWork())) ||
-               (m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob != nullptr;
-    };
+    actionHooks.debugging = [this] { return hasDebugActivity(); };
     actionHooks.stopDebugging = [this] {
         if ((m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob)
             invalidateManagedDebug();
@@ -554,8 +553,15 @@ void Workbench::createRunService() {
     });
 }
 
+bool Workbench::hasDebugActivity() const {
+    return (m_debugSessions && (m_debugSessions->anyDebugging() || m_debugSessions->anyRerunPending() ||
+                                m_debugSessions->hasPendingWork())) ||
+           (m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob != nullptr;
+}
+
 bool Workbench::canStartLuaDebug() const {
-    return !m_shutDown && !m_projectRoot.empty() && m_buildService && !m_buildService->projectEditInProgress() &&
+    return !m_shutDown && !m_nativeAnalysisActive && !m_remoteBuildActive && !m_projectRoot.empty() &&
+           m_buildService && !m_buildService->projectEditInProgress() &&
            m_buildService->state() == build::BuildState::Idle &&
            (!m_cmake || (!m_cmake->running() && m_cmake->service().state() == build::BuildState::Idle)) &&
            m_runController && !m_runController->running() && m_runService && m_runService->activeRuns().empty() &&

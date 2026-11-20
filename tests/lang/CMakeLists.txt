@@ -47,6 +47,9 @@ endif()
 
 frost_add_test(lang_unit_tests
     SOURCES
+        unreal_reflection_test.cpp
+        unreal_partner_test.cpp
+        unreal_compile_commands_test.cpp
         cpp_rename_plan_test.cpp
         cpp_refactoring_plan_test.cpp
         cpp_index_test.cpp
@@ -83,6 +86,7 @@ frost_add_test(lang_unit_tests
         lua_rc_test.cpp
         lua_service_test.cpp
         language_registry_test.cpp
+        extension_manifest_test.cpp
         shader_source_test.cpp
         msbuild_provider_test.cpp
         semantic_tokens_test.cpp

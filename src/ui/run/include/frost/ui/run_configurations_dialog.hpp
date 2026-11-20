@@ -90,6 +90,7 @@ public:
 
     // Adds a native configuration (Add), selects it and returns its id.
     std::string addNative();
+    std::string addRemote();
     // Copies the selected configuration as a native one (Copy; a generated one keeps its fields
     // and the program the user types). Returns the new id, or "" when nothing is selected.
     std::string copySelected();
@@ -131,6 +132,8 @@ private:
     QPushButton* m_copy = nullptr;
     QPushButton* m_remove = nullptr;
     QListWidget* m_list = nullptr;
+    QPushButton* m_addRemote = nullptr;
+    QLineEdit* m_remoteEndpoint = nullptr;
     QLineEdit* m_name = nullptr;
     QLabel* m_type = nullptr;
     QLabel* m_target = nullptr;
@@ -143,6 +146,7 @@ private:
     QPushButton* m_addLuaRepl = nullptr;
     QLineEdit* m_luaScript = nullptr;
     QLineEdit* m_interpreterArguments = nullptr;
+    QComboBox* m_luaRuntime = nullptr;
     std::string m_luaInterpreterDefault, m_luaScriptDefault, m_luaWorkingDirectoryDefault;
     QLineEdit* m_arguments = nullptr;
     QLineEdit* m_workingDirectory = nullptr;

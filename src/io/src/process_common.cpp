@@ -5,6 +5,7 @@
 
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
+#include "frost/io/process_sandbox.hpp"
 #include "frost/io/utf.hpp"
 
 #include "internal.hpp"
@@ -27,6 +28,7 @@ bool isDeviceNamespace(std::string_view path, bool windowsRules) noexcept {
 } // namespace
 
 Result<void> validateProcessSpec(const ProcessSpec& spec, bool windowsRules) {
+    if (auto sandbox = validateProcessSandbox(spec, windowsRules); !sandbox) return sandbox;
     if (spec.residentMemoryLimitBytes) {
         if (!windowsRules) {
             return fail(ErrorCode::Unsupported, "residentMemoryLimitBytes requires Windows HARDWS_MAX");

@@ -11,8 +11,10 @@
 #include <set>
 namespace frost::build {
 namespace {
-constexpr std::string_view kinds[] = {"Compile",         "ProjectReference",  "PackageReference", "Analyzer",
-                                      "AdditionalFiles", "EditorConfigFiles", "Reference",        "PackageVersion"};
+constexpr std::string_view kinds[] = {
+    "Compile",           "ProjectReference", "PackageReference", "Analyzer",       "AdditionalFiles",
+    "EditorConfigFiles", "Reference",        "PackageVersion",   "Page",           "ApplicationDefinition",
+    "AvaloniaXaml",      "MauiXaml",         "RazorGenerate",    "RazorComponent", "Content"};
 Result<std::vector<std::string>> frameworks(std::string_view value) {
     std::vector<std::string> result;
     while (!value.empty()) {
@@ -47,9 +49,13 @@ Result<io::ProcessSpec> managedProjectEvaluationSpec(const ManagedProjectRequest
                          "MSBuildProjectFullPath,UsingMicrosoftNETSdk,AssemblyName,LangVersion,Nullable,"
                          "DefineConstants,IsTestProject,ManagePackageVersionsCentrally,"
                          "CentralPackageVersionOverrideEnabled,NuGetPackageRoot,DirectoryPackagesPropsPath,"
-                         "MSBuildAllProjects,MSBuildToolsPath,MSBuildProjectExtensionsPath";
-    spec->arguments.push_back("-getItem:Compile,ProjectReference,PackageReference,Analyzer,AdditionalFiles,"
-                              "EditorConfigFiles,Reference,PackageVersion");
+                         "MSBuildAllProjects,MSBuildToolsPath,MSBuildProjectExtensionsPath,UsingMicrosoftNETSdkWeb,"
+                         "UseWPF,UseWindowsForms,UseMaui,TargetPlatformIdentifier,TargetPlatformVersion,RootNamespace,"
+                         "RazorLangVersion,RazorCompileOnBuild,RazorConfiguration,StaticWebAssetProjectMode";
+    spec->arguments.push_back(
+        "-getItem:Compile,ProjectReference,PackageReference,Analyzer,AdditionalFiles,"
+        "EditorConfigFiles,Reference,PackageVersion,Page,ApplicationDefinition,AvaloniaXaml,MauiXaml,"
+        "RazorGenerate,RazorComponent,Content");
     spec->arguments.push_back("-property:BuildProjectReferences=false");
     return spec;
 }
@@ -108,6 +114,12 @@ Result<ManagedProjectEvaluation> parseManagedProjectEvaluation(const ManagedProj
     std::size_t count = 0;
     for (const auto kind : kinds) {
         const auto* list = items->find(kind);
+        // Old serialized reports may omit newly requested framework lists; absence means unknown,
+        // never an inferred empty SDK item set. Real query requests them explicitly.
+        if (!list && kind != "Compile" && kind != "ProjectReference" && kind != "PackageReference" &&
+            kind != "Analyzer" && kind != "AdditionalFiles" && kind != "EditorConfigFiles" && kind != "Reference" &&
+            kind != "PackageVersion")
+            continue;
         if (!list || list->kind != detail::JsonValue::Kind::Array)
             return fail(ErrorCode::Corrupt, "managed evaluation lacks a requested item list");
         auto& destination = result.items[std::string(kind)];

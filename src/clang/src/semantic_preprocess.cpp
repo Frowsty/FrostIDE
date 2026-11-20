@@ -7,6 +7,7 @@
 #include "clang/Frontend/PreprocessorOutputOptions.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/Lex/PPCallbacks.h"
+#include "clang/Lex/MacroArgs.h"
 #include "semantic_command.hpp"
 
 namespace frost::clang_engine {
@@ -86,7 +87,7 @@ public:
                                {"characteristic", static_cast<unsigned>(kind)}});
     }
     void MacroExpands(const clang::Token& name, const clang::MacroDefinition& definition, clang::SourceRange range,
-                      const clang::MacroArgs*) override {
+                      const clang::MacroArgs* arguments) override {
         if (!capture.error.empty())
             return;
         const auto* info = definition.getMacroInfo();
@@ -111,6 +112,23 @@ public:
                 }
         }
         auto& manager = preprocessor.getSourceManager();
+        llvm::json::Array argumentTokens;
+        const bool reflection = spelling == "UCLASS" || spelling == "USTRUCT" || spelling == "UENUM" ||
+            spelling == "UINTERFACE" || spelling == "UPROPERTY" || spelling == "UFUNCTION";
+        if (reflection && arguments && !name.getLocation().isMacroID()) {
+            std::size_t count = 0;
+            for (unsigned argument = 0; argument < arguments->getNumMacroArguments(); ++argument) {
+                llvm::json::Array values;
+                for (const clang::Token* token = arguments->getUnexpArgument(argument); !token->is(clang::tok::eof); ++token) {
+                    const auto value = preprocessor.getSpelling(*token);
+                    if (++count > 4096 || !capture.charge(value.size())) {
+                        capture.error = "Reflection argument token budget exceeded"; return;
+                    }
+                    values.push_back(value);
+                }
+                argumentTokens.push_back(std::move(values));
+            }
+        }
         capture.macros.push_back(llvm::json::Object{
             {"name", spelling},
             {"at", location(name.getLocation(), manager, capture.command)},
@@ -121,7 +139,8 @@ public:
             {"variadic", info && info->isVariadic()},
             {"nested", name.getLocation().isMacroID()},
             {"parameters", std::move(parameters)},
-            {"definitionTokens", std::move(tokens)}});
+            {"definitionTokens", std::move(tokens)},
+            {"argumentTokens", std::move(argumentTokens)}});
     }
 };
 class Action final : public clang::PreprocessorFrontendAction {

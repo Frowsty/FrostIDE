@@ -136,6 +136,10 @@ public:
     [[nodiscard]] Result<void> registerActions(input::ActionRegistry& registry);
 
     // --- The features (the action handlers) ---
+    using LocalCompletion = std::function<std::optional<::frost::lang::CompletionList>(std::string_view,
+        const text::Snapshot&, ByteOffset)>;
+    // Optional syntax-only host catalog; an answer owns completion and never reaches LSP resolve.
+    void setLocalCompletion(LocalCompletion completion) { m_localCompletion=std::move(completion); }
     void completeCode();
     void smartCompleteCode();
     void showParameterInfo();
@@ -345,6 +349,7 @@ private:
     std::atomic<std::shared_ptr<SemanticApply>> m_cppSemanticApply;
     bool m_cppSemanticCommand = false; // GUI-thread serialization until the terminal command response.
     std::unique_ptr<CompletionPopup> m_completion;
+    LocalCompletion m_localCompletion;
     std::unique_ptr<ParameterInfoPopup> m_parameterInfo;
     std::unique_ptr<QuickDocPopup> m_quickDoc;
     std::unique_ptr<FindUsagesPanel> m_usages;

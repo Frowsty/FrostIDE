@@ -48,7 +48,7 @@ struct Predicate {
     std::vector<std::string> strings;
 };
 
-enum class QueryKind : std::uint8_t { Highlights, Outline, Folds };
+enum class QueryKind : std::uint8_t { Highlights, Outline, Folds, Structural };
 
 // What a capture of an outline query means: the declaration (kind set) or its name.
 struct OutlineRole {

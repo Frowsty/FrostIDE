@@ -17,7 +17,7 @@
 #   run_tree_child         the helper program that builds that tree (not a test itself).
 
 frost_add_test(run_unit_tests
-    SOURCES dotnet_tests_test.cpp engine_session_configurations_test.cpp native_profile_test.cpp native_coverage_test.cpp vs_import_test.cpp run_configuration_test.cpp run_types_test.cpp frostengine_run_test.cpp engine_debug_mode_test.cpp
+    SOURCES dotnet_tests_test.cpp remote_run_configuration_test.cpp unreal_run_test.cpp vs_import_test.cpp run_configuration_test.cpp run_types_test.cpp frostengine_run_test.cpp engine_debug_mode_test.cpp engine_session_configurations_test.cpp native_profile_test.cpp native_coverage_test.cpp
     DEPS frost::run frost::project frost::rpc frost::io frost::core)
 target_include_directories(run_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 
@@ -188,3 +188,23 @@ frost_add_test(run_native_profile_real_tests SOURCES native_profile_real_test.cp
 target_include_directories(run_native_profile_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(run_native_profile_real_tests PRIVATE FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
     FROST_TEST_PROFILE_UUID="${_frost_profile_uuid}")
+
+# LTR19 source-only authored fixtures; explicit installed tools, never restore diagnostic packages.
+frost_add_test(run_managed_diagnostics_tests SOURCES managed_diagnostics_test.cpp
+    DEPS frost::run frost::io frost::core LABELS unit managed)
+option(FROST_BUILD_MANAGED_DIAGNOSTIC_ACCEPTANCE "Build later real EventPipe tool acceptance" OFF)
+if(FROST_BUILD_MANAGED_DIAGNOSTIC_ACCEPTANCE)
+    foreach(tool IN ITEMS DOTNET TRACE COUNTERS GCDUMP)
+        set(FROST_DIAGNOSTIC_${tool} "" CACHE FILEPATH "Explicit installed managed diagnostic fixture tool")
+        if(NOT IS_ABSOLUTE "${FROST_DIAGNOSTIC_${tool}}" OR NOT EXISTS "${FROST_DIAGNOSTIC_${tool}}")
+            message(FATAL_ERROR "Managed diagnostic acceptance requires FROST_DIAGNOSTIC_${tool}")
+        endif()
+    endforeach()
+    frost_add_test(run_managed_diagnostics_real_tests SOURCES managed_diagnostics_real_test.cpp
+        DEPS frost::run frost::debug frost::io frost::core LABELS integration managed)
+    target_include_directories(run_managed_diagnostics_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    foreach(tool IN ITEMS DOTNET TRACE COUNTERS GCDUMP)
+        file(TO_CMAKE_PATH "${FROST_DIAGNOSTIC_${tool}}" diagnostic_path)
+        target_compile_definitions(run_managed_diagnostics_real_tests PRIVATE FROST_DIAGNOSTIC_${tool}="${diagnostic_path}")
+    endforeach()
+endif()

@@ -26,6 +26,7 @@ set(frost_io_sources
     src/path.cpp
     src/polling_watcher.cpp
     src/process_common.cpp
+    src/process_sandbox_common.cpp
     src/reactor.cpp
     src/real_file_watcher.cpp
     src/scripted_process_launcher.cpp
@@ -35,10 +36,10 @@ set(frost_io_sources
     src/watch_queue.cpp)
 if(WIN32)
     list(APPEND frost_io_sources src/async_process_win.cpp src/file_system_win.cpp src/file_watcher_win.cpp
-                                 src/process_win.cpp src/local_ipc_win.cpp)
+                                 src/process_win.cpp src/process_sandbox_win.cpp src/local_ipc_win.cpp)
 else()
     list(APPEND frost_io_sources src/async_process_posix.cpp src/child_reaper_posix.cpp src/file_system_posix.cpp
-                                 src/file_watcher_linux.cpp src/process_posix.cpp src/local_ipc_posix.cpp)
+                                 src/file_watcher_linux.cpp src/process_posix.cpp src/process_sandbox_linux.cpp src/local_ipc_posix.cpp)
 endif()
 
 frost_add_library(io LAYER io
@@ -51,7 +52,7 @@ target_link_libraries(frost_io PRIVATE asio::asio)
 target_compile_definitions(frost_io PRIVATE ASIO_STANDALONE ASIO_NO_DEPRECATED ASIO_NO_DEFAULT_LINKED_LIBS)
 if(WIN32)
     # BCryptGenRandom: unpredictable pipe names (process_win.cpp).
-    target_link_libraries(frost_io PRIVATE bcrypt advapi32)
+    target_link_libraries(frost_io PRIVATE bcrypt advapi32 userenv)
     # asio's Windows backend references Winsock (ws2_32, mswsock); FrostIDE never uses sockets through
     # it, and reactor.cpp's Winsock guard keeps asio from calling WSAStartup. Delay-loading ws2_32 in
     # every binary that links frost_io keeps the DLL out of the process entirely (ADR 0020; the
@@ -60,3 +61,30 @@ if(WIN32)
     target_link_libraries(frost_io INTERFACE ws2_32 delayimp)
     target_link_options(frost_io INTERFACE "LINKER:/DELAYLOAD:ws2_32.dll")
 endif()
+
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    frost_add_executable(frost-extension-sandbox LAYER io
+        SOURCES ../../tools/extension_sandbox/main.cpp
+        DEPS frost::io)
+    target_include_directories(frost-extension-sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    install(TARGETS frost-extension-sandbox RUNTIME DESTINATION bin)
+endif()
+
+# Install the enforcing helper beside the actual caller image (/proc/self/exe), including fixtures.
+function(frost_deploy_extension_sandbox target)
+    if(TARGET frost-extension-sandbox)
+        set(deployment "frost_extension_sandbox_deploy_${target}")
+        if(NOT TARGET ${deployment})
+            # An always-run prerequisite of the caller, not its POST_BUILD event: refreshing only
+            # the helper must update an otherwise up-to-date caller on its next target build.
+            add_custom_target(${deployment}
+                COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${target}>
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:frost-extension-sandbox> $<TARGET_FILE_DIR:${target}>
+                DEPENDS frost-extension-sandbox
+                VERBATIM)
+        endif()
+        add_dependencies(${target} ${deployment})
+    endif()
+endfunction()

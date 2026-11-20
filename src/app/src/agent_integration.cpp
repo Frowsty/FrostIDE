@@ -3,6 +3,7 @@
 #include "agent_integration.hpp"
 #include "agent_bridge.hpp"
 #include "agent_scope.hpp"
+#include "agent_tools.hpp"
 #include "frost/app/workbench.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/io/utf.hpp"
@@ -62,6 +63,7 @@ struct AgentIntegration::State {
     AgentIntegration& self;
     Workbench& owner;
     std::unique_ptr<AgentBridge> bridge;
+    std::unique_ptr<AgentTools> tools;
     QTimer timer;
     QElapsedTimer consentAge;
     QString root;
@@ -281,12 +283,14 @@ AgentIntegration::AgentIntegration(Workbench& owner) : QObject(&owner), m(std::m
 }
 AgentIntegration::~AgentIntegration() { stop(); }
 bool AgentIntegration::active() const { return m->admitted() && (m->bridge->port() != 0 || m->terminal); }
+unsigned short AgentIntegration::port() const { return m->bridge->port(); }
 void AgentIntegration::stop() {
     m->live->store(false, std::memory_order_release);
     ++m->generation;
     m->consent = false;
     m->probe.request_stop();
     m->timer.stop();
+    if (m->tools) { m->tools->stop(); m->tools.reset(); }
     m->bridge->stop();
     const auto open = m->diffs;
     for (const auto& [title, dialog] : open) { (void)title; if (dialog) dialog->reject(); }
@@ -304,7 +308,7 @@ void AgentIntegration::enable(bool launchTerminal) {
     const auto root = qs(owner.projectRoot());
     QPointer<AgentIntegration> lifetime(this);
     const auto consentGeneration = m->generation;
-    if (!ask(this, "Connect AI Agent", "Allow your installed Claude Code CLI to access this window's workspace editors, selections and diagnostics?\n" + root + "\nDiff changes require Apply; saving requires approval. This consent expires after eight hours or when workspace trust changes. The CLI may use its configured network provider. No prompt will be submitted by FrostIDE.")) return;
+    if (!ask(this, "Connect AI Agent", "Allow your installed Claude Code CLI to access this window's workspace editors, selections, diagnostics and scoped project tools?\n" + root + "\nDiff changes require Apply; saving requires approval. This consent expires after eight hours or when workspace trust changes. The CLI may use its configured network provider. No prompt will be submitted by FrostIDE.")) return;
     if (!lifetime) return;
     if (m->generation != consentGeneration || root != qs(owner.projectRoot()) || !owner.m_services.trust.isTrusted(owner.projectRoot())) return;
     stop();
@@ -318,6 +322,8 @@ void AgentIntegration::enable(bool launchTerminal) {
     if (!QDir::isAbsolutePath(config)) { stop(); return; }
     auto started = m->bridge->start(root, config);
     if (!started) { inform(this, "AI Agent", qs(started.error().message())); if (lifetime) stop(); return; }
+    m->tools = std::make_unique<AgentTools>(owner, [this] { return m->admitted(); }, this);
+    if (auto tools = m->tools->start(root, config); !tools) { inform(this, "AI Agent", qs(tools.error().message())); if (lifetime) stop(); return; }
     m->status = new QLabel("AI Agent: 0 connected", owner.m_window);
     m->status->setAccessibleName("AI Agent connection status");
     owner.m_window->statusBar()->addPermanentWidget(m->status);
@@ -382,8 +388,8 @@ void AgentIntegration::enable(bool launchTerminal) {
             io::ProcessSpec launch;
             launch.executable = utf8(executable);
             launch.workingDirectory = utf8(state.root);
-            if (supported) { launch.arguments = {"--ide"}; launch.environment.emplace_back("CLAUDE_CODE_SSE_PORT", std::to_string(state.bridge->port())); }
-            else state.bridge->stop();
+            if (supported) { launch.arguments = {"--ide", "--settings", utf8(state.tools->hookSettings()), "--mcp-config", utf8(state.tools->mcpConfig())}; launch.environment.emplace_back("CLAUDE_CODE_SSE_PORT", std::to_string(state.bridge->port())); }
+            else { state.bridge->stop(); if (state.tools) state.tools->stop(); }
             auto opened = state.owner.m_terminal->openProcess(launch, "Agent Terminal (Claude Code)");
             if (!opened) { inform(guard, "AI Agent", qs(opened.error().message())); if (guard) guard->stop(); return; }
             state.terminal = state.owner.m_terminal->toolWindow()->view(*opened);
@@ -396,5 +402,6 @@ void Workbench::enableAgentBridge(bool terminal) {
 }
 void Workbench::stopAgentBridge() { if (m_agent) m_agent->stop(); }
 void Workbench::mentionAgentSelection() { if (m_agent) m_agent->mention(); }
+unsigned short Workbench::agentBridgePort() const { return m_agent ? m_agent->port() : 0; }
 bool Workbench::agentBridgeActive() const { return m_agent && m_agent->active(); }
 }

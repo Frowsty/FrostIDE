@@ -10,6 +10,7 @@
 #include "frost/ui/lang/editor_insight_binding.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 
+#include "extension_integration.hpp"
 #include "language_bridge.hpp"
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -19,6 +20,7 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QStandardPaths>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -36,6 +38,12 @@ struct LanguageRegistryIntegration::Entry {
 };
 namespace {
 QString q(std::string_view s) { return QString::fromUtf8(s.data(), static_cast<qsizetype>(s.size())); }
+std::string sandboxParent(const WorkbenchOptions& options) {
+    std::string parent(io::parentPath(options.applicationSettingsFile));
+    if (parent.empty())
+        parent = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation).toStdString();
+    return parent.empty() ? std::string{} : parent + "/extension-sandboxes";
+}
 } // namespace
 LanguageRegistryIntegration::LanguageRegistryIntegration(Workbench& w) : QObject(&w), m_workbench(w) {
     input::ActionSpec action;
@@ -56,6 +64,7 @@ void LanguageRegistryIntegration::retire() {
     ++m_generation;
     m_workbench.m_bridge->setRegisteredServers({});
     for (auto& [id, entry] : m_entries) {
+        entry->launcher->revoke();
         entry->service->diagnostics().removeListener(entry->listener);
         m_retired.push_back(m_workbench.m_pool->spawn(sched::Lane::Background, Entry::stop(entry)));
     }
@@ -89,7 +98,13 @@ void LanguageRegistryIntegration::poll() {
         return true;
     });
     const auto root = m_workbench.m_projectRoot;
-    const auto manifest = m_workbench.m_services.settings.snapshot()->get(settings::key::languageServerRegistry);
+    auto manifest = m_workbench.m_services.settings.snapshot()->get(settings::key::languageServerRegistry);
+    if (m_workbench.m_extensions) {
+        m_workbench.m_extensions->poll();
+        auto combined = m_workbench.m_extensions->composeLanguageRegistry(manifest);
+        manifest =
+            combined ? std::move(*combined) : std::string("invalid extension registry: ") + combined.error().message();
+    }
     const auto trust = m_workbench.m_services.trust.snapshot(root);
     const auto physicalNow =
         root.empty() ? Result<std::string>(std::string{}) : m_workbench.m_services.fs.physicalPath(root);
@@ -145,7 +160,7 @@ void LanguageRegistryIntegration::poll() {
         entry->definition = d;
         entry->launcher = std::make_shared<lang::RegistryProcessLauncher>(
             m_workbench.m_services.launcher, m_workbench.m_services.fs, m_workbench.m_services.trust, d, root,
-            trust.revision, *physical);
+            trust.revision, *physical, nullptr, sandboxParent(m_workbench.m_options));
         auto options = lang::registeredLanguageOptions(d, root);
         options.onLifecycle = [self, generation] {
             if (self)
@@ -212,6 +227,26 @@ std::shared_ptr<lang::LuaService> LanguageRegistryIntegration::service(std::stri
     if (found == m_entries.end() || !found->second->launcher->admitDocument(path))
         return {};
     return found->second->service;
+}
+namespace {
+sched::Task<Result<lang::Json>> commandFailure(Error error) { co_return std::unexpected(std::move(error)); }
+} // namespace
+sched::Task<Result<lang::Json>> LanguageRegistryIntegration::executeCommand(std::string path, std::string serverId,
+                                                                            std::string command, lang::Json arguments,
+                                                                            std::stop_token stop) {
+    poll();
+    auto selected = service(path);
+    if (!selected || !m_registry)
+        return commandFailure(Error{ErrorCode::PermissionDenied, "No admitted language provider for this document"});
+    const auto* definition = m_registry->forPath(path);
+    const auto entry = definition ? m_entries.find(definition->id) : m_entries.end();
+    const auto capabilities = selected->capabilities();
+    if (!definition || definition->id != serverId || entry == m_entries.end() || !capabilities ||
+        !lang::extensionCommandAdvertised(*capabilities, command))
+        return commandFailure(Error{ErrorCode::Unsupported, "The active provider did not advertise this command"});
+    return entry->second->requester->request(
+        "workspace/executeCommand",
+        lang::Json::object().set("command", std::move(command)).set("arguments", std::move(arguments)), stop);
 }
 void LanguageRegistryIntegration::sync(DocumentEditorView& view) {
     auto server = service(view.path());
@@ -350,6 +385,12 @@ Result<void> LanguageRegistryIntegration::setManifest(std::string manifest) {
         return fail(ErrorCode::Cancelled, "Language registry is shutting down");
     if (auto parsed = lang::LanguageServerRegistry::parse(manifest); !parsed)
         return std::unexpected(parsed.error());
+    if (m_workbench.m_extensions) {
+        m_workbench.m_extensions->poll();
+        auto composed = m_workbench.m_extensions->composeLanguageRegistry(manifest);
+        if (!composed)
+            return std::unexpected(composed.error());
+    }
     auto saved = m_workbench.m_services.settings.set(settings::Scope::Application,
                                                      settings::key::languageServerRegistry, std::move(manifest));
     if (!saved)

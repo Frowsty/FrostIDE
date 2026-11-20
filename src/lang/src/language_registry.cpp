@@ -3,6 +3,7 @@
 #include "frost/lang/language_registry.hpp"
 
 #include "frost/io/path.hpp"
+#include "frost/io/process_sandbox.hpp"
 #include "frost/io/spawn_log.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/lang/workspace_edit.hpp"
@@ -121,6 +122,57 @@ Result<LanguageServerRegistry> LanguageServerRegistry::parse(std::string_view ma
         }
         if (!pinsExecutable)
             return fail(ErrorCode::PermissionDenied, "Language server executable requires an explicit SHA256 pin");
+        if (const auto* sandbox = row.find("sandbox")) {
+            const auto* files = sandbox->find("files");
+            if (!sandbox->isObject() || sandbox->stringAt("profile") != "read-only-stdio" || !files ||
+                !files->isArray() || files->size() == 0 || files->size() > 64)
+                return fail(ErrorCode::Unsupported,
+                            "Expected explicit read-only-stdio sandbox and bounded pinned file inventory");
+            for (const auto& key : sandbox->keys())
+                if (key != "profile" && key != "files")
+                    return fail(ErrorCode::PermissionDenied,
+                                "Unknown sandbox grant; no implicit write/network/identity authority");
+            std::set<std::string> sourcePaths, relativePaths;
+            bool sandboxExecutable = false;
+            for (const auto& file : files->items()) {
+                LanguageSandboxFile selected{std::string(file.stringAt("path")),
+                                             std::string(file.stringAt("relativePath")), false};
+                const auto executable = file.boolAt("executable");
+                auto relative = selected.relativePath;
+                std::replace(relative.begin(), relative.end(), '\\', '/');
+                bool safe = bounded(relative, 512) && !io::isAbsolutePath(relative) && relative.front() != '/';
+                std::size_t at = 0;
+                while (safe && at < relative.size()) {
+                    const auto end = relative.find('/', at);
+                    const auto part =
+                        std::string_view(relative).substr(at, end == relative.npos ? relative.size() - at : end - at);
+                    safe =
+                        !part.empty() && part != "." && part != ".." && std::ranges::all_of(part, [](unsigned char c) {
+                            return c > 32 && c < 127 && c != ':' && c != '*' && c != '?' && c != '"' && c != '<' &&
+                                   c != '>' && c != '|';
+                        });
+                    if (end == relative.npos)
+                        break;
+                    at = end + 1;
+                    if (at == relative.size())
+                        safe = false;
+                }
+                if (!absolute(selected.path) || !executable || !safe ||
+                    !sourcePaths.insert(documentKey(selected.path)).second ||
+                    !relativePaths.insert(documentKey(relative)).second ||
+                    std::ranges::none_of(d.artifacts, [&](const auto& pin) {
+                        return documentKey(pin.path) == documentKey(selected.path);
+                    }))
+                    return fail(ErrorCode::PermissionDenied,
+                                "Sandbox files require unique safe relative layout and exact reviewed artifact pins");
+                selected.relativePath = relative;
+                selected.executable = *executable;
+                sandboxExecutable |= documentKey(selected.path) == documentKey(d.executable) && selected.executable;
+                d.sandboxFiles.push_back(std::move(selected));
+            }
+            if (!sandboxExecutable)
+                return fail(ErrorCode::PermissionDenied, "Sandbox executable requires explicit execute grant");
+        }
         if (auto* configuration = row.find("configuration")) {
             if (!configuration->isObject())
                 return fail(ErrorCode::InvalidArgument, "Registry configuration must map LSP section names to values");
@@ -190,10 +242,15 @@ LuaServiceOptions registeredLanguageOptions(const LanguageServerDefinition& d, s
 }
 RegistryProcessLauncher::RegistryProcessLauncher(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                                  project::TrustStore& trust, LanguageServerDefinition definition,
-                                                 std::string root, std::uint64_t revision, std::string physicalRoot)
+                                                 std::string root, std::uint64_t revision, std::string physicalRoot,
+                                                 std::shared_ptr<std::atomic<bool>> contributionActive,
+                                                 std::string sandboxPrivateParent)
     : m_launcher(launcher), m_fs(fs), m_trust(trust), m_definition(std::move(definition)), m_root(std::move(root)),
-      m_physicalRoot(std::move(physicalRoot)), m_revision(revision) {}
+      m_physicalRoot(std::move(physicalRoot)), m_revision(revision),
+      m_contributionActive(std::move(contributionActive)), m_sandboxPrivateParent(std::move(sandboxPrivateParent)) {}
 Result<void> RegistryProcessLauncher::admitWorkspace() const {
+    if (!m_active.load() || (m_contributionActive && !m_contributionActive->load()))
+        return fail(ErrorCode::Cancelled, "Registered tool contribution was revoked");
     const auto trust = m_trust.snapshot(m_root);
     auto physical = m_fs.physicalPath(m_root);
     if (!trust.trusted || trust.revision != m_revision || !physical ||
@@ -226,6 +283,8 @@ Result<void> RegistryProcessLauncher::admitEdit(const Json& edit) const {
     return {};
 }
 Result<void> RegistryProcessLauncher::admit(const io::ProcessSpec& spec) {
+    if (auto allowed = admitWorkspace(); !allowed)
+        return allowed;
     auto trust = m_trust.snapshot(m_root);
     auto physical = m_fs.physicalPath(m_root);
     if (!trust.trusted || trust.revision != m_revision || !physical ||
@@ -242,18 +301,77 @@ Result<void> RegistryProcessLauncher::admit(const io::ProcessSpec& spec) {
     if (!trust.trusted || trust.revision != m_revision || !physical ||
         documentKey(*physical) != documentKey(m_physicalRoot))
         return fail(ErrorCode::Untrusted, "Workspace trust changed while verifying language server pins");
-    return {};
+    return admitWorkspace();
+}
+Result<io::ProcessSpec> RegistryProcessLauncher::prepareSandbox(const io::ProcessSpec& original) {
+    if (m_definition.sandboxFiles.empty())
+        return original;
+    auto spec = original;
+    spec.cleanEnvironment = true;
+    spec.environment.clear();
+    spec.killOnClose = true;
+    spec.sandbox = io::ProcessSandboxProfile{}; // No write or network grant in this public profile.
+    for (const auto& file : m_definition.sandboxFiles)
+        spec.sandbox->paths.push_back(
+            {file.path,
+             file.executable ? io::SandboxAccess::Read | io::SandboxAccess::Execute : io::SandboxAccess::Read, false});
+#ifdef _WIN32
+    if (m_sandboxPrivateParent.empty() || !io::isAbsolutePath(m_sandboxPrivateParent))
+        return fail(ErrorCode::Unsupported, "Sandboxed extension requires an application-owned private staging parent");
+    if (auto created = m_fs.createDirectories(m_sandboxPrivateParent); !created)
+        return std::unexpected(created.error());
+    std::vector<io::SandboxStagingFile> captured;
+    std::size_t capturedBytes = 0;
+    for (const auto& file : m_definition.sandboxFiles) {
+        const auto pin = std::ranges::find_if(m_definition.artifacts, [&](const auto& artifact) {
+            return documentKey(artifact.path) == documentKey(file.path);
+        });
+        if (pin == m_definition.artifacts.end())
+            return fail(ErrorCode::PermissionDenied, "Sandbox runtime file is not pinned");
+        auto bytes = m_fs.readFileSnapshot(file.path, 128 * 1024 * 1024);
+        if (!bytes)
+            return std::unexpected(bytes.error());
+        if (io::sha256Hex(*bytes) != pin->sha256)
+            return fail(ErrorCode::PermissionDenied, "Sandbox runtime changed while capturing staged bytes");
+        capturedBytes += bytes->size();
+        if (capturedBytes > 256 * 1024 * 1024)
+            return fail(ErrorCode::OutOfRange, "Captured sandbox runtime exceeds 256 MiB");
+        captured.push_back(
+            {file.path, file.relativePath, std::move(*bytes),
+             file.executable ? io::SandboxAccess::Read | io::SandboxAccess::Execute : io::SandboxAccess::Read});
+    }
+    auto staged = io::stageWindowsSandboxProcess(spec, captured, m_sandboxPrivateParent);
+    if (!staged)
+        return std::unexpected(staged.error());
+    if (auto current = admitWorkspace(); !current)
+        return std::unexpected(current.error());
+    return staged;
+#else
+    if (auto valid = io::validateProcessSandbox(spec, false); !valid)
+        return std::unexpected(valid.error());
+    return spec;
+#endif
 }
 Result<std::unique_ptr<io::IProcess>> RegistryProcessLauncher::launch(const io::ProcessSpec& spec) {
     if (auto allowed = admit(spec); !allowed)
         return std::unexpected(allowed.error());
-    return m_launcher.launch(spec);
+    auto prepared = prepareSandbox(spec);
+    if (!prepared)
+        return std::unexpected(prepared.error());
+    if (auto current = admitWorkspace(); !current)
+        return std::unexpected(current.error());
+    return m_launcher.launch(*prepared);
 }
 Result<std::unique_ptr<io::IAsyncProcess>> RegistryProcessLauncher::launchAsync(const io::ProcessSpec& spec,
                                                                                 const io::AsyncContext& context) {
     if (auto allowed = admit(spec); !allowed)
         return std::unexpected(allowed.error());
-    return m_launcher.launchAsync(spec, context);
+    auto prepared = prepareSandbox(spec);
+    if (!prepared)
+        return std::unexpected(prepared.error());
+    if (auto current = admitWorkspace(); !current)
+        return std::unexpected(current.error());
+    return m_launcher.launchAsync(*prepared, context);
 }
 sched::Task<Result<Json>> RegistryLspRequester::request(std::string method, Json params, std::stop_token token) {
     return invoke(m_service, m_admission, std::move(method), std::move(params), token);

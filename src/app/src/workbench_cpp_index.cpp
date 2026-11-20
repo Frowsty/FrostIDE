@@ -9,6 +9,7 @@
 #include "frost/lang/cpp_index.hpp"
 #include "frost/lang/cpp_modules.hpp"
 #include "frost/lang/cpp_preprocessor.hpp"
+#include "frost/lang/unreal_reflection.hpp"
 #include "frost/sched/resource_governor.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 
@@ -56,6 +57,8 @@ QString roleText(std::uint64_t roles) {
 struct IndexResult {
     lang::CppIndexQuery query;
     std::optional<lang::CppPreprocessorResult> preprocessor;
+    std::optional<std::vector<lang::UnrealReflectionIssue>> unrealIssues;
+    std::string unrealIssueError;
     std::optional<lang::CppModuleGraph> modules;
     std::map<std::string, std::string> sourceHashes;
     std::string databaseHash;
@@ -67,6 +70,7 @@ struct IndexJob {
     std::string scanner, privateDatabase;
     std::uint64_t trustRevision = 0, generation = 0, commandIndex = 0;
     std::shared_ptr<sched::ResourceGovernor> governor;
+    bool inspectUnreal=false;
 };
 using Done = std::function<void(Result<IndexResult>)>;
 using Progress = std::function<void(std::size_t, std::size_t)>;
@@ -123,6 +127,10 @@ sched::Task<void> indexTask(io::IFileSystem* fs, io::IProcessLauncher* launcher,
             if (!valid) {
                 done(std::unexpected(valid.error()));
                 co_return;
+            }
+            if (job.inspectUnreal) {
+                auto issues=lang::inspectUnrealReflection(*output);
+                if(issues) result.unrealIssues=std::move(*issues); else result.unrealIssueError=issues.error().message();
             }
             result.preprocessor = std::move(*output);
         } else {
@@ -421,6 +429,7 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
     job.root = root;
     job.databaseFile = database->file;
     job.operation = operation;
+    job.inspectUnreal = m_unreal != nullptr;
     job.symbol = std::move(symbol);
     job.trustRevision = permission.revision;
     job.generation = generation;
@@ -538,6 +547,15 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
                         add(QStringLiteral("Expanded source"), result->preprocessor->text);
                         add(QStringLiteral("Include graph"), result->preprocessor->includes.dump());
                         add(QStringLiteral("Macro events"), result->preprocessor->macros.dump());
+                        if(result->unrealIssues || !result->unrealIssueError.empty()) {
+                            std::string report=result->unrealIssueError;
+                            if(result->unrealIssues) {
+                                report="Actual active Clang invocation tokens; only documented conflicting specifiers are checked. Unknown/version-specific specifiers are not rejected.\n";
+                                for(const auto& issue:*result->unrealIssues) report+=issue.path+":"+std::to_string(issue.line)+":"+std::to_string(issue.column)+": "+issue.macro+": "+issue.message+"\n";
+                                if(result->unrealIssues->empty()) report+="No supported conflicts in this captured command. This is not a complete UHT validation.\n";
+                            }
+                            add(QStringLiteral("Unreal reflection inspections"),report);
+                        }
                     } else {
                         layout->addWidget(new QLabel(
                             QStringLiteral("Actual clang-scan-deps P1689 report for captured saved commands. Missing "

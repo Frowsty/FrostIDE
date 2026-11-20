@@ -230,6 +230,7 @@ void RunController::applySelection(const run::RunConfiguration& configuration) {
             m_hooks.selectCMakeTarget(configuration.target);
         }
         break;
+    case run::RunType::Remote:
     case run::RunType::Native:
     case run::RunType::LuaScript:
     case run::RunType::LuaRepl:
@@ -327,6 +328,7 @@ std::optional<run::RunId> RunController::configurationRun(const std::string& id)
 bool RunController::canRun() const {
     if (const run::RunConfiguration* selected = selectedConfiguration()) {
         switch (selected->type) {
+        case run::RunType::Remote: return m_runs!=nullptr && bool(m_hooks.prepareRemoteRun);
         case run::RunType::Native:
         case run::RunType::LuaScript:
         case run::RunType::LuaRepl: return m_runs != nullptr;
@@ -383,6 +385,7 @@ Result<build::RunId> RunController::runConfiguration(const std::string& id) {
     }
     const run::RunConfiguration configuration = *found;
     switch (configuration.type) {
+    case run::RunType::Remote:
     case run::RunType::Native:
     case run::RunType::LuaScript:
     case run::RunType::LuaRepl:
@@ -600,6 +603,12 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
         handlers.launchAdmission = m_hooks.launchAdmissionFor(configuration);
     if (configuration.type == run::RunType::Native && m_hooks.nativeLaunchPlanFor)
         handlers.transformLaunchPlan = m_hooks.nativeLaunchPlanFor(configuration);
+    if(configuration.type==run::RunType::Remote) {
+        if(!m_hooks.prepareRemoteRun)return fail(ErrorCode::Unsupported,"Named remote target preparation is unavailable");
+        auto prepared=m_hooks.prepareRemoteRun(configuration);if(!prepared)return std::unexpected(prepared.error());
+        handlers.remoteLauncher=std::move(prepared->remoteLauncher);handlers.remoteTargetId=std::move(prepared->remoteTargetId);
+        handlers.launchAdmission=std::move(prepared->launchAdmission);
+    }
     if (configuration.type == run::RunType::Native && m_hooks.nativeLaunchPlanWithCancellationFor)
         handlers.transformLaunchPlanWithCancellation = m_hooks.nativeLaunchPlanWithCancellationFor(configuration);
     if (run::isLuaRunType(configuration.type)) {

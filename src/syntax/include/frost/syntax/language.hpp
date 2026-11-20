@@ -17,14 +17,32 @@ namespace frost::syntax {
 
 // The built-in languages. Grammars and queries are compiled in; nothing is loaded from disk,
 // projects or settings (ADR 0023 D6 g, restricted mode).
-enum class LanguageId : std::uint8_t { None, C, Cpp, CSharp, CMake, Xml, Json, Markdown, Lua };
+enum class LanguageId : std::uint8_t {
+    None,
+    C,
+    Cpp,
+    CSharp,
+    CMake,
+    Xml,
+    Json,
+    Markdown,
+    Lua,
+    Python,
+    JavaScript,
+    TypeScript,
+    Tsx,
+    Yaml,
+    Toml,
+    PowerShell
+};
 
 // The number of LanguageId values, None included.
-inline constexpr std::size_t kLanguageIdCount = 9;
+inline constexpr std::size_t kLanguageIdCount = 16;
 // Every language with a grammar, in enumeration order.
-inline constexpr std::array<LanguageId, 8> kAllLanguages = {LanguageId::C,        LanguageId::Cpp, LanguageId::CSharp,
-                                                            LanguageId::CMake,    LanguageId::Xml, LanguageId::Json,
-                                                            LanguageId::Markdown, LanguageId::Lua};
+inline constexpr std::array<LanguageId, 15> kAllLanguages = {
+    LanguageId::C,          LanguageId::Cpp,      LanguageId::CSharp, LanguageId::CMake,  LanguageId::Xml,
+    LanguageId::Json,       LanguageId::Markdown, LanguageId::Lua,    LanguageId::Python, LanguageId::JavaScript,
+    LanguageId::TypeScript, LanguageId::Tsx,      LanguageId::Yaml,   LanguageId::Toml,   LanguageId::PowerShell};
 
 // "c", "cpp", "csharp", "cmake", "xml", "json", "markdown" or "none" (also for out-of-range values).
 [[nodiscard]] std::string_view toString(LanguageId id) noexcept;

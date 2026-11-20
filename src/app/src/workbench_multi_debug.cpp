@@ -135,6 +135,7 @@ Result<void> Workbench::startCompoundDebug(const run::RunConfiguration& configur
         const auto* member = m_runController->configurations().find(id);
         if (!member)
             return fail(ErrorCode::NotFound, "A compound debugger configuration member is missing");
+        if(member->type==run::RunType::Remote)return fail(ErrorCode::Unsupported,"A remote Run-only endpoint cannot be a compound Debug member");
         members.push_back(*member); // Immutable launch inputs survive combo/profile changes.
     }
     auto admitted = [self, root, revision = trust.revision] {

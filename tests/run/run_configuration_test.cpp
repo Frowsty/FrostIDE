@@ -649,5 +649,29 @@ TEST(LuaRunConfiguration, RejectsImplicitRuntimeRelativeScriptAndAmbiguousInterp
     EXPECT_FALSE(validateRunConfiguration(config));
 }
 
+TEST(LuaDialectRun, LuauScriptArgsAndReplDoNotInheritLua54CliOrAbi) {
+    RunConfiguration config; config.id="luau.script"; config.name="Luau"; config.type=RunType::LuaScript;
+    config.program=native("sdk/luau"); config.target=native("project/typed.luau"); config.luaRuntime="luau";
+    config.interpreterArguments={"-O1","-g2"}; config.arguments={"two words","","-e"};
+    auto plan=launchPlanFor(config); ASSERT_TRUE(plan);
+    EXPECT_EQ(plan->arguments,(std::vector<std::string>{"-O1","-g2",config.target,"-a","two words","","-e"}));
+    auto json=serializeRunConfigurations(std::span(&config,1));
+    ASSERT_TRUE(rpc::parseJson(json)); EXPECT_EQ(rpc::parseJson(json)->integerAt("version"),6);
+    auto restored=parseRunConfigurations(json); ASSERT_TRUE(restored); EXPECT_EQ(restored->front(),config);
+    const auto at=json.find("\"version\": 6"); ASSERT_NE(at,std::string::npos); json.replace(at,12,"\"version\": 5");
+    EXPECT_FALSE(parseRunConfigurations(json));
+    config.type=RunType::LuaRepl; config.target.clear(); config.arguments.clear(); config.interpreterArguments.clear();
+    plan=launchPlanFor(config); ASSERT_TRUE(plan); EXPECT_TRUE(plan->arguments.empty());
+    config.interpreterArguments={"-e","print(42)"}; EXPECT_FALSE(validateRunConfiguration(config));
+}
+TEST(LuaDialectRun, LuaJitExplicitFlagsAndUnknownProfilesFailClosed) {
+    RunConfiguration config; config.id="jit.script"; config.name="LuaJIT"; config.type=RunType::LuaScript;
+    config.program=native("sdk/luajit"); config.target=native("project/jit.lua"); config.luaRuntime="luajit";
+    config.interpreterArguments={"-joff"}; config.arguments={"arg"};
+    auto plan=launchPlanFor(config); ASSERT_TRUE(plan); EXPECT_EQ(plan->arguments,(std::vector<std::string>{"-joff",config.target,"arg"}));
+    config.interpreterArguments={"-W"}; EXPECT_FALSE(validateRunConfiguration(config));
+    config.luaRuntime="guessed-lua"; EXPECT_FALSE(validateRunConfiguration(config));
+    config.luaRuntime="luajit"; config.interpreterArguments.clear(); config.type=RunType::Native; config.target.clear(); EXPECT_FALSE(validateRunConfiguration(config));
+}
 } // namespace
 } // namespace frost::run

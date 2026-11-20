@@ -45,6 +45,7 @@ if(NOT FROST_FUZZ)
     # frost::term (ADR 0051): libvterm is vendored, but terminal settings need frost::settings (yyjson).
     add_subdirectory(term)
     add_subdirectory(update)
+    add_subdirectory(agent)
 endif()
 if(NOT FROST_FUZZ)
     # Crash reports and logging need crashpad, cpptrace and spdlog, which fuzz trees do not install.
@@ -53,4 +54,9 @@ endif()
 if(FROST_BUILD_UI)
     add_subdirectory(ui)
     add_subdirectory(app)
+endif()
+
+option(FROST_BUILD_EXTENSION_SAMPLE "Build the explicit local stdio extension API sample" OFF)
+if(FROST_BUILD_EXTENSION_SAMPLE AND NOT FROST_FUZZ)
+    add_subdirectory("${FROST_SOURCE_DIR}/examples/extensions/text-statistics" "${CMAKE_BINARY_DIR}/extension-sample")
 endif()

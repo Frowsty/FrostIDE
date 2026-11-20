@@ -193,6 +193,10 @@ public:
         return !m_shutdown && (!m_hooks.mayStart || m_hooks.mayStart()) &&
                (m_service != nullptr || (m_hooks.alternateAvailable && m_hooks.alternateAvailable()));
     }
+    // Owner-thread asynchronous provider preparation lease. Marks normal Debug/Stop ownership;
+    // only the returned generation may adopt. Stop/shutdown cancel exactly once; stale completions refuse.
+    [[nodiscard]] Result<std::uint64_t> beginExternalPreparation(std::function<void()> cancel);
+    [[nodiscard]] bool finishExternalPreparation(std::uint64_t generation);
     void shutdown();
     void rerun();
     void cancelRerun();
@@ -412,6 +416,7 @@ private:
     bool m_coreClrSession = false;
     bool m_lastCoreClrSession = false;
     bool m_alternatePending = false;
+    std::function<void()> m_externalPreparationCancel;
     bool m_shutdown = false;
     bool m_configured = false;
     bool m_adapterStopped = false;

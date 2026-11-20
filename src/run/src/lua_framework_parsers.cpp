@@ -63,6 +63,8 @@ std::string luaExactPattern(std::string_view name) {
 Result<RunConfiguration> luaFrameworkConfiguration(LuaTestProfile profile, RunConfiguration config,
                                                    std::span<const std::string> cases, std::string_view report,
                                                    bool listing, std::string_view bridge) {
+    if (config.luaRuntime == "luau")
+        return fail(ErrorCode::Unsupported, "Busted/LuaUnit Lua C API profiles do not establish Luau compatibility");
     if (config.type != RunType::LuaScript)
         return fail(ErrorCode::Unsupported, "Lua tests require an explicit Lua Script configuration");
     if (auto valid = validateRunConfiguration(config); !valid)

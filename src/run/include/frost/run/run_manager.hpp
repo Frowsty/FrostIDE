@@ -89,6 +89,7 @@ struct LaunchPlan {
     std::vector<std::string> arguments{}; // argv[1..].
     std::string workingDirectory{};       // Absolute.
     std::vector<EnvironmentEntry> environment{};
+    std::string remoteTarget; // Empty for native plans; otherwise POSIX paths bound to one named endpoint.
 
     friend bool operator==(const LaunchPlan&, const LaunchPlan&) = default;
 };
@@ -147,6 +148,9 @@ struct RunResult {
 
 // The callbacks of one run (start()); every member optional (header comment, "Callbacks").
 struct RunHandlers {
+    // GUI captures one immutable approved endpoint launcher. Only Remote configurations may use it.
+    std::shared_ptr<io::IProcessLauncher> remoteLauncher;
+    std::string remoteTargetId;
     // Optional final admission on the dispatcher immediately before each child starts (tasks too).
     // Must be thread-safe and must not wait on the GUI. May validate physical paths/configuration
     // directories on this worker; errors finish without launching that child. Use shared revision

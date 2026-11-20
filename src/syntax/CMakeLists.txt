@@ -49,6 +49,19 @@ _frost_tree_sitter_grammar(json "${_frost_grammars}/json/src" parser.c)
 _frost_tree_sitter_grammar(lua "${_frost_grammars}/lua/src" parser.c scanner.c)
 _frost_tree_sitter_grammar(markdown "${_frost_grammars}/markdown/tree-sitter-markdown/src" parser.c scanner.c)
 
+# Parent-authorized source recipes compile upstream generated parsers directly; no generation.
+include(FrostLanguageGrammars)
+foreach(grammar IN ITEMS python javascript typescript yaml toml powershell)
+    frost_language_grammar_source(${grammar} _frost_${grammar}_source)
+endforeach()
+_frost_tree_sitter_grammar(python "${_frost_python_source}/src" parser.c scanner.c)
+_frost_tree_sitter_grammar(javascript "${_frost_javascript_source}/src" parser.c scanner.c)
+_frost_tree_sitter_grammar(typescript "${_frost_typescript_source}/typescript/src" parser.c scanner.c)
+_frost_tree_sitter_grammar(tsx "${_frost_typescript_source}/tsx/src" parser.c scanner.c)
+_frost_tree_sitter_grammar(yaml "${_frost_yaml_source}/src" parser.c scanner.c)
+_frost_tree_sitter_grammar(toml "${_frost_toml_source}/src" parser.c scanner.c)
+_frost_tree_sitter_grammar(powershell "${_frost_powershell_source}/src" parser.c scanner.c)
+
 frost_add_library(syntax LAYER syntax
     SOURCES
         src/shader_source.cpp
@@ -59,16 +72,19 @@ frost_add_library(syntax LAYER syntax
         src/syntax_session.cpp
         src/syntax_tree.cpp
         src/lua_ast.cpp
+        src/structural_search.cpp
         src/vocabulary.cpp
     DEPS frost::core frost::sched frost::text
     THIRD_PARTY
         tree_sitter_runtime
         tree_sitter_c tree_sitter_cpp tree_sitter_c_sharp tree_sitter_cmake
-        tree_sitter_xml tree_sitter_json tree_sitter_markdown tree_sitter_lua)
+        tree_sitter_xml tree_sitter_json tree_sitter_markdown tree_sitter_lua
+        tree_sitter_python tree_sitter_javascript tree_sitter_typescript tree_sitter_tsx
+        tree_sitter_yaml tree_sitter_toml tree_sitter_powershell)
 target_include_directories(frost_syntax PRIVATE src)
 
 set(_frost_syntax_queries "")
-foreach(language IN ITEMS c cpp csharp cmake xml json markdown lua)
+foreach(language IN ITEMS c cpp csharp cmake xml json markdown lua python javascript typescript tsx yaml toml powershell)
     list(APPEND _frost_syntax_queries queries/${language}/highlights.scm queries/${language}/outline.scm)
 endforeach()
 list(APPEND _frost_syntax_queries queries/lua/folds.scm queries/cpp/folds.scm

@@ -78,9 +78,11 @@ Result<EngineCliOutcome> runEngineCliCommand(io::IProcessLauncher& launcher, std
     if (request.command.empty() || !request.params.isObject()) {
         return fail(ErrorCode::InvalidArgument, "an engine command needs a name and an object of parameters");
     }
+    if(!request.paramsFile.empty()&&!io::isAbsolutePath(request.paramsFile))return fail(ErrorCode::InvalidArgument,"Engine parameter file must be absolute");
     io::ProcessSpec spec;
     spec.executable = std::string(program);
-    spec.arguments = {request.command, "--params", request.params.dump(), "--log-level", "error"};
+    spec.arguments = request.paramsFile.empty()?std::vector<std::string>{request.command,"--params",request.params.dump(),"--log-level","error"}:
+        std::vector<std::string>{request.command,"--params-file",request.paramsFile,"--log-level","error"};
     if (!request.project.empty()) {
         spec.arguments.emplace_back("--project");
         spec.arguments.push_back(request.project);
