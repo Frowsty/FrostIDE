@@ -114,7 +114,9 @@ const project::CMakeTestPreset* testPresetFor(const project::CMakePresets& prese
 
 namespace {
 
+#ifdef _WIN32
 char lowerAscii(char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
+#endif
 
 std::string_view trimView(std::string_view text) noexcept {
     const auto first = text.find_first_not_of(" \t\r\n");
