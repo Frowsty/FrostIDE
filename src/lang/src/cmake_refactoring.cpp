@@ -65,6 +65,7 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
         if (!buffer) return std::unexpected(buffer.error());
         FileEdit edits; edits.path=path;
         edits.uri=pathToUri(path).value_or("");
+        edits.path=uriToPath(edits.uri).value_or(path);
         for (const auto& command:*parsed) {
             for (std::size_t i=0;i<command.arguments.size();++i) {
                 const auto& argument=command.arguments[i];

@@ -21,6 +21,7 @@ Result<Json> queryMSBuildLanguage(const MSBuildLanguageInput& input, std::string
                                  const Json& params, std::stop_token stop) {
     if (method != "textDocument/completion" && method != "textDocument/definition" && method != "textDocument/hover")
         return fail(ErrorCode::Unsupported, "MSBuild language request is unsupported");
+    if (input.source.size().value()>1024U*1024U) return fail(ErrorCode::OutOfRange,"MSBuild source exceeds language budget");
     const auto* position = params.find("position");
     auto parsedPosition = position ? parsePosition(*position) : std::nullopt;
     if (!parsedPosition) return fail(ErrorCode::InvalidArgument, "MSBuild request requires a position");
