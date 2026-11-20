@@ -244,7 +244,19 @@ TEST_F(RealEngineWorkbench, NativeShaderProblemsEqualCompilerOracleAndRealPrevie
     ASSERT_NE(image, nullptr);
     EXPECT_EQ(image->pixmap().toImage().convertToFormat(QImage::Format_RGBA8888),
               expected.convertToFormat(QImage::Format_RGBA8888));
-    ASSERT_TRUE(rig.trust->untrust(project));
+    // Retain both actual nonempty observations, then lose the authenticated transport itself.
+    ASSERT_TRUE(rig.workbench->openPath(shader));
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*validate, {}), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            return std::ranges::any_of(rig.workbench->problems()->model()->problems(), [](const auto& row) {
+                return row.source == frost::ui::DiagnosticSource::EngineShader;
+            });
+        },
+        60s));
+    ASSERT_NE(rig.window->findChild<QLabel*>(QStringLiteral("engineRenderedPreviewImage")), nullptr);
+    ASSERT_TRUE(editor.kill());
+    ASSERT_TRUE(waitFor([&] { return !rig.workbench->engineState().boolAt("connected").value_or(true); }, 30s));
     ASSERT_TRUE(waitFor(
         [&] { return rig.window->findChild<QLabel*>(QStringLiteral("engineRenderedPreviewImage")) == nullptr; }, 10s));
     ASSERT_TRUE(waitFor(

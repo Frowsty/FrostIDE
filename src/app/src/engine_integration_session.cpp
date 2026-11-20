@@ -362,6 +362,8 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
             }
             impl.owner.clearDocumentTools();
             impl.clearSessionTools();
+            impl.clearShaderPreview();
+            impl.clearAssetUsages();
             impl.identity.reset();
             impl.state.reset();
             impl.requests.clear();
