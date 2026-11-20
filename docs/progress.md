@@ -1,3 +1,20 @@
+## 2026-11-20 — R19 UX-18 source (codex/r19-agent-native)
+
+- 49caa7ce: Qt-free native auth/protocol/control/hook/limit core and private stdio/local-IPC proxy.
+- dca99e9a: actual per-window C2 scoped tools/tasks/paging/hooks, build/debug/current-CTest data,
+  reversible concrete edit previews with existing C++ rename admission, proxy discovery/staging,
+  explicit native Connect/Send/provider-cost consent and native auth enforcement. Added question/plan
+  controls, own session identities, read-only transcript viewer, bounded I/O/UI queues and scoped
+  dry-run CLI rewind/fork controls. Native built-in filesystem/shell tools remain disabled; model
+  reads/proposals use scoped MCP. MCP edits use the IDE's shared Undo, not invented CLI checkpoints.
+- Offline fixtures authored for auth/arguments, framing/init/control deadlines, pagination/Stop loops,
+  private records and real local proxy token exchange. No builds/tests/features/provider processes,
+  prompts, data transfer, installs/downloads or WSL runs. Initial Astra stdin-pipe and Json string
+  pointer findings fixed; full independent adapter/UI source recheck pending on dca99e9a.
+- Remaining adapter scope is explicit in ADR0113: hierarchy prepared roots need expanded edge
+  queries, inspection metadata may be unavailable, and C2 run_tests currently binds CTest. Real CLI
+  schemas/handshake, hooks/settings merge, platform ACL/cancellation/budgets and provider behavior
+  require the resumed local acceptance phase. No complete C2/C3 parity or release claim.
 # FrostIDE progress log
 
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
