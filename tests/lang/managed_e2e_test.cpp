@@ -152,7 +152,9 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
         text::Document::fromUtf8("using Library; public class Example { public string Run() { var s = "
                                  "\"\xf0\x9f\x98\x80\"; return new Greeter().SayHello(); MissingMethod(); } }\n");
     auto libText = text::Document::fromUtf8(
-        "namespace Library; public class Greeter { public string SayHello() => \"Unsaved\"; }\n");
+        "namespace Library; public class Greeter { public string SayHello() => \"Unsaved\"; public int Compute() { "
+        "return 21 + 21; } public int Inline() { var answer = 42; return answer; } public int Multiple() { var count = "
+        "42; return count + count; } }\n");
     ASSERT_TRUE(appText && libText);
     ASSERT_TRUE(service.openDocument(app, appText->text()).has_value());
     ASSERT_TRUE(service.openDocument(lib, libText->text()).has_value());
@@ -201,6 +203,40 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
                                      request(pool, service, "textDocument/definition", positionParams(*uri, 98)))
                               .join();
         EXPECT_TRUE(definition && definition->dump().find("Greeter.cs") != std::string::npos);
+        // Actual owned host proposals over a referenced-project overlay; source files stay unchanged.
+        auto libUri = lang::pathToUri(lib);
+        ASSERT_TRUE(libUri);
+        const std::string localSource =
+            "namespace Library; public class Greeter { public string SayHello() => \"Unsaved\"; public int Compute() { "
+            "return 21 + 21; } public int Inline() { var answer = 42; return answer; } public int Multiple() { var "
+            "count = 42; return count + count; } }\n";
+        auto actionsAt = [&](std::string_view selected, bool cursor = false) {
+            const auto start = localSource.find(selected);
+            auto params = lang::Json::object().set("textDocument", lang::Json::object().set("uri", *libUri));
+            auto position = [](std::size_t column) {
+                return lang::Json::object().set("line", 0).set("character", static_cast<int>(column));
+            };
+            params.set("range", lang::Json::object()
+                                    .set("start", position(start))
+                                    .set("end", position(start + (cursor ? 0 : selected.size()))));
+            params.set("context", lang::Json::object().set("diagnostics", lang::Json::array()));
+            return pool
+                .spawn(sched::Lane::UserVisible, request(pool, service, "textDocument/codeAction", std::move(params)))
+                .join();
+        };
+        auto introduce = actionsAt("21 + 21");
+        ASSERT_TRUE(introduce) << introduce.error().describe();
+        EXPECT_NE(introduce->dump().find("Introduce local for return value (Roslyn)"), std::string::npos);
+        EXPECT_NE(introduce->dump().find("documentChanges"), std::string::npos);
+        auto inlineLocal = actionsAt("answer;", true);
+        ASSERT_TRUE(inlineLocal) << inlineLocal.error().describe();
+        EXPECT_NE(inlineLocal->dump().find("Inline return local (Roslyn)"), std::string::npos);
+        auto multiple = actionsAt("count + count", true);
+        ASSERT_TRUE(multiple) << multiple.error().describe();
+        EXPECT_EQ(multiple->dump().find("Inline return local (Roslyn)"), std::string::npos);
+        auto unchangedLibrary = fs.readFileSnapshot(lib, 1024U);
+        ASSERT_TRUE(unchangedLibrary);
+        EXPECT_EQ(*unchangedLibrary, "namespace Library; public class Greeter {}\n");
         auto params = positionParams(*uri, 98);
         params.set("newName", "Welcome");
         auto rename =
