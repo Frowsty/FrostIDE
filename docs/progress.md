@@ -3,6 +3,13 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R13 native analyzer and Problems integration source
+
+- Added isolated pinned-Clang `frost-analyzer`, source-owned AST/CFG inspection registry, exact configuration/dependency receipts, governed process orchestration, strict severity profiles and SARIF export/import. MISRA and Clazy are explicitly unsupported. Application deployment and both staging scripts include the native helper.
+- Native module analysis publishes actual findings to Problems; editor idle/save jobs respect trust and Power Save. Editor snapshots, settings, provider/database identity and dependency bytes guard publication and export. Header edits analyze actual project TU configurations. Existing clang-tidy inspection remains separately available.
+- Authored positive/control fixtures for every inspection, CFG mutation/alias/lifetime and cleanup-bearing return-move regressions, cross-configuration deletion-fix agreement, and a real application CFG-to-Problems/SARIF/stale-header journey. Independent source review cleared the requested AST/CFG and app/export joins. No builds, tests, feature executions, verification runners or WSL ran; runtime acceptance remains deferred.
+- Next: integrate reviewed source and execute acceptance only when testing resumes. No blocking questions.
+
 ## 2026-11-14: R13 bundled C++ feature-host first vertical
 
 - Normal C++ server selection now prefers the bundled isolated `frost-clang`, while explicit stock-server settings remain authoritative and missing bundles retain the existing stock fallback. The bundled choice must advertise its actual versioned feature-module capability before Running. Application builds and both platform staging scripts include the helper; its normal clangd mode resolves the staged pinned resource directory without changing explicit overrides, trust, synchronization or lifecycle behavior.

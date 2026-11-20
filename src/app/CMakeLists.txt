@@ -158,6 +158,7 @@ frost_add_library(app LAYER app
         src/workbench_lua_refactoring.cpp
         src/workbench_lua_module.cpp
         src/workbench_inspection.cpp
+        src/workbench_analyzer.cpp
         src/workbench_cpp_scope_fixes.cpp
         src/workbench_managed.cpp
         src/managed_debug_preparation.cpp
@@ -209,8 +210,8 @@ function(frost_deploy_clang_platform target)
     # Copy, never link, the isolated /MT LLVM engine into the application's runtime directory.
     add_custom_target(frost_platform_engine
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:frost-clang> $<TARGET_FILE_DIR:${target}>
-        DEPENDS frost-clang VERBATIM)
+            $<TARGET_FILE:frost-clang> $<TARGET_FILE:frost-analyzer> $<TARGET_FILE_DIR:${target}>
+        DEPENDS frost-clang frost-analyzer VERBATIM)
     add_dependencies(${target} frost_platform_engine)
 endfunction()
 

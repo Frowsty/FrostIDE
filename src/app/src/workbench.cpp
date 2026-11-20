@@ -714,6 +714,8 @@ void Workbench::notify(const QString& title, const QString& body, ui::Notificati
 }
 
 void Workbench::onSettingsChanged() {
+    ++m_cppAnalyzerTicket;
+    if (m_cppAnalyzerRunning) m_cppInspectionStop.request_stop();
     const auto snapshot = m_services.settings.snapshot();
     m_documents->applySettings(*snapshot);
     onLuaSettingsChanged(); // workbench_lua.cpp: a restart or a live didChangeConfiguration (LUA-3).

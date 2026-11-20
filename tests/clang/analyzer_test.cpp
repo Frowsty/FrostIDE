@@ -72,6 +72,12 @@ TEST_F(Analyzer, CfgJoinsReinitializationEscapesAndCastOnlyMovesDoNotManufacture
     auto moved=run("#include <string>\n#include <utility>\nunsigned f(){std::string x=\"old\";auto y=std::move(x);x.clear();return x.size();}\n","frost-use-after-move");
     ASSERT_EQ(moved.stringAt("status"),"ready");EXPECT_TRUE(moved.find("findings")->items().empty());
 }
+TEST_F(Analyzer, CleanupBearingReturnMoveStillProducesAnExactFix) {
+    auto value=run("#include <string>\n#include <utility>\nstd::string f(){std::string x=\"owned\";return std::move(x); }\n","frost-return-move");
+    ASSERT_EQ(value.stringAt("status"),"ready");
+    ASSERT_EQ(value.find("findings")->items().size(),1U);
+    EXPECT_EQ(value.find("findings")->items().front().stringAt("replacement"),"x");
+}
 TEST_F(Analyzer, ActualDirtyOverlayChangesFindingsAndReceiptsWhileDiskStaysUnchanged) {
     const std::string disk="int f(int* p){return 0;}\n",dirty="int f(int* p){if(!p)return *p;return 0;}\n";
     auto result=run(disk,"frost-null-dereference","--analyze-unit",Json::array({Json::object().set("path",file).set("contents",dirty)}));

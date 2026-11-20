@@ -683,6 +683,10 @@ public:
     // CPP-10: runs the real clang-tidy over `scopeDirectory` using the open project's compilation
     // database, publishes reported findings in Problems, and keeps the last report for SARIF export.
     // GUI-thread entry; completion is posted to the GUI thread. Refuses untrusted projects.
+    // CPP-11/12/16: GUI-thread native jobs, governed background AST/CFG work and current-image Problems.
+    // Idle/save requests debounce and respect Power Save; explicit module analysis remains available.
+    void scheduleCppAnalyzer(std::string path, bool saved = false);
+    void inspectNativeCppAsync(std::string_view scopePath, bool automatic = false);
     void inspectCppCodeAsync(std::string_view scopeDirectory, std::function<void(Result<lang::InspectionReport>)> done);
     // Writes the most recently completed C++ inspection as validated SARIF 2.1.0. GUI thread.
     [[nodiscard]] Result<void> exportCppInspectionSarif(std::string_view outputPath);
@@ -1168,6 +1172,9 @@ private:
     std::optional<std::uint64_t> m_cppInspectionTrustRevision;
     std::uint64_t m_cppInspectionGeneration = 0;
     std::stop_source m_cppInspectionStop;
+    std::uint64_t m_cppAnalyzerTicket = 0;
+    bool m_cppAnalyzerRunning = false;
+    std::function<Result<void>()> m_cppAnalyzerExportCheck;
     std::shared_ptr<sched::ResourceGovernor> m_resourceGovernor;
     std::shared_ptr<lang::ClangdService> m_clangd;
     // The root already told that clangd was not found (the notice appears once per project; ADR 0078).

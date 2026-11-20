@@ -262,7 +262,10 @@ frost_add_test(app_workbench_cpp_editor_tests QT
 target_include_directories(app_workbench_cpp_editor_tests PRIVATE ${FROST_SOURCE_DIR}/tests
     ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_cpp_editor_tests PRIVATE ${_frost_workbench_definitions})
-add_dependencies(app_workbench_cpp_editor_tests frost-clang)
+target_compile_definitions(app_workbench_cpp_editor_tests PRIVATE
+    FROST_ANALYZER_BINARY="$<TARGET_FILE:frost-analyzer>"
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+add_dependencies(app_workbench_cpp_editor_tests frost-clang frost-analyzer)
 
 # R6 uses mandatory isolated real engines; these cases belong only to the corpus tier.
 include("${FROST_SOURCE_DIR}/tests/support/EngineCorpus.cmake")

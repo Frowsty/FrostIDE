@@ -98,7 +98,7 @@ void reconcileFixes(AnalyzerReport& report,const std::vector<Json>& units) {
             const auto* inputs=unit.find("dependencies");if(!inputs || !inputs->isArray()) {agreed=false;break;}
             if(std::ranges::none_of(inputs->items(),[&](const auto& input){return documentKey(input.stringAt("path"))==documentKey(fix.path);})) continue;
             const auto* findings=unit.find("findings");
-            if(!findings || std::ranges::none_of(findings->items(),[&](const auto& value){return value.stringAt("ruleId")==fix.ruleId && documentKey(value.stringAt("path"))==documentKey(fix.path) && value.unsignedAt("offset")==fix.offset && value.unsignedAt("length")==fix.length && value.stringAt("replacement")==fix.replacement;})) {agreed=false;break;}
+            if(!findings || std::ranges::none_of(findings->items(),[&](const auto& value){const auto* replacement=value.find("replacement"); return replacement && replacement->asString() && value.stringAt("ruleId")==fix.ruleId && documentKey(value.stringAt("path"))==documentKey(fix.path) && value.unsignedAt("offset")==fix.offset && value.unsignedAt("length")==fix.length && value.stringAt("replacement")==fix.replacement;})) {agreed=false;break;}
         }
         if(agreed && std::ranges::none_of(accepted,[&](const auto& prior){return std::tie(prior.ruleId,prior.path,prior.replacement,prior.offset,prior.length)==std::tie(fix.ruleId,fix.path,fix.replacement,fix.offset,fix.length);})) accepted.push_back(fix);
     }

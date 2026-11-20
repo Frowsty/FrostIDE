@@ -177,6 +177,10 @@ void Workbench::registerActions() {
     add(
         "code.inspectLua", "Inspect Lua Code...", [this] { (void)inspectLuaCode(); },
         [this] { return !m_projectRoot.empty(); });
+    add("code.inspectNativeCpp", "Analyze C++ Module (Frost)...", [this] {
+        if(auto* view=currentView(); view && isCFamilySource(view->path()))
+            inspectNativeCppAsync(std::string(io::parentPath(view->path())));
+    },[this] { return m_window && currentView() && isCFamilySource(currentView()->path()); });
     input::ActionSpec inspectCpp;
     inspectCpp.id = "code.inspectCpp";
     inspectCpp.name = "Inspect C++ Module...";

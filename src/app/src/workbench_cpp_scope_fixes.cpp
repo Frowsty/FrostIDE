@@ -130,6 +130,8 @@ void Workbench::prepareCppInspectionScopeFixes(lang::InspectionScope scope, lang
         done(fail(ErrorCode::Untrusted, "Scope fixes require a trusted project and actual compilation database"));
         return;
     }
+    ++m_cppAnalyzerTicket;
+    m_cppAnalyzerRunning = false;
     m_cppInspectionStop.request_stop();
     m_cppInspectionStop = std::stop_source{};
     auto capture = std::make_shared<Capture>();
