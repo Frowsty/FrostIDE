@@ -17,6 +17,8 @@ struct ManagedProjectEvaluation {
     std::vector<std::string> targetFrameworks;
     std::map<std::string, std::vector<ManagedEvaluatedItem>, std::less<>> items;
     std::map<std::string, std::string, std::less<>> properties; // Actual IsTestProject/CPM/compiler facts.
+    // Optional execution receipts captured by an owning worker around a second SDK evaluation.
+    std::map<std::string, std::string, std::less<>> inputFiles = {};
 };
 // Pure bounded command/parser pair. The inner evaluation explicitly selects its TFM; no restore
 // or build target runs. All item metadata is MSBuild output, including linked and evaluation-time generated sources.

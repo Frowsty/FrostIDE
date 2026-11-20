@@ -64,6 +64,7 @@
 #include "frost/app/settings_adapters.hpp"
 #include "frost/app/welcome_screen.hpp"
 #include "frost/build/build_service.hpp"
+#include "frost/build/managed_evaluation.hpp"
 #include "frost/build/run_service.hpp"
 #include "frost/core/clock.hpp"
 #include "frost/core/error.hpp"
@@ -180,6 +181,8 @@ struct ManagedToolsContext;
 class ManagedDebugPreparation;
 class MultiSessionDebugCoordinator;
 struct ManagedSnapshotJob;
+struct ManagedModelJob;
+class ManagedBuildBackend;
 struct ManagedSourceSnapshot;
 
 class LanguageBridge;
@@ -713,6 +716,23 @@ public:
     [[nodiscard]] Result<document::RefactoringOutcome> applyEngineBindingRename();
     [[nodiscard]] lang::Json engineBindingState() const;
     [[nodiscard]] std::shared_ptr<engine::EngineLuaHostProvider> engineLuaHostProvider() const;
+    // GUI-selected, actual evaluated SDK context; null while absent, cancelled or being replaced.
+    [[nodiscard]] std::shared_ptr<const build::ManagedProjectEvaluation> managedProjectEvaluation() const {
+        const auto trust = m_services.trust.snapshot(m_projectRoot);
+        return m_managedContextRoot == m_projectRoot && trust.trusted && trust.revision == m_managedContextTrustRevision
+                   ? m_managedEvaluation
+                   : nullptr;
+    }
+    [[nodiscard]] Result<void> configureManagedProject(build::ManagedProjectRequest request);
+    void showManagedProjectContext();
+    void attachManagedProjectView();
+    void clearManagedProjectContext();
+    void onManagedFilesChanged(const io::FileChangeBatch&);
+    void managedProjectInputChanged(std::string_view path);
+    [[nodiscard]] std::vector<run::RunConfiguration> managedRunConfigurations() const;
+    [[nodiscard]] std::function<Result<void>()> managedRunAdmissionFor(const run::RunConfiguration&) const;
+    [[nodiscard]] std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)>
+    managedRunPlanFor(const run::RunConfiguration&) const;
     [[nodiscard]] lang::ManagedService* managed() noexcept { return m_managed.get(); }
     [[nodiscard]] lang::ClangdService* clangd() noexcept { return m_clangd.get(); }
     [[nodiscard]] sched::ResourceGovernor* resourceGovernor() const noexcept { return m_resourceGovernor.get(); }
@@ -788,6 +808,7 @@ signals:
     void refactoringSettled(const frost::document::RefactoringOutcome& outcome);
     // A project opened (`name` non-empty) or closed (empty).
     void projectChanged(const QString& name);
+    void managedProjectChanged();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -1160,6 +1181,16 @@ private:
     bool m_closingSolution = false;
     std::vector<sched::JoinHandle<void>> m_retiredProjectEvaluations;
     bool m_projectEvaluationDeferred = false;
+    std::shared_ptr<const build::ManagedProjectEvaluation> m_managedEvaluation;
+    std::shared_ptr<ManagedModelJob> m_managedModelJob;
+    std::unique_ptr<ManagedBuildBackend> m_managedBuildBackend;
+    std::vector<sched::JoinHandle<void>> m_managedBuildTasks;
+    std::vector<sched::JoinHandle<void>> m_managedModelTasks;
+    std::uint64_t m_managedModelGeneration = 0, m_managedContextTrustRevision = 0;
+    std::string m_managedContextRoot;
+    std::optional<build::ManagedProjectRequest> m_managedDesiredContext;
+    bool m_managedModelRefreshQueued = false;
+    std::shared_ptr<std::atomic<bool>> m_managedContextLease = std::make_shared<std::atomic<bool>>(true);
     std::shared_ptr<lang::ManagedService> m_managed;
     std::uint64_t m_managedListener = 0;
     std::vector<sched::JoinHandle<void>> m_retiredManaged;

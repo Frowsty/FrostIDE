@@ -1,0 +1,9 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Deferred real Roslyn emit/PE/PDB/decompiler contract probe; no package restore graph. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><TreatWarningsAsErrors>true</TreatWarningsAsErrors></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../integrations/roslyn-host/LibrarySources.cs" Link="LibrarySources.cs" />
+    <Reference Include="$(FrostManagedAssets)/*.dll" Exclude="$(FrostManagedAssets)/CSharpLanguageServer.dll;$(FrostManagedAssets)/FSharp*.dll;$(FrostManagedAssets)/Ionide*.dll;$(FrostManagedAssets)/Argu.dll" />
+  </ItemGroup>
+</Project>

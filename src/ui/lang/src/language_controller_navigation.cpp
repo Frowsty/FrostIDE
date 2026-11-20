@@ -14,6 +14,7 @@
 
 #include "language_controller_internal.hpp"
 
+#include <QCryptographicHash>
 #include <algorithm>
 #include <cstdint>
 #include <format>
@@ -189,6 +190,129 @@ struct MetadataSource {
     bool offered = false;
 };
 
+// The owned host returns actual byte/assembly receipts. Cache names contain only validated
+// digests; provider paths never become output paths. The host supplies the profile-owned root.
+sched::Task<Result<MetadataSource>> librarySourceTask(fl::ILspRequester& server, io::IFileSystem& fs,
+                                                      std::string cacheDir, std::string path, fl::LspPosition position,
+                                                      std::stop_token token, std::string mode, bool allowSourceLink,
+                                                      std::string workspaceRoot) {
+    if (cacheDir.empty())
+        co_return MetadataSource{};
+    auto uri = fl::pathToUri(path);
+    if (!uri)
+        co_return std::unexpected(uri.error());
+    auto result = co_await server.request("frost/managed/librarySource",
+        fl::Json::object().set("textDocument", fl::Json::object().set("uri", *uri))
+            .set("position", fl::Json::object().set("line", static_cast<std::int64_t>(position.line))
+                 .set("character", static_cast<std::int64_t>(position.character)))
+            .set("mode", mode).set("allowSourceLink", allowSourceLink), token);
+    if (!result)
+        co_return std::unexpected(result.error());
+    if (!result->isObject())
+        co_return MetadataSource{};
+    const auto source = result->stringAt("source");
+    const auto identity = result->stringAt("identity");
+    const auto digest = result->stringAt("sourceSha256");
+    const auto extension = result->stringAt("extension");
+    const auto validDigest = [](std::string_view value) {
+        return value.size() == 64 && std::ranges::all_of(value, [](char c) {
+            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        });
+    };
+    if (source.empty() || source.size() > 4 * 1024 * 1024 || !validDigest(identity) || !validDigest(digest) ||
+        (extension != ".cs" && extension != ".il"))
+        co_return fail(ErrorCode::Corrupt, "invalid library source receipt");
+    const auto line = result->integerAt("line").value_or(0);
+    if (line < 0 || line > 1000000)
+        co_return fail(ErrorCode::Corrupt, "library source location is out of range");
+    const auto bytes = QByteArray(source.data(), static_cast<qsizetype>(source.size()));
+    if (QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex().toStdString() != digest)
+        co_return fail(ErrorCode::Corrupt, "library source checksum mismatch");
+    if (token.stop_requested())
+        co_return fail(ErrorCode::Cancelled, "library navigation cancelled");
+    auto normalized = io::normalizePath(cacheDir);
+    if (!normalized)
+        co_return std::unexpected(normalized.error());
+    if (!workspaceRoot.empty()) {
+        auto project = io::normalizePath(workspaceRoot);
+        if (!project)
+            co_return std::unexpected(project.error());
+        const auto root = fl::documentKey(*project);
+        const auto cache = fl::documentKey(*normalized);
+        if (cache == root || (cache.size() > root.size() && cache.starts_with(root) &&
+            (root.back() == '/' || root.back() == '\\' || cache[root.size()] == '/' || cache[root.size()] == '\\')))
+            co_return fail(ErrorCode::PermissionDenied, "library cache must be outside the workspace");
+    }
+    std::string ancestor = *normalized;
+    while (true) {
+        auto exists = fs.exists(ancestor);
+        if (!exists)
+            co_return std::unexpected(exists.error());
+        if (*exists)
+            break;
+        auto parent = std::string(io::parentPath(ancestor));
+        if (parent.empty() || parent == ancestor)
+            co_return fail(ErrorCode::PermissionDenied, "library cache has no existing owned ancestor");
+        ancestor = std::move(parent);
+    }
+    auto physicalAncestor = fs.physicalPath(ancestor);
+    if (!physicalAncestor || fl::documentKey(*physicalAncestor) != fl::documentKey(ancestor))
+        co_return fail(ErrorCode::PermissionDenied, "library cache ancestor resolves through an alias");
+    if (auto made = fs.createDirectories(*normalized); !made)
+        co_return std::unexpected(made.error());
+    auto physical = fs.physicalPath(*normalized);
+    if (!physical || fl::documentKey(*physical) != fl::documentKey(*normalized))
+        co_return fail(ErrorCode::PermissionDenied, "library cache must not resolve through filesystem aliases");
+    if (!workspaceRoot.empty()) {
+        auto project = fs.physicalPath(workspaceRoot);
+        if (!project)
+            co_return std::unexpected(project.error());
+        const auto root = fl::documentKey(*project);
+        const auto cache = fl::documentKey(*physical);
+        if (cache == root || (cache.size() > root.size() && cache.starts_with(root) &&
+            (root.back() == '/' || root.back() == '\\' || cache[root.size()] == '/' || cache[root.size()] == '\\')))
+            co_return fail(ErrorCode::PermissionDenied, "library cache must be outside the workspace");
+    }
+    auto entries = fs.listDirectory(*normalized);
+    if (!entries)
+        co_return std::unexpected(entries.error());
+    if (entries->size() >= 4096)
+        co_return fail(ErrorCode::OutOfRange, "library cache entry budget exceeded");
+    std::uint64_t total = 0;
+    for (const auto& entry : *entries) {
+        if (entry.type != io::FileType::Regular)
+            co_return fail(ErrorCode::PermissionDenied, "library cache contains a non-regular entry");
+        auto item = io::joinPath(*normalized, entry.name);
+        auto status = item ? fs.status(*item) : Result<io::FileStatus>(std::unexpected(item.error()));
+        if (!status)
+            co_return std::unexpected(status.error());
+        total += status->size;
+        if (total > 128 * 1024 * 1024)
+            co_return fail(ErrorCode::OutOfRange, "library cache size budget exceeded");
+    }
+    auto file = io::joinPath(*normalized, std::string(identity) + std::string(extension));
+    if (!file)
+        co_return std::unexpected(file.error());
+    auto exists = fs.exists(*file);
+    if (!exists)
+        co_return std::unexpected(exists.error());
+    if (*exists) {
+        auto existing = fs.readFile(*file);
+        if (!existing || *existing != source)
+            co_return fail(ErrorCode::Corrupt, "cached library source was modified");
+    } else {
+        if (total + source.size() > 128 * 1024 * 1024)
+            co_return fail(ErrorCode::OutOfRange, "library cache size budget exceeded");
+        auto stillPhysical = fs.physicalPath(*normalized);
+        if (token.stop_requested() || !stillPhysical || *stillPhysical != *physical)
+            co_return fail(ErrorCode::Cancelled, "library cache changed before publication");
+        if (auto wrote = fs.writeFileAtomic(*file, source); !wrote)
+            co_return std::unexpected(wrote.error());
+    }
+    co_return MetadataSource{.location = fl::Location{.path = *file, .uri = fl::pathToUri(*file).value_or(""),
+        .range = {.start = {.line = static_cast<std::uint32_t>(line), .character = 0},
+                  .end = {.line = static_cast<std::uint32_t>(line), .character = 0}}}, .offered = true};
+}
 /*
  * Real metadata-as-source for the symbol at `position` (LTR-1): textDocument/definition answered
  * with a metadata URI, and the server's csharp/metadata answered with its source. The source is
@@ -198,7 +322,14 @@ struct MetadataSource {
  */
 sched::Task<Result<MetadataSource>> metadataSourceTask(fl::ILspRequester& server, io::IFileSystem& fs,
                                                        std::string cacheDir, std::string path, fl::LspPosition position,
-                                                       std::stop_token token) {
+                                                       std::stop_token token, std::string mode = "auto",
+                                                       bool allowSourceLink = false, std::string workspaceRoot = {}) {
+    if (const auto caps = server.serverCapabilities(); caps && caps->raw.find("experimental") &&
+        caps->raw.find("experimental")->integerAt("frostLibrarySources").value_or(0) == 1)
+        co_return co_await librarySourceTask(server, fs, std::move(cacheDir), std::move(path), position,
+                                            token, std::move(mode), allowSourceLink, std::move(workspaceRoot));
+    if (mode != "auto" && mode != "decompiled")
+        co_return fail(ErrorCode::Unsupported, "this language server has no library IL/SourceLink/metadata provider");
     const auto uri = fl::pathToUri(path);
     if (!uri) {
         co_return std::unexpected(uri.error());
@@ -274,7 +405,7 @@ struct GotoOutcome {
 sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, io::IFileSystem& fs,
                                                      std::string cacheDir, bool askMetadata, std::string path,
                                                      fl::LspPosition position, std::vector<std::string> unityFiles,
-    std::vector<fl::UnityAssetSnapshot> unityOverlays, std::size_t offset, std::stop_token token) {
+    std::vector<fl::UnityAssetSnapshot> unityOverlays, std::size_t offset, std::stop_token token, std::string workspaceRoot) {
     if (!path.ends_with(".cs") && !unityFiles.empty()) {
         auto unity = fl::queryUnityAssets(fs, unityFiles, unityOverlays, path, offset, token);
         if (unity.recognized || !unity.diagnostics.empty()) {
@@ -295,8 +426,10 @@ sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, 
     GotoOutcome outcome{.result = std::move(*result), .metadata = false};
     if (askMetadata && !outcome.result.showUsages && outcome.result.locations.empty()) {
         const bool noCache = cacheDir.empty();
-        auto metadata = co_await metadataSourceTask(server, fs, std::move(cacheDir), path, position, token);
-        if (metadata && metadata->location) {
+        auto metadata = co_await metadataSourceTask(server, fs, std::move(cacheDir), path, position, token, "auto", false, std::move(workspaceRoot));
+        if (!metadata)
+            co_return std::unexpected(std::move(metadata.error()));
+        if (metadata->location) {
             outcome.result.locations.push_back(std::move(*metadata->location));
             outcome.metadata = true;
         } else if (metadata && metadata->offered && noCache) {
@@ -312,7 +445,7 @@ struct UnityUsagesOutcome {
 };
 sched::Task<Result<UnityUsagesOutcome>> unityUsagesTask(fl::ILspRequester& server, io::IFileSystem& fs,
     std::vector<std::pair<std::string, text::Snapshot>> open, std::vector<std::string> files,
-    std::string path, fl::LspPosition position, fl::PositionEncoding encoding, std::size_t offset, std::stop_token token) {
+    std::string path, fl::LspPosition position, fl::PositionEncoding encoding, std::size_t offset, std::stop_token token, std::string workspaceRoot) {
     UnityUsagesOutcome outcome;
     std::vector<fl::UnityAssetSnapshot> overlays;
     for (const auto& [file, snapshot] : open) overlays.push_back({file, snapshot.text()});
@@ -357,9 +490,9 @@ void LanguageController::gotoDeclarationAtPosition(fl::LspPosition position) {
     }
     start<GotoOutcome>(
         m_navigationSlot,
-        [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir, askMetadata, path,
+        [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir, workspaceRoot = m_services.host.libraryWorkspaceRoot(), askMetadata, path,
          position, unityFiles = std::move(unityFiles), unityOverlays = std::move(unityOverlays), offset](std::stop_token token) {
-            return gotoDeclarationTask(server, fs, cacheDir, askMetadata, path, position, unityFiles, unityOverlays, offset, std::move(token));
+            return gotoDeclarationTask(server, fs, cacheDir, askMetadata, path, position, unityFiles, unityOverlays, offset, std::move(token), workspaceRoot);
         },
         [this, path, position, symbol](Result<GotoOutcome> outcome) {
             if (!outcome) {
@@ -388,12 +521,17 @@ void LanguageController::gotoDeclarationAtPosition(fl::LspPosition position) {
 }
 
 void LanguageController::openMetadataLocation(const fl::Location& location, const QString& symbol) {
-    emit statusMessage(QStringLiteral("Showing metadata source for '%1' from %2 (read-only cache)")
+    emit statusMessage(QStringLiteral("Showing library source for '%1' from %2 (read-only cache)")
                            .arg(symbol, qs(capabilities().serverName)));
     m_services.host.openReadOnlyLocation(location.path, location.range.start);
 }
 
-void LanguageController::decompileExternalSymbol() {
+void LanguageController::decompileExternalSymbol() { showLibrarySource("decompiled", false); }
+void LanguageController::showExternalSourceLink() { showLibrarySource("sourceLink", true); }
+void LanguageController::showExternalIl() { showLibrarySource("il", false); }
+void LanguageController::showAssemblyMetadata() { showLibrarySource("assembly", false); }
+
+void LanguageController::showLibrarySource(std::string mode, bool allowSourceLink) {
     if (!hasDocument()) {
         return;
     }
@@ -419,9 +557,9 @@ void LanguageController::decompileExternalSymbol() {
     }
     start<MetadataSource>(
         m_navigationSlot,
-        [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir, path,
-         position](std::stop_token token) {
-            return metadataSourceTask(server, fs, cacheDir, path, position, std::move(token));
+        [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir, workspaceRoot = m_services.host.libraryWorkspaceRoot(), path,
+         position, mode = std::move(mode), allowSourceLink](std::stop_token token) {
+            return metadataSourceTask(server, fs, cacheDir, path, position, std::move(token), mode, allowSourceLink, workspaceRoot);
         },
         [this, symbol](Result<MetadataSource> source) {
             if (!source) {

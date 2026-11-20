@@ -490,6 +490,8 @@ void LanguageBridge::openLocation(std::string_view path, lang::LspPosition posit
     view->goToLine(static_cast<int>(point.line.value()) + 1, static_cast<int>(point.column.value()) + 1);
 }
 
+std::string LanguageBridge::libraryWorkspaceRoot() const { return m_workbench.m_projectRoot; }
+
 void LanguageBridge::openReadOnlyLocation(std::string_view path, lang::LspPosition position) {
     openLocation(path, position);
     DocumentEditorView* view = m_workbench.currentView();

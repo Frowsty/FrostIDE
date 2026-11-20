@@ -48,6 +48,18 @@ constexpr std::string_view kLog = "workbench";
 void Workbench::registerActions() {
     registerRefactoringActions();
     registerEditorExtrasActions();
+    attachManagedProjectView();
+    input::ActionSpec managedContext;
+    managedContext.id = "managed.projectContext";
+    managedContext.name = ".NET Project Context...";
+    managedContext.group = ".NET";
+    managedContext.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
+        showManagedProjectContext();
+    };
+    managedContext.enabled = [this](const input::ActionContext&) {
+        return !m_projectRoot.empty() && m_services.trust.isTrusted(m_projectRoot);
+    };
+    (void)m_registry.add(std::move(managedContext));
     // The shell owns Go to Line. Refactoring owns Undo/Redo routing at global document edges.
     static constexpr std::array<std::string_view, 3> kShellOwned{ui::actions::kGoToLine, "editor.undo", "editor.redo"};
     if (auto editor = ui::registerEditorActions(m_registry, m_actionHost, kShellOwned); !editor) {
@@ -415,11 +427,16 @@ void Workbench::registerActions() {
             DocumentEditorView* original = view;
             const QPointer<Workbench> owner(this);
             showLocalHistoryDialog(
-                m_window, m_options.historyPath, key, path, snapshot.size().value() <= 4 * 1024 * 1024 ? snapshot.text() : std::string("Current file is too large for history preview."),
-                [owner, original, liveEditor, path, version = snapshot.version()](const std::string& restored) -> Result<void> {
+                m_window, m_options.historyPath, key, path,
+                snapshot.size().value() <= 4 * 1024 * 1024
+                    ? snapshot.text()
+                    : std::string("Current file is too large for history preview."),
+                [owner, original, liveEditor, path,
+                 version = snapshot.version()](const std::string& restored) -> Result<void> {
                     if (!owner || !liveEditor || original->path() != path ||
                         original->editor().editor().text().version() != version)
-                        return fail(ErrorCode::Busy, "The editor changed while history was open; reopen Local History.");
+                        return fail(ErrorCode::Busy,
+                                    "The editor changed while history was open; reopen Local History.");
                     const auto current = original->editor().editor().text();
                     const lang::ByteEdit edit{text::ByteRange{ByteOffset{0}, current.size()}, restored};
                     return owner->m_bridge->applyEdits(path, std::span(&edit, 1), "Restore Local History");

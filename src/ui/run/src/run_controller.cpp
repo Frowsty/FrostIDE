@@ -596,9 +596,13 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
     const QPointer<RunConsole> target(console);
     const std::shared_ptr<Relay> relay = m_relay;
     run::RunHandlers handlers;
+    if (m_hooks.launchAdmissionFor)
+        handlers.launchAdmission = m_hooks.launchAdmissionFor(configuration);
+    if (configuration.type == run::RunType::Native && m_hooks.nativeLaunchPlanFor)
+        handlers.transformLaunchPlan = m_hooks.nativeLaunchPlanFor(configuration);
+    if (configuration.type == run::RunType::Native && m_hooks.nativeLaunchPlanWithCancellationFor)
+        handlers.transformLaunchPlanWithCancellation = m_hooks.nativeLaunchPlanWithCancellationFor(configuration);
     if (run::isLuaRunType(configuration.type)) {
-        if (m_hooks.launchAdmissionFor)
-            handlers.launchAdmission = m_hooks.launchAdmissionFor(configuration);
         if (!handlers.launchAdmission)
             return fail(ErrorCode::Unsupported, "standalone Lua has no current project/trust admission");
     }

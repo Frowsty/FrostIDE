@@ -114,7 +114,15 @@ void Workbench::createRunService() {
         return mayRunConfiguration(configuration);
     };
     hooks.launchAdmissionFor = [this](const run::RunConfiguration& configuration) {
+        if (configuration.id.starts_with("managed.sdk."))
+            return managedRunAdmissionFor(configuration);
         return luaLaunchAdmissionFor(configuration);
+    };
+    hooks.nativeLaunchPlanWithCancellationFor = [this](const run::RunConfiguration& configuration)
+        -> std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)> {
+        return configuration.id.starts_with("managed.sdk.")
+                   ? managedRunPlanFor(configuration)
+                   : std::function<Result<run::LaunchPlan>(run::LaunchPlan, std::stop_token)>{};
     };
     hooks.prepareEngineConfiguration =
         [this](const run::RunConfiguration& configuration) -> Result<run::RunConfiguration> {

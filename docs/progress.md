@@ -18,6 +18,12 @@ what is next, blockers and open questions for the user.
 - Actual project/compiler events check the owned generated-context revision; the package debounces regeneration on real project changes and after domain registration, preserving the existing immutable generation/hash/no-link publication. Public per-assembly Unity6000 analyzer/source-generator DLLs, additional files, rulesets and global compiler configs are now preserved in generated projects. Missing/ambiguous compiler arguments retain explicit reporting rather than being guessed; unrelated host config discovery is disabled. Astra source-reviewed that follow-up against installed Unity API metadata.
 - Authored protocol/callback/gap/continuation/future-cursor fixtures, strict C++ payload rejection tests, separate Problems source/UTF-16 routing and authenticated callback-to-Console/Problems/trust-revocation integration coverage. Consumer source review remains pending. Builds, tests, feature runs, Unity, WSL and platform acceptance remain deferred. No complete R18 milestone, debugger/test-runner/asset-semantics or analyzer-coverage acceptance is claimed; root coordinates those independent tracks.
 
+## 2026-11-20: R17 owned RoslynHost foundation source checkpoint
+
+- Added the owned FrostRoslynHost stdio provider using the existing audited Roslyn 5.9.0/MSBuildWorkspace assets and pinned .NET 10.0.403. The supervised C# service, SDK bootstrap, Windows staging and real managed fixture defaults now select this host instead of csharp-ls. ADR 0109 records its existing dependency provenance and pending verification; no new package feed/version is introduced.
+- The bounded cancellable LSP actor loads actual evaluated C# projects, retains UTF-16 document overlays, and answers compiler diagnostics, completion, QuickInfo, source definitions/references, symbols, signatures, formatting, rename and simplify proposals through Roslyn APIs. Refactor proposals retain document versions and reject changed captured sources, new compiler errors, unresolved conflicts and inconsistent linked edits. Source documents are written only by the existing REF1 owner.
+- Added actual evaluated-project and symbol/assembly receipts plus an owned semantic extension boundary for later Unity/library-source modules. Linked semantic contexts require an explicit project context. Metadata source navigation remains with LTR-6; normal selected context/model controls and richer C# refactor integration continue after this checkpoint.
+- The offline owned-host recipe verifies the previous dependency archive/assets, compiles against those direct references using an empty package-source configuration, and records source/output digests. Authored payload-tamper tests and extended the existing real stdin/stdout cross-project semantic/REF1 journey with model and Undo/Redo assertions. This recipe and all tests remain unexecuted; independent host source review is pending. No builds, SDK tools, packages, feature executions, downloads or WSL ran.
 ## 2026-11-20: R17 managed inventory and evaluated SDK snapshot API underway
 
 - Inventoried the existing supervised csharp-ls 0.28.0 transport, audited Roslyn 5.9.0/MSBuildWorkspace graph, .NET 10.0.403 pins, managed property/build/debug helpers and self-authored SDK fixtures. No private work solutions were read.
@@ -8076,3 +8082,27 @@ with a pointer.
   the modal lifetime and bounded report-read findings were fixed. Commits: dd193193, 040ef30a,
   97e679b1 on codex/r15-editor-extras. No builds, tests, feature runs, WSL, benchmarks, probes or
   verification runners were executed. Runtime acceptance remains deferred by user instruction.
+
+### R17 selected SDK context checkpoint (2026-11-20)
+
+Owned RoslynHost now receives the selected evaluated project, configuration and TFM. The normal .NET project pane, Build/Problems backend and generated console run configuration consume the actual SDK evaluation with captured project/import bytes, trust and physical identity admission, cancellation and stale-context invalidation. Late JSON-RPC cancellation and completion dispose under the same lifetime gate. Added source-authored context/build/run fixtures and an exact Apache-2.0 MoreLINQ v4.4.0 corpus pin with a deferred SDK/host comparison fixture; no corpus was fetched. Semantic contribution interfaces are additive for the independently owned Unity/library modules.
+
+Source checkpoint only; independent review is pending for these additions. No builds, tests, SDK commands, installs, downloads or WSL were executed. Earlier evaluation API source clearance remains separate from this pending checkpoint.
+## 2026-11-20: R17 LTR-6 library-source implementation checkpoint (source only)
+
+- Added a RoslynHost semantic extension resolving actual external symbols to evaluated assembly
+  references and compiler module identities. Reuses the already audited MIT ICSharpCode.Decompiler
+  9.1.0.7988 asset, with exact DLL publication checks and ADR 0112 provenance/licence boundaries.
+- Offline F12 prefers checksum-verified portable-PDB embedded source and otherwise shows real
+  reconstructed C#. Separate actions expose original SourceLink source with explicit network opt-in,
+  actual PE raw IL and assembly metadata. SourceLink initially permits only public GitHub raw HTTPS;
+  unsupported origins, symbol layouts and ambiguous original-source locations refuse explicitly.
+- Output uses a bounded digest-named profile cache outside the physical workspace and the existing
+  forced-read-only editor entry point. Cached-content changes, aliases, stale requests and missing
+  providers refuse. Authored editor request/cache tests, a real host external-symbol call and a
+  registered real PE/PDB/ILSpy probe; no build, configuration, tests, feature runs, WSL, installs or
+  payload downloads were performed. Independent source review and runtime acceptance are pending.
+- Astra independently source-reviewed 9aa00e44 and the 5b41bbd0/7c0448a4 follow-ups. Normal F12 now
+  propagates actual provider failures, and linked SourceLink cancellation bounds headers plus the
+  complete body. Source review cleared; compiled API compatibility and runtime acceptance remain
+  deferred. No tests or feature executions were run to resolve the findings.
