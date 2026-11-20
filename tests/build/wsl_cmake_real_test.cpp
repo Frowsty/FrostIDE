@@ -27,11 +27,16 @@ TEST(WslCMakeReal, ActualMappedSourceBuildAndGeneratedCompilationDatabase) {
     RemoteTarget endpoint;endpoint.id="wsl-acceptance";endpoint.name="Explicit WSL build acceptance";endpoint.executionApproved=true;
     endpoint.transportExecutable = test::environmentValue("FROST_REMOTE_TEST_WSL").value_or("");
     endpoint.distribution = test::environmentValue("FROST_REMOTE_TEST_DISTRIBUTION").value_or("");
+    if (endpoint.transportExecutable.empty() && endpoint.distribution.empty())
+        GTEST_SKIP() << "No WSL acceptance endpoint was explicitly selected";
+    ASSERT_FALSE(endpoint.transportExecutable.empty()) << "Set FROST_REMOTE_TEST_WSL for the selected WSL endpoint";
+    ASSERT_FALSE(endpoint.distribution.empty()) << "Set FROST_REMOTE_TEST_DISTRIBUTION for the selected WSL endpoint";
     const auto cmake = test::environmentValue("FROST_REMOTE_TEST_CMAKE").value_or("");
     const auto ninja = test::environmentValue("FROST_REMOTE_TEST_NINJA").value_or("");
     const auto compiler = test::environmentValue("FROST_REMOTE_TEST_CXX").value_or("");
-    if(endpoint.transportExecutable.empty()||endpoint.distribution.empty()||cmake.empty()||ninja.empty()||compiler.empty())
-        GTEST_SKIP()<<"No explicitly selected/provisioned WSL CMake/Ninja/Clang endpoint; not counted as WSL build acceptance";
+    ASSERT_FALSE(cmake.empty()) << "Set FROST_REMOTE_TEST_CMAKE for the selected WSL endpoint";
+    ASSERT_FALSE(ninja.empty()) << "Set FROST_REMOTE_TEST_NINJA for the selected WSL endpoint";
+    ASSERT_FALSE(compiler.empty()) << "Set FROST_REMOTE_TEST_CXX for the selected WSL endpoint";
     if (auto python = test::environmentValue("FROST_REMOTE_TEST_LINUX_PYTHON"); python && !python->empty())
         endpoint.remotePython = *python;
     RemoteProcessLauncher initial(io::realProcessLauncher(),endpoint,{.admit=[]()->Result<void>{return {};}});

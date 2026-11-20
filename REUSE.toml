@@ -15,6 +15,12 @@ SPDX-FileCopyrightText = "2026 The FrostIDE authors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
+path = ["resources/analyzer_rules.inc", "tools/luaunit-discovery.lua"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 The FrostIDE authors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
 path = ["tests/**/fixtures/**", "tests/**/goldens/**", "tests/fuzz/corpus/**"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 The FrostIDE authors"
@@ -192,7 +198,7 @@ SPDX-FileCopyrightText = "2021 Munif Tanjim"
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = ["integrations/unity/com.frostide.editor/package.json", "integrations/unity/com.frostide.editor/LICENSE", "integrations/unity/com.frostide.editor/Editor/*.asmdef", "integrations/unity/com.frostide.editor/**/*.meta", "integrations/unity/com.frostide.editor/*.meta"]
+path = ["integrations/unity/com.frostide.editor/package.json", "integrations/unity/com.frostide.editor/LICENSE", "integrations/unity/com.frostide.editor/Editor/*.asmdef", "integrations/unity/com.frostide.editor/Editor/Testing/FrostIDE.UnityIntegration.TestRunner.asmdef", "integrations/unity/com.frostide.editor/**/*.meta", "integrations/unity/com.frostide.editor/*.meta"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 FrostIDE contributors"
 SPDX-License-Identifier = "Apache-2.0"
