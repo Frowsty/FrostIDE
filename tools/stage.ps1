@@ -248,6 +248,10 @@ if ($code -ne 0) {
     Fail "the build tree's IDE images have no matching PDBs ($code)"
 }
 
+# The build's Lua runtime is source-pinned and already paired with its API DLL and notice.
+foreach ($name in @('lua54\lua.exe', 'lua54\lua54.dll', 'licenses\Lua\lua.h')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $binDir $name) -PathType Leaf)) { Fail "missing standalone Lua runtime: $name" }
+}
 # 2. A fresh destination (and symbol archive).
 if (Test-Path -LiteralPath $Destination) {
     $existing = @(Get-ChildItem -LiteralPath $Destination -Force)
@@ -267,6 +271,10 @@ $script:ownedDestination = $Destination
 $script:ownedArchive = $symbolArchive
 if (-not $script:destinationExisted) { [void][System.IO.Directory]::CreateDirectory($Destination) }
 
+
+Copy-Item -LiteralPath (Join-Path $binDir 'lua54') -Destination $Destination -Recurse
+New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'licenses') | Out-Null
+Copy-Item -LiteralPath (Join-Path $binDir 'licenses\Lua') -Destination (Join-Path $Destination 'licenses') -Recurse
 # 3. FrostIDE's own files.
 foreach ($name in @('frost.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
