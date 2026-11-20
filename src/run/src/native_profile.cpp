@@ -81,7 +81,8 @@ Result<NativeProfileReport> collectNativeProfile(io::IFileSystem& fs, io::IProce
         spec.arguments = std::move(arguments);
         spec.environment = std::move(environment);
         spec.workingDirectory = request.outputDirectory;
-        return runAnalysisCommand(launcher, std::move(spec), stop, guarded);
+        return runAnalysisCommand(launcher, std::move(spec), stop, guarded, std::chrono::minutes(5),
+                                  32U * 1024U * 1024U, {}, admission);
     };
     NativeProfileReport report;
     report.backend = request.backend;
@@ -138,8 +139,9 @@ Result<NativeProfileReport> collectNativeProfile(io::IFileSystem& fs, io::IProce
         for (const auto& entry : request.plan.environment)
             program.environment.emplace_back(entry.name, entry.value);
         io::ProcessId pid = 0;
-        auto ran = runAnalysisCommand(launcher, std::move(program), stop, guarded, request.duration,
-                                      32U * 1024U * 1024U, [&](auto value) { pid = value; });
+        auto ran = runAnalysisCommand(
+            launcher, std::move(program), stop, guarded, request.duration, 32U * 1024U * 1024U,
+            [&](auto value) { pid = value; }, admission);
         const bool intervalEnded = !ran && ran.error().code() == ErrorCode::Timeout;
         auto ended = retire(ran.has_value() || intervalEnded);
         if (!ended) {
@@ -186,7 +188,8 @@ Result<NativeProfileReport> collectNativeProfile(io::IFileSystem& fs, io::IProce
         for (const auto& entry : request.plan.environment)
             record.environment.emplace_back(entry.name, entry.value);
         record.environment.emplace_back("DEBUGINFOD_URLS", "");
-        auto ran = runAnalysisCommand(launcher, std::move(record), stop, guarded, request.duration);
+        auto ran = runAnalysisCommand(launcher, std::move(record), stop, guarded, request.duration, 32U * 1024U * 1024U,
+                                      {}, admission);
         if (!ran && ran.error().code() != ErrorCode::Timeout)
             return std::unexpected(ran.error());
         if (ran) {

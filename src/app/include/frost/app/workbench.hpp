@@ -394,6 +394,9 @@ struct WorkbenchOptions {
     // Where FrostIDE-written compile_commands.json files go (absolute; one directory per solution);
     // "" uses only existing databases.
     std::string compileCommandsCache;
+    // GUI-thread test seam after native analysis plan resolution, before queuing collection.
+    // It may revoke selection/configuration; queued workers must honor the shared stop token.
+    std::function<void()> nativeAnalysisBeforeQueue;
     // Where a language server's metadata sources are written to be shown read-only (absolute,
     // <profile>/caches/metadata, never a workspace; LanguageServices::metadataCacheDir); "" shows
     // none and navigation names LTR-6.

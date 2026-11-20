@@ -1,10 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 // RUN-12 strict real-format value projection and source identity invalidation; authored, not run.
 #include "frost/io/mem_fs.hpp"
+#include "frost/io/scripted_process_launcher.hpp"
 #include "frost/run/native_analysis.hpp"
 
 #include <gtest/gtest.h>
 namespace frost::run {
+TEST(NativeCoverage, LiveAdmissionRevocationStopsAlreadyRunningOwnedProcess) {
+    io::ScriptedProcessLauncher launcher;
+    io::ProcessSpec command;
+#ifdef _WIN32
+    command.executable = "C:/tools/app.exe";
+    command.workingDirectory = "C:/tools";
+#else
+    command.executable = "/tools/app";
+    command.workingDirectory = "/tools";
+#endif
+    launcher.expect({.expectExecutable = command.executable, .neverExits = true});
+    int checks = 0;
+    auto result = runAnalysisCommand(
+        launcher, command, {}, [] { return Result<void>{}; }, std::nullopt, 1024, {},
+        [&]() -> Result<void> {
+            ++checks;
+            return fail(ErrorCode::PermissionDenied, "trust revoked while running");
+        });
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::PermissionDenied);
+    EXPECT_GT(checks, 0);
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1u);
+    EXPECT_TRUE(launches.front().terminated);
+}
+
 TEST(NativeCoverage, PreservesActualLinesAndUnknownBranches) {
     auto report = parseLlvmCoverage(
         "SF:unit.cpp\nDA:2,13\nDA:7,0\nBRDA:2,0,0,13\nBRDA:2,0,1,-\nLF:2\nLH:1\nBRF:2\nBRH:1\nend_of_record\n",

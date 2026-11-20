@@ -26,6 +26,7 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QTableWidget>
+#include <QTimer>
 #include <QUuid>
 #include <QVBoxLayout>
 
@@ -322,13 +323,16 @@ void Workbench::startNativeAnalysis(bool importProfiles, bool profile) {
     const auto active = m_build->activeConfigurationIndex();
     const auto cmake = m_cmake.get();
     const auto model = m_cmake ? m_cmake->shownModel() : nullptr;
-    const auto contextCurrent = [self, root, revision, generation, configuration, token, solution, active, cmake,
-                                 model] {
+    const auto profileGeneration = m_cmake ? m_cmake->service().profileGeneration() : 0;
+    const auto contextCurrent = [self, root, revision, generation, configuration, token, solution, active, cmake, model,
+                                 profileGeneration] {
         if (!self || self->m_shutDown || token.stop_requested() || self->m_projectRoot != root ||
             self->m_nativeAnalysisGeneration != generation)
             return false;
         if (self->m_solution != solution || self->m_build->activeConfigurationIndex() != active ||
-            self->m_cmake.get() != cmake || (self->m_cmake && self->m_cmake->shownModel() != model))
+            self->m_cmake.get() != cmake ||
+            (self->m_cmake && (self->m_cmake->shownModel() != model ||
+                               self->m_cmake->service().profileGeneration() != profileGeneration)))
             return false;
         const auto trust = self->m_services.trust.snapshot(root);
         const auto current = self->m_runController->selectedConfiguration();
@@ -337,9 +341,25 @@ void Workbench::startNativeAnalysis(bool importProfiles, bool profile) {
     auto* progress =
         new QProgressDialog("Preparing selected configuration and actual coverage tools...", "Stop", 0, 0, m_window);
     progress->setAttribute(Qt::WA_DeleteOnClose);
+    progress->setObjectName("nativeAnalysisProgress");
     progress->show();
     connect(progress, &QProgressDialog::canceled, this,
             [source = m_nativeAnalysisStop]() mutable { source.request_stop(); });
+    const auto revoke = [contextCurrent, source = m_nativeAnalysisStop]() mutable {
+        if (!contextCurrent())
+            source.request_stop();
+    };
+    // Selection/config/model publications synchronously revoke the worker's thread-safe token;
+    // a queued worker never consults GUI-owned configuration objects across threads.
+    connect(m_runController.get(), &ui::RunController::runStateChanged, progress, revoke);
+    connect(m_runController.get(), &ui::RunController::configurationsChanged, progress, revoke);
+    connect(m_build.get(), &ui::BuildController::activeConfigurationChanged, progress, revoke);
+    connect(m_build.get(), &ui::BuildController::solutionChanged, progress, revoke);
+    connect(m_build.get(), &ui::BuildController::backendChanged, progress, revoke);
+    auto* admissionWatch = new QTimer(progress);
+    admissionWatch->setInterval(20);
+    connect(admissionWatch, &QTimer::timeout, progress, revoke);
+    admissionWatch->start();
     const QPointer<QProgressDialog> dialog(progress);
     const auto finished = [self, dialog, generation, contextCurrent,
                            token](Result<run::CoverageReport> result) mutable {
@@ -521,6 +541,8 @@ void Workbench::startNativeAnalysis(bool importProfiles, bool profile) {
                     finished(fail(ErrorCode::Cancelled, "Coverage plan context changed"));
                     return;
                 }
+                if (self->m_options.nativeAnalysisBeforeQueue)
+                    self->m_options.nativeAnalysisBeforeQueue();
                 if (profile) {
                     run::NativeProfileRequest request;
                     request.plan = std::move(*plan);

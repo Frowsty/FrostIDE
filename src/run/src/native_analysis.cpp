@@ -37,7 +37,8 @@ Result<void> validateAnalysisIdentity(io::IFileSystem& fs, const AnalysisFileIde
 Result<AnalysisCommandResult> runAnalysisCommand(io::IProcessLauncher& launcher, io::ProcessSpec spec,
                                                  std::stop_token stop, AnalysisAdmission admission,
                                                  std::optional<IClock::Duration> timeout, std::size_t outputCap,
-                                                 std::function<void(io::ProcessId)> onStarted) {
+                                                 std::function<void(io::ProcessId)> onStarted,
+                                                 AnalysisAdmission liveAdmission) {
     if (!io::isAbsolutePath(spec.executable) || !io::isAbsolutePath(spec.workingDirectory) || !outputCap ||
         outputCap > 64U * 1024U * 1024U || (timeout && *timeout <= IClock::Duration::zero()))
         return fail(ErrorCode::InvalidArgument,
@@ -79,6 +80,7 @@ Result<AnalysisCommandResult> runAnalysisCommand(io::IProcessLauncher& launcher,
     const auto started = systemClock().steadyNow();
     std::stop_callback cancel(stop, [&] { (*session)->stop(); });
     bool expired = false, overflow = false;
+    std::optional<Error> revoked;
     std::optional<build::RunExit> exit;
     while (!(exit = (*session)->waitFor(std::chrono::milliseconds(20)))) {
         {
@@ -86,7 +88,12 @@ Result<AnalysisCommandResult> runAnalysisCommand(io::IProcessLauncher& launcher,
             overflow = capture->overflow;
         }
         expired = timeout && systemClock().steadyNow() - started >= *timeout;
-        if (stop.stop_requested() || expired || overflow)
+        if (liveAdmission && !revoked) {
+            auto allowed = liveAdmission();
+            if (!allowed)
+                revoked = allowed.error();
+        }
+        if (stop.stop_requested() || revoked || expired || overflow)
             (*session)->stop();
     }
     {
@@ -97,6 +104,8 @@ Result<AnalysisCommandResult> runAnalysisCommand(io::IProcessLauncher& launcher,
         return fail(ErrorCode::IoError, "Analysis process cleanup/wait failed");
     if (stop.stop_requested())
         return fail(ErrorCode::Cancelled, "Analysis cancelled; owned process tree stopped");
+    if (revoked)
+        return std::unexpected(*revoked);
     if (expired)
         return fail(ErrorCode::Timeout, "Analysis deadline exceeded");
     if (overflow)

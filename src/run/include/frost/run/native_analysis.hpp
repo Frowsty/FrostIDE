@@ -24,10 +24,12 @@ struct AnalysisCommandResult {
 };
 // Worker-only. Uses RunSession ownership, caps retained output, ends/reaps the owned tree on stop,
 // overflow or deadline. admission runs immediately before launch; never invokes shell syntax.
+// liveAdmission is a cheap thread-safe revocation check polled every20ms while the tree runs.
 [[nodiscard]] Result<AnalysisCommandResult>
 runAnalysisCommand(io::IProcessLauncher& launcher, io::ProcessSpec spec, std::stop_token stop,
                    AnalysisAdmission admission = {}, std::optional<IClock::Duration> timeout = std::chrono::minutes(5),
-                   std::size_t outputCap = 32 * 1024 * 1024, std::function<void(io::ProcessId)> started = {});
+                   std::size_t outputCap = 32 * 1024 * 1024, std::function<void(io::ProcessId)> started = {},
+                   AnalysisAdmission liveAdmission = {});
 struct CoverageLine {
     std::uint32_t line = 0;
     std::uint64_t hits = 0;
