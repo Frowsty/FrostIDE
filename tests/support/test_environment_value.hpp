@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Read optional UTF-8 process settings for acceptance fixtures on Windows and Linux.
 #pragma once
 
 #include <optional>
