@@ -42,6 +42,12 @@ def build_payload(dotnet: Path, assets: Path, archive: Path, destination: Path, 
     if destination.exists():
         raise ValueError("RoslynHost destination already exists; verify it or select a new directory")
     managed_server.verify_installed(archive, assets, root)
+    manifest = json.loads((root / "sdk/managed-dependencies.json").read_text(encoding="utf-8"))
+    decompiler = [p for p in manifest["packages"] if p["name"] == "ICSharpCode.Decompiler"]
+    if len(decompiler) != 1 or decompiler[0]["version"] != "9.1.0.7988" or decompiler[0]["license"] != "MIT":
+        raise ValueError("Library source provider requires the audited ICSharpCode.Decompiler 9.1.0.7988 MIT record")
+    if not (assets / "ICSharpCode.Decompiler.dll").is_file():
+        raise ValueError("Verified managed assets lack the decompiler engine")
     lock = json.loads((root / "sdk/sdk.lock.json").read_text(encoding="utf-8"))
     expected_sdk = lock["windows" if os.name == "nt" else "linux"]["dotnet"]["version"]
     source = source_inputs(root)
@@ -62,6 +68,8 @@ def build_payload(dotnet: Path, assets: Path, archive: Path, destination: Path, 
         common = ["-p:FrostManagedAssets=" + str(assets)]
         subprocess.run([str(dotnet), "restore", str(project / "FrostRoslynHost.csproj"), "--configfile", str(configuration), *common], cwd=project, env=environment, check=True)
         subprocess.run([str(dotnet), "build", str(project / "FrostRoslynHost.csproj"), "--no-restore", "--configuration", "Release", "--output", str(assembly_output), *common], cwd=project, env=environment, check=True)
+        if not (assembly_output / "ICSharpCode.Decompiler.dll").is_file() or sha(assembly_output / "ICSharpCode.Decompiler.dll") != sha(assets / "ICSharpCode.Decompiler.dll"):
+            raise ValueError("Published decompiler differs from the verified managed payload")
         if source_inputs(root) != source:
             raise ValueError("RoslynHost source changed during build")
         files = {p.relative_to(assembly_output).as_posix(): sha(p) for p in sorted(assembly_output.rglob("*")) if p.is_file()}

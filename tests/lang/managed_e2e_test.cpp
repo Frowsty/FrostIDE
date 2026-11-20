@@ -173,6 +173,18 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
     }
     EXPECT_TRUE(ready) << "the server did not load the referenced project";
     if (ready) {
+        // Real external metadata symbol from the evaluated reference pack, through the same host
+        // endpoint normal F12 invokes. Reference assemblies may legitimately have no method IL.
+        auto library = pool.spawn(sched::Lane::UserVisible,
+            request(pool, service, "frost/managed/librarySource",
+                positionParams(*uri, 47).set("mode", "decompiled").set("allowSourceLink", false))).join();
+        ASSERT_TRUE(library) << library.error().describe();
+        ASSERT_TRUE(library->isObject());
+        EXPECT_EQ(library->stringAt("kind"), "decompiled");
+        EXPECT_FALSE(library->stringAt("source").empty());
+        EXPECT_EQ(library->stringAt("assemblySha256").size(), 64U);
+        EXPECT_FALSE(library->stringAt("moduleId").empty());
+        EXPECT_EQ(library->stringAt("extension"), ".cs");
         auto evaluated =
             pool.spawn(sched::Lane::UserVisible, request(pool, service, "frost/projectModel", lang::Json::object()))
                 .join();

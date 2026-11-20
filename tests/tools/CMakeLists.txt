@@ -41,6 +41,14 @@ set_tests_properties(managed_pdb_guard PROPERTIES
     RESOURCE_LOCK frost_desktop
     SKIP_RETURN_CODE 77
     ENVIRONMENT "FROST_MANAGED_TEST_DOTNET=${_frost_managed_test_dotnet};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
+# Real library sources fail visibly when reviewed SDK/host inputs are unavailable; no network restore.
+add_test(NAME managed_library_sources
+    COMMAND "${Python3_EXECUTABLE}" -B "${FROST_SOURCE_DIR}/tests/managed/test_library_sources.py" -v)
+set_tests_properties(managed_library_sources PROPERTIES
+    LABELS "integration;managed"
+    RESOURCE_LOCK frost_desktop
+    TIMEOUT 240
+    ENVIRONMENT "FROST_TEST_CSHARP_DOTNET=${FROST_TEST_CSHARP_DOTNET};FROST_TEST_CSHARP_SERVER=${FROST_TEST_CSHARP_SERVER};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
 # The Unity package's csc.rsp / compiler-argument model (ProjectContext.cs), built with the same SDK.
 add_test(NAME unity_compiler_arguments
     COMMAND "${Python3_EXECUTABLE}" "${FROST_SOURCE_DIR}/tests/unity/test_compiler_arguments.py")

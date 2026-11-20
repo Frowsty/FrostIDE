@@ -8,10 +8,11 @@
     <EnableDefaultItems>true</EnableDefaultItems><RestoreIgnoreFailedSources>false</RestoreIgnoreFailedSources>
   </PropertyGroup>
   <Target Name="RequireAuditedRoslyn" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(FrostManagedAssets)/ICSharpCode.Decompiler.dll')" Text="LTR6 requires the previously audited ICSharpCode.Decompiler 9.1.0.7988 payload." />
     <Error Condition="!Exists('$(FrostManagedAssets)/Microsoft.CodeAnalysis.CSharp.Workspaces.dll')" Text="FrostManagedAssets must name the existing verified Roslyn 5.9.0 managed payload; no packages are downloaded." />
   </Target>
   <ItemGroup>
-    <Reference Include="$(FrostManagedAssets)/*.dll" Exclude="$(FrostManagedAssets)/CSharpLanguageServer.dll;$(FrostManagedAssets)/FSharp*.dll;$(FrostManagedAssets)/Ionide*.dll;$(FrostManagedAssets)/Argu.dll;$(FrostManagedAssets)/ICSharpCode.Decompiler.dll" />
+    <Reference Include="$(FrostManagedAssets)/*.dll" Exclude="$(FrostManagedAssets)/CSharpLanguageServer.dll;$(FrostManagedAssets)/FSharp*.dll;$(FrostManagedAssets)/Ionide*.dll;$(FrostManagedAssets)/Argu.dll" />
     <Content Include="$(FrostManagedAssets)/BuildHost-netcore/**/*" Link="BuildHost-netcore/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="$(FrostManagedAssets)/FrostIDE-Notices/**/*" Link="FrostIDE-Notices/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

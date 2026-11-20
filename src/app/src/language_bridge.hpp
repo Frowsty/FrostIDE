@@ -88,6 +88,7 @@ public:
     void openLocation(std::string_view path, lang::LspPosition position) override;
     // openLocation, then the view of `path` stays read-only (DocumentEditorView::setForcedReadOnly):
     // a metadata-cache source is shown, never edited or saved (LTR-1).
+    [[nodiscard]] std::string libraryWorkspaceRoot() const override;
     void openReadOnlyLocation(std::string_view path, lang::LspPosition position) override;
     void setUsageHighlights(std::vector<lang::DocumentHighlight> highlights) override;
     [[nodiscard]] std::vector<std::pair<std::string, text::Snapshot>> openDocuments() const override;

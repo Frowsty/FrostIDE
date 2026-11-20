@@ -8073,3 +8073,17 @@ with a pointer.
 Owned RoslynHost now receives the selected evaluated project, configuration and TFM. The normal .NET project pane, Build/Problems backend and generated console run configuration consume the actual SDK evaluation with captured project/import bytes, trust and physical identity admission, cancellation and stale-context invalidation. Late JSON-RPC cancellation and completion dispose under the same lifetime gate. Added source-authored context/build/run fixtures and an exact Apache-2.0 MoreLINQ v4.4.0 corpus pin with a deferred SDK/host comparison fixture; no corpus was fetched. Semantic contribution interfaces are additive for the independently owned Unity/library modules.
 
 Source checkpoint only; independent review is pending for these additions. No builds, tests, SDK commands, installs, downloads or WSL were executed. Earlier evaluation API source clearance remains separate from this pending checkpoint.
+## 2026-11-20: R17 LTR-6 library-source implementation checkpoint (source only)
+
+- Added a RoslynHost semantic extension resolving actual external symbols to evaluated assembly
+  references and compiler module identities. Reuses the already audited MIT ICSharpCode.Decompiler
+  9.1.0.7988 asset, with exact DLL publication checks and ADR 0112 provenance/licence boundaries.
+- Offline F12 prefers checksum-verified portable-PDB embedded source and otherwise shows real
+  reconstructed C#. Separate actions expose original SourceLink source with explicit network opt-in,
+  actual PE raw IL and assembly metadata. SourceLink initially permits only public GitHub raw HTTPS;
+  unsupported origins, symbol layouts and ambiguous original-source locations refuse explicitly.
+- Output uses a bounded digest-named profile cache outside the physical workspace and the existing
+  forced-read-only editor entry point. Cached-content changes, aliases, stale requests and missing
+  providers refuse. Authored editor request/cache tests, a real host external-symbol call and a
+  registered real PE/PDB/ILSpy probe; no build, configuration, tests, feature runs, WSL, installs or
+  payload downloads were performed. Independent source review and runtime acceptance are pending.
