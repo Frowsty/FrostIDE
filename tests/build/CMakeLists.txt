@@ -164,6 +164,6 @@ endif()
 
 # R19 pure endpoint/mapping/transport specification cases; real transport fixtures are separate.
 frost_add_test(build_remote_target_tests
-    SOURCES remote_target_test.cpp
+    SOURCES remote_target_test.cpp wsl_cmake_test.cpp
     DEPS frost::build frost::io frost::rpc
     LABELS unit)

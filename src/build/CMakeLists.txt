@@ -39,6 +39,7 @@ set(frost_build_sources
     src/output_parsers.cpp
     src/remote_process.cpp
     src/remote_target.cpp
+    src/wsl_cmake.cpp
     src/run_service.cpp
     src/run_session.cpp
     src/run_target.cpp
