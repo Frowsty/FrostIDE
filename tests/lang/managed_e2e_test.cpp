@@ -131,6 +131,12 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
     const std::string lib = scratch.join("Lib/Greeter.cs");
     ASSERT_TRUE(fs.writeFileAtomic(app, "using Library; public class Example {}\n").has_value());
     ASSERT_TRUE(fs.writeFileAtomic(lib, "namespace Library; public class Greeter {}\n").has_value());
+    const auto shadowPath = scratch.join("Lib/Shadow.cs");
+    const std::string shadowText =
+        "namespace Shadow; public class @var { public static implicit operator @var(int x) => new @var(); public "
+        "static implicit operator int(@var x) => 99; } public class Probe { public int Introduce() { return 1; } "
+        "public int Inline() { var answer = 1; return answer; } }\n";
+    ASSERT_TRUE(fs.writeFileAtomic(shadowPath, shadowText));
     auto options = lang::managedServiceOptions(dotnet, serverPath, scratch.path(), true);
     options.environment.emplace_back("DOTNET_CLI_HOME", scratch.join("dotnet-home"));
     for (const auto* name : {"LOCALAPPDATA", "APPDATA", "HOME", "USERPROFILE", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
@@ -237,6 +243,29 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
         auto unchangedLibrary = fs.readFileSnapshot(lib, 1024U);
         ASSERT_TRUE(unchangedLibrary);
         EXPECT_EQ(*unchangedLibrary, "namespace Library; public class Greeter {}\n");
+        // A real type named @var changes conversion semantics although both forms compile.
+        // Neither inferred-local transformation may be offered in that semantic scope.
+        auto shadowUri = lang::pathToUri(shadowPath);
+        ASSERT_TRUE(shadowUri);
+        for (const auto& selected : {std::string("1; } public int Inline"), std::string("answer;")}) {
+            const auto start = shadowText.find(selected);
+            ASSERT_NE(start, std::string::npos);
+            auto position = [](std::size_t column) {
+                return lang::Json::object().set("line", 0).set("character", static_cast<int>(column));
+            };
+            auto parameters = lang::Json::object()
+                                  .set("textDocument", lang::Json::object().set("uri", *shadowUri))
+                                  .set("range", lang::Json::object()
+                                                    .set("start", position(start))
+                                                    .set("end", position(start + (selected.starts_with("1") ? 1 : 0))))
+                                  .set("context", lang::Json::object().set("diagnostics", lang::Json::array()));
+            auto response = pool.spawn(sched::Lane::UserVisible,
+                                       request(pool, service, "textDocument/codeAction", std::move(parameters)))
+                                .join();
+            ASSERT_TRUE(response) << response.error().describe();
+            EXPECT_EQ(response->dump().find("Introduce local for return value (Roslyn)"), std::string::npos);
+            EXPECT_EQ(response->dump().find("Inline return local (Roslyn)"), std::string::npos);
+        }
         auto params = positionParams(*uri, 98);
         params.set("newName", "Welcome");
         auto rename =
