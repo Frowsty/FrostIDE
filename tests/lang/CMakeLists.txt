@@ -49,6 +49,7 @@ frost_add_test(lang_unit_tests
     SOURCES
         cpp_rename_plan_test.cpp
         cpp_refactoring_plan_test.cpp
+        cpp_index_test.cpp
         scope_fixes_test.cpp
         inspection_scope_fixes_test.cpp
         clangd_actions_test.cpp

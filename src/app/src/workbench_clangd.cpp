@@ -608,6 +608,8 @@ void Workbench::resumeDeferredClangd(bool retryUntilIdle) {
 }
 
 void Workbench::stopClangd() {
+    m_cppIndexStop.request_stop();
+    ++m_cppIndexGeneration;
     if (m_engineBindings)
         m_engineBindings->cancel();
     m_clangdDeferredRoot.clear();

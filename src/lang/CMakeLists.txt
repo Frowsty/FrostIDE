@@ -35,6 +35,8 @@ frost_add_library(lang LAYER lang
         src/cpp_rename_plan.cpp
         src/cmake_language.cpp
         src/cpp_refactoring_plan.cpp
+        src/cpp_index.cpp
+        src/cpp_index_store.cpp
         src/code_assist.cpp
         src/code_vision.cpp
         src/compile_commands.cpp
@@ -79,7 +81,7 @@ frost_add_library(lang LAYER lang
         src/symbols.cpp
         src/uri.cpp
         src/workspace_edit.cpp
-    DEPS frost::project frost::settings frost::text frost::rpc frost::io frost::sched frost::core frost::syntax)
+    DEPS frost::project frost::settings frost::text frost::rpc frost::io frost::sched frost::core frost::syntax frost::storage)
 target_compile_definitions(frost_lang PRIVATE FROST_PINNED_LLVM_VERSION="${_frost_llvm_version}"
     FROST_PINNED_LUALS_VERSION="${_frost_luals_version}")
 if(WIN32)

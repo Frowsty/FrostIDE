@@ -26,13 +26,16 @@
 #include "support/crash_dialogs.hpp"
 #include "workbench_rig.hpp"
 #include <QDir>
+#include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QProgressDialog>
 #include <QSet>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QTreeView>
 
 #include <algorithm>
@@ -98,6 +101,42 @@ std::vector<frost::LineIndex> runMarkerLines(const std::vector<frost::ui::LineMa
     return lines;
 }
 
+TEST(WorkbenchClangd, IndexSymbolPromptCannotMixOldDatabaseWithNewProject) {
+    WorkDir dir("cpp-index-modal-admission");
+    for (const auto name : {"first", "second"}) {
+        dir.write(std::string(name) + "/unit.cpp", "int symbol;\n");
+        const auto root = dir.join(name), file = dir.join(std::string(name) + "/unit.cpp");
+        const std::vector<frost::lang::CompileCommand> commands{{root, file, {"clang++", "-std=c++20", "-c", file}}};
+        ASSERT_TRUE(frost::lang::writeCompileCommands(frost::io::realFileSystem(),
+                                                      dir.join(std::string(name) + "/build"), commands));
+    }
+    RigOptions options;
+    options.workbench.clangd = true;
+    options.workbench.clangdJobs = 1;
+    options.workbench.compileCommandsCache = dir.join("cache");
+    WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.join("first")));
+    ASSERT_TRUE(rig.trust->trust(dir.join("second")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("first")));
+    ASSERT_TRUE(
+        waitFor([&] { return rig.workbench->clangd() && rig.workbench->clangd()->serverCapabilities().has_value(); },
+                kPatience));
+    bool switched = false;
+    QTimer::singleShot(0, rig.window.get(), [&] {
+        auto* prompt = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+        ASSERT_NE(prompt, nullptr);
+        EXPECT_TRUE(rig.workbench->openPath(dir.join("second")));
+        switched = true;
+        prompt->setTextValue(QStringLiteral("sym"));
+        prompt->accept();
+    });
+    EXPECT_EQ(rig.window->invoke("cpp.index.symbols"), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(switched);
+    for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* progress = qobject_cast<QProgressDialog*>(widget))
+            EXPECT_FALSE(progress->isVisible() && progress->labelText().contains(QStringLiteral("C++ index")));
+    EXPECT_FALSE(frost::io::realFileSystem().exists(dir.join("cache/semantic-index")).value_or(true));
+}
 TEST(WorkbenchClangd, LiveDiagnosticsAppearAndClearAfterTheFix) {
     frost::test::disableCrashDialogs(); // clangd inherits the error mode: no WER box if it dies.
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());

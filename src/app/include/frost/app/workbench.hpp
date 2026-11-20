@@ -798,6 +798,8 @@ private:
     void registerActions();
     void registerRefactoringActions();
     void registerCppRefactoringActions();
+    void registerCppIndexActions();
+    void showCppIndex(std::string operation, std::string symbol = {});
     void showCppRefactoring(std::string operation);
     void showCppInspectionScopeFixes();
     void moveCppProjectSource();
@@ -1063,6 +1065,8 @@ private:
     TransactionId m_refactoringAdmissionToken;
     std::shared_ptr<CppRenameAdmission> m_cppRenameAdmission;
     std::stop_source m_cppRenameStop;
+    std::stop_source m_cppIndexStop;
+    std::uint64_t m_cppIndexGeneration = 0;
     std::uint64_t m_cppRenameGeneration = 0;
     std::optional<std::uint64_t> m_cppRenameTrustRevision;
     std::unique_ptr<document::AutosaveController> m_autosave;

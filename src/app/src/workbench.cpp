@@ -865,6 +865,7 @@ void Workbench::shutdown() {
     m_shutDown = true;
     m_cppRenameStop.request_stop();
     m_cppInspectionStop.request_stop();
+    m_cppIndexStop.request_stop();
     if (m_clone) {
         // Ends git's process tree and waits for the worker; its queued result is then ignored.
         m_clone->cancelled = true;
