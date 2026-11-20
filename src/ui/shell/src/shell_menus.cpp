@@ -234,6 +234,7 @@ constexpr std::array kRunMenu{
     act("run.selectConfiguration"),
     act("run.selectDebugConfiguration"),
     act("debug.attachToProcess"),
+    act("debug.attachUnity"),
     sep(),
     act("debug.resume"),
     act("debug.pause"),
