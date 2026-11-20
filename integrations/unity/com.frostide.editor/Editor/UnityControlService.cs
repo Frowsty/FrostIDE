@@ -20,7 +20,7 @@ namespace FrostIDE.UnityIntegration
         [Serializable] private sealed class Announcement
         {
             public string method = "unity.hello", root, instance, session, token;
-            public int version = 2, generation, pid, port, eventVersion = 1;
+            public int version = 2, generation, pid, port, eventVersion = 1, testVersion = 1;
         }
         [Serializable] private sealed class Challenge { public int version; public string session, challenge; }
         [Serializable] private sealed class Proof { public string session, nonce, proof; }
@@ -35,6 +35,7 @@ namespace FrostIDE.UnityIntegration
             public bool ok, playing, paused, compiling;
             public long projectVersion, eventFirst, eventNext, eventLast, eventLost;
             public UnityBridgeEvents.Entry[] events;
+            public UnityTestBridge.Response tests;
             public int frame;
         }
         private sealed class Pending
@@ -211,6 +212,13 @@ namespace FrostIDE.UnityIntegration
                 lock (gate) { if (queue.Count == 0) break; item = queue.Dequeue(); }
                 if (Expired(item)) { Finish(item, false, "Request expired"); continue; }
                 if (item.request.command == "state") { Finish(item, true, "State observed"); continue; }
+                if(UnityControlProtocol.TestCommand(item.request.command)){
+                    var result=UnityTestBridge.Dispatch(item.request.command);
+                    item.result=new Reply{id=item.request.id,session=session,ok=result.ok,message=result.message,
+                        playing=EditorApplication.isPlaying,paused=EditorApplication.isPaused,compiling=EditorApplication.isCompiling,
+                        frame=Time.frameCount,projectVersion=UnityBridgeEvents.ProjectVersion,tests=result};
+                    item.done.Set();continue;
+                }
                 long cursor;
                 if (UnityControlProtocol.EventCursor(item.request.command, out cursor)) {
                     try {

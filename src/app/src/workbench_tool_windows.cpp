@@ -38,6 +38,7 @@
 #include "unit_tests_window.hpp"
 #include "managed_tools_window.hpp"
 #include "unity_control.hpp"
+#include "unity_tests_window.hpp"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -467,6 +468,32 @@ void Workbench::attachToolWindows() {
         providers->setObjectName(QStringLiteral("unitTestsProviders"));
         providers->addTab(createUnitTestsToolWindowWidget(providers, std::move(context)), text("CTest"));
         providers->addTab(createDotnetTestsWidget(providers, owner->managedToolsContext()), text(".NET"));
+        UnityTestsWindowContext unityTests;
+        unityTests.selected = [owner] {
+            return owner && !owner->m_shutDown && owner->m_unity ? owner->m_unity->selectedEditor()
+                                                                 : std::optional<UnityEditorIdentity>{};
+        };
+        unityTests.request = [owner](const UnityEditorIdentity& identity, const lang::Json& payload,
+                                     std::function<void(Result<lang::Json>)> done) {
+            if (!owner || owner->m_shutDown || !owner->m_unity) {
+                done(fail(ErrorCode::Cancelled, "Unity workspace closed"));
+                return;
+            }
+            owner->m_unity->requestTests(identity, payload, std::move(done));
+        };
+        unityTests.prepare = [owner]() -> Result<void> {
+            if (!owner || owner->m_shutDown)
+                return fail(ErrorCode::Cancelled, "Unity workspace closed");
+            const auto saved = owner->saveAllDocuments();
+            if (!saved.failed.empty() || !saved.skipped.empty())
+                return fail(ErrorCode::Busy, "Save all source documents before discovering or running Unity tests");
+            return {};
+        };
+        unityTests.openLocation = [owner](const std::string& path, int line) {
+            if (owner && !owner->m_shutDown)
+                owner->openLocation(qs(path), line, 1);
+        };
+        providers->addTab(createUnityTestsWidget(providers, std::move(unityTests)), text("Unity"));
         LuaUnitTestsContext lua;
         lua.fs = &owner->m_services.fs;
         lua.launcher = &owner->m_services.launcher;

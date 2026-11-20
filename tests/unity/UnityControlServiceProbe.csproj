@@ -12,6 +12,7 @@
     <Compile Include="../../integrations/unity/com.frostide.editor/Editor/UnityControlProtocol.cs" />
     <Compile Include="../../integrations/unity/com.frostide.editor/Editor/UnityControlService.cs" />
     <Compile Include="../../integrations/unity/com.frostide.editor/Editor/UnityBridgeEvents.cs" />
+    <Compile Include="../../integrations/unity/com.frostide.editor/Editor/UnityTestBridge.cs" />
     <Compile Include="UnityControlServiceStubs.cs" />
     <Compile Include="UnityControlServiceProbe.cs" />
   </ItemGroup>

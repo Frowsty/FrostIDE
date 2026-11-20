@@ -67,6 +67,14 @@ internal static class UnityControlProtocolProbe
             if (connection.TryReserve(2, "/physical/project", valueSession, valueId, valueCommand, valueTtl, valueNonce, signature))
                 throw new Exception("modified " + field + " accepted");
         }
+        string tests="tests:"+Convert.ToBase64String(Encoding.UTF8.GetBytes("{\"op\":\"run\",\"ids\":[\"actual-case\"]}")).TrimEnd('=').Replace('+','-').Replace('/','_');
+        var testConnection=protocol.Open(2,session,challenge);
+        string testSignature=Sign(token,"frost-unity-request-v2","/physical/project",session,id,tests,"100",challenge,testConnection.ServerNonce);
+        if(!testConnection.TryReserve(2,"/physical/project",session,id,tests,100,testConnection.ServerNonce,testSignature))throw new Exception("signed test payload refused");
+        var changed=protocol.Open(2,session,challenge);
+        string unchangedSignature=Sign(token,"frost-unity-request-v2","/physical/project",session,id,tests,"100",challenge,changed.ServerNonce);
+        if(changed.TryReserve(2,"/physical/project",session,id,tests+"A",100,changed.ServerNonce,unchangedSignature))throw new Exception("modified test payload accepted");
+        if(UnityControlProtocol.TestCommand("tests:"+new string('A',4091))||UnityControlProtocol.TestCommand("tests:!invalid"))throw new Exception("oversized or noncanonical test command accepted");
         protocol.Close();
         if (protocol.Open(2, session, challenge) != null) throw new Exception("closed session accepted");
         Console.WriteLine("Unity protocol: transcript, one-shot replay and 4100 fresh requests passed");

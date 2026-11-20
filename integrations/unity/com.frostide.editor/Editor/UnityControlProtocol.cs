@@ -68,10 +68,15 @@ namespace FrostIDE.UnityIntegration
             foreach (char c in value) if (c < '0' || c > '9') return false;
             return Int64.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out cursor);
         }
+        internal static bool TestCommand(string command) {
+            if(command==null||!command.StartsWith("tests:",StringComparison.Ordinal)||Encoding.UTF8.GetByteCount(command)>4096||command.Length<=6)return false;
+            for(int i=6;i<command.Length;++i){char c=command[i];if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='-'||c=='_'))return false;}
+            return true;
+        }
         private static bool Command(string command) {
             long cursor;
             return command == "state" || command == "play" || command == "pause" || command == "resume" ||
-                command == "step" || command == "stop" || command == "refresh" || command == "recompile" || EventCursor(command, out cursor);
+                command == "step" || command == "stop" || command == "refresh" || command == "recompile" || EventCursor(command, out cursor) || TestCommand(command);
         }        internal sealed class Connection
         {
             private readonly UnityControlProtocol owner;
