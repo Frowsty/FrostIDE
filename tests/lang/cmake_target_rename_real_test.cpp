@@ -16,9 +16,12 @@ TEST(CMakeTargetRenameReal, ReconfiguredFileApiReportsRenamedTargetAndDependency
     const auto build=io::joinPath(scratch.path(),"build").value();
     const auto path=io::joinPath(root,"CMakeLists.txt").value();
     const std::string source="cmake_minimum_required(VERSION 3.25)\nproject(RenameFixture LANGUAGES NONE)\n"
-        "add_custom_target(alpha)\nadd_custom_target(consumer)\nadd_dependencies(consumer alpha)\n";
+        "add_custom_target(alpha)\nadd_custom_target(consumer)\nadd_subdirectory(child)\n";
     ASSERT_TRUE(fs.createDirectories(root));
     ASSERT_TRUE(fs.writeFileAtomic(path,source));
+    const auto child=io::joinPath(root,"child").value();
+    ASSERT_TRUE(fs.createDirectories(child));
+    ASSERT_TRUE(fs.writeFileAtomic(io::joinPath(child,"CMakeLists.txt").value(),"add_dependencies(consumer alpha)\n"));
     ASSERT_TRUE(project::writeCMakeFileApiQuery(fs,build));
     io::ProcessSpec spec;
     spec.executable=FROST_TEST_CMAKE; spec.arguments={"-S",root,"-B",build,"-G","Ninja"};

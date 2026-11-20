@@ -42,6 +42,7 @@ Result<Json> queryMSBuildLanguage(const MSBuildLanguageInput& input, std::string
     Json result = Json::array();
     std::set<std::string> seen;
     bool evaluatedDefinition = false;
+    std::string evaluatedHover;
     for (const auto& evaluation : input.evaluations) {
         const auto context = evaluation.configuration + "|" + evaluation.platform + " — last evaluated " + evaluation.projectPath;
         if (method=="textDocument/definition")
@@ -62,8 +63,11 @@ Result<Json> queryMSBuildLanguage(const MSBuildLanguageInput& input, std::string
             if (method == "textDocument/completion" && startsName(property.name,prefix) && seen.insert(property.name).second)
                 result.push(Json::object().set("label",property.name).set("kind",6).set("detail",detail));
             if (!equalName(property.name,selected)) continue;
-            if (method == "textDocument/hover")
-                return Json::object().set("contents",Json::object().set("kind","plaintext").set("value",detail));
+            if (method == "textDocument/hover") {
+                if (!evaluatedHover.empty()) evaluatedHover+="\n\n";
+                evaluatedHover+=detail;
+                continue;
+            }
             if (method != "textDocument/definition" || property.path.empty() || property.line == 0) continue;
             const auto file = std::find_if(files.begin(),files.end(),[&](const auto& row){return documentKey(row.first)==documentKey(property.path);});
             if (file == files.end()) continue;
@@ -76,6 +80,8 @@ Result<Json> queryMSBuildLanguage(const MSBuildLanguageInput& input, std::string
             }
         }
     }
+    if (method=="textDocument/hover" && !evaluatedHover.empty())
+        return Json::object().set("contents",Json::object().set("kind","plaintext").set("value",evaluatedHover));
     for (const auto& [path,bytes] : files) {
         if (stop.stop_requested()) return fail(ErrorCode::Cancelled, "MSBuild query cancelled");
         auto xml = project::parseMSBuildSource(bytes,path);
