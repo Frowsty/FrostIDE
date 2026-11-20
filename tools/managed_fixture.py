@@ -14,6 +14,7 @@ import subprocess
 import sys
 
 import managed_server
+import roslyn_host
 
 
 def matches(name: str, pattern: str) -> bool:
@@ -98,9 +99,9 @@ def fixture_environment(configuration: dict, environment: dict[str, str], needed
                                "FROST_TEST_CSHARP_SERVER")
         archive = absolute_file(configured_value(configuration, environment, "FROST_TEST_CSHARP_ARCHIVE"),
                                 "FROST_TEST_CSHARP_ARCHIVE (the pinned offline NuGet archive)")
-        if server.name != "CSharpLanguageServer.dll":
-            raise ValueError("managed server entry must be CSharpLanguageServer.dll")
-        managed_server.verify_installed(archive, server.parent, root)
+        if server.name != "FrostRoslynHost.dll":
+            raise ValueError("managed server entry must be FrostRoslynHost.dll")
+        roslyn_host.verify_payload(server.parent, root)
         result["FROST_TEST_CSHARP_SERVER"] = str(server)
     if "debugger" in needed:
         bundled = environment.get("FROST_TEST_MANAGED_USE_BUNDLE") == "1"

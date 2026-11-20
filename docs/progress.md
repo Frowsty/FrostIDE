@@ -3,6 +3,12 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R17 owned RoslynHost foundation source checkpoint
+
+- Added the owned FrostRoslynHost stdio provider using the existing audited Roslyn 5.9.0/MSBuildWorkspace assets and pinned .NET 10.0.403. The supervised C# service, SDK bootstrap, Windows staging and real managed fixture defaults now select this host instead of csharp-ls. ADR 0109 records its existing dependency provenance and pending verification; no new package feed/version is introduced.
+- The bounded cancellable LSP actor loads actual evaluated C# projects, retains UTF-16 document overlays, and answers compiler diagnostics, completion, QuickInfo, source definitions/references, symbols, signatures, formatting, rename and simplify proposals through Roslyn APIs. Refactor proposals retain document versions and reject changed captured sources, new compiler errors, unresolved conflicts and inconsistent linked edits. Source documents are written only by the existing REF1 owner.
+- Added actual evaluated-project and symbol/assembly receipts plus an owned semantic extension boundary for later Unity/library-source modules. Linked semantic contexts require an explicit project context. Metadata source navigation remains with LTR-6; normal selected context/model controls and richer C# refactor integration continue after this checkpoint.
+- The offline owned-host recipe verifies the previous dependency archive/assets, compiles against those direct references using an empty package-source configuration, and records source/output digests. Authored payload-tamper tests and extended the existing real stdin/stdout cross-project semantic/REF1 journey with model and Undo/Redo assertions. This recipe and all tests remain unexecuted; independent host source review is pending. No builds, SDK tools, packages, feature executions, downloads or WSL ran.
 ## 2026-11-20: R17 managed inventory and evaluated SDK snapshot API underway
 
 - Inventoried the existing supervised csharp-ls 0.28.0 transport, audited Roslyn 5.9.0/MSBuildWorkspace graph, .NET 10.0.403 pins, managed property/build/debug helpers and self-authored SDK fixtures. No private work solutions were read.

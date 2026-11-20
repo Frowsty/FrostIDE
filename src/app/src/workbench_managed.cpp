@@ -320,15 +320,14 @@ void Workbench::startManaged(const std::string& root) {
         const QString sdk = qEnvironmentVariable("FROST_SDK");
         if (!sdk.isEmpty()) {
             const std::string sdkServer =
-                QDir(sdk).filePath(QStringLiteral("managed/CSharpLanguageServer.dll")).toUtf8().toStdString();
+                QDir(sdk).filePath(QStringLiteral("roslyn/FrostRoslynHost.dll")).toUtf8().toStdString();
             const auto st = m_services.fs.status(sdkServer);
             if (st && st->type == io::FileType::Regular)
                 serverPath = sdkServer;
         }
         if (serverPath.empty()) {
             const QString appDir = QCoreApplication::applicationDirPath();
-            serverPath =
-                QDir(appDir).filePath(QStringLiteral("managed/CSharpLanguageServer.dll")).toUtf8().toStdString();
+            serverPath = QDir(appDir).filePath(QStringLiteral("roslyn/FrostRoslynHost.dll")).toUtf8().toStdString();
         }
     }
     if (!io::isAbsolutePath(dotnetPath) || !io::isAbsolutePath(serverPath)) {
@@ -359,11 +358,16 @@ void Workbench::startManaged(const std::string& root) {
     auto options = lang::managedServiceOptions(dotnetPath, serverPath, root, true);
     options.environment.emplace_back("DOTNET_ROLL_FORWARD", "LatestMajor");
     // Keep the Unity root as the LSP workspace: source documents live outside the
-    // generated directory. Tell csharp-ls which solution to load explicitly.
+    // generated directory. Tell RoslynHost which solution to load explicitly.
     if (!m_unityRevision.empty()) {
         const QString solution = unitySolution(root, m_unityRevision);
         options.arguments.emplace_back("--solution");
         options.arguments.push_back(solution.toUtf8().toStdString());
+    } else if (std::string_view(m_projectIdentity).ends_with(".csproj") ||
+               std::string_view(m_projectIdentity).ends_with(".sln") ||
+               std::string_view(m_projectIdentity).ends_with(".slnx")) {
+        options.arguments.emplace_back("--solution");
+        options.arguments.push_back(m_projectIdentity);
     }
     if (!cliHome.isEmpty())
         options.environment.emplace_back("DOTNET_CLI_HOME", cliHome.toUtf8().toStdString());

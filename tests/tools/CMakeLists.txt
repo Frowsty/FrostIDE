@@ -128,3 +128,7 @@ if(FROST_BUILD_UI)
         TIMEOUT 120
         ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endif()
+
+# R17 owned-host payload policy never starts dotnet; real host stdio is covered by managed LSP cases.
+add_test(NAME roslyn_host_payload COMMAND "${Python3_EXECUTABLE}" -B "${FROST_SOURCE_DIR}/tests/tools/test_roslyn_host.py")
+set_tests_properties(roslyn_host_payload PROPERTIES LABELS unit ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")

@@ -173,6 +173,14 @@ TEST(ManagedE2E, UnsavedCrossProjectUtf16NavigationAndRename) {
     }
     EXPECT_TRUE(ready) << "the server did not load the referenced project";
     if (ready) {
+        auto evaluated =
+            pool.spawn(sched::Lane::UserVisible, request(pool, service, "frost/projectModel", lang::Json::object()))
+                .join();
+        ASSERT_TRUE(evaluated) << evaluated.error().describe();
+        ASSERT_TRUE(evaluated->isArray());
+        EXPECT_NE(evaluated->dump().find("App.csproj"), std::string::npos);
+        EXPECT_NE(evaluated->dump().find("Lib.csproj"), std::string::npos);
+        EXPECT_NE(evaluated->dump().find("Greeter.cs"), std::string::npos);
         auto completion = pool.spawn(sched::Lane::UserVisible,
                                      request(pool, service, "textDocument/completion", positionParams(*uri, 97)))
                               .join();

@@ -1,0 +1,16 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# ADR 0109: Owned RoslynHost and authoritative SDK project context
+
+- Status: accepted for source implementation; runtime and redistribution verification pending
+- Date: 2026-11-20
+- Plan: R17 LTR-2 through LTR-5; decision D41
+
+Replace the default csharp-ls process with the repository-owned Apache-2.0 FrostRoslynHost. The supervised existing LSP transport, project trust gate, document versioning and REF1 preview/apply owner remain authoritative. The host uses actual MSBuildWorkspace evaluation, Roslyn compiler diagnostics, completion, QuickInfo, SymbolFinder, Renamer, Simplifier and Formatter; it never writes source documents. Source rename and code actions return WorkspaceEdit proposals, including versions for open documents. Unsupported metadata source navigation, file/project creation and ambiguous linked semantic contexts refuse explicitly.
+
+No new third-party version or feed is introduced. Microsoft.CodeAnalysis 5.9.0, Microsoft.Build.Locator and their runtime closure already have exact archive/nuspec/asset hashes, MIT/Apache-2.0 declarations and retained notices in sdk/managed-dependencies.json, audited under ADR 0064. The old pinned csharp-ls archive remains solely an offline provenance carrier for that graph; its server entry is excluded from the owned host's references and is never the default process. This avoids the proprietary Microsoft language-server distribution and vsdbg entirely. The SPDX allowlist and prior dependency gate are preserved; the gate has not been executed during implementation-first.
+
+The SDK stays pinned to 10.0.403 with roll-forward disabled for host compilation. tools/roslyn_host.py first verifies the prior archived graph and installed assets, then builds only the owned source using an empty package-source configuration. It records every output and source-input digest. Bootstrap and fixture/staging routes use the owned host's receipt; no packages or tools are installed by tests. The implementation session does not execute this recipe, SDK commands, builds, tests or downloads.
+
+The SDK snapshot command uses real dotnet MSBuild -getProperty/-getItem output with explicit project/configuration/TFM/RID authority, retaining item metadata and central-package/test facts. Evaluation performs no restore or build target, but imports are executable project code and require trust. Product loading and edits must retain captured workspace/trust generations; source edits never substitute XML glob guesses for evaluated Compile items.
+
+Self-authored Apache-2.0 fixtures cover linked and removed Compile items, inner/outer target frameworks, nullable/compiler context and central package definitions. Later real-tool acceptance compares evaluated items to MSBuild, semantic replies to direct Roslyn and applied rename/code actions to an actual dotnet build. This ADR records implementation scope and provenance, not completed runtime acceptance.

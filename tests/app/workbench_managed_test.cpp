@@ -305,6 +305,11 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     frost::app::test::sendKey(rename, Qt::Key_Return, Qt::NoModifier);
     ASSERT_TRUE(waitFor([&] { return editor->editor().text().text().find("g.Welcome()") != std::string::npos; }, 15s));
     EXPECT_NE(lib->editor().editor().text().text().find("string Welcome()"), std::string::npos);
+    ASSERT_TRUE(rig.workbench->undoRefactoring());
+    EXPECT_NE(editor->editor().text().text().find("g.SayHello()"), std::string::npos);
+    EXPECT_NE(lib->editor().editor().text().text().find("string SayHello()"), std::string::npos);
+    ASSERT_TRUE(rig.workbench->redoRefactoring());
+    EXPECT_NE(editor->editor().text().text().find("g.Welcome()"), std::string::npos);
     EXPECT_TRUE(rig.trust->untrust(dir.path()));
     EXPECT_TRUE(waitFor([&] { return rig.workbench->managed() == nullptr; }, 5s));
     const std::string alternate = dir.join("alternate-server.dll");
