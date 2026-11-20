@@ -270,8 +270,14 @@ void LanguageRegistryIntegration::publish() {
     }
     for (auto* view : m_workbench.m_editors->views()) {
         auto server = service(view->path());
-        if (!server)
+        if (!server) {
+            if (m_registry && m_registry->forPath(view->path())) {
+                delete view->editor().findChild<ui::lang::EditorInsightBinding*>();
+                view->editor().setDiagnostics(ui::EditorDiagnosticSource::Live, {});
+                view->editor().setInsightEnabled(false);
+            }
             continue;
+        }
         sync(*view);
         auto* binding = view->editor().findChild<ui::lang::EditorInsightBinding*>();
         if (server->state() != lang::LuaState::Running) {
@@ -313,6 +319,7 @@ std::vector<lang::LiveDiagnostic> LanguageRegistryIntegration::problems() const 
         if (!e->launcher->admitWorkspace())
             continue;
         auto rows = e->service->diagnostics().problems();
+        std::erase_if(rows, [&](const auto& row) { return !e->launcher->admitDocument(row.file); });
         out.insert(out.end(), std::make_move_iterator(rows.begin()), std::make_move_iterator(rows.end()));
     }
     return out;
@@ -324,9 +331,13 @@ lang::Json LanguageRegistryIntegration::snapshot() const {
                        .set("id", id)
                        .set("declaredVersion", e->definition.version)
                        .set("state", static_cast<int>(e->service->state()));
-        if (auto error = e->service->lastError())
+        const auto admitted = e->launcher->admitWorkspace();
+        row.set("admitted", admitted.has_value());
+        if (!admitted)
+            row.set("error", admitted.error().message());
+        else if (auto error = e->service->lastError())
             row.set("error", error->message());
-        if (auto caps = e->service->capabilities())
+        if (auto caps = admitted ? e->service->capabilities() : std::nullopt)
             row.set("serverName", caps->serverName).set("serverVersion", caps->serverVersion);
         rows.push(std::move(row));
     }
@@ -335,6 +346,8 @@ lang::Json LanguageRegistryIntegration::snapshot() const {
         .set("physicalIdentityRevoked", m_physicalIdentityRevoked);
 }
 Result<void> LanguageRegistryIntegration::setManifest(std::string manifest) {
+    if (m_stopped || m_workbench.m_shutDown)
+        return fail(ErrorCode::Cancelled, "Language registry is shutting down");
     if (auto parsed = lang::LanguageServerRegistry::parse(manifest); !parsed)
         return std::unexpected(parsed.error());
     auto saved = m_workbench.m_services.settings.set(settings::Scope::Application,

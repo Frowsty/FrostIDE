@@ -1,6 +1,6 @@
 # ADR 0117: Governed local language server registry
 
-Status: implementation authored; independent source review in progress; execution deferred.
+Status: implementation authored; independent Astra source review clear; execution deferred.
 
 LTR-17 adds generic stdio LSP onboarding through **Configure Language Servers**. The application
 setting `languages.serverRegistry` is application-only and marked executing: checked-in or
