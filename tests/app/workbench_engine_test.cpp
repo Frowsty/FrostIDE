@@ -17,6 +17,7 @@
 
 #include "engine_request_helper.hpp"
 #include "engine_json_reference_provider.hpp"
+#include "engine_json_schema_reader.hpp"
 #include "engine_session_peer.hpp"
 #include "file_transaction_replace_testing.hpp"
 #include "workbench_rig.hpp"
@@ -1592,5 +1593,15 @@ TEST(EngineJsonReferences, MultilineObjectCompletionAtomicallyUpdatesAuthoritati
     auto after=frost::rpc::parseJson(buffer.current().text());ASSERT_TRUE(after);const auto* reference=after->find("Texture");ASSERT_NE(reference,nullptr);
     EXPECT_EQ(reference->integerAt("Handle"),22);EXPECT_EQ(reference->stringAt("Path"),"Assets/TextureB.png");
     auto actual=provider.resolve(*reference);ASSERT_TRUE(actual);EXPECT_EQ(actual->handle,22U);
+}
+TEST(EngineJsonSchemaReader, ReadsOnlyBoundedLosslessPhysicalProjectDeclarations) {
+    WorkDir dir("engine-json-schema-reader");dir.write("project/Assets/Base.fschema","{\"Columns\":[]}");dir.write("outside.fschema","{}");
+    auto captured=frost::app::readEngineSchemaDeclaration(frost::io::realFileSystem(),dir.join("project"),dir.join("project/Assets/Base.fschema"));
+    ASSERT_TRUE(captured);EXPECT_EQ(captured->text(),"{\"Columns\":[]}");
+    auto outside=frost::app::readEngineSchemaDeclaration(frost::io::realFileSystem(),dir.join("project"),dir.join("outside.fschema"));
+    ASSERT_FALSE(outside);EXPECT_EQ(outside.error().code(),frost::ErrorCode::PermissionDenied);
+    dir.write("project/Assets/Large.fschema",std::string(2*1024*1024+1,' '));
+    auto large=frost::app::readEngineSchemaDeclaration(frost::io::realFileSystem(),dir.join("project"),dir.join("project/Assets/Large.fschema"));
+    ASSERT_FALSE(large);EXPECT_EQ(large.error().code(),frost::ErrorCode::OutOfRange);
 }
 } // namespace

@@ -23,6 +23,7 @@
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
 #include "engine_integration.hpp"
+#include "engine_json_schema_reader.hpp"
 #include "language_bridge.hpp"
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -77,6 +78,9 @@ LanguageBridge::LanguageBridge(Workbench& workbench)
     : m_workbench(workbench), m_applier(static_cast<lang::IWorkspaceDocuments&>(*this), workbench.m_services.fs,
                                         lang::PositionEncoding::Utf16) {
     m_server.setJsonServer(m_json,[schemas=m_json](std::string_view path){return schemas->handles(path);});
+    m_json->setDeclarationReader([fs=&workbench.m_services.fs](std::string_view root,std::string_view path) {
+        return readEngineSchemaDeclaration(*fs,root,path);
+    });
     // Borrowed services outlive the workbench; its pool drains outstanding requests on shutdown.
     m_cmakeLanguage = std::make_shared<lang::CMakeLanguageService>(
         *workbench.m_pool, [fs = &workbench.m_services.fs](std::string_view path, std::size_t limit) {

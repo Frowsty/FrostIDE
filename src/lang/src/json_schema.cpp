@@ -214,6 +214,32 @@ std::optional<Json> tableReference(const text::Snapshot& snapshot) {
     }
     return {};
 }
+void markDataDeclaration(Json& shape,const std::string& source,std::vector<std::string> path) {
+    auto names=Json::array();for(const auto& name:path)names.push(name);
+    shape.set("x-engine-declaration",source).set("x-engine-columnPath",names);
+    if(auto* properties=shape.find("properties"))for(const auto& key:properties->keys()) {
+        auto child=path;child.push_back(key);markDataDeclaration(*properties->find(key),source,std::move(child));
+    }
+    if(auto* items=shape.find("items"))markDataDeclaration(*items,source,path);
+}
+std::optional<text::ByteRange> dataColumnDeclaration(const text::Snapshot& snapshot,const Json& names) {
+    if(snapshot.size().value()>2*1024*1024||!names.isArray()||!names.size())return {};
+    const auto source=snapshot.text();auto document=rpc::parseJson(source);if(!document)return {};
+    const Json* owner=&*document;std::vector<std::string> path;
+    for(std::size_t depth=0;depth<names.size();++depth) {
+        const Json* columns=owner->find(depth?"Fields":"Columns");
+        if(!columns&&depth)if(const auto* element=owner->find("Element")){owner=element;path.push_back("Element");columns=owner->find("Fields");}
+        if(!columns||!columns->isArray())return {};path.push_back(depth?"Fields":"Columns");
+        const Json* match=nullptr;std::size_t index=0;
+        for(std::size_t i=0;i<columns->size();++i)if(columns->items()[i].stringAt("Name")==*names.items()[depth].asString()) {
+            if(match)return {};match=&columns->items()[i];index=i;
+        }
+        if(!match)return {};owner=match;path.push_back(std::to_string(index));
+    }
+    path.push_back("Name");Scanner scan{source};scan.value();
+    const auto found=std::ranges::find(scan.nodes,path,&Node::path);
+    return found==scan.nodes.end()?std::nullopt:std::optional(text::ByteRange{ByteOffset{found->begin},ByteOffset{found->end}});
+}
 Result<Json> dataColumnShape(const Json& definition,unsigned depth=0) {
     if(!definition.isObject()||depth>8)return fail(ErrorCode::Corrupt,"Malformed actual data column definition");
     const auto type=definition.stringAt("Type");auto shape=Json::object();
@@ -273,6 +299,11 @@ bool admissibleEngineShape(const Json& schema,unsigned depth,std::size_t& nodes)
         if(!values->isArray())return false;for(const auto& value:values->items())if(!value.isString())return false;
     }
     if(const auto* reference=schema.find("x-engine-reference");reference&&(!reference->isString()||(*reference->asString()!="asset"&&*reference->asString()!="entity")))return false;
+    if(const auto* declaration=schema.find("x-engine-declaration");declaration&&(!declaration->isString()||!safeIndexedPath(*declaration->asString())||!declaration->asString()->ends_with(".fschema")))return false;
+    if(const auto* path=schema.find("x-engine-columnPath")) {
+        if(!path->isArray()||!path->size()||path->size()>8)return false;
+        for(const auto& name:path->items())if(!name.isString()||name.asString()->empty()||name.asString()->size()>64)return false;
+    }
     if(const auto* description=schema.find("description");description&&!description->isString())return false;
     if(const auto* required=schema.find("required")) {
         if(!required->isArray())return false;
@@ -385,6 +416,8 @@ Result<void> JsonSchemaService::installEngineTableSchema(std::string path,const 
         auto shape=dataColumnShape(*definition);if(!shape)return std::unexpected(shape.error());
         if(const auto* value=column.find("default"))shape->set("default",*value);
         std::string description(shape->stringAt("description"));description+="\nDeclared in: "+std::string(column.stringAt("declaredIn"));shape->set("description",description);
+        const auto origin=column.stringAt("declaredIn");
+        if(safeIndexedPath(origin)&&origin.ends_with(".fschema"))markDataDeclaration(*shape,std::string(origin),{std::string(name)});
         properties.set(std::string(name),*shape);
     }
     auto schema=schemaFor(path);schema.find("properties")->find("Rows")->set("items",Json::object().set("type","object").set("properties",properties));
@@ -394,6 +427,7 @@ Result<void> JsonSchemaService::installEngineTableSchema(std::string path,const 
     if(m_engineTableSchemas.size()>=64&&!m_engineTableSchemas.contains(key))m_engineTableSchemas.erase(m_engineTableSchemas.begin());
     m_engineTableSchemas.insert_or_assign(key,std::pair{*reference,std::move(schema)});++m_schemaGeneration;return {};
 }
+void JsonSchemaService::setDeclarationReader(DeclarationReader reader) {LockGuard lock(m_mutex);m_declarationReader=std::move(reader);}
 void JsonSchemaService::setAssetReferences(std::string root,JsonAssetReferenceProvider provider) {
     LockGuard lock(m_mutex);
     if(!io::isAbsolutePath(root)||!provider.resolve||!provider.complete){m_assetRoot.clear();m_assetReferences={};}
@@ -500,13 +534,13 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
     if (!path || !handles(*path))
         co_return fail(ErrorCode::Unsupported, "No bundled JSON schema for this document");
     text::Snapshot snapshot;
-    Json selectedSchema;bool engine=false;std::string assetRoot;JsonAssetReferenceProvider assets;
+    Json selectedSchema;bool engine=false;std::string assetRoot,engineRoot;JsonAssetReferenceProvider assets;DeclarationReader reader;std::uint64_t generation=0;
     {
         LockGuard lock(m_mutex);
         const auto found = m_documents.find(documentKey(*path));
         if (found == m_documents.end())
             co_return fail(ErrorCode::Busy, "No captured JSON document");
-        snapshot = found->second;assetRoot=m_assetRoot;assets=m_assetReferences;
+        snapshot = found->second;assetRoot=m_assetRoot;assets=m_assetReferences;engineRoot=m_engineRoot;reader=m_declarationReader;generation=m_schemaGeneration;
         if(auto schema=engineSchemaLocked(*path)){selectedSchema=std::move(*schema);engine=true;}
         else if(hasBundledJsonSchema(*path))selectedSchema=schemaFor(*path);
         else co_return fail(ErrorCode::Busy,"Engine document schemas were withdrawn");
@@ -561,6 +595,28 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
             for(const auto& entity:entities)if(entity.id==*id){ambiguous=match!=nullptr;match=&entity;if(ambiguous)break;}
             if(match&&!ambiguous)locations.push(Json::object().set("uri",pathToUri(*path).value())
                 .set("range",toJson(LspRange{toLspPosition(snapshot,ByteOffset{match->begin},PositionEncoding::Utf16),toLspPosition(snapshot,ByteOffset{match->end},PositionEncoding::Utf16)})));
+        }
+        if(!locations.size()&&selected&&!engineRoot.empty()) {
+            auto context=selected->path;const Json* declaration=nullptr;
+            for(;;) {
+                const auto* shape=fieldSchema(selectedSchema,context);
+                if(shape&&shape->find("x-engine-declaration")&&shape->find("x-engine-columnPath")){declaration=shape;break;}
+                if(context.empty())break;context.pop_back();
+            }
+            if(declaration) {
+                const auto target=io::joinPath(engineRoot,declaration->stringAt("x-engine-declaration"));
+                if(target) {
+                    std::optional<text::Snapshot> captured;
+                    {LockGuard lock(m_mutex);if(m_engineRoot!=engineRoot||m_schemaGeneration!=generation)co_return fail(ErrorCode::Cancelled,"Selected engine schema changed");
+                        if(const auto open=m_documents.find(documentKey(*target));open!=m_documents.end())captured=open->second;}
+                    if(!captured&&reader){auto loaded=reader(engineRoot,*target);if(!loaded)co_return std::unexpected(loaded.error());captured=*loaded;}
+                    if(captured)if(const auto bytes=dataColumnDeclaration(*captured,*declaration->find("x-engine-columnPath"))) {
+                        const auto uri=pathToUri(*target);if(uri)locations.push(Json::object().set("uri",*uri).set("range",toJson(LspRange{
+                            toLspPosition(*captured,bytes->begin,PositionEncoding::Utf16),toLspPosition(*captured,bytes->end,PositionEncoding::Utf16)})));
+                    }
+                    {LockGuard lock(m_mutex);if(m_engineRoot!=engineRoot||m_schemaGeneration!=generation)co_return fail(ErrorCode::Cancelled,"Selected engine schema changed while reading its declaration");}
+                }
+            }
         }
         co_return locations;
     }

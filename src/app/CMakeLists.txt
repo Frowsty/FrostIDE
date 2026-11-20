@@ -55,6 +55,7 @@ frost_add_library(app LAYER app
         src/engine_serialized_properties.cpp
         src/engine_document_integration.cpp
         src/engine_json_reference_provider.cpp
+        src/engine_json_schema_reader.cpp
         src/engine_template_integration.cpp
         src/engine_integration_tools.cpp
         src/engine_integration.cpp

@@ -23,6 +23,9 @@ public:
     void clearEngineSchemas();
     // Actual index callbacks own their immutable listing. Empty root/provider revokes all queries.
     void setAssetReferences(std::string projectRoot,JsonAssetReferenceProvider);
+    using DeclarationReader=std::function<Result<text::Snapshot>(std::string_view root,std::string_view path)>;
+    // Worker-safe bounded/contained source reader; captured open document text takes priority.
+    void setDeclarationReader(DeclarationReader);
     [[nodiscard]] bool handles(std::string_view path) const;
     [[nodiscard]] std::uint64_t schemaGeneration() const;
     void updateDocument(std::string path, text::Snapshot snapshot);
@@ -42,6 +45,7 @@ private:
     std::map<std::string,std::pair<Json,Json>,std::less<>> m_engineTableSchemas;
     std::string m_assetRoot;
     JsonAssetReferenceProvider m_assetReferences;
+    DeclarationReader m_declarationReader;
     std::uint64_t m_schemaGeneration=0;
 };
 } // namespace frost::lang

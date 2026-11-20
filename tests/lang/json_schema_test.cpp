@@ -203,5 +203,30 @@ TEST(JsonSchema, CapturedEntityReferencesNavigateExactIdAndRefuseDuplicateTarget
     service.updateDocument(path,snapshot(R"({"Target":7,"Entities":[{"ID":7},{"ID":7}]})"));
     params=textDocumentPosition(path,LspPosition{0,10}).value();definition=sched::syncWait(service.request("textDocument/definition",params));ASSERT_TRUE(definition);EXPECT_EQ(definition->size(),0U);
 }
+TEST(JsonSchema, InheritedColumnDefinitionUsesActualDeclaredFileAndCapturedOpenOverride) {
+    JsonSchemaService service;const auto project=root+"Game";const auto path=project+"/Assets/Weapons.ftable";
+    ASSERT_TRUE(service.installEngineSchemas(project,actualSchemas()));const auto table=snapshot(R"({"Schema":"Assets/Weapon.fschema","Rows":[{"Damage":1}]})");
+    service.updateDocument(path,table);ASSERT_TRUE(service.installEngineTableSchema(path,table,actualTableSchema()));
+    const auto declaration=snapshot("{\n\"Columns\":[{\"Name\":\"Other\"},{\"Name\":\"Damage\",\"Type\":\"Int\"}]\n}");int reads=0;
+    service.setDeclarationReader([&](std::string_view selectedRoot,std::string_view file)->Result<text::Snapshot> {
+        ++reads;EXPECT_EQ(documentKey(selectedRoot),documentKey(project));EXPECT_EQ(documentKey(file),documentKey(project+"/Assets/BaseWeapon.fschema"));return declaration;
+    });
+    auto params=textDocumentPosition(path,toLspPosition(table,ByteOffset{table.text().find("Damage")+2},PositionEncoding::Utf16)).value();
+    auto result=sched::syncWait(service.request("textDocument/definition",params));ASSERT_TRUE(result);ASSERT_EQ(result->size(),1U);EXPECT_EQ(reads,1);
+    auto range=parseRange(*result->items()[0].find("range"));ASSERT_TRUE(range);
+    EXPECT_EQ(fromLspPosition(declaration,range->start,PositionEncoding::Utf16)->value(),declaration.text().find("\"Damage\""));
+    const auto open=snapshot("{\n\n\"Columns\":[{\"Name\":\"Damage\",\"Type\":\"Int\"}]}" );
+    service.updateDocument(project+"/Assets/BaseWeapon.fschema",open);
+    result=sched::syncWait(service.request("textDocument/definition",params));ASSERT_TRUE(result);ASSERT_EQ(result->size(),1U);EXPECT_EQ(reads,1);
+    range=parseRange(*result->items()[0].find("range"));ASSERT_TRUE(range);EXPECT_EQ(range->start.line,2U);
+}
+TEST(JsonSchema, DeclarationReadCannotPublishAfterSelectedSchemaGenerationChanges) {
+    JsonSchemaService service;const auto project=root+"Game";const auto path=project+"/Assets/Weapons.ftable";
+    ASSERT_TRUE(service.installEngineSchemas(project,actualSchemas()));const auto table=snapshot(R"({"Schema":"Assets/Weapon.fschema","Rows":[{"Damage":1}]})");
+    service.updateDocument(path,table);ASSERT_TRUE(service.installEngineTableSchema(path,table,actualTableSchema()));
+    service.setDeclarationReader([&](std::string_view,std::string_view)->Result<text::Snapshot> {service.clearEngineSchemas();return snapshot(R"({"Columns":[{"Name":"Damage"}]})");});
+    auto params=textDocumentPosition(path,toLspPosition(table,ByteOffset{table.text().find("Damage")+2},PositionEncoding::Utf16)).value();
+    auto result=sched::syncWait(service.request("textDocument/definition",params));ASSERT_FALSE(result);EXPECT_EQ(result.error().code(),ErrorCode::Cancelled);
+}
 } // namespace
 } // namespace frost::lang
