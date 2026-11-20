@@ -49,11 +49,20 @@ bool identifierByte(char c) {return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&
 }
 std::optional<CompletionList> unrealSpecifierCompletions(std::string_view source,std::size_t caret) {
     if(caret>source.size()||source.size()>256*1024)return {};
-    struct Scope {std::string name;bool assigned=false;};
+    struct Scope {std::string name;bool assigned=false;char delimiter='(';};
     std::vector<Scope> scopes;std::string previous;
     for(std::size_t i=0;i<caret;) {
         const char c=source[i];
-        if(c=='/'&&i+1<caret&&source[i+1]=='/') {auto end=source.find('\n',i+2);if(end==std::string_view::npos||end>=caret)return {};i=end+1;previous.clear();continue;}
+        if(c=='/'&&i+1<caret&&source[i+1]=='/') {
+            auto end=source.find('\n',i+2);
+            while(end!=std::string_view::npos&&end<caret) {
+                const auto before=(end>0&&source[end-1]=='\r')?end-1:end;
+                if(before==0||source[before-1]!='\\')break;
+                end=source.find('\n',end+1);
+            }
+            if(end==std::string_view::npos||end>=caret)return {};
+            i=end+1;previous.clear();continue;
+        }
         if(c=='/'&&i+1<caret&&source[i+1]=='*') {auto end=source.find("*/",i+2);if(end==std::string_view::npos||end+2>caret)return {};i=end+2;previous.clear();continue;}
         std::size_t rawPrefix=0;
         for(const std::string_view prefix:{"R\"","u8R\"","uR\"","UR\"","LR\""}) if(source.substr(i).starts_with(prefix)){rawPrefix=prefix.size();break;}
@@ -71,8 +80,12 @@ std::optional<CompletionList> unrealSpecifierCompletions(std::string_view source
             if(!closed)return {};previous.clear();continue;
         }
         if(identifierByte(c)){const auto begin=i;while(i<caret&&identifierByte(source[i]))++i;previous=std::string(source.substr(begin,i-begin));continue;}
-        if(c=='('){scopes.push_back({previous,false});previous.clear();}
-        else if(c==')'){if(!scopes.empty())scopes.pop_back();previous.clear();}
+        if(c=='('||c=='['||c=='{'){scopes.push_back({c=='('?previous:std::string{},false,c});previous.clear();}
+        else if(c==')'||c==']'||c=='}'){
+            const char opening=c==')'?'(':(c==']'?'[':'{');
+            if(scopes.empty()||scopes.back().delimiter!=opening)return {};
+            scopes.pop_back();previous.clear();
+        }
         else if(c=='='&&!scopes.empty()){scopes.back().assigned=true;previous.clear();}
         else if(c==','&&!scopes.empty()){scopes.back().assigned=false;previous.clear();}
         else if(c!=' '&&c!='\t'&&c!='\r'&&c!='\n'){previous.clear();}

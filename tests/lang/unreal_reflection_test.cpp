@@ -35,6 +35,8 @@ TEST(UnrealReflection, SpecifierCompletionIsSyntaxOnlyAndExcludesCommentsStrings
     EXPECT_EQ(classItem->insertText,"Config=${1}");EXPECT_TRUE(classItem->snippet);
     EXPECT_EQ(propertyItem->insertText,"Config");EXPECT_FALSE(propertyItem->snippet);
     EXPECT_FALSE(complete("// UPROPERTY(Blue"));
+    EXPECT_FALSE(complete(std::string("// continued ")+char(92)+"\nUPROPERTY(Blue"));
+    EXPECT_FALSE(complete("UPROPERTY(SomeValue={1, Blue"));
     EXPECT_FALSE(complete("/* UCLASS(Blue"));
     EXPECT_FALSE(complete("const char* text=\"UPROPERTY(Blue"));
     EXPECT_FALSE(complete("auto text=R\"tag(UPROPERTY(Blue"));
