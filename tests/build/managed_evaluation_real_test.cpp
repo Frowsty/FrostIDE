@@ -27,7 +27,8 @@ TEST(ManagedEvaluationReal, EvaluatedItemsAndCompilerContextFollowActualSdkInner
         ManagedProjectRequest request{.dotnet = dotnet,
                                       .project = io::joinPath(destination, "Library/Library.csproj").value(),
                                       .configuration = "Debug",
-                                      .targetFramework = framework};
+                                      .targetFramework = framework,
+                                      .runtimeIdentifier = "linux-x64"};
         auto spec = managedProjectEvaluationSpec(request);
         ASSERT_TRUE(spec);
         for (const auto* name : {"DOTNET_CLI_HOME", "HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "NUGET_PACKAGES",
@@ -51,6 +52,7 @@ TEST(ManagedEvaluationReal, EvaluatedItemsAndCompilerContextFollowActualSdkInner
         }));
         EXPECT_EQ(model->defineConstants.find("MODERN_TFM") != std::string::npos,
                   std::string_view(framework) == "net10.0");
+        EXPECT_NE(model->defineConstants.find("RID_LINUX"), std::string::npos);
         EXPECT_EQ(model->properties.at("ManagePackageVersionsCentrally"), "true");
         EXPECT_TRUE(std::ranges::any_of(model->items.at("PackageVersion"), [](const auto& entry) {
             return entry.identity == "Example.Central" && entry.metadata.at("Version") == "1.2.3";

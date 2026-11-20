@@ -107,4 +107,26 @@ TEST(ManagedModelProduct, ClearingPendingContextTerminatesItsOwnedSdkQueryAndNev
     ASSERT_TRUE(waitFor([&] { return launcher.launches()[0].terminated; }, 3s));
     EXPECT_EQ(rig.workbench->managedProjectEvaluation(), nullptr);
 }
+TEST(ManagedModelProduct, RapidTrustRevokeRegrantCancelsActiveQueryWithoutGuiTransition) {
+    WorkDir dir("managed-model-trust-revision");
+    dir.write("project/App.csproj", "<Project />");
+    dir.write("tools/dotnet", "scripted SDK");
+    io::ScriptedProcessLauncher launcher;
+    RigOptions options;
+    options.launcher = &launcher;
+    options.disableProjectEvaluation = true;
+    WorkbenchRig rig(dir, options);
+    setup(rig, dir);
+    launcher.expect({.expectExecutable = dir.join("tools/dotnet"), .neverExits = true});
+    ASSERT_TRUE(rig.workbench->configureManagedProject({.dotnet = dir.join("tools/dotnet"),
+                                                        .project = dir.join("project/App.csproj"),
+                                                        .configuration = "Release",
+                                                        .targetFramework = "net10.0"}));
+    ASSERT_TRUE(waitFor([&] { return !launcher.launches().empty(); }, 3s));
+    // No GUI event dispatch between mutations: final trusted bool is unchanged.
+    ASSERT_TRUE(rig.trust->untrust(dir.join("project")));
+    ASSERT_TRUE(rig.trust->trust(dir.join("project")));
+    ASSERT_TRUE(waitFor([&] { return launcher.launches()[0].terminated; }, 3s));
+    EXPECT_EQ(rig.workbench->managedProjectEvaluation(), nullptr);
+}
 } // namespace

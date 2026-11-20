@@ -61,6 +61,7 @@ internal sealed class LanguageHost
         if (!File.Exists(target)) throw new FileNotFoundException("Selected managed project is unavailable", target);
         var properties = new Dictionary<string, string> { ["Configuration"] = Option("--configuration") ?? "Debug" };
         if (Option("--framework") is string framework) properties["TargetFramework"] = framework;
+        if (Option("--runtime-identifier") is string runtimeIdentifier) properties["RuntimeIdentifier"] = runtimeIdentifier;
         var assemblies = MefHostServices.DefaultAssemblies
             .Add(Assembly.Load("Microsoft.CodeAnalysis.CSharp.Workspaces"))
             .Add(Assembly.Load("Microsoft.CodeAnalysis.Features"))

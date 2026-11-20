@@ -386,6 +386,10 @@ void Workbench::startManaged(const std::string& root) {
     if (m_managedEvaluation) {
         options.arguments.emplace_back("--framework");
         options.arguments.push_back(m_managedEvaluation->request.targetFramework);
+        if (!m_managedEvaluation->request.runtimeIdentifier.empty()) {
+            options.arguments.emplace_back("--runtime-identifier");
+            options.arguments.push_back(m_managedEvaluation->request.runtimeIdentifier);
+        }
         options.arguments.emplace_back("--project-context");
         options.arguments.push_back(m_managedEvaluation->request.project);
     }

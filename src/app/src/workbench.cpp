@@ -264,6 +264,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             return;
         const auto trust = m_services.trust.snapshot(m_projectRoot);
         const bool trusted = trust.trusted;
+        if ((m_managedEvaluation || m_managedModelJob) && (!trusted || trust.revision != m_managedContextTrustRevision))
+            clearManagedProjectContext();
         if (m_cppRenameTrustRevision && (!trusted || trust.revision != *m_cppRenameTrustRevision)) {
             m_cppRenameStop.request_stop();
             ++m_cppRenameGeneration;

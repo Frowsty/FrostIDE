@@ -12,6 +12,7 @@
 #include "frost/ui/toolwindows/build_controller.hpp"
 
 #include "managed_build_backend.hpp"
+#include "managed_trust_watch.hpp"
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -42,6 +43,7 @@ sched::Task<void> evaluateManaged(std::shared_ptr<ManagedModelJob> job, io::IFil
                                   io::IProcessLauncher* launcher, project::TrustStore* trust, std::string root,
                                   std::uint64_t revision, build::ManagedProjectRequest request,
                                   std::function<void(Result<ModelResult>)> completed) {
+    auto trustWatch = watchManagedTrust(*trust, root, revision, job->stop);
     const auto current = [&] {
         auto snapshot = trust->snapshot(root);
         auto prefix = lang::documentKey(root);
@@ -173,6 +175,7 @@ Result<void> Workbench::configureManagedProject(build::ManagedProjectRequest req
     const auto revision = m_services.trust.snapshot(root).revision;
     auto job = std::make_shared<ManagedModelJob>();
     job->target = this;
+    m_managedContextTrustRevision = revision;
     m_managedModelJob = job;
     auto completed = [this, job, root, revision, generation, request](Result<ModelResult> result) mutable {
         if (m_shutDown || m_projectRoot != root || m_managedModelGeneration != generation || m_managedModelJob != job ||
@@ -193,13 +196,16 @@ Result<void> Workbench::configureManagedProject(build::ManagedProjectRequest req
                        ui::NotificationKind::Error);
                 return;
             }
+            QPointer<Workbench> owner(this);
             bool accepted = true;
             const auto selected =
                 list.size() == 1
                     ? list.front()
                     : QInputDialog::getItem(m_window, QStringLiteral(".NET target framework"),
                                             QStringLiteral("Evaluated target framework"), list, 0, false, &accepted);
-            if (!accepted || m_projectRoot != root || m_managedModelGeneration != generation)
+            if (!owner || !accepted || owner->m_shutDown || owner->m_projectRoot != root ||
+                owner->m_managedModelGeneration != generation || !owner->m_services.trust.snapshot(root).trusted ||
+                owner->m_services.trust.snapshot(root).revision != revision)
                 return;
             request.targetFramework = selected.toStdString();
             if (auto started = configureManagedProject(std::move(request)); !started)
@@ -238,13 +244,21 @@ Result<void> Workbench::configureManagedProject(build::ManagedProjectRequest req
 void Workbench::showManagedProjectContext() {
     if (m_projectRoot.empty())
         return;
+    QPointer<Workbench> owner(this);
     const auto root = m_projectRoot;
+    const auto generation = m_managedModelGeneration;
+    const auto revision = m_services.trust.snapshot(root).revision;
+    const auto admitted = [owner, root, generation, revision] {
+        return owner && !owner->m_shutDown && owner->m_projectRoot == root &&
+               owner->m_managedModelGeneration == generation && owner->m_services.trust.snapshot(root).trusted &&
+               owner->m_services.trust.snapshot(root).revision == revision;
+    };
     const auto file =
         QFileDialog::getOpenFileName(m_window, QStringLiteral("Select SDK C# project"), QString::fromStdString(root),
                                      QStringLiteral("C# project (*.csproj)"));
-    if (file.isEmpty())
+    if (!admitted() || file.isEmpty())
         return;
-    QDialog dialog(m_window);
+    QDialog dialog; // Stack-owned: a closing main window must not delete it during nested dispatch.
     dialog.setWindowTitle(QStringLiteral("Evaluate .NET project context"));
     QFormLayout layout(&dialog);
     std::string host = m_services.settings.snapshot()->get(settings::key::toolsManagedDotnetPath);
@@ -269,7 +283,7 @@ void Workbench::showManagedProjectContext() {
     layout.addRow(&buttons);
     connect(&buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted || m_projectRoot != root)
+    if (dialog.exec() != QDialog::Accepted || !admitted())
         return;
     if (auto started = configureManagedProject({.dotnet = dotnet.text().toStdString(),
                                                 .project = file.toStdString(),
