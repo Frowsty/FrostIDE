@@ -2,6 +2,7 @@
 // Owned semantic extensions share evaluated Roslyn documents and the validated text proposal boundary.
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CodeRefactorings;
 namespace Frost.RoslynHost;
 internal interface ISemanticFeature
 {
@@ -11,9 +12,11 @@ internal interface ISemanticFeature
 internal sealed class SemanticFeatureContext
 {
     internal Document Document { get; }
+    private readonly RefactoringProviderCatalog? providers;
+    internal IEnumerable<CodeRefactoringProvider> Providers(string name) => providers?.Providers(name) ?? [];
     private readonly Func<Solution, CancellationToken, Task<object>> proposal;
-    internal SemanticFeatureContext(Document document, Func<Solution, CancellationToken, Task<object>> createProposal)
-    { Document = document; proposal = createProposal; }
+    internal SemanticFeatureContext(Document document, Func<Solution, CancellationToken, Task<object>> createProposal, RefactoringProviderCatalog? providerCatalog = null)
+    { Document = document; proposal = createProposal; providers = providerCatalog; }
     // Returns a versioned WorkspaceEdit proposal only, after source/compiler/conflict admission.
     // The caller must not mutate files or invoke Workspace.TryApplyChanges; REF1 owns adoption.
     internal Task<object> CreateWorkspaceEditAsync(Solution changed, CancellationToken token) => proposal(changed, token);
