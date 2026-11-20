@@ -15,6 +15,10 @@ Json location(std::string_view path, std::size_t line, std::size_t column = 0) {
         {static_cast<std::uint32_t>(line),static_cast<std::uint32_t>(column)},
         {static_cast<std::uint32_t>(line),static_cast<std::uint32_t>(column)}}));
 }
+bool equalName(std::string_view left,std::string_view right) {
+    return left.size()==right.size() && std::equal(left.begin(),left.end(),right.begin(),[](unsigned char a,unsigned char b){return std::tolower(a)==std::tolower(b);});
+}
+bool startsName(std::string_view name,std::string_view prefix) { return name.size()>=prefix.size() && equalName(name.substr(0,prefix.size()),prefix); }
 bool word(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' || c == '-'; }
 }
 Result<Json> queryMSBuildLanguage(const MSBuildLanguageInput& input, std::string_view method,
@@ -55,9 +59,9 @@ Result<Json> queryMSBuildLanguage(const MSBuildLanguageInput& input, std::string
         for (const auto& property : evaluation.propertyDefinitions) {
             if (stop.stop_requested()) return fail(ErrorCode::Cancelled, "MSBuild query cancelled");
             const auto detail = property.value + " (" + context + ")";
-            if (method == "textDocument/completion" && property.name.starts_with(prefix) && seen.insert(property.name).second)
+            if (method == "textDocument/completion" && startsName(property.name,prefix) && seen.insert(property.name).second)
                 result.push(Json::object().set("label",property.name).set("kind",6).set("detail",detail));
-            if (property.name != selected) continue;
+            if (!equalName(property.name,selected)) continue;
             if (method == "textDocument/hover")
                 return Json::object().set("contents",Json::object().set("kind","plaintext").set("value",detail));
             if (method != "textDocument/definition" || property.path.empty() || property.line == 0) continue;
@@ -66,7 +70,7 @@ Result<Json> queryMSBuildLanguage(const MSBuildLanguageInput& input, std::string
             auto xml = project::parseMSBuildSource(file->second,file->first);
             if (!xml) continue;
             // An origin which no longer identifies that source declaration is stale, never guessed.
-            if (std::ranges::any_of(xml->properties,[&](const auto& row){return row.name==property.name && row.line+1==property.line;})) {
+            if (std::ranges::any_of(xml->properties,[&](const auto& row){return equalName(row.name,property.name) && row.line+1==property.line;})) {
                 result.push(location(property.path,property.line-1,property.column ? property.column-1 : 0));
                 evaluatedDefinition = true;
             }
@@ -81,9 +85,9 @@ Result<Json> queryMSBuildLanguage(const MSBuildLanguageInput& input, std::string
         for (const auto& row : declarations) {
             const auto detail = row.name + " (source declaration; not evaluated)" +
                 (row.condition.empty() ? "" : " Condition: " + row.condition);
-            if (method == "textDocument/completion" && row.name.starts_with(prefix) && seen.insert(row.name).second)
+            if (method == "textDocument/completion" && startsName(row.name,prefix) && seen.insert(row.name).second)
                 result.push(Json::object().set("label",row.name).set("kind",6).set("detail",detail));
-            if (row.name != selected) continue;
+            if (!equalName(row.name,selected)) continue;
             if (method == "textDocument/hover")
                 return Json::object().set("contents",Json::object().set("kind","plaintext").set("value",detail));
             if (method == "textDocument/definition" && !evaluatedDefinition) result.push(location(path,row.line));
@@ -117,7 +121,10 @@ sched::Task<Result<Json>> MSBuildLanguageService::answer(sched::IScheduler& sche
     for (const auto& [path,snapshot] : input.openInputs) {
         if (total+snapshot.size().value()>4U*1024U*1024U || snapshot.size().value()>1024U*1024U)
             co_return fail(ErrorCode::OutOfRange,"MSBuild open inputs exceed language budget");
-        if (seen.insert(documentKey(path)).second) { auto bytes=snapshot.text(); total+=bytes.size(); input.inputs.emplace_back(path,std::move(bytes)); }
+        if (seen.insert(documentKey(path)).second) {
+            if (seen.size()>256) co_return fail(ErrorCode::OutOfRange,"MSBuild open input count exceeds language budget");
+            auto bytes=snapshot.text(); total+=bytes.size(); input.inputs.emplace_back(path,std::move(bytes));
+        }
     }
     std::vector<std::string> pending;
     for (const auto& evaluation : input.evaluations) {

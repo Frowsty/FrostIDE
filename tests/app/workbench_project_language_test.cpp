@@ -53,7 +53,7 @@ void cmakeRenameJourney(bool stale) {
     ASSERT_TRUE(rig.workbench->openPath(dir.join("project")));
     auto* service=rig.workbench->cmakeService(); ASSERT_NE(service,nullptr);
     ASSERT_TRUE(service->configure());
-    ASSERT_TRUE(waitFor([&] {return service->state()==frost::build::BuildState::Idle && service->model() && !service->modelStale();},90s));
+    ASSERT_TRUE(waitFor([&] {return service->state()==frost::build::BuildState::Idle && service->model() && !service->modelStale() && rig.workbench->cmakeTargetsCurrent();},90s));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("project/CMakeLists.txt")));
     auto* view=rig.workbench->editors().find(dir.join("project/CMakeLists.txt")); ASSERT_NE(view,nullptr);
     view->editor().editor().setState(frost::text::EditorState::caretAt(frost::ByteOffset{source.find("alpha")+1}));

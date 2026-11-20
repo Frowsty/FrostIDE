@@ -33,7 +33,7 @@ TEST(MSBuildLanguage, ConditionsAndDynamicImportsRemainSourceOnly) {
 TEST(MSBuildLanguage, EngineOriginWinsOverInactiveSourceAssignments) {
     MSBuildLanguageInput input;
     input.path=projectPath("main.props");
-    input.source=text::TextBuffer::fromUtf8("<Project>\n<PropertyGroup><Chosen>$(Flag)</Chosen></PropertyGroup>\n</Project>\n").value().snapshot();
+    input.source=text::TextBuffer::fromUtf8("<Project>\n<PropertyGroup><Chosen>$(fLaG)</Chosen></PropertyGroup>\n</Project>\n").value().snapshot();
     input.inputs={{projectPath("import.targets"),"<Project>\n<PropertyGroup><Flag>engine</Flag></PropertyGroup>\n</Project>"}};
     project::EvaluatedProjectItems evaluated;
     evaluated.projectPath=projectPath("main.props"); evaluated.configuration="Debug"; evaluated.platform="x64";
