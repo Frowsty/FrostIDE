@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -21,6 +22,18 @@ using frost::rpc::encodeFrame;
 using frost::rpc::FrameDecoder;
 using frost::rpc::Json;
 using frost::rpc::parseJson;
+
+TEST(RpcJson, NegativeFloatingZeroRetainsItsSignAcrossSerialization) {
+    const auto value = parseJson("-0.0");
+    ASSERT_TRUE(value);
+    EXPECT_EQ(value->dump(), "-0.0");
+    const auto roundTrip = parseJson(value->dump());
+    ASSERT_TRUE(roundTrip);
+    const auto number = roundTrip->asDouble();
+    ASSERT_TRUE(number);
+    EXPECT_TRUE(std::signbit(*number));
+    EXPECT_EQ(roundTrip->dump(), value->dump());
+}
 
 // Every payload the decoder has ready, in order; a decode error fails the test.
 std::vector<std::string> drain(FrameDecoder& decoder) {

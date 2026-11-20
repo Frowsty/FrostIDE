@@ -240,6 +240,11 @@ void Json::dumpTo(std::string& out) const {
             out += "null";
             return;
         }
+        // A bare -0 reparses as integer zero. Keep a fractional marker to preserve the sign.
+        if (m_double == 0.0 && std::signbit(m_double)) {
+            out += "-0.0";
+            return;
+        }
         char buffer[64];
         const auto [end, error] = std::to_chars(buffer, buffer + sizeof buffer, m_double);
         out.append(buffer, error == std::errc() ? end : buffer);
