@@ -1,3 +1,18 @@
+## 2026-11-20 — R16 delivery source (codex/r16-delivery)
+
+- FND-17: preserved and completed existing CLI drafts with standalone shared-editor diff/merge,
+  bounded UTF-8 admission, stale snapshot rejection, atomic output and cancellation status. Requires
+  R15 editor APIs from 8ee29a92. Wait uses inferred owning-project IPC, actual editor lifetime,
+  accepted shutdown acknowledgement, renewable bounded tickets and busy-owner polling.
+- Added manifest-owned Windows per-user install/uninstall with optional HKCU project association;
+  foreign/modified files survive uninstall. Python prerequisite remains. Linux stages bundle Qt/ICU/plugins with relocatable lookup and pinned Qt source notices.
+- Both stage scripts require/copy standalone source-pinned Lua plus matching API library and notice.
+- UPG-1/REL-1: offline candidate-lock plan and local evidence validation infrastructure, with explicit
+  source/lock hashes, named gates and user sign-off record. No pins bumped or release claim made.
+- Tests authored: CLI parser cases and temporary-file installer/evidence regression fixtures plus real IPC editor-close ticket/replay coverage. No
+  builds, tests, feature executions, installs, downloads, or WSL calls performed. Astra source review
+  found owner routing, abandoned tickets, busy polling, duplicate-open and uninstall cleanup issues;
+  fixes applied across repeated Astra source reviews; final packaging review surfaced no further blockers. Runtime checks not run. Runtime acceptance and release gates remain pending.
 # FrostIDE progress log
 
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
