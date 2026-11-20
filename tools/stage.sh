@@ -114,7 +114,9 @@ for name in LICENSE NOTICE; do
     [[ -f "$REPO/$name" ]] || fail "the repository has no $name"
 done
 clangd="$sdk_root/$llvm_rel/bin/clangd"
+scan_deps="$sdk_root/$llvm_rel/bin/clang-scan-deps"
 clang_lib="$sdk_root/$llvm_rel/lib/clang"
+[[ -f "$scan_deps" ]] || fail "missing bundled clang-scan-deps: $scan_deps"
 [[ -f "$clangd" ]] || fail "missing bundled clangd: $clangd"
 [[ -d "$clang_lib" ]] || fail "missing bundled clangd resource directory: $clang_lib"
 for name in bin/lldb-dap bin/lldb-argdumper; do
@@ -157,6 +159,7 @@ cp -R -- "$REPO/integrations/unity/com.frostide.editor" "$dest/unity/" || fail "
 
 # 5. The bundled tools.
 mkdir -p -- "$dest/$llvm_rel/bin" "$dest/$llvm_rel/lib" "$dest/$lldb_rel/bin" "$dest/$lldb_rel/lib"
+cp -- "$scan_deps" "$dest/$llvm_rel/bin/" || fail "cannot copy clang-scan-deps"
 cp -- "$clangd" "$dest/$llvm_rel/bin/" || fail "cannot copy clangd"
 cp -R -- "$clang_lib" "$dest/$llvm_rel/lib/" || fail "cannot copy the clangd resource directory"
 cp -- "$sdk_root/$lldb_rel/bin/lldb-dap" "$sdk_root/$lldb_rel/bin/lldb-argdumper" "$dest/$lldb_rel/bin/" ||
@@ -169,7 +172,7 @@ cp -- "$sdk_root/$luals_rel/LICENSE" "$dest/licenses/luals-LICENSE.txt"
 
 # 6. The checks: every staged executable is its source's bytes, and frost's libraries resolve.
 for pair in "frost:$bin_dir/frost" "crashpad_handler:$bin_dir/crashpad_handler" \
-            "$llvm_rel/bin/clangd:$clangd" "$lldb_rel/bin/lldb-dap:$sdk_root/$lldb_rel/bin/lldb-dap" \
+            "$llvm_rel/bin/clang-scan-deps:$scan_deps" "$llvm_rel/bin/clangd:$clangd" "$lldb_rel/bin/lldb-dap:$sdk_root/$lldb_rel/bin/lldb-dap" \
             "$luals_rel/bin/lua-language-server:$sdk_root/$luals_rel/bin/lua-language-server"; do
     staged="$dest/${pair%%:*}"
     [[ -x "$staged" ]] || fail "the staged $staged is missing or not executable"
@@ -188,3 +191,4 @@ files="$(find "$dest" -type f | wc -l)"
 bytes="$(du -sb "$dest" | cut -f1)"
 echo "stage: ok $dest ($files files, $((bytes / 1048576)) MB)"
 exit 0
+

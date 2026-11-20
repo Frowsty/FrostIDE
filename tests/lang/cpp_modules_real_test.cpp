@@ -50,6 +50,27 @@ TEST(CppModulesReal, ScannerGraphMatchesBuiltModuleFixture) {
     // Independent raw scanner DTO is the relationship oracle; no hand-written graph count.
     auto raw = parseJson(graph->rawP1689);
     ASSERT_TRUE(raw);
+    const auto* rawRules = raw->find("rules");
+    ASSERT_NE(rawRules, nullptr);
+    std::vector<std::string> expectedProviders, expectedImports;
+    for (const auto& rawRule : rawRules->items()) {
+        if (const auto* provides = rawRule.find("provides"))
+            for (const auto& provider : provides->items())
+                expectedProviders.push_back(std::string(provider.stringAt("logical-name")) + "=" +
+                                            std::string(provider.stringAt("source-path")));
+        if (const auto* imports = rawRule.find("requires"))
+            for (const auto& imported : imports->items())
+                expectedImports.push_back(std::string(imported.stringAt("logical-name")));
+    }
+    std::vector<std::string> actualProviders, actualImports;
+    for (const auto& rule : graph->rules) {
+        for (const auto& provider : rule.provides)
+            actualProviders.push_back(provider.name + "=" + provider.sourcePath);
+        for (const auto& dependency : rule.requiresModules)
+            actualImports.push_back(dependency.name);
+    }
+    EXPECT_EQ(actualProviders, expectedProviders);
+    EXPECT_EQ(actualImports, expectedImports);
     bool foundImport = false;
     for (const auto& rule : graph->rules)
         for (const auto& dependency : rule.requiresModules)
@@ -71,3 +92,4 @@ TEST(CppModulesReal, ScannerGraphMatchesBuiltModuleFixture) {
     EXPECT_EQ(compile->exitCode, 0) << compile->stderrBytes;
 }
 } // namespace frost::lang
+
