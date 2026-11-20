@@ -437,4 +437,3 @@ $files = @(Get-ChildItem -LiteralPath $Destination -Recurse -File)
 $bytes = ($files | Measure-Object -Property Length -Sum).Sum
 Write-Host ("stage: ok {0} ({1} files, {2:N1} MB); symbols {3}" -f $Destination, $files.Count, ($bytes / 1MB), $symbolArchive)
 exit 0
-

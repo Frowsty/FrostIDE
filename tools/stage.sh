@@ -191,4 +191,3 @@ files="$(find "$dest" -type f | wc -l)"
 bytes="$(du -sb "$dest" | cut -f1)"
 echo "stage: ok $dest ($files files, $((bytes / 1048576)) MB)"
 exit 0
-

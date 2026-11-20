@@ -92,4 +92,3 @@ TEST(CppModulesReal, ScannerGraphMatchesBuiltModuleFixture) {
     EXPECT_EQ(compile->exitCode, 0) << compile->stderrBytes;
 }
 } // namespace frost::lang
-

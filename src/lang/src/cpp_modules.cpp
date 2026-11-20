@@ -151,6 +151,3 @@ Result<CppModuleGraph> scanCppModules(io::IProcessLauncher& launcher, io::IFileS
     return graph;
 }
 } // namespace frost::lang
-
-
-

@@ -89,4 +89,3 @@ if(WIN32)
     # advapi32: RegGetValueW (the Windows SDK root); shell32: SHGetFolderPathW (vswhere's folder).
     target_link_libraries(frost_lang PRIVATE advapi32 shell32 ole32)
 endif()
-

@@ -43,4 +43,3 @@ struct CppModuleScanRequest {
 [[nodiscard]] Result<CppModuleGraph> scanCppModules(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                                    const CppModuleScanRequest& request);
 } // namespace frost::lang
-
