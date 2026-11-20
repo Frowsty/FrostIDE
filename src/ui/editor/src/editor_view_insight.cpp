@@ -8,6 +8,7 @@
 #include "frost/text/anchor.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 
+#include <QAccessible>
 #include <QScrollBar>
 #include <QStringList>
 
@@ -278,6 +279,12 @@ void EditorView::setDiagnostics(EditorDiagnosticSource source, std::vector<Edito
     m_diagnostics[static_cast<std::size_t>(source)] = std::move(resolved);
     m_insightEnabled = true;
     insightUpdated();
+    if (QAccessible::isActive()) {
+        QAccessibleEvent event(this, QAccessible::DescriptionChanged);
+        QAccessible::updateAccessibility(&event);
+        QAccessibleEvent attributes(this, QAccessible::TextAttributeChanged);
+        QAccessible::updateAccessibility(&attributes);
+    }
 }
 
 std::vector<ActiveDiagnostic> EditorView::diagnostics() const {

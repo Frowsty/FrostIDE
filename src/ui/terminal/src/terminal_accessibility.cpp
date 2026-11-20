@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Read-only terminal text interface over the visible cell grid, including wide and combining characters.
+// Read-only terminal text interface over retained scrollback and the active cell grid, including wide and combining characters.
 #include "terminal_accessibility.hpp"
 #include "frost/ui/terminal/terminal_view.hpp"
 #include <QAccessible>
 #include <QAccessibleWidget>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace frost::ui {
@@ -66,6 +67,7 @@ public:
         const auto data = snapshot();
         if (offset < 0 || static_cast<std::size_t>(offset) >= data.positions.size()) return {};
         const auto pos = data.positions[static_cast<std::size_t>(offset)];
+        if (pos.row + m_view->scrollOffset() < 0 || pos.row + m_view->scrollOffset() >= m_view->gridSize().rows) return {};
         const auto cell = m_view->session()->read([pos](const term::VtScreen& screen) { return screen.cell(pos.row, pos.column); });
         const auto size = m_view->cellSize();
         const QPoint origin = m_view->mapToGlobal(QPoint(static_cast<int>(std::floor(pos.column * size.width())), static_cast<int>(std::floor((pos.row + m_view->scrollOffset()) * size.height()))));
@@ -93,18 +95,21 @@ public:
     }
     void scrollToSubstring(int start, int end) override {
         const auto data = snapshot();
-        if (start < 0 || end < start || static_cast<std::size_t>(start) >= data.positions.size()) return;
+        if (start < 0 || end < start || end > data.text.size() || static_cast<std::size_t>(start) >= data.positions.size()) return;
         m_view->setScrollOffset(std::max(0, -data.positions[static_cast<std::size_t>(start)].row));
     }
 private:
     Snapshot snapshot() const {
         if (!m_view->session()) return {};
-        const int offset = m_view->scrollOffset();
-        return m_view->session()->read([offset](const term::VtScreen& screen) {
+        return m_view->session()->read([](const term::VtScreen& screen) {
             Snapshot result;
             const auto cursor = screen.cursor();
-            for (int visual = 0; visual < screen.rows(); ++visual) {
-                const int row = visual - offset;
+            // Scrolling changes geometry, never text offsets. The configured screen history
+            // limit bounds retained output; alternate-screen history follows VtScreen's contract.
+            const int history = screen.altScreen() ? 0 : static_cast<int>(std::min<std::size_t>(
+                screen.scrollbackSize(), std::numeric_limits<int>::max()));
+            const int firstRow = -history;
+            for (int row = firstRow; row < screen.rows(); ++row) {
                 const auto cells = screen.line(row);
                 QString line;
                 std::vector<term::ScreenPos> positions;
@@ -122,7 +127,7 @@ private:
                 }
                 result.text += line;
                 result.positions.insert(result.positions.end(), positions.begin(), positions.end());
-                if (visual + 1 < screen.rows()) {
+                if (row + 1 < screen.rows()) {
                     result.text += QLatin1Char('\n');
                     result.positions.push_back({row, screen.columns()});
                 }
