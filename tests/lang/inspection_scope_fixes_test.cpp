@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Checks validation of scoped inspection inputs and proposed replacement edits.
+#include "frost/core/clock.hpp"
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/inspection_scope_fixes.hpp"
@@ -10,7 +11,8 @@
 namespace frost::lang {
 namespace {
 std::string path(std::string_view leaf) {
-    return io::joinPath(io::kNativePathStyle == io::PathStyle::Windows ? "C:/scope" : "/scope", leaf).value();
+    const std::string root = io::kNativePathStyle == io::PathStyle::Windows ? "C:\\scope" : "/scope";
+    return leaf.empty() ? root : io::joinPath(root, leaf).value();
 }
 Json replacement(const std::string& file, std::uint64_t offset, std::uint64_t length, std::string text) {
     return Json::object().set("path", file).set("offset", offset).set("length", length).set("text", std::move(text));
@@ -86,7 +88,8 @@ TEST(InspectionScopeFixes, NoteOnlyFixIsActualChoiceAndIdenticalConfigurationDup
     EXPECT_EQ(plan->files.front().after, "int* p=nullptr;");
 }
 TEST(InspectionScopeFixes, CapturePrecedesAnalysisAndRejectsChangedHeaderOrNewInput) {
-    io::MemFs fs;
+    ManualClock clock;
+    io::MemFs fs(clock);
     ASSERT_TRUE(fs.createDirectories(path("")));
     ASSERT_TRUE(fs.writeFileAtomic(path("a.cpp"), "#include \"h.hpp\"\nint* p=0;"));
     ASSERT_TRUE(fs.writeFileAtomic(path("h.hpp"), "int* q=0;"));
@@ -109,7 +112,8 @@ TEST(InspectionScopeFixes, CapturePrecedesAnalysisAndRejectsChangedHeaderOrNewIn
     EXPECT_FALSE(validateInspectionCapture(fs, *capture));
 }
 TEST(InspectionScopeFixes, AbsoluteSourceDoesNotMakeRelativeWorkingDirectorySafeToCopy) {
-    io::MemFs fs;
+    ManualClock clock;
+    io::MemFs fs(clock);
     ASSERT_TRUE(fs.createDirectories(path("")));
     ASSERT_TRUE(fs.writeFileAtomic(path("a.cpp"), "int* p=0;"));
     std::vector<CompileCommand> commands{{"relative", path("a.cpp"), {"clang++", "-c", path("a.cpp")}}};
@@ -122,7 +126,8 @@ TEST(InspectionScopeFixes, AbsoluteSourceDoesNotMakeRelativeWorkingDirectorySafe
     EXPECT_NE(capture.error().describe().find("absolute working directories"), std::string::npos);
 }
 TEST(InspectionScopeFixes, SelectedResponseFileIsExplicitlyUnsupportedRatherThanReadLive) {
-    io::MemFs fs;
+    ManualClock clock;
+    io::MemFs fs(clock);
     ASSERT_TRUE(fs.createDirectories(path("build")));
     ASSERT_TRUE(fs.writeFileAtomic(path("a.cpp"), "int* p=0;"));
     ASSERT_TRUE(fs.writeFileAtomic(path("build/args.rsp"), "-DVALUE=1"));
@@ -137,7 +142,8 @@ TEST(InspectionScopeFixes, SelectedResponseFileIsExplicitlyUnsupportedRatherThan
     EXPECT_NE(capture.error().describe().find("response-file"), std::string::npos);
 }
 TEST(InspectionScopeFixes, ExplicitGeneratedIncludeDirectoryAndExtensionlessForcedHeaderAreCaptured) {
-    io::MemFs fs;
+    ManualClock clock;
+    io::MemFs fs(clock);
     ASSERT_TRUE(fs.createDirectories(path("build/generated")));
     ASSERT_TRUE(fs.writeFileAtomic(path("a.cpp"), "int* p=0;"));
     ASSERT_TRUE(fs.writeFileAtomic(path("build/generated/config"), "#define VALUE 1"));
@@ -160,7 +166,8 @@ TEST(InspectionScopeFixes, ExplicitGeneratedIncludeDirectoryAndExtensionlessForc
 }
 
 TEST(InspectionScopeFixes, ExplicitModuleMapCannotBypassImmutableInputProfile) {
-    io::MemFs fs;
+    ManualClock clock;
+    io::MemFs fs(clock);
     ASSERT_TRUE(fs.createDirectories(path("build")));
     ASSERT_TRUE(fs.writeFileAtomic(path("a.cpp"), "int* p=0;"));
     ASSERT_TRUE(fs.writeFileAtomic(path("build/module.modulemap"), "module Example { header \"generated.hpp\" }"));

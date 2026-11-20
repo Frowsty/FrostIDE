@@ -11,9 +11,8 @@
 #include <chrono>
 namespace {
 std::string path(std::string_view name) {
-    return frost::io::joinPath(frost::io::kNativePathStyle == frost::io::PathStyle::Windows ? "C:/project" : "/project",
-                               name)
-        .value();
+    const std::string root = frost::io::kNativePathStyle == frost::io::PathStyle::Windows ? "C:\\project" : "/project";
+    return name.empty() ? root : frost::io::joinPath(root, name).value();
 }
 TEST(CppRefactoringPlan, SerializesExactByteSelectionAndParameterPermutation) {
     frost::lang::CppRefactoringRequest request;

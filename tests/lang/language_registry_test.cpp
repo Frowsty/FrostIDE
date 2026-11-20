@@ -91,8 +91,7 @@ TEST(LanguageRegistry, RejectsUnsupportedLicenseUnpinnedExecutableDuplicateSelec
     other.set("id", "other");
     EXPECT_FALSE(
         LanguageServerRegistry::parse(Json::object().set("version", 1).set("servers", Json::array({d, other})).dump()));
-    EXPECT_FALSE(
-        LanguageServerRegistry::parse(Json::object().set("version", 1.0).set("servers", Json::array()).dump()));
+    EXPECT_FALSE(LanguageServerRegistry::parse(R"({"version":1.0,"servers":[]})"));
 }
 TEST(LanguageRegistry, LaunchRefusesChangedPinsRevokedThenRegrantedTrustAndUnreviewedArguments) {
     io::MemFs fs(systemClock());

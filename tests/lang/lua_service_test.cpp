@@ -134,10 +134,11 @@ TEST(ManagedService, RequiresTrustAndConfiguresCSharpProcess) {
     ASSERT_TRUE(reactor.has_value());
     frost::sched::SimExecutor sim;
     frost::io::ScriptedProcessLauncher launcher;
-    auto options = frost::lang::managedServiceOptions(tool(), root() + "/CSharpLanguageServer.dll", root(), false);
+    const std::string assembly = frost::io::joinPath(root(), "FrostRoslynHost.dll").value();
+    auto options = frost::lang::managedServiceOptions(tool(), assembly, root(), false);
     EXPECT_EQ(options.languageId, "csharp");
-    ASSERT_EQ(options.arguments.size(), 3U);
-    EXPECT_EQ(options.arguments[0], root() + "/CSharpLanguageServer.dll");
+    EXPECT_EQ(options.displayName, "FrostRoslynHost");
+    EXPECT_EQ(options.arguments, (std::vector<std::string>{assembly}));
     frost::lang::ManagedService server(launcher, {**reactor, sim}, options);
     EXPECT_EQ(server.start().error().code(), frost::ErrorCode::Untrusted);
     EXPECT_TRUE(launcher.launches().empty());

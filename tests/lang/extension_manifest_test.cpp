@@ -59,8 +59,7 @@ TEST(ExtensionManifest, NegotiatesExactApiAndExplicitCapabilityFamilies) {
     ASSERT_EQ(parsed->contributions().size(), 1u);
     EXPECT_EQ(parsed->contributions()[0].commands[0].command, "provider.organize");
     EXPECT_FALSE(ExtensionCatalog::parse(Json::object().set("apiVersion", 2).set("extensions", Json::array()).dump()));
-    EXPECT_FALSE(
-        ExtensionCatalog::parse(Json::object().set("apiVersion", 1.0).set("extensions", Json::array()).dump()));
+    EXPECT_FALSE(ExtensionCatalog::parse(R"({"apiVersion":1.0,"extensions":[]})"));
     auto row = extension();
     row.set("capabilities", Json::array({"languages"}));
     EXPECT_FALSE(ExtensionCatalog::parse(catalog(row)));

@@ -129,7 +129,7 @@ std::vector<CodeActionItem> parseCodeActions(const Json& json) {
                 }
             }
         }
-        if (parsedEdit.empty() && commandName.empty()) {
+        if (parsedEdit.empty() && commandName.empty() && disabledReason.empty()) {
             continue;
         }
         out.push_back(CodeActionItem{.title = std::string(item.stringAt("title")),
