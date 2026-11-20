@@ -75,9 +75,9 @@ bool sendAll(TestSocket s, const std::vector<std::uint8_t>& data) {
 class ScriptedMono {
 public:
     explicit ScriptedMono(bool badImage = false, bool failResume = false, bool failSecondClear = false,
-                          bool stopAfterResume = false, bool exceptionStop = false, bool childDomain = false)
+                          bool stopAfterResume = false, bool exceptionStop = false, bool childDomain = false, bool firstSourceEmpty = false)
         : badImage(badImage), failResume(failResume), failSecondClear(failSecondClear),
-          stopAfterResume(stopAfterResume), exceptionStop(exceptionStop), childDomain(childDomain) {
+          stopAfterResume(stopAfterResume), exceptionStop(exceptionStop), childDomain(childDomain), firstSourceEmpty(firstSourceEmpty) {
 #ifdef _WIN32
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
@@ -118,8 +118,9 @@ public:
         module->moduleId = "module";
         module->image = "image";
         module->pdb = "pdb";
-        module->sources = {"/owned/a.cs"};
+        module->sources = firstSourceEmpty ? std::vector<std::string>{"/owned/AssemblyInfo.cs", "/owned/a.cs"} : std::vector<std::string>{"/owned/a.cs"};
         module->points = {{0x06000001, 0, 10, 4}, {0x06000001, 0, 11, 8}};
+        if (firstSourceEmpty) for (auto& point : module->points) point.sourceIndex = 1;
         return {module, [this](MonoDeadline deadline, const std::stop_token& stop) {
                     return BinaryLoopback::connect(port, deadline, stop,
                                                    [this](auto, auto, auto, const auto&) -> Result<void> {
@@ -179,7 +180,9 @@ private:
                 put32(payload, childDomain ? 0 : 1);
                 if (!childDomain) put32(payload, 2);
             } else if (set == 1 && command == 11) {
-                put32(payload, 1); put32(payload, 4);
+                const bool empty = firstSourceEmpty && body.size() >= 4 && get32(body.data()) <= body.size() - 4 &&
+                    std::string_view(reinterpret_cast<const char*>(body.data() + 4), get32(body.data())) == "/owned/AssemblyInfo.cs";
+                put32(payload, empty ? 0 : 1); if (!empty) put32(payload, 4);
             } else if (set == 23 && command == 1) {
                 put32(payload, 0); put32(payload, 1); payload.push_back('C'); put32(payload, 1); payload.push_back('C');
                 put32(payload, 2); put32(payload, 1); put32(payload, 0); put32(payload, 0); put32(payload, 0x02000001);
@@ -240,7 +243,7 @@ private:
     }
     TestSocket listener = badSocket;
     std::jthread server;
-    bool badImage, failResume, failSecondClear, stopAfterResume, exceptionStop, childDomain;
+    bool badImage, failResume, failSecondClear, stopAfterResume, exceptionStop, childDomain, firstSourceEmpty;
     std::uint32_t nextBreakpoint = 9;
 #ifdef _WIN32
     bool winsock = false;
@@ -539,6 +542,12 @@ TEST(MonoDap, ExceptionInfoRetainsStopTimeModeAfterFilterChange) {
     auto info = requestSync(**client, "exceptionInfo", rpc::Json::object().set("threadId", 1));
     ASSERT_TRUE(info); EXPECT_EQ(info->stringAt("breakMode"), "always");
     EXPECT_TRUE(requestSync(**client, "disconnect")); EXPECT_EQ(runtime.clears.load(), 2);
+}
+TEST(MonoDap, LaterVerifiedSourceFindsChildDomainAfterTypelessAssemblyInfo) {
+    ScriptedMono runtime(false, false, false, false, false, true, true);
+    auto client = monoAdapterFactory(runtime.target())({}); ASSERT_TRUE(client);
+    EXPECT_TRUE(requestSync(**client, "attach"));
+    EXPECT_TRUE(requestSync(**client, "disconnect")); EXPECT_TRUE(runtime.disposed);
 }
 } // namespace
 } // namespace frost::debug::mono
