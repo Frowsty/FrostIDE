@@ -201,6 +201,8 @@ class EngineCrashObserver;
 class UnityControlIntegration;
 class GitIntegration;
 class AgentIntegration;
+class AgentTools;
+class NativeAgentChat;
 struct GitClone;
 struct CompileDatabaseState; // workbench_language.cpp
 struct CppRenameAdmission;   // workbench_cpp_rename.cpp
@@ -621,6 +623,9 @@ public:
     void stopAgentBridge();
     void mentionAgentSelection();
     [[nodiscard]] bool agentBridgeActive() const;
+    [[nodiscard]] unsigned short agentBridgePort() const;
+    void showNativeAgent();
+    void stopNativeAgent();
 
     // --- Saving and external changes ---
 
@@ -805,6 +810,8 @@ private:
     friend class UnityControlIntegration;
     friend class GitIntegration;
     friend class AgentIntegration;
+    friend class AgentTools;
+    friend class NativeAgentChat;
 
     // IDocumentEditorListener.
     void editorOpened(DocumentEditorView& view) override;
@@ -1247,6 +1254,7 @@ private:
     std::unique_ptr<term::RealPtyLauncher> m_terminalLauncher;
     std::unique_ptr<ui::TerminalIntegration> m_terminal;
     std::unique_ptr<AgentIntegration> m_agent;
+    std::unique_ptr<NativeAgentChat> m_nativeAgent;
     std::unique_ptr<ui::FindFeature> m_find;
     QPointer<ui::ShellWindow> m_window;
     std::unique_ptr<ui::Workbench> m_nav;

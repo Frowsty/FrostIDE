@@ -56,13 +56,13 @@ bool privatelyOwned(HANDLE file, Security& security) {
     }
     LocalFree(descriptor);
     BY_HANDLE_FILE_INFORMATION info{};
-    return okay && GetFileInformationByHandle(file, &info) && !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
+    return okay && GetFileInformationByHandle(file, &info) && !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && info.nNumberOfLinks == 1;
 }
 #else
 bool privatelyOwned(int file, bool directory) {
     struct stat info{};
     return fstat(file, &info) == 0 && info.st_uid == geteuid() && (info.st_mode & 0077) == 0 &&
-        (directory ? S_ISDIR(info.st_mode) : S_ISREG(info.st_mode));
+        (directory ? S_ISDIR(info.st_mode) : (S_ISREG(info.st_mode) && info.st_nlink == 1));
 }
 #endif
 }

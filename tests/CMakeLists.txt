@@ -57,6 +57,7 @@ if(NOT FROST_FUZZ)
     # whose git lookup (FROST_GIT_EXECUTABLE) it reuses.
     frost_add_test_directory(diag)
     frost_add_test_directory(update)
+    frost_add_test_directory(agent)
     frost_add_test_directory(vcs)
 endif()
 frost_add_test_directory(fuzz)

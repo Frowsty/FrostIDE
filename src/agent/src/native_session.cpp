@@ -66,6 +66,7 @@ Result<void> NativeSession::send(const Json& event) {
     bool startWriter = false;
     {
         std::lock_guard lock(m->mutex);
+        if (m->ended) return fail(ErrorCode::Cancelled, "native session ended before queue admission");
         if (m->pending.size() >= 32 || m->queuedBytes + bytes.size() > 2 * NdjsonFramer::kMaximumLine)
             return fail(ErrorCode::Busy, "native outbound queue is full");
         m->queuedBytes += bytes.size();
@@ -106,7 +107,9 @@ sched::Task<void> NativeSession::read(std::shared_ptr<State> state, bool stderrS
         } else {
             auto events = framer.feed(std::string_view(bytes.data(), *count));
             if (!events) { state->fail(events.error()); co_return; }
-            for (auto& event : *events) if (!state->ended && state->observer.event) state->observer.event(std::move(event));
+            for (auto& event : *events) if (!state->ended && state->observer.event && !state->observer.event(std::move(event))) {
+                state->fail(Error(ErrorCode::OutOfRange, "native UI event queue exceeded its bounded capacity")); co_return;
+            }
         }
     }
     if (!stderrStream && !state->ended) { auto finished = framer.finish(); if (!finished) state->fail(finished.error()); }

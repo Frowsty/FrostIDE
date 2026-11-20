@@ -20,6 +20,7 @@ struct NativeLaunch {
     std::string executable, root, settingsFile, mcpConfig;
     std::string resume, resumeAt, model, effort;
     bool forkSession = false;
+    std::uint16_t idePort = 0;
 };
 // Requires the freshly obtained auth status for this session. Never reads credentials or login state files.
 [[nodiscard]] Result<io::ProcessSpec> nativeLaunch(const NativeLaunch& launch, const Json& freshAuthStatus);

@@ -210,7 +210,7 @@ class StageScriptTest(TempDirTestCase):
         (bin_dir / "project-host").mkdir(parents=True, exist_ok=True)
         (bin_dir / "project-host" / "ProjectHostVsProbe.exe").write_bytes(b"MZ")
         (bin_dir / "project-host" / "ProjectHostVsProbe.exe.config").write_text("<configuration/>", encoding="utf-8")
-        for name in ("crashpad_handler.exe", "conpty.dll", "OpenConsole.exe"):
+        for name in ("frostide-mcp.exe", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe"):
             (bin_dir / name).write_bytes(b"MZ")
         # frost.exe and frost_app.dll name their PDBs, whose GUID and age match (the symbol archive).
         (bin_dir / "frost.exe").write_bytes(symbol_fixtures.pe_bytes(_FROST_GUID, 1, "frost.pdb"))

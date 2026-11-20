@@ -27,14 +27,16 @@ Result<io::ProcessSpec> nativeLaunch(const NativeLaunch& launch, const Json& sta
     if ((!launch.resumeAt.empty() || launch.forkSession) && launch.resume.empty())
         return fail(ErrorCode::InvalidArgument, "fork/resume-at requires an indexed session identity");
     for (const auto* value : {&launch.resume, &launch.resumeAt, &launch.model, &launch.effort})
-        if (value->find(char(0)) != std::string::npos || value->size() > 256)
+        if (value->find(char(0)) != std::string::npos || value->size() > 256 || value->starts_with("-"))
             return fail(ErrorCode::InvalidArgument, "invalid native session option");
+    if (!launch.idePort) return fail(ErrorCode::InvalidArgument, "native session requires this consenting window's IDE port");
     io::ProcessSpec spec;
     spec.executable = launch.executable;
     spec.workingDirectory = launch.root;
+    spec.stdinMode = io::Stdio::Pipe; spec.stdoutMode = io::Stdio::Pipe; spec.stderrMode = io::Stdio::Pipe;
     spec.arguments = {"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
         "--include-partial-messages", "--replay-user-messages", "--permission-prompt-tool", "stdio", "--ide",
-        "--settings", launch.settingsFile, "--mcp-config", launch.mcpConfig,
+        "--settings", launch.settingsFile, "--mcp-config", launch.mcpConfig, "--strict-mcp-config",
         "--permission-mode", "default", "--tools", "AskUserQuestion,ExitPlanMode"};
     if (*route != AuthRoute::Subscription) spec.arguments.insert(spec.arguments.begin(), "--bare");
     if (!launch.resume.empty()) { spec.arguments.push_back("--resume"); spec.arguments.push_back(launch.resume); }
@@ -42,6 +44,7 @@ Result<io::ProcessSpec> nativeLaunch(const NativeLaunch& launch, const Json& sta
     if (!launch.resumeAt.empty()) { spec.arguments.push_back("--resume-session-at"); spec.arguments.push_back(launch.resumeAt); }
     if (!launch.model.empty()) { spec.arguments.push_back("--model"); spec.arguments.push_back(launch.model); }
     if (!launch.effort.empty()) { spec.arguments.push_back("--effort"); spec.arguments.push_back(launch.effort); }
+    spec.environment.emplace_back("CLAUDE_CODE_SSE_PORT", std::to_string(launch.idePort));
     spec.environment.emplace_back("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true");
     // Explicit provider selection never inherits a conflicting subscription route into native chat.
     spec.environment.emplace_back("CLAUDE_CODE_USE_BEDROCK", *route == AuthRoute::Bedrock ? std::optional<std::string>("1") : std::nullopt);
@@ -100,13 +103,14 @@ Result<void> NativeProtocol::receive(const Json& event) {
             !parse(version.substr(first + 1, last - first - 1), minor) || !parse(version.substr(last + 1), patch) ||
             (major < 2 || (major == 2 && (minor < 1 || (minor == 1 && patch < 316)))))
             return fail(ErrorCode::Unsupported, "native chat requires a compatible CLI version at least 2.1.316");
+        m_mcp = false; m_capabilities.clear();
         m_initialized = true;
         m_ide = event.boolAt("ide_connected").value_or(false);
         m_session = std::string(event.stringAt("session_id"));
         if (const auto* servers = event.find("mcp_servers"); servers && servers->isArray())
             for (const auto& server : servers->items()) if (server.stringAt("name") == "frostide" && server.stringAt("status") == "connected") m_mcp = true;
         if (const auto* controls = event.find("supported_control_requests"); controls && controls->isArray())
-            for (const auto& control : controls->items()) if (control.isString()) m_capabilities.emplace(control.asString());
+            for (const auto& control : controls->items()) if (control.isString()) m_capabilities.emplace(*control.asString());
     }
     return {};
 }
@@ -125,7 +129,8 @@ std::vector<Json> NativeProtocol::expire(Time now) {
     return cancelled;
 }
 Json StopHookGuard::evaluate(std::string fingerprint, std::string text, bool active) {
-    if (active || fingerprint.empty() || text.empty()) return Json::object();
+    if (active) return Json::object();
+    if (fingerprint.empty() || text.empty()) { reset(); return Json::object(); }
     if (fingerprint != m_fingerprint) { m_fingerprint = std::move(fingerprint); m_blocks = 0; }
     text.resize(io::validUtf8Prefix(std::string_view(text).substr(0, 4096)));
     if (m_blocks++ < 3) return Json::object().set("decision", "block").set("reason", std::move(text));

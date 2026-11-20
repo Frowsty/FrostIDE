@@ -40,6 +40,8 @@ class StageShTest(TempDirTestCase):
         bin_dir.mkdir(parents=True)
         shutil.copyfile("/bin/true", bin_dir / "frost")
         (bin_dir / "frost").chmod(0o755)
+        shutil.copyfile("/bin/true", bin_dir / "frostide-mcp")
+        (bin_dir / "frostide-mcp").chmod(0o755)
         self._executable(bin_dir / "frost-clang", b"isolated LLVM engine fixture")
         self._executable(bin_dir / "crashpad_handler", b"\x7fELF crashpad fixture")
         (bin_dir / "resources" / "themes").mkdir(parents=True)

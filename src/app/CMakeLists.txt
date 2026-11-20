@@ -120,6 +120,12 @@ frost_add_library(app LAYER app
 
         src/agent_scope.cpp
         src/agent_scope.hpp
+        src/agent_private.cpp
+        src/agent_private.hpp
+        src/agent_tools.cpp
+        src/agent_tools.hpp
+        src/native_agent_chat.cpp
+        src/native_agent_chat.hpp
         src/agent_bridge.cpp
         src/agent_bridge.hpp
         src/agent_integration.cpp
@@ -227,7 +233,7 @@ frost_add_library(app LAYER app
         ${frost_startup_core_sources}
     DEPS frost::ui_vcs frost::vcs frost::ui_find frost::ui_debug frost::debug frost::ui_cmake frost::ui_terminal frost::term frost::ui_workbench frost::ui_nav frost::ui_lang frost::ui_run frost::ui_toolwindows frost::ui_editor
          frost::ui_shell frost::ui frost::engine frost::lang frost::run frost::build frost::document frost::project frost::settings
-         frost::update frost::syntax frost::storage frost::text frost::input frost::rpc frost::io frost::sched frost::diag frost::core
+         frost::agent frost::update frost::syntax frost::storage frost::text frost::input frost::rpc frost::io frost::sched frost::diag frost::core
     THIRD_PARTY Qt6::Widgets Qt6::Network)
 target_compile_definitions(frost_app PRIVATE
     FROST_UPDATE_PUBLIC_KEY_HEX="${FROST_UPDATE_PUBLIC_KEY_HEX}"
@@ -261,6 +267,12 @@ function(frost_stage_lua_test_bridge target)
         VERBATIM)
 endfunction()
 
+# Separate Qt-free stdio MCP proxy. No provider process or network transport is linked here.
+frost_add_executable(frostide_mcp LAYER app
+    SOURCES src/frostide_mcp_main.cpp src/agent_private.cpp
+    DEPS frost::agent frost::rpc frost::io frost::core)
+set_target_properties(frostide_mcp PROPERTIES OUTPUT_NAME "frostide-mcp")
+
 if(NOT WIN32)
     frost_add_executable(frost LAYER app
         SOURCES src/main.cpp
@@ -281,6 +293,7 @@ if(NOT WIN32)
     frost_stage_lua_test_bridge(frost)
     include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
     frost_stage_lua_runtime(frost)
+    add_dependencies(frost frostide_mcp)
     return()
 endif()
 
@@ -378,3 +391,6 @@ include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
 frost_stage_lua_runtime(frost)
 
 frost_stage_lua_test_bridge(frost)
+
+
+add_dependencies(frost frostide_mcp)

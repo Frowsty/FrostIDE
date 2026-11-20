@@ -12,6 +12,9 @@
 #include <iostream>
 #include <optional>
 #include <vector>
+#include <atomic>
+#include <mutex>
+#include <thread>
 namespace {
 using frost::rpc::Json;
 frost::Result<Json> discover(std::string path, std::string root) {
@@ -25,6 +28,7 @@ frost::Result<Json> discover(std::string path, std::string root) {
     const auto physical = fs.physicalPath(root);
     if (!physical) return std::unexpected(physical.error());
     const auto inspect = [&](std::string_view candidate) -> frost::Result<Json> {
+        if (!frost::io::fileName(candidate).ends_with(".discovery.json")) return frost::fail(frost::ErrorCode::InvalidArgument, "MCP discovery must name a discovery record");
         auto bytes = frost::app::readAgentPrivateFile(candidate);
         if (!bytes) return std::unexpected(bytes.error());
         auto record = frost::rpc::parseJson(*bytes);
@@ -77,6 +81,27 @@ int run(const std::vector<std::string>& args) {
     }
     auto record = discover(path, root);
     if (!record) { std::cerr << "frostide-mcp: " << record.error().message() << '\n'; return 2; }
+    std::mutex output;
+    std::atomic<bool> initialized{false};
+    std::jthread notifications([&](std::stop_token stop) {
+        std::int64_t revision = 0;
+        while (!stop.stop_requested()) {
+            if (initialized.load()) {
+                const auto request = Json::object().set("jsonrpc", "2.0").set("id", "frostide-notification-poll").set("method", "notifications/poll").set("params", Json::object().set("after", revision));
+                const auto envelope = Json::object().set("token", std::string(record->stringAt("token"))).set("root", std::string(record->stringAt("root"))).set("instance", std::string(record->stringAt("instance"))).set("request", request).dump();
+                const auto response = frost::io::requestLocalIpc(record->stringAt("key"), envelope, std::chrono::milliseconds(200));
+                if (response) if (auto parsed = frost::rpc::parseJson(*response); parsed) if (const auto* result = parsed->find("result")) {
+                    revision = result->integerAt("revision").value_or(revision);
+                    if (const auto* events = result->find("notifications"); events && events->isArray()) {
+                        std::lock_guard lock(output);
+                        for (const auto& event : events->items()) std::cout << event.dump() << '\n';
+                        std::cout.flush();
+                    }
+                }
+            }
+            for (int tick = 0; tick < 10 && !stop.stop_requested(); ++tick) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    });
     std::string line;
     for (;;) {
         char byte = 0;
@@ -97,7 +122,9 @@ int run(const std::vector<std::string>& args) {
         if (envelope.size() > 65536) { std::cerr << "frostide-mcp: request exceeds IPC bound\n"; return 2; }
         auto response = frost::io::requestLocalIpc(record->stringAt("key"), envelope, std::chrono::seconds(5));
         if (!response) { std::cerr << "frostide-mcp: " << response.error().message() << '\n'; return 2; }
-        if (request->find("id")) { std::cout << *response << '\n'; std::cout.flush(); }
+
+        if (request->find("id")) { std::lock_guard lock(output); std::cout << *response << '\n'; std::cout.flush(); }
+        if (request->stringAt("method") == "initialize") { const auto parsed = frost::rpc::parseJson(*response); initialized.store(parsed && parsed->find("result")); }
     }
 }
 }

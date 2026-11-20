@@ -106,7 +106,7 @@ fi
 
 # 2. The inputs, before the destination is touched.
 bin_dir="$build_dir/src/app/$config"
-for name in frost frost-clang frost-analyzer crashpad_handler; do
+for name in frost frost-clang frost-analyzer frostide-mcp crashpad_handler; do
     [[ -f "$bin_dir/$name" ]] || fail "the build tree has no $name in $bin_dir"
 done
 [[ -d "$bin_dir/resources" ]] || fail "the build tree has no resources in $bin_dir"
@@ -188,7 +188,7 @@ rm -rf -- "$dest/$luals_rel/.frost-installed" "$dest/$luals_rel/log"
 cp -- "$sdk_root/$luals_rel/LICENSE" "$dest/licenses/luals-LICENSE.txt"
 
 # 6. The checks: every staged executable is its source's bytes, and frost's libraries resolve.
-for pair in "frost:$bin_dir/frost" "crashpad_handler:$bin_dir/crashpad_handler" \
+for pair in "frostide-mcp:$bin_dir/frostide-mcp" "frost:$bin_dir/frost" "crashpad_handler:$bin_dir/crashpad_handler" \
             "$llvm_rel/bin/llvm-cov:$sdk_root/$llvm_rel/bin/llvm-cov" "$llvm_rel/bin/llvm-profdata:$sdk_root/$llvm_rel/bin/llvm-profdata" \
             "$llvm_rel/bin/clang-scan-deps:$scan_deps" "$llvm_rel/bin/clangd:$clangd" "$lldb_rel/bin/lldb-dap:$sdk_root/$lldb_rel/bin/lldb-dap" \
             "$luals_rel/bin/lua-language-server:$sdk_root/$luals_rel/bin/lua-language-server"; do

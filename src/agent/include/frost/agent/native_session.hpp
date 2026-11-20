@@ -10,7 +10,7 @@ class NativeSession final {
 public:
     struct Observer {
         // Worker callbacks; the UI owner must marshal through a guarded queued connection.
-        std::function<void(Json)> event;
+        std::function<bool(Json)> event; // false rejects UI backpressure overflow and terminates the session.
         std::function<void(std::string)> stderrChunk;
         std::function<void(Error)> failure;
         std::function<void(io::ExitStatus)> exited;
