@@ -10,6 +10,7 @@
 frost_add_test(syntax_tests
     SOURCES
         language_test.cpp
+        other_language_grammar_test.cpp
         highlight_test.cpp
         session_test.cpp
         lua_ast_test.cpp

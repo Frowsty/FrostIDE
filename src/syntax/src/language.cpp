@@ -36,34 +36,80 @@ struct Extension {
 
 // The table of language.hpp; ".cmake.in" is matched before ".in" would be (none is listed).
 constexpr Extension kExtensions[] = {
-    {".c", LanguageId::C},          {".cpp", LanguageId::Cpp},
-    {".cc", LanguageId::Cpp},       {".cxx", LanguageId::Cpp},
-    {".c++", LanguageId::Cpp},      {".hpp", LanguageId::Cpp},
-    {".hh", LanguageId::Cpp},       {".hxx", LanguageId::Cpp},
-    {".h++", LanguageId::Cpp},      {".h", LanguageId::Cpp},
-    {".inl", LanguageId::Cpp},      {".ipp", LanguageId::Cpp},
-    {".tpp", LanguageId::Cpp},      {".ixx", LanguageId::Cpp},
-    {".cppm", LanguageId::Cpp},     {".cs", LanguageId::CSharp},
-    {".csx", LanguageId::CSharp},   {".cmake", LanguageId::CMake},
-    {".xml", LanguageId::Xml},      {".xsd", LanguageId::Xml},
-    {".xaml", LanguageId::Xml},     {".props", LanguageId::Xml},
-    {".targets", LanguageId::Xml},  {".vcxproj", LanguageId::Xml},
-    {".filters", LanguageId::Xml},  {".csproj", LanguageId::Xml},
-    {".proj", LanguageId::Xml},     {".nuspec", LanguageId::Xml},
-    {".resx", LanguageId::Xml},     {".natvis", LanguageId::Xml},
-    {".manifest", LanguageId::Xml}, {".wxs", LanguageId::Xml},
-    {".slnx", LanguageId::Xml},     {".config", LanguageId::Xml},
-    {".svg", LanguageId::Xml},      {".json", LanguageId::Json},
-    {".fmat", LanguageId::Json},    {".fscene", LanguageId::Json},
-    {".fmeta", LanguageId::Json},   {".fschema", LanguageId::Json},
-    {".ftable", LanguageId::Json},  {".frostproj", LanguageId::Json},
+    {".py", LanguageId::Python},
+    {".pyi", LanguageId::Python},
+    {".js", LanguageId::JavaScript},
+    {".jsx", LanguageId::JavaScript},
+    {".mjs", LanguageId::JavaScript},
+    {".cjs", LanguageId::JavaScript},
+    {".ts", LanguageId::TypeScript},
+    {".mts", LanguageId::TypeScript},
+    {".cts", LanguageId::TypeScript},
+    {".tsx", LanguageId::Tsx},
+    {".yaml", LanguageId::Yaml},
+    {".yml", LanguageId::Yaml},
+    {".toml", LanguageId::Toml},
+    {".ps1", LanguageId::PowerShell},
+    {".psm1", LanguageId::PowerShell},
+    {".psd1", LanguageId::PowerShell},
+    {".c", LanguageId::C},
+    {".cpp", LanguageId::Cpp},
+    {".cc", LanguageId::Cpp},
+    {".cxx", LanguageId::Cpp},
+    {".c++", LanguageId::Cpp},
+    {".hpp", LanguageId::Cpp},
+    {".hh", LanguageId::Cpp},
+    {".hxx", LanguageId::Cpp},
+    {".h++", LanguageId::Cpp},
+    {".h", LanguageId::Cpp},
+    {".inl", LanguageId::Cpp},
+    {".ipp", LanguageId::Cpp},
+    {".tpp", LanguageId::Cpp},
+    {".ixx", LanguageId::Cpp},
+    {".cppm", LanguageId::Cpp},
+    {".cs", LanguageId::CSharp},
+    {".csx", LanguageId::CSharp},
+    {".cmake", LanguageId::CMake},
+    {".xml", LanguageId::Xml},
+    {".xsd", LanguageId::Xml},
+    {".xaml", LanguageId::Xml},
+    {".props", LanguageId::Xml},
+    {".targets", LanguageId::Xml},
+    {".vcxproj", LanguageId::Xml},
+    {".filters", LanguageId::Xml},
+    {".csproj", LanguageId::Xml},
+    {".proj", LanguageId::Xml},
+    {".nuspec", LanguageId::Xml},
+    {".resx", LanguageId::Xml},
+    {".natvis", LanguageId::Xml},
+    {".manifest", LanguageId::Xml},
+    {".wxs", LanguageId::Xml},
+    {".slnx", LanguageId::Xml},
+    {".config", LanguageId::Xml},
+    {".svg", LanguageId::Xml},
+    {".json", LanguageId::Json},
+    {".lua", LanguageId::Lua},
+    {".jsonc", LanguageId::Json},
+    {".md", LanguageId::Markdown},
+    {".markdown", LanguageId::Markdown},
+    {".fmat", LanguageId::Json},
+    {".fscene", LanguageId::Json},
+    {".fmeta", LanguageId::Json},
+    {".fschema", LanguageId::Json},
+    {".ftable", LanguageId::Json},
+    {".frostproj", LanguageId::Json},
     {".feproject", LanguageId::Json},
-    {".lua", LanguageId::Lua},      {".jsonc", LanguageId::Json},
-    {".md", LanguageId::Markdown},  {".markdown", LanguageId::Markdown},
 };
 
 [[nodiscard]] const TSLanguage* grammarOf(LanguageId id) noexcept {
     switch (id) {
+    case LanguageId::Python: return tree_sitter_python();
+    case LanguageId::JavaScript: return tree_sitter_javascript();
+    case LanguageId::TypeScript: return tree_sitter_typescript();
+    case LanguageId::Tsx: return tree_sitter_tsx();
+    case LanguageId::Yaml: return tree_sitter_yaml();
+    case LanguageId::Toml: return tree_sitter_toml();
+    case LanguageId::PowerShell: return tree_sitter_powershell();
     case LanguageId::C: return tree_sitter_c();
     case LanguageId::Cpp: return tree_sitter_cpp();
     case LanguageId::CSharp: return tree_sitter_c_sharp();
@@ -83,6 +129,13 @@ constexpr Extension kExtensions[] = {
 
 std::string_view toString(LanguageId id) noexcept {
     switch (id) {
+    case LanguageId::Python: return "python";
+    case LanguageId::JavaScript: return "javascript";
+    case LanguageId::TypeScript: return "typescript";
+    case LanguageId::Tsx: return "tsx";
+    case LanguageId::Yaml: return "yaml";
+    case LanguageId::Toml: return "toml";
+    case LanguageId::PowerShell: return "powershell";
     case LanguageId::C: return "c";
     case LanguageId::Cpp: return "cpp";
     case LanguageId::CSharp: return "csharp";

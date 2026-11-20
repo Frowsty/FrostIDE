@@ -1386,6 +1386,63 @@ def check_project_host(repo: Path, report: Report) -> None:
                                                "from the installed Visual Studio with Private=\"false\""))
 
 
+LANGUAGE_GRAMMAR_MANIFEST = "third_party/language-grammars.lock.json"
+
+
+def _safe_grammar_path(path: str) -> bool:
+    return isinstance(path, str) and bool(path) and "\\" not in path and ":" not in path and all(part not in ("", ".", "..") for part in path.split("/")) and not path.startswith("/")
+
+
+def check_language_grammar_recipes(repo: Path, report: Report) -> None:
+    """Audit future-fetched grammar recipes and committed original license evidence (ADR0119)."""
+    path = repo / LANGUAGE_GRAMMAR_MANIFEST
+    if not path.exists():
+        return
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict) or document.get("schemaVersion") != 1 or not isinstance(document.get("grammars"), list):
+            raise ValueError("expected schema 1 grammar list")
+        seen: set[str] = set()
+        for grammar in document["grammars"]:
+            identity = grammar["id"]
+            commit = grammar["commit"]
+            repository = grammar["repository"]
+            archive_hash = grammar["archiveSha256"]
+            license_path = grammar["licenseFile"]
+            if identity in seen or not re.fullmatch(r"[a-z][a-z0-9-]*", identity):
+                raise ValueError("duplicate/unsafe grammar id")
+            seen.add(identity)
+            if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(r"[0-9a-f]{64}", archive_hash):
+                raise ValueError("grammar needs exact commit/archive SHA256 pins")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+                raise ValueError("unsafe upstream repository")
+            if not _safe_grammar_path(grammar["archiveRoot"]) or "/" in grammar["archiveRoot"]:
+                raise ValueError("unsafe generated archive root")
+            if grammar["url"] != f"https://codeload.github.com/{repository}/tar.gz/{commit}":
+                raise ValueError("source URL differs from the exact upstream commit")
+            if grammar["license"] != "MIT" or not expression_allowed(grammar["license"], ALLOWLIST):
+                raise ValueError("new grammar license requires source audit and ADR approval")
+            if not _safe_grammar_path(license_path) or not license_path.startswith("third_party/language-grammar-licenses/"):
+                raise ValueError("unsafe grammar license evidence path")
+            evidence = (repo / license_path).read_bytes()
+            if hashlib.sha256(evidence).hexdigest() != grammar["licenseSha256"] or b"Permission is hereby granted" not in evidence:
+                raise ValueError("original MIT evidence differs from audited pin")
+            if not _safe_grammar_path(grammar["adr"]) or not (repo / grammar["adr"]).is_file():
+                raise ValueError("missing grammar architecture/license decision")
+            members: set[str] = set()
+            for member in grammar["files"]:
+                if not _safe_grammar_path(member["path"]) or member["path"] in members or not re.fullmatch(r"[0-9a-f]{64}", member["sha256"]):
+                    raise ValueError("unsafe/duplicate/unpinned generated grammar source")
+                members.add(member["path"])
+            if not any(name.endswith("/parser.c") for name in members) or not any(name.startswith("LICENSE") for name in members):
+                raise ValueError("grammar recipe lacks generated parser/original license")
+            report.packages.append(Package(_spdx_id("Grammar-" + identity), "tree-sitter-" + identity,
+                grammar["version"], "MIT", "MIT", grammar["url"], f"https://github.com/{repository}",
+                f"pkg:github/{repository}@{commit}", "Audited generated source recipe (not fetched during source authoring)", "DEPENDS_ON", archive_hash))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        report.violations.append(Violation(LANGUAGE_GRAMMAR_MANIFEST, 1, f"invalid audited language grammar recipe: {error}"))
+
+
 def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Path | None) -> Report:
     """Runs every check and returns the violations and SBOM packages."""
     report = Report()
@@ -1395,6 +1452,7 @@ def run(repo: Path, vcpkg_roots: list[Path], build_dirs: list[Path], qt_root: Pa
     check_qt(repo, uses, qt_root, report)
     check_assets(repo, report, files)
     check_assets(repo, report, files, VENDOR_MANIFEST)
+    check_language_grammar_recipes(repo, report)
     check_sarif_validator(repo, report)
     check_sdk_conpty(repo, report)
     check_sdk_luals(repo, report)

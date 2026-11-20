@@ -53,6 +53,28 @@ def _elf(needed: list[str]) -> bytes:
     return header + strings + dynamic + sections
 
 
+class LanguageGrammarRecipeTests(TempDirTestCase):
+    def test_committed_recipes_retain_allowlisted_license_and_archive_evidence(self) -> None:
+        report = licensecheck.Report()
+        licensecheck.check_language_grammar_recipes(REPO, report)
+        self.assertEqual(report.violations, [])
+        self.assertEqual({package.name for package in report.packages}, {"tree-sitter-python", "tree-sitter-javascript", "tree-sitter-typescript", "tree-sitter-yaml", "tree-sitter-toml", "tree-sitter-powershell"})
+
+    def test_recipe_rejects_license_change_and_commit_url_mismatch(self) -> None:
+        document = json.loads((REPO / licensecheck.LANGUAGE_GRAMMAR_MANIFEST).read_text(encoding="utf-8"))
+        document["grammars"][0]["license"] = "GPL-3.0-only"
+        _write(self.tmp / licensecheck.LANGUAGE_GRAMMAR_MANIFEST, json.dumps(document))
+        report = licensecheck.Report()
+        licensecheck.check_language_grammar_recipes(self.tmp, report)
+        self.assertTrue(report.violations)
+        document["grammars"][0]["license"] = "MIT"
+        document["grammars"][0]["url"] = "https://example.invalid/moving-tag.tar.gz"
+        _write(self.tmp / licensecheck.LANGUAGE_GRAMMAR_MANIFEST, json.dumps(document))
+        report = licensecheck.Report()
+        licensecheck.check_language_grammar_recipes(self.tmp, report)
+        self.assertTrue(report.violations)
+
+
 class ExpressionTest(unittest.TestCase):
     def test_simple_and_with_expressions_match_exactly(self) -> None:
         allowed = licensecheck.ALLOWLIST

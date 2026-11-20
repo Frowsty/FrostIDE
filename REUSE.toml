@@ -196,3 +196,10 @@ path = ["integrations/unity/com.frostide.editor/package.json", "integrations/uni
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 FrostIDE contributors"
 SPDX-License-Identifier = "Apache-2.0"
+
+# Original MIT notices retained byte-exact for audited future-fetched grammar sources (ADR0119).
+[[annotations]]
+path = ["third_party/language-grammar-licenses/*.txt"]
+precedence = "override"
+SPDX-FileCopyrightText = "Upstream grammar authors, as retained in each notice"
+SPDX-License-Identifier = "MIT"

@@ -1,0 +1,356 @@
+{
+  "schemaVersion": 1,
+  "description": "Audited generated tree-sitter source recipes. Source archives are fetched only by a later authorized CMake configure; no upstream build or generator is executed. Per-file hashes and original MIT notices are retained.",
+  "grammars": [
+    {
+      "id": "python",
+      "repository": "tree-sitter/tree-sitter-python",
+      "version": "0.25.0",
+      "commit": "293fdc02038ee2bf0e2e206711b69c90ac0d413f",
+      "url": "https://codeload.github.com/tree-sitter/tree-sitter-python/tar.gz/293fdc02038ee2bf0e2e206711b69c90ac0d413f",
+      "archiveSha256": "b74d8ba6730535354175436208fe1452fd464f235263959ca40b8bf32cb23dc6",
+      "archiveRoot": "tree-sitter-python-293fdc02038ee2bf0e2e206711b69c90ac0d413f",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "LICENSE",
+          "sha256": "d724405ce238a22c0d35769c5a36b386ad5958192efe8bbb304fb2896254575f",
+          "bytes": 1080
+        },
+        {
+          "path": "src/node-types.json",
+          "sha256": "a2456847bea3adff5b2222b2f7b03a870159470d8908622204e6eb29ee2fe45e",
+          "bytes": 64995
+        },
+        {
+          "path": "src/parser.c",
+          "sha256": "a895f10b3cf7b2608f3283b43cd5cfed70971c7ee4a0136abbaaccbc4a7a25e0",
+          "bytes": 3439646
+        },
+        {
+          "path": "src/scanner.c",
+          "sha256": "6db82134ac2d4c90a1a1475487a625cface02662ebda9b7478cad9c7147e9afe",
+          "bytes": 15470
+        },
+        {
+          "path": "src/tree_sitter/alloc.h",
+          "sha256": "b29c1c9fb7cc82f58c84b376df1297d6e2737a1d655fd356db0859e3c29c2fea",
+          "bytes": 985
+        },
+        {
+          "path": "src/tree_sitter/array.h",
+          "sha256": "5bdf6ed1a78e3409fd443e085ca967a64c188a5d082aaf7f819bccd53a471c94",
+          "bytes": 10431
+        },
+        {
+          "path": "src/tree_sitter/parser.h",
+          "sha256": "180b893c8734778fd32f372dfbc27bd6ad1cd2221f26150b31256ff6716320d2",
+          "bytes": 7624
+        }
+      ],
+      "licenseFile": "third_party/language-grammar-licenses/python.txt",
+      "licenseSha256": "d724405ce238a22c0d35769c5a36b386ad5958192efe8bbb304fb2896254575f",
+      "adr": "docs/adr/0119-other-language-grammars.md"
+    },
+    {
+      "id": "javascript",
+      "repository": "tree-sitter/tree-sitter-javascript",
+      "version": "0.25.0",
+      "commit": "44c892e0be055ac465d5eeddae6d3e194424e7de",
+      "url": "https://codeload.github.com/tree-sitter/tree-sitter-javascript/tar.gz/44c892e0be055ac465d5eeddae6d3e194424e7de",
+      "archiveSha256": "a13fa28148e41bb939b2c2b8cd73c4b4295273b70cbac55a7a589020f52b9611",
+      "archiveRoot": "tree-sitter-javascript-44c892e0be055ac465d5eeddae6d3e194424e7de",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "LICENSE",
+          "sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1",
+          "bytes": 1080
+        },
+        {
+          "path": "src/node-types.json",
+          "sha256": "188a8baa97018edaf63bf7ece372c07bc0d74d1301004bc8f211eb7dee5a6e70",
+          "bytes": 64022
+        },
+        {
+          "path": "src/parser.c",
+          "sha256": "67209ca7ef6e1a4f74e29e48b5928455f892fe1821a3960fbcd62f4e972f7384",
+          "bytes": 2855934
+        },
+        {
+          "path": "src/scanner.c",
+          "sha256": "b3d3f64284d97bf80749c026862427782cf7ecc0b7dc094e6698ab311c9a42c7",
+          "bytes": 10576
+        },
+        {
+          "path": "src/tree_sitter/alloc.h",
+          "sha256": "b29c1c9fb7cc82f58c84b376df1297d6e2737a1d655fd356db0859e3c29c2fea",
+          "bytes": 985
+        },
+        {
+          "path": "src/tree_sitter/array.h",
+          "sha256": "5bdf6ed1a78e3409fd443e085ca967a64c188a5d082aaf7f819bccd53a471c94",
+          "bytes": 10431
+        },
+        {
+          "path": "src/tree_sitter/parser.h",
+          "sha256": "180b893c8734778fd32f372dfbc27bd6ad1cd2221f26150b31256ff6716320d2",
+          "bytes": 7624
+        }
+      ],
+      "licenseFile": "third_party/language-grammar-licenses/javascript.txt",
+      "licenseSha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1",
+      "adr": "docs/adr/0119-other-language-grammars.md"
+    },
+    {
+      "id": "typescript",
+      "repository": "tree-sitter/tree-sitter-typescript",
+      "version": "0.23.2",
+      "commit": "f975a621f4e7f532fe322e13c4f79495e0a7b2e7",
+      "url": "https://codeload.github.com/tree-sitter/tree-sitter-typescript/tar.gz/f975a621f4e7f532fe322e13c4f79495e0a7b2e7",
+      "archiveSha256": "4de2e82e557810eecb93cb3b31fbb3bd28ba4c91ba9a6c6164bcaa074125b7b5",
+      "archiveRoot": "tree-sitter-typescript-f975a621f4e7f532fe322e13c4f79495e0a7b2e7",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "LICENSE",
+          "sha256": "49bf33cf78ef5897e4e161ce1517df7de1ae5042a65b6bcfd44401e0fc606559",
+          "bytes": 1080
+        },
+        {
+          "path": "common/scanner.h",
+          "sha256": "da66ef2bd14a3f7ea743e25ba068c6c9aae2c3509db200ff80c4a0e6116e564c",
+          "bytes": 10097
+        },
+        {
+          "path": "tsx/src/node-types.json",
+          "sha256": "78b5789145286799a27a0a7ecc36cc1bcb151f94ec7fa631b248459867010c8c",
+          "bytes": 113345
+        },
+        {
+          "path": "tsx/src/parser.c",
+          "sha256": "1902cb53fa7ff5179df89b2eea863165e84c8cc866226419dc26921d8c055885",
+          "bytes": 8769870
+        },
+        {
+          "path": "tsx/src/scanner.c",
+          "sha256": "d563cd30b2f39718c9ae4292795c5ce03a2ad01954ba3a86ef84c2781a736673",
+          "bytes": 538
+        },
+        {
+          "path": "tsx/src/tree_sitter/alloc.h",
+          "sha256": "b29c1c9fb7cc82f58c84b376df1297d6e2737a1d655fd356db0859e3c29c2fea",
+          "bytes": 985
+        },
+        {
+          "path": "tsx/src/tree_sitter/array.h",
+          "sha256": "4ff743903dc46f5db6aa54f31c6b4d160a8a9779e5b2ab1ee59ae7ebcd850ea1",
+          "bytes": 10420
+        },
+        {
+          "path": "tsx/src/tree_sitter/parser.h",
+          "sha256": "a1f6ef161fbaf48a0e10fca90ef5290a062462b307b3898aa562993853b9f80a",
+          "bytes": 7039
+        },
+        {
+          "path": "typescript/src/node-types.json",
+          "sha256": "c790a733fc756b54d4e54dceeb7d2d51e40d8b57136e70277753a75804cce3e3",
+          "bytes": 108583
+        },
+        {
+          "path": "typescript/src/parser.c",
+          "sha256": "74fe453edd70f4eae9af0a1050cbd7943d8971d59165b6aaebbaa0a0b716d1aa",
+          "bytes": 8745894
+        },
+        {
+          "path": "typescript/src/scanner.c",
+          "sha256": "9125013b42cb888379d9be909f1d73dfb75a37626c2cdbf4122718a2b431a6d3",
+          "bytes": 573
+        },
+        {
+          "path": "typescript/src/tree_sitter/alloc.h",
+          "sha256": "b29c1c9fb7cc82f58c84b376df1297d6e2737a1d655fd356db0859e3c29c2fea",
+          "bytes": 985
+        },
+        {
+          "path": "typescript/src/tree_sitter/array.h",
+          "sha256": "4ff743903dc46f5db6aa54f31c6b4d160a8a9779e5b2ab1ee59ae7ebcd850ea1",
+          "bytes": 10420
+        },
+        {
+          "path": "typescript/src/tree_sitter/parser.h",
+          "sha256": "a1f6ef161fbaf48a0e10fca90ef5290a062462b307b3898aa562993853b9f80a",
+          "bytes": 7039
+        }
+      ],
+      "licenseFile": "third_party/language-grammar-licenses/typescript.txt",
+      "licenseSha256": "49bf33cf78ef5897e4e161ce1517df7de1ae5042a65b6bcfd44401e0fc606559",
+      "adr": "docs/adr/0119-other-language-grammars.md"
+    },
+    {
+      "id": "yaml",
+      "repository": "tree-sitter-grammars/tree-sitter-yaml",
+      "version": "0.7.2",
+      "commit": "7708026449bed86239b1cd5bce6e3c34dbca6415",
+      "url": "https://codeload.github.com/tree-sitter-grammars/tree-sitter-yaml/tar.gz/7708026449bed86239b1cd5bce6e3c34dbca6415",
+      "archiveSha256": "6e8cb69a4f7a05478b1143d38bd10df2163170a6678df1848f3be89c8b7c5f3b",
+      "archiveRoot": "tree-sitter-yaml-7708026449bed86239b1cd5bce6e3c34dbca6415",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "LICENSE",
+          "sha256": "2d181298822a124f6d106118dcc69c8d4d26ac668559be29682c452e712b0947",
+          "bytes": 1105
+        },
+        {
+          "path": "src/node-types.json",
+          "sha256": "1238b6c89fc6afb9723b6463a365843aa87e478025490660e5acfc9adaaf809b",
+          "bytes": 9026
+        },
+        {
+          "path": "src/parser.c",
+          "sha256": "8a3baaab33fb63cf9a89f97ec61dbb3ab0d4ef69be9f0f229092c79d129617c9",
+          "bytes": 1288845
+        },
+        {
+          "path": "src/scanner.c",
+          "sha256": "9cd962f7c7541247cfc7ebf661abaa5d9b642d27de16575c87093496557aae59",
+          "bytes": 51495
+        },
+        {
+          "path": "src/schema.core.c",
+          "sha256": "91e56c3f3ae6fad1803b739ce4eb4568a782a9aec710f733db2f3e38d407a4d5",
+          "bytes": 6630
+        },
+        {
+          "path": "src/schema.json.c",
+          "sha256": "3a18e4406aa8cdaea2806483e11c50e1a392fd72cf8f54ab7f189b3728836949",
+          "bytes": 3065
+        },
+        {
+          "path": "src/schema.legacy.c",
+          "sha256": "4f7ca12361e848214beceaa95ae615048317039ea4736c6eec956e3e8da4694c",
+          "bytes": 18624
+        },
+        {
+          "path": "src/tree_sitter/alloc.h",
+          "sha256": "b29c1c9fb7cc82f58c84b376df1297d6e2737a1d655fd356db0859e3c29c2fea",
+          "bytes": 985
+        },
+        {
+          "path": "src/tree_sitter/array.h",
+          "sha256": "5bdf6ed1a78e3409fd443e085ca967a64c188a5d082aaf7f819bccd53a471c94",
+          "bytes": 10431
+        },
+        {
+          "path": "src/tree_sitter/parser.h",
+          "sha256": "180b893c8734778fd32f372dfbc27bd6ad1cd2221f26150b31256ff6716320d2",
+          "bytes": 7624
+        }
+      ],
+      "licenseFile": "third_party/language-grammar-licenses/yaml.txt",
+      "licenseSha256": "2d181298822a124f6d106118dcc69c8d4d26ac668559be29682c452e712b0947",
+      "adr": "docs/adr/0119-other-language-grammars.md"
+    },
+    {
+      "id": "toml",
+      "repository": "tree-sitter-grammars/tree-sitter-toml",
+      "version": "0.7.0",
+      "commit": "64b56832c2cffe41758f28e05c756a3a98d16f41",
+      "url": "https://codeload.github.com/tree-sitter-grammars/tree-sitter-toml/tar.gz/64b56832c2cffe41758f28e05c756a3a98d16f41",
+      "archiveSha256": "feeb2e1cf531588cdcfb9c57292620151a08597f18a98dad26cc17fd4b544dcb",
+      "archiveRoot": "tree-sitter-toml-64b56832c2cffe41758f28e05c756a3a98d16f41",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "LICENSE",
+          "sha256": "b727eee929bee836e8102cecf749a795b199f291b58c885bcd81cae727ac5a46",
+          "bytes": 1116
+        },
+        {
+          "path": "src/node-types.json",
+          "sha256": "db9ba87309dd4b5a3fe107ddb20858f869cf40c199cad3ae9d99029240ccf419",
+          "bytes": 5735
+        },
+        {
+          "path": "src/parser.c",
+          "sha256": "1991a2608e6f0214e563fe5f762e8df72954dc69a3dd9a1e22ea8a870e4052c3",
+          "bytes": 133991
+        },
+        {
+          "path": "src/scanner.c",
+          "sha256": "b25ff3b5034f40046e9a041d1e9110aa46d081706bbd1b748b480701aa6f5bde",
+          "bytes": 2578
+        },
+        {
+          "path": "src/tree_sitter/alloc.h",
+          "sha256": "b29c1c9fb7cc82f58c84b376df1297d6e2737a1d655fd356db0859e3c29c2fea",
+          "bytes": 985
+        },
+        {
+          "path": "src/tree_sitter/array.h",
+          "sha256": "4ff743903dc46f5db6aa54f31c6b4d160a8a9779e5b2ab1ee59ae7ebcd850ea1",
+          "bytes": 10420
+        },
+        {
+          "path": "src/tree_sitter/parser.h",
+          "sha256": "a1f6ef161fbaf48a0e10fca90ef5290a062462b307b3898aa562993853b9f80a",
+          "bytes": 7039
+        }
+      ],
+      "licenseFile": "third_party/language-grammar-licenses/toml.txt",
+      "licenseSha256": "b727eee929bee836e8102cecf749a795b199f291b58c885bcd81cae727ac5a46",
+      "adr": "docs/adr/0119-other-language-grammars.md"
+    },
+    {
+      "id": "powershell",
+      "repository": "airbus-cert/tree-sitter-powershell",
+      "version": "0.26.6",
+      "commit": "65ea6919e816a7ac142acec7ee72757f89db8439",
+      "url": "https://codeload.github.com/airbus-cert/tree-sitter-powershell/tar.gz/65ea6919e816a7ac142acec7ee72757f89db8439",
+      "archiveSha256": "ce077de1a8537476750152afa984346a65519b7b795348cc8fb7f1e0e28e4a4a",
+      "archiveRoot": "tree-sitter-powershell-65ea6919e816a7ac142acec7ee72757f89db8439",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "LICENSE",
+          "sha256": "1fca8454c0d77a73f9922a52d39e1f7c339f5da5d03f2766eff66b859fa19477",
+          "bytes": 1068
+        },
+        {
+          "path": "src/node-types.json",
+          "sha256": "db02c7bdba010b518e4fa12b3ba045d0156d475f414b3ff4622eb30f51281c4e",
+          "bytes": 72778
+        },
+        {
+          "path": "src/parser.c",
+          "sha256": "185404a0acfeb8dc351a9c934aca8c60552644344acd2f9a8008baca4b4e1c09",
+          "bytes": 4806731
+        },
+        {
+          "path": "src/scanner.c",
+          "sha256": "dab03ff73a44495c72e6b51f43fd2f5128a1a29344a29974f12fba250328cf99",
+          "bytes": 3498
+        },
+        {
+          "path": "src/tree_sitter/alloc.h",
+          "sha256": "b29c1c9fb7cc82f58c84b376df1297d6e2737a1d655fd356db0859e3c29c2fea",
+          "bytes": 985
+        },
+        {
+          "path": "src/tree_sitter/array.h",
+          "sha256": "31e60a1bff6f715afacce03b5b70efe42b58371b4f9595dd4af52a577ff9608c",
+          "bytes": 13269
+        },
+        {
+          "path": "src/tree_sitter/parser.h",
+          "sha256": "180b893c8734778fd32f372dfbc27bd6ad1cd2221f26150b31256ff6716320d2",
+          "bytes": 7624
+        }
+      ],
+      "licenseFile": "third_party/language-grammar-licenses/powershell.txt",
+      "licenseSha256": "1fca8454c0d77a73f9922a52d39e1f7c339f5da5d03f2766eff66b859fa19477",
+      "adr": "docs/adr/0119-other-language-grammars.md"
+    }
+  ]
+}
