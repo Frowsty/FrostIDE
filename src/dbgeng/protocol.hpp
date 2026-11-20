@@ -31,9 +31,9 @@ inline std::string base64(std::string_view bytes) {
     std::string result;
     result.reserve((bytes.size() + 2) / 3 * 4);
     for (std::size_t i = 0; i < bytes.size(); i += 3) {
-        const auto a = static_cast<unsigned char>(bytes[i]);
-        const auto b = i + 1 < bytes.size() ? static_cast<unsigned char>(bytes[i + 1]) : 0;
-        const auto c = i + 2 < bytes.size() ? static_cast<unsigned char>(bytes[i + 2]) : 0;
+        const unsigned a = static_cast<unsigned char>(bytes[i]);
+        const unsigned b = i + 1 < bytes.size() ? static_cast<unsigned char>(bytes[i + 1]) : 0U;
+        const unsigned c = i + 2 < bytes.size() ? static_cast<unsigned char>(bytes[i + 2]) : 0U;
         result += alphabet[a >> 2];
         result += alphabet[((a & 3) << 4) | (b >> 4)];
         result += i + 1 < bytes.size() ? alphabet[((b & 15) << 2) | (c >> 6)] : '=';

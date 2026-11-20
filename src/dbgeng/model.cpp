@@ -124,14 +124,13 @@ Result<std::int64_t> ModelStore::scope(FrameContext frame, bool parameters) {
     if (!structured()) {
         if (m_basic.size() >= 8192 || m_next == std::numeric_limits<std::int64_t>::max())
             return fail(ErrorCode::OutOfRange, "Variable handle budget exhausted");
+        const auto flags = parameters ? ULONG{DEBUG_SCOPE_GROUP_ARGUMENTS} : ULONG{DEBUG_SCOPE_GROUP_LOCALS};
         ComPtr<IDebugSymbolGroup2> group;
-        const auto status = m_symbols->GetScopeSymbolGroup2(
-            parameters ? DEBUG_SCOPE_GROUP_ARGUMENTS : DEBUG_SCOPE_GROUP_LOCALS, nullptr, group.put());
+        const auto status = m_symbols->GetScopeSymbolGroup2(flags, nullptr, group.put());
         if (FAILED(status))
             return std::unexpected(engineError("native scope symbols", status));
         const auto id = m_next++;
-        m_basic.emplace(id,
-                        BasicValue{frame, parameters ? DEBUG_SCOPE_GROUP_ARGUMENTS : DEBUG_SCOPE_GROUP_LOCALS, {}, {}});
+        m_basic.emplace(id, BasicValue{frame, flags, {}, {}});
         return id;
     }
     // Parameters and LocalVariables are distinct actual native scopes:

@@ -884,8 +884,8 @@ public:
                 if (width == 0)
                     return fail(ErrorCode::Unsupported, "Unknown native register value width");
                 text = "0x";
-                for (std::size_t index = width; index > 0; --index) {
-                    const auto byte = value.RawBytes[index - 1];
+                for (std::size_t byteIndex = width; byteIndex > 0; --byteIndex) {
+                    const auto byte = value.RawBytes[byteIndex - 1];
                     text += digits[byte >> 4];
                     text += digits[byte & 15];
                 }
