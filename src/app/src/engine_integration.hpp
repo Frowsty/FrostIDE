@@ -3,6 +3,7 @@
 #pragma once
 
 #include "frost/core/error.hpp"
+#include "frost/document/refactoring_transaction.hpp"
 #include "frost/lang/json.hpp"
 #include "frost/run/run_manager.hpp"
 
@@ -56,6 +57,10 @@ public:
                                                        std::function<void(Result<lang::Json>)> completed);
     [[nodiscard]] Result<void> findAssetUsagesForDocument(std::string_view absolutePath, bool reveal = true);
     void invalidateAssetUsages();
+    // GUI-only authenticated preparation; bounded nonpumping reply waits and modal preview. No disk effects.
+    // Exact lease and reversible receipt remain tied to the original session and project trust.
+    [[nodiscard]] Result<void> prepareAssetMove(document::RefactoringPlan& plan, std::string oldPath,
+                                                std::string newPath);
     [[nodiscard]] Result<void> showSerializedProperties();
     [[nodiscard]] Result<void> cancelRequest();
     [[nodiscard]] lang::Json snapshot() const;

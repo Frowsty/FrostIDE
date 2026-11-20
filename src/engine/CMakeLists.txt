@@ -13,6 +13,7 @@
 frost_add_library(engine LAYER engine
     SOURCES
         src/asset_index.cpp
+        src/asset_move_plan.cpp
         src/serialized_properties.cpp
         src/document_tools.cpp
         src/binding_index.cpp

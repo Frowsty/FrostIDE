@@ -66,3 +66,43 @@ claim an IDE REF1 disk transaction or global Undo. Native engine tests and real 
 roundtrip/stale-Before tests are authored only. Actual command producer policies explicitly admit
 read queries and descriptor reads, and restrict component writes to Edit plus mutation permission;
 no wildcard or IDE-side policy bypass is introduced.
+
+## Asset move proposal and reversible receipt profile
+
+FEC-9b consumes actual session `assets.plan-move {path,target}` replies. Version 1 returns a
+session lease, a retained reversible receipt, exact unsigned handle, old/new virtual paths,
+asset/metadata move rows, exact before/after UTF8 reference document bytes, and bounded raw-byte
+FNV1a64/size guards. The IDE validates and physically contains every path before converting it
+to native REF1 authority. Missing metadata, malformed/overlapping participants, unsupported
+rename-plus-rewrite source documents and uncertain identities refuse. Dirty IDE documents and
+open reference-rewrite documents are explicitly refused rather than projected into disk guesses.
+
+The normal file Rename/Move preparation composes these real engine edits with the asset/.fmeta
+moves in one preview and native transaction. `assets.validate-move-plan` supplies the exact
+verified lease/receipt/handle/source decision receipt at the final admission boundary.
+After native settlement, `assets.finish-move-plan {lease,applied:true}` must verify the resulting
+images, refresh the actual registry, and return verified/refreshed/handle/destination evidence.
+The IDE also requests its real content refresh and invalidates cached usage observations.
+Failure after native settlement is reported as an engine reconciliation warning, never as a
+rolled-back disk operation; the retained lease is retried before history can proceed.
+
+Undo/Redo reacquire `assets.reopen-move-plan {receipt,reverse}` from the same authenticated session.
+The engine retains original raw pre/post images; the consumer accepts only the exact frozen
+inverse. No client-supplied restorable JSON is trusted. Native history admission and the engine
+lease are both rechecked before a decision. Pending native recovery retains its active lease;
+Resume performs the frozen native decision then actual engine settlement. Remote receipts are
+session-local and are not fabricated on application restart or replacement-session pairing.
+Lost replies/session loss can therefore leave explicit reconciliation refusals, with no claimed
+cross-process atomicity or universal same-user exclusion.
+
+The producer admits persistent editor/headless sessions only when all scenes and worlds are closed.
+A native project mutation gate holds the `.frost/asset-mutation.lock` process lock across the
+lease, and rejects engine file mutations, registry rescans and asset watcher writes from other
+owners. The producer records the owning RPC connection: disconnect refreshes/releases only when
+all exact before images or all exact after images are observed; a mixed native journal state
+retains the active lease/lock and reports recovery instead of admitting engine writes. One-shot CLI contexts cannot own a lease. The IDE exposes the actual refusal and never
+falls back to engine-local Rename or an unguarded disk move. Directory asset moves (including
+the Assets directory itself) are refused until native directory transactions exist. These are
+implementation boundaries; the ordinary paired GUI acceptance journey has not run. Parser and
+native external-guard history regression sources are authored; paired-engine/platform executions
+remain deferred by the user override.

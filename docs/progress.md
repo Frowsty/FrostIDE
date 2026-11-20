@@ -3,6 +3,12 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R14 FEC-9b engine asset transaction consumer
+
+- Authored typed bounded actual engine plan/lease/reversible-receipt parsing and composed normal file Rename/Move with source/.fmeta moves and engine reference before/after images in one preview/native REF1 transaction. Exact session/trust/physical project and raw input guards are checked; retained engine inverse receipts join native Undo/Redo and actual registry refresh/validation after settlement. Predecision refusals cancel leases; native PendingRecovery retains its lease through Resume. Uncertain post-settlement engine replies remain explicit reconciliation warnings/refusals.
+- Unsupported asset directory moves, source rename-plus-rewrite overlaps, dirty IDE inputs and open rewritten reference documents refuse. The producer admits persistent editor/headless sessions with all scenes/worlds closed and holds a native project mutation/process lock; one-shot contexts refuse. GUI/cross-process runtime acceptance remains unexecuted. No fallback or fabricated metadata refresh is used.
+- Parser and native external-guard history regressions are authored. Independent Astra source review cleared the consumer after correcting nested-event-loop lifetime hazards; final admission uses bounded worker completion without GUI event pumping. Builds, tests, features, WSL and verification runners were not executed under the implementation-first override. Next: finalize paired-source review and later native/paired-engine acceptance.
+
 ## 2026-11-20: R14 selected-engine document schemas and validation slice
 
 - Installed bounded actual document.schemas exports for the authenticated project's supported serializer shapes, with completion, hover and local structural findings. Malformed consumed keywords refuse the complete replacement. This covers exported .fmat/.fscene shapes, not all engine document types or the complete FEC-7 editing surface.

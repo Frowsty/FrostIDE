@@ -228,4 +228,55 @@ TEST(SourceRenameWorkbench, DirtyOpenSourceAndMetadataRenameAndUndoAsOneOperatio
     EXPECT_EQ(dir.read("workspace/new.cpp.fmeta"), "stable-guid\n");
 }
 
+// Real native filesystem/history fixture for application-owned engine boundaries. The guard
+// oracle deliberately refuses both the early lease and final decision admissions independently.
+TEST(SourceRenameWorkbench, ExternalLeaseAndFinalAdmissionGateHistoryBeforeAnyInverse) {
+    app::test::WorkDir dir("external-asset-guard-history");
+    dir.write("workspace/asset.lua", "return 1\n");
+    dir.write("workspace/asset.lua.fmeta", "stable-handle\n");
+    app::test::RigOptions options;
+    options.workbench.refactoringStateDirectory = dir.join("private-refactoring");
+    app::test::WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
+    auto move =
+        lang::planFmetaMove(io::realFileSystem(), dir.join("workspace/asset.lua"), dir.join("workspace/renamed.lua"));
+    ASSERT_TRUE(move);
+    auto plan = app::prepareSourceFileRename(io::realFileSystem(), *move, "Move engine asset");
+    ASSERT_TRUE(plan);
+    bool leaseAllowed = false, finalAllowed = false;
+    int cancellations = 0;
+    std::vector<bool> settled;
+    auto external = std::make_shared<document::RefactoringExternalGuard>();
+    external->history = [&](bool) -> Result<void> {
+        if (!leaseAllowed)
+            return fail(ErrorCode::Busy, "actual engine lease refused");
+        return {};
+    };
+    external->admit = [&]() -> Result<void> {
+        if (!finalAllowed)
+            return fail(ErrorCode::Busy, "actual engine decision receipt refused");
+        return {};
+    };
+    external->cancelled = [&] { ++cancellations; };
+    external->settled = [&](bool applied) -> Result<void> {
+        settled.push_back(applied);
+        return {};
+    };
+    plan->external = external;
+    ASSERT_TRUE(rig.workbench->applyRefactoring(*plan));
+    ASSERT_EQ(settled, std::vector<bool>{true});
+    EXPECT_FALSE(rig.workbench->undoRefactoring());
+    EXPECT_EQ(dir.read("workspace/renamed.lua.fmeta"), "stable-handle\n");
+    EXPECT_EQ(cancellations, 0);
+    leaseAllowed = true;
+    EXPECT_FALSE(rig.workbench->undoRefactoring());
+    EXPECT_EQ(cancellations, 1);
+    EXPECT_EQ(dir.read("workspace/renamed.lua"), "return 1\n");
+    finalAllowed = true;
+    ASSERT_TRUE(rig.workbench->undoRefactoring());
+    EXPECT_EQ(dir.read("workspace/asset.lua.fmeta"), "stable-handle\n");
+    ASSERT_TRUE(rig.workbench->redoRefactoring());
+    EXPECT_EQ(settled, (std::vector<bool>{true, false, true}));
+}
+
 } // namespace

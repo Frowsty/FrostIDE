@@ -20,6 +20,10 @@ QString display(std::string_view text) { return QString::fromUtf8(text.data(), s
 } // namespace
 
 Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document::RefactoringPlan& plan) {
+    if (m_refactoringExecuting)
+        return fail(ErrorCode::Busy, "A refactoring boundary is already executing");
+    m_refactoringExecuting = true;
+    const auto executing = qScopeGuard([this] { m_refactoringExecuting = false; });
     if (m_shutDown) {
         return fail(ErrorCode::Cancelled, "The workbench is shutting down");
     }
@@ -77,6 +81,9 @@ Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document:
                 return fail(ErrorCode::Cancelled, "The workbench is shutting down");
             if (m_refactoringAdmissionToken.assigned() && !refactoringTrusted(m_refactoringAdmissionToken))
                 return fail(ErrorCode::Untrusted, "Project trust changed while preparing refactoring history");
+            for (const auto& paths : m_refactoringPaths)
+                if (paths.token == m_refactoringAdmissionToken && paths.external && paths.external->admit)
+                    return paths.external->admit();
             return {};
         };
         options.recoveryDirectory = *recovery;
@@ -124,9 +131,12 @@ Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document:
         return context ? context() : Result<void>{};
     };
     auto outcome = m_refactoring->apply(admittedPlan);
-    if (!outcome)
+    if (!outcome) {
+        if (plan.external && plan.external->cancelled)
+            plan.external->cancelled();
         return std::unexpected(std::move(outcome.error()));
-    m_refactoringPaths.push_back({outcome->token, plan.renames, std::move(mutationPaths), false});
+    }
+    m_refactoringPaths.push_back({outcome->token, plan.renames, std::move(mutationPaths), false, plan.external});
     publishRefactoringOutcome(*outcome);
     return outcome;
 }
@@ -154,6 +164,14 @@ void Workbench::publishRefactoringOutcome(const document::RefactoringOutcome& ou
             rebindRenamedDocument(from, to);
         }
         paths.applied = applied;
+    }
+    for (auto& paths : m_refactoringPaths) {
+        if (paths.token == outcome.token && paths.external && paths.external->settled) {
+            auto result = paths.external->settled(applied);
+            if (!result)
+                notify(QStringLiteral("Engine asset transaction requires attention"), display(result.error().message()),
+                       ui::NotificationKind::Warning);
+        }
     }
     refreshSolutionExplorerForFsChange();
     if (m_language)
@@ -194,6 +212,10 @@ Result<document::RefactoringOutcome> Workbench::redoRefactoring() {
     return runRefactoringHistory(m_refactoring->latestRedo(), true);
 }
 Result<document::RefactoringOutcome> Workbench::runRefactoringHistory(TransactionId token, bool redo) {
+    if (m_refactoringExecuting)
+        return fail(ErrorCode::Busy, "A refactoring boundary is already executing");
+    m_refactoringExecuting = true;
+    const auto executing = qScopeGuard([this] { m_refactoringExecuting = false; });
     if (m_shutDown || !m_refactoring)
         return fail(ErrorCode::Cancelled, "The refactoring owner is unavailable");
     if (!refactoringTrusted(token))
@@ -201,12 +223,26 @@ Result<document::RefactoringOutcome> Workbench::runRefactoringHistory(Transactio
     const auto previous = m_refactoringAdmissionToken;
     m_refactoringAdmissionToken = token;
     const auto clear = qScopeGuard([&] { m_refactoringAdmissionToken = previous; });
+    std::shared_ptr<document::RefactoringExternalGuard> external;
+    for (const auto& paths : m_refactoringPaths)
+        if (paths.token == token)
+            external = paths.external;
+    if (external && external->history) {
+        if (auto admitted = external->history(redo); !admitted)
+            return std::unexpected(admitted.error());
+    }
     auto outcome = redo ? m_refactoring->redo(token) : m_refactoring->undo(token);
+    if (!outcome && external && external->cancelled)
+        external->cancelled();
     if (outcome)
         publishRefactoringOutcome(*outcome);
     return outcome;
 }
 Result<document::RefactoringOutcome> Workbench::resumeRefactoring() {
+    if (m_refactoringExecuting)
+        return fail(ErrorCode::Busy, "A refactoring boundary is already executing");
+    m_refactoringExecuting = true;
+    const auto executing = qScopeGuard([this] { m_refactoringExecuting = false; });
     if (!refactoringPending() || !m_pendingRefactoring.assigned())
         return fail(ErrorCode::Busy, "No refactoring is waiting for recovery");
     auto outcome = m_refactoring->resume(m_pendingRefactoring);

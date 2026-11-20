@@ -388,7 +388,8 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
 }
 
 Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Json params,
-                                                    std::function<void(Result<lang::Json>)> completed) {
+                                                    std::function<void(Result<lang::Json>)> completed,
+                                                    bool workerCompletion) {
     if (!admitted(epoch, root, trustRevision))
         return fail(ErrorCode::Untrusted, "Project trust changed before the engine command");
     if (!session || !identity || !session->connected())
@@ -424,9 +425,15 @@ Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Js
     auto started = session->request(
         method, std::move(params),
         [self, fs, originalKey, admission, observed, currentEpoch, expectedRoot, revision, exactSession, requestId,
-         method, completed = std::move(completed)](Result<lang::Json> result) mutable {
+         method, completed = std::move(completed), workerCompletion](Result<lang::Json> result) mutable {
             if (!self || !retainEngineProjectIdentity(*fs, expectedRoot, originalKey, admission))
                 return;
+            // The native transaction owner cannot pump GUI events during final admission.
+            // This opt-in completion must be worker-safe; GUI status publication stays queued.
+            if (workerCompletion && completed) {
+                completed(result);
+                completed = {};
+            }
             QMetaObject::invokeMethod(
                 self.data(),
                 [self, observed, currentEpoch, expectedRoot, revision, exactSession, requestId, method,

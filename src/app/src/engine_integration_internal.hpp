@@ -163,7 +163,8 @@ struct EngineIntegration::Impl {
     [[nodiscard]] Result<void> refresh();
     [[nodiscard]] Result<void> connectInstance(const EngineInstanceRecord& instance);
     [[nodiscard]] Result<std::uint64_t> send(std::string method, lang::Json params,
-                                             std::function<void(Result<lang::Json>)> completed = {});
+                                             std::function<void(Result<lang::Json>)> completed = {},
+                                             bool workerCompletion = false);
     [[nodiscard]] Result<void> findAssetUsages(std::string relative, engine::EngineHandle handle);
     void clearAssetUsages();
     void publishDocumentProblems();

@@ -1056,10 +1056,12 @@ private:
         std::vector<document::FileRename> renames;
         std::vector<std::string> mutationPaths;
         bool applied = false;
+        std::shared_ptr<document::RefactoringExternalGuard> external;
     };
     std::vector<RefactoringPaths> m_refactoringPaths;
     TransactionId m_pendingRefactoring;
     bool m_refactoringRecoveryChecked = false;
+    bool m_refactoringExecuting = false;
     TransactionId m_refactoringAdmissionToken;
     std::shared_ptr<CppRenameAdmission> m_cppRenameAdmission;
     std::stop_source m_cppRenameStop;
