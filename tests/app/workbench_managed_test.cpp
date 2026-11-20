@@ -323,7 +323,8 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     // Normal Alt+Enter -> installed Roslyn provider/action -> whole-group preview -> REF1/Undo.
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Lib/Operations.cs")));
     auto* semanticView = rig.workbench->currentView();
-    const auto choose = [&](std::size_t offset, QString title, std::function<void()> duringPreview = {}) {
+    const auto choose = [&](std::size_t offset, QString title, std::function<void()> duringPreview = {},
+                            std::function<void()> beforeChoose = {}) {
         semanticView->editor().editor().setState(frost::text::EditorState::caretAt(frost::ByteOffset{offset}));
         semanticView->widget()->setFocus();
         frost::app::test::sendKey(semanticView->widget(), Qt::Key_Return, Qt::AltModifier);
@@ -360,6 +361,8 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
             }
         });
         watcher.start(10);
+        if (beforeChoose)
+            beforeChoose();
         choices.list()->setCurrentRow(index);
         frost::app::test::sendKey(choices.list(), Qt::Key_Return, Qt::NoModifier);
         watcher.stop();
@@ -400,7 +403,11 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
                        [&] { dir.write("Lib/Detached.cs", "// occupied during preview\n"); }));
     EXPECT_EQ(semanticView->editor().editor().text().text(), semanticSource);
     EXPECT_EQ(frost::io::realFileSystem().readFileSnapshot(dir.join("Lib/Lib.csproj"), 65536U).value(), *projectBefore);
-    EXPECT_TRUE(rig.trust->untrust(dir.path()));
+    EXPECT_FALSE(choose(semanticSource.find("int first"), QStringLiteral("Swap first two parameters"), {}, [&] {
+        EXPECT_TRUE(rig.trust->untrust(dir.path()));
+        EXPECT_TRUE(waitFor([&] { return rig.workbench->managed() == nullptr; }, 5s));
+    }));
+    EXPECT_EQ(semanticView->editor().editor().text().text(), semanticSource);
     EXPECT_TRUE(waitFor([&] { return rig.workbench->managed() == nullptr; }, 5s));
     const std::string alternate = dir.join("alternate-server.dll");
     ASSERT_TRUE(QFile::copy(QString::fromStdString(assembly), QString::fromStdString(alternate)));

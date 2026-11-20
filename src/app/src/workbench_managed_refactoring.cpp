@@ -16,10 +16,47 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 
+#include <format>
 #include <map>
 #include <set>
 namespace frost::app {
 namespace {
+sched::Task<Result<lang::Json>> stampActions(std::shared_ptr<lang::ManagedService> server, std::string identity,
+                                             lang::Json params, std::stop_token stop) {
+    if (!server)
+        co_return fail(ErrorCode::Busy, "Managed service unavailable");
+    auto answer = co_await server->request("textDocument/codeAction", std::move(params), stop);
+    if (!answer || !answer->isArray())
+        co_return answer;
+    auto stamped = lang::Json::array();
+    for (auto action : answer->items()) {
+        if (auto* edit = action.find("edit"))
+            if (auto* owned = edit->find("frostManaged"); owned && owned->isObject())
+                owned->set("hostContext", identity);
+        stamped.push(std::move(action));
+    }
+    co_return stamped;
+}
+class OwnedManagedRequester final : public lang::ILspRequester {
+public:
+    OwnedManagedRequester(std::shared_ptr<lang::ManagedService> server, std::string identity)
+        : m_server(std::move(server)), m_identity(std::move(identity)) {}
+    sched::Task<Result<lang::Json>> request(std::string method, lang::Json params, std::stop_token stop) override {
+        if (method == "textDocument/codeAction")
+            return stampActions(m_server, std::format("{}:{}", m_identity, m_server->restarts()), std::move(params),
+                                stop);
+        return m_server->request(std::move(method), std::move(params), stop);
+    }
+    lang::PositionEncoding encoding() const override { return m_server->encoding(); }
+    std::optional<lang::ServerCapabilities> serverCapabilities() const override {
+        return m_server->serverCapabilities();
+    }
+    void setApplyEditHandler(ApplyEditHandler handler) override { m_server->setApplyEditHandler(std::move(handler)); }
+
+private:
+    std::shared_ptr<lang::ManagedService> m_server;
+    const std::string m_identity; // GUI snapshot at registration; worker requests never read Workbench.
+};
 bool within(std::string_view path, std::string_view root) {
     const auto key = lang::documentKey(path), base = lang::documentKey(root);
     return key == base ||
@@ -63,12 +100,32 @@ bool previewManaged(const document::RefactoringPlan& plan, QWidget* parent) {
     return accepted;
 }
 } // namespace
+std::string LanguageBridge::managedProposalIdentity() const {
+    const auto trust = m_workbench.m_services.trust.snapshot(m_workbench.m_projectRoot);
+    return std::format("{}:{}:{}:{}:{}", m_workbench.m_projectRoot, m_workbench.m_managedRefactoringEpoch,
+                       m_workbench.m_managedModelGeneration,
+                       reinterpret_cast<std::uintptr_t>(m_workbench.m_managed.get()), trust.revision);
+}
+void LanguageBridge::setManagedServer(std::shared_ptr<lang::ILspRequester> server) {
+    // Registration is GUI-only. Retained requesters own immutable context and the actual service.
+    if (auto managed = std::dynamic_pointer_cast<lang::ManagedService>(server))
+        m_server.setManagedServer(
+            std::make_shared<OwnedManagedRequester>(std::move(managed), managedProposalIdentity()));
+    else
+        m_server.setManagedServer(std::move(server));
+}
+
 Result<void> LanguageBridge::applyManagedProposal(const lang::WorkspaceEdit& edit, std::string_view label) {
     auto& workbench = m_workbench;
     if (!edit.managed || !workbench.m_managed || !isManagedSource(documentPath()))
         return fail(ErrorCode::Unsupported, "Managed proposals need the active owned C# service");
+    if (edit.managed->context.empty() ||
+        edit.managed->context != std::format("{}:{}", managedProposalIdentity(), workbench.m_managed->restarts()))
+        return fail(ErrorCode::Busy, "Managed service/configuration changed; request the action again");
     if (auto targets = validateRefactoringTargets(edit); !targets)
         return targets;
+    if (edit.managed->creates.size() + edit.managed->renames.size() > 1)
+        return fail(ErrorCode::Unsupported, "Managed profile supports one resource endpoint");
     const QPointer<Workbench> owner(&workbench);
     const auto root = workbench.m_projectRoot;
     const auto trust = workbench.m_services.trust.snapshot(root);
@@ -140,6 +197,9 @@ Result<void> LanguageBridge::applyManagedProposal(const lang::WorkspaceEdit& edi
         }
     }
     const auto endpoint = [&](std::string_view path) -> Result<void> {
+        if (lang::documentKey(io::parentPath(path)) != lang::documentKey(io::parentPath(documentPath())))
+            return fail(ErrorCode::Unsupported,
+                        "Managed move/create endpoint must share the selected source directory");
         auto parent = fs.physicalPath(io::parentPath(path));
         if (!parent || !within(*parent, *physicalRoot))
             return fail(ErrorCode::PermissionDenied, "Managed endpoint escapes workspace");

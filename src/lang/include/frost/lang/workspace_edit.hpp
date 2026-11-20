@@ -80,6 +80,7 @@ struct ManagedFileRename {
     friend bool operator==(const ManagedFileRename&, const ManagedFileRename&) = default;
 };
 struct ManagedProposal {
+    std::string context; // Captured by the owned application requester, not supplied by the provider.
     std::vector<ManagedSourceInput> inputs;
     std::vector<ManagedFileCreation> creates;
     std::vector<ManagedFileRename> renames;

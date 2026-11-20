@@ -84,6 +84,7 @@ Result<WorkspaceEdit> parseWorkspaceEdit(const Json& json) {
         if (!owned->isObject() || owned->stringAt("producer") != "FrostRoslynHost")
             return fail(ErrorCode::InvalidArgument, "Invalid managed proposal identity");
         ManagedProposal proposal;
+        proposal.context = owned->stringAt("hostContext");
         std::size_t bytes = 0;
         for (const auto name : {"inputs", "creates", "renames"}) {
             const auto* entries = owned->find(name);

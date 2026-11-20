@@ -1206,6 +1206,7 @@ private:
     std::vector<sched::JoinHandle<void>> m_managedBuildTasks;
     std::vector<sched::JoinHandle<void>> m_managedModelTasks;
     std::uint64_t m_managedModelGeneration = 0, m_managedContextTrustRevision = 0;
+    std::uint64_t m_managedRefactoringEpoch = 0;
     std::string m_managedContextRoot;
     std::optional<build::ManagedProjectRequest> m_managedDesiredContext;
     bool m_managedModelRefreshQueued = false;

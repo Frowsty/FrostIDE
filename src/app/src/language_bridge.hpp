@@ -52,13 +52,14 @@ public:
     // The applier the controller's rename and quick fixes use (the encoding follows clangd's).
     [[nodiscard]] lang::IWorkspaceEditApplier& applier() noexcept;
     [[nodiscard]] Result<void> apply(const lang::WorkspaceEdit& edit, std::string_view label) override;
+    [[nodiscard]] std::string managedProposalIdentity() const;
     [[nodiscard]] Result<void> applyManagedProposal(const lang::WorkspaceEdit& edit, std::string_view label);
     [[nodiscard]] Result<void> validateRefactoringTargets(const lang::WorkspaceEdit& edit);
     // The UI publishes and withdraws servers; requests retain the server they captured.
     void setServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setServer(std::move(server)); }
 
     void setLuaServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setLuaServer(std::move(server)); }
-    void setManagedServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setManagedServer(std::move(server)); }
+    void setManagedServer(std::shared_ptr<lang::ILspRequester> server);
     void setRegisteredServers(std::map<std::string, std::shared_ptr<lang::ILspRequester>> routes) {
         m_server.setRegisteredServers(std::move(routes));
     }
