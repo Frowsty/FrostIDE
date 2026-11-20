@@ -25,6 +25,8 @@ struct CppModuleGraph {
 // Strict P1689 revision 0/version 1 decoder; bounded O(report + dependency count).
 // Malformed/ambiguous records fail the whole report. Unknown extension fields are tolerated.
 [[nodiscard]] Result<CppModuleGraph> parseCppModuleGraph(std::string_view report);
+// Validate the real llvm::cl::PrintVersionMessage banner against the compiled SDK pin.
+[[nodiscard]] Result<void> validateCppModuleScannerVersion(std::string_view banner);
 struct CppModuleScanRequest {
     std::string scanner; // Absolute pinned clang-scan-deps, from the application toolchain.
     std::string privateDatabasePath; // Captured arguments-form CDB in an owned directory.

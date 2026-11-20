@@ -81,12 +81,31 @@ std::vector<std::string> CppModuleGraph::interfaceTargets(const CppModuleRequire
     if (targets.size() != 1) targets.clear();
     return targets;
 }
+Result<void> validateCppModuleScannerVersion(std::string_view banner) {
+    const std::string expected = "LLVM version " FROST_PINNED_LLVM_VERSION;
+    while (!banner.empty()) {
+        const auto end = banner.find('\n');
+        auto line = banner.substr(0, end);
+        const auto start = line.find_first_not_of(" \t");
+        if (start != line.npos) line.remove_prefix(start);
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (line == expected || (line.starts_with(expected) && line.size() > expected.size() &&
+                                line[expected.size()] == ' '))
+            return {};
+        if (end == banner.npos) break;
+        banner.remove_prefix(end + 1);
+    }
+    return fail(ErrorCode::Unsupported, "Module scanner is not the pinned LLVM clang-scan-deps");
+}
 Result<CppModuleGraph> scanCppModules(io::IProcessLauncher& launcher, io::IFileSystem& fs, const CppModuleScanRequest& request) {
     if (!request.trusted)
         return fail(ErrorCode::PermissionDenied, "Trust the project before scanning C++ module commands");
     if (!io::isAbsolutePath(request.scanner) || !io::isAbsolutePath(request.privateDatabasePath) ||
         !io::isAbsolutePath(request.workingDirectory) || request.databaseBytes.empty() || !request.validateCurrent)
         return fail(ErrorCode::InvalidArgument, "Module scan requires a pinned scanner and captured compilation context");
+    const auto scannerName = io::fileName(request.scanner);
+    if (scannerName != "clang-scan-deps" && scannerName != "clang-scan-deps.exe")
+        return fail(ErrorCode::Unsupported, "Module scanner executable must be clang-scan-deps");
     if (auto current = request.validateCurrent(); !current) return std::unexpected(current.error());
     auto validateDatabase = [&]() -> Result<void> {
         auto bytes = fs.readFileSnapshot(request.privateDatabasePath, 32U * 1024U * 1024U);
@@ -121,13 +140,10 @@ Result<CppModuleGraph> scanCppModules(io::IProcessLauncher& launcher, io::IFileS
     auto version = io::runToCompletion(launcher, spec, "", request.timeout, request.stop);
     if (!version) return std::unexpected(version.error());
     const auto versionText = version->stdoutBytes + version->stderrBytes;
-    const std::string expected = "clang-scan-deps version " FROST_PINNED_LLVM_VERSION;
-    const auto marker = versionText.find(expected);
-    if (version->exitCode != 0 || marker == std::string::npos ||
-        (marker + expected.size() < versionText.size() &&
-         versionText[marker + expected.size()] != '\r' && versionText[marker + expected.size()] != '\n' &&
-         versionText[marker + expected.size()] != ' '))
-        return fail(ErrorCode::Unsupported, "Module scanner is not the pinned LLVM clang-scan-deps");
+    if (version->exitCode != 0)
+        return fail(ErrorCode::Unsupported, "Module scanner version probe failed");
+    if (auto pinned = validateCppModuleScannerVersion(versionText); !pinned)
+        return std::unexpected(pinned.error());
     if (auto current = validateDatabase(); !current) return std::unexpected(current.error());
     spec.arguments = {"-format=p1689", "-compilation-database=" + request.privateDatabasePath};
     auto result = io::runToCompletion(launcher, spec, "", request.timeout, request.stop);

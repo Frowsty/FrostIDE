@@ -3,6 +3,12 @@
 #include "frost/lang/cpp_modules.hpp"
 #include <gtest/gtest.h>
 namespace frost::lang {
+TEST(CppModules, AcceptsActualLlvmVersionBanner) {
+    EXPECT_TRUE(validateCppModuleScannerVersion("/sdk/bin/clang-scan-deps\nLLVM (http://llvm.org/):\n  LLVM version 23.1.4\n  Optimized build.\n"));
+    EXPECT_FALSE(validateCppModuleScannerVersion("LLVM version 23.1.40\n"));
+    EXPECT_FALSE(validateCppModuleScannerVersion("LLVM version 22.1.4\n"));
+    EXPECT_FALSE(validateCppModuleScannerVersion("clang-scan-deps version 23.1.4\n"));
+}
 TEST(CppModules, ResolvesOnlyScannerInterfaceProvider) {
     auto graph = parseCppModuleGraph(R"({"version":1,"revision":0,"rules":[
       {"primary-output":"math.o","provides":[{"logical-name":"math","source-path":"/src/actual.cppm","is-interface":true}]},
