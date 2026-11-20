@@ -24,6 +24,7 @@ frost_add_test(project_unit_tests
         project_model_cache_test.cpp
         sln_reader_test.cpp
         standalone_project_test.cpp
+        unreal_project_test.cpp
         slnx_reader_test.cpp
         solution_configuration_edit_test.cpp
         solution_model_test.cpp

@@ -19,6 +19,7 @@
 
 frost_add_test(debug_unit_tests
     SOURCES
+        unreal_debug_test.cpp
         breakpoints_test.cpp
         coreclr_dap_test.cpp
         standalone_lua_dap_test.cpp

@@ -1,0 +1,1 @@
+{"FileVersion":3,"EngineAssociation":"","Description":"Independently authored FrostIDE UBT/UHT oracle","Modules":[{"Name":"FrostOracle","Type":"Runtime","LoadingPhase":"Default"}]}

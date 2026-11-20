@@ -22,6 +22,7 @@ frost_add_library(run LAYER run
         src/run_configuration_set.cpp
         src/run_manager.cpp
         src/run_types.cpp
+        src/unreal_run.cpp
         src/test_model.cpp
         src/ctest_parsers.cpp
         src/gtest_parsers.cpp

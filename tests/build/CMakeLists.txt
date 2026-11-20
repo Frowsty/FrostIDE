@@ -38,6 +38,7 @@ frost_add_test(build_unit_tests
         json_test.cpp
         line_splitter_test.cpp
         managed_project_test.cpp
+        unreal_build_test.cpp
         msbuild_compile_test.cpp
         msbuild_driver_test.cpp
         msbuild_locator_test.cpp
@@ -141,3 +142,22 @@ frost_add_test(build_dependencies_real_tests
 target_compile_definitions(build_dependencies_real_tests PRIVATE
     FROST_DEPENDENCY_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/dependencies"
     FROST_DEPENDENCY_WORK_PATH="${CMAKE_CURRENT_BINARY_DIR}/dependency-work")
+
+# ADR0114: deferred local installed Unreal oracle. No discovery/download/license acceptance.
+option(FROST_UNREAL_ORACLE "Enable explicit installed Unreal UBT/UHT oracle (executes project code)" OFF)
+if(FROST_UNREAL_ORACLE)
+    foreach(field TOOL PROJECT TARGET GENERATED_HEADER COMPILE_DATABASE)
+        set(FROST_UNREAL_${field} "" CACHE STRING "Explicit Unreal oracle ${field}")
+        if(NOT FROST_UNREAL_${field})
+            message(FATAL_ERROR "FROST_UNREAL_ORACLE requires FROST_UNREAL_${field}")
+        endif()
+    endforeach()
+    set(FROST_UNREAL_UBT_ASSEMBLY "" CACHE FILEPATH "Explicit UBT DLL when TOOL is dotnet")
+    frost_add_test(build_unreal_oracle_tests
+        SOURCES unreal_tool_oracle_test.cpp
+        DEPS frost::build frost::project frost::io
+        LABELS integration unreal)
+    foreach(field TOOL UBT_ASSEMBLY PROJECT TARGET GENERATED_HEADER COMPILE_DATABASE)
+        target_compile_definitions(build_unreal_oracle_tests PRIVATE FROST_UNREAL_${field}="${FROST_UNREAL_${field}}")
+    endforeach()
+endif()
