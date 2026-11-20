@@ -241,6 +241,8 @@ constexpr std::array kRunMenu{
     act("run.selectDebugConfiguration"),
     act("debug.attachToProcess"),
     act("debug.attachUnity"),
+    act("debug.rebindUnity"),
+    act("debug.unityIl2cppNative"),
     sep(),
     act("debug.resume"),
     act("debug.pause"),

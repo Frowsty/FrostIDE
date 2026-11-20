@@ -34,7 +34,20 @@ namespace FrostIDE.UnityIntegration {
             api.UnregisterCallbacks(this);api.RegisterCallbacks(this);
             exported=new List<UnityTestBridge.TestCase>();snapshot=null;
             UnityTestBridge.Register(this);
-            CompilationPipeline.compilationStarted += _=> {catalog=null;if(running){uncertain=true;state="uncertain";message="Compilation changed the active test context; results are not complete";}};
+            CompilationPipeline.compilationStarted -= CompilationStarted;
+            CompilationPipeline.compilationStarted += CompilationStarted;
+        }
+        private void CompilationStarted(object context){
+            catalog=null;
+            if(state=="discovering"){
+                state="cancelled";
+                message="Compilation invalidated the pending Unity test discovery";
+            }
+            if(running){
+                uncertain=true;
+                state="uncertain";
+                message="Compilation changed the active test context; results are not complete";
+            }
         }
         private static bool Token(string value){if(value==null||value.Length!=32)return false;foreach(char c in value)if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return false;return true;}
         private static string Identity(string value,int bytes){if(String.IsNullOrEmpty(value)||Encoding.UTF8.GetByteCount(value)>bytes)throw new InvalidOperationException("Test identity exceeds the supported observation profile");return value;}
@@ -51,7 +64,11 @@ namespace FrostIDE.UnityIntegration {
             var id=Identity(node.UniqueName,512);if(found.Any(item=>item.id==id))throw new InvalidOperationException("Unity returned a duplicate test identity");
             found.Add(new UnityTestBridge.TestCase{id=id,name=Identity(node.Name,256),fullName=Identity(node.FullName,1024),outcome="Discovered",message="",stack=""});
         }
-        private UnityTestBridge.Response Result(bool ok,string text){bool clipped;string detail=Clip(text??message??"",2048,out clipped);return new UnityTestBridge.Response{ok=ok,available=true,message=detail,owner=owner,job=job??"",catalog=catalog??"",mode=mode??"",state=state??"idle",execution=execution??""};}
+        private string WireExecution(){
+            Guid id;
+            return Guid.TryParse(execution,out id)&&id!=Guid.Empty?id.ToString("D"):"";
+        }
+        private UnityTestBridge.Response Result(bool ok,string text){bool clipped;string detail=Clip(text??message??"",2048,out clipped);return new UnityTestBridge.Response{ok=ok,available=true,message=detail,owner=owner,job=job??"",catalog=catalog??"",mode=mode??"",state=state??"idle",execution=WireExecution()};}
         private void RequireOwner(UnityTestBridge.Request request){if(request.owner!=owner||request.job!=job)throw new InvalidOperationException("Unity test owner/job changed; observe the actual editor state before acting");}
         public UnityTestBridge.Response Handle(UnityTestBridge.Request request){
             if(projectRoot!=UnityTestBridge.ProjectRoot)throw new InvalidOperationException("Unity project ownership changed");
@@ -60,7 +77,7 @@ namespace FrostIDE.UnityIntegration {
                 RequireOwner(request);if(!Token(snapshot)||request.snapshot!=snapshot||request.offset<0||request.offset>exported.Count)throw new InvalidOperationException("Unity test snapshot expired");return Page(request.offset);
             }
             if(request.op=="snapshot"){
-                RequireOwner(request);exported=rows.Select(Copy).ToList();snapshot=Guid.NewGuid().ToString("N");exportedState=state;exportedMessage=message;exportedJob=job;exportedMode=mode;exportedCatalog=catalog;exportedExecution=execution;return Page(0);
+                RequireOwner(request);exported=rows.Select(Copy).ToList();snapshot=Guid.NewGuid().ToString("N");exportedState=state;exportedMessage=message;exportedJob=job;exportedMode=mode;exportedCatalog=catalog;exportedExecution=WireExecution();return Page(0);
             }
             if(request.op=="cancel"){
                 RequireOwner(request);
@@ -85,12 +102,12 @@ namespace FrostIDE.UnityIntegration {
             var names=new List<string>();foreach(string id in selected){var row=rows.SingleOrDefault(item=>item.id==id);if(row==null||rows.Count(item=>item.fullName==row.fullName)!=1)throw new InvalidOperationException("Selected test name is absent or ambiguous across assemblies");names.Add(row.fullName);}
             job=request.job;execution=null;running=true;ownStarted=false;uncertain=false;cancelling=false;state="queued";message="TestRunnerApi execution requested";
             foreach(var row in rows){row.outcome="Pending";row.message="";row.stack="";row.duration=0;row.truncated=false;}
-            try{execution=api.Execute(new ExecutionSettings(new Filter{testMode=testMode,testNames=names.Count==0?null:names.ToArray()}));Guid actualExecution;if(String.IsNullOrEmpty(execution)||!Guid.TryParse(execution,out actualExecution)){uncertain=true;state="uncertain";message="TestRunnerApi did not return an execution identity";}}
+            try{execution=api.Execute(new ExecutionSettings(new Filter{testMode=testMode,testNames=names.Count==0?null:names.ToArray()}));if(String.IsNullOrEmpty(WireExecution())){uncertain=true;state="uncertain";message="TestRunnerApi did not return an execution identity";}}
             catch(Exception error){running=false;state="error";message=error.Message;}
             return Result(!uncertain&&state!="error",message);
         }
         private UnityTestBridge.Response Page(int offset){
-            int count=Math.Min(8,exported.Count-offset);var result=Result(true,exportedMessage);result.snapshot=snapshot;result.job=exportedJob;result.mode=exportedMode;result.catalog=exportedCatalog;result.execution=exportedExecution;result.state=exportedState;result.total=exported.Count;result.offset=offset;result.next=offset+count;result.cases=exported.Skip(offset).Take(count).Select(Copy).ToArray();return result;
+            int count=Math.Min(8,exported.Count-offset);var result=Result(true,exportedMessage);result.snapshot=snapshot;result.job=exportedJob;result.mode=exportedMode;result.catalog=exportedCatalog??"";result.execution=exportedExecution;result.state=exportedState;result.total=exported.Count;result.offset=offset;result.next=offset+count;result.cases=exported.Skip(offset).Take(count).Select(Copy).ToArray();return result;
         }
         public void RunStarted(ITestAdaptor tests){
             if(!running){foreignRunning=true;return;}

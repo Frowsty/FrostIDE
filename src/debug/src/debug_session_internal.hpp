@@ -152,7 +152,8 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
           DebugSessionCallbacks sessionCallbacks, DebugSessionOptions options)
         : callbacks(std::move(sessionCallbacks)), launchArguments(std::move(arguments)),
           privateSession(options.privateSession), launchAdmission(std::move(options.launchAdmission)),
-          inspectionAdmission(std::move(options.inspectionAdmission)), adapterId(std::move(options.adapterId)),
+          inspectionAdmission(std::move(options.inspectionAdmission)),
+          sourceAllowed(std::move(options.sourceAllowed)), adapterId(std::move(options.adapterId)),
           attachHint(std::move(options.attachHint)), breakpoints(std::move(lines)),
           functionBreakpoints(std::move(options.functionBreakpoints)),
           exceptionFilters(std::move(options.exceptionFilters)), throwTypes(std::move(options.throwTypes)),
@@ -164,6 +165,7 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     const bool privateSession;
     const std::function<Result<void>()> launchAdmission;
     const std::function<Result<void>()> inspectionAdmission;
+    const std::function<bool(std::string_view)> sourceAllowed;
     const std::string adapterId;
     const std::string attachHint;
     std::atomic<IDebugAdapterClient*> adapter{nullptr};
@@ -200,6 +202,8 @@ struct DebugSession::State : std::enable_shared_from_this<DebugSession::State> {
     std::optional<std::int64_t> stepTargetsThread FROST_GUARDED_BY(mutex);
     std::uint64_t generation FROST_GUARDED_BY(mutex) = 0; // Bumped by each stop and resume.
     std::map<std::string, std::vector<BreakpointLine>> breakpoints FROST_GUARDED_BY(mutex);
+    // A source can disappear after an admitted set request, but its adapter breakpoints still need clearing.
+    std::set<std::string> sentBreakpointSources FROST_GUARDED_BY(mutex);
     std::vector<FunctionBreakpointLine> functionBreakpoints FROST_GUARDED_BY(mutex);
     std::vector<std::string> exceptionFilters FROST_GUARDED_BY(mutex);
     std::vector<std::string> throwTypes FROST_GUARDED_BY(mutex); // Header comment, "Exception filters".

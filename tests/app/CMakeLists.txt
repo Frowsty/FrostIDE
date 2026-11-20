@@ -481,7 +481,7 @@ target_compile_definitions(app_workbench_project_language_tests PRIVATE ${_frost
 
 # Original helper boundary coverage; tests launch it only in an explicitly resumed test phase.
 frost_add_test(app_mono_held_reader_tests QT
-    SOURCES mono_held_reader_test.cpp unity_mono_rebind_test.cpp
+    SOURCES mono_held_reader_test.cpp unity_mono_rebind_test.cpp unity_native_profile_test.cpp
     DEPS frost::app frost::io
     LABELS integration)
 target_include_directories(app_mono_held_reader_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

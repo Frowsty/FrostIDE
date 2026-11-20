@@ -41,7 +41,7 @@ Result<UnityTestObservation> parseUnityTestState(const lang::Json& response) {
     if (!states.contains(result.state) || (result.state != "idle" && result.job.empty()))
         return fail(ErrorCode::Corrupt, "Unity test state has no actual job identity");
     if (!result.execution.empty()) {
-        if (result.execution.size() != 36)
+        if (result.execution.size() != 36 || result.execution == "00000000-0000-0000-0000-000000000000")
             return fail(ErrorCode::Corrupt, "Unity returned an invalid actual execution GUID");
         for (size_t i = 0; i < result.execution.size(); ++i) {
             const char c = result.execution[i];

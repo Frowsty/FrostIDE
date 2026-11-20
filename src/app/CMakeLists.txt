@@ -235,6 +235,8 @@ frost_add_library(app LAYER app
         src/mono_held_capture.hpp
         src/workbench_managed_debug.cpp
         src/workbench_unity_debug.cpp
+        src/workbench_unity_native_debug.cpp
+        src/unity_native_profile.cpp
         src/project_edit_process.cpp
         src/workbench_project_edit.cpp
         src/unity_context.hpp

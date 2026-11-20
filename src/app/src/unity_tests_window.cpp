@@ -23,6 +23,24 @@ QString q(std::string_view value) { return QString::fromUtf8(value.data(), stati
 bool active(std::string_view state) {
     return state == "discovering" || state == "queued" || state == "running" || state == "cancelling";
 }
+struct RequestedOperation {
+    bool run;
+    std::string job, mode, owner, catalog;
+
+    bool acknowledges(const UnityTestObservation& observed) const {
+        if (observed.job != job || observed.mode != mode || (!owner.empty() && observed.owner != owner))
+            return false;
+        if (run) {
+            return !owner.empty() && !catalog.empty() && observed.catalog == catalog && !observed.execution.empty() &&
+                   (observed.state == "queued" || observed.state == "running" || observed.state == "cancelling" ||
+                    observed.state == "finished");
+        }
+        return observed.execution.empty() &&
+               ((observed.state == "discovered" && observed.catalog == job) ||
+                ((observed.state == "discovering" || observed.state == "cancelled") && observed.catalog.empty()));
+    }
+};
+
 class UnityTestsWidget final : public QWidget {
 public:
     UnityTestsWidget(QWidget* parent, UnityTestsWindowContext context)
@@ -111,6 +129,7 @@ public:
         connect(m_mode, &QComboBox::currentTextChanged, this, [this] {
             ++m_round;
             m_pending = false;
+            m_requested.reset();
             m_rows.clear();
             m_table->setRowCount(0);
             m_catalog.clear();
@@ -175,7 +194,7 @@ private:
                      self->m_pending = false;
                      const auto current = self->selected();
                      if (!current || !self->sameDomain(*current, source)) {
-                         if (action && !self->m_requestedJob.empty())
+                         if (action && self->m_requested)
                              self->m_poll = true;
                          self->message(
                              "Unity test domain changed; only actual matching owner/job observations can resume");
@@ -187,7 +206,7 @@ private:
                                  response.error().code() == ErrorCode::Untrusted ||
                                  response.error().code() == ErrorCode::InvalidArgument ||
                                  response.error().code() == ErrorCode::OutOfRange)
-                                 self->m_requestedJob.clear();
+                                 self->m_requested.reset();
                              else
                                  self->m_poll = true;
                          }
@@ -215,12 +234,15 @@ private:
             m_catalog.clear();
             m_owned = false;
             m_poll = false;
-            m_requestedJob.clear();
+            m_requested.reset();
         }
         send(lang::Json::object().set("op", "observe"), [this, explicitRequest](const lang::Json& json) {
             auto observed = parseUnityTestState(json);
             if (!observed) {
-                message(observed.error().message());
+                if (m_requested)
+                    rejectReceipt(observed.error().message());
+                else
+                    message(observed.error().message());
                 return;
             }
             if (m_owned && !m_execution.empty() && observed->owner == m_owner && observed->job == m_job &&
@@ -231,17 +253,14 @@ private:
                 message("Unity changed the actual framework execution identity; no run was rebound");
                 return;
             }
-            if (!m_requestedJob.empty()) {
-                if (observed->job != m_requestedJob || (!m_owner.empty() && observed->owner != m_owner)) {
-                    m_requestedJob.clear();
-                    m_poll = false;
-                    m_owned = false;
-                    message("The editor did not acknowledge the interrupted requested job; no action was retried");
+            if (m_requested) {
+                if (!m_requested->acknowledges(*observed)) {
+                    rejectReceipt("Unity did not acknowledge the interrupted test operation");
                     return;
                 }
                 m_owner = observed->owner;
                 m_job = observed->job;
-                m_requestedJob.clear();
+                m_requested.reset();
                 m_owned = true;
             }
             if (!m_job.empty() && m_owned && (observed->owner != m_owner || observed->job != m_job)) {
@@ -285,13 +304,13 @@ private:
                 message("A different Unity editor is selected; observe or discover its own tests");
                 return;
             }
-            if (m_owned || !m_requestedJob.empty()) {
+            if (m_owned || m_requested) {
                 observe(false);
                 return;
             }
         }
         if (m_poll && !m_pending) {
-            if (!m_requestedJob.empty())
+            if (m_requested)
                 observe(false);
             else
                 snapshot();
@@ -314,26 +333,26 @@ private:
                 return;
             }
         }
-        const auto requestedMode = m_mode->currentText().toStdString();
-        const auto job = QUuid::createUuid().toString(QUuid::Id128).toStdString();
+        const RequestedOperation operation{run, QUuid::createUuid().toString(QUuid::Id128).toStdString(),
+                                           m_mode->currentText().toStdString(), m_owner, m_catalog};
         auto request = lang::Json::object()
                            .set("op", run ? "run" : "discover")
-                           .set("mode", m_mode->currentText().toStdString())
-                           .set("job", job)
-                           .set("owner", m_owner)
-                           .set("catalog", m_catalog);
+                           .set("mode", operation.mode)
+                           .set("job", operation.job)
+                           .set("owner", operation.owner)
+                           .set("catalog", operation.catalog);
         auto selectedIds = lang::Json::array();
         for (const auto& id : ids)
             selectedIds.push(id);
         request.set("ids", std::move(selectedIds));
-        m_requestedJob = job;
-        send(request, [this, job, requestedMode](const lang::Json& json) {
+        m_requested = operation;
+        send(request, [this, operation](const lang::Json& json) {
             auto result = parseUnityTestState(json);
-            if (!result || result->job != job || result->mode != requestedMode) {
-                message(result ? "Unity acknowledged a different test operation" : result.error().message());
+            if (!result || !operation.acknowledges(*result)) {
+                rejectReceipt(result ? "Unity acknowledged a different test operation" : result.error().message());
                 return;
             }
-            m_requestedJob.clear();
+            m_requested.reset();
             m_owner = result->owner;
             m_job = result->job;
             m_catalog = result->catalog;
@@ -346,6 +365,13 @@ private:
             message(result->message);
             snapshot();
         });
+    }
+    void rejectReceipt(std::string_view reason) {
+        m_requested.reset();
+        m_catalog.clear();
+        m_owned = false;
+        m_poll = false;
+        message(reason);
     }
     void cancelRun() {
         send(lang::Json::object().set("op", "cancel").set("owner", m_owner).set("job", m_job),
@@ -443,7 +469,8 @@ private:
     std::optional<UnityEditorIdentity> m_source;
     std::uint64_t m_round = 0;
     bool m_pending = false, m_poll = false, m_owned = false;
-    std::string m_owner, m_job, m_catalog, m_catalogMode, m_requestedJob, m_execution;
+    std::optional<RequestedOperation> m_requested;
+    std::string m_owner, m_job, m_catalog, m_catalogMode, m_execution;
     std::vector<UnityTestCase> m_rows, m_pages;
     std::set<std::string> m_seen;
     UnityTestObservation m_snapshotState;

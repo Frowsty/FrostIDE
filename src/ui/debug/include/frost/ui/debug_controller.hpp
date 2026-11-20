@@ -156,7 +156,8 @@ public:
                                                   debug::DebugTargetMode mode = debug::DebugTargetMode::Launch,
                                                   bool readOnly = false,
                                                   std::function<Result<void>()> launchAdmission = {},
-                                                  const std::function<bool()>& ownerAdmission = {});
+                                                  const std::function<bool()>& ownerAdmission = {},
+                                                  std::function<bool(std::string_view)> sourceAllowed = {});
     [[nodiscard]] bool readOnlySession() const noexcept { return m_session && m_session->readOnly(); }
     // The caller must finish the trusted managed build and verify assembly/PDB/source revisions.
     // Starts the supplied adapter through the same UI and session lifetime as native debugging.

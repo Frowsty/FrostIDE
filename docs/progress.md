@@ -70,6 +70,13 @@
   this core slice is not an LTR19 completion claim.
 - No builds, tests, runtime/profile/SDK probes or verification executed under implementation-first.
 
+## 2026-11-20 R18 Unity source milestone handoff
+
+- The Run menu exposes verified Mono 2.58 attach for a selected Editor or local Mono player on Windows and Linux. Explicit Editor rebind after domain reload reverifies the same process and recaptures PE/PDB/source evidence before restoring eligible breakpoints. The separate IL2CPP action launches a supplied local player with LLDB, native symbols and a generated C++ source directory. Managed IL2CPP C# sequence points, values and script debugging remain deferred.
+- The Unit Tests pane uses the selected Editor's authenticated TestRunnerApi integration for EditMode and PlayMode discovery, execution, results and cancellation. Compilation invalidates pending discovery. The IDE validates the original owner, catalog, mode, job and framework execution identity when accepting or recovering a Run receipt.
+- Unity project mappings retain observed compiler inputs and authenticated Console/Problems routes. Roslyn-backed Unity script semantics, original YAML asset reference navigation and meta-paired move proposals share the existing editor routes. HLSL/ShaderLab retain source highlighting and literal-include navigation, and explicit installed DXC diagnostics cover saved standalone HLSL. Trusted UnityYAMLMerge previews actual Git stages before explicit review and guarded apply.
+- Source integration and authored fixtures are in place. Builds, tests, runtime Unity/Mono and native player debugging, Test Framework and asset workflows, DXC and UnityYAMLMerge acceptance remain deferred.
+
 ## 2026-11-20: R18 source integration joins reviewed managed and Unity semantics
 
 - Merged reviewed R17 `0e1052f1` into the existing R18 shader/link integration, then adopted reviewed Unity source commits `dab342c5`, `51b649ae` and `b1dc8572`. The real owned RoslynHost contribution interface now composes normal completion, diagnostics, intentions and CodeLenses with authoritative Unity semantics.
@@ -132,6 +139,12 @@ Locally merged main 7db564d3 into R18 integration 63f4cbc0. Retained compiler-ba
 - Authored dependency-free HLSL/ShaderLab lexical profiles and cancellable snapshot worker highlighting, including Unity embedded HLSL/Cg boundaries and editing comment selection. Added read-only literal include source definition/hover/links with original ranges, conditional/provenance labels, physical containment and explicit compiler/Unity mapping values; no PackageCache guesses or compiler/variant claims.
 - Actual registered semantic providers outrank the builtin source fallback. Named source/span/include/root/candidate limits and scheduler-free fallback are recorded in ADR0118. Lexer, physical source navigation/provenance, ambiguous/missing/macro limits, provider precedence and worker editor regressions are authored.
 - Independent Astra source review is requested. No builds, tests, shader/Unity feature execution, downloads/install, WSL or pushes occurred. Next: source-review corrections, additive R14 GLSL joins, then independent R19 other-language/extension branches.
+
+## 2026-11-20 R18 IL2CPP generated C++ launch
+
+- In a trusted project, choose Run → Debug IL2CPP Generated C++ and supply the local player executable, IL2CPP native module, matching native symbol file, and generated C++ directory from the same build. Keep these files under the project root. Leave the build-time source prefix empty if the debug info already points to that directory. Otherwise enter the absolute original prefix.
+- FrostIDE passes the selected module, symbol file, and optional source map to the existing LLDB adapter. The adapter determines native symbol availability, breakpoint binding, stacks, stepping, and values. The profile sends line breakpoints only for generated C++ files under the selected directory. Managed C# mapping, managed values, and Unity Editor attach are outside this profile.
+- Authored synthetic native-launch, generated-source, C# refusal, and trust-revocation coverage. Builds, fixture execution, and real player and symbol acceptance are deferred.
 
 ## 2026-11-20 R18 explicit Unity domain reload rebind
 
