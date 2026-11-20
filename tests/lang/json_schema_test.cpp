@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/lang/json_schema.hpp"
 #include "frost/lang/json_entity_hierarchy.hpp"
+#include "frost/lang/symbols.hpp"
 #include "frost/lang/lsp_types.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/sched/scheduler.hpp"
@@ -273,6 +274,23 @@ TEST(JsonSchema, EntityHierarchyBoundsRefuseRatherThanDropCapturedEntities) {
     for(std::uint32_t i=0;i<66;++i)chain.push_back({i+1,i,"Node",{{i,0},{i,1}},{{i,0},{i,1}}});
     result=jsonEntityHierarchy(chain);ASSERT_FALSE(result);EXPECT_EQ(result.error().code(),ErrorCode::OutOfRange);
     chain.resize(65);result=jsonEntityHierarchy(chain);EXPECT_TRUE(result);
+}
+TEST(JsonSchema, GenericStructurePropertySelectionsRemainInsideWholeRangesRecursively) {
+    JsonSchemaService service;const auto path=root+"Game/Assets/Test.fschema";
+    const auto text=snapshot("{\n\"Columns\":[{\"Name\":\"Damage\",\"Type\":\"Int\",\"Nested\":{\"Value\":1}}]}" );
+    service.updateDocument(path,text);auto params=Json::object().set("textDocument",textDocumentIdentifier(path).value());
+    auto reply=sched::syncWait(service.request("textDocument/documentSymbol",params));ASSERT_TRUE(reply);
+    const auto symbols=parseDocumentSymbols(*reply);ASSERT_EQ(symbols.size(),1U);
+    std::size_t count=0;
+    const auto check=[&](auto& self,const std::vector<DocumentSymbol>& rows,const LspRange* parent)->void {
+        for(const auto& row:rows) {
+            ++count;EXPECT_LE(row.range.start,row.selectionRange.start);EXPECT_LE(row.selectionRange.end,row.range.end);
+            if(parent){EXPECT_LE(parent->start,row.range.start);EXPECT_LE(row.range.end,parent->end);}
+            self(self,row.children,&row.range);
+        }
+    };
+    check(check,symbols,nullptr);EXPECT_EQ(count,6U);
+    EXPECT_EQ(fromLspPosition(text,symbols.front().range.start,PositionEncoding::Utf16)->value(),text.text().find("\"Columns\""));
 }
 } // namespace
 } // namespace frost::lang

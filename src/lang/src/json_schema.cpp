@@ -260,7 +260,7 @@ Result<Json> capturedJsonStructure(const text::Snapshot& snapshot,const Scanner&
         const auto parentPath=[&]{auto path=node.path;path.pop_back();return path;}();const auto parent=indices.find(parentPath);
         const bool arrayParent=parent!=indices.end()&&scan.nodes[parent->second].array;
         const auto name=arrayParent?"["+node.path.back()+"]":node.path.back();
-        const auto range=LspRange{toLspPosition(snapshot,ByteOffset{node.begin},PositionEncoding::Utf16),toLspPosition(snapshot,ByteOffset{node.end},PositionEncoding::Utf16)};
+        const auto range=LspRange{toLspPosition(snapshot,ByteOffset{node.keyEnd?node.keyBegin:node.begin},PositionEncoding::Utf16),toLspPosition(snapshot,ByteOffset{node.end},PositionEncoding::Utf16)};
         const auto selection=node.keyEnd?LspRange{toLspPosition(snapshot,ByteOffset{node.keyBegin},PositionEncoding::Utf16),toLspPosition(snapshot,ByteOffset{node.keyEnd},PositionEncoding::Utf16)}:range;
         return Json::object().set("name",name).set("kind",node.object?19:node.array?18:7).set("range",toJson(range)).set("selectionRange",toJson(selection)).set("children",nested);
     };
