@@ -153,7 +153,7 @@ struct Scanner {
 const Json* fieldSchema(const Json& root, std::span<const std::string> path) {
     const Json* schema = &root;
     for (const auto& component : path) {
-        if (schema->stringAt("type") == "array")
+        if (schema->find("items") && !component.empty() && std::ranges::all_of(component,[](unsigned char c){return c>='0'&&c<='9';}))
             schema = schema->find("items");
         else {
             const auto* properties = schema->find("properties");
@@ -225,6 +225,10 @@ bool admissibleEngineShape(const Json& schema,unsigned depth,std::size_t& nodes)
     if(const auto* minimum=schema.find("minimum");minimum&&!minimum->isNumber())return false;
     if(const auto* maximum=schema.find("maximum");maximum&&!maximum->isNumber())return false;
     if(const auto* choices=schema.find("enum");choices&&!choices->isArray())return false;
+    for(const auto* keyword:{"x-engine-enumNames","x-engine-assetTypes"})if(const auto* values=schema.find(keyword)) {
+        if(!values->isArray())return false;for(const auto& value:values->items())if(!value.isString())return false;
+    }
+    if(const auto* reference=schema.find("x-engine-reference");reference&&(!reference->isString()||(*reference->asString()!="asset"&&*reference->asString()!="entity")))return false;
     if(const auto* description=schema.find("description");description&&!description->isString())return false;
     if(const auto* required=schema.find("required")) {
         if(!required->isArray())return false;
@@ -350,6 +354,12 @@ void JsonSchemaService::clearEngineSchemas(){LockGuard lock(m_mutex);m_engineRoo
 std::uint64_t JsonSchemaService::schemaGeneration() const {LockGuard lock(m_mutex);return m_schemaGeneration;}
 std::optional<Json> JsonSchemaService::engineSchemaLocked(std::string_view path) const {
     const auto key=documentKey(path);
+    // POSIX normalization preserves .. across potential symlinks; profiles refuse traversal.
+    for(std::size_t start=0;start<=key.size();) {
+        const auto end=key.find_first_of("/\\",start);
+        if(std::string_view(key).substr(start,end==key.npos?end:end-start)=="..")return {};
+        if(end==key.npos)break;start=end+1;
+    }
     if(m_engineRoot.empty()||!key.starts_with(m_engineRoot)||key.size()<=m_engineRoot.size()||
         (key[m_engineRoot.size()]!='/'&&key[m_engineRoot.size()]!='\\'))return {};
     if(const auto installed=m_engineTableSchemas.find(key);installed!=m_engineTableSchemas.end())
@@ -524,6 +534,7 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
         }
     } else {
         const auto* choices = schema->find("enum");
+        if(!choices)choices=schema->find("x-engine-enumNames");
         Json values = choices                                 ? *choices
                       : schema->stringAt("type") == "boolean" ? Json::array({true, false})
                                                               : Json::array();

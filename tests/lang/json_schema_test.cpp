@@ -149,5 +149,21 @@ TEST(JsonSchema, ChangedTableSchemaReferenceWithdrawsOldColumnsAndMalformedExpor
     auto result=complete(service,path,changed,changed.size());ASSERT_TRUE(result);
     EXPECT_TRUE(std::ranges::none_of(result->items(),[](const auto& item){return item.stringAt("label")=="Damage";}));
 }
+TEST(JsonSchema, ReflectedAlternateEncodingsStayValidAndFlagNamesCompleteInsideArrayUnion) {
+    JsonSchemaService service;const auto project=root+"Game";const auto path=project+"/a.fscene";
+    const auto schema=rpc::parseJson(R"({"protocol":"frostengine.document-schemas","version":1,"schemas":[{"extension":".fscene","serializer":"actual","schema":{"type":"object","properties":{"Asset":{"type":["object","integer","string","null"],"x-engine-reference":"asset","x-engine-assetTypes":["Texture2D"]},"Target":{"type":["integer","string","null"],"x-engine-reference":"entity"},"Mode":{"type":["integer","string"],"x-engine-enumNames":["On","Off"]},"Flags":{"type":["array","string","integer"],"items":{"type":["string","integer"],"x-engine-enumNames":["First","Second"]}}}}]})").value();
+    ASSERT_TRUE(service.installEngineSchemas(project,schema));
+    service.updateDocument(path,snapshot(R"({"Asset":"Assets/Texture.png","Target":null,"Mode":1,"Flags":3})"));
+    EXPECT_TRUE(service.diagnostics(path).empty());
+    const auto text=snapshot(R"({"Flags":[""]})");
+    auto result=complete(service,path,text,ByteOffset{text.text().find("\"\"")+1});ASSERT_TRUE(result);
+    EXPECT_TRUE(std::ranges::any_of(result->items(),[](const auto& item){return item.stringAt("label")=="\"First\"";}));
+}
+TEST(JsonSchema, ActualVectorInputShapeAllowsEngineSpecialFloatStrings) {
+    JsonSchemaService service;const auto project=root+"Game";const auto path=project+"/a.fscene";
+    const auto schema=rpc::parseJson(R"({"protocol":"frostengine.document-schemas","version":1,"schemas":[{"extension":".fscene","serializer":"actual","schema":{"type":"object","properties":{"Vector":{"type":"array","items":{"type":["number","string"]}}}}}]})").value();
+    ASSERT_TRUE(service.installEngineSchemas(project,schema));
+    service.updateDocument(path,snapshot(R"({"Vector":["nan","inf","-inf",0]})"));EXPECT_TRUE(service.diagnostics(path).empty());
+}
 } // namespace
 } // namespace frost::lang
