@@ -89,7 +89,7 @@ struct LaunchPlan {
     std::vector<std::string> arguments{}; // argv[1..].
     std::string workingDirectory{};       // Absolute.
     std::vector<EnvironmentEntry> environment{};
-    std::string remoteTarget; // Empty for native plans; otherwise POSIX paths bound to one named endpoint.
+    std::string remoteTarget{}; // Empty for native plans; otherwise POSIX paths bound to one named endpoint.
 
     friend bool operator==(const LaunchPlan&, const LaunchPlan&) = default;
 };

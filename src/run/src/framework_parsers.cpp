@@ -369,12 +369,12 @@ Result<TestResult> parseFrameworkRun(FrameworkProfile profile, std::string_view 
         return fail(ErrorCode::Corrupt, "Framework reported no executed cases");
     if (!selected.empty()) {
         const std::set<std::string> expected(selected.begin(), selected.end());
-        for (const auto& name : actual)
-            if (!expected.contains(name))
+        for (const auto& caseName : actual)
+            if (!expected.contains(caseName))
                 return fail(ErrorCode::Corrupt, "Framework reported a case outside the selection");
-        for (const auto& name : expected)
-            if (!actual.contains(name) &&
-                !std::ranges::any_of(omittedSuites, [&](const auto& suite) { return name.starts_with(suite); }))
+        for (const auto& caseName : expected)
+            if (!actual.contains(caseName) &&
+                !std::ranges::any_of(omittedSuites, [&](const auto& suite) { return caseName.starts_with(suite); }))
                 return fail(ErrorCode::Corrupt, "Framework report does not account for a selected case");
     }
     if (catch2) {
@@ -384,7 +384,8 @@ Result<TestResult> parseFrameworkRun(FrameworkProfile profile, std::string_view 
         const auto expected = number(totals.attribute("expectedFailures").as_string());
         const auto skipped = number(totals.attribute("skips").as_string());
         if (!passed || !failed || !expected || !skipped ||
-            (static_cast<std::uint64_t>(*passed) + *failed + *expected + *skipped) != result.cases.size() ||
+            (static_cast<std::uint64_t>(*passed) + static_cast<std::uint64_t>(*failed) +
+             static_cast<std::uint64_t>(*expected) + static_cast<std::uint64_t>(*skipped)) != result.cases.size() ||
             std::ranges::count(result.cases, TestOutcome::Failed, &TestResult::outcome) != *failed ||
             std::ranges::count(result.cases, TestOutcome::Skipped, &TestResult::outcome) != *skipped)
             return fail(ErrorCode::Corrupt, "Catch2 case counters disagree with the complete case records");

@@ -169,7 +169,7 @@ struct Variable {
     std::int64_t variablesReference = 0; // > 0: the variable has children.
     std::int64_t namedVariables = 0;
     std::int64_t indexedVariables = 0;
-    std::string memoryReference; // Adapter-owned opaque reference, never inferred from value text.
+    std::string memoryReference{}; // Adapter-owned opaque reference, never inferred from value text.
 };
 
 [[nodiscard]] Variable parseVariable(const rpc::Json& json);

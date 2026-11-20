@@ -19,6 +19,8 @@ class TrustStore;
 
 namespace frost::debug {
 
+struct DebugTarget;
+
 // All paths are absolute. The caller owns the trust, project generation, build and source checks.
 struct CoreClrTarget {
     std::string dotnet{};

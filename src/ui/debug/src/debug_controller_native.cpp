@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <format>
+#include <optional>
 #include <utility>
 
 namespace frost::ui {
@@ -123,7 +124,11 @@ Result<void> DebugController::startNativeTarget(const debug::DebugTarget& target
             files = std::move(*discovered);
         }
         const auto trustRevision = m_options.trust->snapshot(resolvedTarget.program).revision;
-        auto arguments = debug::dbgEngDapLaunchArguments({.native = resolvedTarget, .natvisFiles = files});
+        auto arguments = debug::dbgEngDapLaunchArguments({.native = resolvedTarget,
+                                                         .natvisFiles = std::move(files),
+                                                         .localSymbolPaths = {},
+                                                         .dumpFile = {},
+                                                         .processId = std::nullopt});
         if (!arguments)
             return std::unexpected(std::move(arguments.error()));
         auto factory = adapterFactory();
@@ -190,8 +195,8 @@ Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& targe
     if (!m_options.trust || !factory || !arguments.isObject() || adapterId.empty())
         return fail(ErrorCode::InvalidArgument, "An adapter, arguments and trusted target are required");
     if (launchAdmission) {
-        if (auto admitted = launchAdmission(); !admitted)
-            return admitted;
+        if (auto allowed = launchAdmission(); !allowed)
+            return allowed;
     }
     auto roots = target.trustRoots;
     if (roots.empty() && !target.program.empty())
@@ -284,7 +289,11 @@ Result<void> DebugController::attachTarget(const debug::DebugTarget& target, deb
             files = std::move(*discovered);
         }
         const auto trustRevision = m_options.trust->snapshot(target.program).revision;
-        auto arguments = debug::dbgEngDapLaunchArguments({.native = target, .natvisFiles = files});
+        auto arguments = debug::dbgEngDapLaunchArguments({.native = target,
+                                                         .natvisFiles = std::move(files),
+                                                         .localSymbolPaths = {},
+                                                         .dumpFile = {},
+                                                         .processId = std::nullopt});
         if (!arguments)
             return std::unexpected(std::move(arguments.error()));
         arguments->set("processId", pid);

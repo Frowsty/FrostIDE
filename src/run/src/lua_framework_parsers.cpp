@@ -27,7 +27,8 @@ Result<void> load(pugi::xml_document& doc, std::string_view s) {
 }
 std::string quoted(std::string_view s) {
     std::string out = "\"";
-    for (unsigned char c : s) {
+    for (char byte : s) {
+        const auto c = static_cast<unsigned char>(byte);
         if (c == '\\' || c == '\"') {
             out += '\\';
             out += static_cast<char>(c);

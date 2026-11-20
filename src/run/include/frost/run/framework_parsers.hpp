@@ -11,7 +11,7 @@ enum class FrameworkProfile : std::uint8_t { Catch2Xml3, BoostTest185 };
 [[nodiscard]] std::string_view frameworkProfileName(FrameworkProfile profile) noexcept;
 struct FrameworkCase {
     std::string name;
-    std::optional<TestLocation> location;
+    std::optional<TestLocation> location{};
     bool disabled = false;
 };
 [[nodiscard]] Result<std::vector<FrameworkCase>> parseFrameworkList(FrameworkProfile profile, std::string_view text);

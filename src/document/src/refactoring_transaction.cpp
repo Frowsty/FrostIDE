@@ -310,7 +310,7 @@ struct RefactoringCoordinator::State {
     }
     static bool sameBookkeeping(const FileDocument& f, const Bookkeeping& b) {
         const bool disk = (!f.m_disk && !b.disk) ||
-                          (f.m_disk && b.disk && f.m_disk->size == b.disk->size() && f.m_disk->mtime == b.disk->mtime &&
+                          (f.m_disk && b.disk && f.m_disk->size == b.disk->size && f.m_disk->mtime == b.disk->mtime &&
                            f.m_disk->fingerprint == b.disk->fingerprint);
         const bool transform =
             (!f.m_transformBase && !b.transformBase) ||

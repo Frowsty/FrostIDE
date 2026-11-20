@@ -201,7 +201,7 @@ DebugDepthPanel::DebugDepthPanel(DebugController& controller, QWidget* parent) :
                 status->setText(QStringLiteral("The adapter returned no call targets for this frame."));
         }));
     });
-    connect(step, &QPushButton::clicked, this, [this, &controller, calls, status] {
+    connect(step, &QPushButton::clicked, this, [&controller, calls, status] {
         if (!controller.session() || calls->currentIndex() < 0)
             return;
         if (auto result = controller.session()->stepIntoTarget(calls->currentData().toLongLong()); !result)

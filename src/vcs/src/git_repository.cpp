@@ -542,7 +542,9 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
             io::ProcessSpec spec;
             spec.executable = check.executable;
             spec.arguments = check.arguments;
-            spec.environment = m_runner->processSpec(GitInvocation{.background = true}).environment;
+            GitInvocation invocation;
+            invocation.background = true;
+            spec.environment = m_runner->processSpec(invocation).environment;
             spec.workingDirectory = m_info.workTree;
             spec.stdinMode = io::Stdio::Null;
             spec.stdoutMode = io::Stdio::Pipe;

@@ -15,7 +15,7 @@ bool PathIndex::build(std::span<const std::string> paths, std::stop_token stop) 
     for (std::size_t i = 0; i < paths.size(); ++i) {
         if (stop.stop_requested()) return false;
         std::array<bool, 256> seen{};
-        for (unsigned char c : paths[i]) seen[fold(c)] = true;
+        for (char c : paths[i]) seen[fold(static_cast<unsigned char>(c))] = true;
         for (std::size_t c = 0; c < seen.size(); ++c) if (seen[c]) m_postings[c].push_back(i);
     }
     m_count = paths.size();
@@ -33,8 +33,9 @@ std::vector<RankedPath> PathIndex::query(std::string_view pattern, std::span<con
     std::array<bool, 256> required{};
     // Matcher discards structural separators and boundary whitespace. Omitting these
     // bytes is conservative even when an interior whitespace byte is significant.
-    for (unsigned char c : pattern)
-        if (c != '/' && c != '\\' && c != ' ' && c != '\t' && c != '\r' && c != '\n') required[fold(c)] = true;
+    for (char c : pattern)
+        if (c != '/' && c != '\\' && c != ' ' && c != '\t' && c != '\r' && c != '\n')
+            required[fold(static_cast<unsigned char>(c))] = true;
     const std::vector<std::size_t>* smallest = nullptr;
     for (std::size_t c = 0; c < required.size(); ++c) if (required[c]) {
         if (m_postings[c].empty()) return hits;
