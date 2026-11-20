@@ -190,7 +190,6 @@ cp -- "$sdk_root/$luals_rel/LICENSE" "$dest/licenses/luals-LICENSE.txt"
 # 6. The checks: every staged executable is its source's bytes, and frost's libraries resolve.
 for pair in "frost_held_read:$bin_dir/frost_held_read" "frost:$bin_dir/frost" "crashpad_handler:$bin_dir/crashpad_handler" \
             "$llvm_rel/bin/llvm-cov:$sdk_root/$llvm_rel/bin/llvm-cov" "$llvm_rel/bin/llvm-profdata:$sdk_root/$llvm_rel/bin/llvm-profdata" \
-
             "$llvm_rel/bin/clang-scan-deps:$scan_deps" "$llvm_rel/bin/clangd:$clangd" "$lldb_rel/bin/lldb-dap:$sdk_root/$lldb_rel/bin/lldb-dap" \
             "$luals_rel/bin/lua-language-server:$sdk_root/$luals_rel/bin/lua-language-server"; do
     staged="$dest/${pair%%:*}"
