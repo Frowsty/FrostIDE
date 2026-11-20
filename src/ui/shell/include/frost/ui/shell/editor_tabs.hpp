@@ -141,6 +141,7 @@ signals:
     void tabCountChanged(int count);
     void splitRequested(Qt::Orientation orientation);
     void closeGroupRequested();
+    void floatGroupRequested();
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -225,11 +226,19 @@ public:
     [[nodiscard]] std::vector<EditorTabGroup*> groups() const { return m_groups; }
     [[nodiscard]] EditorTabGroup* activeGroup() const noexcept { return m_active; }
     void setActiveGroup(EditorTabGroup* group);
+    // Reparents the same group/views into an owned editor window; closing that window docks
+    // the group without closing documents. Split layout and native geometry survive saveLayout.
+    bool setGroupFloating(EditorTabGroup* group, bool floating);
+    [[nodiscard]] bool isGroupFloating(EditorTabGroup* group) const;
+    [[nodiscard]] QWidget* floatingGroupWindow(EditorTabGroup* group) const;
 signals:
     void currentEditorChanged(frost::ui::IEditorView* editor);
     void statusUpdated(frost::ui::IEditorView* editor);
     // The total across groups; count() reports only the active group.
     void tabCountChanged(int count);
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     EditorTabGroup* makeGroup();
@@ -237,6 +246,8 @@ private:
     QSplitter* m_root;
     EditorTabGroup* m_active = nullptr;
     std::vector<EditorTabGroup*> m_groups;
+    struct FloatingGroup { EditorTabGroup* group; QWidget* slot; QWidget* host; };
+    std::vector<FloatingGroup> m_floating;
     TitleColorProvider m_titleColors;
 };
 

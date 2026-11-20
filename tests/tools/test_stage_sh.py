@@ -40,6 +40,7 @@ class StageShTest(TempDirTestCase):
         bin_dir.mkdir(parents=True)
         shutil.copyfile("/bin/true", bin_dir / "frost")
         (bin_dir / "frost").chmod(0o755)
+        self._executable(bin_dir / "frost-clang", b"isolated LLVM engine fixture")
         self._executable(bin_dir / "crashpad_handler", b"\x7fELF crashpad fixture")
         (bin_dir / "resources" / "themes").mkdir(parents=True)
         (bin_dir / "resources" / "themes" / "glacier-dark.ftheme").write_bytes(b"theme fixture")
@@ -48,7 +49,7 @@ class StageShTest(TempDirTestCase):
     def _fake_sdk(self) -> Path:
         """An SDK root holding every bundled tool, LuaLS with an install marker and a stale log."""
         sdk = self.tmp / "sdk"
-        for name in (f"{LLVM}/bin/clangd", f"{LLDB}/bin/lldb-dap", f"{LLDB}/bin/lldb-argdumper",
+        for name in (f"{LLVM}/bin/clangd", f"{LLVM}/bin/clang-scan-deps", f"{LLDB}/bin/lldb-dap", f"{LLDB}/bin/lldb-argdumper",
                      f"{LUALS}/bin/lua-language-server"):
             self._executable(sdk / name, b"fixture " + name.encode())
         for name in (f"{LLVM}/lib/clang/23/include/stddef.h", f"{LLDB}/lib/liblldb.so.23.1.4", f"{LUALS}/main.lua",
@@ -72,10 +73,10 @@ class StageShTest(TempDirTestCase):
         result = self._stage(build, sdk, destination)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"stage: ok {destination}", result.stdout)
-        for name in ("frost", "crashpad_handler", "resources/themes/glacier-dark.ftheme", "LICENSE", "NOTICE",
+        for name in ("frost", "frost-clang", "crashpad_handler", "resources/themes/glacier-dark.ftheme", "LICENSE", "NOTICE",
                      "licenses/luals-LICENSE.txt", "licenses/tree-sitter-LICENSE",
                      "unity/com.frostide.editor/package.json",
-                     f"{LLVM}/bin/clangd", f"{LLVM}/lib/clang/23/include/stddef.h", f"{LLDB}/bin/lldb-dap",
+                     f"{LLVM}/bin/clangd", f"{LLVM}/bin/clang-scan-deps", f"{LLVM}/lib/clang/23/include/stddef.h", f"{LLDB}/bin/lldb-dap",
                      f"{LLDB}/bin/lldb-argdumper", f"{LLDB}/lib/liblldb.so.23.1.4", f"{LUALS}/bin/lua-language-server",
                      f"{LUALS}/main.lua", f"{LUALS}/script/files.lua"):
             self.assertTrue((destination / name).is_file(), name)
@@ -86,7 +87,7 @@ class StageShTest(TempDirTestCase):
         self.assertFalse((destination / LUALS / "log").exists(), "a log a run left in the SDK")
 
     def test_a_missing_bundled_tool_fails_before_staging(self) -> None:
-        cases = {"clangd": f"{LLVM}/bin/clangd", "clangd resource directory": f"{LLVM}/lib/clang",
+        cases = {"clang-scan-deps": f"{LLVM}/bin/clang-scan-deps", "clangd": f"{LLVM}/bin/clangd", "clangd resource directory": f"{LLVM}/lib/clang",
                  "lldb-dap file": f"{LLDB}/bin/lldb-dap", "LuaLS file": f"{LUALS}/bin/lua-language-server"}
         for tool, missing in cases.items():
             with self.subTest(tool=tool):

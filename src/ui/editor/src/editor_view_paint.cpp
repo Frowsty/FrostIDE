@@ -300,7 +300,10 @@ void EditorView::ensureCaretVisible() {
     }
 }
 
-void EditorView::scrollContentsBy(int, int) { viewport()->update(); }
+void EditorView::scrollContentsBy(int, int) {
+    refreshStickyScope();
+    viewport()->update();
+}
 
 void EditorView::resizeEvent(QResizeEvent* event) {
     QAbstractScrollArea::resizeEvent(event);

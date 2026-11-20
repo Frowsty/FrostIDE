@@ -8,6 +8,7 @@
 #include "frost/document/load_service.hpp"
 #include "frost/io/path.hpp"
 #include "frost/sched/lane.hpp"
+#include "frost/storage/fingerprint.hpp"
 #include "frost/text/text_shaper.hpp"
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/icon_ids.hpp"
@@ -28,6 +29,7 @@
 #include "frost/ui/vcs/git_controller.hpp"
 #include "frost/ui/vcs/git_log_window.hpp"
 #include "frost/ui/vcs/merge_guard.hpp"
+#include "frost/ui/vcs/merge_editor.hpp"
 #include "frost/ui/vcs/vcs_colors.hpp"
 #include "frost/ui/workbench/file_system_view.hpp"
 #include "frost/ui/workbench/merge_view.hpp"
@@ -68,9 +70,37 @@ constexpr auto kDiff = "gitDiff";
 constexpr auto kLog = "gitLog";
 constexpr auto kConsole = "gitConsole";
 
+bool writesWorkingTree(vcs::GitOperationKind kind) {
+    switch (kind) {
+    case vcs::GitOperationKind::Rollback: case vcs::GitOperationKind::Checkout: case vcs::GitOperationKind::Pull:
+    case vcs::GitOperationKind::Merge: case vcs::GitOperationKind::Rebase: case vcs::GitOperationKind::Reset:
+    case vcs::GitOperationKind::CherryPick: case vcs::GitOperationKind::Revert:
+    case vcs::GitOperationKind::Stash: case vcs::GitOperationKind::Unstash: return true;
+    default: return false;
+    }
+}
+
 // Documents and Git can use different case or symlink spellings for the same file.
 std::string fileKey(io::IFileSystem& fs, std::string_view path) {
     return vcs::vcsPathKey(fs.canonicalPath(path).value_or(std::string(path)));
+}
+
+// A comparison cannot silently write through a symbolic alias to another file. New conflict
+// outputs validate their parent too; the SaveManager remains responsible for atomic encoding/save.
+Result<std::string> comparisonTarget(io::IFileSystem& fs, std::string_view path) {
+    auto normalized = io::normalizePath(path);
+    if (!normalized) return std::unexpected(std::move(normalized.error()));
+    auto canonical = fs.canonicalPath(path);
+    if (!canonical) {
+        if (canonical.error().code() != ErrorCode::NotFound) return std::unexpected(std::move(canonical.error()));
+        auto parent = fs.canonicalPath(io::parentPath(path));
+        if (!parent) return std::unexpected(std::move(parent.error()));
+        canonical = io::joinPath(*parent, io::fileName(path));
+        if (!canonical) return std::unexpected(std::move(canonical.error()));
+    }
+    if (vcs::vcsPathKey(*canonical) != vcs::vcsPathKey(*normalized))
+        return fail(ErrorCode::InvalidArgument, "Comparison writes require a canonical file path, not a symbolic alias");
+    return canonical;
 }
 
 // Find a physical worktree marker without launching an untrusted project-selected executable.
@@ -355,7 +385,9 @@ void GitIntegration::installRepository(vcs::RepositoryInfo info, const std::stri
     connect(m_commit, &ui::CommitToolWindow::resolveConflictsRequested, this,
             &GitIntegration::showResolveConflictsDialog);
     window.toolWindows().setContent(kCommit, m_commit);
-    m_diff = new ui::DiffViewer();
+    m_diff = new ui::DiffViewer(nullptr, {.languages = &m_workbench.m_languages,
+        .scheduler = m_workbench.m_pool.get(), .clock = &m_workbench.m_services.clock,
+        .actionHost = &m_workbench.m_actionHost});
     window.toolWindows().setContent(kDiff, m_diff);
     m_log = new ui::GitLogToolWindow(m_controller.get());
     connect(m_log, &ui::GitLogToolWindow::openCommitFileRequested, this,
@@ -400,8 +432,7 @@ void GitIntegration::installRepository(vcs::RepositoryInfo info, const std::stri
     connect(m_controller.get(), &ui::GitController::operationFinished, this, [this](int rawKind, bool, const QString&) {
         const auto kind = static_cast<vcs::GitOperationKind>(rawKind);
         m_destructiveOperation = false;
-        if (kind == vcs::GitOperationKind::Rollback || kind == vcs::GitOperationKind::Checkout ||
-            kind == vcs::GitOperationKind::Pull)
+        if (writesWorkingTree(kind))
             m_workbench.checkExternalChanges();
     });
     connect(m_controller.get(), &ui::GitController::statusChanged, this, [this] {
@@ -532,8 +563,7 @@ Result<void> GitIntegration::allow(vcs::GitOperationKind kind, const std::vector
             }
         }
     }
-    if (kind == vcs::GitOperationKind::Rollback || kind == vcs::GitOperationKind::Checkout ||
-        kind == vcs::GitOperationKind::Pull) {
+    if (writesWorkingTree(kind)) {
         for (const auto& doc : m_workbench.m_documents->documents()) {
             if (!doc->dirty())
                 continue;
@@ -548,8 +578,7 @@ Result<void> GitIntegration::allow(vcs::GitOperationKind kind, const std::vector
                 return fail(ErrorCode::Busy, "Save or close unsaved files before this Git operation");
         }
     }
-    if (kind == vcs::GitOperationKind::Rollback || kind == vcs::GitOperationKind::Checkout ||
-        kind == vcs::GitOperationKind::Pull)
+    if (writesWorkingTree(kind))
         m_destructiveOperation = true;
     return {};
 }
@@ -597,6 +626,10 @@ void GitIntegration::readBaseText(const std::string& path, bool index, ContentDo
 void GitIntegration::showDiff(const std::string& path, bool index) {
     if (!m_controller || !m_diff)
         return;
+    if (m_diff->hasWorkingEdits()) {
+        if (path != m_diffPath) m_workbench.notify(tr("Diff"), tr("Apply or undo the current comparison edits before switching files."), ui::NotificationKind::Warning);
+        return;
+    }
     m_diffPath = path;
     m_diffIndex = index;
     std::string working;
@@ -617,20 +650,70 @@ void GitIntegration::showDiff(const std::string& path, bool index) {
         if (loaded)
             working = loaded->buffer.snapshot().text();
     }
+    const auto expectedDisk = m_workbench.m_services.fs.readFile(path);
+    if (!expectedDisk && expectedDisk.error().code() != ErrorCode::NotFound) return;
+    std::optional<storage::DiskBase> diskReceipt;
+    if (expectedDisk) diskReceipt = storage::DiskBase{.size = expectedDisk->size(), .fingerprint = storage::xxh3Hash128(*expectedDisk)};
+    const auto projectGeneration = m_projectGeneration;
     const QPointer<ui::DiffViewer> viewer(m_diff);
     const QPointer<GitIntegration> self(this);
     const auto generation = ++m_diffGeneration;
     readBaseText(path, index,
-                 [self, viewer, generation, index,
+                 [self, viewer, generation, index, path, diskReceipt, projectGeneration,
                   working = std::move(working)](Result<std::optional<std::string>> head) mutable {
-                     if (!self || self->m_diffGeneration != generation || !viewer || !head)
+                     if (!self || self->m_diffGeneration != generation || !viewer || !head || viewer->hasWorkingEdits())
                          return;
                      auto diff = vcs::SideBySideDiff::compute(head->value_or(std::string()), std::move(working));
-                     if (diff)
+                     if (diff) {
+                         viewer->setApplyHandler({});
                          viewer->setDiff(std::move(*diff),
                                          head->has_value() ? (index ? QObject::tr("Index") : QObject::tr("HEAD"))
                                                            : QObject::tr("No base version"),
                                          QObject::tr("Working copy"));
+                         viewer->leftPane()->setPath(path);
+                         viewer->rightPane()->setPath(path);
+                         viewer->setApplyHandler([self, path, diskReceipt, projectGeneration](std::string_view expected, std::string_view result) mutable -> Result<void> {
+                             if (!self || self->m_projectGeneration != projectGeneration)
+                                 return fail(ErrorCode::Cancelled, "The comparison's project changed");
+                             if (!self->m_controller || self->m_controller->busy() || self->m_shutdown ||
+                                 !self->m_workbench.m_services.trust.isTrusted(self->m_root) ||
+                                 !self->m_workbench.m_services.trust.isTrusted(self->m_controller->info().workTree) ||
+                                 !self->m_workbench.m_services.trust.isTrusted(path))
+                                 return fail(ErrorCode::Untrusted, "Apply requires an idle trusted repository");
+                             if (auto relative = self->m_controller->service().repository().relativePath(path); !relative)
+                                 return std::unexpected(std::move(relative.error()));
+                             if (auto allowed = self->allowWrite(path); !allowed) return allowed;
+                             auto& fs = self->m_workbench.m_services.fs;
+                             auto target = comparisonTarget(fs, path);
+                             if (!target) return std::unexpected(std::move(target.error()));
+                             if (!self->m_workbench.m_services.trust.isTrusted(*target))
+                                 return fail(ErrorCode::Untrusted, "The comparison target is not trusted");
+                             auto disk = fs.readFile(path);
+                             if ((!disk && disk.error().code() != ErrorCode::NotFound) ||
+                                 static_cast<bool>(disk) != diskReceipt.has_value() ||
+                                 (disk && (disk->size() != diskReceipt->size || storage::xxh3Hash128(*disk) != diskReceipt->fingerprint)))
+                                 return fail(ErrorCode::Busy, "The file changed on disk; reopen the comparison before applying");
+                             auto opened = self->m_workbench.m_documents->open(path);
+                             if (!opened) return std::unexpected(std::move(opened.error()));
+                             auto& document = **opened;
+                             if (document.document().committedText().text() != expected)
+                                 return fail(ErrorCode::Busy, "The open document changed; reopen the comparison before applying");
+                             auto change = document.document().replace({ByteOffset{0}, document.document().text().size()}, result, {});
+                             if (!change) return std::unexpected(std::move(change.error()));
+                             auto saved = self->m_workbench.m_documents->save(document);
+                             if (!saved) {
+                                 static_cast<void>(document.document().undo());
+                                 if (auto* view = self->m_workbench.m_editors->find(document)) view->reloadFromDocument();
+                                 return std::unexpected(std::move(saved.error()));
+                             }
+                             // SaveManager's receipt describes the exact encoded bytes it wrote; never
+                             // adopt a later independent disk read as the baseline for another Apply.
+                             diskReceipt = document.disk();
+                             if (auto* view = self->m_workbench.m_editors->find(document)) { view->reloadFromDocument(); view->markSaved(); }
+                             self->documentChanged();
+                             return {};
+                         });
+                     }
                  });
     m_workbench.m_window->toolWindows().show(kDiff);
 }
@@ -678,145 +761,126 @@ void GitIntegration::showResolveConflictsDialog() {
         return;
 
     struct ConflictSides {
-        std::string base;
-        std::string ours;
-        std::string theirs;
-        bool hadMarkers = false;
+        std::string base, ours, theirs;
+        bool oursExists = false, theirsExists = false, valid = false;
+        std::optional<std::string> disk;
+        std::string index, stages;
+        std::uint64_t generation = 0;
     };
-
-    const auto startsWithMarker = [](std::string_view line, char ch) {
-        if (line.size() < 7)
-            return false;
-        std::size_t count = 0;
-        while (count < line.size() && line[count] == ch)
-            ++count;
-        if (count < 7)
-            return false;
-        if (count == line.size())
-            return true;
-        const char next = line[count];
-        return next == ' ' || next == '\r' || next == '\n';
+    const auto report = [this](std::string_view message) {
+        m_workbench.notify(tr("Resolve Conflicts"), QString::fromUtf8(message.data(), static_cast<qsizetype>(message.size())), ui::NotificationKind::Error);
     };
-
-    const auto parseMarkers = [&](std::string_view text) -> ConflictSides {
+    const auto readStages = [this](const std::string& relative) -> Result<std::string> {
+        if (!m_controller || m_controller->busy()) return fail(ErrorCode::Busy, "Wait for the Git operation to finish");
+        vcs::GitInvocation invocation;
+        invocation.arguments = {"ls-files", "--unmerged", "-z", "--", relative};
+        invocation.workingDirectory = m_controller->info().workTree;
+        invocation.background = true;
+        auto output = m_controller->service().repository().runner().run(invocation);
+        if (!output) return std::unexpected(std::move(output.error()));
+        if (!output->succeeded()) return std::unexpected(vcs::gitFailure("Read conflict stages", *output));
+        return std::move(output->stdoutBytes);
+    };
+    const auto extractSides = [&](const std::string& absolute, const std::string& relative) -> ConflictSides {
         ConflictSides sides;
-        enum class Section : std::uint8_t { Normal, Ours, Base, Theirs };
-        Section section = Section::Normal;
-        std::string blockOurs;
-        std::string blockBase;
-        std::string blockTheirs;
-        bool hasBaseSection = false;
-        std::size_t pos = 0;
-        while (pos < text.size()) {
-            const std::size_t nl = text.find('\n', pos);
-            const std::size_t end = nl == std::string_view::npos ? text.size() : nl + 1;
-            const std::string_view line = text.substr(pos, end - pos);
-            pos = end;
-
-            if (section == Section::Normal && startsWithMarker(line, '<')) {
-                sides.hadMarkers = true;
-                section = Section::Ours;
-                blockOurs.clear();
-                blockBase.clear();
-                blockTheirs.clear();
-                hasBaseSection = false;
-                continue;
-            }
-            if (section == Section::Ours && startsWithMarker(line, '|')) {
-                hasBaseSection = true;
-                section = Section::Base;
-                continue;
-            }
-            if ((section == Section::Ours || section == Section::Base) && startsWithMarker(line, '=')) {
-                section = Section::Theirs;
-                continue;
-            }
-            if (section == Section::Theirs && startsWithMarker(line, '>')) {
-                sides.ours += blockOurs;
-                sides.theirs += blockTheirs;
-                if (hasBaseSection) {
-                    sides.base += blockBase;
-                } else if (blockOurs.empty() || blockTheirs.empty() || blockOurs == blockTheirs) {
-                    sides.base += "<<<conflict-base>>>\n";
-                }
-                section = Section::Normal;
-                continue;
-            }
-
-            switch (section) {
-            case Section::Normal:
-                sides.base.append(line);
-                sides.ours.append(line);
-                sides.theirs.append(line);
-                break;
-            case Section::Ours: blockOurs.append(line); break;
-            case Section::Base: blockBase.append(line); break;
-            case Section::Theirs: blockTheirs.append(line); break;
-            }
+        sides.generation = m_projectGeneration;
+        auto stages = readStages(relative);
+        if (!stages || stages->empty()) { report(stages ? "The file no longer has unmerged Git stages" : stages.error().message()); return sides; }
+        sides.stages = *stages;
+        auto indexPath = io::joinPath(m_controller->info().gitDir, "index");
+        if (!indexPath) { report(indexPath.error().message()); return sides; }
+        auto index = m_workbench.m_services.fs.readFile(*indexPath);
+        auto disk = m_workbench.m_services.fs.readFile(absolute);
+        if (!index || (!disk && disk.error().code() != ErrorCode::NotFound)) {
+            report(!index ? index.error().message() : disk.error().message()); return sides;
         }
-        if (section != Section::Normal) {
-            sides.ours += blockOurs;
-            sides.theirs += blockTheirs;
-            if (hasBaseSection)
-                sides.base += blockBase;
+        sides.index = std::move(*index);
+        if (disk) sides.disk = std::move(*disk);
+        // Git's actual stage blobs are authoritative. Conflict markers omit the common ancestor
+        // in normal merge style and are never used to invent a base version.
+        for (int stage = 1; stage <= 3; ++stage) {
+            const std::string marker = " " + std::to_string(stage) + "\t";
+            if (sides.stages.find(marker) == std::string::npos) continue;
+            vcs::GitInvocation invocation;
+            invocation.arguments = {"cat-file", "blob", ":" + std::to_string(stage) + ":" + relative};
+            invocation.workingDirectory = m_controller->info().workTree;
+            invocation.background = true;
+            auto output = m_controller->service().repository().runner().run(invocation);
+            if (!output || !output->succeeded()) { report(output ? "Could not read the conflict blob" : output.error().message()); return sides; }
+            document::RawFile raw;
+            raw.bytes = std::move(output->stdoutBytes);
+            auto decoded = m_workbench.m_documents->loadService().decode(std::move(raw), absolute);
+            if (!decoded) { report(decoded.error().message()); return sides; }
+            if (stage == 1) sides.base = decoded->buffer.snapshot().text();
+            if (stage == 2) { sides.ours = decoded->buffer.snapshot().text(); sides.oursExists = true; }
+            if (stage == 3) { sides.theirs = decoded->buffer.snapshot().text(); sides.theirsExists = true; }
         }
+        auto stillStages = readStages(relative);
+        auto stillIndex = m_workbench.m_services.fs.readFile(*indexPath);
+        if (!stillStages || !stillIndex || *stillStages != sides.stages || *stillIndex != sides.index) {
+            report("Git conflict sources changed while opening the merge; open it again"); return sides;
+        }
+        sides.valid = true;
         return sides;
     };
-
-    const auto readStageBlob = [this](int stage, const std::string& relPath) -> std::optional<std::string> {
-        if (!m_controller)
-            return std::nullopt;
-        vcs::GitInvocation inv;
-        inv.arguments = {"cat-file", "blob", ":" + std::to_string(stage) + ":" + relPath};
-        inv.workingDirectory = m_controller->info().workTree;
-        inv.background = true;
-        auto out = m_controller->service().repository().runner().run(inv);
-        if (out && out->succeeded())
-            return out->stdoutBytes;
-        return std::nullopt;
-    };
-
-    const auto extractSides = [&](const std::string& absPath, const std::string& relPath) -> ConflictSides {
-        std::string raw;
-        if (auto disk = m_workbench.m_services.fs.readFile(absPath); disk)
-            raw = std::move(*disk);
-        ConflictSides sides = parseMarkers(raw);
-        if (!sides.hadMarkers) {
-            if (auto stage2 = readStageBlob(2, relPath))
-                sides.ours = std::move(*stage2);
-            if (auto stage3 = readStageBlob(3, relPath))
-                sides.theirs = std::move(*stage3);
-            if (auto stage1 = readStageBlob(1, relPath))
-                sides.base = std::move(*stage1);
-        }
-        return sides;
-    };
-
-    const auto applyResolved = [this](const std::string& absPath, const std::string& relPath,
-                                      const std::string& resolvedText) -> bool {
-        if (auto written = m_workbench.m_services.fs.safeWrite(absPath, resolvedText, {}); !written)
-            return false;
-        if (m_trusted && m_controller && !relPath.empty()) {
-            vcs::GitInvocation addInv;
-            addInv.arguments = {"add", "--", relPath};
-            addInv.workingDirectory = m_controller->info().workTree;
-            addInv.requiresTrust = true;
-            static_cast<void>(m_controller->service().repository().runner().run(addInv));
+    const auto applyResolved = [&](const std::string& absolute, const std::string& relative,
+        const std::string& resolved, const ConflictSides& source, bool deleted = false) -> bool {
+        if (!source.valid || source.generation != m_projectGeneration || m_shutdown || !m_controller || m_controller->busy() ||
+            !m_workbench.m_services.trust.isTrusted(m_root) || !m_workbench.m_services.trust.isTrusted(m_controller->info().workTree) ||
+            !m_workbench.m_services.trust.isTrusted(absolute)) { report("Resolve requires the same idle trusted repository"); return false; }
+        if (auto allowed = allowWrite(absolute); !allowed) { report(allowed.error().message()); return false; }
+        auto target = comparisonTarget(m_workbench.m_services.fs, absolute);
+        if (!target) { report(target.error().message()); return false; }
+        if (!m_workbench.m_services.trust.isTrusted(*target)) { report("The merge output target is not trusted"); return false; }
+        const auto& repository = m_controller->service().repository();
+        if (auto relativePath = repository.relativePath(absolute); !relativePath || *relativePath != relative) {
+            report("Conflict path no longer belongs to this repository"); return false;
         }
         m_workbench.checkExternalChanges();
-        const auto key = fileKey(m_workbench.m_services.fs, absPath);
-        for (const auto& doc : m_workbench.m_documents->documents()) {
-            if (!doc->untitled() && fileKey(m_workbench.m_services.fs, doc->path()) == key) {
-                if (doc->pendingMerge() != nullptr) {
-                    static_cast<void>(
-                        m_workbench.m_documents->resolveExternalChange(*doc, document::MergeDecision::TakeDisk));
-                }
-                if (auto* view = m_workbench.m_editors->find(*doc))
-                    view->reloadFromDocument();
+        for (const auto& document : m_workbench.m_documents->documents())
+            if (!document->untitled() && document->dirty() && fileKey(m_workbench.m_services.fs, document->path()) == fileKey(m_workbench.m_services.fs, absolute)) {
+                report("Save or close the unsaved editor before resolving this conflict"); return false;
             }
+        auto stages = readStages(relative);
+        auto indexPath = io::joinPath(m_controller->info().gitDir, "index");
+        auto index = indexPath ? m_workbench.m_services.fs.readFile(*indexPath) : Result<std::string>(fail(ErrorCode::InvalidArgument, "Invalid index path"));
+        auto disk = m_workbench.m_services.fs.readFile(absolute);
+        if (!stages || !index || *stages != source.stages || *index != source.index ||
+            (!disk && disk.error().code() != ErrorCode::NotFound) || (disk ? std::optional<std::string>(*disk) : std::nullopt) != source.disk) {
+            report("The file or Git index changed while merging; reopen the conflict before applying"); return false;
         }
-        if (m_controller)
-            m_controller->refreshStatus();
+        if (deleted) {
+            if (disk) if (auto removed = m_workbench.m_services.fs.removeFile(absolute); !removed) { report(removed.error().message()); return false; }
+        } else {
+            document::FileDocument* document = nullptr;
+            if (disk) {
+                auto opened = m_workbench.m_documents->open(absolute);
+                if (!opened) { report(opened.error().message()); return false; }
+                document = *opened;
+            } else document = &m_workbench.m_documents->createUntitled({});
+            auto changed = document->document().replace({ByteOffset{0}, document->document().text().size()}, resolved, {});
+            if (!changed) { report(changed.error().message()); return false; }
+            auto saved = disk ? m_workbench.m_documents->save(*document) : m_workbench.m_documents->saveAs(*document, absolute);
+            if (!saved) {
+                static_cast<void>(document->document().undo());
+                if (auto* view = m_workbench.m_editors->find(*document)) view->reloadFromDocument();
+                report(saved.error().message()); return false;
+            }
+            if (auto* view = m_workbench.m_editors->find(*document)) { view->reloadFromDocument(); view->markSaved(); }
+        }
+        vcs::GitInvocation stage;
+        stage.arguments = {"add", "-A", "--", relative};
+        stage.workingDirectory = m_controller->info().workTree;
+        stage.requiresTrust = true;
+        auto staged = repository.runner().run(stage);
+        if (!staged || !staged->succeeded()) {
+            report(staged ? vcs::gitFailure("Stage resolved file", *staged).message() : staged.error().message());
+            // The chosen file is retained; never claim that a failed git add resolved the index.
+            m_controller->refreshStatus(); return false;
+        }
+        m_workbench.checkExternalChanges();
+        m_controller->refreshStatus();
+        documentChanged();
         return true;
     };
 
@@ -889,7 +953,7 @@ void GitIntegration::showResolveConflictsDialog() {
         const std::string absPath = item->data(Qt::UserRole).toString().toStdString();
         const std::string relPath = item->data(Qt::UserRole + 1).toString().toStdString();
         const ConflictSides sides = extractSides(absPath, relPath);
-        if (applyResolved(absPath, relPath, sides.ours)) {
+        if (applyResolved(absPath, relPath, sides.ours, sides, !sides.oursExists)) {
             delete list->takeItem(list->row(item));
             updateDialogState();
         }
@@ -902,7 +966,7 @@ void GitIntegration::showResolveConflictsDialog() {
         const std::string absPath = item->data(Qt::UserRole).toString().toStdString();
         const std::string relPath = item->data(Qt::UserRole + 1).toString().toStdString();
         const ConflictSides sides = extractSides(absPath, relPath);
-        if (applyResolved(absPath, relPath, sides.theirs)) {
+        if (applyResolved(absPath, relPath, sides.theirs, sides, !sides.theirsExists)) {
             delete list->takeItem(list->row(item));
             updateDialogState();
         }
@@ -914,216 +978,17 @@ void GitIntegration::showResolveConflictsDialog() {
         const std::string absPath = item->data(Qt::UserRole).toString().toStdString();
         const std::string relPath = item->data(Qt::UserRole + 1).toString().toStdString();
         const ConflictSides sides = extractSides(absPath, relPath);
+        if (!sides.valid) return;
 
-        auto baseSeq = diff::LineSequence::fromBytes(sides.base, diff::LineSplit::Lsp);
-        auto oursSeq = diff::LineSequence::fromBytes(sides.ours, diff::LineSplit::Lsp);
-        auto theirsSeq = diff::LineSequence::fromBytes(sides.theirs, diff::LineSplit::Lsp);
-        if (!baseSeq || !oursSeq || !theirsSeq)
-            return;
-        auto modelRes = diff::MergeModel::create(std::move(*baseSeq), std::move(*oursSeq), std::move(*theirsSeq));
-        if (!modelRes)
-            return;
-        diff::MergeModel model = std::move(*modelRes);
-        text::MonospaceTextShaper shaper;
-        auto panesRes = ui::nav::MergePanes::create(model, shaper);
-        if (!panesRes)
-            return;
-        ui::nav::MergePanes panes = std::move(*panesRes);
-
-        QDialog mergeDialog(&dialog);
-        mergeDialog.setObjectName(QStringLiteral("gitThreeWayMergeDialog"));
-        mergeDialog.setWindowTitle(tr("Merge Conflicts — %1").arg(QString::fromStdString(relPath)));
-        mergeDialog.resize(1100, 680);
-
-        auto* mLayout = new QVBoxLayout(&mergeDialog);
-        auto* headers = new QHBoxLayout();
-        headers->addWidget(new QLabel(tr("Local (Yours)"), &mergeDialog), 1);
-        headers->addWidget(new QLabel(tr("Merged Result"), &mergeDialog), 1);
-        headers->addWidget(new QLabel(tr("Remote (Theirs)"), &mergeDialog), 1);
-        mLayout->addLayout(headers);
-
-        const QFont fixedFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-        auto* splitter = new QSplitter(Qt::Horizontal, &mergeDialog);
-        auto* yoursPane = new QPlainTextEdit(splitter);
-        yoursPane->setObjectName(QStringLiteral("mergeYours"));
-        yoursPane->setReadOnly(true);
-        yoursPane->setLineWrapMode(QPlainTextEdit::NoWrap);
-        yoursPane->setFont(fixedFont);
-
-        auto* resultPane = new QPlainTextEdit(splitter);
-        resultPane->setObjectName(QStringLiteral("mergeResult"));
-        resultPane->setLineWrapMode(QPlainTextEdit::NoWrap);
-        resultPane->setFont(fixedFont);
-
-        auto* theirsPane = new QPlainTextEdit(splitter);
-        theirsPane->setObjectName(QStringLiteral("mergeTheirs"));
-        theirsPane->setReadOnly(true);
-        theirsPane->setLineWrapMode(QPlainTextEdit::NoWrap);
-        theirsPane->setFont(fixedFont);
-        mLayout->addWidget(splitter, 1);
-
-        const auto mapToText = [](const text::DisplayMap& map) {
-            QStringList rows;
-            const text::Snapshot& snap = map.text();
-            for (std::uint32_t r = 0; r < map.rowCount(); ++r) {
-                const text::DisplayRowInfo info = map.rowInfo(text::DisplayRow{r});
-                if (info.kind == text::RowKind::Text) {
-                    const std::string rowText = snap.text(info.buffer);
-                    rows.push_back(QString::fromUtf8(rowText.data(), static_cast<qsizetype>(rowText.size())));
-                } else {
-                    rows.push_back(QString());
-                }
-            }
-            return rows.join(QLatin1Char('\n'));
-        };
-        yoursPane->setPlainText(mapToText(panes.map(ui::nav::MergePane::Yours)));
-        theirsPane->setPlainText(mapToText(panes.map(ui::nav::MergePane::Disk)));
-
-        bool syncingScroll = false;
-        const auto syncScroll = [&](int val) {
-            if (syncingScroll)
-                return;
-            syncingScroll = true;
-            yoursPane->verticalScrollBar()->setValue(val);
-            resultPane->verticalScrollBar()->setValue(val);
-            theirsPane->verticalScrollBar()->setValue(val);
-            syncingScroll = false;
-        };
-        connect(yoursPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
-        connect(resultPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
-        connect(theirsPane->verticalScrollBar(), &QScrollBar::valueChanged, &mergeDialog, syncScroll);
-
-        std::vector<std::size_t> changedChunks;
-        for (std::size_t c = 0; c < panes.chunkCount(); ++c) {
-            if (panes.chunk(c).kind != diff::ChunkKind::Stable)
-                changedChunks.push_back(c);
-        }
-
-        auto* chunkList = new QListWidget(&mergeDialog);
-        chunkList->setObjectName(QStringLiteral("mergeChunks"));
-        chunkList->setMaximumHeight(130);
-        mLayout->addWidget(chunkList);
-
-        auto* chunkBtns = new QHBoxLayout();
-        auto* acceptLeftBtn = new QPushButton(tr("Accept Left (Yours)"), &mergeDialog);
-        acceptLeftBtn->setObjectName(QStringLiteral("acceptLeft"));
-        auto* acceptRightBtn = new QPushButton(tr("Accept Right (Theirs)"), &mergeDialog);
-        acceptRightBtn->setObjectName(QStringLiteral("acceptRight"));
-        auto* acceptAllLeftBtn = new QPushButton(tr("Accept All Yours"), &mergeDialog);
-        acceptAllLeftBtn->setObjectName(QStringLiteral("acceptAllLeft"));
-        auto* acceptAllRightBtn = new QPushButton(tr("Accept All Theirs"), &mergeDialog);
-        acceptAllRightBtn->setObjectName(QStringLiteral("acceptAllRight"));
-        chunkBtns->addWidget(acceptLeftBtn);
-        chunkBtns->addWidget(acceptRightBtn);
-        chunkBtns->addWidget(acceptAllLeftBtn);
-        chunkBtns->addWidget(acceptAllRightBtn);
-        chunkBtns->addStretch(1);
-        mLayout->addLayout(chunkBtns);
-
-        auto* statusLabel = new QLabel(&mergeDialog);
-        statusLabel->setObjectName(QStringLiteral("mergeStatus"));
-        mLayout->addWidget(statusLabel);
-
-        auto* bottomBtns = new QHBoxLayout();
-        auto* applyBtn = new QPushButton(tr("Apply & Mark Resolved"), &mergeDialog);
-        applyBtn->setObjectName(QStringLiteral("applyMergeButton"));
-        applyBtn->setDefault(true);
-        auto* cancelBtn = new QPushButton(tr("Cancel"), &mergeDialog);
-        cancelBtn->setObjectName(QStringLiteral("cancelMergeButton"));
-        bottomBtns->addStretch(1);
-        bottomBtns->addWidget(cancelBtn);
-        bottomBtns->addWidget(applyBtn);
-        mLayout->addLayout(bottomBtns);
-
-        const auto refreshMergeState = [&] {
-            const int curRow = chunkList->currentRow();
-            chunkList->clear();
-            for (const std::size_t c : changedChunks) {
-                const diff::MergeChunk& chunk = panes.chunk(c);
-                const auto fmtRange = [](const diff::LineRange& r) {
-                    return r.empty() ? QStringLiteral("-")
-                                     : QStringLiteral("%1-%2").arg(r.begin.value() + 1).arg(r.end.value());
-                };
-                QString takeStr;
-                switch (model.take(c)) {
-                case diff::Take::Unresolved: takeStr = tr("unresolved"); break;
-                case diff::Take::Ours: takeStr = tr("yours"); break;
-                case diff::Take::Theirs: takeStr = tr("theirs"); break;
-                case diff::Take::Base: takeStr = tr("base"); break;
-                case diff::Take::OursThenTheirs: takeStr = tr("yours, then theirs"); break;
-                case diff::Take::TheirsThenOurs: takeStr = tr("theirs, then yours"); break;
-                case diff::Take::Custom: takeStr = tr("edited"); break;
-                }
-                chunkList->addItem(
-                    tr("Yours %1 | Theirs %2 (%3)").arg(fmtRange(chunk.ours), fmtRange(chunk.theirs), takeStr));
-            }
-            if (chunkList->count() > 0)
-                chunkList->setCurrentRow(std::clamp(curRow, 0, chunkList->count() - 1));
-
-            if (auto resolved = model.resolvedText()) {
-                resultPane->setPlainText(QString::fromStdString(resolved->text));
-            } else if (auto marked = model.renderWithMarkers()) {
-                resultPane->setPlainText(QString::fromStdString(marked->text));
-            } else {
-                resultPane->setPlainText(QString::fromStdString(sides.ours));
-            }
-
-            const std::uint32_t unresolved = model.unresolvedCount();
-            statusLabel->setText(unresolved == 0 ? tr("All conflicts resolved.")
-                                                 : tr("%1 conflict(s) unresolved.").arg(unresolved));
-        };
-        // FND-3: Apply refuses while chunks are unresolved or conflict markers remain in the result.
-        const auto applyBlocker = [&] {
-            return QString::fromStdString(
-                ui::mergeApplyBlocker(model.unresolvedCount(), resultPane->toPlainText().toStdString()));
-        };
-        const auto refreshApply = [&] {
-            const QString blocker = applyBlocker();
-            applyBtn->setEnabled(blocker.isEmpty());
-            applyBtn->setToolTip(blocker);
-        };
-        connect(resultPane, &QPlainTextEdit::textChanged, &mergeDialog, refreshApply);
-        refreshMergeState();
-        refreshApply();
-
-        connect(acceptLeftBtn, &QPushButton::clicked, &mergeDialog, [&] {
-            const int row = chunkList->currentRow();
-            if (row >= 0 && static_cast<std::size_t>(row) < changedChunks.size()) {
-                static_cast<void>(model.resolve(changedChunks[static_cast<std::size_t>(row)], diff::Take::Ours));
-                refreshMergeState();
-            }
-        });
-        connect(acceptRightBtn, &QPushButton::clicked, &mergeDialog, [&] {
-            const int row = chunkList->currentRow();
-            if (row >= 0 && static_cast<std::size_t>(row) < changedChunks.size()) {
-                static_cast<void>(model.resolve(changedChunks[static_cast<std::size_t>(row)], diff::Take::Theirs));
-                refreshMergeState();
-            }
-        });
-        connect(acceptAllLeftBtn, &QPushButton::clicked, &mergeDialog, [&] {
-            for (const std::size_t c : changedChunks)
-                static_cast<void>(model.resolve(c, diff::Take::Ours));
-            refreshMergeState();
-        });
-        connect(acceptAllRightBtn, &QPushButton::clicked, &mergeDialog, [&] {
-            for (const std::size_t c : changedChunks)
-                static_cast<void>(model.resolve(c, diff::Take::Theirs));
-            refreshMergeState();
-        });
-        connect(applyBtn, &QPushButton::clicked, &mergeDialog, [&] {
-            if (const QString blocker = applyBlocker(); !blocker.isEmpty()) {
-                statusLabel->setText(blocker);
-                return;
-            }
-            const std::string mergedText = resultPane->toPlainText().toStdString();
-            if (applyResolved(absPath, relPath, mergedText)) {
-                mergeDialog.accept();
-            }
-        });
-        connect(cancelBtn, &QPushButton::clicked, &mergeDialog, &QDialog::reject);
-
-        ui::installDialogChrome(&mergeDialog, true);
-        if (mergeDialog.exec() == QDialog::Accepted) {
+        ui::EditorServices services{.languages = &m_workbench.m_languages, .scheduler = m_workbench.m_pool.get(),
+            .clock = &m_workbench.m_services.clock, .actionHost = &m_workbench.m_actionHost};
+        auto merged = ui::showMergeEditor({.base = sides.base, .ours = sides.ours, .theirs = sides.theirs, .path = absPath},
+            [&](std::string_view resolved) -> Result<void> {
+                if (applyResolved(absPath, relPath, std::string(resolved), sides)) return {};
+                return fail(ErrorCode::Busy, "The merge could not be applied; source changes or write/stage errors are shown in notifications");
+            }, services, &dialog);
+        if (!merged) { report(merged.error().message()); return; }
+        if (*merged) {
             delete list->takeItem(list->row(item));
             updateDialogState();
         }

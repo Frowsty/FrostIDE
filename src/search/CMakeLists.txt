@@ -15,6 +15,7 @@ frost_add_library(search LAYER search
         src/file_mask.cpp
         src/find_in_files.cpp
         src/fuzzy_path.cpp
+        src/path_index.cpp
         src/replace_in_files.cpp
         src/search_scope.cpp
     DEPS frost::document frost::project frost::text_editor frost::text frost::storage frost::io frost::sched

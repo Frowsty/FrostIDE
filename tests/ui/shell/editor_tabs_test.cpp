@@ -327,4 +327,23 @@ TEST(EditorTabs, CloseTabsToLeftAndRightPreservePinnedTabs) {
     EXPECT_EQ(tabs.indexOf("/e.cpp"), -1);
 }
 
+TEST(EditorTabs, FloatingWindowCloseDocksSameEditorAndLayoutRestoresMode) {
+    FakeEditorFactory factory;
+    EditorTabs tabs(factory);
+    ASSERT_TRUE(tabs.open("/floating.cpp"));
+    auto* editor = tabs.currentEditor();
+    auto* group = tabs.activeGroup();
+    ASSERT_TRUE(tabs.setGroupFloating(group, true));
+    ASSERT_NE(tabs.floatingGroupWindow(group), nullptr);
+    EXPECT_EQ(tabs.currentEditor(), editor);
+    const auto saved = tabs.saveLayout();
+    tabs.floatingGroupWindow(group)->close();
+    EXPECT_FALSE(tabs.isGroupFloating(group));
+    EXPECT_EQ(tabs.currentEditor(), editor);
+    EXPECT_EQ(tabs.count(), 1);
+    EditorTabs restored(factory);
+    ASSERT_TRUE(restored.restoreLayout(saved));
+    EXPECT_TRUE(restored.isGroupFloating(restored.activeGroup()));
+    EXPECT_FALSE(restored.restoreLayout("{\"group\":0,\"floating\":42}"));
+}
 } // namespace

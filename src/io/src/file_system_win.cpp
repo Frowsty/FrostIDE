@@ -4,6 +4,7 @@
 // extended-length (\\?\) form so MAX_PATH never applies (see frost/io/path.hpp).
 
 #include "frost/io/file_system.hpp"
+#include "random_access_reader.hpp"
 #include "frost/io/os_error.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/utf.hpp"
@@ -584,6 +585,7 @@ enum class MkdirOutcome : unsigned char { Done, ParentMissing, Failed };
 class WindowsFileSystem final : public IFileSystem {
 public:
     constexpr WindowsFileSystem() noexcept = default;
+    RandomAccessOpener randomAccessOpener() const override { return detail::openNativeRandomAccess; }
 
     Result<std::string> readFile(std::string_view path) override {
         auto wide = toWin32Path(path);

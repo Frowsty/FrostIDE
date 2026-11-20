@@ -685,6 +685,10 @@ public:
     // CPP-10: runs the real clang-tidy over `scopeDirectory` using the open project's compilation
     // database, publishes reported findings in Problems, and keeps the last report for SARIF export.
     // GUI-thread entry; completion is posted to the GUI thread. Refuses untrusted projects.
+    // CPP-11/12/16: GUI-thread native jobs, governed background AST/CFG work and current-image Problems.
+    // Idle/save requests debounce and respect Power Save; explicit module analysis remains available.
+    void scheduleCppAnalyzer(std::string path, bool saved = false);
+    void inspectNativeCppAsync(std::string_view scopePath, bool automatic = false);
     void inspectCppCodeAsync(std::string_view scopeDirectory, std::function<void(Result<lang::InspectionReport>)> done);
     // Writes the most recently completed C++ inspection as validated SARIF 2.1.0. GUI thread.
     [[nodiscard]] Result<void> exportCppInspectionSarif(std::string_view outputPath);
@@ -798,8 +802,11 @@ private:
 
     // Construction steps.
     void registerActions();
+    void registerEditorExtrasActions();
     void registerRefactoringActions();
     void registerCppRefactoringActions();
+    void registerCppIndexActions();
+    void showCppIndex(std::string operation, std::string symbol = {});
     void showCppRefactoring(std::string operation);
     void showCppInspectionScopeFixes();
     void moveCppProjectSource();
@@ -836,6 +843,7 @@ private:
     [[nodiscard]] Result<void> startCompoundDebug(const run::RunConfiguration& configuration);
     [[nodiscard]] Result<void> startSelectedDebugConfiguration();
     void attachLanguage();
+    void attachServices();
     void attachEngineBindings();
     // GUI retirement is nonblocking; the destructor drains after feature teardown, before services.
     void retireEngineBindingWork(std::shared_ptr<EngineBindingRetirement> retirement);
@@ -1067,6 +1075,8 @@ private:
     TransactionId m_refactoringAdmissionToken;
     std::shared_ptr<CppRenameAdmission> m_cppRenameAdmission;
     std::stop_source m_cppRenameStop;
+    std::stop_source m_cppIndexStop;
+    std::uint64_t m_cppIndexGeneration = 0;
     std::uint64_t m_cppRenameGeneration = 0;
     std::optional<std::uint64_t> m_cppRenameTrustRevision;
     std::unique_ptr<document::AutosaveController> m_autosave;
@@ -1168,6 +1178,9 @@ private:
     std::optional<std::uint64_t> m_cppInspectionTrustRevision;
     std::uint64_t m_cppInspectionGeneration = 0;
     std::stop_source m_cppInspectionStop;
+    std::uint64_t m_cppAnalyzerTicket = 0;
+    bool m_cppAnalyzerRunning = false;
+    std::function<Result<void>()> m_cppAnalyzerExportCheck;
     std::shared_ptr<sched::ResourceGovernor> m_resourceGovernor;
     std::shared_ptr<lang::ClangdService> m_clangd;
     // The root already told that clangd was not found (the notice appears once per project; ADR 0078).

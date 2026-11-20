@@ -7,6 +7,12 @@
 #include "frost/ui/dialog_chrome.hpp"
 
 #include "project_properties_dialog.hpp"
+#include "frost/text/text_file.hpp"
+#include <QMetaObject>
+#include <QMessageBox>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QDateTime>
@@ -267,76 +273,148 @@ QWidget* createAsmViewerToolWindowWidget(QWidget* parent,
     return root;
 }
 
-void showLocalHistoryDialog(QWidget* parent, storage::LocalHistory& history, const std::string& filePath,
-                            const std::string& currentContent,
-                            std::function<void(const std::string& restoredContent)> onRestore) {
-    QDialog dialog(parent);
+void showLocalHistoryDialog(QWidget* parent, const std::string& historyPath, const std::string& fileKey,
+                            const std::string& filePath, const std::string& currentContent,
+                            std::function<Result<void>(const std::string&)> onRestore) {
+    // The worker borrows this stack dialog and its local state. A QObject parent must never
+    // delete it during exec(); owner destruction only rejects, and the worker is joined below.
+    QDialog dialog;
+    dialog.setWindowModality(Qt::ApplicationModal);
+    if (parent)
+        QObject::connect(parent, &QObject::destroyed, &dialog, &QDialog::reject);
     dialog.setObjectName(QStringLiteral("localHistoryDialog"));
-    dialog.setWindowTitle(QStringLiteral("Local History — %1").arg(QFileInfo(toQs(filePath)).fileName()));
-    dialog.setModal(true);
+    dialog.setWindowTitle(QStringLiteral("Local History - %1").arg(QFileInfo(toQs(filePath)).fileName()));
     dialog.resize(840, 520);
-
-    auto* outer = new QVBoxLayout(&dialog);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* status = new QLabel(QStringLiteral("Reading stored revisions..."), &dialog);
+    status->setWordWrap(true);
+    layout->addWidget(status);
     auto* splitter = new QSplitter(Qt::Horizontal, &dialog);
     auto* revList = new QListWidget(splitter);
     revList->setObjectName(QStringLiteral("localHistoryRevisionList"));
-    revList->setMinimumWidth(260);
     auto* preview = new QPlainTextEdit(splitter);
     preview->setObjectName(QStringLiteral("localHistoryPreview"));
     preview->setReadOnly(true);
-    splitter->addWidget(revList);
-    splitter->addWidget(preview);
-    splitter->setStretchFactor(1, 1);
-    outer->addWidget(splitter, 1);
-
+    preview->setPlainText(toQs(currentContent));
+    layout->addWidget(splitter);
+    auto* revert = new QPushButton(QStringLiteral("Restore to Editor (Undo available; Save writes the file)"), &dialog);
+    revert->setObjectName(QStringLiteral("localHistoryRevertButton"));
+    revert->setEnabled(false);
+    layout->addWidget(revert);
+    auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
+    layout->addWidget(close);
+    struct Requests {
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::int64_t revision = 0;
+        std::uint64_t generation = 0;
+        bool stopping = false;
+    } requests;
     std::vector<storage::RevisionInfo> revisions;
-    if (auto listed = history.revisions(filePath))
-        revisions = std::move(*listed);
-    for (std::size_t i = 0; i < revisions.size(); ++i) {
-        const auto& r = revisions[i];
-        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(r.createdAt.time_since_epoch()).count();
-        const QString timeStr = QDateTime::fromSecsSinceEpoch(secs).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-        const QString label = r.label.empty() ? QStringLiteral("Saved") : toQs(r.label);
-        auto* item = new QListWidgetItem(QStringLiteral("%1 — %2").arg(timeStr, label), revList);
-        item->setData(Qt::UserRole, static_cast<int>(i));
-    }
-    if (revisions.empty()) {
-        preview->setPlainText(toQs(currentContent));
-    }
-
+    std::int64_t loadedId = 0;
+    std::string loadedText;
+    // A separate connection belongs exclusively to this worker; the SaveManager connection stays
+    // with its owner. Queries are bounded and cancellation discards queued or obsolete selections.
+    std::jthread reader([&, historyPath, fileKey](std::stop_token stop) {
+        storage::HistoryOptions options;
+        options.busyTimeout = std::chrono::milliseconds(250);
+        auto history = storage::LocalHistory::open(historyPath, systemClock(), options);
+        if (!history) {
+            const auto error = toQs(history.error().message());
+            QMetaObject::invokeMethod(&dialog, [status, error] { status->setText(error); }, Qt::QueuedConnection);
+            return;
+        }
+        auto listed = history->revisions(fileKey, 512);
+        if (!listed) {
+            const auto error = toQs(listed.error().message());
+            QMetaObject::invokeMethod(&dialog, [status, error] { status->setText(error); }, Qt::QueuedConnection);
+            return;
+        }
+        QMetaObject::invokeMethod(&dialog, [&, items = std::move(*listed)] {
+            revisions = items;
+            for (const auto& revision : revisions) {
+                const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(revision.createdAt.time_since_epoch()).count();
+                revList->addItem(QDateTime::fromSecsSinceEpoch(seconds).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")) +
+                    QStringLiteral(" - ") + (revision.label.empty() ? QStringLiteral("Saved") : toQs(revision.label)));
+            }
+            status->setText(revisions.empty() ? QStringLiteral("No stored revisions for this file.") :
+                QStringLiteral("Newest 512 stored revisions at most. Restore changes the editor only; existing unsaved text is protected by Undo."));
+            if (!revisions.empty()) revList->setCurrentRow(0);
+        }, Qt::QueuedConnection);
+        std::uint64_t served = 0;
+        while (!stop.stop_requested()) {
+            std::int64_t revision = 0;
+            std::uint64_t generation = 0;
+            {
+                std::unique_lock lock(requests.mutex);
+                requests.changed.wait(lock, [&] { return requests.stopping || requests.generation != served; });
+                if (requests.stopping || stop.stop_requested()) return;
+                revision = requests.revision;
+                generation = requests.generation;
+                served = generation;
+            }
+            std::string bytes;
+            auto content = history->content(revision, [&](std::string_view chunk) -> Result<void> {
+                if (stop.stop_requested()) return fail(ErrorCode::Cancelled, "history selection cancelled");
+                if (bytes.size() + chunk.size() > 4 * 1024 * 1024)
+                    return fail(ErrorCode::OutOfRange, "History preview and editor restore are limited to 4 MiB.");
+                bytes.append(chunk);
+                return {};
+            }, stop);
+            std::string decodedText;
+            std::string error;
+            if (!content) error = content.error().message();
+            else {
+                auto decoded = text::decodeBytes(bytes);
+                if (!decoded) error = decoded.error().message();
+                else if (!decoded->encoding.fidelity.lossless() || decoded->binaryLikely)
+                    error = "This revision cannot be decoded losslessly as text; restore is unavailable.";
+                else decodedText = decoded->payloadIsText ? bytes.substr(decoded->payloadOffset) : std::move(decoded->text);
+            }
+            QMetaObject::invokeMethod(&dialog, [&, revision, generation, text = std::move(decodedText), error = std::move(error)] {
+                {
+                    std::lock_guard lock(requests.mutex);
+                    if (requests.stopping || generation != requests.generation) return;
+                }
+                if (!error.empty()) { status->setText(toQs(error)); revert->setEnabled(false); return; }
+                loadedId = revision;
+                loadedText = text;
+                preview->setPlainText(toQs(text));
+                status->setText(QStringLiteral("Stored revision loaded. Restore makes one undoable editor change; Save is explicit."));
+                revert->setEnabled(true);
+            }, Qt::QueuedConnection);
+        }
+    });
     QObject::connect(revList, &QListWidget::currentRowChanged, &dialog, [&](int row) {
-        if (row < 0 || static_cast<std::size_t>(row) >= revisions.size())
-            return;
-        if (auto bytes = history.content(revisions[static_cast<std::size_t>(row)].id)) {
-            preview->setPlainText(toQs(*bytes));
+        loadedId = 0;
+        revert->setEnabled(false);
+        if (row < 0 || static_cast<std::size_t>(row) >= revisions.size()) return;
+        {
+            std::lock_guard lock(requests.mutex);
+            requests.revision = revisions[static_cast<std::size_t>(row)].id;
+            ++requests.generation;
         }
+        requests.changed.notify_one();
     });
-    if (!revisions.empty())
-        revList->setCurrentRow(0);
-
-    auto* btnLayout = new QHBoxLayout();
-    auto* revertBtn = new QPushButton(QStringLiteral("Revert to Selected Revision"), &dialog);
-    revertBtn->setObjectName(QStringLiteral("localHistoryRevertButton"));
-    revertBtn->setEnabled(!revisions.empty());
-    auto* closeBtn = new QPushButton(QStringLiteral("Close"), &dialog);
-    btnLayout->addStretch(1);
-    btnLayout->addWidget(revertBtn);
-    btnLayout->addWidget(closeBtn);
-    outer->addLayout(btnLayout);
-
-    QObject::connect(revertBtn, &QPushButton::clicked, &dialog, [&] {
-        const int row = revList->currentRow();
-        if (row < 0 || static_cast<std::size_t>(row) >= revisions.size())
-            return;
-        if (auto bytes = history.content(revisions[static_cast<std::size_t>(row)].id)) {
-            if (onRestore)
-                onRestore(*bytes);
-            dialog.accept();
+    QObject::connect(revert, &QPushButton::clicked, &dialog, [&] {
+        const auto row = revList->currentRow();
+        if (!loadedId || row < 0 || static_cast<std::size_t>(row) >= revisions.size() || revisions[static_cast<std::size_t>(row)].id != loadedId) return;
+        if (onRestore) {
+            const auto restored = onRestore(loadedText);
+            if (!restored) { status->setText(toQs(restored.error().message())); return; }
         }
+        dialog.accept();
     });
-    QObject::connect(closeBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
+    QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
     ui::installDialogChrome(&dialog, true);
     dialog.exec();
+    {
+        std::lock_guard lock(requests.mutex);
+        requests.stopping = true;
+    }
+    reader.request_stop();
+    requests.changed.notify_all();
+    reader.join();
 }
 
 } // namespace frost::app

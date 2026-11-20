@@ -382,6 +382,7 @@ void Workbench::startClangd(const std::string& root) {
 
     lang::ClangdServiceOptions options;
     options.clangdPath = found->path;
+    options.requireFrostPlatform = found->origin == lang::ClangdOrigin::BundledFrost;
     options.workspaceRoot = root;
     options.launch.jobs = m_options.clangdJobs;
     if (!m_options.clangdLogLevel.empty())
@@ -607,6 +608,8 @@ void Workbench::resumeDeferredClangd(bool retryUntilIdle) {
 }
 
 void Workbench::stopClangd() {
+    m_cppIndexStop.request_stop();
+    ++m_cppIndexGeneration;
     if (m_engineBindings)
         m_engineBindings->cancel();
     m_clangdDeferredRoot.clear();

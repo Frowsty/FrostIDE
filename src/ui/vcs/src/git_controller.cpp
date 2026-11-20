@@ -145,7 +145,8 @@ bool GitController::allow(vcs::GitOperationKind kind, const std::vector<std::str
     return false;
 }
 
-void GitController::commit(std::vector<std::string> paths, const QString& message, bool amend, bool pushAfter) {
+void GitController::commit(std::vector<std::string> paths, const QString& message, bool amend, bool pushAfter,
+                           std::vector<vcs::CommitCheck> checks, bool checksReviewed) {
     if (!allow(vcs::GitOperationKind::Commit, paths))
         return;
     m_pendingMessage = message.trimmed();
@@ -153,6 +154,8 @@ void GitController::commit(std::vector<std::string> paths, const QString& messag
     request.paths = std::move(paths);
     request.message = message.toStdString();
     request.amend = amend;
+    request.checks = std::move(checks);
+    request.checksReviewed = checksReviewed;
     m_pushAfterCommit = pushAfter;
     m_service->commit(std::move(request), false);
 }
@@ -221,6 +224,10 @@ void GitController::mergeBranch(const QString& branch) {
 void GitController::rebaseBranch(const QString& ontoBranch) {
     if (allow(vcs::GitOperationKind::Rebase))
         m_service->rebaseBranch(ontoBranch.trimmed().toStdString());
+}
+
+void GitController::rebaseStep(vcs::RebaseStep step) {
+    if (allow(vcs::GitOperationKind::Rebase)) m_service->rebaseStep(step);
 }
 
 void GitController::deleteBranch(const QString& branch, bool force) {

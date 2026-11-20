@@ -5,6 +5,7 @@
 // with the document's state.
 
 #include "frost/ui/workbench/document_editor.hpp"
+#include "frost/ui/workbench/large_file_view.hpp"
 
 #include "frost/document/load_service.hpp"
 #include "frost/ui/icon_ids.hpp"
@@ -257,6 +258,12 @@ DocumentEditorFactory::DocumentEditorFactory(IEditorFactory& inner, nav::Documen
 DocumentEditorFactory::~DocumentEditorFactory() = default;
 
 Result<std::unique_ptr<IEditorView>> DocumentEditorFactory::open(const std::string& path, IEditorHost& host) {
+    // Existing editable/journalled documents retain their identity and normal guards.
+    if (m_documents->find(path) == nullptr) {
+        auto status = m_documents->fileSystem().status(path);
+        if (status && status->type == io::FileType::Regular && status->size >= document::kMaxOpenFileBytes)
+            return makeLargeFileView(m_documents->fileSystem(), path, host);
+    }
     auto opened = m_documents->open(path);
     if (!opened) {
         return std::unexpected(std::move(opened.error()));

@@ -94,6 +94,8 @@ public:
     [[nodiscard]] int scrollOffset() const noexcept { return m_scrollOffset; }
     void setScrollOffset(int lines);
     void scrollToBottom() { setScrollOffset(0); }
+    // Navigate real OSC 133 command boundaries retained in scrollback; false when unavailable.
+    bool navigateCommand(bool forward);
 
     // The title the program set (OSC 0/2), "" until then.
     [[nodiscard]] const QString& title() const noexcept { return m_title; }

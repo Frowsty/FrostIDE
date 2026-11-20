@@ -12,6 +12,7 @@ frost_add_test(search_tests
     SOURCES
         find_in_files_test.cpp
         fuzzy_path_test.cpp
+        path_index_test.cpp
         replace_in_files_test.cpp
     DEPS frost::search frost::document frost::project frost::storage frost::sched frost::io)
 target_include_directories(search_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${FROST_SOURCE_DIR}/tests)

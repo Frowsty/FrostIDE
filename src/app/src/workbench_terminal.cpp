@@ -23,7 +23,8 @@ void Workbench::attachTerminal() {
     if (m_options.terminalProbe)
         env.probe = *m_options.terminalProbe;
     env.context = [this] {
-        return ui::TerminalContext{m_projectRoot, !m_projectRoot.empty() && m_services.trust.isTrusted(m_projectRoot)};
+        const auto trust = m_services.trust.snapshot(m_projectRoot);
+        return ui::TerminalContext{m_projectRoot, !m_projectRoot.empty() && trust.trusted, trust.revision};
     };
     env.settings = [this] { return term::terminalSettings(*m_services.settings.snapshot()); };
     m_terminal = std::make_unique<ui::TerminalIntegration>(*m_window, std::move(env));

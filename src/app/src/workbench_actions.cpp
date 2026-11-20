@@ -46,6 +46,7 @@ constexpr std::string_view kLog = "workbench";
 
 void Workbench::registerActions() {
     registerRefactoringActions();
+    registerEditorExtrasActions();
     // The shell owns Go to Line. Refactoring owns Undo/Redo routing at global document edges.
     static constexpr std::array<std::string_view, 3> kShellOwned{ui::actions::kGoToLine, "editor.undo", "editor.redo"};
     if (auto editor = ui::registerEditorActions(m_registry, m_actionHost, kShellOwned); !editor) {
@@ -177,6 +178,10 @@ void Workbench::registerActions() {
     add(
         "code.inspectLua", "Inspect Lua Code...", [this] { (void)inspectLuaCode(); },
         [this] { return !m_projectRoot.empty(); });
+    add("code.inspectNativeCpp", "Analyze C++ Module (Frost)...", [this] {
+        if(auto* view=currentView(); view && isCFamilySource(view->path()))
+            inspectNativeCppAsync(std::string(io::parentPath(view->path())));
+    },[this] { return m_window && currentView() && isCFamilySource(currentView()->path()); });
     input::ActionSpec inspectCpp;
     inspectCpp.id = "code.inspectCpp";
     inspectCpp.name = "Inspect C++ Module...";
@@ -400,12 +405,21 @@ void Workbench::registerActions() {
             DocumentEditorView* view = currentView();
             if (!m_window || !m_history || !view || view->path().empty())
                 return;
-            const std::string currentText = view->editor().editor().text().text();
+            const auto snapshot = view->editor().editor().text();
+            const std::string path = view->path();
+            const std::string key = view->document().key();
+            const QPointer<ui::EditorView> liveEditor(&view->editor());
+            DocumentEditorView* original = view;
+            const QPointer<Workbench> owner(this);
             showLocalHistoryDialog(
-                m_window, *m_history, view->path(), currentText, [this, view](const std::string& restored) {
-                    const text::Snapshot snap = view->editor().editor().text();
-                    const lang::ByteEdit edit{text::ByteRange{ByteOffset{0}, snap.size()}, restored};
-                    (void)m_bridge->applyEdits(std::span(&edit, 1), "Restore Local History", ByteOffset{0});
+                m_window, m_options.historyPath, key, path, snapshot.size().value() <= 4 * 1024 * 1024 ? snapshot.text() : std::string("Current file is too large for history preview."),
+                [owner, original, liveEditor, path, version = snapshot.version()](const std::string& restored) -> Result<void> {
+                    if (!owner || !liveEditor || original->path() != path ||
+                        original->editor().editor().text().version() != version)
+                        return fail(ErrorCode::Busy, "The editor changed while history was open; reopen Local History.");
+                    const auto current = original->editor().editor().text();
+                    const lang::ByteEdit edit{text::ByteRange{ByteOffset{0}, current.size()}, restored};
+                    return owner->m_bridge->applyEdits(path, std::span(&edit, 1), "Restore Local History");
                 });
         },
         [this] { return m_window != nullptr && m_history.has_value() && currentView() != nullptr; });

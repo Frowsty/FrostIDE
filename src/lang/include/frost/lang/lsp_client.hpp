@@ -86,8 +86,10 @@ struct ServerCapabilities {
     bool documentLink = false;
     bool foldingRange = false;
     bool ast = false;
-    std::string serverName;    // serverInfo.name, e.g. "clangd".
-    std::string serverVersion; // serverInfo.version.
+    std::string serverName;     // serverInfo.name, e.g. "clangd".
+    std::string serverVersion;  // serverInfo.version.
+    bool frostPlatform = false; // Valid frostClangFeatureModule schema 1 from the actual initialize response.
+    std::string frostLlvmVersion;
     Json raw;
 };
 

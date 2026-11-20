@@ -84,6 +84,104 @@ std::string fixturePath(std::string_view relative) {
     return frost::io::normalizePath(std::string(FROST_VCS_FIXTURE_DIR) + "/" + std::string(relative)).value();
 }
 
+TEST(GitDailyWorkflows, ContinueResolvedRebaseAndRoundTripStashThroughRealGit) {
+    TempRepo repo("daily-rebase-stash");
+    repo.init();
+    repo.write("a.txt", "base\n");
+    repo.commitAll("base");
+    const auto main = trimmed(repo.git({"branch", "--show-current"}));
+    repo.git({"checkout", "-b", "topic"});
+    repo.write("a.txt", "topic\n");
+    repo.commitAll("topic change");
+    repo.git({"checkout", main});
+    repo.write("a.txt", "main\n");
+    repo.commitAll("main change");
+    repo.git({"checkout", "topic"});
+    auto conflict = repo.repository().rebaseBranch(main);
+    ASSERT_FALSE(conflict);
+    ASSERT_FALSE(repo.git({"ls-files", "--unmerged"}).stdoutBytes.empty());
+    repo.write("a.txt", "resolved\n");
+    repo.git({"add", "--", "a.txt"});
+    auto continued = repo.repository().rebaseStep(RebaseStep::Continue);
+    ASSERT_TRUE(continued) << continued.error().describe();
+    repo.git({"merge-base", "--is-ancestor", main, "HEAD"});
+    EXPECT_EQ(repo.read("a.txt"), "resolved\n");
+    repo.write("a.txt", "stashed modification\n");
+    repo.write("untracked.txt", "stashed untracked\n");
+    auto stashed = repo.repository().stashPush("daily work", true);
+    ASSERT_TRUE(stashed) << stashed.error().describe();
+    EXPECT_EQ(repo.read("a.txt"), "resolved\n");
+    EXPECT_FALSE(repo.exists("untracked.txt"));
+    auto applied = repo.repository().stashApply(0, false);
+    ASSERT_TRUE(applied) << applied.error().describe();
+    EXPECT_EQ(repo.read("a.txt"), "stashed modification\n");
+    EXPECT_EQ(repo.read("untracked.txt"), "stashed untracked\n");
+    auto dropped = repo.repository().stashDrop(0);
+    ASSERT_TRUE(dropped) << dropped.error().describe();
+    EXPECT_TRUE(repo.git({"stash", "list"}).stdoutBytes.empty());
+}
+
+TEST(GitCommitChecks, SelectingRenameSourceChecksDestinationBytesToo) {
+    TempRepo repo("commit-check-rename");
+    repo.init();
+    repo.write("old.txt", "initial\n");
+    const auto head = repo.commitAll("initial");
+    repo.git({"mv", "old.txt", "new.txt"});
+    repo.write("new.txt", "changed destination\n");
+    CommitRequest request{.paths = {repo.path("old.txt")}, .message = "rename"};
+    request.checksReviewed = true;
+    request.checks = {{.name = "Changes rename destination", .executable = repo.runner().gitPath(),
+        .arguments = {"restore", "--worktree", "--", "new.txt"}}};
+    auto changed = repo.repository().commit(request);
+    ASSERT_FALSE(changed);
+    EXPECT_EQ(changed.error().code(), ErrorCode::Busy);
+    EXPECT_EQ(trimmed(repo.git({"rev-parse", "HEAD"})), head);
+}
+
+TEST(GitCommitChecks, RequireReviewAndBlockActualFailedCheckWithoutChangingHead) {
+    TempRepo repo("commit-checks");
+    repo.init();
+    repo.write("a.txt", "initial\n");
+    const auto head = repo.commitAll("initial");
+    repo.write("a.txt", "trailing whitespace \n");
+    CommitRequest request{.paths = {repo.path("a.txt")}, .message = "checked"};
+    request.checks = {{.name = "Whitespace", .executable = repo.runner().gitPath(), .arguments = {"diff", "--check"}}};
+    auto unreviewed = repo.repository().commit(request);
+    ASSERT_FALSE(unreviewed);
+    EXPECT_EQ(unreviewed.error().code(), ErrorCode::InvalidArgument);
+    request.checksReviewed = true;
+    auto failed = repo.repository().commit(request);
+    ASSERT_FALSE(failed);
+    EXPECT_NE(failed.error().message().find("exited with code"), std::string::npos);
+    EXPECT_EQ(trimmed(repo.git({"rev-parse", "HEAD"})), head);
+    repo.write("a.txt", "clean\n");
+    auto committed = repo.repository().commit(request);
+    ASSERT_TRUE(committed) << committed.error().describe();
+    EXPECT_NE(committed->commit, head);
+    EXPECT_NE(committed->output.find("Whitespace exited with code 0"), std::string::npos);
+}
+
+TEST(GitCommitChecks, IndexMutationRequiresReviewBeforeCommitAndHookStillRunsAfterChecks) {
+    TempRepo repo("commit-check-index");
+    repo.init();
+    repo.write("a.txt", "initial\n");
+    const auto head = repo.commitAll("initial");
+    repo.write("a.txt", "changed\n");
+    CommitRequest request{.paths = {repo.path("a.txt")}, .message = "checked"};
+    request.checksReviewed = true;
+    request.checks = {{.name = "Stages a file", .executable = repo.runner().gitPath(), .arguments = {"add", "--", "a.txt"}}};
+    auto changed = repo.repository().commit(request);
+    ASSERT_FALSE(changed);
+    EXPECT_EQ(changed.error().code(), ErrorCode::Busy);
+    EXPECT_EQ(trimmed(repo.git({"rev-parse", "HEAD"})), head);
+    request.checks = {{.name = "Git available", .executable = repo.runner().gitPath(), .arguments = {"--version"}}};
+    repo.hook("pre-commit", "echo actual-hook-rejected >&2; exit 1");
+    auto refused = repo.repository().commit(request);
+    ASSERT_FALSE(refused);
+    EXPECT_NE(refused.error().message().find("actual-hook-rejected"), std::string::npos);
+    EXPECT_EQ(trimmed(repo.git({"rev-parse", "HEAD"})), head);
+}
+
 TEST(GitE2E, DiscoversTheWorkTreeFromAFileOrASubdirectory) {
     TempRepo repo("vcs-discover");
     repo.init();

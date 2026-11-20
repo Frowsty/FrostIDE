@@ -4,6 +4,7 @@
 // every descriptor opened with O_CLOEXEC so children never inherit it.
 
 #include "frost/io/file_system.hpp"
+#include "random_access_reader.hpp"
 #include "frost/io/os_error.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/utf.hpp"
@@ -281,6 +282,7 @@ enum class MkdirOutcome : unsigned char { Done, ParentMissing, Failed };
 class PosixFileSystem final : public IFileSystem {
 public:
     constexpr PosixFileSystem() noexcept = default;
+    RandomAccessOpener randomAccessOpener() const override { return detail::openNativeRandomAccess; }
 
     Result<std::string> readFile(std::string_view path) override {
         auto checked = checkedPath(path);

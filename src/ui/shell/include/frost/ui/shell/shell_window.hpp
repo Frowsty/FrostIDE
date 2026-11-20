@@ -140,6 +140,9 @@ public:
     void openPopup(Popup* popup);
     // Moves the keyboard focus to the active editor, if any.
     void focusEditor();
+    // GUI-thread focus mode remembers chrome and visible tool windows until explicitly exited.
+    void setDistractionFree(bool enabled);
+    [[nodiscard]] bool distractionFree() const noexcept { return m_distractionFree; }
 
     // Posts start-up warnings (AppearanceManager::InstallReport::warnings) as one notification.
     void reportStartupWarnings(const std::vector<std::string>& warnings);
@@ -194,6 +197,11 @@ private:
     bool m_trusted = false;
     bool m_projectOpen = false;
     bool m_classicMenuBarVisible = false;
+    Qt::WindowStates m_beforeFullScreen;
+    bool m_distractionFree = false;
+    bool m_modeToolbar = true;
+    bool m_modeStatus = true;
+    std::vector<std::string> m_modeTools;
     bool m_tornDown = false;
 };
 

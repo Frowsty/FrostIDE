@@ -62,10 +62,18 @@ struct ShellCommand {
 [[nodiscard]] Result<ShellCommand> defaultShell(const ShellProbe& probe, std::string_view excludeRoot);
 
 // The terminal's settings (terminal.shell and terminal.scrollbackLines).
+struct TerminalProfile {
+    std::string name;
+    std::string shell;
+    std::vector<std::string> arguments;
+    std::string workingDirectory;
+    friend bool operator==(const TerminalProfile&, const TerminalProfile&) = default;
+};
 struct TerminalSettings {
     // An absolute path, or "" for defaultShell().
     std::string shell;
     std::size_t scrollbackLines = 10000;
+    std::vector<TerminalProfile> profiles;
 };
 
 // The terminal keys of `snapshot` (frost::settings' built-in registry).
