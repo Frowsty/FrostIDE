@@ -9,6 +9,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEngine;
 
 namespace FrostIDE.UnityIntegration
@@ -19,7 +20,7 @@ namespace FrostIDE.UnityIntegration
         [Serializable] private sealed class Announcement
         {
             public string method = "unity.hello", root, instance, session, token;
-            public int version = 2, generation, pid, port;
+            public int version = 2, generation, pid, port, eventVersion = 1;
         }
         [Serializable] private sealed class Challenge { public int version; public string session, challenge; }
         [Serializable] private sealed class Proof { public string session, nonce, proof; }
@@ -31,7 +32,9 @@ namespace FrostIDE.UnityIntegration
         [Serializable] private sealed class Reply
         {
             public string id, session, message;
-            public bool ok, playing, paused;
+            public bool ok, playing, paused, compiling;
+            public long projectVersion, eventFirst, eventNext, eventLast, eventLost;
+            public UnityBridgeEvents.Entry[] events;
             public int frame;
         }
         private sealed class Pending
@@ -85,6 +88,7 @@ namespace FrostIDE.UnityIntegration
                 int port = ((IPEndPoint)listener.LocalEndpoint).Port;
                 announcement = JsonUtility.ToJson(new Announcement { root = root, instance = instance, generation = generation,
                     session = session, token = token, pid = Process.GetCurrentProcess().Id, port = port });
+                UnityBridgeEvents.Start();
                 alive = true;
                 EditorApplication.update += Update;
                 AssemblyReloadEvents.beforeAssemblyReload += Shutdown;
@@ -175,7 +179,8 @@ namespace FrostIDE.UnityIntegration
         private static void Finish(Pending item, bool ok, string message)
         {
             item.result = new Reply { id = item.request.id, session = session, ok = ok, message = message,
-                playing = EditorApplication.isPlaying, paused = EditorApplication.isPaused, frame = Time.frameCount };
+                playing = EditorApplication.isPlaying, paused = EditorApplication.isPaused, frame = Time.frameCount,
+                compiling = EditorApplication.isCompiling, projectVersion = UnityBridgeEvents.ProjectVersion };
             item.done.Set();
         }
         private static bool Expired(Pending item)
@@ -206,6 +211,20 @@ namespace FrostIDE.UnityIntegration
                 lock (gate) { if (queue.Count == 0) break; item = queue.Dequeue(); }
                 if (Expired(item)) { Finish(item, false, "Request expired"); continue; }
                 if (item.request.command == "state") { Finish(item, true, "State observed"); continue; }
+                long cursor;
+                if (UnityControlProtocol.EventCursor(item.request.command, out cursor)) {
+                    try {
+                        var batch = UnityBridgeEvents.ReadAfter(cursor);
+                        item.result = new Reply { id = item.request.id, session = session, ok = true, message = "Unity events observed",
+                            playing = EditorApplication.isPlaying, paused = EditorApplication.isPaused, frame = Time.frameCount,
+                            compiling = EditorApplication.isCompiling, projectVersion = UnityBridgeEvents.ProjectVersion,
+                            events = batch.entries, eventFirst = batch.first, eventNext = batch.next, eventLast = batch.last, eventLost = batch.lost };
+                        item.done.Set();
+                    } catch (ArgumentOutOfRangeException) { Finish(item, false, "Event cursor is outside this Unity domain"); }
+                    continue;
+                }
+                if (item.request.command == "refresh") { AssetDatabase.Refresh(); Finish(item, true, "Asset refresh requested"); continue; }
+                if (item.request.command == "recompile") { CompilationPipeline.RequestScriptCompilation(); Finish(item, true, "Script compilation requested"); continue; }
                 if (transition != null) { Finish(item, false, "Another control request is pending"); continue; }
                 string command = item.request.command;
                 if ((command == "pause" || command == "resume" || command == "step") && !EditorApplication.isPlaying)
@@ -224,6 +243,7 @@ namespace FrostIDE.UnityIntegration
         private static void Shutdown()
         {
             alive = false;
+            UnityBridgeEvents.Stop();
             protocol?.Close();
             try { listener?.Stop(); } catch (Exception) { }
             EditorApplication.update -= Update;

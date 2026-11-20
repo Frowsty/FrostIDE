@@ -1,4 +1,4 @@
-﻿<!-- SPDX-License-Identifier: Apache-2.0
+<!-- SPDX-License-Identifier: Apache-2.0
      Standalone test fixture for Unity control transport against a mock editor loop. -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -11,6 +11,7 @@
     <Compile Include="../../integrations/unity/com.frostide.editor/Editor/UnityBrokerClient.cs" />
     <Compile Include="../../integrations/unity/com.frostide.editor/Editor/UnityControlProtocol.cs" />
     <Compile Include="../../integrations/unity/com.frostide.editor/Editor/UnityControlService.cs" />
+    <Compile Include="../../integrations/unity/com.frostide.editor/Editor/UnityBridgeEvents.cs" />
     <Compile Include="UnityControlServiceStubs.cs" />
     <Compile Include="UnityControlServiceProbe.cs" />
   </ItemGroup>

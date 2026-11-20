@@ -41,7 +41,16 @@ internal static class UnityControlProtocolProbe
             if (!connection.TryReserve(2, "/physical/project", session, id, "state", 100, connection.ServerNonce, signature))
                 throw new Exception("fresh connection refused at " + i);
         }
-        var changed = protocol.Open(2, session, challenge);
+        foreach (string command in new[] { "events:0", "events:9223372036854775807", "refresh", "recompile" }) {
+            var connection = protocol.Open(2, session, challenge);
+            string signature = Sign(token, "frost-unity-request-v2", "/physical/project", session, id, command, "100", challenge, connection.ServerNonce);
+            if (!connection.TryReserve(2, "/physical/project", session, id, command, 100, connection.ServerNonce, signature)) throw new Exception("authenticated event/control command refused");
+        }
+        foreach (string command in new[] { "events:-1", "events:1junk", "events:9223372036854775808", "events:", "arbitrary" }) {
+            var connection = protocol.Open(2, session, challenge);
+            string signature = Sign(token, "frost-unity-request-v2", "/physical/project", session, id, command, "100", challenge, connection.ServerNonce);
+            if (connection.TryReserve(2, "/physical/project", session, id, command, 100, connection.ServerNonce, signature)) throw new Exception("invalid event/control command accepted");
+        }        var changed = protocol.Open(2, session, challenge);
         string valid = Sign(token, "frost-unity-request-v2", "/physical/project", session, id, "play", "100", challenge, changed.ServerNonce);
         if (changed.TryReserve(2, "/other", session, id, "play", 100, changed.ServerNonce, valid)) throw new Exception("wrong project accepted");
         foreach (string field in new[] { "session", "id", "command", "ttl", "nonce", "challenge", "mac", "expired", "too-long" })

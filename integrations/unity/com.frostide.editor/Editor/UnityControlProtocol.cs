@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 // One-shot authenticated Unity editor commands bound to fresh connection challenges.
 using System;
 using System.Globalization;
@@ -60,7 +60,19 @@ namespace FrostIDE.UnityIntegration
                 return text.ToString();
             }
         }
-        internal sealed class Connection
+        internal static bool EventCursor(string command, out long cursor) {
+            cursor = 0;
+            if (command == null || !command.StartsWith("events:", StringComparison.Ordinal)) return false;
+            string value = command.Substring(7);
+            if (value.Length == 0 || value.Length > 19) return false;
+            foreach (char c in value) if (c < '0' || c > '9') return false;
+            return Int64.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out cursor);
+        }
+        private static bool Command(string command) {
+            long cursor;
+            return command == "state" || command == "play" || command == "pause" || command == "resume" ||
+                command == "step" || command == "stop" || command == "refresh" || command == "recompile" || EventCursor(command, out cursor);
+        }        internal sealed class Connection
         {
             private readonly UnityControlProtocol owner;
             internal readonly string ClientChallenge, ServerNonce, Proof;
@@ -81,8 +93,7 @@ namespace FrostIDE.UnityIntegration
                     if (owner.closed || version != 2 || !String.Equals(owner.project, project, StringComparison.Ordinal) ||
                         !String.Equals(owner.session, session, StringComparison.Ordinal) || !Hex(id, 32) ||
                         ttlMs < 1 || ttlMs > 5000 || !String.Equals(ServerNonce, nonce, StringComparison.Ordinal) ||
-                        !Hex(supplied, 64) || !(command == "state" || command == "play" || command == "pause" ||
-                        command == "resume" || command == "step" || command == "stop")) return false;
+                        !Hex(supplied, 64) || !Command(command)) return false;
                     string expected = owner.Mac("frost-unity-request-v2", project, session, id, command,
                         ttlMs.ToString(CultureInfo.InvariantCulture), ClientChallenge, ServerNonce);
                     int difference = 0;
