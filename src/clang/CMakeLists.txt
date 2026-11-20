@@ -68,6 +68,7 @@ add_executable(frost-clang
     src/ast_generation.cpp
     src/ast_signature.cpp
     src/semantic_command.cpp
+    src/semantic_preprocess.cpp
     src/semantic_index.cpp
     src/semantic_command_checks.cpp
     src/tidy_fixes_decode.cpp

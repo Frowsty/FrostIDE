@@ -75,3 +75,13 @@ target_compile_definitions(clang_semantic_index_tests PRIVATE
     FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 add_dependencies(clang_semantic_index_tests frost-clang)
+
+frost_add_test(clang_semantic_preprocess_tests
+    SOURCES semantic_preprocess_test.cpp
+    DEPS frost::lang frost::rpc frost::io frost::core
+    LABELS integration)
+target_include_directories(clang_semantic_preprocess_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(clang_semantic_preprocess_tests PRIVATE
+    FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+add_dependencies(clang_semantic_preprocess_tests frost-clang)

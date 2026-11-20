@@ -3,6 +3,17 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R13 CPP-13 actual preprocessor producer/client
+
+- Added an isolated actual Clang preprocessor printer for one exact captured CDB command, callback-derived directed include edges and macro invocation/definition-token events. Full expanded source uses the Clang -E printer without line markers; definition tokens are not mislabelled as expanded tokens. The typed bounded client retains immutable input receipts and rejects unavailable/malformed responses.
+- Authored a pinned clang -E -P output oracle, actual include/macro checks, changed-header refusal and ordinal-dialog project-switch regression. Independent Astra source review cleared producer/client/tests and UI admission source. No build, test, feature execution or WSL ran; clang -E equality remains an authored acceptance test. Combined preprocessor/module Workbench UI wiring continues in the next reviewed slice.
+
+## 2026-11-20: R13 configuration index implementation checkpoint
+
+- Added actual per-command Clang semantic indexing, persistent atomic configuration units, canonical symbol occurrences and relations, stale dependency exclusion, bounded queries and explicit rebuild/invalidate actions. Configuration identity retains the exact captured CDB ordinal; uncaptured/unindexed commands remain visibly outside coverage.
+- Modal request admission retains project/server/trust/generation. Modeless navigation and derived queries retain query-time dependency receipts, validate on a background worker and recheck editor identity/path/version plus live admission before action. Save/reindex cannot bless old displayed coordinates.
+- Storage, actual frontend/configuration, cancellation/refusal and modal-switch regression sources were authored. Independent Astra source review cleared this slice. Only source formatting ran; builds, tests, feature execution, WSL and performance verification remain deferred. CPP-8 baseline performance acceptance has not passed. CPP-13 and CPP-15 continue separately.
+
 ## 2026-11-20: R13 CPP-15 module scanner source implementation
 
 - Added contained pinned-version clang-scan-deps execution over an exact captured arguments-form compilation database, explicit trust and mandatory pre/post current-context validation. Strict bounded P1689 decoding retains actual provider/import relationships; navigation resolves only a unique scanner-reported interface path. Relative scanner source paths, response-file commands and ambiguous providers refuse rather than infer a target.

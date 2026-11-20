@@ -48,6 +48,7 @@
 #include "local_rename_plan.hpp"
 #include "semantic_command.hpp"
 #include "semantic_index.hpp"
+#include "semantic_preprocess.hpp"
 #include "tidy_fixes_decode.hpp"
 
 #include <cstdlib>
@@ -334,6 +335,8 @@ int runSymbolRewriter(int argc, char* argv[]) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    if (argc == 2 && std::string_view(argv[1]) == "--preprocess-unit")
+        return frost::clang_engine::runSemanticPreprocess(detectClangResourceDir());
     if (argc == 2 && std::string_view(argv[1]) == "--index-unit") {
         return frost::clang_engine::runSemanticIndex(detectClangResourceDir());
     }
