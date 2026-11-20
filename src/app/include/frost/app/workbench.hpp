@@ -182,6 +182,7 @@ struct ManagedSnapshotJob;
 struct ManagedSourceSnapshot;
 
 class LanguageBridge;
+class LanguageRegistryIntegration;
 class CMakeIntegration;
 class StandaloneBuildBackend;
 class ProjectEditProcess;
@@ -741,6 +742,9 @@ public:
      * ($/progress), else Unknown. GUI thread; a few stats per call (clangdUsesFallbackFlags).
      */
     [[nodiscard]] ui::lang::ServerReadiness languageReadiness(std::string_view path);
+    // Application-only local onboarding. Validates manifest without launching during parsing.
+    [[nodiscard]] Result<void> setLanguageServerRegistry(std::string manifest);
+    [[nodiscard]] lang::Json languageServerRegistryState() const;
     // WorkbenchOptions::metadataCacheDirectory, as the language features got it.
     [[nodiscard]] const std::string& metadataCacheDirectory() const noexcept {
         return m_options.metadataCacheDirectory;
@@ -783,6 +787,7 @@ protected:
 private:
     bool confirmSourceTemplatePlan(const document::RefactoringPlan&);
     friend class LanguageBridge;
+    friend class LanguageRegistryIntegration;
     friend class EngineIntegration;
     friend class EngineBindingIntegration;
     [[nodiscard]] bool canStartLuaDebug() const;
@@ -1205,6 +1210,7 @@ private:
     bool m_compileDatabaseReading = false;
     sched::LatestWins m_searchSymbolsSlot;
     std::unique_ptr<LanguageBridge> m_bridge;
+    std::unique_ptr<LanguageRegistryIntegration> m_registeredLanguages;
     std::unique_ptr<ui::lang::LanguageController> m_language;
     // Text the user typed into the current editor during this key press (for textTyped).
     std::string m_typed;

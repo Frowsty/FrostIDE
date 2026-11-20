@@ -151,6 +151,7 @@ frost_add_library(app LAYER app
         src/workbench_mixed_debug.cpp
         src/engine_native_debug.hpp
         src/workbench_language.cpp
+        src/language_registry_integration.cpp
         src/workbench_refactoring.cpp
         src/workbench_cpp_rename.cpp
         src/workbench_cpp_refactoring.cpp

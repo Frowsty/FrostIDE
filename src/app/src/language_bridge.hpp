@@ -57,6 +57,9 @@ public:
 
     void setLuaServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setLuaServer(std::move(server)); }
     void setManagedServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setManagedServer(std::move(server)); }
+    void setRegisteredServers(std::map<std::string, std::shared_ptr<lang::ILspRequester>> routes) {
+        m_server.setRegisteredServers(std::move(routes));
+    }
     void setActivePath(std::string_view path) { m_server.setActivePath(path); }
 
     void closeJsonDocument(std::string_view path) { m_json->removeDocument(path); }

@@ -104,6 +104,7 @@ frost_add_test(app_workbench_tests QT
             workbench_engine_mixed_test.cpp
             engine_crash_cleanup_test.cpp engine_native_host_test.cpp engine_tests_lifetime_test.cpp
             source_rename_plan_test.cpp
+            language_registry_integration_test.cpp
         workbench_templates_test.cpp
         workbench_lua_refactoring_test.cpp
     DEPS frost::app frost::build frost::io frost::ui_find

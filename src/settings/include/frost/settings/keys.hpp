@@ -117,6 +117,7 @@ inline constexpr Key<std::string> toolsNugetPath{"tools.nuget.path"};
 inline constexpr Key<std::string> toolsCmakePath{"tools.cmake.path"};
 inline constexpr Key<std::string> toolsNinjaPath{"tools.ninja.path"};
 inline constexpr Key<std::string> toolsGitPath{"tools.git.path"};
+inline constexpr Key<std::string> languageServerRegistry{"languages.serverRegistry"};
 inline constexpr Key<std::string> luaRuntimeVersion{"lua.runtimeVersion"};
 inline constexpr Key<std::string> luaLanguageProvider{"lua.languageProvider"};
 inline constexpr Key<std::string> toolsEmmyLuaPath{"tools.emmyLua.path"};
