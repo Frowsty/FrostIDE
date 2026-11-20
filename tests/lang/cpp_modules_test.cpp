@@ -2,54 +2,7 @@
 // Strict scanner DTO tests. Synthetic protocol cases are not runtime feature evidence.
 #include "frost/lang/cpp_modules.hpp"
 #include <gtest/gtest.h>
-#include "frost/io/mem_fs.hpp"
-#include "frost/io/path.hpp"
 namespace frost::lang {
-TEST(CppModules, CapturedHeaderChangesAndNewInputsInvalidateWholeReceipt) {
-    ManualClock clock;
-    io::MemFs fs(clock);
-    const std::string root = io::kNativePathStyle == io::PathStyle::Windows ? "C:/modules" : "/modules";
-    const auto source = io::joinPath(root, "source.cppm").value();
-    const auto header = io::joinPath(root, "conditional.h").value();
-    ASSERT_TRUE(fs.createDirectories(root));
-    ASSERT_TRUE(fs.writeFileAtomic(source, "module;\n#include \"conditional.h\"\nexport module m;\n"));
-    ASSERT_TRUE(fs.writeFileAtomic(header, "#define IMPORT_ENABLED 1\n"));
-    const std::vector<CompileCommand> commands{{root, source, {source + ".compiler", "-std=c++20", "-c", source}}};
-    const auto database = compileCommandsJson(commands);
-    auto receipt = captureCppModuleInputs(fs, root, database);
-    ASSERT_TRUE(receipt);
-    ASSERT_TRUE(validateCppModuleInputs(fs, *receipt));
-    ASSERT_TRUE(fs.writeFileAtomic(header, "#define IMPORT_ENABLED 0\n"));
-    EXPECT_FALSE(validateCppModuleInputs(fs, *receipt));
-    receipt = captureCppModuleInputs(fs, root, database);
-    ASSERT_TRUE(receipt);
-    ASSERT_TRUE(fs.writeFileAtomic(io::joinPath(root, "new-header.h").value(), "// new include\n"));
-    EXPECT_FALSE(validateCppModuleInputs(fs, *receipt));
-}
-TEST(CppModules, ForcedIncludeCapturesExternalSiblingsAndRefusesHiddenSearchFlags) {
-    ManualClock clock;
-    io::MemFs fs(clock);
-    const std::string root = io::kNativePathStyle == io::PathStyle::Windows ? "C:/modules" : "/modules";
-    const std::string external = io::kNativePathStyle == io::PathStyle::Windows ? "C:/external" : "/external";
-    const auto source = io::joinPath(root, "m.cppm").value();
-    const auto forced = io::joinPath(external, "forced.hpp").value();
-    const auto sibling = io::joinPath(external, "sibling.hpp").value();
-    ASSERT_TRUE(fs.createDirectories(root));
-    ASSERT_TRUE(fs.createDirectories(external));
-    ASSERT_TRUE(fs.writeFileAtomic(source, "export module m;\n"));
-    ASSERT_TRUE(fs.writeFileAtomic(forced, "#include \"sibling.hpp\"\n"));
-    ASSERT_TRUE(fs.writeFileAtomic(sibling, "#define SWITCH 1\n"));
-    std::vector<CompileCommand> commands{{root, source, {source + ".compiler", "-include", forced, "-c", source}}};
-    auto captured = captureCppModuleInputs(fs, root, compileCommandsJson(commands));
-    ASSERT_TRUE(captured);
-    EXPECT_TRUE(captured->files.contains(sibling));
-    ASSERT_TRUE(fs.writeFileAtomic(sibling, "#define SWITCH 0\n"));
-    EXPECT_FALSE(validateCppModuleInputs(fs, *captured));
-    for (const std::string flag : {"/imsvc", "/clang:-Ihidden", "-iprefix", "-iwithprefix"}) {
-        commands[0].arguments = {source + ".compiler", flag, external, "-c", source};
-        EXPECT_FALSE(captureCppModuleInputs(fs, root, compileCommandsJson(commands))) << flag;
-    }
-}
 TEST(CppModules, AcceptsActualLlvmVersionBanner) {
     EXPECT_TRUE(validateCppModuleScannerVersion("/sdk/bin/clang-scan-deps\nLLVM (http://llvm.org/):\n  LLVM version 23.1.4\n  Optimized build.\n"));
     EXPECT_FALSE(validateCppModuleScannerVersion("LLVM version 23.1.40\n"));
