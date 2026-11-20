@@ -58,12 +58,28 @@ sched::Task<void> diagnose(io::IFileSystem* fs, io::IProcessLauncher* launcher, 
 void Workbench::showDxcDiagnostics() {
     if (!m_window || m_shutDown || !m_pool || m_projectRoot.empty())
         return;
-    if (!m_services.trust.isTrusted(m_projectRoot)) {
+    const auto admission = m_services.trust.snapshot(m_projectRoot);
+    if (!admission.trusted) {
         offerProjectTrust();
         return;
     }
     QPointer<Workbench> lifetime(this);
-    QDialog dialog(m_window);
+    const auto shell = m_window;
+    const auto projectRoot = m_projectRoot;
+    const auto projectGeneration = m_projectEditAdmissionGeneration;
+    const auto operationGeneration = m_dxcGeneration;
+    const auto admitted = [this, lifetime, shell, projectRoot, projectGeneration, operationGeneration, admission] {
+        if (!lifetime || !shell || m_shutDown || m_projectRoot != projectRoot ||
+            m_projectEditAdmissionGeneration != projectGeneration || m_dxcGeneration != operationGeneration)
+            return false;
+        const auto current = m_services.trust.snapshot(projectRoot);
+        return current.trusted && current.revision == admission.revision;
+    };
+    // A shell-owned QObject must never delete this stack object during a nested event loop.
+    QDialog dialog;
+    dialog.setWindowModality(Qt::ApplicationModal);
+    connect(this, &QObject::destroyed, &dialog, &QDialog::reject);
+    connect(shell.data(), &QObject::destroyed, &dialog, &QDialog::reject);
     dialog.setObjectName("dxcDiagnosticsDialog");
     dialog.setWindowTitle(tr("DXC HLSL Diagnostics"));
     auto* layout = new QVBoxLayout(&dialog);
@@ -79,11 +95,26 @@ void Workbench::showDxcDiagnostics() {
     form->addRow(tr("Installed DXC"), executable);
     auto* browse = new QPushButton(tr("Choose DXC..."), &dialog);
     form->addRow(browse);
-    connect(browse, &QPushButton::clicked, &dialog, [&] {
-        auto path = QFileDialog::getOpenFileName(&dialog, tr("Select installed DXC"));
-        if (!path.isEmpty())
-            executable->setText(path);
-    });
+    browse->setObjectName("dxcBrowse");
+    connect(browse, &QPushButton::clicked, &dialog,
+            [lifetime, shell, owner = QPointer<QDialog>(&dialog), field = QPointer<QLineEdit>(executable)] {
+                if (!lifetime || !shell || !owner || !field)
+                    return;
+                QFileDialog picker;
+                picker.setObjectName("dxcCompilerPicker");
+                picker.setWindowTitle(tr("Select installed DXC"));
+                picker.setFileMode(QFileDialog::ExistingFile);
+                picker.setWindowModality(Qt::ApplicationModal);
+                connect(lifetime.data(), &QObject::destroyed, &picker, &QDialog::reject);
+                connect(shell.data(), &QObject::destroyed, &picker, &QDialog::reject);
+                connect(owner.data(), &QDialog::finished, &picker, &QDialog::reject);
+                const auto accepted = picker.exec() == QDialog::Accepted;
+                if (!lifetime || !shell || !owner || !field || !owner->isVisible() || !accepted)
+                    return;
+                const auto files = picker.selectedFiles();
+                if (!files.isEmpty())
+                    field->setText(files.front());
+            });
     auto* source = new QLineEdit(&dialog);
     if (auto* view = currentView())
         source->setText(q(view->path()));
@@ -99,9 +130,9 @@ void Workbench::showDxcDiagnostics() {
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted || !lifetime || m_shutDown)
+    if (dialog.exec() != QDialog::Accepted || !admitted())
         return;
-    DxcProfile profile{executable->text().toStdString(), m_projectRoot, source->text().toStdString(),
+    DxcProfile profile{executable->text().toStdString(), projectRoot, source->text().toStdString(),
                        entry->text().toStdString(), target->text().toStdString()};
     auto spec = dxcSpec(profile);
     if (!spec) {
@@ -120,7 +151,7 @@ void Workbench::showDxcDiagnostics() {
         return;
     }
     auto saved = saveAllDocuments();
-    if (!lifetime || m_shutDown)
+    if (!admitted())
         return;
     if (!saved.failed.empty() || !saved.skipped.empty()) {
         notify(tr("DXC unavailable"), tr("Save All must complete before compiling saved HLSL."),
@@ -139,9 +170,9 @@ void Workbench::showDxcDiagnostics() {
             }
             images.emplace(document->path(), std::move(bytes));
         }
-    const auto permission = m_services.trust.snapshot(profile.root);
-    if (!permission.trusted)
+    if (!admitted())
         return;
+    const auto permission = admission;
     m_dxcExecutable = profile.executable;
     m_dxcEntry = profile.entry;
     m_dxcTarget = profile.target;
