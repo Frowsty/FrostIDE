@@ -122,8 +122,15 @@ Result<SceneMergeSnapshot> prepareSceneMerge(const SceneMergeWork& work, std::st
         return std::unexpected(root.error());
     // Only the selected project's actual physical Assets subtree can supply engine scene semantics.
     const auto rootPath = io::toStdPath(*root);
+    if (!rootPath)
+        return std::unexpected(rootPath.error());
     const auto targetPath = io::toStdPath(*target);
-    source.request.images.path = io::fromStdPath(targetPath.lexically_relative(rootPath));
+    if (!targetPath)
+        return std::unexpected(targetPath.error());
+    auto relativePath = io::fromStdPath(targetPath->lexically_relative(*rootPath));
+    if (!relativePath)
+        return std::unexpected(relativePath.error());
+    source.request.images.path = std::move(*relativePath);
     std::ranges::replace(source.request.images.path, '\\', '/');
     auto stages = git(work, {"ls-files", "--unmerged", "-z", "--", work.relative}, stop);
     if (!stages)
