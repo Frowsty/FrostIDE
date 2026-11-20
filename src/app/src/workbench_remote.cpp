@@ -13,7 +13,6 @@
 #include "frost/sched/resource_governor.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/toolwindows/build_controller.hpp"
-#include "frost/ui/debug_session_registry.hpp"
 #include "remote_dialogs.hpp"
 #include "cmake_integration.hpp"
 #include <QDialog>
@@ -282,8 +281,16 @@ void Workbench::showWslCMake() {
     notify("WSL CMake","WSL build toolchains require the Windows IDE.",ui::NotificationKind::Warning);return;
 #else
     if(!m_window||!m_pool||!m_buildService||m_projectRoot.empty()||m_remoteBuildActive)return;
-    if((m_runController&&m_runController->running())||(m_debugSessions&&m_debugSessions->anyDebugging())||
-        m_buildService->externalLaunchAdmissionBusy()) {notify("WSL CMake","Finish the current build, run, debugger or project edit first.",ui::NotificationKind::Warning);return;}
+    const auto launchAvailable = [this] {
+        if (!m_nativeAnalysisActive && !m_remoteBuildActive && !hasDebugActivity() &&
+            (!m_runController || !m_runController->running()) && !m_buildService->externalLaunchAdmissionBusy())
+            return true;
+        notify("WSL CMake", "Finish the current build, run, analysis, debugger or project edit first.",
+               ui::NotificationKind::Warning);
+        return false;
+    };
+    if (!launchAvailable())
+        return;
     const auto root=m_projectRoot;const auto rootStop=m_remoteStop.get_token();
     auto sourceStatus=m_services.fs.status(root);if(!sourceStatus){notify("WSL CMake",q(sourceStatus.error().message()),ui::NotificationKind::Error);return;}
     const auto source=sourceStatus->type==io::FileType::Directory?root:std::string(io::parentPath(root));
@@ -315,6 +322,8 @@ void Workbench::showWslCMake() {
     auto target=std::find_if(targets->begin(),targets->end(),[&](const auto& row){return row.id==edited->profile.targetId;});
     if(target==targets->end()||!target->executionApproved){notify("WSL CMake","Approve the named application endpoint before executing its profile.",ui::NotificationKind::Warning);return;}
     const auto permission=m_services.trust.snapshot(root);
+    if (!launchAvailable())
+        return;
     auto reservation=m_buildService->reserveExternalLaunch();if(!reservation){notify("WSL CMake",q(reservation.error().message()),ui::NotificationKind::Warning);return;}
     auto reserved=std::shared_ptr<Reservation>(new Reservation{m_buildService.get(),*reservation});
     if(m_services.settings.snapshot()->get(settings::key::buildSaveAllBeforeBuild)) {

@@ -510,11 +510,7 @@ void Workbench::createRunService() {
     if (auto added = m_registry.add(std::move(attachProcess)); !added)
         log::warn(kLog, "attach process action: {}", added.error().describe());
     ui::RunActionHooks actionHooks;
-    actionHooks.debugging = [this] {
-        return (m_debugSessions && (m_debugSessions->anyDebugging() || m_debugSessions->anyRerunPending() ||
-                                    m_debugSessions->hasPendingWork())) ||
-               (m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob != nullptr;
-    };
+    actionHooks.debugging = [this] { return hasDebugActivity(); };
     actionHooks.stopDebugging = [this] {
         if ((m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob)
             invalidateManagedDebug();
@@ -547,8 +543,15 @@ void Workbench::createRunService() {
     });
 }
 
+bool Workbench::hasDebugActivity() const {
+    return (m_debugSessions && (m_debugSessions->anyDebugging() || m_debugSessions->anyRerunPending() ||
+                                m_debugSessions->hasPendingWork())) ||
+           (m_managedDebugPreparation && m_managedDebugPreparation->active()) || m_managedSnapshotJob != nullptr;
+}
+
 bool Workbench::canStartLuaDebug() const {
-    return !m_shutDown && !m_projectRoot.empty() && m_buildService && !m_buildService->projectEditInProgress() &&
+    return !m_shutDown && !m_nativeAnalysisActive && !m_remoteBuildActive && !m_projectRoot.empty() &&
+           m_buildService && !m_buildService->projectEditInProgress() &&
            m_buildService->state() == build::BuildState::Idle &&
            (!m_cmake || (!m_cmake->running() && m_cmake->service().state() == build::BuildState::Idle)) &&
            m_runController && !m_runController->running() && m_runService && m_runService->activeRuns().empty() &&

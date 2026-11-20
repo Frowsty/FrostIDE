@@ -19,6 +19,7 @@
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
 #include "frost/rpc/json.hpp"
+#include "frost/ui/toolwindows/problems.hpp"
 
 #include "automation_endpoint.hpp"
 #include "support/endpoint_client.hpp"
@@ -163,6 +164,29 @@ TEST(AutomationEndpoint, RefusesAFirstRequestOtherThanHelloAndAWrongToken) {
     const Json unknown = client.request("no.such.method");
     ASSERT_NE(unknown.find("error"), nullptr);
     EXPECT_EQ(unknown.find("error")->stringAt("code"), "NotFound");
+}
+
+TEST(AutomationEndpoint, ReportsDxcAndLiveProblemsAsDistinctSources) {
+    WorkDir dir("endpoint-problem-sources");
+    WorkbenchRig rig(dir);
+    auto* problems = rig.workbench->problems();
+    ASSERT_NE(problems, nullptr);
+    problems->model()->setProblems(frost::ui::DiagnosticSource::Live, {frost::build::BuildDiagnostic{}});
+    problems->model()->setProblems(frost::ui::DiagnosticSource::Dxc, {frost::build::BuildDiagnostic{}});
+
+    auto endpoint = AutomationEndpoint::start(*rig.workbench, dir.join("automation.json"));
+    ASSERT_TRUE(endpoint);
+    EndpointClient client((*endpoint)->serverName());
+    ASSERT_TRUE(client.connected());
+    result(client.request("hello", Json::object().set("token", (*endpoint)->token())), "hello");
+    const Json reply = result(client.request("problems"), "problems");
+    const Json* rows = reply.find("problems");
+    ASSERT_NE(rows, nullptr);
+    ASSERT_EQ(rows->items().size(), 2U);
+    std::set<std::string> sources;
+    for (const Json& row : rows->items())
+        sources.emplace(row.stringAt("source"));
+    EXPECT_EQ(sources, (std::set<std::string>{"dxc", "live"}));
 }
 
 /*

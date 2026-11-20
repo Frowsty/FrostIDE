@@ -489,7 +489,7 @@ target_compile_definitions(app_mono_held_reader_tests PRIVATE FROST_HELD_READER=
 add_dependencies(app_mono_held_reader_tests frost_held_read)
 # RUN-12 later genuine instrumented selected-run/action/gutter journey.
 frost_add_test(app_workbench_native_coverage_tests QT SOURCES workbench_native_coverage_test.cpp
-    DEPS frost::app frost::run frost::lang frost::io frost::sched LABELS integration)
+    DEPS frost::app frost::build frost::run frost::lang frost::io frost::sched LABELS integration)
 target_include_directories(app_workbench_native_coverage_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_native_coverage_tests PRIVATE ${_frost_workbench_definitions}
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")

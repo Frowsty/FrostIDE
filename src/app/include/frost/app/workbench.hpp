@@ -858,6 +858,7 @@ private:
     friend class ExtensionIntegration;
     friend class EngineIntegration;
     friend class EngineBindingIntegration;
+    [[nodiscard]] bool hasDebugActivity() const;
     [[nodiscard]] bool canStartLuaDebug() const;
     friend class UnityControlIntegration;
     friend class GitIntegration;

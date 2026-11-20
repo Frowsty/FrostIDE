@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // RUN-12 deferred real selected-configuration action -> genuine LLVM results -> source gutter journey.
+#include "frost/build/wsl_cmake.hpp"
 #include "frost/io/path.hpp"
+#include "frost/ui/debug_session_registry.hpp"
+#include "frost/ui/shell/notifications.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/run/native_analysis.hpp"
 #include "frost/ui/run_controller.hpp"
@@ -9,6 +12,7 @@
 #include <QApplication>
 #include <QDialog>
 #include <QFileDialog>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QProgressDialog>
@@ -46,10 +50,15 @@ TEST(WorkbenchNativeCoverage, ChangingSelectedConfigurationBeforeWorkerQueueStar
     options.launcher = &launcher;
     app::test::WorkbenchRig* owner = nullptr;
     bool queued = false;
+    const input::ActionContext debugContext{{}, input::AvailabilityLevel::L4, true};
     QPointer<QProgressDialog> progress;
     options.workbench.nativeAnalysisBeforeQueue = [&] {
         queued = true;
         progress = owner->window->findChild<QProgressDialog*>("nativeAnalysisProgress");
+        auto& registry = owner->workbench->registry();
+        const auto attach = registry.find("debug.attachUnity");
+        ASSERT_TRUE(attach);
+        EXPECT_FALSE(registry.isEnabled(*attach, debugContext));
         EXPECT_TRUE(owner->workbench->runController()->selectConfiguration("coverage.second"));
     };
     app::test::WorkbenchRig rig(dir, std::move(options));
@@ -67,6 +76,9 @@ TEST(WorkbenchNativeCoverage, ChangingSelectedConfigurationBeforeWorkerQueueStar
     second.name = "Second";
     rig.workbench->runController()->setStoredConfigurations({first, second});
     ASSERT_TRUE(rig.workbench->runController()->selectConfiguration(first.id));
+    const auto attach = rig.workbench->registry().find("debug.attachUnity");
+    ASSERT_TRUE(attach);
+    ASSERT_TRUE(rig.workbench->registry().isEnabled(*attach, debugContext));
     const bool oldNative = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
     const auto restoreDialogs =
@@ -86,6 +98,83 @@ TEST(WorkbenchNativeCoverage, ChangingSelectedConfigurationBeforeWorkerQueueStar
         app::test::waitFor([&] { return queued && (!progress || !progress->isVisible()); }, std::chrono::seconds(30)));
     EXPECT_TRUE(launcher.launches().empty());
 }
+
+#ifdef _WIN32
+TEST(WorkbenchWslCMake, RefusesBuildWhenDebugPreparationStartsInsideProfileDialog) {
+    using namespace frost;
+    app::test::WorkDir dir("wsl-build-pending-debug");
+    const auto root = dir.join("project");
+    ASSERT_TRUE(io::realFileSystem().createDirectories(root));
+    build::RemoteTarget target;
+    target.id = "wsl.test";
+    target.name = "Test distribution";
+    target.transportExecutable = dir.join("wsl.exe");
+    target.distribution = "TestDistribution";
+    target.mappings = {{root, "/src"}};
+    target.executionApproved = true;
+    dir.write("remote.json", build::remoteTargetsJson({target}));
+    build::WslCMakeProfile profile;
+    profile.id = "wsl.profile";
+    profile.name = "Debug";
+    profile.targetId = target.id;
+    profile.localSourceDirectory = root;
+    profile.buildDirectory = "/build";
+    ASSERT_TRUE(build::wslCMakeCommand(profile, target, build::WslCMakeOperation::Build, 1));
+    dir.write("wsl.json", build::wslCMakeProfilesJson({profile}));
+
+    io::ScriptedProcessLauncher launcher;
+    app::test::RigOptions options;
+    options.launcher = &launcher;
+    options.workbench.remoteTargetsPath = dir.join("remote.json");
+    options.workbench.wslCMakeProfilesPath = dir.join("wsl.json");
+    app::test::WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(root));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(root));
+    auto* sessions = rig.workbench->debugSessions();
+    ASSERT_NE(sessions, nullptr);
+    ASSERT_FALSE(sessions->hasPendingWork());
+
+    ui::DebugGroupId preparing = 0;
+    bool acceptedBuild = false;
+    QTimer dialogs;
+    dialogs.setInterval(10);
+    QObject::connect(&dialogs, &QTimer::timeout, [&] {
+        auto* active = QApplication::activeModalWidget();
+        if (auto* choice = qobject_cast<QInputDialog*>(active)) {
+            static_cast<QDialog*>(choice)->accept();
+            return;
+        }
+        auto* dialog = qobject_cast<QDialog*>(active);
+        if (!dialog || dialog->objectName() != "wslCMakeProfileDialog")
+            return;
+        preparing = sessions->createGroup();
+        for (auto* button : dialog->findChildren<QPushButton*>()) {
+            if (button->text() != "Build")
+                continue;
+            button->click();
+            acceptedBuild = dialog->result() == QDialog::Accepted;
+            break;
+        }
+        if (!acceptedBuild)
+            dialog->reject();
+    });
+    dialogs.start();
+    EXPECT_EQ(rig.window->invoke("cmake.wsl"), input::InvokeResult::Ran);
+    dialogs.stop();
+
+    EXPECT_NE(preparing, 0U);
+    EXPECT_TRUE(acceptedBuild);
+    EXPECT_TRUE(sessions->hasPendingWork());
+    EXPECT_EQ(rig.window->findChild<QDialog*>("wslCMakeOutputDialog"), nullptr);
+    EXPECT_TRUE(launcher.launches().empty());
+    const auto& entries = rig.window->notifications().log();
+    ASSERT_FALSE(entries.empty());
+    EXPECT_EQ(entries.back().notification.title, "WSL CMake");
+    EXPECT_TRUE(entries.back().notification.text.contains("debugger"));
+    sessions->finishPreparing(preparing);
+}
+#endif
 
 TEST(WorkbenchNativeCoverage, ActualSelectedNativeRunPublishesCountsToGutterAndEditExpiresThem) {
     using namespace frost;
