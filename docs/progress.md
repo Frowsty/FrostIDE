@@ -14,6 +14,11 @@ what is next, blockers and open questions for the user.
 - Actual registered semantic providers outrank the builtin source fallback. Named source/span/include/root/candidate limits and scheduler-free fallback are recorded in ADR0118. Lexer, physical source navigation/provenance, ambiguous/missing/macro limits, provider precedence and worker editor regressions are authored.
 - Independent Astra source review is requested. No builds, tests, shader/Unity feature execution, downloads/install, WSL or pushes occurred. Next: source-review corrections, additive R14 GLSL joins, then independent R19 other-language/extension branches.
 
+## 2026-11-20 R18 Linux Mono endpoint ownership foundation
+
+- Added Linux Mono process selection with an actual pidfd, held proc directory, start-time/executable identity, same UID and network-namespace checks. Per-I/O admission requires the exact reverse established IPv4 loopback tuple's kernel socket inode in the selected process's actual descriptor table, bracketed by lifetime/identity/trust checks. Missing pidfd/procfs/ownership evidence refuses the connection.
+- Authored strict tuple parser fixtures and Linux actual local socket/held-process/revocation coverage. The product UI still refuses Linux pending the separate held source-reader and packaging join. This commit is endpoint evidence only; no Linux/Unity execution occurred. Source review pending. Protocol basis: Linux pidfd_open(2), proc_pid_net(5), kernel proc_net_tcp documentation.
+
 ## 2026-11-20 R18 Mono primitive value rendering
 
 - Actual Mono wire values now render Boolean, Char code unit, signed/unsigned 8/16/32/64-bit integers, Single, Double and null in Locals and exact-local Watch/hover. Decoding preserves unsigned extrema, signed extensions and floating raw bits with locale-independent formatting, and distinguishes unsupported references/structures from malformed supported packets.
