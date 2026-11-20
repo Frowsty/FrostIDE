@@ -37,13 +37,17 @@ Result<std::vector<std::string>> frameworks(std::string_view value) {
 }
 } // namespace
 Result<io::ProcessSpec> managedProjectEvaluationSpec(const ManagedProjectRequest& request) {
+    if (request.targetFramework.empty())
+        return fail(ErrorCode::InvalidArgument,
+                    "Authoritative managed item evaluation requires an explicit target framework");
     auto spec = managedProjectQuerySpec(request);
     if (!spec)
         return std::unexpected(spec.error());
     spec->arguments[3] = "-getProperty:TargetPath,TargetFramework,TargetFrameworks,OutputType,RuntimeIdentifier,"
                          "MSBuildProjectFullPath,UsingMicrosoftNETSdk,AssemblyName,LangVersion,Nullable,"
                          "DefineConstants,IsTestProject,ManagePackageVersionsCentrally,"
-                         "CentralPackageVersionOverrideEnabled,NuGetPackageRoot,MSBuildProjectExtensionsPath";
+                         "CentralPackageVersionOverrideEnabled,NuGetPackageRoot,DirectoryPackagesPropsPath,"
+                         "MSBuildAllProjects,MSBuildToolsPath,MSBuildProjectExtensionsPath";
     spec->arguments.push_back("-getItem:Compile,ProjectReference,PackageReference,Analyzer,AdditionalFiles,"
                               "EditorConfigFiles,Reference,PackageVersion");
     spec->arguments.push_back("-property:BuildProjectReferences=false");

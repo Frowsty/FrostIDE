@@ -19,8 +19,9 @@ struct ManagedProjectEvaluation {
     std::map<std::string, std::string, std::less<>> properties; // Actual IsTestProject/CPM/compiler facts.
 };
 // Pure bounded command/parser pair. The inner evaluation explicitly selects its TFM; no restore
-// or build target runs. All item metadata is MSBuild output, including linked/generated sources.
-// Project loading may execute SDK imports: caller owns trust, cancellation and physical identity.
+// or build target runs. All item metadata is MSBuild output, including linked and evaluation-time generated sources.
+// Outer TFM discovery uses managedProjectQuerySpec separately. Project loading may execute SDK imports: caller owns
+// trust, cancellation and physical identity.
 [[nodiscard]] Result<io::ProcessSpec> managedProjectEvaluationSpec(const ManagedProjectRequest& request);
 [[nodiscard]] Result<ManagedProjectEvaluation> parseManagedProjectEvaluation(const ManagedProjectRequest& request,
                                                                              std::string_view output);

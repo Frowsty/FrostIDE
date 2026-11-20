@@ -47,6 +47,9 @@ TEST(ManagedEvaluation, CapturesActualInnerTfmLinkedMetadataAndCentralOwnership)
 TEST(ManagedEvaluation, RejectsAnotherProjectFrameworkAndNonSdkReports) {
     auto query = request();
     const auto wire = output(query);
+    query.targetFramework.clear();
+    EXPECT_FALSE(managedProjectEvaluationSpec(query));
+    EXPECT_FALSE(parseManagedProjectEvaluation(query, wire));
     query.targetFramework = "netstandard2.1";
     EXPECT_FALSE(parseManagedProjectEvaluation(query, wire));
     query = request();

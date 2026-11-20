@@ -141,3 +141,11 @@ frost_add_test(build_dependencies_real_tests
 target_compile_definitions(build_dependencies_real_tests PRIVATE
     FROST_DEPENDENCY_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/dependencies"
     FROST_DEPENDENCY_WORK_PATH="${CMAKE_CURRENT_BINARY_DIR}/dependency-work")
+
+# R17 authoritative SDK snapshot acceptance uses only configured tools and self-authored sources.
+include("${FROST_SOURCE_DIR}/tests/support/ManagedFixtures.cmake")
+frost_add_managed_fixture_test(build_managed_evaluation_tests SOURCES managed_evaluation_real_test.cpp
+    DEPS frost::build frost::project frost::io frost::core LABELS integration managed)
+target_include_directories(build_managed_evaluation_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(build_managed_evaluation_tests PRIVATE
+    FROST_EVALUATED_SDK_FIXTURE="${FROST_SOURCE_DIR}/tests/managed/fixtures/EvaluatedSdk")
