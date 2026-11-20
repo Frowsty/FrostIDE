@@ -27,6 +27,13 @@ TEST(UnrealReflection, SpecifierCompletionIsSyntaxOnlyAndExcludesCommentsStrings
     auto complete=[](std::string_view source){return unrealSpecifierCompletions(source,source.size());};
     auto list=complete("UPROPERTY(Blue"); ASSERT_TRUE(list);
     EXPECT_TRUE(std::ranges::any_of(list->items,[](const auto& item){return item.label=="BlueprintReadOnly"&&item.resolved;}));
+    auto classConfig=complete("UCLASS(Conf"),propertyConfig=complete("UPROPERTY(Conf");
+    ASSERT_TRUE(classConfig);ASSERT_TRUE(propertyConfig);
+    const auto classItem=std::ranges::find(classConfig->items,std::string("Config"),&CompletionItem::label);
+    const auto propertyItem=std::ranges::find(propertyConfig->items,std::string("Config"),&CompletionItem::label);
+    ASSERT_NE(classItem,classConfig->items.end());ASSERT_NE(propertyItem,propertyConfig->items.end());
+    EXPECT_EQ(classItem->insertText,"Config=${1}");EXPECT_TRUE(classItem->snippet);
+    EXPECT_EQ(propertyItem->insertText,"Config");EXPECT_FALSE(propertyItem->snippet);
     EXPECT_FALSE(complete("// UPROPERTY(Blue"));
     EXPECT_FALSE(complete("/* UCLASS(Blue"));
     EXPECT_FALSE(complete("const char* text=\"UPROPERTY(Blue"));

@@ -17,6 +17,7 @@ Result<std::string> normalizeUnrealCompileDatabase(std::string_view bytes, std::
     auto parsed = parseJson(bytes);
     if (!parsed) return std::unexpected(parsed.error());
     std::vector<Json> rows;
+    std::size_t outputBytes=2;
     for (const auto& original : parsed->items()) {
         const auto directory = original.stringAt("directory");
         auto absoluteDirectory = io::isAbsolutePath(directory) ? io::normalizePath(directory) : io::joinPath(originDirectory, directory);
@@ -24,7 +25,11 @@ Result<std::string> normalizeUnrealCompileDatabase(std::string_view bytes, std::
         const auto file = original.stringAt("file");
         auto absoluteFile = io::isAbsolutePath(file) ? io::normalizePath(file) : io::joinPath(*absoluteDirectory, file);
         if (!absoluteFile) return std::unexpected(absoluteFile.error());
+        if(absoluteDirectory->size()>65536||absoluteFile->size()>65536)return fail(ErrorCode::OutOfRange,"Unreal database path exceeds bounds");
         auto row = Json(original).set("directory", *absoluteDirectory).set("file", *absoluteFile);
+        const auto rowBytes=row.dump().size()+1;
+        if(rowBytes>64*1024*1024-outputBytes)return fail(ErrorCode::OutOfRange,"normalized Unreal database exceeds 64 MiB");
+        outputBytes+=rowBytes;
         rows.push_back(std::move(row));
     }
     return Json::array(std::move(rows)).dump();
@@ -65,7 +70,7 @@ Result<std::optional<CompileCommandsLocation>> UnrealCompileCommandsProvider::lo
     auto file = io::joinPath(*directory, "compile_commands.json");
     if (!file) return std::unexpected(file.error());
     if (auto created = m_fs.createDirectories(*directory); !created) return std::unexpected(created.error());
-    const auto existing = m_fs.readFile(*file);
+    const auto existing = m_fs.readFileSnapshot(*file,64*1024*1024);
     if (existing && *existing != *normalized) return fail(ErrorCode::Corrupt, "immutable Unreal database cache was modified");
     if (!existing) {
         if (existing.error().code() != ErrorCode::NotFound) return std::unexpected(existing.error());

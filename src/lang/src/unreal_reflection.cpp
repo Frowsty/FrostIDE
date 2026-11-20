@@ -84,7 +84,7 @@ std::optional<CompletionList> unrealSpecifierCompletions(std::string_view source
     for(const auto word:vocabulary){CompletionItem item;item.label=std::string(word);item.insertText=item.label;
         item.kind=CompletionItemKind::Keyword;item.detail="Unreal public reflection specifier";item.resolved=true;
         if(word=="Category"){item.insertText+="=\"${1}\"";item.snippet=true;}
-        if(word=="Config"||word=="ReplicatedUsing"){item.insertText+="=${1}";item.snippet=true;}
+        if((word=="Config"&&scopes.back().name=="UCLASS")||word=="ReplicatedUsing"){item.insertText+="=${1}";item.snippet=true;}
         if(word=="meta"){item.insertText="meta=(${1})";item.snippet=true;}
         list.items.push_back(std::move(item));}
     return list;

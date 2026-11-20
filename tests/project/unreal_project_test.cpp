@@ -3,6 +3,7 @@
 #include "frost/io/path.hpp"
 #include <gtest/gtest.h>
 #include "support/scratch_dir.hpp"
+#include "support/directory_link.hpp"
 namespace frost::project {
 namespace {
 std::string at(std::string_view path) { return io::joinPath(io::kNativePathStyle == io::PathStyle::Windows ? "C:/Synthetic" : "/Synthetic", path).value(); }
@@ -55,6 +56,29 @@ TEST(UnrealProject, InventoriesOnlyLocalDescriptorsAndRuleNamesWithoutEvaluating
     ASSERT_EQ(model->localPlugins.size(), 1U); EXPECT_EQ(model->localPlugins[0].name,"LocalOne");
     ASSERT_EQ(model->moduleRules.size(),2U);
     EXPECT_EQ(model->moduleRules[0].owner,"Project"); EXPECT_EQ(model->moduleRules[1].owner,"plugin:LocalOne");
+}
+
+TEST(UnrealProject, RefusesInitialSourceAndPluginsDirectoryLinks) {
+    frost::test::ScratchDir scratch("unreal-links");auto& fs=io::realFileSystem();
+    const auto root=scratch.join("Project"),outside=scratch.join("Outside");
+    ASSERT_TRUE(fs.createDirectories(root));ASSERT_TRUE(fs.createDirectories(outside));
+    const auto project=io::joinPath(root,"Oracle.uproject").value();
+    ASSERT_TRUE(fs.writeFileAtomic(project,R"({"FileVersion":3})"));
+    for(const std::string name:{"Source","Plugins"}){
+        const auto link=io::joinPath(root,name).value();frost::test::makeDirectoryLink(link,outside);
+        auto model=readUnrealWorkspace(fs,project);ASSERT_FALSE(model);EXPECT_EQ(model.error().code(),ErrorCode::PermissionDenied);
+        ASSERT_TRUE(fs.removeFile(link));
+    }
+}
+TEST(UnrealProject, RefusesLinkedSourceInsideAProjectLocalPlugin) {
+    frost::test::ScratchDir scratch("unreal-plugin-link");auto& fs=io::realFileSystem();
+    const auto root=scratch.join("Project"),outside=scratch.join("Outside"),plugin=scratch.join("Project/Plugins/LocalOne");
+    ASSERT_TRUE(fs.createDirectories(plugin));ASSERT_TRUE(fs.createDirectories(outside));
+    const auto project=io::joinPath(root,"Oracle.uproject").value();
+    ASSERT_TRUE(fs.writeFileAtomic(project,R"({"FileVersion":3})"));
+    ASSERT_TRUE(fs.writeFileAtomic(io::joinPath(plugin,"LocalOne.uplugin").value(),R"({"FileVersion":3})"));
+    frost::test::makeDirectoryLink(io::joinPath(plugin,"Source").value(),outside);
+    auto model=readUnrealWorkspace(fs,project);ASSERT_FALSE(model);EXPECT_EQ(model.error().code(),ErrorCode::PermissionDenied);
 }
 
 }

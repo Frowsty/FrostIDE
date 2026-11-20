@@ -71,9 +71,30 @@ Result<std::string> readDescriptor(io::IFileSystem& fs, std::string_view path) {
 struct Inventory {
     io::IFileSystem& fs;
     UnrealWorkspace& result;
+    std::string physicalRoot;
     std::size_t directories = 0, entries = 0;
+    static std::string key(std::string value) {
+        std::ranges::replace(value,'\\','/');
+        if constexpr(io::kNativePathStyle==io::PathStyle::Windows)
+            std::ranges::transform(value,value.begin(),[](unsigned char c){return c>='A'&&c<='Z'?static_cast<char>(c+'a'-'A'):static_cast<char>(c);});
+        while(value.size()>1&&value.back()=='/')value.pop_back();return value;
+    }
+    Result<bool> admit(const std::string& path,io::FileType type) {
+        auto parent=fs.listDirectory(io::parentPath(path));
+        if(!parent){if(parent.error().code()==ErrorCode::NotFound)return false;return std::unexpected(parent.error());}
+        const auto found=std::ranges::find(*parent,io::fileName(path),&io::DirEntry::name);
+        if(found==parent->end())return false;
+        if(found->type!=type)return fail(ErrorCode::PermissionDenied,"Unreal metadata input is a link or wrong entry type");
+        auto physical=fs.physicalPath(path);if(!physical)return std::unexpected(physical.error());
+        const auto actual=key(*physical),root=key(physicalRoot);
+        if(actual!=root&&!actual.starts_with(root+"/"))return fail(ErrorCode::PermissionDenied,"Unreal metadata input escaped the physical project root");
+        return true;
+    }
     Result<std::vector<io::DirEntry>> list(const std::string& path, unsigned depth) {
         if (depth > 32 || ++directories > 1024) return fail(ErrorCode::OutOfRange, "Unreal metadata directory limit exceeded");
+        const auto admitted=admit(path,io::FileType::Directory);
+        if(!admitted)return std::unexpected(admitted.error());
+        if(!*admitted)return std::vector<io::DirEntry>{};
         auto rows = fs.listDirectory(path);
         if (!rows && rows.error().code() == ErrorCode::NotFound) return std::vector<io::DirEntry>{};
         if (!rows) return std::unexpected(rows.error());
@@ -115,6 +136,9 @@ struct Inventory {
         if (descriptorEntry) {
             const auto file = io::joinPath(path, descriptorEntry->name);
             if (!file) return std::unexpected(file.error());
+            auto admitted=admit(*file,io::FileType::Regular);
+            if(!admitted)return std::unexpected(admitted.error());
+            if(!*admitted)return fail(ErrorCode::Busy,"Unreal plugin descriptor disappeared");
             const auto bytes = readDescriptor(fs, *file);
             if (!bytes) return std::unexpected(bytes.error());
             auto descriptor = parseUnrealPluginDescriptor(*bytes);
@@ -140,15 +164,19 @@ Result<UnrealProject> readUnrealProject(io::IFileSystem& fs, std::string_view ab
     return bytes ? parseUnrealProject(*bytes, absoluteProject) : Result<UnrealProject>(std::unexpected(bytes.error()));
 }
 Result<UnrealWorkspace> readUnrealWorkspace(io::IFileSystem& fs, std::string_view absoluteProject) {
-    auto project = readUnrealProject(fs, absoluteProject);
-    if (!project) return std::unexpected(project.error());
-    UnrealWorkspace result{std::move(*project), {}, {}, {}};
-    Inventory inventory{fs, result};
-    const auto root = io::parentPath(absoluteProject);
-    auto source = io::joinPath(root, "Source"), plugins = io::joinPath(root, "Plugins");
-    if (!source || !plugins) return fail(ErrorCode::InvalidArgument, "invalid Unreal project root");
-    if (auto scanned = inventory.source(*source, "Project", 0); !scanned) return std::unexpected(scanned.error());
-    if (auto scanned = inventory.plugins(*plugins, 0); !scanned) return std::unexpected(scanned.error());
+    const auto root=io::parentPath(absoluteProject);
+    auto physicalRoot=fs.physicalPath(root);if(!physicalRoot)return std::unexpected(physicalRoot.error());
+    UnrealWorkspace result;
+    Inventory inventory{fs,result,*physicalRoot};
+    const auto admitted=inventory.admit(std::string(absoluteProject),io::FileType::Regular);
+    if(!admitted)return std::unexpected(admitted.error());
+    if(!*admitted)return fail(ErrorCode::NotFound,"Unreal project descriptor is missing");
+    auto project=readUnrealProject(fs,absoluteProject);if(!project)return std::unexpected(project.error());
+    result.project=std::move(*project);
+    auto source=io::joinPath(root,"Source"),plugins=io::joinPath(root,"Plugins");
+    if(!source||!plugins)return fail(ErrorCode::InvalidArgument,"invalid Unreal project root");
+    if(auto scanned=inventory.source(*source,"Project",0);!scanned)return std::unexpected(scanned.error());
+    if(auto scanned=inventory.plugins(*plugins,0);!scanned)return std::unexpected(scanned.error());
     return result;
 }
 Result<UnrealProject> parseUnrealProject(std::string_view json, std::string_view absoluteProject) {
