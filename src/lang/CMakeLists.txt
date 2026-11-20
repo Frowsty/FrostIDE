@@ -32,6 +32,7 @@ frost_add_library(lang LAYER lang
         src/clangd_locator.cpp
         src/clangd_service.cpp
         src/cmake_compile_commands.cpp
+        src/cpp_modules.cpp
         src/cpp_rename_plan.cpp
         src/cmake_language.cpp
         src/cpp_refactoring_plan.cpp
@@ -88,3 +89,4 @@ if(WIN32)
     # advapi32: RegGetValueW (the Windows SDK root); shell32: SHGetFolderPathW (vswhere's folder).
     target_link_libraries(frost_lang PRIVATE advapi32 shell32 ole32)
 endif()
+
