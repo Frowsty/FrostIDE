@@ -3,6 +3,12 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R17 managed inventory and evaluated SDK snapshot API underway
+
+- Inventoried the existing supervised csharp-ls 0.28.0 transport, audited Roslyn 5.9.0/MSBuildWorkspace graph, .NET 10.0.403 pins, managed property/build/debug helpers and self-authored SDK fixtures. No private work solutions were read.
+- Added an SDK-style MSBuild evaluation command/parser API retaining genuine Compile/ProjectReference/PackageReference/PackageVersion/analyzer metadata, explicit TFM/RID context, compiler properties and central-package/test-project facts. Project/TFM/RID mismatches and bounded malformed output refuse. The command starts no restore or build target; trust and process containment retain existing BuildSession ownership.
+- Authored linked/removed/conditional/multitarget SDK fixtures and model/admission regressions for later execution. RoslynHost and normal product model integration continue separately. This is an incremental source checkpoint, not R17 completion; independent source review and all runtime verification remain pending. No dotnet, build, test, feature, package installation or WSL execution occurred.
+
 ## 2026-11-20 R13 C++ analysis implementation integrated
 
 The default C++ bundle registers the Clang-backed index, native analyzer, preprocessor views and module actions. The SQLite index distinguishes build configurations. The analyzer emits SARIF for 33 AST checks and five control-flow checks. Idle, save and manual analysis share Workbench Problems publication and cancellation.

@@ -32,6 +32,7 @@ set(frost_build_sources
     src/json.cpp
     src/line_splitter.cpp
     src/managed_project.cpp
+    src/managed_evaluation.cpp
     src/msbuild_compile.cpp
     src/msbuild_driver.cpp
     src/msbuild_locator.cpp
