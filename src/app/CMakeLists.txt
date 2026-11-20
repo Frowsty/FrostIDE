@@ -406,3 +406,5 @@ frost_stage_lua_test_bridge(frost)
 
 
 add_dependencies(frost frostide_mcp)
+# Optional extension profiles require the owned native helper next to the calling app on Linux.
+frost_deploy_extension_sandbox(frost)

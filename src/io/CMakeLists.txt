@@ -70,3 +70,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_include_directories(frost-extension-sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     install(TARGETS frost-extension-sandbox RUNTIME DESTINATION bin)
 endif()
+
+# Install the enforcing helper beside the actual caller image (/proc/self/exe), including fixtures.
+function(frost_deploy_extension_sandbox target)
+    if(TARGET frost-extension-sandbox)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:frost-extension-sandbox> $<TARGET_FILE_DIR:${target}>
+            VERBATIM)
+        add_dependencies(${target} frost-extension-sandbox)
+    endif()
+endfunction()

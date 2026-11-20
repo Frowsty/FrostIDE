@@ -38,6 +38,7 @@ Result<void> pinLocalPath(std::string_view input, std::vector<HANDLE>& handles) 
         return fail(ErrorCode::Unsupported, "Sandbox staging requires local drive paths; UNC and device paths are unsupported");
     std::size_t end = 3;
     for (;;) {
+        if (handles.size() >= 4096) return fail(ErrorCode::OutOfRange, "Sandbox path pin budget exceeded");
         auto value = wide(normalized->substr(0, end)); if (!value) return std::unexpected(value.error());
         HANDLE handle = CreateFileW(value->c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
             FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
@@ -49,7 +50,7 @@ Result<void> pinLocalPath(std::string_view input, std::vector<HANDLE>& handles) 
         }
         handles.push_back(handle);
         if (end == normalized->size()) return {};
-        const auto next = normalized->find('\\', end);
+        const auto next = normalized->find('\\', end + 1);
         end = next == normalized->npos ? normalized->size() : next;
     }
 }
@@ -171,4 +172,3 @@ Result<std::unique_ptr<WindowsSandboxAttributes>> prepareWindowsSandboxAttribute
 }
 }
 }
-

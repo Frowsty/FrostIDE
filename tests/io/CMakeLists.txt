@@ -26,6 +26,7 @@ frost_add_test(io_unit_tests
         os_error_test.cpp
         path_test.cpp
         process_spec_test.cpp
+        process_sandbox_test.cpp
         reactor_test.cpp
         replacement_mode_test.cpp
         scripted_async_process_test.cpp
@@ -80,6 +81,7 @@ frost_copy_runtime_dlls(local_ipc_test_child)
 frost_add_test(io_integration_tests
     SOURCES
         async_process_test.cpp
+        process_sandbox_native_test.cpp
         file_transaction_prepare_test.cpp
         file_transaction_replace_test.cpp
         random_access_reader_test.cpp
@@ -124,3 +126,15 @@ frost_add_test(io_perf_tests
     DEPS frost::io frost::sched
     LABELS perf)
 target_include_directories(io_perf_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/io/src)
+
+add_executable(sandbox_probe_child sandbox_probe_child.cpp)
+frost_apply_compile_options(sandbox_probe_child TEST)
+if(WIN32)
+    # The private staged oracle has no implicit VC runtime payload dependency.
+    set_property(TARGET sandbox_probe_child PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_link_libraries(sandbox_probe_child PRIVATE advapi32)
+    target_link_libraries(io_integration_tests PRIVATE userenv)
+endif()
+target_compile_definitions(io_integration_tests PRIVATE FROST_SANDBOX_TEST_CHILD="$<TARGET_FILE:sandbox_probe_child>")
+add_dependencies(io_integration_tests sandbox_probe_child)
+frost_deploy_extension_sandbox(io_integration_tests)
