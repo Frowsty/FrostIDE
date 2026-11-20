@@ -3,6 +3,14 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20 R14 FrostEngine content integration
+
+R14 connects the Engine View, asset usage queries and serialized property inspector to a paired FrostEngine session. Asset moves carry sidecars and reference edits through the IDE preview, journal and Undo. Engine templates, editor controls, measured performance data, export and multiplayer configurations use the engine's actual contracts. Data tables navigate to inherited schema declarations, and the Structure view shows the captured scene entity hierarchy.
+
+GLSL completion, hover, definition, include navigation and Structure use the engine compiler and preprocessor. Validation publishes Problems, and previews use engine-rendered images. The corpus pin names the published companion revision that implements these commands. Completion omits scopes whose boundaries the pinned compiler cannot establish. Project-scoped asset metadata is available as an offline snapshot. Live diagnostics and usage observations clear on disconnect.
+
+GPT-6.1 Sol authored the implementations and regression fixtures. GPT-6 Astra reviewed the source. Builds, runtime tests, paired-engine journeys and release packaging remain deferred at the user's request.
+
 ## 2026-11-20: R14 shader validation and real engine preview source
 
 - Added authenticated Edit-only engine `shader.validate` over actual GLSL preprocessor/compiler and material serializer/program/layout APIs. The IDE captures main editor text, retains source/dependency and absence receipts, rejects dirty includes/stale source/session/state, and publishes actual source diagnostics in a separate Engine Shader Problems scope.
