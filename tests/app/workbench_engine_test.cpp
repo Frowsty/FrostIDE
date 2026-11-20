@@ -6,6 +6,8 @@
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/frost_engine_lua.hpp"
 #include "frost/lang/lua_service.hpp"
+#include "frost/lang/json_schema.hpp"
+#include "frost/lang/completion.hpp"
 #include "frost/ui/debug_controller.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
@@ -14,6 +16,7 @@
 #include "frost/ui/toolwindows/engine_console.hpp"
 
 #include "engine_request_helper.hpp"
+#include "engine_json_reference_provider.hpp"
 #include "engine_session_peer.hpp"
 #include "file_transaction_replace_testing.hpp"
 #include "workbench_rig.hpp"
@@ -1556,5 +1559,38 @@ TEST(WorkbenchEngineDocuments, ActualTableSchemaReplyFeedsCapturedRowProblems) {
     ASSERT_NE(captured.front().find("params"),nullptr);
     EXPECT_EQ(captured.front().find("params")->stringAt("source"),source);
     EXPECT_EQ(dir.read("project/Assets/Weapons.ftable"),source);
+}
+TEST(EngineJsonReferences, ActualIndexOwnsEveryTypedCompletionAndExactHandleFallback) {
+    WorkDir dir("engine-json-reference-index");frost::engine::ProjectContent content;content.directory=dir.path();
+    content.assets={{{13957500353814115645ULL},"Assets/Texture.png","Texture2D"},{{42},"Assets/Material.fmat","Material"}};
+    auto index=frost::engine::AssetIndex::create(std::move(content));ASSERT_TRUE(index);
+    auto provider=frost::app::makeEngineJsonAssetProvider(std::make_shared<const frost::engine::AssetIndex>(std::move(*index)));
+    auto actual=provider.resolve(Json(13957500353814115645ULL));ASSERT_TRUE(actual);EXPECT_EQ(actual->handle,13957500353814115645ULL);
+    actual=provider.resolve(Json::object().set("Handle",99).set("Path","Texture.png"));ASSERT_TRUE(actual);EXPECT_EQ(actual->path,"Assets/Texture.png");
+    EXPECT_FALSE(provider.resolve(Json(13957500353814115645.0)));
+    const auto completed=provider.complete({"Texture2D"},"Texture",1);ASSERT_EQ(completed.size(),1U);EXPECT_EQ(completed.front().handle,13957500353814115645ULL);
+    EXPECT_TRUE(provider.complete({"Material"},"Texture",10).empty());
+    EXPECT_FALSE(provider.resolve(Json("Assets/Missing.png")));
+}
+TEST(EngineJsonReferences, MultilineObjectCompletionAtomicallyUpdatesAuthoritativeHandleAndPath) {
+    WorkDir dir("engine-json-object-completion");frost::engine::ProjectContent content;content.directory=dir.path();
+    content.assets={{{11},"Assets/TextureA.png","Texture2D"},{{22},"Assets/TextureB.png","Texture2D"}};
+    auto index=frost::engine::AssetIndex::create(std::move(content));ASSERT_TRUE(index);
+    auto provider=frost::app::makeEngineJsonAssetProvider(std::make_shared<const frost::engine::AssetIndex>(std::move(*index)));
+    frost::lang::JsonSchemaService service;
+    auto schemas=frost::rpc::parseJson(R"({"protocol":"frostengine.document-schemas","version":1,"schemas":[{"extension":".fscene","serializer":"actual","schema":{"type":"object","properties":{"Texture":{"type":"object","x-engine-reference":"asset","x-engine-assetTypes":["Texture2D"]}}}}]})").value();
+    ASSERT_TRUE(service.installEngineSchemas(dir.path(),schemas));service.setAssetReferences(dir.path(),provider);
+    const std::string source="{\n\"Texture\":{\n\"Handle\":11,\n\"Path\":\"\"\n}\n}";
+    auto buffer=frost::text::TextBuffer::fromUtf8(source).value();const auto text=buffer.snapshot();const auto path=dir.join("scene.fscene");
+    service.updateDocument(path,text);const frost::ByteOffset caret{source.find("\"\"")+1};
+    auto params=frost::lang::textDocumentPosition(path,frost::lang::toLspPosition(text,caret,frost::lang::PositionEncoding::Utf16)).value();
+    auto reply=frost::sched::syncWait(service.request("textDocument/completion",params));ASSERT_TRUE(reply);
+    const auto* items=reply->find("items");ASSERT_NE(items,nullptr);
+    auto chosen=std::ranges::find_if(items->items(),[](const auto& item){return item.stringAt("label")=="Assets/TextureB.png";});ASSERT_NE(chosen,items->items().end());
+    auto commit=frost::lang::commitCompletion(frost::lang::parseCompletionItem(*chosen),text,caret,caret,frost::lang::PositionEncoding::Utf16);ASSERT_TRUE(commit);ASSERT_EQ(commit->edits.size(),2U);
+    std::vector<frost::text::Edit> edits;for(const auto& edit:commit->edits)edits.push_back({edit.range,edit.text});ASSERT_TRUE(buffer.applyEdits(edits));
+    auto after=frost::rpc::parseJson(buffer.current().text());ASSERT_TRUE(after);const auto* reference=after->find("Texture");ASSERT_NE(reference,nullptr);
+    EXPECT_EQ(reference->integerAt("Handle"),22);EXPECT_EQ(reference->stringAt("Path"),"Assets/TextureB.png");
+    auto actual=provider.resolve(*reference);ASSERT_TRUE(actual);EXPECT_EQ(actual->handle,22U);
 }
 } // namespace

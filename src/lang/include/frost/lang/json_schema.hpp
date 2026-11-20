@@ -3,6 +3,7 @@
 #include "frost/core/mutex.hpp"
 #include "frost/lang/diagnostics.hpp"
 #include "frost/lang/lsp_client.hpp"
+#include "frost/lang/json_engine_references.hpp"
 
 #include <map>
 namespace frost::lang {
@@ -20,6 +21,8 @@ public:
     // Retains actual schema.info row shape only while this captured table Schema reference matches.
     [[nodiscard]] Result<void> installEngineTableSchema(std::string absolutePath,const text::Snapshot&,const Json& actualExport);
     void clearEngineSchemas();
+    // Actual index callbacks own their immutable listing. Empty root/provider revokes all queries.
+    void setAssetReferences(std::string projectRoot,JsonAssetReferenceProvider);
     [[nodiscard]] bool handles(std::string_view path) const;
     [[nodiscard]] std::uint64_t schemaGeneration() const;
     void updateDocument(std::string path, text::Snapshot snapshot);
@@ -37,6 +40,8 @@ private:
     std::string m_engineRoot;
     std::map<std::string, Json, std::less<>> m_engineSchemas;
     std::map<std::string,std::pair<Json,Json>,std::less<>> m_engineTableSchemas;
+    std::string m_assetRoot;
+    JsonAssetReferenceProvider m_assetReferences;
     std::uint64_t m_schemaGeneration=0;
 };
 } // namespace frost::lang

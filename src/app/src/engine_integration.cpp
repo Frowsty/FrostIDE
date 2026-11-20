@@ -94,6 +94,7 @@ void EngineIntegration::Impl::invalidate(bool stopOwned) {
     installations.clear();
     clearAssetUsages();
     assetIndex.reset();
+    publishDocumentAssets();
     projectContent.reset();
     if (picker)
         picker->clear();

@@ -570,6 +570,7 @@ void EngineIntegration::processFinished(const run::RunResult& result) {
 void EngineIntegration::Impl::refreshProjectContent() {
     clearAssetUsages();
     assetIndex.reset();
+    publishDocumentAssets();
     const auto generation = ++contentGeneration;
     if (!admitted(epoch, root, trustRevision)) {
         projectView->setUnavailable(QStringLiteral("Trust the project to read its engine content"));
@@ -625,6 +626,8 @@ void EngineIntegration::Impl::refreshProjectContent() {
                     }
                     impl.assetIndex = std::make_shared<const engine::AssetIndex>(std::move(*index));
                     impl.refreshSessionContext();
+
+                    impl.publishDocumentAssets();
                     impl.projectContent = *content;
                     impl.projectView->setContent(std::move(*content));
                 } else {

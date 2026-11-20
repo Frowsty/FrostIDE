@@ -193,6 +193,7 @@ struct EngineIntegration::Impl {
     [[nodiscard]] Result<void> findAssetUsages(std::string relative, engine::EngineHandle handle);
     void clearAssetUsages();
     void publishDocumentProblems();
+    void publishDocumentAssets();
     [[nodiscard]] bool retainDocumentProblems(std::string key,std::vector<build::BuildDiagnostic> rows);
     void attachSessionTools();
     void refreshSessionContext();

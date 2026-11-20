@@ -165,5 +165,43 @@ TEST(JsonSchema, ActualVectorInputShapeAllowsEngineSpecialFloatStrings) {
     ASSERT_TRUE(service.installEngineSchemas(project,schema));
     service.updateDocument(path,snapshot(R"({"Vector":["nan","inf","-inf",0]})"));EXPECT_TRUE(service.diagnostics(path).empty());
 }
+Json referenceSchemas() {
+    return rpc::parseJson(R"({"protocol":"frostengine.document-schemas","version":1,"schemas":[{"extension":".fscene","serializer":"actual","schema":{"type":"object","properties":{"Texture":{"type":["integer","string","object","null"],"x-engine-reference":"asset","x-engine-assetTypes":["Texture2D"]},"Target":{"type":["integer","string","null"],"x-engine-reference":"entity"}}}}]})").value();
+}
+TEST(JsonSchema, TypedActualAssetCompletionAndExactU64DefinitionRevokeWithIndex) {
+    JsonSchemaService service;const auto project=root+"Game";const auto path=project+"/a.fscene";
+    ASSERT_TRUE(service.installEngineSchemas(project,referenceSchemas()));
+    JsonAssetReferenceProvider provider;
+    provider.resolve=[](const Json& value)->std::optional<JsonIndexedAsset> {
+        if(value.kind()==Json::Kind::Integer&&value.asUnsigned()==13957500353814115645ULL)
+            return JsonIndexedAsset{13957500353814115645ULL,"Assets/Texture.png","Texture2D"};return {};
+    };
+    provider.complete=[](const std::vector<std::string>& types,std::string_view prefix,std::size_t limit) {
+        EXPECT_EQ(types,std::vector<std::string>{"Texture2D"});EXPECT_TRUE(prefix.empty());EXPECT_EQ(limit,5001U);
+        return std::vector<JsonIndexedAsset>{{13957500353814115645ULL,"Assets/Texture.png","Texture2D"},{42,"Assets/Wrong.fmat","Material"}};
+    };
+    service.setAssetReferences(project,provider);
+    const auto text=snapshot(R"({"Texture":13957500353814115645})");service.updateDocument(path,text);
+    auto params=textDocumentPosition(path,toLspPosition(text,ByteOffset{14},PositionEncoding::Utf16)).value();
+    auto definition=sched::syncWait(service.request("textDocument/definition",params));ASSERT_TRUE(definition);ASSERT_EQ(definition->size(),1U);
+    EXPECT_EQ(definition->items()[0].stringAt("uri"),pathToUri(project+"/Assets/Texture.png").value());
+    const auto empty=snapshot(R"({"Texture":""})");auto completion=complete(service,path,empty,ByteOffset{12});ASSERT_TRUE(completion);
+    const auto* items=completion->find("items");ASSERT_NE(items,nullptr);ASSERT_EQ(items->size(),1U);EXPECT_EQ(items->items()[0].stringAt("label"),"Assets/Texture.png");
+    service.setAssetReferences({},{});service.updateDocument(path,text);
+    definition=sched::syncWait(service.request("textDocument/definition",params));ASSERT_TRUE(definition);EXPECT_EQ(definition->size(),0U);
+}
+TEST(JsonSchema, CapturedEntityReferencesNavigateExactIdAndRefuseDuplicateTargets) {
+    JsonSchemaService service;const auto project=root+"Game";const auto path=project+"/a.fscene";
+    ASSERT_TRUE(service.installEngineSchemas(project,referenceSchemas()));
+    const auto text=snapshot(R"({"Target":"13957500353814115645","Entities":[{"ID":13957500353814115645,"Components":{"Tag":{"Tag":"Enemy"}}}]})");
+    service.updateDocument(path,text);auto params=textDocumentPosition(path,toLspPosition(text,ByteOffset{15},PositionEncoding::Utf16)).value();
+    auto definition=sched::syncWait(service.request("textDocument/definition",params));ASSERT_TRUE(definition);ASSERT_EQ(definition->size(),1U);
+    const auto range=parseRange(*definition->items()[0].find("range"));ASSERT_TRUE(range);
+    EXPECT_EQ(fromLspPosition(text,range->start,PositionEncoding::Utf16)->value(),text.text().rfind("13957500353814115645"));
+    auto completion=complete(service,path,text,ByteOffset{15});ASSERT_TRUE(completion);const auto* items=completion->find("items");ASSERT_NE(items,nullptr);ASSERT_EQ(items->size(),1U);
+    EXPECT_EQ(items->items()[0].find("textEdit")->stringAt("newText"),"13957500353814115645");
+    service.updateDocument(path,snapshot(R"({"Target":7,"Entities":[{"ID":7},{"ID":7}]})"));
+    params=textDocumentPosition(path,LspPosition{0,10}).value();definition=sched::syncWait(service.request("textDocument/definition",params));ASSERT_TRUE(definition);EXPECT_EQ(definition->size(),0U);
+}
 } // namespace
 } // namespace frost::lang
