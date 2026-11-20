@@ -8,11 +8,12 @@
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 #include <chrono>
-#include <cstdlib>
 #ifdef _WIN32
 #include "frost/io/utf.hpp"
 #include <windows.h>
 #include <userenv.h>
+#else
+#include <cstdlib>
 #endif
 using namespace frost;
 using namespace frost::io;
@@ -24,7 +25,12 @@ struct OwnProfile {
 };
 #endif
 TEST(NativeProcessSandbox, ProductionSyncAndAsyncRetainNativePolicy) {
-    if (!std::getenv("FROST_RUN_NATIVE_SANDBOX_PROBE")) GTEST_SKIP() << "Explicit native sandbox acceptance is disabled";
+#ifdef _WIN32
+    const bool probeEnabled = GetEnvironmentVariableW(L"FROST_RUN_NATIVE_SANDBOX_PROBE", nullptr, 0) != 0;
+#else
+    const bool probeEnabled = std::getenv("FROST_RUN_NATIVE_SANDBOX_PROBE") != nullptr;
+#endif
+    if (!probeEnabled) GTEST_SKIP() << "Explicit native sandbox acceptance is disabled";
     test::ScratchDir scratch("sandbox-probe"); auto& fs = realFileSystem();
     const auto publicFile = *joinPath(scratch.path(), "public.txt"), secretFile = *joinPath(scratch.path(), "secret.txt");
     ASSERT_TRUE(fs.writeFileAtomic(publicFile, "public-fixture\n")); ASSERT_TRUE(fs.writeFileAtomic(secretFile, "private-fixture\n"));
@@ -44,7 +50,8 @@ TEST(NativeProcessSandbox, ProductionSyncAndAsyncRetainNativePolicy) {
     while (begin < paths.size()) {
         const auto end = paths.find(';', begin); const auto path = paths.substr(begin, end == paths.npos ? end : end - begin);
         spec.sandbox->paths.push_back({path, SandboxAccess::Read | SandboxAccess::Execute, false});
-        if (end == paths.npos) break; begin = end + 1;
+        if (end == paths.npos) break;
+        begin = end + 1;
     }
 #endif
     const auto originalProfile = spec.sandbox->paths.size();

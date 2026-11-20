@@ -10,9 +10,9 @@
 #include "debug/debug_test_util.hpp"
 #include "io/process_env.hpp"
 #include "support/scratch_dir.hpp"
+#include "support/test_environment_value.hpp"
 #include <pugixml.hpp>
 
-#include <cstdlib>
 #include <future>
 #include <map>
 namespace {
@@ -27,10 +27,10 @@ RunConfiguration configuration(std::string target) {
     c.program = FROST_TEST_LUA_INTERPRETER;
     c.target = std::move(target);
     c.workingDirectory = FROST_LUA_FRAMEWORK_FIXTURES;
-    if (const auto* path = std::getenv("FROST_LUA_TEST_PATH"))
-        c.environment.push_back({"LUA_PATH", path});
-    if (const auto* path = std::getenv("FROST_LUA_TEST_CPATH"))
-        c.environment.push_back({"LUA_CPATH", path});
+    if (auto path = test::environmentValue("FROST_LUA_TEST_PATH"))
+        c.environment.push_back({"LUA_PATH", std::move(*path)});
+    if (auto path = test::environmentValue("FROST_LUA_TEST_CPATH"))
+        c.environment.push_back({"LUA_CPATH", std::move(*path)});
     return c;
 }
 Result<std::vector<FrameworkCase>> discover(TestRunner& runner, TestRunner::LuaFrameworkRequest request) {
@@ -77,7 +77,7 @@ std::map<std::string, TestOutcome> genuineCases(const std::string& xml) {
 TEST(LuaFrameworkReal, DiscoveryAndResultsEqualActualInstalledFrameworksAndLiteralSelection) {
     ASSERT_TRUE(io::isAbsolutePath(FROST_TEST_LUA_INTERPRETER));
     ASSERT_TRUE(io::realFileSystem().status(FROST_TEST_LUA_INTERPRETER));
-    ASSERT_TRUE(std::getenv("FROST_LUA_TEST_PATH"))
+    ASSERT_TRUE(test::environmentValue("FROST_LUA_TEST_PATH"))
         << "Provision Busted 2.2.0/LuaUnit 3.5 for this interpreter and set FROST_LUA_TEST_PATH";
     auto& fs = io::realFileSystem();
     frost::test::ScratchDir scratch("lua-framework-real");
@@ -148,7 +148,7 @@ TEST(LuaFrameworkReal, DiscoveryAndResultsEqualActualInstalledFrameworksAndLiter
     }
 }
 TEST(LuaFrameworkReal, UnobservedDriverHookAndMissingModulesAreErrorsNotEmptySuccess) {
-    ASSERT_TRUE(std::getenv("FROST_LUA_TEST_PATH"));
+    ASSERT_TRUE(test::environmentValue("FROST_LUA_TEST_PATH"));
     frost::test::ScratchDir scratch("lua-framework-unsupported");
     auto& fs = io::realFileSystem();
     const auto driver = scratch.join("not-a-runner.lua");
@@ -173,9 +173,16 @@ public:
             launched.set_value((*result)->pid());
         return result;
     }
+    Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
+                                                           const io::AsyncContext& context) override {
+        auto result = io::realProcessLauncher().launchAsync(spec, context);
+        if (result)
+            launched.set_value((*result)->pid());
+        return result;
+    }
 };
 TEST(LuaFrameworkReal, CancellationEndsActualRunningChildAndReportsNoInventedResult) {
-    ASSERT_TRUE(std::getenv("FROST_LUA_TEST_PATH"));
+    ASSERT_TRUE(test::environmentValue("FROST_LUA_TEST_PATH"));
     auto config = configuration(std::string(FROST_LUA_FRAMEWORK_FIXTURES) + "/luaunit_blocking.lua");
     frost::test::ScratchDir scratch("lua-framework-cancel");
     ObservedLauncher launcher;
@@ -213,7 +220,7 @@ TEST(LuaFrameworkReal, CancellationEndsActualRunningChildAndReportsNoInventedRes
     EXPECT_TRUE(child.exitsWithin(20s));
 }
 TEST(LuaFrameworkReal, LuaUnitSelectedCaseDebugUsesSameInterpreterAndRealStoppedFrame) {
-    ASSERT_TRUE(std::getenv("FROST_LUA_TEST_PATH"));
+    ASSERT_TRUE(test::environmentValue("FROST_LUA_TEST_PATH"));
     ASSERT_TRUE(io::isAbsolutePath(FROST_TEST_LUA_DEBUG_ADAPTER));
     auto c = configuration(std::string(FROST_LUA_FRAMEWORK_FIXTURES) + "/luaunit_driver.lua");
     auto selected = luaFrameworkConfiguration(LuaTestProfile::LuaUnit35, c,
@@ -238,15 +245,16 @@ TEST(LuaFrameworkReal, LuaUnitSelectedCaseDebugUsesSameInterpreterAndRealStopped
     ASSERT_NE(marker, std::string::npos);
     const auto line = 1 + std::count(source->begin(), source->begin() + static_cast<std::ptrdiff_t>(marker), '\n');
     debug::test::SessionRecorder recorder;
-    auto session = debug::DebugSession::start(
+    auto owned = debug::DebugSession::start(
         debug::standaloneLuaAdapterFactory(io::realProcessLauncher(), FROST_TEST_LUA_DEBUG_ADAPTER), std::move(*launch),
         {{c.target, {{.id = 1, .line = line}}}}, recorder.callbacks(), false, "lua");
-    ASSERT_TRUE(session);
-    ASSERT_TRUE(debug::test::waitUntil([&] { return (*session)->selectedFrame().has_value(); }));
-    EXPECT_EQ((*session)->selectedFrame()->line, line);
-    ASSERT_TRUE((*session)->continueRun());
+    ASSERT_TRUE(owned);
+    auto& session = *owned;
+    ASSERT_TRUE(debug::test::waitUntil([&] { return session.selectedFrame().has_value(); }));
+    EXPECT_EQ(session.selectedFrame()->line, line);
+    ASSERT_TRUE(session.continueRun());
     ASSERT_TRUE(debug::test::waitUntil([&] { return recorder.hasEnded(); }));
-    ASSERT_TRUE((*session)->outcome());
-    EXPECT_EQ((*session)->outcome()->exitCode, 0);
+    ASSERT_TRUE(session.outcome());
+    EXPECT_EQ(session.outcome()->exitCode, 0);
 }
 } // namespace

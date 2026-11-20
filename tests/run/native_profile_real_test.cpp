@@ -5,9 +5,9 @@
 #include "frost/run/native_analysis.hpp"
 
 #include "support/scratch_dir.hpp"
+#include "support/test_environment_value.hpp"
 #include <gtest/gtest.h>
 
-#include <cstdlib>
 namespace frost::run {
 TEST(NativeProfileReal, ActualOsSampleReportIdentifiesTheFixtureHotFunction) {
     frost::test::ScratchDir scratch("native-profile-real");
@@ -49,10 +49,10 @@ TEST(NativeProfileReal, ActualOsSampleReportIdentifiesTheFixtureHotFunction) {
     auto system = build::systemCommandProcessor();
     ASSERT_TRUE(system);
     request.wpr = io::joinPath(io::parentPath(*system), "wpr.exe").value();
-    const auto* xperf = std::getenv("FROST_TEST_XPERF");
-    ASSERT_NE(xperf, nullptr)
+    const auto xperf = test::environmentValue("FROST_TEST_XPERF");
+    ASSERT_TRUE(xperf)
         << "Provision installed Windows Performance Toolkit and recording permission; this is not a skipped pass";
-    request.xperf = xperf;
+    request.xperf = *xperf;
 #else
     request.backend = NativeProfileBackend::Perf;
     request.perf = "/usr/bin/perf";

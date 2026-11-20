@@ -3,17 +3,18 @@
 #include "frost/ui/test_results_tree.hpp"
 
 #include "lua_unit_tests_window.hpp"
+#include "support/test_environment_value.hpp"
 #include "unit_tests_window.hpp"
 #include "workbench_rig.hpp"
 #include <QComboBox>
 #include <QPushButton>
 #include <QTabWidget>
 
-#include <cstdlib>
 namespace {
 using namespace frost;
 TEST(LuaUnitTestsWindow, ActualDiscoveryFeedsTreeGutterAndSameInterpreterSelectedDebug) {
-    ASSERT_TRUE(std::getenv("FROST_LUA_TEST_PATH")) << "provision supported LuaUnit 3.5";
+    const auto luaPath = test::environmentValue("FROST_LUA_TEST_PATH");
+    ASSERT_TRUE(luaPath) << "provision supported LuaUnit 3.5";
     ASSERT_TRUE(io::isAbsolutePath(FROST_TEST_LUA_INTERPRETER));
     app::test::WorkDir dir("lua-unit-tests-ui");
     auto& fs = io::realFileSystem();
@@ -27,7 +28,7 @@ TEST(LuaUnitTestsWindow, ActualDiscoveryFeedsTreeGutterAndSameInterpreterSelecte
     config.program = FROST_TEST_LUA_INTERPRETER;
     config.target = std::string(FROST_LUA_FRAMEWORK_FIXTURES) + "/luaunit_driver.lua";
     config.workingDirectory = dir.path();
-    config.environment = {{"LUA_PATH", std::getenv("FROST_LUA_TEST_PATH")}};
+    config.environment = {{"LUA_PATH", *luaPath}};
     std::stop_source lifetime;
     std::optional<run::RunConfiguration> debugged;
     app::LuaUnitTestsContext context;

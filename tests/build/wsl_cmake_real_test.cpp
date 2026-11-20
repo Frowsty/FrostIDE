@@ -5,12 +5,11 @@
 #include "frost/io/file_system.hpp"
 #include "frost/rpc/json.hpp"
 #include "support/scratch_dir.hpp"
+#include "support/test_environment_value.hpp"
 #include <gtest/gtest.h>
-#include <cstdlib>
 namespace frost::build {
 namespace {
 using namespace std::chrono_literals;
-[[maybe_unused]] std::string setting(const char* name){const auto* value=std::getenv(name);return value?value:"";}
 [[maybe_unused]] std::string trim(std::string text){while(!text.empty()&&(text.back()=='\r'||text.back()=='\n'))text.pop_back();return text;}
 [[maybe_unused]] io::ProcessSpec python(const RemoteTarget& target,std::string code,std::vector<std::string> arguments={}) {
     io::ProcessSpec spec;spec.executable=target.remotePython;spec.arguments={"-I","-u","-c",std::move(code)};
@@ -26,11 +25,15 @@ TEST(WslCMakeReal, ActualMappedSourceBuildAndGeneratedCompilationDatabase) {
     GTEST_SKIP()<<"CMK-16 is the Windows IDE driving a named WSL distribution; Linux guardian has separate real coverage";
 #else
     RemoteTarget endpoint;endpoint.id="wsl-acceptance";endpoint.name="Explicit WSL build acceptance";endpoint.executionApproved=true;
-    endpoint.transportExecutable=setting("FROST_REMOTE_TEST_WSL");endpoint.distribution=setting("FROST_REMOTE_TEST_DISTRIBUTION");
-    const auto cmake=setting("FROST_REMOTE_TEST_CMAKE"),ninja=setting("FROST_REMOTE_TEST_NINJA"),compiler=setting("FROST_REMOTE_TEST_CXX");
+    endpoint.transportExecutable = test::environmentValue("FROST_REMOTE_TEST_WSL").value_or("");
+    endpoint.distribution = test::environmentValue("FROST_REMOTE_TEST_DISTRIBUTION").value_or("");
+    const auto cmake = test::environmentValue("FROST_REMOTE_TEST_CMAKE").value_or("");
+    const auto ninja = test::environmentValue("FROST_REMOTE_TEST_NINJA").value_or("");
+    const auto compiler = test::environmentValue("FROST_REMOTE_TEST_CXX").value_or("");
     if(endpoint.transportExecutable.empty()||endpoint.distribution.empty()||cmake.empty()||ninja.empty()||compiler.empty())
         GTEST_SKIP()<<"No explicitly selected/provisioned WSL CMake/Ninja/Clang endpoint; not counted as WSL build acceptance";
-    if(auto configured=setting("FROST_REMOTE_TEST_LINUX_PYTHON");!configured.empty())endpoint.remotePython=configured;
+    if (auto python = test::environmentValue("FROST_REMOTE_TEST_LINUX_PYTHON"); python && !python->empty())
+        endpoint.remotePython = *python;
     RemoteProcessLauncher initial(io::realProcessLauncher(),endpoint,{.admit=[]()->Result<void>{return {};}});
     frost::test::ScratchDir scratch("cmk16-wsl");auto& fs=io::realFileSystem();
     const auto source=io::joinPath(scratch.path(),"source with space").value();ASSERT_TRUE(fs.createDirectories(source));

@@ -5,15 +5,14 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/rpc/json.hpp"
+#include "support/test_environment_value.hpp"
 #include <gtest/gtest.h>
 #include <array>
 #include <atomic>
-#include <cstdlib>
 #include <sstream>
 namespace frost::build {
 namespace {
 using namespace std::chrono_literals;
-std::string environment(const char* name){const auto* value=std::getenv(name);return value?value:"";}
 io::ProcessSpec workload(std::string python,std::string code) {
     io::ProcessSpec spec;spec.executable=std::move(python);spec.arguments={"-I","-u","-c",std::move(code)};
     spec.workingDirectory="/tmp";spec.stdinMode=io::Stdio::Pipe;spec.stdoutMode=io::Stdio::Pipe;spec.stderrMode=io::Stdio::Pipe;return spec;
@@ -70,13 +69,19 @@ TEST(RemoteGuardianReal, StopAcknowledgesCleanupAndIndependentProcOracleSeesDesc
 TEST(RemoteTransportReal, ExplicitlySelectedWslOrSshEndpointReportsActualWorkloadArgv) {
     RemoteTarget target;target.id="explicit-acceptance";target.name="Explicit test endpoint";target.executionApproved=true;
 #ifdef _WIN32
-    target.transport=RemoteTransport::Wsl;target.transportExecutable=environment("FROST_REMOTE_TEST_WSL");target.distribution=environment("FROST_REMOTE_TEST_DISTRIBUTION");
+    target.transport = RemoteTransport::Wsl;
+    target.transportExecutable = test::environmentValue("FROST_REMOTE_TEST_WSL").value_or("");
+    target.distribution = test::environmentValue("FROST_REMOTE_TEST_DISTRIBUTION").value_or("");
     if(target.transportExecutable.empty()||target.distribution.empty())GTEST_SKIP()<<"No explicitly selected WSL acceptance endpoint; not counted as transport acceptance";
 #else
-    target.transport=RemoteTransport::Ssh;target.transportExecutable=environment("FROST_REMOTE_TEST_SSH");target.host=environment("FROST_REMOTE_TEST_HOST");target.user=environment("FROST_REMOTE_TEST_USER");
+    target.transport = RemoteTransport::Ssh;
+    target.transportExecutable = test::environmentValue("FROST_REMOTE_TEST_SSH").value_or("");
+    target.host = test::environmentValue("FROST_REMOTE_TEST_HOST").value_or("");
+    target.user = test::environmentValue("FROST_REMOTE_TEST_USER").value_or("");
     if(target.transportExecutable.empty()||target.host.empty()||target.user.empty())GTEST_SKIP()<<"No explicitly selected strict-known-host SSH acceptance endpoint; not counted as transport acceptance";
 #endif
-    const auto python=environment("FROST_REMOTE_TEST_LINUX_PYTHON");if(!python.empty())target.remotePython=python;
+    if (auto python = test::environmentValue("FROST_REMOTE_TEST_LINUX_PYTHON"); python && !python->empty())
+        target.remotePython = *python;
     RemoteProcessLauncher launcher(io::realProcessLauncher(),target,{.admit=[]()->Result<void>{return {};}});
     auto spec=workload(target.remotePython,"import json,sys; print(json.dumps(sys.argv[1:])); sys.exit(23)");spec.arguments.push_back("literal space ; $() argument");
     auto actual=io::runToCompletion(launcher,spec,"",30s);ASSERT_TRUE(actual)<<actual.error().describe();EXPECT_EQ(actual->exitCode,23);
