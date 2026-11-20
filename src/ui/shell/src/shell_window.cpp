@@ -439,8 +439,36 @@ void ShellWindow::addShellAction(std::string_view id, std::string_view name, std
     }
 }
 
+void ShellWindow::setDistractionFree(bool enabled) {
+    if (enabled == m_distractionFree) return;
+    m_distractionFree = enabled;
+    if (enabled) {
+        m_modeToolbar = !m_toolbar->isHidden();
+        m_modeStatus = !statusBar()->isHidden();
+        m_modeTools.clear();
+        if (const auto layout = m_env.settings.load(); layout)
+            for (const auto& tool : layout->toolWindows)
+                if (m_toolWindows->isVisible(tool.id)) m_modeTools.push_back(tool.id);
+        m_toolbar->hide();
+        statusBar()->hide();
+        m_toolWindows->hideAll();
+        focusEditor();
+    } else {
+        m_toolbar->setVisible(m_modeToolbar);
+        statusBar()->setVisible(m_modeStatus);
+        for (const auto& id : m_modeTools) m_toolWindows->show(id, false);
+        m_modeTools.clear();
+    }
+}
+
 void ShellWindow::registerActions() {
     namespace a = actions;
+    addShellAction("window.fullScreen", "Toggle Full Screen", "View", [this] {
+        if (isFullScreen()) showNormal(); else showFullScreen();
+    });
+    addShellAction("window.distractionFree", "Toggle Distraction Free Mode", "View", [this] {
+        setDistractionFree(!distractionFree());
+    });
     const auto hasTabs = [this] { return m_tabs != nullptr && m_tabs->count() > 0; };
     const auto hasAnyTabs = [this] { return m_tabs != nullptr && m_tabs->totalCount() > 0; };
     const auto hasEditor = [this] { return m_tabs != nullptr && m_tabs->currentEditor() != nullptr; };

@@ -57,6 +57,21 @@ void sendKey(QWidget* target, int key, Qt::KeyboardModifiers modifiers, bool rel
     }
 }
 
+TEST(ShellWindow, DistractionFreeRestoresChromeAndVisibleTools) {
+    ShellRig rig;
+    ShellWindow window(rig.environment());
+    window.show();
+    window.toolWindows().show(tool_windows::kNotifications, false);
+    window.statusBar()->hide();
+    window.setDistractionFree(true);
+    EXPECT_TRUE(window.mainToolbar().isHidden());
+    EXPECT_TRUE(window.statusBar()->isHidden());
+    EXPECT_FALSE(window.toolWindows().isVisible(tool_windows::kNotifications));
+    window.setDistractionFree(false);
+    EXPECT_FALSE(window.mainToolbar().isHidden());
+    EXPECT_TRUE(window.statusBar()->isHidden());
+    EXPECT_TRUE(window.toolWindows().isVisible(tool_windows::kNotifications));
+}
 TEST(ShellWindow, BuildsTheRiderLayout) {
     ShellRig rig;
     ShellWindow window(rig.environment());
