@@ -108,6 +108,7 @@ struct UnityControlIntegration::Impl {
     QPointer<QCheckBox> collapse, clearOnPlay, refreshOnSave, compileOnSave;
     QTimer saveTimer;
     std::string consentRoot, consentInstance, savedRoot, savedSession;
+    std::uint64_t consentTrustRevision = 0, savedTrustRevision = 0;
     bool pendingRefresh = false, pendingCompile = false;
     QPointer<QLabel> eventsStatus;
     std::vector<UnityBridgeEvent> journal;
@@ -117,10 +118,10 @@ struct UnityControlIntegration::Impl {
     std::optional<bool> lastPlaying;
     std::size_t droppedCompiler = 0;
     void clearSavedWork() {
-        saveTimer.stop(); pendingRefresh = pendingCompile = false; savedRoot.clear(); savedSession.clear();
+        saveTimer.stop(); pendingRefresh = pendingCompile = false; savedRoot.clear(); savedSession.clear(); savedTrustRevision = 0;
     }
     void revokeSaveConsent() {
-        clearSavedWork(); consentRoot.clear(); consentInstance.clear();
+        clearSavedWork(); consentRoot.clear(); consentInstance.clear(); consentTrustRevision = 0;
         if (refreshOnSave) refreshOnSave->setChecked(false);
         if (compileOnSave) compileOnSave->setChecked(false);
     }
@@ -137,10 +138,18 @@ struct UnityControlIntegration::Impl {
             if (status) status->setText(QStringLiteral("Connect and select a compatible trusted Unity editor before enabling save actions"));
             return;
         }
-        consentRoot = workbench.projectRoot(); consentInstance = found->instance;
+        const auto trust = workbench.m_services.trust.snapshot(workbench.projectRoot());
+        if (!trust.trusted) { checkbox->setChecked(false); return; }
+        if (!consentRoot.empty() && (consentRoot != workbench.projectRoot() || consentInstance != found->instance || consentTrustRevision != trust.revision)) {
+            // The newly enabled action can acquire new consent; old checkboxes cannot silently inherit it.
+            revokeSaveConsent(); checkbox->setChecked(true); return;
+        }
+        consentRoot = workbench.projectRoot(); consentInstance = found->instance; consentTrustRevision = trust.revision;
     }
     void documentSaved(const document::SavedDocumentCompletion& completion) {
         if (!trusted() || consentRoot != workbench.projectRoot()) return;
+        const auto trust = workbench.m_services.trust.snapshot(consentRoot);
+        if (!trust.trusted || trust.revision != consentTrustRevision) { revokeSaveConsent(); return; }
         const auto found = std::ranges::find_if(live, [&](const auto& item) { return item.id == selected; });
         if (found == live.end() || !found->events || found->instance != consentInstance) return;
         const auto physicalRoot = externalProjectRoot(workbench.projectRoot());
@@ -152,19 +161,24 @@ struct UnityControlIntegration::Impl {
         const bool refresh = refreshOnSave && refreshOnSave->isChecked();
         const bool compile = compileOnSave && compileOnSave->isChecked() && target.suffix().compare(QStringLiteral("cs"), Qt::CaseInsensitive) == 0;
         if (!refresh && !compile) return;
-        savedRoot = workbench.projectRoot(); savedSession = selected;
+        savedRoot = workbench.projectRoot(); savedSession = selected; savedTrustRevision = trust.revision;
         pendingRefresh = pendingRefresh || refresh; pendingCompile = pendingCompile || compile;
         saveTimer.start(200); // Save All and nearby saves produce one follow-up per selected domain.
     }
     void flushSavedWork() {
+        const auto trust = workbench.m_services.trust.snapshot(savedRoot);
+        if (!trust.trusted || trust.revision != savedTrustRevision || trust.revision != consentTrustRevision) {
+            revokeSaveConsent(); if (status) status->setText(QStringLiteral("Unity save consent expired after trust changed; enable save actions again")); return;
+        }
         const auto found = std::ranges::find_if(live, [&](const auto& item) { return item.id == selected; });
         if (!trusted() || savedRoot != workbench.projectRoot() || consentRoot != savedRoot || savedSession != selected ||
             found == live.end() || !found->events || found->instance != consentInstance) { clearSavedWork(); return; }
         if (busy) { saveTimer.start(200); return; }
-        if (pendingRefresh) { pendingRefresh = false; run("refresh"); }
-        else if (pendingCompile) { pendingCompile = false; run("recompile"); }
+        if (pendingRefresh) { pendingRefresh = false; run("refresh", savedTrustRevision); }
+        else if (pendingCompile) { pendingCompile = false; run("recompile", savedTrustRevision); }
         if (pendingRefresh || pendingCompile) saveTimer.start(200);
-    }    QString sourcePath(std::string_view file) const {
+    }
+    QString sourcePath(std::string_view file) const {
         if (file.empty()) return {};
         const auto path = QDir(qs(workbench.projectRoot())).absoluteFilePath(qs(file));
         const QFileInfo info(path);
@@ -378,6 +392,10 @@ struct UnityControlIntegration::Impl {
         return {};
     }
     void expire() {
+        if (!consentRoot.empty()) {
+            const auto trust = workbench.m_services.trust.snapshot(consentRoot);
+            if (!trust.trusted || trust.revision != consentTrustRevision) revokeSaveConsent();
+        }
         if (!trusted()) {
             if (!live.empty() || busy || awaiting)
                 cancel();
@@ -414,12 +432,16 @@ struct UnityControlIntegration::Impl {
             }
         }
     }
-    void run(std::string command) {
+    void run(std::string command, std::optional<std::uint64_t> requiredTrust = std::nullopt) {
         if (!trusted()) {
             cancel();
             if (status)
                 status->setText(QStringLiteral("Trust the Unity project first"));
             return;
+        }
+        const auto authorization = workbench.m_services.trust.snapshot(workbench.projectRoot());
+        if (!authorization.trusted || (requiredTrust && authorization.revision != *requiredTrust)) {
+            revokeSaveConsent(); status->setText(QStringLiteral("Unity save authorization expired after trust changed")); return;
         }
         if (busy) { status->setText(QStringLiteral("A Unity request is already pending")); return; }
         const auto found = std::ranges::find_if(live, [&](const auto& s) { return s.id == selected; });
@@ -442,7 +464,7 @@ struct UnityControlIntegration::Impl {
         QPointer<UnityControlIntegration> receiver(&owner);
         auto* trust = &workbench.m_services.trust;
         const auto trustRoot = workbench.projectRoot();
-        worker = std::jthread([receiver, round, target, id, challenge, trust, trustRoot,
+        worker = std::jthread([receiver, round, target, id, challenge, trust, trustRoot, trustRevision = authorization.revision,
                                command = std::move(command)](const std::stop_token& stop) mutable {
             Result<lang::Json> result = fail(ErrorCode::Cancelled, "Unity request cancelled");
             auto connection = io::LoopbackStream::connect(target.port, std::chrono::steady_clock::now() + 5s, stop);
@@ -464,7 +486,7 @@ struct UnityControlIntegration::Impl {
                                               static_cast<unsigned char>(expected[static_cast<qsizetype>(i)]));
                 if (!proof || proof->stringAt("session") != target.id || !hex(nonce, 64) || difference != 0)
                     result = fail(ErrorCode::PermissionDenied, "Unity server authentication failed");
-                else if (stop.stop_requested() || !trust->isTrusted(trustRoot))
+                else if (const auto admitted = trust->snapshot(trustRoot); stop.stop_requested() || !admitted.trusted || admitted.revision != trustRevision)
                     result = fail(ErrorCode::Cancelled, "Unity request cancelled after trust changed");
                 else {
                     const std::string signature = mac(target.token, {"frost-unity-request-v2", target.root, target.id,
@@ -492,13 +514,17 @@ struct UnityControlIntegration::Impl {
                 return;
             QMetaObject::invokeMethod(
                 QCoreApplication::instance(),
-                [receiver, round, target, id, command, result = std::move(result)]() mutable {
+                [receiver, round, target, id, command, trustRevision, result = std::move(result)]() mutable {
                     if (!receiver)
                         return;
                     auto& state = *receiver->m_impl;
                     if (state.epoch != round || !state.trusted() || state.selected != target.id)
                         return;
                     state.busy = false;
+                    const auto currentTrust = state.workbench.m_services.trust.snapshot(state.workbench.projectRoot());
+                    if (!currentTrust.trusted || currentTrust.revision != trustRevision) {
+                        state.revokeSaveConsent(); state.status->setText(QStringLiteral("Unity request interrupted after trust changed; state is uncertain")); return;
+                    }
                     if (!result || !result->isObject() || result->stringAt("session") != target.id ||
                         result->stringAt("id") != id) {
                         if (command == "refresh" || command == "recompile") state.clearSavedWork();
