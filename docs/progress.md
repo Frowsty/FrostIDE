@@ -3,6 +3,47 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20 R13 C++ analysis implementation integrated
+
+The default C++ bundle registers the Clang-backed index, native analyzer, preprocessor views and module actions. The SQLite index distinguishes build configurations. The analyzer emits SARIF for 33 AST checks and five control-flow checks. Idle, save and manual analysis share Workbench Problems publication and cancellation.
+
+The preprocessor views show Clang's expanded output, macro events and includes. The module graph consumes P1689 scanner output and validates tracked inputs for each compile command before publishing results and navigating to a source. GPT-6 Astra reviewed the source changes and their combined registrations. Regression tests are in the repository. Execution, toolchain installation, corpus measurements and performance acceptance remain deferred.
+
+## 2026-11-20: R13 normal preprocessor and module tools wired
+
+- Explicit C++ actions now show actual expanded source, macro events and directed includes for a selected captured command, and actual pinned clang-scan-deps module relationships with unique interface-source navigation. The scanner consumes an owned private CDB without rewriting project commands. Missing tools and unsupported response/PCH/BMI/header-unit profiles refuse explicitly.
+- Module freshness retains actual Clang preprocessor tracked-VFS receipts from every exact CDB row, bounded to 32 MiB total. All receipts and original command bytes are checked before/after scanning and before navigation, including headers outside project/include roots. Publication/navigation also retain active CDB, project/server/trust/cancellation and open-document identity/path/version guards. Snapshot result views remain labelled as snapshots.
+- Authored normal Workbench action journeys cover actual import-to-interface navigation and refusal after an escaping included-header or original-CDB change. Independent Astra source review cleared the producer/client, scanner, final input closure, normal UI and authored journeys. Only source formatting ran. Builds, tests, feature execution, module compilation/navigation acceptance, clang -E equality and performance verification remain deferred.
+
+## 2026-11-20: R13 CPP-13 actual preprocessor producer/client
+
+- Added an isolated actual Clang preprocessor printer for one exact captured CDB command, callback-derived directed include edges and macro invocation/definition-token events. Full expanded source uses the Clang -E printer without line markers; definition tokens are not mislabelled as expanded tokens. The typed bounded client retains immutable input receipts and rejects unavailable/malformed responses.
+- Authored a pinned clang -E -P output oracle, actual include/macro checks, changed-header refusal and ordinal-dialog project-switch regression. Independent Astra source review cleared producer/client/tests and UI admission source. No build, test, feature execution or WSL ran; clang -E equality remains an authored acceptance test. Combined preprocessor/module Workbench UI wiring continues in the next reviewed slice.
+
+## 2026-11-20: R13 configuration index implementation checkpoint
+
+- Added actual per-command Clang semantic indexing, persistent atomic configuration units, canonical symbol occurrences and relations, stale dependency exclusion, bounded queries and explicit rebuild/invalidate actions. Configuration identity retains the exact captured CDB ordinal; uncaptured/unindexed commands remain visibly outside coverage.
+- Modal request admission retains project/server/trust/generation. Modeless navigation and derived queries retain query-time dependency receipts, validate on a background worker and recheck editor identity/path/version plus live admission before action. Save/reindex cannot bless old displayed coordinates.
+- Storage, actual frontend/configuration, cancellation/refusal and modal-switch regression sources were authored. Independent Astra source review cleared this slice. Only source formatting ran; builds, tests, feature execution, WSL and performance verification remain deferred. CPP-8 baseline performance acceptance has not passed. CPP-13 and CPP-15 continue separately.
+
+## 2026-11-20: R13 CPP-15 module scanner source implementation
+
+- Added contained pinned-version clang-scan-deps execution over an exact captured arguments-form compilation database, explicit trust and mandatory pre/post current-context validation. Strict bounded P1689 decoding retains actual provider/import relationships; navigation resolves only a unique scanner-reported interface path. Relative scanner source paths, response-file commands and ambiguous providers refuse rather than infer a target.
+- Module freshness uses real per-command CPP13 tracked-VFS dependency receipts before and after scanning and before navigation. Whole-project guessed closure was rejected during independent review because nested quoted includes can escape it; unsupported header-unit/opaque module profiles refuse.
+- Added protocol unit cases and a later real pinned scanner/compiler fixture whose module name differs from its source filename; it scans relationships, precompiles the actual interface and compiles its importing consumer. No build, test, feature, native tool or WSL execution occurred. Workbench current-context integration is coordinated separately with CPP-8/13; independent Astra source review cleared scanner execution after correcting the actual LLVM version banner; receipt/UI followthrough review continues. Runtime module-build/navigation acceptance remains deferred.
+
+## 2026-11-20: R13 native analyzer and Problems integration source
+
+- Added isolated pinned-Clang `frost-analyzer`, source-owned AST/CFG inspection registry, exact configuration/dependency receipts, governed process orchestration, strict severity profiles and SARIF export/import. MISRA and Clazy are explicitly unsupported. Application deployment and both staging scripts include the native helper.
+- Native module analysis publishes actual findings to Problems; editor idle/save jobs respect trust and Power Save. Editor snapshots, settings, provider/database identity and dependency bytes guard publication and export. Header edits analyze actual project TU configurations. Existing clang-tidy inspection remains separately available.
+- Authored positive/control fixtures for every inspection, CFG mutation/alias/lifetime and cleanup-bearing return-move regressions, cross-configuration deletion-fix agreement, and a real application CFG-to-Problems/SARIF/stale-header journey. Independent source review cleared the requested AST/CFG and app/export joins. No builds, tests, feature executions, verification runners or WSL ran; runtime acceptance remains deferred.
+- Next: integrate reviewed source and execute acceptance only when testing resumes. No blocking questions.
+
+## 2026-11-14: R13 bundled C++ feature-host first vertical
+
+- Normal C++ server selection now prefers the bundled isolated `frost-clang`, while explicit stock-server settings remain authoritative and missing bundles retain the existing stock fallback. The bundled choice must advertise its actual versioned feature-module capability before Running. Application builds and both platform staging scripts include the helper; its normal clangd mode resolves the staged pinned resource directory without changing explicit overrides, trust, synchronization or lifecycle behavior.
+- Locator/capability and actual later definition-navigation tests are authored. ADR 0097 records the unchanged process/CRT boundary and the separate configuration-index, preprocessor and modules producer boundaries. These latter verticals remain to implement. No build, test, tool execution, indexing benchmark or journey was run.
+
 ## 2026-11-20: R15 workflow implementation integrated
 
 R15 integrates independently of R13 and R14. The editor now offers Markdown preview with external resources blocked, anchored bookmarks, sticky scope labels, TODO search, history restore as an undoable buffer edit, and a paged read-only UTF-8 view for files of 128 MiB or larger. The shell supports floating editor groups and tools, persistent docking, Services, fullscreen, and temporary distraction-free mode. Indexed file search preserves recent-file order. Settings support previewed Visual Studio imports and native editor/keymap schemes.
@@ -7928,6 +7969,7 @@ with a pointer.
   run from the staged directory observed its bundled DLL and OpenConsole process. Native Linux tests
   cover the terminal protocol and PTY, but the latest application integration has not run on Linux.
   The staged snapshot still needs independent review and the merged-tree verification gate.
+
 
 
 ## 2026-11-14: R15 editor extras implementation (source review only)

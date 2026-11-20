@@ -7,7 +7,8 @@
 /*
  * Finding clangd (findClangd): the tools.clangd.path setting when it is set (it must then name
  * an existing absolute file; there is no fallback, so a typo is reported, not papered over); else
- * the pinned LLVM (sdk/sdk.lock.json): first the clangd bundled beside this executable (<exe
+ * the bundled frost-clang beside the application (CPP-7), with its actual feature-module handshake;
+ * then the pinned LLVM (sdk/sdk.lock.json): first the stock clangd bundled beside this executable (<exe
  * dir>/llvm-<pinned version>/bin, staged by tools/stage.ps1 and tools/stage.sh, then <exe
  * dir>/llvm/bin, <exe dir>/bin and <exe dir>), then $FROST_SDK/llvm-<pinned version>/bin and
  * $FROST_LLVM_ROOT/bin when they are set (tools/env.ps1 and ~/sdk/env.sh set them for development
@@ -83,7 +84,7 @@ namespace frost::lang {
 
 // --- Finding clangd ------------------------------------------------------------------------------
 
-enum class ClangdOrigin : std::uint8_t { Setting, PinnedSdk, Path };
+enum class ClangdOrigin : std::uint8_t { Setting, PinnedSdk, Path, BundledFrost };
 
 [[nodiscard]] std::string_view toString(ClangdOrigin origin) noexcept;
 
@@ -97,6 +98,7 @@ struct ClangdSearch {
     std::string configuredPath;              // tools.clangd.path; "" when unset.
     std::vector<std::string> sdkDirectories; // Pinned-LLVM bin directories, in order.
     std::string pathVariable;                // The PATH value.
+    std::string bundledFrostPath;            // Exact bundled /MT engine beside the application, before SDK fallback.
 };
 
 // The LLVM version pinned in sdk/sdk.lock.json at build time ("23.1.4").
@@ -178,8 +180,9 @@ struct ClangdProgress {
 };
 
 struct ClangdServiceOptions {
-    std::string clangdPath;    // Absolute (findClangd).
-    std::string workspaceRoot; // Absolute: the solution or CMake root (working directory and rootUri).
+    std::string clangdPath;            // Absolute (findClangd).
+    std::string workspaceRoot;         // Absolute: the solution or CMake root (working directory and rootUri).
+    bool requireFrostPlatform = false; // Bundled engine must advertise its actual pinned feature-module protocol.
     ClangdLaunchOptions launch;
     std::shared_ptr<ICompileCommandsProvider> compileCommands; // May be null: clangd's fallback flags.
     RestartPolicy restart;

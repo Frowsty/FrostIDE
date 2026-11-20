@@ -164,6 +164,9 @@ struct InspectionReport {
     bool executionSuccessful = true;
     std::string rawStdout;
     std::string rawStderr;
+    std::string toolName = "clang-tidy";
+    std::string informationUri = "https://clang.llvm.org/extra/clang-tidy/";
+    std::string columnKind = "utf16CodeUnits";
 
     bool operator==(const InspectionReport&) const = default;
 };

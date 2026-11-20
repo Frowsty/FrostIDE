@@ -54,11 +54,23 @@ add_executable(frost-clang
     src/frost_clang_main.cpp
     src/local_rename_plan.cpp
     src/ast_refactoring_plan.cpp
+    src/analyzer_command.cpp
+    src/analyzer_sarif.cpp
+    src/analyzer_registry.cpp
+    src/analyzer_results.cpp
+    src/analyzer_expressions.cpp
+    src/analyzer_declarations.cpp
+    src/analyzer_dataflow.cpp
+    src/analyzer_flow_transfer.cpp
     src/ast_create_from_usage.cpp
     src/ast_refactoring_operations.cpp
     src/ast_safe_delete.cpp
     src/ast_generation.cpp
     src/ast_signature.cpp
+    src/semantic_command.cpp
+    src/semantic_preprocess.cpp
+    src/semantic_index.cpp
+    src/semantic_command_checks.cpp
     src/tidy_fixes_decode.cpp
     src/llvm_compression_shim.cpp
 )
@@ -128,6 +140,7 @@ target_link_libraries(frost-clang PRIVATE
     clangToolingSyntax
     clangUnifiedSymbolResolution
     clangASTMatchers
+    clangIndex
     clangRewrite
     clangFrontend
     clangSerialization
@@ -141,3 +154,27 @@ target_link_libraries(frost-clang PRIVATE
     clangBasic
     LLVMSupport
 )
+
+# Independent T2 process, sharing only the isolated pinned-LLVM compilation/link policy.
+add_executable(frost-analyzer
+    src/analyzer_main.cpp
+    src/analyzer_command.cpp
+    src/analyzer_sarif.cpp
+    src/analyzer_registry.cpp
+    src/analyzer_results.cpp
+    src/analyzer_expressions.cpp
+    src/analyzer_declarations.cpp
+    src/analyzer_dataflow.cpp
+    src/analyzer_flow_transfer.cpp
+    src/semantic_command.cpp
+    src/llvm_compression_shim.cpp)
+foreach(_frost_analyzer_property IN ITEMS COMPILE_OPTIONS COMPILE_DEFINITIONS INCLUDE_DIRECTORIES
+        SYSTEM_INCLUDE_DIRECTORIES COMPILE_FEATURES)
+    get_target_property(_frost_analyzer_value frost-clang ${_frost_analyzer_property})
+    if(_frost_analyzer_value)
+        set_property(TARGET frost-analyzer PROPERTY ${_frost_analyzer_property} "${_frost_analyzer_value}")
+    endif()
+endforeach()
+set_target_properties(frost-analyzer PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
+target_link_libraries(frost-analyzer PRIVATE clangTooling clangToolingCore clangFrontend clangSerialization
+    clangDriver clangParse clangSema clangEdit clangAnalysis clangAST clangLex clangBasic LLVMSupport)

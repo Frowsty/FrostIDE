@@ -202,6 +202,20 @@ TEST(LspClientTest, OffsetEncodingIsTheFallbackAndUtf16TheDefault) {
     EXPECT_TRUE(sync.openClose);
 }
 
+TEST(LspClientTest, FrostPlatformIsOnlyAcceptedFromItsVersionedRealCapability) {
+    const auto parse = [](const char* text) {
+        return frost::lang::parseInitializeResult(frost::lang::parseJson(text).value());
+    };
+    EXPECT_FALSE(parse(R"({"capabilities":{}})").frostPlatform);
+    EXPECT_FALSE(parse(R"({"capabilities":{"frostClangFeatureModule":{"engine":"other","schema":1}}})").frostPlatform);
+    EXPECT_FALSE(
+        parse(R"({"capabilities":{"frostClangFeatureModule":{"engine":"frost-clang","schema":2}}})").frostPlatform);
+    const auto actual = parse(
+        R"({"capabilities":{"frostClangFeatureModule":{"engine":"frost-clang","schema":1,"llvmVersion":"23.1.4"},"definitionProvider":true}})");
+    EXPECT_TRUE(actual.frostPlatform);
+    EXPECT_EQ(actual.frostLlvmVersion, "23.1.4");
+    EXPECT_TRUE(actual.definition);
+}
 TEST(LspClientTest, NotificationsWaitForInitialize) {
     LangEnv env;
     MemoryPipe pipe(env.pool());

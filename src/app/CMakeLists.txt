@@ -154,6 +154,7 @@ frost_add_library(app LAYER app
         src/workbench_refactoring.cpp
         src/workbench_cpp_rename.cpp
         src/workbench_cpp_refactoring.cpp
+        src/workbench_cpp_index.cpp
         src/workbench_cpp_move.cpp
         src/workbench_cpp_published_fixes.cpp
         src/workbench_save_actions.cpp
@@ -161,6 +162,7 @@ frost_add_library(app LAYER app
         src/workbench_lua_refactoring.cpp
         src/workbench_lua_module.cpp
         src/workbench_inspection.cpp
+        src/workbench_analyzer.cpp
         src/workbench_cpp_scope_fixes.cpp
         src/workbench_managed.cpp
         src/managed_debug_preparation.cpp
@@ -208,6 +210,15 @@ if(WIN32)
     frost_add_executable(frost_held_read LAYER app SOURCES src/mono_held_read_main.cpp)
 endif()
 
+function(frost_deploy_clang_platform target)
+    # Copy, never link, the isolated /MT LLVM engine into the application's runtime directory.
+    add_custom_target(frost_platform_engine
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:frost-clang> $<TARGET_FILE:frost-analyzer> $<TARGET_FILE_DIR:${target}>
+        DEPENDS frost-clang frost-analyzer VERBATIM)
+    add_dependencies(${target} frost_platform_engine)
+endfunction()
+
 function(frost_stage_lua_test_bridge target)
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/lua-tests"
@@ -233,6 +244,7 @@ if(NOT WIN32)
             ${FROST_SOURCE_DIR}/assets/visualizers $<TARGET_FILE_DIR:frost>/visualizers
         VERBATIM)
     add_dependencies(frost frost_visualizers)
+    frost_deploy_clang_platform(frost)
     frost_stage_lua_test_bridge(frost)
     include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
     frost_stage_lua_runtime(frost)
@@ -294,6 +306,7 @@ if(FROST_ASAN_RUNTIME_DLL)
 endif()
 # Building frost builds the DLL it loads.
 add_dependencies(frost frost_app_shared)
+frost_deploy_clang_platform(frost)
 add_dependencies(frost frost-dbgeng-dap)
 # The Windows helper uses the locally installed VS MSBuild assemblies at runtime. Build it with
 # the pinned .NET SDK in a private profile; it does not redistribute those VS assemblies.

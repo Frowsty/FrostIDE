@@ -161,7 +161,8 @@ void Workbench::editorOpened(DocumentEditorView& view) {
         m_debug->attachEditor(&view.editor());
     syncJsonDocument(view);
     connect(&view.editor(), &ui::EditorView::textChanged, this,
-            [this, current = &view] { syncJsonDocument(*current); });
+            [this, current = &view] { syncJsonDocument(*current); scheduleCppAnalyzer(current->path()); });
+    scheduleCppAnalyzer(view.path());
     refreshMarkers(view);
     if (m_documentRegistry->viewCount(view.path()) == 1) {
         syncClangdDocument(view);
@@ -469,6 +470,7 @@ void Workbench::documentChanged(const std::string& path) {
         if (DocumentEditorView* current = currentView(); current && &current->document() == &view->document())
             m_language->structureReplaced();
     } else if (saved) {
+        scheduleCppAnalyzer(view->path(), true);
         if (m_managed && isManagedSource(view->path()))
             (void)m_managed->saveDocument(view->path());
         if (m_lua && isLuaSource(view->path()))

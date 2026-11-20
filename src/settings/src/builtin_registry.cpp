@@ -442,6 +442,15 @@ struct Entry {
                  "Absolute LuaLS executable path; empty searches PATH."),
         toolPath("tools.clangd.path", "clangd", "The clangd executable; empty uses the bundled one."),
         toolPath("tools.clangFormat.path", "clang-format", "The clang-format executable; empty uses the bundled one."),
+        toolPath("tools.frostAnalyzer.path", "frost-analyzer", "Absolute native analyzer executable; empty uses the bundled one."),
+        {"analysis.cpp.enabled", "Automatic native C++ analysis", "Runs the bundled native AST/CFG analyzer after idle in trusted projects.", "Editor/Inspections/Frost C++", boolSchema(), Value(true), projectToo},
+        {"analysis.cpp.onSave", "Native analysis on save", "Analyze saved C++ translation units using actual compile commands.", "Editor/Inspections/Frost C++", boolSchema(), Value(true), projectToo},
+        {"analysis.powerSave", "Power Save analysis pause", "Pauses automatic expensive analysis; explicit manual inspection remains available.", "Editor/Inspections", boolSchema(), Value(false), projectToo},
+        {"analysis.cpp.rules", "Native analyzer profile overrides", "check-pattern=error|warning|weak-warning|info|off; applied after individual severity keys.", "Editor/Inspections/Frost C++", stringListSchema(256,4096), emptyList(), projectToo},
+#define FROST_ANALYZER_RULE(id,title,category,level,applicability,key,cfg) \
+        {key,title,applicability,"Editor/Inspections/Frost C++",enumSchema(options({{"default","Default"},{"error","Error"},{"warning","Warning"},{"weak-warning","Weak warning"},{"info","Information"},{"off","Off"}})),text("default"),projectToo},
+#include "../../../resources/analyzer_rules.inc"
+#undef FROST_ANALYZER_RULE
         toolPath("tools.clangTidy.path", "clang-tidy", "The clang-tidy executable; empty uses the bundled one."),
         {"tools.clangTidy.plugins", "clang-tidy plugins", "Modules clang-tidy loads with --load.",
          "Build, Execution, Deployment/Toolchains", stringListSchema(32, 4096, StringHint::Executable), emptyList(),
