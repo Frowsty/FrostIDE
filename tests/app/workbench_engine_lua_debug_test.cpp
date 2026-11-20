@@ -36,13 +36,14 @@ public:
     Result<void> removeFile(std::string_view p) override { return real.removeFile(p); }
     Result<void> removeDirectory(std::string_view p) override { return real.removeDirectory(p); }
     Result<bool> exists(std::string_view p) override { return real.exists(p); }
-    Result<std::string> canonicalPath(std::string_view p) override {
+    Result<std::string> canonicalPath(std::string_view p) override { return real.canonicalPath(p); }
+    Result<std::string> physicalPath(std::string_view p) override {
         if (p.ends_with("HeldPublication.lua") && hold.load()) {
             std::unique_lock lock(mutex);
             entered = true;
             (void)changed.wait_for(lock, 10s, [this] { return !hold.load(); });
         }
-        return real.canonicalPath(p);
+        return real.physicalPath(p);
     }
     void release() {
         hold = false;
@@ -202,7 +203,7 @@ struct CoordinatorRig {
             }))
             return false;
         auto accepted = integration->pair(engine->instanceId());
-        EXPECT_TRUE(accepted);
+        EXPECT_TRUE(accepted) << accepted.error().describe();
         return accepted && waitFor([&] { return integration->captureLuaDebugOwner().has_value(); });
     }
     bool prepare() {
