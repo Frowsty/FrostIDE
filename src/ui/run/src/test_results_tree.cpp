@@ -187,9 +187,8 @@ void TestResultsTree::rebuild() {
         const auto& name = *m_frameworkGroup;
         const auto& cases = m_frameworkCases.at(name);
         if (filter.isEmpty() || qs(name).contains(filter, Qt::CaseInsensitive) ||
-            std::ranges::any_of(cases, [&](const auto& entry) {
-                return qs(entry.name).contains(filter, Qt::CaseInsensitive);
-            })) {
+            std::ranges::any_of(
+                cases, [&](const auto& entry) { return qs(entry.name).contains(filter, Qt::CaseInsensitive); })) {
             auto* item = new QTreeWidgetItem(this, {qs(name)});
             item->setData(0, kTestNameRole, qs(name));
             m_items[name] = item;
@@ -211,7 +210,7 @@ void TestResultsTree::rebuild() {
 }
 
 void TestResultsTree::addFrameworkCaseItems(QTreeWidgetItem* item, const std::string& name,
-                                           const std::vector<run::FrameworkCase>& cases) {
+                                            const std::vector<run::FrameworkCase>& cases) {
     for (const auto& entry : cases) {
         auto* child = new QTreeWidgetItem(item, {qs(entry.name)});
         child->setData(0, kTestNameRole, qs(name));

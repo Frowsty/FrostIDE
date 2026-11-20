@@ -117,10 +117,13 @@ public:
                     QString::compare(qs(*normalized), qs(*requested),
                                      io::kNativePathStyle == io::PathStyle::Windows ? Qt::CaseInsensitive
                                                                                     : Qt::CaseSensitive) == 0)
-                    out.push_back({{}, c.name,
+                    out.push_back({{},
+                                   c.name,
                                    profile() == run::LuaTestProfile::Busted220 ? run::TestCaseFramework::Busted
                                                                                : run::TestCaseFramework::LuaUnit,
-                                   c.location->line, c.name, m_generation});
+                                   c.location->line,
+                                   c.name,
+                                   m_generation});
             }
         return out;
     }
