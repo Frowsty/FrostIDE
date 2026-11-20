@@ -37,6 +37,7 @@ set(frost_build_sources
     src/msbuild_driver.cpp
     src/msbuild_locator.cpp
     src/output_parsers.cpp
+    src/remote_target.cpp
     src/run_service.cpp
     src/run_session.cpp
     src/run_target.cpp
@@ -46,7 +47,7 @@ set(frost_build_sources
 
 frost_add_library(build LAYER build
     SOURCES ${frost_build_sources}
-    DEPS frost::project frost::settings frost::io frost::sched)
+    DEPS frost::project frost::settings frost::io frost::sched frost::rpc)
 # The cmake and Ninja versions pinned in sdk/sdk.lock.json, so findCMakeTools can name the pinned
 # SDK's tools (cmake_toolchain.hpp, step 2).
 file(READ "${FROST_SOURCE_DIR}/sdk/sdk.lock.json" _frost_build_sdk_lock)

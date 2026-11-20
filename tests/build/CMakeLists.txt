@@ -161,3 +161,9 @@ if(FROST_UNREAL_ORACLE)
         target_compile_definitions(build_unreal_oracle_tests PRIVATE FROST_UNREAL_${field}="${FROST_UNREAL_${field}}")
     endforeach()
 endif()
+
+# R19 pure endpoint/mapping/transport specification cases; real transport fixtures are separate.
+frost_add_test(build_remote_target_tests
+    SOURCES remote_target_test.cpp
+    DEPS frost::build frost::io frost::rpc
+    LABELS unit)
