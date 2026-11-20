@@ -21,17 +21,28 @@ ManagedToolsContext Workbench::managedToolsContext() {
     context.trust = &m_services.trust;
     context.root = [owner] { return owner && !owner->m_shutDown ? owner->m_projectRoot : std::string(); };
     context.generation = [owner] { return owner ? owner->m_projectEditAdmissionGeneration : 0; };
+    context.evaluatedProject = [owner] {
+        return owner && !owner->m_shutDown ? owner->managedProjectEvaluation()
+                                           : std::shared_ptr<const build::ManagedProjectEvaluation>{};
+    };
     context.dotnet = [owner] {
+        if (owner && !owner->m_shutDown)
+            if (const auto selected = owner->managedProjectEvaluation())
+                return selected->request.dotnet;
         return owner && !owner->m_shutDown
                    ? owner->m_services.settings.snapshot()->get(settings::key::toolsManagedDotnetPath)
                    : std::string();
     };
     context.projects = [owner] {
         std::vector<std::string> projects;
+        if (owner && !owner->m_shutDown)
+            if (const auto selected = owner->managedProjectEvaluation())
+                projects.push_back(selected->request.project);
         if (owner && owner->m_solution)
             for (const auto& entry : owner->m_solution->projects())
                 if (entry.kind == project::ProjectKind::CSharp && !entry.path.empty())
-                    projects.push_back(entry.path);
+                    if (std::ranges::find(projects, entry.path) == projects.end())
+                        projects.push_back(entry.path);
         return projects;
     };
     context.prepare = [owner]() -> Result<void> {
@@ -69,6 +80,7 @@ void Workbench::showManagedPackages(const std::string& projectPath) {
         }
         return paths;
     };
+    context.preferredProject = projectPath;
     QDialog dialog(m_window);
     dialog.setWindowTitle(tr("NuGet Packages"));
     dialog.resize(1100, 750);

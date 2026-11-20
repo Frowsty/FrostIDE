@@ -2,22 +2,28 @@
 // Product SDK context/build/run admission with scripted tools; real SDK fixtures are separate.
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/settings/keys.hpp"
+#include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/build_controller.hpp"
 
 #include "workbench_rig.hpp"
+#include <QComboBox>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QTableWidget>
 #include <QTreeWidget>
 namespace {
 using namespace std::chrono_literals;
 using namespace frost;
 using namespace frost::app::test;
-lang::Json evaluated(const WorkDir& dir) {
+lang::Json evaluated(const WorkDir& dir, std::string framework = "net10.0", std::string rid = "",
+                     std::string projectName = "App.csproj") {
     auto properties = lang::Json::object()
                           .set("TargetPath", dir.join("project/bin/App.dll"))
-                          .set("TargetFramework", "net10.0")
+                          .set("TargetFramework", framework)
                           .set("TargetFrameworks", "net10.0;netstandard2.1")
                           .set("OutputType", "Exe")
-                          .set("RuntimeIdentifier", "")
-                          .set("MSBuildProjectFullPath", dir.join("project/App.csproj"))
+                          .set("RuntimeIdentifier", rid)
+                          .set("MSBuildProjectFullPath", dir.join("project/" + projectName))
                           .set("UsingMicrosoftNETSdk", "true")
                           .set("AssemblyName", "App")
                           .set("LangVersion", "latest")
@@ -128,5 +134,70 @@ TEST(ManagedModelProduct, RapidTrustRevokeRegrantCancelsActiveQueryWithoutGuiTra
     ASSERT_TRUE(rig.trust->trust(dir.join("project")));
     ASSERT_TRUE(waitFor([&] { return launcher.launches()[0].terminated; }, 3s));
     EXPECT_EQ(rig.workbench->managedProjectEvaluation(), nullptr);
+}
+TEST(ManagedModelProduct, NormalNuGetAndUnitTestsUseActualSelectedContextAndCancelOnReplacement) {
+    WorkDir dir("managed-tools-selected-context");
+    dir.write("project/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+    dir.write("tools/dotnet", "scripted actual SDK");
+    io::ScriptedProcessLauncher launcher;
+    RigOptions options;
+    options.launcher = &launcher;
+    options.disableProjectEvaluation = true;
+    WorkbenchRig rig(dir, options);
+    setup(rig, dir);
+    // Open both normal product panes before a standalone SDK context is selected.
+    rig.window->toolWindows().show(app::kNuGetToolWindow, false);
+    rig.window->toolWindows().show(app::kUnitTestsToolWindow, false);
+    auto* packages = rig.window->toolWindows().content(app::kNuGetToolWindow);
+    auto* providers = rig.window->toolWindows().content(app::kUnitTestsToolWindow);
+    ASSERT_NE(providers, nullptr);
+    auto* tests = providers->findChild<QWidget*>("dotnetTestsWidget");
+    ASSERT_NE(packages, nullptr);
+    ASSERT_NE(tests, nullptr);
+    const auto wire = evaluated(dir).dump();
+    for (int i = 0; i < 2; ++i)
+        launcher.expect({.expectExecutable = dir.join("tools/dotnet"), .stdoutBytes = wire});
+    ASSERT_TRUE(rig.workbench->configureManagedProject({.dotnet = dir.join("tools/dotnet"),
+                                                        .project = dir.join("project/App.csproj"),
+                                                        .configuration = "Release",
+                                                        .targetFramework = "net10.0"}));
+    ASSERT_TRUE(waitFor([&] {
+        return packages->findChild<QLineEdit*>("managedTargetFramework")->text() == "net10.0" &&
+               tests->findChild<QLineEdit*>("managedTargetFramework")->text() == "net10.0";
+    }));
+    for (auto* widget : {packages, tests}) {
+        EXPECT_EQ(widget->findChild<QComboBox*>("managedProjectPath")->currentText().toStdString(),
+                  dir.join("project/App.csproj"));
+        EXPECT_EQ(widget->findChild<QComboBox*>("managedConfiguration")->currentText(), "Release");
+    }
+    const auto previous = launcher.launches().size();
+    launcher.expect({.expectExecutable = dir.join("tools/dotnet"), .neverExits = true});
+    for (auto* button : tests->findChildren<QPushButton*>())
+        if (button->text() == "Discover")
+            button->click();
+    ASSERT_TRUE(waitFor([&] { return launcher.launches().size() > previous; }));
+    rig.workbench->clearManagedProjectContext();
+    ASSERT_TRUE(waitFor([&] { return launcher.launches()[previous].terminated; }));
+    ASSERT_TRUE(waitFor([&] { return tests->findChild<QLineEdit*>("managedTargetFramework")->text().isEmpty(); }));
+    EXPECT_EQ(tests->findChild<QTableWidget*>()->rowCount(), 0);
+    dir.write("project/Tests.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+    const auto replacement = evaluated(dir, "netstandard2.1", "linux-x64", "Tests.csproj").dump();
+    for (int i = 0; i < 2; ++i)
+        launcher.expect({.expectExecutable = dir.join("tools/dotnet"), .stdoutBytes = replacement});
+    ASSERT_TRUE(rig.workbench->configureManagedProject({.dotnet = dir.join("tools/dotnet"),
+                                                        .project = dir.join("project/Tests.csproj"),
+                                                        .configuration = "Custom",
+                                                        .targetFramework = "netstandard2.1",
+                                                        .runtimeIdentifier = "linux-x64"}));
+    ASSERT_TRUE(waitFor([&] {
+        return packages->findChild<QLineEdit*>("managedTargetFramework")->text() == "netstandard2.1" &&
+               tests->findChild<QLineEdit*>("managedTargetFramework")->text() == "netstandard2.1";
+    }));
+    for (auto* widget : {packages, tests}) {
+        EXPECT_EQ(widget->findChild<QComboBox*>("managedProjectPath")->currentText().toStdString(),
+                  dir.join("project/Tests.csproj"));
+        EXPECT_EQ(widget->findChild<QComboBox*>("managedConfiguration")->currentText(), "Custom");
+        EXPECT_EQ(widget->findChild<QLineEdit*>("managedRuntimeIdentifier")->text(), "linux-x64");
+    }
 }
 } // namespace
