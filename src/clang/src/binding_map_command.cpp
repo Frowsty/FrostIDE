@@ -112,12 +112,12 @@ BindingCompileContext bindingSourceCompileContext(const clang::tooling::CompileC
 }
 
 llvm::json::Object bindingCompileContextJson(const BindingCompileContext& context) {
-    return {{"directory", context.original.Directory},
-            {"source", context.original.Filename},
-            {"originalArguments", array(context.original.CommandLine)},
-            {"analysisArguments", array(context.analysisArguments)},
-            {"normalizations", array(context.normalizations)},
-            {"textualPchHeaders", array(context.textualHeaders)},
-            {"error", context.error}};
+    return llvm::json::Object{{"directory", context.original.Directory},
+                              {"source", context.original.Filename},
+                              {"originalArguments", array(context.original.CommandLine)},
+                              {"analysisArguments", array(context.analysisArguments)},
+                              {"normalizations", array(context.normalizations)},
+                              {"textualPchHeaders", array(context.textualHeaders)},
+                              {"error", context.error}};
 }
 } // namespace frost::clang_engine

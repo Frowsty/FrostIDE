@@ -51,6 +51,9 @@ llvm::json::Object analyzerSarif(llvm::json::Object report) {
     llvm::json::Object run{{"tool",llvm::json::Object{{"driver",std::move(driver)}}},{"columnKind","unicodeCodePoints"}};
     run["invocations"]=llvm::json::Array{llvm::json::Object{{"executionSuccessful",complete}}};
     run["properties"]=std::move(report);run["results"]=std::move(results);
-    return {{"version","2.1.0"},{"$schema","https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json"},{"runs",llvm::json::Array{std::move(run)}}};
+    return llvm::json::Object{
+        {"version", "2.1.0"},
+        {"$schema", "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json"},
+        {"runs", llvm::json::Array{std::move(run)}}};
 }
 }

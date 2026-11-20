@@ -26,7 +26,12 @@ public:
         return true;
     }
     bool VisitLambdaExpr(clang::LambdaExpr* lambda) {
-        for(const auto& capture:lambda->captures()) if(capture.capturesVariable() && capture.getCaptureKind()==clang::LCK_ByRef) excluded.insert(capture.getCapturedVar()->getCanonicalDecl());
+        for (const auto& capture : lambda->captures()) {
+            if (!capture.capturesVariable() || capture.getCaptureKind() != clang::LCK_ByRef)
+                continue;
+            if (const auto* variable = llvm::dyn_cast<clang::VarDecl>(capture.getCapturedVar()))
+                excluded.insert(variable->getCanonicalDecl());
+        }
         return true;
     }
 

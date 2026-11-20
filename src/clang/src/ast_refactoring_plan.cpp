@@ -17,16 +17,6 @@ public:
     std::vector<std::string> getAllFiles() const override { return {command.Filename}; }
 };
 
-const clang::NamedDecl* projectCanonical(const clang::NamedDecl* declaration) {
-    if (const auto* templ = llvm::dyn_cast<clang::ClassTemplateDecl>(declaration))
-        declaration = templ->getTemplatedDecl();
-    if (const auto* templ = llvm::dyn_cast<clang::FunctionTemplateDecl>(declaration))
-        declaration = templ->getTemplatedDecl();
-    if (const auto* specialization = llvm::dyn_cast<clang::ClassTemplateSpecializationDecl>(declaration))
-        declaration = specialization->getSpecializedTemplate()->getTemplatedDecl();
-    return clang::tooling::getCanonicalSymbolDeclaration(declaration);
-}
-
 template<class DiagnosticSink>
 std::unique_ptr<clang::ASTUnit>
 projectAST(const clang::tooling::CompileCommand& command, llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs,
@@ -334,11 +324,13 @@ int runAstRefactoringPlan(std::string_view resourceDirectory) {
     llvm::json::Object result;
     if (!parsed) {
         llvm::consumeError(parsed.takeError());
-        result = {{"kind", "cpp-refactoring-plan"}, {"status", "invalid-input"}, {"files", llvm::json::Array{}}};
+        result = llvm::json::Object{
+            {"kind", "cpp-refactoring-plan"}, {"status", "invalid-input"}, {"files", llvm::json::Array{}}};
     } else if (const auto* object = parsed->getAsObject())
         result = astPlan(*object, resourceDirectory);
     else
-        result = {{"kind", "cpp-refactoring-plan"}, {"status", "invalid-input"}, {"files", llvm::json::Array{}}};
+        result = llvm::json::Object{
+            {"kind", "cpp-refactoring-plan"}, {"status", "invalid-input"}, {"files", llvm::json::Array{}}};
     const bool ready = result.getString("status") == "ready";
     llvm::outs() << llvm::json::Value(std::move(result)) << '\n';
     return ready ? 0 : 1;

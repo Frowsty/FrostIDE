@@ -168,13 +168,14 @@ add_executable(frost-analyzer
     src/analyzer_flow_transfer.cpp
     src/semantic_command.cpp
     src/llvm_compression_shim.cpp)
-foreach(_frost_analyzer_property IN ITEMS COMPILE_OPTIONS COMPILE_DEFINITIONS INCLUDE_DIRECTORIES
-        SYSTEM_INCLUDE_DIRECTORIES COMPILE_FEATURES)
+foreach(_frost_analyzer_property IN ITEMS COMPILE_OPTIONS COMPILE_DEFINITIONS COMPILE_FEATURES)
     get_target_property(_frost_analyzer_value frost-clang ${_frost_analyzer_property})
     if(_frost_analyzer_value)
         set_property(TARGET frost-analyzer PROPERTY ${_frost_analyzer_property} "${_frost_analyzer_value}")
     endif()
 endforeach()
+target_include_directories(frost-analyzer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(frost-analyzer SYSTEM PRIVATE "${FROST_LLVM_SDK_ROOT}/include")
 set_target_properties(frost-analyzer PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
 target_link_libraries(frost-analyzer PRIVATE clangTooling clangToolingCore clangFrontend clangSerialization
     clangDriver clangParse clangSema clangEdit clangAnalysis clangAST clangLex clangBasic LLVMSupport)

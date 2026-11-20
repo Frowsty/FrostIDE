@@ -54,11 +54,11 @@ llvm::json::Object location(clang::SourceLocation source, const clang::SourceMan
                             const SemanticCommand& command) {
     source = manager.getExpansionLoc(source);
     if (!source.isFileID() || manager.getFilename(source).empty())
-        return {{"path", ""}, {"offset", 0}, {"line", 0}, {"column", 0}};
-    return {{"path", semantic::absolute(manager.getFilename(source), command.command.Directory)},
-            {"offset", manager.getFileOffset(source)},
-            {"line", manager.getSpellingLineNumber(source)},
-            {"column", manager.getSpellingColumnNumber(source)}};
+        return llvm::json::Object{{"path", ""}, {"offset", 0}, {"line", 0}, {"column", 0}};
+    return llvm::json::Object{{"path", semantic::absolute(manager.getFilename(source), command.command.Directory)},
+                              {"offset", manager.getFileOffset(source)},
+                              {"line", manager.getSpellingLineNumber(source)},
+                              {"column", manager.getSpellingColumnNumber(source)}};
 }
 class Callbacks final : public clang::PPCallbacks {
     clang::Preprocessor& preprocessor;

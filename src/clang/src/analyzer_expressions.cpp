@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Resolved-expression inspections; warnings describe proven syntax/type facts, never lexical guesses.
 #include "analyzer_ast.hpp"
+
+#include <clang/Basic/SourceManager.h>
+
 namespace frost::clang_engine {
 namespace {
 using namespace analysis;

@@ -23,6 +23,12 @@ protected:
         auto arguments=Json::array({Json(compiler)});
 #ifdef _WIN32
         for(const auto& arg:std::vector<std::string>{"/std:c++20","/c",file,"/Fo"+scratch.join("forbidden.obj")}) arguments.push(arg);
+#ifdef FROST_TEST_VCTOOLS_DIR
+        // Replay the configured compiler's SDK pins inside the frozen source snapshot.
+        arguments.push("-vctoolsdir" FROST_TEST_VCTOOLS_DIR);
+        arguments.push("-winsdkdir" FROST_TEST_WINSDK_DIR);
+        arguments.push("-winsdkversion" FROST_TEST_WINSDK_VERSION);
+#endif
 #else
         for(const auto& arg:std::vector<std::string>{"-std=c++20","-c",file,"-o",scratch.join("forbidden.o")}) arguments.push(arg);
 #endif
@@ -33,7 +39,10 @@ protected:
         spec.stdinMode=frost::io::Stdio::Pipe;spec.arguments={mode};spec.workingDirectory=scratch.path();spec.killOnClose=true;
         spec.environment.emplace_back("FROST_LLVM_ROOT",std::filesystem::path(compiler).parent_path().parent_path().generic_string());
         auto output=frost::io::runToCompletion(frost::io::realProcessLauncher(),spec,request.dump(),std::chrono::minutes(2));
-        EXPECT_TRUE(output);if(!output)return {};
+        if (!output) {
+            ADD_FAILURE() << output.error().message();
+            return {};
+        }
         auto result=frost::rpc::parseJson(output->stdoutBytes);EXPECT_TRUE(result)<<output->stdoutBytes<<output->stderrBytes;
         EXPECT_EQ(output->exitCode,0)<<output->stdoutBytes<<output->stderrBytes;
         EXPECT_EQ(fs.readFile(file).value_or("missing"),bytes);

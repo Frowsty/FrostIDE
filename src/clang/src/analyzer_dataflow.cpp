@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Genuine Clang CFG must-analysis: fixed point first, diagnostics only after convergence.
 #include "analyzer_flow.hpp"
+#include "clang/Basic/SourceManager.h"
 #include <algorithm>
 #include <deque>
 namespace frost::clang_engine::flow {

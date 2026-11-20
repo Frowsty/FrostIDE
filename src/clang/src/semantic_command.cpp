@@ -120,8 +120,8 @@ std::optional<SemanticCommand> semanticCommand(const llvm::json::Object& request
         arguments.push_back(argument.str());
     }
     arguments.push_back("-resource-dir=" + resource.str());
-    arguments.push_back("-fno-implicit-modules");
-    arguments.push_back("-fno-implicit-module-maps");
+    arguments.push_back(cl ? "/clang:-fno-implicit-modules" : "-fno-implicit-modules");
+    arguments.push_back(cl ? "/clang:-fno-implicit-module-maps" : "-fno-implicit-module-maps");
     command.CommandLine = std::move(arguments);
     // Producers receive a syntax-only command already stripped of ordinary output/dependency
     // actions; this contract is not left to an individual consumer's FrontendAction choice.
@@ -170,16 +170,16 @@ llvm::json::Object semanticUnitReceipt(const SemanticCommand& command, llvm::Str
         missing.push_back(path);
     for (const auto& path : command.files->directoryInputs())
         directories.push_back(path);
-    return {{"kind", kind},
-            {"schema", 1},
-            {"status", "ready"},
-            {"configuration", command.configuration},
-            {"commandIdentity", command.identity},
-            {"source", command.command.Filename},
-            {"compilationDatabaseSha256", command.databaseSha256},
-            {"commandIndex", command.commandIndex},
-            {"dependencies", semanticDependencies(command)},
-            {"missingDependencies", std::move(missing)},
-            {"directoryDependencies", std::move(directories)}};
+    return llvm::json::Object{{"kind", kind},
+                              {"schema", 1},
+                              {"status", "ready"},
+                              {"configuration", command.configuration},
+                              {"commandIdentity", command.identity},
+                              {"source", command.command.Filename},
+                              {"compilationDatabaseSha256", command.databaseSha256},
+                              {"commandIndex", command.commandIndex},
+                              {"dependencies", semanticDependencies(command)},
+                              {"missingDependencies", std::move(missing)},
+                              {"directoryDependencies", std::move(directories)}};
 }
 } // namespace frost::clang_engine

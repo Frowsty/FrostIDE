@@ -65,6 +65,12 @@ target_include_directories(clang_analyzer_tests PRIVATE ${FROST_SOURCE_DIR}/test
 target_compile_definitions(clang_analyzer_tests PRIVATE
     FROST_ANALYZER_BINARY="$<TARGET_FILE:frost-analyzer>"
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+if(WIN32 AND FROST_VCTOOLS_DIR AND FROST_WINSDK_DIR AND FROST_WINSDK_VERSION)
+    target_compile_definitions(clang_analyzer_tests PRIVATE
+        FROST_TEST_VCTOOLS_DIR="${FROST_VCTOOLS_DIR}"
+        FROST_TEST_WINSDK_DIR="${FROST_WINSDK_DIR}"
+        FROST_TEST_WINSDK_VERSION="${FROST_WINSDK_VERSION}")
+endif()
 add_dependencies(clang_analyzer_tests frost-analyzer)
 frost_add_test(clang_semantic_index_tests
     SOURCES semantic_index_test.cpp

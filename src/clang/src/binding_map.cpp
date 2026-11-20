@@ -97,8 +97,8 @@ struct Request {
     std::map<std::string, std::string> sourceInputs;
     bool sourceInputsComplete = true;
     BindingCompileContext compileContext;
-    std::vector<NameLiteral> embeddedLua;
-    std::vector<std::string> embeddedLuaRefusals;
+    std::vector<NameLiteral> embeddedLua{};
+    std::vector<std::string> embeddedLuaRefusals{};
 };
 
 std::optional<std::string> physicalPath(llvm::StringRef input) {
@@ -125,7 +125,7 @@ bool insideRoot(llvm::StringRef root, llvm::StringRef path) {
 }
 
 llvm::json::Object rangeJson(const Range& range) {
-    return {{"path", range.path}, {"offset", range.offset}, {"length", range.length}};
+    return llvm::json::Object{{"path", range.path}, {"offset", range.offset}, {"length", range.length}};
 }
 
 llvm::json::Object targetJson(const Target& target) {
@@ -141,8 +141,9 @@ llvm::json::Object targetJson(const Target& target) {
 }
 
 llvm::json::Object nameLiteralJson(const NameLiteral& literal) {
-    return {
-        {"range", rangeJson(literal.range)}, {"decodedValue", literal.decodedValue}, {"spelling", literal.spelling}};
+    return llvm::json::Object{{"range", rangeJson(literal.range)},
+                              {"decodedValue", literal.decodedValue},
+                              {"spelling", literal.spelling}};
 }
 
 void printJson(llvm::json::Object object) {
@@ -150,7 +151,8 @@ void printJson(llvm::json::Object object) {
 }
 
 int inputError(llvm::StringRef message) {
-    printJson({{"schemaVersion", 1}, {"error", llvm::json::Object{{"code", "invalid-request"}, {"message", message}}}});
+    printJson(llvm::json::Object{{"schemaVersion", 1},
+                                 {"error", llvm::json::Object{{"code", "invalid-request"}, {"message", message}}}});
     return 2;
 }
 
@@ -751,14 +753,14 @@ void report(const Request& request, bool parsed, llvm::StringRef failure) {
         embeddedLua.push_back(nameLiteralJson(chunk));
     for (const auto& reason : request.embeddedLuaRefusals)
         embeddedLuaRefusals.push_back(reason);
-    printJson({{"schemaVersion", 1},
-               {"translationUnitParsed", parsed},
-               {"embeddedLuaProfile", "Frost::ScriptEngine::ExecuteString/v1"},
-               {"embeddedLua", std::move(embeddedLua)},
-               {"embeddedLuaRefusals", std::move(embeddedLuaRefusals)},
-               {"sourceInputs", std::move(sourceInputs)},
-               {"compilationContext", bindingCompileContextJson(request.compileContext)},
-               {"results", std::move(rows)}});
+    printJson(llvm::json::Object{{"schemaVersion", 1},
+                                 {"translationUnitParsed", parsed},
+                                 {"embeddedLuaProfile", "Frost::ScriptEngine::ExecuteString/v1"},
+                                 {"embeddedLua", std::move(embeddedLua)},
+                                 {"embeddedLuaRefusals", std::move(embeddedLuaRefusals)},
+                                 {"sourceInputs", std::move(sourceInputs)},
+                                 {"compilationContext", bindingCompileContextJson(request.compileContext)},
+                                 {"results", std::move(rows)}});
 }
 
 } // namespace

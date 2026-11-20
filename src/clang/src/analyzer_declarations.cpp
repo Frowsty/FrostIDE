@@ -2,6 +2,7 @@
 // Resolved class/function/lifetime inspections, with explicit narrow applicability.
 #include "analyzer_ast.hpp"
 #include "clang/AST/Attr.h"
+#include "clang/Basic/SourceManager.h"
 #include <algorithm>
 namespace frost::clang_engine::analysis {
 namespace {

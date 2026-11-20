@@ -692,7 +692,7 @@ public:
         return true;
     }
     bool VisitTypedefTypeLoc(clang::TypedefTypeLoc t) {
-        consider(t.getTypedefNameDecl(), t.getNameLoc());
+        consider(t.getTypePtr()->getDecl(), t.getNameLoc());
         return true;
     }
     bool VisitTemplateSpecializationTypeLoc(clang::TemplateSpecializationTypeLoc t) {
@@ -799,7 +799,7 @@ public:
         return true;
     }
     bool VisitTypedefTypeLoc(clang::TypedefTypeLoc t) {
-        consider(t.getTypedefNameDecl(), t.getNameLoc());
+        consider(t.getTypePtr()->getDecl(), t.getNameLoc());
         return true;
     }
     bool VisitTemplateSpecializationTypeLoc(clang::TemplateSpecializationTypeLoc t) {
@@ -1221,28 +1221,31 @@ int checkLocalRenamePlanner(std::string_view resourceDirectory) {
         const bool refused =
             limit.slots ? !slotFits(limit.value, limit.value) : !valueFits(limit.value + 1, limit.value);
         record(limit.name, "pure-production-budget", admitted && refused,
-               {{"limit", limit.value}, {"atBoundaryAdmitted", admitted}, {"aboveBoundaryRefused", refused}});
+               llvm::json::Object{{"limit", limit.value},
+                                  {"atBoundaryAdmitted", admitted},
+                                  {"aboveBoundaryRefused", refused}});
     }
     const bool dependencyAt = dependencyFits(kFiles - 1, kDependencyBytes - 1, 1);
     const bool dependencyOver = !dependencyFits(kFiles - 1, kDependencyBytes, 1);
-    record(
-        "dependency-bytes", "pure-production-budget", dependencyAt && dependencyOver,
-        {{"limit", kDependencyBytes}, {"atBoundaryAdmitted", dependencyAt}, {"aboveBoundaryRefused", dependencyOver}});
+    record("dependency-bytes", "pure-production-budget", dependencyAt && dependencyOver,
+           llvm::json::Object{{"limit", kDependencyBytes},
+                              {"atBoundaryAdmitted", dependencyAt},
+                              {"aboveBoundaryRefused", dependencyOver}});
     std::size_t output = kOutputBytes - 6;
     const bool outputAt = jsonCharge(output, 1);
     const bool outputOver = !jsonCharge(output, 1);
     const bool overflowRefused = !jsonCharge(output, std::numeric_limits<std::size_t>::max());
     record("output-bytes", "pure-production-budget", outputAt && outputOver && overflowRefused,
-           {{"limit", kOutputBytes},
-            {"atBoundaryAdmitted", outputAt},
-            {"aboveBoundaryRefused", outputOver},
-            {"overflowRefused", overflowRefused}});
+           llvm::json::Object{{"limit", kOutputBytes},
+                              {"atBoundaryAdmitted", outputAt},
+                              {"aboveBoundaryRefused", outputOver},
+                              {"overflowRefused", overflowRefused}});
     const OffsetMap growth({{3, 2}, {9, 2}}, 4);
     const OffsetMap shrink({{3, 2}, {9, 2}}, 1);
     record("offset-prefix-map", "pure-production-offsets",
            growth(0) == 0 && growth(3) == 3 && growth(5) == 7 && growth(9) == 11 && growth(12) == 16 &&
                shrink(5) == 4 && shrink(12) == 10,
-           {{"growthAfterTwoEdits", growth(12)}, {"shrinkAfterTwoEdits", shrink(12)}});
+           llvm::json::Object{{"growthAfterTwoEdits", growth(12)}, {"shrinkAfterTwoEdits", shrink(12)}});
 
     // No physical FS underneath this adapter: mutations are controlled in-memory switches.
     class SwitchFileSystem final : public llvm::vfs::FileSystem {
@@ -1338,11 +1341,11 @@ int checkLocalRenamePlanner(std::string_view resourceDirectory) {
         record(name, "actual-two-parse-private-VFS",
                sourceAdded && headersAdded && directoriesSet && ready && originalSetting == expected &&
                    candidateSetting == expected && baseHasHeader == (scenario != 1),
-               {{"plannerStatus", result.getString("status").value_or("missing").str()},
-                {"originalSetting", originalSetting},
-                {"candidateSetting", candidateSetting},
-                {"mutatedBaseHasHeader", baseHasHeader},
-                {"plannerResult", std::move(result)}});
+               llvm::json::Object{{"plannerStatus", result.getString("status").value_or("missing").str()},
+                                  {"originalSetting", originalSetting},
+                                  {"candidateSetting", candidateSetting},
+                                  {"mutatedBaseHasHeader", baseHasHeader},
+                                  {"plannerResult", std::move(result)}});
     }
     llvm::IntrusiveRefCntPtr<llvm::vfs::InMemoryFileSystem> privateBase(new llvm::vfs::InMemoryFileSystem);
     const bool privateSourceAdded = privateBase->addFile(source, 0, llvm::MemoryBuffer::getMemBufferCopy("int f();"));
@@ -1356,11 +1359,11 @@ int checkLocalRenamePlanner(std::string_view resourceDirectory) {
     record("frozen-new-namespace-refusal", "actual-private-VFS",
            privateSourceAdded && privateDirectorySet && initiallyMissing && added && stillMissing && unknownRefused &&
                !namespaceSnapshot.error.empty(),
-           {{"initiallyMissing", initiallyMissing},
-            {"addedToBase", added},
-            {"snapshotStillMissing", stillMissing},
-            {"unknownRefused", unknownRefused},
-            {"error", namespaceSnapshot.error}});
+           llvm::json::Object{{"initiallyMissing", initiallyMissing},
+                              {"addedToBase", added},
+                              {"snapshotStillMissing", stillMissing},
+                              {"unknownRefused", unknownRefused},
+                              {"error", namespaceSnapshot.error}});
     llvm::outs() << llvm::json::Value(llvm::json::Object{
                         {"kind", "internal-local-rename-checks"}, {"passed", all}, {"checks", std::move(checks)}})
                  << '\n';
@@ -1410,11 +1413,13 @@ int runProjectRenamePlan(std::string_view resourceDirectory) {
     llvm::json::Object result;
     if (!parsed) {
         llvm::consumeError(parsed.takeError());
-        result = {{"kind", "cpp-rename-plan"}, {"status", "invalid-input"}, {"files", llvm::json::Array{}}};
+        result = llvm::json::Object{
+            {"kind", "cpp-rename-plan"}, {"status", "invalid-input"}, {"files", llvm::json::Array{}}};
     } else if (const auto* object = parsed->getAsObject())
         result = projectPlan(*object, resourceDirectory);
     else
-        result = {{"kind", "cpp-rename-plan"}, {"status", "invalid-input"}, {"files", llvm::json::Array{}}};
+        result = llvm::json::Object{
+            {"kind", "cpp-rename-plan"}, {"status", "invalid-input"}, {"files", llvm::json::Array{}}};
     const bool ready = result.getString("status") == "ready";
     llvm::outs() << llvm::json::Value(std::move(result)) << '\n';
     return ready ? 0 : 1;
