@@ -10,12 +10,18 @@ namespace frost::lang {
 struct LanguageServerArtifact {
     std::string path, sha256;
 };
+struct LanguageSandboxFile {
+    std::string path, relativePath;
+    bool executable{};
+};
 struct LanguageServerDefinition {
     std::string id, name, languageId, version, executable, license, licensePath, licenseSha256;
     std::vector<std::string> extensions, arguments;
     std::vector<LanguageServerArtifact> artifacts;
     Json configuration = Json::object(), initializationOptions;
     bool enabled = false;
+    std::vector<LanguageSandboxFile>
+        sandboxFiles; // Empty: no opt-in sandbox; named files are already pinned artifacts.
 };
 class LanguageServerRegistry {
 public:
@@ -41,7 +47,8 @@ class RegistryProcessLauncher final : public io::IProcessLauncher {
 public:
     RegistryProcessLauncher(io::IProcessLauncher& launcher, io::IFileSystem& fs, project::TrustStore& trust,
                             LanguageServerDefinition definition, std::string root, std::uint64_t revision,
-                            std::string physicalRoot, std::shared_ptr<std::atomic<bool>> contributionActive = {});
+                            std::string physicalRoot, std::shared_ptr<std::atomic<bool>> contributionActive = {},
+                            std::string sandboxPrivateParent = {});
     void revoke() noexcept { m_active.store(false); }
     [[nodiscard]] Result<void> admitWorkspace() const;
     [[nodiscard]] Result<void> admitDocument(std::string_view path) const;
@@ -52,6 +59,7 @@ public:
 
 private:
     [[nodiscard]] Result<void> admit(const io::ProcessSpec& spec);
+    [[nodiscard]] Result<io::ProcessSpec> prepareSandbox(const io::ProcessSpec& spec);
     io::IProcessLauncher& m_launcher;
     io::IFileSystem& m_fs;
     project::TrustStore& m_trust;
@@ -60,6 +68,7 @@ private:
     std::uint64_t m_revision;
     std::atomic<bool> m_active{true};
     std::shared_ptr<std::atomic<bool>> m_contributionActive;
+    std::string m_sandboxPrivateParent;
 };
 // Retained requester boundary: each request/reply and incoming applyEdit rechecks the captured
 // workspace identity/trust. Documents outside that physical workspace never reach this server.

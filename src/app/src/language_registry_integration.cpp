@@ -20,6 +20,7 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QStandardPaths>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -37,6 +38,12 @@ struct LanguageRegistryIntegration::Entry {
 };
 namespace {
 QString q(std::string_view s) { return QString::fromUtf8(s.data(), static_cast<qsizetype>(s.size())); }
+std::string sandboxParent(const WorkbenchOptions& options) {
+    auto parent = io::parentPath(options.applicationSettingsFile);
+    if (parent.empty())
+        parent = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation).toStdString();
+    return parent.empty() ? std::string{} : parent + "/extension-sandboxes";
+}
 } // namespace
 LanguageRegistryIntegration::LanguageRegistryIntegration(Workbench& w) : QObject(&w), m_workbench(w) {
     input::ActionSpec action;
@@ -153,7 +160,7 @@ void LanguageRegistryIntegration::poll() {
         entry->definition = d;
         entry->launcher = std::make_shared<lang::RegistryProcessLauncher>(
             m_workbench.m_services.launcher, m_workbench.m_services.fs, m_workbench.m_services.trust, d, root,
-            trust.revision, *physical);
+            trust.revision, *physical, nullptr, sandboxParent(m_workbench.m_options));
         auto options = lang::registeredLanguageOptions(d, root);
         options.onLifecycle = [self, generation] {
             if (self)
@@ -378,6 +385,12 @@ Result<void> LanguageRegistryIntegration::setManifest(std::string manifest) {
         return fail(ErrorCode::Cancelled, "Language registry is shutting down");
     if (auto parsed = lang::LanguageServerRegistry::parse(manifest); !parsed)
         return std::unexpected(parsed.error());
+    if (m_workbench.m_extensions) {
+        m_workbench.m_extensions->poll();
+        auto composed = m_workbench.m_extensions->composeLanguageRegistry(manifest);
+        if (!composed)
+            return std::unexpected(composed.error());
+    }
     auto saved = m_workbench.m_services.settings.set(settings::Scope::Application,
                                                      settings::key::languageServerRegistry, std::move(manifest));
     if (!saved)

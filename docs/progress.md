@@ -60,6 +60,11 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R19 real sample and opt-in native sandbox join
+
+- Added a genuine bounded stdio text-statistics provider, offline pin-manifest preparer and normal public-API sandbox onboarding acceptance source. The sample advertises only its implemented buffer-count command; no semantics are simulated. Optional future CMake sample target; no code was built/run.
+- Joined explicit read-only-stdio exact pinned runtime file grants to native sandbox profile/staging API3046af52 (local cherry-pick4b7596c9). Windows private staging uses only captured verified bytes, never original ACL changes; native enforcement commit is pending from its owner. Linux and Windows launch failures cannot downgrade to ordinary execution. Added grant/selector/capability refusals; actual command observations reset on catalog epoch changes. Pair source review and OS enforcement acceptance remain pending/unexecuted.
+
 ## 2026-11-20: R19 UX-20 public extension contribution API
 
 - Added bounded versioned capability-declared data contributions for existing governed language servers, actual advertised provider commands and explicit pinned local stdio DAP launch. Added import/review, command and debug palette actions plus public Workbench entry points. No installer or in-process extension code.

@@ -55,3 +55,8 @@ if(FROST_BUILD_UI)
     add_subdirectory(ui)
     add_subdirectory(app)
 endif()
+
+option(FROST_BUILD_EXTENSION_SAMPLE "Build the explicit local stdio extension API sample" OFF)
+if(FROST_BUILD_EXTENSION_SAMPLE AND NOT FROST_FUZZ)
+    add_subdirectory("${FROST_SOURCE_DIR}/examples/extensions/text-statistics" "${CMAKE_BINARY_DIR}/extension-sample")
+endif()

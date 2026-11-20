@@ -21,12 +21,19 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QStandardPaths>
 #include <QVBoxLayout>
 
 #include <algorithm>
 namespace frost::app {
 namespace {
 QString q(std::string_view s) { return QString::fromUtf8(s.data(), static_cast<qsizetype>(s.size())); }
+std::string sandboxParent(const WorkbenchOptions& options) {
+    auto parent = io::parentPath(options.applicationSettingsFile);
+    if (parent.empty())
+        parent = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation).toStdString();
+    return parent.empty() ? std::string{} : parent + "/extension-sandboxes";
+}
 bool matches(const lang::LanguageServerDefinition& d, std::string_view path) {
     const auto dot = path.find_last_of('.');
     if (dot == path.npos)
@@ -78,6 +85,7 @@ void ExtensionIntegration::revoke() {
     m_active->store(false);
     m_stop.request_stop();
     ++m_generation;
+    m_lastCommand = {};
     if (m_debugGeneration && m_workbench.m_debug && m_workbench.m_debug->sessionGeneration() == m_debugGeneration)
         m_workbench.m_debug->stop();
     m_debugGeneration = 0;
@@ -161,7 +169,10 @@ lang::Json ExtensionIntegration::snapshot() const {
                           .set("id", entry.id)
                           .set("declaredVersion", entry.version)
                           .set("enabled", entry.enabled));
-    return lang::Json::object().set("apiVersion", lang::kExtensionApiVersion).set("extensions", std::move(rows));
+    return lang::Json::object()
+        .set("apiVersion", lang::kExtensionApiVersion)
+        .set("extensions", std::move(rows))
+        .set("lastCommand", m_lastCommand);
 }
 sched::Task<void> ExtensionIntegration::reportCommand(QPointer<ExtensionIntegration> self, std::uint64_t generation,
                                                       sched::Task<Result<lang::Json>> task) {
@@ -172,6 +183,8 @@ sched::Task<void> ExtensionIntegration::reportCommand(QPointer<ExtensionIntegrat
             [self, generation, result = std::move(result)] {
                 if (!self || self->m_generation != generation || self->m_stopped)
                     return;
+                self->m_lastCommand = result ? lang::Json::object().set("result", *result)
+                                             : lang::Json::object().set("error", result.error().message());
                 self->m_workbench.notify(QStringLiteral("Extension language command"),
                                          q(result ? result->dump().substr(0, 4096) : result.error().message()),
                                          result ? ui::NotificationKind::Info : ui::NotificationKind::Warning);
@@ -253,7 +266,7 @@ Result<void> ExtensionIntegration::debugCurrentFile(std::string selected) {
         tool.arguments.push_back(*value.asString());
     auto admission = std::make_shared<lang::RegistryProcessLauncher>(
         m_workbench.m_services.launcher, m_workbench.m_services.fs, m_workbench.m_services.trust, tool, root, revision,
-        *physical, active);
+        *physical, active, sandboxParent(m_workbench.m_options));
     if (auto allowed = admission->admitDocument(file); !allowed)
         return allowed;
     auto prepared = std::make_shared<PreparedDebug>();

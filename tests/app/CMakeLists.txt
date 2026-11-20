@@ -485,3 +485,20 @@ frost_add_test(app_workbench_native_coverage_tests QT SOURCES workbench_native_c
 target_include_directories(app_workbench_native_coverage_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_native_coverage_tests PRIVATE ${_frost_workbench_definitions}
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+
+# Explicit native sandbox/sample acceptance. Never simulated or silently downgraded.
+if(TARGET frost-extension-text-statistics)
+    set(FROST_EXTENSION_SAMPLE_RUNTIME "" CACHE STRING "Explicit approved runtime files for native sample sandbox acceptance")
+    string(REPLACE ";" "|" _frost_sample_runtime "${FROST_EXTENSION_SAMPLE_RUNTIME}")
+    file(TO_CMAKE_PATH "${_frost_sample_runtime}" _frost_sample_runtime)
+    frost_add_test(app_extension_sample_tests QT
+        SOURCES extension_sample_onboarding_test.cpp
+        DEPS frost::app frost::lang frost::io
+        LABELS integration sandbox)
+    target_include_directories(app_extension_sample_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(app_extension_sample_tests PRIVATE ${_frost_workbench_definitions}
+        FROST_EXTENSION_SAMPLE_PATH="$<TARGET_FILE:frost-extension-text-statistics>"
+        FROST_EXTENSION_SAMPLE_LICENSE="${FROST_SOURCE_DIR}/LICENSE"
+        FROST_EXTENSION_SAMPLE_RUNTIME="${_frost_sample_runtime}")
+    add_dependencies(app_extension_sample_tests frost-extension-text-statistics)
+endif()

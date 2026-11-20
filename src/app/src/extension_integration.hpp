@@ -34,6 +34,7 @@ private:
     Workbench& m_workbench;
     QTimer m_poll;
     std::optional<lang::ExtensionCatalog> m_catalog;
+    lang::Json m_lastCommand;
     std::string m_manifest, m_root, m_physicalRoot;
     std::uint64_t m_revision{}, m_generation{}, m_debugGeneration{};
     std::stop_source m_stop;

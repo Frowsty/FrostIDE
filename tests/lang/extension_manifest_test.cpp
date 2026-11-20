@@ -113,6 +113,42 @@ TEST(ExtensionManifest, CommandsRequireActualInitializeCapabilityEvidence) {
     EXPECT_TRUE(extensionCommandAdvertised(capabilities, "provider.organize"));
     EXPECT_FALSE(extensionCommandAdvertised(capabilities, "provider.install"));
 }
+TEST(ExtensionManifest, SandboxRequiresExactPinnedRuntimeInventoryAndNoAmbientGrants) {
+    auto server = descriptor();
+    auto sandbox = Json::object()
+                       .set("profile", "read-only-stdio")
+                       .set("files", Json::array({Json::object()
+                                                      .set("path", server.stringAt("executable"))
+                                                      .set("relativePath", "sample-provider")
+                                                      .set("executable", true)}));
+    server.set("sandbox", sandbox);
+    const auto wrap = [](Json value) {
+        return Json::object().set("version", 1).set("servers", Json::array({std::move(value)})).dump();
+    };
+    auto parsed = LanguageServerRegistry::parse(wrap(server));
+    ASSERT_TRUE(parsed);
+    ASSERT_EQ(parsed->definitions()[0].sandboxFiles.size(), 1u);
+    sandbox.set("network", true);
+    server.set("sandbox", sandbox);
+    EXPECT_FALSE(LanguageServerRegistry::parse(wrap(server)));
+    sandbox = Json::object()
+                  .set("profile", "read-only-stdio")
+                  .set("files", Json::array({Json::object()
+                                                 .set("path", server.stringAt("executable"))
+                                                 .set("relativePath", "../escape")
+                                                 .set("executable", true)}));
+    server.set("sandbox", sandbox);
+    EXPECT_FALSE(LanguageServerRegistry::parse(wrap(server)));
+    sandbox.set("files", Json::array({Json::object()
+                                          .set("path", server.stringAt("executable"))
+                                          .set("relativePath", "provider")
+                                          .set("executable", false)}));
+    server.set("sandbox", sandbox);
+    EXPECT_FALSE(LanguageServerRegistry::parse(wrap(server)));
+    sandbox.set("profile", "ambient-permissions");
+    server.set("sandbox", sandbox);
+    EXPECT_FALSE(LanguageServerRegistry::parse(wrap(server)));
+}
 TEST(ExtensionManifest, DebugToolsKeepRegistryLicenseAndPinGovernanceAndRejectAttach) {
     auto row = extension();
     auto contributions = *row.find("contributes");
