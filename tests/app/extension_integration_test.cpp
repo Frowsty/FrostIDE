@@ -11,6 +11,9 @@ TEST(ExtensionOnboarding, ExactApiValidationAndApplicationScopePrecedeAnyExecuti
     RigOptions options;
     options.launcher = &launcher;
     WorkbenchRig rig(dir, options);
+    EXPECT_TRUE(rig.workbench->registry().find("extensions.configure"));
+    EXPECT_TRUE(rig.workbench->registry().find("extensions.executeCommand"));
+    EXPECT_TRUE(rig.workbench->registry().find("extensions.debugCurrentFile"));
     const auto original = rig.settings->snapshot()->get(settings::key::extensionCatalog);
     EXPECT_FALSE(rig.workbench->setExtensionCatalog("{\"apiVersion\":2,\"extensions\":[]}"));
     EXPECT_EQ(rig.settings->snapshot()->get(settings::key::extensionCatalog), original);

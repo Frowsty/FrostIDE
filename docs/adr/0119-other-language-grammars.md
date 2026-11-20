@@ -1,6 +1,6 @@
 # ADR 0119: Additional real tree-sitter language profiles
 
-Status: audited source recipes and implementation authored; independent source review pending; execution deferred.
+Status: audited source recipes and implementation authored; independent source review cleared (575333a1); execution deferred.
 
 The parent explicitly authorized modest read-only upstream metadata/license/source archive auditing and immutable recipes for a later user-authorized build. No package installation, parser generation, configure, compilation or test execution occurs during this implementation.
 

@@ -190,11 +190,13 @@ LuaServiceOptions registeredLanguageOptions(const LanguageServerDefinition& d, s
 }
 RegistryProcessLauncher::RegistryProcessLauncher(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                                  project::TrustStore& trust, LanguageServerDefinition definition,
-                                                 std::string root, std::uint64_t revision, std::string physicalRoot)
+                                                 std::string root, std::uint64_t revision, std::string physicalRoot,
+                                                 std::shared_ptr<std::atomic<bool>> contributionActive)
     : m_launcher(launcher), m_fs(fs), m_trust(trust), m_definition(std::move(definition)), m_root(std::move(root)),
-      m_physicalRoot(std::move(physicalRoot)), m_revision(revision) {}
+      m_physicalRoot(std::move(physicalRoot)), m_revision(revision),
+      m_contributionActive(std::move(contributionActive)) {}
 Result<void> RegistryProcessLauncher::admitWorkspace() const {
-    if (!m_active.load())
+    if (!m_active.load() || (m_contributionActive && !m_contributionActive->load()))
         return fail(ErrorCode::Cancelled, "Registered tool contribution was revoked");
     const auto trust = m_trust.snapshot(m_root);
     auto physical = m_fs.physicalPath(m_root);

@@ -23,6 +23,8 @@ public:
     [[nodiscard]] Result<void> executeCommand(std::string contributionId);
 
 private:
+    struct PreparedDebug;
+    void adoptDebug(std::shared_ptr<PreparedDebug> prepared);
     void configure();
     void chooseDebug();
     void chooseCommand();

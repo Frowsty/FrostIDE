@@ -38,6 +38,22 @@ bool matches(const lang::LanguageServerDefinition& d, std::string_view path) {
     return std::ranges::find(d.extensions, ext) != d.extensions.end();
 }
 } // namespace
+struct ExtensionIntegration::PreparedDebug {
+    std::shared_ptr<lang::RegistryProcessLauncher> admission;
+    std::shared_ptr<std::atomic<bool>> active;
+    std::unique_ptr<io::IProcess> process;
+    std::optional<Error> error;
+    io::FileStatus status;
+    std::string file, root, hash, adapterId, title;
+    lang::Json arguments;
+    std::uint64_t generation{}, version{};
+};
+namespace {
+sched::Task<void> prepareExtensionDebug(std::function<void()> prepare) {
+    prepare();
+    co_return;
+}
+} // namespace
 ExtensionIntegration::ExtensionIntegration(Workbench& workbench) : QObject(&workbench), m_workbench(workbench) {
     const QPointer<ExtensionIntegration> self(this);
     const auto add = [&](std::string id, std::string name, auto callback) {
@@ -235,56 +251,130 @@ Result<void> ExtensionIntegration::debugCurrentFile(std::string selected) {
     tool.arguments.clear();
     for (const auto& value : adapterArgs->items())
         tool.arguments.push_back(*value.asString());
-    auto admission =
-        std::make_shared<lang::RegistryProcessLauncher>(m_workbench.m_services.launcher, m_workbench.m_services.fs,
-                                                        m_workbench.m_services.trust, tool, root, revision, *physical);
+    auto admission = std::make_shared<lang::RegistryProcessLauncher>(
+        m_workbench.m_services.launcher, m_workbench.m_services.fs, m_workbench.m_services.trust, tool, root, revision,
+        *physical, active);
     if (auto allowed = admission->admitDocument(file); !allowed)
         return allowed;
-    auto before = m_workbench.m_services.fs.readFileSnapshot(file, 4 * 1024 * 1024);
-    if (!before)
-        return std::unexpected(before.error());
-    const auto hash = io::sha256Hex(*before);
+    auto prepared = std::make_shared<PreparedDebug>();
+    prepared->admission = std::move(admission);
+    prepared->active = active;
+    prepared->generation = m_generation;
+    prepared->file = file;
+    prepared->root = root;
+    prepared->version = view->document().snapshot().version();
+    prepared->arguments = std::move(*args);
+    prepared->adapterId = chosen->adapterId;
+    prepared->title = chosen->title;
     auto* fs = &m_workbench.m_services.fs;
-    auto launchAdmission = [admission, active, fs, file, tool, hash]() -> Result<void> {
-        if (!active->load())
+    const QPointer<ExtensionIntegration> self(this);
+    m_tasks.push_back(m_workbench.m_pool->spawn(
+        sched::Lane::Background, prepareExtensionDebug([prepared, fs, tool, self] {
+            const auto prepare = [&]() -> Result<void> {
+                if (!prepared->active->load())
+                    return fail(ErrorCode::Cancelled, "Extension debug preparation was revoked");
+                auto before = fs->readFileSnapshot(prepared->file, 4 * 1024 * 1024);
+                if (!before)
+                    return std::unexpected(before.error());
+                prepared->hash = io::sha256Hex(*before);
+                auto status = fs->status(prepared->file);
+                if (!status)
+                    return std::unexpected(status.error());
+                prepared->status = *status;
+                io::ProcessSpec spec;
+                spec.executable = tool.executable;
+                spec.arguments = tool.arguments;
+                spec.workingDirectory = prepared->root;
+                spec.stdinMode = spec.stdoutMode = spec.stderrMode = io::Stdio::Pipe;
+                spec.killOnClose = true;
+                auto child = prepared->admission->launch(spec);
+                if (!child)
+                    return std::unexpected(child.error());
+                prepared->process = std::move(*child);
+                if (!prepared->active->load())
+                    return fail(ErrorCode::Cancelled, "Extension debug preparation was revoked");
+                return {};
+            };
+            if (auto result = prepare(); !result)
+                prepared->error = result.error();
+            if (self)
+                QMetaObject::invokeMethod(
+                    self.data(),
+                    [self, prepared] {
+                        if (self)
+                            self->adoptDebug(prepared);
+                    },
+                    Qt::QueuedConnection);
+        })));
+    return {};
+}
+void ExtensionIntegration::adoptDebug(std::shared_ptr<PreparedDebug> prepared) {
+    poll();
+    if (m_stopped || m_workbench.m_shutDown || prepared->generation != m_generation || !prepared->active->load())
+        return;
+    if (prepared->error) {
+        m_workbench.notify(QStringLiteral("Extension debug refused"), q(prepared->error->message()),
+                           ui::NotificationKind::Warning);
+        return;
+    }
+    auto* view = m_workbench.currentView();
+    if (!view || view->path() != prepared->file || view->document().dirty() ||
+        view->document().snapshot().version() != prepared->version) {
+        m_workbench.notify(QStringLiteral("Extension debug refused"),
+                           QStringLiteral("The saved source or active document changed during preparation."),
+                           ui::NotificationKind::Warning);
+        return;
+    }
+    auto* fs = &m_workbench.m_services.fs;
+    auto cheapAdmission = [prepared, fs]() -> Result<void> {
+        if (!prepared->active->load())
             return fail(ErrorCode::Cancelled, "Extension contribution was revoked");
-        if (auto allowed = admission->admitDocument(file); !allowed)
+        if (auto allowed = prepared->admission->admitDocument(prepared->file); !allowed)
             return allowed;
-        if (auto pinned = lang::verifyLanguageServer(*fs, tool); !pinned)
-            return pinned;
-        auto now = fs->readFileSnapshot(file, 4 * 1024 * 1024);
-        if (!now || io::sha256Hex(*now) != hash)
-            return fail(ErrorCode::Busy, "Debug source changed since the saved launch snapshot");
-        return active->load() ? Result<void>{}
-                              : Result<void>(fail(ErrorCode::Cancelled, "Extension contribution was revoked"));
+        auto now = fs->status(prepared->file);
+        if (!now || *now != prepared->status)
+            return fail(ErrorCode::Busy, "Debug source metadata changed during preparation");
+        return {};
     };
-    auto factory = [admission, launchAdmission, tool,
-                    root](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
-        if (auto allowed = launchAdmission(); !allowed)
-            return std::unexpected(allowed.error());
-        io::ProcessSpec spec;
-        spec.executable = tool.executable;
-        spec.arguments = tool.arguments;
-        spec.workingDirectory = root;
-        spec.stdinMode = spec.stdoutMode = spec.stderrMode = io::Stdio::Pipe;
-        spec.killOnClose = true;
-        auto child = admission->launch(spec);
-        if (!child)
-            return std::unexpected(child.error());
-        return debug::makeDapClient(debug::processTransport(std::move(*child)), std::move(handlers));
+    auto factory = [prepared, fs](debug::DapHandlers handlers) -> Result<std::unique_ptr<debug::IDebugAdapterClient>> {
+        if (!prepared->process)
+            return fail(ErrorCode::Cancelled, "Prepared extension process is unavailable");
+        auto prior = std::move(handlers.beforeWrite);
+        handlers.beforeWrite = [prepared, fs, prior = std::move(prior)](std::string_view command) -> Result<void> {
+            if (prior)
+                if (auto allowed = prior(command); !allowed)
+                    return allowed;
+            if (command == "launch") {
+                if (!prepared->active->load())
+                    return fail(ErrorCode::Cancelled, "Extension contribution was revoked");
+                if (auto allowed = prepared->admission->admitDocument(prepared->file); !allowed)
+                    return allowed;
+                // Runs on the DAP writer immediately before launch, never the GUI adoption path.
+                auto now = fs->readFileSnapshot(prepared->file, 4 * 1024 * 1024);
+                if (!now || io::sha256Hex(*now) != prepared->hash)
+                    return fail(ErrorCode::Busy, "Debug source changed since the saved launch snapshot");
+                if (!prepared->active->load())
+                    return fail(ErrorCode::Cancelled, "Extension contribution was revoked");
+            }
+            return {};
+        };
+        return debug::makeDapClient(debug::processTransport(std::move(prepared->process)), std::move(handlers));
     };
     debug::DebugTarget target;
-    target.name = chosen->title;
-    target.program = file;
-    target.workingDirectory = root;
-    target.trustRoots = {root};
+    target.name = prepared->title;
+    target.program = prepared->file;
+    target.workingDirectory = prepared->root;
+    target.trustRoots = {prepared->root};
     auto started =
-        m_workbench.m_debug->startAdapterTarget(target, std::move(factory), std::move(*args), chosen->adapterId,
-                                                debug::DebugTargetMode::Launch, false, launchAdmission);
+        m_workbench.m_debug->startAdapterTarget(target, std::move(factory), prepared->arguments, prepared->adapterId,
+                                                debug::DebugTargetMode::Launch, false, std::move(cheapAdmission));
     if (started)
         m_debugGeneration = m_workbench.m_debug->sessionGeneration();
-    return started;
+    else
+        m_workbench.notify(QStringLiteral("Extension debug refused"), q(started.error().message()),
+                           ui::NotificationKind::Warning);
 }
+
 void ExtensionIntegration::chooseCommand() {
     poll();
     QStringList items;

@@ -41,7 +41,7 @@ class RegistryProcessLauncher final : public io::IProcessLauncher {
 public:
     RegistryProcessLauncher(io::IProcessLauncher& launcher, io::IFileSystem& fs, project::TrustStore& trust,
                             LanguageServerDefinition definition, std::string root, std::uint64_t revision,
-                            std::string physicalRoot);
+                            std::string physicalRoot, std::shared_ptr<std::atomic<bool>> contributionActive = {});
     void revoke() noexcept { m_active.store(false); }
     [[nodiscard]] Result<void> admitWorkspace() const;
     [[nodiscard]] Result<void> admitDocument(std::string_view path) const;
@@ -59,6 +59,7 @@ private:
     std::string m_root, m_physicalRoot;
     std::uint64_t m_revision;
     std::atomic<bool> m_active{true};
+    std::shared_ptr<std::atomic<bool>> m_contributionActive;
 };
 // Retained requester boundary: each request/reply and incoming applyEdit rechecks the captured
 // workspace identity/trust. Documents outside that physical workspace never reach this server.

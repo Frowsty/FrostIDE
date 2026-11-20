@@ -792,6 +792,9 @@ public:
     // Application-only local onboarding. Validates manifest without launching during parsing.
     [[nodiscard]] Result<void> setLanguageServerRegistry(std::string manifest);
     [[nodiscard]] lang::Json languageServerRegistryState() const;
+    // Owner-thread public contribution API v1 (ADR0121). Application-only data, no native code
+    // loading. Commands schedule actual provider requests; debug requires a saved admitted source.
+    // Shutdown/remove/change cancels owned observations; returned JSON is declared metadata.
     [[nodiscard]] Result<void> setExtensionCatalog(std::string manifest);
     [[nodiscard]] lang::Json extensionCatalogState() const;
     [[nodiscard]] Result<void> debugWithExtension(std::string contributionId);
