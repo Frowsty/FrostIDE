@@ -25,14 +25,14 @@ UnrealPartnerWindow::UnrealPartnerWindow(std::string projectFile,project::TrustS
     auto* layout=new QVBoxLayout(this);
     auto* note=new QLabel(tr("Connect only to the partner you configured locally. Blueprint rows cover actual loaded graph calls reported by that partner, not every asset. No Editor plug-in is installed by this action."),this);
     note->setWordWrap(true);layout->addWidget(note);
-    auto* form=new QFormLayout();m_port=new QSpinBox(this);m_port->setRange(1024,65535);m_port->setValue(40000);
-    m_secret=new QLineEdit(this);m_secret->setEchoMode(QLineEdit::Password);m_secret->setMaxLength(64);
+    auto* form=new QFormLayout();m_port=new QSpinBox(this);m_port->setRange(1024,65535);m_port->setValue(40000);m_port->setObjectName(QStringLiteral("unrealPartnerPort"));
+    m_secret=new QLineEdit(this);m_secret->setEchoMode(QLineEdit::Password);m_secret->setMaxLength(64);m_secret->setObjectName(QStringLiteral("unrealPartnerToken"));
     form->addRow(tr("Loopback port"),m_port);form->addRow(tr("Session token"),m_secret);layout->addLayout(form);
-    auto* row=new QHBoxLayout();auto* connectButton=new QPushButton(tr("Connect"),this);m_connectButton=connectButton;auto* disconnectButton=new QPushButton(tr("Disconnect"),this);
+    auto* row=new QHBoxLayout();auto* connectButton=new QPushButton(tr("Connect"),this);m_connectButton=connectButton;connectButton->setObjectName(QStringLiteral("unrealPartnerConnect"));auto* disconnectButton=new QPushButton(tr("Disconnect"),this);
     row->addWidget(connectButton);row->addWidget(disconnectButton);
     connect(connectButton,&QPushButton::clicked,this,[this]{beginSession();});connect(disconnectButton,&QPushButton::clicked,this,[this]{endSession(tr("Disconnected"));});
     for(const auto& item:{std::pair{tr("Play"),"pie.play"},std::pair{tr("Stop PIE"),"pie.stop"},std::pair{tr("Pause"),"pie.pause"},std::pair{tr("Resume"),"pie.resume"},std::pair{tr("Refresh loaded Blueprint calls"),"blueprints.loadedCalls"}}){
-        auto* button=new QPushButton(item.first,this);row->addWidget(button);m_controls.push_back(button);
+        auto* button=new QPushButton(item.first,this);button->setObjectName(QStringLiteral("unrealPartnerOperation.")+QString::fromLatin1(item.second));row->addWidget(button);m_controls.push_back(button);
         connect(button,&QPushButton::clicked,this,[this,operation=std::string(item.second)]{send(operation);});
     }
     layout->addLayout(row);m_status=new QLabel(tr("Disconnected; no partner data"),this);m_status->setWordWrap(true);layout->addWidget(m_status);

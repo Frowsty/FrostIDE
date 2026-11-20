@@ -87,7 +87,7 @@ struct Inventory {
         if(found->type!=type)return fail(ErrorCode::PermissionDenied,"Unreal metadata input is a link or wrong entry type");
         auto physical=fs.physicalPath(path);if(!physical)return std::unexpected(physical.error());
         const auto actual=key(*physical),root=key(physicalRoot);
-        if(actual!=root&&!actual.starts_with(root+"/"))return fail(ErrorCode::PermissionDenied,"Unreal metadata input escaped the physical project root");
+        if(actual!=root&&!(root=="/"?actual.starts_with("/"):actual.starts_with(root+"/")))return fail(ErrorCode::PermissionDenied,"Unreal metadata input escaped the physical project root");
         return true;
     }
     Result<std::vector<io::DirEntry>> list(const std::string& path, unsigned depth) {

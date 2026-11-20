@@ -461,3 +461,9 @@ target_include_directories(app_workbench_cpp_modules_tests PRIVATE ${FROST_SOURC
 target_compile_definitions(app_workbench_cpp_modules_tests PRIVATE ${_frost_workbench_definitions}
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 add_dependencies(app_workbench_cpp_modules_tests frost-clang)
+
+# Explicit synthetic loopback partner; does not locate/load an Unreal installation or plug-in.
+frost_add_test(app_unreal_partner_protocol_tests QT
+    SOURCES unreal_partner_protocol_test.cpp
+    DEPS frost::app frost::io Qt6::Network
+    LABELS integration unreal)
