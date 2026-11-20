@@ -387,7 +387,9 @@ Result<void> Workbench::openFolder(const std::string& path, bool discoverSolutio
             if (auto saved = saveRunConfigurations(stored); !saved) return saved;
             m_runController->setStoredConfigurations(std::move(stored));
             return m_runController->selectConfiguration(configuration->id);
-        });
+        }, [self=QPointer<Workbench>(this), file=m_unreal->model().projectFile](const std::string& path) {
+            if (self && self->m_unreal && self->m_unreal->model().projectFile == file) (void)self->openPath(path);
+        }, [self=QPointer<Workbench>(this)] { if (self) self->restartClangd(); });
     }
     if (m_nav) {
         if (auto opened = m_nav->openProject(path); !opened) {

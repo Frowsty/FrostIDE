@@ -181,6 +181,31 @@ private:
     bool released = false;
 };
 
+class MissingRequiredCommands final : public frost::lang::ICompileCommandsProvider {
+public:
+    explicit MissingRequiredCommands(bool failure) : failLookup(failure) {}
+    frost::Result<std::optional<frost::lang::CompileCommandsLocation>> locate() override {
+        if (failLookup) return frost::fail(frost::ErrorCode::Corrupt, "invalid selected database");
+        return std::optional<frost::lang::CompileCommandsLocation>{};
+    }
+    bool failLookup;
+};
+TEST(ClangdE2E, RequiredDatabaseFailureOrAbsenceHasZeroClangdLaunches) {
+    for (const bool failure : {false, true}) {
+        frost::io::ScriptedProcessLauncher launcher;
+        Env env; ASSERT_TRUE(env.ok());
+        ClangdServiceOptions options;
+        options.clangdPath=fixture("dummy-clangd"); options.workspaceRoot=fixture(".");
+        options.compileCommands=std::make_shared<MissingRequiredCommands>(failure);
+        options.requireCompileCommands=true;
+        ClangdService service(launcher,env.context(),std::move(options));
+        ASSERT_TRUE(service.start());
+        ASSERT_TRUE(waitFor([&] { return service.state()==ClangdState::Failed; },5s));
+        EXPECT_TRUE(launcher.launches().empty());
+        env.run(service.stop());
+    }
+}
+
 TEST(ClangdE2E, DestroyDuringHeldDatabaseLookupDoesNotStartClangd) {
     frost::io::ScriptedProcessLauncher launcher;
     auto provider = std::make_shared<HeldCommands>();

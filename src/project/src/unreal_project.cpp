@@ -53,8 +53,9 @@ Result<std::vector<UnrealModule>> modules(const JsonNode& root) {
     return result;
 }
 }
-Result<UnrealProject> readUnrealProject(io::IFileSystem& fs, std::string_view absoluteProject) {
-    auto reader = fs.openRandomAccess(absoluteProject);
+namespace {
+Result<std::string> readDescriptor(io::IFileSystem& fs, std::string_view path) {
+    auto reader = fs.openRandomAccess(path);
     if (!reader) return std::unexpected(reader.error());
     if ((*reader)->size() > 4 * 1024 * 1024) return fail(ErrorCode::InvalidArgument, "Unreal descriptor exceeds 4 MiB");
     std::string bytes;
@@ -65,7 +66,90 @@ Result<UnrealProject> readUnrealProject(io::IFileSystem& fs, std::string_view ab
         if (chunk->empty()) return fail(ErrorCode::Busy, "Unreal descriptor changed during read");
         bytes += *chunk;
     }
-    return parseUnrealProject(bytes, absoluteProject);
+    return bytes;
+}
+struct Inventory {
+    io::IFileSystem& fs;
+    UnrealWorkspace& result;
+    std::size_t directories = 0, entries = 0;
+    Result<std::vector<io::DirEntry>> list(const std::string& path, unsigned depth) {
+        if (depth > 32 || ++directories > 1024) return fail(ErrorCode::OutOfRange, "Unreal metadata directory limit exceeded");
+        auto rows = fs.listDirectory(path);
+        if (!rows && rows.error().code() == ErrorCode::NotFound) return std::vector<io::DirEntry>{};
+        if (!rows) return std::unexpected(rows.error());
+        entries += rows->size();
+        if (entries > 50000) return fail(ErrorCode::OutOfRange, "Unreal metadata entry limit exceeded");
+        std::ranges::sort(*rows, {}, &io::DirEntry::name);
+        return rows;
+    }
+    Result<void> source(const std::string& path, const std::string& owner, unsigned depth) {
+        auto rows = list(path, depth);
+        if (!rows) return std::unexpected(rows.error());
+        for (const auto& row : *rows) {
+            auto child = io::joinPath(path, row.name);
+            if (!child) return std::unexpected(child.error());
+            if (row.type == io::FileType::Directory) {
+                if (auto scanned = source(*child, owner, depth + 1); !scanned) return scanned;
+            } else if (row.type == io::FileType::Regular) {
+                const std::string_view name(row.name);
+                const bool target = name.ends_with(".Target.cs"), module = name.ends_with(".Build.cs");
+                if (!target && !module) continue;
+                std::string stem(name.substr(0, name.size() - (target ? 10 : 9)));
+                if (!identifier(stem)) return fail(ErrorCode::Corrupt, "invalid Unreal rule-file identity");
+                auto& files = target ? result.targetRules : result.moduleRules;
+                if (std::ranges::any_of(files, [&](const auto& file) { return file.name == stem && file.owner == owner; }))
+                    return fail(ErrorCode::Corrupt, "ambiguous Unreal rule-file identity");
+                files.push_back({std::move(stem), *child, owner});
+            }
+        }
+        return {};
+    }
+    Result<void> plugins(const std::string& path, unsigned depth) {
+        auto rows = list(path, depth);
+        if (!rows) return std::unexpected(rows.error());
+        const io::DirEntry* descriptorEntry = nullptr;
+        for (const auto& row : *rows) if (row.type == io::FileType::Regular && std::string_view(row.name).ends_with(".uplugin")) {
+            if (descriptorEntry) return fail(ErrorCode::Corrupt, "multiple Unreal plugin descriptors in one directory");
+            descriptorEntry = &row;
+        }
+        if (descriptorEntry) {
+            const auto file = io::joinPath(path, descriptorEntry->name);
+            if (!file) return std::unexpected(file.error());
+            const auto bytes = readDescriptor(fs, *file);
+            if (!bytes) return std::unexpected(bytes.error());
+            auto descriptor = parseUnrealPluginDescriptor(*bytes);
+            if (!descriptor) return std::unexpected(descriptor.error());
+            const std::string name = descriptorEntry->name.substr(0, descriptorEntry->name.size() - 8);
+            if (!identifier(name) || std::ranges::any_of(result.localPlugins, [&](const auto& plugin) { return plugin.name == name; }))
+                return fail(ErrorCode::Corrupt, "ambiguous Unreal local plugin identity");
+            result.localPlugins.push_back({name, *file, std::move(*descriptor)});
+            auto sourcePath = io::joinPath(path, "Source");
+            return sourcePath ? source(*sourcePath, "plugin:" + name, depth + 1) : Result<void>(std::unexpected(sourcePath.error()));
+        }
+        for (const auto& row : *rows) if (row.type == io::FileType::Directory) {
+            auto child = io::joinPath(path, row.name);
+            if (!child) return std::unexpected(child.error());
+            if (auto scanned = plugins(*child, depth + 1); !scanned) return scanned;
+        }
+        return {};
+    }
+};
+}
+Result<UnrealProject> readUnrealProject(io::IFileSystem& fs, std::string_view absoluteProject) {
+    auto bytes = readDescriptor(fs, absoluteProject);
+    return bytes ? parseUnrealProject(*bytes, absoluteProject) : Result<UnrealProject>(std::unexpected(bytes.error()));
+}
+Result<UnrealWorkspace> readUnrealWorkspace(io::IFileSystem& fs, std::string_view absoluteProject) {
+    auto project = readUnrealProject(fs, absoluteProject);
+    if (!project) return std::unexpected(project.error());
+    UnrealWorkspace result{std::move(*project), {}, {}, {}};
+    Inventory inventory{fs, result};
+    const auto root = io::parentPath(absoluteProject);
+    auto source = io::joinPath(root, "Source"), plugins = io::joinPath(root, "Plugins");
+    if (!source || !plugins) return fail(ErrorCode::InvalidArgument, "invalid Unreal project root");
+    if (auto scanned = inventory.source(*source, "Project", 0); !scanned) return std::unexpected(scanned.error());
+    if (auto scanned = inventory.plugins(*plugins, 0); !scanned) return std::unexpected(scanned.error());
+    return result;
 }
 Result<UnrealProject> parseUnrealProject(std::string_view json, std::string_view absoluteProject) {
     if (!io::isAbsolutePath(absoluteProject) || !absoluteProject.ends_with(".uproject") || absoluteProject.find('\0') != std::string_view::npos)

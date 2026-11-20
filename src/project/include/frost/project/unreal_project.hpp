@@ -17,6 +17,22 @@ struct UnrealProject {
     std::vector<UnrealPluginReference> plugins;
 };
 struct UnrealPluginDescriptor { std::string friendlyName; std::vector<UnrealModule> modules; };
+struct UnrealRuleFile { std::string name; std::string path; std::string owner; };
+struct UnrealLocalPlugin {
+    std::string name;
+    std::string descriptorFile;
+    UnrealPluginDescriptor descriptor;
+};
+struct UnrealWorkspace {
+    UnrealProject project;
+    std::vector<UnrealRuleFile> targetRules;
+    std::vector<UnrealRuleFile> moduleRules;
+    std::vector<UnrealLocalPlugin> localPlugins;
+};
+// Worker-only, bounded project-local Source/Plugins metadata inventory. Never reads rule contents,
+// evaluates C#, follows directory links or searches installed engine/plugin directories.
+// Targets are rule-file names, not evaluated target capabilities/configurations.
+[[nodiscard]] Result<UnrealWorkspace> readUnrealWorkspace(io::IFileSystem& fs, std::string_view absoluteProject);
 struct UnrealInstallation { std::string association; std::string root; };
 // Pure, bounded parsers; unknown fields are retained by the user's original file, never rewritten.
 // Known fields have strict types and duplicate JSON keys/names are refused (Corrupt).

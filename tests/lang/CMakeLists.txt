@@ -48,6 +48,7 @@ endif()
 frost_add_test(lang_unit_tests
     SOURCES
         unreal_reflection_test.cpp
+        unreal_compile_commands_test.cpp
         cpp_rename_plan_test.cpp
         cpp_refactoring_plan_test.cpp
         cpp_index_test.cpp

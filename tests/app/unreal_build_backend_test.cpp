@@ -95,5 +95,20 @@ TEST(UnrealBuildBackend, ActiveChildIsCancelledWhenTrustRevisionChanges) {
     EXPECT_TRUE(backend.diagnostics().empty());
 }
 
+TEST(UnrealBuildBackend, ChangingUbtProfileClearsExplicitCompilationDatabaseWithoutLaunchingTools) {
+    io::MemFs fs(systemClock()); io::ScriptedProcessLauncher launcher;
+    auto trust=project::TrustStore::open(fs,at("trust.txt")); ASSERT_TRUE(trust);
+    auto admission=build::BuildService::create(fs,launcher,**trust);
+    UnrealBuildBackend backend({.projectFile=at("Oracle.uproject")},fs,launcher,**trust,*admission);
+    build::UnrealBuildRequest request{.tool=at("UBT"),.projectFile=at("Oracle.uproject"),.target="OracleEditor"};
+    EXPECT_FALSE(backend.selectCompileDatabase(at("compile_commands.json")));
+    ASSERT_TRUE(backend.configure(request)); const auto identity=backend.configurationIdentity();
+    ASSERT_TRUE(backend.selectCompileDatabase(at("compile_commands.json")));
+    EXPECT_FALSE(backend.compileDatabase().empty());
+    request.configuration=build::UnrealConfiguration::DebugGame; ASSERT_TRUE(backend.configure(request));
+    EXPECT_NE(identity,backend.configurationIdentity()); EXPECT_TRUE(backend.compileDatabase().empty());
+    EXPECT_TRUE(launcher.launches().empty());
+}
+
 }
 } // namespace frost::app

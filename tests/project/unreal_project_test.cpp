@@ -2,6 +2,7 @@
 #include "frost/project/unreal_project.hpp"
 #include "frost/io/path.hpp"
 #include <gtest/gtest.h>
+#include "support/scratch_dir.hpp"
 namespace frost::project {
 namespace {
 std::string at(std::string_view path) { return io::joinPath(io::kNativePathStyle == io::PathStyle::Windows ? "C:/Synthetic" : "/Synthetic", path).value(); }
@@ -34,5 +35,27 @@ TEST(UnrealProject, ReadsPluginMetadataWithoutLoadingOrInstallingAnyModule) {
     ASSERT_TRUE(model);
     EXPECT_EQ(model->modules[0].type, "Editor");
 }
+TEST(UnrealProject, InventoriesOnlyLocalDescriptorsAndRuleNamesWithoutEvaluatingTheirContents) {
+    frost::test::ScratchDir scratch("unreal-metadata"); auto& fs=io::realFileSystem();
+    auto write = [&](std::string_view name, std::string_view bytes) {
+        const auto path=scratch.join(name);
+        EXPECT_TRUE(fs.createDirectories(io::parentPath(path)));
+        EXPECT_TRUE(fs.writeFileAtomic(path, bytes));
+    };
+    write("Oracle.uproject", R"({"FileVersion":3,"Modules":[{"Name":"Oracle","Type":"Runtime"}],"Plugins":[{"Name":"LocalOne","Enabled":false}]})");
+    write("Source/OracleEditor.Target.cs", "NOT VALID C#; MUST NOT BE EVALUATED");
+    write("Source/Oracle/Oracle.Build.cs", "NOT VALID C#; MUST NOT BE READ AS RULES");
+    write("Plugins/Category/LocalOne/LocalOne.uplugin", R"({"FileVersion":3,"Modules":[{"Name":"LocalModule","Type":"Editor"}]})");
+    write("Plugins/Category/LocalOne/Source/LocalModule/LocalModule.Build.cs", "NOT VALID C#");
+    // Epic's descriptor search stops below an already discovered plugin.
+    write("Plugins/Category/LocalOne/Nested/Ignore.uplugin", "malformed and intentionally ignored");
+    auto model=readUnrealWorkspace(fs, scratch.join("Oracle.uproject"));
+    ASSERT_TRUE(model) << model.error().describe();
+    ASSERT_EQ(model->targetRules.size(), 1U); EXPECT_EQ(model->targetRules[0].name,"OracleEditor");
+    ASSERT_EQ(model->localPlugins.size(), 1U); EXPECT_EQ(model->localPlugins[0].name,"LocalOne");
+    ASSERT_EQ(model->moduleRules.size(),2U);
+    EXPECT_EQ(model->moduleRules[0].owner,"Project"); EXPECT_EQ(model->moduleRules[1].owner,"plugin:LocalOne");
+}
+
 }
 } // namespace frost::project

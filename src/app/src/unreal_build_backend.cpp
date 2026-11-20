@@ -16,9 +16,18 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QStandardPaths>
+#include <QDialog>
+#include <QEventLoop>
+#include <QTreeWidget>
+#include <QVBoxLayout>
+#include <QLabel>
+#include <thread>
+#include "frost/rpc/json.hpp"
 
 namespace frost::app {
-void UnrealBuildBackend::attachMenu(ui::ShellWindow& window, std::function<Result<void>(std::string)> addEditor) {
+void UnrealBuildBackend::attachMenu(ui::ShellWindow& window, std::function<Result<void>(std::string)> addEditor,
+    std::function<void(const std::string&)> openFile, std::function<void()> semanticProfileChanged) {
+    m_semanticProfileChanged = std::move(semanticProfileChanged);
     m_menu = new QMenu(tr("Unreal"), &window);
     window.menuBar()->addMenu(m_menu);
     const QPointer<UnrealBuildBackend> self(this);
@@ -26,6 +35,23 @@ void UnrealBuildBackend::attachMenu(ui::ShellWindow& window, std::function<Resul
     auto report = [host](Result<void> result) {
         if (host && !result) QMessageBox::warning(host.data(), tr("Unreal"), QString::fromStdString(result.error().message()));
     };
+    connect(m_menu->addAction(tr("Project modules, plugins and targets…")), &QAction::triggered, this,
+        [self, host, openFile] { if (self && host) self->showProjectModel(host.data(), openFile); });
+    connect(m_menu->addAction(tr("Select generated compilation database for current profile…")), &QAction::triggered, this,
+        [self, host, report] {
+            if (!self || !host) return;
+            const auto identity = self->configurationIdentity();
+            if (identity.empty()) { report(fail(ErrorCode::InvalidArgument, "Select build tools and target first")); return; }
+            const auto file = QFileDialog::getOpenFileName(host.data(), tr("Select actual generated database for the selected UBT profile"), {}, tr("Compilation database (compile_commands.json)"));
+            if (!self || !host || file.isEmpty()) return;
+            if (self->configurationIdentity() != identity) { report(fail(ErrorCode::Busy, "Unreal profile changed while selecting its database")); return; }
+            report(self->selectCompileDatabase(file.toUtf8().toStdString()));
+        });
+    if (openFile) connect(m_menu->addAction(tr("Open existing UHT generated header…")), &QAction::triggered, this,
+        [self, host, openFile] {
+            const auto file = QFileDialog::getOpenFileName(host.data(), tr("Open actual UHT output"), {}, tr("Generated headers (*.generated.h)"));
+            if (self && host && !file.isEmpty()) openFile(file.toUtf8().toStdString());
+        });
     connect(m_menu->addAction(tr("Select installed native visualizer…")), &QAction::triggered, this, [this, self, host] {
         const auto file = QFileDialog::getOpenFileName(host.data(), tr("Select installed Unreal .natvis file"), {}, tr("Native visualizer (*.natvis)"));
         if (!self || !host) return;
@@ -95,6 +121,7 @@ UnrealBuildBackend::UnrealBuildBackend(project::UnrealProject model, io::IFileSy
 }
 
 UnrealBuildBackend::~UnrealBuildBackend() {
+    delete m_modelDialog.data();
     delete m_menu.data();
     if (m_session) {
         m_session->cancel();
@@ -137,8 +164,93 @@ Result<void> UnrealBuildBackend::configure(build::UnrealBuildRequest request) {
     if (request.projectFile != m_model.projectFile) return fail(ErrorCode::InvalidArgument, "Unreal project identity mismatch");
     auto spec = build::unrealBuildSpec(request);
     if (!spec) return std::unexpected(spec.error());
+    const auto before = configurationIdentity();
     m_request = std::move(request);
+    if (configurationIdentity() != before) {
+        m_databaseFile.clear();
+        if (m_semanticProfileChanged) m_semanticProfileChanged();
+    }
     return {};
+}
+std::string UnrealBuildBackend::configurationIdentity() const {
+    auto request = m_request; request.operation = build::UnrealOperation::Build;
+    auto spec = build::unrealBuildSpec(request);
+    if (!spec) return {};
+    std::vector<rpc::Json> arguments;
+    for (const auto& argument : spec->arguments) arguments.emplace_back(argument);
+    return rpc::Json::object().set("tool", spec->executable).set("arguments", rpc::Json::array(std::move(arguments))).dump();
+}
+Result<void> UnrealBuildBackend::selectCompileDatabase(std::string file) {
+    if (m_state != build::BuildState::Idle) return fail(ErrorCode::Busy, "Stop the Unreal operation before selecting a database");
+    if (!io::isAbsolutePath(file) || file.find('\0') != std::string::npos || io::fileName(file) != "compile_commands.json" || configurationIdentity().empty())
+        return fail(ErrorCode::InvalidArgument, "Select an absolute generated database for a configured Unreal target");
+    m_databaseFile = std::move(file);
+    if (m_semanticProfileChanged) m_semanticProfileChanged();
+    return {};
+}
+void UnrealBuildBackend::showProjectModel(QWidget* parent, std::function<void(const std::string&)> openFile) {
+    const QPointer<UnrealBuildBackend> self(this);
+    const QPointer<QWidget> host(parent);
+    const auto projectFile = m_model.projectFile;
+    auto* fs = &m_fs;
+    QEventLoop loop;
+    std::optional<Result<project::UnrealWorkspace>> loaded;
+    std::jthread worker([&loop, &loaded, fs, projectFile] {
+        auto result = project::readUnrealWorkspace(*fs, projectFile);
+        QMetaObject::invokeMethod(&loop, [&loop, &loaded, result=std::move(result)]() mutable { loaded=std::move(result); loop.quit(); }, Qt::QueuedConnection);
+    });
+    loop.exec(); worker.join();
+    if (!self || !host) return;
+    if (!loaded || !*loaded) {
+        QMessageBox::warning(host.data(), tr("Unreal project model"), loaded ? QString::fromStdString(loaded->error().message()) : tr("Project read interrupted"));
+        return;
+    }
+    m_workspace = std::move(**loaded);
+    delete m_modelDialog.data();
+    auto* dialog = new QDialog(host.data()); m_modelDialog = dialog;
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(tr("Unreal project model")); dialog->resize(720, 500);
+    auto* layout = new QVBoxLayout(dialog);
+    auto* note = new QLabel(tr("Project-local descriptor metadata and rule-file names. C# rules are not evaluated; installed engine/plugin contents are not searched."), dialog);
+    note->setWordWrap(true); layout->addWidget(note);
+    auto* tree = new QTreeWidget(dialog); tree->setObjectName(QStringLiteral("unrealProjectTree"));
+    tree->setHeaderLabels({tr("Item"), tr("Metadata"), tr("Source")}); layout->addWidget(tree);
+    auto row = [](QTreeWidgetItem* parentItem, const QString& name, const QString& detail, const std::string& path) {
+        auto* item = new QTreeWidgetItem(parentItem, {name, detail, QString::fromStdString(path)});
+        if (!path.empty()) item->setData(0, Qt::UserRole, QString::fromStdString(path));
+        return item;
+    };
+    auto* root = new QTreeWidgetItem(tree, {QString::fromStdString(std::string(io::fileName(projectFile))), QString::fromStdString(m_workspace->project.engineAssociation), QString::fromStdString(projectFile)});
+    root->setData(0, Qt::UserRole, QString::fromStdString(projectFile));
+    auto* modules = row(root, tr("Project modules"), {}, {});
+    for (const auto& module : m_workspace->project.modules) {
+        std::string rule;
+        for (const auto& file : m_workspace->moduleRules) if (file.owner == "Project" && file.name == module.name) rule = file.path;
+        row(modules, QString::fromStdString(module.name), QString::fromStdString(module.type + " / " + module.loadingPhase), rule);
+    }
+    auto* targets = row(root, tr("Target rule files"), tr("Names only; target capabilities require UBT"), {});
+    for (const auto& file : m_workspace->targetRules) row(targets, QString::fromStdString(file.name), QString::fromStdString(file.owner), file.path);
+    auto* plugins = row(root, tr("Plugin references"), {}, {});
+    for (const auto& plugin : m_workspace->project.plugins) {
+        std::string descriptorFile;
+        for (const auto& local : m_workspace->localPlugins) if (local.name == plugin.name) descriptorFile = local.descriptorFile;
+        row(plugins, QString::fromStdString(plugin.name), plugin.enabled ? tr("Enabled reference") : tr("Disabled reference"), descriptorFile);
+    }
+    auto* localPlugins = row(root, tr("Local plugin descriptors"), tr("Discovery does not imply enablement"), {});
+    for (const auto& plugin : m_workspace->localPlugins) {
+        auto* item = row(localPlugins, QString::fromStdString(plugin.name), QString::fromStdString(plugin.descriptor.friendlyName), plugin.descriptorFile);
+        for (const auto& module : plugin.descriptor.modules) {
+            std::string rule;
+            for (const auto& file : m_workspace->moduleRules) if (file.owner == "plugin:" + plugin.name && file.name == module.name) rule=file.path;
+            row(item, QString::fromStdString(module.name), QString::fromStdString(module.type), rule);
+        }
+    }
+    tree->expandToDepth(1); tree->resizeColumnToContents(0);
+    connect(tree, &QTreeWidget::itemActivated, this, [openFile](QTreeWidgetItem* item, int) {
+        const auto path = item->data(0, Qt::UserRole).toString();
+        if (openFile && !path.isEmpty()) openFile(path.toUtf8().toStdString());
+    });
+    dialog->show();
 }
 Result<void> UnrealBuildBackend::build(build::BuildAction action, std::optional<project::ProjectId> project) {
     if (project) return fail(ErrorCode::Unsupported, "select a UBT target from the Unreal menu");

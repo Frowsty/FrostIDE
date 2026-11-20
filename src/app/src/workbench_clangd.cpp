@@ -16,6 +16,7 @@
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/lang/unreal_compile_commands.hpp"
 #include "frost/project/cmake_compile_database.hpp"
 #include "frost/project/project_model_cache.hpp"
 #include "frost/sched/lane.hpp"
@@ -35,6 +36,7 @@
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "standalone_build_backend.hpp"
+#include "unreal_build_backend.hpp"
 #include "unity_control.hpp"
 #include "workbench_project_helpers.hpp"
 #include <QCoreApplication>
@@ -303,7 +305,19 @@ void Workbench::startClangd(const std::string& root) {
             cache = std::move(*joined);
         }
     }
-    if (m_cmake) {
+    if (m_unreal) {
+        if (m_unreal->compileDatabase().empty()) {
+            notify(text("Unreal code insight"), text("Select a generated compilation database for the current UBT profile from the Unreal menu. No target flags are inferred."), ui::NotificationKind::Info);
+            return;
+        }
+        if (!cache) {
+            notify(text("Unreal code insight"), text("An IDE compilation-database cache must be configured."), ui::NotificationKind::Warning);
+            return;
+        }
+        const auto trust = m_services.trust.snapshot(root);
+        m_compileCommands = std::make_shared<lang::UnrealCompileCommandsProvider>(m_services.fs, m_services.trust,
+            lang::UnrealCompileDatabaseSelection{m_unreal->model().projectFile, m_unreal->compileDatabase(), m_unreal->configurationIdentity()}, *cache, trust.revision);
+    } else if (m_cmake) {
         m_clangdCMakeState = cmakeClangdState(m_services.fs, m_cmake->service());
         std::weak_ptr<build::CMakeService> service = m_cmake->sharedService();
         if (cache) {
@@ -392,6 +406,7 @@ void Workbench::startClangd(const std::string& root) {
     options.launch.trusted = m_services.trust.isTrusted(root);
     m_clangdTrusted = options.launch.trusted;
     options.compileCommands = m_compileCommands;
+    options.requireCompileCommands = m_unreal != nullptr;
     const auto generation = m_clangdGeneration;
     // The owned server supervisors are joined before Workbench's QObject base is destroyed;
     // this worker callback only posts, and the queued GUI callback rechecks the controller.

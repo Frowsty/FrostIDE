@@ -10,6 +10,7 @@
 #include <QTimer>
 class QMenu;
 class QWidget;
+class QDialog;
 namespace frost::ui {
 class ShellWindow;
 }
@@ -45,11 +46,16 @@ public:
     std::vector<std::string> untrustedRoots() const override;
     std::vector<build::BuildDiagnostic> diagnostics() const override { return m_diagnostics; }
     const project::UnrealProject& model() const { return m_model; }
-    void attachMenu(ui::ShellWindow& window, std::function<Result<void>(std::string)> addEditor = {});
+    void attachMenu(ui::ShellWindow& window, std::function<Result<void>(std::string)> addEditor = {},
+        std::function<void(const std::string&)> openFile = {}, std::function<void()> semanticProfileChanged = {});
+    Result<void> selectCompileDatabase(std::string file);
+    const std::string& compileDatabase() const { return m_databaseFile; }
+    std::string configurationIdentity() const;
     const std::string& visualizer() const { return m_visualizer; }
     void setCallbacks(build::BuildServiceCallbacks callbacks) { m_callbacks = std::move(callbacks); }
 
 private:
+    void showProjectModel(QWidget* host, std::function<void(const std::string&)> openFile);
     void setState(build::BuildState state);
     bool admitted() const;
     void checkTrustRevision();
@@ -59,6 +65,10 @@ private:
     project::UnrealProject m_model;
     std::string m_root;
     std::string m_visualizer;
+    std::string m_databaseFile;
+    std::function<void()> m_semanticProfileChanged;
+    std::optional<project::UnrealWorkspace> m_workspace;
+    QPointer<QDialog> m_modelDialog;
     build::UnrealBuildRequest m_request;
     io::IFileSystem& m_fs;
     io::IProcessLauncher& m_launcher;

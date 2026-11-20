@@ -38,6 +38,7 @@ frost_add_library(lang LAYER lang
         src/cpp_refactoring_plan.cpp
         src/cpp_preprocessor.cpp
         src/unreal_reflection.cpp
+        src/unreal_compile_commands.cpp
         src/cpp_index.cpp
         src/cpp_index_store.cpp
         src/code_assist.cpp
