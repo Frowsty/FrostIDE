@@ -12,7 +12,16 @@ internal sealed class RpcTransport
     private readonly Stream input = Console.OpenStandardInput(), output = Console.OpenStandardOutput();
     private readonly SemaphoreSlim writer = new(1, 1);
     private readonly Channel<JsonElement> queue = Channel.CreateBounded<JsonElement>(new BoundedChannelOptions(128) { SingleReader = true, SingleWriter = true });
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> requests = new();
+    // Cancel and disposal share one gate: a late cancellation cannot call a disposed CTS.
+    private sealed class RequestLifetime : IDisposable {
+        private readonly object gate = new();
+        private readonly CancellationTokenSource source; private bool disposed;
+        internal RequestLifetime(CancellationToken stop) { source = CancellationTokenSource.CreateLinkedTokenSource(stop); }
+        internal CancellationToken Token => source.Token;
+        internal void Cancel() { lock (gate) { if (!disposed) source.Cancel(); } }
+        public void Dispose() { lock (gate) { if (!disposed) { disposed = true; source.Dispose(); } } }
+    }
+    private readonly ConcurrentDictionary<string, RequestLifetime> requests = new();
     internal async Task Send(object message)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(message);
@@ -51,7 +60,7 @@ internal sealed class RpcTransport
                     continue;
                 }
                 if (message.TryGetProperty("id", out var requestId) && message.TryGetProperty("method", out _)) {
-                    if (!requests.TryAdd(requestId.GetRawText(), CancellationTokenSource.CreateLinkedTokenSource(stop))) throw new InvalidDataException("Duplicate live LSP request identity");
+                    if (!requests.TryAdd(requestId.GetRawText(), new RequestLifetime(stop))) throw new InvalidDataException("Duplicate live LSP request identity");
                 }
                 if (!queue.Writer.TryWrite(message)) throw new InvalidDataException("RoslynHost request backlog exceeds 128 messages");
             }

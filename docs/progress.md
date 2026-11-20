@@ -8067,3 +8067,9 @@ with a pointer.
   the modal lifetime and bounded report-read findings were fixed. Commits: dd193193, 040ef30a,
   97e679b1 on codex/r15-editor-extras. No builds, tests, feature runs, WSL, benchmarks, probes or
   verification runners were executed. Runtime acceptance remains deferred by user instruction.
+
+### R17 selected SDK context checkpoint (2026-11-20)
+
+Owned RoslynHost now receives the selected evaluated project, configuration and TFM. The normal .NET project pane, Build/Problems backend and generated console run configuration consume the actual SDK evaluation with captured project/import bytes, trust and physical identity admission, cancellation and stale-context invalidation. Late JSON-RPC cancellation and completion dispose under the same lifetime gate. Added source-authored context/build/run fixtures and an exact Apache-2.0 MoreLINQ v4.4.0 corpus pin with a deferred SDK/host comparison fixture; no corpus was fetched. Semantic contribution interfaces are additive for the independently owned Unity/library modules.
+
+Source checkpoint only; independent review is pending for these additions. No builds, tests, SDK commands, installs, downloads or WSL were executed. Earlier evaluation API source clearance remains separate from this pending checkpoint.

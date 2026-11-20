@@ -18,3 +18,12 @@ internal sealed class SemanticFeatureContext
     // The caller must not mutate files or invoke Workspace.TryApplyChanges; REF1 owns adoption.
     internal Task<object> CreateWorkspaceEditAsync(Solution changed, CancellationToken token) => proposal(changed, token);
 }
+// Optional owned modules contribute ordinary LSP shapes to the normal semantic routes.
+// Implementations derive each result from context.Document; mutation uses the proposal boundary.
+internal interface ISemanticContributions
+{
+    Task<IReadOnlyList<object>> Completion(SemanticFeatureContext context, int offset, CancellationToken token) => Task.FromResult<IReadOnlyList<object>>(Array.Empty<object>());
+    Task<IReadOnlyList<object>> Diagnostics(SemanticFeatureContext context, CancellationToken token) => Task.FromResult<IReadOnlyList<object>>(Array.Empty<object>());
+    Task<IReadOnlyList<object>> CodeActions(SemanticFeatureContext context, JsonElement parameters, CancellationToken token) => Task.FromResult<IReadOnlyList<object>>(Array.Empty<object>());
+    Task<IReadOnlyList<object>> CodeLenses(SemanticFeatureContext context, CancellationToken token) => Task.FromResult<IReadOnlyList<object>>(Array.Empty<object>());
+}

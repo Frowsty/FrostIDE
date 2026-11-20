@@ -230,5 +230,42 @@ TEST(FrostEngineRun, StopDuringWorkerAdmissionPreventsChildAfterAdmissionReturns
     EXPECT_TRUE(manager->waitForIdle(30s));
 }
 
+TEST(FrostEngineRun, StopCancelsTheRealToolLifetimeInsideFinalTargetResolution) {
+    io::ScriptedProcessLauncher launcher;
+    launcher.expect({.expectExecutable = path("target-query"), .neverExits = true});
+    test::RunCollector collector;
+    auto manager = RunManager::create(launcher);
+    RunConfiguration config;
+    config.id = "managed.sdk.resolution";
+    config.name = "managed target resolution";
+    config.program = path("dotnet");
+    RunHandlers handlers;
+    handlers = collector.handlers();
+    handlers.transformLaunchPlanWithCancellation = [&](LaunchPlan plan, std::stop_token stop) -> Result<LaunchPlan> {
+        io::ProcessSpec query;
+        query.executable = path("target-query");
+        query.stdinMode = io::Stdio::Null;
+        query.stdoutMode = io::Stdio::Pipe;
+        query.stderrMode = io::Stdio::Pipe;
+        query.killOnClose = true;
+        auto result = io::runToCompletion(launcher, query, {}, 30s, stop);
+        if (!result)
+            return std::unexpected(result.error());
+        return plan;
+    };
+    auto started = manager->start(config, std::move(handlers));
+    ASSERT_TRUE(started);
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (launcher.launches().empty() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    ASSERT_FALSE(launcher.launches().empty());
+    manager->stop(*started);
+    auto finished = collector.waitFinished(5s).result;
+    ASSERT_TRUE(finished);
+    EXPECT_TRUE(finished->stopped);
+    ASSERT_EQ(launcher.launches().size(), 1);
+    EXPECT_TRUE(launcher.launches()[0].terminated);
+    EXPECT_TRUE(manager->waitForIdle(5s));
+}
 } // namespace
 } // namespace frost::run

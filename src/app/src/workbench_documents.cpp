@@ -389,6 +389,7 @@ void Workbench::editorClosed(DocumentEditorView& view) {
 }
 
 void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSet& change) {
+    managedProjectInputChanged(view.path());
     if (m_engineBindings)
         m_engineBindings->cancel();
     if (m_nav && !change.edits.empty()) {

@@ -88,6 +88,7 @@ internal sealed class LanguageHost
         var file = FileOf(parameters.GetProperty("textDocument"));
         var ids = SourceIds(solution, file);
         if (ids.Length == 0) throw new InvalidOperationException("Document is outside the evaluated Compile items");
+        if (ids.Length == 1) return solution.GetDocument(ids[0])!;
         var project = Option("--project-context");
         var candidates = ids.Select(id => solution.GetDocument(id)!).Where(d => project is null || PathComparer.Equals(d.Project.FilePath, Path.GetFullPath(project))).ToArray();
         if (candidates.Length != 1) throw new InvalidOperationException("Linked/multitarget document needs an explicit project context");
@@ -102,13 +103,18 @@ internal sealed class LanguageHost
     private static object Position(SourceText text, int offset) { var p = text.Lines.GetLinePosition(offset); return new { line = p.Line, character = p.Character }; }
     private static object Range(SourceText text, TextSpan span) => new { start = Position(text, span.Start), end = Position(text, span.End) };
     private static string UriOf(string file) => new Uri(Path.GetFullPath(file)).AbsoluteUri;
+    private SemanticFeatureContext Context(Document document) => new(document, async (changed, token) => {
+        var captured = document.Project.Solution; await ValidateSources(captured, token);
+        await ValidateCompilation(captured, changed, token); return await WorkspaceEdit(captured, changed, token);
+    });
     private async Task Publish(Document document, CancellationToken token)
     {
         var text = await document.GetTextAsync(token);
         var model = await document.GetSemanticModelAsync(token) ?? throw new InvalidOperationException("C# semantic model unavailable");
         var diagnostics = model.GetDiagnostics(cancellationToken: token).Where(d => d.Location.IsInSource && d.Location.SourceTree == model.SyntaxTree)
             .Take(10000).Select(d => new { range = Range(text, d.Location.SourceSpan), severity = d.Severity == DiagnosticSeverity.Error ? 1 : d.Severity == DiagnosticSeverity.Warning ? 2 : d.Severity == DiagnosticSeverity.Info ? 3 : 4,
-                code = d.Id, source = "Roslyn", message = d.GetMessage(System.Globalization.CultureInfo.InvariantCulture) }).ToArray();
+                code = d.Id, source = "Roslyn", message = d.GetMessage(System.Globalization.CultureInfo.InvariantCulture) }).Cast<object>().ToList();
+        foreach (var feature in semanticFeatures.OfType<ISemanticContributions>()) diagnostics.AddRange(await feature.Diagnostics(Context(document), token));
         await rpc.Notify("textDocument/publishDiagnostics", new { uri = UriOf(document.FilePath!), version = versions.GetValueOrDefault(document.FilePath!), diagnostics });
     }
     private async Task Update(JsonElement parameters, bool opened, CancellationToken token)
@@ -147,7 +153,7 @@ internal sealed class LanguageHost
             await Load(token);
             return new { capabilities = new { positionEncoding = "utf-16", textDocumentSync = new { openClose = true, change = 2, save = new { includeText = false } },
                 completionProvider = new { triggerCharacters = new[] { "." } }, hoverProvider = true, definitionProvider = true, referencesProvider = true,
-                renameProvider = new { prepareProvider = true }, documentFormattingProvider = true, documentSymbolProvider = true,
+                renameProvider = new { prepareProvider = true }, documentFormattingProvider = true, documentSymbolProvider = true, codeLensProvider = new { resolveProvider = false },
                 signatureHelpProvider = new { triggerCharacters = new[] { "(", "," } }, codeActionProvider = new { codeActionKinds = new[] { "refactor.rewrite" } } }, serverInfo = new { name = "FrostRoslynHost", version = "1" } };
         case "initialized": return null;
         case "shutdown": shutdown = true; return null;
@@ -197,7 +203,11 @@ internal sealed class LanguageHost
         case "textDocument/formatting": return await Edits(doc, await Formatter.FormatAsync(doc, cancellationToken: token), token);
         case "textDocument/documentSymbol": return await Symbols(doc, source, token);
         case "textDocument/signatureHelp": return await Signature(doc, offset, token);
-        case "textDocument/codeAction": return await CodeActions(doc, token);
+        case "textDocument/codeAction": return await CodeActions(doc, p, token);
+        case "textDocument/codeLens":
+            var lenses = new List<object>();
+            foreach (var feature in semanticFeatures.OfType<ISemanticContributions>()) lenses.AddRange(await feature.CodeLenses(Context(doc), token));
+            return lenses;
         default: throw new NotSupportedException("RoslynHost method unavailable: " + method);
         }
     }
@@ -262,6 +272,7 @@ internal sealed class LanguageHost
                 sortText = item.SortText, filterText = item.FilterText, detail = description.Text,
                 textEdit = new { range = Range(source, change.TextChange.Span), newText = change.TextChange.NewText ?? "" } });
         }
+        foreach (var feature in semanticFeatures.OfType<ISemanticContributions>()) items.AddRange(await feature.Completion(Context(doc), offset, token));
         return new { isIncomplete = result.ItemsList.Count > 200, items };
     }
     private static async Task<object[]> Definitions(Document doc, int offset, CancellationToken token)
@@ -360,7 +371,7 @@ internal sealed class LanguageHost
         var active = invocation.ArgumentList.Arguments.GetSeparators().Count(separator => separator.SpanStart < offset);
         return new { signatures = methods.Select(m => new { label = m.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat), parameters = m.Parameters.Select(parameter => new { label = parameter.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) }).ToArray() }).ToArray(), activeSignature = 0, activeParameter = active };
     }
-    private async Task<object[]> CodeActions(Document doc, CancellationToken token)
+    private async Task<object[]> CodeActions(Document doc, JsonElement parameters, CancellationToken token)
     {
         var captured = doc.Project.Solution;
         await ValidateSources(captured, token);
@@ -369,6 +380,8 @@ internal sealed class LanguageHost
         simplified = await Formatter.FormatAsync(simplified, cancellationToken: token);
         await ValidateCompilation(captured, simplified.Project.Solution, token);
         var edit = await WorkspaceEdit(captured, simplified.Project.Solution, token);
-        return new object[] { new { title = "Simplify C# names and format (Roslyn)", kind = "refactor.rewrite", edit } };
+        var actions = new List<object> { new { title = "Simplify C# names and format (Roslyn)", kind = "refactor.rewrite", edit } };
+        foreach (var feature in semanticFeatures.OfType<ISemanticContributions>()) actions.AddRange(await feature.CodeActions(Context(doc), parameters, token));
+        return actions.ToArray();
     }
 }

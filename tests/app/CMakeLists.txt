@@ -352,7 +352,7 @@ target_compile_definitions(app_workbench_unity_tests PRIVATE ${_frost_workbench_
 
 include("${FROST_SOURCE_DIR}/tests/support/ManagedFixtures.cmake")
 frost_add_managed_fixture_test(app_workbench_managed_tests QT
-    SOURCES workbench_managed_test.cpp managed_debug_preparation_test.cpp mono_adapter_preparation_test.cpp
+    SOURCES workbench_managed_test.cpp workbench_managed_model_test.cpp managed_debug_preparation_test.cpp mono_adapter_preparation_test.cpp
     DEPS frost::app frost::lang frost::io
     LABELS integration)
 target_include_directories(app_workbench_managed_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

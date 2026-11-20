@@ -157,6 +157,9 @@ struct RunHandlers {
     // normalized, saved as the actual plan, then launchAdmission is rechecked (it must be idempotent).
     // Errors prevent the root child. Does not affect task plans or RunMode::Prepare's returned plan.
     std::function<Result<LaunchPlan>(LaunchPlan)> transformLaunchPlan{};
+    // Prefer this form when resolution invokes a real tool: Stop owns its contained child too.
+    // Takes precedence over transformLaunchPlan; token is the exact run lifetime, never GUI state.
+    std::function<Result<LaunchPlan>(LaunchPlan, std::stop_token)> transformLaunchPlanWithCancellation{};
     // Running, Stopping, and BeforeLaunch with beforeLaunchTask set when a task starts (RUN-5).
     std::function<void(const RunStatus& run)> onPhaseChanged{};
     std::function<void(OutputStream stream, std::string_view text)> onOutput{};

@@ -244,7 +244,7 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     frost::app::test::RigOptions config;
     config.workbench.clangd = false;
     ASSERT_TRUE(frost::app::test::copyTree(frost::io::realFileSystem(), std::string(frost::io::parentPath(assembly)),
-                                           dir.join("managed")));
+                                           dir.join("roslyn")));
     WorkbenchRig rig(dir, config);
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(dir.path()));
