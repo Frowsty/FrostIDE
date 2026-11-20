@@ -178,10 +178,10 @@ set_tests_properties(UpdateState.IndependentProcessesPreserveHigherFloor PROPERT
 # Real isolated scratch Git repositories, never the user's project or remotes.
 file(TO_CMAKE_PATH "${FROST_GIT_EXECUTABLE}" _frost_app_git)
 frost_add_test(app_workbench_git_tests QT
-    SOURCES workbench_git_test.cpp
+    SOURCES workbench_git_test.cpp unity_yaml_merge_test.cpp
     DEPS frost::app frost::ui_vcs frost::vcs frost::io
     LABELS integration git)
-target_include_directories(app_workbench_git_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_include_directories(app_workbench_git_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_git_tests PRIVATE ${_frost_workbench_definitions} FROST_VCS_GIT="${_frost_app_git}")
 
 if(WIN32)

@@ -14,6 +14,7 @@ frost_add_library(vcs LAYER vcs
         src/environment.cpp
         src/git_locator.cpp
         src/git_repository.cpp
+        src/conflict_sources.cpp
         src/git_runner.cpp
         src/git_service.cpp
         src/git_status.cpp

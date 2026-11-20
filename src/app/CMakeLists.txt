@@ -111,6 +111,8 @@ frost_add_library(app LAYER app
         src/unity_tests_window.cpp
         src/unity_tests_window.hpp
         src/unity_control.hpp
+        src/unity_yaml_merge.cpp
+        src/unity_yaml_merge_dialog.cpp
         src/git_integration.cpp
         src/git_integration.hpp
         src/engine_request_helper.cpp
