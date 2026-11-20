@@ -363,6 +363,39 @@ struct Worker : std::enable_shared_from_this<Worker> {
         }
         return rpc::Json::object().set("variables", rpc::Json::array(std::move(result)));
     }
+    // A watch/hover reads exactly one in-scope local through StackFrame.GET_VALUES.
+    // Mono public SDB wire format: stackframe commands; no method invocation or expression execution.
+    Result<rpc::Json> evaluate(const rpc::Json& args) {
+        const auto expression = args.stringAt("expression");
+        if (expression.empty() || expression.size() > 1024 ||
+            !std::all_of(expression.begin(), expression.end(), [](unsigned char c) {
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+            }))
+            return fail(ErrorCode::Unsupported, "Mono evaluation supports an exact local identifier only");
+        const auto id = args.integerAt("frameId");
+        const auto frame = id ? frames.find(*id) : frames.end();
+        if (!stoppedThread || frame == frames.end() || session.state().phase() != Phase::Suspended)
+            return fail(ErrorCode::InvalidArgument, "stale Mono evaluation frame");
+        auto info = call(session.metadata(MetadataQuery::MethodLocals, frame->second.method));
+        if (!info) return std::unexpected(std::move(info.error()));
+        auto locals = decodeLocals258(info->payload);
+        if (!locals) return std::unexpected(std::move(locals.error()));
+        std::optional<std::uint32_t> ordinal;
+        for (std::size_t i = 0; i < locals->size(); ++i) {
+            const auto& local = (*locals)[i];
+            if (local.name == expression && frame->second.ilOffset >= local.start && frame->second.ilOffset < local.end) {
+                if (ordinal) return fail(ErrorCode::Unsupported, "ambiguous Mono local identity");
+                ordinal = static_cast<std::uint32_t>(i);
+            }
+        }
+        if (!ordinal) return fail(ErrorCode::Unsupported, "no unique in-scope Mono local");
+        auto value = call(session.local(stoppedThread, frame->second.id, *ordinal));
+        if (!value) return std::unexpected(std::move(value.error()));
+        auto number = decodeInt32(value->payload);
+        if (!number) return fail(ErrorCode::Unsupported, "Mono local value type is not supported");
+        return rpc::Json::object().set("result", std::to_string(*number)).set("type", "System.Int32")
+            .set("variablesReference", 0);
+    }
     Result<void> detach() {
         if (!stream)
             return {};
@@ -386,7 +419,7 @@ struct Worker : std::enable_shared_from_this<Worker> {
     }
     Result<rpc::Json> handle(const std::string& command, const rpc::Json& args) {
         if (command == "initialize")
-            return rpc::Json::object().set("supportsConfigurationDoneRequest", true);
+            return rpc::Json::object().set("supportsConfigurationDoneRequest", true).set("supportsEvaluateForHovers", true);
         if (command == "attach") {
             auto result = attach();
             if (!result)
@@ -424,6 +457,8 @@ struct Worker : std::enable_shared_from_this<Worker> {
                                                                            .set("variablesReference", *id)
                                                                            .set("expensive", false)}));
         }
+        if (command == "evaluate")
+            return evaluate(args);
         if (command == "variables")
             return variables(args);
         if (command == "next") {

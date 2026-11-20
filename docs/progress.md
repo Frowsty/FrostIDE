@@ -14,6 +14,11 @@ what is next, blockers and open questions for the user.
 - Actual registered semantic providers outrank the builtin source fallback. Named source/span/include/root/candidate limits and scheduler-free fallback are recorded in ADR0118. Lexer, physical source navigation/provenance, ambiguous/missing/macro limits, provider precedence and worker editor regressions are authored.
 - Independent Astra source review is requested. No builds, tests, shader/Unity feature execution, downloads/install, WSL or pushes occurred. Next: source-review corrections, additive R14 GLSL joins, then independent R19 other-language/extension branches.
 
+## 2026-11-20 R18 Mono watch/hover local reads
+
+- The original Mono adapter now serves DAP evaluate for exact in-scope local identifiers in the current verified stopped frame, using actual Method.GET_LOCALS_INFO and StackFrame.GET_VALUES replies. Int32 formatting is the established supported value profile; expressions, calls, unknown/ambiguous locals, unsupported values and stale frames are refused rather than fabricated. Hover capability is advertised for that bounded read path.
+- Authored socket-peer coverage supplies real protocol frames/metadata/value packets, checks the resulting value, rejects expression execution and invalidates the watch on resume. No tests or features were run; independent source review pending. Protocol basis: https://www.mono-project.com/docs/advanced/runtime/docs/soft-debugger-wire-format/ (stackframe GET_VALUES).
+
 ## 2026-11-20 R18 Unity Mono attach source slice
 
 - Added an explicit command-palette Editor/player attach flow using independently held Windows PID/image/creation identity, user-confirmed known loopback port, actual loaded-module/PDB byte comparison and verified source snapshots. Selected Editor attaches bind the authenticated bridge epoch; trust revisions and source edits revoke admission. Shared run/debug ownership is rechecked after modal selection and source capture.

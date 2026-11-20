@@ -194,6 +194,13 @@ private:
                 put32(payload, 3);
                 put32(payload, 4);
                 payload.push_back(0);
+            } else if (set == 22 && command == 5) {
+                put32(payload, 0); // no nested scopes
+                put32(payload, 1); put32(payload, 1); // one local, runtime type id
+                put32(payload, 5); payload.insert(payload.end(), {'c','o','u','n','t'});
+                put32(payload, 0); put32(payload, 16);
+            } else if (set == 16 && command == 1) {
+                payload.push_back(8); put32(payload, 42); // actual peer Int32 response
             } else if (set == 15 && command == 2) {
                 if (++clears == 2 && failSecondClear)
                     error = 1;
@@ -453,5 +460,33 @@ TEST(MonoDap, UnsupportedBreakpointSemanticsDoNotInstallOrEndSession) {
     EXPECT_TRUE(runtime.disposed);
 }
 
+TEST(MonoDap, EvaluateReadsOnlyCurrentFrameLocalAndRejectsExpressions) {
+    ScriptedMono runtime(false, false, false, true);
+    std::promise<void> stopped;
+    auto stop = stopped.get_future();
+    DapHandlers handlers;
+    handlers.onEvent = [&](std::string_view name, const rpc::Json&) { if (name == "stopped") stopped.set_value(); };
+    auto client = monoAdapterFactory(runtime.target())(std::move(handlers));
+    ASSERT_TRUE(client);
+    ASSERT_TRUE(requestSync(**client, "attach"));
+    ASSERT_TRUE(requestSync(**client, "setBreakpoints", rpc::Json::object()
+        .set("source", rpc::Json::object().set("path", "/owned/a.cs"))
+        .set("breakpoints", rpc::Json::array({rpc::Json::object().set("line", 10)}))));
+    ASSERT_TRUE(requestSync(**client, "continue"));
+    ASSERT_EQ(stop.wait_for(5s), std::future_status::ready);
+    auto stack = requestSync(**client, "stackTrace", rpc::Json::object().set("threadId", 1));
+    ASSERT_TRUE(stack);
+    const auto* frames = stack->find("stackFrames");
+    ASSERT_TRUE(frames); ASSERT_EQ(frames->size(), 1u);
+    const auto id = frames->items().front().integerAt("id"); ASSERT_TRUE(id);
+    auto evaluated = requestSync(**client, "evaluate", rpc::Json::object().set("frameId", *id).set("expression", "count"));
+    ASSERT_TRUE(evaluated);
+    EXPECT_EQ(evaluated->stringAt("result"), "42");
+    EXPECT_EQ(evaluated->stringAt("type"), "System.Int32");
+    EXPECT_FALSE(requestSync(**client, "evaluate", rpc::Json::object().set("frameId", *id).set("expression", "count++")));
+    EXPECT_TRUE(requestSync(**client, "continue"));
+    EXPECT_FALSE(requestSync(**client, "evaluate", rpc::Json::object().set("frameId", *id).set("expression", "count")));
+    EXPECT_TRUE(requestSync(**client, "disconnect"));
+}
 } // namespace
 } // namespace frost::debug::mono
