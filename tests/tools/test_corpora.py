@@ -151,6 +151,36 @@ class CorporaToolTest(TempDirTestCase):
         path = self._run(lock, "path", "engine")
         self.assertEqual(Path(path.stdout.strip()), clone)
 
+    def test_fetch_seeds_only_engine_corpora(self) -> None:
+        lock = self._lock(self.first)
+        document = json.loads(lock.read_text(encoding="utf-8"))
+        engine = document["corpora"][0]
+        document["corpora"].append(engine | {"id": "managed"})
+        engine["presets"] = {corpora.PLATFORM: f"{corpora.PLATFORM}-debug"}
+        lock.write_text(json.dumps(document), encoding="utf-8")
+
+        shared = self.root / corpora.CPM_CACHE_NAME / "fmt" / "shared"
+        explicit = self.tmp / "cpm-source" / "fmt" / "explicit"
+        for package in (shared, explicit):
+            package.mkdir(parents=True)
+            (package / "source.txt").write_text(package.name, encoding="utf-8")
+
+        engine_cache = self._dir(self.first) / ".cache" / "cpm" / "fmt"
+        managed_cache = self.root / f"managed-{self.first[:12]}" / ".cache" / "cpm"
+        result = self._run(lock, "fetch", "--keep-old")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((engine_cache / "shared" / "source.txt").read_text(encoding="utf-8"), "shared")
+        self.assertFalse(managed_cache.exists())
+
+        legacy = managed_cache / "legacy.txt"
+        managed_cache.mkdir(parents=True)
+        legacy.write_text("existing", encoding="utf-8")
+        result = self._run(lock, "fetch", "--keep-old", "--cpm-source", str(explicit.parent.parent))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((engine_cache / "explicit" / "source.txt").read_text(encoding="utf-8"), "explicit")
+        self.assertEqual(list(managed_cache.iterdir()), [legacy])
+        self.assertEqual(legacy.read_text(encoding="utf-8"), "existing")
+
     def test_root_prints_the_root_the_corpus_tests_read(self) -> None:
         # --root wins; without it $FROST_CORPORA_ROOT. The verify scripts export what `root` prints.
         lock = self._lock(self.first)

@@ -22,6 +22,69 @@ using namespace std::chrono_literals;
 sched::Task<Result<lang::Json>> ask(lang::ManagedService& service, std::string method, lang::Json params) {
     co_return co_await service.request(std::move(method), std::move(params));
 }
+std::error_code copyManagedCorpus(const std::filesystem::path& from, const std::filesystem::path& to) {
+    std::error_code error;
+    for (std::filesystem::recursive_directory_iterator it(from, error), end; !error && it != end; it.increment(error)) {
+        const auto relative = it->path().lexically_relative(from);
+        const auto first = *relative.begin();
+        // Older fetches populated this untracked cache even for the MoreLINQ corpus.
+        if (first == ".git" || first == ".github" || relative == std::filesystem::path(".cache/cpm")) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        const auto status = it->symlink_status(error);
+        if (error)
+            return error;
+        if (std::filesystem::is_symlink(status))
+            return std::make_error_code(std::errc::operation_not_supported);
+        const auto destination = to / relative;
+        if (std::filesystem::is_directory(status))
+            std::filesystem::create_directories(destination, error);
+        else {
+            std::filesystem::create_directories(destination.parent_path(), error);
+            if (!error)
+                std::filesystem::copy_file(it->path(), destination, std::filesystem::copy_options::overwrite_existing,
+                                           error);
+        }
+        if (error)
+            return error;
+    }
+    return error;
+}
+
+TEST(ManagedCorpus, ScratchCopyExcludesLegacyEngineCache) {
+    test::ScratchDir scratch("managed-corpus-copy");
+    auto& fs = io::realFileSystem();
+    ASSERT_TRUE(fs.createDirectories(scratch.join("source/.cache/cpm/fmt/hash")));
+    ASSERT_TRUE(fs.createDirectories(scratch.join("source/MoreLinq")));
+    ASSERT_TRUE(fs.writeFileAtomic(scratch.join("source/.cache/cpm/fmt/hash/cache.txt"), "package"));
+    ASSERT_TRUE(fs.writeFileAtomic(scratch.join("source/.cache/keep.txt"), "keep"));
+    ASSERT_TRUE(fs.writeFileAtomic(scratch.join("source/MoreLinq/Source.cs"), "class Source {}"));
+
+    const auto source = io::toStdPath(scratch.join("source")).value();
+    const auto destination = io::toStdPath(scratch.join("copy")).value();
+    const auto error = copyManagedCorpus(source, destination);
+    ASSERT_FALSE(error) << error.message();
+    EXPECT_FALSE(std::filesystem::exists(destination / ".cache/cpm"));
+    EXPECT_EQ(fs.readFile(scratch.join("copy/.cache/keep.txt")).value(), "keep");
+    EXPECT_EQ(fs.readFile(scratch.join("copy/MoreLinq/Source.cs")).value(), "class Source {}");
+    EXPECT_EQ(fs.readFile(scratch.join("source/.cache/cpm/fmt/hash/cache.txt")).value(), "package");
+}
+
+TEST(ManagedCorpus, ScratchCopyReportsDestinationCollision) {
+    test::ScratchDir scratch("managed-corpus-collision");
+    auto& fs = io::realFileSystem();
+    ASSERT_TRUE(fs.createDirectories(scratch.join("source")));
+    ASSERT_TRUE(fs.createDirectories(scratch.join("copy/Source.cs")));
+    ASSERT_TRUE(fs.writeFileAtomic(scratch.join("source/Source.cs"), "class Source {}"));
+    const auto source = io::toStdPath(scratch.join("source")).value();
+    const auto destination = io::toStdPath(scratch.join("copy")).value();
+
+    EXPECT_TRUE(copyManagedCorpus(source, destination));
+    EXPECT_TRUE(std::filesystem::is_directory(destination / "Source.cs"));
+    EXPECT_EQ(fs.readFile(scratch.join("source/Source.cs")).value(), "class Source {}");
+}
+
 TEST(ManagedCorpus, PinnedMoreLinqEvaluatesAndExposesTheSameSourceItemsThroughRealRoslyn) {
     ASSERT_TRUE(test::sdkTestMayStart()) << "SDK profile is not prepared";
     const auto env = [](const char* name) { return project::processEnvironmentVariable(name).value_or(""); };
@@ -43,27 +106,8 @@ TEST(ManagedCorpus, PinnedMoreLinqEvaluatesAndExposesTheSameSourceItemsThroughRe
     test::ScratchDir scratch("managed-public-corpus");
     const auto copy = scratch.join("MoreLINQ");
     ASSERT_TRUE(fs.createDirectories(copy));
-    std::error_code error;
-    const auto from = io::toStdPath(corpus).value(), to = io::toStdPath(copy).value();
-    for (std::filesystem::recursive_directory_iterator it(from, error), end; !error && it != end; it.increment(error)) {
-        const auto relative = it->path().lexically_relative(from);
-        const auto first = (*relative.begin()).string();
-        if (first == ".git" || first == ".github") {
-            if (it->is_directory(error))
-                it.disable_recursion_pending();
-            continue;
-        }
-        ASSERT_FALSE(it->is_symlink(error));
-        if (it->is_directory(error))
-            std::filesystem::create_directories(to / relative, error);
-        else {
-            std::filesystem::create_directories((to / relative).parent_path(), error);
-            if (!error)
-                std::filesystem::copy_file(it->path(), to / relative, std::filesystem::copy_options::overwrite_existing,
-                                           error);
-        }
-    }
-    ASSERT_FALSE(error) << error.message();
+    const auto copyError = copyManagedCorpus(io::toStdPath(corpus).value(), io::toStdPath(copy).value());
+    ASSERT_FALSE(copyError) << copyError.message();
     const auto projectFile = io::joinPath(copy, "MoreLinq/MoreLinq.csproj").value();
     const auto projectDirectory = std::string(io::parentPath(projectFile));
     ASSERT_TRUE(

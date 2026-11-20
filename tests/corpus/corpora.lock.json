@@ -41,7 +41,9 @@
       "license": "Apache-2.0",
       "licenseFile": "COPYING.txt",
       "licenseUrl": "https://raw.githubusercontent.com/morelinq/MoreLINQ/6d97c3b1d482f98300f4446df14742b0e3fafbec/COPYING.txt",
-      "projects": ["MoreLinq/MoreLinq.csproj"],
+      "projects": [
+        "MoreLinq/MoreLinq.csproj"
+      ],
       "framework": "netstandard2.1",
       "purpose": "R17 LTR-2/3/4/5: actual SDK item/TFM evaluation, owned RoslynHost semantic replies and later rename/build oracle in an owned copy. The fixture writes only its scratch SDK-selection global.json for pinned .NET 10.0.403; source clone remains unchanged. Dependencies must already be provisioned in local caches; no corpus fetch/build/restore ran during implementation-first."
     }

@@ -48,8 +48,8 @@
 #           tests/support/engine_lock.hpp and tests/journeys take the same lock).
 #   CPM source cache: the configure fills <dir>/.cache/cpm (the engine's CPM_SOURCE_CACHE preset
 #           variable) from the network; afterwards new packages are copied into
-#           <root>/cpm-source-cache, and fetch seeds a new clone's .cache/cpm from that copy (or
-#           from --cpm-source), so a re-pin or the WSL clone downloads nothing that is cached. The
+#           <root>/cpm-source-cache, and fetch seeds engine corpora from that copy (or from
+#           --cpm-source), so a re-pin or the WSL clone downloads nothing that is cached. The
 #           cache only ever comes from a corpus clone's own fetch, never from a developer tree.
 #   wsl-fetch  (Windows) runs `fetch` inside WSL (python3 and git of the distribution) for the
 #           ext4 root ~/FrostBuilds/corpora, cloning from the url, else from this machine's corpus
@@ -271,8 +271,9 @@ def fetch(git: Git, entry: dict, root: Path, fallback: str | None, replace: bool
 
 
 def seed_cpm_cache(root: Path, entry: dict, cpm_source: Path | None) -> str | None:
-    """Copies the packages of `cpm_source` (else <root>/cpm-source-cache) that the corpus's
-    .cache/cpm lacks into it; a status line, or None when there was nothing to copy from."""
+    """Seed the configured engine corpus's .cache/cpm from the explicit or shared source cache."""
+    if not engine_preset(entry, None):
+        return None
     source = cpm_source or root / CPM_CACHE_NAME
     if not source.is_dir():
         return None
@@ -379,12 +380,12 @@ class BuildLock:
         self.handle = None
 
 
-def engine_preset(entry: dict, preset: str | None) -> str | None:
-    """The preset to configure: `preset`, else the lock's presets[PLATFORM], else None."""
+def engine_preset(entry: dict, preset: str | None, *, platform: str = PLATFORM) -> str | None:
+    """The preset to configure: `preset`, else the lock's preset for the platform, else None."""
     if preset:
         return preset
     presets = entry.get("presets")
-    return presets.get(PLATFORM) if isinstance(presets, dict) else None
+    return presets.get(platform) if isinstance(presets, dict) else None
 
 
 def engine_cache_variables(entry: dict) -> dict[str, str]:
@@ -574,8 +575,9 @@ def wsl_fetch(args, root: Path, by_id: dict, wanted: list[str]) -> int:
             status = 1
             continue
         steps = [["fetch", "--only", corpus_id, "--fallback-source", to_wsl_path(local)]]
-        if (local / ".cache" / "cpm").is_dir():
-            steps[0] += ["--cpm-source", to_wsl_path(local / ".cache" / "cpm")]
+        cpm = local / ".cache" / "cpm"
+        if engine_preset(entry, None, platform="linux") and cpm.is_dir():
+            steps[0] += ["--cpm-source", to_wsl_path(cpm)]
         if args.configure:
             steps.append(["engine", "--only", corpus_id, "--configure"])
         for step in steps:
@@ -632,7 +634,7 @@ def main(argv: list[str] | None = None) -> int:
                               help="delete and re-clone a corpus directory that does not verify")
     fetch_parser.add_argument("--keep-old", action="store_true", help="keep the clones of older pins")
     fetch_parser.add_argument("--cpm-source", type=Path, default=None, metavar="DIR",
-                              help="a corpus clone's .cache/cpm to seed the new clone's from (default: "
+                              help="a corpus clone's .cache/cpm to seed engine corpora from (default: "
                                    f"<root>/{CPM_CACHE_NAME} when it exists)")
     verify_parser = commands.add_parser("verify", help="check every corpus against its pin")
     verify_parser.add_argument("--only", action="append", metavar="ID", help="only this corpus (repeatable)")
