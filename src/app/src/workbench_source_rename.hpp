@@ -42,4 +42,8 @@ struct RefactoringInputSnapshot {
 [[nodiscard]] Result<document::RefactoringPlan>
 prepareSourceFileRename(io::IFileSystem& fs, const lang::FmetaMovePlan& move, std::string label);
 
+// Unity original metadata is a mandatory byte-preserving participant. No GUID regeneration,
+// YAML serialization, or separate sidecar move; REF-1 owns apply/recovery/Undo/Redo.
+[[nodiscard]] Result<void> appendUnityMetaRename(io::IFileSystem& fs, document::RefactoringPlan& plan,
+    const std::string& source, const std::string& target);
 } // namespace frost::app

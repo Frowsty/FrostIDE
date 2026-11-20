@@ -1,0 +1,7 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup><ItemGroup>
+<Compile Include="../../integrations/unity/com.frostide.editor/Editor/UnityControlProtocol.cs"/>
+<Compile Include="../../integrations/unity/com.frostide.editor/Editor/UnityTestBridge.cs"/>
+<Compile Include="../../integrations/unity/com.frostide.editor/Editor/Testing/UnityTestRunnerProvider.cs"/>
+<Compile Include="UnityTestsStubs.cs"/><Compile Include="UnityTestsProbe.cs"/>
+</ItemGroup></Project>

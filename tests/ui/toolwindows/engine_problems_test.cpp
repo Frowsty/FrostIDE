@@ -71,5 +71,23 @@ TEST(EngineProblems, DoesNotInventPositionsForAnUnlocatedEngineError) {
     EXPECT_FALSE(model.index(0, 0).data(ProblemsModel::JumpableRole).toBool());
     EXPECT_EQ(model.index(0, ProblemsModel::LineColumn).data().toString(), QString());
 }
+TEST(EngineProblems, UnityCompilerRowsRemainIndependentAndEmitUtf16Navigation) {
+    ProblemsView view;
+#ifdef _WIN32
+    const std::string path = "C:/project/Assets/Example.cs";
+#else
+    const std::string path = "/project/Assets/Example.cs";
+#endif
+    view.model()->add(test::diagnostic(build::Severity::Error, "CS1002", "actual Unity callback", path, 7, 9), DiagnosticSource::Unity);
+    view.model()->add(test::diagnostic(build::Severity::Warning, "other", "independent build", path, 1, 1), DiagnosticSource::Build);
+    view.filterModel()->setSourceFilter(DiagnosticSource::Unity);
+    test::SignalLog utf16(&view, &ProblemsView::openUtf16Location);
+    test::SignalLog bytes(&view, &ProblemsView::openLocation);
+    ASSERT_TRUE(view.activate(view.view()->model()->index(0, 0)));
+    EXPECT_EQ(utf16.count(), 1); EXPECT_EQ(bytes.count(), 0);
+    view.model()->clear(DiagnosticSource::Build);
+    ASSERT_EQ(view.model()->rowCount(), 1);
+    EXPECT_EQ(view.model()->problems().front().source, DiagnosticSource::Unity);
+}
 } // namespace
 } // namespace frost::ui

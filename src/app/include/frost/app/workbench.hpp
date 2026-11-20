@@ -171,6 +171,7 @@ class TerminalIntegration;
 
 namespace frost::ui::lang {
 class LanguageController;
+class EditorInsightBinding;
 enum class ServerReadiness : std::uint8_t; // frost/ui/lang/language_controller.hpp
 } // namespace frost::ui::lang
 
@@ -370,6 +371,18 @@ struct WorkbenchServices {
     IWorkbenchPrompts& prompts;
 };
 
+// Explicit local target inputs; an installed provider must independently verify process and source identity.
+struct UnityIl2cppNativeSelection {
+    std::string player, module, symbols, generatedRoot, buildSourceRoot;
+};
+struct UnityMonoDebugBinding;
+struct UnityMonoDebugSelection {
+    bool player = false;
+    bool il2cpp = false;
+    std::uint32_t pid = 0;
+    std::uint16_t port = 0;
+    std::string assembly, pdb, dotnet, verifier;
+};
 struct ManagedDebugSelection {
     std::string project;
     std::string dotnet;
@@ -443,6 +456,8 @@ struct WorkbenchOptions {
     // MSBuild.exe (absolute); "" uses tools.msbuild.path, else vswhere at the first build.
     std::string msbuildPath;
     debug::AdapterFactory debugAdapterFactory{}; // Optional adapter override for integration tests.
+    std::function<std::optional<UnityMonoDebugSelection>(std::string_view)> selectUnityDebug; // Test-only picker seam.
+    std::function<std::optional<UnityIl2cppNativeSelection>(std::string_view)> selectUnityNativeDebug; // Test picker.
     std::string managedPdbGuardPath;             // Test override; normally resolved beside the application.
     std::function<std::optional<ManagedDebugSelection>(std::string_view)> selectManagedDebug; // Test seam.
     std::function<QString(const QString&)> selectExistingProjectSource;                       // Test seam.
@@ -705,6 +720,7 @@ public:
     // GUI-thread entry; completion is posted to the GUI thread. Refuses untrusted projects.
     // CPP-11/12/16: GUI-thread native jobs, governed background AST/CFG work and current-image Problems.
     // Idle/save requests debounce and respect Power Save; explicit module analysis remains available.
+    void showDxcDiagnostics();
     void scheduleCppAnalyzer(std::string path, bool saved = false);
     void inspectNativeCppAsync(std::string_view scopePath, bool automatic = false);
     void inspectCppCodeAsync(std::string_view scopeDirectory, std::function<void(Result<lang::InspectionReport>)> done);
@@ -984,6 +1000,9 @@ private:
     void offerProjectTrust();
     void offerLuaTrust();
     void startManagedDebug();
+    void startUnityDebug(bool rebind = false);
+    void startUnityIl2cppNativeDebug();
+    [[nodiscard]] bool canRebindUnityDebug() const;
     void invalidateManagedDebug();
     [[nodiscard]] bool managedDebugFrameAllowed(const debug::DebugFrame& frame) const;
     void validateManagedBreakpoint(std::string path, std::function<void(bool)> done);
@@ -1054,6 +1073,7 @@ private:
     void closeDeletedDocuments(const std::string& deletedPath, bool directory);
     void refreshSolutionExplorerForFsChange(std::string_view selectPath = {});
     void renameSourceInCMakeLists(const std::string& oldPath, const std::string& newPath, bool directory);
+    void configureUnityInsights(ui::lang::EditorInsightBinding& binding);
     // Source, optional .fmeta and all project memberships are prepared before any effect.
     [[nodiscard]] Result<document::RefactoringPlan> prepareProjectSourceRename(const std::string& oldPath,
                                                                                const std::string& newPath);
@@ -1155,6 +1175,7 @@ private:
     std::unique_ptr<EngineDumpController> m_engineDumps;
     std::unique_ptr<EngineCrashObserver> m_engineCrashObserver;
     std::unique_ptr<UnityControlIntegration> m_unity;
+    std::shared_ptr<const UnityMonoDebugBinding> m_unityDebugBinding;
     std::unique_ptr<GitIntegration> m_git;
     std::unique_ptr<ui::BuildServiceBackend> m_buildBackend;
     // Declared before m_cmake, which runs through it, so it is destroyed after it (RUN-1).
@@ -1242,6 +1263,10 @@ private:
     std::optional<std::uint64_t> m_cppInspectionTrustRevision;
     std::uint64_t m_cppInspectionGeneration = 0;
     std::stop_source m_cppInspectionStop;
+    std::string m_dxcExecutable, m_dxcEntry, m_dxcTarget;
+    std::stop_source m_dxcStop;
+    std::uint64_t m_dxcGeneration = 0;
+    std::optional<std::uint64_t> m_dxcTrustRevision;
     std::uint64_t m_cppAnalyzerTicket = 0;
     bool m_cppAnalyzerRunning = false;
     std::function<Result<void>()> m_cppAnalyzerExportCheck;

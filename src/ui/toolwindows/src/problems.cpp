@@ -178,7 +178,10 @@ QVariant ProblemsModel::data(const QModelIndex& index, int role) const {
         case DiagnosticSource::Live: return tr("Live");
         case DiagnosticSource::Inspection: return tr("Inspection");
         case DiagnosticSource::Engine: return tr("Engine");
+        case DiagnosticSource::Unity: return tr("Unity");
         case DiagnosticSource::EngineShader: return tr("Engine Shader");
+
+        case DiagnosticSource::Dxc: return tr("DXC");
         }
         return {};
     case ColumnCount: break;
@@ -300,7 +303,10 @@ ProblemsView::ProblemsView(QWidget* parent)
     makeScopeTab(tr("Live Analysis"), "problemsScopeLive", DiagnosticSource::Live, false);
     makeScopeTab(tr("Inspection"), "problemsScopeInspection", DiagnosticSource::Inspection, false);
     makeScopeTab(tr("Engine"), "problemsScopeEngine", DiagnosticSource::Engine, false);
+    makeScopeTab(tr("Unity"), "problemsScopeUnity", DiagnosticSource::Unity, false);
     makeScopeTab(tr("Engine Shader"), "problemsScopeEngineShader", DiagnosticSource::EngineShader, false);
+
+    makeScopeTab(tr("DXC"), "problemsScopeDxc", DiagnosticSource::Dxc, false);
 
     auto* sep = new QFrame(this);
     sep->setFrameShape(QFrame::VLine);
@@ -406,7 +412,9 @@ bool ProblemsView::activate(const QModelIndex& index) {
     if (!location) {
         return false;
     }
-    emit openLocation(qs(location->path), location->line, location->column);
+    if (m_model->problems()[static_cast<std::size_t>(source.row())].source == DiagnosticSource::Unity)
+        emit openUtf16Location(qs(location->path), location->line, location->column);
+    else emit openLocation(qs(location->path), location->line, location->column);
     return true;
 }
 

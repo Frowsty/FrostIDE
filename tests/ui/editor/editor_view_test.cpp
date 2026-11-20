@@ -998,4 +998,23 @@ TEST(EditorViewInternal, LineBreakAndNormaliseBreaksRespectPreferenceAndModelSet
 }
 
 } // namespace
+TEST(EditorView, ShaderSourceWorkerHighlightsCurrentSnapshotAndWithdrawsAfterPathChange) {
+    FROST_REQUIRE_OFFSCREEN();
+    HarnessOptions options;
+    options.path = "Test.shader";
+    options.syntax = true;
+    options.show = false;
+    EditorHarness h("Shader \"Example\" {\nHLSLPROGRAM\nfloat4 color;\nENDHLSL\n}\n", options);
+    const auto range = frost::text::ByteRange{ByteOffset{0}, h.document.text().size()};
+    (void)h.view->highlightsFor(range);
+    h.settle();
+    auto spans = h.view->highlightsFor(range);
+    EXPECT_FALSE(spans.empty());
+    EXPECT_TRUE(
+        std::ranges::any_of(spans, [](const auto& span) { return span.kind == syntax::HighlightKind::BuiltinType; }));
+    h.view->setPath("notes.txt");
+    EXPECT_TRUE(h.view->highlightsFor(range).empty());
+    h.settle();
+}
+
 } // namespace frost::ui

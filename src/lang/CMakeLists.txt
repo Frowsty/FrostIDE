@@ -75,6 +75,7 @@ frost_add_library(lang LAYER lang
         src/language_registry.cpp
 
         src/msbuild_language.cpp
+        src/shader_source.cpp
         src/msbuild_compile_commands.cpp
         src/msvc_environment.cpp
         src/navigation.cpp
@@ -86,6 +87,7 @@ frost_add_library(lang LAYER lang
         src/templates.cpp
         src/file_templates.cpp
         src/symbols.cpp
+        src/unity_assets.cpp
         src/uri.cpp
         src/workspace_edit.cpp
     DEPS frost::project frost::settings frost::text frost::rpc frost::io frost::sched frost::core frost::syntax frost::storage)

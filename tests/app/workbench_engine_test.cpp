@@ -1605,3 +1605,149 @@ TEST(EngineJsonSchemaReader, ReadsOnlyBoundedLosslessPhysicalProjectDeclarations
     ASSERT_FALSE(large);EXPECT_EQ(large.error().code(),frost::ErrorCode::OutOfRange);
 }
 } // namespace
+
+namespace {
+TEST(WorkbenchEngine, UnityUnsupportedBackendNeverStartsSourceVerifier) {
+    WorkDir dir("unity-debug-backend", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    RigOptions options;
+    options.disableProjectEvaluation = true;
+    options.launcher = &launcher;
+    options.workbench.selectUnityDebug = [](std::string_view) {
+        return std::optional{frost::app::UnityMonoDebugSelection{.player = true, .il2cpp = true, .pid = 1, .port = 5555}};
+    };
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                dir.join("missing-csharp-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                dir.join("missing-lua-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    auto id = rig.workbench->registry().find("debug.attachUnity");
+    ASSERT_TRUE(id);
+    frost::input::ActionContext context;
+    context.trusted = true;
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
+    EXPECT_TRUE(launcher.launches().empty());
+    EXPECT_FALSE(rig.workbench->debugController()->debugging());
+}
+
+TEST(WorkbenchEngine, UnitySelectionCannotRenewRevokedTrustConsent) {
+    WorkDir dir("unity-debug-trust-revision", "tiny_sln");
+    frost::io::ScriptedProcessLauncher launcher;
+    WorkbenchRig* active = nullptr;
+    RigOptions options;
+    options.disableProjectEvaluation = true;
+    options.launcher = &launcher;
+    options.workbench.selectUnityDebug = [&](std::string_view) {
+        EXPECT_TRUE(active->trust->untrust(dir.path()));
+        EXPECT_TRUE(active->trust->trust(dir.path()));
+        return std::optional{frost::app::UnityMonoDebugSelection{.player = true, .pid = 1, .port = 5555,
+            .assembly = dir.join("module.dll"), .pdb = dir.join("module.pdb"), .dotnet = dir.join("dotnet.exe")}};
+    };
+    WorkbenchRig rig(dir, options);
+    active = &rig;
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+                                dir.join("missing-csharp-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+                                dir.join("missing-lua-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    const auto before = rig.trust->snapshot(dir.path()).revision;
+    auto id = rig.workbench->registry().find("debug.attachUnity");
+    ASSERT_TRUE(id);
+    frost::input::ActionContext context;
+    context.trusted = true;
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
+#if defined(_WIN32) || defined(__linux__)
+    EXPECT_GT(rig.trust->snapshot(dir.path()).revision, before);
+#else
+    EXPECT_EQ(rig.trust->snapshot(dir.path()).revision, before); // Unsupported platform refuses before selection.
+#endif
+    EXPECT_TRUE(launcher.launches().empty());
+    EXPECT_FALSE(rig.workbench->debugController()->debugging());
+}
+
+TEST(WorkbenchEngine, Il2cppNativeProfileUsesNativeLaunchAndProvidedGeneratedSources) {
+    WorkDir dir("unity-il2cpp-native", "tiny_sln");
+    dir.write("Player.exe", "native fixture"); dir.write("GameAssembly.dll", "module fixture");
+    dir.write("GameAssembly.pdb", "symbol fixture"); dir.write("generated/Code.cpp", "int Generated() { return 42; }");
+    dir.write("generated/Code.cs", "class Code {}");
+    frost::debug::FakeDebugAdapter adapter;
+    frost::debug::scriptProgram(adapter, {.sourcePath = dir.join("generated/Code.cpp"), .runsForever = true});
+    frost::io::ScriptedProcessLauncher launcher;
+    RigOptions options; options.disableProjectEvaluation = true; options.launcher = &launcher;
+    options.workbench.selectUnityNativeDebug = [&](std::string_view) {
+        return std::optional{frost::app::UnityIl2cppNativeSelection{dir.join("Player.exe"), dir.join("GameAssembly.dll"),
+            dir.join("GameAssembly.pdb"), dir.join("generated"), dir.join("original-generated")}};
+    };
+    options.workbench.debugAdapterFactory = [&](frost::debug::DapHandlers handlers) {
+        return frost::Result<std::unique_ptr<frost::debug::IDebugAdapterClient>>(
+            frost::debug::makeDapClient(adapter.transport(), std::move(handlers)));
+    };
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+        dir.join("missing-csharp-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+        dir.join("missing-lua-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    auto& breakpoints = rig.workbench->debugController()->breakpoints();
+    const auto generated = dir.join("generated/Code.cpp");
+    const auto cppBreakpoint = breakpoints.add(generated, 1);
+    ASSERT_TRUE(cppBreakpoint);
+    ASSERT_TRUE(rig.workbench->debugController()->breakpoints().add(dir.join("generated/Code.cs"), 1));
+    auto id = rig.workbench->registry().find("debug.unityIl2cppNative"); ASSERT_TRUE(id);
+    frost::input::ActionContext context; context.trusted = true;
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&] { return !adapter.argumentsOf("launch").empty(); }));
+    const auto arguments = adapter.argumentsOf("launch").front();
+    EXPECT_EQ(arguments.stringAt("program"), dir.join("Player.exe"));
+    EXPECT_EQ(arguments.stringAt("type"), "lldb-dap");
+    const auto* map = arguments.find("sourceMap"); ASSERT_TRUE(map); ASSERT_EQ(map->size(), 1u);
+    const auto* commands = arguments.find("preRunCommands"); ASSERT_TRUE(commands); ASSERT_EQ(commands->size(), 1u);
+    ASSERT_TRUE(waitFor([&] { return !adapter.argumentsOf("configurationDone").empty(); }));
+    const auto sourceRequests = adapter.argumentsOf("setBreakpoints");
+    ASSERT_EQ(sourceRequests.size(), 1u);
+    const auto* source = sourceRequests.front().find("source");
+    ASSERT_TRUE(source);
+    EXPECT_EQ(source->stringAt("path"), generated);
+
+    ASSERT_TRUE(frost::io::realFileSystem().removeFile(generated));
+    ASSERT_TRUE(breakpoints.remove(*cppBreakpoint));
+    ASSERT_TRUE(waitFor([&] { return adapter.argumentsOf("setBreakpoints").size() == 2; }));
+    const auto clearRequests = adapter.argumentsOf("setBreakpoints");
+    const auto* clearedSource = clearRequests.back().find("source");
+    ASSERT_TRUE(clearedSource);
+    EXPECT_EQ(clearedSource->stringAt("path"), generated);
+    const auto* clearedBreakpoints = clearRequests.back().find("breakpoints");
+    ASSERT_TRUE(clearedBreakpoints);
+    EXPECT_EQ(clearedBreakpoints->size(), 0u);
+    EXPECT_TRUE(launcher.launches().empty()); // The explicit native test adapter owns this protocol fixture.
+    rig.workbench->debugController()->stop();
+}
+TEST(WorkbenchEngine, Il2cppNativePickerRevocationNeverStartsAdapter) {
+    WorkDir dir("unity-il2cpp-native-revoked", "tiny_sln");
+    WorkbenchRig* active = nullptr;
+    bool adapterStarted = false;
+    RigOptions options; options.disableProjectEvaluation = true;
+    options.workbench.selectUnityNativeDebug = [&](std::string_view) {
+        EXPECT_TRUE(active->trust->untrust(dir.path())); EXPECT_TRUE(active->trust->trust(dir.path()));
+        return std::optional{frost::app::UnityIl2cppNativeSelection{dir.join("Player.exe"), dir.join("GameAssembly.dll"),
+            dir.join("GameAssembly.pdb"), dir.join("generated"), ""}};
+    };
+    options.workbench.debugAdapterFactory = [&](frost::debug::DapHandlers) -> frost::Result<std::unique_ptr<frost::debug::IDebugAdapterClient>> {
+        adapterStarted = true; return frost::fail(frost::ErrorCode::IoError, "must not start");
+    };
+    WorkbenchRig rig(dir, options); active = &rig;
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsManagedServerPath,
+        dir.join("missing-csharp-server.dll")));
+    ASSERT_TRUE(rig.settings->set(frost::settings::Scope::Application, frost::settings::key::toolsLuaLanguageServerPath,
+        dir.join("missing-lua-server.exe")));
+    ASSERT_TRUE(rig.trust->trust(dir.path())); ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
+    auto id = rig.workbench->registry().find("debug.unityIl2cppNative"); ASSERT_TRUE(id);
+    frost::input::ActionContext context; context.trusted = true;
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
+    EXPECT_FALSE(adapterStarted);
+}
+} // namespace

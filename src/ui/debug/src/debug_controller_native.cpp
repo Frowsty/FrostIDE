@@ -182,7 +182,8 @@ Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& targe
                                                  rpc::Json arguments, std::string adapterId,
                                                  debug::DebugTargetMode mode, bool readOnly,
                                                  std::function<Result<void>()> launchAdmission,
-                                                 const std::function<bool()>& ownerAdmission) {
+                                                 const std::function<bool()>& ownerAdmission,
+                                                 std::function<bool(std::string_view)> sourceAllowed) {
     const bool admitted = ownerAdmission ? ownerAdmission() : (!m_hooks.mayStart || m_hooks.mayStart());
     if (m_pendingRun || m_alternatePending || !admitted)
         return fail(ErrorCode::Busy, "Another run or debug launch is still preparing");
@@ -215,9 +216,10 @@ Result<void> DebugController::startAdapterTarget(const debug::DebugTarget& targe
         target.name, target.program, display,
         [this, trust = m_options.trust, trustRoots = std::move(roots), factory = std::move(factory),
          arguments = std::move(arguments), adapterId, actualMode, readOnly,
-         launchAdmission = std::move(launchAdmission)](
+         launchAdmission = std::move(launchAdmission), sourceAllowed = std::move(sourceAllowed)](
             debug::DebugSessionCallbacks callbacks) mutable -> Result<std::unique_ptr<debug::DebugSession>> {
-            debug::DebugSessionOptions options;
+            auto options = adapterId == "lldb-dap" ? debug::lldbDapSessionOptions(actualMode) : debug::DebugSessionOptions{};
+            options.sourceAllowed = std::move(sourceAllowed);
             options.adapterId = adapterId;
             options.targetMode = actualMode;
             options.readOnly = readOnly;

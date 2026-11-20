@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Git integration for the actual application workbench.
 #include "git_integration.hpp"
+#include "unity_yaml_merge.hpp"
 
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
@@ -39,6 +40,8 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFontDatabase>
+#include <QFileDialog>
+#include <QPointer>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -824,22 +827,37 @@ void GitIntegration::showResolveConflictsDialog() {
         return sides;
     };
     const auto applyResolved = [&](const std::string& absolute, const std::string& relative,
-        const std::string& resolved, const ConflictSides& source, bool deleted = false) -> bool {
+                                   const std::string& resolved, const ConflictSides& source,
+                                   bool deleted = false) -> bool {
         if (!source.valid || source.generation != m_projectGeneration || m_shutdown || !m_controller || m_controller->busy() ||
             !m_workbench.m_services.trust.isTrusted(m_root) || !m_workbench.m_services.trust.isTrusted(m_controller->info().workTree) ||
-            !m_workbench.m_services.trust.isTrusted(absolute)) { report("Resolve requires the same idle trusted repository"); return false; }
-        if (auto allowed = allowWrite(absolute); !allowed) { report(allowed.error().message()); return false; }
+            !m_workbench.m_services.trust.isTrusted(absolute)) {
+            report("Resolve requires the same idle trusted repository");
+            return false;
+        }
+        if (auto allowed = allowWrite(absolute); !allowed) {
+            report(allowed.error().message());
+            return false;
+        }
         auto target = comparisonTarget(m_workbench.m_services.fs, absolute);
-        if (!target) { report(target.error().message()); return false; }
-        if (!m_workbench.m_services.trust.isTrusted(*target)) { report("The merge output target is not trusted"); return false; }
+        if (!target) {
+            report(target.error().message());
+            return false;
+        }
+        if (!m_workbench.m_services.trust.isTrusted(*target)) {
+            report("The merge output target is not trusted");
+            return false;
+        }
         const auto& repository = m_controller->service().repository();
         if (auto relativePath = repository.relativePath(absolute); !relativePath || *relativePath != relative) {
-            report("Conflict path no longer belongs to this repository"); return false;
+            report("Conflict path no longer belongs to this repository");
+            return false;
         }
         m_workbench.checkExternalChanges();
         for (const auto& document : m_workbench.m_documents->documents())
             if (!document->untitled() && document->dirty() && fileKey(m_workbench.m_services.fs, document->path()) == fileKey(m_workbench.m_services.fs, absolute)) {
-                report("Save or close the unsaved editor before resolving this conflict"); return false;
+                report("Save or close the unsaved editor before resolving this conflict");
+                return false;
             }
         auto stages = readStages(relative);
         auto indexPath = io::joinPath(m_controller->info().gitDir, "index");
@@ -847,26 +865,43 @@ void GitIntegration::showResolveConflictsDialog() {
         auto disk = m_workbench.m_services.fs.readFile(absolute);
         if (!stages || !index || *stages != source.stages || *index != source.index ||
             (!disk && disk.error().code() != ErrorCode::NotFound) || (disk ? std::optional<std::string>(*disk) : std::nullopt) != source.disk) {
-            report("The file or Git index changed while merging; reopen the conflict before applying"); return false;
+            report("The file or Git index changed while merging; reopen the conflict before applying");
+            return false;
         }
         if (deleted) {
-            if (disk) if (auto removed = m_workbench.m_services.fs.removeFile(absolute); !removed) { report(removed.error().message()); return false; }
+            if (disk)
+                if (auto removed = m_workbench.m_services.fs.removeFile(absolute); !removed) {
+                    report(removed.error().message());
+                    return false;
+                }
         } else {
             document::FileDocument* document = nullptr;
             if (disk) {
                 auto opened = m_workbench.m_documents->open(absolute);
-                if (!opened) { report(opened.error().message()); return false; }
+                if (!opened) {
+                    report(opened.error().message());
+                    return false;
+                }
                 document = *opened;
-            } else document = &m_workbench.m_documents->createUntitled({});
+            } else
+                document = &m_workbench.m_documents->createUntitled({});
             auto changed = document->document().replace({ByteOffset{0}, document->document().text().size()}, resolved, {});
-            if (!changed) { report(changed.error().message()); return false; }
+            if (!changed) {
+                report(changed.error().message());
+                return false;
+            }
             auto saved = disk ? m_workbench.m_documents->save(*document) : m_workbench.m_documents->saveAs(*document, absolute);
             if (!saved) {
                 static_cast<void>(document->document().undo());
-                if (auto* view = m_workbench.m_editors->find(*document)) view->reloadFromDocument();
-                report(saved.error().message()); return false;
+                if (auto* view = m_workbench.m_editors->find(*document))
+                    view->reloadFromDocument();
+                report(saved.error().message());
+                return false;
             }
-            if (auto* view = m_workbench.m_editors->find(*document)) { view->reloadFromDocument(); view->markSaved(); }
+            if (auto* view = m_workbench.m_editors->find(*document)) {
+                view->reloadFromDocument();
+                view->markSaved();
+            }
         }
         vcs::GitInvocation stage;
         stage.arguments = {"add", "-A", "--", relative};
@@ -876,7 +911,8 @@ void GitIntegration::showResolveConflictsDialog() {
         if (!staged || !staged->succeeded()) {
             report(staged ? vcs::gitFailure("Stage resolved file", *staged).message() : staged.error().message());
             // The chosen file is retained; never claim that a failed git add resolved the index.
-            m_controller->refreshStatus(); return false;
+            m_controller->refreshStatus();
+            return false;
         }
         m_workbench.checkExternalChanges();
         m_controller->refreshStatus();
@@ -884,7 +920,9 @@ void GitIntegration::showResolveConflictsDialog() {
         return true;
     };
 
-    QDialog dialog(m_workbench.m_window);
+    QPointer<GitIntegration> owner(this);
+    QDialog dialog;
+    connect(this, &QObject::destroyed, &dialog, &QDialog::reject);
     dialog.setObjectName(QStringLiteral("gitResolveConflictsDialog"));
     dialog.setWindowTitle(tr("Resolve Conflicts"));
     dialog.resize(760, 480);
@@ -908,6 +946,9 @@ void GitIntegration::showResolveConflictsDialog() {
     actionColumn->addWidget(acceptYoursBtn);
     actionColumn->addWidget(acceptTheirsBtn);
     actionColumn->addWidget(mergeBtn);
+    auto* unityBtn = new QPushButton(tr("UnityYAMLMerge…"), &dialog);
+    unityBtn->setObjectName(QStringLiteral("unityYamlMergeButton"));
+    actionColumn->addWidget(unityBtn);
     actionColumn->addStretch(1);
     bodyLayout->addLayout(actionColumn);
     mainLayout->addLayout(bodyLayout, 1);
@@ -936,11 +977,15 @@ void GitIntegration::showResolveConflictsDialog() {
     if (list->count() > 0)
         list->setCurrentRow(0);
 
-    const auto updateDialogState = [list, acceptYoursBtn, acceptTheirsBtn, mergeBtn, emptyLabel] {
+    const auto updateDialogState = [list, acceptYoursBtn, acceptTheirsBtn, mergeBtn, unityBtn, emptyLabel] {
         const bool hasSelection = list->currentItem() != nullptr;
         acceptYoursBtn->setEnabled(hasSelection);
         acceptTheirsBtn->setEnabled(hasSelection);
         mergeBtn->setEnabled(hasSelection);
+        const auto selected = hasSelection ? list->currentItem()->data(Qt::UserRole + 1).toString() : QString{};
+        unityBtn->setEnabled(hasSelection && (selected.endsWith(QStringLiteral(".unity")) ||
+                                              selected.endsWith(QStringLiteral(".prefab")) ||
+                                              selected.endsWith(QStringLiteral(".meta"))));
         emptyLabel->setVisible(list->count() == 0);
     };
     connect(list, &QListWidget::currentRowChanged, &dialog, [updateDialogState](int) { updateDialogState(); });
@@ -994,6 +1039,92 @@ void GitIntegration::showResolveConflictsDialog() {
         }
     };
 
+    connect(unityBtn, &QPushButton::clicked, &dialog, [&] {
+        auto* item = list->currentItem();
+        if (!item || !m_controller || m_controller->busy())
+            return;
+        const auto absolute = item->data(Qt::UserRole).toString().toStdString();
+        const auto relative = item->data(Qt::UserRole + 1).toString().toStdString();
+        if (auto allowed = allowWrite(absolute); !allowed) {
+            report(allowed.error().message());
+            return;
+        }
+        const auto generation = m_projectGeneration;
+        const auto selected =
+            QFileDialog::getOpenFileName(&dialog, tr("Select installed UnityYAMLMerge"), QString{},
+                                         tr("UnityYAMLMerge (UnityYAMLMerge.exe UnityYAMLMerge);;All files (*)"));
+        if (!owner || selected.isEmpty())
+            return;
+        if (generation != m_projectGeneration || !m_controller || m_controller->busy()) {
+            report("The Git project changed while choosing UnityYAMLMerge");
+            return;
+        }
+        auto* trust = &m_workbench.m_services.trust;
+        const auto root = m_root;
+        const auto grant = trust->snapshot(root);
+        if (!grant.trusted) {
+            report("Trust this Unity project before running UnityYAMLMerge");
+            return;
+        }
+        UnityMergeWork work{m_workbench.m_services.fs,
+                            m_workbench.m_services.launcher,
+                            m_controller->service().repository().runner(),
+                            root,
+                            m_controller->info().workTree,
+                            m_controller->info().gitDir,
+                            absolute,
+                            relative,
+                            selected.toStdString(),
+                            [trust, root, revision = grant.revision] {
+                                const auto current = trust->snapshot(root);
+                                return current.trusted && current.revision == revision;
+                            }};
+        auto preview = prepareUnityMergeInBackground(&dialog, work);
+        if (!owner)
+            return;
+        if (!preview) {
+            report(preview.error().message());
+            return;
+        }
+        if (generation != m_projectGeneration) {
+            report("The Git project changed during UnityYAMLMerge");
+            return;
+        }
+        auto result = showUnityMergePreview(
+            &dialog, *preview, [&, work, generation, absolute, relative](std::string_view output) -> Result<void> {
+                if (!owner)
+                    return fail(ErrorCode::Cancelled, "Unity merge owner was closed");
+                if (generation != m_projectGeneration || !work.admitted())
+                    return fail(ErrorCode::Untrusted, "Unity merge project or trust changed");
+                auto target = m_workbench.m_services.fs.physicalPath(absolute),
+                     tool = m_workbench.m_services.fs.physicalPath(work.program),
+                     physicalRoot = m_workbench.m_services.fs.physicalPath(work.root);
+                auto status = m_workbench.m_services.fs.status(work.program);
+                if (!target || *target != preview->physicalTarget || !physicalRoot ||
+                    *physicalRoot != preview->physicalRoot || !tool || *tool != preview->physicalProgram || !status ||
+                    *status != preview->programStatus)
+                    return fail(ErrorCode::Busy, "Unity merge target or selected tool identity changed");
+                ConflictSides source;
+                source.valid = true;
+                source.generation = generation;
+                source.index = preview->index;
+                source.stages = preview->stages;
+                source.disk = preview->disk;
+                if (!applyResolved(absolute, relative, std::string(output), source))
+                    return fail(ErrorCode::Busy, "Unity merge apply or Git staging failed; see notifications");
+                return {};
+            });
+        if (!owner)
+            return;
+        if (!result) {
+            report(result.error().message());
+            return;
+        }
+        if (*result) {
+            delete list->takeItem(list->row(item));
+            updateDialogState();
+        }
+    });
     connect(mergeBtn, &QPushButton::clicked, &dialog, [&] { openThreeWayMerge(list->currentItem()); });
     connect(list, &QListWidget::itemDoubleClicked, &dialog, openThreeWayMerge);
 

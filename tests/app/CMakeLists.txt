@@ -25,7 +25,9 @@
 frost_add_test(app_tests QT
     SOURCES agent_bridge_test.cpp command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp engine_shader_requester_test.cpp stall_hooks_test.cpp
             workbench_project_helpers_test.cpp cmake_kit_test.cpp standalone_build_backend_test.cpp
-            settings_import_test.cpp hosting_cli_test.cpp hosting_review_test.cpp managed_tools_window_test.cpp
+            unity_events_test.cpp unity_tests_window_test.cpp settings_import_test.cpp hosting_cli_test.cpp hosting_review_test.cpp managed_tools_window_test.cpp
+
+            dxc_profile_test.cpp
     DEPS frost::app frost::diag frost::io)
 target_link_libraries(app_tests PRIVATE Qt6::Network)
 # tests/support/scratch_dir.hpp (the persistent services' data directory).
@@ -177,10 +179,10 @@ set_tests_properties(UpdateState.IndependentProcessesPreserveHigherFloor PROPERT
 # Real isolated scratch Git repositories, never the user's project or remotes.
 file(TO_CMAKE_PATH "${FROST_GIT_EXECUTABLE}" _frost_app_git)
 frost_add_test(app_workbench_git_tests QT
-    SOURCES workbench_git_test.cpp
+    SOURCES workbench_git_test.cpp unity_yaml_merge_test.cpp
     DEPS frost::app frost::ui_vcs frost::vcs frost::io
     LABELS integration git)
-target_include_directories(app_workbench_git_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_include_directories(app_workbench_git_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_git_tests PRIVATE ${_frost_workbench_definitions} FROST_VCS_GIT="${_frost_app_git}")
 
 if(WIN32)
@@ -471,9 +473,28 @@ frost_add_test(app_workbench_project_language_tests QT
 target_include_directories(app_workbench_project_language_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_project_language_tests PRIVATE ${_frost_workbench_definitions})
 
+# Original helper boundary coverage; tests launch it only in an explicitly resumed test phase.
+frost_add_test(app_mono_held_reader_tests QT
+    SOURCES mono_held_reader_test.cpp unity_mono_rebind_test.cpp unity_native_profile_test.cpp
+    DEPS frost::app frost::io
+    LABELS integration)
+target_include_directories(app_mono_held_reader_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_mono_held_reader_tests PRIVATE FROST_HELD_READER="$<TARGET_FILE:frost_held_read>")
+add_dependencies(app_mono_held_reader_tests frost_held_read)
 # RUN-12 later genuine instrumented selected-run/action/gutter journey.
 frost_add_test(app_workbench_native_coverage_tests QT SOURCES workbench_native_coverage_test.cpp
     DEPS frost::app frost::run frost::lang frost::io frost::sched LABELS integration)
 target_include_directories(app_workbench_native_coverage_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_native_coverage_tests PRIVATE ${_frost_workbench_definitions}
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+# Source-authored opt-in actual installed DXC evidence: no discovery, download, or default execution.
+set(FROST_TEST_DXC "" CACHE FILEPATH "Explicit installed DXC for compiler diagnostic acceptance")
+if(FROST_TEST_DXC)
+    frost_add_test(app_dxc_installed_tests QT SOURCES dxc_profile_test.cpp DEPS frost::app frost::io LABELS integration)
+    target_include_directories(app_dxc_installed_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(app_dxc_installed_tests PRIVATE FROST_TEST_DXC="${FROST_TEST_DXC}")
+endif()
+
+frost_add_test(app_workbench_dxc_tests QT SOURCES workbench_dxc_test.cpp DEPS frost::app frost::lang frost::io LABELS integration)
+target_include_directories(app_workbench_dxc_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_workbench_dxc_tests PRIVATE ${_frost_workbench_definitions})

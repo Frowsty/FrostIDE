@@ -21,6 +21,8 @@ enum class Operation {
     Local,
     Step,
     ClearStep,
+    Exception,
+    ClearException,
     Dispose
 };
 struct Ticket {
@@ -47,6 +49,7 @@ public:
     [[nodiscard]] Result<void> reloaded(bool suspended) { return m_state.reloaded(suspended); }
     void close() noexcept;
     [[nodiscard]] std::optional<std::uint32_t> activeStep() const noexcept { return m_step; }
+    [[nodiscard]] std::optional<std::uint32_t> activeException() const noexcept { return m_exception; }
     [[nodiscard]] bool ownsBreakpoint(std::uint32_t id) const noexcept { return m_breakpoints.contains(id); }
     [[nodiscard]] bool uncleanClose() const noexcept { return m_unclean; }
 
@@ -58,7 +61,7 @@ private:
     };
     SessionState m_state;
     std::optional<Pending> m_pending;
-    std::optional<std::uint32_t> m_step;
+    std::optional<std::uint32_t> m_step, m_exception;
     std::unordered_set<std::uint32_t> m_breakpoints;
     bool m_unknownRequest = false;
     bool m_unclean = false;

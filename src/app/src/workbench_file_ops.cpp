@@ -10,6 +10,7 @@
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/lang/unity_assets.hpp"
 #include "frost/project/project_edit.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
@@ -44,11 +45,16 @@ QString text(const char* source) { return ui::qtr("frost::app::Workbench", sourc
 
 QString qs(std::string_view utf8) { return QString::fromUtf8(utf8.data(), static_cast<qsizetype>(utf8.size())); }
 
+bool unityAssetPath(io::IFileSystem& fs, const std::string& root, std::string_view path) {
+    if (root.empty() || !fs.exists(root + "/ProjectSettings/ProjectVersion.txt").value_or(false)) return false;
+    return lang::isUnityAssetsPath(root, path);
+}
 bool engineAssetDirectory(io::IFileSystem& fs, std::string_view path) {
     return lang::locateFrostEngineAsset(fs, path).has_value() ||
            (qs(io::fileName(path)).compare(QStringLiteral("Assets"), Qt::CaseInsensitive) == 0 &&
             lang::isFrostEngineProjectRoot(fs, io::parentPath(path)));
 }
+
 
 } // namespace
 
@@ -121,6 +127,8 @@ Result<std::string> Workbench::renameItem(std::string_view oldPath, std::string_
         return std::unexpected(std::move(status.error()));
     }
     const bool isDir = status->type == io::FileType::Directory;
+    if (unityAssetPath(m_services.fs, m_projectRoot, canonicalOld) && (isDir || canonicalOld.ends_with(".meta")))
+        return fail(ErrorCode::Unsupported, "Rename the Unity asset file; folder and direct .meta operations require Unity");
     if (lang::isFmetaPath(canonicalOld)) {
         Error err(ErrorCode::InvalidArgument,
                   "cannot rename or move a .fmeta file directly; rename or move the asset itself");
@@ -232,6 +240,8 @@ Result<void> Workbench::deleteItem(std::string_view path) {
         return std::unexpected(std::move(status.error()));
     }
     const bool isDir = status->type == io::FileType::Directory;
+    if (unityAssetPath(m_services.fs, m_projectRoot, canonical))
+        return fail(ErrorCode::Unsupported, "Delete Unity assets in Unity; this editor has no atomic source/meta delete receipt yet");
     auto deletePlan = lang::planFmetaDelete(m_services.fs, canonical);
     if (!deletePlan) {
         notify(text("Cannot delete %1").arg(qs(io::fileName(canonical))), qs(deletePlan.error().message()),
@@ -426,6 +436,10 @@ void Workbench::movePhysicalPathsToDirectory(const std::vector<std::string>& sou
                    ui::NotificationKind::Warning);
             continue;
         }
+        if (unityAssetPath(m_services.fs, m_projectRoot, canonicalOld) && (isDir || canonicalOld.ends_with(".meta"))) {
+            notify(text("Cannot move Unity asset"), text("Move the asset file; folders and direct .meta moves require Unity."), ui::NotificationKind::Warning);
+            continue;
+        }
         const std::string oldParent(io::parentPath(canonicalOld));
         if (lang::documentKey(oldParent) == lang::documentKey(canonicalTargetDir)) {
             continue;
@@ -582,6 +596,10 @@ void Workbench::pasteClipboardIntoDirectory(const std::string& targetDirectory, 
     }
 
     const std::string canonicalTargetDir = m_documentRegistry->canonicalize(targetDirectory);
+    if (unityAssetPath(m_services.fs, m_projectRoot, canonicalTargetDir)) {
+        notify(text("Cannot paste Unity assets"), text("Duplicate assets in Unity so each copy receives its own GUID."), ui::NotificationKind::Warning);
+        return;
+    }
     std::vector<std::string> createdPaths;
     for (const std::string& src : m_clipboardPaths) {
         auto st = m_services.fs.status(src);
@@ -632,6 +650,10 @@ void Workbench::duplicatePathInExplorer(const std::string& sourcePath, bool isDi
         return;
     }
     const std::string canonicalSrc = m_documentRegistry->canonicalize(sourcePath);
+    if (unityAssetPath(m_services.fs, m_projectRoot, canonicalSrc)) {
+        notify(text("Cannot duplicate Unity asset"), text("Duplicate assets in Unity so each copy receives its own GUID."), ui::NotificationKind::Warning);
+        return;
+    }
     auto st = m_services.fs.status(canonicalSrc);
     if (!st) {
         notify(text("Cannot duplicate"), qs(st.error().message()), ui::NotificationKind::Error);

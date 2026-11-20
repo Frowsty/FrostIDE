@@ -75,9 +75,9 @@ bool sendAll(TestSocket s, const std::vector<std::uint8_t>& data) {
 class ScriptedMono {
 public:
     explicit ScriptedMono(bool badImage = false, bool failResume = false, bool failSecondClear = false,
-                          bool stopAfterResume = false)
+                          bool stopAfterResume = false, bool exceptionStop = false, bool childDomain = false, bool firstSourceEmpty = false)
         : badImage(badImage), failResume(failResume), failSecondClear(failSecondClear),
-          stopAfterResume(stopAfterResume) {
+          stopAfterResume(stopAfterResume), exceptionStop(exceptionStop), childDomain(childDomain), firstSourceEmpty(firstSourceEmpty) {
 #ifdef _WIN32
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
@@ -118,8 +118,9 @@ public:
         module->moduleId = "module";
         module->image = "image";
         module->pdb = "pdb";
-        module->sources = {"/owned/a.cs"};
+        module->sources = firstSourceEmpty ? std::vector<std::string>{"/owned/AssemblyInfo.cs", "/owned/a.cs"} : std::vector<std::string>{"/owned/a.cs"};
         module->points = {{0x06000001, 0, 10, 4}, {0x06000001, 0, 11, 8}};
+        if (firstSourceEmpty) for (auto& point : module->points) point.sourceIndex = 1;
         return {module, [this](MonoDeadline deadline, const std::stop_token& stop) {
                     return BinaryLoopback::connect(port, deadline, stop,
                                                    [this](auto, auto, auto, const auto&) -> Result<void> {
@@ -176,8 +177,17 @@ private:
             } else if (set == 20 && command == 1) {
                 put32(payload, 1);
             } else if (set == 20 && command == 3) {
-                put32(payload, 1);
-                put32(payload, 2);
+                put32(payload, childDomain ? 0 : 1);
+                if (!childDomain) put32(payload, 2);
+            } else if (set == 1 && command == 11) {
+                const bool empty = firstSourceEmpty && body.size() >= 4 && get32(body.data()) <= body.size() - 4 &&
+                    std::string_view(reinterpret_cast<const char*>(body.data() + 4), get32(body.data())) == "/owned/AssemblyInfo.cs";
+                put32(payload, empty ? 0 : 1); if (!empty) put32(payload, 4);
+            } else if (set == 23 && command == 1) {
+                put32(payload, 0); put32(payload, 1); payload.push_back('C'); put32(payload, 1); payload.push_back('C');
+                put32(payload, 2); put32(payload, 1); put32(payload, 0); put32(payload, 0); put32(payload, 0x02000001);
+                payload.push_back(0); put32(payload, 0); payload.push_back(0);
+                put32(payload, 0); put32(payload, 0); put32(payload, 0);
             } else if (set == 21 && (command == 1 || command == 8 || command == 10)) {
                 std::string value = command == 1   ? "/owned/a.dll"
                                     : command == 8 ? (badImage ? "other" : "image")
@@ -194,6 +204,13 @@ private:
                 put32(payload, 3);
                 put32(payload, 4);
                 payload.push_back(0);
+            } else if (set == 22 && command == 5) {
+                put32(payload, 0); // no nested scopes
+                put32(payload, 1); put32(payload, 1); // one local, runtime type id
+                put32(payload, 5); payload.insert(payload.end(), {'c','o','u','n','t'});
+                put32(payload, 0); put32(payload, 16);
+            } else if (set == 16 && command == 1) {
+                payload.push_back(8); put32(payload, 42); // actual peer Int32 response
             } else if (set == 15 && command == 2) {
                 if (++clears == 2 && failSecondClear)
                     error = 1;
@@ -212,9 +229,10 @@ private:
             if (!sendAll(peer, reply))
                 break;
             if (set == 1 && command == 4 && stopAfterResume) {
-                const std::vector<std::uint8_t> event{0, 0, 0, 37, 0, 0, 0, 7, 0, 64, 100, 2, 0, 0, 0, 1, 10, 0, 0,
+                const std::vector<std::uint8_t> breakpointEvent{0, 0, 0, 37, 0, 0, 0, 7, 0, 64, 100, 2, 0, 0, 0, 1, 10, 0, 0,
                                                       0, 9, 0, 0,  0, 1, 0, 0, 0, 3,  0,   0, 0, 0, 0, 0, 0,  4};
-                if (!sendAll(peer, event))
+                const std::vector<std::uint8_t> exceptionEvent{0,0,0,29,0,0,0,7,0,64,100,2,0,0,0,1,13,0,0,0,9,0,0,0,1,0,0,0,42};
+                if (!sendAll(peer, exceptionStop ? exceptionEvent : breakpointEvent))
                     break;
                 stopAfterResume = false;
             }
@@ -225,7 +243,7 @@ private:
     }
     TestSocket listener = badSocket;
     std::jthread server;
-    bool badImage, failResume, failSecondClear, stopAfterResume;
+    bool badImage, failResume, failSecondClear, stopAfterResume, exceptionStop, childDomain, firstSourceEmpty;
     std::uint32_t nextBreakpoint = 9;
 #ifdef _WIN32
     bool winsock = false;
@@ -428,6 +446,108 @@ TEST(MonoDap, InitializesAndReportsConnectorFailureWithoutHanging) {
         (*client)->request("continue", {}, [&](Result<rpc::Json> result) { resumed.set_value(std::move(result)); }), 0);
     ASSERT_EQ(resume.wait_for(3s), std::future_status::ready);
     EXPECT_FALSE(resume.get());
+}
+} // namespace
+} // namespace frost::debug::mono
+
+namespace frost::debug::mono {
+namespace {
+TEST(MonoDap, UnsupportedBreakpointSemanticsDoNotInstallOrEndSession) {
+    ScriptedMono runtime;
+    ASSERT_NE(runtime.port, 0);
+    auto client = monoAdapterFactory(runtime.target())({});
+    ASSERT_TRUE(client);
+    ASSERT_TRUE(requestSync(**client, "attach"));
+    for (const auto* key : {"condition", "hitCondition", "logMessage"}) {
+        const auto args = rpc::Json::object()
+            .set("source", rpc::Json::object().set("path", "/owned/a.cs"))
+            .set("breakpoints", rpc::Json::array({rpc::Json::object().set("line", 10).set(key, "unsupported")}));
+        auto rejected = requestSync(**client, "setBreakpoints", args);
+        ASSERT_FALSE(rejected);
+        EXPECT_EQ(rejected.error().code(), ErrorCode::Unsupported);
+        EXPECT_FALSE((*client)->closed());
+    }
+    EXPECT_TRUE(requestSync(**client, "disconnect"));
+    EXPECT_TRUE(runtime.disposed);
+}
+
+TEST(MonoDap, EvaluateReadsOnlyCurrentFrameLocalAndRejectsExpressions) {
+    ScriptedMono runtime(false, false, false, true);
+    std::promise<void> stopped;
+    auto stop = stopped.get_future();
+    DapHandlers handlers;
+    handlers.onEvent = [&](std::string_view name, const rpc::Json&) { if (name == "stopped") stopped.set_value(); };
+    auto client = monoAdapterFactory(runtime.target())(std::move(handlers));
+    ASSERT_TRUE(client);
+    ASSERT_TRUE(requestSync(**client, "attach"));
+    ASSERT_TRUE(requestSync(**client, "setBreakpoints", rpc::Json::object()
+        .set("source", rpc::Json::object().set("path", "/owned/a.cs"))
+        .set("breakpoints", rpc::Json::array({rpc::Json::object().set("line", 10)}))));
+    ASSERT_TRUE(requestSync(**client, "continue"));
+    ASSERT_EQ(stop.wait_for(5s), std::future_status::ready);
+    auto stack = requestSync(**client, "stackTrace", rpc::Json::object().set("threadId", 1));
+    ASSERT_TRUE(stack);
+    const auto* frames = stack->find("stackFrames");
+    ASSERT_TRUE(frames); ASSERT_EQ(frames->size(), 1u);
+    const auto id = frames->items().front().integerAt("id"); ASSERT_TRUE(id);
+    auto evaluated = requestSync(**client, "evaluate", rpc::Json::object().set("frameId", *id).set("expression", "count"));
+    ASSERT_TRUE(evaluated);
+    EXPECT_EQ(evaluated->stringAt("result"), "42");
+    EXPECT_EQ(evaluated->stringAt("type"), "System.Int32");
+    EXPECT_FALSE(requestSync(**client, "evaluate", rpc::Json::object().set("frameId", *id).set("expression", "count++")));
+    EXPECT_TRUE(requestSync(**client, "continue"));
+    EXPECT_FALSE(requestSync(**client, "evaluate", rpc::Json::object().set("frameId", *id).set("expression", "count")));
+    EXPECT_TRUE(requestSync(**client, "disconnect"));
+}
+TEST(MonoDap, OwnedExceptionFilterProducesActualExceptionStopAndClearsBeforeDetach) {
+    ScriptedMono runtime(false, false, false, true, true);
+    std::promise<rpc::Json> stopped;
+    auto stop = stopped.get_future();
+    DapHandlers handlers;
+    handlers.onEvent = [&](std::string_view name, const rpc::Json& body) { if (name == "stopped") stopped.set_value(body); };
+    auto client = monoAdapterFactory(runtime.target())(std::move(handlers));
+    ASSERT_TRUE(client);
+    ASSERT_TRUE(requestSync(**client, "attach"));
+    ASSERT_TRUE(requestSync(**client, "setExceptionBreakpoints", rpc::Json::object().set("filters", rpc::Json::array({"uncaught"}))));
+    EXPECT_FALSE(requestSync(**client, "setExceptionBreakpoints", rpc::Json::object().set("filters", rpc::Json::array({"unknown"}))));
+    ASSERT_TRUE(requestSync(**client, "continue"));
+    ASSERT_EQ(stop.wait_for(5s), std::future_status::ready);
+    EXPECT_EQ(stop.get().stringAt("reason"), "exception");
+    auto info = requestSync(**client, "exceptionInfo", rpc::Json::object().set("threadId", 1));
+    ASSERT_TRUE(info); EXPECT_EQ(info->stringAt("exceptionId"), "Mono object 42");
+    EXPECT_EQ(info->stringAt("breakMode"), "unhandled");
+    EXPECT_FALSE(requestSync(**client, "exceptionInfo", rpc::Json::object().set("threadId", 2)));
+    EXPECT_TRUE(requestSync(**client, "disconnect"));
+    EXPECT_EQ(runtime.clears.load(), 1);
+    EXPECT_TRUE(runtime.disposed);
+}
+TEST(MonoDap, SourceTypeEvidenceFindsVerifiedAssemblyOutsideRootDomain) {
+    ScriptedMono runtime(false, false, false, false, false, true);
+    auto client = monoAdapterFactory(runtime.target())({}); ASSERT_TRUE(client);
+    EXPECT_TRUE(requestSync(**client, "attach"));
+    EXPECT_TRUE(requestSync(**client, "disconnect"));
+    EXPECT_TRUE(runtime.disposed);
+}
+TEST(MonoDap, ExceptionInfoRetainsStopTimeModeAfterFilterChange) {
+    ScriptedMono runtime(false, false, false, true, true);
+    std::promise<void> stopped; auto stop = stopped.get_future();
+    DapHandlers handlers;
+    handlers.onEvent = [&](std::string_view name, const rpc::Json&) { if (name == "stopped") stopped.set_value(); };
+    auto client = monoAdapterFactory(runtime.target())(std::move(handlers)); ASSERT_TRUE(client);
+    ASSERT_TRUE(requestSync(**client, "attach"));
+    ASSERT_TRUE(requestSync(**client, "setExceptionBreakpoints", rpc::Json::object().set("filters", rpc::Json::array({"all"}))));
+    ASSERT_TRUE(requestSync(**client, "continue"));
+    ASSERT_EQ(stop.wait_for(5s), std::future_status::ready);
+    ASSERT_TRUE(requestSync(**client, "setExceptionBreakpoints", rpc::Json::object().set("filters", rpc::Json::array({"uncaught"}))));
+    auto info = requestSync(**client, "exceptionInfo", rpc::Json::object().set("threadId", 1));
+    ASSERT_TRUE(info); EXPECT_EQ(info->stringAt("breakMode"), "always");
+    EXPECT_TRUE(requestSync(**client, "disconnect")); EXPECT_EQ(runtime.clears.load(), 2);
+}
+TEST(MonoDap, LaterVerifiedSourceFindsChildDomainAfterTypelessAssemblyInfo) {
+    ScriptedMono runtime(false, false, false, false, false, true, true);
+    auto client = monoAdapterFactory(runtime.target())({}); ASSERT_TRUE(client);
+    EXPECT_TRUE(requestSync(**client, "attach"));
+    EXPECT_TRUE(requestSync(**client, "disconnect")); EXPECT_TRUE(runtime.disposed);
 }
 } // namespace
 } // namespace frost::debug::mono

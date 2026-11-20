@@ -21,7 +21,7 @@ else()
 endif()
 
 frost_add_test(vcs_unit_tests
-    SOURCES
+    SOURCES conflict_sources_test.cpp
         line_changes_test.cpp
         runner_test.cpp
         status_test.cpp

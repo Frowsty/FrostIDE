@@ -28,6 +28,7 @@ public:
     [[nodiscard]] Result<std::vector<std::uint8_t>> rootDomain();
     [[nodiscard]] Result<std::vector<std::uint8_t>> domainAssemblies(std::uint32_t domain);
     [[nodiscard]] Result<std::vector<std::uint8_t>> types(std::string_view name);
+    [[nodiscard]] Result<std::vector<std::uint8_t>> typesForSource(std::string_view path);
     [[nodiscard]] Result<std::vector<std::uint8_t>> metadata(MetadataQuery query, std::uint32_t id);
     [[nodiscard]] Result<std::vector<std::uint8_t>> methodFromToken(std::uint32_t assembly, std::uint32_t token);
     [[nodiscard]] Result<std::vector<std::uint8_t>> breakpoint(std::uint32_t method, std::uint64_t offset);
@@ -37,6 +38,8 @@ public:
                                                           std::uint32_t ordinal);
     [[nodiscard]] Result<std::vector<std::uint8_t>> step(std::uint32_t thread);
     [[nodiscard]] Result<std::vector<std::uint8_t>> clearStep();
+    [[nodiscard]] Result<std::vector<std::uint8_t>> exceptions(std::uint32_t assembly, bool caught);
+    [[nodiscard]] Result<std::vector<std::uint8_t>> clearException();
     [[nodiscard]] Result<std::vector<std::uint8_t>> dispose();
     [[nodiscard]] const SessionState& state() const noexcept { return m_gate.state(); }
     [[nodiscard]] bool uncleanClose() const noexcept { return m_gate.uncleanClose(); }

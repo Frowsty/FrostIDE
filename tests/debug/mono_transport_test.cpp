@@ -2,6 +2,7 @@
 // Test Mono loopback transport and selected-process verification.
 #include "frost/debug/mono_transport.hpp"
 #include "frost/debug/mono_windows_peer.hpp"
+#include "frost/debug/mono_linux_peer.hpp"
 
 #include <gtest/gtest.h>
 
@@ -237,6 +238,8 @@ TEST(MonoTransport, ExpiredDeadlineRejectsBeforeConnect) {
     EXPECT_FALSE(called);
 }
 TEST(MonoTransport, PeerVerifierRejectsUnboundIdentity) {
+    EXPECT_FALSE(WindowsPeer::select(0, [] { return true; }));
+    EXPECT_FALSE(WindowsPeer::select(1, {}));
     EXPECT_FALSE(WindowsPeer::open(0, 1, [] { return true; }));
     EXPECT_FALSE(WindowsPeer::open(1, 0, [] { return true; }));
     EXPECT_FALSE(WindowsPeer::open(1, 1, {}));
@@ -248,6 +251,11 @@ TEST(MonoTransport, WindowsPeerBindsEstablishedTupleToHeldProcess) {
     const auto creation = std::uint64_t(created.dwLowDateTime) | (std::uint64_t(created.dwHighDateTime) << 32);
     EXPECT_FALSE(
         WindowsPeer::open(static_cast<std::uint32_t>(GetCurrentProcessId()), creation ^ 1, [] { return true; }));
+    auto selected = WindowsPeer::select(static_cast<std::uint32_t>(GetCurrentProcessId()), [] { return true; });
+    ASSERT_TRUE(selected);
+    EXPECT_EQ((*selected)->identity().pid, static_cast<std::uint32_t>(GetCurrentProcessId()));
+    EXPECT_EQ((*selected)->identity().creationTime, creation);
+    EXPECT_FALSE((*selected)->identity().image.empty());
     auto peerVerifier =
         WindowsPeer::open(static_cast<std::uint32_t>(GetCurrentProcessId()), creation, [] { return true; });
     ASSERT_TRUE(peerVerifier);
@@ -376,5 +384,40 @@ TEST(MonoTransport, CancellationDuringPostReceiveVerificationDiscardsResult) {
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error().code(), ErrorCode::Cancelled);
 }
+TEST(MonoTransport, LinuxSocketParserRequiresExactReverseEstablishedLoopbackAndUniqueInode) {
+    const std::string row = "0: 0100007F:15B3 0100007F:C001 01 0:0 00:0 0 1000 0 12345 1\n";
+    auto inode = linuxMonoSocketInode(row, 49153, 5555);
+    ASSERT_TRUE(inode); EXPECT_EQ(*inode, 12345u);
+    EXPECT_FALSE(linuxMonoSocketInode(row, 5555, 49153));
+    EXPECT_FALSE(linuxMonoSocketInode(row + row, 49153, 5555));
+    EXPECT_FALSE(linuxMonoSocketInode("0: 00000000:15B3 0100007F:C001 01 0:0 00:0 0 1000 0 12345\n", 49153, 5555));
+    EXPECT_FALSE(linuxMonoSocketInode("0: 0100007F:15B3 0100007F:C001 0A 0:0 00:0 0 1000 0 12345\n", 49153, 5555));
+}
+#ifdef __linux__
+TEST(MonoTransport, LinuxHeldProcessOwnsActualReverseSocketAndRevocationRefusesIo) {
+    Listener listener;
+    ASSERT_NE(listener.port, 0);
+    std::atomic<bool> current{true};
+    auto peer = LinuxPeer::select(static_cast<std::uint32_t>(::getpid()), [&] { return current.load(); });
+    ASSERT_TRUE(peer);
+    EXPECT_EQ((*peer)->identity().pid, static_cast<std::uint32_t>(::getpid()));
+    EXPECT_GT((*peer)->identity().startTime, 0u);
+    EXPECT_FALSE((*peer)->identity().image.empty());
+    std::jthread server([&] {
+        const auto accepted = listener.acceptOne();
+        if (accepted == invalid) return;
+        char byte = 0;
+        static_cast<void>(recv(accepted, &byte, 1, 0));
+        closeSocket(accepted);
+    });
+    auto stream = BinaryLoopback::connect(listener.port, std::chrono::steady_clock::now() + 3s, {},
+        [peer = *peer](auto local, auto remote, auto until, auto stop) { return peer->verify(local, remote, until, stop); });
+    ASSERT_TRUE(stream);
+    current.store(false);
+    const std::array<std::uint8_t,1> data{1};
+    EXPECT_FALSE((*stream)->write(data));
+    (*stream)->close();
+}
+#endif
 } // namespace
 } // namespace frost::debug::mono
