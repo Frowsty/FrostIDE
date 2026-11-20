@@ -6,6 +6,7 @@
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/project/vcxproj.hpp"
 
+#include "../support/directory_link.hpp"
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -19,7 +20,7 @@ class DependenciesReal : public testing::Test {
 protected:
     void SetUp() override {
         const auto suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-        root = io::joinPath(FROST_DEPENDENCY_WORK_PATH, suffix).value();
+        root = io::normalizePath(io::joinPath(FROST_DEPENDENCY_WORK_PATH, suffix).value()).value();
         ASSERT_TRUE(fs.createDirectories(root));
         auto opened = project::TrustStore::open(fs, io::joinPath(root, "trusted-roots.txt").value());
         ASSERT_TRUE(opened);
@@ -85,23 +86,23 @@ TEST_F(DependenciesReal, PhysicalOutputLinksAndRetargetedExecutablesRefuseBefore
             fs.writeFileAtomic(io::joinPath(sdk, "scripts/buildsystems/vcpkg.cmake").value(), "# fixture toolchain"));
     }
     const auto alias = io::joinPath(root, "sdk-alias").value();
-    std::error_code error;
-    std::filesystem::create_directory_symlink(io::toStdPath(sdkA).value(), io::toStdPath(alias).value(), error);
-    ASSERT_FALSE(error) << "Directory-link privilege is required: " << error.message();
+    ASSERT_NO_FATAL_FAILURE(test::makeDirectoryLink(alias, sdkA));
     DependencyRequest request{.manager = DependencyManager::Vcpkg,
                               .root = project,
                               .executable = io::joinPath(alias, "vcpkg").value(),
                               .input = io::joinPath(project, "vcpkg.json").value(),
                               .outputDirectory = "escape/installed",
-                              .triplet = "x64-windows"};
-    std::filesystem::create_directory_symlink(io::toStdPath(outside).value(),
-                                              io::toStdPath(io::joinPath(project, "escape").value()).value(), error);
-    ASSERT_FALSE(error);
+                              .localFeed = {},
+                              .triplet = "x64-windows",
+                              .hostProfile = {},
+                              .buildProfile = {}};
+    ASSERT_NO_FATAL_FAILURE(test::makeDirectoryLink(io::joinPath(project, "escape").value(), outside));
     EXPECT_FALSE(planDependencies(fs, request));
     const auto dangling = io::joinPath(project, "dangling").value();
-    std::filesystem::create_directory_symlink(io::toStdPath(io::joinPath(root, "missing").value()).value(),
-                                              io::toStdPath(dangling).value(), error);
-    ASSERT_FALSE(error);
+    const auto missing = io::joinPath(root, "missing").value();
+    ASSERT_TRUE(fs.createDirectories(missing));
+    ASSERT_NO_FATAL_FAILURE(test::makeDirectoryLink(dangling, missing));
+    ASSERT_TRUE(fs.removeDirectory(missing));
     request.outputDirectory = "dangling/installed";
     EXPECT_FALSE(planDependencies(fs, request));
     request.outputDirectory = ".frost/installed";
@@ -109,10 +110,10 @@ TEST_F(DependenciesReal, PhysicalOutputLinksAndRetargetedExecutablesRefuseBefore
     ASSERT_TRUE(plan);
     auto allowed = consent(*plan);
     ASSERT_TRUE(allowed);
+    std::error_code error;
     ASSERT_TRUE(std::filesystem::remove(io::toStdPath(alias).value(), error)); // Only the known link, never recursive.
     ASSERT_FALSE(error);
-    std::filesystem::create_directory_symlink(io::toStdPath(sdkB).value(), io::toStdPath(alias).value(), error);
-    ASSERT_FALSE(error);
+    ASSERT_NO_FATAL_FAILURE(test::makeDirectoryLink(alias, sdkB));
     io::ScriptedProcessLauncher launcher;
     EXPECT_FALSE(installDependencies(fs, launcher, *trust, *allowed));
     EXPECT_TRUE(launcher.launches().empty());
@@ -159,6 +160,8 @@ TEST_F(DependenciesReal, ConanCachedLocalRecipeGeneratesToolchainAndBuildsConsum
                               .executable = tool("FROST_TEST_CONAN"),
                               .input = io::joinPath(client, "conanfile.txt").value(),
                               .outputDirectory = ".frost/generated",
+                              .localFeed = {},
+                              .triplet = {},
                               .hostProfile = host.empty() ? defaultProfile : host,
                               .buildProfile = build.empty() ? defaultProfile : build};
     auto plan = planDependencies(fs, request);
@@ -183,7 +186,10 @@ TEST_F(DependenciesReal, VcpkgFilesystemRegistryInstallsAndConfiguresActualConsu
                               .executable = tool("FROST_TEST_VCPKG"),
                               .input = io::joinPath(project, "vcpkg.json").value(),
                               .outputDirectory = ".frost/installed",
-                              .triplet = triplet};
+                              .localFeed = {},
+                              .triplet = triplet,
+                              .hostProfile = {},
+                              .buildProfile = {}};
     auto plan = planDependencies(fs, request);
     ASSERT_TRUE(plan) << plan.error().describe();
     auto allowed = consent(*plan);
@@ -203,7 +209,10 @@ TEST_F(DependenciesReal, NativeNugetRestoresLocalArchiveAndMsbuildConsumesItsTar
                               .executable = tool("FROST_TEST_NUGET"),
                               .input = io::joinPath(project, "client/packages.config").value(),
                               .outputDirectory = "packages",
-                              .localFeed = io::joinPath(project, "feed").value()};
+                              .localFeed = io::joinPath(project, "feed").value(),
+                              .triplet = {},
+                              .hostProfile = {},
+                              .buildProfile = {}};
     auto plan = planDependencies(fs, request);
     ASSERT_TRUE(plan) << plan.error().describe();
     auto allowed = consent(*plan);

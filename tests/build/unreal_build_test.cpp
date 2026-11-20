@@ -14,7 +14,8 @@ UnrealBuildRequest request() {
     return {.tool = test::MemTree::path("Tools/dotnet"),
             .buildToolAssembly = test::MemTree::path("Engine/UnrealBuildTool.dll"),
             .projectFile = test::MemTree::path("Game With Spaces/Oracle.uproject"),
-            .target = "OracleEditor"};
+            .target = "OracleEditor",
+            .headerManifest = {}};
 }
 TEST(UnrealBuild, PreservesSelectedToolAndProjectAsSingleArguments) {
     auto input = request();

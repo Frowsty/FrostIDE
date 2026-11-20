@@ -40,18 +40,19 @@ TEST(ManagedPackages, PreservesRealFeedIdentityProblemsAndFrameworkVersions) {
     ASSERT_EQ(search->packages.size(), 1u);
     EXPECT_EQ(search->packages[0].source, "local");
     EXPECT_EQ(search->problems.size(), 1u);
-    const auto installed = parseManagedPackageReport(R"({"version":1,"projects":[{"path":"App.csproj","frameworks":[{"framework":"net10.0","topLevelPackages":[{"id":"Example","requestedVersion":"[1,3)","resolvedVersion":"2.0.0"
-}],"transitivePackages":[{"id":"Other","resolvedVersion":"1.0.0","vulnerabilities":[{"severity":"High","advisoryurl":"https://example.test/advisory"}]}]
-}]
-}]
-})", PackageQuery::Vulnerable);
+    const auto installed = parseManagedPackageReport(
+        R"json({"version":1,"projects":[{"path":"App.csproj","frameworks":[{"framework":"net10.0",
+          "topLevelPackages":[{"id":"Example","requestedVersion":"[1,3)","resolvedVersion":"2.0.0"}],
+          "transitivePackages":[{"id":"Other","resolvedVersion":"1.0.0",
+                                 "vulnerabilities":[{"severity":"High","advisoryurl":"https://example.test/advisory"}]}]
+        }]}]})json",
+        PackageQuery::Vulnerable);
     ASSERT_TRUE(installed);
-ASSERT_EQ(installed->packages.size(), 2u);
-EXPECT_EQ(installed->packages[0].framework, "net10.0");
-EXPECT_TRUE(installed->packages[1].transitive);
-EXPECT_NE(installed->packages[1].status.find("High"), std::string::npos);
-EXPECT_FALSE(parseManagedPackageReport(R"({"projects":[]})", PackageQuery::Installed));
-}
+    ASSERT_EQ(installed->packages.size(), 2u);
+    EXPECT_EQ(installed->packages[0].framework, "net10.0");
+    EXPECT_TRUE(installed->packages[1].transitive);
+    EXPECT_NE(installed->packages[1].status.find("High"), std::string::npos);
+    EXPECT_FALSE(parseManagedPackageReport(R"({"projects":[]})", PackageQuery::Installed));
 }
 TEST(ManagedPackages, InputSnapshotsEnforcePerFileBudgetBeforeParsingAndHonorCancellation) {
     test::MemTree tree;
@@ -66,3 +67,4 @@ TEST(ManagedPackages, InputSnapshotsEnforcePerFileBudgetBeforeParsingAndHonorCan
     ASSERT_FALSE(cancelled);
     EXPECT_EQ(cancelled.error().code(), ErrorCode::Cancelled);
 }
+} // namespace frost::build

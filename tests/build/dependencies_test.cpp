@@ -43,7 +43,9 @@ protected:
                 .input = path("project/vcpkg.json"),
                 .outputDirectory = ".frost/dependencies/vcpkg",
                 .localFeed = path("feed"),
-                .triplet = "x64-windows"};
+                .triplet = "x64-windows",
+                .hostProfile = {},
+                .buildProfile = {}};
     }
     ManualClock clock;
     io::MemFs fs{clock};
@@ -68,10 +70,10 @@ TEST_F(DependenciesTest, ChangedManifestOrTrustPreventsInvocationAfterConsent) {
     EXPECT_TRUE(launcher.launches().empty());
     plan = planDependencies(fs, request());
     ASSERT_TRUE(plan);
-    consent = consentDependencies(*plan, *trust);
-    ASSERT_TRUE(consent);
+    auto refreshedConsent = consentDependencies(*plan, *trust);
+    ASSERT_TRUE(refreshedConsent);
     ASSERT_TRUE(trust->untrust(path("feed")));
-    EXPECT_FALSE(installDependencies(fs, launcher, *trust, *consent));
+    EXPECT_FALSE(installDependencies(fs, launcher, *trust, *refreshedConsent));
     EXPECT_TRUE(launcher.launches().empty());
 }
 TEST_F(DependenciesTest, ConsentedInvocationReachesActualProcessContractAndCancellationPreventsIt) {
