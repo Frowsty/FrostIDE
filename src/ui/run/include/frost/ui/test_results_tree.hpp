@@ -32,6 +32,7 @@
 
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -54,6 +55,9 @@ public:
     void setTests(std::vector<run::DiscoveredTest> tests);
     // Lists the cases `--gtest_list_tests` gave for `test` below it (without results).
     void setFrameworkCases(const std::string& test, std::vector<run::FrameworkCase> cases);
+    // Replaces the tree with framework discovery grouped under a launch configuration.
+    // The configuration can show aggregate run status but is excluded from test counts.
+    void setFrameworkGroup(std::string configuration, std::vector<run::FrameworkCase> cases);
     [[nodiscard]] const std::vector<run::FrameworkCase>* frameworkCases(const std::string& test) const;
     void setGTestCases(const std::string& test, const std::vector<run::GTestCase>& cases);
     /*
@@ -109,6 +113,8 @@ signals:
 
 private:
     void rebuild();
+    void addFrameworkCaseItems(QTreeWidgetItem* item, const std::string& name,
+                               const std::vector<run::FrameworkCase>& cases);
     void showResult(QTreeWidgetItem* item, const run::TestResult& result);
     void showCases(QTreeWidgetItem* item, const run::TestResult& result);
     QTreeWidgetItem* addTestItem(const run::DiscoveredTest& test);
@@ -116,6 +122,7 @@ private:
     QTreeWidgetItem* groupFor(const QString& program);
 
     std::vector<run::DiscoveredTest> m_tests;
+    std::optional<std::string> m_frameworkGroup;
     std::vector<std::string> m_unlisted; // Named by a report, not by the last discovery.
     std::map<std::string, run::TestResult> m_results;
     std::map<std::string, std::vector<run::FrameworkCase>> m_frameworkCases;

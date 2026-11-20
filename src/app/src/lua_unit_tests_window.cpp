@@ -106,7 +106,6 @@ public:
         auto requested = io::normalizePath(path);
         if (!requested)
             return out;
-        auto parent = parentTest();
         for (const auto& c : m_cases)
             if (c.location) {
                 auto full = io::isAbsolutePath(c.location->file) ? Result<std::string>(c.location->file)
@@ -118,15 +117,15 @@ public:
                     QString::compare(qs(*normalized), qs(*requested),
                                      io::kNativePathStyle == io::PathStyle::Windows ? Qt::CaseInsensitive
                                                                                     : Qt::CaseSensitive) == 0)
-                    out.push_back({parent, c.name,
+                    out.push_back({{}, c.name,
                                    profile() == run::LuaTestProfile::Busted220 ? run::TestCaseFramework::Busted
                                                                                : run::TestCaseFramework::LuaUnit,
-                                   c.location->line, c.name});
+                                   c.location->line, c.name, m_generation});
             }
         return out;
     }
     Result<void> gutterRun(const run::GutterTestCase& c, bool debug) {
-        if (!current() || c.test != parentTest() ||
+        if (!current() || c.luaListingGeneration != m_generation ||
             c.framework != (profile() == run::LuaTestProfile::Busted220 ? run::TestCaseFramework::Busted
                                                                         : run::TestCaseFramework::LuaUnit))
             return fail(ErrorCode::InvalidArgument, "Lua gutter selection is stale");
@@ -152,19 +151,6 @@ private:
         auto plan = run::launchPlanFor(m_source->configuration);
         return plan ? plan->workingDirectory : std::string{};
     }
-    run::DiscoveredTest parentTest() const {
-        run::DiscoveredTest test;
-        if (!m_source)
-            return test;
-        test.name = m_source->configuration.name;
-        test.workingDirectory = workingDirectory();
-        auto plan = run::launchPlanFor(m_source->configuration);
-        if (plan) {
-            test.command = {plan->program};
-            test.command.insert(test.command.end(), plan->arguments.begin(), plan->arguments.end());
-        }
-        return test;
-    }
     run::TestRunner::LuaFrameworkRequest request(std::vector<std::string> cases = {}) const {
         return {m_source->configuration, profile(), m_context.scratchDirectory, m_context.discoveryBridge,
                 std::move(cases)};
@@ -189,7 +175,8 @@ private:
         auto names = selection();
         m_selected->setEnabled(ready && !names.empty());
         m_debug->setEnabled(ready && names.size() == 1 && static_cast<bool>(m_context.debug));
-        m_failed->setEnabled(ready && !m_tree->failedTestNames().empty());
+        const auto* result = ready ? m_tree->result(m_source->configuration.name) : nullptr;
+        m_failed->setEnabled(result && run::countsAsFailure(result->outcome));
         m_stop->setEnabled(busy);
     }
     std::vector<std::string> selection() const {
@@ -262,9 +249,7 @@ private:
                             owner->m_status->setText(qs(cases.error().message()));
                         else {
                             owner->m_cases = std::move(*cases);
-                            auto test = owner->parentTest();
-                            owner->m_tree->setTests({test});
-                            owner->m_tree->setFrameworkCases(test.name, owner->m_cases);
+                            owner->m_tree->setFrameworkGroup(owner->m_source->configuration.name, owner->m_cases);
                             owner->m_status->setText(
                                 QStringLiteral("Discovered %1 real framework cases").arg(owner->m_cases.size()));
                             if (owner->m_context.testsChanged)

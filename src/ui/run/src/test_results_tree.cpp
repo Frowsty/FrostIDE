@@ -63,6 +63,7 @@ TestResultsTree::~TestResultsTree() = default;
 
 void TestResultsTree::setTests(std::vector<run::DiscoveredTest> tests) {
     m_tests = std::move(tests);
+    m_frameworkGroup.reset();
     m_unlisted.clear();
     m_results.clear();
     m_listedCases.clear();
@@ -166,17 +167,7 @@ void TestResultsTree::rebuild() {
             }
         }
         if (framework != m_frameworkCases.end())
-            for (const auto& entry : framework->second) {
-                auto* child = new QTreeWidgetItem(item, {qs(entry.name)});
-                child->setData(0, kTestNameRole, qs(test.name));
-                child->setData(0, kCaseNameRole, qs(entry.name));
-                QString tip;
-                if (entry.location)
-                    tip = QStringLiteral("%1:%2").arg(qs(entry.location->file)).arg(entry.location->line);
-                if (entry.disabled)
-                    tip += QStringLiteral(" (disabled by default)");
-                child->setToolTip(NameColumn, tip);
-            }
+            addFrameworkCaseItems(item, test.name, framework->second);
         if (listed != m_listedCases.end()) {
             for (const run::GTestCase& testCase : listed->second) {
                 auto* child = new QTreeWidgetItem(item, {qs(testCase.fullName())});
@@ -192,6 +183,23 @@ void TestResultsTree::rebuild() {
         else if (const auto state = m_state.find(test.name); state != m_state.end())
             item->setText(StatusColumn, state->second);
     }
+    if (m_frameworkGroup) {
+        const auto& name = *m_frameworkGroup;
+        const auto& cases = m_frameworkCases.at(name);
+        if (filter.isEmpty() || qs(name).contains(filter, Qt::CaseInsensitive) ||
+            std::ranges::any_of(cases, [&](const auto& entry) {
+                return qs(entry.name).contains(filter, Qt::CaseInsensitive);
+            })) {
+            auto* item = new QTreeWidgetItem(this, {qs(name)});
+            item->setData(0, kTestNameRole, qs(name));
+            m_items[name] = item;
+            addFrameworkCaseItems(item, name, cases);
+            if (const auto result = m_results.find(name); result != m_results.end())
+                showResult(item, result->second);
+            else if (const auto state = m_state.find(name); state != m_state.end())
+                item->setText(StatusColumn, state->second);
+        }
+    }
     for (const std::string& name : m_unlisted) {
         if (!filter.isEmpty() && !qs(name).contains(filter, Qt::CaseInsensitive))
             continue;
@@ -200,6 +208,21 @@ void TestResultsTree::rebuild() {
             showResult(item, result->second);
     }
     expandAll();
+}
+
+void TestResultsTree::addFrameworkCaseItems(QTreeWidgetItem* item, const std::string& name,
+                                           const std::vector<run::FrameworkCase>& cases) {
+    for (const auto& entry : cases) {
+        auto* child = new QTreeWidgetItem(item, {qs(entry.name)});
+        child->setData(0, kTestNameRole, qs(name));
+        child->setData(0, kCaseNameRole, qs(entry.name));
+        QString tip;
+        if (entry.location)
+            tip = QStringLiteral("%1:%2").arg(qs(entry.location->file)).arg(entry.location->line);
+        if (entry.disabled)
+            tip += QStringLiteral(" (disabled by default)");
+        child->setToolTip(NameColumn, tip);
+    }
 }
 
 void TestResultsTree::showCases(QTreeWidgetItem* item, const run::TestResult& result) {
@@ -232,6 +255,11 @@ void TestResultsTree::setFrameworkCases(const std::string& test, std::vector<run
     m_doctestCases.erase(test);
     m_frameworkCases[test] = std::move(cases);
     rebuild();
+}
+void TestResultsTree::setFrameworkGroup(std::string configuration, std::vector<run::FrameworkCase> cases) {
+    setTests({});
+    m_frameworkGroup = std::move(configuration);
+    setFrameworkCases(*m_frameworkGroup, std::move(cases));
 }
 const std::vector<run::FrameworkCase>* TestResultsTree::frameworkCases(const std::string& test) const {
     const auto found = m_frameworkCases.find(test);
@@ -283,7 +311,8 @@ void TestResultsTree::applyResult(const run::TestResult& result) {
     m_state.erase(result.name);
     m_results.insert_or_assign(result.name, result);
     QTreeWidgetItem* item = itemFor(result.name);
-    if (!item && !test(result.name) && !std::ranges::contains(m_unlisted, result.name)) {
+    if (!item && m_frameworkGroup != result.name && !test(result.name) &&
+        !std::ranges::contains(m_unlisted, result.name)) {
         // ctest's report names a test the last discovery did not list.
         m_unlisted.push_back(result.name);
         if (m_filter.isEmpty() || qs(result.name).contains(m_filter, Qt::CaseInsensitive))

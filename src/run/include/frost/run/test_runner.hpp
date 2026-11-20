@@ -58,6 +58,7 @@
 #include "frost/run/lua_framework_parsers.hpp"
 #include "frost/run/test_model.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -141,13 +142,14 @@ struct SingleTestLaunch {
 buildSingleTestLaunch(const CTestSetup& setup, const DiscoveredTest& test, std::string_view caseName = {},
                       TestCaseFramework framework = TestCaseFramework::CTestWhole);
 
-// A test case in a source file resolved to a ctest-discovered test (RUN-10).
+// A discovered test case in a source file. Lua selections belong to their listing generation.
 struct GutterTestCase {
     DiscoveredTest test{};
     std::string caseName{};
     TestCaseFramework framework = TestCaseFramework::CTestWhole;
     int line = 0; // 1-based line in the source file.
     std::string displayName{};
+    std::uint64_t luaListingGeneration = 0;
 };
 
 /*

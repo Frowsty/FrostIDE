@@ -65,4 +65,28 @@ TEST(TestResultsTree, ExplicitFrameworkListingsHaveNoInventedVerdictsAndRemainFi
     EXPECT_EQ(tree.frameworkCases(test.name), nullptr);
 }
 
+TEST(TestResultsTree, FrameworkConfigurationGroupsOnlyDiscoveredCases) {
+    TestResultsTree tree;
+    tree.setFrameworkGroup("launch configuration", {{"suite/leaf", {}, false}});
+    ASSERT_NE(tree.itemFor("launch configuration", "suite/leaf"), nullptr);
+    EXPECT_EQ(tree.test("launch configuration"), nullptr);
+    EXPECT_TRUE(tree.testNames().empty());
+    EXPECT_EQ(tree.counts().tests, 0U);
+
+    run::TestResult result;
+    result.name = "launch configuration";
+    result.outcome = run::TestOutcome::Failed;
+    tree.setFilter(QStringLiteral("hidden"));
+    tree.applyResult(result);
+    EXPECT_TRUE(tree.testNames().empty());
+    tree.setFilter(QStringLiteral("suite/leaf"));
+    ASSERT_NE(tree.itemFor("launch configuration"), nullptr);
+    EXPECT_EQ(tree.itemFor("launch configuration")->text(1), QStringLiteral("Failed"));
+    EXPECT_NE(tree.itemFor("launch configuration", "suite/leaf"), nullptr);
+
+    tree.setTests({});
+    EXPECT_EQ(tree.itemFor("launch configuration"), nullptr);
+    EXPECT_EQ(tree.frameworkCases("launch configuration"), nullptr);
+}
+
 } // namespace frost::ui
