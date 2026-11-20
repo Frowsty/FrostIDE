@@ -47,6 +47,11 @@ frost_add_library(lang LAYER lang
         src/frost_engine_assets.cpp
         src/frost_engine_lua.cpp
         src/fuzzy.cpp
+        src/analyzer.cpp
+        src/analyzer_process.cpp
+        src/analyzer_profile.cpp
+        src/analyzer_report.cpp
+        src/analyzer_sarif.cpp
         src/inspection.cpp
         src/inspection_scope_fixes.cpp
         src/inspection_scope_runner.cpp

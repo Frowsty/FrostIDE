@@ -22,6 +22,13 @@ struct Key {
 
 namespace key {
 
+// Native C++ analysis is trusted background work; Power Save suppresses automatic requests.
+inline constexpr Key<bool> cppAnalyzerEnabled{"analysis.cpp.enabled"};
+inline constexpr Key<bool> cppAnalyzerOnSave{"analysis.cpp.onSave"};
+inline constexpr Key<bool> analysisPowerSave{"analysis.powerSave"};
+inline constexpr Key<StringList> cppAnalyzerRules{"analysis.cpp.rules"};
+inline constexpr Key<std::string> toolsFrostAnalyzerPath{"tools.frostAnalyzer.path"};
+
 // Editor: font.
 inline constexpr Key<std::string> editorFontFamily{"editor.fontFamily"};
 inline constexpr Key<std::int64_t> editorFontSize{"editor.fontSize"};
