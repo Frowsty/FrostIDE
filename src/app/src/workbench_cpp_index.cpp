@@ -7,6 +7,8 @@
 #include "frost/lang/clangd_service.hpp"
 #include "frost/lang/compile_commands.hpp"
 #include "frost/lang/cpp_index.hpp"
+#include "frost/lang/cpp_modules.hpp"
+#include "frost/lang/cpp_preprocessor.hpp"
 #include "frost/sched/resource_governor.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 
@@ -24,11 +26,14 @@
 #include <QPointer>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QTabWidget>
 #include <QTableWidget>
+#include <QUuid>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <array>
+#include <map>
 #include <tuple>
 
 namespace frost::app {
@@ -50,11 +55,17 @@ QString roleText(std::uint64_t roles) {
 }
 struct IndexResult {
     lang::CppIndexQuery query;
+    std::optional<lang::CppPreprocessorResult> preprocessor;
+    std::optional<lang::CppModuleGraph> modules;
+    std::map<std::string, std::string> sourceHashes;
+    std::string databaseHash;
+    std::shared_ptr<std::vector<lang::CppIndexUnit>> moduleInputs;
     std::size_t completed = 0, total = 0, stored = 0;
 };
 struct IndexJob {
     std::string root, databaseFile, storeFile, helper, operation, symbol;
-    std::uint64_t trustRevision = 0, generation = 0;
+    std::string scanner, privateDatabase;
+    std::uint64_t trustRevision = 0, generation = 0, commandIndex = 0;
     std::shared_ptr<sched::ResourceGovernor> governor;
 };
 using Done = std::function<void(Result<IndexResult>)>;
@@ -80,6 +91,117 @@ sched::Task<void> indexTask(io::IFileSystem* fs, io::IProcessLauncher* launcher,
     auto commands = lang::parseJson(*bytes);
     if (!commands || !commands->isArray() || commands->items().empty() || commands->items().size() > 32768) {
         done(fail(ErrorCode::InvalidArgument, "Index needs a nonempty bounded compilation database"));
+        co_return;
+    }
+    if (job.operation == "preprocess" || job.operation == "modules") {
+        IndexResult result;
+        result.total = commands->items().size();
+        auto lease = job.governor->tryAcquireHeavyLeg(sched::HeavyLegKind::BackgroundIndex);
+        if (!lease) {
+            done(std::unexpected(lease.error()));
+            co_return;
+        }
+        const auto current = [&]() -> Result<void> {
+            auto database = fs->readFileSnapshot(job.databaseFile, 32U * 1024U * 1024U);
+            if (!permission() || !database || *database != *bytes)
+                return fail(ErrorCode::Busy, "Captured command context changed");
+            return {};
+        };
+        if (job.operation == "preprocess") {
+            lang::CppIndexRequest request;
+            request.projectRoot = job.root;
+            request.compilationDatabase = *bytes;
+            request.configuration = "Captured CDB command " + std::to_string(job.commandIndex + 1);
+            request.commandIndex = job.commandIndex;
+            auto output = co_await lang::requestCppPreprocessor(admitted, context, job.helper, std::move(request),
+                                                                std::chrono::minutes(5), stop);
+            if (!output) {
+                done(std::unexpected(output.error()));
+                co_return;
+            }
+            auto valid = lang::validateCppIndexInputs(*fs, output->receipt, {}, stop);
+            if (!valid) {
+                done(std::unexpected(valid.error()));
+                co_return;
+            }
+            result.preprocessor = std::move(*output);
+        } else {
+            if (auto created = fs->createDirectories(io::parentPath(job.privateDatabase)); !created) {
+                done(std::unexpected(created.error()));
+                co_return;
+            }
+            if (auto written = fs->writeFileAtomic(job.privateDatabase, *bytes); !written) {
+                done(std::unexpected(written.error()));
+                co_return;
+            }
+            auto receipt = std::make_shared<std::vector<lang::CppIndexUnit>>();
+            std::size_t receiptBytes = 0;
+            for (std::size_t ordinal = 0; ordinal < result.total; ++ordinal) {
+                if (auto valid = current(); !valid) {
+                    (void)fs->removeFile(job.privateDatabase);
+                    (void)fs->removeDirectory(io::parentPath(job.privateDatabase));
+                    done(std::unexpected(valid.error()));
+                    co_return;
+                }
+                lang::CppIndexRequest input;
+                input.projectRoot = job.root;
+                input.compilationDatabase = *bytes;
+                input.configuration = "Module scan captured command " + std::to_string(ordinal + 1);
+                input.commandIndex = ordinal;
+                auto captured = co_await lang::requestCppPreprocessor(admitted, context, job.helper, std::move(input),
+                                                                      std::chrono::minutes(5), stop);
+                if (!captured) {
+                    (void)fs->removeFile(job.privateDatabase);
+                    (void)fs->removeDirectory(io::parentPath(job.privateDatabase));
+                    done(std::unexpected(captured.error()));
+                    co_return;
+                }
+                const auto size = captured->receipt.data.dump().size();
+                if (size > 32U * 1024U * 1024U - receiptBytes) {
+                    (void)fs->removeFile(job.privateDatabase);
+                    (void)fs->removeDirectory(io::parentPath(job.privateDatabase));
+                    done(fail(ErrorCode::OutOfRange, "Module input receipts exceed32MiB"));
+                    co_return;
+                }
+                receiptBytes += size;
+                receipt->push_back(std::move(captured->receipt));
+                progress(ordinal + 1, result.total);
+            }
+            lang::CppModuleScanRequest request;
+            request.scanner = job.scanner;
+            request.privateDatabasePath = job.privateDatabase;
+            request.databaseBytes = *bytes;
+            request.workingDirectory = job.root;
+            request.trusted = true;
+            request.stop = stop;
+            request.validateCurrent = [&]() -> Result<void> {
+                if (auto valid = current(); !valid)
+                    return valid;
+                for (const auto& unit : *receipt)
+                    if (auto valid = lang::validateCppIndexInputs(*fs, unit, {}, stop); !valid)
+                        return valid;
+                return {};
+            };
+            auto output = lang::scanCppModules(admitted, *fs, request);
+            (void)fs->removeFile(job.privateDatabase);
+            (void)fs->removeDirectory(io::parentPath(job.privateDatabase));
+            if (!output) {
+                done(std::unexpected(output.error()));
+                co_return;
+            }
+            result.modules = std::move(*output);
+            for (const auto& unit : *receipt)
+                for (const auto& input : unit.data.find("dependencies")->items())
+                    result.sourceHashes.emplace(std::string(input.stringAt("path")),
+                                                std::string(input.stringAt("sha256")));
+            result.moduleInputs = std::move(receipt);
+            result.databaseHash = hash;
+        }
+        if (auto valid = current(); !valid) {
+            done(std::unexpected(valid.error()));
+            co_return;
+        }
+        done(std::move(result));
         co_return;
     }
     if (auto created = fs->createDirectories(io::parentPath(job.storeFile)); !created) {
@@ -191,11 +313,29 @@ sched::Task<void> validateIndexAction(io::IFileSystem* fs, std::string databaseF
     done(valid && current && database && *current == *database && !stop.stop_requested());
     co_return;
 }
+sched::Task<void> validateModuleAction(io::IFileSystem* fs, std::string databaseFile, std::string databaseHash,
+                                       std::shared_ptr<std::vector<lang::CppIndexUnit>> inputs, std::stop_token stop,
+                                       std::function<void(bool)> done) {
+    auto database = fs->readFileSnapshot(databaseFile, 32U * 1024U * 1024U);
+    bool valid = database && io::sha256Hex(*database) == databaseHash && inputs;
+    if (valid)
+        for (const auto& unit : *inputs)
+            if (!lang::validateCppIndexInputs(*fs, unit, {}, stop)) {
+                valid = false;
+                break;
+            }
+    auto current = fs->readFileSnapshot(databaseFile, 32U * 1024U * 1024U);
+    done(valid && current && database && *current == *database && !stop.stop_requested());
+    co_return;
+}
 } // namespace
 void Workbench::registerCppIndexActions() {
-    for (const auto& [operation, label] : std::array{std::pair{"rebuild", "Rebuild C++ Configuration Index"},
-                                                     std::pair{"symbols", "Find Symbol in C++ Configuration Index…"},
-                                                     std::pair{"clear", "Invalidate C++ Configuration Index"}}) {
+    for (const auto& [operation, label] :
+         std::array{std::pair{"rebuild", "Rebuild C++ Configuration Index"},
+                    std::pair{"symbols", "Find Symbol in C++ Configuration Index…"},
+                    std::pair{"clear", "Invalidate C++ Configuration Index"},
+                    std::pair{"preprocess", "C++ Preprocessor: Expanded Source, Macros and Includes..."},
+                    std::pair{"modules", "Scan C++ Module Dependencies..."}}) {
         input::ActionSpec action;
         action.id = "cpp.index." + std::string(operation);
         action.name = label;
@@ -229,6 +369,16 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
                                                     "snapshot. Live clangd navigation remains available."));
             return;
         }
+    std::uint64_t commandIndex = 0;
+    if (operation == "preprocess") {
+        bool accepted = false;
+        const int ordinal = QInputDialog::getInt(
+            m_window, QStringLiteral("C++ preprocessor"),
+            QStringLiteral("Exact compilation database command ordinal (1-based):"), 1, 1, 32768, 1, &accepted);
+        if (!admission || !accepted)
+            return;
+        commandIndex = static_cast<std::uint64_t>(ordinal - 1);
+    }
     if (operation == "symbols") {
         bool accepted = false;
         const auto query = QInputDialog::getText(
@@ -254,6 +404,19 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
     m_cppIndexStop = std::stop_source{};
     const auto stop = m_cppIndexStop.get_token();
     const auto generation = ++m_cppIndexGeneration;
+    using ViewStamp = std::tuple<QPointer<DocumentEditorView>, std::string, std::uint64_t>;
+    std::vector<ViewStamp> initialStamps;
+    for (auto* view : m_editors->uniqueDocumentViews())
+        initialStamps.emplace_back(view, view->path(), view->document().document().version());
+    const auto documentsCurrent = [self = QPointer<Workbench>(this), initialStamps] {
+        if (!self || self->m_editors->uniqueDocumentViews().size() != initialStamps.size())
+            return false;
+        for (const auto& [view, path, version] : initialStamps)
+            if (!view || view->path() != path || view->document().dirty() ||
+                view->document().document().version() != version)
+                return false;
+        return true;
+    };
     IndexJob job;
     job.root = root;
     job.databaseFile = database->file;
@@ -261,6 +424,7 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
     job.symbol = std::move(symbol);
     job.trustRevision = permission.revision;
     job.generation = generation;
+    job.commandIndex = commandIndex;
     job.storeFile =
         io::joinPath(m_options.compileCommandsCache, "semantic-index/" + io::sha256Hex(root) + ".db").value_or("");
     job.helper = QDir(QCoreApplication::applicationDirPath())
@@ -272,6 +436,26 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
 #endif
                              )
                      .toStdString();
+    if (operation == "modules") {
+        for (const auto& directory : lang::defaultClangdSearch().sdkDirectories) {
+            const auto path = io::joinPath(directory,
+#ifdef _WIN32
+                                           "clang-scan-deps.exe"
+#else
+                                           "clang-scan-deps"
+#endif
+            );
+            if (path && io::isAbsolutePath(*path) && m_services.fs.exists(*path).value_or(false)) {
+                job.scanner = *path;
+                break;
+            }
+        }
+        job.privateDatabase =
+            io::joinPath(QDir::tempPath().toStdString(),
+                         "frost-module-scan-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString() +
+                             "/compile_commands.json")
+                .value_or("");
+    }
     if (!m_resourceGovernor)
         m_resourceGovernor = std::make_shared<sched::ResourceGovernor>();
     job.governor = m_resourceGovernor;
@@ -290,24 +474,30 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
                     if (!self || !dialog || self->m_cppIndexGeneration != generation)
                         return;
                     dialog->setLabelText(
-                        QStringLiteral("Indexed %1 of %2 actual captured commands (serial)").arg(done).arg(total));
+                        QStringLiteral("Processed %1 of %2 actual captured commands (serial)").arg(done).arg(total));
                 },
                 Qt::QueuedConnection);
     };
     auto completed = [self, dialog, root, server, generation, revision = permission.revision,
-                      databaseFile = job.databaseFile, stop, operation](Result<IndexResult> result) mutable {
+                      databaseFile = job.databaseFile, stop, documentsCurrent,
+                      operation](Result<IndexResult> result) mutable {
         if (!self)
             return;
         QMetaObject::invokeMethod(
             self.data(),
-            [self, dialog, root, server, generation, revision, databaseFile, stop, operation,
+            [self, dialog, root, server, generation, revision, databaseFile, stop, documentsCurrent, operation,
              result = std::move(result)]() mutable {
                 if (dialog) {
                     QObject::disconnect(dialog.data(), nullptr, self.data(), nullptr);
                     dialog->close();
                 }
-                if (!self || self->m_shutDown || self->m_projectRoot != root || self->m_clangd != server ||
-                    self->m_cppIndexGeneration != generation)
+                if (!self || stop.stop_requested() || self->m_shutDown || self->m_projectRoot != root ||
+                    self->m_clangd != server || self->m_cppIndexGeneration != generation)
+                    return;
+                if (!documentsCurrent())
+                    return;
+                const auto activeDatabase = self->m_clangd->compileCommands();
+                if (!activeDatabase || activeDatabase->file != databaseFile)
                     return;
                 const auto current = self->m_services.trust.snapshot(root);
                 if (!current.trusted || current.revision != revision)
@@ -321,6 +511,128 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
                         display(result.error().message()) +
                             QStringLiteral(
                                 "\nCompleted units are atomic snapshots; the requested full rebuild is not complete."));
+                    return;
+                }
+                if (result->preprocessor || result->modules) {
+                    auto* output = new QDialog(self->m_window);
+                    output->setAttribute(Qt::WA_DeleteOnClose);
+                    output->setObjectName(result->modules ? QStringLiteral("cppModuleResults")
+                                                          : QStringLiteral("cppPreprocessorResults"));
+                    output->setWindowTitle(result->preprocessor
+                                               ? QStringLiteral("C++ preprocessor - captured command snapshot")
+                                               : QStringLiteral("C++ module dependencies - scanner snapshot"));
+                    auto* layout = new QVBoxLayout(output);
+                    auto* tabs = new QTabWidget(output);
+                    const auto add = [&](QString title, const std::string& bytes) {
+                        auto* text = new QPlainTextEdit(tabs);
+                        text->setReadOnly(true);
+                        text->setPlainText(display(bytes));
+                        tabs->addTab(text, title);
+                    };
+                    if (result->preprocessor) {
+                        layout->addWidget(new QLabel(
+                            QStringLiteral(
+                                "Clang -E output without line markers. Macro events retain definition tokens; expanded "
+                                "source is shown separately. Includes record actual directed source-to-target edges."),
+                            output));
+                        add(QStringLiteral("Expanded source"), result->preprocessor->text);
+                        add(QStringLiteral("Include graph"), result->preprocessor->includes.dump());
+                        add(QStringLiteral("Macro events"), result->preprocessor->macros.dump());
+                    } else {
+                        layout->addWidget(new QLabel(
+                            QStringLiteral("Actual clang-scan-deps P1689 report for captured saved commands. Missing "
+                                           "scanner or unsupported CDB is reported; no module build is performed."),
+                            output));
+                        add(QStringLiteral("Module dependency graph"), result->modules->rawP1689);
+                        auto* interfaces = new QTableWidget(0, 2, tabs);
+                        interfaces->setObjectName(QStringLiteral("cppModuleRelationships"));
+                        interfaces->setHorizontalHeaderLabels(
+                            {QStringLiteral("Module interface"), QStringLiteral("Scanner source path")});
+                        interfaces->setEditTriggers(QAbstractItemView::NoEditTriggers);
+                        for (const auto& rule : result->modules->rules)
+                            for (const auto& provider : rule.provides)
+                                if (provider.interface && result->sourceHashes.contains(provider.sourcePath)) {
+                                    const int row = interfaces->rowCount();
+                                    interfaces->insertRow(row);
+                                    interfaces->setItem(row, 0, new QTableWidgetItem(display(provider.name)));
+                                    interfaces->setItem(row, 1, new QTableWidgetItem(display(provider.sourcePath)));
+                                }
+                        for (const auto& rule : result->modules->rules)
+                            for (const auto& dependency : rule.requiresModules) {
+                                const auto targets = result->modules->interfaceTargets(dependency);
+                                const int row = interfaces->rowCount();
+                                interfaces->insertRow(row);
+                                interfaces->setItem(
+                                    row, 0,
+                                    new QTableWidgetItem(display(rule.primaryOutput + " -> " + dependency.name)));
+                                const auto target =
+                                    targets.size() == 1 && result->sourceHashes.contains(targets.front())
+                                        ? targets.front()
+                                        : std::string{};
+                                auto* source = new QTableWidgetItem(display(target));
+                                if (target.empty())
+                                    source->setToolTip(QStringLiteral(
+                                        "External, uncaptured or ambiguous interface; navigation unavailable."));
+                                interfaces->setItem(row, 1, source);
+                            }
+                        interfaces->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+                        tabs->addTab(interfaces, QStringLiteral("Imports and interfaces"));
+                        auto* navigationStatus = new QLabel(output);
+                        navigationStatus->setObjectName(QStringLiteral("cppModuleNavigationStatus"));
+                        layout->addWidget(navigationStatus);
+                        const QPointer<QDialog> owner(output);
+                        connect(interfaces, &QTableWidget::cellDoubleClicked, output,
+                                [self, owner, interfaces, sourceHashes = result->sourceHashes,
+                                 hash = result->databaseHash, inputs = result->moduleInputs, databaseFile, stop, root,
+                                 server, generation, revision, documentsCurrent](int row, int) {
+                                    if (!self || !documentsCurrent() || row < 0 || row >= interfaces->rowCount())
+                                        return;
+                                    const auto file = interfaces->item(row, 1)->text().toStdString();
+                                    const auto found = sourceHashes.find(file);
+                                    if (found == sourceHashes.end())
+                                        return;
+                                    auto done = [self, owner, file, root, server, generation, revision, databaseFile,
+                                                 stop, documentsCurrent](bool valid) {
+                                        if (self)
+                                            QMetaObject::invokeMethod(
+                                                self.data(),
+                                                [=] {
+                                                    if (!self || !owner || stop.stop_requested() || self->m_shutDown ||
+                                                        !documentsCurrent() || self->m_projectRoot != root ||
+                                                        self->m_clangd != server ||
+                                                        self->m_cppIndexGeneration != generation)
+                                                        return;
+                                                    const auto database = self->m_clangd->compileCommands();
+                                                    if (!database || database->file != databaseFile)
+                                                        return;
+                                                    const auto permission = self->m_services.trust.snapshot(root);
+                                                    if (!permission.trusted || permission.revision != revision)
+                                                        return;
+                                                    if (!valid) {
+                                                        if (auto* status = owner->findChild<QLabel*>(
+                                                                QStringLiteral("cppModuleNavigationStatus")))
+                                                            status->setText(
+                                                                QStringLiteral("Module dependency snapshot changed; "
+                                                                               "rescan before navigation."));
+                                                        return;
+                                                    }
+                                                    self->openLocation(display(file), 1, 1);
+                                                },
+                                                Qt::QueuedConnection);
+                                    };
+                                    self->m_pool
+                                        ->spawn(sched::Lane::Background,
+                                                validateModuleAction(&self->m_services.fs, databaseFile, hash, inputs,
+                                                                     stop, std::move(done)))
+                                        .detach();
+                                });
+                    }
+                    layout->addWidget(tabs);
+                    auto* close = new QDialogButtonBox(QDialogButtonBox::Close, output);
+                    connect(close, &QDialogButtonBox::rejected, output, &QDialog::reject);
+                    layout->addWidget(close);
+                    output->resize(1000, 650);
+                    output->show();
                     return;
                 }
                 if (operation == "rebuild" || operation == "clear") {
@@ -338,9 +650,15 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
                 output->setAttribute(Qt::WA_DeleteOnClose);
                 output->setWindowTitle(QStringLiteral("C++ configuration index — actual snapshot results"));
                 auto* layout = new QVBoxLayout(output);
-                const auto contextCurrent = [self, root, server, generation, revision] {
+                const auto contextCurrent = [self, root, server, generation, revision, databaseFile, stop,
+                                             documentsCurrent] {
+                    if (stop.stop_requested() || !documentsCurrent())
+                        return false;
                     if (!self || self->m_shutDown || self->m_projectRoot != root || self->m_clangd != server ||
                         self->m_cppIndexGeneration != generation)
+                        return false;
+                    const auto database = self->m_clangd->compileCommands();
+                    if (!database || database->file != databaseFile)
                         return false;
                     const auto permission = self->m_services.trust.snapshot(root);
                     if (!permission.trusted || permission.revision != revision)

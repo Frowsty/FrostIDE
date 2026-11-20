@@ -3,6 +3,12 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R13 normal preprocessor and module tools wired
+
+- Explicit C++ actions now show actual expanded source, macro events and directed includes for a selected captured command, and actual pinned clang-scan-deps module relationships with unique interface-source navigation. The scanner consumes an owned private CDB without rewriting project commands. Missing tools and unsupported response/PCH/BMI/header-unit profiles refuse explicitly.
+- Module freshness retains actual Clang preprocessor tracked-VFS receipts from every exact CDB row, bounded to 32 MiB total. All receipts and original command bytes are checked before/after scanning and before navigation, including headers outside project/include roots. Publication/navigation also retain active CDB, project/server/trust/cancellation and open-document identity/path/version guards. Snapshot result views remain labelled as snapshots.
+- Authored normal Workbench action journeys cover actual import-to-interface navigation and refusal after an escaping included-header or original-CDB change. Independent Astra source review cleared the producer/client, scanner, final input closure, normal UI and authored journeys. Only source formatting ran. Builds, tests, feature execution, module compilation/navigation acceptance, clang -E equality and performance verification remain deferred.
+
 ## 2026-11-20: R13 CPP-13 actual preprocessor producer/client
 
 - Added an isolated actual Clang preprocessor printer for one exact captured CDB command, callback-derived directed include edges and macro invocation/definition-token events. Full expanded source uses the Clang -E printer without line markers; definition tokens are not mislabelled as expanded tokens. The typed bounded client retains immutable input receipts and rejects unavailable/malformed responses.
