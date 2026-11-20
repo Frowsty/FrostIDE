@@ -253,8 +253,10 @@ Result<std::unique_ptr<io::IProcess>> RemoteProcessLauncher::launch(const io::Pr
     auto environment=rpc::Json::array();for(const auto& [name,value]:workload.environment)
         environment.push(rpc::Json::object().set("name",name).set("value",value?rpc::Json(*value):rpc::Json{}));
     const auto request=rpc::Json::object().set("version",1).set("token",token).set("argv",std::move(argv)).set("cwd",workload.workingDirectory)
-        .set("environment",std::move(environment)).set("stdin",workload.stdinMode==io::Stdio::Pipe).dump()+"\n";
+        .set("environment",std::move(environment)).set("cleanEnvironment",workload.cleanEnvironment).set("lowPriority",workload.belowNormalPriority)
+        .set("stdin",workload.stdinMode==io::Stdio::Pipe).dump()+"\n";
     if(request.size()>1024U*1024U)return fail(ErrorCode::OutOfRange,"Remote workload launch request exceeds 1 MiB");
+    spec->belowNormalPriority=workload.belowNormalPriority;
     auto local=m_local.launch(*spec);if(!local)return std::unexpected(local.error());
     if(auto written=(*local)->writeStdin(request);!written)return std::unexpected(written.error());
     auto process=std::make_unique<RemoteProcess>(std::move(*local),token,m_options,workload.stdinMode==io::Stdio::Pipe);

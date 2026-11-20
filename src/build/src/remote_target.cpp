@@ -176,6 +176,9 @@ Result<void> validateRemoteWorkload(const io::ProcessSpec& workload) {
     if(!io::isAbsolutePath(workload.executable,io::PathStyle::Posix)||!clean(workload.executable)||
         !io::isAbsolutePath(workload.workingDirectory,io::PathStyle::Posix)||!clean(workload.workingDirectory)||!workload.killOnClose||workload.rawArguments)
         return fail(ErrorCode::InvalidArgument,"Remote workload needs absolute Linux program/cwd, structured argv and owned-tree lifetime");
+    if(workload.residentMemoryLimitBytes || workload.pseudoTerminal || workload.newConsole || !workload.desktop.empty() ||
+        !workload.posixInheritedFds.empty() || workload.imagePathForm!=io::ImagePathForm::Auto)
+        return fail(ErrorCode::Unsupported,"Remote execution cannot silently drop native memory, terminal, desktop or descriptor policies");
     if(workload.arguments.size()>4096)return fail(ErrorCode::OutOfRange,"Remote workload argv exceeds budget");
     for(const auto& arg:workload.arguments)if(arg.find('\0')!=arg.npos)return fail(ErrorCode::InvalidArgument,"Remote argument holds NUL");
     for(const auto& [name,value]:workload.environment)

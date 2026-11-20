@@ -171,7 +171,9 @@ def run():
             not os.path.isabs(argv[0]) or not isinstance(cwd, str) or not os.path.isabs(cwd) or
             "\0" in cwd or not isinstance(changes, list) or not isinstance(request.get("stdin"), bool)):
         raise RuntimeError("malformed remote launch request")
-    environment = os.environ.copy()
+    if not isinstance(request.get("cleanEnvironment", False), bool) or not isinstance(request.get("lowPriority", False), bool):
+        raise RuntimeError("malformed remote environment/priority policy")
+    environment = {} if request.get("cleanEnvironment", False) else os.environ.copy()
     for change in changes:
         name, value = change.get("name"), change.get("value")
         if (not isinstance(name, str) or not name or "=" in name or "\0" in name or
@@ -183,7 +185,8 @@ def run():
             environment[name] = value
     child = subprocess.Popen(argv, cwd=cwd, env=environment, start_new_session=True,
                              stdin=subprocess.PIPE if request["stdin"] else subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True,
+                             preexec_fn=(lambda: os.nice(10)) if request.get("lowPriority", False) else None)
     emit("started", pid=child.pid)
     incoming = queue.Queue(maxsize=256)  # At most 1 MiB pending child stdin.
 
