@@ -84,6 +84,12 @@ GPT-6.1 Sol authored the implementations and regression tests. GPT-6 Astra revie
 - Authored actual >1-GiB reader and 128-MiB product-factory fixtures plus UI encoding/navigation/cancellation/close/error tests for later execution. Independent GPT-6 Astra source review closed after encoding, opener-lifetime and authored-test corrections. No build, test, fixture generation, feature execution or benchmark ran, and no B15 or 1-GiB runtime acceptance is claimed.
 - Next: integration and later runtime verification when the user resumes testing. No user question blocks this slice.
 
+## 2026-11-20: R16 native coverage collection core
+
+- Completed bounded actual llvm-profdata merge and llvm-cov baseline/LCOV export collection over an owned instrumented run or explicitly imported raw profiles. Strict parsing preserves line/branch counts, rejects contradictory/duplicate summaries, and reports missing instrumentation/tools rather than inferring counts. Tools use exact pinned-version admission; debuginfod is disabled.
+- Binary, available source and raw-profile identities are captured/revalidated, project admission runs before subprocess launches and publication, and RunSession owns cancellation/output/deadline/tree cleanup. Source hashes describe observed snapshots and do not prove an arbitrary externally built binary used those source bytes.
+- Authored parser/identity cases and a later genuine instrumented compiler/run/profile/export journey compared with independent llvm-cov show counts. Independent Astra source review cleared this core. No build, test, feature execution, probes or WSL ran. Normal configuration actions, gutters and native profiling continue separately; RUN-12 acceptance remains deferred.
+
 ## 2026-11-14: R12 Lua implementation integrated; runtime acceptance deferred
 
 - Added explicit standalone Lua Script/REPL configurations, console stdin, and standalone lua-debug DAP using the same selected interpreter, arguments, environment and working directory. Lua 5.4.9 has an explicit offline Clang build recipe and optional staging, including Windows UTF-8 path resources. The recipe, interpreter and adapter have not been executed in this phase.
