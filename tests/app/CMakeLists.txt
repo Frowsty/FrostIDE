@@ -469,3 +469,10 @@ frost_add_test(app_workbench_project_language_tests QT
     LABELS integration cmake)
 target_include_directories(app_workbench_project_language_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_project_language_tests PRIVATE ${_frost_workbench_definitions})
+
+# RUN-12 later genuine instrumented selected-run/action/gutter journey.
+frost_add_test(app_workbench_native_coverage_tests QT SOURCES workbench_native_coverage_test.cpp
+    DEPS frost::app frost::run frost::lang frost::io frost::sched LABELS integration)
+target_include_directories(app_workbench_native_coverage_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
+target_compile_definitions(app_workbench_native_coverage_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")

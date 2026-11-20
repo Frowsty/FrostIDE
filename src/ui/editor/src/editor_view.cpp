@@ -467,6 +467,8 @@ void EditorView::afterChange(const text::EditorUpdate& update, bool notifyTextCh
     viewport()->update();
     emitStatus();
     armInputToPaint();
+    if (update.change && update.change->version != update.change->baseVersion)
+        m_coverageMarkers.clear();
     if (notifyTextChange && update.change && update.change->version != update.change->baseVersion) {
         emit textChanged(*update.change);
     }
@@ -509,6 +511,12 @@ void EditorView::setColumnMode(bool enabled) {
 void EditorView::markSaved() {
     m_savedStateId = m_document->undoState().stateId;
     emitStatus();
+}
+
+void EditorView::setCoverageMarkers(std::vector<CoverageMarker> markers) {
+    std::ranges::sort(markers, {}, &CoverageMarker::line);
+    m_coverageMarkers = std::move(markers);
+    viewport()->update();
 }
 
 void EditorView::setLineMarkers(std::vector<LineMarker> markers) {
@@ -600,6 +608,7 @@ void EditorView::setLineChanges(std::vector<LineChangeMarker> changes) {
 }
 
 void EditorView::reloadFromDocument() {
+    m_coverageMarkers.clear();
     m_foldCandidates.clear();
     m_foldCandidateMaxEnd.clear();
     if (m_foldJob)

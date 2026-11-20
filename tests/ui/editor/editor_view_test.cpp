@@ -327,6 +327,24 @@ TEST(EditorView, SoftWrapChangesTheRowCount) {
     EXPECT_EQ(h.view->editor().display().rowCount(), 2U);
 }
 
+TEST(EditorView, ObservedCoveragePreservesDiagnosticsAndExpiresOnEdit) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("one\ntwo\n");
+    h.view->setLineMarkers({LineMarker{LineIndex{1}, MarkerSeverity::Warning, "unused"}});
+    h.view->setCoverageMarkers({CoverageMarker{LineIndex{0}, 9}, CoverageMarker{LineIndex{1}, 0}});
+    const auto list = h.view->buildDisplayList();
+    ASSERT_EQ(list.markers.size(), 1u);
+    EXPECT_EQ(list.markers.front().severity, MarkerSeverity::Warning);
+    EXPECT_TRUE(h.view->lineMarkerToolTip(QPointF(2.0, 0.5 * h.view->lineHeight())).contains("9 hits"));
+    EXPECT_TRUE(h.view->lineMarkerToolTip(QPointF(2.0, 1.5 * h.view->lineHeight())).contains("unused"));
+    h.type("edit");
+    EXPECT_TRUE(h.view->coverageMarkers().empty());
+    EXPECT_FALSE(h.view->lineMarkers().empty());
+    h.view->setCoverageMarkers({CoverageMarker{LineIndex{0}, 1}});
+    h.view->reloadFromDocument();
+    EXPECT_TRUE(h.view->coverageMarkers().empty());
+}
+
 TEST(EditorView, GutterShowsLineNumbersAndMarkers) {
     FROST_REQUIRE_OFFSCREEN();
     EditorHarness h("one\ntwo\nthree\n");

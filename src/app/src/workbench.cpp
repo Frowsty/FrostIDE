@@ -215,6 +215,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
     createBuildService();
     createRunService();
     registerActions();
+    registerNativeAnalysisActions();
 
     // The language features: one controller for the window, over whichever clangd runs.
     m_bridge = std::make_unique<LanguageBridge>(*this);
@@ -866,6 +867,7 @@ void Workbench::shutdown() {
         return;
     }
     m_shutDown = true;
+    m_nativeAnalysisStop.request_stop();
     m_cppRenameStop.request_stop();
     m_cppInspectionStop.request_stop();
     m_cppIndexStop.request_stop();

@@ -124,11 +124,14 @@ bool EditorView::viewportEvent(QEvent* event) {
 }
 
 QString EditorView::lineMarkerToolTip(QPointF at) const {
-    if (at.x() >= gutterWidth() || (m_markers.empty() && m_breakpoints.empty())) {
+    if (at.x() >= gutterWidth() || (m_markers.empty() && m_breakpoints.empty() && m_coverageMarkers.empty())) {
         return {};
     }
     const LineIndex line = m_editor->text().lineAt(hitAt(at).offset);
     QStringList messages;
+    const auto coverage = std::ranges::lower_bound(m_coverageMarkers, line, {}, &CoverageMarker::line);
+    if (coverage != m_coverageMarkers.end() && coverage->line == line)
+        messages.push_back(QStringLiteral("Observed source coverage: %1 hits").arg(coverage->hits));
     for (auto it = std::ranges::lower_bound(m_breakpoints, line, {}, &BreakpointMarker::line);
          it != m_breakpoints.end() && it->line == line; ++it) {
         if (!it->message.empty()) {

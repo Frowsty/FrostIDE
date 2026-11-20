@@ -809,6 +809,11 @@ private:
     // Construction steps.
     void registerActions();
     void registerEditorExtrasActions();
+
+    void registerNativeAnalysisActions();
+    void startNativeAnalysis(bool importProfiles = false, bool profile = false);
+    void prepareNativeAnalysis(const run::RunConfiguration& configuration, std::stop_token stop,
+                               std::function<void(Result<run::LaunchPlan>)> done);
     void registerRefactoringActions();
     void registerCppRefactoringActions();
     void registerCppIndexActions();
@@ -1114,6 +1119,9 @@ private:
     std::unique_ptr<ui::BuildServiceBackend> m_buildBackend;
     // Declared before m_cmake, which runs through it, so it is destroyed after it (RUN-1).
     std::unique_ptr<run::RunManager> m_runManager;
+    std::stop_source m_nativeAnalysisStop;
+    std::uint64_t m_nativeAnalysisGeneration = 0;
+    bool m_nativeAnalysisActive = false;
     std::unique_ptr<CMakeIntegration> m_cmake;
     std::unique_ptr<StandaloneBuildBackend> m_standalone;
     // RUN-3: a CMake target chosen in the run configuration combo that the targets window could not
