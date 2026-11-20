@@ -6,7 +6,7 @@ return function(report)
     assert(lu.VERSION == '3.5', 'FrostIDE supports LuaUnit 3.5 discovery only')
     local runner = assert(lu.LuaUnit)
     for _, key in ipairs({'internalRunSuiteByInstances', 'applyTestPrefixSuffixFilter',
-        'expandClasses', 'applyPatternFilter', 'splitClassMethod', 'asFunction'}) do
+        'expandClasses', 'applyPatternFilter', 'splitClassMethod', 'asFunction', 'unregisterSuite'}) do
         assert(type(runner[key]) == 'function', 'Unsupported LuaUnit discovery API: '..key)
     end
     local exit = os.exit
@@ -46,6 +46,8 @@ return function(report)
         assert(file:close())
         -- Successful catalogue exit, never a test verdict. It also prevents driver code after
         -- runSuite from executing. A driver that never calls this hook writes no catalogue.
+        -- LuaUnit registers this runner before calling the hook and guards exits while registered.
+        self:unregisterSuite()
         exit(0, true)
     end
 end
