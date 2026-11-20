@@ -17,6 +17,10 @@
 #include "engine_session_peer.hpp"
 #include "workbench_rig.hpp"
 #include <QLabel>
+#include <QDialog>
+#include <QComboBox>
+#include <QLineEdit>
+#include <QTimer>
 #include <QPushButton>
 #include <QTreeWidget>
 
@@ -1304,5 +1308,40 @@ TEST(WorkbenchEngineDocuments, CapturedByteCoordinatesDirtyRepliesAndDisconnectA
     ASSERT_TRUE(rig.workbench->refreshEngineInstances());ASSERT_TRUE(pairPeer(rig,replacement));
     // A replacement authenticated identity must obtain its own export after loss.
     EXPECT_TRUE(waitFor([&]{return replacement.requests("document.schemas").size()==1;},3s));
+}
+TEST(WorkbenchEngineTemplates, DialogUsesNarrowGeneratorAndChangedTrustPreventsSend) {
+    WorkDir dir("engine-template-dialog");dir.write("project/Game.frostproj","{}");
+    EngineSessionPeer peer(dir.join("project"));peer.enableDocumentTools();
+    peer.result("document.schemas",Json::object().set("protocol","frostengine.document-schemas").set("version",1).set("schemas",Json::array()));
+    peer.result("document.create-template",Json::object().set("path","Assets/Materials/Actual.fmat").set("handle",123));
+    advertise(dir,peer);WorkbenchRig rig(dir,peerOptions(dir));
+    ASSERT_TRUE(openTrusted(rig,dir.join("project")));ASSERT_TRUE(pairPeer(rig,peer));
+    auto id=rig.workbench->registry().find("engine.template.new");ASSERT_TRUE(id);
+    bool revoke=false;int visits=0;QTimer answer;answer.setInterval(1);
+    QObject::connect(&answer,&QTimer::timeout,[&] {
+        auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if(!dialog||dialog->objectName()!=QStringLiteral("engineAssetTemplateDialog"))return;
+        ++visits;answer.stop();
+        auto* kind=dialog->findChild<QComboBox*>("engineAssetTemplateKind");
+        auto* path=dialog->findChild<QLineEdit*>("engineAssetTemplatePath");
+        EXPECT_NE(kind,nullptr);EXPECT_NE(path,nullptr);
+        if(kind)kind->setCurrentText("Material");if(path)path->setText("Assets/Materials/Actual.fmat");
+        if(revoke)EXPECT_TRUE(rig.trust->untrust(dir.join("project")));
+        dialog->accept();
+    });
+    QTimer deadline;deadline.setSingleShot(true);deadline.setInterval(5000);
+    QObject::connect(&deadline,&QTimer::timeout,[] {
+        ADD_FAILURE()<<"Engine template dialog did not settle";
+        if(auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget()))dialog->reject();
+    });
+    frost::input::ActionContext context;context.trusted=true;answer.start();deadline.start();
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*id,context),frost::input::InvokeResult::Ran);deadline.stop();
+    ASSERT_TRUE(waitFor([&]{return peer.requests("document.create-template").size()==1;},3s));
+    const auto requests=peer.requests("document.create-template");const auto* params=requests.front().find("params");ASSERT_NE(params,nullptr);
+    EXPECT_EQ(params->stringAt("kind"),"Material");EXPECT_EQ(params->stringAt("path"),"Assets/Materials/Actual.fmat");
+    EXPECT_EQ(params->find("overwrite"),nullptr);EXPECT_EQ(params->find("unique"),nullptr);
+    revoke=true;answer.start();deadline.start();
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*id,context),frost::input::InvokeResult::Ran);deadline.stop();
+    EXPECT_EQ(visits,2);EXPECT_EQ(peer.requests("document.create-template").size(),1U);
 }
 } // namespace

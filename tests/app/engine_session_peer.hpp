@@ -227,9 +227,9 @@ private:
         auto commands = Json::array();
         for (const std::string_view name :
              {"play.start", "play.stop", "play.state", "play.pause", "play.step", "play.simulate", "script.validate",
-              "test.run", "log.get", "editor.focus", "document.schemas", "document.validate", "document.validate-content"}) {
+              "test.run", "log.get", "editor.focus", "document.schemas", "document.validate", "document.validate-content", "document.create-template"}) {
             if(name.starts_with("document.")&&!m_documentTools.load())continue;
-            const bool mutation = (name.starts_with("play.") && name != "play.state") || name == "test.run";
+            const bool mutation = (name.starts_with("play.") && name != "play.state") || name == "test.run" || name == "document.create-template";
             commands.push(Json::object()
                               .set("name", name)
                               .set("category", "Fixture")

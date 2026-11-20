@@ -52,6 +52,7 @@ public:
     void documentEdited(std::string_view path,std::uint64_t version);
     void clearDocumentTools();
     void registerDocumentActions();
+    void registerTemplateActions();
     // Actual authenticated content command; callback runs on GUI only for the retained session.
     [[nodiscard]] Result<std::uint64_t> contentCommand(std::string method, lang::Json params,
                                                        std::function<void(Result<lang::Json>)> completed);

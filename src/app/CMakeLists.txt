@@ -53,6 +53,7 @@ frost_add_library(app LAYER app
         src/engine_asset_move.cpp
         src/engine_serialized_properties.cpp
         src/engine_document_integration.cpp
+        src/engine_template_integration.cpp
         src/engine_integration.cpp
         src/engine_integration.hpp
         src/engine_integration_internal.hpp
