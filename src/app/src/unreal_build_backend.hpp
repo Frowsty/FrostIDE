@@ -70,6 +70,7 @@ private:
     std::function<void()> m_semanticProfileChanged;
     std::optional<project::UnrealWorkspace> m_workspace;
     QPointer<QDialog> m_modelDialog;
+    QPointer<QDialog> m_partnerDialog;
     build::UnrealBuildRequest m_request;
     io::IFileSystem& m_fs;
     io::IProcessLauncher& m_launcher;

@@ -12,6 +12,7 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <set>
 
 #include <yyjson.h>
 
@@ -26,7 +27,7 @@ struct DocDeleter {
 using DocPtr = std::unique_ptr<yyjson_doc, DocDeleter>;
 
 // Converts a yyjson value tree; false when nesting exceeds kMaxDepth.
-bool convert(yyjson_val* value, Json& out, int depth) {
+bool convert(yyjson_val* value, Json& out, int depth, bool strict = false) {
     if (depth > kMaxDepth) {
         return false;
     }
@@ -51,7 +52,7 @@ bool convert(yyjson_val* value, Json& out, int depth) {
         yyjson_arr_iter_init(value, &iter);
         while (yyjson_val* item = yyjson_arr_iter_next(&iter)) {
             Json converted;
-            if (!convert(item, converted, depth + 1)) {
+            if (!convert(item, converted, depth + 1, strict)) {
                 return false;
             }
             out.push(std::move(converted));
@@ -60,14 +61,17 @@ bool convert(yyjson_val* value, Json& out, int depth) {
     }
     case YYJSON_TYPE_OBJ: {
         out = Json::object();
+        std::set<std::string> names;
         yyjson_obj_iter iter;
         yyjson_obj_iter_init(value, &iter);
         while (yyjson_val* key = yyjson_obj_iter_next(&iter)) {
             Json converted;
-            if (!convert(yyjson_obj_iter_get_val(key), converted, depth + 1)) {
+            if (!convert(yyjson_obj_iter_get_val(key), converted, depth + 1, strict)) {
                 return false;
             }
-            // A duplicate key replaces the earlier value in place (json.hpp).
+            const std::string_view name(yyjson_get_str(key), yyjson_get_len(key));
+            if (strict && !names.insert(std::string(name)).second) return false;
+            // A duplicate key replaces the earlier value in place for permissive callers.
             out.set(std::string(yyjson_get_str(key), yyjson_get_len(key)), std::move(converted));
         }
         return true;
@@ -300,6 +304,15 @@ Result<Json> parseJson(std::string_view text) {
     if (!convert(yyjson_doc_get_root(doc.get()), out, 0)) {
         return fail(ErrorCode::Corrupt, std::format("JSON nested deeper than {} levels", kMaxDepth));
     }
+    return out;
+}
+
+Result<Json> parseJsonStrict(std::string_view text) {
+    yyjson_read_err error{};
+    DocPtr doc(yyjson_read_opts(const_cast<char*>(text.data()), text.size(), 0, nullptr, &error));
+    if (!doc) return fail(ErrorCode::Corrupt, std::format("invalid strict JSON at byte {}", error.pos));
+    Json out;
+    if (!convert(yyjson_doc_get_root(doc.get()),out,0,true)) return fail(ErrorCode::Corrupt,"duplicate JSON key or nesting limit exceeded");
     return out;
 }
 

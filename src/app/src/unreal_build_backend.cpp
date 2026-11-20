@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Unreal tooling execution through the same contained BuildSession and UI events as other builds.
 #include "unreal_build_backend.hpp"
+#include "unreal_partner_window.hpp"
 
 #include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"
@@ -35,6 +36,12 @@ void UnrealBuildBackend::attachMenu(ui::ShellWindow& window, std::function<Resul
     auto report = [host](Result<void> result) {
         if (host && !result) QMessageBox::warning(host.data(), tr("Unreal"), QString::fromStdString(result.error().message()));
     };
+    connect(m_menu->addAction(tr("Local Editor partner and Blueprint calls…")), &QAction::triggered, this, [self,host] {
+        if(!self||!host)return;
+        if(self->m_partnerDialog){self->m_partnerDialog->show();self->m_partnerDialog->raise();return;}
+        auto* dialog=new UnrealPartnerWindow(self->m_model.projectFile,self->m_trust,host.data());
+        self->m_partnerDialog=dialog;dialog->show();
+    });
     if (inspectReflection) connect(m_menu->addAction(tr("Inspect reflection specifiers in captured command…")), &QAction::triggered, this,
         [inspectReflection=std::move(inspectReflection)] { inspectReflection(); });
     connect(m_menu->addAction(tr("Project modules, plugins and targets…")), &QAction::triggered, this,
@@ -124,6 +131,7 @@ UnrealBuildBackend::UnrealBuildBackend(project::UnrealProject model, io::IFileSy
 
 UnrealBuildBackend::~UnrealBuildBackend() {
     delete m_modelDialog.data();
+    delete m_partnerDialog.data();
     delete m_menu.data();
     if (m_session) {
         m_session->cancel();
@@ -169,6 +177,7 @@ Result<void> UnrealBuildBackend::configure(build::UnrealBuildRequest request) {
     const auto before = configurationIdentity();
     m_request = std::move(request);
     if (configurationIdentity() != before) {
+        if(m_partnerDialog)m_partnerDialog->close();
         m_databaseFile.clear();
         if (m_semanticProfileChanged) m_semanticProfileChanged();
     }

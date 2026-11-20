@@ -47,6 +47,8 @@ frost_add_library(app LAYER app
         src/standalone_build_backend.cpp
         src/unreal_build_backend.hpp
         src/unreal_build_backend.cpp
+        src/unreal_partner_window.hpp
+        src/unreal_partner_window.cpp
         src/cmake_integration.hpp
         src/cmake_integration.cpp
         src/cmake_kit_dialog.cpp
