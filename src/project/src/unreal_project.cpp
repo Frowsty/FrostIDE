@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Reads Unreal project and plugin descriptors and inventories local modules.
 #include "frost/project/unreal_project.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/file_system.hpp"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Connects a DAP client to CMake and handles cancellation of its configure process.
 #include "frost/debug/cmake_dap.hpp"
 
 #include "frost/io/utf.hpp"

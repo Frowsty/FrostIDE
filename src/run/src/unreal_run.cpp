@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Builds a native run configuration for an Unreal Editor project.
 #include "frost/run/unreal_run.hpp"
 #include "frost/io/path.hpp"
 namespace frost::run {

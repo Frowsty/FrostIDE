@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Connects the shader diagnostics action to the workbench Problems view.
 #include "frost/app/workbench.hpp"
 #include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"

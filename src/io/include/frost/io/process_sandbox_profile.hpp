@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Defines the filesystem access rights in a process sandbox profile.
 #pragma once
 #include <cstdint>
 #include <string>

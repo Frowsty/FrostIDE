@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Constructs .NET test invocations and parses discovery output and TRX reports.
 #include "frost/run/dotnet_tests.hpp"
 
 #include "frost/io/file_system.hpp"

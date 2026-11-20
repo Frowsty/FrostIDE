@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares the Unity test window factory and its editor control callbacks.
 #pragma once
 #include "unity_control.hpp"
 

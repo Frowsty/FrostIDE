@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks that the native Unreal Editor run configuration preserves the project argument.
 #include "frost/run/unreal_run.hpp"
 #include "frost/io/path.hpp"
 #include <gtest/gtest.h>

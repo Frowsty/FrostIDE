@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Defines shader diagnostic requests and results for DirectX Shader Compiler.
 #pragma once
 #include "frost/build/build_diagnostics.hpp"
 #include "frost/io/process.hpp"

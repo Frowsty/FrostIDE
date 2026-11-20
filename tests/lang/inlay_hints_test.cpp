@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks standard and legacy LSP inlay hint method selection.
 #include "frost/lang/semantic_tokens.hpp"
 
 #include "lang/feature_server.hpp"

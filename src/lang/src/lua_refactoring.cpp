@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Builds Lua inline-variable and extract-function edits from the syntax tree.
 #include "frost/lang/lua_refactoring.hpp"
 
 #include <algorithm>

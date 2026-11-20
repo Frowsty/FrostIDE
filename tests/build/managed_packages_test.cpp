@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks managed package commands, feed report parsing, and snapshot limits.
 #include "frost/build/managed_packages.hpp"
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/scripted_process_launcher.hpp"

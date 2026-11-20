@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks that Lua module renames edit resolved require literals and reject ambiguity.
 #include "frost/io/mem_fs.hpp"
 #include "frost/lang/lua_module_rename.hpp"
 #include "frost/text/document.hpp"

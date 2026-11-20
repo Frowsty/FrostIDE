@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares the CMake kit dialog and configure preset edit helper.
 #pragma once
 #include "frost/core/error.hpp"
 

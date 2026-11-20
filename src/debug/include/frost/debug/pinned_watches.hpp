@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares workspace persistence for pinned debugger watch expressions.
 #pragma once
 #include "frost/core/error.hpp"
 #include "frost/io/file_system.hpp"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Plans edits to Lua module paths and their resolved require references.
 #include "frost/lang/lua_module_rename.hpp"
 
 #include "frost/lang/uri.hpp"

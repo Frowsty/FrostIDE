@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Signals managed tool operations when their workspace trust revision changes.
 #pragma once
 #include "frost/project/trust_store.hpp"
 

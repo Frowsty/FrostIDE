@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Checks read-only package proposals produced by the Microsoft.Build NuGet planner.
 """Mandatory read-only Microsoft.Build package proposal acceptance. Missing SDK fails; no skip."""
 import base64
 import json

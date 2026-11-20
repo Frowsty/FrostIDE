@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Resolves the pinned standalone Lua runtime and stages it for the build.
 include_guard(GLOBAL)
 file(READ "${FROST_SOURCE_DIR}/sdk/sdk.lock.json" _frost_lua_lock)
 string(JSON _frost_lua_version GET "${_frost_lua_lock}" sources lua54 version)

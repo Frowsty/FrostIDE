@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Creates DirectX Shader Compiler invocations and parses their diagnostics.
 #include "dxc_profile.hpp"
 
 #include "frost/build/diagnostic.hpp"

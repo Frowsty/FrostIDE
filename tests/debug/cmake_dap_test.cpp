@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks rejection of invalid CMake DAP endpoints and deadlines.
 #include "frost/debug/cmake_dap.hpp"
 
 #include <gtest/gtest.h>

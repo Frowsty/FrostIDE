@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Indexes Unity asset GUIDs and plans moves that preserve metadata.
 #include "frost/lang/unity_assets.hpp"
 #include <algorithm>
 #include <set>

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks sandbox profiles and path access before platform-specific launch.
 #include "frost/io/process_sandbox.hpp"
 #include "frost/io/utf.hpp"
 namespace frost::io {

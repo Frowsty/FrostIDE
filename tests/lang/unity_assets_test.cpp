@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks Unity GUID indexing, usage detection, and preservation of asset metadata during moves.
 #include "frost/lang/unity_assets.hpp"
 #include <gtest/gtest.h>
 #include "frost/core/clock.hpp"

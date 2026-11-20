@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Converts an Unreal Editor launch into a native debugger target.
 #include "frost/debug/unreal_debug.hpp"
 #include "frost/io/path.hpp"
 namespace frost::debug {

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Encodes Unreal Editor partner requests and validates project-scoped replies.
 #include "frost/lang/unreal_partner.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/utf.hpp"

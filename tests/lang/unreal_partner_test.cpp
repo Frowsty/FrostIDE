@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks allowlisted Unreal Editor requests and strict validation of project replies.
 #include "frost/lang/unreal_partner.hpp"
 #include "frost/io/path.hpp"
 #include <gtest/gtest.h>

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks scene merge revalidation and cancellation when the dialog owner is destroyed.
 #include "scene_merge_work.hpp"
 #include <QApplication>
 #include <QComboBox>

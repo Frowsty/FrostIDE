@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Manages the GDB DAP process and its deferred transport startup.
 #include "gdb_transport.hpp"
 
 #include "frost/core/mutex.hpp"

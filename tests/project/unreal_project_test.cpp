@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks Unreal descriptor parsing and local project inventory boundaries.
 #include "frost/project/unreal_project.hpp"
 #include "frost/io/path.hpp"
 #include <gtest/gtest.h>

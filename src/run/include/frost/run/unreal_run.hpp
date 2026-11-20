@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Defines the inputs for building an Unreal Editor run configuration.
 #pragma once
 #include "frost/run/run_configuration.hpp"
 namespace frost::run {

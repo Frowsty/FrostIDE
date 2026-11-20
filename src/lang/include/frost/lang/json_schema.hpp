@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Defines schema-backed language services for workspace JSON files.
 #pragma once
 #include "frost/core/mutex.hpp"
 #include "frost/lang/diagnostics.hpp"

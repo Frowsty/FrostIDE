@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Prepares Linux sandbox launches and enforces filesystem restrictions with Landlock.
 #include "process_sandbox_internal.hpp"
 #include "frost/io/os_error.hpp"
 #include <array>

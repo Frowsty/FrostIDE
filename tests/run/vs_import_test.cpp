@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks local Visual Studio launch import and rejection of unsupported execution settings.
 #include "frost/io/path.hpp"
 #include "frost/run/vs_import.hpp"
 

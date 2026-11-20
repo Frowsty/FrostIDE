@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Defines language requests for CMake source and configured project data.
 #pragma once
 #include "frost/core/mutex.hpp"
 #include "frost/lang/lsp_client.hpp"

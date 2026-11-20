@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks .NET test commands, discovery identity, and bounded TRX parsing.
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
 #include "frost/run/dotnet_tests.hpp"

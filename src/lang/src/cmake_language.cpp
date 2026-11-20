@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Answers CMake language queries using source declarations and configured project data.
 #include "frost/lang/cmake_language.hpp"
 #include "frost/lang/cmake_refactoring.hpp"
 

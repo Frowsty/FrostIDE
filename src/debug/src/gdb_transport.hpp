@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares the process transport used by the GDB DAP adapter factory.
 #pragma once
 #include "frost/debug/gdb_dap.hpp"
 namespace frost::debug {

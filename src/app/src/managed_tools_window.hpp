@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Defines the workspace context and factories for managed package and test widgets.
 #pragma once
 #include "frost/build/managed_evaluation.hpp"
 #include "frost/document/refactoring_transaction.hpp"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Runs scoped inspection and collects proposed fixes from the tool response.
 #include "frost/io/path.hpp"
 #include "frost/lang/inspection_scope_fixes.hpp"
 #include "frost/lang/uri.hpp"

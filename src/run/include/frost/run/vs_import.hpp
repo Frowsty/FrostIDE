@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares import of local Visual Studio launch settings into run configurations.
 #pragma once
 #include "frost/rpc/json.hpp"
 #include "frost/run/run_configuration.hpp"

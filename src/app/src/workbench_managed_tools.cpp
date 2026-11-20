@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Binds managed package and .NET test tools to workbench services.
 #include "frost/app/workbench.hpp"
 #include "frost/project/solution_model.hpp"
 #include "frost/settings/keys.hpp"

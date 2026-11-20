@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks shader compiler arguments, diagnostic parsing, and trust gating.
 #include "frost/io/file_system.hpp"
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/scripted_process_launcher.hpp"

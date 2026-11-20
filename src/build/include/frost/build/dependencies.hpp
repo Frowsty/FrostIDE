@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Defines dependency plans and the interface for explicit package manager runs.
 #pragma once
 #include "frost/core/error.hpp"
 #include "frost/io/file_system.hpp"

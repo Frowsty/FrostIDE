@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Builds UnrealBuildTool commands and starts them for trusted projects.
 #include "frost/build/unreal_build.hpp"
 #include "frost/io/path.hpp"
 #include "frost/project/trust_store.hpp"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares the transport factory for CMake script debugging.
 #pragma once
 #include "frost/debug/debug_session.hpp"
 

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Registers language service test executables and their dependencies.
 
 frost_add_test(lang_lua_refactoring_tests
     SOURCES lua_refactoring_test.cpp lua_module_rename_test.cpp ../syntax/syntax_test_support.cpp

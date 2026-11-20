@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Runs managed package queries and parses feed and framework reports.
 #include "frost/build/managed_packages.hpp"
 
 #include "frost/io/file_system.hpp"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks personal watch persistence and handling of missing or corrupt settings.
 #include "frost/core/clock.hpp"
 #include "frost/debug/pinned_watches.hpp"
 #include "frost/io/mem_fs.hpp"

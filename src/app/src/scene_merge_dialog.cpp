@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Shows scene conflict choices and runs preview and revalidation work in the background.
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/vcs/diff_viewer.hpp"
 

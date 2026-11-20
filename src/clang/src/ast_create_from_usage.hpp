@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Uses Clang AST and diagnostic evidence to propose declarations for unresolved usages.
 #pragma once
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Frontend/ASTUnit.h"

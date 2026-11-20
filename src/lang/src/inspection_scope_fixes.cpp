@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Validates captured inputs and converts inspection diagnostics into fix proposals.
 #include "frost/lang/inspection_scope_fixes.hpp"
 
 #include "frost/io/path.hpp"

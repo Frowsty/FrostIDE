@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Reads and writes pinned watch expressions in personal project settings.
 #include "frost/debug/pinned_watches.hpp"
 
 #include "frost/rpc/json.hpp"

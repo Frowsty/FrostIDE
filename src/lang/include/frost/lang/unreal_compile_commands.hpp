@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares the Unreal compile database provider and normalization API.
 #pragma once
 #include "frost/lang/compile_commands.hpp"
 namespace frost::project { class TrustStore; }

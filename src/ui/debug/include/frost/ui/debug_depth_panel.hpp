@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares the debugger panel for inspecting variables and session details.
 #pragma once
 #include <QWidget>
 

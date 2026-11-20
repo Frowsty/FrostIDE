@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Stages and configures restricted process launches on Windows.
 #include "process_sandbox_internal.hpp"
 #include "frost/io/os_error.hpp"
 #include "frost/io/utf.hpp"

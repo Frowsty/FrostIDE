@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares the native debug target builder for launching Unreal Editor.
 #pragma once
 #include "frost/debug/lldb_dap.hpp"
 namespace frost::debug {

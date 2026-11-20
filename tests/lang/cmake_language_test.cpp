@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks CMake declarations, configured cache data, and completion results.
 #include "frost/lang/cmake_language.hpp"
 #include "frost/sched/sim_executor.hpp"
 #include "frost/text/text_buffer.hpp"

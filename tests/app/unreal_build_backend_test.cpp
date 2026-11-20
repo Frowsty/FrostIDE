@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks Unreal build launch and cancellation across save and trust changes.
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/scripted_process_launcher.hpp"

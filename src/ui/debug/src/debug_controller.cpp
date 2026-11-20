@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Manages debug session lifecycle and relays session events to the GUI thread.
 #include "frost/debug/pinned_watches.hpp"
 //
 // DebugController (see frost/ui/debug_controller.hpp): session lifecycle, Debug run and attach

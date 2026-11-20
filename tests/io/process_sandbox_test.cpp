@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks process sandbox profile validation and path access boundaries.
 #include "frost/io/process_sandbox.hpp"
 #include <gtest/gtest.h>
 using namespace frost;

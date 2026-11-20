@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares parsers that convert framework output into shared test models.
 #pragma once
 #include "frost/core/error.hpp"
 #include "frost/run/test_model.hpp"

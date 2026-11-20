@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Runs the Unity test bridge probe against public API doubles.
 """Offline public-API-double probe; not Unity runtime acceptance. No implicit SDK discovery."""
 import argparse
 import os

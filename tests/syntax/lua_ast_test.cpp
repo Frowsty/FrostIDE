@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks Lua grammar nodes, cancellation, and syntax tree budget handling.
 #include "syntax_test_support.hpp"
 #include <gtest/gtest.h>
 

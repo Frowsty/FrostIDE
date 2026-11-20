@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks CMake preset insertion, input validation, and preservation of user JSON.
 #include "../../src/app/src/cmake_kit_dialog.hpp"
 #include <QJsonArray>
 #include <QJsonDocument>

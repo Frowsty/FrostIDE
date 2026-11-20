@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Connects the workbench dependency window to planning and installation actions.
 #include "frost/app/main_window.hpp"
 #include "frost/app/workbench.hpp"
 #include "frost/build/build_service.hpp"

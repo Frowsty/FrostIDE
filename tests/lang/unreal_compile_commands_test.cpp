@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks Unreal compile command rebasing, snapshot identity, and trust changes.
 #include "frost/lang/unreal_compile_commands.hpp"
 #include "frost/lang/json.hpp"
 #include "frost/project/trust_store.hpp"

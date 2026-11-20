@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks scene merge source identity, conflict choices, and absent values.
 #include "frost/engine/scene_merge.hpp"
 #include "frost/io/spawn_log.hpp"
 

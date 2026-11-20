@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks explicit package manager commands, consent, trust changes, and cancellation.
 #include "frost/build/dependencies.hpp"
 #include "frost/core/clock.hpp"
 #include "frost/io/mem_fs.hpp"

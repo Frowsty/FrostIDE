@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Validates and configures GDB as a Debug Adapter Protocol backend.
 #include "frost/debug/gdb_dap.hpp"
 
 #include "frost/io/path.hpp"

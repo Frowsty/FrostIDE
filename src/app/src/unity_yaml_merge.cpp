@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Prepares Unity YAML merge previews from Git index stages.
 #include "unity_yaml_merge.hpp"
 
 #include "frost/io/async_process.hpp"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks GDB transport startup, version validation, and launch argument handling.
 #include "frost/core/clock.hpp"
 #include "frost/debug/gdb_dap.hpp"
 #include "frost/io/mem_fs.hpp"

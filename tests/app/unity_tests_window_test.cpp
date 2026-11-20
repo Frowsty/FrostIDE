@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks Unity test catalog selection, continuation validation, and stale responses.
 #include "../../src/app/src/unity_tests_window.hpp"
 #include <QPushButton>
 #include <QTableWidget>

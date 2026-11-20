@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Plans path edits for renamed files referenced by Visual C++ projects.
 #include "frost/project/vcxproj_rename.hpp"
 
 #include "frost/io/path.hpp"

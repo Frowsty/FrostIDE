@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Displays Unity test discovery and run state in the workbench.
 #include "unity_tests_window.hpp"
 
 #include <QComboBox>

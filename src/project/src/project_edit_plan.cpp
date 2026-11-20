@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Decodes project edit proposals and validates their serialized fields.
 #include "frost/io/path.hpp"
 #include "frost/project/project_edit.hpp"
 

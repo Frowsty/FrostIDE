@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Builds the read-only NuGet package planner with an explicitly selected SDK.
 """Explicit offline SDK build of the read-only package planner; never invoked by opening a workspace."""
 import argparse
 import os

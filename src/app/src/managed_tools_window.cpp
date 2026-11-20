@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Implements the managed package and .NET test widgets.
 #include "managed_tools_window.hpp"
 
 #include "frost/build/managed_evaluation.hpp"

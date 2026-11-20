@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Loads scene conflict inputs and validates snapshots against the repository.
 #include "scene_merge_work.hpp"
 
 #include "frost/io/async_process.hpp"

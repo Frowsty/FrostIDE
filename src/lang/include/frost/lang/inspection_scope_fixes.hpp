@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Defines captured inputs and proposed fixes for scoped code inspections.
 #pragma once
 #include "frost/lang/inspection.hpp"
 

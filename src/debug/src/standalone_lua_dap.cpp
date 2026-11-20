@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Prepares debugger launch arguments and an adapter for standalone Lua.
 #include "frost/debug/standalone_lua_dap.hpp"
 
 #include "frost/io/path.hpp"

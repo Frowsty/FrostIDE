@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks UnrealBuildTool argument handling and cancellation for trusted launches.
 #include "frost/build/unreal_build.hpp"
 #include "frost/project/trust_store.hpp"
 #include "frost/io/scripted_process_launcher.hpp"

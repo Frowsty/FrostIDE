@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares process sandbox validation and platform launch preparation.
 #pragma once
 #include "frost/io/process.hpp"
 #include "frost/io/path.hpp"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Runs Unity YAML merge preparation in the background and shows the diff preview.
 #include "frost/ui/dialog_chrome.hpp"
 #include "frost/ui/vcs/diff_viewer.hpp"
 

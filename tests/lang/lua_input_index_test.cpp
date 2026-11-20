@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks Lua input index invalidation across file and directory boundaries.
 #include "frost/lang/lua_input_index.hpp"
 
 #include <gtest/gtest.h>

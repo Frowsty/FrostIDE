@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Provides schema-backed JSON completion, validation, and entity structure.
 #include "frost/lang/json_schema.hpp"
 
 #include "frost/io/path.hpp"

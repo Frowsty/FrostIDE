@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks that opening the partner window does not connect or populate Blueprint rows.
 #include "../../src/app/src/unreal_partner_window.hpp"
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks validation of scoped inspection inputs and proposed replacement edits.
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/inspection_scope_fixes.hpp"

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Analyzes Unreal reflection macros for navigation, completion, and inspections.
 #include "frost/lang/unreal_reflection.hpp"
 #include "frost/io/path.hpp"
 #include <algorithm>

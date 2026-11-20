@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Displays debugger variable details and requests data for the selected frame.
 #include "frost/ui/debug_depth_panel.hpp"
 
 #include "frost/ui/debug_controller.hpp"

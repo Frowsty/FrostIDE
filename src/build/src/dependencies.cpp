@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Validates workspace dependency plans and prepares package manager invocations.
 #include "frost/build/dependencies.hpp"
 
 #include "frost/io/file_system.hpp"

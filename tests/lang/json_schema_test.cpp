@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks JSON schema diagnostics, completions, and captured value ranges.
 #include "frost/lang/json_schema.hpp"
 #include "frost/lang/json_entity_hierarchy.hpp"
 #include "frost/lang/symbols.hpp"

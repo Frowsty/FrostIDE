@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Collects CMake toolchain choices and appends a configure preset.
 #include "cmake_kit_dialog.hpp"
 
 #include "frost/build/cmake_service.hpp"

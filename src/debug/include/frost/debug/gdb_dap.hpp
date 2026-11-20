@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares GDB DAP discovery, launch arguments, and adapter factories.
 #pragma once
 #include "frost/debug/lldb_dap.hpp"
 

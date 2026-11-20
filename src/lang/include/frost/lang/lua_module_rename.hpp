@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Defines requests and edit proposals for renaming a Lua module.
 #pragma once
 #include "frost/io/file_system.hpp"
 #include "frost/lang/lua_refactoring.hpp"

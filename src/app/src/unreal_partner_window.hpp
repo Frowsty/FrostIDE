@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Declares the dialog that displays Unreal Editor partner data.
 #pragma once
 #include <QDialog>
 #include <QByteArray>

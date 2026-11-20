@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Checks that untrusted managed tools cannot launch or publish test discovery rows.
 #include "frost/io/mem_fs.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/scripted_process_launcher.hpp"

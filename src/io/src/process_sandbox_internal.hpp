@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Shares internal sandbox launch declarations with platform backends.
 #pragma once
 #include "frost/io/process_sandbox.hpp"
 #ifdef _WIN32

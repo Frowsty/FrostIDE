@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# Builds and stages the pinned Lua runtime from a local source archive using Clang.
 """Build/stage pinned standalone Lua with Clang. Authored recipe; never invoked implicitly.
 
 Supply an already downloaded official source archive. No network, package installation, tests,

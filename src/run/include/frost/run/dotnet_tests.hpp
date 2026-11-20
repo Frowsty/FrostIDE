@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Defines .NET test commands, discovery results, and TRX report parsing.
 #pragma once
 #include "frost/build/managed_project.hpp"
 #include "frost/run/test_model.hpp"

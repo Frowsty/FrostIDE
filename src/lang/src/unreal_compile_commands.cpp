@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Normalizes Unreal compile commands and stores content-addressed snapshots.
 #include "frost/lang/unreal_compile_commands.hpp"
 #include "frost/lang/json.hpp"
 #include "frost/project/standalone_project.hpp"

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Builds the extension manifest from the local executable, license, and dependencies.
 """Offline manifest preparation; reads explicitly named local files, never executes a tool."""
 import argparse
 import hashlib
