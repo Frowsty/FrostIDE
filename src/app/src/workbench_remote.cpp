@@ -129,42 +129,49 @@ struct Reservation {
 };
 using RemoteOutput=std::function<void(build::RunStream,std::string)>;
 using RemoteDone=std::function<void(Result<build::RunExit>)>;
-sched::Task<void> runWslBuild(io::IFileSystem* fs,io::IProcessLauncher* local,project::TrustStore* trust,
-    std::shared_ptr<RemoteCapture> capture,build::WslCMakeProfile profile,build::WslCMakeOperation operation,
-    std::shared_ptr<sched::ResourceGovernor> governor,std::shared_ptr<Reservation> reservation,RemoteOutput output,RemoteDone done) {
+[[maybe_unused]] Result<build::RunExit> executeWslBuild(io::IFileSystem* fs,io::IProcessLauncher* local,project::TrustStore* trust,
+    const std::shared_ptr<RemoteCapture>& capture,const build::WslCMakeProfile& profile,build::WslCMakeOperation operation,
+    const std::shared_ptr<sched::ResourceGovernor>& governor,const RemoteOutput& output) {
     auto actual=captureEndpoint(*fs,*trust,capture->root,capture->registry,capture->target.id,capture->projectStop);
-    if(!actual){done(std::unexpected(actual.error()));co_return;}
-    if((*actual)->target!=capture->target||(*actual)->registryBytes!=capture->registryBytes||(*actual)->revision!=capture->revision){done(fail(ErrorCode::Untrusted,"Selected remote endpoint/trust changed while the WSL command was queued"));co_return;}
+    if(!actual)return std::unexpected(actual.error());
+    if((*actual)->target!=capture->target||(*actual)->registryBytes!=capture->registryBytes||(*actual)->revision!=capture->revision)
+        return fail(ErrorCode::Untrusted,"Selected remote endpoint/trust changed while the WSL command was queued");
     capture->physicalRoot=(*actual)->physicalRoot;capture->registryPhysical=(*actual)->registryPhysical;capture->mappingIdentities=(*actual)->mappingIdentities;
     auto profilePhysical=fs->physicalPath(capture->profiles);auto profileBytes=fs->readFileSnapshot(capture->profiles,1024U*1024U);
-    if(!profilePhysical||within(capture->physicalRoot,*profilePhysical)||!profileBytes||*profileBytes!=capture->profilesBytes){done(fail(ErrorCode::Untrusted,"Selected WSL profile changed or is not application-owned"));co_return;}
+    if(!profilePhysical||within(capture->physicalRoot,*profilePhysical)||!profileBytes||*profileBytes!=capture->profilesBytes)
+        return fail(ErrorCode::Untrusted,"Selected WSL profile changed or is not application-owned");
     capture->profilesPhysical=*profilePhysical;
-    auto lease=governor->tryAcquireHeavyLeg(sched::HeavyLegKind::Build);
-    if(!lease){done(std::unexpected(lease.error()));co_return;}
+    auto lease=governor->tryAcquireHeavyLeg(sched::HeavyLegKind::Build);if(!lease)return std::unexpected(lease.error());
     const auto permission=[=](){return admit(*fs,*trust,*capture);};
     build::RemoteProcessLauncher launcher(*local,capture->target,{.admit=permission});
-    auto command=build::wslCMakeCommand(profile,capture->target,operation,governor->buildJobs());
-    if(!command){done(std::unexpected(command.error()));co_return;}
+    auto command=build::wslCMakeCommand(profile,capture->target,operation,governor->buildJobs());if(!command)return std::unexpected(command.error());
     auto cmake=*command;cmake.executable=profile.cmakeProgram;cmake.arguments={"--version"};
     auto cmakeVersion=io::runToCompletion(launcher,cmake,"",30s,capture->jobStop);
-    if(!cmakeVersion||cmakeVersion->exitCode!=0){done(fail(ErrorCode::NotFound,"Remote CMake tool unavailable: "+(cmakeVersion?cmakeVersion->stderrBytes:cmakeVersion.error().describe())));co_return;}
+    if(!cmakeVersion)return std::unexpected(cmakeVersion.error().withContext("Remote CMake tool probe"));
+    if(cmakeVersion->exitCode!=0)return fail(ErrorCode::IoError,"Remote CMake version probe failed: "+cmakeVersion->stderrBytes);
     auto ninja=cmake;ninja.executable=profile.ninjaProgram;
     auto ninjaVersion=io::runToCompletion(launcher,ninja,"",30s,capture->jobStop);
-    if(!ninjaVersion||ninjaVersion->exitCode!=0){done(fail(ErrorCode::NotFound,"Remote Ninja tool unavailable: "+(ninjaVersion?ninjaVersion->stderrBytes:ninjaVersion.error().describe())));co_return;}
-    if(auto versions=build::validateWslCMakeToolVersions(cmakeVersion->stdoutBytes,ninjaVersion->stdoutBytes);!versions){done(std::unexpected(versions.error()));co_return;}
+    if(!ninjaVersion)return std::unexpected(ninjaVersion.error().withContext("Remote Ninja tool probe"));
+    if(ninjaVersion->exitCode!=0)return fail(ErrorCode::IoError,"Remote Ninja version probe failed: "+ninjaVersion->stderrBytes);
+    if(auto versions=build::validateWslCMakeToolVersions(cmakeVersion->stdoutBytes,ninjaVersion->stdoutBytes);!versions)return std::unexpected(versions.error());
     output(build::RunStream::Stdout,cmakeVersion->stdoutBytes+ninjaVersion->stdoutBytes);
-    if(auto current=permission();!current){done(std::unexpected(current.error()));co_return;}
+    if(auto current=permission();!current)return std::unexpected(current.error());
     build::RunSessionCallbacks callbacks;callbacks.onOutput=[output](auto stream,std::string_view bytes){output(stream,std::string(bytes));};
     auto session=build::RunSession::start(launcher,*command,std::move(callbacks),systemClock(),{.terminateDescendantsOnExit=true});
-    if(!session){done(std::unexpected(session.error()));co_return;}
+    if(!session)return std::unexpected(session.error());
     std::stop_callback stopped(capture->jobStop,[&]{(*session)->stop();});
     std::stop_callback projectStopped(capture->projectStop,[&]{(*session)->stop();});
     std::optional<build::RunExit> result;
     while(!(result=(*session)->waitFor(250ms)))if(auto current=permission();!current)(*session)->stop();
-    if(result->stopped&&!result->waitFailed&&!result->cleanupFailed)done(*result);
-    else if(auto current=permission();!current)done(std::unexpected(current.error()));else done(*result);
-    (void)reservation; // Shared generation-owned BuildService lease covers probes and the actual command.
-    co_return;
+    if(result->stopped&&!result->waitFailed&&!result->cleanupFailed)return *result;
+    if(auto current=permission();!current)return std::unexpected(current.error());return *result;
+}
+[[maybe_unused]] sched::Task<void> runWslBuild(io::IFileSystem* fs,io::IProcessLauncher* local,project::TrustStore* trust,
+    std::shared_ptr<RemoteCapture> capture,build::WslCMakeProfile profile,build::WslCMakeOperation operation,
+    std::shared_ptr<sched::ResourceGovernor> governor,std::shared_ptr<Reservation> reservation,RemoteOutput output,RemoteDone done) {
+    auto result=executeWslBuild(fs,local,trust,capture,profile,operation,governor,output);
+    reservation.reset(); // Native/CMake handoff may retry only after both shared leases are released.
+    done(std::move(result));co_return;
 }
 struct BuildView {
     std::array<build::LineSplitter,2> lines;
@@ -300,12 +307,12 @@ void Workbench::showWslCMake() {
     auto stream=[self,owner,view,root,generation](build::RunStream channel,std::string text){if(self)QMetaObject::invokeMethod(self.data(),[=]{if(self&&owner&&self->m_remoteBuildGeneration==generation&&self->m_projectRoot==root)view->feed(channel,text);},Qt::QueuedConnection);};
     auto done=[self,owner,statusGuard,stopGuard,view,generation](Result<build::RunExit> result){if(self)QMetaObject::invokeMethod(self.data(),[=]{
         if(!self||self->m_remoteBuildGeneration!=generation)return;self->m_remoteBuildActive=false;
+        if(self->m_cmake)self->m_cmake->service().admissionAvailable();
         if(stopGuard)stopGuard->setEnabled(false);
         if(!owner||!statusGuard)return;view->finish();
         if(!result)statusGuard->setText(q(result.error().describe()));
         else if(result->waitFailed||result->cleanupFailed)statusGuard->setText("Remote result/cleanup could not be confirmed; inspect actual transport output.");
         else statusGuard->setText(QStringLiteral("Actual remote exit code: %1%2").arg(result->exitCode).arg(result->stopped?QStringLiteral(" (stopped)"):QString{}));
-        if(self->m_cmake)self->m_cmake->service().admissionAvailable();
     },Qt::QueuedConnection);};
     dialog->show();
     m_pool->spawn(sched::Lane::Background,runWslBuild(&m_services.fs,&m_services.launcher,&m_services.trust,capture,edited->profile,*edited->operation,m_resourceGovernor,std::move(reserved),std::move(stream),std::move(done))).detach();

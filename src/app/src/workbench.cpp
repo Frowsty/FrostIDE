@@ -489,6 +489,7 @@ void Workbench::createBuildService() {
     m_buildBackend = std::make_unique<ui::BuildServiceBackend>(*m_buildService);
     m_build->setBackend(m_buildBackend.get());
     m_build->setSaveAllHandler(this);
+    m_build->setBuildAdmission([this]{return !m_remoteBuildActive;});
     m_buildActions = new ui::BuildActions(*m_build, this);
     if (auto registered = m_buildActions->registerActions(m_registry); !registered) {
         log::warn(kLog, "build actions: {}", registered.error().describe());

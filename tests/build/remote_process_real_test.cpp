@@ -57,8 +57,9 @@ TEST(RemoteGuardianReal, StopAcknowledgesCleanupAndIndependentProcOracleSeesDesc
     RemoteProcessLauncher launcher(transport,localEndpoint(),{.admit=[&]()->Result<void>{return admitted?Result<void>{}:Result<void>(fail(ErrorCode::Untrusted,"revoked"));}});
     auto spec=workload(FROST_REMOTE_TEST_PYTHON,"import json,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-I','-c','import time; time.sleep(60)']); print(json.dumps({'child':child.pid}),flush=True); time.sleep(60)");
     auto process=launcher.launch(spec);ASSERT_TRUE(process) << process.error().describe();
-    std::array<char,4096> buffer{};auto count=(*process)->readStdout(buffer);ASSERT_TRUE(count);ASSERT_GT(*count,0U);
-    auto actual=rpc::parseJson(std::string_view(buffer.data(),*count));ASSERT_TRUE(actual);
+    std::array<char,4096> buffer{};std::string line;
+    while(line.find('\n')==line.npos){auto count=(*process)->readStdout(buffer);ASSERT_TRUE(count);ASSERT_GT(*count,0U);line.append(buffer.data(),*count);ASSERT_LE(line.size(),4096U);}
+    auto actual=rpc::parseJson(line);ASSERT_TRUE(actual);
     const auto child=actual->integerAt("child");ASSERT_TRUE(child);
     const auto stat="/proc/"+std::to_string(*child)+"/stat";
     auto before=io::realFileSystem().readFile(stat);ASSERT_TRUE(before);const auto identity=startTicks(*before);ASSERT_FALSE(identity.empty());
