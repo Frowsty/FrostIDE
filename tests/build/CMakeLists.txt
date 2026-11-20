@@ -37,7 +37,7 @@ frost_add_test(build_unit_tests
         diagnostic_test.cpp
         json_test.cpp
         line_splitter_test.cpp
-        managed_project_test.cpp managed_evaluation_test.cpp
+        managed_project_test.cpp managed_evaluation_test.cpp managed_packages_test.cpp
         msbuild_compile_test.cpp
         msbuild_driver_test.cpp
         msbuild_locator_test.cpp
