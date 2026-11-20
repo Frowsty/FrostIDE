@@ -1,4 +1,4 @@
-# ADR 0117: SDK package proposals and .NET test reports
+# ADR 0120: SDK package proposals and .NET test reports
 
 Status: source implementation and authored regressions; execution deliberately deferred in R17.
 
