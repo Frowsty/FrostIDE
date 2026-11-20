@@ -36,7 +36,7 @@ internal sealed class LocalRefactorings : ISemanticFeature, ISemanticContributio
         }
         // Exact whole-return selection preserves evaluation order and never hoists across a statement.
         var expression = root.FindNode(selection, getInnermostNodeForTie: true) as ExpressionSyntax;
-        if (!selection.IsEmpty && expression is not null && expression.Span == selection &&
+        if (!semantic.LookupNamespacesAndTypes(start, name: "var").Any() && !selection.IsEmpty && expression is not null && expression.Span == selection &&
             expression.Parent is ReturnStatementSyntax returned && returned.Parent is BlockSyntax block &&
             expression is not RefExpressionSyntax && !returned.ContainsDirectives &&
             semantic.GetTypeInfo(expression, token).Type is { TypeKind: not TypeKind.Error } type && type.SpecialType != SpecialType.System_Void) {
@@ -56,7 +56,7 @@ internal sealed class LocalRefactorings : ISemanticFeature, ISemanticContributio
         if (identifier?.Parent is ReturnStatementSyntax final && final.Expression == identifier && final.Parent is BlockSyntax enclosing) {
             var index = enclosing.Statements.IndexOf(final);
             if (index > 0 && enclosing.Statements[index - 1] is LocalDeclarationStatementSyntax declaration &&
-                declaration.Declaration.Type.IsVar && declaration.Declaration.Variables.Count == 1 && declaration.Modifiers.Count == 0 &&
+                declaration.Declaration.Type.IsVar && !semantic.LookupNamespacesAndTypes(declaration.SpanStart, name: "var").Any() && declaration.Declaration.Variables.Count == 1 && declaration.Modifiers.Count == 0 &&
                 declaration.UsingKeyword.IsKind(SyntaxKind.None) && declaration.AwaitKeyword.IsKind(SyntaxKind.None) &&
                 !declaration.ContainsDirectives && !final.ContainsDirectives &&
                 !declaration.DescendantTrivia().Concat(final.DescendantTrivia()).Any(t => !t.IsKind(SyntaxKind.WhitespaceTrivia) && !t.IsKind(SyntaxKind.EndOfLineTrivia)) &&
