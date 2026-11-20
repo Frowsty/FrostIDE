@@ -132,5 +132,15 @@ TEST(MonoResponses, ExceptionStopRequiresActualObjectAndExactPayload) {
     bytes.back() = 0; EXPECT_FALSE(decodeStop(bytes));
     bytes.back() = 42; bytes.push_back(0); EXPECT_FALSE(decodeStop(bytes));
 }
+TEST(MonoResponses, TypeAssemblyDecoderRequiresCompleteNegotiatedTypeInfo) {
+    std::vector<std::uint8_t> bytes;
+    const auto put = [&](std::uint32_t n) { for (int shift = 24; shift >= 0; shift -= 8) bytes.push_back(static_cast<std::uint8_t>(n >> shift)); };
+    put(0); put(1); bytes.push_back('C'); put(1); bytes.push_back('C');
+    put(7); put(8); put(0); put(0); put(0x02000001);
+    bytes.push_back(0); put(0); bytes.push_back(0); put(0); put(0); put(0);
+    auto assembly = decodeTypeAssembly258(bytes); ASSERT_TRUE(assembly); EXPECT_EQ(*assembly, 7u);
+    bytes.push_back(0); EXPECT_FALSE(decodeTypeAssembly258(bytes));
+    bytes.pop_back(); bytes.pop_back(); EXPECT_FALSE(decodeTypeAssembly258(bytes));
+}
 } // namespace
 } // namespace frost::debug::mono

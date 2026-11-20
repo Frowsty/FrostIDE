@@ -18,6 +18,11 @@ Locally merged main 7db564d3 into R18 integration 63f4cbc0. Retained compiler-ba
 - Actual registered semantic providers outrank the builtin source fallback. Named source/span/include/root/candidate limits and scheduler-free fallback are recorded in ADR0118. Lexer, physical source navigation/provenance, ambiguous/missing/macro limits, provider precedence and worker editor regressions are authored.
 - Independent Astra source review is requested. No builds, tests, shader/Unity feature execution, downloads/install, WSL or pushes occurred. Next: source-review corrections, additive R14 GLSL joins, then independent R19 other-language/extension branches.
 
+## 2026-11-20 R18 Mono live-domain assembly resolution
+
+- Mono attach now obtains actual types for an admitted source through VM.GET_TYPES_FOR_SOURCE_FILE, validates the complete 2.58 Type.GET_INFO layout and collects its domain-bound assembly IDs alongside root-domain candidates. Selection still requires a unique exact loaded path and byte-identical original PE/PDB; source-name matches alone cannot admit a module. This permits verified user code loaded outside the root domain without guessing bridge AppDomain IDs.
+- Source type metadata work is bounded to 512 records. Authored complete/truncated type-info, wire command and socket-peer non-root-assembly coverage. Protocol facts checked against public Mono wire docs and MIT debugger-agent source-query/type-info paths; no implementation/dependency copied. Source review pending; no execution. Domain lifecycle rebind remains separate and does not inherit old frame/method/value identities.
+
 ## 2026-11-20 R18 Mono exception stop controls
 
 - Added actual Mono 2.58 exception request/clear commands, limited to the verified assembly, with the documented caught/uncaught/subclasses and 2.54 filter-extension bytes. DAP exposes any/unhandled module exception filters and actual stopped exception object identity; unsupported conditional/type filters refuse before replacing an installed filter.

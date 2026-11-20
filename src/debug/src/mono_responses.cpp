@@ -72,6 +72,22 @@ Result<std::string> decodeString(std::span<const std::uint8_t> payload) {
         return fail(ErrorCode::Corrupt, "invalid Mono string");
     return result;
 }
+Result<std::uint32_t> decodeTypeAssembly258(std::span<const std::uint8_t> payload) {
+    Reader r(payload);
+    std::string text;
+    std::uint32_t assembly = 0, module = 0, ignored = 0, count = 0;
+    std::uint8_t byte = 0;
+    if (!r.string(text) || !r.string(text) || !r.string(text) || !r.u32(assembly) || !assembly ||
+        !r.u32(module) || !module || !r.u32(ignored) || !r.u32(ignored) || !r.u32(ignored) ||
+        !r.byte(byte) || !r.u32(ignored) || !r.byte(byte) || !r.u32(count) || count > 4096)
+        return fail(ErrorCode::Corrupt, "invalid Mono type info");
+    for (std::uint32_t i = 0; i < count; ++i) if (!r.u32(ignored) || !ignored) return fail(ErrorCode::Corrupt, "invalid nested Mono type");
+    if (!r.u32(ignored) || !r.u32(count) || count > 4096) return fail(ErrorCode::Corrupt, "invalid generic Mono type info");
+    for (std::uint32_t i = 0; i < count; ++i) if (!r.u32(ignored) || !ignored) return fail(ErrorCode::Corrupt, "invalid generic Mono type");
+    if (!r.done()) return fail(ErrorCode::Corrupt, "trailing Mono type info");
+    return assembly;
+}
+
 Result<std::uint32_t> decodeId(std::span<const std::uint8_t> payload) {
     Reader r(payload);
     std::uint32_t id = 0;

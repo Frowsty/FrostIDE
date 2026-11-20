@@ -75,9 +75,9 @@ bool sendAll(TestSocket s, const std::vector<std::uint8_t>& data) {
 class ScriptedMono {
 public:
     explicit ScriptedMono(bool badImage = false, bool failResume = false, bool failSecondClear = false,
-                          bool stopAfterResume = false, bool exceptionStop = false)
+                          bool stopAfterResume = false, bool exceptionStop = false, bool childDomain = false)
         : badImage(badImage), failResume(failResume), failSecondClear(failSecondClear),
-          stopAfterResume(stopAfterResume), exceptionStop(exceptionStop) {
+          stopAfterResume(stopAfterResume), exceptionStop(exceptionStop), childDomain(childDomain) {
 #ifdef _WIN32
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
@@ -176,8 +176,15 @@ private:
             } else if (set == 20 && command == 1) {
                 put32(payload, 1);
             } else if (set == 20 && command == 3) {
-                put32(payload, 1);
-                put32(payload, 2);
+                put32(payload, childDomain ? 0 : 1);
+                if (!childDomain) put32(payload, 2);
+            } else if (set == 1 && command == 11) {
+                put32(payload, 1); put32(payload, 4);
+            } else if (set == 23 && command == 1) {
+                put32(payload, 0); put32(payload, 1); payload.push_back('C'); put32(payload, 1); payload.push_back('C');
+                put32(payload, 2); put32(payload, 1); put32(payload, 0); put32(payload, 0); put32(payload, 0x02000001);
+                payload.push_back(0); put32(payload, 0); payload.push_back(0);
+                put32(payload, 0); put32(payload, 0); put32(payload, 0);
             } else if (set == 21 && (command == 1 || command == 8 || command == 10)) {
                 std::string value = command == 1   ? "/owned/a.dll"
                                     : command == 8 ? (badImage ? "other" : "image")
@@ -233,7 +240,7 @@ private:
     }
     TestSocket listener = badSocket;
     std::jthread server;
-    bool badImage, failResume, failSecondClear, stopAfterResume, exceptionStop;
+    bool badImage, failResume, failSecondClear, stopAfterResume, exceptionStop, childDomain;
     std::uint32_t nextBreakpoint = 9;
 #ifdef _WIN32
     bool winsock = false;
@@ -509,6 +516,13 @@ TEST(MonoDap, OwnedExceptionFilterProducesActualExceptionStopAndClearsBeforeDeta
     EXPECT_FALSE(requestSync(**client, "exceptionInfo", rpc::Json::object().set("threadId", 2)));
     EXPECT_TRUE(requestSync(**client, "disconnect"));
     EXPECT_EQ(runtime.clears.load(), 1);
+    EXPECT_TRUE(runtime.disposed);
+}
+TEST(MonoDap, SourceTypeEvidenceFindsVerifiedAssemblyOutsideRootDomain) {
+    ScriptedMono runtime(false, false, false, false, false, true);
+    auto client = monoAdapterFactory(runtime.target())({}); ASSERT_TRUE(client);
+    EXPECT_TRUE(requestSync(**client, "attach"));
+    EXPECT_TRUE(requestSync(**client, "disconnect"));
     EXPECT_TRUE(runtime.disposed);
 }
 TEST(MonoDap, ExceptionInfoRetainsStopTimeModeAfterFilterChange) {

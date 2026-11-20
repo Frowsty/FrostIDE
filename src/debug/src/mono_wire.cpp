@@ -83,6 +83,14 @@ Result<std::vector<std::uint8_t>> Wire::types(std::string_view name, std::string
     return request(1, 12, p, std::move(label));
 }
 
+Result<std::vector<std::uint8_t>> Wire::typesForSource(std::string_view path, std::string label) {
+    if (path.empty() || path.size() > 4096 || path.find('\0') != path.npos || io::validUtf8Prefix(path) != path.size())
+        return fail(ErrorCode::InvalidArgument, "invalid Mono source query");
+    std::vector<std::uint8_t> p; append32(p, static_cast<std::uint32_t>(path.size()));
+    p.insert(p.end(), path.begin(), path.end()); p.push_back(0);
+    return request(1, 11, p, std::move(label));
+}
+
 Result<std::vector<std::uint8_t>> Wire::metadata(MetadataQuery query, std::uint32_t id, std::string label) {
     if (!id)
         return fail(ErrorCode::InvalidArgument, "invalid Mono metadata ID");

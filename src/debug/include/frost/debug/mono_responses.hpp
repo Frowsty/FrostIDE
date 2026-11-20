@@ -48,6 +48,8 @@ struct MethodDebugInfo {
     std::vector<SequencePoint> points;
 };
 [[nodiscard]] Result<std::string> decodeString(std::span<const std::uint8_t> payload);
+// Validates a complete negotiated 2.58 Type.GET_INFO reply and returns its domain-bound assembly ID.
+[[nodiscard]] Result<std::uint32_t> decodeTypeAssembly258(std::span<const std::uint8_t> payload);
 [[nodiscard]] Result<std::uint32_t> decodeId(std::span<const std::uint8_t> payload);
 [[nodiscard]] Result<std::vector<std::uint32_t>> decodeIds(std::span<const std::uint8_t> payload);
 [[nodiscard]] Result<StopEvent> decodeStop(std::span<const std::uint8_t> payload);

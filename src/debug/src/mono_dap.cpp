@@ -143,7 +143,23 @@ struct Worker : std::enable_shared_from_this<Worker> {
         auto assemblies = decodeIds(assembliesPacket->payload);
         if (!assemblies)
             return std::unexpected(std::move(assemblies.error()));
-        for (auto id : *assemblies) {
+        // Source queries enumerate actual domain-bound types across live domains. Their assembly
+        // IDs are candidates only; every chosen assembly still needs exact path and PE/PDB evidence.
+        std::set<std::uint32_t> candidates(assemblies->begin(), assemblies->end());
+        if (target.module->sources.empty()) return fail(ErrorCode::InvalidArgument, "verified Mono source is missing");
+        auto typePacket = call(session.typesForSource(target.module->sources.front()));
+        if (!typePacket) return std::unexpected(std::move(typePacket.error()));
+        auto types = decodeIds(typePacket->payload);
+        if (!types) return std::unexpected(std::move(types.error()));
+        if (types->size() > 512) return fail(ErrorCode::OutOfRange, "Mono source type lookup exceeds budget");
+        for (auto type : *types) {
+            auto packet = call(session.metadata(MetadataQuery::TypeInfo, type));
+            if (!packet) return std::unexpected(std::move(packet.error()));
+            auto owner = decodeTypeAssembly258(packet->payload);
+            if (!owner) return std::unexpected(std::move(owner.error()));
+            candidates.insert(*owner);
+        }
+        for (auto id : candidates) {
             auto location = call(session.metadata(MetadataQuery::AssemblyLocation, id));
             if (!location)
                 return std::unexpected(std::move(location.error()));

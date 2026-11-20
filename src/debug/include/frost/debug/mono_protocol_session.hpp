@@ -28,6 +28,7 @@ public:
     [[nodiscard]] Result<std::vector<std::uint8_t>> rootDomain();
     [[nodiscard]] Result<std::vector<std::uint8_t>> domainAssemblies(std::uint32_t domain);
     [[nodiscard]] Result<std::vector<std::uint8_t>> types(std::string_view name);
+    [[nodiscard]] Result<std::vector<std::uint8_t>> typesForSource(std::string_view path);
     [[nodiscard]] Result<std::vector<std::uint8_t>> metadata(MetadataQuery query, std::uint32_t id);
     [[nodiscard]] Result<std::vector<std::uint8_t>> methodFromToken(std::uint32_t assembly, std::uint32_t token);
     [[nodiscard]] Result<std::vector<std::uint8_t>> breakpoint(std::uint32_t method, std::uint64_t offset);

@@ -186,6 +186,9 @@ Result<std::vector<std::uint8_t>> ProtocolSession::domainAssemblies(std::uint32_
 Result<std::vector<std::uint8_t>> ProtocolSession::types(std::string_view name) {
     return prepare(Operation::Metadata, [this, name](std::string l) { return m_wire.types(name, std::move(l)); });
 }
+Result<std::vector<std::uint8_t>> ProtocolSession::typesForSource(std::string_view path) {
+    return prepare(Operation::Metadata, [this, path](std::string l) { return m_wire.typesForSource(path, std::move(l)); });
+}
 Result<std::vector<std::uint8_t>> ProtocolSession::metadata(MetadataQuery q, std::uint32_t id) {
     return prepare(Operation::Metadata, [this, q, id](std::string l) { return m_wire.metadata(q, id, std::move(l)); });
 }

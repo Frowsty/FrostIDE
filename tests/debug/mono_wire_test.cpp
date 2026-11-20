@@ -152,5 +152,12 @@ TEST(MonoWire, ExceptionFilterCarries258ExtensionAndVerifiedAssemblyScope) {
         (std::vector<std::uint8_t>{13,2,2,8,0,0,0,0,0,1,1,0,0,11,0,0,0,1,0,0,0,7}));
     EXPECT_FALSE(wire.exceptions(0, true, "missing assembly"));
 }
+TEST(MonoWire, SourceTypeQueryUsesActualCaseSensitiveSourceCommand) {
+    Wire wire; ASSERT_TRUE(wire.feed(bytes(Wire::handshake)));
+    auto request = wire.typesForSource("/a.cs", "source types"); ASSERT_TRUE(request);
+    EXPECT_EQ((*request)[9], 1); EXPECT_EQ((*request)[10], 11);
+    EXPECT_EQ(std::vector<std::uint8_t>(request->begin() + 11, request->end()),
+        (std::vector<std::uint8_t>{0,0,0,5,'/','a','.','c','s',0}));
+}
 } // namespace
 } // namespace frost::debug::mono

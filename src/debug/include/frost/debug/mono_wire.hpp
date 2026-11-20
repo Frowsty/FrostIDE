@@ -59,6 +59,7 @@ public:
     [[nodiscard]] Result<std::vector<std::uint8_t>> rootDomain(std::string label);
     [[nodiscard]] Result<std::vector<std::uint8_t>> domainAssemblies(std::uint32_t domain, std::string label);
     [[nodiscard]] Result<std::vector<std::uint8_t>> types(std::string_view name, std::string label);
+    [[nodiscard]] Result<std::vector<std::uint8_t>> typesForSource(std::string_view path, std::string label);
     [[nodiscard]] Result<std::vector<std::uint8_t>> metadata(MetadataQuery query, std::uint32_t id, std::string label);
     [[nodiscard]] Result<std::vector<std::uint8_t>> methodFromToken(std::uint32_t assembly, std::uint32_t token,
                                                                     std::string label);
