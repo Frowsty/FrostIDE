@@ -275,10 +275,10 @@ Result<HostedCommentPage> parseHostedComments(const HostingRequest& request, std
         if (request.provider == HostingProvider::GitHub) {
             const auto parent = note.value("in_reply_to_id");
             if (!parent.isUndefined() && !parent.isNull()) {
-                const auto id = parent.toInteger(-1);
-                if (id <= 0)
+                const auto parentId = parent.toInteger(-1);
+                if (parentId <= 0)
                     return fail(ErrorCode::Corrupt, "Invalid provider reply parent");
-                comment.replyParent = static_cast<std::uint64_t>(id);
+                comment.replyParent = static_cast<std::uint64_t>(parentId);
             }
             auto current = line(note, "line");
             auto original = line(note, "original_line");
@@ -404,8 +404,8 @@ Result<void> prepareHostedReviewMutation(const HostingRequest& request, HostingC
     return {};
 }
 Result<void> validateHostedCommentMutation(const HostingRequest& request, std::string_view bytes) {
-    HostingCommand expected;
-    if (auto valid = prepareHostedReviewMutation(request, expected); !valid)
+    HostingCommand command;
+    if (auto valid = prepareHostedReviewMutation(request, command); !valid)
         return valid;
     auto parsed = document(bytes, false);
     if (!parsed)

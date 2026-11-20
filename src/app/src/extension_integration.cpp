@@ -289,7 +289,7 @@ Result<void> ExtensionIntegration::debugCurrentFile(std::string selected) {
     prepared->generation = m_generation;
     prepared->file = file;
     prepared->root = root;
-    prepared->version = view->document().snapshot().version();
+    prepared->version = view->document().document().text().version();
     prepared->arguments = std::move(*args);
     prepared->adapterId = chosen->adapterId;
     prepared->title = chosen->title;
@@ -365,7 +365,7 @@ void ExtensionIntegration::adoptDebug(std::shared_ptr<PreparedDebug> prepared) {
     }
     auto* view = m_workbench.currentView();
     if (!view || view->path() != prepared->file || view->document().dirty() ||
-        view->document().snapshot().version() != prepared->version) {
+        view->document().document().text().version() != prepared->version) {
         m_workbench.notify(QStringLiteral("Extension debug refused"),
                            QStringLiteral("The saved source or active document changed during preparation."),
                            ui::NotificationKind::Warning);

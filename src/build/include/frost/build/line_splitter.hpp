@@ -30,7 +30,7 @@ public:
     void finish(const Sink& sink);
 
 private:
-    void emit(std::string_view line, const Sink& sink);
+    void emitLine(std::string_view line, const Sink& sink);
 
     std::string m_pending;
 };

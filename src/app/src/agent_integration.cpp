@@ -142,7 +142,7 @@ struct AgentIntegration::State {
     void dispatch(const QString& method, const QJsonObject& params, AgentBridge::Reply reply) {
         if (!admitted()) { reply(failure("workspace consent expired")); return; }
         if (method == "tools/list") {
-            QJsonArray tools;
+            QJsonArray availableTools;
             for (const auto* name : {"openDiff", "close_tab", "closeAllDiffTabs", "getDiagnostics", "openFile", "getOpenEditors", "getWorkspaceFolders", "checkDocumentDirty", "saveDocument"}) {
                 const QString tool(name);
                 QJsonObject properties;
@@ -155,9 +155,11 @@ struct AgentIntegration::State {
                 else if (tool == "close_tab") field("tab_name", true);
                 else if (tool == "getDiagnostics") field("uri", false);
                 else if (tool == "openFile" || tool == "checkDocumentDirty" || tool == "saveDocument") field("filePath", true);
-                tools.append(QJsonObject{{"name", tool}, {"description", "Consent-scoped FrostIDE editor tool"},
+                availableTools.append(QJsonObject{{"name", tool}, {"description", "Consent-scoped FrostIDE editor tool"},
                     {"inputSchema", QJsonObject{{"type", "object"}, {"properties", properties}, {"required", required}, {"additionalProperties", false}}}});
-            }            reply({{"tools", tools}}); return;
+            }
+            reply({{"tools", availableTools}});
+            return;
         }
         if (method != "tools/call") { reply(failure("unsupported MCP method")); return; }
         const auto name = params.value("name").toString();
@@ -198,7 +200,7 @@ struct AgentIntegration::State {
         const auto path = authorize(args.value(name == "openDiff" ? "new_file_path" : "filePath").toString());
         if (!path) { reply(failure("resource must be an existing file inside the consenting workspace")); return; }
         if (name == "checkDocumentDirty") {
-            const auto* current = view(*path);
+            auto* const current = view(*path);
             reply(textResult(QJsonObject{{"isDirty", current && current->document().dirty()}})); return;
         }
         if (name == "openFile") {

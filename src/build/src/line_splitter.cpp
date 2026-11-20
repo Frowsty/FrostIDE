@@ -31,7 +31,7 @@ std::string sanitizeUtf8(std::string_view bytes) {
     return out;
 }
 
-void LineSplitter::emit(std::string_view line, const Sink& sink) {
+void LineSplitter::emitLine(std::string_view line, const Sink& sink) {
     if (line.ends_with('\r')) {
         line.remove_suffix(1);
     }
@@ -47,11 +47,11 @@ void LineSplitter::feed(std::string_view bytes, const Sink& sink) {
         const std::size_t newline = bytes.find('\n');
         const std::string_view piece = bytes.substr(0, newline);
         if (newline != std::string_view::npos && m_pending.empty()) {
-            emit(piece, sink); // The common case: a whole line inside one chunk, no copy.
+            emitLine(piece, sink); // The common case: a whole line inside one chunk, no copy.
         } else {
             m_pending.append(piece);
             if (newline != std::string_view::npos) {
-                emit(m_pending, sink);
+                emitLine(m_pending, sink);
                 m_pending.clear();
             }
         }
@@ -62,7 +62,7 @@ void LineSplitter::feed(std::string_view bytes, const Sink& sink) {
             for (int back = 0; back < 3 && cut > 0 && isContinuation(m_pending[cut]); ++back) {
                 --cut;
             }
-            emit(std::string_view(m_pending).substr(0, cut), sink);
+            emitLine(std::string_view(m_pending).substr(0, cut), sink);
             m_pending.erase(0, cut);
         }
     }
@@ -70,7 +70,7 @@ void LineSplitter::feed(std::string_view bytes, const Sink& sink) {
 
 void LineSplitter::finish(const Sink& sink) {
     if (!m_pending.empty()) {
-        emit(m_pending, sink);
+        emitLine(m_pending, sink);
         m_pending.clear();
     }
 }

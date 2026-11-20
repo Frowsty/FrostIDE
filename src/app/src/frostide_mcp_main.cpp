@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <vector>
 #include <atomic>
@@ -17,6 +18,22 @@
 #include <thread>
 namespace {
 using frost::rpc::Json;
+#ifdef _WIN32
+std::optional<std::string> environmentVariable(const wchar_t* name) {
+    wchar_t* value = nullptr;
+    const auto status = _wdupenv_s(&value, nullptr, name);
+    const std::unique_ptr<wchar_t, decltype(&std::free)> owned(value, &std::free);
+    if (status != 0 || !owned) return std::nullopt;
+    if (auto text = frost::io::fromWide(owned.get())) return std::move(*text);
+    return std::nullopt;
+}
+#else
+std::optional<std::string> environmentVariable(const char* name) {
+    if (const char* value = std::getenv(name)) return std::string(value);
+    return std::nullopt;
+}
+#endif
+
 frost::Result<Json> discover(std::string path, std::string root) {
     auto& fs = frost::io::realFileSystem();
     if (root.empty()) {
@@ -48,14 +65,15 @@ frost::Result<Json> discover(std::string path, std::string root) {
     };
     if (!path.empty()) return inspect(path);
     std::string base;
-    if (const char* configured = std::getenv("CLAUDE_CONFIG_DIR")) base = configured;
-    else {
 #ifdef _WIN32
-        if (const char* home = std::getenv("USERPROFILE")) base = std::string(home) + "/.claude";
+    const auto configured = environmentVariable(L"CLAUDE_CONFIG_DIR");
+    const auto home = configured ? std::nullopt : environmentVariable(L"USERPROFILE");
 #else
-        if (const char* home = std::getenv("HOME")) base = std::string(home) + "/.claude";
+    const auto configured = environmentVariable("CLAUDE_CONFIG_DIR");
+    const auto home = configured ? std::nullopt : environmentVariable("HOME");
 #endif
-    }
+    if (configured) base = *configured;
+    else if (home) base = *home + "/.claude";
     auto directory = frost::io::joinPath(base, "frostide");
     if (!directory) return std::unexpected(directory.error());
     auto files = fs.listDirectory(*directory);

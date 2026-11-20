@@ -281,7 +281,12 @@ struct AgentTools::State {
             if (!after) { finish(task, std::unexpected(after.error())); return; }
             plan.buffers.push_back({path, current->snapshot.text(), std::move(*after), document::BufferPersistence::Automatic});
         }
-        if (cppRename) { auto admitted = owner.admitCppRename(*edit, plan); if (!admitted) { finish(task, std::unexpected(admitted.error())); return; } }
+        if (cppRename) {
+            if (auto renameAdmission = owner.admitCppRename(*edit, plan); !renameAdmission) {
+                finish(task, std::unexpected(renameAdmission.error()));
+                return;
+            }
+        }
         preview(task, std::move(plan));
     }
     void preview(const QString& task, document::RefactoringPlan plan) {
@@ -360,7 +365,7 @@ struct AgentTools::State {
             if (!debugger) { finish(task, fail(ErrorCode::Unsupported, "debugger unavailable")); return; }
             if (tool == "debug_start") { auto started = debugger->debug(); finish(task, started ? Result<Json>(Json::object().set("accepted", true).set("state", static_cast<int>(debugger->state()))) : Result<Json>(std::unexpected(started.error()))); }
             else if (tool == "debug_stop") { debugger->stop(); finish(task, Json::object().set("accepted", true).set("state", static_cast<int>(debugger->state()))); }
-            else { const bool accepted = tool == "debug_continue" ? debugger->resume() : debugger->pause(); finish(task, accepted ? Result<Json>(Json::object().set("accepted", true).set("state", static_cast<int>(debugger->state()))) : Result<Json>(fail(ErrorCode::Busy, "debugger command refused"))); }
+            else { const bool commandAccepted = tool == "debug_continue" ? debugger->resume() : debugger->pause(); finish(task, commandAccepted ? Result<Json>(Json::object().set("accepted", true).set("state", static_cast<int>(debugger->state()))) : Result<Json>(fail(ErrorCode::Busy, "debugger command refused"))); }
             return;
         }
         if (tool == "run_tests") {

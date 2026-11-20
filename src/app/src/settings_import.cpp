@@ -160,7 +160,7 @@ Result<std::vector<settings::ConditionalSettingEdit>> prepareVisualStudioImport(
     }
     if (!imported.shortcuts.empty()) {
         settings::RecordList records;
-        if (const auto* member = doc->find(settings::key::keymapOverrides.name)) {
+        if (doc->find(settings::key::keymapOverrides.name)) {
             const auto* spec = store.registry().find(settings::key::keymapOverrides.name);
             auto current = doc->value(settings::key::keymapOverrides.name, spec->schema);
             if (!current) return std::unexpected(current.error());

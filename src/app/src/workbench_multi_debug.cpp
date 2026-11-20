@@ -9,6 +9,7 @@
 
 #include "cmake_integration.hpp"
 #include "multi_session_debug.hpp"
+#include "project_properties_dialog.hpp"
 #include <QMetaObject>
 #include <QPointer>
 #include <QProcessEnvironment>

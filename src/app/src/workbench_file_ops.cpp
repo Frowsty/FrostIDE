@@ -7,6 +7,7 @@
 #include "frost/app/workbench.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/compile_commands.hpp"
+#include "frost/lang/frost_engine_lua.hpp"
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/uri.hpp"
