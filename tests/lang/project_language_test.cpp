@@ -84,6 +84,20 @@ TEST(CMakeRefactoring, SearchOptionalAndConditionalImportsRefuseWithoutGuessing)
         EXPECT_FALSE(planCMakeTargetRename(input,{0,19},"bravo"));
     }
 }
+TEST(CMakeRefactoring, RelativeSubdirectoryUsesActualCallerSourceContext) {
+    auto input=cmakeInput("add_custom_target(alpha)\nadd_subdirectory(child)\n");
+    const auto child=projectPath("child/CMakeLists.txt");
+    auto model=std::make_shared<project::CMakeProject>(*input.model);
+    model->inputs.push_back({child}); input.model=model;
+    input.inputs.emplace_back(child,"add_custom_target(consumer)\nadd_dependencies(consumer alpha)\n");
+    auto plan=planCMakeTargetRename(input,{0,19},"bravo");
+    ASSERT_TRUE(plan) << plan.error().describe();
+    EXPECT_EQ(plan->edit.files.size(),2U);
+}
+TEST(CMakeRefactoring, StaticEvalStringsCannotHideTargetReferences) {
+    auto input=cmakeInput("add_custom_target(alpha)\ncmake_language(EVAL CODE \"add_dependencies(consumer alpha)\")\n");
+    EXPECT_FALSE(planCMakeTargetRename(input,{0,19},"bravo"));
+}
 TEST(CMakeRefactoring, LinkGrammarKeywordsAreRefusedAsOldOrNewTargetNames) {
     auto input=cmakeInput("add_custom_target(alpha)\ntarget_link_libraries(consumer PUBLIC alpha)\n");
     for (const auto* name:{"PUBLIC","PRIVATE","INTERFACE","debug","optimized","general"})

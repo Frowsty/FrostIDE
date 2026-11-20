@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <set>
+#include <map>
 namespace frost::lang {
 namespace {
 bool targetCommand(std::string_view name) {
@@ -56,6 +57,37 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
         if (!std::ranges::any_of(files,[&](const auto& row){return documentKey(row.first)==documentKey(file.path);}))
             return fail(ErrorCode::Busy,"Configured CMake input was not captured: "+file.path);
     }
+    // add_subdirectory(relative) is relative to the caller's source directory (CMake
+    // Help/command/add_subdirectory.rst). Absolute include() retains that directory.
+    // Relative include() also searches modules first (Kitware/CMake, BSD-3-Clause,
+    // Source/cmIncludeCommand.cxx); without evaluated search provenance it stays opaque.
+    std::map<std::string,std::set<std::string>> sourceContexts;
+    std::vector<std::pair<std::string,std::string>> pending;
+    auto rootList=io::joinPath(input.model->sourceDirectory,"CMakeLists.txt");
+    if (!rootList) return std::unexpected(rootList.error());
+    pending.emplace_back(*rootList,input.model->sourceDirectory);
+    for (std::size_t visit=0;visit<pending.size();++visit) {
+        if (pending.size()>4096) return fail(ErrorCode::OutOfRange,"CMake source-directory contexts exceed rename budget");
+        const auto path=pending[visit].first, directory=pending[visit].second;
+        if (!sourceContexts[documentKey(path)].insert(directory).second) continue;
+        const auto file=std::find_if(files.begin(),files.end(),[&](const auto& row){return documentKey(row.first)==documentKey(path);});
+        if (file==files.end()) return fail(ErrorCode::Busy,"CMake source graph is not fully captured");
+        auto parsed=project::scanCMakeSyntax(file->second);
+        if (!parsed) return std::unexpected(parsed.error());
+        for (const auto& command:*parsed) if (command.name=="include" || command.name=="add_subdirectory") {
+            if (command.scopeDepth!=0 || command.nestedArguments || command.arguments.empty() || !command.arguments[0].isLiteral ||
+                (command.name=="include" && (command.arguments.size()!=1 || !io::isAbsolutePath(command.arguments[0].literal))))
+                return fail(ErrorCode::Unsupported,"Conditional/optional/dynamic/module-search CMake imports require evaluated import provenance");
+            auto target=io::isAbsolutePath(command.arguments[0].literal)?io::normalizePath(command.arguments[0].literal):
+                io::joinPath(directory,command.arguments[0].literal);
+            if (!target) return std::unexpected(target.error());
+            auto list=command.name=="include" ? target : io::joinPath(*target,"CMakeLists.txt");
+            if (!list) return std::unexpected(list.error());
+            if (!std::ranges::any_of(files,[&](const auto& row){return documentKey(row.first)==documentKey(*list);}))
+                return fail(ErrorCode::Busy,"Direct CMake import is absent from actual File API inputs");
+            pending.emplace_back(*list,command.name=="include"?directory:*target);
+        }
+    }
     CMakeRenameCapture result; result.model=input.model; result.inputs=files;
     std::size_t definitions=0;
     for (const auto& [path,bytes]:files) {
@@ -67,16 +99,10 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
         edits.uri=pathToUri(path).value_or("");
         edits.path=uriToPath(edits.uri).value_or(path);
         for (const auto& command:*parsed) {
-            if (command.name=="include" || command.name=="add_subdirectory") {
-                if (command.scopeDepth!=0 || command.nestedArguments || command.arguments.empty() ||
-                    !command.arguments[0].isLiteral || !io::isAbsolutePath(command.arguments[0].literal) ||
-                    (command.name=="include" && command.arguments.size()!=1))
-                    return fail(ErrorCode::Unsupported,"CMake rename requires unconditional absolute direct include/subdirectory paths; optional or search-module imports are opaque");
-                auto imported=command.name=="include" ? io::normalizePath(command.arguments[0].literal) :
-                    io::joinPath(command.arguments[0].literal,"CMakeLists.txt");
-                if (!imported || !std::ranges::any_of(files,[&](const auto& file){return documentKey(file.first)==documentKey(*imported);}))
-                    return fail(ErrorCode::Busy,"Direct CMake import is absent from the actual captured File API input graph");
-            }
+            if (command.name=="cmake_language" || command.name=="load_command" || command.name=="variable_watch")
+                return fail(ErrorCode::Unsupported,"Indirect CMake code/callback evaluation is outside target rename provenance");
+            if ((command.name=="include" || command.name=="add_subdirectory") && !sourceContexts.contains(documentKey(path)))
+                return fail(ErrorCode::Unsupported,"CMake import has no captured caller source-directory context");
             for (std::size_t i=0;i<command.arguments.size();++i) {
                 const auto& argument=command.arguments[i];
                 if (!argument.isLiteral) {
@@ -104,7 +130,7 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
                 const auto root=documentKey(input.model->sourceDirectory), key=documentKey(path);
                 const auto inputFile=std::find_if(input.model->inputs.begin(),input.model->inputs.end(),[&](const auto& file){return documentKey(file.path)==key;});
                 if (root.empty() || !(key.starts_with(root) && key.size()>root.size() && (key[root.size()]=='/' || key[root.size()]=='\\')) ||
-                    (inputFile!=input.model->inputs.end() && (inputFile->generated || inputFile->external)))
+                    (inputFile==input.model->inputs.end() || inputFile->generated || inputFile->external))
                     return fail(ErrorCode::Unsupported,"Target rename cannot edit generated/external project inputs");
                 const auto span=std::string_view(bytes).substr(argument.begin,argument.end-argument.begin);
                 auto start=argument.begin,end=argument.end;
