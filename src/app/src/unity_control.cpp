@@ -105,7 +105,10 @@ struct UnityControlIntegration::Impl {
     QPointer<QTreeWidget> console;
     QPointer<QLineEdit> filter;
     QPointer<QComboBox> level;
-    QPointer<QCheckBox> collapse, clearOnPlay;
+    QPointer<QCheckBox> collapse, clearOnPlay, refreshOnSave, compileOnSave;
+    QTimer saveTimer;
+    std::string consentRoot, consentInstance, savedRoot, savedSession;
+    bool pendingRefresh = false, pendingCompile = false;
     QPointer<QLabel> eventsStatus;
     std::vector<UnityBridgeEvent> journal;
     std::vector<build::BuildDiagnostic> compilerProblems;
@@ -113,13 +116,62 @@ struct UnityControlIntegration::Impl {
     std::int64_t eventCursor = 0, projectVersion = -1, lostEvents = 0;
     std::optional<bool> lastPlaying;
     std::size_t droppedCompiler = 0;
-    QString sourcePath(std::string_view file) const {
+    void clearSavedWork() {
+        saveTimer.stop(); pendingRefresh = pendingCompile = false; savedRoot.clear(); savedSession.clear();
+    }
+    void revokeSaveConsent() {
+        clearSavedWork(); consentRoot.clear(); consentInstance.clear();
+        if (refreshOnSave) refreshOnSave->setChecked(false);
+        if (compileOnSave) compileOnSave->setChecked(false);
+    }
+    void captureSaveConsent(QCheckBox* checkbox, bool enabled) {
+        if (!enabled) {
+            if (checkbox == refreshOnSave) pendingRefresh = false;
+            if (checkbox == compileOnSave) pendingCompile = false;
+            if (!pendingRefresh && !pendingCompile) saveTimer.stop();
+            return;
+        }
+        const auto found = std::ranges::find_if(live, [&](const auto& item) { return item.id == selected; });
+        if (!trusted() || found == live.end() || !found->events) {
+            checkbox->setChecked(false);
+            if (status) status->setText(QStringLiteral("Connect and select a compatible trusted Unity editor before enabling save actions"));
+            return;
+        }
+        consentRoot = workbench.projectRoot(); consentInstance = found->instance;
+    }
+    void documentSaved(const document::SavedDocumentCompletion& completion) {
+        if (!trusted() || consentRoot != workbench.projectRoot()) return;
+        const auto found = std::ranges::find_if(live, [&](const auto& item) { return item.id == selected; });
+        if (found == live.end() || !found->events || found->instance != consentInstance) return;
+        const auto physicalRoot = externalProjectRoot(workbench.projectRoot());
+        const QFileInfo target(qs(completion.target));
+        if (!physicalRoot || !target.isFile()) return;
+        const auto relative = QDir(qs(*physicalRoot)).relativeFilePath(target.canonicalFilePath());
+        if (QDir::isAbsolutePath(relative) || relative == QStringLiteral("..") || relative.startsWith(QStringLiteral("../")) ||
+            !(relative.startsWith(QStringLiteral("Assets/")) || relative.startsWith(QStringLiteral("Packages/")))) return;
+        const bool refresh = refreshOnSave && refreshOnSave->isChecked();
+        const bool compile = compileOnSave && compileOnSave->isChecked() && target.suffix().compare(QStringLiteral("cs"), Qt::CaseInsensitive) == 0;
+        if (!refresh && !compile) return;
+        savedRoot = workbench.projectRoot(); savedSession = selected;
+        pendingRefresh = pendingRefresh || refresh; pendingCompile = pendingCompile || compile;
+        saveTimer.start(200); // Save All and nearby saves produce one follow-up per selected domain.
+    }
+    void flushSavedWork() {
+        const auto found = std::ranges::find_if(live, [&](const auto& item) { return item.id == selected; });
+        if (!trusted() || savedRoot != workbench.projectRoot() || consentRoot != savedRoot || savedSession != selected ||
+            found == live.end() || !found->events || found->instance != consentInstance) { clearSavedWork(); return; }
+        if (busy) { saveTimer.start(200); return; }
+        if (pendingRefresh) { pendingRefresh = false; run("refresh"); }
+        else if (pendingCompile) { pendingCompile = false; run("recompile"); }
+        if (pendingRefresh || pendingCompile) saveTimer.start(200);
+    }    QString sourcePath(std::string_view file) const {
         if (file.empty()) return {};
         const auto path = QDir(qs(workbench.projectRoot())).absoluteFilePath(qs(file));
         const QFileInfo info(path);
         return info.isFile() ? info.canonicalFilePath() : QString{};
     }
     void clearDomain(const std::string& id) {
+        clearSavedWork();
         eventSession = id; eventCursor = 0; projectVersion = -1; lostEvents = 0; lastPlaying.reset();
         journal.clear(); compilerProblems.clear(); droppedCompiler = 0;
         if (console) console->clear();
@@ -192,6 +244,7 @@ struct UnityControlIntegration::Impl {
         if (!page.events.empty()) renderConsole();
     }
     void cancel() {
+        revokeSaveConsent();
         clearDomain({});
         ++epoch;
         if (worker.joinable()) {
@@ -353,7 +406,7 @@ struct UnityControlIntegration::Impl {
             }
             rebuild();
         }
-        if (!busy && !selected.empty()) {
+        if (!busy && !pendingRefresh && !pendingCompile && !selected.empty()) {
             const auto found = std::ranges::find_if(live, [&](const auto& item) { return item.id == selected; });
             if (found != live.end() && found->events) {
                 if (eventSession != found->id) clearDomain(found->id);
@@ -448,18 +501,21 @@ struct UnityControlIntegration::Impl {
                     state.busy = false;
                     if (!result || !result->isObject() || result->stringAt("session") != target.id ||
                         result->stringAt("id") != id) {
+                        if (command == "refresh" || command == "recompile") state.clearSavedWork();
                         if (command != "state" && !command.starts_with("events:"))
                             state.interrupted = true;
                         state.status->setText(QStringLiteral("Unity request interrupted; state is uncertain"));
                         return;
                     }
                     if (!result->boolAt("ok").value_or(false)) {
+                        if (command == "refresh" || command == "recompile") state.clearSavedWork();
                         state.status->setText(qs(result->stringAt("message")));
                         return;
                     }
                     const auto observedPlaying = result->boolAt("playing"), observedPaused = result->boolAt("paused");
                     const auto observedFrame = result->integerAt("frame");
                     if (!observedPlaying || !observedPaused || !observedFrame || *observedFrame < 0) {
+                        if (command == "refresh" || command == "recompile") { state.clearSavedWork(); state.interrupted = true; }
                         state.status->setText(QStringLiteral("Unity returned an invalid state snapshot")); return;
                     }
                     const bool playing = *observedPlaying, paused = *observedPaused;
@@ -500,6 +556,7 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
     m_impl->rebuild();
     connect(m_impl->sessions, &QComboBox::activated, this, [this](int index) {
         auto& impl = *m_impl;
+        impl.revokeSaveConsent();
         impl.clearDomain({});
         ++impl.epoch;
         if (impl.worker.joinable()) {
@@ -558,6 +615,21 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
         const int line = item->data(0, Qt::UserRole + 1).toInt();
         if (!path.isEmpty() && line > 0) (void)openExternalFile(m_impl->workbench, path.toUtf8().toStdString(), line, std::max(1, item->data(0, Qt::UserRole + 2).toInt()), true);
     });
+    auto* saveActions = new QHBoxLayout;
+    m_impl->refreshOnSave = new QCheckBox(QStringLiteral("Refresh selected Unity editor after saved assets"), panel);
+    m_impl->compileOnSave = new QCheckBox(QStringLiteral("Recompile selected Unity editor after saved C#"), panel);
+    m_impl->refreshOnSave->setObjectName(QStringLiteral("unityRefreshOnSave"));
+    m_impl->compileOnSave->setObjectName(QStringLiteral("unityCompileOnSave"));
+    saveActions->addWidget(m_impl->refreshOnSave); saveActions->addWidget(m_impl->compileOnSave);
+    layout->addLayout(saveActions);
+    connect(m_impl->refreshOnSave, &QCheckBox::toggled, this, [this](bool enabled) { m_impl->captureSaveConsent(m_impl->refreshOnSave, enabled); });
+    connect(m_impl->compileOnSave, &QCheckBox::toggled, this, [this](bool enabled) { m_impl->captureSaveConsent(m_impl->compileOnSave, enabled); });
+    m_impl->saveTimer.setSingleShot(true);
+    connect(&m_impl->saveTimer, &QTimer::timeout, this, [this] { m_impl->flushSavedWork(); });
+    const QPointer<UnityControlIntegration> saveOwner(this);
+    workbench.m_documents->setSavedObserver(this, [saveOwner](const document::SavedDocumentCompletion& completion) {
+        if (saveOwner) saveOwner->m_impl->documentSaved(completion);
+    });
     auto added = workbench.m_window->toolWindows().add({"unityControls",
                                                         QStringLiteral("Unity"),
                                                         ui::ToolWindowSide::Bottom,
@@ -568,6 +640,7 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
     if (!added) {
         delete panel;
         m_impl->stopped = true;
+        m_impl->workbench.m_documents->setSavedObserver(this, {});
         return;
     }
     m_impl->timer.setInterval(500);
@@ -581,6 +654,7 @@ void UnityControlIntegration::shutdown() {
     if (m_impl->stopped)
         return;
     m_impl->stopped = true;
+    m_impl->workbench.m_documents->setSavedObserver(this, {});
     m_impl->timer.stop();
     m_impl->cancel();
 }

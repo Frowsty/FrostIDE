@@ -377,6 +377,8 @@ TEST_F(SaveManagerTest, CommittedWarningSurvivesSingleSaveSaveAllAndAutosave) {
     auto opened = warningManager.open(path("warning.txt"));
     ASSERT_TRUE(opened);
     FileDocument& doc = **opened;
+    int completed = 0;
+    warningManager.setSavedObserver(&completed, [&](const SavedDocumentCompletion&) { ++completed; EXPECT_FALSE(doc.dirty()); });
     edit(doc, 0, 3, "one");
     auto one = warningManager.save(doc);
     ASSERT_TRUE(one);
@@ -398,6 +400,7 @@ TEST_F(SaveManagerTest, CommittedWarningSurvivesSingleSaveSaveAllAndAutosave) {
     ASSERT_EQ(automatic->saved.size(), 1u);
     ASSERT_EQ(automatic->warnings.size(), 1u);
     EXPECT_EQ(automatic->warnings[0].document, &doc);
+    EXPECT_EQ(completed, 3);
     EXPECT_FALSE(doc.dirty());
     EXPECT_EQ(read("warning.txt"), "end");
     ASSERT_TRUE(fs.writeFileAtomic(path("closed.txt"), "old"));

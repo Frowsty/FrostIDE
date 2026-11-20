@@ -14,6 +14,7 @@
 
 #include "workbench_rig.hpp"
 #include <QComboBox>
+#include <QCheckBox>
 #include <QLabel>
 #include <QMessageAuthenticationCode>
 #include <QPushButton>
@@ -119,7 +120,8 @@ public:
     }
     std::uint16_t port = 0;
     std::atomic<bool> holdPlay{false}, playSeen{false}, release{false}, badProof{false};
-    std::atomic<int> states{0}, validRequests{0}, greetings{0}, requestFrames{0};
+    std::atomic<int> states{0}, validRequests{0}, greetings{0}, requestFrames{0}, refreshes{0}, recompiles{0};
+    std::atomic<bool> rejectRefresh{false};
 
 private:
     static std::string readLine(Socket peer) {
@@ -194,6 +196,8 @@ private:
                 continue;
             }
             ++validRequests;
+            if (command == "refresh") ++refreshes;
+            if (command == "recompile") ++recompiles;
             if (command == "state")
                 ++states;
             if (command == "play" && holdPlay.load()) {
@@ -209,6 +213,7 @@ private:
                               .set("paused", false)
                               .set("frame", 3)
                               .set("message", "observed");
+            if (command == "refresh" && rejectRefresh.load()) result.set("ok", false).set("message", "fixture refresh rejected");
             if (command.starts_with("events:")) {
                 const bool initial = command == "events:0";
                 auto events = frost::lang::Json::array();
@@ -452,4 +457,47 @@ TEST(WorkbenchUnity, AuthenticatedCompilerEventsReachConsoleAndIndependentProble
     ASSERT_TRUE(rig.trust->untrust(root));
     ASSERT_TRUE(waitFor([&] { return console->topLevelItemCount() == 0; }, 5s));
     EXPECT_TRUE(std::ranges::none_of(problems->model()->problems(), [](const auto& row) { return row.source == frost::ui::DiagnosticSource::Unity; }));
+}TEST(WorkbenchUnity, ConsentedSaveAllCoalescesRefreshAndRevocationDiscardsPendingFollowups) {
+    WorkDir dir("unity-save-observer");
+    dir.write("project/Assets/a.cs", "class A {}\n"); dir.write("project/Assets/b.cs", "class B {}\n");
+    dir.write("project/Packages/manifest.json", "{}"); dir.write("project/ProjectSettings/ProjectVersion.txt", "scratch");
+    const auto root = dir.join("project");
+    UnityServer server(root, std::string(32, 'a'), std::string(64, 'a'), false);
+    WorkbenchRig rig(dir); ASSERT_TRUE(rig.trust->trust(root)); ASSERT_TRUE(rig.workbench->openExternalProject(root));
+    rig.window->toolWindows().show("unityControls");
+    auto* panel = rig.window->toolWindows().content("unityControls");
+    auto hello = announcement(root, 'a'); hello.set("port", server.port).set("eventVersion", 1);
+    ASSERT_TRUE(rig.workbench->announceUnity(hello));
+    ASSERT_TRUE(waitFor([&] { return hasStatus(panel, QStringLiteral("Unity stopped")); }, 5s));
+    auto* refresh = panel->findChild<QCheckBox*>(QStringLiteral("unityRefreshOnSave"));
+    auto* compile = panel->findChild<QCheckBox*>(QStringLiteral("unityCompileOnSave"));
+    ASSERT_NE(refresh, nullptr); ASSERT_NE(compile, nullptr); EXPECT_FALSE(refresh->isChecked()); EXPECT_FALSE(compile->isChecked());
+    refresh->setChecked(true);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project/Assets/a.cs"))); ASSERT_TRUE(rig.view()->editor().typeText("// saved\n"));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project/Assets/b.cs"))); ASSERT_TRUE(rig.view()->editor().typeText("// saved\n"));
+    const auto saved = rig.workbench->documents().saveAll(); ASSERT_EQ(saved.saved.size(), 2U);
+    ASSERT_TRUE(waitFor([&] { return server.refreshes.load() == 1; }, 5s)); EXPECT_EQ(server.recompiles.load(), 0);
+    compile->setChecked(true);
+    ASSERT_TRUE(rig.view()->editor().typeText("// next\n")); ASSERT_TRUE(rig.workbench->save(*rig.view()));
+    ASSERT_TRUE(rig.trust->untrust(root));
+    ASSERT_TRUE(waitFor([&] { return !refresh->isChecked() && !compile->isChecked(); }, 5s));
+    EXPECT_EQ(server.refreshes.load(), 1); EXPECT_EQ(server.recompiles.load(), 0);
+}
+
+TEST(WorkbenchUnity, RejectedRefreshCancelsTheConsentedCompileFollowup) {
+    WorkDir dir("unity-save-observer-error");
+    dir.write("project/Assets/a.cs", "class A {}\n");
+    dir.write("project/Packages/manifest.json", "{}"); dir.write("project/ProjectSettings/ProjectVersion.txt", "scratch");
+    const auto root = dir.join("project");
+    UnityServer server(root, std::string(32, 'a'), std::string(64, 'a'), false); server.rejectRefresh.store(true);
+    WorkbenchRig rig(dir); ASSERT_TRUE(rig.trust->trust(root)); ASSERT_TRUE(rig.workbench->openExternalProject(root));
+    rig.window->toolWindows().show("unityControls"); auto* panel = rig.window->toolWindows().content("unityControls");
+    auto hello = announcement(root, 'a'); hello.set("port", server.port).set("eventVersion", 1);
+    ASSERT_TRUE(rig.workbench->announceUnity(hello)); ASSERT_TRUE(waitFor([&] { return hasStatus(panel, QStringLiteral("Unity stopped")); }, 5s));
+    panel->findChild<QCheckBox*>(QStringLiteral("unityRefreshOnSave"))->setChecked(true);
+    panel->findChild<QCheckBox*>(QStringLiteral("unityCompileOnSave"))->setChecked(true);
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project/Assets/a.cs"))); ASSERT_TRUE(rig.view()->editor().typeText("// saved\n"));
+    ASSERT_TRUE(rig.workbench->save(*rig.view()));
+    ASSERT_TRUE(waitFor([&] { return hasStatus(panel, QStringLiteral("fixture refresh rejected")); }, 5s));
+    EXPECT_EQ(server.refreshes.load(), 1); EXPECT_EQ(server.recompiles.load(), 0);
 }} // namespace
