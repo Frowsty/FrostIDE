@@ -8,6 +8,7 @@
 #include "frost/text/anchor.hpp"
 #include "frost/ui/editor/editor_view.hpp"
 
+#include <QAccessible>
 #include <QScrollBar>
 #include <QStringList>
 
@@ -278,6 +279,12 @@ void EditorView::setDiagnostics(EditorDiagnosticSource source, std::vector<Edito
     m_diagnostics[static_cast<std::size_t>(source)] = std::move(resolved);
     m_insightEnabled = true;
     insightUpdated();
+    if (QAccessible::isActive()) {
+        QAccessibleEvent event(this, QAccessible::DescriptionChanged);
+        QAccessible::updateAccessibility(&event);
+        QAccessibleEvent attributes(this, QAccessible::TextAttributeChanged);
+        QAccessible::updateAccessibility(&attributes);
+    }
 }
 
 std::vector<ActiveDiagnostic> EditorView::diagnostics() const {
@@ -380,6 +387,20 @@ std::optional<EditorDocumentLink> EditorView::documentLinkAt(ByteOffset offset) 
 }
 
 void EditorView::setCodeVisionLenses(std::vector<EditorCodeVisionLens> lenses) {
+    setCodeVisionLensesForProvider("language", std::move(lenses));
+}
+void EditorView::setCodeVisionLensesForProvider(std::string provider, std::vector<EditorCodeVisionLens> lenses) {
+    if (provider.empty())
+        return;
+    if (lenses.empty())
+        m_codeVisionProviders.erase(provider);
+    else
+        m_codeVisionProviders.insert_or_assign(std::move(provider), std::move(lenses));
+    lenses.clear();
+    for (const auto& [name, items] : m_codeVisionProviders) {
+        static_cast<void>(name);
+        lenses.insert(lenses.end(), items.begin(), items.end());
+    }
     const text::Snapshot& snapshot = m_editor->text();
     const ByteOffset size = snapshot.size();
     const std::uint32_t maxLine = snapshot.lineCount() > 0 ? snapshot.lineCount() - 1 : 0;

@@ -67,6 +67,7 @@ constexpr std::array kExtensions{
     PathRule{".hlsli", "hlsl"},
     PathRule{".fx", "hlsl"},
     PathRule{".glsl", "glsl"},
+    PathRule{".glslh", "glsl"},
     PathRule{".vert", "glsl"},
     PathRule{".frag", "glsl"},
     PathRule{".comp", "glsl"},

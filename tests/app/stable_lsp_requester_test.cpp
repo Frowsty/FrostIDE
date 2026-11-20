@@ -24,6 +24,27 @@ private:
     int m_identity;
 };
 
+TEST(StableLspRequester, GlslRequestsCaptureTheNativeProviderAcrossCppTabSwitch) {
+    frost::app::StableLspRequester requester;
+    requester.setServer(std::make_shared<TestServer>(1));
+    requester.setShaderServer(std::make_shared<TestServer>(3));
+#ifdef _WIN32
+    const std::string path = "C:/project/Assets/Shaders/Main.glsl";
+#else
+    const std::string path = "/project/Assets/Shaders/Main.glsl";
+#endif
+    auto uri = frost::lang::pathToUri(path);
+    ASSERT_TRUE(uri);
+    auto delayed = requester.request(
+        "textDocument/completion",
+        frost::lang::Json::object().set("textDocument", frost::lang::Json::object().set("uri", *uri)));
+    requester.setActivePath("different.cpp");
+    requester.setShaderServer(std::make_shared<TestServer>(4));
+    auto result = frost::sched::syncWait(std::move(delayed));
+    ASSERT_TRUE(result);
+    EXPECT_EQ(result->asInteger(), 3);
+}
+
 TEST(StableLspRequester, DelayedRequestRetainsOldServerAcrossReplacementAndClose) {
     frost::app::StableLspRequester requester;
     auto first = std::make_shared<TestServer>(1);

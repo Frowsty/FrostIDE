@@ -42,6 +42,16 @@ struct BufferDependency {
     std::string path;
     std::string expectedText;
 };
+// Optional application-owned external source boundary. REF1 never executes remote writes.
+// The composition root retains this guard with history, calls history before each inverse,
+// settled after native settlement, and cancelled after predecision refusal. Pending recovery
+// retains the active guard. Callbacks run synchronously on the owner thread.
+struct RefactoringExternalGuard {
+    std::function<Result<void>(bool redo)> history;
+    std::function<Result<void>()> admit;
+    std::function<Result<void>(bool applied)> settled;
+    std::function<void()> cancelled;
+};
 struct RefactoringPlan {
     std::string label;
     std::vector<DiskReplacement> disk;
@@ -52,6 +62,7 @@ struct RefactoringPlan {
     std::vector<FileCreation> creates;
     // Final initial admission only; caller freezes captured preview/config/trust generations.
     std::function<Result<void>()> revalidateContext;
+    std::shared_ptr<RefactoringExternalGuard> external;
 };
 enum class RefactoringStatus { Applied, Undone, Redone, PendingRecovery };
 struct RefactoringOutcome {

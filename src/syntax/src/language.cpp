@@ -54,6 +54,10 @@ constexpr Extension kExtensions[] = {
     {".manifest", LanguageId::Xml}, {".wxs", LanguageId::Xml},
     {".slnx", LanguageId::Xml},     {".config", LanguageId::Xml},
     {".svg", LanguageId::Xml},      {".json", LanguageId::Json},
+    {".fmat", LanguageId::Json},    {".fscene", LanguageId::Json},
+    {".fmeta", LanguageId::Json},   {".fschema", LanguageId::Json},
+    {".ftable", LanguageId::Json},  {".frostproj", LanguageId::Json},
+    {".feproject", LanguageId::Json},
     {".lua", LanguageId::Lua},      {".jsonc", LanguageId::Json},
     {".md", LanguageId::Markdown},  {".markdown", LanguageId::Markdown},
 };

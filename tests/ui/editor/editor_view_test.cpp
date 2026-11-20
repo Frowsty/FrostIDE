@@ -82,6 +82,49 @@ TEST(EditorView, NativeAccessibilityReadsUtf16SelectionsAndEditsThroughUndo) {
     edit->replaceText(0, 1, QStringLiteral("x"));
     EXPECT_EQ(h.text(), "a\xF0\x9F\x98\x80z\nnext");
 }
+TEST(EditorView, NativeAccessibilityExposesResolvedDiagnosticRunsAndCaretMessages) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("abcdef");
+    EditorDiagnostic error;
+    error.range = text::ByteRange{ByteOffset{1}, ByteOffset{4}};
+    error.message = "invalid expression";
+    EditorDiagnostic warning;
+    warning.range = text::ByteRange{ByteOffset{2}, ByteOffset{5}};
+    warning.severity = InsightSeverity::Warning;
+    warning.message = "unused value";
+    EditorDiagnostic point;
+    point.range = text::ByteRange{ByteOffset{6}, ByteOffset{6}};
+    point.message = "expected terminator";
+    h.view->setDiagnostics(EditorDiagnosticSource::Live, {error, warning, point});
+    auto* accessible = QAccessible::queryAccessibleInterface(h.view.get());
+    ASSERT_NE(accessible, nullptr);
+    auto* textInterface = accessible->textInterface();
+    ASSERT_NE(textInterface, nullptr);
+    int start = -1, end = -1;
+    EXPECT_EQ(textInterface->attributes(1, &start, &end), QStringLiteral("invalid:true;"));
+    EXPECT_EQ(start, 1); EXPECT_EQ(end, 2);
+    EXPECT_EQ(textInterface->attributes(2, &start, &end), QStringLiteral("invalid:true;"));
+    EXPECT_EQ(start, 2); EXPECT_EQ(end, 4);
+    EXPECT_TRUE(textInterface->attributes(4, &start, &end).isEmpty());
+    EXPECT_EQ(start, 4); EXPECT_EQ(end, 5);
+    auto* actions = accessible->actionInterface();
+    ASSERT_NE(actions, nullptr);
+    EXPECT_TRUE(actions->actionNames().contains(QStringLiteral("nextDiagnostic")));
+    actions->doAction(QStringLiteral("nextDiagnostic"));
+    EXPECT_EQ(textInterface->cursorPosition(), 1);
+    EXPECT_EQ(accessible->text(QAccessible::Description), QStringLiteral("Error: invalid expression"));
+    textInterface->setCursorPosition(2);
+    EXPECT_EQ(accessible->text(QAccessible::Description), QStringLiteral("Error: invalid expression\nWarning: unused value"));
+    textInterface->setCursorPosition(6);
+    EXPECT_EQ(accessible->text(QAccessible::Description), QStringLiteral("Error: expected terminator"));
+    textInterface->attributes(-1, &start, &end);
+    EXPECT_EQ(start, -1); EXPECT_EQ(end, -1);
+    h.view->setDiagnostics(EditorDiagnosticSource::Live, {});
+    EXPECT_TRUE(accessible->text(QAccessible::Description).isEmpty());
+    EXPECT_TRUE(textInterface->attributes(2, &start, &end).isEmpty());
+    EXPECT_EQ(start, 0); EXPECT_EQ(end, 6);
+}
+
 TEST(EditorView, TypingAppearsInTheDocumentAndRepaints) {
     FROST_REQUIRE_OFFSCREEN();
     HarnessOptions options;
@@ -325,6 +368,24 @@ TEST(EditorView, SoftWrapChangesTheRowCount) {
     settings.softWrap = false;
     h.view->applySettings(settings);
     EXPECT_EQ(h.view->editor().display().rowCount(), 2U);
+}
+
+TEST(EditorView, ObservedCoveragePreservesDiagnosticsAndExpiresOnEdit) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("one\ntwo\n");
+    h.view->setLineMarkers({LineMarker{LineIndex{1}, MarkerSeverity::Warning, "unused"}});
+    h.view->setCoverageMarkers({CoverageMarker{LineIndex{0}, 9}, CoverageMarker{LineIndex{1}, 0}});
+    const auto list = h.view->buildDisplayList();
+    ASSERT_EQ(list.markers.size(), 1u);
+    EXPECT_EQ(list.markers.front().severity, MarkerSeverity::Warning);
+    EXPECT_TRUE(h.view->lineMarkerToolTip(QPointF(2.0, 0.5 * h.view->lineHeight())).contains("9 hits"));
+    EXPECT_TRUE(h.view->lineMarkerToolTip(QPointF(2.0, 1.5 * h.view->lineHeight())).contains("unused"));
+    h.type("edit");
+    EXPECT_TRUE(h.view->coverageMarkers().empty());
+    EXPECT_FALSE(h.view->lineMarkers().empty());
+    h.view->setCoverageMarkers({CoverageMarker{LineIndex{0}, 1}});
+    h.view->reloadFromDocument();
+    EXPECT_TRUE(h.view->coverageMarkers().empty());
 }
 
 TEST(EditorView, GutterShowsLineNumbersAndMarkers) {

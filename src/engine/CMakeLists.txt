@@ -12,6 +12,12 @@
 
 frost_add_library(engine LAYER engine
     SOURCES
+        src/asset_index.cpp
+        src/asset_move_plan.cpp
+        src/serialized_properties.cpp
+        src/document_tools.cpp
+        src/shader_preview.cpp
+        src/shader_language.cpp
         src/binding_index.cpp
         src/binding_preview.cpp
         src/binding_queries.cpp
@@ -23,6 +29,7 @@ frost_add_library(engine LAYER engine
         src/engine_test_parsers.cpp
         src/engine_test_provider.cpp
         src/handle.cpp
+        src/performance.cpp
         src/project_content.cpp
         src/schema.cpp
         src/session.cpp

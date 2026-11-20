@@ -5,6 +5,7 @@
 #include <QAccessible>
 #include <QAccessibleWidget>
 #include <QScrollBar>
+#include <QStringList>
 #include <algorithm>
 #include <limits>
 #include <utility>
@@ -31,7 +32,39 @@ public:
     QString text(QAccessible::Text type) const override {
         if (type == QAccessible::Name) return m_view->path().empty() ? QStringLiteral("Text editor") : QString::fromStdString(m_view->path());
         if (type == QAccessible::Value) return text(0, characterCount());
+        if (type == QAccessible::Description) {
+            QStringList messages;
+            const auto caret = m_view->editor().state().primary().head;
+            for (const auto& diagnostic : m_view->diagnostics()) {
+                if (diagnostic.range.begin <= caret &&
+                    (caret < diagnostic.range.end ||
+                     (diagnostic.range.begin == diagnostic.range.end && caret == diagnostic.range.begin)))
+                    messages.append(diagnosticText(diagnostic));
+            }
+            return messages.join(QLatin1Char('\n'));
+        }
         return QAccessibleWidget::text(type);
+    }
+    QStringList actionNames() const override {
+        auto actions = QAccessibleWidget::actionNames();
+        actions.append(QStringLiteral("nextDiagnostic"));
+        actions.append(QStringLiteral("previousDiagnostic"));
+        return actions;
+    }
+    QString localizedActionName(const QString& name) const override {
+        if (name == QStringLiteral("nextDiagnostic")) return QStringLiteral("Next diagnostic");
+        if (name == QStringLiteral("previousDiagnostic")) return QStringLiteral("Previous diagnostic");
+        return QAccessibleWidget::localizedActionName(name);
+    }
+    void doAction(const QString& name) override {
+        if (name == QStringLiteral("nextDiagnostic")) { (void)m_view->gotoNextProblem(true); return; }
+        if (name == QStringLiteral("previousDiagnostic")) { (void)m_view->gotoNextProblem(false); return; }
+        QAccessibleWidget::doAction(name);
+    }
+    QStringList keyBindingsForAction(const QString& name) const override {
+        // Shortcuts are customizable; advertise no binding rather than a stale default.
+        if (name == QStringLiteral("nextDiagnostic") || name == QStringLiteral("previousDiagnostic")) return {};
+        return QAccessibleWidget::keyBindingsForAction(name);
     }
     int characterCount() const override { return units(snapshot(), snapshot().size()); }
     int cursorPosition() const override { return units(snapshot(), m_view->editor().state().primary().head); }
@@ -94,9 +127,26 @@ public:
         return units(snapshot(), m_view->offsetAt(m_view->viewport()->mapFromGlobal(point)));
     }
     QString attributes(int offset, int* start, int* end) const override {
-        if (start) *start = offset >= 0 && offset <= characterCount() ? 0 : -1;
-        if (end) *end = offset >= 0 && offset <= characterCount() ? characterCount() : -1;
-        return {};
+        if (start) *start = -1;
+        if (end) *end = -1;
+        if (offset < 0 || offset > characterCount()) return {};
+        int begin = 0, finish = characterCount();
+        bool invalid = false;
+        for (const auto& diagnostic : m_view->diagnostics()) {
+            const int from = units(snapshot(), diagnostic.range.begin);
+            const int to = units(snapshot(), diagnostic.range.end);
+            // Every boundary splits a run, including overlapping diagnostics. Point diagnostics
+            // have no text run and are exposed by the caret description instead.
+            if (from == to) continue;
+            for (const int boundary : {from, to}) {
+                if (boundary <= offset) begin = std::max(begin, boundary);
+                else finish = std::min(finish, boundary);
+            }
+            invalid = invalid || (from <= offset && offset < to && diagnostic.severity == InsightSeverity::Error);
+        }
+        if (start) *start = begin;
+        if (end) *end = finish;
+        return invalid ? QStringLiteral("invalid:true;") : QString{};
     }
     void scrollToSubstring(int start, int end) override {
         if (!validRange(start, end)) return;
@@ -118,6 +168,16 @@ public:
         (void)m_view->pasteText(std::string_view(utf8.constData(), static_cast<std::size_t>(utf8.size())));
     }
 private:
+    static QString diagnosticText(const ActiveDiagnostic& diagnostic) {
+        QString severity;
+        switch (diagnostic.severity) {
+        case InsightSeverity::Error: severity = QStringLiteral("Error"); break;
+        case InsightSeverity::Warning: severity = QStringLiteral("Warning"); break;
+        case InsightSeverity::WeakWarning: severity = QStringLiteral("Weak warning"); break;
+        case InsightSeverity::Info: severity = QStringLiteral("Information"); break;
+        }
+        return severity + QStringLiteral(": ") + QString::fromStdString(diagnostic.message);
+    }
     const text::Snapshot& snapshot() const { return m_view->editor().text(); }
     bool validRange(int start, int end) const { return start >= 0 && end >= start && end <= characterCount(); }
     ByteOffset byte(int offset) const { return snapshot().offsetAtUtf16(Utf16Offset{static_cast<std::uint64_t>(offset)}).value(); }
@@ -144,6 +204,8 @@ void initializeEditorAccessibility(EditorView& view) {
         const auto range = view.editor().state().primary().range();
         QAccessibleTextSelectionEvent event(&view, units(view.editor().text(), range.begin), units(view.editor().text(), range.end));
         QAccessible::updateAccessibility(&event);
+        QAccessibleEvent description(&view, QAccessible::DescriptionChanged);
+        QAccessible::updateAccessibility(&description);
     });
     QObject::connect(&view, &EditorView::documentEdited, &view, [&view, before = view.editor().text()](quint64) mutable {
         const auto after = view.editor().text();

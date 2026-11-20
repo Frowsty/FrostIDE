@@ -237,6 +237,9 @@ void EngineIntegration::Impl::drainPushEvents() {
                             if constexpr (std::is_same_v<T, engine::EngineState>) {
                                 if (impl.state && entry.sequence < impl.state->sequence)
                                     return;
+                                impl.clearAssetUsages();
+                                if(impl.state && (impl.state->state!=entry.state || impl.state->mode!=entry.mode || impl.state->playGeneration!=entry.playGeneration))
+                                    impl.clearShaderPreview();
                                 impl.state = entry;
                                 statePublished = true;
                                 impl.observeEvent("play.state", entry.data, entry.sequence);
@@ -280,7 +283,7 @@ void EngineIntegration::Impl::drainPushEvents() {
                     impl.console->append(std::move(notice));
                 }
                 if (diagnosticsChanged && impl.workbench.m_problems)
-                    impl.workbench.m_problems->model()->setProblems(ui::DiagnosticSource::Engine, impl.diagnostics);
+                    impl.publishDocumentProblems();
                 impl.drainPushEvents();
                 // Consumers re-fetch the current typed state and identity. Emit only after
                 // publishing an admitted engine push, never from a successful command reply.

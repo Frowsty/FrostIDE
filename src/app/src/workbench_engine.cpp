@@ -9,8 +9,9 @@
 namespace frost::app {
 namespace {
 bool sameTestSource(const engine::EngineTestProviderOptions& a, const engine::EngineTestProviderOptions& b) {
-    return a.expectedProgram == b.expectedProgram && a.program == b.program && a.project == b.project && a.expectedProjectRoot == b.expectedProjectRoot &&
-           a.expectedProjectFile == b.expectedProjectFile && a.folder == b.folder && a.frames == b.frames;
+    return a.expectedProgram == b.expectedProgram && a.program == b.program && a.project == b.project &&
+           a.expectedProjectRoot == b.expectedProjectRoot && a.expectedProjectFile == b.expectedProjectFile &&
+           a.folder == b.folder && a.frames == b.frames;
 }
 } // namespace
 lang::Json Workbench::engineState() const {
@@ -22,6 +23,14 @@ Result<void> Workbench::configureEngineTools(std::string editorPath, std::string
         return fail(ErrorCode::Unsupported, "FrostEngine integration is unavailable");
     return m_engine->configureTools(std::move(editorPath), std::move(configDirectory), std::move(automationDirectory),
                                     std::move(arguments));
+}
+Result<void> Workbench::refreshEnginePerformance() {
+    return m_engine ? m_engine->refreshPerformance()
+                    : Result<void>(fail(ErrorCode::Unsupported, "FrostEngine integration is unavailable"));
+}
+Result<void> Workbench::showAssetInFrostEditor(std::string path, bool openAsset) {
+    return m_engine ? m_engine->showInFrostEditor(std::move(path), openAsset)
+                    : Result<void>(fail(ErrorCode::Unsupported, "FrostEngine integration is unavailable"));
 }
 Result<void> Workbench::refreshEngineInstances() {
     return m_engine ? m_engine->refreshInstances()
