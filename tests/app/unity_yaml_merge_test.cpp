@@ -45,6 +45,10 @@ public:
         scripted.expect({.exitCode = code, .stdoutBytes = "vendor stdout", .stderrBytes = "vendor stderr"});
         return scripted.launch(spec);
     }
+    Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec&, const io::AsyncContext&) override {
+        ADD_FAILURE() << "The synchronous vendor fixture received an asynchronous launch";
+        return fail(ErrorCode::Unsupported, "asynchronous vendor test launch");
+    }
 };
 TEST(UnityYamlMerge, UsesIsolatedActualGitStagesAndReportsVendorConflictsWithoutApplying) {
     vcs::test::TempRepo repo("unity-yaml-merge");

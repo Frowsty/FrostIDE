@@ -18,6 +18,7 @@
 #include "frost/io/process.hpp"
 #include "frost/vcs/git_repository.hpp"
 #include "frost/vcs/git_runner.hpp"
+#include "frost/vcs/vcs_status.hpp"
 
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
