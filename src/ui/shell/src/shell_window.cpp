@@ -464,7 +464,8 @@ void ShellWindow::setDistractionFree(bool enabled) {
 void ShellWindow::registerActions() {
     namespace a = actions;
     addShellAction("window.fullScreen", "Toggle Full Screen", "View", [this] {
-        if (isFullScreen()) showNormal(); else showFullScreen();
+        if (isFullScreen()) setWindowState(m_beforeFullScreen);
+        else { m_beforeFullScreen = windowState(); showFullScreen(); }
     });
     addShellAction("window.distractionFree", "Toggle Distraction Free Mode", "View", [this] {
         setDistractionFree(!distractionFree());

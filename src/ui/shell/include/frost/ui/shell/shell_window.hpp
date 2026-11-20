@@ -197,6 +197,7 @@ private:
     bool m_trusted = false;
     bool m_projectOpen = false;
     bool m_classicMenuBarVisible = false;
+    Qt::WindowStates m_beforeFullScreen;
     bool m_distractionFree = false;
     bool m_modeToolbar = true;
     bool m_modeStatus = true;
