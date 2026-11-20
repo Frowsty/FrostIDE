@@ -62,7 +62,7 @@ struct BindingQuerySeed {
     BindingSourceRange anchor;    // Actual name selection or a position verified by the provider's exact USR.
     std::string luaQualifiedName; // Lua seed's exact schema identity; empty for a native seed.
     std::string nativeUsr;        // Native seed's exact AST identity; empty for a Lua seed.
-    std::optional<text::Snapshot> anchorSnapshot;
+    std::optional<text::Snapshot> anchorSnapshot{};
 };
 
 // Creates native+Lua seeds for usages of an AST USR. Explicit schema sameAs aliases participate in

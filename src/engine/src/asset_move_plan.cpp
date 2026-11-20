@@ -17,9 +17,11 @@ bool safe(std::string_view p) {
         auto part = p.substr(at, end == p.npos ? p.size() - at : end - at);
         if (part.empty() || part == "." || part == ".." || part.back() == '.' || part.back() == ' ')
             return false;
-        for (unsigned char c : part)
+        for (char byte : part) {
+            const auto c = static_cast<unsigned char>(byte);
             if (c < 32 || c == 127)
                 return false;
+        }
         if (end == p.npos)
             return true;
         at = end + 1;
@@ -36,8 +38,8 @@ bool decimal(std::string_view p) {
 } // namespace
 std::string assetMoveHash(std::string_view bytes) {
     std::uint64_t hash = 14695981039346656037ULL;
-    for (unsigned char c : bytes) {
-        hash ^= c;
+    for (char byte : bytes) {
+        hash ^= static_cast<unsigned char>(byte);
         hash *= 1099511628211ULL;
     }
     return std::to_string(hash);

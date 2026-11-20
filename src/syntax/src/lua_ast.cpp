@@ -54,7 +54,7 @@ Result<LuaAstProjection> SyntaxTree::luaAstProjection(const LuaAstLimits& limits
     const auto range = [](TSNode node) {
         return text::ByteRange{ByteOffset{ts_node_start_byte(node)}, ByteOffset{ts_node_end_byte(node)}};
     };
-    result.nodes.push_back({ts_node_type(root), {}, range(root), kNoLuaNode, {}});
+    result.nodes.push_back({ts_node_type(root), {}, range(root), kNoLuaNode, {}, {}});
     std::vector<std::pair<TSNode, std::uint32_t>> pending{{root, 0}};
     std::uint32_t visits = 0;
     for (std::size_t index = 0; index < pending.size(); ++index) {
@@ -82,7 +82,7 @@ Result<LuaAstProjection> SyntaxTree::luaAstProjection(const LuaAstLimits& limits
                 return fail(ErrorCode::OutOfRange, "Lua AST depth/node limit exceeded");
             const auto id = static_cast<std::uint32_t>(pending.size());
             result.nodes.push_back(
-                {ts_node_type(child), field ? field : "", range(child), static_cast<std::uint32_t>(index), {}});
+                {ts_node_type(child), field ? field : "", range(child), static_cast<std::uint32_t>(index), {}, {}});
             result.nodes[index].children.push_back(id);
             pending.emplace_back(child, depth + 1);
         }

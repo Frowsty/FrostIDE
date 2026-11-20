@@ -18,7 +18,8 @@ namespace {
 // These intentionally permit unmodeled properties. They do not claim full preset semantics,
 // dynamic engine component schemas, reference integrity, or arbitrary remote JSON Schema support.
 const Json& schemaFor(std::string_view path) {
-    static const Json cmake = rpc::parseJson(R"schema({"type":"object","required":["version"],"properties":{
+    // The immutable bundled profiles are shared for the lifetime of the process.
+    static const Json* const cmake = new Json(rpc::parseJson(R"schema({"type":"object","required":["version"],"properties":{
       "$schema":{"type":"string","description":"Schema URI; offline profile remains bundled."},
       "version":{"type":"integer","minimum":1,"description":"CMake preset format version."},
       "cmakeMinimumRequired":{"type":"object","properties":{"major":{"type":"integer"},"minor":{"type":"integer"},"patch":{"type":"integer"}}},
@@ -26,13 +27,13 @@ const Json& schemaFor(std::string_view path) {
       "configurePresets":{"type":"array","items":{"type":"object","required":["name"],"properties":{
         "name":{"type":"string"},"displayName":{"type":"string"},"description":{"type":"string"},"hidden":{"type":"boolean"},
         "inherits":{"type":["string","array"]},"generator":{"type":"string"},"binaryDir":{"type":"string"},"installDir":{"type":"string"},
-        "toolchainFile":{"type":"string"},"cacheVariables":{"type":"object"},"environment":{"type":"object"},"condition":{"type":["object","boolean","null"]}}},
+        "toolchainFile":{"type":"string"},"cacheVariables":{"type":"object"},"environment":{"type":"object"},"condition":{"type":["object","boolean","null"]}}}},
       "buildPresets":{"type":"array","items":{"type":"object","required":["name"],"properties":{"name":{"type":"string"},"configurePreset":{"type":"string"},"configuration":{"type":"string"},"jobs":{"type":"integer","minimum":1},"targets":{"type":["string","array"]},"cleanFirst":{"type":"boolean"}}}},
       "testPresets":{"type":"array","items":{"type":"object","required":["name"],"properties":{"name":{"type":"string"},"configurePreset":{"type":"string"},"configuration":{"type":"string"}}}},
       "packagePresets":{"type":"array","items":{"type":"object"}},"workflowPresets":{"type":"array","items":{"type":"object"}}
     }})schema")
-                                  .value();
-    static const Json lua = rpc::parseJson(R"schema({"type":"object","properties":{
+                                  .value());
+    static const Json* const lua = new Json(rpc::parseJson(R"schema({"type":"object","properties":{
       "$schema":{"type":"string"},"runtime.version":{"type":"string","enum":["Lua 5.1","Lua 5.2","Lua 5.3","Lua 5.4","LuaJIT"],"description":"Lua runtime used by LuaLS."},
       "workspace.library":{"type":"array","items":{"type":"string"}},"workspace.checkThirdParty":{"type":["boolean","string"]},
       "diagnostics.enable":{"type":"boolean"},"diagnostics.globals":{"type":"array","items":{"type":"string"}},"diagnostics.disable":{"type":"array","items":{"type":"string"}},
@@ -41,39 +42,36 @@ const Json& schemaFor(std::string_view path) {
       "workspace":{"type":"object","properties":{"library":{"type":"array","items":{"type":"string"}},"checkThirdParty":{"type":["boolean","string"]}}},
       "diagnostics":{"type":"object","properties":{"enable":{"type":"boolean"},"globals":{"type":"array","items":{"type":"string"}},"disable":{"type":"array","items":{"type":"string"}}}}
     }})schema")
-                                .value();
-    static const Json project = rpc::parseJson(R"schema({"type":"object","properties":{
+                                .value());
+    static const Json* const project = new Json(rpc::parseJson(R"schema({"type":"object","properties":{
       "General":{"type":"object","description":"Project identity and startup scene.","properties":{"Name":{"type":"string"},"Company":{"type":"string"},"Version":{"type":"string"},"StartScene":{"type":"integer","minimum":0}}},
       "Build":{"type":"object","properties":{"GameName":{"type":"string"},"OutputDirectory":{"type":"string"},"WindowTitle":{"type":"string"},"WindowWidth":{"type":"integer","minimum":1},"WindowHeight":{"type":"integer","minimum":1},"Fullscreen":{"type":"boolean"},"Resizable":{"type":"boolean"}}},
       "Input":{"type":"object","properties":{"Actions":{"type":"array","items":{"type":"object","properties":{"Name":{"type":"string"}}}}}},
       "Audio":{"type":"object","properties":{"MasterVolume":{"type":"number","minimum":0},"Groups":{"type":"array","items":{"type":"object","properties":{"Name":{"type":"string"},"Volume":{"type":"number","minimum":0},"Muted":{"type":"boolean"}}}}}},
       "Physics":{"type":"object","properties":{"Layers":{"type":"array","items":{"type":"string"}}}},"Render":{"type":"object","properties":{"RenderLayers":{"type":"array","items":{"type":"string"}}}}
     }})schema")
-                                    .value();
-    static const Json meta =
-        rpc::parseJson(
+                                    .value());
+    static const Json* const meta = new Json(rpc::parseJson(
             R"schema({"type":"object","properties":{"Handle":{"type":"integer","minimum":0,"x-engine-reference":"asset"},"Type":{"type":"string"},"Path":{"type":"string"},"ImporterVersion":{"type":"integer","minimum":0},"Settings":{"type":"object"}}})schema")
-            .value();
-    static const Json data =
-        rpc::parseJson(
+            .value());
+    static const Json* const data = new Json(rpc::parseJson(
             R"schema({"type":"object","properties":{"Format":{"type":"string","enum":["FrostDataSchema"]},"Version":{"type":"integer","minimum":1},"Name":{"type":"string"},"Description":{"type":"string"},"Columns":{"type":"array","items":{"type":"object","required":["Name","Type"],"properties":{"Name":{"type":"string"},"Type":{"type":"string"},"Required":{"type":"boolean"},"Description":{"type":"string"},"Min":{"type":"number"},"Max":{"type":"number"},"MaxLength":{"type":"integer","minimum":0}}}}}})schema")
-            .value();
-    static const Json table =
-        rpc::parseJson(
+            .value());
+    static const Json* const table = new Json(rpc::parseJson(
             R"schema({"type":"object","properties":{"Format":{"type":"string","enum":["FrostDataTable"]},"Version":{"type":"integer","minimum":1},"Schema":{"type":["string","object","integer"],"x-engine-reference":"asset","x-engine-assetTypes":["DataSchema"]},"Rows":{"type":"array","items":{"type":"object"}}}})schema")
-            .value();
+            .value());
     const auto name = io::fileName(path);
     if (name == "CMakePresets.json" || name == "CMakeUserPresets.json")
-        return cmake;
+        return *cmake;
     if (name == ".luarc.json" || name == ".luarc.jsonc")
-        return lua;
+        return *lua;
     if (path.ends_with(".frostproj") || path.ends_with(".feproject"))
-        return project;
+        return *project;
     if (path.ends_with(".fmeta"))
-        return meta;
+        return *meta;
     if (path.ends_with(".fschema"))
-        return data;
-    return table;
+        return *data;
+    return *table;
 }
 struct Node {
     std::vector<std::string> path;
@@ -83,7 +81,7 @@ struct Node {
 struct Scanner {
     std::string_view source;
     std::size_t at = 0;
-    std::vector<Node> nodes;
+    std::vector<Node> nodes{};
     void space() {
         while (at < source.size() && std::isspace(static_cast<unsigned char>(source[at])))
             ++at;
@@ -180,7 +178,11 @@ bool safeIndexedPath(std::string_view path) {
     for(std::size_t start=0;start<=path.size();) {
         const auto end=path.find('/',start);const auto part=path.substr(start,end==path.npos?end:end-start);
         if(part.empty()||part=="."||part=="..")return false;
-        for(unsigned char c:part)if(c<32||c==127)return false;
+        for (const char character : part) {
+            const auto byte = static_cast<unsigned char>(character);
+            if (byte < 32 || byte == 127)
+                return false;
+        }
         if(end==path.npos)break;start=end+1;
     }
     return true;
@@ -311,7 +313,10 @@ Result<Json> dataColumnShape(const Json& definition,unsigned depth=0) {
     else if(type=="Ref")shape.set("type",Json::array({"string","null"}));
     else if(type=="Asset") {
         shape.set("type",Json::array({"string","object","integer","null"})).set("x-engine-reference","asset");
-        auto types=Json::array();if(const auto type=definition.stringAt("AssetType");!type.empty())types.push(std::string(type));shape.set("x-engine-assetTypes",types);
+        auto types = Json::array();
+        if (const auto assetType = definition.stringAt("AssetType"); !assetType.empty())
+            types.push(std::string(assetType));
+        shape.set("x-engine-assetTypes", types);
     }
     else if(type=="Color"||type=="Vec2")shape.set("type","array").set("items",Json::object().set("type","number"));
     else if(type=="List") {

@@ -215,9 +215,10 @@ sched::Task<Result<Json>> CMakeLanguageService::answer(sched::IScheduler& schedu
         auto proposal=planCMakeTargetRename(input,*position,name);
         if (!proposal) co_return std::unexpected(proposal.error());
         for (const auto& path:input.provenancePaths) {
-            auto bytes=reader(path,32U*1024U*1024U);
-            if (!bytes) co_return std::unexpected(bytes.error());
-            proposal->provenance.emplace_back(path,std::move(*bytes));
+            auto contents = reader(path, 32U * 1024U * 1024U);
+            if (!contents)
+                co_return std::unexpected(contents.error());
+            proposal->provenance.emplace_back(path, std::move(*contents));
         }
         if (method=="textDocument/prepareRename") {
             for (const auto& file:proposal->edit.files) if (documentKey(file.path)==documentKey(input.path))

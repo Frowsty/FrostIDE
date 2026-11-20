@@ -236,14 +236,14 @@ captureInspectionScope(io::IFileSystem& fs, const InspectionRequest& request, st
                 continue;
             }
             if (directory) {
-                if (auto captured = walk(*path, true); !captured)
-                    return std::unexpected(captured.error());
+                if (auto walked = walk(*path, true); !walked)
+                    return std::unexpected(walked.error());
             } else {
                 auto identity = fs.physicalPath(*path);
                 if (!identity || !within(result.physicalRoot, *identity))
                     return fail(ErrorCode::Unsupported, "Compiler input leaves the physical project: " + *path);
-                if (auto captured = add(*path, false); !captured)
-                    return std::unexpected(captured.error());
+                if (auto added = add(*path, false); !added)
+                    return std::unexpected(added.error());
             }
         }
     }

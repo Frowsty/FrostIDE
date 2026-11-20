@@ -19,9 +19,11 @@ bool assetPath(std::string_view path) {
         const auto part = path.substr(at, end == path.npos ? end : end - at);
         if (part.empty() || part == "." || part == "..")
             return false;
-        for (unsigned char c : part)
+        for (char byte : part) {
+            const auto c = static_cast<unsigned char>(byte);
             if (c < 32 || c == 127)
                 return false;
+        }
         if (end == path.npos)
             break;
         at = end + 1;
