@@ -99,6 +99,10 @@ static class ProjectEvaluator
                         });
                     }
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var importDefinitions = project.Imports.Select(i => new {
+                    File = i.ImportingElement.Location.File, Line = i.ImportingElement.Location.Line,
+                    Expression = i.ImportingElement.Project, ImportedFile = i.ImportedProject.FullPath
+                }).ToArray();
                 var imports = project.Imports.Select(i => i.ImportedProject.FullPath).Where(seen.Add).ToArray();
                 var values2 = new Dictionary<string, string>();
                 foreach (string name in properties)
@@ -115,13 +119,21 @@ static class ProjectEvaluator
                             ? definition.GetMetadataValue(name.Substring(dot + 1)) : "";
                     }
                 }
+                // Use the winning evaluated property, not every historical assignment. XML-less
+                // globals/environment properties intentionally have no invented definition location.
+                var propertyDefinitions = project.Properties.Select(p => new {
+                    Name = p.Name, Value = p.EvaluatedValue,
+                    File = p.Xml == null ? "" : p.Xml.Location.File,
+                    Line = p.Xml == null ? 0 : p.Xml.Location.Line,
+                    Column = p.Xml == null ? 0 : p.Xml.Location.Column
+                }).ToArray();
                 var configurations = project.GetItems("ProjectConfiguration").Select(i => i.EvaluatedInclude).ToArray();
                 var globSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var globs = project.GetAllGlobs().SelectMany(g => g.IncludeGlobs).Where(globSeen.Add).ToArray();
                 return new {
                     Op = "Evaluate", Id = id, Error = (string)null, Project = project.FullPath,
                     Configuration = globals["Configuration"], Platform = globals["Platform"], Items = items,
-                    Imports = imports, Properties = values2, ProjectConfigurations = configurations, Globs = globs
+                    Imports = imports, Properties = values2, PropertyDefinitions = propertyDefinitions, ImportDefinitions = importDefinitions, ProjectConfigurations = configurations, Globs = globs
                 };
             }
             finally

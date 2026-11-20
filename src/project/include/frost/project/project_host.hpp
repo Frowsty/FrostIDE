@@ -121,6 +121,8 @@ struct HostEvaluation {
     std::vector<HostItem> items;      // Evaluation order, per requested type.
     std::vector<std::string> imports; // Evaluation order, each once; empty for the MSBuild.exe fallback.
     std::map<std::string, std::string, std::less<>> properties;
+    std::vector<EvaluatedPropertyDefinition> propertyDefinitions;
+    std::vector<EvaluatedImportDefinition> importDefinitions;
     std::vector<std::string> projectConfigurations; // "Debug|x64", ...; empty for the fallback.
     // The evaluated include globs of every item element (SLN-4), relative to the project directory
     // or absolute, each once; empty for the fallback.
