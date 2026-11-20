@@ -45,7 +45,7 @@ class IconCache;
 class BuildController;
 
 // The originating tool family, kept distinct for filtering and independent result clearing.
-enum class DiagnosticSource : std::uint8_t { Build, Live, Inspection, Engine };
+enum class DiagnosticSource : std::uint8_t { Build, Live, Inspection, Engine, Unity };
 
 struct Problem {
     build::BuildDiagnostic diagnostic;
@@ -145,6 +145,8 @@ public:
 
 signals:
     void openLocation(const QString& path, int line, int column);
+    // Unity compiler callbacks report UTF-16 columns; keep that unit through live-buffer navigation.
+    void openUtf16Location(const QString& path, int line, int column);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;

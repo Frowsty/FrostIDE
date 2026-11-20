@@ -11,6 +11,7 @@ namespace FrostIDE.UnityIntegration {
             public long sequence;
             public string kind, level, message, stack, file, assembly;
             public int line, column;
+            public bool truncated;
         }
         internal sealed class Batch {
             internal Entry[] entries;
@@ -50,6 +51,7 @@ namespace FrostIDE.UnityIntegration {
             lock (gate) {
                 if (sequence == Int64.MaxValue) return;
                 entry.sequence = ++sequence;
+                entry.truncated = (entry.message?.Length ?? 0) > 512 || (entry.stack?.Length ?? 0) > 2048 || (entry.file?.Length ?? 0) > 512 || (entry.assembly?.Length ?? 0) > 512;
                 entry.message = Clip(entry.message, 512); entry.stack = Clip(entry.stack, 2048);
                 entry.file = Clip(entry.file, 512); entry.assembly = Clip(entry.assembly, 512);
                 entries.Enqueue(entry);

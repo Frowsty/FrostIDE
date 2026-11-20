@@ -223,9 +223,17 @@ namespace FrostIDE.UnityIntegration
                     } catch (ArgumentOutOfRangeException) { Finish(item, false, "Event cursor is outside this Unity domain"); }
                     continue;
                 }
-                if (item.request.command == "refresh") { AssetDatabase.Refresh(); Finish(item, true, "Asset refresh requested"); continue; }
-                if (item.request.command == "recompile") { CompilationPipeline.RequestScriptCompilation(); Finish(item, true, "Script compilation requested"); continue; }
+
+
                 if (transition != null) { Finish(item, false, "Another control request is pending"); continue; }
+                if (item.request.command == "refresh" || item.request.command == "recompile") {
+                    try {
+                        if (item.request.command == "refresh") AssetDatabase.Refresh();
+                        else CompilationPipeline.RequestScriptCompilation();
+                        Finish(item, true, item.request.command == "refresh" ? "Asset refresh requested" : "Script compilation requested");
+                    } catch (Exception error) { Finish(item, false, "Unity request failed: " + error.Message); }
+                    continue;
+                }
                 string command = item.request.command;
                 if ((command == "pause" || command == "resume" || command == "step") && !EditorApplication.isPlaying)
                 { Finish(item, false, "Unity is not playing"); continue; }

@@ -17,6 +17,8 @@
 #include <QLabel>
 #include <QMessageAuthenticationCode>
 #include <QPushButton>
+#include <QTreeWidget>
+#include "frost/ui/toolwindows/problems.hpp"
 
 #include <atomic>
 #include <thread>
@@ -206,9 +208,16 @@ private:
                               .set("playing", playing)
                               .set("paused", false)
                               .set("frame", 3)
-                              .set("message", "observed")
-                              .dump();
-            (void)sendLine(peer, result);
+                              .set("message", "observed");
+            if (command.starts_with("events:")) {
+                const bool initial = command == "events:0";
+                auto events = frost::lang::Json::array();
+                if (initial) events.push(frost::lang::Json::object().set("sequence", 1).set("kind", "compiler").set("level", "error")
+                    .set("message", "CS1002: fixture compiler error").set("stack", "").set("file", "Assets/a.cs").set("assembly", "Assembly-CSharp.dll").set("line", 1).set("column", 2));
+                result.set("eventFirst", 1).set("eventNext", 1).set("eventLast", 1).set("eventLost", 0)
+                    .set("projectVersion", 2).set("compiling", false).set("events", std::move(events));
+            }
+            (void)sendLine(peer, result.dump());
             closeSocket(peer);
         }
     }
@@ -415,4 +424,32 @@ TEST(WorkbenchUnity, RevocationRemovesSessionsAndRefusesFurtherCommands) {
     EXPECT_EQ(combo->count(), 1);
     EXPECT_FALSE(rig.workbench->announceUnity(message));
 }
-} // namespace
+TEST(WorkbenchUnity, AuthenticatedCompilerEventsReachConsoleAndIndependentProblemsSource) {
+    WorkDir dir("unity-authenticated-events");
+    dir.write("project/Assets/a.cs", "int fixture;\n");
+    dir.write("project/Packages/manifest.json", "{}");
+    dir.write("project/ProjectSettings/ProjectVersion.txt", "scratch");
+    const auto root = dir.join("project");
+    UnityServer server(root, std::string(32, 'a'), std::string(64, 'a'), false);
+    ASSERT_NE(server.port, 0);
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.trust->trust(root));
+    ASSERT_TRUE(rig.workbench->openExternalProject(root));
+    rig.window->toolWindows().show("unityControls");
+    auto* panel = rig.window->toolWindows().content("unityControls");
+    auto hello = announcement(root, 'a');
+    hello.set("port", server.port).set("eventVersion", 1);
+    ASSERT_TRUE(rig.workbench->announceUnity(hello));
+    auto* console = panel->findChild<QTreeWidget*>(QStringLiteral("unityConsole"));
+    ASSERT_NE(console, nullptr);
+    ASSERT_TRUE(waitFor([&] { return console->topLevelItemCount() == 1; }, 5s));
+    EXPECT_EQ(console->topLevelItem(0)->text(1), QStringLiteral("CS1002: fixture compiler error"));
+    auto* problems = rig.workbench->problems(); ASSERT_NE(problems, nullptr);
+    const auto& rows = problems->model()->problems();
+    const auto found = std::ranges::find_if(rows, [](const auto& row) { return row.source == frost::ui::DiagnosticSource::Unity; });
+    ASSERT_NE(found, rows.end());
+    EXPECT_EQ(found->diagnostic.diagnostic.line, 1); EXPECT_EQ(found->diagnostic.diagnostic.column, 2);
+    ASSERT_TRUE(rig.trust->untrust(root));
+    ASSERT_TRUE(waitFor([&] { return console->topLevelItemCount() == 0; }, 5s));
+    EXPECT_TRUE(std::ranges::none_of(problems->model()->problems(), [](const auto& row) { return row.source == frost::ui::DiagnosticSource::Unity; }));
+}} // namespace

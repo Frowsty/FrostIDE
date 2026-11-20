@@ -4,6 +4,7 @@
 // registry and their handlers (split from workbench.cpp, FND-12a).
 
 #include "frost/app/workbench.hpp"
+#include "project_open_broker.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/ui/debug_actions.hpp"
@@ -108,6 +109,9 @@ void Workbench::registerActions() {
             problems->setController(&replayController);
             output->setController(&replayController);
             connect(problems, &ui::ProblemsView::openLocation, this, &Workbench::openLocation);
+            connect(problems, &ui::ProblemsView::openUtf16Location, this, [this](const QString& path, int line, int column) {
+                (void)openExternalFile(*this, path.toUtf8().toStdString(), line, column, true);
+            });
             connect(output, &ui::BuildOutputPane::openLocation, this, &Workbench::openLocation);
             layout->addWidget(problems, 2);
             layout->addWidget(output, 1);

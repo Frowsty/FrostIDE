@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Trusted Unity editor discovery and acknowledged play controls.
 #include "unity_control.hpp"
+#include "unity_events.hpp"
+#include "frost/ui/toolwindows/problems.hpp"
 
 #include "frost/app/workbench.hpp"
 #include "frost/io/loopback_stream.hpp"
@@ -12,6 +14,13 @@
 
 #include "project_open_broker.hpp"
 #include <QComboBox>
+#include <QCheckBox>
+#include <QLineEdit>
+#include <QTreeWidget>
+#include <QHeaderView>
+#include <QRegularExpression>
+#include <QJsonDocument>
+#include <QJsonArray>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -34,6 +43,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <map>
 namespace frost::app {
 namespace {
 using namespace std::chrono_literals;
@@ -77,6 +87,7 @@ struct UnityControlIntegration::Impl {
         int generation = 0, pid = 0;
         std::uint16_t port = 0;
         std::chrono::steady_clock::time_point seen;
+        bool events = false;
     };
     UnityControlIntegration& owner;
     Workbench& workbench;
@@ -91,7 +102,97 @@ struct UnityControlIntegration::Impl {
     std::jthread worker;
     std::uint64_t epoch = 0;
     bool busy = false, stopped = false, autoSelected = false, explicitSelection = false;
+    QPointer<QTreeWidget> console;
+    QPointer<QLineEdit> filter;
+    QPointer<QComboBox> level;
+    QPointer<QCheckBox> collapse, clearOnPlay;
+    QPointer<QLabel> eventsStatus;
+    std::vector<UnityBridgeEvent> journal;
+    std::vector<build::BuildDiagnostic> compilerProblems;
+    std::string eventSession;
+    std::int64_t eventCursor = 0, projectVersion = -1, lostEvents = 0;
+    std::optional<bool> lastPlaying;
+    std::size_t droppedCompiler = 0;
+    QString sourcePath(std::string_view file) const {
+        if (file.empty()) return {};
+        const auto path = QDir(qs(workbench.projectRoot())).absoluteFilePath(qs(file));
+        const QFileInfo info(path);
+        return info.isFile() ? info.canonicalFilePath() : QString{};
+    }
+    void clearDomain(const std::string& id) {
+        eventSession = id; eventCursor = 0; projectVersion = -1; lostEvents = 0; lastPlaying.reset();
+        journal.clear(); compilerProblems.clear(); droppedCompiler = 0;
+        if (console) console->clear();
+        if (eventsStatus) eventsStatus->setText(QStringLiteral("Waiting for Unity event journal"));
+        if (workbench.problems()) workbench.problems()->model()->clear(ui::DiagnosticSource::Unity);
+    }
+    void renderConsole() {
+        if (!console) return;
+        console->clear();
+        std::map<std::string, QTreeWidgetItem*> duplicates;
+        const QString query = filter ? filter->text() : QString{};
+        const QString severity = level ? level->currentData().toString() : QString{};
+        for (const auto& entry : journal) {
+            if ((!severity.isEmpty() && severity != qs(entry.level)) ||
+                (!query.isEmpty() && !qs(entry.message + entry.stack + entry.file).contains(query, Qt::CaseInsensitive))) continue;
+            const auto key = lang::Json::array().push(entry.kind).push(entry.level).push(entry.message).push(entry.stack).push(entry.file).push(entry.line).push(entry.column).dump();
+            if (collapse && collapse->isChecked()) {
+                if (const auto found = duplicates.find(key); found != duplicates.end()) {
+                    auto* row = found->second;
+                    row->setText(3, QString::number(row->text(3).toInt() + 1));
+                    continue;
+                }
+            }
+            auto* row = new QTreeWidgetItem(console, {qs(entry.level), qs(entry.message) + (entry.truncated ? QStringLiteral(" [truncated]") : QString{}), qs(entry.file), QStringLiteral("1")});
+            duplicates[key] = row;
+            const auto path = sourcePath(entry.file);
+            if (!entry.truncated && !path.isEmpty() && entry.line > 0) {
+                row->setData(0, Qt::UserRole, path); row->setData(0, Qt::UserRole + 1, entry.line); row->setData(0, Qt::UserRole + 2, entry.column);
+            }
+            const QRegularExpression frame(QStringLiteral("\\(at (.+):(\\d+)\\)"));
+            for (const auto& lineText : qs(entry.stack).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+                auto* child = new QTreeWidgetItem(row, {QString{}, lineText});
+                const auto match = frame.match(lineText);
+                if (!match.hasMatch()) continue;
+                const auto target = sourcePath(match.captured(1).toUtf8().toStdString());
+                const auto line = match.captured(2).toInt();
+                if (target.isEmpty() || line <= 0) continue;
+                child->setData(0, Qt::UserRole, target); child->setData(0, Qt::UserRole + 1, line); child->setData(0, Qt::UserRole + 2, 1);
+            }
+        }
+    }
+    void publishEvents(const UnityEventPage& page) {
+        lostEvents += page.lost;
+        if (page.lost && workbench.problems()) {
+            compilerProblems.clear();
+            workbench.problems()->model()->clear(ui::DiagnosticSource::Unity);
+        }
+        for (const auto& entry : page.events) {
+            if (entry.kind == "compilationStarted") { compilerProblems.clear(); droppedCompiler = 0; }
+            if (entry.kind == "compiler") {
+                build::BuildDiagnostic row;
+                row.diagnostic.message = entry.message;
+                row.diagnostic.severity = entry.level == "error" ? build::Severity::Error : build::Severity::Warning;
+                row.diagnostic.file = entry.file; row.diagnostic.line = entry.line; row.diagnostic.column = entry.column;
+                row.diagnostic.project = entry.assembly;
+                row.path = sourcePath(entry.file).toUtf8().toStdString();
+                row.jumpable = !entry.truncated && !row.path.empty() && entry.line > 0;
+                if (compilerProblems.size() < 4096) compilerProblems.push_back(std::move(row)); else ++droppedCompiler;
+            }
+            journal.push_back(entry);
+        }
+        if (journal.size() > 2000) journal.erase(journal.begin(), journal.begin() + static_cast<std::ptrdiff_t>(journal.size() - 2000));
+        if (workbench.problems() && !page.events.empty()) workbench.problems()->model()->setProblems(ui::DiagnosticSource::Unity, compilerProblems);
+        const bool changed = projectVersion != page.projectVersion;
+        eventCursor = page.next; projectVersion = page.projectVersion;
+        if (changed || std::ranges::any_of(page.events, [](const auto& entry) { return entry.kind == "compilationFinished"; })) workbench.checkUnityProjectContext();
+        if (eventsStatus) eventsStatus->setText(QStringLiteral("Domain %1 · project change %2 · %3 · %4 events unavailable%5 · %6 retained console events · %7 compiler rows omitted")
+            .arg(qs(eventSession).left(8)).arg(projectVersion).arg(page.compiling ? QStringLiteral("compiling") : QStringLiteral("not compiling"))
+            .arg(lostEvents).arg(lostEvents ? QStringLiteral("; compiler diagnostics may be incomplete") : QString{}).arg(journal.size()).arg(droppedCompiler));
+        if (!page.events.empty()) renderConsole();
+    }
     void cancel() {
+        clearDomain({});
         ++epoch;
         if (worker.joinable()) {
             worker.request_stop();
@@ -156,7 +257,7 @@ struct UnityControlIntegration::Impl {
             return fail(ErrorCode::InvalidArgument, "project is not a Unity project");
         auto it = std::ranges::find_if(live, [&](const auto& s) { return s.id == id; });
         if (it != live.end()) {
-            if (it->root != root || it->instance != instance || it->generation != *generation || it->token != token ||
+            if (it->events != (json.integerAt("eventVersion").value_or(0) == 1) || it->root != root || it->instance != instance || it->generation != *generation || it->token != token ||
                 it->pid != *pid || it->port != *port)
                 return fail(ErrorCode::InvalidArgument, "Unity session changed identity");
             it->seen = std::chrono::steady_clock::now();
@@ -191,7 +292,7 @@ struct UnityControlIntegration::Impl {
         if (live.size() >= 16)
             return fail(ErrorCode::Busy, "too many Unity sessions");
         live.push_back({root, instance, id, token, static_cast<int>(*generation), static_cast<int>(*pid),
-                        static_cast<std::uint16_t>(*port), std::chrono::steady_clock::now()});
+                        static_cast<std::uint16_t>(*port), std::chrono::steady_clock::now(), json.integerAt("eventVersion").value_or(0) == 1});
         if (!reconnect && awaiting && awaiting->instance == instance && *generation >= awaiting->generation &&
             (awaitingExplicit || live.size() == 1)) {
             reconnect = true;
@@ -252,6 +353,13 @@ struct UnityControlIntegration::Impl {
             }
             rebuild();
         }
+        if (!busy && !selected.empty()) {
+            const auto found = std::ranges::find_if(live, [&](const auto& item) { return item.id == selected; });
+            if (found != live.end() && found->events) {
+                if (eventSession != found->id) clearDomain(found->id);
+                run("events:" + std::to_string(eventCursor));
+            }
+        }
     }
     void run(std::string command) {
         if (!trusted()) {
@@ -260,13 +368,16 @@ struct UnityControlIntegration::Impl {
                 status->setText(QStringLiteral("Trust the Unity project first"));
             return;
         }
-        if (busy)
-            return;
+        if (busy) { status->setText(QStringLiteral("A Unity request is already pending")); return; }
         const auto found = std::ranges::find_if(live, [&](const auto& s) { return s.id == selected; });
         if (found == live.end()) {
             status->setText(QStringLiteral("Select a connected Unity editor"));
             return;
         }
+        if ((command.starts_with("events:") || command == "refresh" || command == "recompile") && !found->events) {
+            status->setText(QStringLiteral("Update the Unity editor package to use event and refresh controls")); return;
+        }
+        if (eventSession != found->id) clearDomain(found->id);
         Session target = *found;
         if (worker.joinable())
             worker.join();
@@ -274,7 +385,7 @@ struct UnityControlIntegration::Impl {
         const auto round = ++epoch;
         const auto id = randomHex(32);
         const auto challenge = randomHex(64);
-        status->setText(QStringLiteral("Waiting for Unity…"));
+        if (!command.starts_with("events:")) status->setText(QStringLiteral("Waiting for Unity…"));
         QPointer<UnityControlIntegration> receiver(&owner);
         auto* trust = &workbench.m_services.trust;
         const auto trustRoot = workbench.projectRoot();
@@ -316,7 +427,7 @@ struct UnityControlIntegration::Impl {
                                        .set("nonce", nonce)
                                        .set("mac", signature)
                                        .dump();
-                    auto reply = (*connection)->exchange(request, 8192);
+                    auto reply = (*connection)->exchange(request, command.starts_with("events:") ? 262144 : 8192);
                     if (reply)
                         result = lang::parseJson(*reply);
                     else
@@ -337,7 +448,7 @@ struct UnityControlIntegration::Impl {
                     state.busy = false;
                     if (!result || !result->isObject() || result->stringAt("session") != target.id ||
                         result->stringAt("id") != id) {
-                        if (command != "state")
+                        if (command != "state" && !command.starts_with("events:"))
                             state.interrupted = true;
                         state.status->setText(QStringLiteral("Unity request interrupted; state is uncertain"));
                         return;
@@ -346,11 +457,25 @@ struct UnityControlIntegration::Impl {
                         state.status->setText(qs(result->stringAt("message")));
                         return;
                     }
-                    const bool playing = result->boolAt("playing").value_or(false),
-                               paused = result->boolAt("paused").value_or(false);
+                    const auto observedPlaying = result->boolAt("playing"), observedPaused = result->boolAt("paused");
+                    const auto observedFrame = result->integerAt("frame");
+                    if (!observedPlaying || !observedPaused || !observedFrame || *observedFrame < 0) {
+                        state.status->setText(QStringLiteral("Unity returned an invalid state snapshot")); return;
+                    }
+                    const bool playing = *observedPlaying, paused = *observedPaused;
+                    if (state.lastPlaying && !*state.lastPlaying && playing && state.clearOnPlay && state.clearOnPlay->isChecked()) {
+                        state.journal.clear(); state.renderConsole();
+                    }
+                    state.lastPlaying = playing;
+                    if (command.starts_with("events:")) {
+                        auto page = parseUnityEvents(*result, state.eventCursor);
+                        if (!page) { state.eventsStatus->setText(qs(page.error().message())); return; }
+                        state.publishEvents(*page);
+                    }
                     QString observed = !playing ? QStringLiteral("Unity stopped")
                                        : paused ? QStringLiteral("Unity paused")
                                                 : QStringLiteral("Unity playing");
+                    if (command == "refresh" || command == "recompile") observed += QStringLiteral(" · ") + qs(result->stringAt("message"));
                     if (state.interrupted)
                         observed += QStringLiteral(" (previous request interrupted)");
                     state.status->setText(observed);
@@ -375,6 +500,7 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
     m_impl->rebuild();
     connect(m_impl->sessions, &QComboBox::activated, this, [this](int index) {
         auto& impl = *m_impl;
+        impl.clearDomain({});
         ++impl.epoch;
         if (impl.worker.joinable()) {
             impl.worker.request_stop();
@@ -393,7 +519,7 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
                                          {"Pause", "pause"},
                                          {"Resume", "resume"},
                                          {"Step", "step"},
-                                         {"Stop", "stop"}}) {
+                                         {"Stop", "stop"}, {"Refresh Assets", "refresh"}, {"Recompile", "recompile"}}) {
         auto* button = new QPushButton(QString::fromLatin1(title), panel);
         row->addWidget(button);
         connect(button, &QPushButton::clicked, this, [this, command] { m_impl->run(command); });
@@ -401,6 +527,37 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
     layout->addLayout(row);
     m_impl->status = new QLabel(QStringLiteral("Disconnected"), panel);
     layout->addWidget(m_impl->status);
+    layout->addWidget(new QLabel(QStringLiteral("Unity Console"), panel));
+    auto* consoleTools = new QHBoxLayout;
+    m_impl->filter = new QLineEdit(panel); m_impl->filter->setPlaceholderText(QStringLiteral("Filter Unity output"));
+    m_impl->level = new QComboBox(panel);
+    m_impl->level->addItem(QStringLiteral("All levels"), QString{});
+    m_impl->level->addItem(QStringLiteral("Errors"), QStringLiteral("error"));
+    m_impl->level->addItem(QStringLiteral("Warnings"), QStringLiteral("warning"));
+    m_impl->level->addItem(QStringLiteral("Info"), QStringLiteral("info"));
+    m_impl->collapse = new QCheckBox(QStringLiteral("Collapse"), panel);
+    m_impl->clearOnPlay = new QCheckBox(QStringLiteral("Clear on Play"), panel);
+    auto* clear = new QPushButton(QStringLiteral("Clear Console View"), panel);
+    consoleTools->addWidget(m_impl->filter); consoleTools->addWidget(m_impl->level);
+    consoleTools->addWidget(m_impl->collapse); consoleTools->addWidget(m_impl->clearOnPlay); consoleTools->addWidget(clear);
+    layout->addLayout(consoleTools);
+    m_impl->console = new QTreeWidget(panel);
+    m_impl->console->setObjectName(QStringLiteral("unityConsole"));
+    m_impl->console->setHeaderLabels({QStringLiteral("Level"), QStringLiteral("Message / Stack Frame"), QStringLiteral("Source"), QStringLiteral("Count")});
+    m_impl->console->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    layout->addWidget(m_impl->console);
+    m_impl->eventsStatus = new QLabel(QStringLiteral("Unity event stream unavailable until a compatible package connects"), panel);
+    m_impl->eventsStatus->setWordWrap(true); layout->addWidget(m_impl->eventsStatus);
+    connect(m_impl->filter, &QLineEdit::textChanged, this, [this] { m_impl->renderConsole(); });
+    connect(m_impl->level, &QComboBox::currentIndexChanged, this, [this] { m_impl->renderConsole(); });
+    connect(m_impl->collapse, &QCheckBox::toggled, this, [this] { m_impl->renderConsole(); });
+    connect(clear, &QPushButton::clicked, this, [this] { m_impl->journal.clear(); m_impl->renderConsole(); });
+    connect(m_impl->console, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* item, int) {
+        if (!item || !m_impl->trusted()) return;
+        const auto path = item->data(0, Qt::UserRole).toString();
+        const int line = item->data(0, Qt::UserRole + 1).toInt();
+        if (!path.isEmpty() && line > 0) (void)openExternalFile(m_impl->workbench, path.toUtf8().toStdString(), line, std::max(1, item->data(0, Qt::UserRole + 2).toInt()), true);
+    });
     auto added = workbench.m_window->toolWindows().add({"unityControls",
                                                         QStringLiteral("Unity"),
                                                         ui::ToolWindowSide::Bottom,

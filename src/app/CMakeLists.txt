@@ -90,6 +90,7 @@ frost_add_library(app LAYER app
         src/update_check.hpp
         src/update_download.cpp
         src/update_download.hpp
+        src/unity_events.cpp
         src/unity_control.cpp
         src/unity_control.hpp
         src/git_integration.cpp

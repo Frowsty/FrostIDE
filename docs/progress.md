@@ -3,6 +3,13 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R18 Unity authenticated event/Console/compiler checkpoint
+
+- Extended the existing project/domain-bound HMAC channel with capability-gated, monotonic event continuations. The Unity package journals public log, compiler and project callbacks, reports exact lost prefixes after bounded retention, caps strings/batch bytes and marks truncation. Authenticated Refresh Assets and Request Compilation execute on the Editor update thread and distinguish acceptance from later observed compiler state. Astra source-reviewed producer 220030e without a blocker; no Unity Editor or runtime test ran.
+- The C++ consumer strictly validates complete event pages before publication, rejects malformed/missing observed play state, polls the selected current domain, resets old-domain Console/Problems state and recovers event polling across same-domain transport interruptions. Unity Console has severity/text filtering, collapse counts, actual stack-frame/source navigation and clear-on-play. Compiler callback rows retain a separate Unity Problems source and UTF-16 navigation through live editor snapshots; other diagnostic sources survive Unity clearing. Console and compiler row retention/loss remain visible.
+- Actual project/compiler events check the owned generated-context revision; the package debounces regeneration on real project changes and after domain registration, preserving the existing immutable generation/hash/no-link publication. Unsupported compiler arguments retain their existing explicit reporting rather than being guessed.
+- Authored protocol/callback/gap/continuation/future-cursor fixtures, strict C++ payload rejection tests, separate Problems source/UTF-16 routing and authenticated callback-to-Console/Problems/trust-revocation integration coverage. Consumer source review remains pending. Builds, tests, feature runs, Unity, WSL and platform acceptance remain deferred. No complete R18 milestone, debugger/test-runner/asset-semantics or analyzer-coverage acceptance is claimed; root coordinates those independent tracks.
+
 ## 2026-11-20 R13 C++ analysis implementation integrated
 
 The default C++ bundle registers the Clang-backed index, native analyzer, preprocessor views and module actions. The SQLite index distinguishes build configurations. The analyzer emits SARIF for 33 AST checks and five control-flow checks. Idle, save and manual analysis share Workbench Problems publication and cancellation.

@@ -19,12 +19,19 @@ namespace FrostIDE.UnityIntegration
         static FrostEditor()
         {
             CodeEditor.Register(new FrostEditor());
+            EditorApplication.projectChanged += QueueSynchronize;
+            QueueSynchronize();
             CompilationPipeline.compilationFinished += _ =>
             {
                 if (CodeEditor.Editor.CurrentCodeEditor is FrostEditor) Synchronize();
             };
         }
 
+        private static void QueueSynchronize() {
+            if (!(CodeEditor.Editor.CurrentCodeEditor is FrostEditor)) return;
+            EditorApplication.delayCall -= Synchronize;
+            EditorApplication.delayCall += Synchronize;
+        }
         public CodeEditor.Installation[] Installations
         {
             get

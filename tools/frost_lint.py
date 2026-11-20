@@ -341,6 +341,9 @@ SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
     SiteAllowance("src/app/src/engine_integration_events.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
                   "adapter of EngineDiagnostic decoded from authenticated engine push events",
                   context="row.diagnostic.message = entry.message;"),
+    SiteAllowance("src/app/src/unity_control.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+                  "adapter of Unity compiler callback decoded from authenticated project/domain event batches",
+                  context="row.diagnostic.message = entry.message;"),
     # Reviewed real site: the author lens shows git blame's author (VcsService through authorForLine).
     SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
                   "out.push_back(EditorCodeVisionLens{", "git blame author from VcsService (authorForLine)",

@@ -5,6 +5,7 @@
 // into the shell window (split from workbench.cpp, FND-12a).
 
 #include "frost/app/workbench.hpp"
+#include "project_open_broker.hpp"
 #include "frost/core/log.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/uri.hpp"
@@ -371,6 +372,9 @@ void Workbench::attachToolWindows() {
     windows.setContent(ui::tool_windows::kProblems, problems);
     m_problems = problems;
     connect(problems, &ui::ProblemsView::openLocation, this, &Workbench::openLocation);
+    connect(problems, &ui::ProblemsView::openUtf16Location, this, [this](const QString& path, int line, int column) {
+        (void)openExternalFile(*this, path.toUtf8().toStdString(), line, column, true);
+    });
 
     auto* output = new ui::BuildOutputPane();
     output->setController(m_build.get());
