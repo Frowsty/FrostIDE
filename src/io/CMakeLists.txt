@@ -74,10 +74,17 @@ endif()
 # Install the enforcing helper beside the actual caller image (/proc/self/exe), including fixtures.
 function(frost_deploy_extension_sandbox target)
     if(TARGET frost-extension-sandbox)
-        add_custom_command(TARGET ${target} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_FILE:frost-extension-sandbox> $<TARGET_FILE_DIR:${target}>
-            VERBATIM)
-        add_dependencies(${target} frost-extension-sandbox)
+        set(deployment "frost_extension_sandbox_deploy_${target}")
+        if(NOT TARGET ${deployment})
+            # An always-run prerequisite of the caller, not its POST_BUILD event: refreshing only
+            # the helper must update an otherwise up-to-date caller on its next target build.
+            add_custom_target(${deployment}
+                COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${target}>
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:frost-extension-sandbox> $<TARGET_FILE_DIR:${target}>
+                DEPENDS frost-extension-sandbox
+                VERBATIM)
+        endif()
+        add_dependencies(${target} ${deployment})
     endif()
 endfunction()

@@ -80,3 +80,9 @@ third-party source or package/license graph was introduced. Public primary refer
 [Microsoft LPAC launch contract](https://learn.microsoft.com/en-us/windows/win32/secauthz/implementing-an-appcontainer),
 [Linux Landlock API and limitations](https://www.kernel.org/doc/html/latest/userspace-api/landlock.html),
 [Linux seccomp filter API](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html).
+
+Helper deployment is an always-run prerequisite of each application/test target, ordered after
+the helper target. A helper-only recompilation is copied on the next caller-target build even
+when the caller needs no relink; duplicate registrations share the same deployment target.
+Source build-graph regressions cover those dependency edges and the app/native-probe consumers.
+These checks remain authored and unexecuted; no incremental-build acceptance is claimed.
