@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -33,15 +34,18 @@ class StageShTest(TempDirTestCase):
         path.write_bytes(content)
         path.chmod(0o755)
 
-    def _fake_build(self) -> Path:
+    def _fake_build(self, root: Path | None = None) -> Path:
         """A build tree with what the Debug frost target leaves in src/app/Debug."""
-        build = self.tmp / "build"
+        build = (root or self.tmp) / "build"
         bin_dir = build / "src" / "app" / "Debug"
         bin_dir.mkdir(parents=True)
         shutil.copyfile("/bin/true", bin_dir / "frost")
         (bin_dir / "frost").chmod(0o755)
-        shutil.copyfile("/bin/true", bin_dir / "frostide-mcp")
-        (bin_dir / "frostide-mcp").chmod(0o755)
+        # stage.sh inspects the snapshot validator's dynamic dependencies as well as frost's.
+        shutil.copyfile("/bin/false", bin_dir / "frost-snapshot-validator")
+        (bin_dir / "frost-snapshot-validator").chmod(0o755)
+        for name in ("frost-analyzer", "frostide-mcp", "frost_held_read", "frost-extension-sandbox"):
+            self._executable(bin_dir / name, b"fixture " + name.encode())
         self._executable(bin_dir / "frost-clang", b"isolated LLVM engine fixture")
         self._executable(bin_dir / "crashpad_handler", b"\x7fELF crashpad fixture")
         (bin_dir / "resources" / "themes").mkdir(parents=True)
@@ -52,9 +56,9 @@ class StageShTest(TempDirTestCase):
             path.write_bytes(b'Lua fixture')
         return build
 
-    def _fake_sdk(self) -> Path:
+    def _fake_sdk(self, root: Path | None = None) -> Path:
         """An SDK root holding every bundled tool, LuaLS with an install marker and a stale log."""
-        sdk = self.tmp / "sdk"
+        sdk = (root or self.tmp) / "sdk"
         for name in (f"{LLVM}/bin/llvm-cov", f"{LLVM}/bin/llvm-profdata", f"{LLVM}/bin/clangd", f"{LLVM}/bin/clang-scan-deps", f"{LLDB}/bin/lldb-dap", f"{LLDB}/bin/lldb-argdumper",
                      f"{LUALS}/bin/lua-language-server"):
             self._executable(sdk / name, b"fixture " + name.encode())
@@ -84,15 +88,25 @@ class StageShTest(TempDirTestCase):
         result = self._stage(build, sdk, destination)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"stage: ok {destination}", result.stdout)
-        for name in ("frost", "frost-clang", "crashpad_handler", "resources/themes/glacier-dark.ftheme", "LICENSE", "NOTICE",
+        for name in ("resources/themes/glacier-dark.ftheme", "LICENSE", "NOTICE",
                      "licenses/luals-LICENSE.txt", "licenses/tree-sitter-LICENSE",
+                     "lua54/lua", "lua54/liblua54.so", "licenses/Lua/lua.h",
+                     "qt/lib/libQt6Core.so.6", "qt/plugins/platforms/libqxcb.so",
+                     "qt/plugins/platforms/libqoffscreen.so", "qt/plugins/tls/libqopensslbackend.so",
                      "unity/com.frostide.editor/package.json",
                      f"{LLVM}/bin/llvm-cov", f"{LLVM}/bin/llvm-profdata", f"{LLVM}/bin/clangd", f"{LLVM}/bin/clang-scan-deps", f"{LLVM}/lib/clang/23/include/stddef.h", f"{LLDB}/bin/lldb-dap",
                      f"{LLDB}/bin/lldb-argdumper", f"{LLDB}/lib/liblldb.so.23.1.4", f"{LUALS}/bin/lua-language-server",
                      f"{LUALS}/main.lua", f"{LUALS}/script/files.lua"):
             self.assertTrue((destination / name).is_file(), name)
+        bin_dir = build / "src" / "app" / "Debug"
+        for name in ("frost-clang", "frost-analyzer", "frostide-mcp", "frost-snapshot-validator",
+                     "frost_held_read", "crashpad_handler", "frost-extension-sandbox"):
+            self.assertTrue(os.access(destination / name, os.X_OK), name)
+            self.assertEqual((destination / name).read_bytes(), (bin_dir / name).read_bytes(), name)
         self.assertTrue(os.access(destination / LUALS / "bin" / "lua-language-server", os.X_OK))
-        self.assertEqual((destination / "frost.bin").read_bytes(), Path("/bin/true").read_bytes())
+        self.assertEqual((destination / "frost.bin").read_bytes(), (bin_dir / "frost").read_bytes())
+        launcher = subprocess.run([destination / "frost"], capture_output=True, text=True, check=False)
+        self.assertEqual(launcher.returncode, 0, launcher.stdout + launcher.stderr)
         self.assertTrue((destination / LLDB / "lib" / "liblldb.so").is_symlink(), "the soname link is kept")
         self.assertFalse((destination / LUALS / ".frost-installed").exists(), "the SDK's install marker")
         self.assertFalse((destination / LUALS / "log").exists(), "a log a run left in the SDK")
@@ -101,17 +115,16 @@ class StageShTest(TempDirTestCase):
         cases = {"clang-scan-deps": f"{LLVM}/bin/clang-scan-deps", "LLVM coverage tool": f"{LLVM}/bin/llvm-cov", "clangd": f"{LLVM}/bin/clangd", "clangd resource directory": f"{LLVM}/lib/clang",
                  "lldb-dap file": f"{LLDB}/bin/lldb-dap", "LuaLS file": f"{LUALS}/bin/lua-language-server"}
         for tool, missing in cases.items():
-            with self.subTest(tool=tool):
-                build, sdk = self._fake_build(), self._fake_sdk()
+            with self.subTest(tool=tool), tempfile.TemporaryDirectory(dir=self.tmp) as scratch:
+                root = Path(scratch)
+                build, sdk = self._fake_build(root), self._fake_sdk(root)
                 target = sdk / missing
                 shutil.rmtree(target) if target.is_dir() else target.unlink()
-                destination = self.tmp / "missing-tool"
+                destination = root / "missing-tool"
                 result = self._stage(build, sdk, destination)
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(f"stage: FAIL missing bundled {tool}", result.stdout)
                 self.assertFalse(destination.exists(), "nothing is staged without the tool")
-                shutil.rmtree(self.tmp / "build")
-                shutil.rmtree(self.tmp / "sdk")
 
     def test_no_sdk_root_is_guessed(self) -> None:
         build = self._fake_build()
@@ -153,6 +166,7 @@ class StageShTest(TempDirTestCase):
         if os.geteuid() == 0:
             self.skipTest("root reads unreadable files; the copy cannot fail this way")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("cannot copy LuaLS", result.stdout)
         self.assertTrue(destination.is_dir(), "a folder the caller made stays")
         self.assertEqual(list(destination.iterdir()), [], "but holds nothing of the failed stage")
 
