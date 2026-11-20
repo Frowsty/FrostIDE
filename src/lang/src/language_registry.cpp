@@ -214,6 +214,17 @@ Result<void> RegistryProcessLauncher::admitDocument(std::string_view path) const
         return fail(ErrorCode::PermissionDenied, "Document is outside the registered language workspace");
     return {};
 }
+Result<void> RegistryProcessLauncher::admitEdit(const Json& edit) const {
+    if (auto current = admitWorkspace(); !current)
+        return current;
+    auto parsed = parseWorkspaceEdit(edit);
+    if (!parsed)
+        return std::unexpected(parsed.error());
+    for (const auto& file : parsed->files)
+        if (auto allowed = admitDocument(file.path); !allowed)
+            return allowed;
+    return {};
+}
 Result<void> RegistryProcessLauncher::admit(const io::ProcessSpec& spec) {
     auto trust = m_trust.snapshot(m_root);
     auto physical = m_fs.physicalPath(m_root);
@@ -264,12 +275,28 @@ sched::Task<Result<Json>> RegistryLspRequester::invoke(std::shared_ptr<LuaServic
         if (auto allowed = admission->admitDocument(*path); !allowed)
             co_return std::unexpected(allowed.error());
     }
+    const auto requestedMethod = method;
     auto result = co_await service->request(std::move(method), std::move(params), token);
     if (auto current = admission->admitWorkspace(); !current)
         co_return std::unexpected(current.error());
     if (path)
         if (auto current = admission->admitDocument(*path); !current)
             co_return std::unexpected(current.error());
+    if (result && !result->isNull()) {
+        if (requestedMethod == "textDocument/rename") {
+            if (auto allowed = admission->admitEdit(*result); !allowed)
+                co_return std::unexpected(allowed.error());
+        } else if (requestedMethod == "textDocument/codeAction" && result->isArray()) {
+            for (const auto& action : result->items())
+                if (const auto* edit = action.find("edit"))
+                    if (auto allowed = admission->admitEdit(*edit); !allowed)
+                        co_return std::unexpected(allowed.error());
+        } else if (requestedMethod == "codeAction/resolve") {
+            if (const auto* edit = result->find("edit"))
+                if (auto allowed = admission->admitEdit(*edit); !allowed)
+                    co_return std::unexpected(allowed.error());
+        }
+    }
     co_return result;
 }
 std::optional<ServerCapabilities> RegistryLspRequester::serverCapabilities() const {
@@ -287,16 +314,10 @@ void RegistryLspRequester::setApplyEditHandler(ApplyEditHandler handler) {
                     (*completed)(false);
                     return;
                 }
-                auto parsed = parseWorkspaceEdit(*edit);
-                if (!parsed) {
+                if (!admission->admitEdit(*edit)) {
                     (*completed)(false);
                     return;
                 }
-                for (const auto& file : parsed->files)
-                    if (!admission->admitDocument(file.path)) {
-                        (*completed)(false);
-                        return;
-                    }
                 handler(params, [completed](bool applied) { (*completed)(applied); });
             };
             // The app dispatches this whole admission+apply boundary to its document owner. The

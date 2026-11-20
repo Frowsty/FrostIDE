@@ -46,7 +46,7 @@ Delayed requests retain their original server and admission; they recheck projec
 and physical containment before sending and after the actual reply. External documents cannot
 borrow a registered server through extension matching. Incoming server applyEdit checks the same
 boundary on the GUI document owner immediately before the ordinary synchronous edit handler.
-Physical project replacement retires the epoch and requires a renewed trust revision. Trust,
+Physical project replacement retires the epoch and requires closing/reopening the project or an observed withdrawal and renewal of trust; an unrelated global trust revision cannot revive that epoch. Trust,
 project or manifest changes cancel publication from old epochs and stop owned process trees.
 
 The editor and Problems use actual versioned server diagnostics; stale/absent/failed observations

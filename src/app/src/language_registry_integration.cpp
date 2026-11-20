@@ -95,12 +95,12 @@ void LanguageRegistryIntegration::poll() {
         root.empty() ? Result<std::string>(std::string{}) : m_workbench.m_services.fs.physicalPath(root);
     const auto physicalKey = physicalNow ? lang::documentKey(*physicalNow) : std::string{};
     if (root != m_root || manifest != m_manifest || trust.revision != m_revision || physicalKey != m_physicalRoot) {
-        if (root != m_root || trust.revision != m_revision)
+        if (root != m_root || !trust.trusted)
             m_physicalIdentityRevoked = false;
         else if (!m_physicalRoot.empty() && physicalKey != m_physicalRoot) {
             m_physicalIdentityRevoked = true;
             m_workbench.notify(QStringLiteral("Language server workspace changed"),
-                               QStringLiteral("The physical project changed. Revoke and grant project trust before "
+                               QStringLiteral("The physical project changed. Close and reopen the project before "
                                               "restarting registered servers."),
                                ui::NotificationKind::Warning);
         }

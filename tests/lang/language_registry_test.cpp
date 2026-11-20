@@ -133,6 +133,20 @@ TEST(LanguageRegistry, RequestBoundaryRejectsExternalDocumentsAndRevokedDelayedT
         std::make_shared<LuaService>(*admission, io::AsyncContext{**reactor, sim},
                                      registeredLanguageOptions(registry->definitions().front(), root() + "/workspace"));
     RegistryLspRequester requester(service, admission);
+    const auto externalEdit = Json::object().set(
+        "changes",
+        Json::object().set(
+            pathToUri(root() + "/external.py").value(),
+            Json::array(
+                {Json::object()
+                     .set("range", Json::object().set("start", toJson(LspPosition{})).set("end", toJson(LspPosition{})))
+                     .set("newText", "foreign")})));
+    EXPECT_FALSE(admission->admitEdit(externalEdit));
+    const auto resource = Json::object().set(
+        "documentChanges",
+        Json::array(
+            {Json::object().set("kind", "delete").set("uri", pathToUri(root() + "/workspace/local.py").value())}));
+    EXPECT_FALSE(admission->admitEdit(resource));
     auto params = [](std::string path) {
         return Json::object().set("textDocument", Json::object().set("uri", pathToUri(path).value()));
     };

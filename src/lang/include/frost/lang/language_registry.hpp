@@ -42,6 +42,7 @@ public:
                             std::string physicalRoot);
     [[nodiscard]] Result<void> admitWorkspace() const;
     [[nodiscard]] Result<void> admitDocument(std::string_view path) const;
+    [[nodiscard]] Result<void> admitEdit(const Json& workspaceEdit) const;
     [[nodiscard]] Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& spec) override;
     [[nodiscard]] Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
                                                                          const io::AsyncContext& context) override;
