@@ -180,7 +180,6 @@ Result<void> ManagedBuildBackend::build(build::BuildAction action, std::optional
             if (self.m_generation != generation || self.m_state != build::BuildState::SavingDocuments)
                 return;
             if (!result) {
-                auto trustWatch = watchManagedTrust(*trust, root, revision, job->stop);
                 build::BuildOutcome outcome;
                 outcome.error = result.error();
                 self.finish(std::move(outcome));
@@ -221,7 +220,6 @@ void ManagedBuildBackend::cancel() {
         m_job->stop.request_stop();
     if (m_state == build::BuildState::SavingDocuments) {
         ++m_generation;
-        auto trustWatch = watchManagedTrust(*trust, root, revision, job->stop);
         build::BuildOutcome outcome;
         outcome.result.cancelled = true;
         finish(std::move(outcome));
