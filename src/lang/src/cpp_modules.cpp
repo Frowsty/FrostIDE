@@ -117,6 +117,18 @@ Result<CppModuleGraph> scanCppModules(io::IProcessLauncher& launcher, io::IFileS
     io::ProcessSpec spec;
     spec.executable = request.scanner;
     spec.workingDirectory = request.workingDirectory;
+    spec.arguments = {"--version"};
+    auto version = io::runToCompletion(launcher, spec, "", request.timeout, request.stop);
+    if (!version) return std::unexpected(version.error());
+    const auto versionText = version->stdoutBytes + version->stderrBytes;
+    const std::string expected = "clang-scan-deps version " FROST_PINNED_LLVM_VERSION;
+    const auto marker = versionText.find(expected);
+    if (version->exitCode != 0 || marker == std::string::npos ||
+        (marker + expected.size() < versionText.size() &&
+         versionText[marker + expected.size()] != '\r' && versionText[marker + expected.size()] != '\n' &&
+         versionText[marker + expected.size()] != ' '))
+        return fail(ErrorCode::Unsupported, "Module scanner is not the pinned LLVM clang-scan-deps");
+    if (auto current = validateDatabase(); !current) return std::unexpected(current.error());
     spec.arguments = {"-format=p1689", "-compilation-database=" + request.privateDatabasePath};
     auto result = io::runToCompletion(launcher, spec, "", request.timeout, request.stop);
     if (!result) return std::unexpected(result.error());
@@ -139,5 +151,6 @@ Result<CppModuleGraph> scanCppModules(io::IProcessLauncher& launcher, io::IFileS
     return graph;
 }
 } // namespace frost::lang
+
 
 

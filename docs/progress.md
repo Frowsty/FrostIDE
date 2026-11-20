@@ -3,6 +3,11 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R13 CPP-15 module scanner source implementation
+
+- Added contained pinned-version clang-scan-deps execution over an exact captured arguments-form compilation database, explicit trust and mandatory pre/post current-context validation. Strict bounded P1689 decoding retains actual provider/import relationships; navigation resolves only a unique scanner-reported interface path. Relative scanner source paths, response-file commands and ambiguous providers refuse rather than infer a target.
+- Added protocol unit cases and a later real pinned scanner/compiler fixture whose module name differs from its source filename; it scans relationships, precompiles the actual interface and compiles its importing consumer. No build, test, feature, native tool or WSL execution occurred. Workbench current-context integration is coordinated separately with CPP-8/13; independent Astra source review is pending. Runtime module-build/navigation acceptance remains deferred.
+
 ## 2026-11-20: R13 native analyzer and Problems integration source
 
 - Added isolated pinned-Clang `frost-analyzer`, source-owned AST/CFG inspection registry, exact configuration/dependency receipts, governed process orchestration, strict severity profiles and SARIF export/import. MISRA and Clazy are explicitly unsupported. Application deployment and both staging scripts include the native helper.
@@ -7940,6 +7945,7 @@ with a pointer.
   run from the staged directory observed its bundled DLL and OpenConsole process. Native Linux tests
   cover the terminal protocol and PTY, but the latest application integration has not run on Linux.
   The staged snapshot still needs independent review and the merged-tree verification gate.
+
 
 
 ## 2026-11-14: R15 editor extras implementation (source review only)
