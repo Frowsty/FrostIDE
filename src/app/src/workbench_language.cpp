@@ -129,7 +129,7 @@ void LanguageBridge::setActivePath(std::string_view path) {
 std::vector<lang::LiveDiagnostic> LanguageBridge::jsonDiagnostics(std::string_view path) const {
     if (!m_json->handles(path) && !lang::isCMakeSource(path))
         return {};
-    const auto* view = m_workbench.m_editors->find(path);
+    auto* view = m_workbench.m_editors->find(path);
     if (!view)
         return {};
     if (lang::isCMakeSource(path)) return lang::inspectCMakeSource(path,view->editor().editor().text());
@@ -158,7 +158,7 @@ Result<void> LanguageBridge::validateRefactoringTargets(const lang::WorkspaceEdi
         if (const auto state = find(file.path); state && state->changedOnDisk)
             return fail(ErrorCode::Busy, "Resolve the external source change before refactoring: " + file.path);
     for (const auto& file : edit.files)
-        if (const auto* view = m_workbench.m_editors->find(file.path); view && view->editor().isReadOnly())
+        if (auto* view = m_workbench.m_editors->find(file.path); view && view->editor().isReadOnly())
             return fail(ErrorCode::PermissionDenied, "Refactoring target is read-only: " + file.path);
     if (m_workbench.m_engineBindings)
         for (const auto& file : edit.files)

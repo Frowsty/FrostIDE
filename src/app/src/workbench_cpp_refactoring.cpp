@@ -4,6 +4,7 @@
 #include "frost/io/spawn_log.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/ui/editor/editor_view.hpp"
+#include "frost/ui/lang/language_controller.hpp"
 
 #include "language_bridge.hpp"
 #include "trusted_project_launcher.hpp"

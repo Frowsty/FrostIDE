@@ -4,6 +4,7 @@
 #include "frost/lang/analyzer.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/io/path.hpp"
+#include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "trusted_project_launcher.hpp"

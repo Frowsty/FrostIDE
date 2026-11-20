@@ -339,7 +339,7 @@ private:
                 return;
             QMetaObject::invokeMethod(
                 owner,
-                [owner, generation, report]() mutable {
+                [owner, generation, report = report]() mutable {
                     if (!owner || generation != owner->m_generation || !owner->current())
                         return;
                     for (auto& parent : report.results)

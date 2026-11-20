@@ -209,7 +209,15 @@ std::vector<std::string> sortedFolderKeys(const std::vector<lang::LuaWorkspaceFo
     return keys;
 }
 
-// Whether the path `key` is `input`, lies below it, or is a folder above it (documentKeys).
+// Both arguments are document keys. A completed inspection replaces results only in its scope.
+bool isInInspectionScope(std::string_view fileKey, std::string_view scopeKey) {
+    constexpr char separator = io::kNativePathStyle == io::PathStyle::Windows ? '\\' : '/';
+    if (scopeKey.empty() || !fileKey.starts_with(scopeKey))
+        return false;
+    return fileKey.size() == scopeKey.size() || scopeKey.back() == separator ||
+           fileKey[scopeKey.size()] == separator;
+}
+
 sched::Task<void> prepareLuaPlanTask(io::IFileSystem* fs, std::shared_ptr<WorkbenchLuaState> luaStatePtr,
                                      std::string runtime, std::string stateDirectory, std::string root,
                                      QPointer<Workbench> self,
@@ -828,7 +836,7 @@ Result<std::vector<lang::FileDiagnostics>> Workbench::inspectLuaCode(std::string
         }
     };
     for (const lang::FileDiagnostics& previous : state.inspected.files()) {
-        if (touches(lang::documentKey(previous.file), scopeKey)) {
+        if (isInInspectionScope(lang::documentKey(previous.file), scopeKey)) {
             state.inspected.publish(emptyFileDiagnostics(previous.file));
             applyFileToViews(previous.file, nullptr);
         }
@@ -930,7 +938,7 @@ void Workbench::inspectLuaCodeAsync(std::string_view scopeDirectory,
                                   }
                               };
                               for (const lang::FileDiagnostics& previous : state.inspected.files()) {
-                                  if (touches(lang::documentKey(previous.file), scopeKey)) {
+                                  if (isInInspectionScope(lang::documentKey(previous.file), scopeKey)) {
                                       state.inspected.publish(emptyFileDiagnostics(previous.file));
                                       applyFileToViews(previous.file, nullptr);
                                   }

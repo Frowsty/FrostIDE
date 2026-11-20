@@ -362,7 +362,7 @@ void Workbench::startNativeAnalysis(bool importProfiles, bool profile) {
     admissionWatch->start();
     const QPointer<QProgressDialog> dialog(progress);
     const auto finished = [self, dialog, generation, contextCurrent,
-                           token](Result<run::CoverageReport> result) mutable {
+                           token](Result<run::CoverageReport> result) {
         if (!self)
             return;
         QMetaObject::invokeMethod(
@@ -457,7 +457,7 @@ void Workbench::startNativeAnalysis(bool importProfiles, bool profile) {
             Qt::QueuedConnection);
     };
     const auto finishedProfile = [self, dialog, generation,
-                                  contextCurrent](Result<run::NativeProfileReport> result) mutable {
+                                  contextCurrent](Result<run::NativeProfileReport> result) {
         if (!self)
             return;
         QMetaObject::invokeMethod(
@@ -582,8 +582,8 @@ void Workbench::startNativeAnalysis(bool importProfiles, bool profile) {
                     io::joinPath(parent.toStdString(),
                                  "coverage-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString())
                         .value_or("");
-                for (const auto& profile : profiles)
-                    request.rawProfiles.push_back(profile.toStdString());
+                for (const auto& rawProfile : profiles)
+                    request.rawProfiles.push_back(rawProfile.toStdString());
                 for (const auto& directory : lang::defaultClangdSearch().sdkDirectories) {
                     if (request.llvmCov.empty()) {
                         const auto path = io::joinPath(directory,

@@ -35,10 +35,35 @@
 #include <algorithm>
 #include <array>
 #include <map>
-#include <tuple>
 
 namespace frost::app {
 namespace {
+struct IndexViewStamp {
+    QPointer<ui::EditorView> editor;
+    std::string path;
+    std::uint64_t version;
+};
+
+std::vector<IndexViewStamp> captureIndexViews(const DocumentEditorFactory& editors) {
+    std::vector<IndexViewStamp> stamps;
+    for (auto* view : editors.uniqueDocumentViews())
+        stamps.push_back({&view->editor(), view->path(), view->document().document().version()});
+    return stamps;
+}
+
+bool indexViewsCurrent(const DocumentEditorFactory& editors, const std::vector<IndexViewStamp>& stamps) {
+    const auto views = editors.uniqueDocumentViews();
+    if (views.size() != stamps.size())
+        return false;
+    return std::ranges::all_of(views, [&stamps](DocumentEditorView* view) {
+        const auto stamp = std::ranges::find_if(stamps, [view](const IndexViewStamp& item) {
+            return item.editor.data() == &view->editor();
+        });
+        return stamp != stamps.end() && stamp->path == view->path() && !view->document().dirty() &&
+               stamp->version == view->document().document().version();
+    });
+}
+
 QString display(std::string_view bytes) {
     return QString::fromUtf8(bytes.data(), static_cast<qsizetype>(bytes.size()));
 }
@@ -412,18 +437,8 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
     m_cppIndexStop = std::stop_source{};
     const auto stop = m_cppIndexStop.get_token();
     const auto generation = ++m_cppIndexGeneration;
-    using ViewStamp = std::tuple<QPointer<DocumentEditorView>, std::string, std::uint64_t>;
-    std::vector<ViewStamp> initialStamps;
-    for (auto* view : m_editors->uniqueDocumentViews())
-        initialStamps.emplace_back(view, view->path(), view->document().document().version());
-    const auto documentsCurrent = [self = QPointer<Workbench>(this), initialStamps] {
-        if (!self || self->m_editors->uniqueDocumentViews().size() != initialStamps.size())
-            return false;
-        for (const auto& [view, path, version] : initialStamps)
-            if (!view || view->path() != path || view->document().dirty() ||
-                view->document().document().version() != version)
-                return false;
-        return true;
+    const auto documentsCurrent = [self = QPointer<Workbench>(this), stamps = captureIndexViews(*m_editors)] {
+        return self && indexViewsCurrent(*self->m_editors, stamps);
     };
     IndexJob job;
     job.root = root;
@@ -729,23 +744,15 @@ void Workbench::showCppIndex(std::string operation, std::string symbol) {
                         });
                         if (receipt == receipts->end())
                             return;
-                        using ViewStamp = std::tuple<QPointer<DocumentEditorView>, std::string, std::uint64_t>;
-                        std::vector<ViewStamp> stamps;
-                        for (auto* view : self->m_editors->uniqueDocumentViews())
-                            stamps.emplace_back(view, view->path(), view->document().document().version());
-                        auto done = [self, resultDialog, contextCurrent, stamps = std::move(stamps),
+                        auto done = [self, resultDialog, contextCurrent, stamps = captureIndexViews(*self->m_editors),
                                      action = std::move(action)](bool valid) {
                             if (self)
                                 QMetaObject::invokeMethod(
                                     self.data(),
                                     [self, resultDialog, contextCurrent, stamps, valid, action] {
                                         if (!resultDialog || !valid || !contextCurrent() ||
-                                            self->m_editors->uniqueDocumentViews().size() != stamps.size())
+                                            !indexViewsCurrent(*self->m_editors, stamps))
                                             return;
-                                        for (const auto& [view, path, version] : stamps)
-                                            if (!view || view->path() != path ||
-                                                view->document().document().version() != version)
-                                                return;
                                         action();
                                     },
                                     Qt::QueuedConnection);
