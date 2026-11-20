@@ -29,7 +29,7 @@ def main():
         subprocess.run([str(args.dotnet), "build", str(project), "--configfile", str(config),
                         "--artifacts-path", str(root / "artifacts"), "--output", str(output)],
                        env=env, cwd=root, check=True, timeout=120)
-        subprocess.run([str(args.dotnet), str(output / "UnityTestsProbe.dll")],
+        subprocess.run([str(args.dotnet), str(output / "UnityTestsProbe.dll"), str(root / "project")],
                        env=env, cwd=root, check=True, timeout=30)
 
 
