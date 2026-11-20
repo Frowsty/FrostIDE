@@ -10,6 +10,7 @@
 #include "../../../src/ui/editor/src/editor_view_internal.hpp"
 #include "editor/editor_harness.hpp"
 #include <QAction>
+#include <QAccessible>
 #include <QClipboard>
 #include <QInputMethodEvent>
 #include <QMenu>
@@ -51,6 +52,36 @@ void click(EditorView& view, QPointF at, Qt::KeyboardModifiers modifiers = Qt::N
     QCoreApplication::sendEvent(view.viewport(), &release);
 }
 
+TEST(EditorView, NativeAccessibilityReadsUtf16SelectionsAndEditsThroughUndo) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("a\xF0\x9F\x98\x80z\nnext");
+    auto* accessible = QAccessible::queryAccessibleInterface(h.view.get());
+    ASSERT_NE(accessible, nullptr);
+    EXPECT_EQ(accessible->role(), QAccessible::EditableText);
+    auto* text = accessible->textInterface();
+    ASSERT_NE(text, nullptr);
+    EXPECT_EQ(text->characterCount(), 9);
+    EXPECT_EQ(text->text(1, 3), QString::fromUtf8("\xF0\x9F\x98\x80"));
+    text->setCursorPosition(3);
+    EXPECT_EQ(h.caret(), 5U);
+    text->addSelection(1, 3);
+    ASSERT_EQ(text->selectionCount(), 1);
+    int begin = -1, end = -1;
+    text->selection(0, &begin, &end);
+    EXPECT_EQ(begin, 1); EXPECT_EQ(end, 3);
+    auto* edit = accessible->editableTextInterface();
+    ASSERT_NE(edit, nullptr);
+    edit->replaceText(1, 3, QStringLiteral("replacement"));
+    EXPECT_EQ(h.text(), "areplacementz\nnext");
+    ASSERT_TRUE(h.view->perform(EditorAction::Undo));
+    EXPECT_EQ(h.text(), "a\xF0\x9F\x98\x80z\nnext");
+    auto info = h.view->fileInfo(); info.readOnly = true;
+    h.view->setFileInfo(info);
+    EXPECT_TRUE(accessible->state().readOnly);
+    EXPECT_EQ(accessible->editableTextInterface(), nullptr);
+    edit->replaceText(0, 1, QStringLiteral("x"));
+    EXPECT_EQ(h.text(), "a\xF0\x9F\x98\x80z\nnext");
+}
 TEST(EditorView, TypingAppearsInTheDocumentAndRepaints) {
     FROST_REQUIRE_OFFSCREEN();
     HarnessOptions options;

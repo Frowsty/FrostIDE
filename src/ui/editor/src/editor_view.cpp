@@ -14,6 +14,7 @@
 #include "frost/ui/frost_style.hpp"
 
 #include "editor_view_internal.hpp"
+#include "editor_accessibility.hpp"
 #include <QMetaObject>
 
 #include <algorithm>
@@ -177,6 +178,7 @@ EditorView::EditorView(text::Document& document, std::string path, EditorService
     m_lastStatus = status();
     selectRenderer();
     initializeEditorExtras();
+    initializeEditorAccessibility(*this);
 }
 
 EditorView::~EditorView() {
