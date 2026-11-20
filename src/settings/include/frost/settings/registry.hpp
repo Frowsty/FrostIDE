@@ -72,7 +72,7 @@ inline constexpr ScopeMask kAllScopesWithEditorConfig{Scope::Application, Scope:
 
 // One registry entry.
 struct KeySpec {
-    // "namespace.camelCase[.more]": [a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)+, at most 128 bytes.
+    // "namespace.camelCase[.more]" or "frost_cpp_<snake_case_rule_id>_highlighting", at most 128 bytes.
     std::string key;
     std::string title;       // Short English label ("Tab size").
     std::string description; // One or two English sentences; the dialog's help text.

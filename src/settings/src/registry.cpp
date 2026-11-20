@@ -35,6 +35,14 @@ bool isValidSettingKey(std::string_view key) noexcept {
     if (key.empty() || key.size() > 128) {
         return false;
     }
+    constexpr std::string_view analyzerPrefix = "frost_cpp_";
+    constexpr std::string_view analyzerSuffix = "_highlighting";
+    if (key.starts_with(analyzerPrefix) && key.ends_with(analyzerSuffix) &&
+        key.size() > analyzerPrefix.size() + analyzerSuffix.size()) {
+        const auto id = key.substr(analyzerPrefix.size(), key.size() - analyzerPrefix.size() - analyzerSuffix.size());
+        return isLower(id.front()) && id.back() != '_' && id.find("__") == std::string_view::npos &&
+               std::ranges::all_of(id, [](char c) { return isLower(c) || (c >= '0' && c <= '9') || c == '_'; });
+    }
     std::size_t segments = 0;
     std::size_t start = 0;
     while (start <= key.size()) {
