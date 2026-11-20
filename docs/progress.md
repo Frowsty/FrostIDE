@@ -3,6 +3,14 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20 R16 C++, Lua and FrostEngine implementation milestone
+
+R16 adds LLVM native coverage with per-line editor counts, owned CPU profiling through ETW or perf, MSBuild property/import locations and previewed CMake target rename. Hosted GitHub and GitLab review supports changed files, pinned inline comments, discussion refresh and replies. A trust or selection change during submission requires a refresh before retry. The editor and terminal expose text, diagnostic navigation and retained scrollback through their accessibility interfaces.
+
+The optional Claude C1 bridge uses explicit workspace consent, a local authenticated transport and a native terminal. The per-user installer, file associations and CLI diff/merge/wait paths are implemented. Tool upgrade and local release evidence handling are recorded in ADR 0106. GPT-6 Astra reviewed the combined source and authored regressions.
+
+This is a source milestone. The Windows/WSL full suite, sanitizers, latency budgets, installer round-trip, provider interoperability and release sign-off remain pending under deferred execution. No 1.0 binary or updater release was produced.
+
 ## 2026-11-20: R14 main joined into R16 integration
 
 Locally merged published main 1d5b0c46 into codex/r16-integration 06630d1b. Additive conflict resolution retains GLSL and MSBuild provider routing, all document readiness/version paths, agent/hosting/shader requester fixtures, and both progress histories. Automatic CMake, coverage, CLI, schema/hierarchy and Workbench hooks retained. GLSL stop-token propagation and worker/GUI handoff remain unchanged. Only git diff --check performed; no builds, tests, feature execution, WSL or push. Independent Astra composed-join review remains pending.
