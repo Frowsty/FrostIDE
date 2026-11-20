@@ -153,6 +153,13 @@ install_managed() {
         python3 "$REPO_ROOT/tools/managed_server.py" --archive "$archive" --dest "$dest"
     fi
     echo "[managed] $version verified in $dest"
+    local roslyn_dest="$SDK/roslyn"
+    if [[ -e "$roslyn_dest" ]]; then
+        python3 "$REPO_ROOT/tools/roslyn_host.py" --dest "$roslyn_dest" --verify-only
+    else
+        python3 "$REPO_ROOT/tools/roslyn_host.py" --dotnet "$SDK/dotnet-$(lock_get linux.dotnet.version)/dotnet" \
+            --assets "$dest" --archive "$archive" --dest "$roslyn_dest"
+    fi
 }
 
 # Installs the pinned Qt subset for Linux with tools/qt-fetch.py, which reads

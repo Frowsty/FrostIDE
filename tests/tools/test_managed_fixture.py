@@ -33,7 +33,7 @@ class ManagedFixtureTest(TempDirTestCase):
         (sdk / "sdk/10.0.403/dotnet.dll").write_bytes(b"SDK fixture")
         dotnet = sdk / ("dotnet.exe" if os.name == "nt" else "dotnet")
         dotnet.write_bytes(b"not executed")
-        server = self.tmp / "server/CSharpLanguageServer.dll"
+        server = self.tmp / "server/FrostRoslynHost.dll"
         server.parent.mkdir()
         server.write_bytes(b"not executed")
         archive = self.tmp / "server.nupkg"
@@ -125,14 +125,13 @@ class ManagedFixtureTest(TempDirTestCase):
         with self.assertRaisesRegex(ValueError, "pinned sdk/10.0.403"):
             managed_fixture.fixture_environment(configuration, {}, {"sdk"}, self.tmp / "test")
 
-    def test_server_uses_original_installed_archive_verifier(self) -> None:
+    def test_server_uses_owned_host_payload_verifier(self) -> None:
         configuration = self.fixture()
-        with mock.patch.object(managed_fixture.managed_server, "verify_installed") as verify:
+        with mock.patch.object(managed_fixture.roslyn_host, "verify_payload") as verify:
             environment = managed_fixture.fixture_environment(configuration, {"EXISTING": "value"},
                                                                 {"sdk", "server"}, self.tmp / "test")
         tools = configuration["tools"]
-        verify.assert_called_once_with(Path(tools["FROST_TEST_CSHARP_ARCHIVE"]),
-                                       Path(tools["FROST_TEST_CSHARP_SERVER"]).parent,
+        verify.assert_called_once_with(Path(tools["FROST_TEST_CSHARP_SERVER"]).parent,
                                        Path(configuration["sourceRoot"]))
         self.assertEqual(environment["FROST_TEST_CSHARP_SERVER"], tools["FROST_TEST_CSHARP_SERVER"])
         self.assertEqual(environment["EXISTING"], "value")
@@ -140,7 +139,7 @@ class ManagedFixtureTest(TempDirTestCase):
 
     def test_missing_server_archive_and_failed_verification_refuse(self) -> None:
         configuration = self.fixture()
-        with mock.patch.object(managed_fixture.managed_server, "verify_installed", side_effect=ValueError("tampered")):
+        with mock.patch.object(managed_fixture.roslyn_host, "verify_payload", side_effect=ValueError("tampered")):
             with self.assertRaisesRegex(ValueError, "tampered"):
                 managed_fixture.fixture_environment(configuration, {}, {"sdk", "server"}, self.tmp / "test")
         Path(configuration["tools"]["FROST_TEST_CSHARP_ARCHIVE"]).unlink()

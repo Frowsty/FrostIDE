@@ -25,6 +25,7 @@
 #include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "language_registry_integration.hpp"
 #include "project_properties_dialog.hpp"
 #include "unit_tests_window.hpp"
 #include <QAction>
@@ -151,6 +152,10 @@ DocumentEditorView* Workbench::currentView() const {
 }
 
 void Workbench::editorOpened(DocumentEditorView& view) {
+    if (m_registeredLanguages) {
+        m_registeredLanguages->poll();
+        m_registeredLanguages->sync(view);
+    }
     if (m_engineBindings)
         m_engineBindings->cancel();
     connect(&view.editor(), &ui::EditorView::textChanged, this, [this] { invalidateManagedDebug(); });
@@ -377,6 +382,8 @@ void Workbench::editorClosed(DocumentEditorView& view) {
         (void)m_managed->closeDocument(path);
     if (m_lua && isLuaSource(path))
         (void)m_lua->closeDocument(path);
+    if (m_registeredLanguages)
+        m_registeredLanguages->close(path);
     m_language->editorChanged();
     if (m_bridge && (m_bridge->handlesJsonDocument(path) || lang::isCMakeSource(path))) {
         m_bridge->closeJsonDocument(path);
@@ -398,6 +405,7 @@ void Workbench::editorClosed(DocumentEditorView& view) {
 }
 
 void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSet& change) {
+    managedProjectInputChanged(view.path());
     if (m_engineBindings)
         m_engineBindings->cancel();
     if (m_nav && !change.edits.empty()) {
@@ -422,6 +430,8 @@ void Workbench::editorTextChanged(DocumentEditorView& view, const text::ChangeSe
         (void)m_managed->changeDocument(view.path(), change, view.document().document().text());
     if (m_lua && isLuaSource(view.path()))
         (void)m_lua->changeDocument(view.path(), change, view.document().document().text());
+    if (m_registeredLanguages)
+        m_registeredLanguages->sync(view);
     if (DocumentEditorView* current = currentView(); current && &current->document() == &view.document())
         m_language->structureChanged();
     // What the user typed, now in the document and with clangd: completion and parameter info.
@@ -501,6 +511,8 @@ void Workbench::documentChanged(const std::string& path) {
             (void)m_lua->saveDocument(view->path());
         if (m_clangd && isCFamilySource(view->path()))
             (void)m_clangd->saveDocument(view->path());
+        if (m_registeredLanguages)
+            m_registeredLanguages->saved(view->path());
     }
     if (m_engine)
         m_engine->scheduleShaderDiagnostics(view->path());

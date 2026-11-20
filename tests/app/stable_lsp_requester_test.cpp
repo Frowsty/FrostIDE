@@ -210,4 +210,34 @@ TEST(StableLspRequester, OfflineJsonAndCMakeKeepTheirOwnRouteAcrossTabSwitch) {
     EXPECT_FALSE(frost::sched::syncWait(requester.request("textDocument/completion", params("arbitrary.json"))));
 }
 
+TEST(StableLspRequester, RegisteredDocumentCapturesExactServerAcrossReloadAndMixedTabs) {
+    frost::app::StableLspRequester requester;
+    requester.setServer(std::make_shared<TestServer>(1));
+    auto old = std::make_shared<TestServer>(7);
+    std::weak_ptr<TestServer> retained = old;
+#ifdef _WIN32
+    const std::string path = "C:/project/file.py";
+#else
+    const std::string path = "/project/file.py";
+#endif
+    requester.setRegisteredServers({{frost::lang::documentKey(path), old}});
+    auto params = frost::lang::Json::object().set(
+        "textDocument", frost::lang::Json::object().set("uri", frost::lang::pathToUri(path).value()));
+    requester.setActivePath(path);
+    auto delayed = requester.request("textDocument/hover", params);
+    old.reset();
+    requester.setRegisteredServers({{frost::lang::documentKey(path), std::make_shared<TestServer>(8)}});
+    requester.setActivePath("file.cpp");
+    ASSERT_FALSE(retained.expired());
+    auto answer = frost::sched::syncWait(std::move(delayed));
+    ASSERT_TRUE(answer);
+    EXPECT_EQ(answer->asInteger(), 7);
+    EXPECT_TRUE(retained.expired());
+    answer = frost::sched::syncWait(requester.request("textDocument/hover", params));
+    ASSERT_TRUE(answer);
+    EXPECT_EQ(answer->asInteger(), 8);
+    requester.setRegisteredServers({});
+    EXPECT_FALSE(frost::sched::syncWait(requester.request("textDocument/hover", params)));
+}
+
 } // namespace

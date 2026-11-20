@@ -244,6 +244,15 @@ function Install-ManagedServer {
     }
     if ($LASTEXITCODE -ne 0) { throw 'Managed server install or verification failed' }
     Write-Host "[managed] $($pin.version) verified in $dest"
+    $roslynDest = Join-Path $SdkRoot 'roslyn'
+    $roslynTool = Join-Path $PSScriptRoot 'roslyn_host.py'
+    if (Test-Path -LiteralPath $roslynDest) {
+        & $python $roslynTool --dest $roslynDest --verify-only
+    } else {
+        $dotnetHost = Join-Path $SdkRoot "dotnet-$($Lock.windows.dotnet.version)\dotnet.exe"
+        & $python $roslynTool --dotnet $dotnetHost --assets $dest --archive $archive --dest $roslynDest
+    }
+    if ($LASTEXITCODE -ne 0) { throw 'Owned RoslynHost build or receipt verification failed' }
 }
 
 # Verifies the self-built lldb-dap in $SdkRoot\lldb-<version> against windows.lldb.files in the

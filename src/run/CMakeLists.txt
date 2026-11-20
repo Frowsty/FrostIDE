@@ -34,5 +34,6 @@ frost_add_library(run LAYER run
         src/lua_framework_parsers.cpp
         src/doctest_parsers.cpp
         src/test_runner.cpp
+        src/dotnet_tests.cpp
     DEPS frost::build frost::settings frost::project frost::rpc frost::io frost::core)
 target_link_libraries(frost_run PRIVATE pugixml::pugixml)

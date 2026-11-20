@@ -609,6 +609,8 @@ Result<build::RunId> RunController::runNative(const run::RunConfiguration& confi
         handlers.remoteLauncher=std::move(prepared->remoteLauncher);handlers.remoteTargetId=std::move(prepared->remoteTargetId);
         handlers.launchAdmission=std::move(prepared->launchAdmission);
     }
+    if (configuration.type == run::RunType::Native && m_hooks.nativeLaunchPlanWithCancellationFor)
+        handlers.transformLaunchPlanWithCancellation = m_hooks.nativeLaunchPlanWithCancellationFor(configuration);
     if (run::isLuaRunType(configuration.type)) {
         if (!handlers.launchAdmission)
             return fail(ErrorCode::Unsupported, "standalone Lua has no current project/trust admission");

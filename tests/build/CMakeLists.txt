@@ -37,7 +37,7 @@ frost_add_test(build_unit_tests
         diagnostic_test.cpp
         json_test.cpp
         line_splitter_test.cpp
-        managed_project_test.cpp
+        managed_project_test.cpp managed_evaluation_test.cpp managed_packages_test.cpp
         unreal_build_test.cpp
         msbuild_compile_test.cpp
         msbuild_driver_test.cpp
@@ -183,3 +183,15 @@ target_include_directories(build_remote_process_real_tests PRIVATE ${FROST_SOURC
 target_compile_definitions(build_remote_process_real_tests PRIVATE
     FROST_REMOTE_TEST_PYTHON="${_frost_remote_test_python}"
     FROST_REMOTE_GUARD_SOURCE="${FROST_SOURCE_DIR}/src/build/resources/remote_guard.py")
+# R17 authoritative SDK snapshot acceptance uses only configured tools and self-authored sources.
+include("${FROST_SOURCE_DIR}/tests/support/ManagedFixtures.cmake")
+frost_add_managed_fixture_test(build_managed_evaluation_tests SOURCES managed_evaluation_real_test.cpp
+    DEPS frost::build frost::project frost::io frost::core LABELS integration managed)
+target_include_directories(build_managed_evaluation_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(build_managed_evaluation_tests PRIVATE
+    FROST_EVALUATED_SDK_FIXTURE="${FROST_SOURCE_DIR}/tests/managed/fixtures/EvaluatedSdk")
+
+# R17 offline NuGet process acceptance. The package/feed are authored under an isolated scratch root.
+frost_add_managed_fixture_test(build_managed_packages_tests SOURCES managed_packages_real_test.cpp
+    DEPS frost::build frost::project frost::io frost::core LABELS integration managed nuget)
+target_include_directories(build_managed_packages_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

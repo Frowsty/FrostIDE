@@ -23,6 +23,17 @@ set(_frost_managed_test_dotnet "")
 if(DEFINED ENV{DOTNET_ROOT} AND EXISTS "$ENV{DOTNET_ROOT}/dotnet${CMAKE_EXECUTABLE_SUFFIX}")
     set(_frost_managed_test_dotnet "$ENV{DOTNET_ROOT}/dotnet${CMAKE_EXECUTABLE_SUFFIX}")
 endif()
+if(FROST_TEST_CSHARP_DOTNET)
+    set(_frost_nuget_planner_dotnet "${FROST_TEST_CSHARP_DOTNET}")
+else()
+    set(_frost_nuget_planner_dotnet "${_frost_managed_test_dotnet}")
+endif()
+# R17 package proposal acceptance is mandatory and offline; missing configured SDK fails.
+add_test(NAME managed_nuget_planner
+    COMMAND "${Python3_EXECUTABLE}" -B "${FROST_SOURCE_DIR}/tests/managed/test_nuget_planner.py")
+set_tests_properties(managed_nuget_planner PROPERTIES LABELS "integration;managed;nuget"
+    RESOURCE_LOCK frost_desktop TIMEOUT 300
+    ENVIRONMENT "FROST_MANAGED_TEST_DOTNET=${_frost_nuget_planner_dotnet};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
 add_test(NAME managed_pdb_guard
     COMMAND "${Python3_EXECUTABLE}" "${FROST_SOURCE_DIR}/tests/managed/test_pdb_guard.py")
 set_tests_properties(managed_pdb_guard PROPERTIES
@@ -30,6 +41,14 @@ set_tests_properties(managed_pdb_guard PROPERTIES
     RESOURCE_LOCK frost_desktop
     SKIP_RETURN_CODE 77
     ENVIRONMENT "FROST_MANAGED_TEST_DOTNET=${_frost_managed_test_dotnet};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
+# Real library sources fail visibly when reviewed SDK/host inputs are unavailable; no network restore.
+add_test(NAME managed_library_sources
+    COMMAND "${Python3_EXECUTABLE}" -B "${FROST_SOURCE_DIR}/tests/managed/test_library_sources.py" -v)
+set_tests_properties(managed_library_sources PROPERTIES
+    LABELS "integration;managed"
+    RESOURCE_LOCK frost_desktop
+    TIMEOUT 240
+    ENVIRONMENT "FROST_TEST_CSHARP_DOTNET=${FROST_TEST_CSHARP_DOTNET};FROST_TEST_CSHARP_SERVER=${FROST_TEST_CSHARP_SERVER};FROST_MANAGED_TEST_ROOT=${CMAKE_BINARY_DIR};PYTHONDONTWRITEBYTECODE=1")
 # The Unity package's csc.rsp / compiler-argument model (ProjectContext.cs), built with the same SDK.
 add_test(NAME unity_compiler_arguments
     COMMAND "${Python3_EXECUTABLE}" "${FROST_SOURCE_DIR}/tests/unity/test_compiler_arguments.py")
@@ -117,3 +136,7 @@ if(FROST_BUILD_UI)
         TIMEOUT 120
         ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endif()
+
+# R17 owned-host payload policy never starts dotnet; real host stdio is covered by managed LSP cases.
+add_test(NAME roslyn_host_payload COMMAND "${Python3_EXECUTABLE}" -B "${FROST_SOURCE_DIR}/tests/tools/test_roslyn_host.py")
+set_tests_properties(roslyn_host_payload PROPERTIES LABELS unit ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")

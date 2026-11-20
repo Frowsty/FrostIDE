@@ -35,6 +35,7 @@
 #include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "language_registry_integration.hpp"
 #include "standalone_build_backend.hpp"
 #include "unreal_build_backend.hpp"
 #include "unity_control.hpp"
@@ -681,6 +682,8 @@ void Workbench::stopClangd() {
 }
 
 void Workbench::syncClangdDocument(DocumentEditorView& view) {
+    if (m_registeredLanguages)
+        m_registeredLanguages->sync(view);
     if (!m_clangd || !isCFamilySource(view.path())) {
         return;
     }
@@ -763,6 +766,10 @@ void Workbench::refreshLiveProblems() {
             auto json = m_bridge->jsonDiagnostics(view->path());
             live.insert(live.end(), std::make_move_iterator(json.begin()), std::make_move_iterator(json.end()));
         }
+    if (m_registeredLanguages) {
+        auto registered = m_registeredLanguages->problems();
+        live.insert(live.end(), std::make_move_iterator(registered.begin()), std::make_move_iterator(registered.end()));
+    }
     rows.reserve(live.size());
     for (lang::LiveDiagnostic& d : live) {
         build::BuildDiagnostic row;

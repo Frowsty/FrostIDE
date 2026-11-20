@@ -56,6 +56,8 @@
 #include "git_clone.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
+#include "language_registry_integration.hpp"
+#include "managed_build_backend.hpp"
 #include "managed_debug_preparation.hpp"
 #include "multi_session_debug.hpp"
 #include "project_edit_process.hpp"
@@ -260,6 +262,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
         log::warn(kLog, "language actions: {}", registered.error().describe());
     }
 
+    m_registeredLanguages = std::make_unique<LanguageRegistryIntegration>(*this);
+
     m_luaTrustWatch.setParent(this);
     m_luaTrustWatch.setObjectName(QStringLiteral("projectTrustWatch"));
     m_luaTrustWatch.setInterval(1000);
@@ -268,6 +272,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             return;
         const auto trust = m_services.trust.snapshot(m_projectRoot);
         const bool trusted = trust.trusted;
+        if ((m_managedEvaluation || m_managedModelJob) && (!trusted || trust.revision != m_managedContextTrustRevision))
+            clearManagedProjectContext();
         if (m_cppRenameTrustRevision && (!trusted || trust.revision != *m_cppRenameTrustRevision)) {
             m_cppRenameStop.request_stop();
             ++m_cppRenameGeneration;
@@ -295,6 +301,15 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
         }
         if (m_solution && trust.revision != m_projectTrustRevision) {
             startProjectEvaluation(m_projectRoot);
+            if (m_managedEvaluation) {
+                auto request = m_managedEvaluation->request;
+                if (const auto selected = m_buildService->activeConfiguration();
+                    selected && selected->configuration != request.configuration) {
+                    request.configuration = selected->configuration;
+                    (void)configureManagedProject(std::move(request));
+                }
+            } else if (m_managed)
+                startManaged(m_projectRoot);
             if (m_clangd)
                 restartClangd();
         }
@@ -350,6 +365,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                     m_engine->trustChanged();
                 stopLua();
                 stopManaged();
+                clearManagedProjectContext();
             }
         } else if (trusted) {
             checkUnityProjectContext();
@@ -437,6 +453,11 @@ Workbench::~Workbench() {
         m_build->setSaveAllHandler(nullptr);
         m_build->setBackend(nullptr);
     }
+    m_managedBuildBackend.reset();
+    for (auto& task : m_managedBuildTasks)
+        if (task.valid())
+            task.join();
+    m_managedBuildTasks.clear();
     m_buildService.reset(); // Joins its thread before the backend that forwards to it goes.
     m_buildBackend.reset();
     m_build.reset();
@@ -452,6 +473,10 @@ Workbench::~Workbench() {
         if (stopped.valid())
             stopped.join();
     m_retiredManaged.clear();
+    for (auto& task : m_managedModelTasks)
+        if (task.valid())
+            task.join();
+    m_managedModelTasks.clear();
     // frost/io/reactor.hpp's exit order: shut the reactor down, drop the watcher, shut the pool
     // down, then destroy the reactor.
     if (m_reactor) {
@@ -483,9 +508,9 @@ void Workbench::createBuildService() {
             options.binaryLogDirectory = *logs;
     }
     options.startBuild = m_options.startBuild;
-    m_buildService =
-        build::BuildService::create(m_services.fs, m_services.launcher, m_services.trust, options,
-                                    m_build->serviceCallbacks([this] { return !m_cmake && !m_standalone; }));
+    m_buildService = build::BuildService::create(
+        m_services.fs, m_services.launcher, m_services.trust, options,
+        m_build->serviceCallbacks([this] { return !m_cmake && !m_standalone && !m_managedBuildBackend; }));
     m_buildBackend = std::make_unique<ui::BuildServiceBackend>(*m_buildService);
     m_build->setBackend(m_buildBackend.get());
     m_build->setSaveAllHandler(this);
@@ -501,8 +526,17 @@ void Workbench::createBuildService() {
     });
     // A new configuration builds other files with other flags: clangd follows (ADR 0041).
     connect(m_build.get(), &ui::BuildController::activeConfigurationChanged, this, [this](int) {
-        if (m_solution && !m_closingSolution) {
+        if (m_solution && !m_closingSolution && m_build->backend() == m_buildBackend.get()) {
             startProjectEvaluation(m_projectRoot);
+            if (m_managedEvaluation) {
+                auto request = m_managedEvaluation->request;
+                if (const auto selected = m_buildService->activeConfiguration();
+                    selected && selected->configuration != request.configuration) {
+                    request.configuration = selected->configuration;
+                    (void)configureManagedProject(std::move(request));
+                }
+            } else if (m_managed)
+                startManaged(m_projectRoot);
             if (m_clangd)
                 restartClangd();
         }
@@ -726,8 +760,13 @@ void Workbench::notify(const QString& title, const QString& body, ui::Notificati
 
 void Workbench::onSettingsChanged() {
     ++m_cppAnalyzerTicket;
-    if (m_cppAnalyzerRunning) m_cppInspectionStop.request_stop();
-    if(m_engine){m_engine->invalidateShaderPreview();if(auto* view=currentView())m_engine->scheduleShaderDiagnostics(view->path());}
+    if (m_cppAnalyzerRunning)
+        m_cppInspectionStop.request_stop();
+    if (m_engine) {
+        m_engine->invalidateShaderPreview();
+        if (auto* view = currentView())
+            m_engine->scheduleShaderDiagnostics(view->path());
+    }
     const auto snapshot = m_services.settings.snapshot();
     m_documents->applySettings(*snapshot);
     onLuaSettingsChanged(); // workbench_lua.cpp: a restart or a live didChangeConfiguration (LUA-3).
@@ -971,8 +1010,11 @@ void Workbench::shutdown() {
     if (auto closed = m_documents->closeJournal(); !closed) {
         log::warn(kLog, "hot-exit journal: {}", closed.error().describe());
     }
+    if (m_registeredLanguages)
+        m_registeredLanguages->shutdown();
     stopLua();
     stopManaged();
+    clearManagedProjectContext();
     stopClangd();
     stopProjectEvaluation();
 }

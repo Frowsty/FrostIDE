@@ -48,7 +48,7 @@ param(
     [string]$WinDeployQt = '',
     [string]$QtSourceArchive = '',
     [string]$ManagedServerDir = $(if ($env:FROST_MANAGED_SERVER_DIR) { $env:FROST_MANAGED_SERVER_DIR }
-        else { 'E:\FrostBuilds\managed-server-0.28.0-reviewed' }),
+        else { Join-Path $SdkRoot 'roslyn' }),
     [string]$ManagedDebugDir = $(if ($env:FROST_MANAGED_DEBUG_DIR) { $env:FROST_MANAGED_DEBUG_DIR }
         else { 'E:\FrostBuilds\managed-debug\installed-app-v13\FrostManagedDebug' }),
     [string]$Python = '',
@@ -227,8 +227,8 @@ if ($bundle) {
         $path = Join-Path $lualsSource $name
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "missing bundled LuaLS file: $path (tools\bootstrap.ps1 -Only luals)" }
     }
-    if (-not $ManagedServerDir -or -not (Test-Path -LiteralPath (Join-Path $ManagedServerDir 'CSharpLanguageServer.dll') -PathType Leaf)) {
-        Fail "missing bundled managed language server: no CSharpLanguageServer.dll in '$ManagedServerDir'"
+    if (-not $ManagedServerDir -or -not (Test-Path -LiteralPath (Join-Path $ManagedServerDir 'FrostRoslynHost.dll') -PathType Leaf)) {
+        Fail "missing bundled managed language server: no FrostRoslynHost.dll in '$ManagedServerDir'"
     }
     if (-not $ManagedDebugDir -or -not (Test-Path -LiteralPath (Join-Path $ManagedDebugDir 'adapter\netcoredbg.exe') -PathType Leaf)) {
         Fail "missing bundled managed debugger: no adapter\netcoredbg.exe in '$ManagedDebugDir'"
@@ -342,7 +342,7 @@ if ($bundle) {
         $path = Join-Path $lualsDest $generated
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
     }
-    $managedDest = Join-Path $Destination 'managed'
+    $managedDest = Join-Path $Destination 'roslyn'
     New-Item -ItemType Directory -Force -Path $managedDest | Out-Null
     Copy-Item -Path (Join-Path $ManagedServerDir '*') -Destination $managedDest -Recurse -Force
     $managedDbgDest = Join-Path $Destination 'FrostManagedDebug'
@@ -432,7 +432,7 @@ else {
 }
 if ($bundle) {
     foreach ($name in @("$llvmRel\bin\llvm-cov.exe", "$llvmRel\bin\llvm-profdata.exe", "$llvmRel\bin\clangd.exe", "$llvmRel\bin\clang-scan-deps.exe", "$lldbRel\bin\lldb-dap.exe", "$lualsRel\bin\lua-language-server.exe",
-            'managed\CSharpLanguageServer.dll', 'FrostManagedDebug\adapter\netcoredbg.exe', 'licenses\luals-LICENSE.txt')) {
+            'roslyn\FrostRoslynHost.dll', 'FrostManagedDebug\adapter\netcoredbg.exe', 'licenses\luals-LICENSE.txt')) {
         if (-not (Test-Path -LiteralPath (Join-Path $Destination $name) -PathType Leaf)) { Fail "the staged folder has no $name" }
     }
 }

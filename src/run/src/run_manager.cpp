@@ -546,6 +546,7 @@ struct RunManager::State : std::enable_shared_from_this<RunManager::State> {
         }
         LaunchPlan plan;
         std::shared_ptr<const RunHandlers> launchHandlers;
+        std::stop_token resolutionStop;
         {
             LockGuard lock(mutex);
             const auto it = runs.find(id);
@@ -554,9 +555,14 @@ struct RunManager::State : std::enable_shared_from_this<RunManager::State> {
             }
             plan = *it->second.plan;
             launchHandlers = it->second.handlers;
+            resolutionStop = it->second.stop.get_token();
         }
-        if (launchHandlers && launchHandlers->transformLaunchPlan) {
-            auto transformed = launchHandlers->transformLaunchPlan(std::move(plan));
+        if (launchHandlers &&
+            (launchHandlers->transformLaunchPlan || launchHandlers->transformLaunchPlanWithCancellation)) {
+            auto transformed =
+                launchHandlers->transformLaunchPlanWithCancellation
+                    ? launchHandlers->transformLaunchPlanWithCancellation(std::move(plan), resolutionStop)
+                    : launchHandlers->transformLaunchPlan(std::move(plan));
             if (transformed) {
                 transformed = normalizePlan(std::move(*transformed));
             }

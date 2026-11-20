@@ -166,10 +166,13 @@ public:
                        std::vector<std::string> allowedSources = {},
                        std::function<void(std::string, std::function<void(bool)>)> validateBreakpoint = {});
     // Attach to an existing host using a preconnected adapter. Trust is checked again here; Stop
-    // disconnects the adapter without terminating that host.
+    // disconnects the adapter without terminating that host. CoreCLR requires worker-safe process
+    // admission captured from the selected local process and rechecked before the attach frame.
     [[nodiscard]] Result<void> attachTarget(const debug::DebugTarget& target, debug::AdapterFactory factory,
                                             rpc::Json attachArguments,
-                                            const std::function<bool()>& ownerAdmission = {});
+                                            const std::function<bool()>& ownerAdmission = {},
+                                            std::function<Result<void>()> processAdmission = {},
+                                            std::function<void()> releaseAuthorization = {});
 
     // Attaches a verified managed module with a source allowlist and per-change validator.
     // The caller must establish process identity, trust, and source freshness before calling.

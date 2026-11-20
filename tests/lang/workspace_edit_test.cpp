@@ -225,4 +225,30 @@ TEST(WorkspaceEditApplier, ConflictsRefuseTheWholeEdit) {
     EXPECT_EQ(documents.doc(a).buffer.current().text(), "int value;\n");
 }
 
+TEST(WorkspaceEdit, OwnedManagedReceiptsDecodeWithoutEnablingGenericResourceOperations) {
+    const auto a = workPath("Old.cs"), b = workPath("New.cs");
+    const auto uriA = frost::lang::pathToUri(a), uriB = frost::lang::pathToUri(b);
+    ASSERT_TRUE(uriA && uriB);
+    auto owned = Json::object()
+                     .set("producer", "FrostRoslynHost")
+                     .set("hostContext", "captured-generation")
+                     .set("inputs", Json::array().push(Json::object().set("uri", *uriA).set("text", "class Old {}")))
+                     .set("creates", Json::array().push(Json::object().set("uri", *uriB).set("text", "class New {}")))
+                     .set("renames", Json::array());
+    auto wire = Json::object().set("documentChanges", Json::array()).set("frostManaged", owned);
+    auto parsed = frost::lang::parseWorkspaceEdit(wire);
+    ASSERT_TRUE(parsed);
+    ASSERT_TRUE(parsed->managed);
+    EXPECT_EQ(parsed->managed->context, "captured-generation");
+    ASSERT_EQ(parsed->managed->creates.size(), 1u);
+    EXPECT_EQ(parsed->managed->creates[0].path, b);
+    EXPECT_FALSE(parsed->empty());
+    auto malformed = owned;
+    malformed.set("inputs", Json::array().push(Json::object().set("uri", *uriA)));
+    EXPECT_FALSE(frost::lang::parseWorkspaceEdit(Json::object().set("frostManaged", malformed)));
+    auto standard = Json::object().set("documentChanges",
+                                       Json::array().push(Json::object().set("kind", "create").set("uri", *uriB)));
+    EXPECT_FALSE(frost::lang::parseWorkspaceEdit(standard));
+}
+
 } // namespace

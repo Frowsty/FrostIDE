@@ -23,7 +23,7 @@
 # runs frost.exe beside the test). app_tests runs offscreen Qt only and takes no lock.
 
 frost_add_test(app_tests QT
-    SOURCES command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp stall_hooks_test.cpp workbench_project_helpers_test.cpp cmake_kit_test.cpp standalone_build_backend_test.cpp unreal_build_backend_test.cpp unreal_partner_window_test.cpp settings_import_test.cpp agent_bridge_test.cpp engine_shader_requester_test.cpp hosting_cli_test.cpp hosting_review_test.cpp native_agent_chat_test.cpp agent_private_test.cpp
+    SOURCES command_line_test.cpp main_window_test.cpp stable_lsp_requester_test.cpp stall_hooks_test.cpp workbench_project_helpers_test.cpp cmake_kit_test.cpp standalone_build_backend_test.cpp unreal_build_backend_test.cpp unreal_partner_window_test.cpp settings_import_test.cpp agent_bridge_test.cpp engine_shader_requester_test.cpp hosting_cli_test.cpp hosting_review_test.cpp native_agent_chat_test.cpp agent_private_test.cpp managed_tools_window_test.cpp
     DEPS frost::app frost::diag frost::io)
 target_link_libraries(app_tests PRIVATE Qt6::Network)
 add_dependencies(app_tests frostide_mcp)
@@ -106,6 +106,7 @@ frost_add_test(app_workbench_tests QT
             engine_crash_cleanup_test.cpp engine_native_host_test.cpp engine_tests_lifetime_test.cpp
             scene_merge_dialog_test.cpp
             source_rename_plan_test.cpp
+            language_registry_integration_test.cpp
         workbench_templates_test.cpp
         workbench_lua_refactoring_test.cpp
         workbench_structural_search_test.cpp
@@ -353,7 +354,7 @@ target_compile_definitions(app_workbench_unity_tests PRIVATE ${_frost_workbench_
 
 include("${FROST_SOURCE_DIR}/tests/support/ManagedFixtures.cmake")
 frost_add_managed_fixture_test(app_workbench_managed_tests QT
-    SOURCES workbench_managed_test.cpp managed_debug_preparation_test.cpp mono_adapter_preparation_test.cpp
+    SOURCES workbench_managed_test.cpp workbench_managed_model_test.cpp managed_debug_preparation_test.cpp mono_adapter_preparation_test.cpp
     DEPS frost::app frost::lang frost::io
     LABELS integration)
 target_include_directories(app_workbench_managed_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

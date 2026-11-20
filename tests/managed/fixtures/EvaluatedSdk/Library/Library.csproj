@@ -1,0 +1,8 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Offline authored SDK evaluation fixture: inner/outer builds, linked and removed items. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFrameworks>net10.0;netstandard2.1</TargetFrameworks><LangVersion>latest</LangVersion><Nullable>enable</Nullable></PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'"><DefineConstants>$(DefineConstants);MODERN_TFM</DefineConstants></PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64'"><DefineConstants>$(DefineConstants);RID_LINUX</DefineConstants></PropertyGroup>
+  <ItemGroup><Compile Remove="Removed.cs" /><Compile Include="../Shared/Linked.cs" Link="Shared/Linked.cs" /></ItemGroup>
+</Project>

@@ -85,6 +85,7 @@ frost_add_test(lang_unit_tests
         lua_input_index_test.cpp
         lua_rc_test.cpp
         lua_service_test.cpp
+        language_registry_test.cpp
         msbuild_provider_test.cpp
         semantic_tokens_test.cpp
         uri_test.cpp
@@ -264,3 +265,21 @@ frost_add_test(lang_cmake_target_rename_real_tests
     LABELS integration cmake)
 target_include_directories(lang_cmake_target_rename_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(lang_cmake_target_rename_real_tests PRIVATE FROST_TEST_CMAKE="${CMAKE_COMMAND}")
+# R17 public .NET corpus; provisioned clone/cache/host are explicit and missing inputs fail.
+frost_add_managed_fixture_test(lang_managed_corpus_tests SOURCES managed_corpus_test.cpp
+    DEPS frost::lang frost::build frost::project frost::io frost::sched frost::text LABELS integration corpus managed TIMEOUT 1200)
+target_include_directories(lang_managed_corpus_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+file(READ "${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json" _frost_managed_corpus_lock)
+string(JSON _frost_managed_corpus_count LENGTH "${_frost_managed_corpus_lock}" corpora)
+math(EXPR _frost_managed_corpus_last "${_frost_managed_corpus_count}-1")
+foreach(_frost_managed_index RANGE ${_frost_managed_corpus_last})
+    string(JSON _frost_managed_id GET "${_frost_managed_corpus_lock}" corpora ${_frost_managed_index} id)
+    if(_frost_managed_id STREQUAL "managed")
+        string(JSON _frost_managed_sha GET "${_frost_managed_corpus_lock}" corpora ${_frost_managed_index} sha)
+    endif()
+endforeach()
+if(NOT _frost_managed_sha MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR "Managed public corpus has no exact revision pin")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FROST_SOURCE_DIR}/tests/corpus/corpora.lock.json")
+target_compile_definitions(lang_managed_corpus_tests PRIVATE FROST_MANAGED_CORPUS_SHA="${_frost_managed_sha}")
