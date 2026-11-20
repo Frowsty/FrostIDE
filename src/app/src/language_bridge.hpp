@@ -18,7 +18,9 @@
 #include "frost/core/error.hpp"
 #include "frost/lang/cmake_language.hpp"
 #include "frost/lang/lsp_client.hpp"
+#include "frost/lang/shader_source.hpp"
 #include "frost/lang/msbuild_language.hpp"
+
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/ui/lang/editor_language_host.hpp"
 
@@ -125,6 +127,7 @@ private:
     std::shared_ptr<lang::JsonSchemaService> m_json = std::make_shared<lang::JsonSchemaService>();
     std::shared_ptr<lang::CMakeLanguageService> m_cmakeLanguage;
     std::shared_ptr<lang::MSBuildLanguageService> m_msbuildLanguage;
+    std::shared_ptr<lang::ShaderSourceService> m_shaderSource;
     lang::WorkspaceEditApplier m_applier;
 };
 

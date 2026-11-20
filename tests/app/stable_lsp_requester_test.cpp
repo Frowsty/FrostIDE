@@ -240,4 +240,24 @@ TEST(StableLspRequester, RegisteredDocumentCapturesExactServerAcrossReloadAndMix
     EXPECT_FALSE(frost::sched::syncWait(requester.request("textDocument/hover", params)));
 }
 
+TEST(StableLspRequester, ActualRegisteredShaderProviderOutranksLiteralSourceFallback) {
+    frost::app::StableLspRequester requester;
+    requester.setShaderSourceServer(std::make_shared<TestServer>(6));
+#ifdef _WIN32
+    const std::string path = "C:/project/Test.shader";
+#else
+    const std::string path = "/project/Test.shader";
+#endif
+    auto params = frost::lang::Json::object().set(
+        "textDocument", frost::lang::Json::object().set("uri", frost::lang::pathToUri(path).value()));
+    auto source = requester.request("textDocument/definition", params);
+    requester.setRegisteredServers({{frost::lang::documentKey(path), std::make_shared<TestServer>(7)}});
+    auto actual = frost::sched::syncWait(requester.request("textDocument/definition", params));
+    ASSERT_TRUE(actual);
+    EXPECT_EQ(actual->asInteger(), 7);
+    auto retained = frost::sched::syncWait(std::move(source));
+    ASSERT_TRUE(retained);
+    EXPECT_EQ(retained->asInteger(), 6);
+}
+
 } // namespace

@@ -297,6 +297,43 @@ TEST_F(SaveManagerTest, OpeningSweepsStaleTempFiles) {
     EXPECT_TRUE(fs.exists(fresh).value()); // Younger than SaveManagerOptions::staleTempAge.
 }
 
+TEST_F(SaveManagerTest, CompletedSaveObserversCoverSaveAllSaveAsAndSkipNoopOrCancelledWrites) {
+    policies.hotExit = false; policies.localHistory = false;
+    writeExternally("first.cs", "first"); writeExternally("second.cs", "second");
+    auto* first = open("first.cs"); auto* second = open("second.cs");
+    ASSERT_NE(first, nullptr); ASSERT_NE(second, nullptr);
+    std::vector<SavedDocumentCompletion> observed;
+    const int owner = 0;
+    manager().setSavedObserver(&owner, [&](const SavedDocumentCompletion& completion) {
+        observed.push_back(completion);
+        EXPECT_FALSE(first->dirty() && second->dirty());
+        EXPECT_TRUE(fs.exists(completion.target).value_or(false));
+    });
+    ASSERT_TRUE(manager().save(*first)); EXPECT_TRUE(observed.empty());
+    edit(*first, 0, 5, "changed"); edit(*second, 0, 6, "updated");
+    manager().setWriteGuard([](std::string_view) -> Result<void> { return fail(ErrorCode::Cancelled, "save cancelled by fixture"); });
+    EXPECT_FALSE(manager().save(*first)); EXPECT_TRUE(observed.empty());
+    auto refused = manager().saveAll(); EXPECT_EQ(refused.failed.size(), 2U); EXPECT_TRUE(observed.empty());
+    manager().setWriteGuard({});
+    const auto saved = manager().saveAll(); ASSERT_EQ(saved.saved.size(), 2U); ASSERT_EQ(observed.size(), 2U);
+    EXPECT_EQ(observed[0].reason, SaveReason::SaveAll); EXPECT_EQ(observed[1].reason, SaveReason::SaveAll);
+    edit(*first, 0, 7, "renamed");
+    ASSERT_TRUE(manager().saveAs(*first, path("renamed.cs")));
+    ASSERT_EQ(observed.size(), 3U); EXPECT_EQ(observed.back().path, path("renamed.cs"));
+    EXPECT_EQ(observed.back().target, path("renamed.cs")); EXPECT_EQ(observed.back().bytes, 7U);
+    manager().setSavedObserver(&owner, {});
+    edit(*second, 0, 7, "next"); ASSERT_TRUE(manager().save(*second)); EXPECT_EQ(observed.size(), 3U);
+}
+
+TEST_F(SaveManagerTest, CompletedObserverCanRemoveAnotherSubscriptionBeforeItsTurn) {
+    policies.hotExit = false; policies.localHistory = false;
+    writeExternally("observer.cs", "old"); auto* document = open("observer.cs"); ASSERT_NE(document, nullptr);
+    int first = 0, second = 0;
+    manager().setSavedObserver(&first, [&](const SavedDocumentCompletion&) { ++first; manager().setSavedObserver(&second, {}); });
+    manager().setSavedObserver(&second, [&](const SavedDocumentCompletion&) { ++second; });
+    edit(*document, 0, 3, "new"); ASSERT_TRUE(manager().save(*document));
+    EXPECT_EQ(first, 1); EXPECT_EQ(second, 0);
+}
 } // namespace
 // Simulates an OS save that committed bytes but needs post-publication recovery.
 class CommittedWarningFs final : public io::IFileSystem {
@@ -340,6 +377,8 @@ TEST_F(SaveManagerTest, CommittedWarningSurvivesSingleSaveSaveAllAndAutosave) {
     auto opened = warningManager.open(path("warning.txt"));
     ASSERT_TRUE(opened);
     FileDocument& doc = **opened;
+    int completed = 0;
+    warningManager.setSavedObserver(&completed, [&](const SavedDocumentCompletion&) { ++completed; EXPECT_FALSE(doc.dirty()); });
     edit(doc, 0, 3, "one");
     auto one = warningManager.save(doc);
     ASSERT_TRUE(one);
@@ -361,6 +400,7 @@ TEST_F(SaveManagerTest, CommittedWarningSurvivesSingleSaveSaveAllAndAutosave) {
     ASSERT_EQ(automatic->saved.size(), 1u);
     ASSERT_EQ(automatic->warnings.size(), 1u);
     EXPECT_EQ(automatic->warnings[0].document, &doc);
+    EXPECT_EQ(completed, 3);
     EXPECT_FALSE(doc.dirty());
     EXPECT_EQ(read("warning.txt"), "end");
     ASSERT_TRUE(fs.writeFileAtomic(path("closed.txt"), "old"));

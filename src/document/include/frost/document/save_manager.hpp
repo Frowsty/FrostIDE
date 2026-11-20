@@ -70,6 +70,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <utility>
 
 namespace frost::document {
 
@@ -152,6 +153,13 @@ struct SaveOutcome {
     std::optional<settings::SaveCheck> settingsCheck; // When the file is a settings scope file.
 };
 
+// One actual completed file replacement, after document state/recovery bookkeeping is settled.
+// Owned values; paths identify the logical document and physical written target, respectively.
+struct SavedDocumentCompletion {
+    std::string path, target;
+    SaveReason reason = SaveReason::Explicit;
+    std::uint64_t bytes = 0, textVersion = 0;
+};
 // Why saveAll() passed a document over.
 enum class SkipReason : std::uint8_t {
     Untitled,     // Needs Save As.
@@ -342,6 +350,13 @@ public:
     void applySettings(const settings::SettingsSnapshot& snapshot);
     [[nodiscard]] const SavePolicies& policies() const noexcept { return m_policies; }
 
+    // Owner-thread completion observers, keyed by non-null owner identity. Empty callback removes
+    // only that owner's subscription. Called once after each committed save/saveAs (including
+    // Save All/autosave), even with post-commit warnings; never for no-op, failed or refused saves.
+    // Callbacks must not throw, recursively save, or mutate the manager's document set. They may
+    // remove observers; removals take effect before later callbacks in the same notification.
+    // Observer and manager lifetimes are the caller's; owners unsubscribe before destruction.
+    void setSavedObserver(const void* owner, std::function<void(const SavedDocumentCompletion&)> observer);
     // --- External changes ---
 
     // checkDisk() for every open document a change of `batch` touches; returns the changes found
@@ -420,6 +435,7 @@ private:
     LoadService m_loader;
     std::vector<std::unique_ptr<FileDocument>> m_documents;
     std::function<void(const ExternalChange&)> m_listener;
+    std::vector<std::pair<const void*, std::function<void(const SavedDocumentCompletion&)>>> m_savedObservers;
     std::function<Result<void>(std::string_view)> m_writeGuard;
     std::function<SaveTransform(const FileDocument&, SaveReason)> m_saveTransform;
     std::set<std::string, std::less<>> m_sweptDirectories;

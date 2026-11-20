@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <charconv>
 #include <limits>
 
 namespace frost::debug::mono {
@@ -71,6 +72,22 @@ Result<std::string> decodeString(std::span<const std::uint8_t> payload) {
         return fail(ErrorCode::Corrupt, "invalid Mono string");
     return result;
 }
+Result<std::uint32_t> decodeTypeAssembly258(std::span<const std::uint8_t> payload) {
+    Reader r(payload);
+    std::string text;
+    std::uint32_t assembly = 0, module = 0, ignored = 0, count = 0;
+    std::uint8_t byte = 0;
+    if (!r.string(text) || !r.string(text) || !r.string(text) || !r.u32(assembly) || !assembly ||
+        !r.u32(module) || !module || !r.u32(ignored) || !r.u32(ignored) || !r.u32(ignored) ||
+        !r.byte(byte) || !r.u32(ignored) || !r.byte(byte) || !r.u32(count) || count > 4096)
+        return fail(ErrorCode::Corrupt, "invalid Mono type info");
+    for (std::uint32_t i = 0; i < count; ++i) if (!r.u32(ignored) || !ignored) return fail(ErrorCode::Corrupt, "invalid nested Mono type");
+    if (!r.u32(ignored) || !r.u32(count) || count > 4096) return fail(ErrorCode::Corrupt, "invalid generic Mono type info");
+    for (std::uint32_t i = 0; i < count; ++i) if (!r.u32(ignored) || !ignored) return fail(ErrorCode::Corrupt, "invalid generic Mono type");
+    if (!r.done()) return fail(ErrorCode::Corrupt, "trailing Mono type info");
+    return assembly;
+}
+
 Result<std::uint32_t> decodeId(std::span<const std::uint8_t> payload) {
     Reader r(payload);
     std::uint32_t id = 0;
@@ -102,9 +119,12 @@ Result<StopEvent> decodeStop(std::span<const std::uint8_t> payload) {
     std::uint32_t count = 0;
     StopEvent e;
     if (!r.byte(policy) || policy != 2 || !r.u32(count) || count != 1 || !r.byte(e.kind) ||
-        (e.kind != 10 && e.kind != 11) || !r.u32(e.request) || !e.request || !r.u32(e.thread) || !e.thread ||
-        !r.u32(e.method) || !e.method || !r.u64(e.rawOffset) || !r.done())
+        (e.kind != 10 && e.kind != 11 && e.kind != 13) || !r.u32(e.request) || !e.request || !r.u32(e.thread) || !e.thread)
         return fail(ErrorCode::Corrupt, "invalid Mono stop event");
+    if (e.kind == 13) {
+        if (!r.u32(e.exception) || !e.exception || !r.done()) return fail(ErrorCode::Corrupt, "invalid Mono exception event");
+    } else if (!r.u32(e.method) || !e.method || !r.u64(e.rawOffset) || !r.done())
+        return fail(ErrorCode::Corrupt, "invalid Mono stop location");
     return e;
 }
 
@@ -124,6 +144,53 @@ Result<std::vector<Frame>> decodeFrames(std::span<const std::uint8_t> payload) {
     if (!r.done())
         return fail(ErrorCode::Corrupt, "trailing Mono frames data");
     return result;
+}
+
+Result<ScalarValue> decodeScalar(std::span<const std::uint8_t> payload) {
+    // Mono MIT debugger-agent.c buffer_add_value_full: primitive tags + BE int/long raw bits.
+    // https://github.com/mono/mono/blob/main/mono/mini/debugger-agent.c
+    Reader r(payload);
+    std::uint8_t tag = 0;
+    if (!r.byte(tag)) return fail(ErrorCode::Corrupt, "missing Mono value type");
+    if (tag == 0xf0) {
+        if (!r.done()) return fail(ErrorCode::Corrupt, "trailing Mono null data");
+        return ScalarValue{"null", "null"};
+    }
+    if (tag < 2 || tag > 13) return fail(ErrorCode::Unsupported, "Mono reference or structured value requires expansion");
+    std::uint32_t bits = 0;
+    std::uint64_t wide = 0;
+    if (tag == 10 || tag == 11 || tag == 13) {
+        if (!r.u64(wide) || !r.done()) return fail(ErrorCode::Corrupt, "invalid Mono wide primitive");
+    } else if (!r.u32(bits) || !r.done()) return fail(ErrorCode::Corrupt, "invalid Mono primitive");
+    if ((tag == 2 && bits > 1) || ((tag == 4 || tag == 5) && bits > 127 && bits < 0xffffff80U) ||
+        ((tag == 3 || tag == 6 || tag == 7) && bits > 32767 && bits < 0xffff8000U))
+        return fail(ErrorCode::Corrupt, "invalid Mono narrow primitive extension");
+    switch (tag) {
+    case 2: return ScalarValue{bits ? "true" : "false", "System.Boolean"};
+    case 3: {
+        const auto code = bits & 0xffffU;
+        constexpr char hex[] = "0123456789ABCDEF";
+        std::string value = "U+0000";
+        for (unsigned i = 0; i < 4; ++i) value[5 - i] = hex[(code >> (i * 4)) & 15];
+        return ScalarValue{value, "System.Char"};
+    }
+    case 4: return ScalarValue{std::to_string(static_cast<std::int8_t>(bits & 255)), "System.SByte"};
+    case 5: return ScalarValue{std::to_string(bits & 255), "System.Byte"};
+    case 6: return ScalarValue{std::to_string(static_cast<std::int16_t>(bits & 65535)), "System.Int16"};
+    case 7: return ScalarValue{std::to_string(bits & 65535), "System.UInt16"};
+    case 8: return ScalarValue{std::to_string(std::bit_cast<std::int32_t>(bits)), "System.Int32"};
+    case 9: return ScalarValue{std::to_string(bits), "System.UInt32"};
+    case 10: return ScalarValue{std::to_string(std::bit_cast<std::int64_t>(wide)), "System.Int64"};
+    case 11: return ScalarValue{std::to_string(wide), "System.UInt64"};
+    default: {
+        std::array<char, 128> buffer{};
+        const auto converted = tag == 12
+            ? std::to_chars(buffer.data(), buffer.data() + buffer.size(), std::bit_cast<float>(bits))
+            : std::to_chars(buffer.data(), buffer.data() + buffer.size(), std::bit_cast<double>(wide));
+        if (converted.ec != std::errc{}) return fail(ErrorCode::Corrupt, "unrepresentable Mono floating value");
+        return ScalarValue{std::string(buffer.data(), converted.ptr), tag == 12 ? "System.Single" : "System.Double"};
+    }
+    }
 }
 
 Result<std::int32_t> decodeInt32(std::span<const std::uint8_t> payload) {

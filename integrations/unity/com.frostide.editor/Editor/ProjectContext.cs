@@ -134,7 +134,8 @@ namespace FrostIDE.UnityIntegration
         /*
          * The csc options of an assembly's response files (csc.rsp) and AdditionalCompilerArguments
          * that change the language model: -define/-d, -nowarn, -unsafe[+|-], -langversion,
-         * -nullable[+|-|:value], -reference/-r and -warnaserror[+|-|:list]. Anything else is kept
+         * -nullable[+|-|:value], -reference/-r, single-path analyzer/additionalfile/analyzerconfig/ruleset,
+         * and -warnaserror[+|-|:list]. Public Unity per-assembly analyzer inputs are retained. Anything else is kept
          * in Unsupported, published with the generation (UnsupportedArguments.txt) so the IDE can
          * name the options it does not model, instead of refusing the whole project.
          */
@@ -144,6 +145,10 @@ namespace FrostIDE.UnityIntegration
             internal readonly List<string> NoWarn = new List<string>();
             internal readonly List<string> WarningsAsErrors = new List<string>();
             internal readonly List<string> References = new List<string>();
+            internal readonly List<string> Analyzers = new List<string>();
+            internal readonly List<string> AdditionalFiles = new List<string>();
+            internal readonly List<string> AnalyzerConfigs = new List<string>();
+            internal string Ruleset;
             internal readonly List<string> Unsupported = new List<string>();
             internal bool? Unsafe;
             internal bool? TreatWarningsAsErrors;
@@ -246,7 +251,18 @@ namespace FrostIDE.UnityIntegration
                     into.References.AddRange(paths);
                     return;
                 }
-                case "warnaserror":
+                case "analyzer":
+                case "additionalfile":
+                case "analyzerconfig":
+                case "ruleset":
+                    // Public Unity metadata supplies individual paths. Delimited raw arguments
+                    // remain unsupported rather than guessing whether a separator belongs to a filename.
+                    if (toggle != null || String.IsNullOrEmpty(value) || value.IndexOfAny(new[] { ';', ',' }) >= 0) break;
+                    if (name == "analyzer") into.Analyzers.Add(value);
+                    else if (name == "additionalfile") into.AdditionalFiles.Add(value);
+                    else if (name == "analyzerconfig") into.AnalyzerConfigs.Add(value);
+                    else into.Ruleset = value;
+                    return;                case "warnaserror":
                     if (value == null)
                     {
                         into.TreatWarningsAsErrors = toggle ?? true;
@@ -268,6 +284,11 @@ namespace FrostIDE.UnityIntegration
         internal static CompilerArguments ReadCompilerArguments(ScriptCompilerOptions options)
         {
             var parsed = new CompilerArguments();
+            // These public Unity 6000 ScriptCompilerOptions fields are the compiler's actual per-assembly inputs.
+            parsed.Analyzers.AddRange(options.RoslynAnalyzerDllPaths ?? Array.Empty<string>());
+            parsed.AdditionalFiles.AddRange(options.RoslynAdditionalFilePaths ?? Array.Empty<string>());
+            if (!String.IsNullOrEmpty(options.AnalyzerConfigPath)) parsed.AnalyzerConfigs.Add(options.AnalyzerConfigPath);
+            parsed.Ruleset = options.RoslynAnalyzerRulesetPath;
             foreach (string file in options.ResponseFiles ?? Array.Empty<string>())
             {
                 string path = ResolveAssetPath(file);
@@ -315,6 +336,13 @@ namespace FrostIDE.UnityIntegration
                 CompilerArguments arguments = ReadCompilerArguments(assembly.compilerOptions);
                 foreach (string argument in arguments.Unsupported)
                     unsupported.Append(assembly.name).Append('\t').Append(argument.Replace('\r', ' ').Replace('\n', ' ')).Append('\n');
+                string CompilerFile(string path, string option) {
+                    string absolute = ResolveAssetPath(path);
+                    if (File.Exists(absolute)) return absolute;
+                    unsupported.Append(assembly.name).Append('\t').Append(option).Append(':').Append(path).Append(" (file not found)\n");
+                    return null;
+                }
+                string ruleset = String.IsNullOrEmpty(arguments.Ruleset) ? null : CompilerFile(arguments.Ruleset, "ruleset");
                 string noWarn = String.Join(";", arguments.NoWarn);
                 var defines = new List<string>(assembly.defines ?? Array.Empty<string>());
                 foreach (string symbol in arguments.Defines)
@@ -341,6 +369,10 @@ namespace FrostIDE.UnityIntegration
                     xml.WriteElementString("AutomaticallyUseReferenceAssemblyPackages", "false");
                     xml.WriteElementString("EnableDefaultCompileItems", "false");
                     xml.WriteElementString("GenerateAssemblyInfo", "false");
+                    // Do not add host-SDK-discovered config files that were absent from Unity's invocation.
+                    xml.WriteElementString("DiscoverEditorConfigFiles", "false");
+                    xml.WriteElementString("DiscoverGlobalAnalyzerConfigFiles", "false");
+                    if (ruleset != null) xml.WriteElementString("CodeAnalysisRuleSet", MsBuildLiteral(ruleset));
                     if (!String.IsNullOrEmpty(noWarn)) xml.WriteElementString("NoWarn", noWarn);
                     xml.WriteElementString("AssemblyName", MsBuildLiteral(assembly.name));
                     xml.WriteElementString("DefineConstants", String.Join(";", defines));
@@ -405,6 +437,17 @@ namespace FrostIDE.UnityIntegration
                         if (File.Exists(absolute)) AddReference(reference);
                         else unsupported.Append(assembly.name).Append("\t-r:").Append(reference).Append(" (reference not found)\n");
                     }
+                    void CompilerItems(string item, IEnumerable<string> paths, string option) {
+                        var seen = new HashSet<string>(Application.platform == RuntimePlatform.WindowsEditor ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+                        foreach (string path in paths) {
+                            string absolute = CompilerFile(path, option);
+                            if (absolute == null || !seen.Add(absolute)) continue;
+                            xml.WriteStartElement(item); xml.WriteAttributeString("Include", MsBuildLiteral(absolute)); xml.WriteEndElement();
+                        }
+                    }
+                    CompilerItems("Analyzer", arguments.Analyzers, "analyzer");
+                    CompilerItems("AdditionalFiles", arguments.AdditionalFiles, "additionalfile");
+                    CompilerItems("EditorConfigFiles", arguments.AnalyzerConfigs, "analyzerconfig");
                     xml.WriteEndElement();
                     if (literalReferences.Count != 0)
                     {

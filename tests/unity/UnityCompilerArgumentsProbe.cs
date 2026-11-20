@@ -26,7 +26,7 @@ internal static class UnityCompilerArgumentsProbe
     {
         var parsed = new ProjectContext.CompilerArguments();
         foreach (string argument in new[] { "-define:FOO;BAR", "/d:BAZ", "-nowarn:0168,CS0219", "-unsafe", "-langversion:9.0",
-                                            "-nullable:enable", "-r:Libs/Extra.dll", "-warnaserror+", "-warnaserror:CS0618",
+                                            "-nullable:enable", "-r:Libs/Extra.dll", "-analyzer:Libs/Rules.dll", "-additionalfile:Assets/Input.txt", "-analyzerconfig:Assets/Compiler.globalconfig", "-ruleset:Assets/Rules.ruleset", "-warnaserror+", "-warnaserror:CS0618",
                                             "-optimize+", "-define:not-an-identifier", "-r:Alias=Libs/Extra.dll" })
             ProjectContext.ParseCompilerArgument(argument, parsed);
         Check(parsed.Defines.SequenceEqual(new[] { "FOO", "BAR", "BAZ" }), "defines from -define and /d");
@@ -35,6 +35,10 @@ internal static class UnityCompilerArgumentsProbe
         Check(parsed.LangVersion == "9.0", "-langversion");
         Check(parsed.Nullable == "enable", "-nullable:enable");
         Check(parsed.References.SequenceEqual(new[] { "Libs/Extra.dll" }), "-r path");
+        Check(parsed.Analyzers.SequenceEqual(new[] { "Libs/Rules.dll" }), "explicit analyzer option");
+        Check(parsed.AdditionalFiles.SequenceEqual(new[] { "Assets/Input.txt" }), "explicit additional file");
+        Check(parsed.AnalyzerConfigs.SequenceEqual(new[] { "Assets/Compiler.globalconfig" }), "explicit analyzer config");
+        Check(parsed.Ruleset == "Assets/Rules.ruleset", "explicit ruleset");
         Check(parsed.TreatWarningsAsErrors == true, "-warnaserror+");
         Check(parsed.WarningsAsErrors.SequenceEqual(new[] { "CS0618" }), "-warnaserror:list");
         Check(parsed.Unsupported.SequenceEqual(new[] { "-optimize+", "-define:not-an-identifier", "-r:Alias=Libs/Extra.dll" }),
@@ -64,6 +68,10 @@ internal static class UnityCompilerArgumentsProbe
         File.WriteAllText(Path.Combine(project, "Assets", "csc.rsp"),
                           "-define:FROM_RSP\n-nowarn:0649\n-unsafe\n-nullable:enable\n-r:Libs/Extra.dll\n-optimize+\n");
         File.WriteAllText(Path.Combine(project, "Assets", "Game.cs"), "class Game {}");
+        File.WriteAllText(Path.Combine(project, "Libs", "Rules.dll"), "fixture analyzer identity, never loaded by this probe");
+        File.WriteAllText(Path.Combine(project, "Assets", "Input.txt"), "actual additional input");
+        File.WriteAllText(Path.Combine(project, "Assets", "Compiler.globalconfig"), "is_global = true\n");
+        File.WriteAllText(Path.Combine(project, "Assets", "Rules.ruleset"), "<RuleSet Name=\"Fixture\" ToolsVersion=\"1.0\" />");
         Application.dataPath = Path.Combine(project, "Assets");
         CompilationPipeline.Assemblies = new[]
         {
@@ -79,6 +87,10 @@ internal static class UnityCompilerArgumentsProbe
                     ResponseFiles = new[] { "Assets/csc.rsp" },
                     AdditionalCompilerArguments = new[] { "-langversion:9.0", "-warnaserror:CS0618", "-checked+" },
                     LanguageVersion = "latest",
+                    RoslynAnalyzerDllPaths = new[] { "Libs/Rules.dll" },
+                    RoslynAdditionalFilePaths = new[] { "Assets/Input.txt" },
+                    AnalyzerConfigPath = "Assets/Compiler.globalconfig",
+                    RoslynAnalyzerRulesetPath = "Assets/Rules.ruleset",
                 },
             },
         };
@@ -93,6 +105,12 @@ internal static class UnityCompilerArgumentsProbe
         Check(xml.Contains("<Nullable>enable</Nullable>"), "csproj Nullable");
         Check(xml.Contains("<WarningsAsErrors>CS0618</WarningsAsErrors>"), "csproj WarningsAsErrors");
         Check(xml.Contains("Extra.dll</HintPath>"), "csproj reference from -r");
+        var document = System.Xml.Linq.XDocument.Parse(xml);
+        Check(document.Descendants("Analyzer").Single().Attribute("Include").Value == Path.GetFullPath(Path.Combine(project, "Libs", "Rules.dll")), "per-assembly public analyzer metadata");
+        Check(document.Descendants("AdditionalFiles").Single().Attribute("Include").Value == Path.GetFullPath(Path.Combine(project, "Assets", "Input.txt")), "per-assembly additional inputs");
+        Check(document.Descendants("EditorConfigFiles").Single().Attribute("Include").Value == Path.GetFullPath(Path.Combine(project, "Assets", "Compiler.globalconfig")), "actual Unity global config");
+        Check(document.Descendants("CodeAnalysisRuleSet").Single().Value == Path.GetFullPath(Path.Combine(project, "Assets", "Rules.ruleset")), "actual Unity ruleset");
+        Check(xml.Contains("<DiscoverEditorConfigFiles>false</DiscoverEditorConfigFiles>"), "host compiler config discovery does not add unrelated inputs");
         Check(files.ContainsKey("FrostUnity.sln"), "the generation has its solution");
         string unsupported = files.TryGetValue(ProjectContext.UnsupportedArgumentsFile, out string listed) ? listed : "";
         Check(unsupported == "Game\t-optimize+\nGame\t-checked+\n", "unmodelled options are published for the IDE: " + unsupported.Replace("\n", "|"));

@@ -13,6 +13,7 @@
 #include "frost/settings/editorconfig.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/lang/editor_insight_binding.hpp"
+#include "frost/ui/workbench/workbench.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/editor_tabs.hpp"
@@ -190,12 +191,14 @@ void Workbench::editorOpened(DocumentEditorView& view) {
         offerLuaTrust();
     if (m_clangd && isCFamilySource(view.path()) && currentView() == &view) {
         auto* binding = new ui::lang::EditorInsightBinding(view.editor(), {*m_bridge, *m_pool});
+        configureUnityInsights(*binding);
         binding->setCodeVisionEnabled(true);
         binding->attach(*m_clangd);
         refreshMarkers(view);
     } else if (((m_managed && isManagedSource(view.path())) || (m_lua && isLuaSource(view.path()))) &&
                currentView() == &view) {
         auto* binding = new ui::lang::EditorInsightBinding(view.editor(), {*m_bridge, *m_pool});
+        configureUnityInsights(*binding);
         binding->setCodeVisionEnabled(true);
         if (m_lua && isLuaSource(view.path())) {
             if (auto set = m_lua->diagnostics().forFile(view.path()); set && !set->stale)
@@ -640,6 +643,7 @@ Result<void> Workbench::saveAs(DocumentEditorView& view, std::string_view target
         delete peer->editor().findChild<ui::lang::EditorInsightBinding*>();
         if (m_clangd && isCFamilySource(newPath) && peer == currentView()) {
             auto* binding = new ui::lang::EditorInsightBinding(peer->editor(), {*m_bridge, *m_pool});
+            configureUnityInsights(*binding);
             binding->setCodeVisionEnabled(true);
             binding->attach(*m_clangd);
         }
@@ -718,6 +722,7 @@ void Workbench::rebindRenamedDocument(const std::string& oldPath, const std::str
         delete peer->editor().findChild<ui::lang::EditorInsightBinding*>();
         if (m_clangd && isCFamilySource(newPath) && peer == currentView()) {
             auto* binding = new ui::lang::EditorInsightBinding(peer->editor(), {*m_bridge, *m_pool});
+            configureUnityInsights(*binding);
             binding->setCodeVisionEnabled(true);
             binding->attach(*m_clangd);
         }
@@ -931,4 +936,30 @@ void Workbench::openLocation(const QString& path, int line, int column) {
     (void)openPath(path.toStdString(), FileLocation{line, column});
 }
 
+void Workbench::configureUnityInsights(ui::lang::EditorInsightBinding& binding) {
+    binding.setUnityInsightInputs([self = QPointer<Workbench>(this)] {
+        ui::lang::UnityInsightInputs inputs;
+        if (!self || self->m_shutDown || !self->m_nav || !self->m_managed || self->m_projectRoot.empty()) return inputs;
+        const auto root = self->m_projectRoot;
+        const auto trust = self->m_services.trust.snapshot(root);
+        if (!trust.trusted || !self->m_services.fs.exists(root + "/ProjectSettings/ProjectVersion.txt").value_or(false)) return inputs;
+        inputs.fs = &self->m_services.fs;
+        inputs.files = self->m_nav->projectFiles().candidates();
+        std::vector<std::pair<std::string, std::uint64_t>> versions;
+        for (const auto& document : self->m_documents->documents()) {
+            inputs.overlays.push_back({document->path(), document->document().snapshot().text.text()});
+            versions.emplace_back(document->path(), document->document().snapshot().text.version());
+        }
+        inputs.current = [self, root, trust, versions = std::move(versions), managed = self->m_managed, generation = self->m_evaluatedGeneration] {
+            if (!self || self->m_shutDown || self->m_projectRoot != root || self->m_managed != managed || self->m_evaluatedGeneration != generation) return false;
+            const auto now = self->m_services.trust.snapshot(root);
+            if (!now.trusted || now.revision != trust.revision || self->m_documents->documents().size() != versions.size()) return false;
+            const auto documents = self->m_documents->documents();
+            for (std::size_t i = 0; i < documents.size(); ++i)
+                if (documents[i]->path() != versions[i].first || documents[i]->document().snapshot().text.version() != versions[i].second) return false;
+            return true;
+        };
+        return inputs;
+    });
+}
 } // namespace frost::app

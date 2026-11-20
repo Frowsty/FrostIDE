@@ -64,6 +64,7 @@ _frost_tree_sitter_grammar(powershell "${_frost_powershell_source}/src" parser.c
 
 frost_add_library(syntax LAYER syntax
     SOURCES
+        src/shader_source.cpp
         src/input.cpp
         src/language.cpp
         src/parse.cpp

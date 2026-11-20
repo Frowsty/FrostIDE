@@ -1,0 +1,7 @@
+{
+  "name": "FrostIDE.UnityIntegration.TestRunner",
+  "includePlatforms": ["Editor"],
+  "references": ["FrostIDE.UnityIntegration.Editor", "UnityEditor.TestRunner", "UnityEngine.TestRunner"],
+  "defineConstraints": ["FROST_UNITY_TEST_FRAMEWORK"],
+  "versionDefines": [{"name":"com.unity.test-framework","expression":"[1.4.0,2.0.0)","define":"FROST_UNITY_TEST_FRAMEWORK"}]
+}

@@ -106,6 +106,9 @@ LanguageBridge::LanguageBridge(Workbench& workbench)
                 },
                 Qt::QueuedConnection);
         }));
+    m_shaderSource = std::make_shared<lang::ShaderSourceService>(workbench.m_services.fs, *workbench.m_pool);
+    m_server.setShaderSourceServer(m_shaderSource);
+
     // Borrowed services outlive the workbench; its pool drains outstanding requests on shutdown.
     m_cmakeLanguage = std::make_shared<lang::CMakeLanguageService>(
         *workbench.m_pool, [fs = &workbench.m_services.fs](std::string_view path, std::size_t limit) {
@@ -321,6 +324,26 @@ sched::Task<Result<lang::Json>> LanguageBridge::request(std::string method, lang
             m_msbuildLanguage->setInput(std::move(input));
             return m_msbuildLanguage->request(std::move(method),std::move(params),token);
         }
+        if (path && syntax::shaderSourceKind(*path) != syntax::ShaderSourceKind::None &&
+            (!m_workbench.m_registeredLanguages || !m_workbench.m_registeredLanguages->service(*path))) {
+            lang::ShaderLanguageInput input;
+            input.path = *path;
+            input.projectRoot =
+                m_workbench.m_projectRoot.empty() ? std::string(io::parentPath(*path)) : m_workbench.m_projectRoot;
+            if (auto physical = m_workbench.m_services.fs.physicalPath(input.projectRoot))
+                input.physicalProjectRoot = *physical;
+            bool found = false;
+            for (const auto& [openPath, source] : openDocuments())
+                if (lang::documentKey(openPath) == lang::documentKey(*path)) {
+                    input.source = source;
+                    found = true;
+                    break;
+                }
+            if (found) {
+                m_shaderSource->setInput(std::move(input));
+                return m_shaderSource->request(std::move(method), std::move(params), token);
+            }
+        }
         if (path && lang::isCMakeSource(*path)) {
             lang::CMakeLanguageInput input;
             input.path = *path;
@@ -376,7 +399,13 @@ std::optional<text::Snapshot> LanguageBridge::snapshot() const {
 std::int64_t LanguageBridge::documentVersion() const {
     const lang::ClangdService* clangd = m_workbench.m_clangd.get();
     const std::string path = documentPath();
+    if (syntax::shaderSourceKind(path) != syntax::ShaderSourceKind::None &&
+        (!m_workbench.m_registeredLanguages || !m_workbench.m_registeredLanguages->service(path))) {
+        const auto text = snapshot();
+        return text ? static_cast<std::int64_t>(text->version()) : 0;
+    }
     if (isEngineShaderSource(path) || m_json->handles(path) || lang::isCMakeSource(path) || project::isMSBuildSource(path)) {
+
         const auto text = snapshot();
         return text ? static_cast<std::int64_t>(text->version()) : 0;
     }
@@ -681,6 +710,9 @@ ui::lang::ServerReadiness Workbench::languageReadiness(std::string_view path) {
     if (isEngineShaderSource(path))
         return m_engine && m_engine->snapshot().boolAt("connected").value_or(false) ? Readiness::Unknown : Readiness::NotRunning;
     if ((m_bridge && m_bridge->handlesJsonDocument(path)) || lang::isCMakeSource(path) || project::isMSBuildSource(path))
+        return Readiness::Unknown;
+    if (syntax::shaderSourceKind(path) != syntax::ShaderSourceKind::None &&
+        (!m_registeredLanguages || !m_registeredLanguages->service(path)))
         return Readiness::Unknown;
     if (isLuaSource(path))
         return m_lua && m_lua->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;

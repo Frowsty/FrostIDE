@@ -250,6 +250,13 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
         if (!m_unreal || !isCFamilySource(path) || snapshot.size().value()>256*1024) return {};
         return lang::unrealSpecifierCompletions(snapshot.text(),static_cast<std::size_t>(caret.value()));
     });
+    m_language->setUnityAssetFiles([this] {
+        // The inventory is owned by normal project navigation; never crawl Library or generated solutions.
+        if (!m_nav || m_projectRoot.empty() ||
+            !m_services.fs.exists(m_projectRoot + "/ProjectSettings/ProjectVersion.txt").value_or(false))
+            return std::vector<std::string>{};
+        return m_nav->projectFiles().candidates();
+    });
     m_language->setCppRenameCheck([this](std::string path, lang::LspPosition position, std::string name,
                                          lang::WorkspaceEdit required, lang::WorkspaceEdit offered,
                                          std::stop_token cancel, std::function<void(Result<void>)> done) {
@@ -281,6 +288,12 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             ++m_cppRenameGeneration;
             m_cppRenameTrustRevision.reset();
             m_cppRenameAdmission.reset();
+        }
+        if (m_dxcTrustRevision && (!trusted || trust.revision != *m_dxcTrustRevision)) {
+            m_dxcStop.request_stop();
+            ++m_dxcGeneration;
+            m_dxcTrustRevision.reset();
+            if (m_problems) m_problems->model()->setProblems(ui::DiagnosticSource::Dxc, {});
         }
         if (m_cppInspectionTrustRevision && (!trusted || trust.revision != *m_cppInspectionTrustRevision)) {
             m_cppInspectionStop.request_stop();
@@ -920,6 +933,7 @@ void Workbench::shutdown() {
     }
     m_shutDown = true;
     m_nativeAnalysisStop.request_stop();
+    m_dxcStop.request_stop();
     m_cppRenameStop.request_stop();
     m_cppInspectionStop.request_stop();
     m_cppIndexStop.request_stop();

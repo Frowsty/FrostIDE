@@ -6,6 +6,7 @@
 // editor_view_input.cpp.
 
 #include "frost/sched/task.hpp"
+#include "frost/syntax/shader_source.hpp"
 #include "frost/syntax/syntax_tree.hpp"
 #include "frost/text/editor/unicode.hpp"
 #include "frost/ui/appearance_manager.hpp"
@@ -18,12 +19,36 @@
 #include <QMetaObject>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <iterator>
 #include <mutex>
 #include <utility>
 
 namespace frost::ui {
+struct ShaderHighlightJob {
+    text::Snapshot source;
+    syntax::ShaderSourceKind kind{};
+    std::stop_source stop;
+    syntax::ShaderSourceScan result;
+    std::atomic<bool> ready{false};
+};
+namespace {
+sched::Task<void> scanShaderHighlight(std::shared_ptr<ShaderHighlightJob> job, QPointer<EditorView> view) {
+    if (!job->stop.stop_requested())
+        job->result = syntax::scanShaderSource(job->source.text(), job->kind, job->stop.get_token());
+    job->ready.store(true, std::memory_order_release);
+    if (view)
+        QMetaObject::invokeMethod(
+            view.data(),
+            [view] {
+                if (view)
+                    view->viewport()->update();
+            },
+            Qt::QueuedConnection);
+    co_return;
+}
+} // namespace
 
 struct FoldQueryJob {
     std::mutex mutex;
@@ -182,6 +207,11 @@ EditorView::EditorView(text::Document& document, std::string path, EditorService
 }
 
 EditorView::~EditorView() {
+    if (m_shaderHighlights)
+        m_shaderHighlights->stop.request_stop();
+    for (auto& task : m_shaderHighlightTasks)
+        if (task.valid())
+            task.join();
     for (const auto id : m_bookmarkAnchors)
         (void)m_document->releaseAnchor(id);
     if (m_foldJob)
@@ -203,6 +233,7 @@ void EditorView::setPath(std::string path) {
         return;
     }
     m_path = std::move(path);
+    m_highlights.valid = false;
     m_language = &text::languageForPath(m_path);
     m_editor->setLanguage(m_language);
     if (m_syntax != nullptr) {
@@ -267,12 +298,16 @@ void EditorView::setTheme(std::shared_ptr<const Theme> theme) {
             const auto* colorField = settings::findField(row, "color");
             const auto* name = nameField ? std::get_if<std::string>(nameField) : nullptr;
             const auto* color = colorField ? std::get_if<std::string>(colorField) : nullptr;
-            if (!name || !color || !(name->starts_with("Editor.") || name->starts_with("Syntax.") || name->starts_with("Semantic."))) continue;
+            if (!name || !color ||
+                !(name->starts_with("Editor.") || name->starts_with("Syntax.") || name->starts_with("Semantic.")))
+                continue;
             const auto key = findName(kColorNameIndex, *name);
             const auto rgba = parseHexColor(*color);
-            if (key && rgba && rgba->opaque()) data.colors[static_cast<std::size_t>(*key)] = *rgba;
+            if (key && rgba && rgba->opaque())
+                data.colors[static_cast<std::size_t>(*key)] = *rgba;
         }
-        if (auto scheme = Theme::fromData(std::move(data))) m_colors = EditorColors::fromTheme(*scheme);
+        if (auto scheme = Theme::fromData(std::move(data)))
+            m_colors = EditorColors::fromTheme(*scheme);
     }
     viewport()->update();
 }
@@ -844,6 +879,47 @@ void EditorView::mergeLanguageFolds() {
 }
 
 std::vector<syntax::HighlightSpan> EditorView::highlightsFor(text::ByteRange range) {
+    const auto shader = syntax::shaderSourceKind(m_path);
+    if (shader != syntax::ShaderSourceKind::None && !m_fileInfo.largeFile) {
+        const auto snapshot = m_editor->text();
+        if (snapshot.size().value() > syntax::kShaderMaxSourceBytes)
+            return {};
+        std::erase_if(m_shaderHighlightTasks, [](auto& task) {
+            if (!task.ready())
+                return false;
+            task.join();
+            return true;
+        });
+        if (!m_shaderHighlights || m_shaderHighlights->source.version() != snapshot.version() ||
+            !m_shaderHighlights->source.sharesStorageWith(snapshot) || m_shaderHighlights->kind != shader) {
+            if (m_shaderHighlights)
+                m_shaderHighlights->stop.request_stop();
+            m_shaderHighlights = std::make_shared<ShaderHighlightJob>();
+            m_shaderHighlights->source = snapshot;
+            m_shaderHighlights->kind = shader;
+            if (m_services.scheduler)
+                m_shaderHighlightTasks.push_back(m_services.scheduler->spawn(
+                    sched::Lane::Background, scanShaderHighlight(m_shaderHighlights, QPointer<EditorView>(this))));
+            else if (snapshot.size().value() <= 64 * 1024) {
+                m_shaderHighlights->result = syntax::scanShaderSource(snapshot.text(), shader);
+                m_shaderHighlights->ready.store(true, std::memory_order_release);
+            }
+            m_highlights.valid = false;
+        }
+        if (!m_shaderHighlights->ready.load(std::memory_order_acquire))
+            return {};
+        if (!m_highlights.valid || m_highlights.version != snapshot.version()) {
+            m_highlights.spans = m_shaderHighlights->result.spans;
+            m_highlights.version = snapshot.version();
+            m_highlights.valid = true;
+        }
+        std::vector<syntax::HighlightSpan> visible;
+        auto first = std::lower_bound(m_highlights.spans.begin(), m_highlights.spans.end(), range.begin,
+                                      [](const auto& span, ByteOffset begin) { return span.range.end <= begin; });
+        for (auto it = first; it != m_highlights.spans.end() && it->range.begin < range.end; ++it)
+            visible.push_back({{std::max(it->range.begin, range.begin), std::min(it->range.end, range.end)}, it->kind});
+        return visible;
+    }
     if (!m_syntax || m_fileInfo.largeFile) {
         return {};
     }

@@ -109,10 +109,16 @@ frost_add_library(app LAYER app
         src/update_check.hpp
         src/update_download.cpp
         src/update_download.hpp
+        src/unity_events.cpp
         src/unity_control.cpp
+        src/unity_tests_model.cpp
+        src/unity_tests_window.cpp
+        src/unity_tests_window.hpp
         src/unity_control.hpp
         src/scene_merge_work.cpp
         src/scene_merge_dialog.cpp
+        src/unity_yaml_merge.cpp
+        src/unity_yaml_merge_dialog.cpp
         src/git_integration.cpp
         src/git_integration.hpp
         src/engine_request_helper.cpp
@@ -208,6 +214,9 @@ frost_add_library(app LAYER app
         src/workbench_lua_refactoring.cpp
         src/workbench_structural_search.cpp
         src/workbench_lua_module.cpp
+        src/dxc_profile.cpp
+        src/dxc_profile.hpp
+        src/workbench_dxc.cpp
         src/workbench_inspection.cpp
         src/workbench_analyzer.cpp
         src/workbench_cpp_scope_fixes.cpp
@@ -225,6 +234,7 @@ frost_add_library(app LAYER app
         src/mono_held_capture.cpp
         src/mono_held_capture.hpp
         src/workbench_managed_debug.cpp
+        src/workbench_unity_debug.cpp
         src/project_edit_process.cpp
         src/workbench_project_edit.cpp
         src/unity_context.hpp
@@ -259,6 +269,8 @@ endif()
 
 if(WIN32)
     frost_add_executable(frost_held_read LAYER app SOURCES src/mono_held_read_main.cpp)
+else()
+    frost_add_executable(frost_held_read LAYER app SOURCES src/mono_held_read_linux.cpp)
 endif()
 
 function(frost_deploy_clang_platform target)
@@ -300,7 +312,7 @@ if(NOT WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${FROST_SOURCE_DIR}/assets/visualizers $<TARGET_FILE_DIR:frost>/visualizers
         VERBATIM)
-    add_dependencies(frost frost_visualizers)
+    add_dependencies(frost frost_visualizers frost_held_read)
     frost_deploy_clang_platform(frost)
     frost_stage_lua_test_bridge(frost)
     include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
@@ -364,7 +376,7 @@ if(FROST_ASAN_RUNTIME_DLL)
     target_compile_definitions(frost PRIVATE FROST_LAUNCHER_PRELOAD_ASAN_RUNTIME="${_frost_asan_runtime_name}")
 endif()
 # Building frost builds the DLL it loads.
-add_dependencies(frost frost_app_shared)
+add_dependencies(frost frost_app_shared frost_held_read)
 frost_deploy_clang_platform(frost)
 add_dependencies(frost frost-dbgeng-dap)
 # The Windows helper uses the locally installed VS MSBuild assemblies at runtime. Build it with

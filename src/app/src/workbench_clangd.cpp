@@ -467,6 +467,7 @@ void Workbench::startClangd(const std::string& root) {
     for (DocumentEditorView* view : m_editors->views()) {
         if (isCFamilySource(view->path()) && view == currentView()) {
             auto* binding = new ui::lang::EditorInsightBinding(view->editor(), {*m_bridge, *m_pool});
+            configureUnityInsights(*binding);
             binding->setCodeVisionEnabled(true);
             binding->attach(*m_clangd);
         }

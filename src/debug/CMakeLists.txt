@@ -55,6 +55,7 @@ frost_add_library(debug LAYER debug
         src/mono_protocol_session.cpp
         src/mono_transport.cpp
         src/mono_windows_peer.cpp
+        src/mono_linux_peer.cpp
         src/lua_debug_adapter.cpp
         src/lua_debug_endpoint.cpp
         src/lua_dap_transport.cpp

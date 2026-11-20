@@ -83,6 +83,14 @@ Result<std::vector<std::uint8_t>> Wire::types(std::string_view name, std::string
     return request(1, 12, p, std::move(label));
 }
 
+Result<std::vector<std::uint8_t>> Wire::typesForSource(std::string_view path, std::string label) {
+    if (path.empty() || path.size() > 4096 || path.find('\0') != path.npos || io::validUtf8Prefix(path) != path.size())
+        return fail(ErrorCode::InvalidArgument, "invalid Mono source query");
+    std::vector<std::uint8_t> p; append32(p, static_cast<std::uint32_t>(path.size()));
+    p.insert(p.end(), path.begin(), path.end()); p.push_back(0);
+    return request(1, 11, p, std::move(label));
+}
+
 Result<std::vector<std::uint8_t>> Wire::metadata(MetadataQuery query, std::uint32_t id, std::string label) {
     if (!id)
         return fail(ErrorCode::InvalidArgument, "invalid Mono metadata ID");
@@ -148,6 +156,16 @@ Result<std::vector<std::uint8_t>> Wire::breakpoint(std::uint32_t method, std::ui
     return request(15, 1, p, std::move(label));
 }
 
+Result<std::vector<std::uint8_t>> Wire::exceptions(std::uint32_t assembly, bool caught, std::string label) {
+    if (!assembly) return fail(ErrorCode::InvalidArgument, "exception scope requires an admitted assembly");
+    // Public Mono 2.58 EXCEPTION_ONLY includes subclasses and the 2.54 filtering extension bytes.
+    std::vector<std::uint8_t> p{13, 2, 2, 8};
+    append32(p, 0); // all exception types
+    p.insert(p.end(), {static_cast<std::uint8_t>(caught), 1, 1, 0, 0});
+    p.push_back(11); append32(p, 1); append32(p, assembly); // admitted assembly only
+    return request(15, 1, p, std::move(label));
+}
+
 Result<std::vector<std::uint8_t>> Wire::stepOver(std::uint32_t thread, std::string label) {
     if (!thread)
         return fail(ErrorCode::InvalidArgument, "invalid Mono thread ID");
@@ -160,7 +178,7 @@ Result<std::vector<std::uint8_t>> Wire::stepOver(std::uint32_t thread, std::stri
 }
 
 Result<std::vector<std::uint8_t>> Wire::clearEvent(std::uint8_t kind, std::uint32_t id, std::string label) {
-    if ((kind != 10 && kind != 11) || !id)
+    if ((kind != 10 && kind != 11 && kind != 13) || !id)
         return fail(ErrorCode::InvalidArgument, "invalid Mono event request");
     std::vector<std::uint8_t> p{kind};
     append32(p, id);

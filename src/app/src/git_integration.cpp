@@ -4,6 +4,7 @@
 #include "engine_integration.hpp"
 #include "scene_merge_work.hpp"
 #include "frost/document/refactoring_transaction.hpp"
+#include "unity_yaml_merge.hpp"
 
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
@@ -42,6 +43,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFontDatabase>
+#include <QFileDialog>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -1023,6 +1025,9 @@ void GitIntegration::showResolveConflictsDialog() {
     auto* semanticBtn=new QPushButton(tr("Semantic Scene Merge…"),&dialog);
     semanticBtn->setObjectName(QStringLiteral("semanticSceneMergeButton"));
     actionColumn->addWidget(semanticBtn);
+    auto* unityBtn = new QPushButton(tr("UnityYAMLMerge…"), &dialog);
+    unityBtn->setObjectName(QStringLiteral("unityYamlMergeButton"));
+    actionColumn->addWidget(unityBtn);
     actionColumn->addStretch(1);
     bodyLayout->addLayout(actionColumn);
     mainLayout->addLayout(bodyLayout, 1);
@@ -1051,13 +1056,16 @@ void GitIntegration::showResolveConflictsDialog() {
     if (list->count() > 0)
         list->setCurrentRow(0);
 
-    const auto updateDialogState = [list, acceptYoursBtn, acceptTheirsBtn, mergeBtn, semanticBtn, emptyLabel] {
+    const auto updateDialogState = [list, acceptYoursBtn, acceptTheirsBtn, mergeBtn, semanticBtn, unityBtn, emptyLabel] {
         const bool hasSelection = list->currentItem() != nullptr;
         acceptYoursBtn->setEnabled(hasSelection);
         acceptTheirsBtn->setEnabled(hasSelection);
         mergeBtn->setEnabled(hasSelection);
         const auto selected=hasSelection?list->currentItem()->data(Qt::UserRole + 1).toString():QString{};
         semanticBtn->setEnabled(hasSelection&&(selected.endsWith(QStringLiteral(".fscene"))||selected.endsWith(QStringLiteral(".fprefab"))));
+        unityBtn->setEnabled(hasSelection && (selected.endsWith(QStringLiteral(".unity")) ||
+                                              selected.endsWith(QStringLiteral(".prefab")) ||
+                                              selected.endsWith(QStringLiteral(".meta"))));
         emptyLabel->setVisible(list->count() == 0);
     };
     connect(list, &QListWidget::currentRowChanged, &dialog, [updateDialogState](int) { updateDialogState(); });
@@ -1169,6 +1177,92 @@ void GitIntegration::showResolveConflictsDialog() {
                 if (!applyResolved(absolute, relative, snapshot.report.result, source, false, true, work.tool.admitted))
                     return fail(ErrorCode::Busy,
                                 "Scene merge apply or Git staging failed; details are in notifications");
+                return {};
+            });
+        if (!owner)
+            return;
+        if (!result) {
+            report(result.error().message());
+            return;
+        }
+        if (*result) {
+            delete list->takeItem(list->row(item));
+            updateDialogState();
+        }
+    });
+    connect(unityBtn, &QPushButton::clicked, &dialog, [&] {
+        auto* item = list->currentItem();
+        if (!item || !m_controller || m_controller->busy())
+            return;
+        const auto absolute = item->data(Qt::UserRole).toString().toStdString();
+        const auto relative = item->data(Qt::UserRole + 1).toString().toStdString();
+        if (auto allowed = allowWrite(absolute); !allowed) {
+            report(allowed.error().message());
+            return;
+        }
+        const auto generation = m_projectGeneration;
+        const auto selected =
+            QFileDialog::getOpenFileName(&dialog, tr("Select installed UnityYAMLMerge"), QString{},
+                                         tr("UnityYAMLMerge (UnityYAMLMerge.exe UnityYAMLMerge);;All files (*)"));
+        if (!owner || selected.isEmpty())
+            return;
+        if (generation != m_projectGeneration || !m_controller || m_controller->busy()) {
+            report("The Git project changed while choosing UnityYAMLMerge");
+            return;
+        }
+        auto* trust = &m_workbench.m_services.trust;
+        const auto root = m_root;
+        const auto grant = trust->snapshot(root);
+        if (!grant.trusted) {
+            report("Trust this Unity project before running UnityYAMLMerge");
+            return;
+        }
+        UnityMergeWork work{m_workbench.m_services.fs,
+                            m_workbench.m_services.launcher,
+                            m_controller->service().repository().runner(),
+                            root,
+                            m_controller->info().workTree,
+                            m_controller->info().gitDir,
+                            absolute,
+                            relative,
+                            selected.toStdString(),
+                            [trust, root, revision = grant.revision] {
+                                const auto current = trust->snapshot(root);
+                                return current.trusted && current.revision == revision;
+                            }};
+        auto preview = prepareUnityMergeInBackground(&dialog, work);
+        if (!owner)
+            return;
+        if (!preview) {
+            report(preview.error().message());
+            return;
+        }
+        if (generation != m_projectGeneration) {
+            report("The Git project changed during UnityYAMLMerge");
+            return;
+        }
+        auto result = showUnityMergePreview(
+            &dialog, *preview, [&, work, generation, absolute, relative](std::string_view output) -> Result<void> {
+                if (!owner)
+                    return fail(ErrorCode::Cancelled, "Unity merge owner was closed");
+                if (generation != m_projectGeneration || !work.admitted())
+                    return fail(ErrorCode::Untrusted, "Unity merge project or trust changed");
+                auto target = m_workbench.m_services.fs.physicalPath(absolute),
+                     tool = m_workbench.m_services.fs.physicalPath(work.program),
+                     physicalRoot = m_workbench.m_services.fs.physicalPath(work.root);
+                auto status = m_workbench.m_services.fs.status(work.program);
+                if (!target || *target != preview->physicalTarget || !physicalRoot ||
+                    *physicalRoot != preview->physicalRoot || !tool || *tool != preview->physicalProgram || !status ||
+                    *status != preview->programStatus)
+                    return fail(ErrorCode::Busy, "Unity merge target or selected tool identity changed");
+                ConflictSides source;
+                source.valid = true;
+                source.generation = generation;
+                source.index = preview->index;
+                source.stages = preview->stages;
+                source.disk = preview->disk;
+                if (!applyResolved(absolute, relative, std::string(output), source))
+                    return fail(ErrorCode::Busy, "Unity merge apply or Git staging failed; see notifications");
                 return {};
             });
         if (!owner)

@@ -724,6 +724,7 @@ TEST(ShellWindow, RiderHeaderControlsAndQuickSwitchThemeCatalog) {
     EXPECT_NE(window.menus().action("refactor.rename"), nullptr);
     EXPECT_NE(window.menus().action("debug.toggleBreakpoint"), nullptr);
     EXPECT_NE(window.menus().action("debug.stepOver"), nullptr);
+    EXPECT_NE(window.menus().action("debug.attachUnity"), nullptr);
 
     // Tool window headers expose Rider's Options (⋮) menu alongside Hide.
     window.toolWindows().show(tool_windows::kProject, false);

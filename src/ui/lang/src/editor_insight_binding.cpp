@@ -55,19 +55,50 @@ struct TokensOutcome {
 struct CodeVisionOutcome {
     std::vector<fl::DocumentSymbol> symbols;
     std::vector<CodeVisionCountEntry> counts;
+    std::vector<EditorCodeVisionLens> managed;
 };
 
 // Executes Code Vision requests against clangd's index and maps their exact declarations to the
 // document snapshot used for this request. Each metric is omitted if the server has no answer.
 sched::Task<Result<CodeVisionOutcome>> codeVisionCountsTask(fl::ILspRequester& server, std::string path,
                                                             text::Snapshot snapshot, fl::PositionEncoding encoding,
-                                                            bool cppCounts, std::stop_token token) {
+                                                            bool cppCounts, UnityInsightInputs unityInputs, std::stop_token token) {
     auto symbols = co_await fl::requestDocumentSymbols(server, path, token);
     if (!symbols) {
         co_return std::unexpected(std::move(symbols.error()));
     }
     if (!cppCounts) {
-        co_return CodeVisionOutcome{std::move(*symbols), {}};
+        CodeVisionOutcome outcome{std::move(*symbols), {}, {}};
+        if (path.ends_with(".cs")) {
+            auto params = fl::textDocumentIdentifier(path);
+            if (params) {
+                auto result = co_await server.request("textDocument/codeLens", fl::Json::object().set("textDocument", std::move(*params)), token);
+                std::size_t valueQueries = 0;
+                if (result && result->isArray()) for (const auto& item : result->items()) {
+                    const auto* rangeJson = item.find("range"), *command = item.find("command");
+                    const auto range = rangeJson ? fl::parseRange(*rangeJson) : std::nullopt;
+                    if (!range || !command || command->stringAt("command") != "navigate.findUsages") continue;
+                    const auto offset = fl::fromLspPosition(snapshot, range->start, encoding);
+                    if (!offset) continue;
+                    std::string label(command->stringAt("title"));
+                    const auto* data = item.find("data");
+                    if (data && unityInputs.fs && !unityInputs.files.empty() && valueQueries++ < 8 &&
+                        !data->stringAt("field").empty() && data->stringAt("sourcePath") == path &&
+                        fl::isUnityScriptAssociation(path, data->stringAt("declaringType"))) {
+                        auto values = fl::queryUnityAssets(*unityInputs.fs, unityInputs.files, unityInputs.overlays, path, 0, token, data->stringAt("field"), "field");
+                        std::size_t count = 0; std::string sample;
+                        for (const auto& group : values.usages) for (const auto& usage : group.usages) {
+                            ++count;
+                            if (sample.size() < 120) { if (!sample.empty()) sample += "; "; sample += usage.lineText.substr(0, 60); }
+                        }
+                        if (values.recognized) label = std::to_string(count) + " serialized values" + (sample.empty() ? "" : ": " + sample);
+                        if (!values.diagnostics.empty()) label += " (index incomplete)";
+                    }
+                    if (!label.empty()) outcome.managed.push_back({snapshot.lineAt(*offset), *offset, std::move(label), "navigate.findUsages", "Unity source identity and captured original asset values; click for usages"});
+                }
+            }
+        }
+        co_return outcome;
     }
     const auto rows = fl::flattenSymbols(*symbols);
     fl::CppCodeVisionProvider provider;
@@ -98,7 +129,7 @@ sched::Task<Result<CodeVisionOutcome>> codeVisionCountsTask(fl::ILspRequester& s
         }
         entries.push_back(CodeVisionCountEntry{*offset, snapshot.lineAt(*offset), *counts});
     }
-    co_return CodeVisionOutcome{std::move(*symbols), std::move(entries)};
+    co_return CodeVisionOutcome{std::move(*symbols), std::move(entries), {}};
 }
 
 // Requests and decodes off the UI thread (the snapshot is the one the request was made for).
@@ -706,26 +737,28 @@ void EditorInsightBinding::refreshCodeVision() {
     const sched::LatestWins::Ticket ticket = m_codeVisionSlot.next();
     const fl::PositionEncoding encoding = m_services.server.encoding();
     const auto authorFn = m_authorProvider;
+    const auto unityInputs = m_unityInputs ? m_unityInputs() : UnityInsightInputs{};
     auto work = codeVisionCountsTask(m_services.server, m_path, snapshot, encoding, languageIdForPath(m_path) == "cpp",
-                                     ticket.token);
+                                     unityInputs, ticket.token);
     const QPointer<EditorInsightBinding> self(this);
     auto deliver = [](sched::Task<Result<CodeVisionOutcome>> task, QPointer<EditorInsightBinding> binding,
                       sched::LatestWins* slot, sched::LatestWins::Ticket current, text::Snapshot snap,
                       fl::PositionEncoding enc,
-                      std::function<std::string(int line)> authorProvider) -> sched::Task<void> {
+                      std::function<std::string(int line)> authorProvider, std::function<bool()> currentContext) -> sched::Task<void> {
         auto result = std::make_shared<Result<CodeVisionOutcome>>(co_await std::move(task));
         if (!*result) {
             co_return;
         }
         auto lenses = std::make_shared<std::vector<EditorCodeVisionLens>>(
             toCodeVisionLenses((*result)->symbols, snap, enc, authorProvider));
+        lenses->insert(lenses->end(), (*result)->managed.begin(), (*result)->managed.end());
         std::vector<EditorCodeVisionLens> counts = toCodeVisionCountLenses((*result)->counts);
         lenses->insert(lenses->end(), std::make_move_iterator(counts.begin()), std::make_move_iterator(counts.end()));
-        post(binding, [slot, current, lenses, textVersion = snap.version()](EditorInsightBinding& target) {
+        post(binding, [slot, current, lenses, currentContext, textVersion = snap.version()](EditorInsightBinding& target) {
             if (!slot->isCurrent(current) || !target.m_view) {
                 return;
             }
-            if (target.m_view->editor().text().version() != textVersion) {
+            if ((currentContext && !currentContext()) || target.m_view->editor().text().version() != textVersion) {
                 return;
             }
             target.m_view->setCodeVisionLenses(std::move(*lenses));
@@ -734,7 +767,7 @@ void EditorInsightBinding::refreshCodeVision() {
     };
     m_services.scheduler
         .spawn(sched::Lane::Interactive,
-               deliver(std::move(work), self, &m_codeVisionSlot, ticket, snapshot, encoding, authorFn))
+               deliver(std::move(work), self, &m_codeVisionSlot, ticket, snapshot, encoding, authorFn, unityInputs.current))
         .detach();
 }
 

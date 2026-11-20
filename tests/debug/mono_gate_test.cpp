@@ -82,5 +82,23 @@ TEST(MonoGate, ReloadDuringStepCannotAssumeItWasNotInstalled) {
     gate.close();
     EXPECT_TRUE(gate.uncleanClose());
 }
+TEST(MonoGate, OwnsExceptionRequestAndRequiresClearBeforeDispose) {
+    SessionGate gate;
+    ASSERT_TRUE(gate.handshakeComplete());
+    auto version = gate.begin(Operation::Version); ASSERT_TRUE(version);
+    ASSERT_TRUE(gate.complete(*version, true, false, 2, 58));
+    auto negotiate = gate.begin(Operation::Negotiate); ASSERT_TRUE(negotiate);
+    ASSERT_TRUE(gate.complete(*negotiate, true, true));
+    auto filter = gate.begin(Operation::Exception); ASSERT_TRUE(filter);
+    ASSERT_TRUE(gate.complete(*filter, true, false, 0, 0, 7));
+    EXPECT_EQ(gate.activeException(), 7u);
+    EXPECT_FALSE(gate.begin(Operation::Dispose));
+    EXPECT_FALSE(gate.begin(Operation::ClearException, 8));
+    auto clear = gate.begin(Operation::ClearException, 7); ASSERT_TRUE(clear);
+    ASSERT_TRUE(gate.complete(*clear, true));
+    EXPECT_FALSE(gate.activeException());
+    auto dispose = gate.begin(Operation::Dispose); ASSERT_TRUE(dispose);
+    ASSERT_TRUE(gate.complete(*dispose, true));
+}
 } // namespace
 } // namespace frost::debug::mono
