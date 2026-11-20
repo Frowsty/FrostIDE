@@ -3,6 +3,7 @@
 #include "frost/app/workbench.hpp"
 #include "frost/debug/mono_dap.hpp"
 #include "frost/debug/mono_windows_peer.hpp"
+#include "frost/debug/mono_linux_peer.hpp"
 #include "frost/settings/keys.hpp"
 #include "frost/ui/debug_controller.hpp"
 #include "frost/ui/shell/shell_window.hpp"
@@ -45,8 +46,8 @@ using MonoCompletion = std::function<void(Result<MonoAdmittedModule>)>;
 }
 void Workbench::startUnityDebug() {
     if (!m_window || !canStartLuaDebug() || m_buildService->externalLaunchAdmissionBusy()) return;
-#ifndef _WIN32
-    notify(QStringLiteral("Unity Debugger"), QStringLiteral("The verified Mono endpoint/source profile currently requires Windows. No adapter was started."), ui::NotificationKind::Error);
+#if !defined(_WIN32) && !defined(__linux__)
+    notify(QStringLiteral("Unity Debugger"), QStringLiteral("The verified Mono endpoint/source profile currently requires Windows or Linux. No adapter was started."), ui::NotificationKind::Error);
     return;
 #else
     const auto root = m_projectRoot;
@@ -69,10 +70,14 @@ void Workbench::startUnityDebug() {
         QSpinBox port(&dialog); port.setRange(0, 65535); port.setSpecialValueText(QStringLiteral("Enter known port"));
         QLineEdit assembly(&dialog), pdb(&dialog);
         QLineEdit dotnet(QString::fromStdString(m_services.settings.snapshot()->get(settings::key::toolsManagedDotnetPath)), &dialog);
+        QLineEdit verifier(QString::fromStdString(m_options.managedPdbGuardPath.empty()
+            ? (QCoreApplication::applicationDirPath() + QStringLiteral("/FrostManagedDebug/PdbGuard/PdbGuard.dll")).toStdString()
+            : m_options.managedPdbGuardPath), &dialog);
         form->addRow(QStringLiteral("Host"), &host); form->addRow(QStringLiteral("Backend"), &backend);
         form->addRow(QStringLiteral("Actual local process PID"), &pid); form->addRow(QStringLiteral("Known loopback debugger port"), &port);
         form->addRow(QStringLiteral("Loaded managed module (absolute)"), &assembly); form->addRow(QStringLiteral("Matching portable PDB (absolute)"), &pdb);
         form->addRow(QStringLiteral("Installed .NET source-verifier host"), &dotnet);
+        form->addRow(QStringLiteral("Original FrostIDE PDB verifier DLL"), &verifier);
         QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
         connect(&buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept); connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         form->addRow(&buttons);
@@ -80,7 +85,7 @@ void Workbench::startUnityDebug() {
         bool validPid = false; const auto number = pid.text().toUInt(&validPid);
         if (!validPid || !number) return;
         selected = UnityMonoDebugSelection{host.currentIndex() == 1, backend.currentIndex() == 1, number,
-            static_cast<std::uint16_t>(port.value()), assembly.text().toUtf8().toStdString(), pdb.text().toUtf8().toStdString(), dotnet.text().toUtf8().toStdString()};
+            static_cast<std::uint16_t>(port.value()), assembly.text().toUtf8().toStdString(), pdb.text().toUtf8().toStdString(), dotnet.text().toUtf8().toStdString(), verifier.text().toUtf8().toStdString()};
     }
     if (!selected) return;
     if (selected->il2cpp) { notify(QStringLiteral("Unity Debugger"), QStringLiteral("IL2CPP has no verified provider in this profile. CoreCLR and Mono wire compatibility are not assumed."), ui::NotificationKind::Error); return; }
@@ -92,8 +97,15 @@ void Workbench::startUnityDebug() {
         notify(QStringLiteral("Unity Debugger"), QStringLiteral("Select the matching live Unity Editor session before attaching."), ui::NotificationKind::Error); return;
     }
     const auto bundle = QCoreApplication::applicationDirPath();
+#ifdef _WIN32
     const auto held = (bundle + QStringLiteral("/frost_held_read.exe")).toStdString();
-    const auto guard = m_options.managedPdbGuardPath.empty() ? (bundle + QStringLiteral("/FrostManagedDebug/PdbGuard/PdbGuard.dll")).toStdString() : m_options.managedPdbGuardPath;
+    using SelectedPeer = debug::mono::WindowsPeer;
+#else
+    const auto held = (bundle + QStringLiteral("/frost_held_read")).toStdString();
+    using SelectedPeer = debug::mono::LinuxPeer;
+#endif
+    const auto guard = !selection.verifier.empty() ? selection.verifier : m_options.managedPdbGuardPath.empty()
+        ? (bundle + QStringLiteral("/FrostManagedDebug/PdbGuard/PdbGuard.dll")).toStdString() : m_options.managedPdbGuardPath;
     if (!QFileInfo::exists(QString::fromStdString(held)) || !QFileInfo::exists(QString::fromStdString(guard))) {
         notify(QStringLiteral("Unity Debugger"), QStringLiteral("The installed held-read/source-verification helper is unavailable."), ui::NotificationKind::Error); return;
     }
@@ -106,12 +118,17 @@ void Workbench::startUnityDebug() {
         const auto state = trust->snapshot(root);
         return !job->cancelled.load() && state.trusted && state.revision == revision && identityCurrent();
     };
-    auto peer = debug::mono::WindowsPeer::select(selection.pid, admitted);
+    auto peer = SelectedPeer::select(selection.pid, admitted);
     if (!peer) { notify(QStringLiteral("Unity Debugger"), QString::fromStdString(peer.error().message()), ui::NotificationKind::Error); return; }
     const auto identity = (*peer)->identity();
+#ifdef _WIN32
+    const auto processIdentity = identity.creationTime;
+#else
+    const auto processIdentity = identity.startTime;
+#endif
     QMessageBox confirmation(QMessageBox::Question, QStringLiteral("Confirm Unity Process"),
         QStringLiteral("Attach the Mono 2.58 debugger to this held process?\n\nPID: %1\nImage: %2\nCreation identity: %3\nProject: %4\nPort: %5\nModule: %6\n\nThe adapter may suspend this host. Stop disconnects; it does not kill the Unity process.")
-            .arg(identity.pid).arg(QString::fromStdString(identity.image)).arg(identity.creationTime).arg(QString::fromStdString(root)).arg(selection.port).arg(QString::fromStdString(selection.assembly)),
+            .arg(identity.pid).arg(QString::fromStdString(identity.image)).arg(processIdentity).arg(QString::fromStdString(root)).arg(selection.port).arg(QString::fromStdString(selection.assembly)),
         QMessageBox::Yes | QMessageBox::Cancel, nullptr);
     confirmation.setTextFormat(Qt::PlainText); confirmation.setDefaultButton(QMessageBox::Cancel);
     const QPointer<Workbench> owner(this); connect(this, &QObject::destroyed, &confirmation, &QDialog::reject);

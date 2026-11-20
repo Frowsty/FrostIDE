@@ -470,3 +470,12 @@ frost_add_test(app_workbench_project_language_tests QT
     LABELS integration cmake)
 target_include_directories(app_workbench_project_language_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
 target_compile_definitions(app_workbench_project_language_tests PRIVATE ${_frost_workbench_definitions})
+
+# Original helper boundary coverage; tests launch it only in an explicitly resumed test phase.
+frost_add_test(app_mono_held_reader_tests
+    SOURCES mono_held_reader_test.cpp
+    DEPS frost::app frost::io
+    LABELS integration)
+target_include_directories(app_mono_held_reader_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_mono_held_reader_tests PRIVATE FROST_HELD_READER="$<TARGET_FILE:frost_held_read>")
+add_dependencies(app_mono_held_reader_tests frost_held_read)

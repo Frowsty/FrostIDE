@@ -377,7 +377,7 @@ struct UnityMonoDebugSelection {
     bool il2cpp = false;
     std::uint32_t pid = 0;
     std::uint16_t port = 0;
-    std::string assembly, pdb, dotnet;
+    std::string assembly, pdb, dotnet, verifier;
 };
 struct ManagedDebugSelection {
     std::string project;

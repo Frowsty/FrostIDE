@@ -1311,7 +1311,7 @@ TEST(WorkbenchEngine, UnitySelectionCannotRenewRevokedTrustConsent) {
     frost::input::ActionContext context;
     context.trusted = true;
     ASSERT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Ran);
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
     EXPECT_GT(rig.trust->snapshot(dir.path()).revision, before);
 #else
     EXPECT_EQ(rig.trust->snapshot(dir.path()).revision, before); // Unsupported platform refuses before selection.

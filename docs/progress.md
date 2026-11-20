@@ -14,6 +14,12 @@ what is next, blockers and open questions for the user.
 - Actual registered semantic providers outrank the builtin source fallback. Named source/span/include/root/candidate limits and scheduler-free fallback are recorded in ADR0118. Lexer, physical source navigation/provenance, ambiguous/missing/macro limits, provider precedence and worker editor regressions are authored.
 - Independent Astra source review is requested. No builds, tests, shader/Unity feature execution, downloads/install, WSL or pushes occurred. Next: source-review corrections, additive R14 GLSL joins, then independent R19 other-language/extension branches.
 
+## 2026-11-20 R18 Linux Mono source/attach join
+
+- Linux Unity Mono attach now joins the pidfd/socket-owner verifier with the original isolated no-link held source reader. The reader walks absolute ancestry through openat/O_NOFOLLOW descriptors, requires a unique regular-file link and actual kernel read lease, brackets bounded capture/output with canonical-path/metadata/lease checks and rejects lease-break requests. Unsupported filesystems or ownership refuse the capture; the parent retains its timeout/cancellation kill policy.
+- Both platform builds now depend on the original helper. Linux staging preflights, copies and compares it. The product dialog can explicitly select the original FrostIDE PDB verifier DLL and installed .NET host; absent tools remain an explicit refusal. No binary download, proprietary adapter or new dependency was introduced.
+- Authored actual-helper exact-byte/size/cancellation coverage and Linux symlink/hardlink refusal coverage; existing product trust test includes Linux selection. Source review pending; no builds, tests, Linux/Unity or feature execution occurred. Kernel contracts checked against pidfd_open(2), F_SETLEASE(2const), proc_pid_net(5) and proc_net_tcp documentation.
+
 ## 2026-11-20 R18 Linux Mono endpoint ownership foundation
 
 - Added Linux Mono process selection with an actual pidfd, held proc directory, start-time/executable identity, same UID and network-namespace checks. Per-I/O admission requires the exact reverse established IPv4 loopback tuple's kernel socket inode in the selected process's actual descriptor table, bracketed by lifetime/identity/trust checks. Missing pidfd/procfs/ownership evidence refuses the connection.

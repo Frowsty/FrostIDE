@@ -232,6 +232,8 @@ endif()
 
 if(WIN32)
     frost_add_executable(frost_held_read LAYER app SOURCES src/mono_held_read_main.cpp)
+else()
+    frost_add_executable(frost_held_read LAYER app SOURCES src/mono_held_read_linux.cpp)
 endif()
 
 function(frost_deploy_clang_platform target)
@@ -267,7 +269,7 @@ if(NOT WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${FROST_SOURCE_DIR}/assets/visualizers $<TARGET_FILE_DIR:frost>/visualizers
         VERBATIM)
-    add_dependencies(frost frost_visualizers)
+    add_dependencies(frost frost_visualizers frost_held_read)
     frost_deploy_clang_platform(frost)
     frost_stage_lua_test_bridge(frost)
     include("${FROST_SOURCE_DIR}/cmake/FrostLuaRuntime.cmake")
