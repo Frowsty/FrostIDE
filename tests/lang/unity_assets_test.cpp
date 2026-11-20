@@ -51,3 +51,12 @@ TEST(UnityAssets, OversizedLineAndUnknownEncodingAreExplicitlyIncomplete) {
     EXPECT_TRUE(index.usages(guid).empty()); EXPECT_EQ(index.diagnostics().size(), 2);
 }
 }
+namespace {
+TEST(UnityAssets, ComponentBoundariesArePortableAcrossNativeSeparators) {
+    EXPECT_TRUE(isUnityAssetsPath("C:/Project", "c:\\project\\Assets\\A.cs", frost::io::PathStyle::Windows));
+    EXPECT_TRUE(isUnityAssetsPath("C:/Project", "C:/Project/Assets", frost::io::PathStyle::Windows));
+    EXPECT_FALSE(isUnityAssetsPath("C:/Project", "C:/Project/AssetsOther/A.cs", frost::io::PathStyle::Windows));
+    EXPECT_TRUE(isUnityAssetsPath("/project", "/project/Assets/A.cs", frost::io::PathStyle::Posix));
+    EXPECT_FALSE(isUnityAssetsPath("/project", "/project/AssetsOther/A.cs", frost::io::PathStyle::Posix));
+}
+}

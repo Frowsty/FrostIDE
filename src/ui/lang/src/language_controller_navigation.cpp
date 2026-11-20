@@ -507,7 +507,10 @@ void LanguageController::findUsagesAt(std::string path, fl::LspPosition position
         name = qs(snapshot->text(text::ByteRange{.begin = begin, .end = end}));
     }
     auto unityFiles = m_services.unityAssetFiles ? m_services.unityAssetFiles() : std::vector<std::string>{};
-    const auto offset = m_services.host.caretOffset().value();
+    std::size_t offset = 0;
+    if (m_services.host.documentPath() == path)
+        if (const auto snapshot = m_services.host.snapshot())
+            if (const auto at = fl::fromLspPosition(*snapshot, position, m_services.server.encoding())) offset = at->value();
     start<UnityUsagesOutcome>(
         m_usagesSlot,
         [&server = m_services.server, &fs = m_services.fs, open = m_services.host.openDocuments(),

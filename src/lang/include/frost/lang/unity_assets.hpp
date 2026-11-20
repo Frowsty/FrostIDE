@@ -2,6 +2,7 @@
 // Original Unity snapshots only; no generated project or Unity process is consulted.
 #pragma once
 #include "frost/io/file_system.hpp"
+#include "frost/io/path.hpp"
 #include "frost/lang/navigation.hpp"
 #include <stop_token>
 #include <cstddef>
@@ -11,6 +12,7 @@
 #include <string_view>
 #include <vector>
 namespace frost::lang {
+[[nodiscard]] bool isUnityAssetsPath(std::string_view root, std::string_view path, io::PathStyle style = io::kNativePathStyle);
 struct UnityAssetSnapshot {
     std::string path, contents;
 };

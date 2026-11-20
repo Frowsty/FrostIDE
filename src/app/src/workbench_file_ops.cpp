@@ -10,6 +10,7 @@
 #include "frost/lang/msbuild_compile_commands.hpp"
 #include "frost/lang/msvc_environment.hpp"
 #include "frost/lang/uri.hpp"
+#include "frost/lang/unity_assets.hpp"
 #include "frost/project/project_edit.hpp"
 #include "frost/ui/lang/language_controller.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
@@ -46,8 +47,7 @@ QString qs(std::string_view utf8) { return QString::fromUtf8(utf8.data(), static
 
 bool unityAssetPath(io::IFileSystem& fs, const std::string& root, std::string_view path) {
     if (root.empty() || !fs.exists(root + "/ProjectSettings/ProjectVersion.txt").value_or(false)) return false;
-    const auto key = lang::documentKey(path), assets = lang::documentKey(root + "/Assets");
-    return key == assets || key.starts_with(assets + "/");
+    return lang::isUnityAssetsPath(root, path);
 }
 } // namespace
 

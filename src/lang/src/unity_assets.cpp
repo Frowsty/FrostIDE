@@ -37,6 +37,11 @@ std::optional<std::string> number(std::string_view& s) {
     std::string result(s.substr(0, end)); s.remove_prefix(end); return result;
 }
 }
+bool isUnityAssetsPath(std::string_view root, std::string_view path, io::PathStyle style) {
+    const auto assets = documentKey(std::string(root) + "/Assets", style), key = documentKey(path, style);
+    return key == assets || (key.size() > assets.size() && key.starts_with(assets) &&
+        (key[assets.size()] == '/' || key[assets.size()] == '\\'));
+}
 void UnityAssetIndex::reset(std::span<const UnityAssetSnapshot> snapshots) {
     m_targets.clear(); m_usages.clear(); m_diagnostics.clear();
     std::size_t total = 0, files = 0;
@@ -50,7 +55,7 @@ void UnityAssetIndex::reset(std::span<const UnityAssetSnapshot> snapshots) {
         if (!meta && !yamlAsset(snapshot.path)) continue;
         std::string_view contents(snapshot.contents);
         if (contents.starts_with("\xef\xbb\xbf")) contents.remove_prefix(3);
-        if (contents.find('\0') != contents.npos || (!meta && !contents.starts_with("%YAML 1.1"))) {
+        if (!text::TextBuffer::fromUtf8(std::string(contents)) || contents.find('\0') != contents.npos || (!meta && !contents.starts_with("%YAML 1.1"))) {
             m_diagnostics.push_back(snapshot.path + ": binary or unsupported serialized encoding; index incomplete"); continue;
         }
         std::vector<std::string> guids;
