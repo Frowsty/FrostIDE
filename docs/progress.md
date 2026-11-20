@@ -18,6 +18,12 @@ Locally merged main 7db564d3 into R18 integration 63f4cbc0. Retained compiler-ba
 - Actual registered semantic providers outrank the builtin source fallback. Named source/span/include/root/candidate limits and scheduler-free fallback are recorded in ADR0118. Lexer, physical source navigation/provenance, ambiguous/missing/macro limits, provider precedence and worker editor regressions are authored.
 - Independent Astra source review is requested. No builds, tests, shader/Unity feature execution, downloads/install, WSL or pushes occurred. Next: source-review corrections, additive R14 GLSL joins, then independent R19 other-language/extension branches.
 
+## 2026-11-20 R18 IL2CPP generated C++ launch
+
+- In a trusted project, choose Run → Debug IL2CPP Generated C++ and supply the local player executable, IL2CPP native module, matching native symbol file, and generated C++ directory from the same build. Keep these files under the project root. Leave the build-time source prefix empty if the debug info already points to that directory. Otherwise enter the absolute original prefix.
+- FrostIDE passes the selected module, symbol file, and optional source map to the existing LLDB adapter. The adapter determines native symbol availability, breakpoint binding, stacks, stepping, and values. The profile sends line breakpoints only for generated C++ files under the selected directory. Managed C# mapping, managed values, and Unity Editor attach are outside this profile.
+- Authored synthetic native-launch, generated-source, C# refusal, and trust-revocation coverage. Builds, fixture execution, and real player and symbol acceptance are deferred.
+
 ## 2026-11-20 R18 explicit Unity domain reload rebind
 
 - Added a Rebind Unity Mono After Reload action retaining only ephemeral profile/consent and original held process identity. It requires a different current domain of the same editor instance/root/PID, the original unchanged trust revision, a valid authenticated event reply and non-compiling state. The selected process is independently held again and its actual start/image identity must match before user confirmation.

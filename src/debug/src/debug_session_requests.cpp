@@ -263,6 +263,8 @@ Result<void> DebugSession::pause() {
 Result<void> DebugSession::runToLine(const std::string& path, std::int64_t line) {
     if (m_state->readOnly)
         return fail(ErrorCode::Unsupported, "A dump session cannot execute a process");
+    if (m_state->sourceAllowed && !m_state->sourceAllowed(path))
+        return fail(ErrorCode::Unsupported, "This profile only supports Run to Cursor in generated C++ files");
     {
         LockGuard lock(m_state->mutex);
         if (m_state->state != DebugState::Stopped) {
@@ -539,6 +541,11 @@ std::int64_t DebugSession::readMemory(std::string_view memoryReference, std::int
 
 std::int64_t DebugSession::gotoLine(std::int64_t threadId, std::string_view path, std::int64_t line,
                                     GotoLineDone done) {
+    if (m_state->sourceAllowed && !m_state->sourceAllowed(path)) {
+        if (done)
+            done(fail(ErrorCode::Unsupported, "This profile only supports Set Next Statement in generated C++ files"));
+        return 0;
+    }
     const std::weak_ptr<State> weak = m_state;
     return m_state->send("gotoTargets", dap::gotoTargetsArguments(path, line),
                          [weak, threadId, done = std::move(done)](Result<rpc::Json> body) mutable {

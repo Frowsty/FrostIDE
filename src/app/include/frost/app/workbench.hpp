@@ -372,6 +372,9 @@ struct WorkbenchServices {
 };
 
 // Explicit local target inputs; an installed provider must independently verify process and source identity.
+struct UnityIl2cppNativeSelection {
+    std::string player, module, symbols, generatedRoot, buildSourceRoot;
+};
 struct UnityMonoDebugBinding;
 struct UnityMonoDebugSelection {
     bool player = false;
@@ -454,6 +457,7 @@ struct WorkbenchOptions {
     std::string msbuildPath;
     debug::AdapterFactory debugAdapterFactory{}; // Optional adapter override for integration tests.
     std::function<std::optional<UnityMonoDebugSelection>(std::string_view)> selectUnityDebug; // Test-only picker seam.
+    std::function<std::optional<UnityIl2cppNativeSelection>(std::string_view)> selectUnityNativeDebug; // Test picker.
     std::string managedPdbGuardPath;             // Test override; normally resolved beside the application.
     std::function<std::optional<ManagedDebugSelection>(std::string_view)> selectManagedDebug; // Test seam.
     std::function<QString(const QString&)> selectExistingProjectSource;                       // Test seam.
@@ -997,6 +1001,7 @@ private:
     void offerLuaTrust();
     void startManagedDebug();
     void startUnityDebug(bool rebind = false);
+    void startUnityIl2cppNativeDebug();
     [[nodiscard]] bool canRebindUnityDebug() const;
     void invalidateManagedDebug();
     [[nodiscard]] bool managedDebugFrameAllowed(const debug::DebugFrame& frame) const;

@@ -70,12 +70,11 @@ void Workbench::startUnityDebug(bool rebind) {
         QDialog dialog;
         const QPointer<Workbench> owner(this);
         connect(this, &QObject::destroyed, &dialog, &QDialog::reject);
-        dialog.setWindowTitle(QStringLiteral("Attach Unity Debugger"));
+        dialog.setWindowTitle(QStringLiteral("Attach Unity Mono Debugger"));
         auto* form = new QFormLayout(&dialog);
-        auto* description = new QLabel(QStringLiteral("Verified Mono 2.58 profile: one loaded module and PDB, each below 1 MiB. Source frames use verified snapshots. Domain reload discards old frames and values; use Rebind Unity Mono After Reload to reverify the same Editor and restore eligible breakpoints. IL2CPP is unavailable until a separate actual debugger contract is established."), &dialog);
+        auto* description = new QLabel(QStringLiteral("Verified Mono 2.58 profile: one loaded module and PDB, each below 1 MiB. Source frames use verified snapshots. Domain reload discards old frames and values; use Rebind Unity Mono After Reload to reverify the same Editor and restore eligible breakpoints. For a local IL2CPP player build, use Debug IL2CPP Generated C++ from the Run menu to launch with native symbols."), &dialog);
         description->setWordWrap(true); form->addRow(description);
         QComboBox host(&dialog); host.addItems({QStringLiteral("Selected Unity Editor"), QStringLiteral("Running Mono Player")});
-        QComboBox backend(&dialog); backend.addItems({QStringLiteral("Mono 2.58 verified profile"), QStringLiteral("IL2CPP (unsupported)")});
         QLineEdit pid(editor ? QString::number(editor->reportedPid) : QString{}, &dialog);
         QSpinBox port(&dialog); port.setRange(0, 65535); port.setSpecialValueText(QStringLiteral("Enter known port"));
         QLineEdit assembly(&dialog), pdb(&dialog);
@@ -83,7 +82,7 @@ void Workbench::startUnityDebug(bool rebind) {
         QLineEdit verifier(QString::fromStdString(m_options.managedPdbGuardPath.empty()
             ? (QCoreApplication::applicationDirPath() + QStringLiteral("/FrostManagedDebug/PdbGuard/PdbGuard.dll")).toStdString()
             : m_options.managedPdbGuardPath), &dialog);
-        form->addRow(QStringLiteral("Host"), &host); form->addRow(QStringLiteral("Backend"), &backend);
+        form->addRow(QStringLiteral("Host"), &host);
         form->addRow(QStringLiteral("Actual local process PID"), &pid); form->addRow(QStringLiteral("Known loopback debugger port"), &port);
         form->addRow(QStringLiteral("Loaded managed module (absolute)"), &assembly); form->addRow(QStringLiteral("Matching portable PDB (absolute)"), &pdb);
         form->addRow(QStringLiteral("Installed .NET source-verifier host"), &dotnet);
@@ -94,11 +93,11 @@ void Workbench::startUnityDebug(bool rebind) {
         if (dialog.exec() != QDialog::Accepted || !owner) return;
         bool validPid = false; const auto number = pid.text().toUInt(&validPid);
         if (!validPid || !number) return;
-        selected = UnityMonoDebugSelection{host.currentIndex() == 1, backend.currentIndex() == 1, number,
+        selected = UnityMonoDebugSelection{host.currentIndex() == 1, false, number,
             static_cast<std::uint16_t>(port.value()), assembly.text().toUtf8().toStdString(), pdb.text().toUtf8().toStdString(), dotnet.text().toUtf8().toStdString(), verifier.text().toUtf8().toStdString()};
     }
     if (!selected) return;
-    if (selected->il2cpp) { notify(QStringLiteral("Unity Debugger"), QStringLiteral("IL2CPP has no verified provider in this profile. CoreCLR and Mono wire compatibility are not assumed."), ui::NotificationKind::Error); return; }
+    if (selected->il2cpp) { notify(QStringLiteral("Unity Debugger"), QStringLiteral("Mono attach requires a Mono runtime. Use Debug IL2CPP Generated C++ to launch a local IL2CPP player with native symbols."), ui::NotificationKind::Error); return; }
     const auto selection = *selected;
     const auto liveTrust = m_services.trust.snapshot(root);
     if (m_projectRoot != root || !liveTrust.trusted || liveTrust.revision != authorized.revision || !canStartLuaDebug() || m_buildService->externalLaunchAdmissionBusy()) return;

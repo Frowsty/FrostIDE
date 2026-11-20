@@ -491,6 +491,16 @@ void Workbench::createRunService() {
     unityRebind.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startUnityDebug(true); };
     if (auto added = m_registry.add(std::move(unityRebind)); !added)
         log::warn(kLog, "Unity rebind action: {}", added.error().describe());
+    input::ActionSpec unityNative;
+    unityNative.id = "debug.unityIl2cppNative";
+    unityNative.name = "Debug IL2CPP Generated C++...";
+    unityNative.description = "Launch a provided local player with native symbols and generated C++ breakpoints";
+    unityNative.group = "Debug";
+    unityNative.executesProjectCode = true;
+    unityNative.enabled = [this](const input::ActionContext&) { return canStartLuaDebug() && !m_buildService->externalLaunchAdmissionBusy(); };
+    unityNative.handler = [this](const input::ActionContext&, const input::InvokeInfo&) { startUnityIl2cppNativeDebug(); };
+    if (auto added = m_registry.add(std::move(unityNative)); !added)
+        log::warn(kLog, "Unity native debug action: {}", added.error().describe());
     input::ActionSpec attachProcess;
     attachProcess.id = "debug.attachToProcess";
     attachProcess.name = "Attach to Process...";

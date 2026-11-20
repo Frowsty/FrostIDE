@@ -274,6 +274,8 @@ struct DebugSessionOptions {
     std::function<Result<void>()> launchAdmission{};
     // Recheck captured trust roots at the actual writer for symbol/source/visualizer configuration.
     std::function<Result<void>()> inspectionAdmission{};
+    // Optional worker-safe source admission for line breakpoints and source cursor commands.
+    std::function<bool(std::string_view)> sourceAllowed{};
 };
 
 /*

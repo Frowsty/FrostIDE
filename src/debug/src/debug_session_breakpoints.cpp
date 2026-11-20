@@ -49,6 +49,10 @@ void DebugSession::State::sendBreakpoints(const std::string& path) {
             .logMessage = line.logMessage,
         });
     }
+    if (sourceAllowed && !sourceAllowed(path)) {
+        breakpointsAnswered(activeLines, fail(ErrorCode::Unsupported, "This profile only binds line breakpoints in generated C++ files"));
+        return;
+    }
     send("setBreakpoints", dap::setBreakpointsArguments(path, sourceBreakpoints),
          [weak = weak(), activeLines](Result<rpc::Json> body) {
              if (const auto self = weak.lock()) {
