@@ -43,6 +43,13 @@ Result<std::vector<std::string>> Workbench::createSourceTemplate(const SourceTem
     const auto active = m_build ? m_build->activeConfigurationIndex() : std::nullopt;
     const auto cmake = m_cmake ? m_cmake->sharedService() : nullptr;
     const auto model = m_cmake ? m_cmake->shownModel() : nullptr;
+    if(spec.file.kind==lang::FileTemplateKind::FrostComponent) {
+        if(!model||spec.newCMakeTarget||spec.cmakeTargetId.empty()||!spec.vcxprojPath.empty())
+            return fail(ErrorCode::Unsupported,"Choose a configured FrostEngine CMake executable for component registration");
+        const auto target=std::ranges::find(model->targets,spec.cmakeTargetId,&project::CMakeTarget::id);
+        if(target==model->targets.end()||target->type!=project::CMakeTargetType::Executable||target->generatorProvided)
+            return fail(ErrorCode::Unsupported,"Component registration requires direct source membership in an executable; library objects may be discarded");
+    }
     const auto profile = cmake ? cmake->profileGeneration() : 0;
     const auto msbuildSetting = m_services.settings.snapshot()->get(settings::key::toolsMsbuildPath);
     if ((model && !spec.newCMakeTarget && spec.cmakeTargetId.empty()) || (solution && spec.vcxprojPath.empty()))

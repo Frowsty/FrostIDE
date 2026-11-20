@@ -22,6 +22,9 @@
 
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
+#include "engine_integration.hpp"
+#include "engine_json_schema_reader.hpp"
+#include "engine_shader_language_requester.hpp"
 #include "language_bridge.hpp"
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -75,7 +78,32 @@ ByteOffset mapThrough(ByteOffset offset, std::span<const lang::ByteEdit> edits) 
 LanguageBridge::LanguageBridge(Workbench& workbench)
     : m_workbench(workbench), m_applier(static_cast<lang::IWorkspaceDocuments&>(*this), workbench.m_services.fs,
                                         lang::PositionEncoding::Utf16) {
-    m_server.setJsonServer(m_json);
+    m_server.setJsonServer(m_json,[schemas=m_json](std::string_view path){return schemas->handles(path);});
+    m_json->setDeclarationReader([fs=&workbench.m_services.fs](std::string_view root,std::string_view path) {
+        return readEngineSchemaDeclaration(*fs,root,path);
+    });
+    if (!workbench.m_resourceGovernor)
+        workbench.m_resourceGovernor = std::make_shared<sched::ResourceGovernor>();
+    m_server.setShaderServer(std::make_shared<EngineShaderLanguageRequester>(
+        *workbench.m_pool, workbench.m_resourceGovernor,
+        [self = QPointer<Workbench>(&workbench)](std::string method, lang::Json params, std::stop_token stop,
+                                                 EngineShaderLanguageRequester::Reply reply) {
+            if (!self) {
+                reply(fail(ErrorCode::Cancelled));
+                return;
+            }
+            QMetaObject::invokeMethod(
+                self.data(),
+                [self, method = std::move(method), params = std::move(params), stop,
+                 reply = std::move(reply)]() mutable {
+                    if (!self || !self->m_engine) {
+                        reply(fail(ErrorCode::Busy, "Pair a trusted engine for GLSL language features"));
+                        return;
+                    }
+                    self->m_engine->requestShaderLanguage(std::move(method), std::move(params), stop, std::move(reply));
+                },
+                Qt::QueuedConnection);
+        }));
     // Borrowed services outlive the workbench; its pool drains outstanding requests on shutdown.
     m_cmakeLanguage = std::make_shared<lang::CMakeLanguageService>(
         *workbench.m_pool, [fs = &workbench.m_services.fs](std::string_view path, std::size_t limit) {
@@ -85,8 +113,13 @@ LanguageBridge::LanguageBridge(Workbench& workbench)
 }
 
 LanguageBridge::~LanguageBridge() = default;
+void LanguageBridge::setActivePath(std::string_view path) {
+    m_server.setActivePath(path);
+    if (m_workbench.m_engine)
+        m_workbench.m_engine->scheduleShaderDiagnostics(std::string(path));
+}
 std::vector<lang::LiveDiagnostic> LanguageBridge::jsonDiagnostics(std::string_view path) const {
-    if (!lang::hasBundledJsonSchema(path))
+    if (!m_json->handles(path))
         return {};
     const auto* view = m_workbench.m_editors->find(path);
     if (!view)
@@ -95,7 +128,8 @@ std::vector<lang::LiveDiagnostic> LanguageBridge::jsonDiagnostics(std::string_vi
     return m_json->diagnostics(path);
 }
 void Workbench::syncJsonDocument(DocumentEditorView& view) {
-    if (!m_bridge || !lang::hasBundledJsonSchema(view.path()))
+    if(m_engine)m_engine->documentEdited(view.path(),view.editor().editor().text().version());
+    if (!m_bridge || !m_bridge->handlesJsonDocument(view.path()))
         return;
     lang::FileDiagnostics set;
     set.file = view.path();
@@ -274,7 +308,7 @@ std::optional<text::Snapshot> LanguageBridge::snapshot() const {
         return std::nullopt;
     }
     auto text = editor->editor().text();
-    if (lang::hasBundledJsonSchema(documentPath()))
+    if (m_json->handles(documentPath()))
         m_json->updateDocument(documentPath(), text);
     return text;
 }
@@ -282,7 +316,7 @@ std::optional<text::Snapshot> LanguageBridge::snapshot() const {
 std::int64_t LanguageBridge::documentVersion() const {
     const lang::ClangdService* clangd = m_workbench.m_clangd.get();
     const std::string path = documentPath();
-    if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path)) {
+    if (isEngineShaderSource(path) || m_json->handles(path) || lang::isCMakeSource(path)) {
         const auto text = snapshot();
         return text ? static_cast<std::int64_t>(text->version()) : 0;
     }
@@ -300,6 +334,10 @@ std::string LanguageBridge::structureIdentity() const {
     const auto* view = m_workbench.currentView();
     const std::string path = documentPath();
     const auto key = reinterpret_cast<std::uintptr_t>(view);
+    if(ui::lang::languageIdForPath(path)=="json")return std::format("{}:json:{}",key,m_json->schemaGeneration());
+    if (isEngineShaderSource(path))
+        return std::format("{}:{}", key,
+                           m_workbench.m_engine ? m_workbench.m_engine->shaderLanguageIdentity() : "unavailable");
     if (isManagedSource(path) && m_workbench.m_managed)
         return std::format("{}:{}:{}:{}", key, reinterpret_cast<std::uintptr_t>(m_workbench.m_managed.get()),
                            m_workbench.m_managed->restarts(), static_cast<int>(m_workbench.m_managed->state()));
@@ -568,7 +606,10 @@ sched::Task<void> readCompileDatabaseTask(io::IFileSystem* fs, std::string datab
 
 ui::lang::ServerReadiness Workbench::languageReadiness(std::string_view path) {
     using Readiness = ui::lang::ServerReadiness;
-    if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path))
+    if (isEngineShaderSource(path))
+        return m_engine && m_engine->snapshot().boolAt("connected").value_or(false) ? Readiness::Unknown
+                                                                                    : Readiness::NotRunning;
+    if ((m_bridge && m_bridge->handlesJsonDocument(path)) || lang::isCMakeSource(path))
         return Readiness::Unknown;
     if (isLuaSource(path))
         return m_lua && m_lua->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;

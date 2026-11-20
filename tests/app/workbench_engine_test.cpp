@@ -6,6 +6,8 @@
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/frost_engine_lua.hpp"
 #include "frost/lang/lua_service.hpp"
+#include "frost/lang/json_schema.hpp"
+#include "frost/lang/completion.hpp"
 #include "frost/ui/debug_controller.hpp"
 #include "frost/ui/run_controller.hpp"
 #include "frost/ui/shell/main_toolbar.hpp"
@@ -14,10 +16,19 @@
 #include "frost/ui/toolwindows/engine_console.hpp"
 
 #include "engine_request_helper.hpp"
+#include "engine_json_reference_provider.hpp"
+#include "engine_json_schema_reader.hpp"
 #include "engine_session_peer.hpp"
+#include "file_transaction_replace_testing.hpp"
 #include "workbench_rig.hpp"
+#include <QCheckBox>
 #include <QLabel>
+#include <QDialog>
+#include <QComboBox>
+#include <QLineEdit>
+#include <QTimer>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QTreeWidget>
 
 #include <algorithm>
@@ -221,6 +232,83 @@ bool runReservationReleased(WorkbenchRig& rig) {
     const auto state = rig.workbench->engineState();
     return state.boolAt("launchReserved") == false && state.unsignedAt("ownedRunId") == 0 &&
            !rig.workbench->runController()->running();
+}
+
+// Labelled socket-peer regression: native restart journal replay is real; the scripted peer
+// supplies the retained disconnected-lease receipt only after observing the full settled state.
+TEST(WorkbenchEngine, ExplicitRestartRecoverySettlesNativeJournalBeforeStrandedLeaseRequest) {
+    WorkDir dir("engine-stranded-native-journal");
+    dir.write("project/Game.frostproj", "{}");
+    dir.write("project/Assets/Old.lua", "return 1\n");
+    dir.write("project/Assets/Old.lua.fmeta", "stable-handle");
+    dir.write("project/Reference.json", "before");
+    auto options = peerOptions(dir);
+    options.workbench.refactoringStateDirectory = dir.join("private-refactoring");
+    bool interrupted = false;
+    {
+        WorkbenchRig first(dir, options);
+        ASSERT_TRUE(first.trust->trust(dir.join("project")));
+        frost::document::RefactoringPlan plan;
+        plan.label = "Asset move interrupted after decision";
+        plan.disk.push_back({dir.join("project/Reference.json"), "before", "after"});
+        plan.renames.push_back({dir.join("project/Assets/Old.lua"), dir.join("project/Assets/New.lua"), "return 1\n"});
+        plan.renames.push_back(
+            {dir.join("project/Assets/Old.lua.fmeta"), dir.join("project/Assets/New.lua.fmeta"), "stable-handle"});
+        frost::io::detail::setReplacementObserver(
+            [](void* data, frost::io::detail::ReplacementBoundary boundary,
+               const frost::io::FileReplacementReceipt& receipt) {
+                if (boundary != frost::io::detail::ReplacementBoundary::OriginalRetired ||
+                    !receipt.images.targetPath.ends_with("Reference.json") || *static_cast<bool*>(data))
+                    return;
+                *static_cast<bool*>(data) = frost::io::realFileSystem()
+                                                .writeFileAtomic(receipt.images.targetPath, "foreign interruption")
+                                                .has_value();
+            },
+            &interrupted);
+        const auto reset = qScopeGuard([] { frost::io::detail::setReplacementObserver(nullptr, nullptr); });
+        auto pending = first.workbench->applyRefactoring(plan);
+        ASSERT_TRUE(pending);
+        ASSERT_EQ(pending->status, frost::document::RefactoringStatus::PendingRecovery);
+        ASSERT_TRUE(interrupted);
+    }
+    EngineSessionPeer peer(dir.join("project"));
+    advertise(dir, peer);
+    peer.hold("assets.recover-move-plan");
+    WorkbenchRig restarted(dir, options);
+    ASSERT_TRUE(openTrusted(restarted, dir.join("project")));
+    ASSERT_TRUE(pairPeer(restarted, peer));
+    auto blocked = restarted.workbench->recoverRefactoringJournal();
+    ASSERT_FALSE(blocked);
+    EXPECT_TRUE(restarted.workbench->refactoringPending());
+    EXPECT_TRUE(peer.requests("assets.recover-move-plan").empty());
+    // The fixture owns the explicit foreign obstruction. Recovery never guesses it is safe to erase.
+    ASSERT_TRUE(frost::io::realFileSystem().removeFile(dir.join("project/Reference.json")));
+    std::atomic<bool> sawCompleteImages{false};
+    std::jthread oracle([&] {
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (peer.requests("assets.recover-move-plan").empty() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(5ms);
+        sawCompleteImages =
+            dir.read("project/Reference.json") == "after" && dir.read("project/Assets/New.lua") == "return 1\n" &&
+            dir.read("project/Assets/New.lua.fmeta") == "stable-handle" &&
+            !frost::io::realFileSystem().exists(dir.join("project/Assets/Old.lua")).value_or(true) &&
+            !frost::io::realFileSystem().exists(dir.join("project/Assets/Old.lua.fmeta")).value_or(true);
+        peer.release("assets.recover-move-plan", Json::object()
+                                                     .set("recovered", true)
+                                                     .set("verified", true)
+                                                     .set("refreshed", true)
+                                                     .set("applied", true)
+                                                     .set("lease", "stranded-lease")
+                                                     .set("receipt", "retained-receipt")
+                                                     .set("handle", 18446744073709551615ULL)
+                                                     .set("path", "Assets/New.lua"));
+    });
+    auto recovered = restarted.workbench->recoverRefactoringJournal();
+    oracle.join();
+    ASSERT_TRUE(recovered) << (recovered ? "" : recovered.error().describe());
+    EXPECT_TRUE(sawCompleteImages.load());
+    EXPECT_FALSE(restarted.workbench->refactoringPending());
+    EXPECT_EQ(peer.requests("assets.recover-move-plan").size(), 1);
 }
 
 TEST(WorkbenchEngine, ManagedSelectionRechecksSharedOwnerBeforePreparation) {
@@ -971,6 +1059,117 @@ TEST(WorkbenchEngine, OwnedAuthenticationDeadlineIncludesAStalledChallengeAndRel
     EXPECT_EQ(peer.authenticated.load(), 0U);
 }
 
+TEST(WorkbenchEngine, QueuedGeneratedNativeExportCannotLaunchAfterTrustOrProjectInvalidation) {
+    for (const bool revokeTrust : {true, false}) {
+        WorkDir dir("engine-export-final-admission");
+        dir.write("project/Game.frostproj", "{}");
+        dir.write("other/Other.frostproj", "{}");
+        const auto program = editorProgram(dir);
+        EngineRunLauncher launcher;
+        WorkbenchRig rig(dir, runOptions(dir, launcher, program));
+        ASSERT_TRUE(openTrusted(rig, dir.join("project")));
+        ASSERT_TRUE(waitForConfiguration(rig));
+        const auto& configs = rig.workbench->runController()->configurations().all();
+        const auto selected =
+            std::ranges::find_if(configs, [](const auto& config) { return config.id.starts_with("engine.export."); });
+        ASSERT_NE(selected, configs.end());
+        const auto exportId = selected->id;
+        auto entered = std::make_shared<std::promise<void>>();
+        auto enteredFuture = entered->get_future();
+        auto released = std::make_shared<std::promise<void>>();
+        auto releasedFuture = released->get_future().share();
+        frost::run::RunConfiguration blocker;
+        blocker.id = "dispatcher-gate";
+        blocker.name = "dispatcher gate";
+        blocker.program = program;
+        frost::run::RunHandlers handlers;
+        handlers.launchAdmission = [entered, releasedFuture]() -> frost::Result<void> {
+            entered->set_value();
+            // Bounded failure also guarantees fixture teardown cannot hang on an early ASSERT.
+            if (releasedFuture.wait_for(5s) != std::future_status::ready)
+                return frost::fail(frost::ErrorCode::Timeout, "fixture gate not released");
+            return frost::fail(frost::ErrorCode::Cancelled, "fixture dispatcher gate completed");
+        };
+        auto* manager = rig.workbench->runManager();
+        ASSERT_NE(manager, nullptr);
+        ASSERT_TRUE(manager->start(blocker, std::move(handlers)));
+        ASSERT_EQ(enteredFuture.wait_for(3s), std::future_status::ready);
+        ASSERT_TRUE(rig.workbench->runController()->runConfiguration(exportId));
+        if (revokeTrust)
+            ASSERT_TRUE(rig.trust->untrust(dir.join("project")));
+        else
+            ASSERT_TRUE(openTrusted(rig, dir.join("other")));
+        released->set_value();
+        ASSERT_TRUE(manager->waitForIdle(5s));
+        EXPECT_TRUE(launcher.runs.launches().empty())
+            << "queued export must reach production final admission before launch";
+    }
+}
+TEST(WorkbenchEngine, UnexpectedDisconnectClearsMeasuredLensesAndPendingRequestBeforeReplacement) {
+    WorkDir dir("engine-performance-loss");
+    dir.write("project/Game.frostproj", "{}");
+    dir.write("project/main.cpp", "abc");
+    EngineSessionPeer first(dir.join("project"));
+    EngineSessionPeer replacement(dir.join("project"), 'b');
+    first.performanceTools = replacement.performanceTools = true;
+    const auto report =
+        Json::object()
+            .set("frame", Json::object().set("frames", 2).set("fps", 50.0))
+            .set("profiler", Json::object()
+                                 .set("sourceProvenance", "macro-source-location/v1")
+                                 .set("sourceScopes",
+                                      Json::array().push(
+                                          Json::object()
+                                              .set("name", "measured-site")
+                                              .set("file", dir.join("project/main.cpp"))
+                                              .set("function", "compiled-function")
+                                              .set("line", 1)
+                                              .set("sourceSha256",
+                                                   "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+                                              .set("calls", 2)
+                                              .set("msPerFrame", 1.0)
+                                              .set("callsPerFrame", 1.0)
+                                              .set("averageMs", 1.0)
+                                              .set("maxMs", 1.0))));
+    first.result("stats.get", report);
+    replacement.result("stats.get", report);
+    advertise(dir, first);
+    advertise(dir, replacement);
+    WorkbenchRig rig(dir, peerOptions(dir));
+    ASSERT_TRUE(openTrusted(rig, dir.join("project")));
+    ASSERT_TRUE(pairPeer(rig, first));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project/main.cpp")));
+    auto* view = rig.workbench->currentView();
+    ASSERT_NE(view, nullptr);
+    const auto hasLens = [&] {
+        return std::ranges::any_of(view->editor().codeVisionLenses(),
+                                   [](const auto& lens) { return lens.actionId == "engine.performance"; });
+    };
+    ASSERT_TRUE(rig.workbench->refreshEnginePerformance());
+    ASSERT_TRUE(waitFor(hasLens, 5s));
+    rig.window->toolWindows().show("enginePerformance");
+    auto* panel = rig.window->toolWindows().content("enginePerformance");
+    ASSERT_NE(panel, nullptr);
+    auto* tree = panel->findChild<QTreeWidget*>(QStringLiteral("enginePerformanceTree"));
+    auto* automatic = panel->findChild<QCheckBox*>();
+    ASSERT_NE(tree, nullptr);
+    ASSERT_NE(automatic, nullptr);
+    ASSERT_GT(tree->topLevelItemCount(), 0);
+    automatic->setChecked(true);
+    first.hold("stats.get");
+    ASSERT_TRUE(rig.workbench->refreshEnginePerformance());
+    ASSERT_TRUE(waitFor([&] { return first.requests("stats.get").size() >= 2; }, 3s));
+    first.stop(); // Unexpected transport loss, rather than the explicit Disconnect action.
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->engineState().boolAt("connected") == false; }, 5s));
+    EXPECT_FALSE(hasLens());
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+    EXPECT_FALSE(automatic->isChecked());
+    EXPECT_FALSE(rig.workbench->engineState().boolAt("performanceAvailable").value_or(true));
+    ASSERT_TRUE(pairPeer(rig, replacement));
+    ASSERT_TRUE(rig.workbench->refreshEnginePerformance()) << "lost pending request must not leave Busy set";
+    ASSERT_TRUE(waitFor(hasLens, 5s));
+    EXPECT_EQ(replacement.requests("stats.get").size(), 1);
+}
 TEST(WorkbenchEngine, RePairDropsQueuedReplyFromPreviousAuthenticatedInstance) {
     WorkDir dir("engine-repair-stale-result");
     dir.write("project/Game.frostproj", "{}");
@@ -1256,4 +1455,153 @@ TEST(WorkbenchEngine, WorkerLaunchLatchesExactProjectFileAndRefusesSameRootAlias
     EXPECT_EQ(*std::next(logLevel), "warn");
 }
 
+TEST(WorkbenchEngineDocuments, CapturedByteCoordinatesDirtyRepliesAndDisconnectAreRevocable) {
+    WorkDir dir("engine-document-dirty-replies");
+    dir.write("project/Game.frostproj","{}");
+    const std::string source="{\n\"Note\":\"\xc3\xa5\", \"Program\":\"bad\"\n}";
+    dir.write("project/Assets/test.fmat",source);
+    EngineSessionPeer peer(dir.join("project"));peer.enableDocumentTools();
+    const auto schemas=frost::rpc::parseJson(R"({"protocol":"frostengine.document-schemas","version":1,"schemas":[{"extension":".fmat","serializer":"MaterialSerializer","schema":{"type":"object","properties":{"Program":{"type":"string"}}}}]})").value();
+    peer.result("document.schemas",schemas);
+    peer.hold("document.validate");advertise(dir,peer);
+    WorkbenchRig rig(dir,peerOptions(dir));ASSERT_TRUE(openTrusted(rig,dir.join("project")));ASSERT_TRUE(pairPeer(rig,peer));
+    ASSERT_TRUE(waitFor([&]{return peer.replies("document.schemas")==1;},3s));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project/Assets/test.fmat")));
+    const auto invoke=[&](const char* name) {
+        auto id=rig.workbench->registry().find(name);EXPECT_TRUE(id);if(!id)return;
+        frost::input::ActionContext context;context.trusted=true;
+        EXPECT_EQ(rig.workbench->registry().tryInvoke(*id,context),frost::input::InvokeResult::Ran);
+    };
+    const auto countEngine=[&] {
+        const auto& rows=rig.workbench->problems()->model()->problems();
+        return std::ranges::count_if(rows,[](const auto& row){return row.source==frost::ui::DiagnosticSource::Engine;});
+    };
+    auto reply=frost::rpc::parseJson(R"({"protocol":"frostengine.document-validation","version":1,"path":"Assets/test.fmat","valid":false,"errors":1,"warnings":0,"issues":[{"severity":"error","code":"actual","message":"Actual serializer finding","location":{"asset":"Assets/test.fmat","jsonPath":"$.Program"}}]})").value();
+    auto location=Json::object().set("asset","Assets/test.fmat").set("jsonPath","$.Program")
+        .set("byte",static_cast<std::uint64_t>(source.find("\"bad\"")+1));
+    auto issue=Json::object().set("severity","error").set("code","actual").set("message","Actual serializer finding").set("location",location);
+    reply.set("issues",Json::array({issue}));
+    invoke("engine.document.validate");ASSERT_TRUE(waitFor([&]{return peer.requests("document.validate").size()==1;},3s));
+    // Copy the request before dereferencing: requests() returns an owned protocol snapshot.
+    auto captured=peer.requests("document.validate");ASSERT_EQ(captured.front().find("params")->stringAt("source"),source);
+    peer.release("document.validate",reply);ASSERT_TRUE(waitFor([&]{return countEngine()==1;},3s));
+    const auto& rows=rig.workbench->problems()->model()->problems();
+    auto row=std::ranges::find(rows,frost::ui::DiagnosticSource::Engine,&frost::ui::Problem::source);ASSERT_NE(row,rows.end());
+    EXPECT_EQ(row->diagnostic.line,2);EXPECT_EQ(row->diagnostic.column,23);
+    invoke("engine.document.validate");ASSERT_TRUE(waitFor([&]{return peer.requests("document.validate").size()==2;},3s));
+    ASSERT_TRUE(rig.workbench->currentView()->editor().typeText(" "));
+    ASSERT_TRUE(waitFor([&]{return countEngine()==0;},3s));
+    peer.release("document.validate",reply);ASSERT_TRUE(waitFor([&]{return peer.replies("document.validate")==2;},3s));
+    ASSERT_TRUE(waitFor([&]{return hasStatus(rig.window->toolWindows().content("frostEngine"),QStringLiteral("stale engine validation was discarded"));},3s));
+    EXPECT_EQ(countEngine(),0);EXPECT_EQ(dir.read("project/Assets/test.fmat"),source);
+    invoke("engine.document.validate");ASSERT_TRUE(waitFor([&]{return peer.requests("document.validate").size()==3;},3s));
+    peer.release("document.validate",reply);ASSERT_TRUE(waitFor([&]{return countEngine()==1;},3s));
+    peer.stop();ASSERT_TRUE(waitFor([&]{return !rig.workbench->engineState().boolAt("connected").value_or(false);},3s));
+    EXPECT_EQ(countEngine(),0);
+    EngineSessionPeer replacement(dir.join("project"),'b');replacement.enableDocumentTools();
+    replacement.result("document.schemas",schemas);advertise(dir,replacement);
+    ASSERT_TRUE(rig.workbench->refreshEngineInstances());ASSERT_TRUE(pairPeer(rig,replacement));
+    // A replacement authenticated identity must obtain its own export after loss.
+    EXPECT_TRUE(waitFor([&]{return replacement.requests("document.schemas").size()==1;},3s));
+}
+TEST(WorkbenchEngineTemplates, DialogUsesNarrowGeneratorAndChangedTrustPreventsSend) {
+    WorkDir dir("engine-template-dialog");dir.write("project/Game.frostproj","{}");
+    EngineSessionPeer peer(dir.join("project"));peer.enableDocumentTools();
+    peer.result("document.schemas",Json::object().set("protocol","frostengine.document-schemas").set("version",1).set("schemas",Json::array()));
+    peer.result("document.create-template",Json::object().set("path","Assets/Materials/Actual.fmat").set("handle",123));
+    advertise(dir,peer);WorkbenchRig rig(dir,peerOptions(dir));
+    ASSERT_TRUE(openTrusted(rig,dir.join("project")));ASSERT_TRUE(pairPeer(rig,peer));
+    auto id=rig.workbench->registry().find("engine.template.new");ASSERT_TRUE(id);
+    bool revoke=false;int visits=0;QTimer answer;answer.setInterval(1);
+    QObject::connect(&answer,&QTimer::timeout,[&] {
+        auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if(!dialog||dialog->objectName()!=QStringLiteral("engineAssetTemplateDialog"))return;
+        ++visits;answer.stop();
+        auto* kind=dialog->findChild<QComboBox*>("engineAssetTemplateKind");
+        auto* path=dialog->findChild<QLineEdit*>("engineAssetTemplatePath");
+        EXPECT_NE(kind,nullptr);EXPECT_NE(path,nullptr);
+        if(kind)kind->setCurrentText("Material");if(path)path->setText("Assets/Materials/Actual.fmat");
+        if(revoke)EXPECT_TRUE(rig.trust->untrust(dir.join("project")));
+        dialog->accept();
+    });
+    QTimer deadline;deadline.setSingleShot(true);deadline.setInterval(5000);
+    QObject::connect(&deadline,&QTimer::timeout,[] {
+        ADD_FAILURE()<<"Engine template dialog did not settle";
+        if(auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget()))dialog->reject();
+    });
+    frost::input::ActionContext context;context.trusted=true;answer.start();deadline.start();
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*id,context),frost::input::InvokeResult::Ran);deadline.stop();
+    ASSERT_TRUE(waitFor([&]{return peer.requests("document.create-template").size()==1;},3s));
+    const auto requests=peer.requests("document.create-template");const auto* params=requests.front().find("params");ASSERT_NE(params,nullptr);
+    EXPECT_EQ(params->stringAt("kind"),"Material");EXPECT_EQ(params->stringAt("path"),"Assets/Materials/Actual.fmat");
+    EXPECT_EQ(params->find("overwrite"),nullptr);EXPECT_EQ(params->find("unique"),nullptr);
+    revoke=true;answer.start();deadline.start();
+    EXPECT_EQ(rig.workbench->registry().tryInvoke(*id,context),frost::input::InvokeResult::Ran);deadline.stop();
+    EXPECT_EQ(visits,2);EXPECT_EQ(peer.requests("document.create-template").size(),1U);
+}
+TEST(WorkbenchEngineDocuments, ActualTableSchemaReplyFeedsCapturedRowProblems) {
+    WorkDir dir("engine-table-schema-profile");dir.write("project/Game.frostproj","{}");
+    const std::string source=R"({"Schema":"Assets/Weapon.fschema","Rows":[{"Damage":101}]})";
+    dir.write("project/Assets/Weapons.ftable",source);
+    EngineSessionPeer peer(dir.join("project"));peer.enableDocumentTools();
+    peer.result("document.schemas",Json::object().set("protocol","frostengine.document-schemas").set("version",1).set("schemas",Json::array()));
+    peer.result("document.table-schema",frost::rpc::parseJson(R"({"protocol":"frostengine.table-schema","version":1,"path":"Assets/Weapons.ftable","reference":"Assets/Weapon.fschema","schemaInfo":{"resolveError":"","columns":[{"name":"Damage","type":"Int","declaredIn":"Assets/BaseWeapon.fschema","default":1,"definition":{"Name":"Damage","Type":"Int","Max":100}}]}})").value());
+    advertise(dir,peer);WorkbenchRig rig(dir,peerOptions(dir));ASSERT_TRUE(openTrusted(rig,dir.join("project")));ASSERT_TRUE(pairPeer(rig,peer));
+    ASSERT_TRUE(waitFor([&]{return peer.replies("document.schemas")==1;},3s));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project/Assets/Weapons.ftable")));
+    auto id=rig.workbench->registry().find("engine.document.tableSchema");ASSERT_TRUE(id);
+    frost::input::ActionContext context;context.trusted=true;
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*id,context),frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&]{
+        const auto& rows=rig.workbench->problems()->model()->problems();
+        return std::ranges::any_of(rows,[](const auto& row){return row.source==frost::ui::DiagnosticSource::Live&&row.diagnostic.message.find("maximum")!=std::string::npos;});
+    },3s));
+    const auto captured=peer.requests("document.table-schema");ASSERT_EQ(captured.size(),1U);
+    ASSERT_NE(captured.front().find("params"),nullptr);
+    EXPECT_EQ(captured.front().find("params")->stringAt("source"),source);
+    EXPECT_EQ(dir.read("project/Assets/Weapons.ftable"),source);
+}
+TEST(EngineJsonReferences, ActualIndexOwnsEveryTypedCompletionAndExactHandleFallback) {
+    WorkDir dir("engine-json-reference-index");frost::engine::ProjectContent content;content.directory=dir.path();
+    content.assets={{{13957500353814115645ULL},"Assets/Texture.png","Texture2D"},{{42},"Assets/Material.fmat","Material"}};
+    auto index=frost::engine::AssetIndex::create(std::move(content));ASSERT_TRUE(index);
+    auto provider=frost::app::makeEngineJsonAssetProvider(std::make_shared<const frost::engine::AssetIndex>(std::move(*index)));
+    auto actual=provider.resolve(Json(13957500353814115645ULL));ASSERT_TRUE(actual);EXPECT_EQ(actual->handle,13957500353814115645ULL);
+    actual=provider.resolve(Json::object().set("Handle",99).set("Path","Texture.png"));ASSERT_TRUE(actual);EXPECT_EQ(actual->path,"Assets/Texture.png");
+    EXPECT_FALSE(provider.resolve(Json(13957500353814115645.0)));
+    const auto completed=provider.complete({"Texture2D"},"Texture",1);ASSERT_EQ(completed.size(),1U);EXPECT_EQ(completed.front().handle,13957500353814115645ULL);
+    EXPECT_TRUE(provider.complete({"Material"},"Texture",10).empty());
+    EXPECT_FALSE(provider.resolve(Json("Assets/Missing.png")));
+}
+TEST(EngineJsonReferences, MultilineObjectCompletionAtomicallyUpdatesAuthoritativeHandleAndPath) {
+    WorkDir dir("engine-json-object-completion");frost::engine::ProjectContent content;content.directory=dir.path();
+    content.assets={{{11},"Assets/TextureA.png","Texture2D"},{{22},"Assets/TextureB.png","Texture2D"}};
+    auto index=frost::engine::AssetIndex::create(std::move(content));ASSERT_TRUE(index);
+    auto provider=frost::app::makeEngineJsonAssetProvider(std::make_shared<const frost::engine::AssetIndex>(std::move(*index)));
+    frost::lang::JsonSchemaService service;
+    auto schemas=frost::rpc::parseJson(R"({"protocol":"frostengine.document-schemas","version":1,"schemas":[{"extension":".fscene","serializer":"actual","schema":{"type":"object","properties":{"Texture":{"type":"object","x-engine-reference":"asset","x-engine-assetTypes":["Texture2D"]}}}}]})").value();
+    ASSERT_TRUE(service.installEngineSchemas(dir.path(),schemas));service.setAssetReferences(dir.path(),provider);
+    const std::string source="{\n\"Texture\":{\n\"Handle\":11,\n\"Path\":\"\"\n}\n}";
+    auto buffer=frost::text::TextBuffer::fromUtf8(source).value();const auto text=buffer.snapshot();const auto path=dir.join("scene.fscene");
+    service.updateDocument(path,text);const frost::ByteOffset caret{source.find("\"\"")+1};
+    auto params=frost::lang::textDocumentPosition(path,frost::lang::toLspPosition(text,caret,frost::lang::PositionEncoding::Utf16)).value();
+    auto reply=frost::sched::syncWait(service.request("textDocument/completion",params));ASSERT_TRUE(reply);
+    const auto* items=reply->find("items");ASSERT_NE(items,nullptr);
+    auto chosen=std::ranges::find_if(items->items(),[](const auto& item){return item.stringAt("label")=="Assets/TextureB.png";});ASSERT_NE(chosen,items->items().end());
+    auto commit=frost::lang::commitCompletion(frost::lang::parseCompletionItem(*chosen),text,caret,caret,frost::lang::PositionEncoding::Utf16);ASSERT_TRUE(commit);ASSERT_EQ(commit->edits.size(),2U);
+    std::vector<frost::text::Edit> edits;for(const auto& edit:commit->edits)edits.push_back({edit.range,edit.text});ASSERT_TRUE(buffer.applyEdits(edits));
+    auto after=frost::rpc::parseJson(buffer.current().text());ASSERT_TRUE(after);const auto* reference=after->find("Texture");ASSERT_NE(reference,nullptr);
+    EXPECT_EQ(reference->integerAt("Handle"),22);EXPECT_EQ(reference->stringAt("Path"),"Assets/TextureB.png");
+    auto actual=provider.resolve(*reference);ASSERT_TRUE(actual);EXPECT_EQ(actual->handle,22U);
+}
+TEST(EngineJsonSchemaReader, ReadsOnlyBoundedLosslessPhysicalProjectDeclarations) {
+    WorkDir dir("engine-json-schema-reader");dir.write("project/Assets/Base.fschema","{\"Columns\":[]}");dir.write("outside.fschema","{}");
+    auto captured=frost::app::readEngineSchemaDeclaration(frost::io::realFileSystem(),dir.join("project"),dir.join("project/Assets/Base.fschema"));
+    ASSERT_TRUE(captured);EXPECT_EQ(captured->text(),"{\"Columns\":[]}");
+    auto outside=frost::app::readEngineSchemaDeclaration(frost::io::realFileSystem(),dir.join("project"),dir.join("outside.fschema"));
+    ASSERT_FALSE(outside);EXPECT_EQ(outside.error().code(),frost::ErrorCode::PermissionDenied);
+    dir.write("project/Assets/Large.fschema",std::string(2*1024*1024+1,' '));
+    auto large=frost::app::readEngineSchemaDeclaration(frost::io::realFileSystem(),dir.join("project"),dir.join("project/Assets/Large.fschema"));
+    ASSERT_FALSE(large);EXPECT_EQ(large.error().code(),frost::ErrorCode::OutOfRange);
+}
 } // namespace

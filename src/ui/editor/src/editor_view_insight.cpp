@@ -380,6 +380,20 @@ std::optional<EditorDocumentLink> EditorView::documentLinkAt(ByteOffset offset) 
 }
 
 void EditorView::setCodeVisionLenses(std::vector<EditorCodeVisionLens> lenses) {
+    setCodeVisionLensesForProvider("language", std::move(lenses));
+}
+void EditorView::setCodeVisionLensesForProvider(std::string provider, std::vector<EditorCodeVisionLens> lenses) {
+    if (provider.empty())
+        return;
+    if (lenses.empty())
+        m_codeVisionProviders.erase(provider);
+    else
+        m_codeVisionProviders.insert_or_assign(std::move(provider), std::move(lenses));
+    lenses.clear();
+    for (const auto& [name, items] : m_codeVisionProviders) {
+        static_cast<void>(name);
+        lenses.insert(lenses.end(), items.begin(), items.end());
+    }
     const text::Snapshot& snapshot = m_editor->text();
     const ByteOffset size = snapshot.size();
     const std::uint32_t maxLine = snapshot.lineCount() > 0 ? snapshot.lineCount() - 1 : 0;
