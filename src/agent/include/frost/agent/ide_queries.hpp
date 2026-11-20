@@ -3,6 +3,7 @@
 #pragma once
 #include "frost/rpc/json.hpp"
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 namespace frost::agent {
@@ -14,6 +15,8 @@ using IdeQueryDone = std::function<void(Result<rpc::Json>)>;
 // The adapter calls/replies on one owner thread; it may reply inline. No process/thread is owned here.
 using IdeQueryRequest = std::function<void(std::string method, rpc::Json params, IdeQueryDone done)>;
 using IdeResourceAdmission = std::function<bool(std::string_view uri)>;
+// Removes out-of-scope locations and opaque provider data from an IDE result.
+[[nodiscard]] std::optional<rpc::Json> scopedLocations(const rpc::Json& value, const IdeResourceAdmission& admitted);
 // Queries actual prepare + both one-hop edge directions. Preserves server data privately in follow-up
 // requests, strips opaque data from output, and filters every root/edge resource through admission.
 // Emits flat root/relation records so ordinary MCP pagination can split large edge sets.

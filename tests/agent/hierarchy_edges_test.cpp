@@ -48,6 +48,32 @@ TEST(AgentHierarchy, CallEdgesKeepActualRangesAndExcludeEscapingCallers) {
     EXPECT_NE(result->value().dump().find("actual-range"), std::string::npos);
     EXPECT_EQ(result->value().dump().find("Outside"), std::string::npos);
 }
+TEST(AgentHierarchy, NestedProviderLocationsStayWithinWorkspace) {
+    std::optional<frost::Result<Json>> result;
+    frost::agent::hierarchyEdges(false, Json::object(), [](std::string method, Json, frost::agent::IdeQueryDone done) {
+        const auto metadata = Json::object()
+            .set("outsideLocation", Json::object().set("location", Json::object().set("uri", "file:///outside/private.cpp")))
+            .set("outsideTarget", Json::object().set("targetUri", "file:///outside/target.cpp"))
+            .set("insideLocation", Json::object().set("location", Json::object().set("uri", "file:///workspace/local.cpp")));
+        if (method == "textDocument/prepareCallHierarchy") {
+            done(Json::array().push(item("Root").set("metadata", metadata)));
+            return;
+        }
+        const auto key = method == "callHierarchy/incomingCalls" ? "from" : "to";
+        auto range = *item("fixture").find("range");
+        range.set("metadata", metadata);
+        done(Json::array().push(Json::object().set(key, item("Edge")).set("fromRanges", Json::array().push(range))));
+    }, admitted, [&](frost::Result<Json> value) { result.emplace(std::move(value)); });
+
+    ASSERT_TRUE(result);
+    ASSERT_TRUE(*result);
+    ASSERT_EQ(result->value().size(), 3);
+    const auto output = result->value().dump();
+    EXPECT_EQ(output.find("file:///outside/"), std::string::npos);
+    EXPECT_NE(output.find("file:///workspace/local.cpp"), std::string::npos);
+    EXPECT_EQ(result->value().items()[1].stringAt("relation"), "incomingCall");
+    EXPECT_EQ(result->value().items()[2].stringAt("relation"), "outgoingCall");
+}
 TEST(AgentHierarchy, ProviderErrorsDoNotBecomeEmptyOrInventedEdges) {
     std::optional<frost::Result<Json>> result;
     frost::agent::hierarchyEdges(true, Json::object(), [](std::string method, Json, frost::agent::IdeQueryDone done) {

@@ -60,7 +60,10 @@ struct Query final : std::enable_shared_from_this<Query> {
     }
     void advance() {
         if (completed) return;
-        if (next == roots.size()) { finish(std::move(output)); return; }
+        if (next == roots.size()) {
+            finish(scopedLocations(output, admitted).value_or(Json::array()));
+            return;
+        }
         root = roots[next++];
         if (!admitted(root.stringAt("uri"))) { finish(fail(ErrorCode::PermissionDenied, "hierarchy root authorization changed")); return; }
         auto self = shared_from_this();
@@ -102,6 +105,26 @@ struct Query final : std::enable_shared_from_this<Query> {
         advance();
     }
 };
+}
+std::optional<Json> scopedLocations(const Json& value, const IdeResourceAdmission& admitted) {
+    if (value.isArray()) {
+        auto array = Json::array();
+        for (const auto& item : value.items())
+            if (auto scoped = scopedLocations(item, admitted)) array.push(std::move(*scoped));
+        return array;
+    }
+    if (!value.isObject()) return value;
+    for (const auto* key : {"uri", "targetUri"})
+        if (const auto* uri = value.find(key); uri && uri->isString() && !admitted(*uri->asString())) return std::nullopt;
+
+    auto object = Json::object();
+    for (std::size_t i = 0; i < value.keys().size(); ++i) {
+        const auto& key = value.keys()[i];
+        if (key == "data") continue;
+        if (auto scoped = scopedLocations(value.items()[i], admitted)) object.set(key, std::move(*scoped));
+        else if (key == "location") return std::nullopt;
+    }
+    return object;
 }
 void hierarchyEdges(bool types, Json params, IdeQueryRequest request, IdeResourceAdmission admitted, IdeQueryDone done) {
     if (!params.isObject() || !request || !admitted || !done) {

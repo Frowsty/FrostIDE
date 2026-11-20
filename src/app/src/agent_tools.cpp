@@ -128,22 +128,8 @@ struct AgentTools::State {
         }
         return nullptr;
     }
-    std::optional<Json> scopedLocations(const Json& value) const {
-        if (value.isArray()) {
-            auto array = Json::array();
-            for (const auto& item : value.items()) if (auto scoped = scopedLocations(item)) array.push(std::move(*scoped));
-            return array;
-        }
-        if (!value.isObject()) return value;
-        for (const auto* key : {"uri", "targetUri"})
-            if (const auto* uri = value.find(key); uri && uri->isString() && !agentWorkspaceResource(owner.m_services.fs, utf8(root), *uri->asString())) return std::nullopt;
-        if (const auto* location = value.find("location"); location && !scopedLocations(*location)) return std::nullopt;
-        auto object = Json::object();
-        for (std::size_t i = 0; i < value.keys().size(); ++i) {
-            if (value.keys()[i] == "data") continue; // Keep opaque server handles private to this dispatch.
-            if (auto scoped = scopedLocations(value.items()[i])) object.set(value.keys()[i], std::move(*scoped));
-        }
-        return object;
+    bool admitsLocation(std::string_view uri) const {
+        return agentWorkspaceResource(owner.m_services.fs, utf8(root), uri).has_value();
     }
     void result(const QJsonValue& id, const QString& tool, Json data, Reply reply) {
         if (!live()) { reply(error(id, "workspace consent expired")); return; }
@@ -689,7 +675,7 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
             },
             [guard, issued](std::string_view uri) {
                 return guard && guard->m->live() && guard->m->instance == issued &&
-                    agentWorkspaceResource(guard->m->owner.m_services.fs, utf8(guard->m->root), uri).has_value();
+                    guard->m->admitsLocation(uri);
             },
             [guard, issued, id, tool, reply = std::move(reply)](Result<Json> value) mutable {
                 if (!guard || !guard->m->live() || guard->m->instance != issued) { reply(error(id, "hierarchy consent expired")); return; }
@@ -699,7 +685,10 @@ void AgentTools::request(const QJsonObject& request, Reply reply) {
     }
     m->lsp(methodName, std::move(paramsJson), [this, id, tool, reply = std::move(reply)](Result<Json> value) mutable {
         if (!value) reply(error(id, qs(value.error().message())));
-        else { auto scoped = m->scopedLocations(*value); m->result(id, tool, scoped ? std::move(*scoped) : Json::array(), std::move(reply)); }
+        else {
+            auto scoped = agent::scopedLocations(*value, [this](std::string_view uri) { return m->admitsLocation(uri); });
+            m->result(id, tool, std::move(scoped).value_or(Json::array()), std::move(reply));
+        }
     });
 }
 }
