@@ -12,7 +12,7 @@
 #                        debug_corpus_tests (tests/debug): on Linux FrostEditor is most of an engine
 #                        build, which the corpus tier never does (tools/corpora.py, "engine").
 frost_add_test(engine_tests
-    SOURCES engine_test.cpp command_policy_test.cpp project_content_test.cpp
+    SOURCES shader_language_test.cpp shader_preview_test.cpp performance_test.cpp asset_move_plan_test.cpp serialized_properties_test.cpp asset_index_test.cpp engine_test.cpp command_policy_test.cpp project_content_test.cpp document_tools_test.cpp
             binding_index_test.cpp binding_queries_test.cpp binding_preview_test.cpp binding_lua_metadata_test.cpp
             engine_test_provider_test.cpp crash_artifact_test.cpp
     DEPS frost::engine frost::lang frost::text frost::sched frost::rpc frost::io frost::core
@@ -47,7 +47,7 @@ frost_configure_engine_corpus_target(engine_test_provider_corpus_tests)
 # FEC-13 compares usages with real providers and applies the reviewed preview only in an owned
 # disposable clone before a full engine build/test/exporter oracle. The shared lock spans each case.
 frost_add_test(binding_queries_corpus_tests
-    SOURCES binding_queries_corpus_test.cpp binding_corpus_support.hpp
+    SOURCES binding_queries_corpus_test.cpp component_template_corpus_test.cpp binding_corpus_support.hpp
     DEPS frost::engine frost::build frost::lang frost::sched frost::text frost::io frost::rpc frost::core
     LABELS integration corpus clangd luals
     TIMEOUT 18000)

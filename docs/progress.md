@@ -3,6 +3,123 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20 R16 C++, Lua and FrostEngine implementation milestone
+
+R16 adds LLVM native coverage with per-line editor counts, owned CPU profiling through ETW or perf, MSBuild property/import locations and previewed CMake target rename. Hosted GitHub and GitLab review supports changed files, pinned inline comments, discussion refresh and replies. A trust or selection change during submission requires a refresh before retry. The editor and terminal expose text, diagnostic navigation and retained scrollback through their accessibility interfaces.
+
+The optional Claude C1 bridge uses explicit workspace consent, a local authenticated transport and a native terminal. The per-user installer, file associations and CLI diff/merge/wait paths are implemented. Tool upgrade and local release evidence handling are recorded in ADR 0106. GPT-6 Astra reviewed the combined source and authored regressions.
+
+This is a source milestone. The Windows/WSL full suite, sanitizers, latency budgets, installer round-trip, provider interoperability and release sign-off remain pending under deferred execution. No 1.0 binary or updater release was produced.
+
+## 2026-11-20: R14 main joined into R16 integration
+
+Locally merged published main 1d5b0c46 into codex/r16-integration 06630d1b. Additive conflict resolution retains GLSL and MSBuild provider routing, all document readiness/version paths, agent/hosting/shader requester fixtures, and both progress histories. Automatic CMake, coverage, CLI, schema/hierarchy and Workbench hooks retained. GLSL stop-token propagation and worker/GUI handoff remain unchanged. Only git diff --check performed; no builds, tests, feature execution, WSL or push. Independent Astra composed-join review remains pending.
+
+## 2026-11-20: R16 UX-14 anchored PR review source follow-up
+
+- Added actual provider file-patch pages and strictly derived old/new line anchors, original/new rename paths and immutable GitHub head/base or GitLab base/start/head refs. The existing panel now loads reviewed lines, confirms/sends exact inline comments, reads/refetches actual existing discussions and replies to actual thread roots. Provider response IDs, bodies and original position/commit are validated; stale refs refuse, ambiguous outcomes keep the draft and require refresh rather than automatic POST retries.
+- Context/selection/anchor changes cancel old work. Production project-trust revisions survive revoke/regrant, and original/outdated positions remain explicit in refreshed comments. Missing/binary/truncated/oversized patch evidence has no sendable anchors. Authored provider-format and normal panel fixtures cover pinned comments, thread replies, stale base/head, uncertain responses, modal review switches and trust-revision cancellation. Independent source review is pending; no provider CLI/API, feature, build, test or WSL execution occurred.
+- **Exact R16 boundary:** PLAN Appendix C UX-14 defines PR review and manual network acceptance; feature matrix UX-14 currently maps no numbered Appendix A rows. This source completes the requested line-review entry points within that bounded profile, not runtime acceptance. Source supports explicit installed/authenticated GitHub/GitLab CLI account identity, open-review pages, metadata/raw diff, verified checkout, top-level comments/approvals, GitHub request-changes, single-line comments and discussion replies. GitLab request-changes stays explicitly unsupported; signin/account-management UI, repository creation/sharing, multiline/file-comment creation, review batches and resolve/reopen controls are not claimed.
+- **Broader Git debt is not silently added as new R16 gates:** rows 32/203/204/207/208/209/210 map to UX-12 (R15; historical M5/M11). Existing source has full-file selected commits/amend/checks, basic branch/remote operations, rebase Continue/Skip/Abort, stash, a 300-commit log snapshot with branch/text filtering, separate blame table and asynchronous clone progress/cancel. It does not implement hunk/line partial commits, changelists, real partial shelves (stash aliases are not shelves), full paged author/path/date history, age-coloured gutter blame/clickthrough, general revision/branch comparisons, sequencer controls beyond rebase, dedicated Undo Commit or outgoing-commit push review. LFS detection/management and worktree management are absent (linked-worktree discovery alone exists). Signing is left to Git configuration without the planned preflight/agent/askpass bridge or dedicated 60-second signing guard. These section-2/parity-ledger/historical gaps remain recorded against their existing scope or unmapped ledger; none is marked done by this PR review slice.
+
+## 2026-11-20: R16 native analysis UI/profiling draft checkpoint
+
+- Drafted selected Native/CMake/MSBuild coverage/import/profiling actions through existing Save All/build/task preparation, actual-count independent coverage gutters, timed installed perf/WPR/xperf sample collection, raw genuine tool reports, local symbols and named ETW-instance retirement. ADR0111 records the external OS-tool boundary and observed-source provenance limits. Pinned LLVM coverage tools join the staged payload.
+- Authored later normal Workbench coverage/gutter, owned ETW startup-cancellation, trace-mutation and real OS hot-function oracle fixtures; staging fixture inputs include both LLVM coverage executables. These drafts have not been built or executed. Earlier coverage collection core18c305fb received narrow independent Astra source review; UI/profiling/staging review is still pending.
+- Initial reviewer findings were addressed in source: direct selection/configuration/model publication signals revoke the thread-safe queued-worker stop token, a GUI admission watch also retires preparation on trust/profile changes, and a separate cheap worker admission check polls every 20 ms to stop already running owned trees on trust loss. Authored regressions cover selected-configuration replacement immediately before queuing (no child) and live admission revocation of an already running child (owned termination). These fixes await independent rereview; source drafting is not runtime acceptance. Root requested focused source commits and release of this worker slot while the review queue proceeds. No builds, tests, feature execution, probes, installation or WSL occurred.
+
+## 2026-11-20 — R16 C1 source (codex/r16-c1)
+
+- UX-17 C1: explicit per-window workspace consent after L1/trust, loopback-only authenticated
+  WebSocket/MCP editor bridge, current-user discovery/cleanup, per-session generation, revocation,
+  expiry and disconnect. No startup listener or provider process. Bounded framing, payloads,
+  outstanding calls and clients; no Origin fallback or all-interface bind.
+- Direct opt-in user-installed CLI version/auth detection and PTY Agent Terminal, without shell
+  interpolation, automatic login, prompts, hooks or credential reads. Older CLI terminal-only mode.
+- Real editor metadata/diagnostics and selection/mention notifications, editable nonblocking diff
+  review with explicit Apply/Reject, save approval and once-only completion. Physical workspace
+  resources only; same-file diff target; Windows WSL drive spellings retain root containment.
+- Offline fixtures authored for no-consent listener refusal, private discovery lifetime, cross-window
+  tokens, Origin rejection, initialization/masking/fragmentation, revocation and resource boundaries.
+- Astra source review found and fixed modal lifetimes, stale consent generations, probe trust
+  admission, diff baseline identity, auth status parsing and request accounting. No builds/tests,
+  provider launches, prompts, data transfer, installs/downloads or WSL execution performed. Real CLI
+  interoperability, ACL/WSL acceptance and runtime budgets remain local verification gates (ADR0108).
+
+## 2026-11-20 — R16 delivery source (codex/r16-delivery)
+
+- FND-17: preserved and completed existing CLI drafts with standalone shared-editor diff/merge,
+  bounded UTF-8 admission, stale snapshot rejection, atomic output and cancellation status. Requires
+  R15 editor APIs from 8ee29a92. Wait uses inferred owning-project IPC, actual editor lifetime,
+  accepted shutdown acknowledgement, renewable bounded tickets and busy-owner polling.
+- Added manifest-owned Windows per-user install/uninstall with optional HKCU project association;
+  foreign/modified files survive uninstall. Python prerequisite remains. Linux stages bundle Qt/ICU/plugins with relocatable lookup and pinned Qt source notices.
+- Both stage scripts require/copy standalone source-pinned Lua plus matching API library and notice.
+- UPG-1/REL-1: offline candidate-lock plan and local evidence validation infrastructure, with explicit
+  source/lock hashes, named gates and user sign-off record. No pins bumped or release claim made.
+- Tests authored: CLI parser cases and temporary-file installer/evidence regression fixtures plus real IPC editor-close ticket/replay coverage. No
+  builds, tests, feature executions, installs, downloads, or WSL calls performed. Astra source review
+  found owner routing, abandoned tickets, busy polling, duplicate-open and uninstall cleanup issues;
+  fixes applied across repeated Astra source reviews; final packaging review surfaced no further blockers. Runtime checks not run. Runtime acceptance and release gates remain pending.
+
+## 2026-11-20: R16 MSBuild and CMake language implementation
+
+- SLN-18 adds bounded, read-only XML property/target declarations and literal import loading for `.props`/`.targets`, normal editor completion/hover/navigation, and actual winning property/import source origins reported by the already-trusted ProjectHost evaluation. Source declarations are labelled unevaluated; actual values are labelled by their last evaluated project/configuration. No source query starts evaluation, resolves unknown property functions, or grants trust.
+- CMK-9 adds parser-backed syntax/duplicate-target inspections and configured literal target rename through the normal Rename action and REF1 atomic preview/Apply/Undo. Captured CMake input images include generated/external scripts as read-only evidence, alongside reply/CDB and current model/trust provenance. Reserved link grammar names and unsupported dynamic/indirect target spellings refuse instead of guessing. Literal relative `add_subdirectory` follows documented caller source-directory contexts and confirms each destination in the actual File API graph. Direct absolute `include` is supported; conditional/OPTIONAL/module-search imports and hidden EVAL/CALL/callback evaluation explicitly refuse. Relative includes remain ambiguous because CMake searches module paths before source fallback.
+- Authored future actual MSBuild CLI value/import origin and CMake configure/File API target-dependency oracles; normal UI fixtures cover untrusted source navigation, multi-file atomic rename/Undo and changed closed-input refusal during preview. No build, test, configure, feature, native tool or WSL execution occurred. Independent Astra source review has closed target grammar/native Windows containment findings; normal UI/atomic/stale-preview source fixtures are reviewed; the final direct-import/source-context delta is under source re-review. Runtime milestone acceptance remains deferred.
+
+## 2026-11-20: R16 native text accessibility and explicit hosted-review CLI profiles
+
+- Custom editor and terminal viewport now expose real text through Qt native accessibility factories. Editor offsets/selections use UTF-16 mappings over actual snapshots, editing retains undo and read-only admission, and geometry follows the actual viewport. Terminal exposes actual visible cells, wide/combining characters, program-owned caret, output selection and output notifications; it never pretends terminal output is editable. Astra source-reviewed 311dc966/d0fd127b without actionable findings. Windows/Linux screen-reader acceptance, diagnostic text navigation and whole-scrollback accessibility remain unexecuted/additional work.
+- Added an explicit Pull Requests tool window using separately installed gh/glab executables, an explicit host/repository and real provider output. Account identity, bounded open-review pages, metadata, head-checked provider patches, checkout, comments, approval and GitHub request-changes use documented commands/API fields (ADR 0107). Opening/invalidation launches nothing. Review/checkout confirmation names the exact action, target, commit and body; review JSON uses stdin. Project/trust admission, generation invalidation, cancellation and mutex-gated worker callbacks prevent old-project completions from reappearing.
+- Authored tests cover native editor UTF-16/emoji selection/edit/undo/read-only behavior, terminal wide-cell output/selection/geometry, both provider JSON contracts, malformed/duplicate identity rows, exact commit-pinned review bodies, refused/cancelled launches, actual CLI errors, changed-head diff rejection and zero-launch UI construction. No builds, tests, features, provider requests, outbound messages or WSL ran. Hosting sources await independent review; no complete UX14/UX19 or R16 runtime gate is claimed.
+- Remaining hosted-VCS scope includes inline anchored comments, repository sharing/sign-in UX, worktree/LFS/signing depth and runtime provider conformance. Root coordinates the remaining R16 tracks and integration. C1 has a separate owner; this branch does not implement or claim its secure transport.
+## 2026-11-20 R14 FrostEngine content integration
+
+R14 connects the Engine View, asset usage queries and serialized property inspector to a paired FrostEngine session. Asset moves carry sidecars and reference edits through the IDE preview, journal and Undo. Engine templates, editor controls, measured performance data, export and multiplayer configurations use the engine's actual contracts. Data tables navigate to inherited schema declarations, and the Structure view shows the captured scene entity hierarchy.
+
+GLSL completion, hover, definition, include navigation and Structure use the engine compiler and preprocessor. Validation publishes Problems, and previews use engine-rendered images. The corpus pin names the published companion revision that implements these commands. Completion omits scopes whose boundaries the pinned compiler cannot establish. Project-scoped asset metadata is available as an offline snapshot. Live diagnostics and usage observations clear on disconnect.
+
+GPT-6.1 Sol authored the implementations and regression fixtures. GPT-6 Astra reviewed the source. Builds, runtime tests, paired-engine journeys and release packaging remain deferred at the user's request.
+
+## 2026-11-20: R14 shader validation and real engine preview source
+
+- Added authenticated Edit-only engine `shader.validate` over actual GLSL preprocessor/compiler and material serializer/program/layout APIs. The IDE captures main editor text, retains source/dependency and absence receipts, rejects dirty includes/stale source/session/state, and publishes actual source diagnostics in a separate Engine Shader Problems scope.
+- Added genuine engine-rendered saved texture/material/sprite-sheet previews with isolated empty-content engine, copied session registry/VFS, bounded resource/readback/PNG paths, explicit failure on unavailable GPU or unresolved fallbacks, and source/texture hashes. IDE previews display validated PNG bytes as snapshots and close on editor/trust/session/state invalidation. The safe engine slice is committed at `698f9b5d`; other engine owners' changes were not staged.
+- ADR 0103 records existing GLSL text/comment authoring plus explicit base-variant validation/navigation, no added language server or dependency, and supported preview scope. Shader semantic language-service work is not claimed complete by this slice.
+- Authored real engine compiler/include/BOM/missing/material/readback fixtures, strict IDE response readers, and a composed later journey comparing Problems and displayed pixels with direct real engine oracles. Independent Astra source review cleared compiler, resource, lifetime and UI publication seams. Source formatting only ran; builds, tests, feature execution and WSL remain deferred.
+- Authenticated transport loss now clears nonempty shader diagnostics, rendered previews and asset usage observations before withdrawing identity. The real later acceptance journey kills the actual paired editor after asserting both shader rows and preview content exist.
+- Next: integrate additive constructor/header/document hooks with other R14 branches and continue GLSL authoring scope decisions. No blocking user question.
+
+## 2026-11-20: R14 authenticated session tools and measured source attribution
+
+- Added generated real `build.export` and localhost dedicated-server/two-client compound configurations using the selected installed tools. Each native child retains deferred trust revision, project invalidation and exact physical project-file admission; generated command edits refuse. Existing Run tabs, owned process containment and partial-start reporting remain authoritative.
+- Added engine-listed Show/Open in FrostEditor through authenticated `editor.browse-assets`/`editor.open-asset`; Show clears a hiding browser search before selection. Added an explicit measured `stats.get` panel and optional two-second polling. Unexpected transport loss clears pending requests, reports, polling and inline metrics before replacement pairing.
+- Inline performance values require explicit compiler macro-site identity plus a matching first-party build-source SHA256 receipt, trusted physical source and exact editor/captured bytes. The engine producer generates a bounded source receipt table through CMake input dependencies; absent/mismatched receipts suppress inline attribution while measured statistics remain available. No scope-name-to-function inference or invented timing values is used.
+- Authored parser/hash/configuration regressions, production queued-export trust/project refusal, actual socket-loss cleanup with nonempty lenses, and later real-engine stats/browser/export receipts and three-process multiplayer ownership acceptance. Independent source review cleared the decoder, source receipts, lifecycle and final native admission fixes. Pinned formatting and whitespace inspection were performed; builds, tests, feature execution, WSL and runtime/performance acceptance remain deferred. No runtime exit criterion or binary release is claimed.
+- Next: integrate with the other R14 content/asset/shader slices, then continue the roadmap. Runtime acceptance remains pending under implementation-first.
+## 2026-11-20: R14 FEC-9b engine asset transaction consumer
+
+- Authored typed bounded actual engine plan/lease/reversible-receipt parsing and composed normal file Rename/Move with source/.fmeta moves and engine reference before/after images in one preview/native REF1 transaction. Exact session/trust/physical project and raw input guards are checked; retained engine inverse receipts join native Undo/Redo and actual registry refresh/validation after settlement. Predecision refusals cancel leases; native PendingRecovery retains its lease through Resume. Uncertain post-settlement engine replies remain explicit reconciliation warnings/refusals.
+- Added explicit restart recovery action and engine Rename/Move preflight: actual owned native journals settle before disconnected engine lease verification. The real recover command distinguishes absent lease from a verified retained before/after receipt; mixed state refuses. Authored same-process native Resume and native-journal restart with authenticated scripted stranded-lease fixtures cover the new seams, including no engine recovery request while the native obstruction remains. Independent Astra source review cleared the recovery follow-up; none of these tests were executed.
+- Unsupported asset directory moves, source rename-plus-rewrite overlaps, dirty IDE inputs and open rewritten reference documents refuse. The producer admits persistent editor/headless sessions with all scenes/worlds closed and holds a native project mutation/process lock; one-shot contexts refuse. GUI/cross-process runtime acceptance remains unexecuted. No fallback or fabricated metadata refresh is used.
+- Parser and native external-guard history regressions are authored. Independent Astra source review cleared the consumer after correcting nested-event-loop lifetime hazards; final admission uses bounded worker completion without GUI event pumping. Builds, tests, features, WSL and verification runners were not executed under the implementation-first override. Next: finalize paired-source review and later native/paired-engine acceptance.
+
+## 2026-11-20: R14 selected-engine document schemas and validation slice
+
+- Installed bounded actual document.schemas exports for the authenticated project's supported serializer shapes, with completion, hover and local structural findings. Malformed consumed keywords refuse the complete replacement. This covers exported .fmat/.fscene shapes, not all engine document types or the complete FEC-7 editing surface.
+- Added captured-image document.validate and read-only document.validate-content actions publishing actual engine issues in Problems. Captured byte offsets map to UTF16 navigation; dirty edits, replaced physical identities, session loss and selected project changes revoke stale findings and schema profiles.
+- Authored parser, dynamic-schema and HMAC-session UI regressions for envelope identity, unsafe locations, malformed nested schemas, Unicode coordinates, late dirty replies and disconnect/replacement loading. Independent Astra source review findings were fixed and rechecked. No builds, tests, feature executions or WSL were run; runtime acceptance remains deferred.
+- Added New C++ Component for configured CMake executable membership: generated reflected field and actual registration module use the existing single REF1 creation/membership preview and Undo. Folder/library/solution profiles refuse before effects. Authored a disposable engine build/schema-export oracle; acceptance is not executed. Astra source review closed comment-splicing and control-byte findings.
+- Added New FrostEngine Asset dialog for actual Scene/Prefab/Material and Behaviour/Physics/Test/Module generation through an Edit-only, mutation-permitted wrapper. Existing assets cannot be overwritten; the real FrostEditor owns sidecars and Undo. Session/project/trust are rechecked after the dialog. Authored seven-kind generator and modal trust-revocation regression sources; Astra source review passed.
+- Source inspection found the document command descriptors lacked mandatory CLI examples/required example params, which would fail real registry admission. Corrected all four descriptors and authored isolated registration coverage; no execution was used to establish this source finding.
+- Added captured .ftable/.fschema validation through the actual DataValidation file validators, retaining engine codes/messages and row/field/line locations. A read-only document.table-schema bridge resolves the captured Schema through the actual catalog and schema.info. Per-table inherited column/type/enum completion and documentation/default/range hover remain bound to that Schema reference, with bundled structural fallback after changes. Direct engine oracles and authenticated UI row-Problem regressions are authored; Astra source review passed, runtime remains deferred.
+- Component shapes now preserve actual reflection documentation/defaults/bounds, entity/asset reference markers and accepted alternate scalar/vector/enum/flags encodings. This fixes default-output-only inferred type restrictions on valid serializer inputs. Dynamic extension metadata is checked before consumption, and POSIX traversal components cannot select a project profile. Actual reflection metadata and special float/flags regressions are authored; Astra source review closed the vector-string gap.
+- Added actual-index asset type/path-prefix completion and exact-u64 handle/path/object navigation/hover, plus same-captured-document entity ID/name completion and exact declaration navigation. Actual index reset/republication revokes stale queries. Object completion updates authoritative Handle and Path atomically through standard additional edits, preserving multiline edits and unrelated fields. High-u64, filtering/revocation, ambiguous IDs and complete completion-commit-to-index resolution regressions are authored; Astra source review passed.
+- Table column and nested field definition navigation follows actual schema.info declaredIn metadata to exact Columns/Fields Name tokens. Captured open schema text wins; closed project declarations use a bounded lossless reader with physical containment/identity checks and schema-generation cancellation. Inherited/open-buffer, revoked read, containment and size-limit tests are authored; Astra source review passed for valid engine schema nesting.
+- Authored captured scene Parent hierarchy and generic supported-JSON Structure projection with exact ID/key selections, subtree-contained ranges and explicit duplicate/missing/unresolved/cyclic/depth/count refusal. Added project/schema/table/meta JSON syntax aliases. Offline completion/hover labels identify the real retained index snapshot; session-schema revocation withdraws live schemas while project/trust index revocation removes snapshot navigation. Hierarchy, bounds, generic outline and revocation-boundary tests are authored. Independent Astra review found a generic property key/whole-range containment issue; corrected it and authored recursive genuine-parser containment coverage. The combined hierarchy/snapshot slice is source-reviewed clear; no runtime execution occurred.
+- Shared engine alias/test is committed as 3858746d atop the existing reviewed document schema/validation implementation. Next: finish shader/material validation and engine previews, and the remaining schema editing surface; no runtime exit is claimed.
+
 ## 2026-11-20 R13 C++ analysis implementation integrated
 
 The default C++ bundle registers the Clang-backed index, native analyzer, preprocessor views and module actions. The SQLite index distinguishes build configurations. The analyzer emits SARIF for 33 AST checks and five control-flow checks. Idle, save and manual analysis share Workbench Problems publication and cancellation.
@@ -68,6 +185,12 @@ GPT-6.1 Sol authored the implementations and regression tests. GPT-6 Astra revie
 - The view has previous/next pages, 64-bit byte navigation, cancellable LF/CRLF line seeking without a whole-file line table, explicit encoding/unknown-line/page-edge constraints and surfaced read/identity errors. ADR 0105 documents this limited read-only profile; full mapped/editable large-file behavior remains outside this slice.
 - Authored actual >1-GiB reader and 128-MiB product-factory fixtures plus UI encoding/navigation/cancellation/close/error tests for later execution. Independent GPT-6 Astra source review closed after encoding, opener-lifetime and authored-test corrections. No build, test, fixture generation, feature execution or benchmark ran, and no B15 or 1-GiB runtime acceptance is claimed.
 - Next: integration and later runtime verification when the user resumes testing. No user question blocks this slice.
+
+## 2026-11-20: R16 native coverage collection core
+
+- Completed bounded actual llvm-profdata merge and llvm-cov baseline/LCOV export collection over an owned instrumented run or explicitly imported raw profiles. Strict parsing preserves line/branch counts, rejects contradictory/duplicate summaries, and reports missing instrumentation/tools rather than inferring counts. Tools use exact pinned-version admission; debuginfod is disabled.
+- Binary, available source and raw-profile identities are captured/revalidated, project admission runs before subprocess launches and publication, and RunSession owns cancellation/output/deadline/tree cleanup. Source hashes describe observed snapshots and do not prove an arbitrary externally built binary used those source bytes.
+- Authored parser/identity cases and a later genuine instrumented compiler/run/profile/export journey compared with independent llvm-cov show counts. Independent Astra source review cleared this core. No build, test, feature execution, probes or WSL ran. Normal configuration actions, gutters and native profiling continue separately; RUN-12 acceptance remains deferred.
 
 ## 2026-11-14: R12 Lua implementation integrated; runtime acceptance deferred
 
@@ -7996,29 +8119,6 @@ with a pointer.
   the modal lifetime and bounded report-read findings were fixed. Commits: dd193193, 040ef30a,
   97e679b1 on codex/r15-editor-extras. No builds, tests, feature runs, WSL, benchmarks, probes or
   verification runners were executed. Runtime acceptance remains deferred by user instruction.
+### R14 native GLSL authoring profile (2026-11-20)
 
-## 2026-11-20: R19 DBG-16 hot reload decision (source only)
-
-- ADR 0110 records distinct native restart, FrostEngine Lua reload, CoreCLR and Unity code-update
-  boundaries against the actual IDE capability/session contracts. The reviewed netcoredbg payload
-  excludes its hot-reload hook. No new hot-reload capability, engine command or state-preservation
-  claim is introduced; provider implementation and runtime acceptance remain explicit follow-up work.
-- The decision requires exact profile/process/module/generation admission, actual apply outcomes,
-  symbol/breakpoint revalidation, uncertain-outcome handling and explicit restart ownership.
-- No builds, configuration, tests, feature runs, WSL, installs or licence acceptance were performed.
-  Independent source review is pending on codex/r19-hot-reload-decision.
-
-## 2026-11-20: R19 REF-15 structural search/replace checkpoint (source only)
-
-- Added actual pinned-parser S-expression structural queries with one @match, named captures and
-  literal equality/set predicates. Replacements expand exact captured bytes, refuse ambiguous or
-  overlapping matches and require an error-free complete reparse. This is explicitly syntax-only;
-  semantic/type/binding/regex constraints refuse rather than silently switching to text search.
-- Normal Search/Refactor actions capture current/open/indexed-project same-language scopes, parse
-  on workers with cancellation and byte/match/time ceilings, preserve disk encoding and dirty
-  overlays, and use the existing complete preview and one REF-1 global Undo/Redo transaction.
-  Captured search rows navigate only to matching live source. No files are written before Apply.
-- Authored actual C++/Lua grammar regressions and normal Workbench preview/Undo/cancellation
-  journeys. docs/protocols/structural-patterns.md specifies syntax and concrete scope/semantic limits.
-  No builds, configuration, tests, feature executions, WSL, installs or pushes ran. Independent
-  source review and runtime acceptance are pending on codex/r19-structural-search.
+Implemented ordinary completion, declaration/definition, hover, Structure and idle diagnostics through authenticated native shader.language (producer 08897089), using compiler AST identities and actual include provenance. Governed asynchronous requests preserve cancellation/deadline semantics without blocking workers; trust/session/state/source changes invalidate observations. Retained dirty documents without views validate document identity, version and bytes. Authored normal key-entry real-engine journey, strict projection/routing tests and single-dispatcher response/cancellation/timeout/late-reply regressions. ADR0103 records bounded ownership/scope and unsupported operations. Independent Astra native and IDE source reviews cleared. No builds, tests, feature execution or WSL run; runtime acceptance remains open.

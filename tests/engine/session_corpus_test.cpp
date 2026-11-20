@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // R6 mandatory real-engine acceptance: v2 authentication, push-only transitions and liveness.
+#include "frost/engine/performance.hpp"
 #include "frost/engine/project_content.hpp"
 
 #include "support/real_engine_session.hpp"
@@ -153,6 +154,92 @@ protected:
     std::string project;
 };
 
+// The oracle is the actual authenticated stats.get receipt, never a synthetic frame count or FPS.
+TEST_F(RealSessionCorpus, MeasuredStatsDecodeExactlyThroughTheAuthenticatedSession) {
+    test::RealEditor editor;
+    auto endpoint = editor.start(build, project, scratch.join("statistics-config"));
+    ASSERT_TRUE(endpoint) << endpoint.error().describe();
+    SessionObservations seen;
+    auto session = EngineSession::create(optionsFor(*endpoint), seen.callbacks());
+    ASSERT_TRUE(session) << session.error().describe();
+    ASSERT_TRUE(seen.wait([&] { return seen.identity.has_value() && !seen.states.empty(); }));
+    EngineIdentity identity;
+    {
+        std::lock_guard lock(seen.mutex);
+        identity = *seen.identity;
+    }
+    auto wire = seen.command(**session, "stats.get",
+                             Json::object()
+                                 .set("sections", Json::array({"frame", "rendering", "memory", "profiler"}))
+                                 .set("profilerScopes", 128));
+    ASSERT_TRUE(wire) << wire.error().describe();
+    auto decoded = parseEnginePerformance(identity, *wire);
+    ASSERT_TRUE(decoded) << decoded.error().describe();
+    EXPECT_EQ(decoded->measured.dump(), wire->dump());
+    EXPECT_EQ(decoded->identity.instanceId, endpoint->instanceId);
+    EXPECT_EQ(decoded->identity.connectionGeneration, identity.connectionGeneration);
+    const auto* profiler = wire->find("profiler");
+    ASSERT_NE(profiler, nullptr);
+    // This acceptance requires the additive source-site engine producer; no runtime skip.
+    ASSERT_EQ(profiler->stringAt("sourceProvenance"), "macro-source-location/v1");
+    ASSERT_TRUE(decoded->sourceProvenanceAvailable);
+    const auto* sites = profiler->find("sourceScopes");
+    ASSERT_NE(sites, nullptr);
+    ASSERT_EQ(decoded->sourceScopes.size(), sites->size());
+    ASSERT_FALSE(decoded->sourceScopes.empty()) << "real editor recorded no compiled instrumentation sites";
+    for (std::size_t i = 0; i < sites->size(); ++i) {
+        const auto& site = sites->items()[i];
+        EXPECT_EQ(decoded->sourceScopes[i].file, site.stringAt("file"));
+        EXPECT_EQ(decoded->sourceScopes[i].line, site.unsignedAt("line"));
+        EXPECT_DOUBLE_EQ(decoded->sourceScopes[i].msPerFrame, *site.find("msPerFrame")->asDouble());
+        EXPECT_DOUBLE_EQ(decoded->sourceScopes[i].callsPerFrame, *site.find("callsPerFrame")->asDouble());
+    }
+    (*session)->shutdown();
+}
+// Real browser state is the selection oracle. Start with a filter that hides every asset.
+TEST_F(RealSessionCorpus, ShowAssetByListedHandleClearsSearchAndSelectsTheActualBrowserItem) {
+    test::RealEditor editor;
+    auto endpoint = editor.start(build, project, scratch.join("browse-config"));
+    ASSERT_TRUE(endpoint) << endpoint.error().describe();
+    SessionObservations seen;
+    auto session = EngineSession::create(optionsFor(*endpoint), seen.callbacks());
+    ASSERT_TRUE(session) << session.error().describe();
+    ASSERT_TRUE(seen.wait([&] { return seen.identity.has_value(); }));
+    auto listing = seen.command(**session, "assets.list");
+    ASSERT_TRUE(listing) << listing.error().describe();
+    const auto* assets = listing->find("assets");
+    ASSERT_NE(assets, nullptr);
+    ASSERT_FALSE(assets->items().empty());
+    const auto& chosen = assets->items().front();
+    const auto handle = chosen.unsignedAt("handle");
+    ASSERT_TRUE(handle);
+    auto filtered =
+        seen.command(**session, "editor.browse-assets", Json::object().set("search", "__FrostIDE_no_matching_asset__"));
+    ASSERT_TRUE(filtered) << filtered.error().describe();
+    auto shown = seen.command(**session, "editor.browse-assets",
+                              Json::object()
+                                  .set("refresh", true)
+                                  .set("search", "")
+                                  .set("select", Json::array().push(std::to_string(*handle))));
+    ASSERT_TRUE(shown) << shown.error().describe();
+    EXPECT_EQ(shown->stringAt("search"), "");
+    const auto* selection = shown->find("selection");
+    ASSERT_NE(selection, nullptr);
+    ASSERT_EQ(selection->size(), 1);
+    // Engine browser paths may omit the Assets prefix used by assets.list; handle identity
+    // from the visible receipt remains the independent oracle across that representation seam.
+    const auto* items = shown->find("items");
+    ASSERT_NE(items, nullptr);
+    bool matched = false;
+    for (const auto& item : items->items())
+        if (item.unsignedAt("handle") == handle) {
+            matched = true;
+            EXPECT_EQ(selection->items().front().asString(), item.find("path")->asString());
+            EXPECT_EQ(shown->stringAt("primary"), item.stringAt("path"));
+        }
+    EXPECT_TRUE(matched);
+    (*session)->shutdown();
+}
 TEST_F(RealSessionCorpus, AuthenticationRejectsUnpairedWrongHmacReflectionAndReplayAgainstRealEditor) {
     test::RealEditor editor;
     auto endpoint = editor.start(build, project, scratch.join("config"));

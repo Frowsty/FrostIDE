@@ -109,6 +109,7 @@ public:
     std::atomic<bool> stallChallenge{false}, closed{false}, heartbeats{true};
     std::atomic<std::int64_t> processId{0};
     std::atomic<unsigned> authenticated{0};
+    bool performanceTools = false; // Set before pairing; opt-in additive FER-14 fixture schema.
     std::vector<Json> requests(std::string_view method) const {
         std::lock_guard lock(m_mutex);
         std::vector<Json> found;
@@ -135,6 +136,7 @@ public:
         const auto found = m_replied.find(std::string(method));
         return found == m_replied.end() ? 0 : found->second;
     }
+    void enableDocumentTools() { m_documentTools=true; }
     void hold(std::string method) {
         std::lock_guard lock(m_mutex);
         m_held.insert(std::move(method));
@@ -226,8 +228,12 @@ private:
         auto commands = Json::array();
         for (const std::string_view name :
              {"play.start", "play.stop", "play.state", "play.pause", "play.step", "play.simulate", "script.validate",
-              "test.run", "log.get", "editor.focus"}) {
-            const bool mutation = (name.starts_with("play.") && name != "play.state") || name == "test.run";
+              "test.run", "log.get", "editor.focus", "assets.recover-move-plan", "document.schemas",
+              "document.validate", "document.validate-content", "document.create-template", "document.table-schema"}) {
+            if (name.starts_with("document.") && !m_documentTools.load())
+                continue;
+            const bool mutation = (name.starts_with("play.") && name != "play.state") || name == "test.run" ||
+                                  name == "document.create-template" || name == "assets.recover-move-plan";
             commands.push(Json::object()
                               .set("name", name)
                               .set("category", "Fixture")
@@ -240,6 +246,16 @@ private:
                                                     .set("requiresMutationPermission", mutation)
                                                     .set("requiredCapabilities", Json::array({"session.v2"}))));
         }
+        if (performanceTools)
+            commands.push(Json::object()
+                              .set("name", "stats.get")
+                              .set("category", "Fixture")
+                              .set("flags", Json::array({"RequiresEditor"}))
+                              .set("idePolicy", Json::object()
+                                                    .set("allowed", true)
+                                                    .set("states", Json::array({"Edit", "Play", "Paused"}))
+                                                    .set("requiresMutationPermission", false)
+                                                    .set("requiredCapabilities", Json::array({"session.v2"}))));
         // Present in schema, deliberately outside IDE policy: the refusal test must not send it.
         commands.push(Json::object()
                           .set("name", "scene.delete")
@@ -488,6 +504,7 @@ private:
     std::uint16_t m_port = 0;
     std::jthread m_worker;
     std::uint16_t m_luaDebugPort = 0;
+    std::atomic<bool> m_documentTools=false;
     mutable std::mutex m_mutex;
     std::vector<Json> m_requests;
     std::map<std::string, std::size_t> m_replied;

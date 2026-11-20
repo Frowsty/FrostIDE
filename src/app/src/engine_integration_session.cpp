@@ -49,6 +49,11 @@ void EngineIntegration::Impl::retireSession() {
 }
 
 void EngineIntegration::Impl::clearSession(bool clearOutput, bool preserveCrashObservation) {
+    owner.clearDocumentTools();
+    shaderLanguageProgram.clear();
+    clearShaderPreview();
+    clearAssetUsages();
+    clearSessionTools();
     if (!preserveCrashObservation)
         revokeCrashObservation();
     ++sessionEpoch;
@@ -356,6 +361,11 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
                 impl.nativeTarget.reset();
                 impl.retainedNativeBinding.reset();
             }
+            impl.owner.clearDocumentTools();
+            impl.clearSessionTools();
+            impl.shaderLanguageProgram.clear();
+            impl.clearShaderPreview();
+            impl.clearAssetUsages();
             impl.identity.reset();
             impl.state.reset();
             impl.requests.clear();
@@ -384,7 +394,9 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
     return {};
 }
 
-Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Json params) {
+Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Json params,
+                                                    std::function<void(Result<lang::Json>)> completed,
+                                                    bool workerCompletion, std::stop_token stop) {
     if (!admitted(epoch, root, trustRevision))
         return fail(ErrorCode::Untrusted, "Project trust changed before the engine command");
     if (!session || !identity || !session->connected())
@@ -420,51 +432,69 @@ Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Js
     auto started = session->request(
         method, std::move(params),
         [self, fs, originalKey, admission, observed, currentEpoch, expectedRoot, revision, exactSession, requestId,
-         method](Result<lang::Json> result) {
+         method, completed = std::move(completed), workerCompletion](Result<lang::Json> result) mutable {
             if (!self || !retainEngineProjectIdentity(*fs, expectedRoot, originalKey, admission))
                 return;
+            // The native transaction owner cannot pump GUI events during final admission.
+            // This opt-in completion must be worker-safe; GUI status publication stays queued.
+            if (workerCompletion && completed) {
+                completed(result);
+                completed = {};
+            }
             QMetaObject::invokeMethod(
                 self.data(),
                 [self, observed, currentEpoch, expectedRoot, revision, exactSession, requestId, method,
-                 result = std::move(result)]() mutable {
+                 result = std::move(result), completed = std::move(completed)]() mutable {
                     if (!self)
                         return;
                     auto& impl = *self->m_impl;
                     if (!impl.admitted(currentEpoch, expectedRoot, revision) || impl.session.get() != exactSession ||
                         !impl.currentIdentity(observed))
                         return;
-                    impl.requests.erase(*requestId);
-                    impl.lastCompletedRequest = *requestId;
-                    if (impl.lastRequest == *requestId) {
-                        impl.lastReply = result ? *result : lang::Json{};
-                        impl.lastError = result ? std::string{} : result.error().message();
+                    if (method != "shader.language") {
+                        impl.requests.erase(*requestId);
+                        impl.lastCompletedRequest = *requestId;
+                        if (impl.lastRequest == *requestId) {
+                            impl.lastReply = result ? *result : lang::Json{};
+                            impl.lastError = result ? std::string{} : result.error().message();
+                        }
+                        impl.updateControls();
+                        EngineCommandReply reply;
+                        reply.identity = observed;
+                        reply.identity.schema = lang::Json{};
+                        reply.identity.availableCommands.clear();
+                        reply.method = method;
+                        reply.success = result.has_value();
+                        reply.message = result ? result->dump() : result.error().message();
+                        reply.data = result ? *result : lang::Json::object().set("message", result.error().message());
+                        if (impl.pushSink)
+                            impl.pushSink(std::move(reply));
+                        impl.setStatus(result ? QStringLiteral("Command completed") : qs(result.error().message()));
+                        // Other engine operations may change content; retain no complete usage
+                        // snapshot across them. External edits have no content event in contract v2,
+                        // so retained counts are explicitly labelled query snapshots, not live values.
+                        if (result && method != "assets.find-references")
+                            impl.clearAssetUsages();
                     }
-                    impl.updateControls();
-                    EngineCommandReply reply;
-                    reply.identity = observed;
-                    reply.identity.schema = lang::Json{};
-                    reply.identity.availableCommands.clear();
-                    reply.method = method;
-                    reply.success = result.has_value();
-                    reply.message = result ? result->dump() : result.error().message();
-                    reply.data = result ? *result : lang::Json::object().set("message", result.error().message());
-                    if (impl.pushSink)
-                        impl.pushSink(std::move(reply));
-                    impl.setStatus(result ? QStringLiteral("Command completed") : qs(result.error().message()));
                     // Command replies never change the toolbar's play/paused/frame state.
+                    if (completed)
+                        completed(std::move(result));
                 },
                 Qt::QueuedConnection);
-        });
+        },
+        stop);
     if (!started) {
         lastError = started.error().message();
         return std::unexpected(started.error());
     }
     *requestId = *started;
-    lastRequest = *started;
-    requests.emplace(*started, method);
-    updateControls();
-    lastReply = lang::Json{};
-    lastError.clear();
+    if (method != "shader.language") {
+        lastRequest = *started;
+        requests.emplace(*started, method);
+        updateControls();
+        lastReply = lang::Json{};
+        lastError.clear();
+    }
     return started;
 }
 
@@ -504,6 +534,10 @@ lang::Json EngineIntegration::snapshot() const {
                    .set("lastReply", impl.lastReply)
                    .set("lastError", impl.lastError)
                    .set("sentCommandCount", impl.session ? impl.session->sentCommandCount() : std::uint64_t{0});
+    out.set("performanceAvailable", current && impl.performanceSample.has_value());
+    if (current && impl.performanceSample)
+        out.set("performance", impl.performanceSample->measured)
+            .set("performanceSourceProvenance", impl.performanceSample->sourceProvenanceAvailable);
     auto instances = lang::Json::array();
     for (const auto& instance : impl.instances)
         if (current)

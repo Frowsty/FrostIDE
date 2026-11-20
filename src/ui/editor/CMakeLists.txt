@@ -22,6 +22,7 @@ frost_add_library(ui_editor LAYER ui
     SOURCES
         src/display_list.cpp
         src/display_strokes.cpp
+        src/editor_accessibility.cpp
         src/editor_actions.cpp
         src/editor_backend.cpp
         src/editor_colors.cpp

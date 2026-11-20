@@ -202,6 +202,7 @@ $bundle = $Config -ne 'Debug' -or $BundleTools
 $llvmRel = "llvm-$($lock.windows.llvm.version)"
 $clangdSource = Join-Path $SdkRoot "$llvmRel\bin\clangd.exe"
 $scanDepsSource = Join-Path $SdkRoot "$llvmRel\bin\clang-scan-deps.exe"
+$coverageTools = @('llvm-cov.exe', 'llvm-profdata.exe')
 $clangLibSource = Join-Path $SdkRoot "$llvmRel\lib\clang"
 $lldbRel = "lldb-$($lock.windows.lldb.version)"
 $lldbSourceDir = Join-Path $SdkRoot "$lldbRel\bin"
@@ -210,6 +211,10 @@ $lualsRel = "luals-$($lock.windows.luals.version)"
 $lualsSource = Join-Path $SdkRoot $lualsRel
 if ($bundle) {
     if (-not (Test-Path -LiteralPath $scanDepsSource -PathType Leaf)) { Fail "missing bundled clang-scan-deps: $scanDepsSource" }
+    foreach ($tool in $coverageTools) {
+        $path = Join-Path $SdkRoot "$llvmRel\bin\$tool"
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "missing bundled LLVM coverage tool: $path" }
+    }
     if (-not (Test-Path -LiteralPath $clangdSource -PathType Leaf)) { Fail "missing bundled clangd: $clangdSource" }
     if (-not (Test-Path -LiteralPath $clangLibSource -PathType Container)) {
         Fail "missing bundled clangd resource directory: $clangLibSource"
@@ -250,6 +255,10 @@ if ($code -ne 0) {
     Fail "the build tree's IDE images have no matching PDBs ($code)"
 }
 
+# The build's Lua runtime is source-pinned and already paired with its API DLL and notice.
+foreach ($name in @('lua54\lua.exe', 'lua54\lua54.dll', 'licenses\Lua\lua.h')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $binDir $name) -PathType Leaf)) { Fail "missing standalone Lua runtime: $name" }
+}
 # 2. A fresh destination (and symbol archive).
 if (Test-Path -LiteralPath $Destination) {
     $existing = @(Get-ChildItem -LiteralPath $Destination -Force)
@@ -269,6 +278,10 @@ $script:ownedDestination = $Destination
 $script:ownedArchive = $symbolArchive
 if (-not $script:destinationExisted) { [void][System.IO.Directory]::CreateDirectory($Destination) }
 
+
+Copy-Item -LiteralPath (Join-Path $binDir 'lua54') -Destination $Destination -Recurse
+New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'licenses') | Out-Null
+Copy-Item -LiteralPath (Join-Path $binDir 'licenses\Lua') -Destination (Join-Path $Destination 'licenses') -Recurse
 # 3. FrostIDE's own files.
 foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
@@ -311,6 +324,7 @@ if ($bundle) {
     New-Item -ItemType Directory -Force -Path $llvmBinDest | Out-Null
     Copy-Item -LiteralPath $clangdSource -Destination $llvmBinDest -Force
     Copy-Item -LiteralPath $scanDepsSource -Destination $llvmBinDest -Force
+    foreach ($tool in $coverageTools) { Copy-Item -LiteralPath (Join-Path $SdkRoot "$llvmRel\bin\$tool") -Destination $llvmBinDest -Force }
     $llvmLibDest = Join-Path $Destination "$llvmRel\lib"
     New-Item -ItemType Directory -Force -Path $llvmLibDest | Out-Null
     Copy-Item -LiteralPath $clangLibSource -Destination $llvmLibDest -Recurse -Force
@@ -417,7 +431,7 @@ else {
     Write-Host 'stage: local Debug preview; dependency source/notice packaging was not requested'
 }
 if ($bundle) {
-    foreach ($name in @("$llvmRel\bin\clangd.exe", "$llvmRel\bin\clang-scan-deps.exe", "$lldbRel\bin\lldb-dap.exe", "$lualsRel\bin\lua-language-server.exe",
+    foreach ($name in @("$llvmRel\bin\llvm-cov.exe", "$llvmRel\bin\llvm-profdata.exe", "$llvmRel\bin\clangd.exe", "$llvmRel\bin\clang-scan-deps.exe", "$lldbRel\bin\lldb-dap.exe", "$lualsRel\bin\lua-language-server.exe",
             'managed\CSharpLanguageServer.dll', 'FrostManagedDebug\adapter\netcoredbg.exe', 'licenses\luals-LICENSE.txt')) {
         if (-not (Test-Path -LiteralPath (Join-Path $Destination $name) -PathType Leaf)) { Fail "the staged folder has no $name" }
     }

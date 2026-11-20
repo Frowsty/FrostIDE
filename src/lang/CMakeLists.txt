@@ -27,6 +27,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FROST_SOURCE_D
 frost_add_library(lang LAYER lang
     SOURCES
         src/json_schema.cpp
+        src/json_entity_hierarchy.cpp
         src/cl_command_lines_provider.cpp
         src/clangd_actions.cpp
         src/clangd_locator.cpp
@@ -35,6 +36,7 @@ frost_add_library(lang LAYER lang
         src/cpp_modules.cpp
         src/cpp_rename_plan.cpp
         src/cmake_language.cpp
+        src/cmake_refactoring.cpp
         src/cpp_refactoring_plan.cpp
         src/cpp_preprocessor.cpp
         src/unreal_reflection.cpp
@@ -73,6 +75,7 @@ frost_add_library(lang LAYER lang
         src/lua_module_rename.cpp
         src/managed_service.cpp
         src/lsp_types.cpp
+        src/msbuild_language.cpp
         src/msbuild_compile_commands.cpp
         src/msvc_environment.cpp
         src/navigation.cpp

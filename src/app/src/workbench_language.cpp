@@ -8,6 +8,7 @@
 #include "frost/engine/engine_lua.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/clangd.hpp"
+#include "frost/lang/cmake_refactoring.hpp"
 #include "frost/lang/document_sync.hpp"
 #include "frost/lang/json.hpp"
 #include "frost/lang/lua_service.hpp"
@@ -22,6 +23,9 @@
 
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
+#include "engine_integration.hpp"
+#include "engine_json_schema_reader.hpp"
+#include "engine_shader_language_requester.hpp"
 #include "language_bridge.hpp"
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -75,27 +79,63 @@ ByteOffset mapThrough(ByteOffset offset, std::span<const lang::ByteEdit> edits) 
 LanguageBridge::LanguageBridge(Workbench& workbench)
     : m_workbench(workbench), m_applier(static_cast<lang::IWorkspaceDocuments&>(*this), workbench.m_services.fs,
                                         lang::PositionEncoding::Utf16) {
-    m_server.setJsonServer(m_json);
+    m_server.setJsonServer(m_json,[schemas=m_json](std::string_view path){return schemas->handles(path);});
+    m_json->setDeclarationReader([fs=&workbench.m_services.fs](std::string_view root,std::string_view path) {
+        return readEngineSchemaDeclaration(*fs,root,path);
+    });
+    if (!workbench.m_resourceGovernor)
+        workbench.m_resourceGovernor = std::make_shared<sched::ResourceGovernor>();
+    m_server.setShaderServer(std::make_shared<EngineShaderLanguageRequester>(
+        *workbench.m_pool, workbench.m_resourceGovernor,
+        [self = QPointer<Workbench>(&workbench)](std::string method, lang::Json params, std::stop_token stop,
+                                                 EngineShaderLanguageRequester::Reply reply) {
+            if (!self) {
+                reply(fail(ErrorCode::Cancelled));
+                return;
+            }
+            QMetaObject::invokeMethod(
+                self.data(),
+                [self, method = std::move(method), params = std::move(params), stop,
+                 reply = std::move(reply)]() mutable {
+                    if (!self || !self->m_engine) {
+                        reply(fail(ErrorCode::Busy, "Pair a trusted engine for GLSL language features"));
+                        return;
+                    }
+                    self->m_engine->requestShaderLanguage(std::move(method), std::move(params), stop, std::move(reply));
+                },
+                Qt::QueuedConnection);
+        }));
     // Borrowed services outlive the workbench; its pool drains outstanding requests on shutdown.
     m_cmakeLanguage = std::make_shared<lang::CMakeLanguageService>(
         *workbench.m_pool, [fs = &workbench.m_services.fs](std::string_view path, std::size_t limit) {
             return fs->readFileSnapshot(path, limit);
         });
     m_server.setCMakeServer(m_cmakeLanguage);
+    m_msbuildLanguage = std::make_shared<lang::MSBuildLanguageService>(*workbench.m_pool,
+        [fs=&workbench.m_services.fs](std::string_view path,std::size_t limit) { return fs->readFileSnapshot(path,limit); });
+    m_server.setMSBuildServer(m_msbuildLanguage);
 }
 
 LanguageBridge::~LanguageBridge() = default;
+void LanguageBridge::setActivePath(std::string_view path) {
+    m_server.setActivePath(path);
+    if (m_workbench.m_engine)
+        m_workbench.m_engine->scheduleShaderDiagnostics(std::string(path));
+}
 std::vector<lang::LiveDiagnostic> LanguageBridge::jsonDiagnostics(std::string_view path) const {
-    if (!lang::hasBundledJsonSchema(path))
+    if (!m_json->handles(path) && !lang::isCMakeSource(path))
         return {};
     const auto* view = m_workbench.m_editors->find(path);
     if (!view)
         return {};
+    if (lang::isCMakeSource(path)) return lang::inspectCMakeSource(path,view->editor().editor().text());
     m_json->updateDocument(std::string(path), view->editor().editor().text());
     return m_json->diagnostics(path);
 }
 void Workbench::syncJsonDocument(DocumentEditorView& view) {
-    if (!m_bridge || !lang::hasBundledJsonSchema(view.path()))
+    if (m_engine)
+        m_engine->documentEdited(view.path(), view.editor().editor().text().version());
+    if (!m_bridge || (!m_bridge->handlesJsonDocument(view.path()) && !lang::isCMakeSource(view.path())))
         return;
     lang::FileDiagnostics set;
     set.file = view.path();
@@ -146,6 +186,34 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
     if (label == "Rename" || label == "C++ Semantic Refactoring") {
         document::RefactoringPlan plan;
         plan.label = std::string(label);
+        const bool cmakeRename=label=="Rename" && std::ranges::any_of(edit.files,[](const auto& file){return lang::isCMakeSource(file.path);});
+        if (cmakeRename) {
+            const auto capture=m_cmakeLanguage->renameCapture(edit);
+            if (!capture || !m_workbench.m_cmake || m_workbench.m_cmake->shownModel()!=capture->model ||
+                m_workbench.m_cmake->service().modelStale())
+                return fail(ErrorCode::Busy,"CMake rename configuration changed; request a new preview");
+            plan.label="Rename CMake target";
+            for (const auto& [path,bytes]:capture->inputs) {
+                if (auto state=find(path)) {
+                    if (state->snapshot.text()!=bytes || state->changedOnDisk)
+                        return fail(ErrorCode::Busy,"CMake source changed after analysis: "+path);
+                    plan.bufferDependencies.push_back({path,bytes});
+                } else plan.dependencies.push_back({path,bytes});
+            }
+            for (const auto& [path,bytes]:capture->provenance) plan.dependencies.push_back({path,bytes});
+            const auto root=m_workbench.m_projectRoot;
+            const auto trust=m_workbench.m_services.trust.snapshot(root);
+            const QPointer<Workbench> self(&m_workbench);
+            plan.revalidateContext=[self,capture,root,trust]() -> Result<void> {
+                if (!self || self->m_shutDown || self->m_projectRoot!=root || !self->m_cmake ||
+                    self->m_cmake->shownModel()!=capture->model || self->m_cmake->service().modelStale())
+                    return fail(ErrorCode::Busy,"CMake configuration changed during preview");
+                const auto current=self->m_services.trust.snapshot(root);
+                if (current.revision!=trust.revision || current.trusted!=trust.trusted)
+                    return fail(ErrorCode::Untrusted,"Project trust changed during CMake preview");
+                return {};
+            };
+        }
         const auto positionEncoding = encoding();
         for (const auto& file : edit.files) {
             if (auto state = find(file.path)) {
@@ -214,6 +282,8 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
             if (!m_workbench.previewCppRefactoring(plan))
                 return fail(ErrorCode::Cancelled, "Semantic refactoring cancelled");
         }
+        if (cmakeRename && !m_workbench.previewCppRefactoring(plan))
+            return fail(ErrorCode::Cancelled,"CMake target rename cancelled");
         auto applied = m_workbench.applyRefactoring(plan);
         if (!applied)
             return std::unexpected(std::move(applied.error()));
@@ -231,6 +301,23 @@ Result<void> LanguageBridge::apply(const lang::WorkspaceEdit& edit, std::string_
 sched::Task<Result<lang::Json>> LanguageBridge::request(std::string method, lang::Json params, std::stop_token token) {
     if (const auto* doc = params.find("textDocument")) {
         auto path = lang::uriToPath(doc->stringAt("uri"));
+        if (path && project::isMSBuildSource(*path)) {
+            lang::MSBuildLanguageInput input;
+            input.path=*path;
+            for (const auto& [openPath,text] : openDocuments()) {
+                if (lang::documentKey(openPath)==lang::documentKey(*path)) input.source=text;
+                else if (project::isMSBuildSource(openPath)) input.openInputs.emplace_back(openPath,text);
+            }
+            // Only already-completed, trusted ProjectHost results are consumed. No request
+            // starts evaluation, resolves property functions, or grants project trust.
+            if (m_workbench.m_solutionEvaluation && m_workbench.m_services.trust.isTrusted(m_workbench.m_projectRoot))
+                for (const auto& evaluated : m_workbench.m_solutionEvaluation->results())
+                    if (lang::documentKey(evaluated.projectPath)==lang::documentKey(*path) ||
+                        std::ranges::any_of(evaluated.imports,[&](const auto& imported){return lang::documentKey(imported)==lang::documentKey(*path);}))
+                        input.evaluations.push_back(evaluated);
+            m_msbuildLanguage->setInput(std::move(input));
+            return m_msbuildLanguage->request(std::move(method),std::move(params),token);
+        }
         if (path && lang::isCMakeSource(*path)) {
             lang::CMakeLanguageInput input;
             input.path = *path;
@@ -240,8 +327,12 @@ sched::Task<Result<lang::Json>> LanguageBridge::request(std::string method, lang
                 else if (lang::isCMakeSource(openPath))
                     input.openInputs.emplace_back(openPath, text);
             }
-            if (m_workbench.m_cmake)
+            if (m_workbench.m_cmake && !m_workbench.m_cmake->service().modelStale()) {
                 input.model = m_workbench.m_cmake->shownModel();
+                if (input.model && !input.model->replyIndex.empty()) input.provenancePaths.push_back(input.model->replyIndex);
+                if (m_workbench.m_clangd)
+                    if (auto database=m_workbench.m_clangd->compileCommands()) input.provenancePaths.push_back(database->file);
+            }
             // Capture snapshots/model only. Bounded file reads and flattening run on the pool.
             m_cmakeLanguage->setInput(std::move(input));
             return m_cmakeLanguage->request(std::move(method), std::move(params), token);
@@ -274,7 +365,7 @@ std::optional<text::Snapshot> LanguageBridge::snapshot() const {
         return std::nullopt;
     }
     auto text = editor->editor().text();
-    if (lang::hasBundledJsonSchema(documentPath()))
+    if (m_json->handles(documentPath()))
         m_json->updateDocument(documentPath(), text);
     return text;
 }
@@ -282,7 +373,7 @@ std::optional<text::Snapshot> LanguageBridge::snapshot() const {
 std::int64_t LanguageBridge::documentVersion() const {
     const lang::ClangdService* clangd = m_workbench.m_clangd.get();
     const std::string path = documentPath();
-    if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path)) {
+    if (isEngineShaderSource(path) || m_json->handles(path) || lang::isCMakeSource(path) || project::isMSBuildSource(path)) {
         const auto text = snapshot();
         return text ? static_cast<std::int64_t>(text->version()) : 0;
     }
@@ -300,6 +391,10 @@ std::string LanguageBridge::structureIdentity() const {
     const auto* view = m_workbench.currentView();
     const std::string path = documentPath();
     const auto key = reinterpret_cast<std::uintptr_t>(view);
+    if(ui::lang::languageIdForPath(path)=="json")return std::format("{}:json:{}",key,m_json->schemaGeneration());
+    if (isEngineShaderSource(path))
+        return std::format("{}:{}", key,
+                           m_workbench.m_engine ? m_workbench.m_engine->shaderLanguageIdentity() : "unavailable");
     if (isManagedSource(path) && m_workbench.m_managed)
         return std::format("{}:{}:{}:{}", key, reinterpret_cast<std::uintptr_t>(m_workbench.m_managed.get()),
                            m_workbench.m_managed->restarts(), static_cast<int>(m_workbench.m_managed->state()));
@@ -568,7 +663,9 @@ sched::Task<void> readCompileDatabaseTask(io::IFileSystem* fs, std::string datab
 
 ui::lang::ServerReadiness Workbench::languageReadiness(std::string_view path) {
     using Readiness = ui::lang::ServerReadiness;
-    if (lang::hasBundledJsonSchema(path) || lang::isCMakeSource(path))
+    if (isEngineShaderSource(path))
+        return m_engine && m_engine->snapshot().boolAt("connected").value_or(false) ? Readiness::Unknown : Readiness::NotRunning;
+    if ((m_bridge && m_bridge->handlesJsonDocument(path)) || lang::isCMakeSource(path) || project::isMSBuildSource(path))
         return Readiness::Unknown;
     if (isLuaSource(path))
         return m_lua && m_lua->state() == lang::LuaState::Running ? Readiness::Unknown : Readiness::NotRunning;

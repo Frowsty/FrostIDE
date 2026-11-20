@@ -4,6 +4,7 @@
 
 #include "frost/engine/session.hpp"
 #include "frost/io/async_process.hpp"
+#include "frost/run/engine_session_configurations.hpp"
 #include "frost/run/run_configuration.hpp"
 #include "frost/run/run_manager.hpp"
 
@@ -12,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -215,6 +217,76 @@ protected:
     PrivateEngineLauncher launcher;
 };
 
+TEST_F(FrostEngineRunCorpus, ActualExportReceiptNamesExistingManifestPackAndExecutable) {
+#ifdef _WIN32
+    constexpr std::string_view executable = "FrostRuntime.exe";
+#else
+    constexpr std::string_view executable = "FrostRuntime";
+#endif
+    const auto runtime = io::joinPath(io::parentPath(build.program), executable);
+    ASSERT_TRUE(runtime);
+    const auto output = scratch.join("exported-game");
+    auto exported =
+        build.cli("build.export", project, rpc::Json::object().set("outputDirectory", output).set("runtime", *runtime));
+    ASSERT_TRUE(exported) << exported.error().describe();
+    EXPECT_EQ(io::normalizePath(exported->stringAt("outputDirectory")), io::normalizePath(output));
+    for (const std::string_view key : {"manifest", "pack", "executable"}) {
+        const auto path = exported->stringAt(key);
+        ASSERT_FALSE(path.empty()) << key;
+        const auto status = io::realFileSystem().status(path);
+        ASSERT_TRUE(status) << status.error().describe();
+        EXPECT_EQ(status->type, io::FileType::Regular) << key;
+    }
+}
+// Three real owned process trees must coexist; no scripted launcher establishes this criterion.
+TEST_F(FrostEngineRunCorpus, GeneratedMultiplayerMembersStartTogetherAndOwnedStopSettlesEveryTree) {
+#ifdef _WIN32
+    constexpr std::string_view executable = "FrostRuntime.exe";
+#else
+    constexpr std::string_view executable = "FrostRuntime";
+#endif
+    const auto runtime = io::joinPath(io::parentPath(build.program), executable);
+    ASSERT_TRUE(runtime);
+    std::random_device random;
+    const auto port = static_cast<std::uint16_t>(40000U + random() % 20000U);
+    auto configs = engineSessionRunConfigurations("corpus", "pinned", build.program, *runtime, project, port);
+    ASSERT_TRUE(configs) << configs.error().describe();
+    std::array<test::RunCollector, 3> outputs;
+    auto manager = RunManager::create(launcher);
+    std::vector<RunId> started;
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        auto config = (*configs)[i + 1];
+        // Headless is the real runtime presentation option, preserving generated networking args.
+        config.arguments.push_back("--headless");
+        auto run = manager->start(config, outputs[i].handlers());
+        ASSERT_TRUE(run) << run.error().describe();
+        started.push_back(*run);
+    }
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        const auto observed = outputs[i].waitUntil(
+            [&](const auto& snapshot) {
+                const auto current = manager->status(started[i]);
+                return snapshot.result.has_value() || (current && current->phase == RunPhase::Running);
+            },
+            120s);
+        ASSERT_FALSE(observed.result.has_value()) << "multiplayer member exited during startup";
+    }
+    ASSERT_EQ(manager->activeRuns().size(), 3);
+    for (const auto run : started) {
+        const auto status = manager->status(run);
+        ASSERT_TRUE(status);
+        EXPECT_EQ(status->phase, RunPhase::Running);
+        EXPECT_NE(status->processId, 0U);
+    }
+    manager->stopAll();
+    for (auto& output : outputs) {
+        const auto finished = output.waitFinished(30s).result;
+        ASSERT_TRUE(finished);
+        EXPECT_TRUE(finished->stopped);
+        EXPECT_FALSE(finished->cleanupFailed);
+    }
+    EXPECT_TRUE(manager->waitForIdle(30s));
+}
 TEST_F(FrostEngineRunCorpus, TypedEditorEstablishesAuthenticatedPersistentSessionThenOwnedStopDisconnects) {
     auto config = configuration(RunType::FrostEditor);
     config.arguments = {"--offscreen",         "--size", "320x240", "--automation-port", "0", "--config-dir",

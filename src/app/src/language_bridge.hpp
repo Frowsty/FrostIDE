@@ -17,6 +17,7 @@
 
 #include "frost/core/error.hpp"
 #include "frost/lang/cmake_language.hpp"
+#include "frost/lang/msbuild_language.hpp"
 #include "frost/lang/lsp_client.hpp"
 #include "frost/lang/workspace_edit.hpp"
 #include "frost/ui/lang/editor_language_host.hpp"
@@ -57,9 +58,14 @@ public:
 
     void setLuaServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setLuaServer(std::move(server)); }
     void setManagedServer(std::shared_ptr<lang::ILspRequester> server) { m_server.setManagedServer(std::move(server)); }
-    void setActivePath(std::string_view path) { m_server.setActivePath(path); }
+    void setActivePath(std::string_view path);
 
     void closeJsonDocument(std::string_view path) { m_json->removeDocument(path); }
+    [[nodiscard]] bool handlesJsonDocument(std::string_view path) const { return m_json->handles(path); }
+    [[nodiscard]] Result<void> installEngineDocumentSchemas(std::string root, const lang::Json& schemas) { return m_json->installEngineSchemas(std::move(root),schemas); }
+    [[nodiscard]] Result<void> installEngineTableSchema(std::string path,const text::Snapshot& snapshot,const lang::Json& reply) { return m_json->installEngineTableSchema(std::move(path),snapshot,reply); }
+    void setJsonAssetReferences(std::string root,lang::JsonAssetReferenceProvider provider) { m_json->setAssetReferences(std::move(root),std::move(provider)); }
+    void clearEngineDocumentSchemas() { m_json->clearEngineSchemas(); }
     [[nodiscard]] std::vector<lang::LiveDiagnostic> jsonDiagnostics(std::string_view path) const;
     // ILspRequester: the server for the document.
     [[nodiscard]] sched::Task<Result<lang::Json>> request(std::string method, lang::Json params,
@@ -105,6 +111,7 @@ private:
     StableLspRequester m_server;
     std::shared_ptr<lang::JsonSchemaService> m_json = std::make_shared<lang::JsonSchemaService>();
     std::shared_ptr<lang::CMakeLanguageService> m_cmakeLanguage;
+    std::shared_ptr<lang::MSBuildLanguageService> m_msbuildLanguage;
     lang::WorkspaceEditApplier m_applier;
 };
 

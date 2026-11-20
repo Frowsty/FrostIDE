@@ -83,6 +83,7 @@ set_tests_properties(tools.staged_luals PROPERTIES
 
 # Each suite runs as a script (its directory goes first on sys.path) in the build directory: ctest
 # labels only tests that run there with mod.tools (tests/CMakeLists.txt checks this).
+list(APPEND _frost_tool_suites delivery)
 foreach(suite IN LISTS _frost_tool_suites)
     add_test(NAME tools.${suite}
         COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/test_${suite}.py -v)

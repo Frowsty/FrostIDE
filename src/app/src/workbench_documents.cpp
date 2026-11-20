@@ -22,6 +22,7 @@
 
 #include "cmake_integration.hpp"
 #include "engine_binding_integration.hpp"
+#include "engine_integration.hpp"
 #include "git_integration.hpp"
 #include "language_bridge.hpp"
 #include "project_properties_dialog.hpp"
@@ -160,9 +161,18 @@ void Workbench::editorOpened(DocumentEditorView& view) {
     else if (m_debug)
         m_debug->attachEditor(&view.editor());
     syncJsonDocument(view);
-    connect(&view.editor(), &ui::EditorView::textChanged, this,
-            [this, current = &view] { syncJsonDocument(*current); scheduleCppAnalyzer(current->path()); });
+    connect(&view.editor(), &ui::EditorView::textChanged, this, [this, current = &view] {
+        syncJsonDocument(*current);
+        scheduleCppAnalyzer(current->path());
+        if (m_engine) {
+            m_engine->invalidateShaderPreview();
+            m_engine->scheduleShaderDiagnostics(current->path());
+        }
+    });
+    if (m_engine)
+        m_engine->scheduleShaderDiagnostics(view.path());
     scheduleCppAnalyzer(view.path());
+    view.editor().setProperty("engineAssetContext", m_engine && m_engine->isListedAsset(view.path()));
     refreshMarkers(view);
     if (m_documentRegistry->viewCount(view.path()) == 1) {
         syncClangdDocument(view);
@@ -223,7 +233,13 @@ void Workbench::editorOpened(DocumentEditorView& view) {
             return;
         editor->setFocus();
         editor->setState(text::EditorState::caretAt(lens.symbolOffset));
-        if (lens.actionId == "navigate.findUsages")
+        if (lens.actionId == "engine.assetUsages" && m_engine) {
+            auto result = m_engine->findAssetUsagesForDocument(targetView->path());
+            if (!result)
+                notify(text("Engine asset usages"), qs(result.error().message()), ui::NotificationKind::Error);
+        } else if (lens.actionId == "engine.performance" && m_window)
+            m_window->toolWindows().show("enginePerformance");
+        else if (lens.actionId == "navigate.findUsages")
             m_language->findUsages();
         else if (lens.actionId == "navigate.implementation")
             m_language->gotoImplementation();
@@ -336,6 +352,8 @@ void Workbench::editorOpened(DocumentEditorView& view) {
         }
     });
     transitionLauncherToMainWindow();
+    if (m_engine)
+        static_cast<void>(m_engine->findAssetUsagesForDocument(view.path(), false));
 }
 
 void Workbench::editorClosing(DocumentEditorView& view) {
@@ -360,7 +378,7 @@ void Workbench::editorClosed(DocumentEditorView& view) {
     if (m_lua && isLuaSource(path))
         (void)m_lua->closeDocument(path);
     m_language->editorChanged();
-    if (lang::hasBundledJsonSchema(path) && m_bridge) {
+    if (m_bridge && (m_bridge->handlesJsonDocument(path) || lang::isCMakeSource(path))) {
         m_bridge->closeJsonDocument(path);
         QMetaObject::invokeMethod(this, [this] { refreshLiveProblems(); }, Qt::QueuedConnection);
     }
@@ -436,6 +454,12 @@ bool Workbench::editorCloseRequested(DocumentEditorView& view) {
 }
 
 void Workbench::documentChanged(const std::string& path) {
+    if (m_engine)
+        m_engine->invalidateAssetUsages();
+    if (m_engine) {
+        m_engine->invalidatePerformanceLenses();
+        m_engine->invalidateShaderPreview();
+    }
     if (m_engineBindings && (isCFamilySource(path) || isLuaSource(path)))
         m_engineBindings->cancel();
     invalidateManagedDebug();
@@ -478,6 +502,8 @@ void Workbench::documentChanged(const std::string& path) {
         if (m_clangd && isCFamilySource(view->path()))
             (void)m_clangd->saveDocument(view->path());
     }
+    if (m_engine)
+        m_engine->scheduleShaderDiagnostics(view->path());
 }
 
 // --- Saving ---

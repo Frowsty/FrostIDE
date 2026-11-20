@@ -767,6 +767,14 @@ EditorDisplayList EditorView::buildDisplayList() {
             list.gutterText.push_back(DisplayText{QPointF(numbersRight - width, baseline), number, color, false,
                                                   std::nullopt, row.buffer, std::nullopt, false});
         }
+        const auto coverage = std::ranges::lower_bound(m_coverageMarkers, row.line, {}, &CoverageMarker::line);
+        if (coverage != m_coverageMarkers.end() && coverage->line == row.line) {
+            // A narrow count stripe shares the gutter but never replaces diagnostic/test markers.
+            const double x = gutter - (kMarkerColumn + kFoldColumn) * zoom;
+            list.gutterText.push_back(DisplayText{QPointF(x, baseline), QStringLiteral("|"),
+                                                  coverage->hits ? m_colors.changeAdded : m_colors.changeDeleted, false,
+                                                  std::nullopt, row.buffer, std::nullopt, false});
+        }
         // The most severe marker of the line (Error sorts before Warning, which sorts before Bookmark).
         const auto marker = std::ranges::lower_bound(m_markers, row.line, {}, &LineMarker::line);
         const bool hasLineMarker = marker != m_markers.end() && marker->line == row.line;

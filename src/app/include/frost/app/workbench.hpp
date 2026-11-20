@@ -200,6 +200,7 @@ class EngineDumpController;
 class EngineCrashObserver;
 class UnityControlIntegration;
 class GitIntegration;
+class AgentIntegration;
 struct GitClone;
 struct CompileDatabaseState; // workbench_language.cpp
 struct CppRenameAdmission;   // workbench_cpp_rename.cpp
@@ -394,6 +395,9 @@ struct WorkbenchOptions {
     // Where FrostIDE-written compile_commands.json files go (absolute; one directory per solution);
     // "" uses only existing databases.
     std::string compileCommandsCache;
+    // GUI-thread test seam after native analysis plan resolution, before queuing collection.
+    // It may revoke selection/configuration; queued workers must honor the shared stop token.
+    std::function<void()> nativeAnalysisBeforeQueue;
     // Where a language server's metadata sources are written to be shown read-only (absolute,
     // <profile>/caches/metadata, never a workspace; LanguageServices::metadataCacheDir); "" shows
     // none and navigation names LTR-6.
@@ -516,6 +520,8 @@ public:
     [[nodiscard]] Result<build::RunId> startEngineEditor();
     [[nodiscard]] Result<void> validateEngineScript();
     [[nodiscard]] Result<void> cancelEngineRequest();
+    [[nodiscard]] Result<void> refreshEnginePerformance();
+    [[nodiscard]] Result<void> showAssetInFrostEditor(std::string path, bool openAsset = false);
     // Paired-engine Lua debugging never grants ownership of an external host process.
     [[nodiscard]] Result<void> startEngineLuaDebug(bool startPlay = true);
     [[nodiscard]] ui::MixedDebugSnapshot mixedDebugSnapshot() const;
@@ -610,6 +616,12 @@ public:
     // The open solution, or nullptr (no project, or a folder project).
     [[nodiscard]] std::shared_ptr<const project::SolutionModel> solution() const { return m_solution; }
 
+    // Explicit per-window C1 consent; never starts from startup or project configuration.
+    void enableAgentBridge(bool launchTerminal);
+    void stopAgentBridge();
+    void mentionAgentSelection();
+    [[nodiscard]] bool agentBridgeActive() const;
+
     // --- Saving and external changes ---
 
     // Saves `view`'s document. Errors: SaveManager::save's (also shown as a notification).
@@ -644,6 +656,9 @@ public:
     [[nodiscard]] Result<document::RefactoringOutcome> undoRefactoring();
     [[nodiscard]] Result<document::RefactoringOutcome> redoRefactoring();
     [[nodiscard]] Result<document::RefactoringOutcome> resumeRefactoring();
+    // Explicit restart recovery: replay only owned native decisions, then verify a stranded
+    // engine lease against actual full images. Never creates a new asset move decision.
+    [[nodiscard]] Result<void> recoverRefactoringJournal(bool explicitRequest = true);
     [[nodiscard]] bool canUndoRefactoring() const noexcept;
     [[nodiscard]] bool canRedoRefactoring() const noexcept;
     [[nodiscard]] bool refactoringPending() const noexcept;
@@ -789,6 +804,7 @@ private:
     [[nodiscard]] bool canStartLuaDebug() const;
     friend class UnityControlIntegration;
     friend class GitIntegration;
+    friend class AgentIntegration;
 
     // IDocumentEditorListener.
     void editorOpened(DocumentEditorView& view) override;
@@ -802,7 +818,13 @@ private:
     // Construction steps.
     void registerActions();
     void registerEditorExtrasActions();
+
+    void registerNativeAnalysisActions();
+    void startNativeAnalysis(bool importProfiles = false, bool profile = false);
+    void prepareNativeAnalysis(const run::RunConfiguration& configuration, std::stop_token stop,
+                               std::function<void(Result<run::LaunchPlan>)> done);
     void registerRefactoringActions();
+    [[nodiscard]] Result<void> ensureRefactoringCoordinator(const std::string& target);
     void registerCppRefactoringActions();
     void registerCppIndexActions();
     void showCppIndex(std::string operation, std::string symbol = {});
@@ -845,6 +867,7 @@ private:
     [[nodiscard]] Result<void> startSelectedDebugConfiguration();
     void attachLanguage();
     void attachServices();
+    void attachHosting();
     void attachEngineBindings();
     // GUI retirement is nonblocking; the destructor drains after feature teardown, before services.
     void retireEngineBindingWork(std::shared_ptr<EngineBindingRetirement> retirement);
@@ -1067,10 +1090,12 @@ private:
         std::vector<document::FileRename> renames;
         std::vector<std::string> mutationPaths;
         bool applied = false;
+        std::shared_ptr<document::RefactoringExternalGuard> external;
     };
     std::vector<RefactoringPaths> m_refactoringPaths;
     TransactionId m_pendingRefactoring;
     bool m_refactoringRecoveryChecked = false;
+    bool m_refactoringExecuting = false;
     TransactionId m_refactoringAdmissionToken;
     std::shared_ptr<CppRenameAdmission> m_cppRenameAdmission;
     std::stop_source m_cppRenameStop;
@@ -1108,6 +1133,9 @@ private:
     std::unique_ptr<ui::BuildServiceBackend> m_buildBackend;
     // Declared before m_cmake, which runs through it, so it is destroyed after it (RUN-1).
     std::unique_ptr<run::RunManager> m_runManager;
+    std::stop_source m_nativeAnalysisStop;
+    std::uint64_t m_nativeAnalysisGeneration = 0;
+    bool m_nativeAnalysisActive = false;
     std::unique_ptr<CMakeIntegration> m_cmake;
     std::unique_ptr<StandaloneBuildBackend> m_standalone;
     std::unique_ptr<UnrealBuildBackend> m_unreal;
@@ -1218,6 +1246,7 @@ private:
 
     std::unique_ptr<term::RealPtyLauncher> m_terminalLauncher;
     std::unique_ptr<ui::TerminalIntegration> m_terminal;
+    std::unique_ptr<AgentIntegration> m_agent;
     std::unique_ptr<ui::FindFeature> m_find;
     QPointer<ui::ShellWindow> m_window;
     std::unique_ptr<ui::Workbench> m_nav;
