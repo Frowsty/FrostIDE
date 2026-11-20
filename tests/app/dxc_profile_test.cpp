@@ -33,8 +33,9 @@ TEST(DxcProfile, RefusesImplicitCompilerInventedEntryAndShaderLabVariants) {
 }
 TEST(DxcProfile, ActualCompilerFormatLocationsRemainMessagesWithoutInferredSuccess) {
     auto p = profile();
-    auto rows =
-        parseDxcDiagnostics("test.hlsl(4,9): error: use of undeclared identifier 'actual'\nnot a diagnostic\n", p.root);
+    auto rows = parseDxcDiagnostics("test.hlsl(4,9) :  error: use of undeclared identifier 'actual'\r\n"
+                                    "    return actual;\r\n"
+                                    "           ^\r\n", p.root);
     ASSERT_TRUE(rows);
     ASSERT_EQ(rows->size(), 1u);
     EXPECT_EQ(rows->front().diagnostic.line, 4);
@@ -48,7 +49,7 @@ TEST(DxcProfile, RealCommandRecipeUsesExactArgvAndBoundedDiagnosticCollection) {
     io::ScriptedProcessLauncher launcher;
     io::ScriptedProcess script;
     script.exitCode = 1;
-    script.stderrBytes = "test.hlsl(2,3): error: actual adapter output\n";
+    script.stderrBytes = "test.hlsl(2,3) :  error: actual adapter output\r\n";
     launcher.expect(std::move(script));
     auto p = profile();
     auto report = runDxc(launcher, p);
@@ -59,9 +60,15 @@ TEST(DxcProfile, RealCommandRecipeUsesExactArgvAndBoundedDiagnosticCollection) {
     ASSERT_EQ(records.size(), 1u);
     EXPECT_EQ(records[0].spec.executable, p.executable);
     EXPECT_FALSE(records[0].spec.rawArguments);
-    EXPECT_EQ(records[0].spec.arguments.back(), p.source);
-    EXPECT_EQ(records[0].spec.arguments[1], p.entry);
-    EXPECT_EQ(records[0].spec.arguments[3], p.target);
+    const std::vector<std::string> expectedArguments{
+        "-E", p.entry, "-T", p.target, "-HV", "2021", "-fdiagnostics-format=msvc", "-Fo",
+#ifdef _WIN32
+        "NUL",
+#else
+        "/dev/null",
+#endif
+        p.source};
+    EXPECT_EQ(records[0].spec.arguments, expectedArguments);
     EXPECT_EQ(records[0].spec.stderrMode, io::Stdio::MergeIntoStdout);
     script = {};
     script.stdoutBytes = std::string(1024 * 1024 + 1, 'x');
@@ -101,7 +108,7 @@ TEST(DxcInstalledCompiler, DiagnosesActualSavedHlslThroughRealCommand) {
     auto report = runDxc(io::realProcessLauncher(), p);
     ASSERT_TRUE(report) << report.error().message();
     EXPECT_NE(report->exitCode, 0);
-    ASSERT_FALSE(report->diagnostics.empty());
+    ASSERT_FALSE(report->diagnostics.empty()) << report->output;
     EXPECT_EQ(report->diagnostics.front().diagnostic.line, 1);
     EXPECT_NE(report->diagnostics.front().diagnostic.message.find("actual_missing_identifier"), std::string::npos);
 }

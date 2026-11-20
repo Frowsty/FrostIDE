@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/app/workbench.hpp"
+#include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 
