@@ -1,3 +1,12 @@
+## 2026-11-20 — Focused Windows verification after R19
+
+- Built the Windows Debug IDE with the pinned clang-cl preset. Its startup self-test passed all 14 checks, including showing and closing the main window offscreen. The first run exposed an access violation while constructing the .NET Project panel. The workbench now waits for the shell before attaching the panel.
+- The Visual Studio project-host regression matched real MSBuild items for two C++ projects across Debug and Release on Win32 and x64. It checked both solution formats, imported and linked headers, exclusions, and configuration changes. A separate Solution Explorer test activated a header and checked the exact file path.
+- In a normal IDE process with an isolated profile, opened scratch copies of `Headers.sln` and `Headers.slnx` at Debug|x64. Solution Explorer listed `imported.hpp`, `from_targets.hpp`, the nested wildcard header `glob.hpp`, `linked.hpp`, and the header-only project's `only.hpp` for both. It omitted the orphan and excluded headers. The IDE quit with exit code 0.
+- The installed Windows SDK DXC produced a source diagnostic for an invalid saved shader after removing an unsupported flag. The native C++ analyzer emitted the expected SARIF rule and source region with the SDK selections in FrostIDE's compilation database. External clang-cl databases that rely on implicit SDK discovery remain outside this result.
+- Built the managed host against pinned Roslyn and exercised portable PDB source lookup, ILSpy decompilation and IL output. The Unity TestRunner probe passed with API doubles. Running the Unity Editor and distributing the managed payload remain separate acceptance steps.
+- The built-in settings registry check passed with the documented analyzer rule keys. Nine agent hierarchy and inspection metadata tests passed. Windows checks were selected by feature. Linux, live engine integration, release packaging and the updater were outside this run.
+
 ## 2026-11-20 — R19 cumulative source handoff
 
 - LTR-15 and LTR-16 add Unreal project discovery, trusted local build and native debug, reflection completion and explicit Blueprint observations through the partner protocol. The local-only Unreal plug-in is omitted. Unreal Live Coding and Automation remain open.
