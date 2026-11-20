@@ -17,11 +17,11 @@ void EngineIntegration::Impl::observedCrashLoss(const engine::EngineIdentity& ob
     const auto lease = crashSessions->snapshot();
     if (!lease || !lease->admitted())
         return;
-    const auto& identity = lease->identity();
-    if (identity.instanceId != observed.instanceId || identity.generation != observed.generation ||
-        identity.connectionGeneration != observed.connectionGeneration ||
-        identity.projectPath != observed.projectPath || identity.processId != observed.processId ||
-        identity.crashArtifactSource != observed.crashArtifactSource)
+    const auto& captured = lease->identity();
+    if (captured.instanceId != observed.instanceId || captured.generation != observed.generation ||
+        captured.connectionGeneration != observed.connectionGeneration ||
+        captured.projectPath != observed.projectPath || captured.processId != observed.processId ||
+        captured.crashArtifactSource != observed.crashArtifactSource)
         return;
     emit owner.crashSourceUnexpectedLoss(observed);
 }

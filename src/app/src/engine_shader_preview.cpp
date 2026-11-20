@@ -5,6 +5,7 @@
 #include "frost/io/spawn_log.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/ui/lang/language_controller.hpp"
+#include "frost/ui/shell/shell_actions.hpp"
 #include "frost/ui/shell/tool_window_manager.hpp"
 #include "frost/ui/toolwindows/problems.hpp"
 

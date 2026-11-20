@@ -108,15 +108,15 @@ struct EngineBindingIntegration::Impl {
             relay = std::move(delivery);
         relay->target = &owner;
     }
-    void regenerate(const AppliedBinding& applied, document::RefactoringStatus status) {
-        if (status == document::RefactoringStatus::PendingRecovery || stopped ||
+    void regenerate(const AppliedBinding& applied, document::RefactoringStatus settlementStatus) {
+        if (settlementStatus == document::RefactoringStatus::PendingRecovery || stopped ||
             !workbench.m_services.trust.isTrusted(applied.root) ||
             !workbench.m_services.trust.isTrusted(applied.engineRoot))
             return;
         invalidate(true);
         setStatus("Binding sources settled; refreshing actual engine schema (rebuild may be required)");
         const auto expected =
-            status == document::RefactoringStatus::Undone ? applied.previousIdentity : applied.renamedIdentity;
+            settlementStatus == document::RefactoringStatus::Undone ? applied.previousIdentity : applied.renamedIdentity;
         retirement->jobs.push_back(workbench.m_pool->spawn(
             sched::Lane::Background, regenerateSchema(relay, applied, expected, revision, &workbench.m_services.fs,
                                                       &workbench.m_services.trust)));
@@ -237,7 +237,7 @@ struct EngineBindingIntegration::Impl {
                 value.luaStateDirectory = io::joinPath(io::parentPath(*trustFile), "luals").value_or("");
         value.stateDirectory = bytes(QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
                                          .filePath(QStringLiteral("binding-analysis")));
-        for (const auto* view : workbench.m_editors->uniqueDocumentViews()) {
+        for (auto* view : workbench.m_editors->uniqueDocumentViews()) {
             if (!isCFamilySource(view->path()) && !isLuaSource(view->path()))
                 continue;
             value.openDocuments.push_back({view->path(), view->editor().editor().text(),
@@ -247,7 +247,7 @@ struct EngineBindingIntegration::Impl {
         }
         if (workbench.m_nav)
             value.candidates = workbench.m_nav->projectFiles().candidates();
-        if (const auto* view = workbench.currentView()) {
+        if (auto* view = workbench.currentView()) {
             value.activePath = view->path();
             value.caret = view->editor().editor().state().primary().head;
         }
@@ -426,7 +426,7 @@ struct EngineBindingIntegration::Impl {
                 return;
             auto& impl = *self->m_impl;
             impl.busy = false;
-            const auto* view = impl.workbench.currentView();
+            auto* view = impl.workbench.currentView();
             if (!probe.current() || !view || lang::documentKey(view->path()) != lang::documentKey(probe.path) ||
                 !view->editor().editor().text().sharesStorageWith(probe.snapshot) ||
                 view->editor().editor().text().version() != probe.snapshot.version()) {
@@ -589,8 +589,8 @@ EngineBindingIntegration::EngineBindingIntegration(Workbench& workbench,
     auto* usages = new QPushButton(QStringLiteral("Find C++/Lua usages"), panel);
     usages->setObjectName(QStringLiteral("engineBindingUsagesButton"));
     row->addWidget(usages);
-    auto* cancel = new QPushButton(QStringLiteral("Cancel"), panel);
-    row->addWidget(cancel);
+    auto* cancelButton = new QPushButton(QStringLiteral("Cancel"), panel);
+    row->addWidget(cancelButton);
     layout->addLayout(row);
     auto* renameRow = new QHBoxLayout;
     impl.newName = new QLineEdit(panel);
@@ -634,7 +634,7 @@ EngineBindingIntegration::EngineBindingIntegration(Workbench& workbench,
         if (auto result = findUsages(); !result)
             m_impl->setStatus(result.error().message());
     });
-    connect(cancel, &QPushButton::clicked, this, [this] { this->cancel(); });
+    connect(cancelButton, &QPushButton::clicked, this, [this] { cancel(); });
     connect(preview, &QPushButton::clicked, this, [this] {
         if (auto result = previewRename(bytes(m_impl->newName->text()), m_impl->nativeRename->isChecked()); !result)
             m_impl->setStatus(result.error().message());

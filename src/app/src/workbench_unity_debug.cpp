@@ -118,7 +118,11 @@ void Workbench::startUnityDebug(bool rebind) {
     if (!QFileInfo::exists(QString::fromStdString(held)) || !QFileInfo::exists(QString::fromStdString(guard))) {
         notify(QStringLiteral("Unity Debugger"), QStringLiteral("The installed held-read/source-verification helper is unavailable."), ui::NotificationKind::Error); return;
     }
-    auto job = std::make_shared<ManagedSnapshotJob>(); job->target = this;
+    auto job = std::make_shared<ManagedSnapshotJob>();
+    {
+        LockGuard lock(job->mutex);
+        job->target = this;
+    }
     const auto identityCurrent = [editor, player = selection.player] {
         return player || (editor && editor->epoch && editor->epoch->load() == editor->revision);
     };

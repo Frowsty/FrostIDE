@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "scene_merge_work.hpp"
 
+#include "frost/io/async_process.hpp"
 #include "frost/io/path.hpp"
 #include "frost/text/text_file.hpp"
 #include "frost/vcs/conflict_sources.hpp"
@@ -38,14 +39,26 @@ class AdmittedLauncher final : public io::IProcessLauncher {
 public:
     AdmittedLauncher(const SceneMergeWork& work, std::stop_token stop) : m_work(work), m_stop(stop) {}
     Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& spec) override {
+        if (auto valid = checkAdmission(); !valid)
+            return std::unexpected(valid.error());
+        return m_work.launcher.launch(spec);
+    }
+    Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
+                                                         const io::AsyncContext& context) override {
+        if (auto valid = checkAdmission(); !valid)
+            return std::unexpected(valid.error());
+        return m_work.launcher.launchAsync(spec, context);
+    }
+
+private:
+    Result<void> checkAdmission() const {
         if (m_stop.stop_requested())
             return fail(ErrorCode::Cancelled, "Scene merge cancelled");
         if (!m_work.tool.admitted || !m_work.tool.admitted())
             return fail(ErrorCode::Untrusted, "Engine merge source admission changed before launch");
-        return m_work.launcher.launch(spec);
+        return {};
     }
 
-private:
     const SceneMergeWork& m_work;
     std::stop_token m_stop;
 };

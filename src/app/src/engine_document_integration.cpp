@@ -15,16 +15,21 @@ namespace frost::app {
 namespace {
 QString displayDocument(std::string_view value){return QString::fromUtf8(value.data(),static_cast<qsizetype>(value.size()));}
 build::BuildDiagnostic rowFor(const engine::DocumentIssue& issue,std::string path,const text::Snapshot* source=nullptr) {
-    build::BuildDiagnostic row;row.file=std::move(path);row.code=issue.code;row.message=issue.message;
-    if(!issue.location.empty())row.message+=" ["+issue.location+"]";
-    row.severity=issue.severity=="error"?build::Severity::Error:issue.severity=="warning"?build::Severity::Warning:build::Severity::Info;
-    row.line=static_cast<int>(issue.line);row.column=static_cast<int>(issue.column);
+    build::BuildDiagnostic row;
+    row.path=std::move(path);
+    auto& diagnostic=row.diagnostic;
+    diagnostic.code=issue.code;
+    diagnostic.message=issue.message;
+    if(!issue.location.empty())diagnostic.message+=" ["+issue.location+"]";
+    diagnostic.severity=issue.severity=="error"?build::Severity::Error:issue.severity=="warning"?build::Severity::Warning:build::Severity::Message;
+    diagnostic.line=static_cast<int>(issue.line);diagnostic.column=static_cast<int>(issue.column);
     if(source&&issue.byte) {
         auto offset=std::min<std::uint64_t>(issue.byte-1,source->size().value());
         while(offset&&!source->isCharBoundary(ByteOffset{offset}))--offset;
         const auto position=source->utf16PointAt(ByteOffset{offset});
-        row.line=static_cast<int>(position.line.value())+1;row.column=static_cast<int>(position.column.value())+1;
+        diagnostic.line=static_cast<int>(position.line.value())+1;diagnostic.column=static_cast<int>(position.column.value())+1;
     }
+    row.jumpable=!row.path.empty()&&diagnostic.line>0;
     return row;
 }
 }
@@ -35,7 +40,7 @@ void EngineIntegration::Impl::publishDocumentProblems() {
     workbench.m_problems->model()->setProblems(ui::DiagnosticSource::Engine,std::move(rows));
 }
 bool EngineIntegration::Impl::retainDocumentProblems(std::string key,std::vector<build::BuildDiagnostic> rows) {
-    const auto size=[](const auto& row){return row.message.size()+row.file.size()+row.code.size()+128;};
+    const auto size=[](const build::BuildDiagnostic& row){return row.diagnostic.message.size()+row.path.size()+row.diagnostic.code.size()+128;};
     documentDiagnostics.erase(key);std::size_t count=0,bytes=0;
     for(const auto& row:rows) {if(count==10000||bytes+size(row)>4*1024*1024)break;bytes+=size(row);++count;}
     const bool complete=count==rows.size();rows.resize(count);
@@ -165,7 +170,7 @@ Result<void> EngineIntegration::validateContent() {
                 const auto relative=QDir(displayDocument(impl.physicalRoot)).relativeFilePath(displayDocument(*actual));
                 if(!relative.startsWith(QStringLiteral(".."))&&!QDir::isAbsolutePath(relative))path=*actual;
             }
-            auto row=rowFor(issue,std::move(path));if(row.file.empty()&&!issue.asset.empty())row.message+=" ["+issue.asset+"]";rows.push_back(std::move(row));
+            auto row=rowFor(issue,std::move(path));if(row.path.empty()&&!issue.asset.empty())row.diagnostic.message+=" ["+issue.asset+"]";rows.push_back(std::move(row));
         }
         const bool retained=impl.retainDocumentProblems("$content",std::move(rows));
         impl.setStatus(retained?QStringLiteral("Actual on-disk project validation is in Problems; dirty document validation is separate"):

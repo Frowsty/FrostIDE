@@ -3,6 +3,7 @@
 #pragma once
 #include "engine_native_host.hpp"
 #include "workbench_engine_lua_debug.hpp"
+#include "frost/lang/json.hpp"
 #include <QObject>
 namespace frost::app {
 class EngineMixedLaunchCoordinator final : public QObject {

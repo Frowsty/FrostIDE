@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "unity_yaml_merge.hpp"
 
+#include "frost/io/async_process.hpp"
 #include "frost/io/path.hpp"
 #include "frost/text/text_file.hpp"
 #include "frost/vcs/conflict_sources.hpp"
@@ -63,6 +64,12 @@ public:
         if (auto valid = validateUnityMergeSources(m_work, m_source, m_stop); !valid)
             return std::unexpected(valid.error());
         return m_work.launcher.launch(spec);
+    }
+    Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
+                                                         const io::AsyncContext& context) override {
+        if (auto valid = validateUnityMergeSources(m_work, m_source, m_stop); !valid)
+            return std::unexpected(valid.error());
+        return m_work.launcher.launchAsync(spec, context);
     }
 
 private:

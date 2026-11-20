@@ -382,7 +382,7 @@ private:
                                      : Result<std::string>(std::unexpected(physical.error()));
             if (stop.stop_requested() || !workerAdmission(source)())
                 resolved = fail(ErrorCode::Cancelled, "engine test source changed during navigation");
-            relay->post([this, resolved = std::move(resolved), generation, line]() mutable {
+            relay->post([this, resolved = std::move(resolved), generation, line = location.line]() mutable {
                 m_busy = false;
                 const auto now = current();
                 if (generation == m_generation && now && key(*now) == m_key) {

@@ -149,21 +149,21 @@ void EngineIntegration::requestShaderLanguage(std::string method, lang::Json par
     std::replace(prefix.begin(), prefix.end(), '\\', '/');
     if (!prefix.ends_with('/'))
         prefix += '/';
-    for (const auto& document : impl.workbench.m_documents->documents())
-        if (!document->path().empty()) {
-            auto key = lang::documentKey(document->path());
+    for (const auto& openDocument : impl.workbench.m_documents->documents())
+        if (!openDocument->path().empty()) {
+            auto key = lang::documentKey(openDocument->path());
             std::replace(key.begin(), key.end(), '\\', '/');
             if (!key.starts_with(prefix))
                 continue;
-            const auto text = document->document().text();
+            const auto text = openDocument->document().text();
             if (text.size().value() > 256 * 1024 || text.size().value() > 4 * 1024 * 1024 - total ||
                 captured.size() >= 128) {
                 gate->finish(fail(ErrorCode::OutOfRange, "GLSL open snapshots exceed input budget"));
                 return;
             }
             total += text.size().value();
-            captured.emplace(document->path(), text.text());
-            stamps.emplace(document->path(), std::pair{document.get(), static_cast<std::uint64_t>(text.version())});
+            captured.emplace(openDocument->path(), text.text());
+            stamps.emplace(openDocument->path(), std::pair{openDocument.get(), static_cast<std::uint64_t>(text.version())});
         }
     const auto epoch = impl.epoch, sessionEpoch = impl.sessionEpoch, trust = impl.trustRevision,
                generation = impl.shaderPreviewGeneration;
@@ -239,9 +239,9 @@ void EngineIntegration::requestShaderLanguage(std::string method, lang::Json par
                                         gate->finish(fail(ErrorCode::Cancelled));
                                         return;
                                     }
-                                    for (const auto& [path, bytes] : captured) {
-                                        auto* current = impl.workbench.m_documents->find(path);
-                                        const auto stamp = stamps.find(path);
+                                    for (const auto& [capturedPath, bytes] : captured) {
+                                        auto* current = impl.workbench.m_documents->find(capturedPath);
+                                        const auto stamp = stamps.find(capturedPath);
                                         if (!current || stamp == stamps.end() || current != stamp->second.first ||
                                             current->document().text().version() != stamp->second.second ||
                                             current->document().text().text() != bytes) {

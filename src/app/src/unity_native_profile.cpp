@@ -16,14 +16,15 @@ Result<std::string> owned(io::IFileSystem& fs, std::string_view root, std::strin
     if (!status || status->type != kind) return fail(ErrorCode::NotFound, "IL2CPP native input is unavailable or has the wrong type");
     return normal;
 }
-Result<std::string> quoted(std::string_view path) {
+Result<std::string> quoteLldbPath(std::string_view path) {
     if (path.empty() || path.size() > 32767) return fail(ErrorCode::InvalidArgument, "invalid native symbol path");
     std::string result = "\"";
-    for (unsigned char c : path) {
-        if (c < 32 || c == 127 || c == 96)
+    for (char c : path) {
+        const auto byte = static_cast<unsigned char>(c);
+        if (byte < 32 || byte == 127 || c == '`')
             return fail(ErrorCode::InvalidArgument, "native debugger command paths cannot contain control characters or backticks");
         if (c == '\\' || c == '\"') result.push_back('\\');
-        result.push_back(static_cast<char>(c));
+        result.push_back(c);
     }
     result.push_back('\"'); return result;
 }
@@ -48,7 +49,7 @@ Result<UnityNativeProfile> prepareUnityNativeProfile(io::IFileSystem& fs, const 
     if (!module) return std::unexpected(std::move(module.error()));
     if (!symbols) return std::unexpected(std::move(symbols.error()));
     if (!sources) return std::unexpected(std::move(sources.error()));
-    auto moduleArg = quoted(*module), symbolArg = quoted(*symbols);
+    auto moduleArg = quoteLldbPath(*module), symbolArg = quoteLldbPath(*symbols);
     if (!moduleArg) return std::unexpected(std::move(moduleArg.error()));
     if (!symbolArg) return std::unexpected(std::move(symbolArg.error()));
     UnityNativeProfile profile;

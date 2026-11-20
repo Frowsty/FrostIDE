@@ -54,7 +54,7 @@ void requestProperty(const std::shared_ptr<PropertyDialog>& state, std::string m
     }
 }
 void publishProperties(const std::shared_ptr<PropertyDialog>& state, engine::SerializedComponent component) {
-    const auto text = component.fields.dump(2);
+    const auto text = component.fields.dump();
     state->snapshot = std::move(component);
     state->fields->setPlainText(qs(text));
     const bool editable = state->expectedSupported && text.size() <= 512 * 1024;
@@ -271,7 +271,7 @@ Result<void> EngineIntegration::showSerializedProperties() {
         }
     });
     watch->start();
-    installDialogChrome(dialog, false);
+    ui::installDialogChrome(dialog, false);
     dialog->open();
     return {};
 }

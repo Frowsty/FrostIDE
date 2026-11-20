@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Immutable actual-index queries injected without a lang-to-engine dependency or filesystem inference.
 #pragma once
-#include "frost/rpc/json.hpp"
+#include "frost/lang/json.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
