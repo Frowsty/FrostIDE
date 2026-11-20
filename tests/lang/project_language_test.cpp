@@ -72,6 +72,25 @@ TEST(CMakeRefactoring, DynamicAndUnsupportedTargetUsesRefuseTheEntirePlan) {
         EXPECT_FALSE(planCMakeTargetRename(input,{0,19},"bravo"));
     }
 }
+TEST(CMakeRefactoring, LinkGrammarKeywordsAreRefusedAsOldOrNewTargetNames) {
+    auto input=cmakeInput("add_custom_target(alpha)\ntarget_link_libraries(consumer PUBLIC alpha)\n");
+    for (const auto* name:{"PUBLIC","PRIVATE","INTERFACE","debug","optimized","general"})
+        EXPECT_FALSE(planCMakeTargetRename(input,{0,19},name));
+    auto old=cmakeInput("add_custom_target(PUBLIC)\ntarget_link_libraries(consumer PUBLIC PUBLIC)\n");
+    auto model=std::make_shared<project::CMakeProject>(*old.model);
+    model->targets[0].name="PUBLIC"; old.model=model;
+    EXPECT_FALSE(planCMakeTargetRename(old,{0,19},"bravo"));
+}
+TEST(CMakeRefactoring, GeneratedDynamicMetadataIsReadOnlyCapturedEvidence) {
+    auto input=cmakeInput("add_custom_target(alpha)\n");
+    auto model=std::make_shared<project::CMakeProject>(*input.model);
+    model->inputs.push_back({"/build/CMakeSystem.cmake",true,false,false}); input.model=model;
+    input.inputs.emplace_back("/build/CMakeSystem.cmake","set(CMAKE_HOST_SYSTEM_NAME \"${HOST}\")\n");
+    auto plan=planCMakeTargetRename(input,{0,19},"bravo");
+    ASSERT_TRUE(plan);
+    EXPECT_EQ(plan->inputs.size(),2U);
+    EXPECT_EQ(plan->edit.files.size(),1U);
+}
 TEST(CMakeRefactoring, ParserInspectionsReportConcreteSourceFacts) {
     auto source=text::TextBuffer::fromUtf8("add_custom_target(alpha)\nadd_custom_target(alpha)\n").value();
     auto diagnostics=inspectCMakeSource("/project/CMakeLists.txt",source.snapshot());

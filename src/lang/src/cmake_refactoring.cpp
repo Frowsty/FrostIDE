@@ -17,8 +17,19 @@ bool targetCommand(std::string_view name) {
            name=="set_target_properties" || name=="add_dependencies";
 }
 bool declaration(std::string_view name) { return name=="add_library" || name=="add_executable" || name=="add_custom_target"; }
+bool reservedTarget(std::string_view name) {
+    constexpr std::string_view words[]={"PUBLIC","PRIVATE","INTERFACE","LINK_PUBLIC","LINK_PRIVATE","LINK_INTERFACE_LIBRARIES",
+        "debug","optimized","general","ALIAS","IMPORTED","GLOBAL","STATIC","SHARED","MODULE","OBJECT","UNKNOWN",
+        "WIN32","MACOSX_BUNDLE","EXCLUDE_FROM_ALL","ALL","COMMAND","NAME","TARGET","PROPERTY","PROPERTIES","BEFORE","AFTER","SYSTEM"};
+    return std::ranges::find(words,name)!=std::end(words);
+}
+bool irrelevantDynamicCommand(std::string_view name) {
+    constexpr std::string_view names[]={"set","unset","option","project","cmake_minimum_required","message","string","list","math",
+        "get_filename_component","cmake_path","get_cmake_property","mark_as_advanced","cmake_policy","cmake_host_system_information"};
+    return std::ranges::find(names,name)!=std::end(names);
+}
 bool validTarget(std::string_view name) {
-    return !name.empty() && std::ranges::all_of(name,[](unsigned char c){return std::isalnum(c)||c=='_'||c=='-'||c=='.'||c=='+';});
+    return !name.empty() && !reservedTarget(name) && std::ranges::all_of(name,[](unsigned char c){return std::isalnum(c)||c=='_'||c=='-'||c=='.'||c=='+';});
 }
 }
 Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input,LspPosition position,std::string newName) {
@@ -32,7 +43,7 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
     std::string oldName;
     for (const auto& command:*active) for (const auto& arg:command.arguments)
         if (arg.isLiteral && arg.begin<=at->value() && at->value()<=arg.end) oldName=arg.literal;
-    if (oldName.empty() || oldName==newName) return fail(ErrorCode::Unsupported,"Select a literal configured target name");
+    if (!validTarget(oldName) || oldName==newName) return fail(ErrorCode::Unsupported,"Select a literal configured target name");
     const auto* configured=input.model->findTarget(oldName);
     if (!configured || configured->generatorProvided || configured->backtrace.empty())
         return fail(ErrorCode::Unsupported,"Target has no configured source definition");
@@ -42,16 +53,8 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
     files.insert(files.begin(),{input.path,input.source.text()});
     for (const auto& file:input.model->inputs) {
         if (file.cmake) continue; // Pinned CMake distribution is outside editable user source.
-        if (file.generated || file.external)
-            return fail(ErrorCode::Unsupported,"Generated/external CMake input prevents a complete writable rename closure");
         if (!std::ranges::any_of(files,[&](const auto& row){return documentKey(row.first)==documentKey(file.path);}))
             return fail(ErrorCode::Busy,"Configured CMake input was not captured: "+file.path);
-    }
-    for (const auto& [path,bytes]:files) {
-        (void)bytes;
-        const auto root=documentKey(input.model->sourceDirectory), key=documentKey(path);
-        if (root.empty() || !(key==root || (key.starts_with(root) && key.size()>root.size() && key[root.size()]=='/')))
-            return fail(ErrorCode::Unsupported,"CMake rename cannot edit sources outside the configured project");
     }
     CMakeRenameCapture result; result.model=input.model; result.inputs=files;
     std::size_t definitions=0;
@@ -65,8 +68,11 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
         for (const auto& command:*parsed) {
             for (std::size_t i=0;i<command.arguments.size();++i) {
                 const auto& argument=command.arguments[i];
-                if (!argument.isLiteral)
-                    return fail(ErrorCode::Unsupported,"Dynamic CMake arguments require evaluated refactoring provenance; target rename refused");
+                if (!argument.isLiteral) {
+                    if (!irrelevantDynamicCommand(command.name))
+                        return fail(ErrorCode::Unsupported,"Dynamic target/import/user-command arguments require evaluated refactoring provenance");
+                    continue;
+                }
                 if (argument.literal==newName && declaration(command.name) && i==0)
                     return fail(ErrorCode::AlreadyExists,"A source target already has that name");
                 if (argument.literal!=oldName) continue;
@@ -84,6 +90,11 @@ Result<CMakeRenameCapture> planCMakeTargetRename(const CMakeLanguageInput& input
                 else if ((command.name=="if" || command.name=="elseif") && i>0 && command.arguments[i-1].literal=="TARGET") slot=true;
                 else if (command.name=="add_test" && i>0 && command.arguments[i-1].literal=="COMMAND") slot=true;
                 if (!slot) return fail(ErrorCode::Unsupported,"Target name occurs in an unsupported/indirect CMake command: "+command.name);
+                const auto root=documentKey(input.model->sourceDirectory), key=documentKey(path);
+                const auto inputFile=std::find_if(input.model->inputs.begin(),input.model->inputs.end(),[&](const auto& file){return documentKey(file.path)==key;});
+                if (root.empty() || !(key.starts_with(root) && key.size()>root.size() && key[root.size()]=='/') ||
+                    (inputFile!=input.model->inputs.end() && (inputFile->generated || inputFile->external)))
+                    return fail(ErrorCode::Unsupported,"Target rename cannot edit generated/external project inputs");
                 const auto span=std::string_view(bytes).substr(argument.begin,argument.end-argument.begin);
                 auto start=argument.begin,end=argument.end;
                 // Quoted and bracket arguments retain delimiters; only exact spelling is replaced.

@@ -192,7 +192,7 @@ sched::Task<Result<Json>> CMakeLanguageService::answer(sched::IScheduler& schedu
         for (const auto& file : input.model->inputs) {
             if (cancelled())
                 co_return fail(ErrorCode::Cancelled, "CMake input loading cancelled");
-            if (file.generated || file.external)
+            if ((method=="textDocument/rename" || method=="textDocument/prepareRename") ? file.cmake : (file.generated || file.external))
                 continue;
             if (++visited > kMaxInputs || bytes >= kMaxTotalInputBytes)
                 break;
