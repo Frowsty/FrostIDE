@@ -796,6 +796,7 @@ private:
 
     // Construction steps.
     void registerActions();
+    void registerEditorExtrasActions();
     void registerRefactoringActions();
     void registerCppRefactoringActions();
     void showCppRefactoring(std::string operation);
@@ -834,6 +835,7 @@ private:
     [[nodiscard]] Result<void> startCompoundDebug(const run::RunConfiguration& configuration);
     [[nodiscard]] Result<void> startSelectedDebugConfiguration();
     void attachLanguage();
+    void attachServices();
     void attachEngineBindings();
     // GUI retirement is nonblocking; the destructor drains after feature teardown, before services.
     void retireEngineBindingWork(std::shared_ptr<EngineBindingRetirement> retirement);

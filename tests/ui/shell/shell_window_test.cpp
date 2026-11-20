@@ -57,6 +57,46 @@ void sendKey(QWidget* target, int key, Qt::KeyboardModifiers modifiers, bool rel
     }
 }
 
+TEST(ShellWindow, DistractionFreeRestoresChromeAndVisibleTools) {
+    ShellRig rig;
+    ShellWindow window(rig.environment());
+    window.show();
+    window.toolWindows().show(tool_windows::kNotifications, false);
+    window.statusBar()->hide();
+    window.setDistractionFree(true);
+    EXPECT_TRUE(window.mainToolbar().isHidden());
+    EXPECT_TRUE(window.statusBar()->isHidden());
+    EXPECT_FALSE(window.toolWindows().isVisible(tool_windows::kNotifications));
+    window.setDistractionFree(false);
+    EXPECT_FALSE(window.mainToolbar().isHidden());
+    EXPECT_TRUE(window.statusBar()->isHidden());
+    EXPECT_TRUE(window.toolWindows().isVisible(tool_windows::kNotifications));
+}
+TEST(ShellWindow, DistractionFreeShutdownRestoresToolsBeforeSessionCapture) {
+    ShellRig rig;
+    bool capturedVisible = false;
+    {
+        ShellWindow window(rig.environment());
+        window.toolWindows().show(tool_windows::kNotifications, false);
+        window.addTeardownHook([&] { capturedVisible = window.toolWindows().isVisible(tool_windows::kNotifications); });
+        window.setDistractionFree(true);
+    }
+    EXPECT_TRUE(capturedVisible);
+    const auto* saved = rig.settings.current().find(tool_windows::kNotifications);
+    ASSERT_NE(saved, nullptr);
+    EXPECT_TRUE(saved->visible);
+}
+
+TEST(ShellWindow, FullScreenTogglePreservesMaximizedWindowState) {
+    ShellRig rig;
+    ShellWindow window(rig.environment());
+    window.showMaximized();
+    ASSERT_EQ(window.invoke("window.fullScreen"), frost::input::InvokeResult::Ran);
+    EXPECT_TRUE(window.isFullScreen());
+    ASSERT_EQ(window.invoke("window.fullScreen"), frost::input::InvokeResult::Ran);
+    EXPECT_FALSE(window.isFullScreen());
+    EXPECT_TRUE(window.isMaximized());
+}
 TEST(ShellWindow, BuildsTheRiderLayout) {
     ShellRig rig;
     ShellWindow window(rig.environment());

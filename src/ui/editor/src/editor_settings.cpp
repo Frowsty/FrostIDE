@@ -28,6 +28,7 @@ template<class Source>
 [[nodiscard]] EditorViewSettings read(const Source& source) {
     EditorViewSettings out;
     out.fontFamily = source.get(key::editorFontFamily);
+    out.schemeColors = source.get(key::editorSchemeColors);
     out.fontSize = static_cast<double>(source.get(key::editorFontSize));
     out.lineSpacing = source.get(key::editorLineSpacing);
     out.ligatures = source.get(key::editorFontLigatures);

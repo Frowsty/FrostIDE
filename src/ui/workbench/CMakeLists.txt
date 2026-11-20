@@ -8,6 +8,7 @@
 
 frost_add_library(ui_workbench LAYER ui
     SOURCES
+        src/large_file_view.cpp
         src/document_editor.cpp
         src/file_system_view.cpp
         src/merge_view.cpp

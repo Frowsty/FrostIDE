@@ -57,6 +57,8 @@ class QContextMenuEvent;
 class QInputMethodEvent;
 class QMenu;
 
+class QLabel;
+
 namespace frost::ui {
 
 class AppearanceManager;
@@ -312,7 +314,14 @@ public:
     // Gutter markers (sorted by line on the way in; replaces the previous set).
     void setLineMarkers(std::vector<LineMarker> markers);
     [[nodiscard]] const std::vector<LineMarker>& lineMarkers() const noexcept { return m_markers; }
+    // Bookmarks use document anchors so insert/delete/Undo preserve the marked text.
     void setBookmarks(std::vector<LineIndex> lines);
+    void toggleBookmark();
+    bool navigateBookmark(bool forward);
+    void refreshBookmarks();
+    // Current-version tree-sitter scope above the viewport; at most one bounded label.
+    void refreshStickyScope();
+    void initializeEditorExtras();
     [[nodiscard]] std::span<const LineIndex> bookmarks() const noexcept { return m_bookmarks; }
     // The messages of the markers on the line at viewport point `at` when it is in the gutter, one per
     // line (the gutter tooltip); empty elsewhere.
@@ -749,6 +758,8 @@ private:
 
     std::vector<LineMarker> m_markers;
     std::vector<LineIndex> m_bookmarks;
+    std::vector<text::AnchorId> m_bookmarkAnchors;
+    QLabel* m_stickyScope = nullptr;
     std::vector<BreakpointMarker> m_breakpoints;
     std::optional<LineIndex> m_executionPoint;
     bool m_breakpointGutter = false;

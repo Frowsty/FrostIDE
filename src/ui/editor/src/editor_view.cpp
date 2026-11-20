@@ -176,9 +176,12 @@ EditorView::EditorView(text::Document& document, std::string path, EditorService
     updateScrollBars();
     m_lastStatus = status();
     selectRenderer();
+    initializeEditorExtras();
 }
 
 EditorView::~EditorView() {
+    for (const auto id : m_bookmarkAnchors)
+        (void)m_document->releaseAnchor(id);
     if (m_foldJob)
         m_foldJob->stop.request_stop();
     for (auto& task : m_foldTasks)
@@ -255,6 +258,20 @@ void EditorView::followAppearance() {
 void EditorView::setTheme(std::shared_ptr<const Theme> theme) {
     m_theme = std::move(theme);
     m_colors = m_theme ? EditorColors::fromTheme(*m_theme) : EditorColors::defaults();
+    if (m_theme && !m_settings.schemeColors.empty()) {
+        auto data = m_theme->data();
+        for (const auto& row : m_settings.schemeColors) {
+            const auto* nameField = settings::findField(row, "name");
+            const auto* colorField = settings::findField(row, "color");
+            const auto* name = nameField ? std::get_if<std::string>(nameField) : nullptr;
+            const auto* color = colorField ? std::get_if<std::string>(colorField) : nullptr;
+            if (!name || !color || !(name->starts_with("Editor.") || name->starts_with("Syntax.") || name->starts_with("Semantic."))) continue;
+            const auto key = findName(kColorNameIndex, *name);
+            const auto rgba = parseHexColor(*color);
+            if (key && rgba && rgba->opaque()) data.colors[static_cast<std::size_t>(*key)] = *rgba;
+        }
+        if (auto scheme = Theme::fromData(std::move(data))) m_colors = EditorColors::fromTheme(*scheme);
+    }
     viewport()->update();
 }
 
@@ -301,6 +318,7 @@ void EditorView::applySettings(const EditorViewSettings& settings) {
                              settings.ligatures != m_settings.ligatures || settings.tabSize != m_settings.tabSize;
     const bool rendererChanged = settings.renderer != m_settings.renderer;
     m_settings = settings;
+    setTheme(m_theme); // Re-resolve the base theme plus the user's editor-only scheme overrides.
     m_editor->setSettings(modelSettings(m_settings));
     if (fontChanged) {
         rebuildFont();
@@ -366,6 +384,8 @@ void EditorView::setInputToPaintSink(std::function<void(const InputToPaintSample
 
 void EditorView::afterChange(const text::EditorUpdate& update, bool notifyTextChange) {
     if (update.change) {
+        refreshBookmarks();
+        refreshStickyScope();
         // Grapheme boundaries can change anywhere on an edited line (for example regional
         // indicator parity), even when the edit did not touch the stored endpoint itself.
         const auto& snapshot = m_editor->text();
@@ -498,11 +518,70 @@ void EditorView::setLineMarkers(std::vector<LineMarker> markers) {
 void EditorView::setBookmarks(std::vector<LineIndex> lines) {
     std::ranges::sort(lines);
     lines.erase(std::unique(lines.begin(), lines.end()), lines.end());
-    if (lines == m_bookmarks) {
-        return;
+    for (const auto id : m_bookmarkAnchors)
+        (void)m_document->releaseAnchor(id);
+    m_bookmarkAnchors.clear();
+    const auto snapshot = m_editor->text();
+    for (const auto line : lines) {
+        if (m_bookmarkAnchors.size() == 4096)
+            break;
+        const auto info = snapshot.lineInfo(line);
+        if (!info)
+            continue;
+        if (const auto anchor = m_document->createAnchor(info->content.begin, text::Bias::Right))
+            m_bookmarkAnchors.push_back(*anchor);
     }
-    m_bookmarks = std::move(lines);
+    refreshBookmarks();
+}
+void EditorView::refreshBookmarks() {
+    m_bookmarks.clear();
+    const auto snapshot = m_editor->text();
+    for (const auto id : m_bookmarkAnchors)
+        if (const auto offset = m_document->anchors().find(id))
+            m_bookmarks.push_back(snapshot.lineAt(*offset));
+    std::ranges::sort(m_bookmarks);
+    m_bookmarks.erase(std::unique(m_bookmarks.begin(), m_bookmarks.end()), m_bookmarks.end());
     viewport()->update();
+}
+void EditorView::toggleBookmark() {
+    const auto line = m_editor->text().lineAt(m_editor->state().primary().head);
+    // Remove only the chosen anchor: recreating all anchors would lose their Undo identities.
+    bool removed = false;
+    std::erase_if(m_bookmarkAnchors, [&](const auto id) {
+        const auto at = m_document->anchors().find(id);
+        if (at && m_editor->text().lineAt(*at) == line) {
+            (void)m_document->releaseAnchor(id);
+            removed = true;
+            return true;
+        }
+        return false;
+    });
+    if (!removed && m_bookmarkAnchors.size() < 4096) {
+        const auto info = m_editor->text().lineInfo(line);
+        if (info)
+            if (const auto anchor = m_document->createAnchor(info->content.begin, text::Bias::Right))
+                m_bookmarkAnchors.push_back(*anchor);
+    }
+    refreshBookmarks();
+}
+bool EditorView::navigateBookmark(bool forward) {
+    refreshBookmarks();
+    if (m_bookmarks.empty())
+        return false;
+    const auto line = m_editor->text().lineAt(m_editor->state().primary().head);
+    auto found = std::ranges::upper_bound(m_bookmarks, line);
+    LineIndex target = m_bookmarks.front();
+    if (forward)
+        target = found == m_bookmarks.end() ? m_bookmarks.front() : *found;
+    else {
+        found = std::ranges::lower_bound(m_bookmarks, line);
+        target = found == m_bookmarks.begin() ? m_bookmarks.back() : *std::prev(found);
+    }
+    const auto info = m_editor->text().lineInfo(target);
+    if (!info)
+        return false;
+    setState(text::EditorState::caretAt(info->content.begin));
+    return true;
 }
 
 void EditorView::setLineChanges(std::vector<LineChangeMarker> changes) {
@@ -530,6 +609,7 @@ void EditorView::reloadFromDocument() {
     m_editor = std::make_unique<text::Editor>(*m_document, *m_shaper, config);
     const text::Snapshot& snapshot = m_editor->text();
     m_editor->setState(text::EditorState::caretAt(snapshot.clip(std::min(caret, snapshot.size()))));
+    refreshBookmarks();
     if (m_syntax) {
         m_syntax->open(m_syntaxLanguage, snapshot);
     }
@@ -694,6 +774,7 @@ bool EditorView::pollSyntax() {
             m_services.scheduler->spawn(sched::Lane::UserVisible, queryFolds(m_foldJob), m_foldJob->stop.get_token()));
         m_foldTimer.start();
     }
+    refreshStickyScope();
     viewport()->update();
     return true;
 }

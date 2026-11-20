@@ -6,10 +6,10 @@
 // blocks), the changed words inside replaced blocks highlighted (Diff.innerChangeBackground), the two
 // panes scrolled together, and F7 / Shift+F7 jumping to the next and previous change.
 /*
- * Both panes are read-only plain-text views without wrapping, one block per line of git's line
- * model (a line's "\r\n" or "\n" is not shown; a lone '\r' inside a line shows as a space). The
- * right side is read-only in this slice (ADR 0048: editing it needs the editor widget in the right
- * pane; TODO(M6): an editable working-copy side). Scrolling either pane scrolls the other to the
+ * Both panes use the main editor model, renderer, selection and find services, one row per line of git's line
+ * model, preserving original text and line endings. The
+ * right side becomes editable with setApplyHandler; its Document owns normal transactional undo.
+ * Incoming refreshes never replace un-applied edits. Scrolling either pane scrolls the other to the
  * line SideBySideDiff::mapLine pairs with its top line.
  *
  * GUI thread only.
@@ -18,6 +18,9 @@
 
 #include "frost/core/error.hpp"
 #include "frost/vcs/side_by_side.hpp"
+#include "frost/text/document.hpp"
+#include "frost/ui/editor/editor_view.hpp"
+#include "frost/ui/editor/editor_key_routing.hpp"
 
 #include <QColor>
 #include <QString>
@@ -30,7 +33,7 @@
 #include <string>
 
 class QLabel;
-class QPlainTextEdit;
+class QPushButton;
 
 namespace frost::ui {
 
@@ -51,7 +54,7 @@ class DiffViewer final : public QWidget {
     Q_OBJECT
 
 public:
-    explicit DiffViewer(QWidget* parent = nullptr);
+    explicit DiffViewer(QWidget* parent = nullptr, EditorServices services = {});
     ~DiffViewer() override;
 
     // Shows `diff` with a title over each pane ("HEAD", "Working copy"); the caret goes to the first
@@ -59,10 +62,12 @@ public:
     void setDiff(vcs::SideBySideDiff diff, const QString& leftTitle, const QString& rightTitle);
     [[nodiscard]] const vcs::SideBySideDiff& diff() const noexcept { return m_diff; }
 
-    [[nodiscard]] QPlainTextEdit* leftPane() const noexcept { return m_left; }
-    [[nodiscard]] QPlainTextEdit* rightPane() const noexcept { return m_right; }
+    [[nodiscard]] EditorView* leftPane() const noexcept { return m_left; }
+    [[nodiscard]] EditorView* rightPane() const noexcept { return m_right; }
     [[nodiscard]] QString leftTitle() const;
     [[nodiscard]] QString rightTitle() const;
+    [[nodiscard]] QString leftText() const;
+    [[nodiscard]] QString rightText() const;
 
     // F7 and Shift+F7: moves both carets to the next (previous) block after (before) the right
     // pane's caret line and scrolls it into view. False when there is none.
@@ -78,6 +83,14 @@ public:
     // The highlight count of a pane (line tints plus word highlights), for tests.
     [[nodiscard]] int highlightCount(vcs::DiffSide side) const;
 
+    // Enables editing in the real editor model. Apply receives the originally displayed working
+    // text and the current committed text; the owner must reject stale sources and save atomically.
+    // The owner outlives the callback. GUI thread; no file write occurs inside the viewer.
+    using ApplyHandler = std::function<Result<void>(std::string_view, std::string_view)>;
+    void setApplyHandler(ApplyHandler handler);
+    [[nodiscard]] Result<void> applyWorkingCopy();
+    [[nodiscard]] bool hasWorkingEdits() const;
+
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -89,8 +102,17 @@ private:
     vcs::SideBySideDiff m_diff;
     QLabel* m_leftTitle;
     QLabel* m_rightTitle;
-    QPlainTextEdit* m_left;
-    QPlainTextEdit* m_right;
+    std::unique_ptr<EditorKeyRouting> m_keys;
+    EditorServices m_services;
+    std::unique_ptr<text::Document> m_leftDocument;
+    std::unique_ptr<text::Document> m_rightDocument;
+    EditorView* m_left;
+    EditorView* m_right;
+    QPushButton* m_apply;
+    QLabel* m_status;
+    ApplyHandler m_applyHandler;
+    std::string m_originalWorking;
+    void workingEdited();
     std::optional<std::size_t> m_current;
     bool m_syncing = false;
 };

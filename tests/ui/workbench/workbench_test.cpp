@@ -936,7 +936,7 @@ TEST_F(WorkbenchTest, MergeViewAppliesPerChunkChoicesAndResolves) {
     EXPECT_TRUE(app.editors->banners("/proj/merge.txt").empty());
 }
 
-TEST_F(WorkbenchTest, RefusedHugeFileIsNotifiedOnEveryOpenPath) {
+TEST_F(WorkbenchTest, LargeFileUsesReadOnlyTabOnEveryOpenPath) {
     file("/proj/huge.bin", "tiny on disk, huge by status\n");
     fs.huge.insert("/proj/huge.bin");
     Ide& app = ide();
@@ -946,27 +946,30 @@ TEST_F(WorkbenchTest, RefusedHugeFileIsNotifiedOnEveryOpenPath) {
     app.window->toolWindows().show(kFileSystemToolWindow, false);
     ASSERT_TRUE(app.workbench->fileSystemView()->select("/proj/huge.bin"));
     app.workbench->fileSystemView()->activateSelected();
-    EXPECT_EQ(app.notificationsTitled(tooLarge), 1);
+    EXPECT_EQ(app.notificationsTitled(tooLarge), 0);
+    ASSERT_EQ(app.window->tabs().count(), 1);
+    EXPECT_EQ(app.window->tabs().currentEditor()->widget()->objectName(), QStringLiteral("largeFileView"));
+    EXPECT_TRUE(app.window->tabs().currentEditor()->status().readOnly);
     // Go to File.
     ListPopup* gotoFile = app.workbench->showGoToFile(QStringLiteral("huge"));
     ASSERT_FALSE(gotoFile->items().empty());
     gotoFile->acceptCurrent();
-    EXPECT_EQ(app.notificationsTitled(tooLarge), 2);
+    EXPECT_EQ(app.notificationsTitled(tooLarge), 0);
     // Ctrl+E (the file was recent when it was smaller).
     app.workbench->recentFiles().touch("/proj/huge.bin");
     ListPopup* recent = app.workbench->showRecentFiles();
     ASSERT_NE(recent, nullptr);
     recent->setCurrentItem(0);
     recent->acceptCurrent();
-    EXPECT_EQ(app.notificationsTitled(tooLarge), 3);
+    EXPECT_EQ(app.notificationsTitled(tooLarge), 0);
     // Session restore.
     nav::SessionState state;
     state.root = "/proj";
     state.tabs.push_back(nav::SessionTab{"/proj/huge.bin", false, 1, 1, 0});
     state.active = 0;
     app.workbench->applySession(state);
-    EXPECT_EQ(app.notificationsTitled(tooLarge), 4);
-    EXPECT_EQ(app.window->tabs().count(), 0);
+    EXPECT_EQ(app.notificationsTitled(tooLarge), 0);
+    EXPECT_EQ(app.window->tabs().count(), 1);
     EXPECT_EQ(app.manager->documents().size(), 0U);
 }
 

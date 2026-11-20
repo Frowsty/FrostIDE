@@ -124,6 +124,17 @@ namespace tool_windows = frost::ui::tool_windows;
 
 constexpr bool kWindows = frost::io::kNativePathStyle == frost::io::PathStyle::Windows;
 
+TEST(Workbench, ServicesStartsEmptyAndRegistersNavigationAction) {
+    WorkDir dir("services-empty");
+    WorkbenchRig rig(dir);
+    rig.window->toolWindows().show("services", false);
+    auto* content = rig.window->toolWindows().content("services");
+    ASSERT_NE(content, nullptr);
+    auto* tree = content->findChild<QTreeWidget*>(QStringLiteral("servicesTree"));
+    ASSERT_NE(tree, nullptr);
+    EXPECT_EQ(tree->topLevelItemCount(), 0);
+
+}
 TEST(Workbench, ExplicitEditorSaveReportsCommittedWarning) {
     WorkDir dir("save-warning");
     dir.write("main.cpp", "int value;\n");

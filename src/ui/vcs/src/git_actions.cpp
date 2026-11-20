@@ -238,6 +238,20 @@ void appendViewAndHistorySpecs(std::vector<GitActionSpec>& specs, const std::fun
                              git()->readBlame(QString::fromStdString(path), [](auto) {});
                          }
                      }});
+    specs.push_back({git_actions::kContinueRebase, "Continue Rebase", "Continue the paused rebase after resolving and staging conflicts",
+        {"git rebase --continue"}, kAnywhere, true, {}, [git] { git()->rebaseStep(vcs::RebaseStep::Continue); }});
+    specs.push_back({git_actions::kSkipRebase, "Skip Rebase Commit...", "Skip the current commit in a paused rebase",
+        {"git rebase --skip"}, kAnywhere, true, {}, [git, shared] {
+            const QPointer<GitController> original(git());
+            if (shared->confirm && shared->confirm(trText("Skip Rebase Commit"), trText("Skip the current rebased commit and discard its conflict resolution?")))
+                if (original && git() == original.data()) original->rebaseStep(vcs::RebaseStep::Skip);
+        }});
+    specs.push_back({git_actions::kAbortRebase, "Abort Rebase...", "Abort the paused rebase and restore its original branch state",
+        {"git rebase --abort"}, kAnywhere, true, {}, [git, shared] {
+            const QPointer<GitController> original(git());
+            if (shared->confirm && shared->confirm(trText("Abort Rebase"), trText("Abort this rebase and discard its conflict resolution?")))
+                if (original && git() == original.data()) original->rebaseStep(vcs::RebaseStep::Abort);
+        }});
     specs.push_back({git_actions::kNextChange,
                      "Next Change",
                      "Go to the next change in the diff",

@@ -115,6 +115,9 @@ frost_add_library(app LAYER app
         src/selftest.cpp
         src/settings_dialog.cpp
         src/settings_dialog.hpp
+        src/settings_import.cpp
+        src/settings_import.hpp
+        src/workbench_services.cpp
         src/settings_keymap_page.cpp
         src/settings_keymap_page.hpp
         src/settings_lua_page.cpp
@@ -125,6 +128,7 @@ frost_add_library(app LAYER app
         src/workbench.cpp
         src/git_clone.hpp
         src/workbench_actions.cpp
+        src/workbench_editor_extras.cpp
         src/workbench_attach.cpp
         src/workbench_clone.cpp
         src/workbench_prompts.cpp

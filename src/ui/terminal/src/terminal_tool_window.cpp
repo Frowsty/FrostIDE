@@ -236,6 +236,23 @@ void TerminalToolWindow::setupHeaderBar(QHBoxLayout& header) {
     m_shellMenu = new QMenu(this);
     m_shellMenu->setObjectName(QStringLiteral("terminalShellMenu"));
     m_shellMenu->addAction(text("Default Shell"), this, [this] { static_cast<void>(newTab()); });
+    auto* personal = m_shellMenu->addMenu(text("Personal Profiles"));
+    connect(personal, &QMenu::aboutToShow, this, [this, personal] {
+        personal->clear();
+        const auto settings = m_env.settings ? m_env.settings() : term::TerminalSettings{};
+        for (const auto& profile : settings.profiles)
+            personal->addAction(fromUtf8(profile.name), this, [this, name = profile.name] {
+                const auto latest = m_env.settings ? m_env.settings() : term::TerminalSettings{};
+                for (const auto& current : latest.profiles)
+                    if (current.name == name) {
+                        const auto opened = newTabWithShell(current.shell, current.workingDirectory, &current);
+                        if (opened) renameTab(*opened, fromUtf8(current.name));
+                        return;
+                    }
+            });
+        if (settings.profiles.empty())
+            personal->addAction(text("Configure terminal.profiles in application settings"))->setEnabled(false);
+    });
     m_shellMenu->addSeparator();
     const struct ShellEntry {
         const char* label;
@@ -251,6 +268,13 @@ void TerminalToolWindow::setupHeaderBar(QHBoxLayout& header) {
         m_shellMenu->addAction(text(entry.label), this,
                                [this, exe = std::string(entry.exe)] { static_cast<void>(newTabWithShell(exe)); });
     }
+    m_shellMenu->addSeparator();
+    m_shellMenu->addAction(text("Previous Command (OSC 133)"), this, [this] {
+        if (auto* pane = currentView()) (void)pane->navigateCommand(false);
+    });
+    m_shellMenu->addAction(text("Next Command (OSC 133)"), this, [this] {
+        if (auto* pane = currentView()) (void)pane->navigateCommand(true);
+    });
     m_newTab->setMenu(m_shellMenu);
     m_newTab->setPopupMode(QToolButton::MenuButtonPopup);
 
@@ -355,7 +379,7 @@ void TerminalToolWindow::showMessage(const QString& message) {
 QString TerminalToolWindow::message() const { return count() == 0 ? m_message->text() : QString(); }
 
 Result<TerminalView*> TerminalToolWindow::createAndStartView(QWidget* parentWidget, const std::string& shellOverride,
-                                                             const std::string& workingDirectory) {
+                                                             const std::string& workingDirectory, const term::TerminalProfile* profile) {
     if (m_stopped || (m_env.available && !m_env.available())) {
         return fail(ErrorCode::Cancelled, "terminal is shutting down");
     }
@@ -367,7 +391,12 @@ Result<TerminalView*> TerminalToolWindow::createAndStartView(QWidget* parentWidg
     if (m_env.launcher == nullptr) {
         return failWith(Error(ErrorCode::InvalidArgument, "no terminal launcher"));
     }
+    if (profile && (profile->shell.empty() || !io::isAbsolutePath(profile->shell) ||
+        (!profile->workingDirectory.empty() && !io::isAbsolutePath(profile->workingDirectory))))
+        return failWith(Error(ErrorCode::InvalidArgument, "personal terminal profiles require absolute shell and working-directory paths"));
     const TerminalContext context = m_env.context ? m_env.context() : TerminalContext{};
+    if (profile && !context.projectRoot.empty() && !context.trusted)
+        return failWith(Error(ErrorCode::Untrusted, "trust the project before starting a personal terminal profile"));
     const term::TerminalSettings settings = m_env.settings ? m_env.settings() : term::TerminalSettings{};
     term::TerminalLaunchRequest request;
     request.projectRoot = context.projectRoot;
@@ -381,6 +410,12 @@ Result<TerminalView*> TerminalToolWindow::createAndStartView(QWidget* parentWidg
         return failWith(std::move(launch.error()));
     }
 
+    if (profile)
+        launch->spec.arguments = profile->arguments;
+    const auto current = m_env.context ? m_env.context() : TerminalContext{};
+    if (current.projectRoot != context.projectRoot || current.trusted != context.trusted || current.generation != context.generation || m_stopped ||
+        (m_env.available && !m_env.available()))
+        return failWith(Error(ErrorCode::Cancelled, "terminal context changed before launch"));
     auto* view = new TerminalView(parentWidget);
     applyAppearance(*view);
     if (auto* splitter = qobject_cast<QSplitter*>(parentWidget)) {
@@ -431,14 +466,14 @@ Result<int> TerminalToolWindow::newTab(const std::string& workingDirectory) {
 }
 
 Result<int> TerminalToolWindow::newTabWithShell(const std::string& shellExecutable,
-                                                const std::string& workingDirectory) {
+                                                const std::string& workingDirectory, const term::TerminalProfile* profile) {
     auto* splitter = new QSplitter(Qt::Horizontal, m_stack);
     splitter->setChildrenCollapsible(false);
     splitter->setHandleWidth(2);
     m_stack->addWidget(splitter);
     splitter->resize(m_stack->size());
 
-    Result<TerminalView*> created = createAndStartView(splitter, shellExecutable, workingDirectory);
+    Result<TerminalView*> created = createAndStartView(splitter, shellExecutable, workingDirectory, profile);
     if (!created) {
         delete splitter;
         return std::unexpected(std::move(created.error()));

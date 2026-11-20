@@ -13,5 +13,5 @@ frost_add_library(ui_nav LAYER ui
         src/paths.cpp
         src/project_files.cpp
         src/session.cpp
-    DEPS frost::document frost::project frost::diff frost::text frost::io frost::sched frost::core)
+    DEPS frost::document frost::project frost::diff frost::text frost::io frost::sched frost::core frost::search)
 target_link_libraries(frost_ui_nav PRIVATE yyjson::yyjson)

@@ -21,6 +21,27 @@ using frost::term::ScreenPos;
 using frost::term::Underline;
 using frost::term::VtScreen;
 
+TEST(VtScreen, ShellMarksComeOnlyFromBoundedActualOsc133Sequences) {
+    VtScreen screen(PtySize{20, 5}, 100);
+    EXPECT_TRUE(screen.shellMarks().empty());
+    screen.feed("\x1b]133;A\x1b");
+    EXPECT_TRUE(screen.shellMarks().empty());
+    screen.feed("\\prompt> \x1b]133;B\aecho hi\r\n\x1b]133;C\aoutput\r\n\x1b]133;D;7\a");
+    ASSERT_EQ(screen.shellMarks().size(), 4u);
+    EXPECT_EQ(screen.shellMarks().front().kind, frost::term::ShellMark::Kind::Prompt);
+    EXPECT_EQ(screen.shellMarks().back().exitCode, 7);
+    screen.feed("\x1b]7;file://localhost/work/project\a");
+    EXPECT_EQ(screen.shellDirectoryUri(), "file://localhost/work/project");
+    screen.feed("\x1b]133;bad\a\x1b]52;c;ZXhmaWx0cmF0ZQ==\a");
+    EXPECT_EQ(screen.shellMarks().size(), 4u);
+    screen.feed("\x1b]133;" + std::string(8192, 'A') + "\a");
+    EXPECT_EQ(screen.shellMarks().size(), 4u);
+    for (int i = 0; i < 4096; ++i) screen.feed("\x1b]133;A\a");
+    EXPECT_LE(screen.shellMarks().size(), 2048u);
+    screen.feed("\x1b" "c");
+    EXPECT_TRUE(screen.shellMarks().empty());
+}
+
 TEST(VtScreen, PlainTextAndCursor) {
     VtScreen screen(PtySize{20, 5}, 100);
     screen.feed("hello\r\nworld");

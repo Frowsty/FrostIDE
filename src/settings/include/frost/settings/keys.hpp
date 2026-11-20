@@ -24,6 +24,7 @@ namespace key {
 
 // Editor: font.
 inline constexpr Key<std::string> editorFontFamily{"editor.fontFamily"};
+inline constexpr Key<RecordList> editorSchemeColors{"editor.schemeColors"};
 inline constexpr Key<std::int64_t> editorFontSize{"editor.fontSize"};
 inline constexpr Key<double> editorLineSpacing{"editor.lineSpacing"};
 inline constexpr Key<bool> editorFontLigatures{"editor.fontLigatures"};
@@ -130,6 +131,7 @@ inline constexpr Key<std::string> debugSourceMapFrom{"debug.sourceMap.from"};
 inline constexpr Key<std::string> debugSourceMapTo{"debug.sourceMap.to"};
 
 // Terminal (frost::term, ADR 0051). terminal.shell is an Application-only `executes` key.
+inline constexpr Key<RecordList> terminalProfiles{"terminal.profiles"};
 inline constexpr Key<std::string> terminalShell{"terminal.shell"};
 inline constexpr Key<std::int64_t> terminalScrollbackLines{"terminal.scrollbackLines"};
 

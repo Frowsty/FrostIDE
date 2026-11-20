@@ -12,6 +12,7 @@
 #include "frost/term/vt_screen.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <array>
 #include <deque>
 #include <format>
@@ -247,10 +248,63 @@ struct VtScreen::Impl {
         }
         return 0;
     }
+    std::string shellOsc;
+    bool shellOscOverflow = false;
+    static int shellOscCallback(int command, VTermStringFragment fragment, void* user) {
+        if (command != 133 && command != 7)
+            return 0;
+        auto& self = *static_cast<Impl*>(user);
+        if (fragment.initial) {
+            self.shellOsc.clear();
+            self.shellOscOverflow = false;
+        }
+        if (fragment.len > 4096 - self.shellOsc.size())
+            self.shellOscOverflow = true;
+        if (!self.shellOscOverflow)
+            self.shellOsc.append(fragment.str, fragment.len);
+        if (!fragment.final || self.shellOscOverflow)
+            return 1;
+        if (command == 7) {
+            // Keep only a bounded file URI. Never chdir, launch, or dereference child output.
+            if (self.shellOsc.starts_with("file://") && self.shellOsc.find_first_of("\r\n") == std::string::npos) {
+                self.owner.m_shellDirectoryUri = self.shellOsc;
+                self.owner.m_events.changed = true;
+            }
+            return 1;
+        }
+        if (self.owner.m_altScreen) return 1;
+        const std::string_view value = self.shellOsc;
+        if (value.empty() || (value.size() > 1 && value[1] != ';'))
+            return 1;
+        ShellMark mark;
+        switch (value.front()) {
+        case 'A': mark.kind = ShellMark::Kind::Prompt; break;
+        case 'B': mark.kind = ShellMark::Kind::Command; break;
+        case 'C': mark.kind = ShellMark::Kind::Output; break;
+        case 'D': mark.kind = ShellMark::Kind::Finished; break;
+        default: return 1;
+        }
+        if (value.front() == 'D' && value.size() > 2) {
+            const auto codeText = value.substr(2);
+            int code = 0;
+            const auto parsed = std::from_chars(codeText.data(), codeText.data() + codeText.size(), code);
+            if (parsed.ec == std::errc{} && parsed.ptr == codeText.data() + codeText.size())
+                mark.exitCode = code;
+        }
+        VTermPos cursor{};
+        vterm_state_get_cursorpos(self.state, &cursor);
+        mark.line = self.owner.m_linesPushed + static_cast<std::uint64_t>(std::max(cursor.row, 0));
+        auto& marks = self.owner.m_shellMarks;
+        if (marks.size() == 2048)
+            marks.erase(marks.begin(), marks.begin() + 512);
+        marks.push_back(mark);
+        self.owner.m_events.changed = true;
+        return 1;
+    }
     static constexpr VTermStateFallbacks kFallbacks{
         .control = nullptr,
         .csi = &fallbackCsi,
-        .osc = nullptr,
+        .osc = &shellOscCallback,
         .dcs = nullptr,
         .apc = nullptr,
         .pm = nullptr,
@@ -324,6 +378,8 @@ struct VtScreen::Impl {
         if (std::string_view(bytes, length) == "c") {
             auto& self = *static_cast<Impl*>(user);
             self.win32Input = false;
+            self.owner.m_shellMarks.clear();
+            self.owner.m_shellDirectoryUri.clear();
             self.keyboardStacks = {};
             self.keyboardAlternate = false;
         }
@@ -569,6 +625,8 @@ void VtScreen::resize(PtySize size) {
     if (clamped == m_size) {
         return;
     }
+    // libvterm reflows rows on resize; discard positions whose exact mapping is no longer known.
+    m_shellMarks.clear();
     m_size = clamped;
     vterm_set_size(m_impl->vt, m_size.rows, m_size.columns);
     m_events.changed = true;

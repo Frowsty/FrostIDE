@@ -16,6 +16,9 @@
 #include "vcs/git_fixture.hpp"
 #include "workbench_rig.hpp"
 #include <QFileInfo>
+#include <QApplication>
+#include <QDialog>
+#include <QListWidget>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -27,6 +30,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <future>
 #include <string>
 
 namespace {
@@ -66,6 +70,166 @@ ui::CommitToolWindow* commitWindow(WorkbenchRig& rig) {
     return qobject_cast<ui::CommitToolWindow*>(rig.window->toolWindows().content("commit"));
 }
 
+// The stage-1 common ancestor intentionally differs from both branches. Normal conflict markers
+// omit it, so the resolver must read actual Git stages instead of fabricating a base.
+void makeThreeWayConflict(TempRepo& repo) {
+    repo.init();
+    repo.write("conflict.cpp", "int value = 1;\n");
+    repo.commitAll("base");
+    const auto branch = std::string(vcs::trimGitText(repo.git({"branch", "--show-current"}).stdoutBytes));
+    repo.git({"checkout", "-b", "topic"});
+    repo.write("conflict.cpp", "int value = 2;\n");
+    repo.commitAll("theirs");
+    repo.git({"checkout", branch});
+    repo.write("conflict.cpp", "int value = 3;\n");
+    repo.commitAll("ours");
+    repo.git({"merge", "topic"}, 1);
+}
+
+TEST(WorkbenchGit, ThreeWayResultUsesMainEditorHistoryAndStagesOnlyTheChosenOutput) {
+    TempRepo repo("app-three-way-editor");
+    GitConfig config(repo);
+    makeThreeWayConflict(repo);
+    WorkDir dir("git-merge-editor");
+    app::test::RigOptions options;
+    options.workbench.git = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(repo.work()));
+    ASSERT_TRUE(rig.workbench->openPath(repo.work()));
+    rig.show();
+    ASSERT_TRUE(waitFor([&] { return controller(rig) && controller(rig)->snapshot(); }, 20s));
+    QTimer::singleShot(0, rig.window.get(), [&] {
+        auto* resolver = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        ASSERT_NE(resolver, nullptr);
+        const auto closeResolver = qScopeGuard([resolver] { resolver->reject(); });
+        auto* files = resolver->findChild<QListWidget*>(QStringLiteral("conflictedFilesList"));
+        ASSERT_NE(files, nullptr);
+        files->setCurrentRow(0);
+        QTimer::singleShot(0, resolver, [&] {
+            auto* merge = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            ASSERT_NE(merge, nullptr);
+            const auto closeMerge = qScopeGuard([merge] { merge->reject(); });
+            auto* editor = merge->findChild<ui::EditorView*>(QStringLiteral("mergeResult"));
+            ASSERT_NE(editor, nullptr);
+            auto edited = editor->document().replace({ByteOffset{0}, editor->document().text().size()}, "int value = 4;\n", {});
+            ASSERT_TRUE(edited);
+            ASSERT_TRUE(editor->followExternalChange(*edited));
+            ASSERT_TRUE(editor->perform(ui::EditorAction::Undo));
+            ASSERT_TRUE(editor->perform(ui::EditorAction::Redo));
+            merge->findChild<QPushButton*>(QStringLiteral("acceptEditedResult"))->click();
+            auto* apply = merge->findChild<QPushButton*>(QStringLiteral("applyMergeButton"));
+            ASSERT_TRUE(apply->isEnabled());
+            apply->click();
+        });
+        resolver->findChild<QPushButton*>(QStringLiteral("mergeConflictsButton"))->click();
+    });
+    ASSERT_EQ(rig.window->invoke(ui::git_actions::kResolveConflicts), input::InvokeResult::Ran);
+    EXPECT_EQ(repo.read("conflict.cpp"), "int value = 4;\n");
+    EXPECT_EQ(repo.git({"show", ":conflict.cpp"}).stdoutBytes, "int value = 4;\n");
+    EXPECT_TRUE(repo.git({"ls-files", "--unmerged"}).stdoutBytes.empty());
+}
+
+TEST(WorkbenchGit, ThreeWayApplyRefusesDiskChangesSinceDialogOpened) {
+    TempRepo repo("app-three-way-stale");
+    GitConfig config(repo);
+    makeThreeWayConflict(repo);
+    WorkDir dir("git-merge-stale");
+    app::test::RigOptions options;
+    options.workbench.git = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(repo.work()));
+    ASSERT_TRUE(rig.workbench->openPath(repo.work()));
+    rig.show();
+    ASSERT_TRUE(waitFor([&] { return controller(rig) && controller(rig)->snapshot(); }, 20s));
+    QTimer::singleShot(0, rig.window.get(), [&] {
+        auto* resolver = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        ASSERT_NE(resolver, nullptr);
+        const auto closeResolver = qScopeGuard([resolver] { resolver->reject(); });
+        resolver->findChild<QListWidget*>(QStringLiteral("conflictedFilesList"))->setCurrentRow(0);
+        QTimer::singleShot(0, resolver, [&] {
+            auto* merge = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            ASSERT_NE(merge, nullptr);
+            const auto closeMerge = qScopeGuard([merge] { merge->reject(); });
+            merge->findChild<QPushButton*>(QStringLiteral("acceptAllLeft"))->click();
+            repo.write("conflict.cpp", "int external_change = 99;\n");
+            merge->findChild<QPushButton*>(QStringLiteral("applyMergeButton"))->click();
+            EXPECT_TRUE(merge->isVisible());
+            EXPECT_EQ(repo.read("conflict.cpp"), "int external_change = 99;\n");
+        });
+        resolver->findChild<QPushButton*>(QStringLiteral("mergeConflictsButton"))->click();
+    });
+    ASSERT_EQ(rig.window->invoke(ui::git_actions::kResolveConflicts), input::InvokeResult::Ran);
+    EXPECT_FALSE(repo.git({"ls-files", "--unmerged"}).stdoutBytes.empty());
+}
+
+TEST(WorkbenchGit, ConsecutiveDiffAppliesUseTheExactLatestSaveReceipt) {
+    TempRepo repo("app-diff-two-applies");
+    GitConfig config(repo);
+    repo.init();
+    repo.write("a.cpp", "int value;\n");
+    repo.commitAll("initial");
+    WorkDir dir("git-two-applies");
+    app::test::RigOptions options;
+    options.workbench.git = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(repo.work()));
+    ASSERT_TRUE(rig.workbench->openPath(repo.work()));
+    ASSERT_TRUE(rig.workbench->openPath(repo.path("a.cpp")));
+    rig.show();
+    ASSERT_TRUE(waitFor([&] { return controller(rig) && controller(rig)->snapshot(); }, 20s));
+    ASSERT_EQ(rig.window->invoke(ui::git_actions::kCompareWithHead), input::InvokeResult::Ran);
+    auto* diff = qobject_cast<ui::DiffViewer*>(rig.window->toolWindows().content("gitDiff"));
+    ASSERT_NE(diff, nullptr);
+    ASSERT_TRUE(waitFor([&] { return diff->rightText().contains("int value;"); }, 10s));
+    ASSERT_TRUE(diff->rightPane()->typeText("// first\n"));
+    ASSERT_TRUE(diff->applyWorkingCopy());
+    // No event-loop turn: the 300ms comparison refresh cannot repair a stale callback receipt.
+    ASSERT_TRUE(diff->rightPane()->typeText("// second\n"));
+    auto second = diff->applyWorkingCopy();
+    ASSERT_TRUE(second) << second.error().describe();
+    EXPECT_NE(repo.read("a.cpp").find("// first"), std::string::npos);
+    EXPECT_NE(repo.read("a.cpp").find("// second"), std::string::npos);
+}
+
+TEST(WorkbenchGit, AsyncDiffReloadCannotDiscardEditsMadeWhileBaseReadWasQueued) {
+    TempRepo repo("app-diff-queued-read");
+    GitConfig config(repo);
+    repo.init();
+    repo.write("a.cpp", "int value;\n");
+    repo.commitAll("initial");
+    WorkDir dir("git-queued-read");
+    app::test::RigOptions options;
+    options.workbench.git = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(repo.work()));
+    ASSERT_TRUE(rig.workbench->openPath(repo.work()));
+    ASSERT_TRUE(rig.workbench->openPath(repo.path("a.cpp")));
+    rig.show();
+    ASSERT_TRUE(waitFor([&] { return controller(rig) && controller(rig)->snapshot(); }, 20s));
+    ASSERT_EQ(rig.window->invoke(ui::git_actions::kCompareWithHead), input::InvokeResult::Ran);
+    auto* diff = qobject_cast<ui::DiffViewer*>(rig.window->toolWindows().content("gitDiff"));
+    ASSERT_NE(diff, nullptr);
+    ASSERT_TRUE(waitFor([&] { return diff->rightText().contains("int value;"); }, 10s));
+    auto entered = std::make_shared<std::promise<void>>();
+    auto release = std::make_shared<std::promise<void>>();
+    auto enteredFuture = entered->get_future();
+    auto releaseFuture = release->get_future().share();
+    bool released = false;
+    const auto unblock = qScopeGuard([&] { if (!released) release->set_value(); });
+    controller(rig)->service().readHeadContent(repo.path("a.cpp"), [entered, releaseFuture](auto) {
+        entered->set_value();
+        releaseFuture.wait();
+    });
+    ASSERT_EQ(enteredFuture.wait_for(10s), std::future_status::ready);
+    ASSERT_EQ(rig.window->invoke(ui::git_actions::kCompareWithHead), input::InvokeResult::Ran);
+    ASSERT_TRUE(diff->rightPane()->typeText("// comparison edit\n"));
+    released = true;
+    release->set_value();
+    ASSERT_TRUE(controller(rig)->waitForIdle(20s));
+    EXPECT_TRUE(diff->rightText().contains("// comparison edit"));
+    EXPECT_TRUE(diff->hasWorkingEdits());
+}
+
 TEST(WorkbenchGit, NestedProjectShowsDirtyBufferDiffAndCommitsSelectedFile) {
     TempRepo repo("app-git-dirty");
     GitConfig config(repo);
@@ -92,7 +256,7 @@ TEST(WorkbenchGit, NestedProjectShowsDirtyBufferDiffAndCommitsSelectedFile) {
     ASSERT_EQ(rig.window->invoke(ui::git_actions::kCompareWithHead), input::InvokeResult::Ran);
     auto* diff = qobject_cast<ui::DiffViewer*>(rig.window->toolWindows().content("gitDiff"));
     ASSERT_NE(diff, nullptr);
-    ASSERT_TRUE(waitFor([&] { return diff->rightPane()->toPlainText().contains(QStringLiteral("unsaved")); }, 10s));
+    ASSERT_TRUE(waitFor([&] { return diff->rightText().contains(QStringLiteral("unsaved")); }, 10s));
     ASSERT_EQ(rig.window->invoke(ui::git_actions::kCommit), input::InvokeResult::Ran);
     auto* commit = commitWindow(rig);
     ASSERT_NE(commit, nullptr);
@@ -130,11 +294,11 @@ TEST(WorkbenchGit, IndexDiffComparesStagedContentWithUnsavedEditor) {
     auto* diff = qobject_cast<ui::DiffViewer*>(rig.window->toolWindows().content("gitDiff"));
     ASSERT_NE(diff, nullptr);
     ASSERT_TRUE(waitFor([&] { return diff->leftTitle() == QStringLiteral("Index"); }, 10s));
-    EXPECT_TRUE(diff->leftPane()->toPlainText().contains(QStringLiteral("staged")));
-    EXPECT_TRUE(diff->rightPane()->toPlainText().contains(QStringLiteral("unsaved staged")));
+    EXPECT_TRUE(diff->leftText().contains(QStringLiteral("staged")));
+    EXPECT_TRUE(diff->rightText().contains(QStringLiteral("unsaved staged")));
     ASSERT_TRUE(rig.view()->editor().typeText("later "));
     EXPECT_TRUE(waitFor(
-        [&] { return diff->rightPane()->toPlainText().contains(QStringLiteral("unsaved later staged")); }, 10s));
+        [&] { return diff->rightText().contains(QStringLiteral("unsaved later staged")); }, 10s));
 }
 
 TEST(WorkbenchGit, HookFailureKeepsSelectionMessageAndOtherStagedFiles) {
