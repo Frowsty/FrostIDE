@@ -221,6 +221,9 @@ sched::Task<Result<MetadataSource>> librarySourceTask(fl::ILspRequester& server,
     if (source.empty() || source.size() > 4 * 1024 * 1024 || !validDigest(identity) || !validDigest(digest) ||
         (extension != ".cs" && extension != ".il"))
         co_return fail(ErrorCode::Corrupt, "invalid library source receipt");
+    const auto line = result->integerAt("line").value_or(0);
+    if (line < 0 || line > 1000000)
+        co_return fail(ErrorCode::Corrupt, "library source location is out of range");
     const auto bytes = QByteArray(source.data(), static_cast<qsizetype>(source.size()));
     if (QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex().toStdString() != digest)
         co_return fail(ErrorCode::Corrupt, "library source checksum mismatch");
@@ -305,9 +308,6 @@ sched::Task<Result<MetadataSource>> librarySourceTask(fl::ILspRequester& server,
         if (auto wrote = fs.writeFileAtomic(*file, source); !wrote)
             co_return std::unexpected(wrote.error());
     }
-    const auto line = result->integerAt("line").value_or(0);
-    if (line < 0 || line > 1000000)
-        co_return fail(ErrorCode::Corrupt, "library source location is out of range");
     co_return MetadataSource{.location = fl::Location{.path = *file, .uri = fl::pathToUri(*file).value_or(""),
         .range = {.start = {.line = static_cast<std::uint32_t>(line), .character = 0},
                   .end = {.line = static_cast<std::uint32_t>(line), .character = 0}}}, .offered = true};
