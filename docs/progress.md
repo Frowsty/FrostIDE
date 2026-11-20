@@ -3,6 +3,15 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R15 shell, indexed search, schemes and docking source checkpoint
+
+- Search Everywhere uses immutable indexed file snapshots with cancellable bounded result retention; separator-only patterns retain fuzzy scoring, while empty queries preserve recent-file order. Those earlier search corrections were independently source-reviewed.
+- Tool windows support owned floating hosts, drag docking and persisted side/mode/geometry. Hidden unpinned floating tools now restore their stripe access when shown. Services projects actual build, run and debug owners, with generation-checked debug Stop/navigation and no fabricated idle rows.
+- Editor groups can float into owned windows and dock on native close without closing documents; split slots, floating mode and geometry round-trip in editor layouts. Fullscreen and distraction-free shell actions restore remembered chrome/tool visibility.
+- Documented Visual Studio XML imports retain explicit font/color category selection and reviewable conditional application edits. Native scheme editing/import/export validates bounded JSON, editor color names/opacity and strict keymap semantics, exports through QSaveFile, and applies optimistic edits atomically.
+- Authored regression sources cover floating editor ownership/layout, unpinned stripe restoration, Services empty state, shell mode restoration, native scheme round-trip, stale application edits and malformed/ineffective scheme values. Independent Astra source review is in progress; runtime builds, tests, feature execution, budgets and WSL remain deferred by user instruction. No R15 runtime acceptance or main merge is claimed.
+- Next: resolve independent source findings and integrate the remaining R15 editor/VCS/terminal slices through the coordinator. No user questions block this branch.
+
 ## 2026-11-14: R15 bounded large-file product preview; runtime acceptance deferred
 
 - New regular files at or above 128 MiB route through the product editor factory to a separate read-only UTF-8 byte-page view, without creating an empty editable document or invoking the inner editor. Existing editable load/reload/merge/hot-exit guards remain intact.
