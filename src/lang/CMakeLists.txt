@@ -74,6 +74,7 @@ frost_add_library(lang LAYER lang
         src/language_registry.cpp
 
         src/msbuild_language.cpp
+        src/shader_source.cpp
         src/msbuild_compile_commands.cpp
         src/msvc_environment.cpp
         src/navigation.cpp

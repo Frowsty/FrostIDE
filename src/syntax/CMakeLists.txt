@@ -51,6 +51,7 @@ _frost_tree_sitter_grammar(markdown "${_frost_grammars}/markdown/tree-sitter-mar
 
 frost_add_library(syntax LAYER syntax
     SOURCES
+        src/shader_source.cpp
         src/input.cpp
         src/language.cpp
         src/parse.cpp

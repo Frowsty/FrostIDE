@@ -67,6 +67,7 @@ class EditorKeyRouting;
 class GoToLinePopup;
 class RhiEditorViewport;
 struct FoldQueryJob;
+struct ShaderHighlightJob;
 
 // A gutter marker: an error or warning on buffer line `line` (W1's error list fills these).
 struct LineMarker {
@@ -741,6 +742,8 @@ private:
         bool valid = false;
     };
     HighlightCache m_highlights;
+    std::shared_ptr<ShaderHighlightJob> m_shaderHighlights;
+    std::vector<sched::JoinHandle<void>> m_shaderHighlightTasks;
     std::vector<text::ByteRange> m_foldCandidates;
     std::vector<std::uint64_t> m_foldCandidateMaxEnd;
     std::shared_ptr<FoldQueryJob> m_foldJob;

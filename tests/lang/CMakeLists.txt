@@ -83,6 +83,7 @@ frost_add_test(lang_unit_tests
         lua_rc_test.cpp
         lua_service_test.cpp
         language_registry_test.cpp
+        shader_source_test.cpp
         msbuild_provider_test.cpp
         semantic_tokens_test.cpp
         unity_assets_test.cpp

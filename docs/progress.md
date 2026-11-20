@@ -3,6 +3,12 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R18 LTR-14 shader source profiles
+
+- Authored dependency-free HLSL/ShaderLab lexical profiles and cancellable snapshot worker highlighting, including Unity embedded HLSL/Cg boundaries and editing comment selection. Added read-only literal include source definition/hover/links with original ranges, conditional/provenance labels, physical containment and explicit compiler/Unity mapping values; no PackageCache guesses or compiler/variant claims.
+- Actual registered semantic providers outrank the builtin source fallback. Named source/span/include/root/candidate limits and scheduler-free fallback are recorded in ADR0118. Lexer, physical source navigation/provenance, ambiguous/missing/macro limits, provider precedence and worker editor regressions are authored.
+- Independent Astra source review is requested. No builds, tests, shader/Unity feature execution, downloads/install, WSL or pushes occurred. Next: source-review corrections, additive R14 GLSL joins, then independent R19 other-language/extension branches.
+
 ## 2026-11-20: R18 Unity authenticated event/Console/compiler checkpoint
 
 - Extended the existing project/domain-bound HMAC channel with capability-gated, monotonic event continuations. The Unity package journals public log, compiler and project callbacks, reports exact lost prefixes after bounded retention, caps strings/batch bytes and marks truncation. Authenticated Refresh Assets and Request Compilation execute on the Editor update thread and distinguish acceptance from later observed compiler state. Astra source-reviewed producer 220030e without a blocker; no Unity Editor or runtime test ran.

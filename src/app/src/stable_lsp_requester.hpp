@@ -7,6 +7,7 @@
 #include "frost/lang/lsp_client.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/msbuild_source.hpp"
+#include "frost/syntax/shader_source.hpp"
 
 #include <map>
 #include <memory>
@@ -32,6 +33,10 @@ public:
     void setJsonServer(std::shared_ptr<lang::ILspRequester> server) {
         LockGuard lock(m_mutex);
         m_json = std::move(server);
+    }
+    void setShaderSourceServer(std::shared_ptr<lang::ILspRequester> server) {
+        LockGuard lock(m_mutex);
+        m_shaderSource = std::move(server);
     }
     void setCMakeServer(std::shared_ptr<lang::ILspRequester> server) {
         LockGuard lock(m_mutex);
@@ -130,7 +135,9 @@ private:
     [[nodiscard]] std::shared_ptr<lang::ILspRequester> registeredFor(std::string_view path) const
         FROST_REQUIRES(m_mutex) {
         const auto found = m_registered.find(lang::documentKey(path));
-        return found == m_registered.end() ? nullptr : found->second;
+        if (found != m_registered.end())
+            return found->second;
+        return syntax::shaderSourceKind(path) != syntax::ShaderSourceKind::None ? m_shaderSource : nullptr;
     }
     [[nodiscard]] std::shared_ptr<lang::ILspRequester> server() const {
         LockGuard lock(m_mutex);
@@ -184,6 +191,7 @@ private:
     std::shared_ptr<lang::ILspRequester> m_managed FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_json FROST_GUARDED_BY(m_mutex);
     std::shared_ptr<lang::ILspRequester> m_cmake FROST_GUARDED_BY(m_mutex);
+    std::shared_ptr<lang::ILspRequester> m_shaderSource FROST_GUARDED_BY(m_mutex);
     std::map<std::string, std::shared_ptr<lang::ILspRequester>> m_registered FROST_GUARDED_BY(m_mutex);
     std::string m_activePath FROST_GUARDED_BY(m_mutex);
     bool m_activeJson FROST_GUARDED_BY(m_mutex) = false;
