@@ -3,6 +3,12 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20 R13 C++ analysis implementation integrated
+
+The default C++ bundle registers the Clang-backed index, native analyzer, preprocessor views and module actions. The SQLite index distinguishes build configurations. The analyzer emits SARIF for 33 AST checks and five control-flow checks. Idle, save and manual analysis share Workbench Problems publication and cancellation.
+
+The preprocessor views show Clang's expanded output, macro events and includes. The module graph consumes P1689 scanner output and validates tracked inputs for each compile command before publishing results and navigating to a source. GPT-6 Astra reviewed the source changes and their combined registrations. Regression tests are in the repository. Execution, toolchain installation, corpus measurements and performance acceptance remain deferred.
+
 ## 2026-11-20: R13 normal preprocessor and module tools wired
 
 - Explicit C++ actions now show actual expanded source, macro events and directed includes for a selected captured command, and actual pinned clang-scan-deps module relationships with unique interface-source navigation. The scanner consumes an owned private CDB without rewriting project commands. Missing tools and unsupported response/PCH/BMI/header-unit profiles refuse explicitly.
