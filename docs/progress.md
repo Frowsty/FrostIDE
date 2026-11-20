@@ -1,3 +1,13 @@
+## 2026-11-20 — R19 cumulative source handoff
+
+- LTR-15 and LTR-16 add Unreal project discovery, trusted local build and native debug, reflection completion and explicit Blueprint observations through the partner protocol. The local-only Unreal plug-in is omitted. Unreal Live Coding and Automation remain open.
+- LTR-18 adds pinned grammar source recipes and extension registry routes. LTR-19 adds evaluated .NET framework and launch profiles, plus opt-in diagnostics for an admitted running process. Broader Razor, XAML and MAUI tooling, F# and VB semantics, designers and browser debugging remain open.
+- REF-15 adds syntax-based structural search and previewed transactional replacement. LUA-16 adds explicit LuaJIT and Luau run profiles and distinct analysis routes. Non-Lua54 debugging remains outside the existing debugger ABI.
+- CMK-16 and RUN-15 add named WSL CMake profiles and governed WSL/Linux SSH run targets. DBG-16 records the native restart and provider-specific reload boundaries. Native hot reload remains open. R18's separate IL2CPP profile launches a supplied local player under LLDB for generated C++ debugging with native symbols. Verified Mono attach uses its own held-process and source evidence. IL2CPP managed sequence points and values remain open.
+- FEC-16 adds guarded engine scene and prefab merge from actual Git stages. The FrostEngine corpus is pinned at `0e7b37374a7d4d1c574a681f4b76a3a1213f93ee`. Independent UnityYAMLMerge and DXC routes, Unity test metadata, and MoreLINQ 4.4.0 at `6d97c3b1d482f98300f4446df14742b0e3fafbec` are included in the assembled source.
+- UX-18 adds scoped C2 tools and user-operated native C3 chat. UX-20 adds public extension contributions, a sample and opt-in native sandbox profiles. Provider protocol acceptance and platform sandbox acceptance remain deferred.
+- This is a source handoff with authored regression fixtures. Build, test, runtime, corpus and release acceptance remain deferred.
+
 ## 2026-11-20 — C2 actual hierarchy edges
 
 - Existing LSP services now supply immediate incoming/outgoing calls and super/subtype edges,
