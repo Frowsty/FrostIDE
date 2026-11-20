@@ -172,7 +172,11 @@ public:
         while (offset < size) {
             if (!readyLuaSocket(socket))
                 return {};
+#ifdef _WIN32
             const auto count = recv(socket, body.data() + offset, static_cast<int>(size - offset), 0);
+#else
+            const auto count = recv(socket, body.data() + offset, size - offset, 0);
+#endif
             if (count <= 0)
                 return {};
             offset += static_cast<std::size_t>(count);
@@ -186,10 +190,12 @@ public:
     bool sendBytes(std::string_view wire) {
         const auto socket = peer.load();
         while (!wire.empty()) {
-#ifdef MSG_NOSIGNAL
-            const auto count = send(socket, wire.data(), static_cast<int>(wire.size()), MSG_NOSIGNAL);
-#else
+#ifdef _WIN32
             const auto count = send(socket, wire.data(), static_cast<int>(wire.size()), 0);
+#elif defined(MSG_NOSIGNAL)
+            const auto count = send(socket, wire.data(), wire.size(), MSG_NOSIGNAL);
+#else
+            const auto count = send(socket, wire.data(), wire.size(), 0);
 #endif
             if (count <= 0)
                 return false;

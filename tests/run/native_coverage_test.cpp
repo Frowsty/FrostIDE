@@ -49,16 +49,15 @@ TEST(NativeCoverage, PreservesActualLinesAndUnknownBranches) {
     EXPECT_FALSE(report->front().branches[1].hits);
 }
 TEST(NativeCoverage, RefusesDuplicateContradictoryAndTruncatedRecords) {
+#ifdef _WIN32
+    constexpr auto projectRoot = "C:/project";
+#else
+    constexpr auto projectRoot = "/project";
+#endif
     for (auto rows :
          {"DA:1,1\nDA:1,2\nLF:2\nLH:2\nend_of_record\n", "DA:1,1\nLF:1\nLH:0\nend_of_record\n", "DA:1,1\nLF:1\nLH:1\n",
           "DA:1,1\nBRDA:1,0,0,1\nBRDA:1,0,0,1\nLF:1\nLH:1\nBRF:2\nBRH:2\nend_of_record\n"})
-        EXPECT_FALSE(parseLlvmCoverage(std::string("SF:unit.cpp\n") + rows,
-#ifdef _WIN32
-                                       "C:/project"
-#else
-                                       "/project"
-#endif
-                                       ));
+        EXPECT_FALSE(parseLlvmCoverage(std::string("SF:unit.cpp\n") + rows, projectRoot));
 }
 TEST(NativeCoverage, VersionRequiresExactLlvmToken) {
     EXPECT_TRUE(validateAnalysisLlvmVersion("LLVM (https://llvm.org):\n LLVM version 23.1.4\n", "23.1.4"));

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <future>
+#include <string_view>
 
 namespace frost::debug {
 TEST(GdbDapReal, BreakpointThreadsStackValueStepAndNormalExit) {
@@ -20,7 +21,7 @@ TEST(GdbDapReal, BreakpointThreadsStackValueStepAndNormalExit) {
     ASSERT_TRUE(contents);
     const auto marker = contents->find("// FROST_BREAK_HERE");
     ASSERT_NE(marker, std::string::npos);
-    const auto line = 1 + std::count(contents->begin(), contents->begin() + marker, '\n');
+    const auto line = 1 + std::ranges::count(std::string_view(*contents).substr(0, marker), '\n');
     auto trust = project::TrustStore::open(fs, FROST_GDB_TRUST_PATH);
     ASSERT_TRUE(trust);
     ASSERT_TRUE((*trust)->trust(std::string(io::parentPath(FROST_DEBUGGEE_PATH))));

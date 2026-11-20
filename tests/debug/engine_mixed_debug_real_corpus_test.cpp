@@ -10,6 +10,7 @@
 #include "frost/ui/debug_session_registry.hpp"
 #include "frost/ui/mixed_debug_window.hpp"
 #include "frost/ui/run_controller.hpp"
+#include "frost/ui/shell/tool_window_manager.hpp"
 
 #include "../app/workbench_rig.hpp"
 #include "support/real_engine_session.hpp"

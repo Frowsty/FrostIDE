@@ -18,18 +18,22 @@ TEST(DotnetTests, AdapterDiscoveryIsAuthoritativeAndDuplicateNamesRefuse) {
     EXPECT_FALSE(parseDotnetTestDiscovery("The following Tests are available:\n    Suite.Same\n    Suite.Same\n"));
 }
 TEST(DotnetTests, TrxReportsActualFailureIdentityDurationAndStack) {
-    auto report = parseDotnetTrx(
-        R"(<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results><UnitTestResult testId="id" executionId="exec" testName="Fail(1)" outcome =
-            "Failed" duration = "00:00:01.1234567" > <Output><ErrorInfo><Message> Expected 1 < / Message >
-                                <StackTrace> at Suite.Fail in Test.cs : line 12 < / StackTrace > </ ErrorInfo></ Output>
-                                </ UnitTestResult></ Results><TestDefinitions><UnitTest id = "id">
-                                <TestMethod className = "Suite" name = "Fail" /></ UnitTest></ TestDefinitions>
-                                <ResultSummary outcome = "Failed" /></ TestRun>) ");
-        ASSERT_TRUE(report);
+    auto report = parseDotnetTrx(R"trx(<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+        <Results>
+            <UnitTestResult testId="id" executionId="exec" testName="Fail(1)" outcome="Failed" duration="00:00:01.1234567">
+                <Output><ErrorInfo><Message>Expected 1</Message>
+                    <StackTrace>at Suite.Fail in Test.cs:line 12</StackTrace></ErrorInfo></Output>
+            </UnitTestResult>
+        </Results>
+        <TestDefinitions><UnitTest id="id"><TestMethod className="Suite" name="Fail"/></UnitTest></TestDefinitions>
+        <ResultSummary outcome="Failed"/>
+    </TestRun>)trx");
+    ASSERT_TRUE(report);
     ASSERT_EQ(report->size(), 1u);
     EXPECT_EQ(report->front().fullyQualifiedName, "Suite.Fail");
     EXPECT_EQ(report->front().result.outcome, TestOutcome::Failed);
     EXPECT_EQ(report->front().result.duration, std::chrono::microseconds(1123456));
+    ASSERT_FALSE(report->front().result.failures.empty());
     EXPECT_NE(report->front().result.failures.front().message.find("line 12"), std::string::npos);
     EXPECT_FALSE(parseDotnetTrx("<TestRun><Results/></TestRun>"));
 }
