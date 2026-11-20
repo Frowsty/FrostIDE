@@ -108,6 +108,8 @@ frost_add_library(app LAYER app
         src/update_download.hpp
         src/unity_control.cpp
         src/unity_control.hpp
+        src/scene_merge_work.cpp
+        src/scene_merge_dialog.cpp
         src/git_integration.cpp
         src/git_integration.hpp
         src/engine_request_helper.cpp

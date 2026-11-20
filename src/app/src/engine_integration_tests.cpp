@@ -84,12 +84,15 @@ Result<EngineUnitTestsSource> captureEngineTestsSource(io::IFileSystem& fs, proj
 }
 
 Result<EngineUnitTestsSource> EngineIntegration::captureEngineUnitTestsSource() const {
+    return captureDocumentToolSource();
+}
+Result<EngineUnitTestsSource> EngineIntegration::captureDocumentToolSource() const {
     const auto& impl = *m_impl;
     if (!impl.available || !impl.admitted(impl.epoch, impl.root, impl.trustRevision))
-        return fail(ErrorCode::Untrusted, "Open and trust a FrostEngine project to use its scene tests");
+        return fail(ErrorCode::Untrusted, "Open and trust a FrostEngine project to use its tools");
     if (impl.installations.empty() || impl.installations.front().cliProgram.empty() ||
         !impl.installations.front().cliStatus)
-        return fail(ErrorCode::NotFound, "Locate a built FrostEditor CLI to list or run engine tests");
+        return fail(ErrorCode::NotFound, "Locate a built FrostEditor CLI to use engine tools");
     const auto& tool = impl.installations.front();
     const auto project = lang::documentKey(impl.selectedProject) == impl.projectKey
                              ? impl.physicalRoot

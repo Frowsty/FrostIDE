@@ -39,6 +39,7 @@ struct EngineCliRequest {
     std::string workingDirectory{};         // The child's current directory when not empty (absolute).
     std::optional<std::chrono::milliseconds> timeout = std::chrono::minutes(5); // nullopt: cancellation-only, no cap.
     std::stop_token stopToken{};
+    std::string paramsFile{}; // Optional absolute private JSON file; owner retains it through completion.
 };
 
 // The engine's refusal of a command, from its error object.

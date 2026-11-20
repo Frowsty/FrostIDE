@@ -17,6 +17,7 @@ frost_add_library(vcs LAYER vcs
         src/git_runner.cpp
         src/git_service.cpp
         src/git_status.cpp
+        src/conflict_sources.cpp
         src/line_changes.cpp
         src/serial_queue.cpp
         src/side_by_side.cpp

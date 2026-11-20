@@ -25,6 +25,7 @@ frost_add_test(vcs_unit_tests
         line_changes_test.cpp
         runner_test.cpp
         status_test.cpp
+        conflict_sources_test.cpp
     DEPS frost::vcs frost::diff frost::io frost::core
     LABELS unit)
 target_include_directories(vcs_unit_tests PRIVATE ${FROST_SOURCE_DIR}/tests)

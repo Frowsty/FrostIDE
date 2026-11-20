@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Git integration for the actual application workbench.
 #include "git_integration.hpp"
+#include "engine_integration.hpp"
+#include "scene_merge_work.hpp"
+#include "frost/document/refactoring_transaction.hpp"
 
 #include "frost/app/workbench.hpp"
 #include "frost/core/log.hpp"
@@ -46,6 +49,7 @@
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSplitter>
@@ -785,88 +789,193 @@ void GitIntegration::showResolveConflictsDialog() {
         ConflictSides sides;
         sides.generation = m_projectGeneration;
         auto stages = readStages(relative);
-        if (!stages || stages->empty()) { report(stages ? "The file no longer has unmerged Git stages" : stages.error().message()); return sides; }
+        if (!stages || stages->empty()) {
+            report(stages ? "The file no longer has unmerged Git stages" : stages.error().message());
+            return sides;
+        }
         sides.stages = *stages;
         auto indexPath = io::joinPath(m_controller->info().gitDir, "index");
-        if (!indexPath) { report(indexPath.error().message()); return sides; }
+        if (!indexPath) {
+            report(indexPath.error().message());
+            return sides;
+        }
         auto index = m_workbench.m_services.fs.readFile(*indexPath);
         auto disk = m_workbench.m_services.fs.readFile(absolute);
         if (!index || (!disk && disk.error().code() != ErrorCode::NotFound)) {
-            report(!index ? index.error().message() : disk.error().message()); return sides;
+            report(!index ? index.error().message() : disk.error().message());
+            return sides;
         }
         sides.index = std::move(*index);
-        if (disk) sides.disk = std::move(*disk);
+        if (disk)
+            sides.disk = std::move(*disk);
         // Git's actual stage blobs are authoritative. Conflict markers omit the common ancestor
         // in normal merge style and are never used to invent a base version.
         for (int stage = 1; stage <= 3; ++stage) {
             const std::string marker = " " + std::to_string(stage) + "\t";
-            if (sides.stages.find(marker) == std::string::npos) continue;
+            if (sides.stages.find(marker) == std::string::npos)
+                continue;
             vcs::GitInvocation invocation;
             invocation.arguments = {"cat-file", "blob", ":" + std::to_string(stage) + ":" + relative};
             invocation.workingDirectory = m_controller->info().workTree;
             invocation.background = true;
             auto output = m_controller->service().repository().runner().run(invocation);
-            if (!output || !output->succeeded()) { report(output ? "Could not read the conflict blob" : output.error().message()); return sides; }
+            if (!output || !output->succeeded()) {
+                report(output ? "Could not read the conflict blob" : output.error().message());
+                return sides;
+            }
             document::RawFile raw;
             raw.bytes = std::move(output->stdoutBytes);
             auto decoded = m_workbench.m_documents->loadService().decode(std::move(raw), absolute);
-            if (!decoded) { report(decoded.error().message()); return sides; }
-            if (stage == 1) sides.base = decoded->buffer.snapshot().text();
-            if (stage == 2) { sides.ours = decoded->buffer.snapshot().text(); sides.oursExists = true; }
-            if (stage == 3) { sides.theirs = decoded->buffer.snapshot().text(); sides.theirsExists = true; }
+            if (!decoded) {
+                report(decoded.error().message());
+                return sides;
+            }
+            if (stage == 1)
+                sides.base = decoded->buffer.snapshot().text();
+            if (stage == 2) {
+                sides.ours = decoded->buffer.snapshot().text();
+                sides.oursExists = true;
+            }
+            if (stage == 3) {
+                sides.theirs = decoded->buffer.snapshot().text();
+                sides.theirsExists = true;
+            }
         }
         auto stillStages = readStages(relative);
         auto stillIndex = m_workbench.m_services.fs.readFile(*indexPath);
         if (!stillStages || !stillIndex || *stillStages != sides.stages || *stillIndex != sides.index) {
-            report("Git conflict sources changed while opening the merge; open it again"); return sides;
+            report("Git conflict sources changed while opening the merge; open it again");
+            return sides;
         }
         sides.valid = true;
         return sides;
     };
     const auto applyResolved = [&](const std::string& absolute, const std::string& relative,
-        const std::string& resolved, const ConflictSides& source, bool deleted = false) -> bool {
-        if (!source.valid || source.generation != m_projectGeneration || m_shutdown || !m_controller || m_controller->busy() ||
-            !m_workbench.m_services.trust.isTrusted(m_root) || !m_workbench.m_services.trust.isTrusted(m_controller->info().workTree) ||
-            !m_workbench.m_services.trust.isTrusted(absolute)) { report("Resolve requires the same idle trusted repository"); return false; }
-        if (auto allowed = allowWrite(absolute); !allowed) { report(allowed.error().message()); return false; }
+                                   const std::string& resolved, const ConflictSides& source, bool deleted = false,
+                                   bool semantic = false, std::function<bool()> semanticAdmitted = {}) -> bool {
+        if (!source.valid || source.generation != m_projectGeneration || m_shutdown || !m_controller ||
+            m_controller->busy() || !m_workbench.m_services.trust.isTrusted(m_root) ||
+            !m_workbench.m_services.trust.isTrusted(m_controller->info().workTree) ||
+            !m_workbench.m_services.trust.isTrusted(absolute)) {
+            report("Resolve requires the same idle trusted repository");
+            return false;
+        }
+        if (auto allowed = allowWrite(absolute); !allowed) {
+            report(allowed.error().message());
+            return false;
+        }
         auto target = comparisonTarget(m_workbench.m_services.fs, absolute);
-        if (!target) { report(target.error().message()); return false; }
-        if (!m_workbench.m_services.trust.isTrusted(*target)) { report("The merge output target is not trusted"); return false; }
+        if (!target) {
+            report(target.error().message());
+            return false;
+        }
+        if (!m_workbench.m_services.trust.isTrusted(*target)) {
+            report("The merge output target is not trusted");
+            return false;
+        }
         const auto& repository = m_controller->service().repository();
         if (auto relativePath = repository.relativePath(absolute); !relativePath || *relativePath != relative) {
-            report("Conflict path no longer belongs to this repository"); return false;
+            report("Conflict path no longer belongs to this repository");
+            return false;
         }
         m_workbench.checkExternalChanges();
         for (const auto& document : m_workbench.m_documents->documents())
-            if (!document->untitled() && document->dirty() && fileKey(m_workbench.m_services.fs, document->path()) == fileKey(m_workbench.m_services.fs, absolute)) {
-                report("Save or close the unsaved editor before resolving this conflict"); return false;
+            if (!document->untitled() && document->dirty() &&
+                fileKey(m_workbench.m_services.fs, document->path()) == fileKey(m_workbench.m_services.fs, absolute)) {
+                report("Save or close the unsaved editor before resolving this conflict");
+                return false;
             }
         auto stages = readStages(relative);
         auto indexPath = io::joinPath(m_controller->info().gitDir, "index");
-        auto index = indexPath ? m_workbench.m_services.fs.readFile(*indexPath) : Result<std::string>(fail(ErrorCode::InvalidArgument, "Invalid index path"));
+        auto index = indexPath ? m_workbench.m_services.fs.readFile(*indexPath)
+                               : Result<std::string>(fail(ErrorCode::InvalidArgument, "Invalid index path"));
         auto disk = m_workbench.m_services.fs.readFile(absolute);
         if (!stages || !index || *stages != source.stages || *index != source.index ||
-            (!disk && disk.error().code() != ErrorCode::NotFound) || (disk ? std::optional<std::string>(*disk) : std::nullopt) != source.disk) {
-            report("The file or Git index changed while merging; reopen the conflict before applying"); return false;
+            (!disk && disk.error().code() != ErrorCode::NotFound) ||
+            (disk ? std::optional<std::string>(*disk) : std::nullopt) != source.disk) {
+            report("The file or Git index changed while merging; reopen the conflict before applying");
+            return false;
         }
-        if (deleted) {
-            if (disk) if (auto removed = m_workbench.m_services.fs.removeFile(absolute); !removed) { report(removed.error().message()); return false; }
+        if (semantic) {
+            document::RefactoringPlan plan;
+            plan.label = "Semantic scene merge";
+            if (disk) {
+                auto opened = m_workbench.m_documents->open(absolute);
+                if (!opened) {
+                    report(opened.error().message());
+                    return false;
+                }
+                const auto& encoding = (*opened)->encoding();
+                if (!encoding.fidelity.lossless() || encoding.format.encoding != text::Encoding::utf8()) {
+                    report("Semantic scene merge output requires a lossless UTF8 working file");
+                    return false;
+                }
+                plan.buffers.push_back(
+                    {absolute, (*opened)->document().text().text(), resolved, document::BufferPersistence::Persist});
+            } else
+                plan.creates.push_back({absolute, resolved});
+            plan.revalidateContext = [&, source, target = *target]() -> Result<void> {
+                if ((semanticAdmitted && !semanticAdmitted()) || source.generation != m_projectGeneration ||
+                    m_shutdown || !m_controller || m_controller->busy() ||
+                    !m_workbench.m_services.trust.isTrusted(m_root) ||
+                    !m_workbench.m_services.trust.isTrusted(absolute))
+                    return fail(ErrorCode::Untrusted, "Scene merge project or trust changed before Apply");
+                auto physical = comparisonTarget(m_workbench.m_services.fs, absolute);
+                auto currentStages = readStages(relative);
+                auto currentIndex = m_workbench.m_services.fs.readFile(*indexPath);
+                auto currentDisk = m_workbench.m_services.fs.readFile(absolute);
+                if (!physical || *physical != target || !currentStages || *currentStages != source.stages ||
+                    !currentIndex || *currentIndex != source.index ||
+                    (!currentDisk && currentDisk.error().code() != ErrorCode::NotFound) ||
+                    (currentDisk ? std::optional<std::string>(*currentDisk) : std::nullopt) != source.disk)
+                    return fail(ErrorCode::Busy, "Scene merge sources changed before Apply");
+                return {};
+            };
+            auto committed = m_workbench.applyRefactoring(plan);
+            if (!committed) {
+                report(committed.error().message());
+                return false;
+            }
+            if (committed->status == document::RefactoringStatus::PendingRecovery) {
+                report("The scene merge has a durable decision pending recovery. Complete recovery before staging; the "
+                       "merge must not be applied again.");
+                return false;
+            }
+        } else if (deleted) {
+            if (disk)
+                if (auto removed = m_workbench.m_services.fs.removeFile(absolute); !removed) {
+                    report(removed.error().message());
+                    return false;
+                }
         } else {
             document::FileDocument* document = nullptr;
             if (disk) {
                 auto opened = m_workbench.m_documents->open(absolute);
-                if (!opened) { report(opened.error().message()); return false; }
+                if (!opened) {
+                    report(opened.error().message());
+                    return false;
+                }
                 document = *opened;
-            } else document = &m_workbench.m_documents->createUntitled({});
-            auto changed = document->document().replace({ByteOffset{0}, document->document().text().size()}, resolved, {});
-            if (!changed) { report(changed.error().message()); return false; }
+            } else
+                document = &m_workbench.m_documents->createUntitled({});
+            auto changed =
+                document->document().replace({ByteOffset{0}, document->document().text().size()}, resolved, {});
+            if (!changed) {
+                report(changed.error().message());
+                return false;
+            }
             auto saved = disk ? m_workbench.m_documents->save(*document) : m_workbench.m_documents->saveAs(*document, absolute);
             if (!saved) {
                 static_cast<void>(document->document().undo());
-                if (auto* view = m_workbench.m_editors->find(*document)) view->reloadFromDocument();
-                report(saved.error().message()); return false;
+                if (auto* view = m_workbench.m_editors->find(*document))
+                    view->reloadFromDocument();
+                report(saved.error().message());
+                return false;
             }
-            if (auto* view = m_workbench.m_editors->find(*document)) { view->reloadFromDocument(); view->markSaved(); }
+            if (auto* view = m_workbench.m_editors->find(*document)) {
+                view->reloadFromDocument();
+                view->markSaved();
+            }
         }
         vcs::GitInvocation stage;
         stage.arguments = {"add", "-A", "--", relative};
@@ -876,7 +985,8 @@ void GitIntegration::showResolveConflictsDialog() {
         if (!staged || !staged->succeeded()) {
             report(staged ? vcs::gitFailure("Stage resolved file", *staged).message() : staged.error().message());
             // The chosen file is retained; never claim that a failed git add resolved the index.
-            m_controller->refreshStatus(); return false;
+            m_controller->refreshStatus();
+            return false;
         }
         m_workbench.checkExternalChanges();
         m_controller->refreshStatus();
@@ -908,6 +1018,9 @@ void GitIntegration::showResolveConflictsDialog() {
     actionColumn->addWidget(acceptYoursBtn);
     actionColumn->addWidget(acceptTheirsBtn);
     actionColumn->addWidget(mergeBtn);
+    auto* semanticBtn=new QPushButton(tr("Semantic Scene Merge…"),&dialog);
+    semanticBtn->setObjectName(QStringLiteral("semanticSceneMergeButton"));
+    actionColumn->addWidget(semanticBtn);
     actionColumn->addStretch(1);
     bodyLayout->addLayout(actionColumn);
     mainLayout->addLayout(bodyLayout, 1);
@@ -936,11 +1049,13 @@ void GitIntegration::showResolveConflictsDialog() {
     if (list->count() > 0)
         list->setCurrentRow(0);
 
-    const auto updateDialogState = [list, acceptYoursBtn, acceptTheirsBtn, mergeBtn, emptyLabel] {
+    const auto updateDialogState = [list, acceptYoursBtn, acceptTheirsBtn, mergeBtn, semanticBtn, emptyLabel] {
         const bool hasSelection = list->currentItem() != nullptr;
         acceptYoursBtn->setEnabled(hasSelection);
         acceptTheirsBtn->setEnabled(hasSelection);
         mergeBtn->setEnabled(hasSelection);
+        const auto selected=hasSelection?list->currentItem()->data(Qt::UserRole + 1).toString():QString{};
+        semanticBtn->setEnabled(hasSelection&&(selected.endsWith(QStringLiteral(".fscene"))||selected.endsWith(QStringLiteral(".fprefab"))));
         emptyLabel->setVisible(list->count() == 0);
     };
     connect(list, &QListWidget::currentRowChanged, &dialog, [updateDialogState](int) { updateDialogState(); });
@@ -994,6 +1109,77 @@ void GitIntegration::showResolveConflictsDialog() {
         }
     };
 
+    connect(semanticBtn, &QPushButton::clicked, &dialog, [&] {
+        auto* item=list->currentItem();
+        if (!item || !m_controller || m_controller->busy())
+            return;
+        if(!m_workbench.m_engine){
+            report("Open a trusted FrostEngine project with a built CLI to merge scenes semantically");
+            return;
+        }
+        auto tool=m_workbench.m_engine->captureDocumentToolSource();
+        if (!tool) {
+            report(tool.error().message());
+            return;
+        }
+        const auto absolute=item->data(Qt::UserRole).toString().toStdString();
+        const auto relative=item->data(Qt::UserRole+1).toString().toStdString();
+        const auto generation=m_projectGeneration;
+        SceneMergeWork work{m_workbench.m_services.fs,m_workbench.m_services.launcher,
+            m_controller->service().repository().runner(),std::move(*tool),m_controller->info().workTree,
+            m_controller->info().gitDir,absolute,relative};
+        auto prepared=sceneMergeInBackground(&dialog,[work](std::stop_token stop){return prepareSceneMerge(work,stop);});
+        if(!owner)
+            return;
+        if(!prepared){
+            report(prepared.error().message());
+            return;
+        }
+        auto result = showSceneMerge(
+            &dialog, std::move(*prepared),
+            [work](SceneMergeSnapshot snapshot, std::stop_token stop) {
+                return refreshSceneMerge(work, std::move(snapshot), stop);
+            },
+            [&, work, generation, absolute, relative](const SceneMergeSnapshot& snapshot) -> Result<void> {
+                if (!owner)
+                    return fail(ErrorCode::Cancelled, "Merge owner was closed");
+                auto checked = sceneMergeInBackground(
+                    &dialog, [work, snapshot](std::stop_token stop) -> Result<SceneMergeSnapshot> {
+                        if (auto valid = validateSceneMergeSources(work, snapshot, stop); !valid)
+                            return std::unexpected(valid.error());
+                        return snapshot;
+                    });
+                if (!owner)
+                    return fail(ErrorCode::Cancelled, "Merge owner was closed");
+                if (!checked)
+                    return std::unexpected(checked.error());
+                if (!snapshot.report.clean || !work.tool.admitted || !work.tool.admitted())
+                    return fail(ErrorCode::Busy, "Engine merge source or validation changed");
+                ConflictSides source;
+                source.valid = true;
+                source.generation = generation;
+                source.index = snapshot.index;
+                source.stages = snapshot.stages;
+                source.disk = snapshot.disk;
+                auto target = comparisonTarget(m_workbench.m_services.fs, absolute);
+                if (!target || *target != snapshot.target)
+                    return fail(ErrorCode::Busy, "Scene output target changed");
+                if (!applyResolved(absolute, relative, snapshot.report.result, source, false, true, work.tool.admitted))
+                    return fail(ErrorCode::Busy,
+                                "Scene merge apply or Git staging failed; details are in notifications");
+                return {};
+            });
+        if (!owner)
+            return;
+        if (!result) {
+            report(result.error().message());
+            return;
+        }
+        if (*result) {
+            delete list->takeItem(list->row(item));
+            updateDialogState();
+        }
+    });
     connect(mergeBtn, &QPushButton::clicked, &dialog, [&] { openThreeWayMerge(list->currentItem()); });
     connect(list, &QListWidget::itemDoubleClicked, &dialog, openThreeWayMerge);
 
