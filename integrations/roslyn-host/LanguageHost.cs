@@ -72,7 +72,7 @@ internal sealed class LanguageHost
         workspace = MSBuildWorkspace.Create(properties, providerCatalog.HostServices);
         workspace.LoadMetadataForReferencedProjects = false;
         workspace.SkipUnrecognizedProjects = false;
-        workspace.WorkspaceFailed += (_, value) => Console.Error.WriteLine(value.Diagnostic.Message);
+        workspace.RegisterWorkspaceFailedHandler(value => Console.Error.WriteLine(value.Diagnostic.Message));
         solution = target.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
             ? (await workspace.OpenProjectAsync(target, cancellationToken: token)).Solution
             : await workspace.OpenSolutionAsync(target, cancellationToken: token);
@@ -233,9 +233,11 @@ internal sealed class LanguageHost
         }
         workspace?.Dispose(); workspace = null; solution = null;
         await Load(token);
+        var reloaded = solution ?? throw new InvalidOperationException("Roslyn workspace has not loaded");
         foreach (var overlay in overlays) {
-            var ids = SourceIds(solution!, overlay.Key);
-            foreach (var id in ids) solution = solution.WithDocumentText(id, overlay.Value, PreservationMode.PreserveIdentity);
+            var ids = SourceIds(reloaded, overlay.Key);
+            foreach (var id in ids) reloaded = reloaded.WithDocumentText(id, overlay.Value, PreservationMode.PreserveIdentity);
+            solution = reloaded;
             if (ids.Length == 0) await rpc.Notify("textDocument/publishDiagnostics", new { uri = UriOf(overlay.Key), diagnostics = Array.Empty<object>() });
         }
     }
@@ -282,7 +284,7 @@ internal sealed class LanguageHost
             var tags = item.Tags;
             var kind = tags.Contains("Method") || tags.Contains("ExtensionMethod") ? 2 : tags.Contains("Property") ? 10 : tags.Contains("Class") ? 7 : tags.Contains("Interface") ? 8 : tags.Contains("Keyword") ? 14 : 6;
             items.Add(new { label = item.DisplayTextPrefix + item.DisplayText + item.DisplayTextSuffix, kind,
-                sortText = item.SortText, filterText = item.FilterText, detail = description.Text,
+                sortText = item.SortText, filterText = item.FilterText, detail = description?.Text ?? "",
                 textEdit = new { range = Range(source, change.TextChange.Span), newText = change.TextChange.NewText ?? "" } });
         }
         foreach (var feature in semanticFeatures.OfType<ISemanticContributions>()) items.AddRange(await feature.Completion(Context(doc), offset, token));
