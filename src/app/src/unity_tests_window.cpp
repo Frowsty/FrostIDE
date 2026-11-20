@@ -376,6 +376,13 @@ private:
             m_catalog.clear();
             return;
         }
+        if (m_owned && !m_execution.empty() && result->execution != m_execution) {
+            m_poll = false;
+            m_owned = false;
+            m_catalog.clear();
+            message("Unity snapshot changed the actual framework execution identity; no results were published");
+            return;
+        }
         if (offset == 0) {
             m_snapshotState = *result;
             m_snapshotState.cases.clear();

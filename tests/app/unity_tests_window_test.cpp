@@ -111,4 +111,63 @@ TEST(UnityTestsWindow, ActualCatalogIdsDriveSelectionAndLateDomainRepliesCannotP
     EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("Discovered"));
     EXPECT_EQ(requests.size(), 3u);
 }
+TEST(UnityTestsWindow, FirstSnapshotMustPreserveAcknowledgedExecutionBeforePublishing) {
+    UnityEditorIdentity identity;
+    identity.root = "/fixture";
+    identity.instance = std::string(32, 'd');
+    identity.session = std::string(32, 'e');
+    identity.generation = 1;
+    identity.epoch = std::make_shared<std::atomic_uint64_t>(0);
+    identity.tests = true;
+    struct Request {
+        lang::Json payload;
+        std::function<void(Result<lang::Json>)> done;
+    };
+    std::vector<Request> requests;
+    UnityTestsWindowContext context;
+    context.selected = [&]() { return std::optional<UnityEditorIdentity>{identity}; };
+    context.request = [&](const auto&, const auto& payload, auto done) {
+        requests.push_back({payload, std::move(done)});
+    };
+    std::unique_ptr<QWidget> widget(createUnityTestsWidget(nullptr, std::move(context)));
+    widget->findChild<QPushButton*>("unityTestsDiscover")->click();
+    ASSERT_EQ(requests.size(), 1u);
+    const std::string discovery(requests[0].payload.stringAt("job"));
+    auto deliver = [&](size_t index, lang::Json response) {
+        auto done = std::move(requests.at(index).done);
+        done(std::move(response));
+    };
+    deliver(0, state(discovery));
+    ASSERT_EQ(requests.size(), 2u);
+    deliver(1, page(discovery));
+    auto* table = widget->findChild<QTableWidget*>();
+    ASSERT_EQ(table->rowCount(), 1);
+    table->selectRow(0);
+    widget->findChild<QPushButton*>("unityTestsRunSelected")->click();
+    ASSERT_EQ(requests.size(), 3u);
+    const std::string job(requests[2].payload.stringAt("job"));
+    const std::string executionA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const std::string executionB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    deliver(2, state(job, "running").set("execution", executionA));
+    ASSERT_EQ(requests.size(), 4u);
+    auto failed = row();
+    failed.set("outcome", "Failed");
+    deliver(
+        3,
+        page(job).set("state", "finished").set("execution", executionB).set("cases", lang::Json::array().push(failed)));
+    EXPECT_EQ(table->rowCount(), 0);
+    widget->findChild<QPushButton*>("unityTestsRunSelected")->click();
+    widget->findChild<QPushButton*>("unityTestsRunFailed")->click();
+    EXPECT_EQ(requests.size(), 4u);
+    // Explicit observation can reacquire the actual original receipt; the rejected page did not.
+    widget->findChild<QPushButton*>("unityTestsObserve")->click();
+    ASSERT_EQ(requests.size(), 5u);
+    deliver(4, state(job, "finished").set("execution", executionA));
+    ASSERT_EQ(requests.size(), 6u);
+    deliver(
+        5,
+        page(job).set("state", "finished").set("execution", executionA).set("cases", lang::Json::array().push(failed)));
+    ASSERT_EQ(table->rowCount(), 1);
+    EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("Failed"));
+}
 } // namespace frost::app
