@@ -17,6 +17,7 @@
 
 frost_add_library(run LAYER run
     SOURCES
+        src/managed_diagnostics.cpp
         src/native_analysis.cpp
         src/native_coverage.cpp
         src/native_profile.cpp

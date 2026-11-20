@@ -22,6 +22,17 @@
   queries, inspection metadata may be unavailable, and C2 run_tests currently binds CTest. Real CLI
   schemas/handshake, hooks/settings merge, platform ACL/cancellation/budgets and provider behavior
   require the resumed local acceptance phase. No complete C2/C3 parity or release claim.
+## 2026-11-20 — R19 LTR19 managed diagnostic core (implementation in progress)
+
+- Isolated `codex/r19-managed-frameworks` from reviewed R17 integration; main untouched.
+- Actual installed trace/counters/gcdump adapter source now includes exact-version/capability gates,
+  retained target/context admission and live collector cancellation, private artifact receipts,
+  real reports/CSV and explicit full-GC consent (ADR0122). No package/tool download.
+- Authored pure admission/argv and opt-in real EventPipe oracle fixtures; not executed. Independent
+  source review pending. UI, launchSettings/framework facts and registry presentation remain next;
+  this core slice is not an LTR19 completion claim.
+- No builds, tests, runtime/profile/SDK probes or verification executed under implementation-first.
+
 # FrostIDE progress log
 
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
