@@ -171,6 +171,7 @@ class TerminalIntegration;
 
 namespace frost::ui::lang {
 class LanguageController;
+class EditorInsightBinding;
 enum class ServerReadiness : std::uint8_t; // frost/ui/lang/language_controller.hpp
 } // namespace frost::ui::lang
 
@@ -1040,6 +1041,7 @@ private:
     void closeDeletedDocuments(const std::string& deletedPath, bool directory);
     void refreshSolutionExplorerForFsChange(std::string_view selectPath = {});
     void renameSourceInCMakeLists(const std::string& oldPath, const std::string& newPath, bool directory);
+    void configureUnityInsights(ui::lang::EditorInsightBinding& binding);
     // Source, optional .fmeta and all project memberships are prepared before any effect.
     [[nodiscard]] Result<document::RefactoringPlan> prepareProjectSourceRename(const std::string& oldPath,
                                                                                const std::string& newPath);

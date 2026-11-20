@@ -564,3 +564,23 @@ TEST(EditorInsightBinding, DocumentLinksAndFoldingRangesReachTheView) {
 }
 
 } // namespace
+
+TEST(EditorInsightBinding, ManagedCodeLensPublishesUnityEvidenceThroughNormalCodeVision) {
+    FROST_REQUIRE_OFFSCREEN();
+    FeatureServer server(capabilities().set("documentSymbolProvider", true));
+    server.on("textDocument/documentSymbol", [](const Json&) { return Json::array(); });
+    server.on("textDocument/codeLens", [](const Json& params) {
+        EXPECT_NE(params.find("textDocument"), nullptr);
+        const auto range = Json::object().set("start", Json::object().set("line", 0).set("character", 6))
+            .set("end", Json::object().set("line", 0).set("character", 7));
+        return Json::array({Json::object().set("range", range).set("command", Json::object()
+            .set("title", "Unity event function").set("command", "navigate.findUsages"))});
+    });
+    frost::ui::test::EditorHarness h("class C {}\n", at(workPath("unity.cs")));
+    auto* binding = new EditorInsightBinding(*h.view, {server.client(), server.scheduler()});
+    binding->setCodeVisionEnabled(true); binding->refreshCodeVision();
+    ASSERT_TRUE(pumpUntil([&] { return !h.view->codeVisionLenses().empty(); }));
+    EXPECT_EQ(h.view->codeVisionLenses().front().label, "Unity event function");
+    EXPECT_EQ(h.view->codeVisionLenses().front().actionId, "navigate.findUsages");
+    EXPECT_EQ(h.view->codeVisionLenses().front().symbolOffset, ByteOffset{6});
+}

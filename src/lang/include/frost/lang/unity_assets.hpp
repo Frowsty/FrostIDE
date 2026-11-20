@@ -55,5 +55,5 @@ struct UnityAssetQuery {
 // dirty editor overlays. Never scans the project, starts Unity or reads generated project files.
 [[nodiscard]] UnityAssetQuery queryUnityAssets(io::IFileSystem& fs, std::span<const std::string> projectFiles,
     std::span<const UnityAssetSnapshot> overlays, std::string_view path, std::size_t byteOffset,
-    std::stop_token stop = {});
+    std::stop_token stop = {}, std::string_view memberName = {}, std::string_view memberKind = {});
 } // namespace frost::lang

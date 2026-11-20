@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "frost/lang/unity_assets.hpp"
 #include <gtest/gtest.h>
+#include "frost/core/clock.hpp"
+#include "frost/io/mem_fs.hpp"
 using namespace frost::lang;
 namespace {
 const std::string guid = "0123456789abcdef0123456789abcdef";
@@ -58,5 +60,26 @@ TEST(UnityAssets, ComponentBoundariesArePortableAcrossNativeSeparators) {
     EXPECT_FALSE(isUnityAssetsPath("C:/Project", "C:/Project/AssetsOther/A.cs", frost::io::PathStyle::Windows));
     EXPECT_TRUE(isUnityAssetsPath("/project", "/project/Assets/A.cs", frost::io::PathStyle::Posix));
     EXPECT_FALSE(isUnityAssetsPath("/project", "/project/AssetsOther/A.cs", frost::io::PathStyle::Posix));
+}
+}
+
+namespace {
+TEST(UnityAssets, RoslynSelectedFieldsAndVoidEventsJoinOriginalObjectGuidIdentity) {
+    frost::ManualClock clock; frost::io::MemFs fs{clock, frost::io::PathStyle::Posix};
+    ASSERT_TRUE(fs.createDirectories("/p/Assets"));
+    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/Component.cs.meta", "guid: " + guid + "\n"));
+    const std::string yaml = "%YAML 1.1\n--- !u!114 &10\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " + guid + ", type: 3}\n  health: 17\n  onClick:\n    m_PersistentCalls:\n      m_Calls:\n      - m_Target: {fileID: 10}\n        m_TargetAssemblyTypeName: Component, Assembly-CSharp\n        m_MethodName: Click\n        m_Mode: 1\n--- !u!114 &20\nMonoBehaviour:\n  health: 99\n";
+    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/Scene.unity", yaml));
+    const std::vector<std::string> files{"/p/Assets/Component.cs", "/p/Assets/Scene.unity"};
+    auto field = queryUnityAssets(fs, files, {}, "/p/Assets/Component.cs", 0, {}, "health", "field");
+    ASSERT_TRUE(field.recognized); ASSERT_EQ(field.usages.size(), 1); ASSERT_EQ(field.usages[0].usages.size(), 1);
+    EXPECT_NE(field.usages[0].usages[0].lineText.find("health: 17"), std::string::npos);
+    auto method = queryUnityAssets(fs, files, {}, "/p/Assets/Component.cs", 0, {}, "Click", "eventMethod");
+    ASSERT_EQ(method.usages.size(), 1); ASSERT_EQ(method.usages[0].usages.size(), 1);
+    EXPECT_NE(method.usages[0].usages[0].lineText.find("m_MethodName: Click"), std::string::npos);
+    const std::vector<UnityAssetSnapshot> dirty{{"/p/Assets/Scene.unity", "%YAML 1.1\n--- !u!114 &10\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " + guid + ", type: 3}\n  health: 31\n"}};
+    auto overlay = queryUnityAssets(fs, files, dirty, "/p/Assets/Component.cs", 0, {}, "health", "field");
+    ASSERT_EQ(overlay.usages.size(), 1); EXPECT_NE(overlay.usages[0].usages[0].lineText.find("health: 31"), std::string::npos);
+    EXPECT_EQ(*fs.readFile("/p/Assets/Scene.unity"), yaml);
 }
 }

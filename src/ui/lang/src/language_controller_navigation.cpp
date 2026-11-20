@@ -411,7 +411,7 @@ sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, 
         if (unity.recognized || !unity.diagnostics.empty()) {
             GotoOutcome outcome;
             outcome.result.locations = std::move(unity.declarations);
-            outcome.diagnostics = std::move(unity.diagnostics);
+            outcome.diagnostics.insert(outcome.diagnostics.end(), unity.diagnostics.begin(), unity.diagnostics.end());
             co_return outcome;
         }
     }
@@ -449,8 +449,27 @@ sched::Task<Result<UnityUsagesOutcome>> unityUsagesTask(fl::ILspRequester& serve
     UnityUsagesOutcome outcome;
     std::vector<fl::UnityAssetSnapshot> overlays;
     for (const auto& [file, snapshot] : open) overlays.push_back({file, snapshot.text()});
-    auto unity = fl::queryUnityAssets(fs, files, overlays, path, offset, token);
-    outcome.diagnostics = std::move(unity.diagnostics);
+    fl::UnityAssetQuery unity;
+    if (path.ends_with(".cs") && !files.empty()) {
+        auto params = fl::textDocumentPosition(path, position);
+        if (params) {
+            auto semantics = co_await server.request("frost/unity/semantics", std::move(*params), token);
+            if (semantics && semantics->stringAt("contract") == "unity-source-semantics-v1") {
+                const auto* member = semantics->find("selectedMember");
+                if (member && member->isObject()) {
+                    const auto source = member->stringAt("sourcePath"), name = member->stringAt("name"), kind = member->stringAt("kind");
+                    const auto* identity = member->find("identity");
+                    const auto sourceName = io::fileName(source);
+                    const bool inventoried = std::ranges::any_of(files, [&](const auto& file) { return fl::documentKey(file) == fl::documentKey(source); });
+                    if (inventoried && sourceName.ends_with(".cs") && sourceName.substr(0, sourceName.size() - 3) == member->stringAt("declaringType") &&
+                        identity && !identity->stringAt("declarationId").empty() && !identity->stringAt("assembly").empty() &&
+                        (kind == "field" || kind == "eventMethod" || kind == "asset"))
+                        unity = fl::queryUnityAssets(fs, files, overlays, source, 0, token, kind == "asset" ? std::string_view{} : name, kind);
+                }
+            } else if (!semantics) outcome.diagnostics.push_back("Unity source-symbol asset usages require the owned Roslyn semantic provider");
+        }
+    } else unity = fl::queryUnityAssets(fs, files, overlays, path, offset, token);
+    outcome.diagnostics.insert(outcome.diagnostics.end(), unity.diagnostics.begin(), unity.diagnostics.end());
     if (path.ends_with(".cs") || !unity.recognized) {
         auto ordinary = co_await detail::runFindUsagesTask(server, fs, open, path, position, encoding, token);
         if (ordinary) outcome.groups = std::move(*ordinary);

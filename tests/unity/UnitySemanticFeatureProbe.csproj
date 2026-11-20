@@ -1,0 +1,16 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings><TreatWarningsAsErrors>true</TreatWarningsAsErrors><EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="UnitySemanticFeatureProbe.cs" />
+    <Compile Include="../../integrations/roslyn-host/UnitySemanticFeature.cs" Link="UnitySemanticFeature.cs" />
+    <Compile Include="../../integrations/roslyn-host/SemanticFeature.cs" Link="SemanticFeature.cs" />
+    <Reference Include="$(FrostManagedAssets)/*.dll" Exclude="$(FrostManagedAssets)/CSharpLanguageServer.dll;$(FrostManagedAssets)/FSharp*.dll;$(FrostManagedAssets)/Ionide*.dll;$(FrostManagedAssets)/Argu.dll;$(FrostManagedAssets)/ICSharpCode.Decompiler.dll" />
+  </ItemGroup>
+  <Target Name="RequireAuditedRoslyn" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(FrostManagedAssets)/Microsoft.CodeAnalysis.CSharp.Workspaces.dll')" Text="FrostManagedAssets must name the existing audited Roslyn payload; no downloads." />
+  </Target>
+</Project>

@@ -42,6 +42,7 @@
 #include "frost/lang/navigation.hpp"
 #include "frost/lang/semantic_tokens.hpp"
 #include "frost/lang/symbols.hpp"
+#include "frost/lang/unity_assets.hpp"
 #include "frost/sched/latest_wins.hpp"
 #include "frost/sched/scheduler.hpp"
 #include "frost/text/positions.hpp"
@@ -127,6 +128,12 @@ struct CodeVisionCountEntry {
 [[nodiscard]] std::vector<EditorCodeVisionLens> toCodeVisionCountLenses(std::span<const CodeVisionCountEntry> entries);
 
 // What the binding talks to (see the lifetime rules above).
+struct UnityInsightInputs {
+    io::IFileSystem* fs = nullptr;
+    std::vector<std::string> files;
+    std::vector<::frost::lang::UnityAssetSnapshot> overlays;
+    std::function<bool()> current; // UI-thread admission after worker completion.
+};
 struct InsightServices {
     ::frost::lang::ILspRequester& server; // ClangdService (or a test's LspClient).
     sched::IScheduler& scheduler;
@@ -168,6 +175,7 @@ public:
     void refreshFoldingRanges();
     // Requests document symbols and refreshes Code Vision lenses.
     void refreshCodeVision();
+    void setUnityInsightInputs(std::function<UnityInsightInputs()> capture) { m_unityInputs = std::move(capture); }
     void setCodeVisionEnabled(bool enabled);
     void setAuthorProvider(std::function<std::string(int line)> provider);
     // The delay between the last edit and the token request (default 300 ms).
@@ -204,6 +212,7 @@ private:
     std::optional<::frost::lang::SemanticTokensData> m_previous;
     bool m_serverAvailable = true;
     bool m_codeVisionEnabled = false;
+    std::function<UnityInsightInputs()> m_unityInputs;
     std::function<std::string(int line)> m_authorProvider;
     bool m_haveInactiveRegions = false; // The extension's notification arrived for this file.
     bool m_inactiveFromTokens = false;  // The view's inactive ranges came from comment tokens.
