@@ -198,6 +198,8 @@ void Workbench::registerActions() {
         if(auto* view=currentView(); view && isCFamilySource(view->path()))
             inspectNativeCppAsync(std::string(io::parentPath(view->path())));
     },[this] { return m_window && currentView() && isCFamilySource(currentView()->path()); });
+    add("code.dxcDiagnostics", "DXC HLSL Diagnostics...", [this] { showDxcDiagnostics(); }, [this] { return m_window && !m_projectRoot.empty(); });
+    add("code.cancelDxcDiagnostics", "Cancel DXC HLSL Diagnostics", [this] { m_dxcStop.request_stop(); ++m_dxcGeneration; }, [this] { return m_dxcGeneration > 0; });
     input::ActionSpec inspectCpp;
     inspectCpp.id = "code.inspectCpp";
     inspectCpp.name = "Inspect C++ Module...";

@@ -181,6 +181,7 @@ QVariant ProblemsModel::data(const QModelIndex& index, int role) const {
         case DiagnosticSource::Unity: return tr("Unity");
         case DiagnosticSource::EngineShader: return tr("Engine Shader");
 
+        case DiagnosticSource::Dxc: return tr("DXC");
         }
         return {};
     case ColumnCount: break;
@@ -305,6 +306,7 @@ ProblemsView::ProblemsView(QWidget* parent)
     makeScopeTab(tr("Unity"), "problemsScopeUnity", DiagnosticSource::Unity, false);
     makeScopeTab(tr("Engine Shader"), "problemsScopeEngineShader", DiagnosticSource::EngineShader, false);
 
+    makeScopeTab(tr("DXC"), "problemsScopeDxc", DiagnosticSource::Dxc, false);
 
     auto* sep = new QFrame(this);
     sep->setFrameShape(QFrame::VLine);

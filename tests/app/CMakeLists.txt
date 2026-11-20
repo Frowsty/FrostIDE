@@ -27,6 +27,7 @@ frost_add_test(app_tests QT
             workbench_project_helpers_test.cpp cmake_kit_test.cpp standalone_build_backend_test.cpp
             unity_events_test.cpp unity_tests_window_test.cpp settings_import_test.cpp hosting_cli_test.cpp hosting_review_test.cpp managed_tools_window_test.cpp
 
+            dxc_profile_test.cpp
     DEPS frost::app frost::diag frost::io)
 target_link_libraries(app_tests PRIVATE Qt6::Network)
 # tests/support/scratch_dir.hpp (the persistent services' data directory).
@@ -486,3 +487,14 @@ frost_add_test(app_workbench_native_coverage_tests QT SOURCES workbench_native_c
 target_include_directories(app_workbench_native_coverage_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
 target_compile_definitions(app_workbench_native_coverage_tests PRIVATE ${_frost_workbench_definitions}
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+# Source-authored opt-in actual installed DXC evidence: no discovery, download, or default execution.
+set(FROST_TEST_DXC "" CACHE FILEPATH "Explicit installed DXC for compiler diagnostic acceptance")
+if(FROST_TEST_DXC)
+    frost_add_test(app_dxc_installed_tests QT SOURCES dxc_profile_test.cpp DEPS frost::app frost::io LABELS integration)
+    target_include_directories(app_dxc_installed_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+    target_compile_definitions(app_dxc_installed_tests PRIVATE FROST_TEST_DXC="${FROST_TEST_DXC}")
+endif()
+
+frost_add_test(app_workbench_dxc_tests QT SOURCES workbench_dxc_test.cpp DEPS frost::app frost::lang frost::io LABELS integration)
+target_include_directories(app_workbench_dxc_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
+target_compile_definitions(app_workbench_dxc_tests PRIVATE ${_frost_workbench_definitions})

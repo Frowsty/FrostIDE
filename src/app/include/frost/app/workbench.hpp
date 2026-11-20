@@ -716,6 +716,7 @@ public:
     // GUI-thread entry; completion is posted to the GUI thread. Refuses untrusted projects.
     // CPP-11/12/16: GUI-thread native jobs, governed background AST/CFG work and current-image Problems.
     // Idle/save requests debounce and respect Power Save; explicit module analysis remains available.
+    void showDxcDiagnostics();
     void scheduleCppAnalyzer(std::string path, bool saved = false);
     void inspectNativeCppAsync(std::string_view scopePath, bool automatic = false);
     void inspectCppCodeAsync(std::string_view scopeDirectory, std::function<void(Result<lang::InspectionReport>)> done);
@@ -1257,6 +1258,10 @@ private:
     std::optional<std::uint64_t> m_cppInspectionTrustRevision;
     std::uint64_t m_cppInspectionGeneration = 0;
     std::stop_source m_cppInspectionStop;
+    std::string m_dxcExecutable, m_dxcEntry, m_dxcTarget;
+    std::stop_source m_dxcStop;
+    std::uint64_t m_dxcGeneration = 0;
+    std::optional<std::uint64_t> m_dxcTrustRevision;
     std::uint64_t m_cppAnalyzerTicket = 0;
     bool m_cppAnalyzerRunning = false;
     std::function<Result<void>()> m_cppAnalyzerExportCheck;

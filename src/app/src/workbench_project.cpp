@@ -525,6 +525,10 @@ void Workbench::setProject(std::string root, QString name, std::string recentPat
     m_cppRenameAdmission.reset();
     if (!m_resourceGovernor)
         m_resourceGovernor = std::make_shared<sched::ResourceGovernor>();
+    m_dxcStop.request_stop();
+    ++m_dxcGeneration;
+    m_dxcTrustRevision.reset();
+    if (m_problems) m_problems->model()->setProblems(ui::DiagnosticSource::Dxc, {});
     m_cppInspectionStop.request_stop();
     ++m_cppInspectionGeneration;
     m_lastCppInspectionReport.reset();
@@ -623,6 +627,10 @@ bool Workbench::closeForOpen() {
     m_cppRenameStop.request_stop();
     ++m_cppRenameGeneration;
     m_cppRenameAdmission.reset();
+    m_dxcStop.request_stop();
+    ++m_dxcGeneration;
+    m_dxcTrustRevision.reset();
+    if (m_problems) m_problems->model()->setProblems(ui::DiagnosticSource::Dxc, {});
     m_cppInspectionStop.request_stop();
     ++m_cppInspectionGeneration;
     m_lastCppInspectionReport.reset();

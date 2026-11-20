@@ -198,6 +198,9 @@ frost_add_library(app LAYER app
         src/workbench_lua.cpp
         src/workbench_lua_refactoring.cpp
         src/workbench_lua_module.cpp
+        src/dxc_profile.cpp
+        src/dxc_profile.hpp
+        src/workbench_dxc.cpp
         src/workbench_inspection.cpp
         src/workbench_analyzer.cpp
         src/workbench_cpp_scope_fixes.cpp

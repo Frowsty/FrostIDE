@@ -280,6 +280,12 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
             m_cppRenameTrustRevision.reset();
             m_cppRenameAdmission.reset();
         }
+        if (m_dxcTrustRevision && (!trusted || trust.revision != *m_dxcTrustRevision)) {
+            m_dxcStop.request_stop();
+            ++m_dxcGeneration;
+            m_dxcTrustRevision.reset();
+            if (m_problems) m_problems->model()->setProblems(ui::DiagnosticSource::Dxc, {});
+        }
         if (m_cppInspectionTrustRevision && (!trusted || trust.revision != *m_cppInspectionTrustRevision)) {
             m_cppInspectionStop.request_stop();
             ++m_cppInspectionGeneration;
@@ -915,6 +921,7 @@ void Workbench::shutdown() {
     }
     m_shutDown = true;
     m_nativeAnalysisStop.request_stop();
+    m_dxcStop.request_stop();
     m_cppRenameStop.request_stop();
     m_cppInspectionStop.request_stop();
     m_cppIndexStop.request_stop();
