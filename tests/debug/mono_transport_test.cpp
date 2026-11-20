@@ -237,6 +237,8 @@ TEST(MonoTransport, ExpiredDeadlineRejectsBeforeConnect) {
     EXPECT_FALSE(called);
 }
 TEST(MonoTransport, PeerVerifierRejectsUnboundIdentity) {
+    EXPECT_FALSE(WindowsPeer::select(0, [] { return true; }));
+    EXPECT_FALSE(WindowsPeer::select(1, {}));
     EXPECT_FALSE(WindowsPeer::open(0, 1, [] { return true; }));
     EXPECT_FALSE(WindowsPeer::open(1, 0, [] { return true; }));
     EXPECT_FALSE(WindowsPeer::open(1, 1, {}));
@@ -248,6 +250,11 @@ TEST(MonoTransport, WindowsPeerBindsEstablishedTupleToHeldProcess) {
     const auto creation = std::uint64_t(created.dwLowDateTime) | (std::uint64_t(created.dwHighDateTime) << 32);
     EXPECT_FALSE(
         WindowsPeer::open(static_cast<std::uint32_t>(GetCurrentProcessId()), creation ^ 1, [] { return true; }));
+    auto selected = WindowsPeer::select(static_cast<std::uint32_t>(GetCurrentProcessId()), [] { return true; });
+    ASSERT_TRUE(selected);
+    EXPECT_EQ((*selected)->identity().pid, static_cast<std::uint32_t>(GetCurrentProcessId()));
+    EXPECT_EQ((*selected)->identity().creationTime, creation);
+    EXPECT_FALSE((*selected)->identity().image.empty());
     auto peerVerifier =
         WindowsPeer::open(static_cast<std::uint32_t>(GetCurrentProcessId()), creation, [] { return true; });
     ASSERT_TRUE(peerVerifier);

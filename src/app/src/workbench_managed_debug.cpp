@@ -14,6 +14,7 @@
 #include "engine_integration.hpp"
 #include "managed_debug_preparation.hpp"
 #include "managed_source_snapshot.hpp"
+#include "managed_snapshot_job.hpp"
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -34,11 +35,7 @@
 #include <atomic>
 
 namespace frost::app {
-struct ManagedSnapshotJob {
-    Mutex mutex;
-    Workbench* target FROST_GUARDED_BY(mutex) = nullptr;
-    std::atomic_bool cancelled{false};
-};
+
 namespace {
 using SnapshotCompletion = std::function<void(Result<ManagedSourceSnapshot>)>;
 sched::Task<void> captureSnapshot(std::shared_ptr<ManagedSnapshotJob> job, io::IFileSystem* fs,

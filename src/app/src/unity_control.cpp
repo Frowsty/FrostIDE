@@ -114,6 +114,7 @@ struct UnityControlIntegration::Impl {
     std::vector<UnityBridgeEvent> journal;
     std::vector<build::BuildDiagnostic> compilerProblems;
     std::string eventSession;
+    std::shared_ptr<std::atomic_uint64_t> identityEpoch = std::make_shared<std::atomic_uint64_t>(1);
     std::int64_t eventCursor = 0, projectVersion = -1, lostEvents = 0;
     std::optional<bool> lastPlaying;
     std::size_t droppedCompiler = 0;
@@ -185,6 +186,7 @@ struct UnityControlIntegration::Impl {
         return info.isFile() ? info.canonicalFilePath() : QString{};
     }
     void clearDomain(const std::string& id) {
+        identityEpoch->fetch_add(1);
         clearSavedWork();
         eventSession = id; eventCursor = 0; projectVersion = -1; lostEvents = 0; lastPlaying.reset();
         journal.clear(); compilerProblems.clear(); droppedCompiler = 0;
@@ -675,7 +677,13 @@ UnityControlIntegration::UnityControlIntegration(Workbench& workbench)
 }
 UnityControlIntegration::~UnityControlIntegration() { shutdown(); }
 Result<void> UnityControlIntegration::announce(const lang::Json& message) { return m_impl->announce(message); }
-void UnityControlIntegration::cancel() { m_impl->cancel(); }
+std::optional<UnityEditorIdentity> UnityControlIntegration::selectedEditor() const {
+    if (!m_impl->trusted()) return std::nullopt;
+    const auto found = std::ranges::find_if(m_impl->live, [this](const auto& item) { return item.id == m_impl->selected; });
+    if (found == m_impl->live.end()) return std::nullopt;
+    return UnityEditorIdentity{found->root, found->instance, found->id, found->generation, found->pid,
+        m_impl->identityEpoch, m_impl->identityEpoch->load()};
+}void UnityControlIntegration::cancel() { m_impl->cancel(); }
 void UnityControlIntegration::shutdown() {
     if (m_impl->stopped)
         return;
