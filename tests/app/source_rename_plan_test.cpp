@@ -229,3 +229,23 @@ TEST(SourceRenameWorkbench, DirtyOpenSourceAndMetadataRenameAndUndoAsOneOperatio
 }
 
 } // namespace
+
+TEST(SourceRenamePlan, UnityMetaJoinsOriginalSourceReceiptAndDestinationAbsence) {
+    ManualClock clock;
+    io::MemFs fs{clock, io::PathStyle::Posix};
+    ASSERT_TRUE(fs.createDirectories("/p/Assets"));
+    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/A.cs", "// original\r\n"));
+    const std::string metadata = "guid: 0123456789abcdef0123456789abcdef\r\nimporter: unchanged\r\n";
+    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/A.cs.meta", metadata));
+    auto move = lang::planFmetaMove(fs, "/p/Assets/A.cs", "/p/Assets/B.cs"); ASSERT_TRUE(move);
+    auto plan = app::prepareSourceFileRename(fs, *move, "Rename Unity asset"); ASSERT_TRUE(plan);
+    ASSERT_TRUE(app::appendUnityMetaRename(fs, *plan, "/p/Assets/A.cs", "/p/Assets/B.cs"));
+    ASSERT_EQ(plan->renames.size(), 2);
+    EXPECT_EQ(plan->renames[1].expectedBytes, metadata);
+    EXPECT_EQ(plan->renames[1].to, "/p/Assets/B.cs.meta");
+    const auto target = std::ranges::find(plan->dependencies, "/p/Assets/B.cs.meta", &document::ReadDependency::path);
+    ASSERT_NE(target, plan->dependencies.end()); EXPECT_FALSE(target->expectedBytes);
+    EXPECT_EQ(*fs.readFile("/p/Assets/A.cs.meta"), metadata);
+    ASSERT_TRUE(fs.writeFileAtomic("/p/Assets/B.cs.meta", "foreign"));
+    EXPECT_FALSE(app::appendUnityMetaRename(fs, *plan, "/p/Assets/A.cs", "/p/Assets/B.cs"));
+}

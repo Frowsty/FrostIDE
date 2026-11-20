@@ -108,6 +108,8 @@ struct LanguageServices {
     std::function<void(std::string, ::frost::lang::LspPosition, std::string, ::frost::lang::WorkspaceEdit,
                        ::frost::lang::WorkspaceEdit, std::stop_token, std::function<void(Result<void>)>)>
         cppRenameCheck{};
+    // Original Unity asset inventory from the existing source index. Empty outside Unity projects.
+    std::function<std::vector<std::string>()> unityAssetFiles{};
 };
 
 class LanguageController final : public QObject {
@@ -116,6 +118,7 @@ class LanguageController final : public QObject {
 public:
     explicit LanguageController(LanguageServices services, QObject* parent = nullptr);
     ~LanguageController() override;
+    void setUnityAssetFiles(std::function<std::vector<std::string>()> files) { m_services.unityAssetFiles = std::move(files); }
     void setCppRenameCheck(decltype(LanguageServices::cppRenameCheck) check) {
         m_services.cppRenameCheck = std::move(check);
     }

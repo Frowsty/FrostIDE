@@ -7,6 +7,7 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/lang/navigation.hpp"
+#include "frost/lang/unity_assets.hpp"
 #include "frost/lang/symbols.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/ui/lang/language_controller.hpp"
@@ -265,13 +266,24 @@ sched::Task<Result<MetadataSource>> metadataSourceTask(fl::ILspRequester& server
 // server's metadata source (metadataSourceTask) if it has one.
 struct GotoOutcome {
     fl::GotoResult result;
+    std::vector<std::string> diagnostics;
     bool metadata = false;        // result.locations holds one location in the metadata cache.
     bool metadataNoCache = false; // The server offered metadata, but no cache is configured (LTR-6).
 };
 
 sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, io::IFileSystem& fs,
                                                      std::string cacheDir, bool askMetadata, std::string path,
-                                                     fl::LspPosition position, std::stop_token token) {
+                                                     fl::LspPosition position, std::vector<std::string> unityFiles,
+    std::vector<fl::UnityAssetSnapshot> unityOverlays, std::size_t offset, std::stop_token token) {
+    if (!path.ends_with(".cs") && !unityFiles.empty()) {
+        auto unity = fl::queryUnityAssets(fs, unityFiles, unityOverlays, path, offset, token);
+        if (unity.recognized || !unity.diagnostics.empty()) {
+            GotoOutcome outcome;
+            outcome.result.locations = std::move(unity.declarations);
+            outcome.diagnostics = std::move(unity.diagnostics);
+            co_return outcome;
+        }
+    }
     // The declarations' lines from disk, to pass over a forward type declaration (navigation.hpp).
     auto lineSource = std::make_shared<fl::FileLineSource>(fs, nullptr);
     auto result = co_await fl::gotoDeclarationOrUsages(
@@ -294,6 +306,27 @@ sched::Task<Result<GotoOutcome>> gotoDeclarationTask(fl::ILspRequester& server, 
     co_return outcome;
 }
 
+struct UnityUsagesOutcome {
+    std::vector<fl::UsageGroup> groups;
+    std::vector<std::string> diagnostics;
+};
+sched::Task<Result<UnityUsagesOutcome>> unityUsagesTask(fl::ILspRequester& server, io::IFileSystem& fs,
+    std::vector<std::pair<std::string, text::Snapshot>> open, std::vector<std::string> files,
+    std::string path, fl::LspPosition position, fl::PositionEncoding encoding, std::size_t offset, std::stop_token token) {
+    UnityUsagesOutcome outcome;
+    std::vector<fl::UnityAssetSnapshot> overlays;
+    for (const auto& [file, snapshot] : open) overlays.push_back({file, snapshot.text()});
+    auto unity = fl::queryUnityAssets(fs, files, overlays, path, offset, token);
+    outcome.diagnostics = std::move(unity.diagnostics);
+    if (path.ends_with(".cs") || !unity.recognized) {
+        auto ordinary = co_await detail::runFindUsagesTask(server, fs, open, path, position, encoding, token);
+        if (ordinary) outcome.groups = std::move(*ordinary);
+        else if (!unity.recognized) co_return std::unexpected(ordinary.error());
+        else outcome.diagnostics.push_back("C# symbol usages unavailable; showing serialized asset GUID references only");
+    }
+    for (auto& group : unity.usages) outcome.groups.push_back(std::move(group));
+    co_return outcome;
+}
 } // namespace
 
 // --- Navigation ---
@@ -315,17 +348,25 @@ void LanguageController::gotoDeclarationAtPosition(fl::LspPosition position) {
     const std::string symbol = identifierAtPosition(m_services.host.snapshot(), position, m_services.server.encoding());
     // Only C# servers answer with metadata URIs; C++ declarations come from clangd alone.
     const bool askMetadata = capabilities().languageId == "csharp";
+    auto unityFiles = m_services.unityAssetFiles ? m_services.unityAssetFiles() : std::vector<std::string>{};
+    std::vector<fl::UnityAssetSnapshot> unityOverlays;
+    for (const auto& [file, snapshot] : m_services.host.openDocuments()) unityOverlays.push_back({file, snapshot.text()});
+    std::size_t offset = 0;
+    if (const auto snapshot = m_services.host.snapshot()) {
+        if (const auto at = fl::fromLspPosition(*snapshot, position, m_services.server.encoding())) offset = at->value();
+    }
     start<GotoOutcome>(
         m_navigationSlot,
         [&server = m_services.server, &fs = m_services.fs, cacheDir = m_services.metadataCacheDir, askMetadata, path,
-         position](std::stop_token token) {
-            return gotoDeclarationTask(server, fs, cacheDir, askMetadata, path, position, std::move(token));
+         position, unityFiles = std::move(unityFiles), unityOverlays = std::move(unityOverlays), offset](std::stop_token token) {
+            return gotoDeclarationTask(server, fs, cacheDir, askMetadata, path, position, unityFiles, unityOverlays, offset, std::move(token));
         },
         [this, path, position, symbol](Result<GotoOutcome> outcome) {
             if (!outcome) {
                 report(outcome.error(), "Go to declaration");
                 return;
             }
+            if (!outcome->diagnostics.empty()) emit statusMessage(qs(outcome->diagnostics.front()));
             if (outcome->result.showUsages) {
                 findUsagesAt(path, position);
                 return;
@@ -465,20 +506,23 @@ void LanguageController::findUsagesAt(std::string path, fl::LspPosition position
         }
         name = qs(snapshot->text(text::ByteRange{.begin = begin, .end = end}));
     }
-    start<std::vector<fl::UsageGroup>>(
+    auto unityFiles = m_services.unityAssetFiles ? m_services.unityAssetFiles() : std::vector<std::string>{};
+    const auto offset = m_services.host.caretOffset().value();
+    start<UnityUsagesOutcome>(
         m_usagesSlot,
         [&server = m_services.server, &fs = m_services.fs, open = m_services.host.openDocuments(),
-         path = std::move(path), position, encoding = m_services.server.encoding()](std::stop_token token) {
-            return detail::runFindUsagesTask(server, fs, open, path, position, encoding, std::move(token));
+         path = std::move(path), position, encoding = m_services.server.encoding(), unityFiles = std::move(unityFiles), offset](std::stop_token token) {
+            return unityUsagesTask(server, fs, open, unityFiles, path, position, encoding, offset, std::move(token));
         },
-        [this, name](Result<std::vector<fl::UsageGroup>> groups) {
+        [this, name](Result<UnityUsagesOutcome> groups) {
             if (!groups) {
                 report(groups.error(), "Find usages");
                 return;
             }
+            if (!groups->diagnostics.empty()) emit statusMessage(qs(groups->diagnostics.front()));
             m_usages->setUsages(name.isEmpty() ? QStringLiteral("Usages") : QStringLiteral("Usages of '%1'").arg(name),
-                                std::move(*groups));
-            if (m_usages->usageCount() == 0) {
+                                std::move(groups->groups));
+            if (m_usages->usageCount() == 0 && groups->diagnostics.empty()) {
                 emit statusMessage(QStringLiteral("No usages found"));
             }
             emit usagesReady();

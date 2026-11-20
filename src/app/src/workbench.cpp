@@ -238,6 +238,13 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                                    m_options.metadataCacheDirectory,
                                    // Empty answers say why: no server, fallback flags, indexing (R0 follow-up 4).
                                    [this](std::string_view path) { return languageReadiness(path); }});
+    m_language->setUnityAssetFiles([this] {
+        // The inventory is owned by normal project navigation; never crawl Library or generated solutions.
+        if (!m_nav || m_projectRoot.empty() ||
+            !m_services.fs.exists(m_projectRoot + "/ProjectSettings/ProjectVersion.txt").value_or(false))
+            return std::vector<std::string>{};
+        return m_nav->projectFiles().candidates();
+    });
     m_language->setCppRenameCheck([this](std::string path, lang::LspPosition position, std::string name,
                                          lang::WorkspaceEdit required, lang::WorkspaceEdit offered,
                                          std::stop_token cancel, std::function<void(Result<void>)> done) {

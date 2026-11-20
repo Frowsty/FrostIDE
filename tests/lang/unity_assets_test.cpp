@@ -34,3 +34,20 @@ TEST(UnityAssets, MovePreservesOriginalMetaAndRefusesIncompleteOrOccupiedPair) {
     files.resize(1); EXPECT_FALSE(planUnityAssetMove(files, "Assets/A.cs", "Assets/B.cs"));
 }
 }
+
+namespace {
+TEST(UnityAssets, ArrayItemsInlineCommentsAndQuotedContinuations) {
+    const std::string reference = "{fileID: -123, guid: " + guid + ", type: 3}";
+    const std::string yaml = "%YAML 1.1\r\n  array:\r\n  - " + reference + " # real\r\n  text: 'continued\r\n    fake: " + reference + "\r\n    end'\r\n  actual: " + reference + "\r\n";
+    const std::vector<UnityAssetSnapshot> files{{"Assets/S.prefab", yaml}};
+    UnityAssetIndex index; index.reset(files);
+    ASSERT_EQ(index.usages(guid).size(), 2);
+    for (const auto& usage : index.usages(guid)) EXPECT_EQ(yaml.substr(usage.offset, 32), guid);
+}
+TEST(UnityAssets, OversizedLineAndUnknownEncodingAreExplicitlyIncomplete) {
+    const std::vector<UnityAssetSnapshot> files{{"Assets/S.prefab", "%YAML 1.1\n" + std::string(16385, '9')},
+        {"Assets/B.asset", std::string("\xff\xfe\0x", 4)}};
+    UnityAssetIndex index; index.reset(files);
+    EXPECT_TRUE(index.usages(guid).empty()); EXPECT_EQ(index.diagnostics().size(), 2);
+}
+}

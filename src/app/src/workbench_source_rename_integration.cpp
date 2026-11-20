@@ -154,6 +154,14 @@ Result<document::RefactoringPlan> Workbench::prepareProjectSourceRename(const st
             auto plan = prepareSourceFileRename(*fs, *move, label);
             if (!plan)
                 return plan;
+            const bool unityProject = fs->exists(root + "/ProjectSettings/ProjectVersion.txt").value_or(false);
+            const auto assets = lang::documentKey(root + "/Assets/");
+            if (unityProject && (lang::documentKey(oldPath).starts_with(assets) || lang::documentKey(newPath).starts_with(assets))) {
+                if (!lang::documentKey(oldPath).starts_with(assets) || !lang::documentKey(newPath).starts_with(assets))
+                    return fail(ErrorCode::Unsupported, "Move Unity assets within Assets so original GUID identity stays paired");
+                if (auto paired = appendUnityMetaRename(*fs, *plan, oldPath, newPath); !paired)
+                    return std::unexpected(paired.error());
+            }
             std::map<std::string, RefactoringInputSnapshot> inputs;
             auto capture = [&](const std::string& path) -> Result<RefactoringInputSnapshot> {
                 const auto key = lang::documentKey(path);
