@@ -174,6 +174,32 @@ bool typeMatches(const Json& value, std::string_view type) {
            : type == "null"    ? value.isNull()
                                : true;
 }
+// Dynamic selected-engine schemas are untrusted protocol data. Validate every consumed
+// keyword before publishing the complete replacement; unknown keywords stay inert.
+bool admissibleEngineShape(const Json& schema,unsigned depth,std::size_t& nodes) {
+    if(!schema.isObject()||depth>64||++nodes>10000)return false;
+    const auto typeName=[](const Json& type) {
+        const auto name=type.asString();
+        return name&&(*name=="object"||*name=="array"||*name=="string"||*name=="boolean"||*name=="integer"||*name=="number"||*name=="null");
+    };
+    if(const auto* type=schema.find("type")) {
+        if(type->isArray()){if(type->size()==0)return false;for(const auto& value:type->items())if(!typeName(value))return false;}
+        else if(!typeName(*type))return false;
+    }
+    if(const auto* minimum=schema.find("minimum");minimum&&!minimum->isNumber())return false;
+    if(const auto* choices=schema.find("enum");choices&&!choices->isArray())return false;
+    if(const auto* description=schema.find("description");description&&!description->isString())return false;
+    if(const auto* required=schema.find("required")) {
+        if(!required->isArray())return false;
+        for(const auto& key:required->items())if(!key.isString())return false;
+    }
+    if(const auto* properties=schema.find("properties")) {
+        if(!properties->isObject())return false;
+        for(const auto& property:properties->items())if(!admissibleEngineShape(property,depth+1,nodes))return false;
+    }
+    if(const auto* items=schema.find("items");items&&!admissibleEngineShape(*items,depth+1,nodes))return false;
+    return true;
+}
 void validate(const Json& schema, const Json& value, std::vector<std::string> path,
               std::vector<std::pair<std::vector<std::string>, std::string>>& errors, unsigned depth = 0) {
     if (depth > 128 || errors.size() >= 256)
@@ -241,6 +267,36 @@ void JsonSchemaService::updateDocument(std::string path, text::Snapshot snapshot
         m_documents.erase(m_documents.begin());
     m_documents.insert_or_assign(documentKey(path), std::move(snapshot));
 }
+Result<void> JsonSchemaService::installEngineSchemas(std::string projectRoot,const Json& actualExport) {
+    if(!io::isAbsolutePath(projectRoot)||actualExport.stringAt("protocol")!="frostengine.document-schemas"||actualExport.integerAt("version")!=1)
+        return fail(ErrorCode::Corrupt,"Unsupported engine document schema contract");
+    const auto* entries=actualExport.find("schemas");
+    if(!entries||!entries->isArray()||entries->size()>64||actualExport.dump().size()>2*1024*1024)
+        return fail(ErrorCode::OutOfRange,"Engine document schemas exceed their bounded structural profile");
+    std::map<std::string,Json,std::less<>> schemas;std::size_t shapeNodes=0;
+    for(const auto& entry:entries->items()) {
+        const auto extension=entry.stringAt("extension");const auto* schema=entry.find("schema");
+        if(extension.size()<2||extension.size()>32||extension.front()!='.'||!schema||!schema->isObject()||entry.stringAt("serializer").empty())
+            return fail(ErrorCode::Corrupt,"Invalid engine document schema descriptor");
+        if(!admissibleEngineShape(*schema,0,shapeNodes))return fail(ErrorCode::Corrupt,"Malformed or oversized engine schema keyword shape");
+        for(char c:extension.substr(1))if(!((c>='a'&&c<='z')||(c>='0'&&c<='9')))
+            return fail(ErrorCode::Corrupt,"Engine schema extension must be a literal lowercase suffix");
+        if(!schemas.emplace(std::string(extension),*schema).second)return fail(ErrorCode::Corrupt,"Duplicate engine document schema suffix");
+    }
+    LockGuard lock(m_mutex);m_engineRoot=documentKey(projectRoot);m_engineSchemas=std::move(schemas);++m_schemaGeneration;return {};
+}
+void JsonSchemaService::clearEngineSchemas(){LockGuard lock(m_mutex);m_engineRoot.clear();m_engineSchemas.clear();++m_schemaGeneration;}
+std::uint64_t JsonSchemaService::schemaGeneration() const {LockGuard lock(m_mutex);return m_schemaGeneration;}
+std::optional<Json> JsonSchemaService::engineSchemaLocked(std::string_view path) const {
+    const auto key=documentKey(path);
+    if(m_engineRoot.empty()||!key.starts_with(m_engineRoot)||key.size()<=m_engineRoot.size()||
+        (key[m_engineRoot.size()]!='/'&&key[m_engineRoot.size()]!='\\'))return {};
+    for(const auto& [extension,schema]:m_engineSchemas)if(key.ends_with(extension))return schema;
+    return {};
+}
+bool JsonSchemaService::handles(std::string_view path) const {
+    if(hasBundledJsonSchema(path))return true;LockGuard lock(m_mutex);return engineSchemaLocked(path).has_value();
+}
 void JsonSchemaService::removeDocument(std::string_view path) {
     LockGuard lock(m_mutex);
     m_documents.erase(documentKey(path));
@@ -254,15 +310,17 @@ std::optional<ServerCapabilities> JsonSchemaService::serverCapabilities() const 
 }
 std::vector<LiveDiagnostic> JsonSchemaService::diagnostics(std::string_view path) const {
     text::Snapshot snapshot;
+    Json selectedSchema;bool engine=false;
     {
         LockGuard lock(m_mutex);
         const auto found = m_documents.find(documentKey(path));
         if (found == m_documents.end())
             return {};
         snapshot = found->second;
+        if(auto schema=engineSchemaLocked(path)){selectedSchema=std::move(*schema);engine=true;}
+        else if(hasBundledJsonSchema(path))selectedSchema=schemaFor(path);
+        else return {};
     }
-    if (!hasBundledJsonSchema(path))
-        return {};
     const auto source = normalized(path, snapshot);
     auto parsed = source ? rpc::parseJson(*source) : Result<Json>(std::unexpected(source.error()));
     std::vector<std::pair<std::vector<std::string>, std::string>> errors;
@@ -271,7 +329,7 @@ std::vector<LiveDiagnostic> JsonSchemaService::diagnostics(std::string_view path
     if (!parsed)
         errors.push_back({{}, parsed.error().message()});
     else
-        validate(schemaFor(path), *parsed, {}, errors);
+        validate(selectedSchema, *parsed, {}, errors);
     std::vector<LiveDiagnostic> diagnostics;
     for (const auto& [nodePath, message] : errors) {
         auto node = std::ranges::find(scan.nodes, nodePath, &Node::path);
@@ -295,7 +353,7 @@ std::vector<LiveDiagnostic> JsonSchemaService::diagnostics(std::string_view path
         }
         LiveDiagnostic diagnostic;
         diagnostic.file = path;
-        diagnostic.source = "frost-json-schema";
+        diagnostic.source = engine?"frost-engine-schema-shape":"frost-json-schema";
         diagnostic.code = parsed ? "schema" : "syntax";
         diagnostic.message = message;
         diagnostic.range = text::ByteRange{ByteOffset{begin}, ByteOffset{end}};
@@ -313,15 +371,19 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
         co_return fail(ErrorCode::Cancelled);
     const auto* document = params.find("textDocument");
     auto path = uriToPath(document ? document->stringAt("uri") : std::string_view{});
-    if (!path || !hasBundledJsonSchema(*path))
+    if (!path || !handles(*path))
         co_return fail(ErrorCode::Unsupported, "No bundled JSON schema for this document");
     text::Snapshot snapshot;
+    Json selectedSchema;bool engine=false;
     {
         LockGuard lock(m_mutex);
         const auto found = m_documents.find(documentKey(*path));
         if (found == m_documents.end())
             co_return fail(ErrorCode::Busy, "No captured JSON document");
         snapshot = found->second;
+        if(auto schema=engineSchemaLocked(*path)){selectedSchema=std::move(*schema);engine=true;}
+        else if(hasBundledJsonSchema(*path))selectedSchema=schemaFor(*path);
+        else co_return fail(ErrorCode::Busy,"Engine document schemas were withdrawn");
     }
     auto source = normalized(*path, snapshot);
     if (!source)
@@ -344,7 +406,7 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
             (node.keyBegin <= offset && offset <= node.keyEnd && node.keyEnd))
             if (!selected || node.path.size() >= selected->path.size())
                 selected = &node;
-    const auto& root = schemaFor(*path);
+    const auto& root = selectedSchema;
     if (method == "textDocument/hover") {
         const auto* schema = selected ? fieldSchema(root, selected->path) : &root;
         if (!schema)
@@ -355,7 +417,7 @@ sched::Task<Result<Json>> JsonSchemaService::request(std::string method, Json pa
         if (const auto* choices = schema->find("enum"))
             description += "\nValues: " + choices->dump();
         description += "\n";
-        description += bundledJsonSchemaCoverage(*path);
+        description += engine?"Actual engine serializer/default field shapes; semantic validation requires the selected engine's document.validate.":bundledJsonSchemaCoverage(*path);
         co_return Json::object().set("contents", Json::object().set("kind", "plaintext").set("value", description));
     }
     if (method != "textDocument/completion")

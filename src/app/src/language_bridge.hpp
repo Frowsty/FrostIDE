@@ -60,6 +60,9 @@ public:
     void setActivePath(std::string_view path) { m_server.setActivePath(path); }
 
     void closeJsonDocument(std::string_view path) { m_json->removeDocument(path); }
+    [[nodiscard]] bool handlesJsonDocument(std::string_view path) const { return m_json->handles(path); }
+    [[nodiscard]] Result<void> installEngineDocumentSchemas(std::string root, const lang::Json& schemas) { return m_json->installEngineSchemas(std::move(root),schemas); }
+    void clearEngineDocumentSchemas() { m_json->clearEngineSchemas(); }
     [[nodiscard]] std::vector<lang::LiveDiagnostic> jsonDiagnostics(std::string_view path) const;
     // ILspRequester: the server for the document.
     [[nodiscard]] sched::Task<Result<lang::Json>> request(std::string method, lang::Json params,

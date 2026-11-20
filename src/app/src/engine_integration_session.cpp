@@ -49,6 +49,7 @@ void EngineIntegration::Impl::retireSession() {
 }
 
 void EngineIntegration::Impl::clearSession(bool clearOutput, bool preserveCrashObservation) {
+    owner.clearDocumentTools();
     clearAssetUsages();
     if (!preserveCrashObservation)
         revokeCrashObservation();
@@ -357,6 +358,7 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
                 impl.nativeTarget.reset();
                 impl.retainedNativeBinding.reset();
             }
+            impl.owner.clearDocumentTools();
             impl.identity.reset();
             impl.state.reset();
             impl.requests.clear();

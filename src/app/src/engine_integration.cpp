@@ -306,6 +306,7 @@ void EngineIntegration::Impl::updateControls() {
 EngineIntegration::EngineIntegration(Workbench& workbench)
     : QObject(&workbench), m_impl(std::make_unique<Impl>(*this, workbench)) {
     auto& impl = *m_impl;
+    registerDocumentActions();
     impl.automationDirectory = workbench.m_options.engineAutomationDirectory;
     if (impl.automationDirectory.empty()) {
         QString directory = qEnvironmentVariable("FROST_ENGINE_AUTOMATION_DIR");

@@ -3,6 +3,13 @@
 Session hand-off log (CLAUDE.md, PLAN.md section 6.7). Newest entry first. Each entry lists what was done,
 what is next, blockers and open questions for the user.
 
+## 2026-11-20: R14 selected-engine document schemas and validation slice
+
+- Installed bounded actual document.schemas exports for the authenticated project's supported serializer shapes, with completion, hover and local structural findings. Malformed consumed keywords refuse the complete replacement. This covers exported .fmat/.fscene shapes, not all engine document types or the complete FEC-7 editing surface.
+- Added captured-image document.validate and read-only document.validate-content actions publishing actual engine issues in Problems. Captured byte offsets map to UTF16 navigation; dirty edits, replaced physical identities, session loss and selected project changes revoke stale findings and schema profiles.
+- Authored parser, dynamic-schema and HMAC-session UI regressions for envelope identity, unsafe locations, malformed nested schemas, Unicode coordinates, late dirty replies and disconnect/replacement loading. Independent Astra source review findings were fixed and rechecked. No builds, tests, feature executions or WSL were run; runtime acceptance remains deferred.
+- Shared engine alias/test is committed as 3858746d atop the existing reviewed document schema/validation implementation. Next: finish engine templates, shader/material validation and engine previews, and the remaining schema editing surface; no runtime exit is claimed.
+
 ## 2026-11-14: R12 Lua implementation integrated; runtime acceptance deferred
 
 - Added explicit standalone Lua Script/REPL configurations, console stdin, and standalone lua-debug DAP using the same selected interpreter, arguments, environment and working directory. Lua 5.4.9 has an explicit offline Clang build recipe and optional staging, including Windows UTF-8 path resources. The recipe, interpreter and adapter have not been executed in this phase.

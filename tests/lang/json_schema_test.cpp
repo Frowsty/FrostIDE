@@ -84,5 +84,42 @@ TEST(JsonSchema, InvalidPositionAndCancellationRefuseWithoutClampingIntoAnotherV
     ASSERT_FALSE(result);
     EXPECT_EQ(result.error().code(), ErrorCode::Cancelled);
 }
+Json actualSchemas() {
+    return rpc::parseJson(R"({"protocol":"frostengine.document-schemas","version":1,"schemas":[{"extension":".fmat","serializer":"MaterialSerializer","schema":{"type":"object","properties":{"Program":{"type":"string","description":"Actual serializer program field"},"Enabled":{"type":"boolean"}}}}]})").value();
+}
+TEST(JsonSchema, SelectedEngineSchemasStayWithinTheirProjectAndAreWithdrawn) {
+    JsonSchemaService service;
+    const auto project=root+"Game";
+    ASSERT_TRUE(service.installEngineSchemas(project,actualSchemas()));
+    const auto generation=service.schemaGeneration();
+    EXPECT_TRUE(service.handles(project+"/Assets/a.fmat"));
+    EXPECT_FALSE(service.handles(project+"Sibling/Assets/a.fmat"));
+    EXPECT_FALSE(service.handles(project+"/../Elsewhere/a.fmat"));
+    const auto path=project+"/Assets/a.fmat";
+    service.updateDocument(path,snapshot(R"({"Program":42,"FutureProperty":true})"));
+    auto diagnostics=service.diagnostics(path);ASSERT_EQ(diagnostics.size(),1U);
+    EXPECT_EQ(diagnostics[0].source,"frost-engine-schema-shape");
+    service.clearEngineSchemas();EXPECT_GT(service.schemaGeneration(),generation);
+    EXPECT_FALSE(service.handles(path));EXPECT_TRUE(service.diagnostics(path).empty());
+}
+TEST(JsonSchema, MalformedNestedEngineSchemaKeywordsNeverReplaceAdmittedShapes) {
+    JsonSchemaService service;const auto project=root+"Game";
+    ASSERT_TRUE(service.installEngineSchemas(project,actualSchemas()));const auto generation=service.schemaGeneration();
+    for(const auto* bad:{R"({"type":42})",R"({"minimum":"zero"})",R"({"required":[false]})",R"({"properties":[]})",R"({"items":false})",R"({"enum":42})"}) {
+        const auto schema=rpc::parseJson(std::string("{\"type\":\"object\",\"properties\":{\"Nested\":")+bad+"}}").value();
+        auto entry=Json::object().set("extension",".fmat").set("serializer","actual").set("schema",schema);
+        auto reply=Json::object().set("protocol","frostengine.document-schemas").set("version",1).set("schemas",Json::array({entry}));
+        EXPECT_FALSE(service.installEngineSchemas(project,reply))<<bad;
+        EXPECT_EQ(service.schemaGeneration(),generation);EXPECT_TRUE(service.handles(project+"/a.fmat"));
+    }
+}
+TEST(JsonSchema, ActualEngineKeysCompleteAndInvalidReplacementKeepsPriorSchema) {
+    JsonSchemaService service;const auto project=root+"Game";const auto path=project+"/Assets/a.fmat";
+    ASSERT_TRUE(service.installEngineSchemas(project,actualSchemas()));
+    const auto text=snapshot("{");auto result=complete(service,path,text,text.size());ASSERT_TRUE(result);
+    EXPECT_TRUE(std::ranges::any_of(result->items(),[](const auto& item){return item.stringAt("label")=="Program";}));
+    auto invalid=actualSchemas();invalid.set("version",2);
+    EXPECT_FALSE(service.installEngineSchemas(project,invalid));EXPECT_TRUE(service.handles(path));
+}
 } // namespace
 } // namespace frost::lang

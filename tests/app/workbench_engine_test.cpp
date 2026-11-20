@@ -1256,4 +1256,53 @@ TEST(WorkbenchEngine, WorkerLaunchLatchesExactProjectFileAndRefusesSameRootAlias
     EXPECT_EQ(*std::next(logLevel), "warn");
 }
 
+TEST(WorkbenchEngineDocuments, CapturedByteCoordinatesDirtyRepliesAndDisconnectAreRevocable) {
+    WorkDir dir("engine-document-dirty-replies");
+    dir.write("project/Game.frostproj","{}");
+    const std::string source="{\n\"Note\":\"\xc3\xa5\", \"Program\":\"bad\"\n}";
+    dir.write("project/Assets/test.fmat",source);
+    EngineSessionPeer peer(dir.join("project"));peer.enableDocumentTools();
+    const auto schemas=frost::rpc::parseJson(R"({"protocol":"frostengine.document-schemas","version":1,"schemas":[{"extension":".fmat","serializer":"MaterialSerializer","schema":{"type":"object","properties":{"Program":{"type":"string"}}}}]})").value();
+    peer.result("document.schemas",schemas);
+    peer.hold("document.validate");advertise(dir,peer);
+    WorkbenchRig rig(dir,peerOptions(dir));ASSERT_TRUE(openTrusted(rig,dir.join("project")));ASSERT_TRUE(pairPeer(rig,peer));
+    ASSERT_TRUE(waitFor([&]{return peer.replies("document.schemas")==1;},3s));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("project/Assets/test.fmat")));
+    const auto invoke=[&](const char* name) {
+        auto id=rig.workbench->registry().find(name);EXPECT_TRUE(id);if(!id)return;
+        frost::input::ActionContext context;context.trusted=true;
+        EXPECT_EQ(rig.workbench->registry().tryInvoke(*id,context),frost::input::InvokeResult::Ran);
+    };
+    const auto countEngine=[&] {
+        const auto& rows=rig.workbench->problems()->model()->problems();
+        return std::ranges::count_if(rows,[](const auto& row){return row.source==frost::ui::DiagnosticSource::Engine;});
+    };
+    auto reply=frost::rpc::parseJson(R"({"protocol":"frostengine.document-validation","version":1,"path":"Assets/test.fmat","valid":false,"errors":1,"warnings":0,"issues":[{"severity":"error","code":"actual","message":"Actual serializer finding","location":{"asset":"Assets/test.fmat","jsonPath":"$.Program"}}]})").value();
+    auto location=Json::object().set("asset","Assets/test.fmat").set("jsonPath","$.Program")
+        .set("byte",static_cast<std::uint64_t>(source.find("\"bad\"")+1));
+    auto issue=Json::object().set("severity","error").set("code","actual").set("message","Actual serializer finding").set("location",location);
+    reply.set("issues",Json::array({issue}));
+    invoke("engine.document.validate");ASSERT_TRUE(waitFor([&]{return peer.requests("document.validate").size()==1;},3s));
+    // Copy the request before dereferencing: requests() returns an owned protocol snapshot.
+    auto captured=peer.requests("document.validate");ASSERT_EQ(captured.front().find("params")->stringAt("source"),source);
+    peer.release("document.validate",reply);ASSERT_TRUE(waitFor([&]{return countEngine()==1;},3s));
+    const auto& rows=rig.workbench->problems()->model()->problems();
+    auto row=std::ranges::find(rows,frost::ui::DiagnosticSource::Engine,&frost::ui::Problem::source);ASSERT_NE(row,rows.end());
+    EXPECT_EQ(row->diagnostic.line,2);EXPECT_EQ(row->diagnostic.column,23);
+    invoke("engine.document.validate");ASSERT_TRUE(waitFor([&]{return peer.requests("document.validate").size()==2;},3s));
+    ASSERT_TRUE(rig.workbench->currentView()->editor().typeText(" "));
+    ASSERT_TRUE(waitFor([&]{return countEngine()==0;},3s));
+    peer.release("document.validate",reply);ASSERT_TRUE(waitFor([&]{return peer.replies("document.validate")==2;},3s));
+    ASSERT_TRUE(waitFor([&]{return hasStatus(rig.window->toolWindows().content("frostEngine"),QStringLiteral("stale engine validation was discarded"));},3s));
+    EXPECT_EQ(countEngine(),0);EXPECT_EQ(dir.read("project/Assets/test.fmat"),source);
+    invoke("engine.document.validate");ASSERT_TRUE(waitFor([&]{return peer.requests("document.validate").size()==3;},3s));
+    peer.release("document.validate",reply);ASSERT_TRUE(waitFor([&]{return countEngine()==1;},3s));
+    peer.stop();ASSERT_TRUE(waitFor([&]{return !rig.workbench->engineState().boolAt("connected").value_or(false);},3s));
+    EXPECT_EQ(countEngine(),0);
+    EngineSessionPeer replacement(dir.join("project"),'b');replacement.enableDocumentTools();
+    replacement.result("document.schemas",schemas);advertise(dir,replacement);
+    ASSERT_TRUE(rig.workbench->refreshEngineInstances());ASSERT_TRUE(pairPeer(rig,replacement));
+    // A replacement authenticated identity must obtain its own export after loss.
+    EXPECT_TRUE(waitFor([&]{return replacement.requests("document.schemas").size()==1;},3s));
+}
 } // namespace

@@ -281,7 +281,7 @@ void EngineIntegration::Impl::drainPushEvents() {
                     impl.console->append(std::move(notice));
                 }
                 if (diagnosticsChanged && impl.workbench.m_problems)
-                    impl.workbench.m_problems->model()->setProblems(ui::DiagnosticSource::Engine, impl.diagnostics);
+                    impl.publishDocumentProblems();
                 impl.drainPushEvents();
                 // Consumers re-fetch the current typed state and identity. Emit only after
                 // publishing an admitted engine push, never from a successful command reply.
