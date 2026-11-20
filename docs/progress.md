@@ -8087,3 +8087,7 @@ Source checkpoint only; independent review is pending for these additions. No bu
   providers refuse. Authored editor request/cache tests, a real host external-symbol call and a
   registered real PE/PDB/ILSpy probe; no build, configuration, tests, feature runs, WSL, installs or
   payload downloads were performed. Independent source review and runtime acceptance are pending.
+- Astra independently source-reviewed 9aa00e44 and the 5b41bbd0/7c0448a4 follow-ups. Normal F12 now
+  propagates actual provider failures, and linked SourceLink cancellation bounds headers plus the
+  complete body. Source review cleared; compiled API compatibility and runtime acceptance remain
+  deferred. No tests or feature executions were run to resolve the findings.

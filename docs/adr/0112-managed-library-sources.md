@@ -2,7 +2,7 @@
 
 # ADR 0112: Verified managed library sources and an existing MIT decompiler
 
-- Status: bounded source implementation; independent source review and runtime acceptance pending
+- Status: bounded implementation independently source-reviewed; compiled API and runtime acceptance pending
 - Date: 2026-11-20
 - Plan: R17 LTR-6; builds on ADRs 0073 and 0109
 
