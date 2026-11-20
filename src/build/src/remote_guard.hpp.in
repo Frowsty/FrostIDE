@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Generated from application-owned remote_guard.py; no runtime project file is interpreted as the guardian.
+#pragma once
+#include <string_view>
+namespace frost::build::detail {
+inline constexpr std::string_view kRemoteGuard=R"FROSTGUARD(@_frost_remote_guard@)FROSTGUARD";
+}
