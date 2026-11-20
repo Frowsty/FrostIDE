@@ -232,6 +232,9 @@ class ResultType:
 _RUN7_TEST_PARSERS = ("src/run/src/ctest_parsers.cpp", "src/run/src/gtest_parsers.cpp",
                       # RUN-8: doctest's XML case list and run report and its console failure blocks.
                       "src/run/src/doctest_parsers.cpp", "src/run/src/framework_parsers.cpp")
+_LUA_JUNIT_PARSER = "src/run/src/lua_framework_parsers.cpp"
+_DOTNET_TRX_PARSER = "src/run/src/dotnet_tests.cpp"
+_TEST_OUTCOME_PARSERS = _RUN7_TEST_PARSERS + (_DOTNET_TRX_PARSER, _LUA_JUNIT_PARSER)
 
 RESULT_TYPES: tuple[ResultType, ...] = (
     # Test outcomes and test discovery. RUN-7 (gtest, CTest), RUN-8 (doctest), RUN-10 (the Unit
@@ -242,9 +245,10 @@ RESULT_TYPES: tuple[ResultType, ...] = (
     # RUN-7's model (src/run/include/frost/run/test_model.hpp): ctest's -N --show-only=json-v1,
     # --output-junit and console progress (ctest_parsers.cpp), and Google Test's
     # --gtest_list_tests and JSON report (gtest_parsers.cpp).
-    ResultType("TestResult", "test outcome", _RUN7_TEST_PARSERS),
-    ResultType("TestOutcome", "test outcome", _RUN7_TEST_PARSERS, ("Passed", "Failed", "Skipped", "Disabled")),
-    ResultType("TestFailure", "test outcome", _RUN7_TEST_PARSERS),
+    ResultType("TestResult", "test outcome", _RUN7_TEST_PARSERS + (_LUA_JUNIT_PARSER,)),
+    ResultType("TestOutcome", "test outcome", _TEST_OUTCOME_PARSERS, ("Passed", "Failed", "Skipped", "Disabled")),
+    ResultType("TestFailure", "test outcome", _TEST_OUTCOME_PARSERS),
+    ResultType("DotnetTestResult", "test outcome", (_DOTNET_TRX_PARSER,)),
     ResultType("DiscoveredTest", "test discovery", _RUN7_TEST_PARSERS),
     ResultType("GTestCase", "test discovery", _RUN7_TEST_PARSERS),
     ResultType("DoctestCase", "test discovery", _RUN7_TEST_PARSERS),
@@ -263,18 +267,22 @@ RESULT_TYPES: tuple[ResultType, ...] = (
     # FEC-13 normalizes actual references replies with the provider's captured identity,
     # negotiated encoding and exact document snapshots, then combines those parsed usages.
     ResultType("BindingUsage", "usage", ("src/engine/src/binding_queries.cpp",)),
+    ResultType("AssetUsage", "usage", ("src/engine/src/asset_index.cpp",)),  # FrostEditor asset.usages reply
+    ResultType("UnityAssetUsage", "usage", ("src/lang/src/unity_assets.cpp",)),  # Unity serialization file records
     ResultType("EditorCodeVisionLens", "usage count"),
     # IL and disassembly: the DAP disassemble response.
     ResultType("DisassembledInstruction", "disassembly", ("src/debug/src/dap_types.cpp",)),
     # Diagnostics: LSP publishDiagnostics, the build output parsers and their editor adapter.
     # settings::Diagnostic, theme_compiler::Diagnostic and io::IgnoreDiagnostic are FrostIDE's
     # own validators reporting on its own inputs, never a tool's result.
-    ResultType("LiveDiagnostic", "diagnostic", ("src/lang/src/diagnostics.cpp",)),
+    ResultType("LiveDiagnostic", "diagnostic",
+               ("src/lang/src/diagnostics.cpp", "src/app/src/validator_client.cpp")),
     # FER-7: fields decoded from authenticated, identity-bound engine diagnostic push events.
     ResultType("EngineDiagnostic", "diagnostic", ("src/engine/src/session.cpp",)),
-    ResultType("BuildDiagnostic", "diagnostic", ("src/build/src/**",)),
+    ResultType("BuildDiagnostic", "diagnostic", ("src/build/src/**", "src/app/src/dxc_profile.cpp")),
     ResultType("Diagnostic", "diagnostic",
-               ("src/build/src/**", "src/settings/src/**", "src/ui/theme_compiler/**")),
+               ("src/build/src/**", "src/settings/src/**", "src/ui/theme_compiler/**",
+                "src/clang/src/tidy_fixes_decode.cpp")),  # clang-tidy -export-fixes YAML records
     ResultType("EditorDiagnostic", "diagnostic", ("src/ui/lang/src/editor_insight_binding.cpp",)),
 )
 
@@ -285,6 +293,7 @@ RESULT_TYPES: tuple[ResultType, ...] = (
 RESULT_NAME_SUFFIX = re.compile(r"(?:TestEntry|TestResult|TestOutcome|TestRunState|PackageEntry|Instruction|"
                                 r"Diagnostic|Usage|UsageGroup|CodeVisionLens)$")
 NOT_RESULT_TYPES = frozenset({
+    "CreatedUsage",  # clang: proposed text edit for Create from Usage, not a usage query result
     "IgnoreDiagnostic",  # io: a malformed line in a .gitignore the IDE itself parsed
     "ActiveDiagnostic",  # ui/editor: which EditorDiagnostic is under the caret (no new data)
 })
@@ -338,6 +347,21 @@ SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
     SiteAllowance("src/app/src/workbench_inspection.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
                   "adapter of InspectionFinding parsed from the clang-tidy process output",
                   context="row.diagnostic.message = finding.message;"),
+    SiteAllowance("src/app/src/workbench_analyzer.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+                  "adapter of validated frost-analyzer process findings",
+                  context="row.diagnostic.message = finding.message;"),
+    SiteAllowance("src/app/src/engine_document_integration.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+                  "adapter of FrostEditor document validation reply",
+                  context="diagnostic.message = issue.message;"),
+    SiteAllowance("src/app/src/engine_shader_language.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+                  "adapter of FrostEditor shader language diagnostics",
+                  context="row.diagnostic.message = issue.message;"),
+    SiteAllowance("src/app/src/engine_shader_language.cpp", "LiveDiagnostic", "lang::LiveDiagnostic diagnostic;",
+                  "editor adapter of the same FrostEditor shader language diagnostics",
+                  context="diagnostic.message = row.diagnostic.message;"),
+    SiteAllowance("src/app/src/engine_shader_preview.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
+                  "adapter of parsed FrostEditor shader preview diagnostics",
+                  context="row.diagnostic.message = issue.message;"),
     SiteAllowance("src/app/src/engine_integration_events.cpp", "BuildDiagnostic", "build::BuildDiagnostic row;",
                   "adapter of EngineDiagnostic decoded from authenticated engine push events",
                   context="row.diagnostic.message = entry.message;"),
@@ -352,6 +376,12 @@ SITE_ALLOWANCES: tuple[SiteAllowance, ...] = (
     SiteAllowance("src/ui/lang/src/editor_insight_binding.cpp", "EditorCodeVisionLens",
                   "out.push_back(EditorCodeVisionLens{", "adapter of CppCodeVisionProvider LSP result counts",
                   context='.label = std::to_string(count) + " " + noun,'),
+    SiteAllowance("src/app/src/engine_asset_integration.cpp", "EditorCodeVisionLens", "lenses.push_back(",
+                  "count from the parsed FrostEditor asset.usages reply",
+                  context='.label = std::to_string(*count) + " asset usage rows",'),
+    SiteAllowance("src/app/src/engine_integration_tools.cpp", "EditorCodeVisionLens", "lenses.push_back(",
+                  "measurements from the parsed FrostEditor stats.get reply",
+                  context='scope.msPerFrame, scope.callsPerFrame'),
 )
 
 # Synthesized tool output: literals that imitate a tool's own output lines. Outside the files
