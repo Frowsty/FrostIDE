@@ -154,11 +154,11 @@ using EnvironmentLookup = std::function<std::optional<std::string>(std::string_v
 
 struct VcxprojOptions {
     // The solution's directory, for $(SolutionDir) (absolute, normalised); "" leaves it undefined.
-    std::string solutionDirectory;
+    std::string solutionDirectory{};
     // Where $(Name) references the property table does not define are looked up (see above);
     // empty uses processEnvironmentVariable. Values are used literally, never expanded again.
     EnvironmentLookup environment{};
-    std::stop_token stop; // Cooperative between item/scan steps; cannot preempt a single filesystem read/XML parse.
+    std::stop_token stop{}; // Cooperative between item/scan steps; cannot preempt a single filesystem read/XML parse.
 };
 
 // One <Filter Include="Source Files\Core"> of a .filters file.

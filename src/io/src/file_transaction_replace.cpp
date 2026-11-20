@@ -18,6 +18,8 @@
 #include <vector>
 
 #ifdef _WIN32
+#include "frost/io/utf.hpp"
+
 #include "save_metadata_win.hpp"
 
 #include <aclapi.h>

@@ -300,8 +300,9 @@ Result<HostEvaluation> parseProjectHostEvaluation(std::string_view line) {
         if (!definitions->isArray() || definitions->items.size() > 32768)
             return fail(ErrorCode::Corrupt, "Invalid evaluated property definitions");
         for (const auto& row : definitions->items) {
-            const auto line = row.integerAt("Line"), column = row.integerAt("Column");
-            if (!row.isObject() || row.stringAt("Name").empty() || !line || *line < 0 || !column || *column < 0)
+            const auto lineNumber = row.integerAt("Line"), column = row.integerAt("Column");
+            if (!row.isObject() || row.stringAt("Name").empty() || !lineNumber || *lineNumber < 0 || !column ||
+                *column < 0)
                 return fail(ErrorCode::Corrupt, "Malformed evaluated property origin");
             auto path = row.stringAt("File");
             if (!path.empty()) {
@@ -310,7 +311,7 @@ Result<HostEvaluation> parseProjectHostEvaluation(std::string_view line) {
                 path = *normalized;
             }
             out.propertyDefinitions.push_back({row.stringAt("Name"), row.stringAt("Value"), std::move(path),
-                static_cast<std::size_t>(*line), static_cast<std::size_t>(*column)});
+                static_cast<std::size_t>(*lineNumber), static_cast<std::size_t>(*column)});
         }
     }
     if (const auto* definitions = json->find("ImportDefinitions")) {
@@ -319,10 +320,11 @@ Result<HostEvaluation> parseProjectHostEvaluation(std::string_view line) {
         for (const auto& row:definitions->items) {
             auto source=detail::normalizeAbsolute(row.stringAt("File"));
             auto target=detail::normalizeAbsolute(row.stringAt("ImportedFile"));
-            auto line=row.integerAt("Line");
-            if (!source || !target || !line || *line<=0 || row.stringAt("Expression").empty())
+            const auto lineNumber = row.integerAt("Line");
+            if (!source || !target || !lineNumber || *lineNumber <= 0 || row.stringAt("Expression").empty())
                 return fail(ErrorCode::Corrupt,"Malformed evaluated import origin");
-            out.importDefinitions.push_back({*source,row.stringAt("Expression"),*target,static_cast<std::size_t>(*line)});
+            out.importDefinitions.push_back({*source, row.stringAt("Expression"), *target,
+                                             static_cast<std::size_t>(*lineNumber)});
         }
     }
     out.imports = stringArray(json->find("Imports"));

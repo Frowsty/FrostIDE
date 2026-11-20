@@ -18,7 +18,12 @@ std::atomic<std::uint64_t> sequence{0};
 std::string hex(std::string_view bytes) {
     constexpr char digits[]="0123456789abcdef";
     std::string result;result.reserve(bytes.size()*2);
-    for(unsigned char c:bytes){result+=digits[c>>4];result+=digits[c&15];}return result;
+    for (char byte : bytes) {
+        const auto c = static_cast<unsigned char>(byte);
+        result += digits[c >> 4];
+        result += digits[c & 15];
+    }
+    return result;
 }
 Result<std::string> unhex(std::string_view text) {
     if(text.size()>16384||text.size()%2!=0)return fail(ErrorCode::Corrupt,"Remote output packet size is invalid");

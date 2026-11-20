@@ -126,8 +126,8 @@ Result<std::vector<ManagedLaunchProfile>> parseManagedLaunchSettings(std::string
         auto expansionFields = profile.arguments;
         expansionFields.insert(expansionFields.end(),
                                {profile.workingDirectory, profile.applicationUrl, profile.launchUrl});
-        for (const auto& [name, value] : profile.environment)
-            expansionFields.push_back(value);
+        for (const auto& [name, environmentValue] : profile.environment)
+            expansionFields.push_back(environmentValue);
         for (const auto& field : expansionFields)
             if (field.find('%') != field.npos || field.find("$(") != field.npos || field.find("${") != field.npos)
                 profile.unavailable = "Launch setting expansion requires an external provider";

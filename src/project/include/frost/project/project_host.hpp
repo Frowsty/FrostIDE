@@ -87,7 +87,7 @@ struct ProjectEvaluationRequest {
     std::string projectPath;   // Absolute .vcxproj.
     std::string configuration; // The project configuration ("Debug").
     std::string platform;      // The project platform ("x64").
-    std::string solutionPath;  // Absolute .sln/.slnx for the Solution* properties; may be empty.
+    std::string solutionPath{}; // Absolute .sln/.slnx for the Solution* properties; may be empty.
     // The item types to return; empty means fileItemTypeNames().
     std::vector<std::string> itemTypes = {};
     // Item metadata values to return per item ("PreprocessorDefinitions").

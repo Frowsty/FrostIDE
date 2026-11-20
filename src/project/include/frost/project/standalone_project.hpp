@@ -18,9 +18,9 @@ namespace frost::project {
 // A database describes translation units, not link products: run configurations remain explicit.
 struct StandaloneProject {
     std::string root;
-    std::optional<std::string> makefile;
-    std::optional<std::string> database;
-    std::vector<std::string> sources;
+    std::optional<std::string> makefile{};
+    std::optional<std::string> database{};
+    std::vector<std::string> sources{};
 };
 
 // Recognizes GNUmakefile, makefile, Makefile (GNU Make precedence), and a database at the root

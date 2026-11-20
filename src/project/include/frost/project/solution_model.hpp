@@ -165,9 +165,9 @@ struct SolutionLoadOptions {
 #else
     SolutionModelMode mode = SolutionModelMode::ApproximateReadOnly;
 #endif
-    std::stop_token stop;
+    std::stop_token stop{};
     // Worker-thread progress, never an estimate of time remaining. Must not throw or reenter load.
-    std::function<void(const SolutionLoadProgress&)> progress;
+    std::function<void(const SolutionLoadProgress&)> progress{};
 };
 
 // "C++", "C#", "Visual Basic", "F#", "shared items", "unknown".
