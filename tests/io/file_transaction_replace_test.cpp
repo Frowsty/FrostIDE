@@ -548,8 +548,9 @@ TEST_F(FileTransactionReplace, ObservedAlternateStreamRefusesWithoutPretendingIt
     ASSERT_TRUE(wide);
     // The ordinary FrostIDE path API deliberately rejects ADS syntax. Append it only at the native oracle.
     const auto streamPath = *wide + L":extra";
-    HANDLE stream = CreateFileW(streamPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE stream =
+        CreateFileW(streamPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                    CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     ASSERT_NE(stream, INVALID_HANDLE_VALUE);
     DWORD written = 0;
     const bool success = WriteFile(stream, "secret", 6, &written, nullptr) && written == 6;
