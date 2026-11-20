@@ -101,3 +101,30 @@ TEST(MonoResponses, DecodesLocalsAndRejectsInvalidNamesAndScopes) {
 }
 } // namespace
 } // namespace frost::debug::mono
+
+namespace frost::debug::mono {
+namespace {
+TEST(MonoResponses, FormatsActualPrimitiveBitsAndRefusesMalformedOrComplexValues) {
+    const auto check = [](std::vector<std::uint8_t> bytes, const char* value, const char* type) {
+        auto decoded = decodeScalar(bytes); ASSERT_TRUE(decoded);
+        EXPECT_EQ(decoded->value, value); EXPECT_EQ(decoded->type, type);
+    };
+    check({2,0,0,0,1}, "true", "System.Boolean");
+    check({3,0xff,0xff,0xff,0xff}, "U+FFFF", "System.Char");
+    check({4,0xff,0xff,0xff,0x80}, "-128", "System.SByte");
+    check({5,0xff,0xff,0xff,0xff}, "255", "System.Byte");
+    check({7,0xff,0xff,0xff,0xff}, "65535", "System.UInt16");
+    check({9,0xff,0xff,0xff,0xff}, "4294967295", "System.UInt32");
+    check({10,0x80,0,0,0,0,0,0,0}, "-9223372036854775808", "System.Int64");
+    check({11,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff}, "18446744073709551615", "System.UInt64");
+    check({12,0x3f,0xc0,0,0}, "1.5", "System.Single");
+    check({13,0x3f,0xf8,0,0,0,0,0,0}, "1.5", "System.Double");
+    check({0xf0}, "null", "null");
+    EXPECT_FALSE(decodeScalar(std::vector<std::uint8_t>{2,0,0,0,2}));
+    EXPECT_FALSE(decodeScalar(std::vector<std::uint8_t>{4,0,0,0,255}));
+    EXPECT_FALSE(decodeScalar(std::vector<std::uint8_t>{8,0,0,0,1,0}));
+    auto reference = decodeScalar(std::vector<std::uint8_t>{0x12,0,0,0,1});
+    ASSERT_FALSE(reference); EXPECT_EQ(reference.error().code(), ErrorCode::Unsupported);
+}
+} // namespace
+} // namespace frost::debug::mono

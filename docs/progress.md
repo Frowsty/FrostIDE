@@ -14,6 +14,11 @@ what is next, blockers and open questions for the user.
 - Actual registered semantic providers outrank the builtin source fallback. Named source/span/include/root/candidate limits and scheduler-free fallback are recorded in ADR0118. Lexer, physical source navigation/provenance, ambiguous/missing/macro limits, provider precedence and worker editor regressions are authored.
 - Independent Astra source review is requested. No builds, tests, shader/Unity feature execution, downloads/install, WSL or pushes occurred. Next: source-review corrections, additive R14 GLSL joins, then independent R19 other-language/extension branches.
 
+## 2026-11-20 R18 Mono primitive value rendering
+
+- Actual Mono wire values now render Boolean, Char code unit, signed/unsigned 8/16/32/64-bit integers, Single, Double and null in Locals and exact-local Watch/hover. Decoding preserves unsigned extrema, signed extensions and floating raw bits with locale-independent formatting, and distinguishes unsupported references/structures from malformed supported packets.
+- Protocol layout was checked against the public MIT Mono debugger-agent primitive encoder; no implementation was copied and no dependency added. Authored boundary/bit-pattern/malformed fixtures; independent source review pending. No build/test/Unity/feature execution.
+
 ## 2026-11-20 R18 Mono watch/hover local reads
 
 - The original Mono adapter now serves DAP evaluate for exact in-scope local identifiers in the current verified stopped frame, using actual Method.GET_LOCALS_INFO and StackFrame.GET_VALUES replies. Int32 formatting is the established supported value profile; expressions, calls, unknown/ambiguous locals, unsupported values and stale frames are refused rather than fabricated. Hover capability is advertised for that bounded read path.

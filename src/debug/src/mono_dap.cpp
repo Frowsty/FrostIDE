@@ -355,10 +355,12 @@ struct Worker : std::enable_shared_from_this<Worker> {
             auto value = call(session.local(stoppedThread, frame->second.id, static_cast<std::uint32_t>(i)));
             if (!value)
                 return std::unexpected(std::move(value.error()));
-            auto number = decodeInt32(value->payload);
+            auto scalar = decodeScalar(value->payload);
+            if (!scalar && scalar.error().code() != ErrorCode::Unsupported) return std::unexpected(std::move(scalar.error()));
             result.push_back(rpc::Json::object()
                                  .set("name", local.name)
-                                 .set("value", number ? std::to_string(*number) : "<unsupported>")
+                                 .set("value", scalar ? scalar->value : "<unsupported structured/reference value>")
+                                 .set("type", scalar ? scalar->type : "")
                                  .set("variablesReference", 0));
         }
         return rpc::Json::object().set("variables", rpc::Json::array(std::move(result)));
@@ -391,9 +393,9 @@ struct Worker : std::enable_shared_from_this<Worker> {
         if (!ordinal) return fail(ErrorCode::Unsupported, "no unique in-scope Mono local");
         auto value = call(session.local(stoppedThread, frame->second.id, *ordinal));
         if (!value) return std::unexpected(std::move(value.error()));
-        auto number = decodeInt32(value->payload);
-        if (!number) return fail(ErrorCode::Unsupported, "Mono local value type is not supported");
-        return rpc::Json::object().set("result", std::to_string(*number)).set("type", "System.Int32")
+        auto scalar = decodeScalar(value->payload);
+        if (!scalar) return std::unexpected(std::move(scalar.error()));
+        return rpc::Json::object().set("result", scalar->value).set("type", scalar->type)
             .set("variablesReference", 0);
     }
     Result<void> detach() {
