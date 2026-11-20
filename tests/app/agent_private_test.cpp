@@ -63,6 +63,11 @@ TEST(AgentMcpProxy, RealStdioUsesCurrentUserPipeAndExactWindowToken) {
     spec.arguments = {"--discovery", discovery, "--root", *root}; spec.stdinMode = frost::io::Stdio::Pipe;
     auto response = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"initialize\"}\n", 10s);
     ASSERT_TRUE(response); EXPECT_EQ(response->exitCode, 0) << response->stderrBytes; EXPECT_NE(response->stdoutBytes.find("fixture"), std::string::npos);
+    // Omitted --root must resolve the proxy's actual cwd through Result<string> conversion.
+    spec.arguments = {"--discovery", discovery};
+    spec.workingDirectory = *root;
+    response = frost::io::runToCompletion(frost::io::realProcessLauncher(), spec, "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/list\"}\n", 10s);
+    ASSERT_TRUE(response); EXPECT_EQ(response->exitCode, 0) << response->stderrBytes; EXPECT_NE(response->stdoutBytes.find("fixture"), std::string::npos);
     const auto wrong = directory + "/wrong.discovery.json";
     ASSERT_TRUE(frost::app::writeAgentPrivateFile(wrong, Json(record).set("token", std::string(32, 'c')).dump()));
     spec.arguments = {"--discovery", wrong, "--root", *root};

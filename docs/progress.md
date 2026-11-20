@@ -1,3 +1,10 @@
+## 2026-11-20 — R19 native source review repairs
+
+- Corrected proxy cwd fromStdPath Result propagation and constructed the actual named native
+  checkpoint selector. Authored regression coverage for omitted --root using the real local proxy
+  fixture and for checkpoint UI construction without connecting or starting a provider.
+- Astra_native findings applied; independent recheck and all runtime/test execution remain pending.
+  No provider/subprocess feature execution, prompt, data transfer, builds, tests, installs or WSL runs.
 ## 2026-11-20 — R19 UX-18 source (codex/r19-agent-native)
 
 - 49caa7ce: Qt-free native auth/protocol/control/hook/limit core and private stdio/local-IPC proxy.
@@ -8165,3 +8172,9 @@ with a pointer.
 ### R14 native GLSL authoring profile (2026-11-20)
 
 Implemented ordinary completion, declaration/definition, hover, Structure and idle diagnostics through authenticated native shader.language (producer 08897089), using compiler AST identities and actual include provenance. Governed asynchronous requests preserve cancellation/deadline semantics without blocking workers; trust/session/state/source changes invalidate observations. Retained dirty documents without views validate document identity, version and bytes. Authored normal key-entry real-engine journey, strict projection/routing tests and single-dispatcher response/cancellation/timeout/late-reply regressions. ADR0103 records bounded ownership/scope and unsupported operations. Independent Astra native and IDE source reviews cleared. No builds, tests, feature execution or WSL run; runtime acceptance remains open.
+
+### R19 FEC-16 semantic scene/prefab merge — authored source increment
+
+Resolve Conflicts now exposes Semantic Scene Merge for actual `.fscene`/`.fprefab` Git conflicts. Worker capture reads immutable stage OIDs, retains explicit missing-base identity and exact index/disk receipts, requires lossless UTF8 and the selected actual project/tool admission, and calls real `document.merge-scene` using a private params file. Engine reports alone provide merge semantics/diagnostics. Conflict choices require revalidation before Apply; the existing DiffViewer shows ours versus retained engine output. Apply rechecks source/trust/project/physical target, uses REF1/global file Undo, then normal Git staging. A failed Git stage is reported separately and retains the file/history. Undo changes the file; it does not rewrite Git's index. Missing-side whole-file conflicts remain in the normal text/accept-side resolver. Bounded source files (1 MiB each) and output (4 MiB) fail closed; no fallback merge authority is fabricated.
+
+Authored regression sources cover genuine engine serializer/prefab merging, unknown fields/exact IDs, conflicts/ambiguous IDs/absent ancestor/cyclic parent repairs, strict DTO hash/counter/presence admission, real throwaway Git source receipts and private-file transport, UI revalidation and owner-loss cancellation. No build/test/runtime/WSL execution was performed. Source review is pending; this entry does not mark R19 green or update the R14 engine corpus pin.

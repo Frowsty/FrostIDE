@@ -341,6 +341,7 @@ void NativeAgentChat::show() {
     if (m->panel) { m->panel->show(); m->panel->raise(); return; }
     auto* panel = new QDialog(m->owner.m_window);
     m->panel = panel;
+    panel->setObjectName("nativeAgentChatPanel");
     panel->setAttribute(Qt::WA_DeleteOnClose);
     panel->setWindowTitle("AI Agent"); panel->resize(850, 720);
     auto* layout = new QVBoxLayout(panel);
@@ -363,6 +364,10 @@ void NativeAgentChat::show() {
     form->addRow("Own indexed session", m->sessions);
     m->fork = new QCheckBox("Fork selected session", panel); form->addRow(m->fork);
     m->resumeAt = new QLineEdit(panel); form->addRow("Resume at message UUID (optional)", m->resumeAt);
+    m->checkpoints = new QComboBox(panel);
+    m->checkpoints->setObjectName("nativeAgentCheckpoints");
+    m->checkpoints->setAccessibleName("Actual CLI message checkpoints");
+    form->addRow("Actual CLI message checkpoints", m->checkpoints);
     layout->addLayout(form);
     auto* connectRow = new QHBoxLayout;
     auto* connectButton = new QPushButton("Connect (no prompt)", panel); connectRow->addWidget(connectButton);

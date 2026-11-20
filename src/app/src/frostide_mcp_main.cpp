@@ -23,7 +23,9 @@ frost::Result<Json> discover(std::string path, std::string root) {
         std::error_code error;
         const auto current = std::filesystem::current_path(error);
         if (error) return frost::fail(frost::ErrorCode::IoError, "cannot identify MCP client working directory");
-        root = frost::io::fromStdPath(current);
+        auto converted = frost::io::fromStdPath(current);
+        if (!converted) return std::unexpected(converted.error());
+        root = std::move(*converted);
     }
     const auto physical = fs.physicalPath(root);
     if (!physical) return std::unexpected(physical.error());
