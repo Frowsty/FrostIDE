@@ -188,57 +188,50 @@ Result<void> EngineIntegration::Impl::refresh() {
     const auto originalKey = projectKey;
     const auto admission = physicalAdmission;
     auto* fs = &workbench.m_services.fs;
-    QPointer<EngineIntegration> self(&owner);
     setStatus(QStringLiteral("Looking for FrostEngine editors..."));
     updateControls();
-    background([self, fs, expectedRoot, originalKey, admission, revision, currentEpoch, generation, stop, configured,
-                directory] {
+    background([relay = guiCallbacks, fs, expectedRoot, originalKey, admission, revision, currentEpoch, generation,
+                stop, configured, directory] {
         if (!retainEngineProjectIdentity(*fs, expectedRoot, originalKey, admission))
             return;
         auto editors = locateEngineInstallations(*fs, expectedRoot, configured, stop);
         auto found = listEngineInstances(*fs, directory, expectedRoot, stop);
-        if (!self || !retainEngineProjectIdentity(*fs, expectedRoot, originalKey, admission))
+        if (!retainEngineProjectIdentity(*fs, expectedRoot, originalKey, admission))
             return;
-        QMetaObject::invokeMethod(
-            self.data(),
-            [self, expectedRoot, revision, currentEpoch, generation, editors = std::move(editors),
-             found = std::move(found)]() mutable {
-                if (!self)
-                    return;
-                auto& impl = *self->m_impl;
-                if (!impl.admitted(currentEpoch, expectedRoot, revision) || generation != impl.discoveryGeneration)
-                    return;
-                impl.discoveryBusy = false;
-                impl.testsSourceRevision->fetch_add(1);
-                impl.installations = editors ? std::move(*editors) : std::vector<EngineInstallation>{};
-                impl.instances = found ? std::move(*found) : std::vector<EngineInstanceRecord>{};
-                impl.picker->clear();
-                for (const auto& instance : impl.instances) {
-                    const QString label =
-                        instance.instanceId.empty()
-                            ? QStringLiteral("Legacy editor on port %1 (pairing unavailable)").arg(instance.port)
-                            : QStringLiteral("Editor %1 — port %2")
-                                  .arg(qs(instance.instanceId), QString::number(instance.port));
-                    impl.picker->addItem(label, qs(instance.instanceId));
-                }
-                if (!impl.selectedInstance.empty()) {
-                    const int selected = impl.picker->findData(qs(impl.selectedInstance));
-                    if (selected >= 0)
-                        impl.picker->setCurrentIndex(selected);
-                }
-                if (!found)
-                    impl.setStatus(qs(found.error().message()));
-                else if (!editors && impl.instances.empty())
-                    impl.setStatus(qs(editors.error().message()));
-                else
-                    impl.setStatus(
-                        QStringLiteral("%1 editor instance(s) found; select one to pair").arg(impl.instances.size()));
-                if (impl.workbench.m_runController)
-                    impl.workbench.m_runController->refreshStartupCombo();
-                impl.refreshProjectContent();
-                impl.updateControls();
-            },
-            Qt::QueuedConnection);
+        relay->post([expectedRoot, revision, currentEpoch, generation, editors = std::move(editors),
+                     found = std::move(found)](Impl& impl) mutable {
+            if (!impl.admitted(currentEpoch, expectedRoot, revision) || generation != impl.discoveryGeneration)
+                return;
+            impl.discoveryBusy = false;
+            impl.testsSourceRevision->fetch_add(1);
+            impl.installations = editors ? std::move(*editors) : std::vector<EngineInstallation>{};
+            impl.instances = found ? std::move(*found) : std::vector<EngineInstanceRecord>{};
+            impl.picker->clear();
+            for (const auto& instance : impl.instances) {
+                const QString label =
+                    instance.instanceId.empty()
+                        ? QStringLiteral("Legacy editor on port %1 (pairing unavailable)").arg(instance.port)
+                        : QStringLiteral("Editor %1 — port %2")
+                              .arg(qs(instance.instanceId), QString::number(instance.port));
+                impl.picker->addItem(label, qs(instance.instanceId));
+            }
+            if (!impl.selectedInstance.empty()) {
+                const int selected = impl.picker->findData(qs(impl.selectedInstance));
+                if (selected >= 0)
+                    impl.picker->setCurrentIndex(selected);
+            }
+            if (!found)
+                impl.setStatus(qs(found.error().message()));
+            else if (!editors && impl.instances.empty())
+                impl.setStatus(qs(editors.error().message()));
+            else
+                impl.setStatus(
+                    QStringLiteral("%1 editor instance(s) found; select one to pair").arg(impl.instances.size()));
+            if (impl.workbench.m_runController)
+                impl.workbench.m_runController->refreshStartupCombo();
+            impl.refreshProjectContent();
+            impl.updateControls();
+        });
     });
     return {};
 }
@@ -578,6 +571,44 @@ EngineIntegration::EngineIntegration(Workbench& workbench)
     impl.projectChanged();
 }
 
+void EngineIntegration::Impl::CallbackQueue::post(Callback callback) {
+    std::scoped_lock lock(mutex);
+    if (!target)
+        return;
+    const bool wake = pending.empty();
+    pending.push_back(std::move(callback));
+    // Qt wakes the GUI; the mutex publishes the payload and protects the target through posting.
+    if (wake && !QMetaObject::invokeMethod(target, "drainEngineCallbacks", Qt::QueuedConnection))
+        pending.clear();
+}
+
+void EngineIntegration::Impl::CallbackQueue::close() {
+    std::deque<Callback> cancelled;
+    {
+        std::scoped_lock lock(mutex);
+        target = nullptr;
+        cancelled.swap(pending);
+    }
+}
+
+void EngineIntegration::drainEngineCallbacks() {
+    Impl::CallbackQueue::Callback next;
+    {
+        auto& queue = *m_impl->guiCallbacks;
+        std::scoped_lock lock(queue.mutex);
+        if (queue.pending.empty())
+            return;
+        next = std::move(queue.pending.front());
+        queue.pending.pop_front();
+        // Keep the next callback in the FIFO until its own wake. An inner GUI event
+        // loop must not let a newly posted reply run ahead of an older queued reply.
+        if (!queue.pending.empty() && !QMetaObject::invokeMethod(this, "drainEngineCallbacks", Qt::QueuedConnection))
+            queue.pending.clear();
+    }
+    if (!m_impl->stopped)
+        next(*m_impl);
+}
+
 EngineIntegration::~EngineIntegration() {
     shutdown();
     if (!m_impl->registered)
@@ -604,6 +635,7 @@ void EngineIntegration::shutdown() {
     auto& impl = *m_impl;
     if (impl.stopped)
         return;
+    impl.guiCallbacks->close();
     impl.invalidate(true);
     impl.stopped = true;
     if (impl.console)

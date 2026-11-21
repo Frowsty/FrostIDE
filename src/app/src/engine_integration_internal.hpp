@@ -105,7 +105,19 @@ struct EngineToolResolution {
     std::optional<std::string> project;
 };
 struct EngineIntegration::Impl {
+    struct CallbackQueue {
+        using Callback = std::function<void(Impl&)>;
+        explicit CallbackQueue(EngineIntegration& integration) : target(&integration) {}
+        void post(Callback callback);
+        void close();
+
+        std::mutex mutex;
+        EngineIntegration* target;
+        std::deque<Callback> pending;
+    };
+
     EngineIntegration& owner;
+    const std::shared_ptr<CallbackQueue> guiCallbacks;
     Workbench& workbench;
     QPointer<QWidget> panel;
     QPointer<QComboBox> picker;
@@ -187,7 +199,8 @@ struct EngineIntegration::Impl {
     IClock::SteadyTime startupDeadline;
     bool awaitingOwnedEndpoint = false, awaitingOwnedAuthentication = false, ownedProcessStarted = false;
 
-    Impl(EngineIntegration& integration, Workbench& host) : owner(integration), workbench(host) {}
+    Impl(EngineIntegration& integration, Workbench& host)
+        : owner(integration), guiCallbacks(std::make_shared<CallbackQueue>(integration)), workbench(host) {}
     void projectChanged();
     void updateControls();
     void setStatus(const QString& message);

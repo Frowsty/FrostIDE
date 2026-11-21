@@ -145,6 +145,9 @@ signals:
     void crashSourceUnexpectedLoss(const engine::EngineIdentity& identity);
     void crashSourceRevoked();
 
+private slots:
+    void drainEngineCallbacks();
+
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;

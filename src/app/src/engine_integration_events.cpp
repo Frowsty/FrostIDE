@@ -201,9 +201,8 @@ void EngineIntegration::Impl::drainPushEvents() {
     const auto admission = physicalAdmission;
     const auto revision = trustRevision;
     auto* fs = &workbench.m_services.fs;
-    QPointer<EngineIntegration> self(&owner);
-    background([self, queue, fs, currentEpoch, currentSessionEpoch, expectedRoot, originalPhysicalRoot, originalKey,
-                admission, revision, dropped, batch = std::move(batch)]() mutable {
+    background([relay = guiCallbacks, queue, fs, currentEpoch, currentSessionEpoch, expectedRoot, originalPhysicalRoot,
+                originalKey, admission, revision, dropped, batch = std::move(batch)]() mutable {
         if (!retainEngineProjectIdentity(*fs, expectedRoot, originalKey, admission))
             return;
         std::ranges::stable_sort(batch, {}, &QueuedEnginePush::order);
@@ -214,84 +213,76 @@ void EngineIntegration::Impl::drainPushEvents() {
                 return;
             resolved.push_back(resolvePush(*fs, originalPhysicalRoot, std::move(event.value)));
         }
-        if (!self)
-            return;
-        QMetaObject::invokeMethod(
-            self.data(),
-            [self, queue, currentEpoch, currentSessionEpoch, expectedRoot, revision, dropped,
-             resolved = std::move(resolved)]() mutable {
-                if (!self)
-                    return;
-                auto& impl = *self->m_impl;
-                if (impl.eventQueue != queue || impl.sessionEpoch != currentSessionEpoch ||
-                    !impl.admitted(currentEpoch, expectedRoot, revision))
-                    return;
-                bool diagnosticsChanged = false;
-                bool statePublished = false;
-                for (auto& event : resolved) {
-                    std::visit(
-                        [&](const auto& entry) {
-                            using T = std::decay_t<decltype(entry)>;
-                            if (!impl.currentIdentity(entry.identity))
+        relay->post([queue, currentEpoch, currentSessionEpoch, expectedRoot, revision, dropped,
+                     resolved = std::move(resolved)](Impl& impl) mutable {
+            const QPointer<EngineIntegration> alive(&impl.owner);
+            if (impl.eventQueue != queue || impl.sessionEpoch != currentSessionEpoch ||
+                !impl.admitted(currentEpoch, expectedRoot, revision))
+                return;
+            bool diagnosticsChanged = false;
+            bool statePublished = false;
+            for (auto& event : resolved) {
+                std::visit(
+                    [&](const auto& entry) {
+                        using T = std::decay_t<decltype(entry)>;
+                        if (!impl.currentIdentity(entry.identity))
+                            return;
+                        if constexpr (std::is_same_v<T, engine::EngineState>) {
+                            if (impl.state && entry.sequence < impl.state->sequence)
                                 return;
-                            if constexpr (std::is_same_v<T, engine::EngineState>) {
-                                if (impl.state && entry.sequence < impl.state->sequence)
-                                    return;
-                                impl.clearAssetUsages();
-                                if (impl.state && (impl.state->state != entry.state || impl.state->mode != entry.mode ||
-                                                   impl.state->playGeneration != entry.playGeneration))
-                                    impl.clearShaderPreview();
-                                impl.state = entry;
-                                statePublished = true;
-                                impl.observeEvent("play.state", entry.data, entry.sequence);
-                                impl.indicator->setState(entry.state == "DebuggerPaused"
-                                                             ? ui::EngineConnectionState::DebuggerPaused
-                                                         : entry.paused ? ui::EngineConnectionState::Paused
-                                                                        : ui::EngineConnectionState::Connected);
-                                impl.console->setPlaying(entry.playing);
-                                impl.updateControls();
-                            } else if constexpr (std::is_same_v<T, engine::EngineLogEntry>) {
-                                impl.observeEvent("log.entry", entry.data, entry.eventSequence);
-                                impl.console->append(std::move(*event.log));
-                            } else if constexpr (std::is_same_v<T, engine::EngineDiagnostic>) {
-                                impl.observeEvent("diagnostic", entry.data, entry.eventSequence);
-                                const auto& row = *event.diagnostic;
-                                const auto bytes =
-                                    row.diagnostic.message.size() + row.diagnostic.file.size() + row.path.size() + 256U;
-                                while (!impl.diagnostics.empty() &&
-                                       (impl.diagnostics.size() >= 10000 ||
-                                        impl.diagnosticBytes + bytes > 4U * 1024U * 1024U)) {
-                                    impl.diagnosticBytes -= impl.diagnosticSizes.front();
-                                    impl.diagnosticSizes.pop_front();
-                                    impl.diagnostics.erase(impl.diagnostics.begin());
-                                }
-                                impl.diagnosticBytes += bytes;
-                                impl.diagnosticSizes.push_back(bytes);
-                                impl.diagnostics.push_back(std::move(*event.diagnostic));
-                                diagnosticsChanged = true;
-                            } else {
-                                impl.console->append(std::move(*event.log));
+                            impl.clearAssetUsages();
+                            if (impl.state && (impl.state->state != entry.state || impl.state->mode != entry.mode ||
+                                               impl.state->playGeneration != entry.playGeneration))
+                                impl.clearShaderPreview();
+                            impl.state = entry;
+                            statePublished = true;
+                            impl.observeEvent("play.state", entry.data, entry.sequence);
+                            impl.indicator->setState(entry.state == "DebuggerPaused"
+                                                         ? ui::EngineConnectionState::DebuggerPaused
+                                                     : entry.paused ? ui::EngineConnectionState::Paused
+                                                                    : ui::EngineConnectionState::Connected);
+                            impl.console->setPlaying(entry.playing);
+                            impl.updateControls();
+                        } else if constexpr (std::is_same_v<T, engine::EngineLogEntry>) {
+                            impl.observeEvent("log.entry", entry.data, entry.eventSequence);
+                            impl.console->append(std::move(*event.log));
+                        } else if constexpr (std::is_same_v<T, engine::EngineDiagnostic>) {
+                            impl.observeEvent("diagnostic", entry.data, entry.eventSequence);
+                            const auto& row = *event.diagnostic;
+                            const auto bytes =
+                                row.diagnostic.message.size() + row.diagnostic.file.size() + row.path.size() + 256U;
+                            while (!impl.diagnostics.empty() && (impl.diagnostics.size() >= 10000 ||
+                                                                 impl.diagnosticBytes + bytes > 4U * 1024U * 1024U)) {
+                                impl.diagnosticBytes -= impl.diagnosticSizes.front();
+                                impl.diagnosticSizes.pop_front();
+                                impl.diagnostics.erase(impl.diagnostics.begin());
                             }
-                        },
-                        event.value);
-                }
-                if (dropped) {
-                    ui::EngineLogEntry notice;
-                    notice.logger = QStringLiteral("FrostIDE");
-                    notice.level = ui::EngineLogLevel::Warning;
-                    notice.message =
-                        QStringLiteral("Dropped %1 queued engine event(s) to keep the console bounded").arg(dropped);
-                    impl.console->append(std::move(notice));
-                }
-                if (diagnosticsChanged && impl.workbench.m_problems)
-                    impl.publishDocumentProblems();
-                impl.drainPushEvents();
-                // Consumers re-fetch the current typed state and identity. Emit only after
-                // publishing an admitted engine push, never from a successful command reply.
-                if (statePublished && self)
-                    emit self->stateObserved();
-            },
-            Qt::QueuedConnection);
+                            impl.diagnosticBytes += bytes;
+                            impl.diagnosticSizes.push_back(bytes);
+                            impl.diagnostics.push_back(std::move(*event.diagnostic));
+                            diagnosticsChanged = true;
+                        } else {
+                            impl.console->append(std::move(*event.log));
+                        }
+                    },
+                    event.value);
+            }
+            if (dropped) {
+                ui::EngineLogEntry notice;
+                notice.logger = QStringLiteral("FrostIDE");
+                notice.level = ui::EngineLogLevel::Warning;
+                notice.message =
+                    QStringLiteral("Dropped %1 queued engine event(s) to keep the console bounded").arg(dropped);
+                impl.console->append(std::move(notice));
+            }
+            if (diagnosticsChanged && impl.workbench.m_problems)
+                impl.publishDocumentProblems();
+            impl.drainPushEvents();
+            // Consumers re-fetch the current typed state and identity. Emit only after
+            // publishing an admitted engine push, never from a successful command reply.
+            if (statePublished && alive)
+                emit alive->stateObserved();
+        });
     });
 }
 

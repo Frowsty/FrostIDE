@@ -134,7 +134,6 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
     auto* trust = &workbench.m_services.trust;
     auto* fs = &workbench.m_services.fs;
     const auto directory = (ownedRun || nativeHost) ? ownedConfigDirectory + "/Automation" : automationDirectory;
-    QPointer<EngineIntegration> self(&owner);
     engine::EngineSessionOptions options;
     options.endpoint = std::move(*endpoint);
     options.trustRevision = revision;
@@ -176,23 +175,19 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
             return fail(ErrorCode::NotFound, "The selected editor instance is no longer advertised");
         return endpointOf(*found);
     };
-    const auto post = [self, fs, rootKey, admission, currentEpoch, currentSessionEpoch = sessionEpoch, expectedRoot,
-                       revision](auto value, auto apply) {
-        if (!self || !retainEngineProjectIdentity(*fs, expectedRoot, rootKey, admission))
+    const auto post = [relay = guiCallbacks, fs, rootKey, admission, currentEpoch, currentSessionEpoch = sessionEpoch,
+                       expectedRoot, revision](auto value, auto apply) {
+        if (!retainEngineProjectIdentity(*fs, expectedRoot, rootKey, admission))
             return;
-        QMetaObject::invokeMethod(
-            self.data(),
-            [self, currentEpoch, currentSessionEpoch, expectedRoot, revision, value = std::move(value),
-             apply = std::move(apply)]() mutable {
-                if (!self || self->m_impl->sessionEpoch != currentSessionEpoch ||
-                    !self->m_impl->admitted(currentEpoch, expectedRoot, revision))
-                    return;
-                apply(*self->m_impl, value);
-            },
-            Qt::QueuedConnection);
+        relay->post([currentEpoch, currentSessionEpoch, expectedRoot, revision, value = std::move(value),
+                     apply = std::move(apply)](Impl& impl) mutable {
+            if (impl.sessionEpoch != currentSessionEpoch || !impl.admitted(currentEpoch, expectedRoot, revision))
+                return;
+            apply(impl, value);
+        });
     };
-    const auto push = [self, queue = eventQueue, currentEpoch, currentSessionEpoch = sessionEpoch, expectedRoot,
-                       revision](EnginePush value) {
+    const auto push = [relay = guiCallbacks, queue = eventQueue, currentEpoch, currentSessionEpoch = sessionEpoch,
+                       expectedRoot, revision](EnginePush value) {
         if (!queue->active.load())
             return;
         const std::size_t bytes =
@@ -225,16 +220,12 @@ Result<void> EngineIntegration::Impl::connectInstance(const EngineInstanceRecord
                 wake = true;
             }
         }
-        if (wake && self)
-            QMetaObject::invokeMethod(
-                self.data(),
-                [self, queue, currentEpoch, currentSessionEpoch, expectedRoot, revision] {
-                    if (self && self->m_impl->eventQueue == queue &&
-                        self->m_impl->sessionEpoch == currentSessionEpoch &&
-                        self->m_impl->admitted(currentEpoch, expectedRoot, revision))
-                        self->m_impl->drainPushEvents();
-                },
-                Qt::QueuedConnection);
+        if (wake)
+            relay->post([queue, currentEpoch, currentSessionEpoch, expectedRoot, revision](Impl& impl) {
+                if (impl.eventQueue == queue && impl.sessionEpoch == currentSessionEpoch &&
+                    impl.admitted(currentEpoch, expectedRoot, revision))
+                    impl.drainPushEvents();
+            });
     };
     pushSink = push;
     engine::EngineSessionCallbacks callbacks;
