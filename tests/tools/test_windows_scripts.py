@@ -101,9 +101,12 @@ foreach ($version in $Versions) {
 # first: the child inherits this process's environment, so a value left by an earlier dot-sourcing of env.ps1
 # would otherwise pass for one that env.ps1 does not set.
 _ENV_DUMP = r"""
-param([string]$EnvScript, [string]$SdkRoot)
+param([string]$EnvScript, [string]$SdkRoot, [string]$CacheRoot)
 $ErrorActionPreference = 'Stop'
-$names = @('FROST_SDK', 'DOTNET_CLI_HOME', 'NUGET_PACKAGES', 'NUGET_HTTP_CACHE_PATH', 'NUGET_PLUGINS_CACHE_PATH',
+Remove-Item -LiteralPath 'Env:\FROST_WINDOWS_CACHE_ROOT' -ErrorAction SilentlyContinue
+if ($CacheRoot) { $env:FROST_WINDOWS_CACHE_ROOT = $CacheRoot }
+$names = @('FROST_SDK', 'FROST_LLVM_ROOT', 'FROST_QT_ROOT', 'DOTNET_ROOT', 'VCPKG_ROOT', 'DOTNET_CLI_HOME',
+           'NUGET_PACKAGES', 'NUGET_HTTP_CACHE_PATH', 'NUGET_PLUGINS_CACHE_PATH',
            'SCCACHE_DIR', 'VCPKG_DOWNLOADS', 'VCPKG_DEFAULT_BINARY_CACHE', 'X_VCPKG_REGISTRIES_CACHE',
            'DOTNET_ADD_GLOBAL_TOOLS_TO_PATH', 'DOTNET_GENERATE_ASPNET_CERTIFICATE')
 foreach ($name in $names) { Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue }
@@ -142,6 +145,13 @@ class BootstrapPythonCheckTest(TempDirTestCase):
 
 @unittest.skipUnless(sys.platform == "win32", "Windows PowerShell scripts")
 class EnvCacheRedirectionTest(TempDirTestCase):
+    def _dump(self, sdk: str, *args: str) -> dict[str, str]:
+        script = self.tmp / "env_dump.ps1"
+        script.write_text(_ENV_DUMP, encoding="utf-8", newline="\n")
+        result = run_powershell(script, str(TOOLS / "env.ps1"), sdk, *args)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
     def test_every_tool_cache_is_under_the_sdk_root(self) -> None:
         sdk = os.environ.get("FROST_SDK")
         if not sdk:
@@ -149,11 +159,7 @@ class EnvCacheRedirectionTest(TempDirTestCase):
         system_drive = os.environ.get("SystemDrive", "C:").upper()
         if ntpath.splitdrive(sdk)[0].upper() == system_drive:
             self.skipTest("the SDK itself is on the system drive")
-        script = self.tmp / "env_dump.ps1"
-        script.write_text(_ENV_DUMP, encoding="utf-8", newline="\n")
-        result = run_powershell(script, str(TOOLS / "env.ps1"), sdk)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        values = self._dump(sdk)
         sdk_drive = ntpath.splitdrive(sdk)[0].upper()
         # X_VCPKG_REGISTRIES_CACHE: vcpkg's registry clones, %LOCALAPPDATA%\vcpkg\registries when it is unset.
         for name in ("DOTNET_CLI_HOME", "NUGET_PACKAGES", "NUGET_HTTP_CACHE_PATH", "NUGET_PLUGINS_CACHE_PATH",
@@ -166,6 +172,34 @@ class EnvCacheRedirectionTest(TempDirTestCase):
         # A new .NET CLI home must not edit the user PATH or create a certificate on first use.
         self.assertEqual(values["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"], "0")
         self.assertEqual(values["DOTNET_GENERATE_ASPNET_CERTIFICATE"], "0")
+
+    def test_explicit_cache_root_preserves_pinned_tool_locations(self) -> None:
+        sdk = os.environ.get("FROST_SDK", str(self.tmp / "sdk"))
+        cache = self.tmp / "isolated cache"
+        values = self._dump(sdk, str(cache))
+        for name, suffix in {
+            "DOTNET_CLI_HOME": "dotnet-home",
+            "NUGET_PACKAGES": "nuget",
+            "NUGET_HTTP_CACHE_PATH": "nuget-http-cache",
+            "NUGET_PLUGINS_CACHE_PATH": "nuget-plugins-cache",
+            "SCCACHE_DIR": "sccache-cache",
+            "VCPKG_DOWNLOADS": "_downloads/vcpkg",
+            "VCPKG_DEFAULT_BINARY_CACHE": "vcpkg-binary",
+            "X_VCPKG_REGISTRIES_CACHE": "vcpkg-registries",
+        }.items():
+            with self.subTest(name=name):
+                self.assertEqual(Path(values[name]), cache / suffix)
+                self.assertTrue(Path(values[name]).is_dir())
+        lock = json.loads((TOOLS.parent / "sdk/sdk.lock.json").read_text(encoding="utf-8"))
+        for name, suffix in {
+            "FROST_SDK": "",
+            "FROST_LLVM_ROOT": f"llvm-{lock['windows']['llvm']['version']}",
+            "FROST_QT_ROOT": f"qt/{lock['qt']['version']}/msvc2022_64",
+            "DOTNET_ROOT": f"dotnet-{lock['windows']['dotnet']['version']}",
+            "VCPKG_ROOT": "vcpkg",
+        }.items():
+            with self.subTest(name=name):
+                self.assertEqual(Path(values[name]), Path(sdk) / suffix)
 
 
 # A stand-in for windeployqt.exe: it writes a Qt core DLL and the Windows platform plugin into the
