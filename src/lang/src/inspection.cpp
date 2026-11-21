@@ -849,6 +849,9 @@ Result<InspectionReport> runClangTidyInspection(io::IProcessLauncher& launcher, 
     std::vector<std::string> args;
     args.emplace_back("-p");
     args.push_back(compileCommandsDir);
+    if (!request.profile.respectProjectClangTidy) {
+        args.emplace_back("--config={}");
+    }
     if (const std::string checks = request.profile.toChecksArgument(); !checks.empty()) {
         args.push_back("--checks=" + checks);
     }

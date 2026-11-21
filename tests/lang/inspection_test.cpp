@@ -371,6 +371,11 @@ int* makeNull() {
     };
     const std::string ccJson = fl::compileCommandsJson(entries);
     ASSERT_TRUE(fs.writeFileAtomic(joinChecked(dir, "compile_commands.json"), ccJson).has_value());
+    // An enabled profile can inherit compiler policy from the source's ancestors. The
+    // explicit opt-out must isolate all config fields, including warnings-as-errors.
+    ASSERT_TRUE(
+        fs.writeFileAtomic(joinChecked(dir, ".clang-tidy"), "InheritParentConfig: false\nWarningsAsErrors: '*'\n")
+            .has_value());
 
     frost::sched::ResourceGovernor governor;
 
@@ -392,7 +397,7 @@ int* makeNull() {
 
     auto report = fl::runClangTidyInspection(launcher, fs, request);
     ASSERT_TRUE(report.has_value()) << report.error().describe();
-    EXPECT_EQ(report->exitCode, 0);
+    EXPECT_EQ(report->exitCode, 0) << report->rawStdout << report->rawStderr;
     EXPECT_TRUE(report->executionSuccessful);
     ASSERT_GE(report->findings.size(), 2U);
 
@@ -431,7 +436,7 @@ int* makeNull() {
     fio::ProcessSpec cliSpec;
     cliSpec.executable = tidy->path;
     cliSpec.arguments = {
-        "-p", dir, "--checks=" + request.profile.toChecksArgument(), "--quiet", srcFile,
+        "-p", dir, "--config={}", "--checks=" + request.profile.toChecksArgument(), "--quiet", srcFile,
     };
     cliSpec.workingDirectory = dir;
     auto cliRun = fio::runToCompletion(launcher, cliSpec, {}, std::chrono::minutes{2});
@@ -458,6 +463,15 @@ int* makeNull() {
         EXPECT_EQ(phys->find("region")->integerAt("startLine"), static_cast<std::int64_t>(cliFindings[i].line));
         EXPECT_EQ(phys->find("region")->integerAt("startColumn"), static_cast<std::int64_t>(cliFindings[i].column));
     }
+
+    request.profile.respectProjectClangTidy = true;
+    auto inherited = fl::runClangTidyInspection(launcher, fs, request);
+    ASSERT_TRUE(inherited.has_value()) << inherited.error().describe();
+    EXPECT_EQ(inherited->exitCode, 1) << inherited->rawStdout << inherited->rawStderr;
+    EXPECT_FALSE(inherited->executionSuccessful);
+    const std::string inheritedOutput = inherited->rawStdout + inherited->rawStderr;
+    EXPECT_NE(inheritedOutput.find("[modernize-use-nullptr,-warnings-as-errors]"), std::string::npos);
+    EXPECT_NE(inheritedOutput.find("[modernize-use-using,-warnings-as-errors]"), std::string::npos);
 }
 
 } // namespace
