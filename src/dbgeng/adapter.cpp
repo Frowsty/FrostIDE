@@ -218,16 +218,24 @@ public:
             auto wideCwd = io::toWide(cwd);
             if (!wideCommand || !wideCwd)
                 return fail(ErrorCode::InvalidArgument, "debuggee command is not valid UTF-8");
-            auto environment = makeEnvironment(arguments);
-            if (!environment)
-                return std::unexpected(std::move(environment.error()));
+            std::wstring environment;
+            const auto* overrides = arguments.find("env");
+            // System32 DbgEng can inherit the adapter environment even on engines that reject explicit blocks.
+            const bool inheritUnmodified = arguments.boolAt("inheritEnvironment").value_or(true) &&
+                                           (!overrides || (overrides->isObject() && overrides->size() == 0));
+            if (!inheritUnmodified) {
+                auto block = makeEnvironment(arguments);
+                if (!block)
+                    return std::unexpected(std::move(block.error()));
+                environment = std::move(*block);
+            }
             DEBUG_CREATE_PROCESS_OPTIONS options{};
             // No DEBUG_ECREATE_PROCESS_INHERIT_HANDLES: the target must never inherit the
             // adapter's DAP pipe handles. DEBUG_OUTPUT_DEBUGGEE carries OutputDebugString only.
             options.CreateFlags = DEBUG_ONLY_THIS_PROCESS | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
             status = m_client->CreateProcessAndAttach2Wide(0, wideCommand->data(), &options, sizeof(options),
                                                            cwd.empty() ? nullptr : wideCwd->c_str(),
-                                                           environment->data(), 0, 0);
+                                                           inheritUnmodified ? nullptr : environment.c_str(), 0, 0);
         }
         if (FAILED(status))
             return std::unexpected(engineError(m_dump ? "open minidump" : "create debuggee", status));
@@ -238,6 +246,17 @@ public:
         if (status != S_OK) {
             close();
             return std::unexpected(engineError("initial debug event", status));
+        }
+        if (!m_dump && !m_attached) {
+            // Resolve unqualified main-image breakpoints before configurationDone. ReloadWide
+            // parses debugger arguments, so pass only a single literal image name.
+            const std::string_view image = io::fileName(program);
+            constexpr std::string_view literalChars =
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-";
+            if (!image.empty() && image.find_first_not_of(literalChars) == image.npos) {
+                if (const auto name = io::toWide(image))
+                    (void)m_symbols->ReloadWide((L"/f " + *name).c_str());
+            }
         }
         if (m_dump) {
             status = m_control->ExecuteWide(DEBUG_OUTCTL_THIS_CLIENT, L".ecxr", DEBUG_EXECUTE_NOT_LOGGED);
@@ -258,6 +277,7 @@ public:
                 auto path = io::toWide(*file.asString());
                 if (!path)
                     return std::unexpected(std::move(path.error()));
+                std::ranges::replace(*path, L'/', L'\\');
                 const DWORD attributes = GetFileAttributesW(path->c_str());
                 if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
                     return fail(ErrorCode::NotFound, "the requested Natvis file is unavailable");
@@ -278,12 +298,21 @@ public:
         }
         if (!m_dump) {
             ULONG pid = 0;
-            if (SUCCEEDED(m_systems->GetCurrentProcessSystemId(&pid)))
+            if (SUCCEEDED(m_systems->GetCurrentProcessSystemId(&pid))) {
+                // Retain the stopped target while the debugger still knows its identity. The engine
+                // may discard its process before GetExitCode can read the actual code.
+                ULONG64 engineTarget = 0;
+                if (SUCCEEDED(m_systems->GetCurrentProcessHandle(&engineTarget))) {
+                    const HANDLE self = GetCurrentProcess();
+                    (void)DuplicateHandle(self, reinterpret_cast<HANDLE>(engineTarget), self, &m_target,
+                                          PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0);
+                }
                 m_event("process", Json::object()
                                        .set("name", program)
                                        .set("systemProcessId", pid)
                                        .set("isLocalProcess", true)
                                        .set("startMethod", m_attached ? "attach" : "launch"));
+            }
         }
         m_event("capabilities",
                 Json::object().set("capabilities", Json::object()
@@ -337,11 +366,9 @@ public:
         if (total > 8192)
             return fail(ErrorCode::OutOfRange, "breakpoint budget exhausted");
         auto& previous = m_breakpoints[key];
-        for (auto& breakpoint : previous) {
-            ULONG id = 0;
-            if (SUCCEEDED(breakpoint->GetId(&id)))
-                m_policies.erase(id);
-            m_control->RemoveBreakpoint2(breakpoint.get());
+        for (const ULONG id : previous) {
+            m_policies.erase(id);
+            removeBreakpoint(id);
         }
         previous.clear();
         Json result = Json::array();
@@ -358,8 +385,8 @@ public:
                 result.push(std::move(bound).set("message", "Invalid conditional, hit-count or log breakpoint"));
                 continue;
             }
-            ComPtr<IDebugBreakpoint2> breakpoint;
-            HRESULT status = m_control->AddBreakpoint2(DEBUG_BREAKPOINT_CODE, DEBUG_ANY_ID, breakpoint.put());
+            IDebugBreakpoint2* breakpoint = nullptr;
+            HRESULT status = m_control->AddBreakpoint2(DEBUG_BREAKPOINT_CODE, DEBUG_ANY_ID, &breakpoint);
             if (SUCCEEDED(status)) {
                 if (functions) {
                     const std::string name(request.stringAt("name"));
@@ -396,13 +423,12 @@ public:
                             bound.set("message", "the debugger has not resolved this breakpoint");
                     }
                 }
-                if (SUCCEEDED(status)) {
-                    previous.push_back(std::move(breakpoint));
-                }
+                if (SUCCEEDED(status))
+                    previous.push_back(id);
             }
             if (FAILED(status)) {
                 if (breakpoint)
-                    m_control->RemoveBreakpoint2(breakpoint.get());
+                    m_control->RemoveBreakpoint2(breakpoint);
                 bound.set("message", engineError("bind breakpoint", status).message());
             }
             result.push(std::move(bound));
@@ -660,8 +686,8 @@ public:
         const auto* requested = arguments.find("breakpoints");
         if (!requested || !requested->isArray() || requested->size() > 4)
             return fail(ErrorCode::InvalidArgument, "At most four hardware data breakpoints are supported");
-        for (auto& previous : m_dataBreakpoints)
-            (void)m_control->RemoveBreakpoint2(previous.get());
+        for (const ULONG id : m_dataBreakpoints)
+            removeBreakpoint(id);
         m_dataBreakpoints.clear();
         Json result = Json::array();
         for (const auto& request : requested->items()) {
@@ -673,8 +699,8 @@ public:
                 result.push(std::move(item).set("message", "Expired/unsupported hardware data breakpoint"));
                 continue;
             }
-            ComPtr<IDebugBreakpoint2> breakpoint;
-            auto status = m_control->AddBreakpoint2(DEBUG_BREAKPOINT_DATA, DEBUG_ANY_ID, breakpoint.put());
+            IDebugBreakpoint2* breakpoint = nullptr;
+            auto status = m_control->AddBreakpoint2(DEBUG_BREAKPOINT_DATA, DEBUG_ANY_ID, &breakpoint);
             if (SUCCEEDED(status))
                 status = breakpoint->SetOffset(found->second.first);
             if (SUCCEEDED(status))
@@ -688,10 +714,10 @@ public:
                 status = breakpoint->GetId(&id);
             if (SUCCEEDED(status)) {
                 item.set("verified", true).set("id", id);
-                m_dataBreakpoints.push_back(std::move(breakpoint));
+                m_dataBreakpoints.push_back(id);
             } else {
                 if (breakpoint)
-                    (void)m_control->RemoveBreakpoint2(breakpoint.get());
+                    (void)m_control->RemoveBreakpoint2(breakpoint);
                 item.set("message", engineError("install hardware data breakpoint", status).message());
             }
             result.push(std::move(item));
@@ -713,6 +739,7 @@ public:
             auto path = io::toWide(*file.asString());
             if (!path)
                 return std::unexpected(std::move(path.error()));
+            std::ranges::replace(*path, L'/', L'\\');
             auto attributes = GetFileAttributesW(path->c_str());
             if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
                 return fail(ErrorCode::NotFound, "Natvis file unavailable");
@@ -862,7 +889,7 @@ public:
             if (SUCCEEDED(status))
                 status = m_registers->GetValue(index, &value);
             if (FAILED(status))
-                return std::unexpected(engineError("native register", status));
+                continue; // The engine may enumerate registers unavailable in this stop.
             auto converted = utf8(name.data());
             if (!converted)
                 return std::unexpected(std::move(converted.error()));
@@ -882,7 +909,7 @@ public:
                                    : value.Type == DEBUG_VALUE_VECTOR64                                        ? 8U
                                                                                                                : 0U;
                 if (width == 0)
-                    return fail(ErrorCode::Unsupported, "Unknown native register value width");
+                    continue;
                 text = "0x";
                 for (std::size_t byteIndex = width; byteIndex > 0; --byteIndex) {
                     const auto byte = value.RawBytes[byteIndex - 1];
@@ -902,6 +929,8 @@ public:
                                                                                  : "native-vector")
                             .set("index", index));
         }
+        if (values.size() == 0)
+            return fail(ErrorCode::Unsupported, "No native register values are available in this stop");
         return Json::object().set("registers", std::move(values));
     }
     Result<Json> modules(const Json& arguments) {
@@ -1108,6 +1137,15 @@ public:
             return;
         observeExecution();
         const HRESULT waited = m_control->WaitForEvent(0, 10);
+        if (m_target && WaitForSingleObject(m_target, 0) == WAIT_OBJECT_0) {
+            DWORD exit = 0;
+            if (GetExitCodeProcess(m_target, &exit))
+                m_event("exited", Json::object().set("exitCode", exit));
+            m_running = false;
+            m_ended = true;
+            m_event("terminated", Json::object());
+            return;
+        }
         if (waited == S_FALSE)
             return;
         ULONG status = 0;
@@ -1115,9 +1153,13 @@ public:
         // The last process can disappear while WaitForEvent returns an end-of-session status.
         // The actual engine state and GetExitCode decide whether this is an ordinary exit.
         if (SUCCEEDED(execution) && (status & DEBUG_STATUS_MASK) == DEBUG_STATUS_NO_DEBUGGEE) {
-            ULONG exit = 0;
-            if (SUCCEEDED(m_client->GetExitCode(&exit)))
-                m_event("exited", Json::object().set("exitCode", exit));
+            DWORD processExit = 0;
+            ULONG engineExit = 0;
+            if (m_target && WaitForSingleObject(m_target, 1000) == WAIT_OBJECT_0 &&
+                GetExitCodeProcess(m_target, &processExit))
+                m_event("exited", Json::object().set("exitCode", processExit));
+            else if (SUCCEEDED(m_client->GetExitCode(&engineExit)))
+                m_event("exited", Json::object().set("exitCode", engineExit));
             m_running = false;
             m_ended = true;
             m_event("terminated", Json::object());
@@ -1146,9 +1188,9 @@ public:
                 if (SUCCEEDED(m_control->GetLastEventInformationWide(
                         &type, &process, &thread, &breakpoint, sizeof(breakpoint), nullptr, nullptr, 0, nullptr))) {
                     m_stopBreakpoint = breakpoint.Id;
-                    ComPtr<IDebugBreakpoint2> native;
+                    IDebugBreakpoint2* native = nullptr;
                     ULONG breakpointType = 0, processor = 0;
-                    if (SUCCEEDED(m_control->GetBreakpointById2(breakpoint.Id, native.put())) &&
+                    if (SUCCEEDED(m_control->GetBreakpointById2(breakpoint.Id, &native)) &&
                         SUCCEEDED(native->GetType(&breakpointType, &processor)) &&
                         breakpointType == DEBUG_BREAKPOINT_DATA)
                         reason = "data breakpoint";
@@ -1199,12 +1241,23 @@ public:
         m_client.reset();
         if (HMODULE library = std::exchange(m_library, nullptr))
             FreeLibrary(library);
+        if (HANDLE target = std::exchange(m_target, nullptr))
+            CloseHandle(target);
         m_loaded = false;
         m_running = false;
         m_ended = true;
     }
 
 private:
+    HANDLE m_target = nullptr;
+
+    void removeBreakpoint(ULONG id) noexcept {
+        // Breakpoint interfaces are owned by DbgEng and invalidated when removed.
+        IDebugBreakpoint2* breakpoint = nullptr;
+        if (SUCCEEDED(m_control->GetBreakpointById2(id, &breakpoint)))
+            (void)m_control->RemoveBreakpoint2(breakpoint);
+    }
+
     void visualizersLoaded() {
         Json paths = Json::array();
         for (const auto& path : m_natvisLoaded)
@@ -1232,7 +1285,7 @@ private:
     };
     std::map<ULONG, BreakpointPolicy> m_policies;
     std::map<std::string, std::pair<ULONG64, ULONG>> m_dataIds;
-    std::vector<ComPtr<IDebugBreakpoint2>> m_dataBreakpoints;
+    std::vector<ULONG> m_dataBreakpoints;
     std::uint64_t m_dataGeneration = 0;
     Result<ULONG64> nativeInteger(std::string_view expression) {
         auto wide = io::toWide(expression);
@@ -1437,7 +1490,7 @@ private:
     std::vector<std::pair<std::string, std::string>> m_sourceMap;
     std::vector<std::string> m_natvisLoaded;
     ModelStore m_models;
-    std::map<std::string, std::vector<ComPtr<IDebugBreakpoint2>>> m_breakpoints;
+    std::map<std::string, std::vector<ULONG>> m_breakpoints;
     std::map<ULONG, ULONG> m_threads;
     std::map<std::int64_t, FrameContext> m_frames;
     std::int64_t m_nextFrame = 1;

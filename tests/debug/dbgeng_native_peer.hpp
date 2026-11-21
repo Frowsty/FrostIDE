@@ -112,6 +112,9 @@ class Peer {
 public:
     ~Peer() {
         if (client) {
+            // Release debuggee and symbol handles before the fixture removes the files.
+            if (!client->closed())
+                (void)request("disconnect", Json::object(), 2s);
             client->close();
             client.reset();
         }
@@ -131,12 +134,13 @@ public:
         client = std::move(*opened);
         return request("initialize", dap::initializeArguments(kDbgEngAdapterId));
     }
-    Result<Json> request(std::string command, Json arguments = Json::object()) {
+    Result<Json> request(std::string command, Json arguments = Json::object(),
+                         std::chrono::milliseconds timeout = 60s) {
         auto promise = std::make_shared<std::promise<Result<Json>>>();
         auto future = promise->get_future();
         client->request(std::move(command), std::move(arguments),
                         [promise](Result<Json> result) { promise->set_value(std::move(result)); });
-        if (future.wait_for(60s) != std::future_status::ready)
+        if (future.wait_for(timeout) != std::future_status::ready)
             return fail(ErrorCode::Timeout, "Native DAP request timed out");
         return future.get();
     }
