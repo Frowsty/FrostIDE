@@ -325,8 +325,8 @@ TEST_F(BindingMapTest, TextualExternalHeaderPreservesContextWithoutBecomingAWork
     EXPECT_EQ(row(*output, "direct").stringAt("status"), "mapped");
     const auto* inputs = output->find("sourceInputs");
     ASSERT_NE(inputs, nullptr);
-    EXPECT_TRUE(
-        std::ranges::none_of(inputs->items(), [&](const Json& input) { return input.stringAt("path") == wirePath(header); }));
+    EXPECT_TRUE(std::ranges::none_of(inputs->items(),
+                                     [&](const Json& input) { return input.stringAt("path") == wirePath(header); }));
     EXPECT_EQ(snapshot(external.path()), externalBefore);
 }
 

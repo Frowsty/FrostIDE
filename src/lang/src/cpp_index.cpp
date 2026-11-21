@@ -202,8 +202,8 @@ Result<void> validateCppIndexInputs(io::IFileSystem& fs, const CppIndexUnit& uni
         if (!path)
             return std::unexpected(path.error());
         const auto found = buffers.find(*path);
-        const auto disk = found == buffers.end() ? readIndexInput(fs, lookupPath)
-                                                 : Result<std::string>{std::string(found->second)};
+        const auto disk =
+            found == buffers.end() ? readIndexInput(fs, lookupPath) : Result<std::string>{std::string(found->second)};
         if (!disk || disk->size() != *dependency.find("bytes")->asUnsigned() ||
             io::sha256Hex(*disk) != dependency.stringAt("sha256"))
             return fail(ErrorCode::Busy, "Index dependency changed: " + *path);
