@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 TOOLS = Path(__file__).resolve().parents[2] / 'tools'
 def load(name):
@@ -17,6 +18,40 @@ installer = load('install_user')
 gate = load('delivery_gate')
 
 class DeliveryTest(unittest.TestCase):
+    def test_install_applies_default_and_opt_out_before_copying(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            stage = root / 'stage'
+            (stage / 'bin').mkdir(parents=True)
+            for name in ('frost.exe', 'frost_app.dll', 'LICENSE', 'NOTICE', 'bin/helper.dll'):
+                (stage / name).write_bytes(name.encode('utf-8'))
+
+            def configure(directory, enabled):
+                self.assertTrue(directory.is_dir())
+                self.assertEqual(list(directory.iterdir()), [])
+                return True
+
+            with mock.patch.object(installer, 'configure_compression', side_effect=configure) as compression:
+                installer.install(stage, root / 'compressed')
+                installer.install(stage, root / 'uncompressed', compress=False)
+                self.assertEqual(compression.call_args_list, [mock.call(root / 'compressed', True),
+                                                              mock.call(root / 'uncompressed', False)])
+            self.assertEqual((root / 'compressed/bin/helper.dll').read_bytes(), b'bin/helper.dll')
+            self.assertEqual((root / 'uncompressed/bin/helper.dll').read_bytes(), b'bin/helper.dll')
+
+    def test_compression_preparation_failure_rolls_back_fresh_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage, target = root / 'stage', root / 'installed'
+            stage.mkdir()
+            for name in ('frost.exe', 'frost_app.dll', 'LICENSE', 'NOTICE'):
+                (stage / name).write_bytes(name.encode('utf-8'))
+            with mock.patch.object(installer, 'configure_compression', side_effect=OSError('native failure')):
+                with self.assertRaisesRegex(OSError, 'native failure'):
+                    installer.install(stage, target, associate=True)
+            self.assertFalse(target.exists())
+            self.assertTrue((stage / 'frost.exe').is_file())
+
     def test_uninstall_preserves_foreign_and_modified_files(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

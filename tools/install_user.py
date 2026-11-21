@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import sys
 
 MARKER = '.frost-install.json'
@@ -153,7 +154,56 @@ def registration(root, remove=False, receipt=None):
     return {'values': [list(path) for path in written], 'keys': created}
 
 
-def install(stage, destination, associate=False):
+def configure_compression(directory, enabled):
+    """Set the inheritance policy of the fresh install directory on local NTFS."""
+    if os.name != 'nt':
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    mount = ctypes.create_unicode_buffer(32768)
+    kernel.GetVolumePathNameW.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+    kernel.GetDriveTypeW.argtypes = (wintypes.LPCWSTR,)
+    if not kernel.GetVolumePathNameW(str(directory), mount, len(mount)) or kernel.GetDriveTypeW(mount) not in (2, 3):
+        return False  # Local removable or fixed volume only.
+    flags = wintypes.DWORD()
+    filesystem = ctypes.create_unicode_buffer(32)
+    kernel.GetVolumeInformationW.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD,
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR, wintypes.DWORD)
+    # NTFS reports FILE_FILE_COMPRESSION only for cluster sizes up to 4 KiB (MS-FSA, Appendix A).
+    if (not kernel.GetVolumeInformationW(mount, None, 0, None, None, ctypes.byref(flags), filesystem, len(filesystem))
+            or filesystem.value.casefold() != 'ntfs' or not flags.value & 0x10):
+        return False
+    attributes = directory.stat().st_file_attributes
+    if bool(attributes & stat.FILE_ATTRIBUTE_COMPRESSED) == enabled:
+        return True
+
+    kernel.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                 wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.DeviceIoControl.argtypes = (wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+                                      ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p)
+    # OPEN_EXISTING, BACKUP_SEMANTICS | OPEN_REPARSE_POINT, share read/write/delete.
+    handle = kernel.CreateFileW(str(directory), 0xC0000000, 7, None, 3, 0x02200000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        state = wintypes.WORD(int(enabled))  # COMPRESSION_FORMAT_DEFAULT or COMPRESSION_FORMAT_NONE.
+        transferred = wintypes.DWORD()
+        if not kernel.DeviceIoControl(handle, 0x9C040, ctypes.byref(state), ctypes.sizeof(state),
+                                      None, 0, ctypes.byref(transferred), None):  # FSCTL_SET_COMPRESSION
+            error = ctypes.get_last_error()
+            if enabled and error in (1, 50, 769):  # Invalid function, unsupported, or disabled by filesystem policy.
+                return False
+            raise ctypes.WinError(error)
+    finally:
+        kernel.CloseHandle(handle)
+    return True
+
+
+def install(stage, destination, associate=False, compress=True):
     stage, destination = stage.resolve(), destination.resolve()
     if stage == destination or stage.is_relative_to(destination) or destination.is_relative_to(stage):
         raise ValueError('stage and destination must be disjoint')
@@ -163,10 +213,18 @@ def install(stage, destination, associate=False):
     destination.mkdir(parents=True)
     receipt = None
     try:
+        inherit_compression = configure_compression(destination, compress)
         for name, expected in files.items():
             target = owned_path(destination, name)
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(stage / name, target)
+            source = stage / name
+            if inherit_compression:
+                # Create the file under the directory's policy rather than copying source attributes.
+                with source.open('rb') as contents, target.open('xb') as installed:
+                    shutil.copyfileobj(contents, installed)
+                shutil.copystat(source, target)
+            else:
+                shutil.copy2(source, target)
             if digest(target) != expected:
                 raise ValueError('payload changed while copying')
         marker = {'schema': 1, 'files': files, 'associated': associate}
@@ -221,12 +279,13 @@ def main():
     parser.add_argument('--stage', type=Path)
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--associate', action='store_true')
+    parser.add_argument('--no-compression', action='store_true', help='Store a fresh NTFS installation uncompressed')
     args = parser.parse_args()
     if os.name != 'nt': parser.error('Windows per-user installer; Linux uses the staged archive')
     destination = args.destination or Path(os.environ['LOCALAPPDATA']) / 'Programs' / 'FrostIDE'
     if args.action == 'install':
         if not args.stage: parser.error('--stage is required')
-        install(args.stage, destination, args.associate)
+        install(args.stage, destination, args.associate, compress=not args.no_compression)
         if args.associate:
             notify_shell_associations_changed()
     else:
