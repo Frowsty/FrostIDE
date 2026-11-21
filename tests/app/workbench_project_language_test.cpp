@@ -65,7 +65,12 @@ void cmakeRenameJourney(bool stale) {
     ASSERT_TRUE(rig.workbench->openPath(dir.join("project")));
     auto* service = rig.workbench->cmakeService();
     ASSERT_NE(service, nullptr);
-    ASSERT_TRUE(service->configure());
+    // Opening a trusted CMake folder starts configure. Wait for its result before renaming.
+    ASSERT_TRUE(waitFor(
+        [&] { return service->state() == frost::build::BuildState::Idle && service->lastConfigure().has_value(); },
+        90s));
+    const auto configured = *service->lastConfigure();
+    ASSERT_TRUE(configured.succeeded()) << (configured.error ? configured.error->describe() : "CMake configure failed");
     ASSERT_TRUE(waitFor(
         [&] {
             return service->state() == frost::build::BuildState::Idle && service->model() && !service->modelStale() &&
