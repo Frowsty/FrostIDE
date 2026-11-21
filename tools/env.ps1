@@ -6,7 +6,9 @@
 # It also points every tool cache that would otherwise land in the user profile on
 # the system drive at the SDK root (D1): the NuGet package folder and its HTTP and
 # plugin caches, the .NET CLI home, the vcpkg downloads and registry clones, and
-# sccache; the vcpkg binary cache goes to <SDK drive>\vcpkg-cache. It sets DOTNET_ROOT
+# sccache; the vcpkg binary cache goes to <SDK drive>\vcpkg-cache. Set FROST_WINDOWS_CACHE_ROOT to an
+# absolute drive path to redirect these caches without changing the pinned tools.
+# It sets DOTNET_ROOT
 # to the pinned .NET SDK and turns off tool telemetry. Nothing is persisted machine-wide.
 #
 # Moving the .NET CLI home (DOTNET_CLI_HOME) has side effects in these sessions:
@@ -41,29 +43,40 @@ $paths += (Join-Path $SdkRoot 'vcpkg')
 $rest = @($env:PATH -split ';' | Where-Object { $_ -and ($paths -notcontains $_) })
 $env:PATH = (($paths + $rest) -join ';')
 
+# Optional per-run cache root for isolated builds. Tools still come from the pinned SDK.
+$cacheRoot = $SdkRoot
+$vcpkgBinaryCache = Join-Path (Split-Path -Qualifier $SdkRoot) 'vcpkg-cache'
+if ($env:FROST_WINDOWS_CACHE_ROOT) {
+    if ($env:FROST_WINDOWS_CACHE_ROOT -notmatch '^[a-zA-Z]:[\\/]') {
+        throw 'FROST_WINDOWS_CACHE_ROOT must be an absolute Windows drive path.'
+    }
+    $cacheRoot = [System.IO.Path]::GetFullPath($env:FROST_WINDOWS_CACHE_ROOT)
+    $vcpkgBinaryCache = Join-Path $cacheRoot 'vcpkg-binary'
+}
+
 $env:FROST_SDK = $SdkRoot
 $env:FROST_LLVM_ROOT = Join-Path $SdkRoot "llvm-$($lock.windows.llvm.version)"
 $env:FROST_QT_ROOT = Join-Path $SdkRoot "qt\$($lock.qt.version)\msvc2022_64"
 $env:VCPKG_ROOT = Join-Path $SdkRoot 'vcpkg'
 $env:VCPKG_DISABLE_METRICS = '1'
-$env:VCPKG_DOWNLOADS = Join-Path $SdkRoot '_downloads\vcpkg'
-$env:VCPKG_DEFAULT_BINARY_CACHE = Join-Path (Split-Path -Qualifier $SdkRoot) 'vcpkg-cache'
+$env:VCPKG_DOWNLOADS = Join-Path $cacheRoot '_downloads\vcpkg'
+$env:VCPKG_DEFAULT_BINARY_CACHE = $vcpkgBinaryCache
 # vcpkg's registry clones (its git and git-trees folders). Unset, they go to
 # %LOCALAPPDATA%\vcpkg\registries on C:, where S2's reference build left 136 MB (ADR 0005). vcpkg
 # reads it only under this experimental X_ name and rejects a value that is not an absolute
 # path to a directory.
-$env:X_VCPKG_REGISTRIES_CACHE = Join-Path $SdkRoot 'vcpkg-registries'
+$env:X_VCPKG_REGISTRIES_CACHE = Join-Path $cacheRoot 'vcpkg-registries'
 $env:DOTNET_ROOT = Join-Path $SdkRoot "dotnet-$($lock.windows.dotnet.version)"
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
-$env:DOTNET_CLI_HOME = Join-Path $SdkRoot 'dotnet-home'
+$env:DOTNET_CLI_HOME = Join-Path $cacheRoot 'dotnet-home'
 $env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = '0'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = '0'
-$env:NUGET_PACKAGES = Join-Path $SdkRoot 'nuget'
-$env:NUGET_HTTP_CACHE_PATH = Join-Path $SdkRoot 'nuget-http-cache'
-$env:NUGET_PLUGINS_CACHE_PATH = Join-Path $SdkRoot 'nuget-plugins-cache'
-$env:SCCACHE_DIR = Join-Path $SdkRoot 'sccache-cache'
+$env:NUGET_PACKAGES = Join-Path $cacheRoot 'nuget'
+$env:NUGET_HTTP_CACHE_PATH = Join-Path $cacheRoot 'nuget-http-cache'
+$env:NUGET_PLUGINS_CACHE_PATH = Join-Path $cacheRoot 'nuget-plugins-cache'
+$env:SCCACHE_DIR = Join-Path $cacheRoot 'sccache-cache'
 $env:GH_NO_UPDATE_NOTIFIER = '1'
 
 # Create the cache directories up front: vcpkg refuses to start when its binary
