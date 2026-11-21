@@ -58,15 +58,22 @@ using frost::app::test::WorkDir;
 class CountingLauncher final : public frost::io::IProcessLauncher {
 public:
     frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
-        count(spec);
-        return frost::io::realProcessLauncher().launch(spec);
+        const bool clangd = recordAttempt(spec);
+        auto process = frost::io::realProcessLauncher().launch(spec);
+        if (process && clangd)
+            recordStart(spec);
+        return process;
     }
     frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
     launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
-        count(spec);
-        return frost::io::realProcessLauncher().launchAsync(spec, context);
+        const bool clangd = recordAttempt(spec);
+        auto process = frost::io::realProcessLauncher().launchAsync(spec, context);
+        if (process && clangd)
+            recordStart(spec);
+        return process;
     }
-    [[nodiscard]] int clangdStarts() const { return m_clangd.load(); }
+    [[nodiscard]] int clangdAttempts() const { return m_attempts.load(); }
+    [[nodiscard]] int clangdStarts() const { return m_starts.load(); }
     // The arguments of the latest clangd start (empty before the first).
     [[nodiscard]] std::vector<std::string> lastClangdArguments() const {
         const std::scoped_lock lock(m_mutex);
@@ -74,15 +81,24 @@ public:
     }
 
 private:
-    void count(const frost::io::ProcessSpec& spec) {
+    bool recordAttempt(const frost::io::ProcessSpec& spec) {
         const std::string_view name = frost::io::fileName(spec.executable);
-        if (name == "clangd" || name == "clangd.exe") {
-            const std::scoped_lock lock(m_mutex);
-            m_lastArguments = spec.arguments;
-            ++m_clangd;
-        }
+        // A staged Workbench may prefer the bundled frost-clang LSP server over SDK clangd.
+        const bool clangd =
+            (name == "clangd" || name == "clangd.exe" || name == "frost-clang" || name == "frost-clang.exe") &&
+            spec.stdinMode == frost::io::Stdio::Pipe;
+        if (clangd)
+            ++m_attempts;
+        return clangd;
     }
-    std::atomic<int> m_clangd{0};
+
+    void recordStart(const frost::io::ProcessSpec& spec) {
+        const std::scoped_lock lock(m_mutex);
+        m_lastArguments = spec.arguments;
+        ++m_starts;
+    }
+
+    std::atomic<int> m_attempts{0}, m_starts{0};
     mutable std::mutex m_mutex;
     std::vector<std::string> m_lastArguments;
 };
@@ -321,6 +337,7 @@ TEST(WorkbenchClangdSpawn, TrustingAConfiguredFolderStartsClangdOnceAndRevokingS
     ASSERT_FALSE(rig.trust->isTrusted(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
     (void)waitFor([] { return false; }, 2s);
+    ASSERT_EQ(launcher.clangdAttempts(), 0);
     ASSERT_EQ(launcher.clangdStarts(), 0);
     EXPECT_EQ(rig.workbench->clangd(), nullptr);
 
@@ -337,6 +354,7 @@ TEST(WorkbenchClangdSpawn, TrustingAConfiguredFolderStartsClangdOnceAndRevokingS
     ASSERT_TRUE(waitFor([&] { return rig.workbench->clangd() == nullptr; }, 60s));
     (void)waitFor([] { return false; }, 2s);
     EXPECT_EQ(launcher.clangdStarts(), 1);
+    EXPECT_EQ(launcher.clangdAttempts(), 1);
 }
 
 // An untrusted CMake folder runs no clangd. The trust grant's configure writes the first
@@ -353,6 +371,7 @@ TEST(WorkbenchClangdSpawn, TrustingAnUnconfiguredFolderRestartsClangdOnceOnTheNe
     ASSERT_FALSE(rig.trust->isTrusted(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
     (void)waitFor([] { return false; }, 2s); // No configure may run before trust.
+    ASSERT_EQ(launcher.clangdAttempts(), 0);
     ASSERT_EQ(launcher.clangdStarts(), 0);
 
     auto* dialog = rig.window->findChild<frost::ui::TrustDialog*>(QStringLiteral("trustDialog"));
@@ -380,6 +399,7 @@ TEST(WorkbenchClangdSpawn, TrustGrantedInTheStoreConfiguresAndRestartsClangdOnce
     ASSERT_FALSE(rig.trust->isTrusted(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
     (void)waitFor([] { return false; }, 2s); // No configure may run before trust.
+    ASSERT_EQ(launcher.clangdAttempts(), 0);
     ASSERT_EQ(launcher.clangdStarts(), 0);
     auto* service = rig.workbench->cmakeService();
     ASSERT_NE(service, nullptr);
@@ -410,6 +430,7 @@ TEST(WorkbenchClangdSpawn, RevokingATrustedParentUntrustsTheOpenProject) {
     WorkbenchRig rig(dir, clangdOptions(launcher));
     ASSERT_TRUE(rig.workbench->openPath(project).has_value());
     (void)waitFor([] { return false; }, 2s);
+    ASSERT_EQ(launcher.clangdAttempts(), 0);
     ASSERT_EQ(launcher.clangdStarts(), 0);
 
     ASSERT_TRUE(rig.trust->trust(parent).has_value()); // The Settings route: the store only.
