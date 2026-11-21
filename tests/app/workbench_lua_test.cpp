@@ -174,7 +174,17 @@ TEST(WorkbenchStructure, SplitViewsSendOneDocumentChangeAndRetainOpenUntilLastVi
     ASSERT_TRUE(rig.workbench->openPath(dir.join("main.cpp")));
     rig.window->toolWindows().show("structure");
     const QString barrier = QString::fromStdString(dir.join("structure-requested"));
-    ASSERT_TRUE(waitFor([&] { return QFile::exists(barrier); }, 20s));
+    const auto requestProcess = [&] {
+        const auto marker = dir.read("structure-requested");
+        return marker.ends_with('\n') ? QString::fromStdString(marker).toLongLong() : qlonglong{0};
+    };
+    qlonglong firstProcess = 0;
+    ASSERT_TRUE(waitFor(
+        [&] {
+            firstProcess = requestProcess();
+            return firstProcess > 0;
+        },
+        20s));
     auto readLog = [&] { return dir.read("structure-notifications"); };
     auto count = [&](std::string_view needle) {
         const std::string log = readLog();
@@ -199,9 +209,16 @@ TEST(WorkbenchStructure, SplitViewsSendOneDocumentChangeAndRetainOpenUntilLastVi
     EXPECT_EQ(count("notification textDocument/didClose"), 0);
     auto* service = rig.workbench->clangd();
     ASSERT_NE(service, nullptr);
-    QFile::remove(barrier);
     ASSERT_TRUE(service->killServerForTesting());
-    ASSERT_TRUE(waitFor([&] { return service->restarts() == 1 && QFile::exists(barrier); }, 20s));
+    // A request marker from the original process can outlive the restart.
+    // The replacement fixture logs the replayed didOpen before its first symbol request.
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto process = requestProcess();
+            return service->restarts() == 1 && service->state() == frost::lang::ClangdState::Running && process > 0 &&
+                   process != firstProcess;
+        },
+        20s));
     EXPECT_EQ(count("notification textDocument/didOpen"), 2);
     EXPECT_EQ(count("notification textDocument/didChange"), 1);
     QFile::remove(barrier);

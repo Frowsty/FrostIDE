@@ -14,6 +14,9 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#include <process.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace {
@@ -45,6 +48,9 @@ int main() {
 #ifdef _WIN32
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
+    const auto processId = _getpid();
+#else
+    const auto processId = getpid();
 #endif
     const bool utf8 = present("structure-utf8");
     for (;;) {
@@ -85,7 +91,7 @@ int main() {
                 std::ifstream nameFile("structure-name");
                 std::getline(nameFile, name);
             }
-            std::ofstream("structure-requested") << "requested";
+            std::ofstream("structure-requested") << processId << '\n';
             while (present("structure-hold"))
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
             const int start = utf8 ? 8 : 6;
