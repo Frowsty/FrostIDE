@@ -35,6 +35,33 @@ using namespace std::chrono_literals;
 using frost::app::test::waitFor;
 using frost::app::test::WorkbenchRig;
 using frost::app::test::WorkDir;
+TEST(ProjectOpenProcess, RetriesOnlyWhenOwnerDeclaresOpenWasNotDispatched) {
+    WorkDir dir("external-open-retry");
+    dir.write("message.txt", "original\n");
+    const auto file = dir.join("message.txt");
+    const auto root = frost::app::externalProjectRoot(frost::io::parentPath(file));
+    ASSERT_TRUE(root);
+    std::atomic<unsigned> calls = 0;
+    std::atomic<bool> legacy = false;
+    auto owner = frost::io::LocalIpcOwner::claim(frost::app::externalProjectKey(*root));
+    ASSERT_TRUE(owner);
+    ASSERT_TRUE((*owner)->start([&](const std::string& body) -> frost::Result<std::string> {
+        const auto request = frost::lang::parseJson(body);
+        if (!request || request->stringAt("file") != file || request->integerAt("line") != 2 ||
+            request->integerAt("column") != 7)
+            return frost::fail(frost::ErrorCode::InvalidArgument, "unexpected request");
+        const auto count = calls.fetch_add(1);
+        if (legacy.load())
+            return std::string("retry:busy");
+        return count == 0 ? std::string("retry:not-dispatched") : std::string("ok");
+    }));
+    EXPECT_TRUE(frost::app::forwardExternalOpen(*root, file, 2, 7));
+    EXPECT_EQ(calls.load(), 2U);
+    legacy = true;
+    EXPECT_FALSE(frost::app::forwardExternalOpen(*root, file, 2, 7));
+    EXPECT_EQ(calls.load(), 3U);
+}
+
 TEST(ProjectOpenProcess, StartupReadinessChecksOwnerAndProjectWithoutOpeningTheFile) {
     WorkDir dir("external-wait-readiness");
     dir.write("project/message.txt", "original\n");
@@ -50,9 +77,12 @@ TEST(ProjectOpenProcess, StartupReadinessChecksOwnerAndProjectWithoutOpeningTheF
     frost::app::ProjectOpenBroker broker(*rig.workbench, *rig.window, *root, std::move(*owner));
     ASSERT_TRUE(broker.start());
     const auto probe = [&](std::string_view project, std::int64_t pid) {
-        const auto request = frost::lang::Json::object().set("method", "project.ready")
-                                 .set("root", std::string(project)).set("ownerPid", pid)
-                                 .set("file", dir.join("project/message.txt")).dump();
+        const auto request = frost::lang::Json::object()
+                                 .set("method", "project.ready")
+                                 .set("root", std::string(project))
+                                 .set("ownerPid", pid)
+                                 .set("file", dir.join("project/message.txt"))
+                                 .dump();
         std::atomic<bool> done = false;
         frost::Result<std::string> result = frost::fail(frost::ErrorCode::Unknown, "not sent");
         std::jthread client([&] {
@@ -248,6 +278,14 @@ TEST(ProjectOpenProcess, ForwardsUnicodePositionWithoutClosingDirtyTab) {
     ASSERT_TRUE(owner.has_value());
     frost::app::ProjectOpenBroker broker(*rig.workbench, *rig.window, *canonical, std::move(*owner));
     ASSERT_TRUE(broker.start());
+    bool delayedEditorOpen = false;
+    QObject::connect(&rig.window->tabs(), &frost::ui::EditorTabs::tabCountChanged, &broker, [&](int count) {
+        if (count == 2 && !delayedEditorOpen) {
+            delayedEditorOpen = true;
+            // The open has started, but the frame is not ready to acknowledge it yet.
+            std::this_thread::sleep_for(2500ms);
+        }
+    });
 
     frost::io::ProcessSpec spec;
     spec.executable = frost::io::normalizePath(FROST_EXE_PATH).value();
@@ -269,6 +307,7 @@ TEST(ProjectOpenProcess, ForwardsUnicodePositionWithoutClosingDirtyTab) {
     ASSERT_TRUE(finished);
     ASSERT_TRUE(result.has_value()) << result.error().describe();
     EXPECT_EQ(result->exitCode, 0) << result->stderrBytes;
+    EXPECT_TRUE(delayedEditorOpen);
     ASSERT_NE(rig.workbench->currentView(), nullptr);
     EXPECT_EQ(rig.workbench->currentView()->path(), script);
     EXPECT_EQ(rig.workbench->currentView()->status().line, 2);

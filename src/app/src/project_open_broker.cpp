@@ -32,6 +32,8 @@
 namespace frost::app {
 namespace {
 using namespace std::chrono_literals;
+constexpr std::string_view kNotDispatched = "retry:not-dispatched";
+constexpr std::string_view kOpenPending = "open:pending:";
 std::string utf8(const QString& text) {
     auto bytes = text.toUtf8();
     return {bytes.constData(), static_cast<std::size_t>(bytes.size())};
@@ -43,8 +45,13 @@ Result<std::string> physicalInfoPath(const QFileInfo& info) {
 struct Waiter {
     std::mutex mutex;
     std::condition_variable changed;
+    bool started = false;
     bool done = false;
     Result<std::string> result = fail(ErrorCode::Timeout, "window did not accept request in time");
+};
+struct PendingOpen {
+    std::shared_ptr<Waiter> waiter;
+    std::chrono::steady_clock::time_point expires;
 };
 } // namespace
 Result<std::string> externalProjectRoot(std::string_view project) {
@@ -223,6 +230,7 @@ Result<void> forwardExternalOpen(std::string_view root, std::string_view file, i
                                  bool wait, io::IProcess* startingOwner) {
     const auto key = externalProjectKey(root);
     auto payload = lang::Json::object().set("root", std::string(root)).set("file", std::string(file));
+    payload.set("deferredOpen", true);
     if (wait)
         payload.set("wait", true);
     if (columnUtf16) {
@@ -239,42 +247,70 @@ Result<void> forwardExternalOpen(std::string_view root, std::string_view file, i
 #endif
     if (startingOwner) {
         const auto pid = static_cast<std::int64_t>(startingOwner->pid());
-        const auto ready = lang::Json::object().set("method", "project.ready").set("root", std::string(root))
-                               .set("ownerPid", pid).dump();
+        const auto ready = lang::Json::object()
+                               .set("method", "project.ready")
+                               .set("root", std::string(root))
+                               .set("ownerPid", pid)
+                               .dump();
         const auto deadline = std::chrono::steady_clock::now() + 30s;
         // Readiness probes do not open the file. Submit the real request just once, after the
         // launched owner has finished project admission and started serving its GUI.
         for (;;) {
-            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                deadline - std::chrono::steady_clock::now());
+            const auto remaining =
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
             if (remaining <= 0ms)
                 return fail(ErrorCode::Timeout, "the project window did not become ready within 30 seconds");
             auto state = io::requestLocalIpc(key, ready, std::min(remaining, 1000ms));
             if (state && *state == "ready")
                 break;
-            if (state && *state != "retry:busy")
+            if (state && *state != kNotDispatched && *state != "retry:busy")
                 return fail(ErrorCode::Unsupported, "the project window did not acknowledge startup readiness");
             if (!state && state.error().code() != ErrorCode::Timeout && state.error().code() != ErrorCode::Busy)
                 return std::unexpected(std::move(state.error()));
             if (auto exited = startingOwner->wait(0ms); exited) {
-                return fail(ErrorCode::Cancelled,
-                            "the project window exited before it became ready (exit " +
-                                std::to_string(exited->exitCode) + ")");
+                return fail(ErrorCode::Cancelled, "the project window exited before it became ready (exit " +
+                                                      std::to_string(exited->exitCode) + ")");
             } else if (exited.error().code() != ErrorCode::Timeout) {
                 return std::unexpected(std::move(exited.error()));
             }
         }
         payload.set("ownerPid", pid);
     }
-    auto reply = io::requestLocalIpc(key, payload.dump(), 5s);
+    const auto request = payload.dump();
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    auto reply = io::requestLocalIpc(key, request, 5s);
+    // Only a current owner's explicit pre-dispatch refusal proves the open has no side effects.
+    // A transport failure or a legacy "retry:busy" reply can come from an already-started open.
+    while (reply && *reply == kNotDispatched) {
+        const auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        if (remaining <= 0ms)
+            return fail(ErrorCode::Timeout, "the window remained busy before opening the document");
+        reply = io::requestLocalIpc(key, request, remaining);
+    }
+    if (reply && reply->starts_with(kOpenPending)) {
+        const auto id = reply->substr(kOpenPending.size());
+        const auto poll = lang::Json::object().set("method", "open.result").set("requestId", id).dump();
+        const auto expires = std::chrono::steady_clock::now() + 5s;
+        do {
+            const auto remaining =
+                std::chrono::duration_cast<std::chrono::milliseconds>(expires - std::chrono::steady_clock::now());
+            if (remaining <= 0ms)
+                return fail(ErrorCode::Timeout, "the window did not confirm opening the document");
+            reply = io::requestLocalIpc(key, poll, remaining);
+            if (!reply || *reply != "open:in-progress")
+                break;
+            std::this_thread::sleep_for(100ms);
+        } while (true);
+    }
     if (!reply)
         return std::unexpected(std::move(reply.error()));
     if (wait) {
         if (!reply->starts_with("wait:") || reply->size() > 100)
             return fail(ErrorCode::Unsupported, "the project window does not support document-close waiting");
         const std::string ticket = reply->substr(5);
-        auto pollPayload = lang::Json::object().set("method", "document.wait").set("root", std::string(root))
-                               .set("ticket", ticket);
+        auto pollPayload =
+            lang::Json::object().set("method", "document.wait").set("root", std::string(root)).set("ticket", ticket);
         if (startingOwner)
             pollPayload.set("ownerPid", static_cast<std::int64_t>(startingOwner->pid()));
         const auto poll = pollPayload.dump();
@@ -292,7 +328,7 @@ Result<void> forwardExternalOpen(std::string_view root, std::string_view file, i
                 return std::unexpected(std::move(state.error()));
             }
             lastReply = std::chrono::steady_clock::now();
-            if (*state == "retry:busy") {
+            if (*state == kNotDispatched || *state == "retry:busy") {
                 std::this_thread::sleep_for(200ms);
                 continue;
             }
@@ -307,8 +343,9 @@ Result<void> forwardExternalOpen(std::string_view root, std::string_view file, i
         return fail(ErrorCode::Busy, "window did not accept the open request");
     return {};
 }
-Result<std::unique_ptr<io::IProcess>> startExternalWaitOwner(io::IProcessLauncher& launcher, std::string_view executable,
-                                                            std::string_view root, std::string_view file) {
+Result<std::unique_ptr<io::IProcess>> startExternalWaitOwner(io::IProcessLauncher& launcher,
+                                                             std::string_view executable, std::string_view root,
+                                                             std::string_view file) {
     if (!io::isAbsolutePath(executable) || !io::isAbsolutePath(root) || !io::isAbsolutePath(file))
         return fail(ErrorCode::InvalidArgument, "wait owner paths must be absolute");
     io::ProcessSpec spec;
@@ -332,7 +369,23 @@ Result<void> ProjectOpenBroker::start() {
     if (!m_owner)
         return {};
     QPointer<ProjectOpenBroker> self(this);
-    return m_owner->start([self](std::string request) -> Result<std::string> {
+    return m_owner->start([self, pending = std::map<std::string, PendingOpen>{}](
+                              std::string request) mutable -> Result<std::string> {
+        const auto now = std::chrono::steady_clock::now();
+        std::erase_if(pending, [&](const auto& item) { return item.second.expires <= now; });
+        const auto json = lang::parseJson(request);
+        if (json && json->stringAt("method") == "open.result") {
+            const auto found = pending.find(std::string(json->stringAt("requestId")));
+            if (found == pending.end())
+                return fail(ErrorCode::NotFound, "unknown open request");
+            auto& waiter = *found->second.waiter;
+            std::lock_guard lock(waiter.mutex);
+            if (!waiter.done)
+                return std::string("open:in-progress");
+            return waiter.result;
+        }
+        const bool deferredOpen =
+            json && json->stringAt("method").empty() && json->boolAt("deferredOpen").value_or(false);
         auto waiter = std::make_shared<Waiter>();
         if (!self)
             return fail(ErrorCode::Cancelled, "window closed");
@@ -343,6 +396,7 @@ Result<void> ProjectOpenBroker::start() {
                     std::lock_guard lock(waiter->mutex);
                     if (waiter->done)
                         return;
+                    waiter->started = true;
                 }
                 Result<std::string> result = self ? self->accept(request) : fail(ErrorCode::Cancelled, "window closed");
                 {
@@ -357,8 +411,19 @@ Result<void> ProjectOpenBroker::start() {
             return fail(ErrorCode::IoError, "cannot queue open request");
         std::unique_lock lock(waiter->mutex);
         if (!waiter->changed.wait_for(lock, 2s, [&] { return waiter->done; })) {
-            waiter->done = true;
-            return std::string("retry:busy");
+            if (!waiter->started) {
+                waiter->done = true;
+                return std::string(deferredOpen ? kNotDispatched : "retry:busy");
+            }
+            if (!deferredOpen)
+                return std::string("retry:busy");
+            if (pending.size() < 256) {
+                // Keep the outcome available briefly if a reply is lost. Polling never reopens the file.
+                auto id = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+                pending.emplace(id, PendingOpen{waiter, std::chrono::steady_clock::now() + 30s});
+                return std::string(kOpenPending) + id;
+            }
+            return fail(ErrorCode::Timeout, "the window did not finish processing the request");
         }
         return std::move(waiter->result);
     });
