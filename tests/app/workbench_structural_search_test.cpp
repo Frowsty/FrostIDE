@@ -17,7 +17,7 @@ TEST(WorkbenchStructuralSearch, NormalReplacePreviewAndUndoUseTheActualSyntaxMat
     options.workbench.refactoringStateDirectory = dir.join("private-refactoring");
     WorkbenchRig rig(dir, options);
     ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
-    ASSERT_TRUE(rig.workbench->openFolder(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace")));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/main.cpp")));
     rig.show();
     auto* view = rig.view();
@@ -34,8 +34,12 @@ TEST(WorkbenchStructuralSearch, NormalReplacePreviewAndUndoUseTheActualSyntaxMat
             patternSeen = true;
             auto* pattern = dialog->findChild<QPlainTextEdit*>("structuralPattern");
             auto* replacement = dialog->findChild<QPlainTextEdit*>("structuralReplacement");
-            ASSERT_NE(pattern, nullptr);
-            ASSERT_NE(replacement, nullptr);
+            if (!pattern || !replacement) {
+                ADD_FAILURE() << "Structural pattern dialog is missing its inputs";
+                dialog->reject();
+                answer.stop();
+                return;
+            }
             pattern->setPlainText("((identifier) @match (#eq? @match \"old\"))");
             replacement->setPlainText("fresh");
             dialog->accept();
@@ -44,6 +48,10 @@ TEST(WorkbenchStructuralSearch, NormalReplacePreviewAndUndoUseTheActualSyntaxMat
             EXPECT_EQ(dir.read("workspace/main.cpp"), source);
             answer.stop();
             dialog->accept();
+        } else {
+            ADD_FAILURE() << "Unexpected modal: " << dialog->windowTitle().toStdString();
+            dialog->reject();
+            answer.stop();
         }
     });
     answer.start();
@@ -66,7 +74,7 @@ TEST(WorkbenchStructuralSearch, CancelledPatternDialogChangesNoDocumentOrDisk) {
     options.workbench.clangd = false;
     WorkbenchRig rig(dir, options);
     ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
-    ASSERT_TRUE(rig.workbench->openFolder(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace")));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/main.cpp")));
     rig.show();
     rig.view()->editor().setFocus();
@@ -74,10 +82,11 @@ TEST(WorkbenchStructuralSearch, CancelledPatternDialogChangesNoDocumentOrDisk) {
     answer.setInterval(1);
     QObject::connect(&answer, &QTimer::timeout, [&] {
         auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
-        if (dialog && dialog->objectName() == "structuralSearchPattern") {
-            answer.stop();
-            dialog->reject();
-        }
+        if (!dialog)
+            return;
+        EXPECT_EQ(dialog->objectName(), "structuralSearchPattern");
+        answer.stop();
+        dialog->reject();
     });
     answer.start();
     EXPECT_EQ(rig.window->invoke("refactor.structuralReplace"), input::InvokeResult::Ran);

@@ -17,9 +17,13 @@
 #include "workbench_rig.hpp"
 #include <QByteArray>
 #include <QFile>
+#include <QDialog>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
+#include <QTimer>
 #include <QTreeWidget>
 
 #include <algorithm>
@@ -1033,3 +1037,84 @@ TEST(WorkbenchLua, SchemaExportMetaStubsCompleteAndNavigateToStubAndCppBinding) 
     EXPECT_EQ(rig.workbench->currentView()->status().line, 5);
 }
 } // namespace
+
+namespace frost::app::test {
+TEST(WorkbenchLuaModuleReal, PinnedServiceResolvedRequireEditAndFileSidecarMoveShareOneHistoryEdge) {
+    auto pinned = pinnedLuaLs();
+    ASSERT_TRUE(pinned.has_value()) << pinned.error().describe();
+    WorkDir dir("lua-module-real-transaction");
+    dir.write("workspace/old.lua", "return {value=42}\n");
+    dir.write("workspace/old.lua.fmeta", "sidecar bytes");
+    dir.write("workspace/main.lua", "local m=require('old')\nprint(m.value)\n");
+    dir.write("workspace/.luarc.json", "{\"runtime\":{\"path\":[\"?.lua\",\"?/init.lua\"],\"pathStrict\":true}}");
+    RigOptions options;
+    options.workbench.refactoringStateDirectory = dir.join("private-refactoring");
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(settings::Scope::Application, settings::key::toolsLuaLanguageServerPath, *pinned));
+    ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/old.lua")));
+    rig.show();
+    rig.view()->editor().setFocus();
+    const bool started =
+        waitFor([&] { return rig.workbench->lua() && rig.workbench->lua()->state() == lang::LuaState::Running; }, 30s);
+    if (!started) {
+        if (const auto* service = rig.workbench->lua()) {
+            if (const auto error = service->lastError())
+                ADD_FAILURE() << error->describe();
+            for (const auto& line : service->recentStderr())
+                ADD_FAILURE() << line;
+        }
+        for (const auto& entry : rig.window->notifications().log())
+            ADD_FAILURE() << entry.notification.title.toStdString() << ": "
+                          << entry.notification.text.toStdString();
+    }
+    ASSERT_TRUE(started) << "the pinned LuaLS did not start: " << *pinned;
+    bool preview = false;
+    QTimer answer;
+    answer.setInterval(1);
+    QObject::connect(&answer, &QTimer::timeout, [&] {
+        auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        if (auto* warning = qobject_cast<QMessageBox*>(dialog)) {
+            ADD_FAILURE() << warning->text().toStdString();
+            warning->reject();
+            answer.stop();
+            return;
+        }
+        if (auto* name = qobject_cast<QInputDialog*>(dialog)) {
+            name->setTextValue("new.lua");
+            name->accept();
+            return;
+        }
+        if (dialog->objectName() == QStringLiteral("sourceRenamePlanningDialog"))
+            return;
+        if (dialog->windowTitle() != QStringLiteral("Rename Lua module and resolved workspace require users")) {
+            ADD_FAILURE() << "Unexpected modal: " << dialog->windowTitle().toStdString();
+            dialog->reject();
+            answer.stop();
+            return;
+        }
+        preview = true;
+        EXPECT_TRUE(io::realFileSystem().exists(dir.join("workspace/old.lua")).value_or(false));
+        EXPECT_FALSE(io::realFileSystem().exists(dir.join("workspace/new.lua")).value_or(true));
+        EXPECT_NE(dir.read("workspace/main.lua").find("require('old')"), std::string::npos);
+        dialog->accept();
+    });
+    answer.start();
+    EXPECT_EQ(rig.window->invoke("refactor.lua.renameModule"), input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&] { return io::realFileSystem().exists(dir.join("workspace/new.lua")).value_or(false); }));
+    EXPECT_TRUE(preview);
+    EXPECT_EQ(dir.read("workspace/new.lua.fmeta"), "sidecar bytes");
+    EXPECT_NE(dir.read("workspace/main.lua").find("require('new')"), std::string::npos);
+    auto undone = rig.workbench->undoRefactoring();
+    ASSERT_TRUE(undone);
+    EXPECT_TRUE(io::realFileSystem().exists(dir.join("workspace/old.lua")).value_or(false));
+    EXPECT_NE(dir.read("workspace/main.lua").find("require('old')"), std::string::npos);
+    auto redone = rig.workbench->redoRefactoring();
+    ASSERT_TRUE(redone);
+    EXPECT_TRUE(io::realFileSystem().exists(dir.join("workspace/new.lua")).value_or(false));
+    EXPECT_NE(dir.read("workspace/main.lua").find("require('new')"), std::string::npos);
+}
+} // namespace frost::app::test

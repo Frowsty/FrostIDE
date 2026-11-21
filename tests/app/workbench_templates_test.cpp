@@ -58,7 +58,7 @@ TEST(WorkbenchTemplates, ClassPreviewHasNoFilesThenOneUndoRestoresBothAbsencesAn
     dir.write("workspace/keep.txt", "unchanged");
     WorkbenchRig rig(dir, optionsFor(dir));
     ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
-    ASSERT_TRUE(rig.workbench->openFolder(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace")));
     PreviewAnswer preview(true, [&] {
         EXPECT_FALSE(io::realFileSystem().exists(dir.join("workspace/Widget.hpp")).value_or(true));
         EXPECT_FALSE(io::realFileSystem().exists(dir.join("workspace/Widget.cpp")).value_or(true));
@@ -88,7 +88,7 @@ TEST(WorkbenchTemplates, DeclinedPreviewAndExistingHeaderCannotLeaveAHalfGenerat
     dir.write("workspace/keep.txt", "unchanged");
     WorkbenchRig rig(dir, optionsFor(dir));
     ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
-    ASSERT_TRUE(rig.workbench->openFolder(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace")));
     {
         PreviewAnswer preview(false);
         auto created = rig.workbench->createSourceTemplate(classSpec(dir));
@@ -125,7 +125,7 @@ TEST(WorkbenchTemplates, SettledCallbackClosingOwnerPreservesSuccessfulCreationW
     dir.write("workspace/keep.txt", "unchanged");
     WorkbenchRig rig(dir, optionsFor(dir));
     ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
-    ASSERT_TRUE(rig.workbench->openFolder(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace")));
     bool settled = false;
     QObject::connect(rig.workbench.get(), &Workbench::refactoringSettled,
                      [&](const document::RefactoringOutcome& outcome) {
@@ -191,7 +191,7 @@ TEST(WorkbenchTemplates, ScriptedHostMembershipAndClassFilesShareOneProductionAp
     options.workbench.msbuildPath = dir.join("tools/MSBuild.exe");
     WorkbenchRig rig(dir, options);
     ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
-    ASSERT_TRUE(rig.workbench->openSolution(dir.join("workspace/Demo.sln")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/Demo.sln")));
     auto spec = classSpec(dir);
     spec.directory = dir.join("workspace/App");
     spec.vcxprojPath = dir.join("workspace/App/App.vcxproj");
@@ -224,7 +224,7 @@ TEST(WorkbenchTemplates, FrostComponentRefusesFolderWithoutExecutableMembershipB
     dir.write("workspace/keep.txt", "unchanged");
     WorkbenchRig rig(dir, optionsFor(dir));
     ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
-    ASSERT_TRUE(rig.workbench->openFolder(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace")));
     auto spec = classSpec(dir);
     spec.file.kind = lang::FileTemplateKind::FrostComponent;
     spec.file.name = "HealthComponent";

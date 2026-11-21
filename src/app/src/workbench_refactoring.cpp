@@ -9,6 +9,7 @@
 #include "frost/ui/lang/language_controller.hpp"
 
 #include "engine_integration.hpp"
+#include <QPointer>
 #include <QScopeGuard>
 #include <QStandardPaths>
 
@@ -74,8 +75,12 @@ Result<void> Workbench::ensureRefactoringCoordinator(const std::string& target) 
         if (!recovered)
             return std::unexpected(std::move(recovered.error()));
         m_refactoringRecoveryChecked = true;
-        for (const auto& outcome : *recovered)
+        const QPointer<Workbench> owner(this);
+        for (const auto& outcome : *recovered) {
             publishRefactoringOutcome(outcome);
+            if (!owner)
+                return fail(ErrorCode::Cancelled, "The workbench closed while recovering refactorings");
+        }
         m_pendingRefactoring = m_refactoring->pendingToken();
     }
     return {};
@@ -85,7 +90,12 @@ Result<document::RefactoringOutcome> Workbench::applyRefactoring(const document:
     if (m_refactoringExecuting)
         return fail(ErrorCode::Busy, "A refactoring boundary is already executing");
     m_refactoringExecuting = true;
-    const auto executing = qScopeGuard([this] { m_refactoringExecuting = false; });
+    const QPointer<Workbench> owner(this);
+    // A synchronous settlement notification may close and destroy the Workbench.
+    const auto executing = qScopeGuard([owner] {
+        if (owner)
+            owner->m_refactoringExecuting = false;
+    });
     if (m_shutDown) {
         return fail(ErrorCode::Cancelled, "The workbench is shutting down");
     }
@@ -224,14 +234,21 @@ Result<document::RefactoringOutcome> Workbench::runRefactoringHistory(Transactio
     if (m_refactoringExecuting)
         return fail(ErrorCode::Busy, "A refactoring boundary is already executing");
     m_refactoringExecuting = true;
-    const auto executing = qScopeGuard([this] { m_refactoringExecuting = false; });
+    const QPointer<Workbench> owner(this);
+    const auto executing = qScopeGuard([owner] {
+        if (owner)
+            owner->m_refactoringExecuting = false;
+    });
     if (m_shutDown || !m_refactoring)
         return fail(ErrorCode::Cancelled, "The refactoring owner is unavailable");
     if (!refactoringTrusted(token))
         return fail(ErrorCode::Untrusted, "Trust the project before changing refactoring history");
     const auto previous = m_refactoringAdmissionToken;
     m_refactoringAdmissionToken = token;
-    const auto clear = qScopeGuard([&] { m_refactoringAdmissionToken = previous; });
+    const auto clear = qScopeGuard([owner, previous] {
+        if (owner)
+            owner->m_refactoringAdmissionToken = previous;
+    });
     std::shared_ptr<document::RefactoringExternalGuard> external;
     for (const auto& paths : m_refactoringPaths)
         if (paths.token == token)
@@ -251,7 +268,11 @@ Result<document::RefactoringOutcome> Workbench::resumeRefactoring() {
     if (m_refactoringExecuting)
         return fail(ErrorCode::Busy, "A refactoring boundary is already executing");
     m_refactoringExecuting = true;
-    const auto executing = qScopeGuard([this] { m_refactoringExecuting = false; });
+    const QPointer<Workbench> owner(this);
+    const auto executing = qScopeGuard([owner] {
+        if (owner)
+            owner->m_refactoringExecuting = false;
+    });
     if (!refactoringPending() || !m_pendingRefactoring.assigned())
         return fail(ErrorCode::Busy, "No refactoring is waiting for recovery");
     auto outcome = m_refactoring->resume(m_pendingRefactoring);
@@ -266,7 +287,11 @@ Result<void> Workbench::recoverRefactoringJournal(bool explicitRequest) {
     if (m_projectRoot.empty() || !m_services.trust.isTrusted(m_projectRoot))
         return fail(ErrorCode::Untrusted, "Open and trust the project before recovering its refactoring journal");
     m_refactoringExecuting = true;
-    const auto executing = qScopeGuard([this] { m_refactoringExecuting = false; });
+    const QPointer<Workbench> owner(this);
+    const auto executing = qScopeGuard([owner] {
+        if (owner)
+            owner->m_refactoringExecuting = false;
+    });
     auto target = io::joinPath(m_projectRoot, ".frost-refactoring-recovery-volume");
     if (!target)
         return std::unexpected(target.error());
@@ -277,6 +302,8 @@ Result<void> Workbench::recoverRefactoringJournal(bool explicitRequest) {
         if (!outcome)
             return std::unexpected(outcome.error());
         publishRefactoringOutcome(*outcome);
+        if (!owner)
+            return fail(ErrorCode::Cancelled, "The workbench closed while recovering refactorings");
         if (outcome->status == document::RefactoringStatus::PendingRecovery)
             return fail(ErrorCode::Busy,
                         "Native journal settlement remains incomplete; engine lease recovery was not requested");
@@ -307,7 +334,8 @@ void Workbench::registerRefactoringActions() {
         return !m_shutDown && !m_projectRoot.empty() && !m_refactoringExecuting;
     };
     recover.handler = [this](const input::ActionContext&, const input::InvokeInfo&) {
-        if (auto result = recoverRefactoringJournal(); !result)
+        const QPointer<Workbench> owner(this);
+        if (auto result = recoverRefactoringJournal(); !result && owner)
             notify(QStringLiteral("Refactoring recovery requires attention"), display(result.error().message()),
                    ui::NotificationKind::Warning);
     };
