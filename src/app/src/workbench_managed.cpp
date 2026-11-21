@@ -14,6 +14,7 @@
 
 #include "language_bridge.hpp"
 #include "unity_context.hpp"
+#include "workbench_project_helpers.hpp"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -244,6 +245,17 @@ void Workbench::startManaged(const std::string& root) {
         return;
     }
     m_unityRevision = trustedUnityRevision(root);
+    const auto projectExtension = extensionOf(m_projectIdentity);
+    const bool sdkProjectSelected = projectExtension == ".csproj";
+    const bool solutionSelected = projectExtension == ".sln" || projectExtension == ".slnx";
+    const bool managedSolution =
+        m_solution && std::ranges::any_of(m_solution->projects(), [](const auto& entry) {
+            return entry.kind == project::ProjectKind::CSharp && entry.nodeKind == project::NodeKind::Project;
+        });
+    const bool managedDocument =
+        std::ranges::any_of(m_editors->views(), [](auto* view) { return isManagedSource(view->path()); });
+    if (!m_managedEvaluation && !sdkProjectSelected && !managedSolution && !managedDocument && m_unityRevision.empty())
+        return;
     // Once per generation: a restart for the same one (settings, trust) has nothing new to say.
     if (std::string generation = root + '\n' + m_unityRevision;
         !m_unityRevision.empty() && generation != m_unityNotifiedGeneration) {
@@ -322,7 +334,7 @@ void Workbench::startManaged(const std::string& root) {
             }
         }
     }
-    if (!m_managedEvaluation && !m_managedModelJob && std::string_view(m_projectIdentity).ends_with(".csproj")) {
+    if (!m_managedEvaluation && !m_managedModelJob && sdkProjectSelected) {
         if (dotnetPath.empty()) {
             notify(QStringLiteral(".NET project context"),
                    QStringLiteral("The .NET SDK is unavailable; configure the managed SDK executable."),
@@ -400,13 +412,10 @@ void Workbench::startManaged(const std::string& root) {
         const QString solution = unitySolution(root, m_unityRevision);
         options.arguments.emplace_back("--solution");
         options.arguments.push_back(solution.toUtf8().toStdString());
-    } else if (m_managedEvaluation && !std::string_view(m_projectIdentity).ends_with(".sln") &&
-               !std::string_view(m_projectIdentity).ends_with(".slnx")) {
+    } else if (m_managedEvaluation && !solutionSelected) {
         options.arguments.emplace_back("--solution");
         options.arguments.push_back(m_managedEvaluation->request.project);
-    } else if (std::string_view(m_projectIdentity).ends_with(".csproj") ||
-               std::string_view(m_projectIdentity).ends_with(".sln") ||
-               std::string_view(m_projectIdentity).ends_with(".slnx")) {
+    } else if (sdkProjectSelected || solutionSelected) {
         options.arguments.emplace_back("--solution");
         options.arguments.push_back(m_projectIdentity);
     }

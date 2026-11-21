@@ -185,8 +185,8 @@ void Workbench::editorOpened(DocumentEditorView& view) {
         syncLuaDocument(view);
         syncManagedDocument(view);
     }
-    if (isManagedSource(view.path()) && !m_managed)
-        offerManagedTrust();
+    if (!m_projectRoot.empty() && isManagedSource(view.path()) && !m_managed)
+        startManaged(m_projectRoot);
     if (isLuaSource(view.path()) && !m_lua)
         offerLuaTrust();
     if (m_clangd && isCFamilySource(view.path()) && currentView() == &view) {
@@ -671,8 +671,8 @@ Result<void> Workbench::saveAs(DocumentEditorView& view, std::string_view target
     }
     if (validated)
         refreshLiveProblems();
-    if (isManagedSource(newPath) && !m_managed)
-        offerManagedTrust();
+    if (!m_projectRoot.empty() && isManagedSource(newPath) && !m_managed)
+        startManaged(m_projectRoot);
     if (isLuaSource(newPath) && !m_lua)
         offerLuaTrust();
 
@@ -759,8 +759,8 @@ void Workbench::rebindRenamedDocument(const std::string& oldPath, const std::str
     }
     if (validated)
         refreshLiveProblems();
-    if (isManagedSource(newPath) && !m_managed)
-        offerManagedTrust();
+    if (!m_projectRoot.empty() && isManagedSource(newPath) && !m_managed)
+        startManaged(m_projectRoot);
     if (isLuaSource(newPath) && !m_lua)
         offerLuaTrust();
 

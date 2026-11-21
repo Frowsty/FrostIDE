@@ -11,6 +11,39 @@
 #include <gtest/gtest.h>
 namespace frost::app::test {
 namespace {
+TEST(WorkbenchLuaRuntime, ConfiguredRoslynWaitsForManagedProjectOrDocument) {
+    WorkDir dir("lua-managed-provider-admission");
+    dir.write("tools/dotnet", "unit fixture, never executed");
+    dir.write("tools/Roslyn.dll", "unit fixture, never loaded");
+    dir.write("workspace/main.lua", "return 42\n");
+    dir.write("workspace/other.cpp", "int value = 42;\n");
+    dir.write("workspace/Later.cs", "class Later {}\n");
+    const auto dotnet = dir.join("tools/dotnet");
+    const auto host = dir.join("tools/Roslyn.dll");
+    io::ScriptedProcessLauncher launcher;
+    RigOptions options;
+    options.launcher = &launcher;
+    options.disableProjectEvaluation = true;
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.settings->set(settings::Scope::Application, settings::key::toolsManagedDotnetPath, dotnet));
+    ASSERT_TRUE(rig.settings->set(settings::Scope::Application, settings::key::toolsManagedServerPath, host));
+    ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/main.lua")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/other.cpp")));
+    EXPECT_EQ(rig.workbench->managed(), nullptr);
+    EXPECT_TRUE(launcher.launches().empty());
+
+    launcher.expect({.expectExecutable = dotnet, .neverExits = true, .outputHeld = true});
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/Later.cs")));
+    ASSERT_TRUE(waitFor([&] { return !launcher.launches().empty(); }));
+    const auto launches = launcher.launches();
+    ASSERT_EQ(launches.size(), 1u);
+    EXPECT_EQ(launches.front().spec.executable, dotnet);
+    ASSERT_FALSE(launches.front().spec.arguments.empty());
+    EXPECT_EQ(launches.front().spec.arguments.front(), host);
+}
+
 TEST(WorkbenchLuaRuntime, RunUsesExplicitInterpreterAndDirtyScriptSavePolicy) {
     WorkDir dir("lua-explicit-runtime");
     dir.write("tools/lua", "unit fixture, never executed");
