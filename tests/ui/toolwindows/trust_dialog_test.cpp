@@ -10,6 +10,7 @@
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
 #include "toolwindows/toolwindow_test_util.hpp"
+#include <QDeadlineTimer>
 #include <QListWidget>
 #include <QPushButton>
 #include <QWidget>
@@ -66,6 +67,45 @@ TEST(TrustDialog, TrustCallsTrustForEachRootAndCloses) {
     EXPECT_EQ(rig.backend.trusted, (std::vector<std::string>{kApp, kShared}));
     EXPECT_EQ(dialog.result(), QDialog::Accepted);
     EXPECT_EQ(rig.backend.cancels, 0);
+}
+
+TEST(TrustDialog, LargeTrustListKeepsEveryRootBeforeAndAfterBatchedLayout) {
+    const auto root = QString::fromUtf8(kApp);
+    QStringList paths{root};
+    for (int i = 0; i < 500; ++i)
+        paths.push_back(root + QStringLiteral("/Project%1").arg(i, 3, 10, QLatin1Char('0')));
+    std::vector<std::string> expected;
+    expected.reserve(static_cast<std::size_t>(paths.size()));
+    for (const auto& path : paths)
+        expected.push_back(path.toStdString());
+
+    for (const bool render : {false, true}) {
+        SCOPED_TRACE(render);
+        Rig rig;
+        rig.needTrust(expected);
+        TrustDialog dialog(rig.controller, paths);
+        auto* list = dialog.findChild<QListWidget*>(QStringLiteral("trustRoots"));
+        ASSERT_NE(list, nullptr);
+        ASSERT_EQ(list->count(), paths.size());
+        if (render) {
+            dialog.show();
+            auto* last = list->item(list->count() - 1);
+            const QDeadlineTimer deadline(5000);
+            while (!deadline.hasExpired() && !list->viewport()->rect().intersects(list->visualItemRect(last))) {
+                runPostedEvents();
+                list->scrollToItem(last, QAbstractItemView::PositionAtBottom);
+            }
+            ASSERT_TRUE(list->viewport()->rect().intersects(list->visualItemRect(last)));
+        }
+        for (int i = 0; i < list->count(); ++i) {
+            EXPECT_EQ(list->item(i)->text(), paths[i]);
+            EXPECT_EQ(list->item(i)->toolTip(), paths[i]);
+        }
+        EXPECT_TRUE(rig.backend.trusted.empty());
+        dialog.trustButton()->click();
+        EXPECT_EQ(rig.backend.trusted, expected);
+        EXPECT_EQ(dialog.result(), QDialog::Accepted);
+    }
 }
 
 TEST(TrustDialog, AFailedTrustStaysOpenWithTheError) {

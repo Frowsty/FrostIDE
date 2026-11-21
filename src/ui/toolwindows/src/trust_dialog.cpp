@@ -54,6 +54,9 @@ TrustDialog::TrustDialog(BuildController& controller, const QStringList& roots, 
     m_list->setObjectName(QStringLiteral("trustRoots"));
     m_list->setSelectionMode(QAbstractItemView::NoSelection);
     m_list->setFocusPolicy(Qt::NoFocus);
+    // Keep every root immediately in the list and lay out large solutions in event-loop batches.
+    m_list->setLayoutMode(QListView::Batched);
+    m_list->setBatchSize(32);
 
     m_error->setObjectName(QStringLiteral("trustError"));
     m_error->setWordWrap(true);
@@ -131,14 +134,17 @@ void TrustDialog::setSessionGrant(std::function<Result<void>(std::string_view ro
 QString TrustDialog::description() const { return m_body->text(); }
 
 void TrustDialog::setRoots(const QStringList& roots) {
+    m_trust->setEnabled(!roots.isEmpty());
+    if (m_roots == roots)
+        return;
     m_roots = roots;
     m_list->clear();
     detail::IconCache icons;
+    const auto icon = icons.get(icons::kNodesFolder);
     for (const QString& root : m_roots) {
-        auto* item = new QListWidgetItem(icons.get(icons::kNodesFolder), root, m_list);
+        auto* item = new QListWidgetItem(icon, root, m_list);
         item->setToolTip(root);
     }
-    m_trust->setEnabled(!m_roots.isEmpty());
 }
 
 QString TrustDialog::errorText() const { return m_error->isHidden() ? QString() : m_error->text(); }
