@@ -137,7 +137,7 @@ if(FROST_BUILD_FRAMEWORK_ACCEPTANCE)
     frost_apply_compile_options(run_catch_fixture TEST)
     frost_copy_runtime_dlls(run_catch_fixture)
     add_executable(run_boost_fixture fixtures/frameworks/boost_fixture.cpp)
-    target_include_directories(run_boost_fixture PRIVATE ${Boost_INCLUDE_DIRS})
+    target_link_libraries(run_boost_fixture PRIVATE Boost::headers)
     frost_apply_compile_options(run_boost_fixture TEST)
     frost_copy_runtime_dlls(run_boost_fixture)
     frost_add_test(run_framework_real_tests SOURCES framework_real_test.cpp
