@@ -47,6 +47,21 @@ extension. Exact directory grants are refused because Landlock directory rules a
 The caller must explicitly grant the executable, ELF loader and runtime files/subtrees it needs;
 no /usr, /lib, home or workspace scope is added automatically.
 
+For a Linux release build that provides this sandbox, select a reviewed public
+`linux/landlock.h` exposing ABI 6 or newer and supply its independently verified SHA-256.
+Ubuntu 24.04's default userspace header can lag the WSL kernel. Use the public UAPI
+header from the appropriate kernel headers package when the default is too old:
+
+```sh
+cmake --preset linux-clang -DFROST_LANDLOCK_UAPI_HEADER=/absolute/linux/landlock.h \
+  -DFROST_LANDLOCK_UAPI_SHA256=<expected-sha256>
+cmake --build --preset linux-clang-release --target frost-extension-sandbox
+```
+
+The build uses only this single selected header for the Linux sandbox translation unit.
+An explicit selection fails the build if complete ABI 6 enforcement cannot be compiled.
+Validate the resulting helper on the release host using the real native sandbox fixture.
+
 Known filesystem operations through ABI 6, cross-domain signals and abstract Unix connections
 are restricted. Default seccomp denies socket creation; authorized InternetClient allows only
 Internet stream/datagram sockets and still refuses listener and ambient Unix/netlink/socketpair

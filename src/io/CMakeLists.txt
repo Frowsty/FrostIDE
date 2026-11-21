@@ -64,6 +64,28 @@ endif()
 
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(FROST_LANDLOCK_UAPI_HEADER "" CACHE FILEPATH "Reviewed Linux Landlock ABI 6+ public UAPI header")
+    set(FROST_LANDLOCK_UAPI_SHA256 "" CACHE STRING "Expected SHA-256 of the selected Landlock UAPI header")
+    if(FROST_LANDLOCK_UAPI_HEADER OR FROST_LANDLOCK_UAPI_SHA256)
+        if(NOT IS_ABSOLUTE "${FROST_LANDLOCK_UAPI_HEADER}" OR
+           NOT EXISTS "${FROST_LANDLOCK_UAPI_HEADER}" OR
+           IS_DIRECTORY "${FROST_LANDLOCK_UAPI_HEADER}" OR
+           NOT FROST_LANDLOCK_UAPI_SHA256 MATCHES "^[0-9a-fA-F]+$")
+            message(FATAL_ERROR "Select an absolute Linux Landlock UAPI header and its expected SHA-256")
+        endif()
+        file(SHA256 "${FROST_LANDLOCK_UAPI_HEADER}" _frost_landlock_digest)
+        string(TOLOWER "${FROST_LANDLOCK_UAPI_SHA256}" _frost_landlock_expected)
+        if(NOT _frost_landlock_digest STREQUAL _frost_landlock_expected)
+            message(FATAL_ERROR "Linux Landlock UAPI header does not match the expected SHA-256")
+        endif()
+        set(_frost_landlock_include "${CMAKE_CURRENT_BINARY_DIR}/landlock-uapi")
+        configure_file("${FROST_LANDLOCK_UAPI_HEADER}" "${_frost_landlock_include}/linux/landlock.h" COPYONLY)
+        set_property(SOURCE src/process_sandbox_linux.cpp APPEND PROPERTY
+            INCLUDE_DIRECTORIES "${_frost_landlock_include}")
+        set_property(SOURCE src/process_sandbox_linux.cpp APPEND PROPERTY
+            COMPILE_DEFINITIONS FROST_REQUIRE_LANDLOCK_ABI6)
+    endif()
+
     frost_add_executable(frost-extension-sandbox LAYER io
         SOURCES ../../tools/extension_sandbox/main.cpp
         DEPS frost::io)

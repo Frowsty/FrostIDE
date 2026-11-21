@@ -22,6 +22,14 @@
 #include <sched.h>
 #include <unistd.h>
 #endif
+
+#if defined(__linux__) && defined(SYS_landlock_create_ruleset) && defined(SYS_landlock_add_rule) &&                    \
+    defined(SYS_landlock_restrict_self) && defined(LANDLOCK_SCOPE_SIGNAL) && defined(LANDLOCK_ACCESS_FS_IOCTL_DEV)
+#define FROST_HAS_LANDLOCK_ABI6 1
+#elif defined(FROST_REQUIRE_LANDLOCK_ABI6)
+#error "Configured Landlock UAPI and system syscall headers must support complete ABI 6 enforcement"
+#endif
+
 namespace frost::io {
 Result<ProcessSpec> stageWindowsSandboxProcess(const ProcessSpec&, std::span<const SandboxStagingFile>,
                                                std::string_view) {
@@ -81,8 +89,7 @@ Result<ProcessSpec> prepareLinuxSandboxLaunch(const ProcessSpec& original) {
 #endif
 }
 Result<void> enforceLinuxSandbox(const ProcessSandboxProfile& profile) {
-#if defined(__linux__) && defined(SYS_landlock_create_ruleset) && defined(SYS_landlock_add_rule) &&                    \
-    defined(SYS_landlock_restrict_self) && defined(LANDLOCK_SCOPE_SIGNAL) && defined(LANDLOCK_ACCESS_FS_IOCTL_DEV)
+#ifdef FROST_HAS_LANDLOCK_ABI6
     if (syscall(SYS_landlock_create_ruleset, nullptr, 0, LANDLOCK_CREATE_RULESET_VERSION) < 6)
         return fail(ErrorCode::Unsupported, "Landlock ABI 6 is unavailable");
     constexpr std::uint64_t allFs =

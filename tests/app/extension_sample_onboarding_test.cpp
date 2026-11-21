@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Future opt-in acceptance: actual sample binary through normal public onboarding and OS sandbox.
+// Exercises the actual extension sample through public onboarding and OS sandboxing.
 #include "frost/io/spawn_log.hpp"
 #include "frost/lang/json.hpp"
 
@@ -67,7 +67,7 @@ TEST(ExtensionSample, RealSandboxedProviderInitializesCountsActualBufferAndRetir
                                                                             .set("command", "frost.sample.statistics")
                                                                             .set("arguments", lang::Json::array())})));
     ASSERT_TRUE(rig.trust->trust(dir.join("workspace")));
-    ASSERT_TRUE(rig.workbench->openFolder(dir.join("workspace")));
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace")));
     ASSERT_TRUE(rig.workbench->setExtensionCatalog(
         lang::Json::object().set("apiVersion", 1).set("extensions", lang::Json::array({extension})).dump()));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("workspace/note.frostnote")));
@@ -87,10 +87,15 @@ TEST(ExtensionSample, RealSandboxedProviderInitializesCountsActualBufferAndRetir
         return last && last->find("result");
     }));
     const auto observed = rig.workbench->extensionCatalogState();
-    const auto* result = observed.find("lastCommand")->find("result");
+    const auto* last = observed.find("lastCommand");
+    ASSERT_NE(last, nullptr);
+    const auto* result = last->find("result");
     ASSERT_NE(result, nullptr);
-    ASSERT_EQ(result->find("documents")->size(), 1u);
-    const auto& stats = result->find("documents")->items()[0];
+    const auto* documents = result->find("documents");
+    ASSERT_NE(documents, nullptr);
+    ASSERT_TRUE(documents->isArray());
+    ASSERT_EQ(documents->size(), 1u);
+    const auto& stats = documents->items()[0];
     EXPECT_EQ(stats.unsignedAt("whitespaceSeparatedWords"), 3u);
     EXPECT_EQ(stats.unsignedAt("utf8Bytes"), 13u);
     ASSERT_TRUE(rig.workbench->setExtensionCatalog("{\"apiVersion\":1,\"extensions\":[]}"));

@@ -156,6 +156,18 @@ void LanguageRegistryIntegration::poll() {
         });
         if (!interested)
             continue;
+        // File watching can be disabled independently of registered language services.
+        if (!m_workbench.m_reactor) {
+            auto reactor = io::Reactor::create(io::ReactorOptions{1, "frost-registry-io"});
+            if (!reactor) {
+                // Like a manifest parse failure, reconsider this registry on the next change.
+                m_registry.reset();
+                m_workbench.notify(QStringLiteral("Language server I/O unavailable"), q(reactor.error().message()),
+                                   ui::NotificationKind::Warning);
+                return;
+            }
+            m_workbench.m_reactor = std::move(*reactor);
+        }
         auto entry = std::make_shared<Entry>();
         entry->definition = d;
         entry->launcher = std::make_shared<lang::RegistryProcessLauncher>(
