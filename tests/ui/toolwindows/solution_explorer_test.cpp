@@ -800,9 +800,11 @@ TEST(SolutionExplorer, ShowsEvaluatedItemsInTheirFiltersAndTheFallbackBanner) {
                               .path = generatedPath(relative),
                               .fromWildcard = false});
     }
-    auto loaded = project::SolutionModel::load(
-        io::realFileSystem(), generatedPath("Generated.sln"),
-        {.cppHierarchy = project::CppHierarchyMode::Filters, .unloadedProjectPaths = {}, .evaluated = {core}});
+    auto loaded = project::SolutionModel::load(io::realFileSystem(), generatedPath("Generated.sln"),
+                                               {.cppHierarchy = project::CppHierarchyMode::Filters,
+                                                .unloadedProjectPaths = {},
+                                                .evaluated = {core},
+                                                .mode = project::SolutionModelMode::NativeStatic});
     ASSERT_TRUE(loaded.has_value()) << loaded.error().describe();
     auto solution = std::make_shared<const project::SolutionModel>(std::move(*loaded));
     SolutionExplorer explorer;
