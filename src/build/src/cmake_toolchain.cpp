@@ -25,7 +25,13 @@ namespace frost::build {
 namespace {
 
 constexpr bool kWindows = io::kNativePathStyle == io::PathStyle::Windows;
-constexpr std::string_view kEnvironmentHeader = "# FrostIDE MSVC environment v1";
+constexpr std::string_view kEnvironmentHeader = "# FrostIDE MSVC environment v2";
+
+// These values must survive a cache written from an existing Visual Studio developer shell.
+// Other variables retain the delta semantics, so the capture does not freeze unrelated settings.
+constexpr std::string_view kCompilerEnvironment[] = {
+    "include", "lib", "libpath", "path", "vctoolsinstalldir", "vctoolsversion", "windowssdkversion",
+};
 
 constexpr char lowerAscii(char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
 
@@ -71,7 +77,7 @@ std::string onPath(io::IFileSystem& fs, std::span<const std::string> directories
     return {};
 }
 
-// Splits "NAME=VALUE" lines into a name-keyed map (lower-cased keys on Windows) keeping the spelling.
+// Splits cmd.exe's "NAME=VALUE" lines by case-insensitive key while keeping the original spelling.
 std::map<std::string, std::pair<std::string, std::string>> readSetListing(std::string_view text) {
     std::map<std::string, std::pair<std::string, std::string>> out;
     while (!text.empty()) {
@@ -86,7 +92,7 @@ std::map<std::string, std::pair<std::string, std::string>> readSetListing(std::s
             continue;
         }
         const std::string name(line.substr(0, equals));
-        out[kWindows ? lowered(name) : name] = {name, std::string(line.substr(equals + 1))};
+        out[lowered(name)] = {name, std::string(line.substr(equals + 1))};
     }
     return out;
 }
@@ -406,7 +412,8 @@ Result<project::CMakeEnvironment> parseVcvarsCapture(std::string_view output) {
     project::CMakeEnvironment changes;
     for (const auto& [key, entry] : newValues) {
         const auto old = oldValues.find(key);
-        if (old == oldValues.end() || old->second.second != entry.second) {
+        if (old == oldValues.end() || old->second.second != entry.second ||
+            std::ranges::find(kCompilerEnvironment, key) != std::end(kCompilerEnvironment)) {
             changes.emplace_back(entry.first, entry.second);
         }
     }

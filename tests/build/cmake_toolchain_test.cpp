@@ -220,6 +220,25 @@ TEST(MsvcEnvironment, TakesTheDifferenceOfTheTwoListings) {
     EXPECT_EQ(parseVcvarsCapture("A=1\r\n" + std::string(kVcvarsMarker) + "\r\n").error().code(), ErrorCode::Corrupt);
 }
 
+TEST(MsvcEnvironment, RetainsCompilerValuesFromAnInitializedDeveloperShell) {
+    const std::string before =
+        "Path=C:\\VC\\bin;C:\\Windows\r\nINCLUDE=C:\\VC\\include\r\nLIB=C:\\VC\\lib\r\nLIBPATH=C:\\VC\\libpath\r\n"
+        "VCToolsInstallDir=C:\\VC\\tools\r\nVCToolsVersion=14.44.35207\r\nWindowsSDKVersion=10.0.26100.0\\\r\n"
+        "Unrelated=unchanged\r\n";
+    const std::string after = "PATH" + before.substr(4);
+    auto captured = parseVcvarsCapture(before + std::string(kVcvarsMarker) + "\r\n" + after);
+    ASSERT_TRUE(captured) << captured.error().describe();
+    ASSERT_EQ(captured->size(), 7U);
+    EXPECT_EQ(environmentValue(*captured, "path"), "C:\\VC\\bin;C:\\Windows");
+    EXPECT_EQ(environmentValue(*captured, "Include"), "C:\\VC\\include");
+    EXPECT_EQ(environmentValue(*captured, "lib"), "C:\\VC\\lib");
+    EXPECT_EQ(environmentValue(*captured, "libpath"), "C:\\VC\\libpath");
+    EXPECT_EQ(environmentValue(*captured, "vctoolsinstalldir"), "C:\\VC\\tools");
+    EXPECT_EQ(environmentValue(*captured, "VCToolsVersion"), "14.44.35207");
+    EXPECT_EQ(environmentValue(*captured, "WindowsSDKVersion"), "10.0.26100.0\\");
+    EXPECT_FALSE(environmentValue(*captured, "Unrelated"));
+}
+
 // `text` (ASCII) as UTF-16LE bytes.
 std::string utf16(std::string_view text) {
     std::string out;
@@ -250,7 +269,8 @@ TEST(MsvcEnvironment, CacheFileRoundTripsAndFollowsTheVersion) {
     EXPECT_EQ(parsed->installationVersion, "17.14.1");
     EXPECT_EQ(parsed->changes, environment.changes);
     EXPECT_FALSE(parseMsvcEnvironmentFile("# something else\n").has_value());
-    EXPECT_FALSE(parseMsvcEnvironmentFile("# FrostIDE MSVC environment v1\nset\tnoequals\n").has_value());
+    EXPECT_FALSE(parseMsvcEnvironmentFile("# FrostIDE MSVC environment v1\nversion\t17.14.1\n").has_value());
+    EXPECT_FALSE(parseMsvcEnvironmentFile("# FrostIDE MSVC environment v2\nset\tnoequals\n").has_value());
 
     MemTree tree;
     io::ScriptedProcessLauncher launcher;

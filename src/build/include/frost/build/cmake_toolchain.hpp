@@ -39,14 +39,16 @@
  * and the architecture must be one vcvarsall knows (isVcvarsArchitecture), so nothing else reaches
  * the command line. /u makes `set` and `echo` write UTF-16LE, so non-ASCII values survive. The
  * environment before the marker is the one cmd.exe started with; the result is the difference
- * (variables vcvarsall set or changed, ASCII case ignored in names). VSCMD_SKIP_SENDTELEMETRY=1
- * is set for the child. Off Windows it fails with Unsupported.
+ * (variables vcvarsall set or changed, ASCII case ignored in names). Compiler search paths
+ * and toolset/SDK identity are captured even when unchanged so a cached environment can
+ * also be applied outside the developer shell. VSCMD_SKIP_SENDTELEMETRY=1 is set for the child.
+ * Off Windows it fails with Unsupported.
  *
  * Cache (MsvcEnvironmentCache): in memory per (instance, architecture, selection) and on disk as
  * <cacheDirectory>/msvc-env-<instanceId>-<arch>[-t<toolset>][-s<sdk>].txt, which records the instance's
  * installationVersion. An entry whose version differs from the instance's (Visual Studio was
  * updated) is captured again; so is one that does not parse. File format: a header line
- * "# FrostIDE MSVC environment v1", "version\t<installationVersion>", then "set\tNAME=VALUE" and
+ * "# FrostIDE MSVC environment v2", "version\t<installationVersion>", then "set\tNAME=VALUE" and
  * "unset\tNAME" lines.
  *
  * Thread safety: the free functions are thread-safe; MsvcEnvironmentCache is internally locked.
@@ -176,8 +178,8 @@ inline constexpr std::string_view kVcvarsMarker = "FROST-VCVARS-AFTER";
 
 /*
  * Reads the capture's output (UTF-8, already decoded from UTF-16LE): the "NAME=VALUE" lines before
- * and after the marker, and returns what changed (header comment). Errors: Corrupt (no marker, or
- * no line after it).
+ * and after the marker, and returns what changed plus the compiler environment (header comment).
+ * Errors: Corrupt (no marker, or no line after it).
  */
 [[nodiscard]] Result<project::CMakeEnvironment> parseVcvarsCapture(std::string_view output);
 
