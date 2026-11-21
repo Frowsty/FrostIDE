@@ -24,15 +24,15 @@
 #   3. open the solution before trust, and the C++ file again (now in the solution);
 #   4. from the first open until the observation window ends (OBSERVE_SECONDS after the last request,
 #      the CMake service idle), every spawn-log record is a launch PLAN.md section 3.5's restricted mode
-#      allows (read-only git with fsmonitor and hooks off, at an
-#      absolute path outside the repository, no plugin flag; restricted_launch_violation), with no
+#      allows (read-only git with fsmonitor and hooks off, plus the app-owned stdin snapshot validator).
+#      The executable must be outside the repository, and no plugin flags are allowed. There is no
 #      launch failure, and no planted program left a marker (*.ran) anywhere in the repository. Both
 #      are the oracle: the spawn log is every launch of the process (frost/io/spawn_log.hpp), and a
 #      canary marks every run of a planted copy, also one that bypassed the launcher. The R3 exit's
-#      literal "the spawn log is empty" would also forbid restricted mode's git; that is a
+#      literal "the spawn log is empty" would also forbid the restricted read-only tools; that is a
 #      question for the user (the slice's report), not something this test decides;
 #   5. trusting the root through the trust dialog's grant starts tools (the spawn log records at
-#      least one start, so the log is known to see launches), and none of them is a binary planted in
+#      least one new, trust-gated tool start), and none of the starts belongs to a binary planted in
 #      the root under a tool's name (the IDE resolves tools to absolute paths, never in the project).
 #
 # The evidence (one JSON file per run, under --evidence), as j1_cmake's. Run by ctest
@@ -112,23 +112,26 @@ READ_ONLY_GIT = {"rev-parse", "config", "log", "for-each-ref", "cat-file", "symb
 PLUGIN_FLAGS = ("-fplugin", "-fpass-plugin", "-load", "--load", "--query-driver", "-query-driver")
 
 
-def restricted_launch_violation(record: dict, root: Path) -> str:
-    """Why a spawn-log record is not a launch PLAN.md section 3.5 allows before trust, or "" when it
-    is: restricted mode may start only git (read-only, with fsmonitor and hooks off), at an
-    absolute path outside the repository, with
-    no argument loading a plugin. Anything else (another tool, a launch failure, a path in the root,
-    a writing git command) is a violation."""
+def restricted_launch_violation(record: dict, root: Path, validator: Path, validator_sha256: str) -> str:
+    """Require read-only git or the exact app-owned stdin snapshot validator before trust."""
     event = record.get("event")
     if event == "exit":
         return ""
     if event != "start":
         return f"event {event!r} ({record.get('error', '')})"
     executable = record.get("executable", "")
-    argv = [str(a) for a in record.get("argv", [])][1:]
+    invocation = record.get("argv", [])
+    argv = [str(a) for a in invocation[1:]]
     if not os.path.isabs(executable) or inside(executable, root):
         return f"{executable} is not an absolute path outside the repository"
     if any(a.startswith(PLUGIN_FLAGS) for a in argv):
         return "an argument loads a plugin or a query driver"
+    if Path(executable) == validator:
+        if record.get("sha256") != validator_sha256 or Path(record.get("cwd", "")) != validator.parent:
+            return "snapshot validator digest or working directory differs from the app-owned worker"
+        if len(invocation) != 1 or Path(invocation[0]) != validator:
+            return "snapshot validator was not started with its stdin-only invocation"
+        return ""
     name = Path(executable).stem.lower()
     if name == "git":
         options: dict[str, str] = {}
@@ -245,6 +248,20 @@ class TrustJourney(j1.Journey):
         if not canary.is_file():
             self.evidence.step("setup", ok=False, note=f"no canary program at {canary}")
             return 1
+        app = Path(args.frost).resolve()
+        validator = app.with_name("frost-snapshot-validator" + EXE)
+        if not validator.is_file() or validator.is_symlink():
+            self.evidence.step("setup", ok=False, note=f"no app-owned snapshot validator at {validator}")
+            return 1
+        validator_sha256 = j1.sha256_file(validator)
+        # The solution rescan after trust starts Visual Studio discovery on Windows, or the
+        # app-owned clangd for the native static solution reader on Linux.
+        trusted_tool = (Path(os.environ.get("ProgramFiles(x86)", "")) / "Microsoft Visual Studio/Installer/vswhere.exe"
+                        if WINDOWS else app.with_name("frost-clang"))
+        if not trusted_tool.is_absolute() or not trusted_tool.is_file():
+            self.evidence.step("setup", ok=False, note=f"expected trust-gated tool is missing: {trusted_tool}")
+            return 1
+        trusted_tool_sha256 = j1.sha256_file(trusted_tool)
         self.repo_tmp = Path(tempfile.mkdtemp(prefix="frost-fnd8-"))
         repo = self.repo_tmp / "malicious-repo"
 
@@ -256,8 +273,8 @@ class TrustJourney(j1.Journey):
             return 1
         self.evidence.data["repository"] = str(repo)
         self._launch(repo)
-        self._before_trust(repo)
-        self._after_trust(repo)
+        self._before_trust(repo, validator, validator_sha256)
+        self._after_trust(repo, trusted_tool, trusted_tool_sha256)
         self._quit()
         return 0 if all(step["ok"] for step in self.evidence.data["steps"]) else 1
 
@@ -274,7 +291,7 @@ class TrustJourney(j1.Journey):
                     raise
                 time.sleep(0.05)
 
-    def _before_trust(self, repo: Path) -> None:
+    def _before_trust(self, repo: Path, validator: Path, validator_sha256: str) -> None:
         ep = self.endpoint
         replies: dict[str, Any] = {}
 
@@ -316,11 +333,11 @@ class TrustJourney(j1.Journey):
             deadline = time.monotonic() + OBSERVE_SECONDS
             while time.monotonic() < deadline:
                 time.sleep(POLL_SECONDS)
-                if any(restricted_launch_violation(r, repo) for r in self._records()):
+                if any(restricted_launch_violation(r, repo, validator, validator_sha256) for r in self._records()):
                     break
             records = self._records()
             violations = [{"record": r, "why": why} for r in records
-                          if (why := restricted_launch_violation(r, repo))]
+                          if (why := restricted_launch_violation(r, repo, validator, validator_sha256))]
             planted = markers(repo)
             starts = [r for r in records if r.get("event") == "start"]
             observed = {"restrictedStarts": len(starts),
@@ -332,28 +349,39 @@ class TrustJourney(j1.Journey):
 
         self.run_step("before trust only restricted-mode tools start and no planted program runs", nothing_ran)
 
-    def _after_trust(self, repo: Path) -> None:
+    def _after_trust(self, repo: Path, trusted_tool: Path, trusted_tool_sha256: str) -> None:
         ep = self.endpoint
 
         def trust() -> tuple[bool, Any, Any, str]:
+            before = {r["id"] for r in self._records() if r.get("event") == "start"}
             ep.call("trust", root=str(repo))
+
+            def new_starts() -> list[dict]:
+                return [r for r in self._records() if r.get("event") == "start" and r["id"] not in before]
+
+            def is_trusted_tool(record: dict) -> bool:
+                path = record.get("executable", "")
+                return (Path(path) == trusted_tool and not inside(path, repo) and
+                        record.get("sha256") == trusted_tool_sha256)
+
             deadline = time.monotonic() + TRUST_START_SECONDS
-            starts: list[dict] = []
             while time.monotonic() < deadline:
-                starts = [r for r in self._records() if r.get("event") == "start"]
-                if starts:
+                if any(is_trusted_tool(record) for record in new_starts()):
                     break
                 time.sleep(POLL_SECONDS)
             # Wait out what the grant started, then read the whole log once more.
             ep.call("wait", **{"for": "cmake", "timeoutMs": 60000})
-            starts = [r for r in self._records() if r.get("event") == "start"]
+            starts = new_starts()
             root_plants = {os.path.normcase(str(repo / (name + EXE))) for name in ROOT_PLANTS}
             hijacked = [r["executable"] for r in starts
                         if os.path.normcase(os.path.normpath(r.get("executable", ""))) in root_plants]
             executables = sorted({r.get("executable", "") for r in starts})
-            return (bool(starts) and not hijacked, {"starts": ">= 1", "rootPlantsStarted": []},
-                    {"executables": executables, "rootPlantsStarted": hijacked},
-                    "" if starts else f"nothing started within {TRUST_START_SECONDS:.0f} s of the trust grant")
+            trusted_starts = sorted({r["id"] for r in starts if is_trusted_tool(r)})
+            return (bool(trusted_starts) and not hijacked,
+                    {"trustedExecutable": str(trusted_tool), "rootPlantsStarted": []},
+                    {"executables": executables, "startIds": sorted({r["id"] for r in starts}),
+                     "trustedStartIds": trusted_starts, "rootPlantsStarted": hijacked},
+                    "" if trusted_starts else f"{trusted_tool.name} did not start after the trust grant")
 
         self.run_step("trusting the root starts tools, none planted in the root", trust)
 
