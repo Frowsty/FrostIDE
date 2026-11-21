@@ -8,26 +8,36 @@
 namespace frost::clang_engine::analysis {
 namespace {
 const clang::Expr* unwrap(const clang::Expr* expression) {
-    expression = clean(expression);
-    while (const auto* cleanup = llvm::dyn_cast_or_null<clang::ExprWithCleanups>(expression))
-        expression = clean(cleanup->getSubExpr());
+    // IgnoreParenImpCasts also discards MaterializeTemporaryExpr, which carries lifetime evidence.
+    while (expression) {
+        const auto* inner = expression->IgnoreImpCasts()->IgnoreParens();
+        if (inner == expression)
+            break;
+        expression = inner;
+    }
     return expression;
 }
 bool temporaryString(const clang::Expr* expression) {
     expression = unwrap(expression);
     const auto* materialized = llvm::dyn_cast_or_null<clang::MaterializeTemporaryExpr>(expression);
-    return materialized && stdRecord(materialized->getType(), "basic_string");
+    return materialized && materialized->getStorageDuration() == clang::SD_FullExpression &&
+           stdRecord(materialized->getType(), "basic_string");
 }
 bool temporaryStringView(const clang::Expr* expression) {
     expression = unwrap(expression);
+    while (const auto* cast = llvm::dyn_cast_or_null<clang::ExplicitCastExpr>(expression)) {
+        if (cast->getCastKind() != clang::CK_NoOp || !stdRecord(cast->getType(), "basic_string_view"))
+            break;
+        expression = unwrap(cast->getSubExpr());
+    }
     if (const auto* call = llvm::dyn_cast_or_null<clang::CXXMemberCallExpr>(expression)) {
         const auto* method = call->getMethodDecl();
-        return method && method->getParent()->getName() == "basic_string" &&
-               inStd(method->getParent()->getDeclContext()) && temporaryString(call->getImplicitObjectArgument());
+        return llvm::isa_and_nonnull<clang::CXXConversionDecl>(method) &&
+               stdRecord(call->getType(), "basic_string_view") && temporaryString(call->getImplicitObjectArgument());
     }
     if (const auto* construction = llvm::dyn_cast_or_null<clang::CXXConstructExpr>(expression);
-        construction && construction->getNumArgs()) {
-        const auto* call = llvm::dyn_cast<clang::CXXMemberCallExpr>(unwrap(construction->getArg(0)));
+        construction && construction->getNumArgs() && stdRecord(construction->getType(), "basic_string_view")) {
+        const auto* call = llvm::dyn_cast_or_null<clang::CXXMemberCallExpr>(unwrap(construction->getArg(0)));
         const auto* method = call ? call->getMethodDecl() : nullptr;
         return method && (method->getNameAsString() == "data" || method->getNameAsString() == "c_str") &&
                temporaryString(call->getImplicitObjectArgument());

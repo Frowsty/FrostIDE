@@ -27,7 +27,7 @@ protected:
         auto arguments = Json::array({Json(compiler)});
 #ifdef _WIN32
         for (const auto& arg :
-             std::vector<std::string>{"/std:c++20", "/c", file, "/Fo" + scratch.join("forbidden.obj")})
+             std::vector<std::string>{"/std:c++20", "/EHsc", "/c", file, "/Fo" + scratch.join("forbidden.obj")})
             arguments.push(arg);
 #ifdef FROST_TEST_VCTOOLS_DIR
         // Replay the configured compiler's SDK pins inside the frozen source snapshot.
@@ -124,6 +124,19 @@ TEST_F(Analyzer, CleanupBearingReturnMoveStillProducesAnExactFix) {
     ASSERT_EQ(value.stringAt("status"), "ready");
     ASSERT_EQ(value.find("findings")->items().size(), 1U);
     EXPECT_EQ(value.find("findings")->items().front().stringAt("replacement"), "x");
+}
+TEST_F(Analyzer, StringViewFindingsRequireAStdStringMaterializedForTheFullExpression) {
+    auto value = run("#include <string>\n#include <string_view>\n"
+                     "std::string_view from_data(){return std::string(\"abc\").data();}\n"
+                     "std::string_view from_cast(){return std::string_view(std::string(\"abc\"));}\n"
+                     "std::string_view borrowed(){static const std::string s=\"safe\";return s;}\n",
+                     "frost-dangling-string-view");
+    ASSERT_EQ(value.stringAt("status"), "ready");
+    const auto* findings = value.find("findings");
+    ASSERT_NE(findings, nullptr);
+    ASSERT_EQ(findings->items().size(), 2U);
+    EXPECT_EQ(findings->items()[0].integerAt("line"), 3);
+    EXPECT_EQ(findings->items()[1].integerAt("line"), 4);
 }
 TEST_F(Analyzer, ActualDirtyOverlayChangesFindingsAndReceiptsWhileDiskStaysUnchanged) {
     const std::string disk = "int f(int* p){return 0;}\n", dirty = "int f(int* p){if(!p)return *p;return 0;}\n";
