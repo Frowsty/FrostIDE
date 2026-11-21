@@ -386,9 +386,11 @@ struct RefactoringCoordinator::State {
                 doc->m_disk->fingerprint != storage::xxh3Hash128(file.after) ||
                 doc->document().committedText().text() != doc->m_baseText.text())
                 return fail(ErrorCode::Busy, "created file has dirty/foreign open content or format: " + file.path);
-            auto leased = doc->document().acquireExternalWrite(r.id);
-            if (!leased)
-                return leased;
+            if (!doc->document().ownsExternalWrite(r.id)) {
+                auto leased = doc->document().acquireExternalWrite(r.id);
+                if (!leased)
+                    return leased;
+            }
             auto found = std::find_if(r.createdViews.begin(), r.createdViews.end(),
                                       [&](const CreatedView& v) { return v.instance == doc->instanceId(); });
             if (found == r.createdViews.end() && adopt) {
@@ -759,7 +761,9 @@ struct RefactoringCoordinator::State {
                 d.afterBytes, load, manager.m_services.codecs ? *manager.m_services.codecs : text::platformCodecs());
             if (!decoded || !decoded->encoding.fidelity.lossless())
                 return reject(Error(ErrorCode::Corrupt, "disk output is not reversible open-document text"));
-            if (auto added = addBuffer(*r, {doc->path(), doc->document().committedText().text(), decoded->text,
+            auto afterText =
+                decoded->payloadIsText ? d.afterBytes.substr(decoded->payloadOffset) : std::move(decoded->text);
+            if (auto added = addBuffer(*r, {doc->path(), doc->document().committedText().text(), std::move(afterText),
                                             BufferPersistence::Persist});
                 !added)
                 return reject(added.error());

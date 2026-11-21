@@ -469,7 +469,7 @@ TEST_F(RefactoringTransactionTest, CleanAutoOpenedCreationHasGlobalHistoryAndDir
     EXPECT_FALSE(doc->dirty());
     EXPECT_EQ(doc->document().undoState().externalUndo, applied->token);
     auto undone = coordinator->undo(applied->token);
-    ASSERT_TRUE(undone);
+    ASSERT_TRUE(undone) << undone.error().describe();
     ASSERT_EQ(undone->status, RefactoringStatus::Undone);
     EXPECT_EQ(doc->diskState(), DiskState::Deleted);
     EXPECT_EQ(doc->document().undoState().externalRedo, applied->token);
@@ -480,7 +480,7 @@ TEST_F(RefactoringTransactionTest, CleanAutoOpenedCreationHasGlobalHistoryAndDir
     ASSERT_EQ(redone->status, RefactoringStatus::Redone);
     EXPECT_EQ(doc->diskState(), DiskState::InSync);
     EXPECT_FALSE(doc->dirty());
-    auto edited = doc->document().replace({0, 0}, "dirty ", {});
+    auto edited = doc->document().replace({ByteOffset{0}, ByteOffset{0}}, "dirty ", {});
     ASSERT_TRUE(edited);
     EXPECT_FALSE(coordinator->undo(applied->token));
     EXPECT_EQ(bytes(generated), "created\n");
@@ -495,7 +495,8 @@ TEST_F(RefactoringTransactionTest, SavingUndoneCreationCreatesForeignObjectAndRe
     ASSERT_TRUE(applied);
     auto* doc = open(generated);
     ASSERT_NE(doc, nullptr);
-    ASSERT_TRUE(coordinator->undo(applied->token));
+    auto undone = coordinator->undo(applied->token);
+    ASSERT_TRUE(undone) << undone.error().describe();
     ASSERT_EQ(doc->diskState(), DiskState::Deleted);
     auto saved = documents->save(*doc);
     ASSERT_TRUE(saved);
@@ -600,7 +601,8 @@ TEST_F(RefactoringTransactionTest, AliasedCreatedViewFormatChangeAfterUndoRefuse
     auto* doc = open(spelling);
     ASSERT_NE(doc, nullptr);
     EXPECT_EQ(doc->document().undoState().externalUndo, applied->token);
-    ASSERT_TRUE(coordinator->undo(applied->token));
+    auto undone = coordinator->undo(applied->token);
+    ASSERT_TRUE(undone) << undone.error().describe();
     EXPECT_EQ(doc->diskState(), DiskState::Deleted);
     EXPECT_EQ(doc->document().undoState().externalRedo, applied->token);
     doc->setLineSeparator(text::LineSeparator::Cr);
@@ -626,7 +628,7 @@ TEST_F(RefactoringTransactionTest, MultipleOpenCreationSpellingsNeverBypassDirty
     ASSERT_NE(direct, nullptr);
     ASSERT_NE(second, nullptr);
     ASSERT_NE(direct, second);
-    ASSERT_TRUE(second->document().replace({0, 0}, "dirty ", {}));
+    ASSERT_TRUE(second->document().replace({ByteOffset{0}, ByteOffset{0}}, "dirty ", {}));
     EXPECT_FALSE(coordinator->undo(applied->token));
     EXPECT_EQ(bytes(generated), "created\n");
     EXPECT_EQ(second->document().text().text(), "dirty created\n");
