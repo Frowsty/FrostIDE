@@ -5,6 +5,7 @@
 #include "frost/io/process.hpp"
 #include "frost/rpc/json.hpp"
 
+#include "pinned_compiler_arguments.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -34,6 +35,7 @@ protected:
         if (noExceptions)
             args.push_back("-fno-exceptions");
 #endif
+        frost::test::appendPinnedCompilerArguments(args);
         auto command = [&](const std::vector<std::string>& values) {
             auto argv = Json::array();
             for (const auto& value : values)

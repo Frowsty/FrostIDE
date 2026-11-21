@@ -43,6 +43,14 @@ target_include_directories(local_rename_plan_tests PRIVATE ${FROST_SOURCE_DIR}/t
 target_compile_definitions(local_rename_plan_tests PRIVATE
     FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+if(WIN32)
+    target_compile_definitions(local_rename_plan_tests PRIVATE
+        FROST_TEST_VCTOOLS_DIR="${FROST_VCTOOLS_DIR}"
+        FROST_TEST_WINSDK_DIR="${FROST_WINSDK_DIR}"
+        FROST_TEST_WINSDK_VERSION="${FROST_WINSDK_VERSION}")
+elseif(DEFINED FROST_GCC_INSTALL_DIR)
+    target_compile_definitions(local_rename_plan_tests PRIVATE FROST_TEST_GCC_INSTALL_DIR="${FROST_GCC_INSTALL_DIR}")
+endif()
 add_dependencies(local_rename_plan_tests frost-clang)
 
 # REF-10 real LLVM YAML decoding and clang-tidy VFS replacement export (source-only until provisioned).

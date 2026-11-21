@@ -8,6 +8,7 @@
 #include "frost/io/spawn_log.hpp"
 #include "frost/rpc/json.hpp"
 
+#include "pinned_compiler_arguments.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -53,6 +54,7 @@ protected:
 #else
         arguments.insert(arguments.end(), {"-std=c++20", "-c", source, "-o", scratch.join("must-not-exist.o")});
 #endif
+        frost::test::appendPinnedCompilerArguments(arguments);
         arguments.insert(arguments.end(), extra.begin(), extra.end());
         std::vector<Json> command;
         for (const auto& argument : arguments) {
@@ -263,16 +265,16 @@ TEST_F(LocalRenamePlan, PchResponsePluginsAndOutputActionsRefuseWithoutArtifacts
     const std::string bytes = "int f(){int local=1;return local;}\n";
     const auto response = scratch.join("danger.rsp");
     write(response, "-Xclang -load evil-plugin");
-    for (const std::vector<std::string> flags : {std::vector<std::string>{"-include-pch", "precompiled.pch"},
-                                                 {"/Yucommon.h", "/Fpcommon.pch"},
-                                                 {"@" + response},
-                                                 {"-I", "@" + response},
-                                                 {"-Xclang", "-load", "evil-plugin"},
-                                                 {"-fplugin=evil-plugin"},
-                                                 {"-M", "-MF", scratch.join("must-not-exist.d")},
-                                                 {"--analyze"},
-                                                 {"-emit-ast"},
-                                                 {"-fmodule-output=" + scratch.join("must-not-exist.pcm")}}) {
+    for (const std::vector<std::string>& flags : {std::vector<std::string>{"-include-pch", "precompiled.pch"},
+                                                  {"/Yucommon.h", "/Fpcommon.pch"},
+                                                  {"@" + response},
+                                                  {"-I", "@" + response},
+                                                  {"-Xclang", "-load", "evil-plugin"},
+                                                  {"-fplugin=evil-plugin"},
+                                                  {"-M", "-MF", scratch.join("must-not-exist.d")},
+                                                  {"--analyze"},
+                                                  {"-emit-ast"},
+                                                  {"-fmodule-output=" + scratch.join("must-not-exist.pcm")}}) {
         SCOPED_TRACE(flags.front());
         refuses(plan(bytes, bytes.find("local"), "renamed", flags), "unsupported");
         EXPECT_FALSE(std::filesystem::exists(scratch.join("must-not-exist.d")));

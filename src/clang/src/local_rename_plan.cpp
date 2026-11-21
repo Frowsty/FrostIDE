@@ -203,6 +203,25 @@ struct Request {
     std::vector<std::string> supplied, arguments;
 };
 
+// Explicit Windows SDK inputs keep the driver from enumerating ambient toolchain directories.
+// The existing snapshot continues to admit file and directory reads through their typed probes.
+bool explicitMsvcToolchainFlag(llvm::StringRef arg) {
+    if (arg.consume_front("-vctoolsdir") || arg.consume_front("-winsdkdir"))
+        return llvm::sys::path::is_absolute(arg);
+    if (!arg.consume_front("-winsdkversion"))
+        return false;
+    llvm::SmallVector<llvm::StringRef, 4> parts;
+    arg.split(parts, '.', 4);
+    return parts.size() == 4 && std::ranges::all_of(parts, [](llvm::StringRef part) {
+               return !part.empty() && part.size() <= 10 &&
+                      std::ranges::all_of(part, [](char digit) { return digit >= '0' && digit <= '9'; });
+           });
+}
+
+bool explicitGccInstallDir(llvm::StringRef arg) {
+    return arg.consume_front("--gcc-install-dir=") && llvm::sys::path::is_absolute(arg);
+}
+
 // Deliberately small flag allowlist: this preparatory mode does not guess at arbitrary driver
 // actions. In particular all forwarding/response/plugin/PCH/module flags are unsupported.
 bool argumentsFor(Request& request, llvm::StringRef resource, std::string& error) {
@@ -248,12 +267,13 @@ bool argumentsFor(Request& request, llvm::StringRef resource, std::string& error
         }
         const bool pair = arg == "-I" || arg == "-isystem" || arg == "-iquote" || arg == "-D" || arg == "-U" ||
                           arg == "-include" || (cl && (arg == "/I" || arg == "/D" || arg == "/U" || arg == "/FI"));
-        const bool flag = arg.starts_with("-std=") || arg.starts_with("-I") || arg.starts_with("-D") ||
-                          arg.starts_with("-U") || arg == "-fms-extensions" || arg == "-fms-compatibility" ||
-                          arg == "-fno-exceptions" || arg == "-fno-rtti" || arg == "-m64" ||
-                          (cl && (arg.starts_with("/std:") || arg.starts_with("/I") || arg.starts_with("/D") ||
-                                  arg.starts_with("/U") || arg.starts_with("/FI") || arg == "/TP" || arg == "/EHsc" ||
-                                  arg == "/nologo" || arg == "/W4" || arg == "/WX"));
+        const bool flag =
+            arg.starts_with("-std=") || arg.starts_with("-I") || arg.starts_with("-D") || arg.starts_with("-U") ||
+            arg == "-fms-extensions" || arg == "-fms-compatibility" || arg == "-fno-exceptions" || arg == "-fno-rtti" ||
+            arg == "-m64" || arg == "-nostdinc" || explicitGccInstallDir(arg) ||
+            (cl && (arg.starts_with("/std:") || arg.starts_with("/I") || arg.starts_with("/D") ||
+                    arg.starts_with("/U") || arg.starts_with("/FI") || arg == "/TP" || arg == "/EHsc" ||
+                    arg == "/nologo" || arg == "/W4" || arg == "/WX" || arg == "/X" || explicitMsvcToolchainFlag(arg)));
         if (!pair && !flag) {
             error = "unsupported compile flag/action: " + arg.str();
             return false;
@@ -650,19 +670,47 @@ const clang::NamedDecl* projectCanonical(const clang::NamedDecl* declaration) {
     return clang::tooling::getCanonicalSymbolDeclaration(declaration);
 }
 
+std::vector<std::string> projectUsrs(const clang::NamedDecl* declaration, clang::ASTContext& context) {
+    auto ids = clang::tooling::getUSRsForDeclaration(declaration, context);
+    // Clang's rename family can include an empty USR from an implicit or dependent declaration.
+    // It cannot establish identity between declarations in different scopes.
+    std::erase(ids, std::string{});
+    return ids;
+}
+
+clang::SourceLocation projectNameToken(const clang::NamedDecl* declaration, clang::SourceLocation location,
+                                       const clang::SourceManager& sources, const clang::LangOptions& language) {
+    if (!llvm::isa<clang::CXXDestructorDecl>(declaration))
+        return location;
+    bool invalid = false;
+    const char* bytes = sources.getCharacterData(location, &invalid);
+    if (invalid)
+        return {};
+    if (*bytes != '~')
+        return location;
+    const auto name = clang::Lexer::findNextToken(location, sources, language);
+    if (!name || !name->isAnyIdentifier() || sources.getFileID(location) != sources.getFileID(name->getLocation()))
+        return {};
+    return name->getLocation();
+}
+
 class ProjectSelection final : public clang::RecursiveASTVisitor<ProjectSelection> {
     clang::ASTContext& context;
     std::string file;
+    llvm::StringRef directory;
     unsigned offset;
 
 public:
     const clang::NamedDecl* declaration = nullptr;
     bool ambiguous = false;
-    ProjectSelection(clang::ASTContext& ctx, std::string path, unsigned position)
-        : context(ctx), file(std::move(path)), offset(position) {}
+    ProjectSelection(clang::ASTContext& ctx, std::string path, llvm::StringRef workingDirectory, unsigned position)
+        : context(ctx), file(std::move(path)), directory(workingDirectory), offset(position) {}
     void consider(const clang::NamedDecl* candidate, clang::SourceLocation location) {
         auto& sm = context.getSourceManager();
-        if (!candidate || !location.isFileID() || absolute(sm.getFilename(location), "") != file)
+        if (!candidate || !location.isFileID() || absolute(sm.getFilename(location), directory) != file)
+            return;
+        location = projectNameToken(candidate, location, sm, context.getLangOpts());
+        if (location.isInvalid())
             return;
         const auto start = sm.getFileOffset(location);
         if (offset < start || offset - start >= clang::Lexer::MeasureTokenLength(location, sm, context.getLangOpts()))
@@ -670,8 +718,7 @@ public:
         candidate = projectCanonical(candidate);
         if (!candidate || !candidate->getIdentifier())
             return;
-        if (declaration && clang::tooling::getUSRsForDeclaration(declaration, context) !=
-                               clang::tooling::getUSRsForDeclaration(candidate, context))
+        if (declaration && projectUsrs(declaration, context) != projectUsrs(candidate, context))
             ambiguous = true;
         declaration = candidate;
     }
@@ -709,8 +756,7 @@ public:
     explicit ProjectMethods(clang::ASTContext& ctx) : context(ctx) {}
     bool VisitCXXMethodDecl(clang::CXXMethodDecl* method) {
         for (const auto* base : method->overridden_methods())
-            edges.emplace_back(clang::tooling::getUSRsForDeclaration(method, context),
-                               clang::tooling::getUSRsForDeclaration(base, context));
+            edges.emplace_back(projectUsrs(method, context), projectUsrs(base, context));
         return true;
     }
 };
@@ -720,20 +766,23 @@ class ProjectOccurrences final : public clang::RecursiveASTVisitor<ProjectOccurr
     clang::Preprocessor* preprocessor;
     const std::set<std::string>& family;
     std::string spelling;
+    llvm::StringRef directory;
 
 public:
     std::map<std::string, std::set<unsigned>> tokens;
+    std::map<std::string, std::set<unsigned>> destructors;
     bool unsupportedMacro = false;
     ProjectOccurrences(clang::ASTContext& ctx, clang::Preprocessor& pp, const std::set<std::string>& ids,
-                       std::string name)
-        : context(ctx), preprocessor(&pp), family(ids), spelling(std::move(name)) {}
+                       std::string name, llvm::StringRef workingDirectory)
+        : context(ctx), preprocessor(&pp), family(ids), spelling(std::move(name)), directory(workingDirectory) {}
     void consider(const clang::NamedDecl* declaration, clang::SourceLocation location) {
         if (!declaration || location.isInvalid())
             return;
+        const auto* spelledDeclaration = declaration;
         declaration = projectCanonical(declaration);
         if (!declaration || declaration->isImplicit())
             return;
-        auto ids = clang::tooling::getUSRsForDeclaration(declaration, context);
+        auto ids = projectUsrs(declaration, context);
         if (std::ranges::none_of(ids, [&](const auto& id) { return family.contains(id); }))
             return;
         auto& sm = context.getSourceManager();
@@ -770,17 +819,25 @@ public:
             unsupportedMacro = true;
             return;
         }
+        location = projectNameToken(spelledDeclaration, location, sm, context.getLangOpts());
+        if (location.isInvalid()) {
+            unsupportedMacro = true;
+            return;
+        }
         bool invalid = false;
         const char* data = sm.getCharacterData(location, &invalid);
         if (invalid) {
             unsupportedMacro = true;
             return;
         }
-        if (*data == '~')
-            location = location.getLocWithOffset(1);
-        if (clang::Lexer::MeasureTokenLength(location, sm, context.getLangOpts()) != spelling.size())
+        if (clang::Lexer::MeasureTokenLength(location, sm, context.getLangOpts()) != spelling.size() ||
+            llvm::StringRef(data, spelling.size()) != spelling)
             return;
-        tokens[absolute(sm.getFilename(location), "")].insert(sm.getFileOffset(location));
+        const auto path = absolute(sm.getFilename(location), directory);
+        const auto offset = sm.getFileOffset(location);
+        tokens[path].insert(offset);
+        if (llvm::isa<clang::CXXDestructorDecl>(spelledDeclaration))
+            destructors[path].insert(offset);
     }
     bool VisitNamedDecl(clang::NamedDecl* d) {
         consider(d, d->getLocation());
@@ -807,6 +864,26 @@ public:
         return true;
     }
 };
+
+// Clang's RenamingAction can omit a class template's spelled destructor name. Include only
+// destructor tokens already bound to the selected AST family, in both directions of the replay.
+bool addDestructorReplacements(std::map<std::string, clang::tooling::Replacements>& replacements,
+                               const ProjectOccurrences& occurrences, llvm::StringRef root, llvm::StringRef oldName,
+                               llvm::StringRef newName) {
+    for (const auto& [path, offsets] : occurrences.destructors) {
+        auto existing =
+            std::ranges::find_if(replacements, [&](const auto& entry) { return absolute(entry.first, root) == path; });
+        if (existing == replacements.end())
+            existing = replacements.try_emplace(path).first;
+        for (const auto offset : offsets)
+            if (auto error = existing->second.add(clang::tooling::Replacement(
+                    existing->first, offset, static_cast<unsigned>(oldName.size()), newName))) {
+                llvm::consumeError(std::move(error));
+                return false;
+            }
+    }
+    return true;
+}
 
 std::unique_ptr<clang::ASTUnit> projectAST(const clang::tooling::CompileCommand& command,
                                            llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> fs,
@@ -968,13 +1045,13 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
             return refuse("parse-error",
                           frozen->error.empty() ? "Original compilation configuration failed" : frozen->error);
         if (seed.empty() || command.Filename == seed) {
-            ProjectSelection selected(ast->getASTContext(), anchor, static_cast<unsigned>(*offset));
+            ProjectSelection selected(ast->getASTContext(), anchor, command.Directory, static_cast<unsigned>(*offset));
             selected.TraverseDecl(ast->getASTContext().getTranslationUnitDecl());
             if (!selected.declaration || selected.ambiguous) {
                 if (!seed.empty())
                     return refuse("unsupported", "Selection has no unique canonical AST declaration");
             } else {
-                auto ids = clang::tooling::getUSRsForDeclaration(selected.declaration, ast->getASTContext());
+                auto ids = projectUsrs(selected.declaration, ast->getASTContext());
                 if (ids.empty())
                     return refuse("unsupported", "Selected symbol has no stable USR");
                 if (oldName.empty()) {
@@ -1019,7 +1096,8 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
         auto ast = projectAST(command, frozen, {}, diagnostics);
         if (!ast || !frozen->error.empty())
             return refuse("conflict", "Frozen original configuration cannot be replayed");
-        ProjectOccurrences occurrences(ast->getASTContext(), ast->getPreprocessor(), family, oldName);
+        ProjectOccurrences occurrences(ast->getASTContext(), ast->getPreprocessor(), family, oldName,
+                                       command.Directory);
         occurrences.TraverseDecl(ast->getASTContext().getTranslationUnitDecl());
         if (occurrences.unsupportedMacro)
             return refuse("unsupported", "A target occurrence depends on a macro body, token paste or stringization");
@@ -1029,6 +1107,8 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
         auto consumer = action.newASTConsumer();
         consumer->Initialize(ast->getASTContext());
         consumer->HandleTranslationUnit(ast->getASTContext());
+        if (!addDestructorReplacements(replacements, occurrences, root, oldName, newName))
+            return refuse("conflict", "Destructor token overlaps another semantic replacement");
     }
     std::map<std::string, std::string> candidates;
     std::size_t editCount = 0;
@@ -1060,7 +1140,8 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
                     for (const auto& edit : edits)
                         covered |= edit.getOffset() == offset && edit.getLength() == oldName.size();
             if (!covered)
-                return refuse("unsupported", "A semantic target occurrence has no proven token replacement");
+                return refuse("unsupported", "A semantic target occurrence has no proven token replacement at " + path +
+                                                 " byte " + std::to_string(offset));
         }
 
     auto mappedOffset = [&](unsigned original) {
@@ -1085,11 +1166,12 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
         if (!ast || !frozen->error.empty())
             return refuse("conflict", "Candidate fails a captured compilation configuration");
         if (command.Filename == chosenSeed) {
-            ProjectSelection selected(ast->getASTContext(), anchor, mappedOffset(static_cast<unsigned>(*offset)));
+            ProjectSelection selected(ast->getASTContext(), anchor, command.Directory,
+                                      mappedOffset(static_cast<unsigned>(*offset)));
             selected.TraverseDecl(ast->getASTContext().getTranslationUnitDecl());
             if (!selected.declaration || selected.ambiguous || selected.declaration->getNameAsString() != newName)
                 return refuse("conflict", "Renamed declaration identity was captured or lost");
-            auto found = clang::tooling::getUSRsForDeclaration(selected.declaration, ast->getASTContext());
+            auto found = projectUsrs(selected.declaration, ast->getASTContext());
             reverseFamily.insert(found.begin(), found.end());
         }
         ProjectMethods methods(ast->getASTContext());
@@ -1114,10 +1196,15 @@ llvm::json::Object projectPlan(const llvm::json::Object& input, llvm::StringRef 
         auto ast = projectAST(command, frozen, candidates, diagnostics);
         if (!ast)
             return refuse("conflict", "Candidate semantic replay failed");
+        ProjectOccurrences occurrences(ast->getASTContext(), ast->getPreprocessor(), reverseFamily, newName,
+                                       command.Directory);
+        occurrences.TraverseDecl(ast->getASTContext().getTranslationUnitDecl());
         clang::tooling::RenamingAction action(oldNames, newNames, reverseIDs, reverse);
         auto consumer = action.newASTConsumer();
         consumer->Initialize(ast->getASTContext());
         consumer->HandleTranslationUnit(ast->getASTContext());
+        if (occurrences.unsupportedMacro || !addDestructorReplacements(reverse, occurrences, root, newName, oldName))
+            return refuse("conflict", "Candidate destructor token cannot be replayed");
     }
     // A valid parse alone misses name capture/overload changes. Reverse AST-bound edits must
     // restore every edited buffer exactly, and must not capture any previously unrelated file.
@@ -1271,11 +1358,12 @@ int checkLocalRenamePlanner(std::string_view resourceDirectory) {
 #ifdef _WIN32
     const std::string directory = "C:/frost-local-rename-private";
     constexpr auto driverName = "clang-cl.exe";
-    const std::vector<std::string> flags{"/std:c++20"};
+    // This private VFS contains only the supplied translation unit and optional header.
+    const std::vector<std::string> flags{"/std:c++20", "/X"};
 #else
     const std::string directory = "/frost-local-rename-private";
     constexpr auto driverName = "clang++";
-    const std::vector<std::string> flags{"-std=c++20"};
+    const std::vector<std::string> flags{"-std=c++20", "-nostdinc"};
 #endif
     llvm::SmallString<256> driver(resourceDirectory);
     for (int i = 0; i != 3; ++i) {

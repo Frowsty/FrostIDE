@@ -239,13 +239,16 @@ public:
         if (const auto it = inputs.find(key); it != inputs.end()) {
             return std::make_unique<FrozenFile>(it->second);
         }
-        if (frozen) {
-            error = "candidate requested a dependency outside the frozen snapshot";
-            return std::make_error_code(std::errc::permission_denied);
-        }
         const auto observed = status(path);
         if (!observed) {
             return observed.getError();
+        }
+        if (observed->isDirectory()) {
+            return std::make_error_code(std::errc::is_a_directory);
+        }
+        if (frozen) {
+            error = "candidate requested a dependency outside the frozen snapshot";
+            return std::make_error_code(std::errc::permission_denied);
         }
         auto file = ProxyFileSystem::openFileForRead(path);
         if (!file) {

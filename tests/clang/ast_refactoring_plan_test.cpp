@@ -5,6 +5,7 @@
 #include "frost/io/process.hpp"
 #include "frost/rpc/json.hpp"
 
+#include "pinned_compiler_arguments.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -31,27 +32,29 @@ protected:
         std::vector<Json> arguments{Json(compiler)};
 #ifdef _WIN32
         for (const auto& arg :
-             std::vector<std::string>{"/std:c++20", "/c", unit, "/Fo" + scratch.join("forbidden.obj")})
+             std::vector<std::string>{"/std:c++20", "/EHsc", "/c", unit, "/Fo" + scratch.join("forbidden.obj")})
             arguments.emplace_back(arg);
 #else
         for (const auto& arg : std::vector<std::string>{"-std=c++20", "-c", unit, "-o", scratch.join("forbidden.o")})
             arguments.emplace_back(arg);
 #endif
+        frost::test::appendPinnedCompilerArguments(arguments);
         std::vector<Json> commands{Json::object()
                                        .set("directory", scratch.path())
                                        .set("file", unit)
                                        .set("arguments", Json::array(std::move(arguments)))};
-        for (const auto& [name, contents] : extraSources) {
-            const auto path = scratch.join(name);
+        for (const auto& [sourceName, contents] : extraSources) {
+            const auto path = scratch.join(sourceName);
             EXPECT_TRUE(fs.writeFileAtomic(path, contents));
             std::vector<Json> args{Json(compiler)};
 #ifdef _WIN32
-            for (const auto& arg : std::vector<std::string>{"/std:c++20", "/c", path})
+            for (const auto& arg : std::vector<std::string>{"/std:c++20", "/EHsc", "/c", path})
                 args.emplace_back(arg);
 #else
             for (const auto& arg : std::vector<std::string>{"-std=c++20", "-c", path})
                 args.emplace_back(arg);
 #endif
+            frost::test::appendPinnedCompilerArguments(args);
             commands.push_back(Json::object()
                                    .set("directory", scratch.path())
                                    .set("file", path)
@@ -211,7 +214,7 @@ TEST_F(AstRefactoring, GenerateMembersUsesActualProjectHeaderAndFieldTypes) {
 TEST_F(AstRefactoring, GenerateOverridesUsesBaseSignaturesAndExplicitStubBodies) {
     auto overrides = plan("struct Base { virtual int evaluate(int value) const = 0; }; struct Child : Base {};\n",
                           "generate-overrides", "Child", Json::array(), "unused", true);
-    ASSERT_EQ(overrides.stringAt("status"), "ready");
+    ASSERT_EQ(overrides.stringAt("status"), "ready") << overrides.dump();
     EXPECT_NE(after(overrides).find("evaluate(int arg0) const override"), std::string::npos);
     EXPECT_NE(after(overrides).find("Unimplemented override: evaluate"), std::string::npos);
     refused(plan("struct Base { virtual int evaluate() noexcept = 0; }; struct Child : Base {};\n",

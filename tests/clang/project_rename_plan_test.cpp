@@ -7,6 +7,7 @@
 #include "frost/io/spawn_log.hpp"
 #include "frost/rpc/json.hpp"
 
+#include "pinned_compiler_arguments.hpp"
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 
@@ -46,6 +47,7 @@ protected:
             std::vector<std::string> arguments{compiler, "-std=c++20", "-c", path, "-o", scratch.join("unexpected.o")};
 #endif
             arguments.insert(arguments.end(), flags.begin(), flags.end());
+            frost::test::appendPinnedCompilerArguments(arguments);
             std::vector<Json> args;
             for (const auto& item : arguments)
                 args.emplace_back(item);
@@ -108,7 +110,7 @@ TEST_F(ProjectRename, ClassAcrossFiftyFilesIncludesHeaderAndPreservesOtherNamesp
                       "(){Widget value; other::Widget untouched; return value.value();}\n";
     }
     auto result = plan(files, units, "type.h", header.find("struct Widget { int") + 7, "Gadget");
-    ASSERT_EQ(result.stringAt("status"), "ready");
+    ASSERT_EQ(result.stringAt("status"), "ready") << result.dump();
     ASSERT_EQ(exit, 0);
     ASSERT_NE(result.find("files"), nullptr);
     EXPECT_EQ(result.find("files")->items().size(), 51U);
@@ -128,21 +130,26 @@ TEST_F(ProjectRename, DetectsCaptureOfAnExistingOverloadWithoutSyntaxErrors) {
     EXPECT_TRUE(result.find("files")->items().empty());
 }
 TEST_F(ProjectRename, TemplatesConstructorsDestructorsAndHeaderSelectionUseCanonicalClass) {
-    const std::string header =
-        "#pragma once\ntemplate<class T> struct Widget { T value; Widget()=default; ~Widget()=default; };\n";
-    auto result = plan({{"type.h", header},
-                        {"one.cpp", "#include \"type.h\"\nWidget<int> make(){Widget<int> value; return value;}\n"}},
-                       {"one.cpp"}, "type.h", header.find("Widget"), "Gadget");
-    ASSERT_EQ(result.stringAt("status"), "ready");
-    const auto* changed = image(result, "type.h");
-    ASSERT_NE(changed, nullptr);
-    EXPECT_EQ(changed->stringAt("after").find("Widget"), std::string_view::npos);
+    for (const std::string_view trivia : {"", " ", " /*keep*/ "}) {
+        SCOPED_TRACE(trivia);
+        const auto destructor = "~" + std::string(trivia);
+        const auto header = "#pragma once\ntemplate<class T> struct Widget { T value; Widget()=default; " + destructor +
+                            "Widget()=default; };\n";
+        auto result = plan({{"type.h", header},
+                            {"one.cpp", "#include \"type.h\"\nWidget<int> make(){Widget<int> value; return value;}\n"}},
+                           {"one.cpp"}, "type.h", header.rfind("Widget"), "Gadget");
+        ASSERT_EQ(result.stringAt("status"), "ready") << result.dump();
+        const auto* changed = image(result, "type.h");
+        ASSERT_NE(changed, nullptr);
+        EXPECT_EQ(changed->stringAt("after").find("Widget"), std::string_view::npos);
+        EXPECT_NE(changed->stringAt("after").find(destructor + "Gadget"), std::string_view::npos);
+    }
 }
 TEST_F(ProjectRename, VirtualOverrideFamilyRenamesTogether) {
     const std::string code = "struct Base{virtual int tick(){return 1;}}; struct Child:Base{int tick() override{return "
                              "2;}}; int use(Base& value){return value.tick();}";
     auto result = plan({{"one.cpp", code}}, {"one.cpp"}, "one.cpp", code.find("tick"), "next");
-    ASSERT_EQ(result.stringAt("status"), "ready");
+    ASSERT_EQ(result.stringAt("status"), "ready") << result.dump();
     const auto* changed = image(result, "one.cpp");
     ASSERT_NE(changed, nullptr);
     EXPECT_EQ(changed->stringAt("after").find("tick"), std::string_view::npos);
@@ -158,7 +165,7 @@ TEST_F(ProjectRename, MacroBodyAndTokenSynthesisAreExplicitRefusals) {
 TEST_F(ProjectRename, MacroArgumentSpellingCanRemainAProvenDirectToken) {
     const std::string code = "struct Widget {};\n#define DECLARE(type,name) type name\nDECLARE(Widget,value);\n";
     auto result = plan({{"one.cpp", code}}, {"one.cpp"}, "one.cpp", code.find("Widget"), "Gadget");
-    ASSERT_EQ(result.stringAt("status"), "ready");
+    ASSERT_EQ(result.stringAt("status"), "ready") << result.dump();
     const auto* changed = image(result, "one.cpp");
     ASSERT_NE(changed, nullptr);
     EXPECT_NE(changed->stringAt("after").find("DECLARE(Gadget,value)"), std::string_view::npos);
@@ -170,7 +177,7 @@ TEST_F(ProjectRename, DirtyHeaderOverlayIsTheOriginalImageAndDiskIsUntouched) {
     auto result =
         plan({{"type.h", "#pragma once\nstruct Widget {};\n"}, {"one.cpp", "#include \"type.h\"\nWidget value;\n"}},
              {"one.cpp"}, "type.h", dirty.find("Widget"), "Gadget", {}, std::move(overlays));
-    ASSERT_EQ(result.stringAt("status"), "ready");
+    ASSERT_EQ(result.stringAt("status"), "ready") << result.dump();
     const auto* changed = image(result, "type.h");
     ASSERT_NE(changed, nullptr);
     EXPECT_EQ(changed->stringAt("before"), dirty);
@@ -181,7 +188,7 @@ TEST_F(ProjectRename, MsvcYuPchIsReplayedFromItsCapturedHeaderWithoutArtifacts) 
     const std::string header = "#pragma once\nstruct Widget {};\n";
     auto result = plan({{"type.h", header}, {"one.cpp", "#include \"type.h\"\nWidget value;\n"}}, {"one.cpp"}, "type.h",
                        header.find("Widget"), "Gadget", {"/Yutype.h", "/Fp" + scratch.join("unread.pch")});
-    ASSERT_EQ(result.stringAt("status"), "ready");
+    ASSERT_EQ(result.stringAt("status"), "ready") << result.dump();
     ASSERT_NE(result.find("pch"), nullptr);
     EXPECT_FALSE(result.find("pch")->items().empty());
     EXPECT_FALSE(std::filesystem::exists(scratch.join("unread.pch")));
@@ -192,7 +199,7 @@ TEST_F(ProjectRename, InteriorCaretMapsToRenamedTokenForBothShorteningAndGrowth)
     const std::string code = "int longIdentifier=1; int read(){return longIdentifier;}";
     for (const auto& name : {"x", "muchLongerIdentifier"}) {
         auto result = plan({{"one.cpp", code}}, {"one.cpp"}, "one.cpp", code.find("longIdentifier") + 8, name);
-        ASSERT_EQ(result.stringAt("status"), "ready");
+        ASSERT_EQ(result.stringAt("status"), "ready") << result.dump();
         const auto* changed = image(result, "one.cpp");
         ASSERT_NE(changed, nullptr);
         EXPECT_NE(changed->stringAt("after").find(name), std::string_view::npos);
@@ -211,7 +218,7 @@ TEST_F(ProjectRename, ReorderedTranslationUnitsKeepTheEntireVirtualChain) {
                         {"first.cpp", "#include \"a.h\"\nint first(A& a){return a.tick();}"},
                         {"middle.cpp", "#define TOP\n#include \"b.h\"\nint middle(B& b){return b.tick();}"}},
                        {"last.cpp", "first.cpp", "middle.cpp"}, "a.h", a.find("tick"), "next");
-    ASSERT_EQ(result.stringAt("status"), "ready");
+    ASSERT_EQ(result.stringAt("status"), "ready") << result.dump();
     for (const auto& name : {"a.h", "b.h", "c.h", "last.cpp", "first.cpp", "middle.cpp"}) {
         const auto* changed = image(result, name);
         ASSERT_NE(changed, nullptr);
@@ -230,7 +237,7 @@ TEST_F(ProjectRename, PositiveHasIncludeProbeBecomesAReadReceiptEvenWithoutOpeni
                              "3\n#endif\nint target(){return NUMBER;}\n";
     auto result = plan({{"one.cpp", code}, {"optional.h", "// existence affects preprocessing only\n"}}, {"one.cpp"},
                        "one.cpp", code.find("target"), "renamed");
-    ASSERT_EQ(result.stringAt("status"), "ready");
+    ASSERT_EQ(result.stringAt("status"), "ready") << result.dump();
     const auto* dependencies = result.find("dependencies");
     ASSERT_NE(dependencies, nullptr);
     bool found = false;
@@ -246,7 +253,7 @@ TEST_F(ProjectRename, PositiveDirectoryProbesAreTypedAndNeverClaimedAsMissingFil
     const std::string code = "#if __has_include(\"kind\")\n#define NUMBER 7\n#else\n#define NUMBER 3\n#endif\nint "
                              "target(){return NUMBER;}\n";
     auto result = plan({{"one.cpp", code}}, {"one.cpp"}, "one.cpp", code.find("target"), "renamed");
-    ASSERT_EQ(result.stringAt("status"), "ready");
+    ASSERT_EQ(result.stringAt("status"), "ready") << result.dump();
     const auto* directories = result.find("directoryDependencies");
     ASSERT_NE(directories, nullptr);
     bool found = false;
