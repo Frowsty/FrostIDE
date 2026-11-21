@@ -254,10 +254,14 @@ TEST(WorkbenchCMake, TrustConfigureBuildDiagnoseAndRun) {
     ASSERT_TRUE(waitFor([&] { return !rig.workbench->build().isBuilding(); }, 30s));
     EXPECT_TRUE(
         frost::io::realFileSystem().exists(dir.join("cmake-build-debug/compile_commands.json")).value_or(false));
-    ASSERT_NE(rig.workbench->clangd(), nullptr);
+    // Trust publication and language-server admission arrive on the GUI event loop independently
+    // of the successful build outcome.
     ASSERT_TRUE(waitFor(
         [&] {
-            const auto location = rig.workbench->clangd()->compileCommands();
+            const auto* clangd = rig.workbench->clangd();
+            if (!clangd)
+                return false;
+            const auto location = clangd->compileCommands();
             // CPP-3: the IDE's own directory for the configuration, holding its database.
             return location && location->origin == dir.join("cmake-build-debug") &&
                    location->directory != location->origin;
