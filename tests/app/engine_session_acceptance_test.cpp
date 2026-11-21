@@ -6,9 +6,7 @@
 #include "frost/engine/schema.hpp"
 #include "frost/engine/shader_preview.hpp"
 #include "frost/io/async_process.hpp"
-#include "frost/io/os_error.hpp"
 #include "frost/io/spawn_log.hpp"
-#include "frost/io/utf.hpp"
 #include "frost/lang/completion.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/run/run_manager.hpp"
@@ -48,11 +46,9 @@
 #include <mutex>
 #include <optional>
 #include <tuple>
-#include <type_traits>
 #include <vector>
 
 #ifdef _WIN32
-#include <windows.h>
 #ifndef FROST_DBGENG_ADAPTER_PATH
 #error "The real crash composition case requires the built frost-dbgeng-dap path"
 #endif
@@ -1403,69 +1399,6 @@ TEST_F(RealEngineWorkbench, ActualSceneListingAndSelectedRunPopulateTheWorkbench
         10s));
 }
 #ifdef _WIN32
-// A fixed fault in this test's own disposable editor, never an externally selected process.
-// Retaining the native process handle and then proving the original launcher owner remains alive
-// excludes PID reuse. No enumeration/name targeting or configurable executable payload exists.
-frost::Result<void> faultOwnedEditor(frost::test::RealEditor& editor, frost::io::ProcessId expectedPid,
-                                     const std::string& expectedImage) {
-    using Handle = std::unique_ptr<std::remove_pointer_t<HANDLE>, decltype(&CloseHandle)>;
-    // CreateRemoteThread's documented required rights, not PROCESS_ALL_ACCESS:
-    // https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-createremotethread
-    constexpr DWORD rights =
-        PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ;
-    Handle process(OpenProcess(rights, FALSE, expectedPid), &CloseHandle);
-    if (!process)
-        return std::unexpected(frost::io::lastWin32Error("owned editor fault: acquire process"));
-    auto liveOwner = editor.requireLiveOwnedProcess(expectedPid);
-    if (!liveOwner)
-        return liveOwner;
-    std::array<wchar_t, 32768> image{};
-    DWORD length = static_cast<DWORD>(image.size());
-    if (!QueryFullProcessImageNameW(process.get(), 0, image.data(), &length))
-        return std::unexpected(frost::io::lastWin32Error("owned editor fault: query image"));
-    auto actualImage = frost::io::fromWide(std::wstring_view(image.data(), length));
-    if (!actualImage)
-        return std::unexpected(actualImage.error());
-    auto actual = frost::io::realFileSystem().physicalPath(*actualImage);
-    auto expected = frost::io::realFileSystem().physicalPath(expectedImage);
-    if (!actual || !expected || *actual != *expected)
-        return frost::fail(frost::ErrorCode::PermissionDenied,
-                           "owned editor fault: actual image differs from pinned editor");
-
-    // UD2 raises a genuine illegal-instruction exception through the installed engine CrashHandler.
-    // Allocation is writable only during initialization, then executable/read-only. After thread
-    // start it must remain until owned-process teardown; freeing it while executing is forbidden.
-    constexpr std::array<unsigned char, 3> fault{0x0f, 0x0b, 0xc3};
-    void* code = VirtualAllocEx(process.get(), nullptr, fault.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!code)
-        return std::unexpected(frost::io::lastWin32Error("owned editor fault: allocate fixed stub"));
-    struct Allocation {
-        HANDLE process;
-        void* code;
-        bool started = false;
-        ~Allocation() {
-            if (!started)
-                static_cast<void>(VirtualFreeEx(process, code, 0, MEM_RELEASE));
-        }
-    } allocation{process.get(), code};
-    SIZE_T written = 0;
-    if (!WriteProcessMemory(process.get(), code, fault.data(), fault.size(), &written))
-        return std::unexpected(frost::io::lastWin32Error("owned editor fault: write fixed stub"));
-    if (written != fault.size())
-        return frost::fail(frost::ErrorCode::IoError, "owned editor fault: incomplete fixed stub write");
-    DWORD previous = 0;
-    if (!VirtualProtectEx(process.get(), code, fault.size(), PAGE_EXECUTE_READ, &previous) ||
-        !FlushInstructionCache(process.get(), code, fault.size()))
-        return std::unexpected(frost::io::lastWin32Error("owned editor fault: finalize fixed stub"));
-    Handle thread(CreateRemoteThread(process.get(), nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(code), nullptr,
-                                     0, nullptr),
-                  &CloseHandle);
-    if (!thread)
-        return std::unexpected(frost::io::lastWin32Error("owned editor fault: start fixed fault"));
-    allocation.started = true;
-    return {};
-}
-
 TEST_F(RealEngineWorkbench, ActualEditorCrashOffersAndOpensARealReadOnlyDumpSession) {
     auto& fs = frost::io::realFileSystem();
     const auto adapter = fs.physicalPath(FROST_DBGENG_ADAPTER_PATH);
@@ -1477,7 +1410,7 @@ TEST_F(RealEngineWorkbench, ActualEditorCrashOffersAndOpensARealReadOnlyDumpSess
     WorkbenchRig rig(dir, configured);
     ASSERT_NO_FATAL_FAILURE(open(rig));
     frost::test::RealEditor editor;
-    auto endpoint = editor.start(build, project, config);
+    auto endpoint = editor.startCrashFixture(build, project, config);
     ASSERT_TRUE(endpoint) << endpoint.error().describe();
     ASSERT_NO_FATAL_FAILURE(pair(rig, *endpoint));
     const auto authenticatedPid = rig.workbench->engineState().integerAt("processId");
@@ -1486,7 +1419,12 @@ TEST_F(RealEngineWorkbench, ActualEditorCrashOffersAndOpensARealReadOnlyDumpSess
     ASSERT_LE(static_cast<std::uint64_t>(*authenticatedPid), std::numeric_limits<frost::io::ProcessId>::max());
     const auto ownedPid = editor.ownedPid();
     ASSERT_EQ(static_cast<std::uint64_t>(ownedPid), static_cast<std::uint64_t>(*authenticatedPid));
-    auto* observer = rig.workbench->findChild<frost::app::EngineCrashObserver*>();
+    frost::app::EngineCrashObserver* observer = nullptr;
+    for (auto* child : rig.workbench->children())
+        if (auto* candidate = dynamic_cast<frost::app::EngineCrashObserver*>(child)) {
+            observer = candidate;
+            break;
+        }
     ASSERT_NE(observer, nullptr);
     ASSERT_TRUE(
         waitFor([&] { return observer->status().phase == frost::app::EngineCrashObservationPhase::Armed; }, 30s));
@@ -1494,7 +1432,7 @@ TEST_F(RealEngineWorkbench, ActualEditorCrashOffersAndOpensARealReadOnlyDumpSess
     ASSERT_NE(sessions, nullptr);
     const auto sessionsBefore = sessions->sessions().size();
     EXPECT_FALSE(sessions->anyDebugging());
-    auto fault = faultOwnedEditor(editor, ownedPid, build.program);
+    auto fault = editor.requestCrashFixtureFault();
     ASSERT_TRUE(fault) << fault.error().describe();
     // Same actual crash completion deadline as the existing real engine crash-artifact oracle.
     auto exited = editor.waitForOwnedExit(120s);

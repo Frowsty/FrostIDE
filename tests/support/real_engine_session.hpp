@@ -71,6 +71,28 @@ public:
         m_lock = std::make_unique<EngineBuildLock>(root + "/frostengine-" + sha.substr(0, 12) + ".build.lock");
         if (!m_lock->held())
             return fail(ErrorCode::Timeout, "R6 fixture could not acquire the engine corpus build lock");
+        if (auto built = buildTargets(targets); !built)
+            return built;
+        auto binary = engine::findEngineEditorProgram(io::realFileSystem(), corpus, FROST_CORPUS_FROSTENGINE_PRESET);
+        if (!binary)
+            return std::unexpected(binary.error());
+        program = *binary;
+        return {};
+    }
+
+#ifdef _WIN32
+    [[nodiscard]] Result<std::string> prepareCrashFixture() const {
+        if (!m_lock || !m_lock->held())
+            return fail(ErrorCode::InvalidArgument, "prepare the pinned corpus before building its crash fixture");
+        if (auto built = buildTargets({"FrostEditorCrashFixture"}); !built)
+            return std::unexpected(built.error());
+        return io::realFileSystem().physicalPath(corpus + "/build/" + FROST_CORPUS_FROSTENGINE_PRESET +
+                                                 "/bin/FrostEditorCrashFixture.exe");
+    }
+#endif
+
+private:
+    [[nodiscard]] Result<void> buildTargets(const std::vector<std::string>& targets) const {
         io::ProcessSpec buildSpec;
         buildSpec.executable = io::normalizePath(FROST_TEST_CMAKE).value_or("");
         buildSpec.arguments = {"--build", corpus + "/build/" + FROST_CORPUS_FROSTENGINE_PRESET, "--target"};
@@ -107,17 +129,14 @@ public:
         if (!result)
             return std::unexpected(result.error());
         if (result->exitCode != 0)
-            return fail(ErrorCode::IoError, "mandatory FrostEditor build failed: " + result->stderrBytes +
+            return fail(ErrorCode::IoError, "mandatory engine fixture build failed: " + result->stderrBytes +
                                                 result->stdoutBytes.substr(result->stdoutBytes.size() > 8000
                                                                                ? result->stdoutBytes.size() - 8000
                                                                                : 0));
-        auto binary = engine::findEngineEditorProgram(io::realFileSystem(), corpus, FROST_CORPUS_FROSTENGINE_PRESET);
-        if (!binary)
-            return std::unexpected(binary.error());
-        program = *binary;
         return {};
     }
 
+public:
     [[nodiscard]] Result<rpc::Json> cli(std::string command, const std::string& project,
                                         rpc::Json params = rpc::Json::object()) const {
         engine::EngineCliRequest request;
@@ -197,11 +216,38 @@ public:
     ~RealEditor() { stop(); }
     [[nodiscard]] Result<engine::EngineEndpoint> start(const RealEngineBuild& build, const std::string& project,
                                                        const std::string& config) {
+        return launch(build.program, project, config, false);
+    }
+#ifdef _WIN32
+    [[nodiscard]] Result<engine::EngineEndpoint>
+    startCrashFixture(const RealEngineBuild& build, const std::string& project, const std::string& config) {
+        auto fixture = build.prepareCrashFixture();
+        if (!fixture)
+            return std::unexpected(fixture.error());
+        return launch(*fixture, project, config, true);
+    }
+    [[nodiscard]] io::ProcessId ownedPid() const noexcept { return m_process ? m_process->pid() : 0; }
+    [[nodiscard]] Result<void> requestCrashFixtureFault() {
+        if (!m_crashFixture || !m_process)
+            return fail(ErrorCode::InvalidArgument, "cooperative crash fixture was not launched");
+        return m_process->writeStdin("FrostEditorCrashFixture:abort\n");
+    }
+    [[nodiscard]] Result<io::ExitStatus> waitForOwnedExit(IClock::Duration timeout) {
+        if (!m_process)
+            return fail(ErrorCode::InvalidArgument, "editor not started");
+        return m_process->wait(timeout);
+    }
+#endif
+
+private:
+    [[nodiscard]] Result<engine::EngineEndpoint> launch(const std::string& program, const std::string& project,
+                                                        const std::string& config, bool crashFixture) {
         io::ProcessSpec spec;
-        spec.executable = build.program;
+        spec.executable = program;
         spec.arguments = {"--project",         project, "--offscreen",  "--size", "320x240",
                           "--automation-port", "0",     "--config-dir", config};
         spec.workingDirectory = project;
+        spec.stdinMode = crashFixture ? io::Stdio::Pipe : io::Stdio::Null;
         spec.stderrMode = io::Stdio::Inherit;
         spec.environment.emplace_back("FROST_AUTOMATION_TOKEN", std::nullopt);
 #ifdef _WIN32
@@ -213,6 +259,9 @@ public:
         if (!process)
             return std::unexpected(process.error());
         m_process = std::move(*process);
+#ifdef _WIN32
+        m_crashFixture = crashFixture;
+#endif
         m_reader = std::thread([this] {
             std::array<char, 4096> buffer{};
             std::string line;
@@ -258,6 +307,8 @@ public:
             return fail(ErrorCode::Corrupt, "real FrostEditor startup record lacks mandatory v2 identity/credentials");
         return endpoint;
     }
+
+public:
     [[nodiscard]] Result<void> kill() {
         if (!m_process)
             return fail(ErrorCode::InvalidArgument, "editor not started");
@@ -277,6 +328,7 @@ public:
 private:
 #ifdef _WIN32
     PrivateDesktop m_desktop;
+    bool m_crashFixture = false;
 #endif
     std::unique_ptr<io::IProcess> m_process;
     std::thread m_reader;
