@@ -8,14 +8,15 @@
 
 #include <algorithm>
 namespace frost::run {
-TEST(DotnetTests, AdapterDiscoveryIsAuthoritativeAndDuplicateNamesRefuse) {
+TEST(DotnetTests, AdapterDiscoveryPreservesOrderedRepeatedAndMultilineDisplayNames) {
     auto list = parseDotnetTestDiscovery(
-        "Test run for X.dll\nThe following Tests are available:\r\n    Suite.Pass\r\n    Suite.Fail\r\n");
+        "Test run for X.dll\nThe following Tests are available:\r\n    Suite.Pass\r\n    Suite.Signature:\r\n"
+        "System.Boolean Function[T](T)\r\n    Suite.Pass\r\n");
     ASSERT_TRUE(list);
-    ASSERT_EQ(list->size(), 2u);
-    EXPECT_EQ(list->at(1), "Suite.Fail");
+    EXPECT_EQ(*list, (std::vector<std::string>{"Suite.Pass", "Suite.Signature:\nSystem.Boolean Function[T](T)",
+                                               "Suite.Pass"}));
     EXPECT_FALSE(parseDotnetTestDiscovery("class FakeTest {}"));
-    EXPECT_FALSE(parseDotnetTestDiscovery("The following Tests are available:\n    Suite.Same\n    Suite.Same\n"));
+    EXPECT_FALSE(parseDotnetTestDiscovery("The following Tests are available:\n    \n"));
 }
 TEST(DotnetTests, TrxReportsActualFailureIdentityDurationAndStack) {
     auto report = parseDotnetTrx(R"trx(<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
@@ -51,6 +52,9 @@ TEST(DotnetTests, CommandsOwnOneFrameworkAndRejectFilterInjection) {
     ASSERT_TRUE(spec);
     EXPECT_NE(std::find(spec->arguments.begin(), spec->arguments.end(), "--no-build"), spec->arguments.end());
     EXPECT_EQ(spec->arguments.back(), "FullyQualifiedName=Suite.Pass");
+    request.discover = true;
+    EXPECT_FALSE(dotnetTestSpec(request));
+    request.discover = false;
     request.selected = {"Suite.Pass|FullyQualifiedName~Other"};
     EXPECT_FALSE(dotnetTestSpec(request));
     request.platform = DotnetTestPlatform::MicrosoftTestingPlatform;

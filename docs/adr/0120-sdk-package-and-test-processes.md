@@ -33,9 +33,9 @@ property-expression-owned versions require a scoped ownership edit and refuse he
 add/remove package` write bypass exists. Restore and project refresh follow explicit actions.
 
 The .NET tab in the normal Unit Tests window verifies actual `IsTestProject` evaluation for the selected
-inner TFM. VSTest discovery displays only the adapter's `--list-tests` output. Display strings never become
-FullyQualifiedName filters. Run All produces a private per-invocation TRX report. Actual TestMethod identities
-from TRX enable **Run Selected Methods** and **Run Failed Methods**; parameterized methods can rerun several
+inner TFM. VSTest discovery preserves the adapter's `--list-tests` order, repeats, and multiline display names.
+Display strings never become FullyQualifiedName filters. Run All produces a private per-invocation TRX report.
+Actual TestMethod identities from TRX enable **Run Selected Methods** and **Run Failed Methods**; parameterized methods can rerun several
 rows. Unrepresentable filter identities refuse. Failures, durations, output and navigable stack locations
 come from that report. Stdout/stderr stream while the process runs; completed result rows publish after
 its report arrives. A cancelled process or a missing/malformed report never produces invented passes.

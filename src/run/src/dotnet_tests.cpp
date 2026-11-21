@@ -71,6 +71,8 @@ Result<io::ProcessSpec> dotnetTestSpec(const DotnetTestRequest& request) {
     if (request.project.targetFramework.empty() || !io::isAbsolutePath(request.reportDirectory))
         return fail(ErrorCode::InvalidArgument,
                     "select an evaluated framework and private absolute test report directory");
+    if (request.discover && !request.selected.empty())
+        return fail(ErrorCode::InvalidArgument, "VSTest discovery requires the full adapter list");
     if (request.platform == DotnetTestPlatform::MicrosoftTestingPlatform &&
         (request.discover || !request.selected.empty()))
         return fail(ErrorCode::Unsupported, "MTP discovery and exact selection require an adapter-specific protocol; "
@@ -117,7 +119,6 @@ Result<std::vector<std::string>> parseDotnetTestDiscovery(std::string_view outpu
         return fail(ErrorCode::Corrupt, "dotnet test returned no VSTest discovery marker");
     output.remove_prefix(start + marker.size());
     std::vector<std::string> names;
-    std::set<std::string> seen;
     while (!output.empty()) {
         const auto end = output.find('\n');
         auto line = output.substr(0, end);
@@ -127,13 +128,12 @@ Result<std::vector<std::string>> parseDotnetTestDiscovery(std::string_view outpu
             line.remove_prefix(4);
             if (line.empty())
                 return fail(ErrorCode::Corrupt, "empty adapter test identity");
-            std::string name(line);
-            if (!seen.insert(name).second)
-                return fail(ErrorCode::Unsupported,
-                            "duplicate adapter display identities cannot be selected unambiguously");
-            names.push_back(std::move(name));
-        } else if (!line.empty() && !names.empty())
-            break;
+            names.emplace_back(line);
+        } else if (!line.empty() && !names.empty()) {
+            // VSTest indents only the first line of each display name.
+            names.back().push_back('\n');
+            names.back().append(line);
+        }
         if (end == output.npos)
             break;
         output.remove_prefix(end + 1);
