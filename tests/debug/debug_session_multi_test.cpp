@@ -173,8 +173,12 @@ TEST(DebugCancelledAttach, LateStartupFailureAfterExplicitStopDoesNotFabricateFa
     const auto outcome = session->outcome();
     ASSERT_TRUE(outcome);
     EXPECT_TRUE(outcome->stopped);
-    EXPECT_FALSE(outcome->error);
     EXPECT_FALSE(outcome->disconnectConfirmed);
+    // EOF before the disconnect response leaves the detach unconfirmed.
+    ASSERT_TRUE(outcome->error);
+    EXPECT_EQ(outcome->error->code(), ErrorCode::IoError);
+    EXPECT_NE(outcome->error->message().find("disconnect was not confirmed"), std::string::npos);
+    EXPECT_EQ(outcome->error->message().find("connection lease revoked during native pause"), std::string::npos);
     EXPECT_EQ(adapter.argumentsOf("disconnect").front().boolAt("terminateDebuggee"), false);
 }
 

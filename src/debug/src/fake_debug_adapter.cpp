@@ -494,7 +494,12 @@ void scriptProgram(FakeDebugAdapter& adapter, FakeProgram program) {
     adapter.on("next", step);
     adapter.on("stepIn", step);
     adapter.on("stepOut", step);
-    adapter.on("pause", [](const rpc::Json&) { return Reply{.events = {{"stopped", stopped("pause")}}}; });
+    adapter.on("pause", [state](const rpc::Json&) {
+        LockGuard lock(state->mutex);
+        if (state->line == 0)
+            state->line = state->program.entryLine;
+        return Reply{.events = {{"stopped", stopped("pause")}}};
+    });
     adapter.on("continue", [state](const rpc::Json&) {
         LockGuard lock(state->mutex);
         Reply reply{.body = rpc::Json::object().set("allThreadsContinued", true)};

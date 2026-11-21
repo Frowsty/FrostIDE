@@ -99,15 +99,29 @@ TEST(GdbDap, FinalAdmissionRechecksCurrentTrustForLaunchAndAttach) {
         return fail(ErrorCode::NotFound, "capture only");
     };
     DebugTarget target{.program = test::workPath("project/program")};
-    EXPECT_FALSE(startGdbDebugSession(**trust, target, factory, {}, {}, {}));
+    auto launch = startGdbDebugSession(**trust, target, factory, {}, {}, {});
+    ASSERT_TRUE(launch);
+    // The capture-only factory ends the admitted session with its startup error.
+    const auto launchOutcome = (*launch)->outcome();
+    ASSERT_TRUE(launchOutcome && launchOutcome->error);
+    EXPECT_EQ(launchOutcome->error->code(), ErrorCode::NotFound);
     ASSERT_TRUE(admission);
     ASSERT_TRUE((*trust)->untrust(test::workPath("project")));
-    EXPECT_EQ(admission("launch").error().code(), ErrorCode::Untrusted);
+    const auto launchAdmission = admission("launch");
+    ASSERT_FALSE(launchAdmission);
+    EXPECT_EQ(launchAdmission.error().code(), ErrorCode::Untrusted);
     ASSERT_TRUE((*trust)->trust(test::workPath("project")));
-    EXPECT_FALSE(attachGdbDebugSession(**trust, target, 123, factory, {}, {}));
+    admission = {};
+    auto attach = attachGdbDebugSession(**trust, target, 123, factory, {}, {});
+    ASSERT_TRUE(attach);
+    const auto attachOutcome = (*attach)->outcome();
+    ASSERT_TRUE(attachOutcome && attachOutcome->error);
+    EXPECT_EQ(attachOutcome->error->code(), ErrorCode::NotFound);
     ASSERT_TRUE(admission);
     ASSERT_TRUE((*trust)->untrust(test::workPath("project")));
-    EXPECT_EQ(admission("attach").error().code(), ErrorCode::Untrusted);
+    const auto attachAdmission = admission("attach");
+    ASSERT_FALSE(attachAdmission);
+    EXPECT_EQ(attachAdmission.error().code(), ErrorCode::Untrusted);
 }
 TEST(GdbDap, UntrustedLaunchAndInvalidAttachCannotStartAnAdapter) {
     ManualClock clock;
