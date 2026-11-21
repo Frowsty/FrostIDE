@@ -1,6 +1,6 @@
 # ADR 0094: Standalone Lua interpreter and DAP
 
-Status: accepted source design; recipes and acceptance sources authored, not executed.
+Status: accepted. The opt-in standalone coroutine profile is verified on Windows and Linux.
 
 ## Context
 
@@ -74,18 +74,45 @@ The thread value display in `worker/variables.lua` reports status for a reachabl
 provides neither a registry of coroutines nor a handle for stack requests. The published launch
 configuration and request handlers offer no switch or coroutine listing request.
 
-The viable route is provider support for identities derived from actual Lua coroutine objects.
-The provider must retain stable identities for live coroutines without keeping otherwise dead
-objects alive, emit their creation and exit, and route stack and scope requests to the selected
-coroutine at a current stop. The tracker must cover coroutine creation through the Lua C API as
-well as the Lua standard library. An upstream change or a separately reviewed and pinned provider
-build can expose these through ordinary DAP threads so FrostIDE can use its existing selector.
-Acceptance must cover a coroutine created after launch, an independently selectable suspended
-coroutine, correct per-coroutine stacks and locals, and identity removal on completion. The real
-thread assertion remains a failing acceptance check with Lua Debug 2.3.0.
+Use an explicit local coroutine profile on Windows and Linux x64. It combines the official Lua
+5.4.9 sources with a small VM lifecycle tracker, and the pinned Lua Debug 2.3.0 VSIX with checked
+changes to its Lua scripts. The adapter executable and native libraries are copied byte for byte
+from the verified package. Both recipes work offline from local archives. The package digests
+apply to the ZIP payload inside any Marketplace HTTP gzip wrapper. Each prefix retains the
+upstream notices and the license and change summary for FrostIDE's additions.
+
+The VM observes `lua_newthread`, `lua_resume`, `lua_closethread`, and garbage collection. It assigns
+IDs to actual Lua threads, keeps metadata outside the Lua garbage collector, and anchors a
+coroutine only during an individual inspection request. The adapter captures the native
+inspection function before user code starts. DAP exposes creation and exit events, selects each
+live coroutine's own stack, and resolves frame and variable handles against their originating
+coroutine for the current stop. Continue resumes the VM. Step operates on the stopped coroutine.
+The adapter reports a capability error for a mismatched runtime or an exhausted tracker budget.
+The policy for exceeding the 4,096 tracked objects or 16,384 unconsumed events is to end the
+debug session with an explanatory error. Restart-frame and individual-thread termination are
+unavailable in this profile.
+
+Build into fresh absolute work and installation directories with the existing recipe:
+
+```text
+python tools/build_lua_runtime.py --archive PATH_TO_LUA_5_4_9_TAR_GZ --work-dir NEW_WORK --prefix NEW_RUNTIME --clang PINNED_CLANG --cmake PINNED_CMAKE --ninja PINNED_NINJA --coroutine-debugger
+python tools/build_lua_debug_coroutines.py --vsix PATH_TO_LUA_DEBUG_2_3_0_VSIX --prefix NEW_PROVIDER
+```
+
+Set `tools.luaInterpreter.path` for new configurations, or select `NEW_RUNTIME/bin/lua[.exe]`
+in a standalone Run configuration. Set `tools.luaDebugAdapter.path` to
+`NEW_PROVIDER/extension/bin/lua-debug[.exe]`. Debug uses the interpreter selected in the Run
+configuration. Existing installations and other Run configurations retain their paths.
+For native acceptance, configure `FROST_LUA54_EXECUTABLE` and `FROST_LUA_DEBUG_ADAPTER` with
+those paths. Build `debug_standalone_lua_real_tests` and run `ctest -R '^StandaloneLuaReal[.]'`
+for the selected configuration. The fixture confirms a C-created coroutine after launch,
+an independently selectable Lua-created suspended coroutine, both real frames and locals,
+completion and garbage-collection removal, and ordinary script, REPL, stepping, and exit behavior.
 
 Primary sources: [Lua archive](https://www.lua.org/ftp/), [Lua license](https://www.lua.org/license.html),
 [Lua5.4.9 source](https://www.lua.org/source/5.4/),
+[Lua Debug 2.3.0 source](https://github.com/actboy168/lua-debug/tree/60aad0259502f354d921b08313fce74facb6a497),
+[Lua Debug package listing](https://marketplace.visualstudio.com/items?itemName=actboy168.lua-debug),
 [lua-debug descriptor](https://github.com/actboy168/lua-debug/blob/master/extension/js/descriptorFactory.js),
 [lua-debug schema](https://github.com/actboy168/lua-debug/blob/master/compile/common/package_json.lua),
 [lua-debug bootstrap](https://github.com/actboy168/lua-debug/blob/master/extension/script/frontend/debuger_factory.lua).

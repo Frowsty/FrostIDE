@@ -43,4 +43,10 @@ function(frost_stage_lua_runtime target)
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${FROST_LUA54_ROOT}/share/licenses/Lua"
                 "$<TARGET_FILE_DIR:${target}>/licenses/Lua"
         VERBATIM)
+    if(EXISTS "${FROST_LUA54_ROOT}/share/licenses/FrostIDE/NOTICE.txt")
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${FROST_LUA54_ROOT}/share/licenses/FrostIDE"
+                    "$<TARGET_FILE_DIR:${target}>/licenses/Lua-FrostIDE"
+            VERBATIM)
+    endif()
 endfunction()

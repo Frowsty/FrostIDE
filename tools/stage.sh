@@ -158,6 +158,9 @@ fi
 cp -R -- "$bin_dir/lua54" "$dest/lua54"
 mkdir -p -- "$dest/licenses"
 cp -R -- "$bin_dir/licenses/Lua" "$dest/licenses/Lua"
+if [[ -d "$bin_dir/licenses/Lua-FrostIDE" ]]; then
+    cp -R -- "$bin_dir/licenses/Lua-FrostIDE" "$dest/licenses/Lua-FrostIDE"
+fi
 # 4. FrostIDE's files and licences (the vendored sources' LICENSE files, named as stage.ps1 does).
 cp -- "$bin_dir/frost" "$bin_dir/frost-clang" "$bin_dir/frost-analyzer" "$bin_dir/frostide-mcp" "$bin_dir/frost-snapshot-validator" "$bin_dir/frost_held_read" "$bin_dir/crashpad_handler" "$bin_dir/frost-extension-sandbox" "$dest/" || fail "cannot copy frost"
 cp -R -- "$bin_dir/resources" "$dest/resources" || fail "cannot copy the resources"

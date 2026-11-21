@@ -1,0 +1,13 @@
+SPDX-License-Identifier: Apache-2.0
+
+FrostIDE Lua Debug Coroutine Profile
+
+This local installation uses the MIT-licensed Lua Debug 2.3.0 package by
+actboy168. Its original LICENSE.txt and native binaries are preserved.
+
+FrostIDE adds script/backend/master/frost_coroutines.lua and
+script/backend/worker/frost_coroutines.lua, and modifies
+script/backend/worker.lua, script/backend/master/mgr.lua,
+script/backend/master/request.lua, script/backend/master/threads.lua,
+and script/common/capabilities.lua. FrostIDE's changes are licensed under
+Apache-2.0, included beside this notice.

@@ -18,6 +18,13 @@ set(_lua_core lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.
 list(TRANSFORM _lua_core PREPEND "${LUA_SOURCE_DIR}/src/")
 add_library(lua54 SHARED ${_lua_core})
 target_include_directories(lua54 PUBLIC "${LUA_SOURCE_DIR}/src")
+if(FROST_LUA_COROUTINE_DEBUGGER)
+    target_sources(lua54 PRIVATE coroutines/tracker.c)
+    target_include_directories(lua54 PRIVATE coroutines)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../LICENSE" DESTINATION share/licenses/FrostIDE
+        RENAME Apache-2.0.txt)
+    install(FILES coroutines/NOTICE.txt DESTINATION share/licenses/FrostIDE)
+endif()
 set_target_properties(lua54 PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
 if(WIN32)
     # Core/library C files export LUA_API; lua.c imports that exact external Lua 5.4 ABI.

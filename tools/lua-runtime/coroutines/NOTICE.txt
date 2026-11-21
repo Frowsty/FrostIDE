@@ -1,0 +1,8 @@
+SPDX-License-Identifier: Apache-2.0
+
+FrostIDE Lua 5.4.9 Coroutine Runtime Profile
+
+Lua retains its MIT copyright notice in share/licenses/Lua.
+FrostIDE adds the coroutine tracker and modifies the official ldo.c,
+linit.c, lstate.c and lstate.h during the opt-in build. FrostIDE's changes
+are licensed under Apache-2.0, included beside this notice.

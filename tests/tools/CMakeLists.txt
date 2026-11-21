@@ -102,7 +102,7 @@ set_tests_properties(tools.staged_luals PROPERTIES
 
 # Each suite runs as a script (its directory goes first on sys.path) in the build directory: ctest
 # labels only tests that run there with mod.tools (tests/CMakeLists.txt checks this).
-list(APPEND _frost_tool_suites delivery)
+list(APPEND _frost_tool_suites delivery lua_coroutine_provider)
 if(WIN32)
     list(APPEND _frost_tool_suites install_user_registry)
 endif()

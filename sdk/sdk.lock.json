@@ -25,6 +25,17 @@
       "licenseSource": "src/lua.h (copyright notice), doc/readme.html",
       "buildRecipe": "tools/build_lua_runtime.py",
       "note": "Source archive pin only, not a built executable digest. Build with pinned Clang; Windows Lua API exports live in lua54.dll. ADR0094. No lua-debug binary is redistributed."
+    },
+    "luaDebugCoroutines": {
+      "version": "2.3.0",
+      "releaseSource": "https://github.com/actboy168/lua-debug/tree/60aad0259502f354d921b08313fce74facb6a497",
+      "vsixUrl": "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/actboy168/vsextensions/lua-debug/2.3.0/vspackage",
+      "vsixSha256": {
+        "windows": "a2b609e1e2e9d1f196a890a14750cd672341cc93dfe285a169218367e4bdaf4d",
+        "linux": "2be2feadc0d0ed557661033a06dae92e7cc9e9febd48d8b65fb5b60321f0be0d"
+      },
+      "license": "MIT",
+      "note": "Hashes cover the published win32-x64 and linux-x64 ZIP contents before any HTTP gzip wrapping. The opt-in local recipe only patches Lua scripts and preserves vendor executables and licenses. ADR0094."
     }
   },
   "windows": {

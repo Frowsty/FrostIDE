@@ -15,7 +15,8 @@ SPDX-FileCopyrightText = "2026 The FrostIDE authors"
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = ["resources/analyzer_rules.inc", "tools/luaunit-discovery.lua"]
+path = ["resources/analyzer_rules.inc", "tools/luaunit-discovery.lua", "tools/lua-debug-coroutines/*.lua",
+        "tools/lua-debug-coroutines/NOTICE.txt", "tools/lua-runtime/coroutines/NOTICE.txt"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 The FrostIDE authors"
 SPDX-License-Identifier = "Apache-2.0"

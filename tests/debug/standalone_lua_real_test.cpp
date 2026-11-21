@@ -112,7 +112,9 @@ TEST(StandaloneLuaReal, UnicodeScriptAndRequiredModuleUseSelectedInterpreter) {
 TEST(StandaloneLuaReal, SameInterpreterBreakpointsLocalsUpvaluesTablesMutationStepsAndNewCoroutine) {
     ASSERT_TRUE(io::isAbsolutePath(FROST_TEST_LUA_INTERPRETER));
     ASSERT_TRUE(io::isAbsolutePath(FROST_TEST_LUA_DEBUG_ADAPTER))
-        << "configure the installed complete lua-debug extension";
+        << "configure the opt-in Lua Debug coroutine provider";
+    ASSERT_TRUE(io::isAbsolutePath(FROST_TEST_LUA_COROUTINE_MODULE))
+        << "configure the complete Lua runtime build, including the headers and import library";
     auto& fs = io::realFileSystem();
     ASSERT_TRUE(fs.status(FROST_TEST_LUA_INTERPRETER));
     ASSERT_TRUE(fs.status(FROST_TEST_LUA_DEBUG_ADAPTER));
@@ -128,16 +130,25 @@ TEST(StandaloneLuaReal, SameInterpreterBreakpointsLocalsUpvaluesTablesMutationSt
     target.workingDirectory = runPlan->workingDirectory;
     target.arguments = config.arguments;
     target.interpreterArguments = config.interpreterArguments;
+    target.environment.emplace_back("FROST_LUA_COROUTINE_TEST_MODULE", FROST_TEST_LUA_COROUTINE_MODULE);
     target.stopOnEntry = false;
     auto launch = standaloneLuaLaunchArguments(target);
     ASSERT_TRUE(launch);
     EXPECT_EQ(launch->stringAt("luaexe"), runPlan->program);
     const auto localLine = marker(*source, "STANDALONE_LOCALS");
     const auto coroutineLine = marker(*source, "STANDALONE_COROUTINE");
+    const auto suspendedLine = marker(*source, "STANDALONE_SUSPENDED");
+    const auto completedLine = marker(*source, "STANDALONE_AFTER_COMPLETION");
+    const auto collectedLine = marker(*source, "STANDALONE_AFTER_COLLECTION");
     test::SessionRecorder recorder;
     auto owned = DebugSession::start(
         standaloneLuaAdapterFactory(io::realProcessLauncher(), FROST_TEST_LUA_DEBUG_ADAPTER, target),
-        std::move(*launch), {{config.target, {{.id = 1, .line = localLine}, {.id = 2, .line = coroutineLine}}}},
+        std::move(*launch),
+        {{config.target,
+          {{.id = 1, .line = localLine},
+           {.id = 2, .line = coroutineLine},
+           {.id = 3, .line = completedLine},
+           {.id = 4, .line = collectedLine}}}},
         recorder.callbacks(), false, "lua");
     ASSERT_TRUE(owned);
     auto& session = *owned;
@@ -146,6 +157,8 @@ TEST(StandaloneLuaReal, SameInterpreterBreakpointsLocalsUpvaluesTablesMutationSt
     ASSERT_TRUE(frame);
     EXPECT_EQ(frame->line, localLine);
     EXPECT_FALSE(session.threads().empty());
+    const auto mainThread = session.selectedThread();
+    ASSERT_TRUE(mainThread);
     auto scopes = answer<ScopeList>([&](auto done) { session.scopes(frame->id, std::move(done)); });
     ASSERT_TRUE(scopes);
     bool captured = false, table = false;
@@ -229,7 +242,42 @@ TEST(StandaloneLuaReal, SameInterpreterBreakpointsLocalsUpvaluesTablesMutationSt
         [&](auto done) { session.evaluate("childValue", coroutineFrame->id, "watch", std::move(done)); });
     ASSERT_TRUE(childValue);
     EXPECT_EQ(childValue->value, "23");
-    EXPECT_GE(session.threads().size(), 2U) << "The active coroutine must have its own exposed thread identity";
+    const auto childThread = session.selectedThread();
+    ASSERT_TRUE(childThread);
+    EXPECT_NE(*childThread, *mainThread) << "The C-created coroutine must have its own exposed thread identity";
+    ASSERT_TRUE(test::waitUntil([&] { return session.threads().size() == 3; }));
+    const auto threads = session.threads();
+    const auto side = std::ranges::find_if(
+        threads, [&](const DebugThread& thread) { return thread.id != *mainThread && thread.id != *childThread; });
+    ASSERT_NE(side, threads.end());
+    ASSERT_TRUE(session.selectThread(side->id));
+    ASSERT_TRUE(test::waitUntil([&] { return !session.frames(side->id).frames.empty(); }));
+    const auto sideFrames = session.frames(side->id).frames;
+    const auto sideFrame = std::ranges::find(sideFrames, suspendedLine, &DebugFrame::line);
+    ASSERT_NE(sideFrame, sideFrames.end());
+    ASSERT_TRUE(session.selectFrame(side->id, sideFrame->id));
+    auto sideValue = answer<dap::Variable>(
+        [&](auto done) { session.evaluate("sideValue", sideFrame->id, "watch", std::move(done)); });
+    ASSERT_TRUE(sideValue);
+    EXPECT_EQ(sideValue->value, "73");
+    auto childAgain = answer<dap::Variable>(
+        [&](auto done) { session.evaluate("childValue", coroutineFrame->id, "watch", std::move(done)); });
+    ASSERT_TRUE(childAgain);
+    EXPECT_EQ(childAgain->value, "23");
+    ASSERT_TRUE(session.continueRun());
+    ASSERT_TRUE(test::waitUntil([&] {
+        const auto selected = session.selectedFrame();
+        return selected && selected->line == completedLine && session.selectedThread() == mainThread &&
+               session.threads().size() == 2;
+    }));
+    EXPECT_FALSE(std::ranges::contains(session.threads(), *childThread, &DebugThread::id));
+    EXPECT_TRUE(std::ranges::contains(session.threads(), side->id, &DebugThread::id));
+    ASSERT_TRUE(session.continueRun());
+    ASSERT_TRUE(test::waitUntil([&] {
+        const auto selected = session.selectedFrame();
+        return selected && selected->line == collectedLine && session.threads().size() == 1;
+    }));
+    EXPECT_EQ(session.threads().front().id, *mainThread);
     ASSERT_TRUE(session.continueRun());
     ASSERT_TRUE(test::waitUntil([&] { return recorder.hasEnded(); }));
     ASSERT_TRUE(session.outcome());

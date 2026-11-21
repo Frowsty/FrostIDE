@@ -25,6 +25,8 @@ def main() -> None:
     parser.add_argument("--clang", type=Path, required=True)
     parser.add_argument("--cmake", type=Path, required=True)
     parser.add_argument("--ninja", type=Path, required=True)
+    parser.add_argument("--coroutine-debugger", action="store_true",
+                        help="build the opt-in coroutine tracker for the pinned standalone adapter profile")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     lock = json.loads((repo / "sdk/sdk.lock.json").read_text(encoding="utf-8"))
@@ -58,13 +60,18 @@ def main() -> None:
                 raise ValueError("source archive contains unsupported links/special objects")
         archive.extractall(args.work_dir / "source", filter="data")
     source = args.work_dir / "source" / root_name
+    if args.coroutine_debugger:
+        from lua_coroutine_runtime_patch import apply_coroutine_hooks
+        apply_coroutine_hooks(source)
     configure = [str(args.cmake), "-S", str(repo / "tools/lua-runtime"), "-B", str(args.work_dir / "build"),
-        "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=" + str(args.clang),
-        "-DCMAKE_MAKE_PROGRAM=" + str(args.ninja), "-DLUA_SOURCE_DIR=" + str(source),
-        "-DCMAKE_INSTALL_PREFIX=" + str(args.prefix),
+        "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_C_COMPILER=" + args.clang.as_posix(),
+        "-DCMAKE_MAKE_PROGRAM=" + args.ninja.as_posix(), "-DLUA_SOURCE_DIR=" + source.as_posix(),
+        "-DCMAKE_INSTALL_PREFIX=" + args.prefix.as_posix(),
         "-DFROST_PINNED_CLANG_VERSION=" + lock["windows" if os.name == "nt" else "linux"]["llvm"]["version"]]
+    if args.coroutine_debugger:
+        configure.append("-DFROST_LUA_COROUTINE_DEBUGGER=ON")
     if resource_compiler is not None:
-        configure.append("-DCMAKE_RC_COMPILER=" + str(resource_compiler))
+        configure.append("-DCMAKE_RC_COMPILER=" + resource_compiler.as_posix())
     subprocess.run(configure, check=True)
     subprocess.run([str(args.cmake), "--build", str(args.work_dir / "build")], check=True)
     subprocess.run([str(args.cmake), "--install", str(args.work_dir / "build")], check=True)

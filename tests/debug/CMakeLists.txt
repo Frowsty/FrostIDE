@@ -293,3 +293,22 @@ target_compile_definitions(debug_standalone_lua_real_tests PRIVATE
     FROST_TEST_LUA_INTERPRETER="${_frost_test_lua}"
     FROST_TEST_LUA_DEBUG_ADAPTER="${_frost_test_lua_adapter}"
     FROST_TEST_LUA_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/standalone_lua.lua")
+
+# The external Lua prefix supplies this module's actual Lua 5.4 C ABI. Missing
+# development artifacts are reported by the real test together with the runtime.
+get_filename_component(_frost_lua_bin "${_frost_test_lua}" DIRECTORY)
+get_filename_component(_frost_lua_prefix "${_frost_lua_bin}" DIRECTORY)
+if(EXISTS "${_frost_lua_prefix}/include/lua.h" AND
+   (NOT WIN32 OR EXISTS "${_frost_lua_prefix}/lib/lua54.lib"))
+    add_library(frost_test_lua_coroutine MODULE fixtures/standalone_coroutine_c.c)
+    target_include_directories(frost_test_lua_coroutine PRIVATE "${_frost_lua_prefix}/include")
+    if(WIN32)
+        target_compile_definitions(frost_test_lua_coroutine PRIVATE LUA_BUILD_AS_DLL)
+        target_link_libraries(frost_test_lua_coroutine PRIVATE "${_frost_lua_prefix}/lib/lua54.lib")
+    endif()
+    add_dependencies(debug_standalone_lua_real_tests frost_test_lua_coroutine)
+    target_compile_definitions(debug_standalone_lua_real_tests PRIVATE
+        FROST_TEST_LUA_COROUTINE_MODULE="$<TARGET_FILE:frost_test_lua_coroutine>")
+else()
+    target_compile_definitions(debug_standalone_lua_real_tests PRIVATE FROST_TEST_LUA_COROUTINE_MODULE="")
+endif()

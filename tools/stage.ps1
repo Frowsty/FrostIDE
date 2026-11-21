@@ -282,6 +282,9 @@ if (-not $script:destinationExisted) { [void][System.IO.Directory]::CreateDirect
 Copy-Item -LiteralPath (Join-Path $binDir 'lua54') -Destination $Destination -Recurse
 New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'licenses') | Out-Null
 Copy-Item -LiteralPath (Join-Path $binDir 'licenses\Lua') -Destination (Join-Path $Destination 'licenses') -Recurse
+if (Test-Path -LiteralPath (Join-Path $binDir 'licenses\Lua-FrostIDE') -PathType Container) {
+    Copy-Item -LiteralPath (Join-Path $binDir 'licenses\Lua-FrostIDE') -Destination (Join-Path $Destination 'licenses') -Recurse
+}
 # 3. FrostIDE's own files.
 foreach ($name in @('frost.exe', 'frost-clang.exe', 'frost-analyzer.exe', 'frost_app.dll', 'frost-dbgeng-dap.exe', 'crashpad_handler.exe', 'frostide-mcp.exe', 'frost-snapshot-validator.exe', 'frost_held_read.exe', 'conpty.dll', 'OpenConsole.exe')) {
     Copy-Item -LiteralPath (Join-Path $binDir $name) -Destination $Destination
