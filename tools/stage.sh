@@ -19,13 +19,15 @@
 #
 # Every check on the inputs (the build tree, the bundled tools) runs before the destination is
 # touched, and a failure after that removes what this run created, so a failed stage never leaves
-# a partial folder behind. After copying, every staged executable is compared byte for byte with
-# its source, and `ldd` must resolve every shared library frost needs.
+# a partial folder behind. The stage compares copied executables with their sources, and `ldd`
+# must resolve every shared library frost needs. Release then splits DWARF from copied FrostIDE
+# ELF images. Keep the sibling <stage>-symbols.zip for offline tools/symbolize.py --symbol-archive.
 #
 # Qt is copied into qt/lib and qt/plugins. The frost wrapper resolves the relocated package,
 # supplies its library/plugin paths and executes frost.bin. Release packaging requires the
 # source-pinned --qt-source archive; Debug fixture stages may omit that archive.
 # If the Qt SDK lacks its ICU notice, pass the pinned upstream file as --icu-notice.
+# Release stages split debug sections from FrostIDE ELF images into <dest>-symbols.zip.
 ## Exit status: 0 staged, 1 a check failed (nothing partial is left), 2 usage. Linux only; bash 4+,
 # coreutils, python3 (reads the lock), cmp and ldd.
 
@@ -96,6 +98,7 @@ print(lock["linux"][sys.argv[2]]["version"])' "$REPO/sdk/sdk.lock.json" "$1"
 llvm_rel="llvm-$(lock_version llvm)"
 lldb_rel="lldb-$(lock_version lldb)"
 luals_rel="luals-$(lock_version luals)"
+symbol_archive="$dest-symbols.zip"
 
 # 1. Build frost.
 if [[ $skip_build -eq 0 ]]; then
@@ -120,6 +123,13 @@ done
 for tool in llvm-cov llvm-profdata; do
     [[ -f "$sdk_root/$llvm_rel/bin/$tool" ]] || fail "missing bundled LLVM coverage tool: $sdk_root/$llvm_rel/bin/$tool"
 done
+if [[ "$config" == Release ]]; then
+    for tool in llvm-objcopy llvm-readelf; do
+        [[ -x "$sdk_root/$llvm_rel/bin/$tool" ]] || fail "missing pinned ELF symbol tool: $tool"
+    done
+    [[ ! -L "$symbol_archive" ]] || fail "symbol archive must not be a link: $symbol_archive"
+    [[ ! -e "$symbol_archive" || $force -eq 1 ]] || fail "symbol archive already exists: $symbol_archive"
+fi
 clangd="$sdk_root/$llvm_rel/bin/clangd"
 scan_deps="$sdk_root/$llvm_rel/bin/clang-scan-deps"
 clang_lib="$sdk_root/$llvm_rel/lib/clang"
@@ -224,6 +234,13 @@ done
 runpath="$( (readelf -d "$dest/frost.bin" 2>/dev/null || true) | sed -n 's/.*(RUNPATH).*\[\(.*\)\]/\1/p')"
 [[ -z "$runpath" ]] || echo "stage: launcher resolves packaged Qt first"
 
+if [[ "$config" == Release ]]; then
+    symbol_args=(--stage "$dest" --output "$symbol_archive" --llvm-bin "$sdk_root/$llvm_rel/bin")
+    [[ $force -eq 0 ]] || symbol_args+=(--replace)
+    python3 -I "$REPO/tools/stage_elf_symbols.py" "${symbol_args[@]}" \
+        frost.bin frost-clang frost-analyzer frostide-mcp frost-snapshot-validator frost_held_read frost-extension-sandbox ||
+        fail "could not split Release ELF symbols"
+fi
 files="$(find "$dest" -type f | wc -l)"
 bytes="$(du -sb "$dest" | cut -f1)"
 echo "stage: ok $dest ($files files, $((bytes / 1048576)) MB)"

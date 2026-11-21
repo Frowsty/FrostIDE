@@ -58,6 +58,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import mmap
 import os
 import re
 import shutil
@@ -214,10 +215,10 @@ def rsds_pdb_name(record: bytes) -> str:
     return base_name(recorded)
 
 
-def elf_image(path: Path, data: bytes) -> LocalImage:
+def elf_image(path: Path, data: bytes | mmap.mmap) -> LocalImage:
     """A little-endian ELF64 image: its NT_GNU_BUILD_ID note (PT_NOTE segments) and the virtual
     address of its file start (the first PT_LOAD's p_vaddr - p_offset)."""
-    if data[4:6] != b"\x02\x01":
+    if data[:6] != b"\x7fELF\x02\x01":
         return LocalImage(path, "elf", Identity("none"))
     identity = Identity("none")
     file_start: int | None = None
@@ -270,11 +271,13 @@ def local_image(path: Path) -> LocalImage | None:
 # the stream directory, the PDB info stream (stream 1: version, signature, age, GUID) and the DBI
 # stream's age (stream 3, offset 8), which is the age the linker writes into the image.
 #
-# --symbol-archive <zip> (any symbolizing command) unpacks an archive into a temporary directory
-# and searches it like --search-dir; llvm-symbolizer then finds each PDB beside its image when the
-# path the linker recorded is gone.
+# Linux Release staging archives the stripped ELF with its GNU debug-link companion. The ELF
+# manifest records the shared GNU build ID and a separate digest for each of those two files.
+# --symbol-archive <zip> unpacks verified pairs into a temporary search directory where
+# llvm-symbolizer can find the companions beside their corresponding images.
 
 SYMBOL_ARCHIVE_SCHEMA = "frost-symbol-archive/1"
+ELF_SYMBOL_ARCHIVE_SCHEMA = "frost-elf-symbol-archive/1"
 SYMBOL_ARCHIVE_MANIFEST = "symbols.json"
 MSF_MAGIC = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\0\0\0"
 
@@ -394,18 +397,28 @@ def unpack_symbol_archive(archive_path: Path, destination: Path) -> Path:
     try:
         with zipfile.ZipFile(archive_path) as archive:
             manifest = json.loads(archive.read(SYMBOL_ARCHIVE_MANIFEST).decode("utf-8"))
-            if not isinstance(manifest, dict) or manifest.get("schema") != SYMBOL_ARCHIVE_SCHEMA:
-                raise InputError(f"{archive_path}: not a {SYMBOL_ARCHIVE_SCHEMA} archive")
+            schema = manifest.get("schema") if isinstance(manifest, dict) else None
+            if schema not in (SYMBOL_ARCHIVE_SCHEMA, ELF_SYMBOL_ARCHIVE_SCHEMA):
+                raise InputError(f"{archive_path}: unknown symbol archive schema")
             for module in manifest.get("modules", []):
-                for key in ("image", "pdb"):
+                elf = schema == ELF_SYMBOL_ARCHIVE_SCHEMA
+                if elf and module.get("debug") != module.get("image", "") + ".debug":
+                    raise InputError(f"{archive_path}: bad ELF debug companion name")
+                for key in ("image", "debug" if elf else "pdb"):
                     name = module.get(key, "")
                     # Flat names only: nothing may land outside the destination.
                     if not name or name != base_name(name) or name in (".", "..") or ":" in name:
                         raise InputError(f"{archive_path}: bad member name {name!r}")
-                    content = archive.read(name)
-                    if hashlib.sha256(content).hexdigest() != module.get(key + "Sha256"):
+                    output = destination / name
+                    with archive.open(name) as source, output.open("xb") as target:
+                        shutil.copyfileobj(source, target)
+                    if sha256_file(output) != module.get(key + "Sha256"):
                         raise InputError(f"{archive_path}: {name} does not match its manifest digest")
-                    (destination / name).write_bytes(content)
+                    if elf:
+                        with output.open("rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                            identity = elf_image(output, data).identity
+                        if identity.kind != "gnu-build-id" or identity.build_id != module.get("buildId"):
+                            raise InputError(f"{archive_path}: {name} does not match its manifest GNU build ID")
     except (OSError, KeyError, ValueError, zipfile.BadZipFile) as error:
         raise InputError(f"{archive_path}: {error}") from error
     return destination
@@ -621,7 +634,11 @@ class Symbolizer:
         if key in self._located:
             return self._located[key]
         candidates = [Path(plain_path(module.path))] if module.path else []
-        candidates += [directory / base_name(module.path) for directory in self.search_dirs if module.path]
+        search = [directory / base_name(module.path) for directory in self.search_dirs if module.path]
+        if module.identity.kind == "gnu-build-id":
+            companions = [path for path in search if path.with_name(path.name + ".debug").is_file()]
+            candidates = companions + candidates
+        candidates += search
         result: tuple[LocalImage | None, str] = (None, "module not found")
         for candidate in candidates:
             image = local_image(candidate) if candidate.is_file() else None
@@ -1027,7 +1044,7 @@ def main(argv: list[str]) -> int:
     common.add_argument("--llvm-symbolizer")
     common.add_argument("--search-dir", action="append", default=[], type=Path)
     common.add_argument("--symbol-archive", action="append", default=[], type=Path,
-                        help="a <stage>-symbols.zip from tools/stage.ps1, searched like --search-dir")
+                        help="a <stage>-symbols.zip from Windows or Linux Release staging")
     parser = argparse.ArgumentParser(prog="symbolize.py",
                                      description="Symbolizes FrostIDE crash dumps and freeze reports (ADR 0022).")
     commands = parser.add_subparsers(dest="command", required=True)

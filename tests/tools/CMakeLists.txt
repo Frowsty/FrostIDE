@@ -85,7 +85,7 @@ if(WIN32)
     list(APPEND _frost_tool_suites windows_scripts)
 else()
     # tools/stage.sh on fixture trees (bash, ldd); the Windows stage is windows_scripts'.
-    list(APPEND _frost_tool_suites stage_sh install_desktop)
+    list(APPEND _frost_tool_suites stage_sh stage_elf_symbols install_desktop)
 endif()
 # The R0 exit criterion (test_staged_luals.py): this tree's Debug build staged with the bundled tools,
 # frost run offscreen on a fresh profile, LuaLS started from the stage and its diagnostic shown.
