@@ -11,6 +11,7 @@
 #
 #   tools/stage.sh --dest <dir> [--config Debug|Release|RelWithDebInfo] [--build-dir build/linux-clang]
 #                  [--sdk-root <dir>] [--jobs N] [--skip-build] [--force]
+#                  [--qt-source <archive>] [--icu-notice <file>]
 #
 # --sdk-root defaults to $FROST_SDK (~/sdk/env.sh sets it); there is no built-in default root. The
 # destination must not exist or be empty; --force replaces it. Without --skip-build the frost target
@@ -24,6 +25,7 @@
 # Qt is copied into qt/lib and qt/plugins. The frost wrapper resolves the relocated package,
 # supplies its library/plugin paths and executes frost.bin. Release packaging requires the
 # source-pinned --qt-source archive; Debug fixture stages may omit that archive.
+# If the Qt SDK lacks its ICU notice, pass the pinned upstream file as --icu-notice.
 ## Exit status: 0 staged, 1 a check failed (nothing partial is left), 2 usage. Linux only; bash 4+,
 # coreutils, python3 (reads the lock), cmp and ldd.
 
@@ -43,6 +45,7 @@ jobs=""
 skip_build=0
 force=0
 qt_source=""
+icu_notice=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dest) dest="${2:-}"; shift 2 ;;
@@ -53,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         --skip-build) skip_build=1; shift ;;
         --force) force=1; shift ;;
         --qt-source) qt_source="${2:-}"; shift 2 ;;
+        --icu-notice) icu_notice="${2:-}"; shift 2 ;;
         -h|--help) usage ;;
         *) echo "stage: unknown argument '$1'" >&2; usage ;;
     esac
@@ -138,6 +142,7 @@ done
 qt_args=(--repo "$REPO" --sdk "$sdk_root" --destination "$dest")
 [[ "$config" != Debug ]] || qt_args+=(--debug)
 [[ -z "$qt_source" ]] || qt_args+=(--qt-source "$qt_source")
+[[ -z "$icu_notice" ]] || qt_args+=(--icu-notice "$icu_notice")
 python3 -B "$REPO/tools/stage_linux_qt.py" "${qt_args[@]}" --check-only
 # 3. A fresh destination.
 if [[ -e "$dest" && ! -d "$dest" ]]; then

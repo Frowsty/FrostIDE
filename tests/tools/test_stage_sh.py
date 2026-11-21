@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -20,6 +21,8 @@ import unittest
 from pathlib import Path
 
 from tools_test_support import TOOLS, TempDirTestCase, clean_env
+
+from stage_linux_qt import stage_qt
 
 _LOCK = json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(encoding="utf-8"))["linux"]
 LLVM = f"llvm-{_LOCK['llvm']['version']}"
@@ -111,6 +114,44 @@ class StageShTest(TempDirTestCase):
         self.assertTrue((destination / LLDB / "lib" / "liblldb.so").is_symlink(), "the soname link is kept")
         self.assertFalse((destination / LUALS / ".frost-installed").exists(), "the SDK's install marker")
         self.assertFalse((destination / LUALS / "log").exists(), "a log a run left in the SDK")
+
+    def test_unverified_icu_notice_fails_before_staging(self) -> None:
+        build, sdk = self._fake_build(), self._fake_sdk()
+        notice = self.tmp / "incorrect ICU notice.txt"
+        notice.write_bytes(b"incorrect notice")
+        destination = self.tmp / "out"
+
+        result = self._stage(build, sdk, destination, "--icu-notice", str(notice))
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ICU notice does not match sdk.lock", result.stderr)
+        self.assertFalse(destination.exists())
+
+    def test_pinned_icu_notice_is_copied_byte_for_byte_without_writing_to_sdk(self) -> None:
+        sdk = self._fake_sdk()
+        repository = self.tmp / "repo"
+        lock = repository / "sdk/sdk.lock.json"
+        lock.parent.mkdir(parents=True)
+        fixture_pin = json.loads((TOOLS.parent / "sdk/sdk.lock.json").read_text(encoding="utf-8"))
+        notice = self.tmp / "pinned ICU notice.txt"
+        notice_bytes = b"Unicode ICU fixture\r\n"
+        notice.write_bytes(notice_bytes)
+        fixture_pin["qt"]["linux"]["icuNotice"]["sha256"] = hashlib.sha256(notice_bytes).hexdigest()
+        lock.write_text(json.dumps(fixture_pin), encoding="utf-8")
+        qt = sdk / "qt" / fixture_pin["qt"]["version"] / "gcc_64"
+        (qt / "lib/libicuuc.so.73").write_bytes(b"ICU fixture")
+        destination = self.tmp / "stage"
+        with self.assertRaisesRegex(ValueError, "bundled ICU requires the pinned --icu-notice"):
+            stage_qt(repository, sdk, destination, debug=True, check_only=True)
+        self.assertFalse(destination.exists())
+        destination.mkdir()
+        self._executable(destination / "frost", b"FrostIDE executable fixture")
+
+        stage_qt(repository, sdk, destination, debug=True, icu_notice=notice)
+
+        self.assertEqual((destination / "licenses/ICU.txt").read_bytes(), notice_bytes)
+        self.assertFalse((qt / "licenses").exists())
+        self.assertEqual(notice.read_bytes(), notice_bytes)
 
     def test_a_missing_bundled_tool_fails_before_staging(self) -> None:
         cases = {"clang-scan-deps": f"{LLVM}/bin/clang-scan-deps", "LLVM coverage tool": f"{LLVM}/bin/llvm-cov", "clangd": f"{LLVM}/bin/clangd", "clangd resource directory": f"{LLVM}/lib/clang",
