@@ -1146,9 +1146,9 @@ class BuildTreeLabelsTest(unittest.TestCase):
         if any(test["name"].startswith("FrostProcess.") for test in self.tests):  # Trees with the UI.
             self.assertTrue(any(name.startswith("FrostProcess.") for name in desktop), desktop[:5])
 
-    def test_one_kind_label_and_tags_after_it(self):
-        # frost_add_test (cmake/FrostLayers.cmake): LABELS starts with the kind, and the labels after it
-        # are tags that ctest -L selects by and that keep the kind's scheduling default. Every test has
+    def test_one_kind_label_and_expected_tags(self):
+        # CMake registration lists the kind first, then tags used by ctest -L. CTest returns labels
+        # in alphabetical order, so this check uses membership and verifies the kind's lock. Every test has
         # exactly one kind label; the tagged suites are build_msbuild_tests,
         # app_workbench_msbuild_tests, project_msbuild_tests, project_edit_msbuild_tests (SLN-6),
         # project_corpus_tests and build_corpus_tests (Windows only; tag "msbuild"; SLN-2, SLN-9),
@@ -1185,22 +1185,31 @@ class BuildTreeLabelsTest(unittest.TestCase):
                                               "WorkbenchClangd.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
                                               "CMakeCompileCommands.", "ClCommandLinesClangd.",
                                               "WorkbenchConfigurationManager.", "BindingQueriesCorpus.",
-                                              "WorkbenchBindingCorpus.")),
+                                              "WorkbenchBindingCorpus.", "ComponentTemplateCorpus.",
+                                              "WorkbenchCppRefactoringJourney.",
+                                              "WorkbenchCreateUsage.", "WorkbenchCppModules.")),
                   "cmake": ("integration", ("CMakeRealBuild.", "WorkbenchCMake.", "WorkbenchClangdSpawn.",
                                             "CMakeCompileCommands.", "AutomationEndpoint.", "WorkbenchRun.",
                                             "CMakePresetsOracle.", "Fixtures/CMakePresetsOracle.",
                                             "Fixtures/CMakePresetsRefusedOracle.", "TestRunnerCTest.",
                                             "TestRunnerCancel.", "TestRunnerStub.", "UnitTestsWindow.",
-                                            "DoctestRunner.", "TestRunnerDoctestSelection.")),
+                                            "DoctestRunner.", "TestRunnerDoctestSelection.",
+                                            "CMakeMembershipOracle.", "CMakeTemplateOracle.",
+                                            "CMakeTargetRenameReal.", "WorkbenchProjectLanguage.")),
                   "msvc": ("integration", ("MsvcEnvironmentCapture.", "RealToolchain.", "MsvcDebug.",
+                                           "NatvisPackReal.", "NativeDepth.",
                                            "Runtimes/MsvcThrowFilter.", "Builds/MsvcStepInto.")),
-                  "git": ("integration", ("GitE2E.", "GitUiE2E.", "WorkbenchGit.")),
+                  "git": ("integration", ("GitE2E.", "GitUiE2E.", "WorkbenchGit.",
+                                          "GitDailyWorkflows.", "GitCommitChecks.", "SceneMergeSources.",
+                                          "UnityYamlMerge.")),
                   "lldb": ("integration", ("LldbDapE2E.", "LldbDebugSession.", "DapReal.", "CorpusFrostEditor.",
                                            "UnitTestsWindow.", "MultiSessionReal.", "EngineMixedRealCorpus.",
                                            "MsvcDebug.", "Runtimes/MsvcThrowFilter.", "Builds/MsvcStepInto.")),
-                  "lua": ("integration", ("LuaDebugEndpoint.", "RealLuaCorpus.", "EngineMixedRealCorpus.")),
-                  "luals": ("integration", ("BindingQueriesCorpus.", "WorkbenchBindingCorpus.")),
-                  "dbgeng": ("integration", ("DbgEngReal.", "DbgEngTransportReal.")),
+                  "lua": ("integration", ("LuaDebugEndpoint.", "RealLuaCorpus.", "EngineMixedRealCorpus.",
+                                          "LuaFrameworkReal.", "StandaloneLuaReal.", "LuaUnitTestsWindow.")),
+                  "luals": ("integration", ("BindingQueriesCorpus.", "WorkbenchBindingCorpus.",
+                                            "ComponentTemplateCorpus.")),
+                  "dbgeng": ("integration", ("DbgEngReal.", "DbgEngTransportReal.", "NatvisPackReal.", "NativeDepth.")),
                   "screenshot": ("unit", ("ThemeScreenshot.", "ThemeScreenshot/", "ThemeContrast.",
                                           "GoldenComparator."))}
         wrong, seen = [], dict.fromkeys(tagged, 0)

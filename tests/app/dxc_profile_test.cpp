@@ -9,6 +9,7 @@
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 namespace frost::app {
+#ifndef FROST_TEST_DXC
 namespace {
 DxcProfile profile() {
 #ifdef _WIN32
@@ -101,7 +102,7 @@ TEST(DxcProfile, UntrustedOrRevokedProjectNeverLaunchesTheCompiler) {
     EXPECT_FALSE(runDxc(captured, p));
     EXPECT_TRUE(launcher.launches().empty());
 }
-#ifdef FROST_TEST_DXC
+#else
 TEST(DxcInstalledCompiler, DiagnosesActualSavedHlslThroughRealCommand) {
     frost::test::ScratchDir scratch("installed-dxc");
     auto& fs = io::realFileSystem();
