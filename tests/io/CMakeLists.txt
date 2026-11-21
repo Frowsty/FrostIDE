@@ -136,5 +136,18 @@ if(WIN32)
     target_link_libraries(io_integration_tests PRIVATE userenv)
 endif()
 target_compile_definitions(io_integration_tests PRIVATE FROST_SANDBOX_TEST_CHILD="$<TARGET_FILE:sandbox_probe_child>")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(FROST_SANDBOX_TEST_RUNTIME_FILES "" CACHE STRING
+        "Semicolon-separated canonical Linux runtime files approved for this build's native sandbox probe")
+    if(NOT "${FROST_SANDBOX_TEST_RUNTIME_FILES}" STREQUAL "")
+        # Pass the literal fixture list to this source only. The test retains its environment fallback
+        # for direct runs built without an explicit inventory.
+        string(REPLACE "\\" "\\\\" _frost_probe_runtime "${FROST_SANDBOX_TEST_RUNTIME_FILES}")
+        string(REPLACE "\"" "\\\"" _frost_probe_runtime "${_frost_probe_runtime}")
+        string(REPLACE ";" "\\;" _frost_probe_runtime "${_frost_probe_runtime}")
+        set_property(SOURCE process_sandbox_native_test.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+            "FROST_CONFIGURED_SANDBOX_TEST_RUNTIME_FILES=\"${_frost_probe_runtime}\"")
+    endif()
+endif()
 add_dependencies(io_integration_tests sandbox_probe_child)
 frost_deploy_extension_sandbox(io_integration_tests)

@@ -65,9 +65,13 @@ TEST(NativeProcessSandbox, ProductionSyncAndAsyncRetainNativePolicy) {
     spec = std::move(*staged);
     profile.name = spec.sandbox->windowsAppContainerName;
 #else
+#ifdef FROST_CONFIGURED_SANDBOX_TEST_RUNTIME_FILES
+    const auto* configured = FROST_CONFIGURED_SANDBOX_TEST_RUNTIME_FILES;
+#else
     const auto* configured = std::getenv("FROST_SANDBOX_TEST_RUNTIME_FILES");
     if (!configured)
         GTEST_SKIP() << "Provide explicit semicolon-separated canonical runtime files (loader/libc/libstdc++)";
+#endif
     std::string paths(configured);
     std::size_t begin = 0;
     while (begin < paths.size()) {

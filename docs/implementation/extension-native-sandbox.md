@@ -82,16 +82,30 @@ profile is not a VM, a hostile-kernel boundary or a defense against a malicious 
 changing the approved installation/state. No claim is made for future syscall families or a
 resource/CPU/memory quota beyond existing independent process controls.
 
-## Deferred evidence
+## Native acceptance
 
 Pure production-policy tests cover exact rights, component boundaries, parent traversal, invalid
 profiles and mandatory launch restrictions. The independent sandbox_probe_child uses only native
 APIs/standard library to attempt permitted reading, forbidden reading and writing; Linux additionally
 attempts socket creation, while Windows independently inspects AppContainer/capability token state.
 The production integration fixture exercises both real synchronous and asynchronous launch paths.
-It is explicitly opt-in with FROST_RUN_NATIVE_SANDBOX_PROBE; Linux also requires the exact canonical
-runtime file inventory in FROST_SANDBOX_TEST_RUNTIME_FILES. Unset acceptance inputs are reported
-as skipped rather than counted as native enforcement evidence. No fixture has been executed.
+Set `FROST_RUN_NATIVE_SANDBOX_PROBE=1` for CTest to opt in. On Linux, configure each build tree
+with `-DFROST_SANDBOX_TEST_RUNTIME_FILES:STRING="$approved_runtime_files"`. The value is a
+semicolon-separated list of exact canonical ELF interpreter and shared library files approved
+for that tree's `sandbox_probe_child`. Inspect the actual child with `readelf -l` and `ldd`, then
+resolve the identified paths with `readlink -e`. An empty cache entry preserves the
+`FROST_SANDBOX_TEST_RUNTIME_FILES` environment fallback for local runs. A nonempty cache entry
+takes precedence. Unset acceptance inputs are reported as skipped.
+
+Keep the ordinary Release helper and extension sample together when validating the distribution
+pair. An instrumented parent can launch that same pair as an additional check. For a homogeneous
+sanitizer CTest run, use the preset's own helper and child and approve that child's runtime
+inventory separately. On the Ubuntu 24.04 WSL reference host, the ASan/UBSan and TSan probe children
+needed `libresolv.so.2` in addition to the ordinary five runtime files. Ordinary Debug, Release,
+RelWithDebInfo and TSan RelWithDebInfo each passed both native probe cases there. The ASan/UBSan
+positive case failed because LeakSanitizer could not inspect `/proc/PID/task` at exit. Its invalid
+profile case passed. An ordinary Release pair passing under an instrumented parent does not resolve
+that homogeneous ASan failure. Preserve the test failure and the sandbox's procfs restrictions.
 
 The implementation uses only existing platform headers/libraries and project code. No new
 third-party source or package/license graph was introduced. Public primary references:
