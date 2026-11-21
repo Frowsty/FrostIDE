@@ -146,6 +146,15 @@ target_include_directories(app_cpp_refactoring_journey_tests PRIVATE ${FROST_SOU
 target_compile_definitions(app_cpp_refactoring_journey_tests PRIVATE ${_frost_workbench_definitions}
     FROST_CLANG_BINARY="$<TARGET_FILE:frost-clang>"
     FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+if(WIN32)
+    target_compile_definitions(app_cpp_refactoring_journey_tests PRIVATE
+        FROST_TEST_VCTOOLS_DIR="${FROST_VCTOOLS_DIR}"
+        FROST_TEST_WINSDK_DIR="${FROST_WINSDK_DIR}"
+        FROST_TEST_WINSDK_VERSION="${FROST_WINSDK_VERSION}")
+elseif(DEFINED FROST_GCC_INSTALL_DIR)
+    target_compile_definitions(app_cpp_refactoring_journey_tests PRIVATE
+        FROST_TEST_GCC_INSTALL_DIR="${FROST_GCC_INSTALL_DIR}")
+endif()
 add_dependencies(app_cpp_refactoring_journey_tests frost-clang)
 
 # DBG-10 real lldb sessions use actual source/stack/variable responses, separately from doubles.

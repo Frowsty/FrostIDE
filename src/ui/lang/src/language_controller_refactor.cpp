@@ -354,10 +354,11 @@ void LanguageController::extractParameter() {
 }
 
 void LanguageController::inlineSymbol() {
-    runClangdTweak(
-        "InlineVariable", QStringLiteral("Inline Variable"),
-        QStringLiteral(
-            "clangd cannot inline this variable; use Inline C++ Call for the supported call-expression profile"));
+    if (capabilities().clangdTweaks && m_cppAstRefactoring) {
+        m_cppAstRefactoring("inline-variable");
+        return;
+    }
+    unavailable(QStringLiteral("Inline C++ Const Local requires the captured C++ AST planner"));
 }
 
 void LanguageController::changeSignature() {

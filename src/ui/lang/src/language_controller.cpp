@@ -402,8 +402,8 @@ Result<void> LanguageController::registerActions(input::ActionRegistry& registry
          A::Never, "Requires the extract refactorings (REF-7)"},
         {"refactor.extractMethod", "Extract Method...", "Refactor", &LanguageController::extractMethod, true,
          A::ClangdTweaks, "C++: clangd's Extract to Function; other languages require REF-7"},
-        {"refactor.inline", "Inline...", "Refactor", &LanguageController::inlineSymbol, true, A::ClangdTweaks,
-         "REF-6: actual clangd InlineVariable; use Inline C++ Call for the bounded AST call profile"},
+        {"refactor.inline", "Inline C++ Const Local...", "Refactor", &LanguageController::inlineSymbol, true,
+         A::AstOperations, "Inline an automatic const arithmetic local initialized with literal arithmetic"},
         {"refactor.changeSignature", "Change Signature...", "Refactor", &LanguageController::changeSignature, true,
          A::AstOperations,
          "REF-6: explicit parameter names/types/order/add/remove across captured project declarations and direct "

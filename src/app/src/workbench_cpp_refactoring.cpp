@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // REF-6/7 production actions: captured semantic helper, atomic preview, then REF-1 transaction.
 #include "frost/app/workbench.hpp"
+#include "frost/core/log.hpp"
 #include "frost/io/spawn_log.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/ui/editor/editor_view.hpp"
@@ -256,14 +257,22 @@ void Workbench::prepareCppRefactoring(lang::CppRefactoringRequest request, std::
 }
 
 void Workbench::registerCppRefactoringActions() {
-    for (const auto& [operation, label] : std::array{
-             std::pair{"change-signature", "Reorder C++ Parameters…"},
-             std::pair{"edit-signature", "Change C++ Signature…"}, std::pair{"inline-variable", "Inline C++ Variable…"},
-             std::pair{"inline-function", "Inline C++ Call…"}, std::pair{"extract-variable", "Extract C++ Variable…"},
-             std::pair{"extract-constant", "Extract C++ Constant…"}, std::pair{"extract-method", "Extract C++ Method…"},
-             std::pair{"extract-field", "Extract C++ Field…"}}) {
+    struct Entry {
+        const char* actionId;
+        const char* operation;
+        const char* label;
+    };
+    constexpr std::array entries{Entry{"refactor.cpp.changeSignature", "change-signature", "Reorder C++ Parameters…"},
+                                 Entry{"refactor.cpp.editSignature", "edit-signature", "Change C++ Signature…"},
+                                 Entry{"refactor.cpp.inlineVariable", "inline-variable", "Inline C++ Const Local…"},
+                                 Entry{"refactor.cpp.inlineFunction", "inline-function", "Inline C++ Call…"},
+                                 Entry{"refactor.cpp.extractVariable", "extract-variable", "Extract C++ Variable…"},
+                                 Entry{"refactor.cpp.extractConstant", "extract-constant", "Extract C++ Constant…"},
+                                 Entry{"refactor.cpp.extractMethod", "extract-method", "Extract C++ Method…"},
+                                 Entry{"refactor.cpp.extractField", "extract-field", "Extract C++ Field…"}};
+    for (const auto& [actionId, operation, label] : entries) {
         input::ActionSpec action;
-        action.id = "refactor.cpp." + std::string(operation);
+        action.id = actionId;
         action.name = label;
         action.group = "Refactor";
         action.context.all = input::ContextKeys{input::ContextKey::EditorFocus};
@@ -271,7 +280,8 @@ void Workbench::registerCppRefactoringActions() {
         action.handler = [this, operation](const input::ActionContext&, const input::InvokeInfo&) {
             showCppRefactoring(operation);
         };
-        (void)m_registry.add(std::move(action));
+        if (auto registered = m_registry.add(std::move(action)); !registered)
+            log::warn("refactoring", "C++ action registration: {}", registered.error().describe());
     }
 }
 
@@ -291,10 +301,6 @@ void Workbench::showCppRefactoring(std::string operation) {
     }
     if (m_language && operation == "extract-method") {
         m_language->extractMethod();
-        return;
-    }
-    if (m_language && operation == "inline-variable") {
-        m_language->inlineSymbol();
         return;
     }
     auto* view = m_actionHost.active();
@@ -468,6 +474,9 @@ void Workbench::showCppRefactoring(std::string operation) {
                           "Parameter types come from recovered argument QualTypes; implementation is supplied "
                           "by you. A source-local free definition or public inline method in its captured "
                           "project class/header is inserted. All configurations must reparse without errors.")
+                : operation == "inline-variable"
+                    ? QStringLiteral("Profile: one automatic const arithmetic local with its own declaration and a "
+                                     "literal arithmetic initializer. Every use must read its value.")
                 : operation == "inline-function"
                     ? QStringLiteral("Profile: one direct call to an internal arithmetic function with a single pure "
                                      "return expression; every argument must be a non-volatile value or literal.")

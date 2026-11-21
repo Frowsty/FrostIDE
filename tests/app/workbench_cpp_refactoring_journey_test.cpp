@@ -2,15 +2,137 @@
 // Authored R11 ten-operation real-AST -> Workbench transaction -> Undo/Redo composition.
 // This is a C++ component fixture, not evidence that the future engine-corpus journey ran.
 #include "frost/document/refactoring_transaction.hpp"
+#include "frost/lang/clangd_service.hpp"
+#include "frost/lang/compile_commands.hpp"
 #include "frost/rpc/json.hpp"
+#include "frost/ui/editor/editor_view.hpp"
 
+#include "clang/pinned_compiler_arguments.hpp"
 #include "workbench_rig.hpp"
+#include <QDialogButtonBox>
+#include <QMessageBox>
+#include <QPlainTextEdit>
+#include <QPushButton>
+#include <QTimer>
 
 #include <array>
 #include <filesystem>
 
 namespace frost::app::test {
 namespace {
+using namespace std::chrono_literals;
+
+TEST(WorkbenchCppRefactoringJourney, NamedInlineActionsPreviewApplyCompileAndRefuseObservableIdentity) {
+    WorkDir dir("cpp-inline-action"), recovery("cpp-inline-recovery");
+    const std::string before = "int main(){const int literal=2+3; const int observed=7; "
+                               "const int* pointer=&observed; return literal+*pointer;}\n";
+    dir.write("workspace/main.cpp", before);
+    const auto file = dir.join("workspace/main.cpp");
+    const auto root = dir.join("workspace");
+    const auto compiler = io::normalizePath(FROST_TEST_CXX_COMPILER).value();
+#ifdef _WIN32
+    std::vector<std::string> arguments{compiler, "/std:c++20", "/EHsc", "/c", file};
+#else
+    std::vector<std::string> arguments{compiler, "-std=c++20", "-c", file};
+#endif
+    frost::test::appendPinnedCompilerArguments(arguments);
+    const std::vector<lang::CompileCommand> commands{{root, file, std::move(arguments)}};
+    ASSERT_TRUE(lang::writeCompileCommands(io::realFileSystem(), dir.join("workspace/build"), commands));
+
+    RigOptions options;
+    options.workbench.clangd = true;
+    options.workbench.clangdJobs = 1;
+    options.workbench.refactoringStateDirectory = recovery.join("transactions");
+    WorkbenchRig rig(dir, options);
+    ASSERT_TRUE(rig.trust->trust(root));
+    rig.show();
+    ASSERT_TRUE(rig.workbench->openPath(root));
+    ASSERT_TRUE(rig.workbench->openPath(file));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            auto* service = rig.workbench->clangd();
+            return service && service->state() == lang::ClangdState::Running && service->compileCommands();
+        },
+        90s));
+
+    QString refusal;
+    QTimer dismissWarning;
+    QObject::connect(&dismissWarning, &QTimer::timeout, [&] {
+        if (auto* warning = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+            refusal = warning->text();
+            warning->reject();
+        }
+    });
+    dismissWarning.start(1);
+    const auto moveCaret = [&](std::string_view name) {
+        rig.view()->widget()->setFocus();
+        rig.view()->goToLine(1, static_cast<int>(before.find(name) + 1));
+    };
+    const input::ActionContext context{.keys = input::ContextKeys{input::ContextKey::EditorFocus}, .trusted = true};
+    for (const auto* id : {"refactor.inline", "refactor.cpp.inlineVariable"}) {
+        SCOPED_TRACE(id);
+        const auto action = rig.workbench->registry().find(id);
+        ASSERT_TRUE(action);
+        moveCaret("literal");
+        ASSERT_EQ(rig.workbench->registry().tryInvoke(*action, context), input::InvokeResult::Ran);
+        QDialogButtonBox* preview = nullptr;
+        ASSERT_TRUE(waitFor(
+            [&] {
+                for (auto* box : rig.window->findChildren<QDialogButtonBox*>())
+                    if (box->isVisible() && box->button(QDialogButtonBox::Apply))
+                        preview = box;
+                return preview || !refusal.isEmpty();
+            },
+            120s));
+        ASSERT_NE(preview, nullptr) << refusal.toStdString();
+        auto* dialog = preview->parentWidget();
+        ASSERT_NE(dialog, nullptr);
+        auto* image = dialog->findChild<QPlainTextEdit*>();
+        ASSERT_NE(image, nullptr);
+        const auto previewText = image->toPlainText();
+        EXPECT_TRUE(previewText.contains(QStringLiteral("BEFORE\n") + QString::fromStdString(before)));
+        EXPECT_TRUE(previewText.contains(QStringLiteral("AFTER\n")));
+        const auto afterPreview = previewText.section(QStringLiteral("AFTER\n"), 1);
+        EXPECT_TRUE(afterPreview.contains(QStringLiteral("2+3")));
+        EXPECT_FALSE(afterPreview.contains(QStringLiteral("literal")));
+        EXPECT_EQ(rig.view()->editor().document().text().text(), before);
+        EXPECT_EQ(dir.read("workspace/main.cpp"), before);
+        preview->button(QDialogButtonBox::Apply)->click();
+        ASSERT_TRUE(refusal.isEmpty()) << refusal.toStdString();
+        ASSERT_TRUE(rig.workbench->canUndoRefactoring());
+
+        const auto after = rig.view()->editor().document().text().text();
+        EXPECT_EQ(after.find("literal"), std::string::npos);
+        EXPECT_NE(after.find("2+3"), std::string::npos);
+        EXPECT_NE(after.find("&observed"), std::string::npos);
+        dir.write("workspace/compiled.cpp", after);
+        io::ProcessSpec compile;
+        compile.executable = compiler;
+        compile.workingDirectory = root;
+#ifdef _WIN32
+        compile.arguments = {"/std:c++20", "/EHsc", "/Zs", dir.join("workspace/compiled.cpp")};
+#else
+        compile.arguments = {"-std=c++20", "-fsyntax-only", dir.join("workspace/compiled.cpp")};
+#endif
+        frost::test::appendPinnedCompilerArguments(compile.arguments);
+        const auto result = io::runToCompletion(io::realProcessLauncher(), compile, {}, 30s);
+        ASSERT_TRUE(result);
+        EXPECT_EQ(result->exitCode, 0) << result->stderrBytes;
+        ASSERT_TRUE(rig.workbench->undoRefactoring());
+        EXPECT_EQ(rig.view()->editor().document().text().text(), before);
+    }
+
+    moveCaret("observed");
+    const auto action = rig.workbench->registry().find("refactor.inline");
+    ASSERT_TRUE(action);
+    ASSERT_EQ(rig.workbench->registry().tryInvoke(*action, context), input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&] { return !refusal.isEmpty(); }, 120s));
+    EXPECT_TRUE(refusal.contains(QStringLiteral("Variable identity/address is observable"))) << refusal.toStdString();
+    EXPECT_EQ(rig.view()->editor().document().text().text(), before);
+    EXPECT_EQ(dir.read("workspace/main.cpp"), before);
+    EXPECT_FALSE(rig.workbench->canUndoRefactoring());
+}
+
 TEST(WorkbenchCppRefactoringJourney, TenRealAstOperationsHaveWholeOperationUndoAndRedo) {
     WorkDir dir("cpp-refactoring-journey");
     std::string source = "struct Health { int value; };\n"
@@ -36,6 +158,7 @@ TEST(WorkbenchCppRefactoringJourney, TenRealAstOperationsHaveWholeOperationUndoA
     for (const auto& argument : std::vector<std::string>{"-std=c++20", "-c", file})
         arguments.emplace_back(argument);
 #endif
+    frost::test::appendPinnedCompilerArguments(arguments);
     const auto database = Json::array({Json::object()
                                            .set("directory", root)
                                            .set("file", file)
