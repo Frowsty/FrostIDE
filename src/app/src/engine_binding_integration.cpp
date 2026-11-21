@@ -575,6 +575,8 @@ EngineBindingIntegration::EngineBindingIntegration(Workbench& workbench,
     : QObject(&workbench), m_impl(std::make_unique<Impl>(*this, workbench, std::move(retirement), std::move(relay))) {
     auto& impl = *m_impl;
     auto* panel = new QWidget(workbench.m_window);
+    // The tool window takes over visibility when it docks the panel on first use.
+    panel->hide();
     panel->setObjectName(QStringLiteral("engineBindingsPanel"));
     impl.panel = panel;
     auto* layout = new QVBoxLayout(panel);

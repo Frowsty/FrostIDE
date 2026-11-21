@@ -362,6 +362,11 @@ Result<build::RunId> RunController::run(std::optional<project::ProjectId> projec
     return runService(std::nullopt);
 }
 
+bool RunController::canRunCompound() const {
+    const auto* selected = selectedConfiguration();
+    return selected && selected->type == run::RunType::Compound && validateCompoundMembers(*selected).has_value();
+}
+
 Result<run::RunId> RunController::runEngineConfiguration(const run::RunConfiguration& configuration) {
     if (!run::isFrostEngineRunType(configuration.type))
         return fail(ErrorCode::InvalidArgument, "Transient engine launch requires an Editor or Player configuration");
@@ -417,12 +422,11 @@ Result<build::RunId> RunController::runConfiguration(const std::string& id) {
     return fail(ErrorCode::Unsupported, "unknown run configuration type");
 }
 
-Result<build::RunId> RunController::runCompound(const run::RunConfiguration& configuration) {
+Result<void> RunController::validateCompoundMembers(const run::RunConfiguration& configuration) const {
     if (auto valid = run::validateRunConfiguration(configuration); !valid) {
         return std::unexpected(std::move(valid.error()));
     }
     // Every member is checked before anything starts (header comment, "What runs").
-    std::vector<std::string> members;
     std::size_t cmakeTargets = 0;
     for (const std::string& id : configuration.configurations) {
         const run::RunConfiguration* member = m_set.find(id);
@@ -443,8 +447,13 @@ Result<build::RunId> RunController::runCompound(const run::RunConfiguration& con
                                     "one target at a time, so a compound run can hold one of them",
                                     configuration.name));
         }
-        members.push_back(id);
     }
+    return {};
+}
+
+Result<build::RunId> RunController::runCompound(const run::RunConfiguration& configuration) {
+    if (auto valid = validateCompoundMembers(configuration); !valid)
+        return std::unexpected(std::move(valid.error()));
     // The workspace's trust gate once for the whole compound (one prompt, whose retry reruns it).
     if (m_hooks.mayRunConfiguration) {
         if (auto allowed = m_hooks.mayRunConfiguration(configuration); !allowed) {
@@ -453,7 +462,8 @@ Result<build::RunId> RunController::runCompound(const run::RunConfiguration& con
     }
     std::optional<build::RunId> first;
     std::vector<Error> errors;
-    for (const std::string& id : members) {
+    // runConfiguration holds this configuration by value across all member launches.
+    for (const std::string& id : configuration.configurations) {
         auto started = runConfiguration(id);
         if (started) {
             first = first.value_or(*started);

@@ -756,19 +756,4 @@ void Workbench::attachToProcess(std::uint32_t pid, const std::string& exePath, c
     }
 }
 
-/*
- * Compound launches are unavailable until RUN-5 (before-launch steps, compound run and attach
- * configurations). The previous implementation granted trust silently and started `dotnet` by bare
- * name through Qt's process class, outside IProcessLauncher; nothing is launched here now, and the user is
- * told why. The dialogs keep their compound section, which reaches this refusal.
- */
-void Workbench::launchCompoundConfiguration(const std::vector<project::ProjectId>& targets) {
-    if (targets.empty())
-        return;
-    notify(text("Compound Run unavailable"),
-           text("Running several targets together requires compound run configurations (RUN-5). Nothing was "
-                "started."),
-           ui::NotificationKind::Warning);
-}
-
 } // namespace frost::app

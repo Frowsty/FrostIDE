@@ -50,6 +50,17 @@ Result<void> registerRunActions(input::ActionRegistry& registry, RunController& 
                      .context = {},
                      .enabled = hasSolution,
                      .handler = runAction});
+    specs.push_back({.id = "run.runCompound",
+                     .name = "Run Compound Configuration...",
+                     .description = "Run the selected compound configuration",
+                     .group = "Run",
+                     .synonyms = {},
+                     .context = {{}, input::ContextKeys{input::ContextKey::DialogFocus}},
+                     .enabled =
+                         [c, shared](const input::ActionContext&) {
+                             return c->canRunCompound() && (!shared->debugging || !shared->debugging());
+                         },
+                     .handler = runAction});
     specs.push_back({.id = std::string(kRunContextActionId),
                      .name = "Run Context Configuration",
                      .description = "Build and run the active or startup project",

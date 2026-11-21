@@ -398,10 +398,6 @@ void Workbench::registerActions() {
         "run.editConfigurations", "Edit Run/Debug Configurations...", [this] { editRunConfigurations(); },
         [this] { return m_window != nullptr && hasProject() && m_runController != nullptr; });
     add(
-        "run.runCompound", "Run Compound Configuration...", [this] { editRunConfigurations(); },
-        // Disabled until compound run configurations exist (RUN-5); see launchCompoundConfiguration.
-        [] { return false; });
-    add(
         "run.selectConfiguration", "Select Run Configuration...", [this] { editRunConfigurations(); },
         [this] { return m_window != nullptr && hasProject() && m_runController != nullptr; });
     add(

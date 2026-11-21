@@ -839,7 +839,7 @@ TEST(WorkbenchEngine, SessionPeerTestFailureAndLogLocationsNavigate) {
     EXPECT_TRUE(output->activate(rowContaining(output, QStringLiteral("integration log"))));
     ASSERT_TRUE(waitFor([&] { return rig.workbench->currentView()->status().line == 1; }, 3s));
 }
-TEST(WorkbenchEngine, ToolWindowExistsOnlyForFrostEngineProjectsAndHasNoLuaDebugAction) {
+TEST(WorkbenchEngine, ToolWindowRequiresAnEngineProjectAndLuaDebugRequiresAnEngineConnection) {
     WorkDir dir("engine-gating");
     dir.write("plain/main.lua", "return 1\n");
     dir.write("game/Game.frostproj", "{}");
@@ -848,15 +848,19 @@ TEST(WorkbenchEngine, ToolWindowExistsOnlyForFrostEngineProjectsAndHasNoLuaDebug
     ASSERT_TRUE(rig.workbench->openPath(dir.join("plain")));
     EXPECT_EQ(rig.workbench->engineState().boolAt("available"), false);
     EXPECT_FALSE(rig.window->toolWindows().isVisible("frostEngine"));
+    ASSERT_TRUE(rig.trust->trust(dir.join("game")));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("game")));
     ASSERT_EQ(rig.workbench->engineState().boolAt("available"), true);
     auto* output = console(rig);
     ASSERT_NE(output, nullptr);
     EXPECT_FALSE(output->submitCommand(QStringLiteral("play.start")));
-    EXPECT_FALSE(rig.workbench->registry().find("engine.debugLua"));
     auto* panel = rig.window->toolWindows().content("frostEngine");
-    for (auto* candidate : panel->findChildren<QPushButton*>())
-        EXPECT_FALSE(candidate->text().contains(QStringLiteral("Lua"))) << candidate->text().toStdString();
+    ASSERT_NE(panel, nullptr);
+    auto* debugLua = panel->findChild<QPushButton*>(QStringLiteral("engineDebugLuaButton"));
+    ASSERT_NE(debugLua, nullptr);
+    EXPECT_FALSE(debugLua->isEnabled());
+    debugLua->click();
+    EXPECT_FALSE(rig.workbench->debugController()->debugging());
     ASSERT_TRUE(rig.workbench->openPath(dir.join("plain")));
     EXPECT_FALSE(rig.window->toolWindows().isVisible("frostEngine"));
     EXPECT_FALSE(output->submitCommand(QStringLiteral("play.start")));

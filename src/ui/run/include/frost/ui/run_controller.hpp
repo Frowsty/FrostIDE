@@ -214,6 +214,7 @@ public:
     // The RunManager run of the native configuration `id` that has not finished, if any.
     [[nodiscard]] std::optional<run::RunId> configurationRun(const std::string& id) const;
     [[nodiscard]] bool canRun() const;
+    [[nodiscard]] bool canRunCompound() const;
     void alternateStateChanged() { emit runStateChanged(); }
 
 signals:
@@ -241,6 +242,7 @@ private:
     void applySelection(const run::RunConfiguration& configuration);
     [[nodiscard]] Result<build::RunId> runService(std::optional<project::ProjectId> project);
     [[nodiscard]] Result<build::RunId> runNative(const run::RunConfiguration& configuration);
+    [[nodiscard]] Result<void> validateCompoundMembers(const run::RunConfiguration& configuration) const;
     [[nodiscard]] Result<build::RunId> runCompound(const run::RunConfiguration& configuration);
     void nativeFinished(const std::string& id, const run::RunResult& result);
     void notifyExplicitEngineStop(run::RunId id);

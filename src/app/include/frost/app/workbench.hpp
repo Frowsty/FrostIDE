@@ -1004,7 +1004,6 @@ private:
     void showAttachToProcess();
     void attachToProcess(std::uint32_t pid, const std::string& exePath, const std::string& exeName,
                          bool attachAsDotNet);
-    void launchCompoundConfiguration(const std::vector<project::ProjectId>& targets);
     [[nodiscard]] Result<void> reopenRoot(const std::string& root);
     [[nodiscard]] Result<void> openProjectIdentity(const std::string& path);
 

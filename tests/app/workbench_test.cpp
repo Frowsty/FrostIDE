@@ -195,6 +195,17 @@ TEST(Workbench, TopLevelMenusReceiveClicksWithoutOpeningAnotherMenu) {
     QApplication::processEvents();
     EXPECT_FALSE(panel->isVisible());
     checkMenus();
+    auto* bindings = rig.window->findChild<QWidget*>(QStringLiteral("engineBindingsPanel"));
+    ASSERT_NE(bindings, nullptr);
+    EXPECT_FALSE(bindings->isVisible());
+    rig.window->toolWindows().show("engineBindings");
+    QApplication::processEvents();
+    EXPECT_TRUE(bindings->isVisible());
+    checkMenus();
+    rig.window->toolWindows().hide("engineBindings");
+    QApplication::processEvents();
+    EXPECT_FALSE(bindings->isVisible());
+    checkMenus();
 }
 
 TEST(Workbench, DirtyTabCloseReportsCommittedWarningWithoutDiscardPrompt) {
@@ -2139,29 +2150,42 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
     EXPECT_EQ(reparsed["Link.SubSystem"], "Windows");
     EXPECT_EQ(reparsed["PostBuildEvent.Command"], "echo PostBuildDone");
 
-    // 2. Project properties dialog opens, modifies linker AdditionalDependencies, and saves to disk.
+    // 2. A direct properties dialog without a trusted save callback refuses the attempted edit.
     bool savedCalled = false;
+    QString saveWarning;
     QTimer::singleShot(0, rig.window.get(), [&] {
         auto* dlg = rig.window->findChild<QDialog*>(QStringLiteral("projectPropertiesDialog"));
-        ASSERT_NE(dlg, nullptr);
+        EXPECT_NE(dlg, nullptr);
+        if (dlg == nullptr) {
+            if (auto* active = qobject_cast<QDialog*>(QApplication::activeModalWidget()))
+                active->reject();
+            return;
+        }
         auto* depsEdit = dlg->findChild<QLineEdit*>(QStringLiteral("prop_Link.AdditionalDependencies"));
         EXPECT_NE(depsEdit, nullptr);
         if (depsEdit != nullptr)
             depsEdit->setText(QStringLiteral("ws2_32.lib;advapi32.lib"));
-        // OK saves and then closes (QDialog::accept alone would skip the save).
         auto* buttons = dlg->findChild<QDialogButtonBox*>();
         QPushButton* ok = buttons != nullptr ? buttons->button(QDialogButtonBox::Ok) : nullptr;
         EXPECT_NE(ok, nullptr);
-        if (ok != nullptr)
+        if (ok != nullptr) {
+            QTimer::singleShot(0, dlg, [&, dlg] {
+                if (auto* warning = dlg->findChild<QMessageBox*>()) {
+                    saveWarning = warning->text();
+                    warning->accept();
+                }
+            });
             ok->click();
+        }
         if (dlg->isVisible())
             dlg->reject();
     });
     frost::app::showProjectPropertiesDialog(rig.window.get(), frost::io::realFileSystem(), appVcxprojPath, "Debug|x64",
                                             [&] { savedCalled = true; });
-    EXPECT_TRUE(savedCalled);
-    auto onDiskAfterDlg = frost::app::parseVcxprojPropertiesForConfig(dir.read("App/App.vcxproj"), "Debug|x64");
-    EXPECT_EQ(onDiskAfterDlg["Link.AdditionalDependencies"], "ws2_32.lib;advapi32.lib");
+    EXPECT_FALSE(savedCalled);
+    EXPECT_TRUE(saveWarning.contains(QStringLiteral("Open a trusted solution to edit MSBuild properties")))
+        << saveWarning.toStdString();
+    EXPECT_EQ(dir.read("App/App.vcxproj"), initialXml);
 
     // 3. C# .csproj properties & NuGet PackageReference round-trip.
     const std::string sampleCsproj = "<Project Sdk=\"Microsoft.NET.Sdk\">\n"
@@ -2226,12 +2250,18 @@ TEST(Workbench, VcxprojCsprojNuGetReferencesAndSolutionXmlRoundTripAndDialogs) {
     std::uint32_t attachedPid = 0;
     QTimer::singleShot(0, rig.window.get(), [&] {
         auto* dlg = rig.window->findChild<QDialog*>(QStringLiteral("attachToProcessDialog"));
-        ASSERT_NE(dlg, nullptr);
+        EXPECT_NE(dlg, nullptr);
+        if (dlg == nullptr) {
+            if (auto* active = qobject_cast<QDialog*>(QApplication::activeModalWidget()))
+                active->reject();
+            return;
+        }
         auto* filter = dlg->findChild<QLineEdit*>(QStringLiteral("attachProcessFilterEdit"));
         EXPECT_NE(filter, nullptr);
         auto* table = dlg->findChild<QTableWidget*>(QStringLiteral("attachProcessTable"));
-        ASSERT_NE(table, nullptr);
-        EXPECT_GT(table->rowCount(), 0);
+        EXPECT_NE(table, nullptr);
+        if (table != nullptr)
+            EXPECT_GT(table->rowCount(), 0);
         dlg->accept();
     });
     frost::app::showAttachToProcessDialog(
@@ -3250,7 +3280,7 @@ TEST(Workbench, AttachToProcessPromptsForTrustInsteadOfGrantingIt) {
     EXPECT_FALSE(rig.workbench->debugController()->debugging());
 }
 
-TEST(Workbench, CompoundRunIsUnavailableUntilRunFiveAndStartsNothing) {
+TEST(Workbench, CompoundRunMenuRequiresAValidSelectedCompoundAndStartsItsMembers) {
     WorkDir dir("compound-run", "tiny_sln");
     frost::io::ScriptedProcessLauncher launcher;
     RigOptions options;
@@ -3263,8 +3293,57 @@ TEST(Workbench, CompoundRunIsUnavailableUntilRunFiveAndStartsNothing) {
     ASSERT_TRUE(id);
     frost::input::ActionContext context;
     context.trusted = true;
-    EXPECT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Disabled);
-    EXPECT_TRUE(launcher.launches().empty());
+    const std::string firstProgram = dir.join("first-fixture.exe");
+    const std::string secondProgram = dir.join("second-fixture.exe");
+    dir.write("first-fixture.exe", "scripted");
+    dir.write("second-fixture.exe", "scripted");
+    const auto memberLaunches = [&] {
+        auto launches = launcher.launches();
+        std::erase_if(launches, [&](const auto& launch) {
+            return launch.spec.executable != firstProgram && launch.spec.executable != secondProgram;
+        });
+        return launches;
+    };
+    const auto refused = [&] {
+        EXPECT_EQ(rig.workbench->registry().whyDisabled(*id, context), frost::input::DisabledReason::Callback);
+        EXPECT_EQ(rig.workbench->registry().tryInvoke(*id, context), frost::input::InvokeResult::Disabled);
+        EXPECT_TRUE(memberLaunches().empty());
+    };
+    refused();
+
+    auto* controller = rig.workbench->runController();
+    frost::run::RunConfiguration first;
+    first.id = "first";
+    first.name = "First";
+    first.type = frost::run::RunType::Native;
+    first.program = firstProgram;
+    auto second = first;
+    second.id = "second";
+    second.name = "Second";
+    second.program = secondProgram;
+    frost::run::RunConfiguration compound;
+    compound.id = "pair";
+    compound.name = "Pair";
+    compound.type = frost::run::RunType::Compound;
+    compound.configurations = {first.id, second.id};
+    auto dangling = compound;
+    dangling.id = "dangling";
+    dangling.configurations.back() = "missing";
+    ASSERT_TRUE(controller->replaceConfigurations({first, second, compound, dangling}));
+    ASSERT_TRUE(controller->selectConfiguration(first.id));
+    refused();
+    ASSERT_TRUE(controller->selectConfiguration(dangling.id));
+    refused();
+
+    launcher.expect({});
+    launcher.expect({});
+    ASSERT_TRUE(controller->selectConfiguration(compound.id));
+    EXPECT_EQ(rig.window->invoke("run.runCompound", frost::input::InvokeSource::Menu), frost::input::InvokeResult::Ran);
+    ASSERT_TRUE(waitFor([&] { return memberLaunches().size() == 2; }));
+    auto launches = memberLaunches();
+    EXPECT_TRUE(launches[0].launched);
+    EXPECT_TRUE(launches[1].launched);
+    EXPECT_NE(launches[0].spec.executable, launches[1].spec.executable);
 }
 
 // RUN-5: the Run/Debug Configurations dialog's compound section is the feature now (it replaced
@@ -3281,6 +3360,7 @@ TEST(Workbench, CompoundRunInTheRunConfigurationsDialogAddsAConfigurationAndStar
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")));
     auto id = rig.workbench->registry().find("run.editConfigurations");
     ASSERT_TRUE(id);
+    const auto launchesBefore = launcher.launches().size();
     const std::size_t before = rig.workbench->runController()->configurations().all().size();
     bool clicked = false;
     bool enabled = false;
@@ -3313,24 +3393,22 @@ TEST(Workbench, CompoundRunInTheRunConfigurationsDialogAddsAConfigurationAndStar
     EXPECT_EQ(rowsAfter, rowsBefore + 1);
     EXPECT_TRUE(added.contains(QStringLiteral("compound"))) << added.toStdString();
     EXPECT_EQ(rig.workbench->runController()->configurations().all().size(), before) << "Cancel stored it";
-    EXPECT_TRUE(launcher.launches().empty());
+    EXPECT_EQ(launcher.launches().size(), launchesBefore);
 }
 
-// The "Debug Selected Test" and window.services shortcuts are gone: neither did what it said.
-TEST(Workbench, NoActionPretendsToDebugOneTestOrOpenAServicesWindow) {
-    WorkDir dir("removed-actions");
+TEST(Workbench, ServicesActionOpensItsOwnToolWindow) {
+    WorkDir dir("services-action");
     WorkbenchRig rig(dir);
-    EXPECT_FALSE(rig.workbench->registry().find("window.services").has_value());
-    EXPECT_TRUE(rig.workbench->registry().find("window.unitTests").has_value());
-    // The IntelliJ keymap still names window.services for Alt+8; with no such action that binding
-    // resolves to nothing, and Alt+8 still toggles the Unit Tests window (module default).
     rig.show();
-    rig.window->refreshActions();
-    ASSERT_FALSE(rig.window->toolWindows().isVisible(frost::app::kUnitTestsToolWindow));
-    sendKey(rig.window.get(), Qt::Key_8, Qt::AltModifier);
-    EXPECT_TRUE(rig.window->toolWindows().isVisible(frost::app::kUnitTestsToolWindow));
-    sendKey(rig.window.get(), Qt::Key_8, Qt::AltModifier);
-    EXPECT_FALSE(rig.window->toolWindows().isVisible(frost::app::kUnitTestsToolWindow));
+    auto& tools = rig.window->toolWindows();
+    ASSERT_FALSE(tools.isVisible("services"));
+    ASSERT_FALSE(tools.isVisible(frost::app::kUnitTestsToolWindow));
+    ASSERT_EQ(rig.window->invoke("window.services"), frost::input::InvokeResult::Ran);
+    EXPECT_TRUE(tools.isVisible("services"));
+    EXPECT_NE(tools.content("services"), nullptr);
+    EXPECT_FALSE(tools.isVisible(frost::app::kUnitTestsToolWindow));
+    ASSERT_EQ(rig.window->invoke("window.unitTests"), frost::input::InvokeResult::Ran);
+    EXPECT_TRUE(tools.isVisible(frost::app::kUnitTestsToolWindow));
 }
 
 TEST(Workbench, SolutionLoadPumpsEventsRejectsReentryAndCancelKeepsPreviousProject) {
