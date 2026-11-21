@@ -142,7 +142,8 @@ public:
     }
     std::size_t count(std::string_view name) {
         std::scoped_lock lock(mutex);
-        return std::ranges::count_if(events, [&](const auto& event) { return event.first == name; });
+        return static_cast<std::size_t>(
+            std::ranges::count_if(events, [&](const auto& event) { return event.first == name; }));
     }
     std::optional<Json> last(std::string_view name) {
         std::scoped_lock lock(mutex);
