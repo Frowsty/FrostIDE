@@ -20,6 +20,7 @@
 #include "frost/ui/shell/tool_window_manager.hpp"
 
 #include "shell/shell_rig.hpp"
+#include <QAccessible>
 #include <QAction>
 #include <QComboBox>
 #include <QElapsedTimer>
@@ -136,6 +137,25 @@ TEST(ShellWindow, BuildsTheRiderLayout) {
         EXPECT_FALSE(window.toolWindows().stripeButton(id)->accessibleName().isEmpty()) << id;
         EXPECT_FALSE(window.toolWindows().isVisible(id)) << id;
     }
+}
+
+TEST(ShellWindow, ToolbarNamesFollowTheActiveCommand) {
+    ShellRig rig;
+    ShellWindow window(rig.environment());
+    auto& toolbar = window.mainToolbar();
+    auto* search = toolbar.button(frost::ui::MainToolbar::kSearch);
+    ASSERT_NE(search, nullptr);
+    auto* accessible = QAccessible::queryAccessibleInterface(search);
+    ASSERT_NE(accessible, nullptr);
+    EXPECT_FALSE(accessible->text(QAccessible::Name).isEmpty());
+
+    int searches = 0;
+    rig.addCounted("test.toolbar.search", "Search This Project", searches);
+    toolbar.setSlotAction(frost::ui::MainToolbar::kSearch, "test.toolbar.search");
+    window.refreshActions();
+    EXPECT_EQ(accessible->text(QAccessible::Name), QStringLiteral("Search This Project"));
+    search->click();
+    EXPECT_EQ(searches, 1);
 }
 
 TEST(ShellWindow, ToolbarFocusFollowsVisibleDynamicControls) {

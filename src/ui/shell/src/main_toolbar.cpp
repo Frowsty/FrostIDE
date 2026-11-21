@@ -881,13 +881,15 @@ void MainToolbar::addSlot(std::string_view actionId, std::string_view iconId, st
     button->setObjectName(QStringLiteral("toolbar.") + shell_detail::fromUtf8(actionId));
     button->setAutoRaise(true);
     button->setFocusPolicy(Qt::TabFocus);
+    const QString label = text(fallbackText);
     const QIcon icon = shell_detail::themedIcon(iconId, iconRole);
     if (icon.isNull()) {
-        button->setText(text(fallbackText));
+        button->setText(label);
     } else {
         button->setIcon(icon);
     }
-    button->setToolTip(text(fallbackText));
+    button->setToolTip(label);
+    button->setAccessibleName(label);
     button->setEnabled(false);
     const std::string id(actionId);
     // The slot's current action is looked up at click time (setSlotAction may rebind it).
@@ -966,7 +968,9 @@ void MainToolbar::refresh(input::ActionRegistry& registry, input::KeymapService&
             slot.button->setEnabled(false);
             continue;
         }
-        QString tooltip = qtr(shell_detail::kActionsContext, registry.info(*id).name);
+        const QString label = qtr(shell_detail::kActionsContext, registry.info(*id).name);
+        slot.button->setAccessibleName(label);
+        QString tooltip = label;
         if (const std::optional<input::Sequence> shortcut = keymap.primaryShortcut(*id); shortcut) {
             tooltip += QStringLiteral(" (") +
                        shell_detail::fromUtf8(input::toDisplayText(*shortcut, keymap.layout(), keymap.platform())) +
