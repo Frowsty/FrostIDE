@@ -1633,7 +1633,8 @@ HARNESSES: dict[str, type] = {"B28": B28Harness}
 
 _OPTIONS = ("list", "budget", "variant", "runs", "warmup", "files", "label", "perf-root", "milestone",
             "build-dir", "restore", "lock-record", "repo", "package-dir", "package-archive", "package-sha256",
-            "b14-fixture", "b14-source", "b14-git", "b14-session-probe")
+            "b14-fixture", "b14-source", "b14-git", "b14-session-probe",
+            "full", "full-manifest", "full-manifest-sha256")
 _FLAGS = {"list"}
 
 
@@ -1662,7 +1663,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="perf.ps1", allow_abbrev=False,
                                      description="FrostIDE performance budgets (PLAN.md section 4)")
     parser.add_argument("--list", action="store_true", help="list every budget, its gate and whether it has a harness")
-    parser.add_argument("--budget", default="B28", help="the budget ID (default B28)")
+    parser.add_argument("--budget", help="the budget ID (default B28)")
+    parser.add_argument("--full", action="store_true", help="validate the REF-W1 full performance work")
+    parser.add_argument("--full-manifest", help="independently reviewed full measurement manifest")
+    parser.add_argument("--full-manifest-sha256", help="independently obtained SHA-256 of that manifest")
     parser.add_argument("--variant", action="append", help="variants to run, comma-separated (default: all)")
     parser.add_argument("--runs", type=int, help="counted runs (rounds for rebuild) per variant")
     parser.add_argument("--warmup", type=int, help="warm-up runs per variant")
@@ -1736,15 +1740,108 @@ def main(argv: Sequence[str] | None = None, *, tools: Tools | None = None, hooks
         return EXIT_USAGE
 
 
+def cmd_full(repo: Path, args: argparse.Namespace) -> int:
+    """Aggregate release performance evidence and reuse native measurements where available."""
+    from contextlib import redirect_stdout
+    import io
+    import runpy
+
+    if args.list or args.restore or args.budget is not None or any(
+        value is not None for value in (args.variant, args.runs, args.warmup, args.files, args.label,
+                                       args.perf_root, args.milestone, args.build_dir, args.lock_record,
+                                       args.package_dir, args.package_archive, args.package_sha256,
+                                       args.b14_fixture, args.b14_source, args.b14_git, args.b14_session_probe)
+    ):
+        raise PerfError("-Full cannot be combined with a single-budget operation")
+    if bool(args.full_manifest) != bool(args.full_manifest_sha256):
+        raise PerfError("-FullManifest and -FullManifestSha256 must be supplied together")
+
+    rows = load_budgets(repo / BUDGETS_FILE)
+    try:
+        identity = {
+            "commit": _git(repo, "rev-parse", "--verify", "HEAD").strip(),
+            "lockSha256": _b14_digest(repo / "sdk/sdk.lock.json"),
+            "budgetsSha256": _b14_digest(repo / BUDGETS_FILE),
+            "corporaSha256": _b14_digest(repo / "tests/corpus/manifest.json"),
+        }
+        if args.full_manifest and _git(repo, "--no-optional-locks", "-c", "core.fsmonitor=false", "status",
+                                       "--porcelain", "--untracked-files=no").strip():
+            raise RunInvalid("source checkout has tracked local changes")
+        corpus = json.loads((repo / "tests/corpus/manifest.json").read_text(encoding="utf-8"))
+        pin, = (item["sha"] for item in corpus["corpora"] if item["id"] == "R3")
+
+        def verify_revision(revision: str, digest: str) -> None:
+            git = shutil.which("git")
+            if not git:
+                raise ValueError("Git is required to verify the B14 source revision")
+            ancestry = subprocess.run([git, "merge-base", "--is-ancestor", revision, identity["commit"]],
+                                      cwd=repo, capture_output=True, check=False)
+            if ancestry.returncode:
+                raise ValueError("B14 source revision is outside the candidate ancestry")
+            paths = {"tools/frost_perf.py": digest, "sdk/sdk.lock.json": identity["lockSha256"],
+                     str(BUDGETS_FILE.as_posix()): identity["budgetsSha256"],
+                     "tests/corpus/manifest.json": identity["corporaSha256"]}
+            for path, expected_digest in paths.items():
+                source = subprocess.run([git, "show", f"{revision}:{path}"],
+                                        cwd=repo, capture_output=True, check=False)
+                if source.returncode or sha256(source.stdout) != expected_digest:
+                    raise ValueError(f"B14 {path} bytes do not match its declared source revision")
+
+        def measure_b27(root: Path, entry: dict[str, Any], expected: dict[str, str]) -> dict[str, Any]:
+            if entry.get("identity") != expected:
+                raise ValueError("B27 archive does not identify the candidate revision and locks")
+            if entry.get("platform") != "windows" or os.name != "nt":
+                raise ValueError("REF-W1 B27 needs the native Windows portable archive and its expansion")
+
+            def local_path(key: str) -> Path:
+                proposed = Path(entry[key])
+                result = (root / proposed).resolve(strict=True)
+                if proposed.is_absolute() or proposed.drive or not result.is_relative_to(root):
+                    raise ValueError(f"B27 {key} must be inside the authenticated manifest directory")
+                return root / proposed
+
+            capture = io.StringIO()
+            budget = load_budget(repo / BUDGETS_FILE, "B27")
+            with redirect_stdout(capture):
+                exit_code = cmd_installed_size(budget, argparse.Namespace(
+                    package_dir=str(local_path("installed")), package_archive=str(local_path("archive")),
+                    package_sha256=entry["archiveSha256"], variant=None, runs=None, warmup=None,
+                    files=None, build_dir=None, lock_record=None, perf_root=None, milestone=None, label=None,
+                ))
+            if exit_code not in (EXIT_OK, EXIT_OVER):
+                raise ValueError("native B27 allocation and archive validation failed")
+            return {"state": "within" if exit_code == EXIT_OK else "over",
+                    "source": "live-native-storage", "native": json.loads(capture.getvalue())}
+
+        release = runpy.run_path(str(Path(__file__).with_name("perf_release.py")))
+        outcomes = release["run_full"](rows, identity, pin, Path(args.full_manifest) if args.full_manifest else None,
+                                      args.full_manifest_sha256, _B14_COMMAND, percentile_value, measure_b27,
+                                      verify_revision)
+    except (RunInvalid, OSError, ValueError, TypeError, KeyError, PerfError) as error:
+        print(json.dumps({"schemaVersion": 1, "scope": "REF-W1-full", "status": "invalid", "reason": str(error)}))
+        return EXIT_INVALID
+
+    states = {row["state"] for row in outcomes.values()}
+    incomplete = bool(states & {"blocked", "invalid"})
+    state = "incomplete" if incomplete else "over" if "over" in states else "within"
+    print(json.dumps({"schemaVersion": 1, "scope": "REF-W1-full", "identity": identity,
+                      "status": state, "budgets": outcomes}, indent=2))
+    return EXIT_INVALID if incomplete else EXIT_OVER if state == "over" else EXIT_OK
+
+
 def _run(args: argparse.Namespace, injected: Tools | None, hooks: Hooks) -> int:
     repo = Path(args.repo).resolve() if args.repo else REPO
     budgets_json = repo / BUDGETS_FILE
+    if args.full:
+        return cmd_full(repo, args)
+    if args.full_manifest is not None or args.full_manifest_sha256 is not None:
+        raise PerfError("full manifest options require -Full")
     if args.list:
         return cmd_list(budgets_json)
     if args.restore:
         return cmd_restore(Path(args.restore))
 
-    budget = load_budget(budgets_json, args.budget)
+    budget = load_budget(budgets_json, args.budget or "B28")
     if budget.id != "B14" and any((args.b14_fixture, args.b14_source, args.b14_git, args.b14_session_probe)):
         raise PerfError("B14 arguments require --budget B14")
     if budget.id == "B27":

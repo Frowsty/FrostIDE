@@ -7,6 +7,48 @@
 - Date: 2026-11-02
 - Plan reference: PLAN.md section 4 (B28), 6.3, 6.4; ADR 0010 follow-ups; ADR 0011 F2; ADR 0031 (feature-first)
 
+## REF-W1 full performance entry point
+
+`tools/perf.ps1 -Full` reports the state of all 28 registered budgets. For a
+reviewed run, pass `-FullManifest` and `-FullManifestSha256`. Obtain the manifest
+digest independently from the reviewer after they check the source, machine,
+quiet conditions, artifacts and measurements. This independent digest anchors
+the trust chain to the manifest and its referenced receipt bytes.
+
+The manifest is a JSON object with `schemaVersion: 1`, `reviewer`, `identity`,
+`environment` and `budgets`. Each file reference contains a relative `file`
+and its lowercase hexadecimal `sha256`. The identity contains the full
+`commit`, `lockSha256`, `budgetsSha256` and `corporaSha256`, bound to HEAD,
+`sdk/sdk.lock.json`, `tests/perf/budgets.json` and
+`tests/corpus/manifest.json`. The environment file contains the reviewed
+`profile`, `os`, `logicalThreads`, `memoryGiB`, `gpu` and `display`
+(width, height and hertz).
+
+- **B14** accepts two file references named `current` and `baseline`. Each
+  points to an envelope with `schemaVersion: 1`, `kind: "B14-native"`,
+  `identity`, `environmentSha256`, offset-bearing `startUtc` and `endUtc`,
+  and the standalone B14 JSON under `native`. The reviewer binds actual
+  observation of `precheckStart`, `precheckEnd`, `inputUnchanged`, `quiet`
+  and `concurrentBuilds`. A comparison requires twenty raw samples in each
+  series, an earlier baseline with the same locks and Git binaries, the same
+  REF-W1 environment and the pinned clean tree on the E: volume. The runner
+  recomputes absolute p50 and p99 and compares medians using a two-sided exact
+  permutation Mann–Whitney U test with midranks for ties. Both p<0.01 and a
+  median regression greater than 5% are required to fail the comparative gate.
+- **B27** uses the reviewed candidate `identity`, `platform: "windows"`,
+  relative `installed` and `archive` paths, and `archiveSha256`. The existing
+  native collector verifies the complete archive expansion and reads actual
+  on-disk allocation. The review binds the archive to the source revision.
+  This storage measurement is independent of timing baselines.
+
+Exit 3 means incomplete or invalid. Per-budget detail retains available
+failures. A complete run with an exceeded budget would exit 1, and a complete
+run within all limits would exit 0. All rows outside B14 and B27 remain blocked
+in this implementation. B1 and B7 currently produce component evidence. B28
+has its standalone runner. Full-run adapters for these budgets and instruments
+for the other rows remain open. Performance history and the 14-day release
+streak are outside this entry point.
+
 ## Context
 B28 (ADR 0010) found the dev loop dominated by two avoidable costs: the Windows tests ran one at a time, and
 every Linux configure spent 15-27 s in CMake's FindOpenGL (reached through `find_package(Qt6)`), which probed

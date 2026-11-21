@@ -6,6 +6,8 @@
 #              [-Variant rebuild,noop,verify,wsl-leg] [-Runs n] [-Warmup n] [-Files core,main,sched]
 #              [-Label text] [-PerfRoot E:\FrostBuilds\perf] [-Milestone m1] [-BuildDir build\win-clangcl]
 #              [-LockRecord <file>] [-Restore <run dir>]
+#   powershell -ExecutionPolicy Bypass -File tools\perf.ps1 -Full
+#              [-FullManifest <file> -FullManifestSha256 <independently-reviewed SHA-256>]
 #
 # A thin wrapper with no param block: it dot-sources env.ps1 (the pinned cmake, ninja, sccache and
 # clang-cl on PATH, SCCACHE_DIR set) and runs tools\frost_perf.py with the SDK's Python, forwarding
