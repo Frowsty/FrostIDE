@@ -14,7 +14,9 @@ namespace {
 using namespace std::chrono_literals;
 TEST(ProcessDeadline, UnboundedCollectsActualBothStreamsAndExit) {
     const std::string input = "actual stdout and stderr\n";
-    auto result = runToCompletionUntil(realProcessLauncher(), test::childSpec({"tee"}), input, std::nullopt);
+    auto spec = test::childSpec({"tee"});
+    spec.stdinMode = Stdio::Pipe;
+    auto result = runToCompletionUntil(realProcessLauncher(), spec, input, std::nullopt);
     ASSERT_TRUE(result) << result.error().message();
     EXPECT_EQ(result->exitCode, 0);
     EXPECT_EQ(result->stdoutBytes, input);
