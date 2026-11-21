@@ -35,6 +35,37 @@ DWM fade delay. R3 reopen, true cold launches, ETW FirstPresent correlation,
 reference hardware qualification, baseline comparison and the full release gate
 remain open.
 
+## Production B5 diagnostic component
+
+Set `FROST_PERF_B5=1` only for a new FrostIDE process in a dedicated profile on
+the quiet reference desktop. Open the chosen source file through the ordinary
+Workbench and type isolated printable keys. Set word wrap through the normal
+editor setting. The app writes a `perf.b5` record in its standard FrostIDE
+log for each Qt-spontaneous, non-repeating printable edit whose version reached
+the view's paint without another pending update. Records include the effective
+wrap mode, viewport pixels and a hash of the path used to open the document.
+The log carries no typed text.
+
+After exit, preserve and independently hash the process log. Extract a selected
+document's per-viewport and per-backend timing series with:
+
+```powershell
+& "$env:FROST_SDK\py\Scripts\python.exe" -I tools\perf_b5_component.py `
+    --log $log --log-sha256 $reviewedLogSha256 --file-id $selectedFileId
+```
+
+The raster endpoint is the return from drawing within the view paint handler.
+QRhi ends this component when the view hands off its display list to the deferred
+viewport renderer. Backing-store flush, display submission and composition
+occur later. Qt's spontaneous flag distinguishes the event path.
+The B5 release gate still needs independent input delivery evidence, the pinned
+R3 wrap-on/off sequences, ETW input-to-actual-paint correlation and reviewed
+comparative samples.
+
+B6 still needs the production editor's timed full-output fling with per-frame
+UI CPU evidence, DWM and decoded content timing, and the QRhi PresentMon
+cross-check. The S1 prototype reports remain historical.
+
 ## Context
 PLAN.md ships the raster QPainter editor backend (QGlyphRun cache) and builds a QRhiWidget glyph-atlas backend only
 if the S1 gate fails at 5120x1440 @ 144 Hz. The S1 gate is B6 (10 s fling: UI CPU per frame p99 at most 5 ms,

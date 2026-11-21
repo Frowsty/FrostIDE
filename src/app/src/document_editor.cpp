@@ -4,6 +4,8 @@
 
 #include "frost/app/document_editor.hpp"
 
+#include "frost/core/log.hpp"
+#include "frost/io/spawn_log.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/text/encoding.hpp"
 #include "frost/text/line_separator.hpp"
@@ -11,8 +13,10 @@
 
 #include <QObject>
 #include <QScrollBar>
+#include <QtEnvironmentVariables>
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 namespace frost::app {
@@ -218,6 +222,23 @@ Result<std::unique_ptr<ui::IEditorView>> DocumentEditorFactory::open(const std::
     }
     std::unique_ptr<ui::EditorView> editor =
         ui::createEditorView(document.document(), document.path(), m_services, settings);
+    if (qEnvironmentVariable("FROST_PERF_B5") == QStringLiteral("1")) {
+        // Budget: B5. A diagnostic component only. This runs after the sampled endpoint,
+        // and the QRhi display list has yet to be drawn, flushed, or composed.
+        editor->setInputToPaintSink(
+            [view = editor.get(), fileId = io::sha256Hex(document.path())](const ui::InputToPaintSample& sample) {
+                if (!sample.nativeTyping)
+                    return;
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(sample.paintEnd - sample.input).count();
+                const auto size = view->viewport()->size();
+                const auto scale = view->viewport()->devicePixelRatioF();
+                log::info("perf.b5", "endpoint={} wrap={} elapsed_ns={} text_version={} viewport={}x{} file_id={}",
+                          sample.backend == ui::EditorBackend::Raster ? "raster-paint-return" : "qrhi-display-list",
+                          sample.softWrap, elapsed, sample.textVersion, size.width() * scale, size.height() * scale,
+                          fileId);
+            });
+    }
     if (m_store != nullptr && m_fs != nullptr) {
         // Owned by the editor widget: follows the settings files and .editorconfig for this file.
         new ui::EditorSettingsBinding(*m_store, *m_fs, document.path(), *editor, editor.get());

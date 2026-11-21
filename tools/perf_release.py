@@ -15,6 +15,8 @@ _HEX = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _COMPONENTS = {
     "B1": "Only warm empty-workspace screen capture exists. R3, cold and ETW correlation are missing.",
+    "B5": "Production view timing is a component. R3 wrap variants and ETW input through actual paint remain unqualified.",
+    "B6": "S1 measures a prototype. The real editor needs frame CPU and composed-content correlation during a full-size fling.",
     "B7": "Only the Go to File viewport paint component exists. Full R3 and R4-XL receipts are missing.",
 }
 

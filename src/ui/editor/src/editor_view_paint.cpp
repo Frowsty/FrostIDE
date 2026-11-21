@@ -838,10 +838,17 @@ void EditorView::paintEvent(QPaintEvent*) {
     m_renderer->render(list, *viewport());
     ++m_paintCount;
     if (m_pendingInput && m_inputToPaint) {
-        // The InputToPaint marker: input handled -> this paint ended. Budget: B5.
-        m_inputToPaint(InputToPaintSample{*m_pendingInput, m_clock->steadyNow(), m_editor->text().version()});
+        // Budget: B5. The QRhi viewport records the display list after this callback.
+        auto sample = *m_pendingInput;
+        m_pendingInput.reset();
+        sample.paintEnd = m_clock->steadyNow();
+        sample.backend = m_rendererState.active;
+        sample.softWrap = m_settings.softWrap && !m_fileInfo.largeFile;
+        const auto version = m_editor->text().version();
+        sample.nativeTyping = sample.nativeTyping && sample.textVersion == version;
+        sample.textVersion = version;
+        m_inputToPaint(sample);
     }
-    m_pendingInput.reset();
 }
 
 } // namespace frost::ui

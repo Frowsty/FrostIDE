@@ -417,6 +417,7 @@ void EditorView::setFileInfo(const EditorFileInfo& info) {
 
 void EditorView::setInputToPaintSink(std::function<void(const InputToPaintSample&)> sink) {
     m_inputToPaint = std::move(sink);
+    m_pendingInput.reset();
 }
 
 void EditorView::afterChange(const text::EditorUpdate& update, bool notifyTextChange) {
@@ -510,14 +511,23 @@ void EditorView::afterChange(const text::EditorUpdate& update, bool notifyTextCh
 }
 
 void EditorView::armInputToPaint() {
-    if (m_inputToPaint && !m_pendingInput) {
-        m_pendingInput = m_inputStart.value_or(m_clock->steadyNow());
+    if (!m_inputToPaint)
+        return;
+    if (m_pendingInput) {
+        m_pendingInput->nativeTyping = false; // Multiple edits/updates can share one paint.
+        return;
     }
+    const auto version = m_editor->text().version();
+    m_pendingInput =
+        InputToPaintSample{.input = m_inputStart ? *m_inputStart : m_clock->steadyNow(),
+                           .textVersion = version,
+                           .nativeTyping = m_inputStart && m_nativeKeyVersion && *m_nativeKeyVersion != version};
 }
 
 void EditorView::beginInput() {
     if (m_inputToPaint) {
         m_inputStart = m_clock->steadyNow();
+        m_nativeKeyVersion.reset();
     }
 }
 

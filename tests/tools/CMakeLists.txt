@@ -79,7 +79,7 @@ if(WIN32)
 endif()
 
 set(_frost_tool_suites frost_lint licensecheck validate_sarif featurecheck corpus_fetch corpora asset_fetch budgets symbolize freeze_triage
-    verify_support frost_perf perf_b1 perf_b14 perf_release verify_scripts build_lldb managed_server lua_dialects managed_fixture package_notices sandbox_deployment hooks)
+    verify_support frost_perf perf_b1 perf_b14 perf_b5_component perf_release verify_scripts build_lldb managed_server lua_dialects managed_fixture package_notices sandbox_deployment hooks)
 if(WIN32)
     # Runs Windows PowerShell 5.1 (bootstrap.ps1 and env.ps1); nothing to test on Linux.
     list(APPEND _frost_tool_suites windows_scripts)

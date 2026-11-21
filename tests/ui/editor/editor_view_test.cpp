@@ -13,8 +13,10 @@
 #include <QAction>
 #include <QClipboard>
 #include <QInputMethodEvent>
+#include <QKeyEvent>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QtTest/qtestspontaneevent.h>
 
 #include <algorithm>
 #include <array>
@@ -923,8 +925,37 @@ TEST(EditorView, InputToPaintMarkerReportsAfterThePaint) {
     ASSERT_EQ(samples.size(), 1U);
     EXPECT_LE(samples[0].input, samples[0].paintEnd);
     EXPECT_EQ(samples[0].textVersion, h.document.text().version());
+    EXPECT_EQ(samples[0].backend, EditorBackend::Raster);
+    EXPECT_FALSE(samples[0].nativeTyping);
     h.view->viewport()->repaint(); // No input since: no sample.
     EXPECT_EQ(samples.size(), 1U);
+}
+
+TEST(EditorView, InputToPaintMetadataSeparatesSingleSpontaneousTypingFromCoalescedEdits) {
+    FROST_REQUIRE_OFFSCREEN();
+    EditorHarness h("");
+    auto settings = h.view->settings();
+    settings.softWrap = true;
+    h.view->applySettings(settings);
+    std::vector<InputToPaintSample> samples;
+    h.view->setInputToPaintSink([&](const InputToPaintSample& sample) { samples.push_back(sample); });
+    const auto nativeKey = [&](int key, const QString& text) {
+        QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier, text);
+        QSpontaneKeyEvent::setSpontaneous(&event);
+        qApp->notify(h.view.get(), &event);
+    };
+    nativeKey(Qt::Key_A, QStringLiteral("a"));
+    h.view->viewport()->repaint();
+    ASSERT_EQ(samples.size(), 1U);
+    EXPECT_TRUE(samples[0].nativeTyping);
+    EXPECT_TRUE(samples[0].softWrap);
+    EXPECT_EQ(samples[0].backend, EditorBackend::Raster);
+    nativeKey(Qt::Key_B, QStringLiteral("b"));
+    nativeKey(Qt::Key_C, QStringLiteral("c"));
+    h.view->viewport()->repaint();
+    ASSERT_EQ(samples.size(), 2U);
+    EXPECT_FALSE(samples[1].nativeTyping);
+    EXPECT_EQ(h.text(), "abc");
 }
 
 TEST(EditorView, RasterRendererCachesGlyphRuns) {

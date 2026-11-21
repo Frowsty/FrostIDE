@@ -158,6 +158,13 @@ bool EditorView::focusNextPrevChild(bool next) {
 
 void EditorView::keyPressEvent(QKeyEvent* event) {
     beginInput();
+    const auto modifiers = event->modifiers();
+    if (m_inputStart && event->spontaneous() && !event->isAutoRepeat() &&
+        !(modifiers & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))) {
+        const auto text = event->text();
+        if (text.size() == 1 && text.front().isPrint())
+            m_nativeKeyVersion = m_editor->text().version();
+    }
     if (m_services.keys != nullptr) {
         if (m_services.keys->handleKey(*this, *event)) {
             event->accept();
@@ -169,7 +176,7 @@ void EditorView::keyPressEvent(QKeyEvent* event) {
     }
     // Without key routing the view only types text (tools and tests that drive commands directly).
     const QString text = event->text();
-    const bool command = (event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) != 0;
+    const bool command = (modifiers & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) != 0;
     if (!command && !text.isEmpty() && text.at(0).isPrint() && typeText(text.toStdString())) {
         event->accept();
     } else {

@@ -146,12 +146,15 @@ struct EditorViewStatus {
     friend bool operator==(const EditorViewStatus&, const EditorViewStatus&) = default;
 };
 
-// One InputToPaint sample (PLAN.md "Self-diagnostics"; B5 is keystroke to paint end): the steady
-// time an input event was handled and the time the paint that showed it ended.
+// One editor timing component from event handler entry to the view's paint callback.
+// Raster has painted at this point. QRhi has queued the display list for its later render.
 struct InputToPaintSample {
     IClock::SteadyTime input{};
     IClock::SteadyTime paintEnd{};
     std::uint64_t textVersion = 0;
+    EditorBackend backend = EditorBackend::Raster;
+    bool softWrap = false;
+    bool nativeTyping = false; // One Qt-spontaneous printable key edited the version observed at paint.
 };
 
 /*
@@ -504,8 +507,7 @@ public:
     [[nodiscard]] ByteOffset offsetAt(QPointF at) const;
     [[nodiscard]] QRect globalCaretRect(ByteOffset offset) const;
 
-    // The InputToPaint marker's sink (none by default): called after every paint that follows a
-    // handled input event. TODO(M1): the hardening phase feeds the ETW provider and B5 from it.
+    // Optional view paint observer. QRhi's later render/composition is outside this callback.
     void setInputToPaintSink(std::function<void(const InputToPaintSample&)> sink);
 
     // The IME's queries: the caret rectangle (viewport-offset widget coordinates), the font, the
@@ -846,7 +848,8 @@ private:
 
     std::uint64_t m_paintCount = 0;
     std::optional<IClock::SteadyTime> m_inputStart;
-    std::optional<IClock::SteadyTime> m_pendingInput;
+    std::optional<std::uint64_t> m_nativeKeyVersion;
+    std::optional<InputToPaintSample> m_pendingInput;
     std::function<void(const InputToPaintSample&)> m_inputToPaint;
 };
 
