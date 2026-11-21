@@ -149,9 +149,8 @@ TEST_F(ProjectEditReal, PreMoveImportRulesCannotDropOrDuplicateTheNewItem) {
 }
 
 TEST_F(ProjectEditReal, PreMoveImportConditionsAndPropertyFunctionsCannotChangeAfterTheMove) {
-    for (const std::string source :
-         {"app.cpp", "renamed.cpp", "property-function", "property-reassigned", "property-initial", "instance-property",
-          "wildcard-import"}) {
+    for (const std::string source : {"app.cpp", "renamed.cpp", "property-function", "property-reassigned",
+                                     "property-initial", "instance-property", "wildcard-import"}) {
         EditScratch scratch("r8 file-dependent import " + source);
         ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
         auto edit = fileEdit(scratch, ProjectEditKind::RenameFiles, "App/App.vcxproj");

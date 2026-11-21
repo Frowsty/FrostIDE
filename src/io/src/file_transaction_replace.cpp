@@ -576,8 +576,8 @@ Result<void> releasePublicMutationHandle(Native& file, Native& identity, std::st
 #ifdef _WIN32
     // Keep the same object alive without sharing read, write or delete access against workspace readers.
     if (!identity.valid()) {
-        identity.reset(ReOpenFile(file.get(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                  FILE_FLAG_BACKUP_SEMANTICS));
+        identity.reset(ReOpenFile(file.get(), FILE_READ_ATTRIBUTES,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_FLAG_BACKUP_SEMANTICS));
         if (!identity.valid())
             return std::unexpected(lastWin32Error("replacement: retain public object identity", path));
     }
@@ -995,8 +995,8 @@ FileReplacementOutcome PreparedFileReplacement::installAfter() {
 #endif
     if (auto installed = objectAt(state.receipt.images.targetPath, state.after, state.afterPayload); !installed)
         return failed(installed.error());
-    if (auto released = releasePublicMutationHandle(state.replacement, state.replacementIdentity,
-                                                    state.receipt.images.targetPath);
+    if (auto released =
+            releasePublicMutationHandle(state.replacement, state.replacementIdentity, state.receipt.images.targetPath);
         !released)
         return failed(released.error());
     state.receipt.phase = FileReplacementPhase::AfterInstalled;
@@ -1086,8 +1086,8 @@ FileReplacementOutcome PreparedFileReplacement::restoreBefore() {
         return failed(store.error());
     if (auto restored = objectAt(state.receipt.images.targetPath, state.before, state.beforePayload); !restored)
         return failed(restored.error());
-    if (auto released = releasePublicMutationHandle(state.original, state.originalIdentity,
-                                                    state.receipt.images.targetPath);
+    if (auto released =
+            releasePublicMutationHandle(state.original, state.originalIdentity, state.receipt.images.targetPath);
         !released)
         return failed(released.error());
     state.receipt.phase = FileReplacementPhase::BeforeRestored;
@@ -1143,8 +1143,8 @@ FileReplacementOutcome PreparedFileReplacement::settle() {
     if (state.receipt.phase == FileReplacementPhase::BeforeRestoredUnverified) {
         if (auto error = verify(state.receipt.images.targetPath, state.before, state.beforePayload, false))
             return {state.receipt, std::move(error)};
-        if (auto released = releasePublicMutationHandle(state.original, state.originalIdentity,
-                                                        state.receipt.images.targetPath);
+        if (auto released =
+                releasePublicMutationHandle(state.original, state.originalIdentity, state.receipt.images.targetPath);
             !released)
             return {state.receipt, released.error()};
         state.receipt.phase = FileReplacementPhase::BeforeRestored;
@@ -1286,8 +1286,8 @@ FileReplacementOutcome PreparedFileReplacement::moveOriginalTo(std::string_view 
         return failWith(Error(ErrorCode::Busy, "move participant is in another operation"));
     if (auto current = objectAt(state.receipt.moveDestination, state.before, state.beforePayload); !current)
         return failWith(current.error());
-    if (auto released = releasePublicMutationHandle(state.original, state.originalIdentity,
-                                                    state.receipt.moveDestination);
+    if (auto released =
+            releasePublicMutationHandle(state.original, state.originalIdentity, state.receipt.moveDestination);
         !released)
         return failWith(released.error());
     state.receipt.phase = FileReplacementPhase::OriginalMoved;
@@ -1329,8 +1329,8 @@ FileReplacementOutcome PreparedFileReplacement::restoreMove() {
         return failWith(Error(ErrorCode::Busy, "inverse move requires the exact moved object"));
     if (auto current = objectAt(state.receipt.images.targetPath, state.before, state.beforePayload); !current)
         return failWith(current.error());
-    if (auto released = releasePublicMutationHandle(state.original, state.originalIdentity,
-                                                    state.receipt.images.targetPath);
+    if (auto released =
+            releasePublicMutationHandle(state.original, state.originalIdentity, state.receipt.images.targetPath);
         !released)
         return failWith(released.error());
     state.receipt.phase = FileReplacementPhase::MoveRestored;
@@ -1703,8 +1703,8 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
             return fail(ErrorCode::Busy, "contradictory native recovery layout; preserve all artifacts");
     }
     if (state->receipt.phase == FileReplacementPhase::AfterInstalled) {
-        if (auto released = releasePublicMutationHandle(state->replacement, state->replacementIdentity,
-                                                        saved.images.targetPath);
+        if (auto released =
+                releasePublicMutationHandle(state->replacement, state->replacementIdentity, saved.images.targetPath);
             !released)
             return std::unexpected(released.error());
     }
