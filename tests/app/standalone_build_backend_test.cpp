@@ -14,7 +14,8 @@
 namespace frost::app {
 namespace {
 std::string path(std::string_view name = {}) {
-    return io::joinPath(io::kNativePathStyle == io::PathStyle::Windows ? "C:/make-test" : "/make-test", name).value();
+    const auto root = io::normalizePath(io::kNativePathStyle == io::PathStyle::Windows ? "C:/make-test" : "/make-test");
+    return name.empty() ? *root : io::joinPath(*root, name).value();
 }
 bool pumpUntil(const std::function<bool()>& predicate) {
     QElapsedTimer elapsed;
@@ -35,6 +36,12 @@ TEST(StandaloneBuildBackend, CancelledSaveDoesNotLaunchAndReleasesReservation) {
     StandaloneBuildBackend backend({.root = path(), .makefile = path("Makefile")}, fs, launcher, **trust, *admission);
     build::SaveAllCompletion completeSave;
     backend.setSaveAllHook([&](auto done) { completeSave = std::move(done); });
+    ASSERT_TRUE(admission->reserveRun());
+    const auto blocked = backend.build(build::BuildAction::Build, {});
+    ASSERT_FALSE(blocked);
+    EXPECT_EQ(blocked.error().code(), ErrorCode::Busy);
+    EXPECT_FALSE(completeSave);
+    admission->releaseRun();
     ASSERT_TRUE(backend.build(build::BuildAction::Build, {}));
     EXPECT_EQ(backend.state(), build::BuildState::SavingDocuments);
     EXPECT_FALSE(admission->reserveRun());

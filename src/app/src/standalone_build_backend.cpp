@@ -50,8 +50,8 @@ StandaloneBuildBackend::~StandaloneBuildBackend() {
         m_session->cancel();
         m_session.reset();
     }
-    if (m_reserved)
-        m_admission.releaseRun();
+    if (m_reservation)
+        m_admission.releaseExternalLaunch(m_reservation);
 }
 Result<void> StandaloneBuildBackend::openSolution(std::shared_ptr<const project::SolutionModel>) {
     return fail(ErrorCode::Unsupported, "a standalone C++ project is open");
@@ -87,10 +87,10 @@ Result<void> StandaloneBuildBackend::buildTarget(project::MakeAction action, std
     auto steps = project::makeProjectArguments(m_model, action, target);
     if (!steps)
         return std::unexpected(steps.error());
-    auto reserved = m_admission.reserveRun();
+    auto reserved = m_admission.reserveExternalLaunch();
     if (!reserved)
-        return reserved;
-    m_reserved = true;
+        return std::unexpected(reserved.error());
+    m_reservation = *reserved;
     ++m_generation;
     m_steps = std::move(*steps);
     m_step = 0;
@@ -242,9 +242,9 @@ void StandaloneBuildBackend::finish(std::optional<Error> error) {
         else
             ++m_outcome.counts.messages;
     }
-    if (m_reserved) {
-        m_admission.releaseRun();
-        m_reserved = false;
+    if (m_reservation) {
+        m_admission.releaseExternalLaunch(m_reservation);
+        m_reservation = 0;
     }
     if (m_callbacks.onFinished)
         m_callbacks.onFinished(m_outcome);

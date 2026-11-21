@@ -9,7 +9,8 @@
 namespace frost::project {
 namespace {
 std::string at(std::string_view name = {}) {
-    return io::joinPath(io::kNativePathStyle == io::PathStyle::Windows ? "C:/project" : "/project", name).value();
+    const auto root = io::normalizePath(io::kNativePathStyle == io::PathStyle::Windows ? "C:/project" : "/project");
+    return name.empty() ? *root : io::joinPath(*root, name).value();
 }
 TEST(StandaloneProject, RelativeDatabaseDirectoriesAndDuplicateTranslationUnits) {
     auto result = compilationDatabaseSources(R"([
@@ -79,5 +80,15 @@ TEST(StandaloneProject, NinjaObjectTargetComesFromActualOutput) {
     ])",
                                                  at("build"), at("main.cpp")));
 }
+#ifndef _WIN32
+TEST(StandaloneProject, PosixObjectTargetsPreserveLiteralBackslashes) {
+    auto target = compilationDatabaseObjectTarget(R"([
+        {"directory":".","file":"../main.cpp","output":"..\\literal.o","command":"c++"}
+    ])",
+                                                  at("build"), at("main.cpp"));
+    ASSERT_TRUE(target) << target.error().describe();
+    EXPECT_EQ(*target, "..\\literal.o");
+}
+#endif
 } // namespace
 } // namespace frost::project

@@ -7,16 +7,22 @@
 #include "frost/project/cmake_compile_database.hpp"
 
 #include "json.hpp"
+#include "paths.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <set>
 
 namespace frost::project {
 namespace {
 Result<std::string> resolve(std::string_view base, std::string_view path) {
-    return io::isAbsolutePath(path) ? io::normalizePath(path) : io::joinPath(base, path);
+    if (io::isAbsolutePath(path))
+        return detail::normalizeAbsolute(path);
+    auto joined = io::joinPath(base, path);
+    if (!joined)
+        return std::unexpected(joined.error());
+    // Database identities are lexical. POSIX backslashes remain literal filename bytes.
+    return detail::normalizeAbsolute(*joined);
 }
 } // namespace
 
@@ -69,16 +75,10 @@ Result<std::string> compilationDatabaseObjectTarget(std::string_view text, std::
     auto parsed = detail::parseJson(text);
     if (!parsed)
         return std::unexpected(parsed.error());
-    const auto key = [](std::string path) {
-        if constexpr (io::kNativePathStyle == io::PathStyle::Windows)
-            std::ranges::transform(path, path.begin(),
-                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return path;
-    };
-    auto normalizedSource = io::normalizePath(source);
+    auto normalizedSource = detail::normalizeAbsolute(source);
     if (!normalizedSource)
         return std::unexpected(normalizedSource.error());
-    auto normalizedDirectory = io::normalizePath(directory);
+    auto normalizedDirectory = detail::normalizeAbsolute(directory);
     if (!normalizedDirectory)
         return std::unexpected(normalizedDirectory.error());
     std::set<std::string> targets;
@@ -89,7 +89,7 @@ Result<std::string> compilationDatabaseObjectTarget(std::string_view text, std::
         auto file = resolve(*base, entry.stringAt("file"));
         if (!file)
             return std::unexpected(file.error());
-        if (key(*file) != key(*normalizedSource))
+        if (detail::pathKey(*file) != detail::pathKey(*normalizedSource))
             continue;
         std::string output = entry.stringAt("output");
         if (output.empty()) {
@@ -113,15 +113,17 @@ Result<std::string> compilationDatabaseObjectTarget(std::string_view text, std::
         auto object = resolve(*base, output);
         if (!object)
             return std::unexpected(object.error());
-        if (!key(*object).ends_with(".o") && !key(*object).ends_with(".obj"))
+        const auto objectKey = detail::pathKey(*object);
+        if (!objectKey.ends_with(".o") && !objectKey.ends_with(".obj"))
             return fail(ErrorCode::Unsupported, "the database output is not a compiler object file");
-        std::string prefix = key(*normalizedDirectory);
-        if (!prefix.ends_with('/') && !prefix.ends_with('\\'))
-            prefix += io::kNativePathStyle == io::PathStyle::Windows ? '\\' : '/';
-        if (!key(*object).starts_with(prefix))
+        std::string prefix = detail::pathKey(*normalizedDirectory);
+        if (!prefix.ends_with(detail::kNativeSeparator))
+            prefix += detail::kNativeSeparator;
+        if (!objectKey.starts_with(prefix))
             return fail(ErrorCode::Unsupported, "object output is outside the active build directory");
         std::string target = object->substr(prefix.size());
-        std::ranges::replace(target, '\\', '/');
+        if constexpr (io::kNativePathStyle == io::PathStyle::Windows)
+            std::ranges::replace(target, '\\', '/');
         if (target.empty() || target.front() == '-' || target.find_first_of("\r\n\0", 0, 3) != std::string::npos)
             return fail(ErrorCode::InvalidArgument, "invalid object build target");
         targets.insert(std::move(target));

@@ -65,8 +65,8 @@ private:
     std::vector<build::BuildDiagnostic> m_diagnostics;
     build::BuildOutcome m_outcome;
     std::size_t m_step = 0;
-    bool m_reserved = false;
     bool m_cancelled = false;
+    std::uint64_t m_reservation = 0;
     std::uint64_t m_generation = 0;
     QPointer<QMenu> m_menu;
 };
