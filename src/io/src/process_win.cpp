@@ -336,6 +336,17 @@ Result<std::wstring> buildEnvironmentBlock(const ProcessSpec& spec) {
             entries.push_back(*wideName + L"=" + *wideValue);
         }
     }
+    if (spec.sandbox) {
+        // CreateProcess requires LOCALAPPDATA as input to its AppContainer profile rewrite.
+        auto stage = toWide(spec.sandbox->windowsStagingRoot);
+        if (!stage) {
+            return std::unexpected(std::move(stage.error()).withContext("sandbox environment"));
+        }
+        std::erase_if(entries, [](const std::wstring& entry) {
+            return compareNames(envName(entry), L"LOCALAPPDATA") == CSTR_EQUAL;
+        });
+        entries.push_back(L"LOCALAPPDATA=" + *stage);
+    }
     std::ranges::sort(entries, [](const std::wstring& a, const std::wstring& b) {
         return compareNames(envName(a), envName(b)) == CSTR_LESS_THAN;
     });

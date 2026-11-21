@@ -48,6 +48,8 @@ int main(int argc, char** argv) {
     // This profile is capability-free: no Internet/private-network/COM/registry capability.
     if (capabilities->GroupCount != 0)
         return 16;
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0) == 0)
+        return 19;
 #else
     const int network = socket(AF_INET, SOCK_STREAM, 0);
     if (network >= 0) {

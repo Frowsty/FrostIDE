@@ -37,6 +37,9 @@ is added. Staging generations and their OS profiles are retained pending a separ
 policy; setup failures can leave a new private partial generation/profile for explicit later cleanup.
 The independent future fixture cleans up only its own random profile after its child has settled.
 
+The clean child environment supplies the owned staging path as the `LOCALAPPDATA` input required
+by process creation. Windows rewrites it to the child's private AppContainer profile location.
+
 ## Linux
 
 The launcher requires enabled Landlock ABI 6 or newer and an owned frost-extension-sandbox helper
