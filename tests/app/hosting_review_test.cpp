@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Deferred provider-format/admission fixtures for anchored reviews; no CLI/provider is contacted.
+#include "frost/core/clock.hpp"
+#include "frost/io/mem_fs.hpp"
+#include "frost/io/path.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
+#include "frost/project/trust_store.hpp"
 
 #include "../../src/app/src/hosting_cli.hpp"
 #include "../../src/app/src/hosting_panel.hpp"
@@ -425,9 +429,15 @@ public:
 TEST(HostedReviewPanel, RevokedAndRegrantedTrustCannotContinueAnOldProviderRequest) {
     ProviderCancellationLauncher launcher;
     const auto selected = request();
-    std::atomic<std::uint64_t> revision = 1;
-    HostingPanel panel({&launcher, [selected] { return selected.root; }, [](const auto&) { return true; },
-                        [&](const auto&) { return revision.load(); }});
+    ManualClock clock;
+    io::MemFs fs(clock);
+    auto trust = project::TrustStore::open(fs, io::joinPath(selected.root, "trusted-roots.txt").value());
+    ASSERT_TRUE(trust);
+    ASSERT_TRUE((*trust)->trust(selected.root));
+    const auto original = (*trust)->snapshot(selected.root);
+    HostingPanel panel({&launcher, [selected] { return selected.root; },
+                        [&](const auto& root) { return (*trust)->isTrusted(root); },
+                        [&](const auto& root) { return (*trust)->snapshot(root).revision; }});
     configure(panel, selected);
     launcher.scripts.expect({.stdoutBytes = "[" + details(selected.provider) + "]"});
     button(panel, "Load Page")->click();
@@ -438,8 +448,12 @@ TEST(HostedReviewPanel, RevokedAndRegrantedTrustCannotContinueAnOldProviderReque
     launcher.waitForCancellation = true;
     button(panel, "Load Review Lines")->click();
     ASSERT_TRUE(waitFor([&] { return launcher.scripts.launches().size() == 2; }));
-    // Current trust remains true, but revoke/regrant changed the immutable admission revision.
-    revision.store(2);
+    ASSERT_TRUE((*trust)->untrust(selected.root));
+    EXPECT_FALSE((*trust)->snapshot(selected.root).trusted);
+    ASSERT_TRUE((*trust)->trust(selected.root));
+    const auto restored = (*trust)->snapshot(selected.root);
+    EXPECT_TRUE(restored.trusted);
+    EXPECT_NE(restored.revision, original.revision);
     ASSERT_TRUE(waitFor([&] {
         const auto children = launcher.scripts.launches();
         return children.size() == 2 && children.back().terminated && button(panel, "Load Review Lines")->isEnabled();
