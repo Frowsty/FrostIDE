@@ -500,11 +500,12 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
         }
         return selected;
     };
+    const auto matchesCheckedBytes = [](const Result<std::string>& current, const std::optional<std::string>& saved) {
+        return current ? saved && *current == *saved : !saved && current.error().code() == ErrorCode::NotFound;
+    };
     const auto checkFilesUnchanged = [&]() -> Result<void> {
         for (const auto& [path, bytes] : checkedFiles) {
-            auto after = m_fs->readFile(path);
-            if ((!after && after.error().code() != ErrorCode::NotFound) ||
-                (after ? std::optional<std::string>(*after) : std::nullopt) != bytes)
+            if (!matchesCheckedBytes(m_fs->readFile(path), bytes))
                 return fail(ErrorCode::Busy,
                             "Selected file changed during commit checks; review it before committing: " + path);
         }
@@ -527,13 +528,13 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
                 return std::unexpected(std::move(bytes.error()));
             checkedFiles[path] = bytes ? std::optional<std::string>(std::move(*bytes)) : std::nullopt;
         }
-        const auto checkIndexPath = io::joinPath(m_info.gitDir, "index");
+        auto checkIndexPath = io::joinPath(m_info.gitDir, "index");
         if (!checkIndexPath)
             return std::unexpected(std::move(checkIndexPath.error()));
         auto indexBefore = m_fs->readFile(*checkIndexPath);
         if (!indexBefore && indexBefore.error().code() != ErrorCode::NotFound)
             return std::unexpected(std::move(indexBefore.error()));
-        checkedIndex.emplace(indexBefore ? std::optional<std::string>(*indexBefore) : std::nullopt);
+        checkedIndex.emplace(indexBefore ? std::optional<std::string>(std::move(*indexBefore)) : std::nullopt);
         auto headBefore = git({"rev-parse", "--verify", "HEAD"}, control, kLocalTimeout, true);
         if (!headBefore)
             return std::unexpected(std::move(headBefore.error()));
@@ -585,9 +586,7 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
             return std::unexpected(std::move(headAfter.error()));
         if (headBefore->exitCode != headAfter->exitCode || headBefore->stdoutBytes != headAfter->stdoutBytes)
             return fail(ErrorCode::Busy, "HEAD changed during commit checks; review the commit again");
-        auto indexAfter = m_fs->readFile(*checkIndexPath);
-        if ((!indexAfter && indexAfter.error().code() != ErrorCode::NotFound) ||
-            (indexAfter ? std::optional<std::string>(*indexAfter) : std::nullopt) != *checkedIndex)
+        if (!matchesCheckedBytes(m_fs->readFile(*checkIndexPath), *checkedIndex))
             return fail(ErrorCode::Busy, "The Git index changed during commit checks; review staged changes again");
         auto finalStatus = status(control.stop);
         if (!finalStatus)
@@ -659,7 +658,7 @@ Result<CommitResult> GitRepository::commit(const CommitRequest& request, const R
     auto existing = m_fs->readFile(*index);
     if (!existing && existing.error().code() != ErrorCode::NotFound)
         return std::unexpected(std::move(existing.error()).withContext("reading the Git index"));
-    if (checkedIndex && (existing ? std::optional<std::string>(*existing) : std::nullopt) != *checkedIndex)
+    if (checkedIndex && !matchesCheckedBytes(existing, *checkedIndex))
         return fail(ErrorCode::Busy, "The Git index changed after commit checks; review staged changes again");
     if (existing) {
         std::error_code error;
