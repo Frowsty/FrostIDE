@@ -35,7 +35,7 @@ struct CppModuleGraph {
 // Validate the real llvm::cl::PrintVersionMessage banner against the compiled SDK pin.
 [[nodiscard]] Result<void> validateCppModuleScannerVersion(std::string_view banner);
 struct CppModuleScanRequest {
-    std::string scanner;             // Absolute pinned clang-scan-deps, from the application toolchain.
+    std::string scanner; // Absolute pinned clang-scan-deps, from the application toolchain.
     // Captured CDB in a scratch directory exclusive to this scan. The scanner's derived
     // arguments-form database is created and removed beside it.
     std::string privateDatabasePath;

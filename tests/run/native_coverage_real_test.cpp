@@ -75,7 +75,8 @@ TEST(NativeCoverageReal, InstrumentedRunMatchesActualLlvmCovSourceCounts) {
     ASSERT_EQ(request.rawProfiles.size(), 1U);
     const auto otherSource = scratch.join("other.cpp");
     const auto otherBinary = scratch.join("other.exe");
-    ASSERT_TRUE(fs.writeFileAtomic(otherSource, "int cold(){return 17;}\nint hot(){return 0;}\nint main(){return hot();}\n"));
+    ASSERT_TRUE(
+        fs.writeFileAtomic(otherSource, "int cold(){return 17;}\nint hot(){return 0;}\nint main(){return hot();}\n"));
     compile.arguments[6] = otherSource;
     compile.arguments.back() = otherBinary;
     auto otherBuilt = runAnalysisCommand(io::realProcessLauncher(), compile, {});

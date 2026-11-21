@@ -43,8 +43,8 @@ std::string_view nextCoverageLine(std::string_view& input) {
 
 bool isCoverageId(std::string_view value) {
     return value.size() == 32 && std::ranges::all_of(value, [](char ch) {
-        return (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F') || (ch >= 'a' && ch <= 'f');
-    });
+               return (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F') || (ch >= 'a' && ch <= 'f');
+           });
 }
 
 char lowerHex(char ch) { return ch >= 'A' && ch <= 'F' ? static_cast<char>(ch - 'A' + 'a') : ch; }
@@ -405,10 +405,9 @@ Result<CoverageReport> collectNativeCoverage(io::IFileSystem& fs, io::IProcessLa
     if (!merged)
         return std::unexpected(merged.error());
     const auto exportProfile = [&](bool checkIds) {
-        return command(request.llvmCov,
-                       {"export", "-format=lcov", "-num-threads=2",
-                        checkIds ? "-check-binary-ids" : "-check-binary-ids=false", "-debuginfod=false",
-                        "-instr-profile=" + *mergedPath, request.plan.program});
+        return command(request.llvmCov, {"export", "-format=lcov", "-num-threads=2",
+                                         checkIds ? "-check-binary-ids" : "-check-binary-ids=false",
+                                         "-debuginfod=false", "-instr-profile=" + *mergedPath, request.plan.program});
     };
     auto actual = exportProfile(true);
 #ifdef _WIN32

@@ -448,7 +448,8 @@ void Workbench::reportSaveAll(const document::SaveAllResult& result, bool quiet)
     }
     for (const document::SkippedDocument& skipped : result.skipped) {
         const std::string path = skipped.path;
-        const QString name = skipped.reason == document::SkipReason::Untitled ? text("An untitled buffer") : nativePath(path);
+        const QString name =
+            skipped.reason == document::SkipReason::Untitled ? text("An untitled buffer") : nativePath(path);
         switch (skipped.reason) {
         case document::SkipReason::MergePending: {
             Notification notification;
