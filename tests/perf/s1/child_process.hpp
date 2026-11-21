@@ -14,10 +14,12 @@
 
 #include "frost/core/error.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace frost::s1 {
 
@@ -32,6 +34,20 @@ struct LaunchOptions {
     // Show the first window without activating it (STARTF_USESHOWWINDOW with
     // SW_SHOWNOACTIVATE), so a run never takes the user's focus.
     bool noActivate = true;
+    // For console fixture programs that must not create or inherit a console.
+    bool noConsole = false;
+};
+
+struct ProcessMemory {
+    std::uint64_t privateBytes;
+    std::uint64_t workingSetBytes;
+};
+
+struct ProcessTreeMemory {
+    ProcessMemory total;
+    std::vector<std::uint32_t> memberPids;
+    // Job-wide commit high-water mark maintained by Windows, including exited members.
+    std::uint64_t peakJobCommitBytes;
 };
 
 // A running or finished child. Move-only; the destructor closes the handles, and
@@ -55,6 +71,10 @@ public:
     // Waits up to `timeoutMs` for the process to exit; returns its exit code, or
     // nullopt on timeout or when the exit code cannot be read.
     [[nodiscard]] std::optional<std::uint32_t> wait(std::uint32_t timeoutMs) const;
+    [[nodiscard]] Result<ProcessMemory> memory() const;
+    // Samples current job members sequentially. The working sets may include shared pages.
+    // An unstable or inaccessible job is an error rather than a partial sum.
+    [[nodiscard]] Result<ProcessTreeMemory> memoryTree() const;
     // Terminates the process (only this child). Idempotent.
     void terminate() const;
 

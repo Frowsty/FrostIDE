@@ -42,6 +42,11 @@ frost_add_executable(s1_exit LAYER app
 target_link_libraries(s1_exit PRIVATE shell32 user32)
 frost_s1_embed_manifest(s1_exit)
 
+frost_add_executable(s1_memory_smoke LAYER diag
+    SOURCES memory_smoke.cpp child_process.cpp child_process.hpp
+    DEPS frost::perf_probes frost::core)
+frost_s1_embed_manifest(s1_memory_smoke)
+
 # The QRhi API (rhi/qrhi.h, QShader) is semi-public: Qt ships it in the private
 # Gui package, under the same LGPL licence as Gui. Qt warns that private APIs
 # may change between minors; this is spike code pinned to FROST_QT_VERSION.
