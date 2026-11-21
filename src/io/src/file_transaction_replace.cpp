@@ -187,6 +187,26 @@ Result<void> privateStore(HANDLE handle, std::string_view path, bool requireSafe
     return {};
 }
 
+Result<void> protectPrivateStage(HANDLE handle, std::string_view path) {
+    if (auto restricted = privateStore(handle, path); !restricted)
+        return restricted;
+    auto security = securityOf(handle, path);
+    if (!security)
+        return std::unexpected(security.error());
+    BOOL present = FALSE, defaulted = FALSE;
+    PACL acl = nullptr;
+    if (!GetSecurityDescriptorDacl(security->data(), &present, &acl, &defaulted) || !present || !acl)
+        return fail(ErrorCode::Unsupported, "replacement: private stage requires a restricted DACL");
+    // A cross-directory move can turn an inherited ACE into an explicit, protected ACE.
+    // Freeze that transition on the verified held object while it is still private.
+    const auto error =
+        SetSecurityInfo(handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                        nullptr, nullptr, acl, nullptr);
+    if (error != ERROR_SUCCESS)
+        return std::unexpected(win32Error(error, "replacement: protect private stage DACL", path));
+    return privateStore(handle, path);
+}
+
 bool sameSecurityOwners(const Metadata& a, const Metadata& b) {
     PSID aOwner = nullptr, aGroup = nullptr, bOwner = nullptr, bGroup = nullptr;
     BOOL defaulted = FALSE;
@@ -633,12 +653,13 @@ Result<PreparedFileReplacement> prepareFileCreation(std::string_view target, std
     if (!wide)
         return std::unexpected(wide.error());
     // Store admission proves restrictive inheritable child ACL BEFORE the first byte is written.
-    state->replacement.reset(CreateFileW(wide->c_str(), GENERIC_READ | GENERIC_WRITE | DELETE | READ_CONTROL,
+    state->replacement.reset(CreateFileW(wide->c_str(),
+                                         GENERIC_READ | GENERIC_WRITE | DELETE | READ_CONTROL | WRITE_DAC,
                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_NEW,
                                          FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
     if (!state->replacement.valid())
         return std::unexpected(lastWin32Error("create: exclusive stage", *stage));
-    if (auto restricted = privateStore(state->replacement.get(), *stage); !restricted)
+    if (auto restricted = protectPrivateStage(state->replacement.get(), *stage); !restricted)
         return retained(restricted.error());
 #else
     state->replacement.reset(
@@ -762,7 +783,7 @@ Result<PreparedFileReplacement> prepareFileReplacement(std::string_view target, 
     if (*originalStageBytes != state->afterPayload)
         return retainedError(Error(ErrorCode::Busy, "replacement: acquired stage bytes differ before metadata copy"));
 #ifdef _WIN32
-    if (auto restricted = privateStore(state->replacement.get(), state->receipt.replacementPath); !restricted)
+    if (auto restricted = protectPrivateStage(state->replacement.get(), state->receipt.replacementPath); !restricted)
         return retainedError(restricted.error());
 #endif
     if (auto copied = supportedMetadataTo(state->replacement, state->before, state->receipt.replacementPath); !copied)
