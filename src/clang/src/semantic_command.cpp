@@ -2,7 +2,7 @@
 // CPP-8/13 preserves distinct full compile-command identities and captures actual frontend inputs.
 #include "semantic_command.hpp"
 
-#include "clang/Driver/Driver.h"
+#include "semantic_driver.hpp"
 
 namespace frost::clang_engine {
 namespace {
@@ -209,27 +209,18 @@ std::optional<SemanticCommand> semanticCommand(const llvm::json::Object& request
 #ifdef _WIN32
     pinned += ".exe";
 #endif
-    std::vector<const char*> driverArguments;
-    for (std::size_t index = 1; index < command.CommandLine.size(); ++index)
-        driverArguments.push_back(command.CommandLine[index].c_str());
-    const auto mode = clang::driver::getDriverMode(pinned, driverArguments);
-    if (!mode.empty() && mode != "cl" && mode != "gcc" && mode != "g++" && mode != "cpp") {
-        error = "Unsupported semantic compiler driver mode";
+    bool clMode;
+    if (!semantic::clangClMode(pinned, command.CommandLine, clMode, error))
         return {};
-    }
-    const bool clMode = clang::driver::IsClangCL(mode);
     std::vector<std::string> arguments{pinned.str().str()};
     for (std::size_t index = 1; index < command.CommandLine.size(); ++index) {
         const llvm::StringRef argument(command.CommandLine[index]);
-        if (clMode && argument == "/c") {
-            arguments.emplace_back("-c"); // The syntax-only action adjuster recognizes this spelling.
-            continue;
-        }
-        if (clMode && (argument == "/Zc:preprocessor" || argument == "-Zc:preprocessor"))
-            continue; // Conforming preprocessing is already Clang's default.
-        if (clMode && (argument == "/Zc:preprocessor-" || argument == "-Zc:preprocessor-")) {
-            error = "MSVC's traditional preprocessor mode cannot be reproduced by Clang";
-            return {};
+        if (clMode) {
+            const auto normalized = semantic::normalizeMsvcReplayArgument(argument, arguments, error);
+            if (normalized == semantic::MsvcReplayArgument::Unsupported)
+                return {};
+            if (normalized == semantic::MsvcReplayArgument::Handled)
+                continue;
         }
         if (argument.starts_with("@") || argument == "-Xclang" || argument.starts_with("-Xclang=") ||
             argument.starts_with("-fplugin") || argument.starts_with("-fmodule") || argument.starts_with("/clang:") ||
@@ -245,8 +236,7 @@ std::optional<SemanticCommand> semanticCommand(const llvm::json::Object& request
         arguments.push_back(argument.str());
     }
     arguments.push_back("-resource-dir=" + resource.str());
-    arguments.push_back(clMode ? "/clang:-fno-implicit-modules" : "-fno-implicit-modules");
-    arguments.push_back(clMode ? "/clang:-fno-implicit-module-maps" : "-fno-implicit-module-maps");
+    semantic::disableImplicitModules(arguments, clMode);
     command.CommandLine = std::move(arguments);
     // Producers receive a syntax-only command already stripped of ordinary output/dependency
     // actions; this contract is not left to an individual consumer's FrontendAction choice.

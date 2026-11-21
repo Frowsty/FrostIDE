@@ -5,6 +5,7 @@
 #include "ast_create_from_usage.hpp"
 #include "ast_refactoring_operations.hpp"
 #include "ast_signature.hpp"
+#include "semantic_driver.hpp"
 #include "semantic_snapshot.hpp"
 namespace frost::clang_engine {
 namespace {
@@ -110,15 +111,26 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
 #ifdef _WIN32
         driver += ".exe";
 #endif
+        bool clMode;
+        if (!clangClMode(driver, command.CommandLine, clMode, error))
+            return refuse("unsupported", error);
         args.push_back(driver.str().str());
         for (std::size_t i = 1; i < command.CommandLine.size(); ++i) {
             llvm::StringRef arg(command.CommandLine[i]);
             if (arg.contains('\0'))
                 return refuse("invalid-input", "NUL in compiler argument");
-            if (arg.starts_with("@") || arg == "-Xclang" || arg.starts_with("-fplugin") ||
-                arg.starts_with("-fmodule") || arg.starts_with("/clang:") || arg == "-include-pch")
+            if (arg.starts_with("@") || arg == "-Xclang" || arg.starts_with("-Xclang=") ||
+                arg.starts_with("-fplugin") || arg.starts_with("-fmodule") || arg.starts_with("/clang:") ||
+                arg == "-include-pch")
                 return refuse("unsupported", "Response/plugin/module or opaque PCH actions are not admitted");
-            if (cl && (arg.starts_with("/Yu") || arg.starts_with("/Yc"))) {
+            if (clMode) {
+                const auto normalized = normalizeMsvcReplayArgument(arg, args, error);
+                if (normalized == MsvcReplayArgument::Unsupported)
+                    return refuse("unsupported", error);
+                if (normalized == MsvcReplayArgument::Handled)
+                    continue;
+            }
+            if (clMode && (arg.starts_with("/Yu") || arg.starts_with("/Yc"))) {
                 auto header = arg.drop_front(3).str();
                 if (header.empty()) {
                     if (++i == command.CommandLine.size())
@@ -132,7 +144,7 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
                     {"translationUnit", command.Filename}, {"header", header}, {"mode", "textual-reparse"}});
                 continue;
             }
-            if (cl && arg.starts_with("/Fp")) {
+            if (clMode && arg.starts_with("/Fp")) {
                 if (arg.size() == 3 && ++i == command.CommandLine.size())
                     return refuse("invalid-input", "Missing PCH output operand");
                 continue;
@@ -140,8 +152,7 @@ llvm::json::Object astPlan(const llvm::json::Object& input, llvm::StringRef reso
             args.push_back(arg.str());
         }
         args.push_back("-resource-dir=" + resource.str());
-        args.push_back("-fno-implicit-modules");
-        args.push_back("-fno-implicit-module-maps");
+        disableImplicitModules(args, clMode);
         if (creation) {
             args.insert(args.end(),
                         {"-Xclang", "-frecovery-ast", "-Xclang", "-frecovery-ast-type", "-Werror=return-type"});

@@ -3,6 +3,7 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
+#include "frost/io/spawn_log.hpp"
 #include "frost/rpc/json.hpp"
 
 #include "pinned_compiler_arguments.hpp"
@@ -19,7 +20,8 @@ protected:
     frost::test::ScratchDir scratch{"ast-refactoring"};
     Json plan(std::string source, std::string operation, std::string selection, Json order = Json::array(),
               std::string name = "extracted", bool header = false, Json parameters = {},
-              std::vector<std::pair<std::string, std::string>> extraSources = {}) {
+              std::vector<std::pair<std::string, std::string>> extraSources = {},
+              const std::vector<std::string>& extraArguments = {}) {
         const auto file = scratch.join(header ? "fixture.hpp" : "fixture.cpp");
         const auto unit = scratch.join("fixture.cpp");
         const auto compiler = *frost::io::normalizePath(FROST_TEST_CXX_COMPILER);
@@ -39,6 +41,8 @@ protected:
             arguments.emplace_back(arg);
 #endif
         frost::test::appendPinnedCompilerArguments(arguments);
+        for (const auto& argument : extraArguments)
+            arguments.emplace_back(argument);
         std::vector<Json> commands{Json::object()
                                        .set("directory", scratch.path())
                                        .set("file", unit)
@@ -93,6 +97,8 @@ protected:
         EXPECT_FALSE(fs.exists(scratch.join("forbidden.o")).value_or(true));
         if (value)
             EXPECT_EQ(result->exitCode, value->stringAt("status") == "ready" ? 0 : 1);
+        if (value && result->exitCode == 0)
+            EXPECT_EQ(value->stringAt("compilationDatabaseSha256"), frost::io::sha256Hex(database));
         return value ? std::move(*value) : Json{};
     }
     std::string after(const Json& result) {
@@ -114,6 +120,32 @@ TEST_F(AstRefactoring, PermutesCanonicalFunctionParametersAndDirectCalls) {
     EXPECT_NE(after(result).find("int right, int left"), std::string::npos);
     EXPECT_NE(after(result).find("sum((2), (1))"), std::string::npos);
 }
+
+TEST_F(AstRefactoring, RefusesJoinedOpaqueFrontendOption) {
+    const auto result =
+        plan("int f(){return 2+3;}\n", "extract-variable", "2+3", {}, "value", false, {}, {}, {"-Xclang=-ast-dump"});
+    EXPECT_EQ(result.stringAt("status"), "unsupported");
+    refused(result);
+}
+
+#ifdef _WIN32
+TEST_F(AstRefactoring, MsvcConformingPreprocessorAndWarningsAsErrorsArePreserved) {
+    const auto result = plan("int f(){return 2+3;}\n", "extract-variable", "2+3", {}, "value", false, {}, {},
+                             {"-WX", "/Zc:preprocessor"});
+    ASSERT_EQ(result.stringAt("status"), "ready");
+    EXPECT_NE(after(result).find("return value"), std::string::npos);
+
+    const auto warning = plan("int f(){int unused; return 2+3;}\n", "extract-variable", "2+3", {}, "value", false, {},
+                              {}, {"-WX", "/Zc:preprocessor", "-Wunused-variable"});
+    EXPECT_EQ(warning.stringAt("status"), "parse-error");
+    refused(warning);
+
+    const auto traditional = plan("int f(){return 2+3;}\n", "extract-variable", "2+3", {}, "value", false, {}, {},
+                                  {"-WX", "/Zc:preprocessor-"});
+    EXPECT_EQ(traditional.stringAt("status"), "unsupported");
+    refused(traditional);
+}
+#endif
 TEST_F(AstRefactoring, SignatureEditsHeaderDefinitionAndCallsAcrossCapturedTranslationUnits) {
     auto rows = Json::array({Json::object().set("oldIndex", 1).set("type", "long").set("name", "value"),
                              Json::object().set("type", "int").set("name", "bias").set("argument", "4")});
