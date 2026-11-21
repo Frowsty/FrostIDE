@@ -55,24 +55,19 @@ inline std::string luaProof(std::string_view credential, std::string_view text) 
 inline constexpr std::string_view kLuaCredential = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 inline constexpr std::string_view kLuaServerNonce = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 inline LuaDebugIdentity luaIdentity() {
+#ifdef _WIN32
+    return {"C:/fixture/project", std::string(32, 'a'), std::string(32, 'b'), std::string(32, 'c'), 12345, 7};
+#else
     return {"/fixture/project", std::string(32, 'a'), std::string(32, 'b'), std::string(32, 'c'), 12345, 7};
+#endif
 }
 // Independent frozen wire transcript. The fixed vector is checked separately in endpoint tests.
-inline std::string luaTranscript(std::string_view role, std::string_view client) {
+inline std::string frozenLuaTranscript(std::string_view role, std::string_view client) {
     return "FrostEngine.ScriptDebug.v1\nrole=" + std::string(role) +
            "\ninstanceId=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ngeneration=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
            "projectPath=/fixture/"
            "project\nprocessId=12345\ndebugSessionId=cccccccccccccccccccccccccccccccc\nclientNonce=" +
            std::string(client) + "\nserverNonce=" + std::string(kLuaServerNonce) + "\n";
-}
-inline rpc::Json luaIdentityBody() {
-    return rpc::Json::object()
-        .set("protocolVersion", 1)
-        .set("instanceId", std::string(32, 'a'))
-        .set("generation", std::string(32, 'b'))
-        .set("projectPath", "/fixture/project")
-        .set("processId", 12345)
-        .set("debugSessionId", std::string(32, 'c'));
 }
 inline LuaDebugEndpoint luaEndpoint(std::uint16_t port) {
     LuaDebugEndpoint endpoint{std::string(kLuaCredential)};

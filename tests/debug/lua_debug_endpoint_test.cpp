@@ -21,10 +21,32 @@ TEST(LuaDebugEndpoint, FrozenRoleSeparatedHmacVectorsMatchEngineContract) {
     // Public immutable vector from Frost-Tests/Data/Automation/ScriptDebugProtocol-v1.json.
     ASSERT_GE(sodium_init(), 0);
     const std::string client(64, 'e');
-    EXPECT_EQ(luaProof(kLuaCredential, luaTranscript("server", client)),
+    EXPECT_EQ(luaProof(kLuaCredential, frozenLuaTranscript("server", client)),
               "eb4aa1f08dee5ce7457e4449b9742c88d6bf81eca40327e2aba937e0575fb239");
-    EXPECT_EQ(luaProof(kLuaCredential, luaTranscript("client", client)),
+    EXPECT_EQ(luaProof(kLuaCredential, frozenLuaTranscript("client", client)),
               "689f8c8f67cf58c1891b7ba29b6cd261cb0c81c5df26dcae86b1002e11a9b4c9");
+}
+
+TEST(LuaDebugEndpoint, NonAbsoluteProjectIdentityIsRefusedBeforeAdmissionOrConnect) {
+    LuaDapPeer peer([](LuaDapPeer&) {});
+    ASSERT_NE(peer.port, 0);
+#ifdef _WIN32
+    constexpr std::string_view shamPath = "/fixture/project"; // Root-relative without a drive.
+#else
+    constexpr std::string_view shamPath = "fixture/project";
+#endif
+    auto endpoint = luaEndpoint(peer.port);
+    endpoint.identity.projectPath = shamPath;
+    auto result = connectLuaDebugEndpoint(
+        std::move(endpoint),
+        [](const LuaDebugIdentity&, std::string_view) -> Result<void> {
+            ADD_FAILURE() << "A nonabsolute project identity must never reach admission";
+            return {};
+        },
+        deadline());
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
+    EXPECT_EQ(peer.accepted.load(), 0);
 }
 
 TEST(LuaDebugEndpoint, AuthenticatesAndLeavesActualNextDapFrameUnread) {
