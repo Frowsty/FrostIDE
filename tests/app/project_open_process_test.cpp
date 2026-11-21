@@ -35,6 +35,65 @@ using namespace std::chrono_literals;
 using frost::app::test::waitFor;
 using frost::app::test::WorkbenchRig;
 using frost::app::test::WorkDir;
+TEST(ProjectOpenProcess, StartupReadinessChecksOwnerAndProjectWithoutOpeningTheFile) {
+    WorkDir dir("external-wait-readiness");
+    dir.write("project/message.txt", "original\n");
+    dir.write("other/message.txt", "other\n");
+    WorkbenchRig rig(dir);
+    const auto root = frost::app::externalProjectRoot(dir.join("project"));
+    ASSERT_TRUE(root);
+    ASSERT_TRUE(rig.trust->trust(*root));
+    ASSERT_TRUE(rig.workbench->openExternalProject(*root));
+    const auto key = frost::app::externalProjectKey(*root);
+    auto owner = frost::io::LocalIpcOwner::claim(key);
+    ASSERT_TRUE(owner);
+    frost::app::ProjectOpenBroker broker(*rig.workbench, *rig.window, *root, std::move(*owner));
+    ASSERT_TRUE(broker.start());
+    const auto probe = [&](std::string_view project, std::int64_t pid) {
+        const auto request = frost::lang::Json::object().set("method", "project.ready")
+                                 .set("root", std::string(project)).set("ownerPid", pid)
+                                 .set("file", dir.join("project/message.txt")).dump();
+        std::atomic<bool> done = false;
+        frost::Result<std::string> result = frost::fail(frost::ErrorCode::Unknown, "not sent");
+        std::jthread client([&] {
+            result = frost::io::requestLocalIpc(key, request, 5s);
+            done.store(true, std::memory_order_release);
+        });
+        const bool finished = waitFor([&] { return done.load(std::memory_order_acquire); }, 6s);
+        client.join();
+        EXPECT_TRUE(finished);
+        return result;
+    };
+    const auto pid = QCoreApplication::applicationPid();
+    EXPECT_FALSE(probe(*root, pid + 1));
+    EXPECT_FALSE(probe(dir.join("other"), pid));
+    const auto ready = probe(*root, pid);
+    ASSERT_TRUE(ready) << ready.error().describe();
+    EXPECT_EQ(*ready, "ready");
+    EXPECT_EQ(rig.window->tabs().count(), 0);
+}
+
+TEST(ProjectOpenProcess, StartupReadinessReportsExitedOwner) {
+    WorkDir dir("external-wait-exited-owner");
+    dir.write("message.txt", "original\n");
+    const auto file = dir.join("message.txt");
+    const auto root = frost::app::externalProjectRoot(frost::io::parentPath(file));
+    ASSERT_TRUE(root);
+    frost::io::ProcessSpec spec;
+    spec.executable = frost::io::normalizePath(FROST_EXE_PATH).value();
+    spec.arguments = {"--version"};
+    spec.stdoutMode = frost::io::Stdio::Null;
+    auto child = frost::io::realProcessLauncher().launch(spec);
+    ASSERT_TRUE(child);
+    const auto exited = (*child)->wait(10s);
+    ASSERT_TRUE(exited);
+    ASSERT_EQ(exited->exitCode, 0);
+    const auto result = frost::app::forwardExternalOpen(*root, file, 0, 0, false, true, child->get());
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), frost::ErrorCode::Cancelled);
+    EXPECT_NE(result.error().message().find("before it became ready (exit 0)"), std::string::npos);
+}
+
 TEST(ProjectOpenProcess, SymlinkedProjectUsesTargetDirectoryAsIdentity) {
     WorkDir dir("engine-project-symlink");
     dir.write("target/Game.frostproj", "{}");

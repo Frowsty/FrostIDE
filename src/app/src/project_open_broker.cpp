@@ -9,6 +9,7 @@
 #include "frost/lang/json.hpp"
 #include "frost/lang/uri.hpp"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QEventLoop>
@@ -219,7 +220,8 @@ Result<void> openExternalFile(Workbench& workbench, std::string_view path, int l
     return {};
 }
 Result<void> forwardExternalOpen(std::string_view root, std::string_view file, int line, int column, bool columnUtf16,
-                                 bool wait) {
+                                 bool wait, io::IProcess* startingOwner) {
+    const auto key = externalProjectKey(root);
     auto payload = lang::Json::object().set("root", std::string(root)).set("file", std::string(file));
     if (wait)
         payload.set("wait", true);
@@ -235,21 +237,50 @@ Result<void> forwardExternalOpen(std::string_view root, std::string_view file, i
 #ifdef _WIN32
     AllowSetForegroundWindow(ASFW_ANY);
 #endif
-    auto reply = io::requestLocalIpc(externalProjectKey(root), payload.dump(), 5s);
+    if (startingOwner) {
+        const auto pid = static_cast<std::int64_t>(startingOwner->pid());
+        const auto ready = lang::Json::object().set("method", "project.ready").set("root", std::string(root))
+                               .set("ownerPid", pid).dump();
+        const auto deadline = std::chrono::steady_clock::now() + 30s;
+        // Readiness probes do not open the file. Submit the real request just once, after the
+        // launched owner has finished project admission and started serving its GUI.
+        for (;;) {
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - std::chrono::steady_clock::now());
+            if (remaining <= 0ms)
+                return fail(ErrorCode::Timeout, "the project window did not become ready within 30 seconds");
+            auto state = io::requestLocalIpc(key, ready, std::min(remaining, 1000ms));
+            if (state && *state == "ready")
+                break;
+            if (state && *state != "retry:busy")
+                return fail(ErrorCode::Unsupported, "the project window did not acknowledge startup readiness");
+            if (!state && state.error().code() != ErrorCode::Timeout && state.error().code() != ErrorCode::Busy)
+                return std::unexpected(std::move(state.error()));
+            if (auto exited = startingOwner->wait(0ms); exited) {
+                return fail(ErrorCode::Cancelled,
+                            "the project window exited before it became ready (exit " +
+                                std::to_string(exited->exitCode) + ")");
+            } else if (exited.error().code() != ErrorCode::Timeout) {
+                return std::unexpected(std::move(exited.error()));
+            }
+        }
+        payload.set("ownerPid", pid);
+    }
+    auto reply = io::requestLocalIpc(key, payload.dump(), 5s);
     if (!reply)
         return std::unexpected(std::move(reply.error()));
     if (wait) {
         if (!reply->starts_with("wait:") || reply->size() > 100)
             return fail(ErrorCode::Unsupported, "the project window does not support document-close waiting");
         const std::string ticket = reply->substr(5);
-        const auto poll = lang::Json::object()
-                              .set("method", "document.wait")
-                              .set("root", std::string(root))
-                              .set("ticket", ticket)
-                              .dump();
+        auto pollPayload = lang::Json::object().set("method", "document.wait").set("root", std::string(root))
+                               .set("ticket", ticket);
+        if (startingOwner)
+            pollPayload.set("ownerPid", static_cast<std::int64_t>(startingOwner->pid()));
+        const auto poll = pollPayload.dump();
         auto lastReply = std::chrono::steady_clock::now();
         for (;;) {
-            auto state = io::requestLocalIpc(externalProjectKey(root), poll, 2s);
+            auto state = io::requestLocalIpc(key, poll, 2s);
             if (!state) {
                 // A GUI stall is not a close. Owner death is still surfaced by transport errors.
                 if (state.error().code() == ErrorCode::Timeout || state.error().code() == ErrorCode::Busy) {
@@ -276,8 +307,8 @@ Result<void> forwardExternalOpen(std::string_view root, std::string_view file, i
         return fail(ErrorCode::Busy, "window did not accept the open request");
     return {};
 }
-Result<void> startExternalWaitOwner(io::IProcessLauncher& launcher, std::string_view executable, std::string_view root,
-                                    std::string_view file) {
+Result<std::unique_ptr<io::IProcess>> startExternalWaitOwner(io::IProcessLauncher& launcher, std::string_view executable,
+                                                            std::string_view root, std::string_view file) {
     if (!io::isAbsolutePath(executable) || !io::isAbsolutePath(root) || !io::isAbsolutePath(file))
         return fail(ErrorCode::InvalidArgument, "wait owner paths must be absolute");
     io::ProcessSpec spec;
@@ -287,10 +318,7 @@ Result<void> startExternalWaitOwner(io::IProcessLauncher& launcher, std::string_
     spec.stdinMode = io::Stdio::Null;
     spec.stdoutMode = io::Stdio::Null;
     spec.stderrMode = io::Stdio::Null;
-    auto child = launcher.launch(spec);
-    if (!child)
-        return std::unexpected(std::move(child.error()));
-    return {};
+    return launcher.launch(spec);
 }
 ProjectOpenBroker::ProjectOpenBroker(Workbench& workbench, MainWindow& window, std::string root,
                                      std::unique_ptr<io::LocalIpcOwner> owner)
@@ -342,6 +370,8 @@ Result<std::string> ProjectOpenBroker::accept(const std::string& request) {
     auto json = lang::parseJson(request);
     if (!json || !json->isObject())
         return fail(ErrorCode::InvalidArgument, "invalid open request");
+    if (json->find("ownerPid") && json->integerAt("ownerPid") != QCoreApplication::applicationPid())
+        return fail(ErrorCode::Cancelled, "the project window owner changed");
     if (json->stringAt("method") == "document.wait") {
         if (json->stringAt("root") != m_root || m_workbench.projectRoot().empty())
             return fail(ErrorCode::Cancelled, "the project window changed");
@@ -358,6 +388,12 @@ Result<std::string> ProjectOpenBroker::accept(const std::string& request) {
     }
     if (m_finishingWaits)
         return fail(ErrorCode::Cancelled, "the window is closing");
+    if (json->stringAt("method") == "project.ready") {
+        const auto current = externalProjectRoot(m_workbench.projectRoot());
+        if (json->stringAt("root") != m_root || !current || lang::documentKey(*current) != lang::documentKey(m_root))
+            return fail(ErrorCode::Cancelled, "the project window changed");
+        return std::string("ready");
+    }
     if (json->stringAt("method") == "unity.hello") {
         const std::string announcedRoot(json->stringAt("root"));
         if (announcedRoot.empty() || m_workbench.projectRoot().empty() ||

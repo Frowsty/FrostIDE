@@ -33,11 +33,14 @@ class MainWindow;
 [[nodiscard]] Result<void> openExternalFile(Workbench& workbench, std::string_view path, int line, int column,
                                             bool columnUtf16 = false);
 // Secondary process: sends one bounded request and waits for the owning window's acknowledgement.
+// A just-launched owner gets a separate, bounded readiness probe before the open is sent.
 [[nodiscard]] Result<void> forwardExternalOpen(std::string_view root, std::string_view file, int line, int column,
-                                               bool columnUtf16 = false, bool wait = false);
-// Start an ordinary owner window for a --wait client; the owner keeps normal Save/close semantics.
-[[nodiscard]] Result<void> startExternalWaitOwner(io::IProcessLauncher& launcher, std::string_view executable,
-                                                  std::string_view root, std::string_view file);
+                                               bool columnUtf16 = false, bool wait = false,
+                                               io::IProcess* startingOwner = nullptr);
+// Start an ordinary owner window for a --wait client and return its non-terminating process handle.
+[[nodiscard]] Result<std::unique_ptr<io::IProcess>>
+startExternalWaitOwner(io::IProcessLauncher& launcher, std::string_view executable, std::string_view root,
+                       std::string_view file);
 
 // GUI thread owns this adapter. The handler runs on the IPC worker, posts to this object, and
 // waits at most two seconds for the UI; destruction cancels the server and joins its worker.

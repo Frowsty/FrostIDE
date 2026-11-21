@@ -668,7 +668,7 @@ int run(const frost::app::ProcessHardening& hardening, const std::string& restar
                     return 2;
                 }
                 auto waited = frost::app::forwardExternalOpen(externalRoot, externalFile, parsed->line, parsed->column,
-                                                              parsed->columnUtf16, true);
+                                                              parsed->columnUtf16, true, started->get());
                 if (!waited) {
                     reportExternalOpenFailure(consoleCodePage, waited.error().message());
                     return 2;
