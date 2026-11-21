@@ -1000,6 +1000,7 @@ private:
     void showSettings();
     void showUpdateCheck();
     void showVersionSwitcher();
+    friend struct WorkbenchUpdateFixture;
     void applyVerifiedUpdate();
     void showAttachToProcess();
     void attachToProcess(std::uint32_t pid, const std::string& exePath, const std::string& exeName,

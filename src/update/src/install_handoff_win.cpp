@@ -29,6 +29,7 @@ Result<PreparedUpdateHelper> stagePerUserUpdateHelper(io::IFileSystem& fs, std::
         std::string_view{"vcruntime140d.dll"},
         std::string_view{"vcruntime140_1d.dll"},
         std::string_view{"ucrtbased.dll"},
+        std::string_view{"clang_rt.asan_dynamic-x86_64.dll"},
     };
     std::vector<std::pair<std::string, std::string>> copies;
     for (const auto name : names) {

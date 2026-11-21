@@ -188,6 +188,21 @@ if(WIN32 AND NOT Python3_EXECUTABLE AND DEFINED ENV{FROST_SDK} AND EXISTS "$ENV{
     set(Python3_EXECUTABLE "$ENV{FROST_SDK}/py/Scripts/python.exe")
 endif()
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+if(WIN32)
+    add_executable(app_update_ui_probe in_place_update_ui_probe.cpp ${FROST_TEST_MANIFEST_RC})
+    frost_apply_compile_options(app_update_ui_probe TEST)
+    frost_copy_runtime_dlls(app_update_ui_probe)
+    target_link_options(app_update_ui_probe PRIVATE /MANIFEST:NO)
+    target_link_libraries(app_update_ui_probe PRIVATE frost::app frost::io frost::update Qt6::Widgets
+        unofficial-sodium::sodium)
+    add_dependencies(app_update_ui_probe frost-update-apply update_test_app_helper)
+    add_test(NAME Workbench.RealSignedInPlaceUpdateUi
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/in_place_update_ui_test.py"
+                "$<TARGET_FILE:app_update_ui_probe>" "$<TARGET_FILE:frost-update-apply>"
+                "$<TARGET_FILE:update_test_app_helper>" "${FROST_QT_PLUGIN_DIR}" "$<CONFIG>")
+    set_tests_properties(Workbench.RealSignedInPlaceUpdateUi PROPERTIES LABELS integration
+        RESOURCE_LOCK frost_desktop TIMEOUT 150)
+endif()
 add_test(NAME UpdateState.IndependentProcessesPreserveHigherFloor
     COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/update_state_process.py"
             "$<TARGET_FILE:app_workbench_tests>")
