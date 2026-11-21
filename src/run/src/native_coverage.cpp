@@ -139,7 +139,8 @@ Result<void> validateAnalysisLlvmVersion(std::string_view banner, std::string_vi
     }
     return fail(ErrorCode::Unsupported, "Coverage requires pinned LLVM " + std::string(expected));
 }
-Result<std::vector<CoverageFile>> parseLlvmCoverage(std::string_view lcov, std::string_view compilationDirectory) {
+Result<std::vector<CoverageFile>> parseLlvmCoverage(std::string_view lcov, std::string_view compilationDirectory,
+                                                    CoverageSummaryMode summaryMode) {
     if (!io::isAbsolutePath(compilationDirectory) || lcov.find('\0') != lcov.npos)
         return fail(ErrorCode::InvalidArgument,
                     "Coverage requires an absolute compilation directory and NUL-free export");
@@ -185,10 +186,15 @@ Result<std::vector<CoverageFile>> parseLlvmCoverage(std::string_view lcov, std::
                 std::ranges::count_if(current->lines, [](const auto& item) { return item.hits > 0; }));
             const auto branches = static_cast<std::uint64_t>(
                 std::ranges::count_if(current->branches, [](const auto& item) { return item.hits && *item.hits > 0; }));
-            if (!lf || !lh || current->found != current->lines.size() || current->covered != covered || (brf != brh) ||
-                (!current->branches.empty() && (!brf || !brh)) ||
-                (brf && current->branchesFound != current->branches.size()) ||
-                (brh && current->branchesCovered != branches))
+            if (!lf || !lh || current->covered > current->found || brf != brh || (!current->branches.empty() && !brf) ||
+                current->branchesCovered > current->branchesFound)
+                return fail(ErrorCode::Corrupt, "Missing or invalid coverage summary");
+            // LLVM's file report and source projections are calculated separately. Macro expansions and
+            // template instantiations can make their totals differ; both values are meaningful.
+            current->aggregateDiffersFromDetails =
+                current->found != current->lines.size() || current->covered != covered ||
+                (brf && (current->branchesFound != current->branches.size() || current->branchesCovered != branches));
+            if (current->aggregateDiffersFromDetails && summaryMode == CoverageSummaryMode::RequireRowTotals)
                 return fail(ErrorCode::Corrupt, "Coverage summary disagrees with line/branch records");
             std::ranges::sort(current->lines, {}, &CoverageLine::line);
             result.push_back(std::move(*current));
@@ -329,7 +335,8 @@ Result<CoverageReport> collectNativeCoverage(io::IFileSystem& fs, io::IProcessLa
                                                   "-num-threads=2", request.plan.program});
     if (!baselineText)
         return std::unexpected(baselineText.error());
-    auto baseline = parseLlvmCoverage(*baselineText, request.compilationDirectory);
+    auto baseline =
+        parseLlvmCoverage(*baselineText, request.compilationDirectory, CoverageSummaryMode::LlvmFileAggregates);
     if (!baseline)
         return std::unexpected(baseline.error());
     std::map<std::string, std::optional<AnalysisFileIdentity>> sources;
@@ -459,7 +466,7 @@ Result<CoverageReport> collectNativeCoverage(io::IFileSystem& fs, io::IProcessLa
 #endif
     if (!actual)
         return std::unexpected(actual.error());
-    auto files = parseLlvmCoverage(*actual, request.compilationDirectory);
+    auto files = parseLlvmCoverage(*actual, request.compilationDirectory, CoverageSummaryMode::LlvmFileAggregates);
     if (!files)
         return std::unexpected(files.error());
     if (files->size() != baseline->size())

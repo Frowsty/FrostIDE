@@ -59,6 +59,34 @@ TEST(NativeCoverage, RefusesDuplicateContradictoryAndTruncatedRecords) {
           "DA:1,1\nBRDA:1,0,0,1\nBRDA:1,0,0,1\nLF:1\nLH:1\nBRF:2\nBRH:2\nend_of_record\n"})
         EXPECT_FALSE(parseLlvmCoverage(std::string("SF:unit.cpp\n") + rows, projectRoot));
 }
+TEST(NativeCoverage, PreservesLlvmFileAggregatesAndProjectedCountsSeparately) {
+#ifdef _WIN32
+    constexpr auto projectRoot = "C:/project";
+#else
+    constexpr auto projectRoot = "/project";
+#endif
+    // llvm-cov reports aggregate and per-source counts separately for macro-heavy test translation units.
+    constexpr auto sample = "SF:tests.cpp\nDA:2,13\nDA:7,0\nBRDA:2,0,0,13\nBRDA:2,0,1,-\n"
+                            "LF:1\nLH:1\nBRF:4\nBRH:2\nend_of_record\n";
+    EXPECT_FALSE(parseLlvmCoverage(sample, projectRoot));
+    auto report = parseLlvmCoverage(sample, projectRoot, CoverageSummaryMode::LlvmFileAggregates);
+    ASSERT_TRUE(report);
+    ASSERT_EQ(report->size(), 1u);
+    const auto& file = report->front();
+    EXPECT_TRUE(file.aggregateDiffersFromDetails);
+    EXPECT_EQ(file.found, 1u);
+    EXPECT_EQ(file.covered, 1u);
+    EXPECT_EQ(file.branchesFound, 4u);
+    EXPECT_EQ(file.branchesCovered, 2u);
+    EXPECT_EQ(file.lines, (std::vector<CoverageLine>{{2, 13}, {7, 0}}));
+    ASSERT_EQ(file.branches.size(), 2u);
+    EXPECT_EQ(file.branches[0].hits, 13u);
+    EXPECT_FALSE(file.branches[1].hits);
+    for (auto invalid : {"DA:1,1\nDA:1,2\nLF:2\nLH:2\nend_of_record\n", "DA:1,1\nLF:1\nLH:2\nend_of_record\n",
+                         "DA:1,1\nLF:1\nLH:1\n", "DA:1,1\nLF:1\nLH:1\nBRF:2\nend_of_record\n"})
+        EXPECT_FALSE(parseLlvmCoverage(std::string("SF:tests.cpp\n") + invalid, projectRoot,
+                                       CoverageSummaryMode::LlvmFileAggregates));
+}
 TEST(NativeCoverage, VersionRequiresExactLlvmToken) {
     EXPECT_TRUE(validateAnalysisLlvmVersion("LLVM (https://llvm.org):\n LLVM version 23.1.4\n", "23.1.4"));
     EXPECT_FALSE(validateAnalysisLlvmVersion("LLVM version 23.1.40\n", "23.1.4"));

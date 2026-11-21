@@ -405,6 +405,14 @@ void Workbench::startNativeAnalysis(bool importProfiles, bool profile) {
                     table->setItem(static_cast<int>(row), 2,
                                    new QTableWidgetItem(
                                        QStringLiteral("%1 / %2").arg(file.branchesCovered).arg(file.branchesFound)));
+                    if (file.aggregateDiffersFromDetails) {
+                        for (const auto column : {1, 2}) {
+                            auto* item = table->item(static_cast<int>(row), column);
+                            item->setText(item->text() + QStringLiteral(" (LLVM aggregate)"));
+                            item->setToolTip("LLVM file aggregates differ from the source-level records. "
+                                             "The gutter shows LLVM's individual source line counts.");
+                        }
+                    }
                     table->setItem(static_cast<int>(row), 3,
                                    new QTableWidgetItem(file.identity ? "Observed, not build provenance"
                                                                       : text(file.sourceUnavailable)));
