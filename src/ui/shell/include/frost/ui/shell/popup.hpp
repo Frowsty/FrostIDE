@@ -11,6 +11,7 @@
 #include <QString>
 #include <QVariant>
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -96,6 +97,17 @@ public:
 
     ListPopup(QWidget* owner, const QString& title, bool filterable);
 
+    struct ResultPaintSample {
+        std::uint64_t queryGeneration;
+        QString query;
+        int firstPaintedItem;
+        std::chrono::steady_clock::time_point keyPress, paintEnd;
+    };
+    using ResultPaintSink = std::function<void(const ResultPaintSample&)>;
+    // B7. Opt-in observation for synchronous external filters such as Go to File. Delivers
+    // only for a changed keyboard query after a result row is painted; an empty sink disables it.
+    void setResultPaintSink(ResultPaintSink sink);
+
     void setFilterMode(FilterMode mode);
     [[nodiscard]] FilterMode filterMode() const noexcept { return m_mode; }
     // The title label (Search Everywhere shows the scope there).
@@ -136,6 +148,8 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    class ResultList;
+    class FilterEdit;
     void applyFilter();
     [[nodiscard]] bool handleKey(QKeyEvent& event);
     [[nodiscard]] bool selectable(int row) const;

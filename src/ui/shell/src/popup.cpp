@@ -16,11 +16,13 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPainter>
+#include <QScopedValueRollback>
 #include <QStyledItemDelegate>
 #include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <memory>
 #include <utility>
 
 namespace frost::ui {
@@ -35,6 +37,7 @@ constexpr int kEnabledRole = Qt::UserRole + 4;
 class ListPopupItemDelegate final : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
+    int* firstPaintedItem = nullptr;
 
     [[nodiscard]] QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
         const bool isHeader = index.data(kHeaderRole).toBool();
@@ -141,10 +144,110 @@ public:
                           mainFm.elidedText(primary, Qt::ElideRight, availWidth));
 
         painter->restore();
+        if (firstPaintedItem && *firstPaintedItem < 0) {
+            *firstPaintedItem = index.data(Qt::UserRole).toInt();
+        }
     }
 };
 
 } // namespace
+
+class ListPopup::ResultList final : public QListWidget {
+public:
+    using Clock = std::chrono::steady_clock;
+    struct KeyPress {
+        std::uint64_t previousGeneration;
+        Clock::time_point time;
+    };
+    struct Timing {
+        explicit Timing(ResultPaintSink callback) : sink(std::move(callback)) {}
+        ResultPaintSink sink;
+        std::uint64_t queryGeneration = 0;
+        std::optional<KeyPress> key;
+        std::optional<ResultPaintSample> pending;
+    };
+
+    explicit ResultList(QWidget* parent) : QListWidget(parent), m_delegate(new ListPopupItemDelegate(this)) {
+        setItemDelegate(m_delegate);
+    }
+
+    [[nodiscard]] std::shared_ptr<Timing> timing() const { return m_timing; }
+
+    void setSink(ResultPaintSink sink) { m_timing = sink ? std::make_shared<Timing>(std::move(sink)) : nullptr; }
+
+    void queryChanged() {
+        if (m_timing) {
+            ++m_timing->queryGeneration;
+            m_timing->pending.reset();
+        }
+    }
+
+    void itemsChanged(const QString& query, bool hasItems) {
+        if (!m_timing) {
+            return;
+        }
+        m_timing->pending.reset();
+        const auto& key = m_timing->key;
+        if (key && key->previousGeneration + 1 == m_timing->queryGeneration && hasItems && !query.isEmpty()) {
+            m_timing->pending = ResultPaintSample{m_timing->queryGeneration, query, -1, key->time, {}};
+        }
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        if (!m_timing || !m_timing->pending || !viewport()->isVisible() || itemDelegate() != m_delegate) {
+            QListWidget::paintEvent(event);
+            return;
+        }
+        const auto timing = m_timing;
+        const auto queryGeneration = timing->pending->queryGeneration;
+        int firstPaintedItem = -1;
+        {
+            const QScopedValueRollback capture(m_delegate->firstPaintedItem, &firstPaintedItem);
+            QListWidget::paintEvent(event);
+        }
+        if (firstPaintedItem >= 0 && timing == m_timing && timing->pending &&
+            timing->pending->queryGeneration == queryGeneration) {
+            const auto paintEnd = Clock::now();
+            auto sample = std::move(*timing->pending);
+            timing->pending.reset();
+            sample.firstPaintedItem = firstPaintedItem;
+            sample.paintEnd = paintEnd;
+            timing->sink(sample);
+        }
+    }
+
+    void hideEvent(QHideEvent* event) override {
+        if (m_timing) {
+            m_timing->pending.reset();
+        }
+        QListWidget::hideEvent(event);
+    }
+
+private:
+    ListPopupItemDelegate* const m_delegate;
+    std::shared_ptr<Timing> m_timing;
+};
+
+class ListPopup::FilterEdit final : public QLineEdit {
+public:
+    explicit FilterEdit(ListPopup& popup) : QLineEdit(&popup), m_popup(popup) {}
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override {
+        const auto timing = static_cast<ResultList*>(m_popup.m_list)->timing();
+        if (!timing) {
+            QLineEdit::keyPressEvent(event);
+            return;
+        }
+        const QScopedValueRollback capture(
+            timing->key, std::optional{ResultList::KeyPress{timing->queryGeneration, ResultList::Clock::now()}});
+        QLineEdit::keyPressEvent(event);
+    }
+
+private:
+    ListPopup& m_popup;
+};
 
 Popup::Popup(QWidget* owner) : QFrame(owner, Qt::Popup | Qt::FramelessWindowHint) {
     setObjectName(QStringLiteral("frostPopup"));
@@ -235,7 +338,7 @@ void Popup::paintEvent(QPaintEvent* /*event*/) {
 
 ListPopup::ListPopup(QWidget* owner, const QString& title, bool filterable)
     : Popup(owner), m_title(new QLabel(title, this)), m_scopeBar(new QWidget(this)),
-      m_scopeLayout(new QHBoxLayout(m_scopeBar)), m_filter(new QLineEdit(this)), m_list(new QListWidget(this)) {
+      m_scopeLayout(new QHBoxLayout(m_scopeBar)), m_filter(new FilterEdit(*this)), m_list(new ResultList(this)) {
     setObjectName(QStringLiteral("listPopup"));
     m_title->setObjectName(QStringLiteral("popupTitle"));
     QFont titleFont = m_title->font();
@@ -260,7 +363,7 @@ ListPopup::ListPopup(QWidget* owner, const QString& title, bool filterable)
     m_list->setSelectionMode(QAbstractItemView::SingleSelection);
     m_list->setFrameShape(QFrame::NoFrame);
     m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_list->setItemDelegate(new ListPopupItemDelegate(m_list));
+
     m_list->viewport()->setAttribute(Qt::WA_Hover, true);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(8, 8, 8, 6);
@@ -289,6 +392,7 @@ ListPopup::ListPopup(QWidget* owner, const QString& title, bool filterable)
     m_filter->installEventFilter(this);
     m_list->installEventFilter(this);
     connect(m_filter, &QLineEdit::textChanged, this, [this](const QString& value) {
+        static_cast<ResultList*>(m_list)->queryChanged();
         applyFilter();
         emit filterTextChanged(value);
     });
@@ -386,7 +490,10 @@ void ListPopup::setItems(std::vector<ListPopupItem> items) {
         }
     }
     applyFilter();
+    static_cast<ResultList*>(m_list)->itemsChanged(m_filter->text(), !m_items.empty());
 }
+
+void ListPopup::setResultPaintSink(ResultPaintSink sink) { static_cast<ResultList*>(m_list)->setSink(std::move(sink)); }
 
 bool ListPopup::selectable(int row) const {
     const QListWidgetItem* item = m_list->item(row);

@@ -6,6 +6,7 @@
 #include "frost/ui/find/find_item_roles.hpp"
 #include "frost/ui/find/find_popup.hpp"
 #include "frost/ui/find/find_tool_window.hpp"
+#include "frost/ui/shell/popup.hpp"
 #include "frost/ui/workbench/file_system_view.hpp"
 
 #include "workbench_rig.hpp"
@@ -17,9 +18,11 @@
 #include <QToolButton>
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace {
 using namespace frost;
@@ -28,6 +31,79 @@ using app::test::WorkDir;
 namespace actions = ui::find_actions;
 
 ui::FindFeature* feature(WorkbenchRig& rig) { return rig.window->findChild<ui::FindFeature*>(); }
+
+TEST(WorkbenchFind, GoToFileMeasuresDeliveredKeyToLatestResultPaint) {
+    using Clock = std::chrono::steady_clock;
+    WorkDir dir("go-to-file-paint");
+    dir.write("src/zebra.cpp", "int zebra;\n");
+    dir.write("src/zinnia.cpp", "int zinnia;\n");
+    dir.write("src/other.cpp", "int other;\n");
+    std::vector<ui::ListPopup::ResultPaintSample> samples;
+    WorkbenchRig rig(dir);
+    ASSERT_TRUE(rig.workbench->openPath(dir.path()));
+    rig.show();
+    ASSERT_EQ(rig.window->invoke(ui::workbench_actions::kGoToFile), input::InvokeResult::Ran);
+    auto* popup = qobject_cast<ui::ListPopup*>(rig.window->activePopup());
+    ASSERT_NE(popup, nullptr);
+    ASSERT_EQ(popup->objectName(), QStringLiteral("goToFilePopup"));
+    ASSERT_TRUE(app::test::waitFor([&] {
+        popup->setFilterText(QString());
+        popup->setFilterText(QStringLiteral("zebra"));
+        return !popup->items().empty() && popup->items().front().text == QStringLiteral("zebra.cpp");
+    }));
+    popup->setFilterText(QString());
+    QApplication::processEvents();
+    ASSERT_TRUE(popup->list()->viewport()->isVisible());
+
+    popup->setResultPaintSink([&](const auto& sample) { samples.push_back(sample); });
+    auto* filter = popup->filterField();
+    ASSERT_TRUE(filter->hasFocus());
+    app::test::sendKey(filter, Qt::Key_Z, Qt::NoModifier, QStringLiteral("z"));
+    const auto secondKeyBefore = Clock::now();
+    app::test::sendKey(filter, Qt::Key_E, Qt::NoModifier, QStringLiteral("e"));
+    const auto secondKeyAfter = Clock::now();
+    ASSERT_TRUE(samples.empty());
+
+    ASSERT_TRUE(app::test::waitFor([&] { return !samples.empty(); }));
+    ASSERT_EQ(samples.size(), 1U);
+    const auto& sample = samples.front();
+    EXPECT_EQ(sample.queryGeneration, 2U);
+    EXPECT_EQ(sample.query, QStringLiteral("ze"));
+    ASSERT_GE(sample.firstPaintedItem, 0);
+    ASSERT_LT(static_cast<std::size_t>(sample.firstPaintedItem), popup->items().size());
+    EXPECT_EQ(popup->items()[static_cast<std::size_t>(sample.firstPaintedItem)].text, QStringLiteral("zebra.cpp"));
+    EXPECT_GE(sample.keyPress, secondKeyBefore);
+    EXPECT_LE(sample.keyPress, secondKeyAfter);
+    EXPECT_GT(sample.paintEnd, secondKeyAfter);
+    const auto ticks = [](auto time) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count();
+    };
+    RecordProperty("go_to_file_key_press_steady_ns", std::to_string(ticks(sample.keyPress)));
+    RecordProperty("go_to_file_result_paint_end_steady_ns", std::to_string(ticks(sample.paintEnd)));
+    const auto elapsed = ticks(sample.paintEnd) - ticks(sample.keyPress);
+    RecordProperty("go_to_file_key_to_result_paint_ns", std::to_string(elapsed));
+
+    app::test::sendKey(filter, Qt::Key_Left, Qt::NoModifier, QString());
+    QApplication::processEvents();
+    EXPECT_EQ(samples.size(), 1U);
+    app::test::sendKey(filter, Qt::Key_End, Qt::NoModifier, QString());
+    app::test::sendKey(filter, Qt::Key_X, Qt::NoModifier, QStringLiteral("x"));
+    QApplication::processEvents();
+    EXPECT_TRUE(popup->items().empty());
+    EXPECT_EQ(samples.size(), 1U);
+    // Supersede an actual key result before Qt paints it.
+    app::test::sendKey(filter, Qt::Key_Backspace, Qt::NoModifier, QString());
+    ASSERT_FALSE(popup->items().empty());
+    ASSERT_EQ(samples.size(), 1U);
+    popup->setFilterText(QStringLiteral("zinnia"));
+    QApplication::processEvents();
+    ASSERT_FALSE(popup->items().empty());
+    EXPECT_EQ(samples.size(), 1U);
+    popup->setResultPaintSink({});
+    app::test::sendKey(filter, Qt::Key_Backspace, Qt::NoModifier, QString());
+    QApplication::processEvents();
+    EXPECT_EQ(samples.size(), 1U);
+}
 
 TEST(WorkbenchFind, TodoActionUsesCurrentProjectDirtyTextAndIgnoredFileRules) {
     WorkDir dir("todo-action");
