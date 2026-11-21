@@ -10,6 +10,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
@@ -30,17 +31,21 @@ public:
         bool callbacksOnOneThread = true;
     };
 
-    // Handlers for start(); they record into this collector.
+    RunCollector() = default;
+    RunCollector(const RunCollector&) = delete;
+    RunCollector& operator=(const RunCollector&) = delete;
+
+    // The handlers own the recording state even if the test stops observing before a callback returns.
     [[nodiscard]] run::RunHandlers handlers() {
         run::RunHandlers handlers;
-        handlers.onPhaseChanged = [this](const run::RunStatus& status) {
-            record([&](Snapshot& s) {
+        handlers.onPhaseChanged = [state = m_state](const run::RunStatus& status) {
+            state->record([&](Snapshot& s) {
                 s.events.push_back("phase:" + std::string(run::toString(status.phase)));
                 s.phases.push_back(status.phase);
             });
         };
-        handlers.onOutput = [this](run::OutputStream stream, std::string_view text) {
-            record([&](Snapshot& s) {
+        handlers.onOutput = [state = m_state](run::OutputStream stream, std::string_view text) {
+            state->record([&](Snapshot& s) {
                 if (stream == run::OutputStream::Stdout) {
                     if (s.events.empty() || s.events.back() != "out") {
                         s.events.emplace_back("out");
@@ -54,8 +59,8 @@ public:
                 }
             });
         };
-        handlers.onFinished = [this](const run::RunResult& result) {
-            record([&](Snapshot& s) {
+        handlers.onFinished = [state = m_state](const run::RunResult& result) {
+            state->record([&](Snapshot& s) {
                 s.events.emplace_back("finished");
                 s.result = result;
             });
@@ -66,9 +71,10 @@ public:
     // Waits up to `timeout` for `done` to hold; returns the snapshot either way.
     Snapshot waitUntil(const std::function<bool(const Snapshot&)>& done,
                        std::chrono::milliseconds timeout = std::chrono::seconds(30)) {
-        UniqueLock lock(m_mutex);
-        m_changed.wait_for(lock.native(), timeout, [&]() FROST_NO_THREAD_SAFETY_ANALYSIS { return done(m_snapshot); });
-        return m_snapshot;
+        UniqueLock lock(m_state->mutex);
+        m_state->changed.wait_for(lock.native(), timeout,
+                                  [&]() FROST_NO_THREAD_SAFETY_ANALYSIS { return done(m_state->snapshot); });
+        return m_state->snapshot;
     }
 
     // Waits for onFinished.
@@ -77,29 +83,33 @@ public:
     }
 
     Snapshot snapshot() {
-        LockGuard lock(m_mutex);
-        return m_snapshot;
+        LockGuard lock(m_state->mutex);
+        return m_state->snapshot;
     }
 
 private:
-    template<class F>
-    void record(F change) FROST_NO_THREAD_SAFETY_ANALYSIS {
-        {
-            LockGuard lock(m_mutex);
-            const auto self = std::this_thread::get_id();
-            if (m_snapshot.callbackThread == std::thread::id{}) {
-                m_snapshot.callbackThread = self;
-            } else if (m_snapshot.callbackThread != self) {
-                m_snapshot.callbacksOnOneThread = false;
+    struct State {
+        template<class F>
+        void record(F change) FROST_NO_THREAD_SAFETY_ANALYSIS {
+            {
+                LockGuard lock(mutex);
+                const auto self = std::this_thread::get_id();
+                if (snapshot.callbackThread == std::thread::id{}) {
+                    snapshot.callbackThread = self;
+                } else if (snapshot.callbackThread != self) {
+                    snapshot.callbacksOnOneThread = false;
+                }
+                change(snapshot);
             }
-            change(m_snapshot);
+            changed.notify_all();
         }
-        m_changed.notify_all();
-    }
 
-    Mutex m_mutex;
-    std::condition_variable m_changed;
-    Snapshot m_snapshot FROST_GUARDED_BY(m_mutex);
+        Mutex mutex;
+        std::condition_variable changed;
+        Snapshot snapshot FROST_GUARDED_BY(mutex);
+    };
+
+    const std::shared_ptr<State> m_state = std::make_shared<State>();
 };
 
 } // namespace frost::test
