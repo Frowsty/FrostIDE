@@ -116,8 +116,7 @@ TEST(EngineUnitTestsComposition, WorkbenchDestroyedBeforeWindowDeletesProviderBe
     EXPECT_TRUE(fs.destroyedBeforeReturn) << "Provider must retire before Workbench drains borrowed services";
     EXPECT_TRUE(fs.returned.load());
     ASSERT_TRUE(rig.window);
-    rig.window->toolWindows().show(kUnitTestsToolWindow, false);
-    QApplication::processEvents();
+    EXPECT_EQ(rig.window->findChild<QWidget*>("engineUnitTestsProvider"), nullptr);
     rig.window.reset();
 }
 } // namespace
