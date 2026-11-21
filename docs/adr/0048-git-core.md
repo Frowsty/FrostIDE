@@ -7,6 +7,32 @@
 - Plan reference: PLAN.md M5 (Git), section 2 (VCS notes); ADR 0019 (frost::diff, D6 histogram dialects),
   ADR 0016 (input), ADR 0037 (editor view), ADR 0038 (shell)
 
+## B14 Git status measurement
+
+The Windows runner uses the actual Git for Windows executable configured in
+FrostIDE. Build `s1_probe_validate` before measuring. Prepare a new private
+checkout from the manifest-pinned R3 source and keep the fixture idle afterward:
+
+```powershell
+tools\perf.ps1 -Budget B14 -B14Git $gitExe -B14Source E:\corpus\R3 `
+    -B14Fixture E:\FrostBuilds\perf\b14-r3-private
+tools\perf.ps1 -Budget B14 -B14Git $gitExe -B14Fixture E:\FrostBuilds\perf\b14-r3-private `
+    -B14SessionProbe $sessionProbeExe
+```
+
+Run the measurement from a quiet, unlocked Windows console with an attached
+powered monitor and keep keyboard and mouse idle. Preparation only reads the
+original R3. The measurement owns the built-in fsmonitor daemon and index priming
+in the private checkout. It uses the background VCS status arguments and checks
+all twenty process exits and porcelain outputs. An independent scan before and
+after the series and two untimed incremental IPC witnesses confirm corpus and
+monitor state. Results use the shared median, nearest-rank p99 and absolute limits in
+`tests/perf/budgets.json`. Preserve stdout as a JSON receipt. Preparation emits
+`prepared`. A valid series emits `within` or `over`, with the raw samples.
+Precondition failures or desktop input invalidate the series. This path records
+an absolute B14 result. Reference-hardware qualification, cross-run statistics,
+and full-release performance history remain separate.
+
 ## Context
 M5 needs the everyday Git workflow: file status colours, change markers in the editor, the Commit window, a
 side-by-side diff, branches, and fetch, pull and push. A Rider user's repositories use hooks, credential helpers,

@@ -1391,6 +1391,239 @@ def cmd_installed_size(budget: Budget, args: argparse.Namespace) -> int:
                       "allocatedMiB": size.allocated_bytes / 1_048_576, "limitBytes": limit}, indent=2))
     return EXIT_OK if passed else EXIT_OVER
 
+# B14 measures the trusted VCS service command (GitRunner and statusArguments).
+_B14_COMMAND = ("--no-pager", "-c", "core.quotepath=false", "-c", "color.ui=false",
+                "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all",
+                "--ignored=no", "--ignore-submodules=dirty")
+_B14_MARKER = "frost-perf-b14.json"
+_B14_SAMPLES = 20
+
+
+def _b14_environment(scratch: Path) -> dict[str, str]:
+    env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+    env.update(LC_ALL="C", LANG="C", GIT_TERMINAL_PROMPT="0", GIT_EDITOR=":", GIT_SEQUENCE_EDITOR=":",
+               GIT_MERGE_AUTOEDIT="no", GIT_OPTIONAL_LOCKS="0", GIT_CONFIG_NOSYSTEM="1",
+               GIT_CONFIG_GLOBAL=str(scratch / "absent-global-config"), GIT_NO_LAZY_FETCH="1")
+    env.pop("LANGUAGE", None)
+    return env
+
+
+def _b14_git(git: Path, work: Path, env: dict[str, str], *args: str,
+             timeout: int = 60) -> bytes:
+    result = subprocess.run([str(git), *args], cwd=work, env=env, stdin=subprocess.DEVNULL,
+                            capture_output=True, timeout=timeout, check=False)
+    if result.returncode:
+        raise RunInvalid(f"Git {args[0]} exited {result.returncode}: "
+                         f"{result.stderr.decode('utf-8', errors='replace').strip()}")
+    return result.stdout
+
+
+def _b14_digest(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _b14_prepare(git: Path, source: Path, destination: Path, sha: str, scratch: Path) -> None:
+    env = _b14_environment(scratch)
+    if _b14_git(git, source, env, "rev-parse", "--verify", "HEAD").strip() != sha.encode():
+        raise RunInvalid("R3 source HEAD does not equal the corpus pin")
+    destination.mkdir()  # Exclusive: the fixture must not replace an existing directory.
+    _b14_git(git, destination, env, "clone", "--no-local", "--no-checkout", "--depth=1",
+             "--template=", "--", str(source), ".", timeout=1200)
+    _b14_git(git, destination, env, "checkout", "--detach", sha, timeout=1200)
+    _b14_git(git, destination, env, "config", "--local", "core.fsmonitor", "true")
+    config = destination / ".git" / "config"
+    receipt = {"path": str(destination), "commit": sha, "configSha256": _b14_digest(config)}
+    (config.parent / _B14_MARKER).write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+
+
+def _b14_admit(work: Path, sha: str) -> None:
+    git_dir = work / ".git"
+    marker = git_dir / _B14_MARKER
+    config = git_dir / "config"
+    if any(getattr(path.lstat(), "st_file_attributes", 0) & 0x400 for path in (git_dir, marker, config)):
+        raise RunInvalid("the B14 fixture contains a linked Git directory or ownership file")
+    expected = {"path": str(work), "commit": sha, "configSha256": _b14_digest(config)}
+    if json.loads(marker.read_text(encoding="utf-8")) != expected:
+        raise RunInvalid("B14 fixture ownership, corpus identity or Git configuration changed")
+
+
+def _b14_input_tick() -> int:
+    # LASTINPUTINFO stores two DWORDs on each supported Windows architecture.
+    info = (ctypes.c_uint32 * 2)(8, 0)
+    if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+        raise RunInvalid("Windows could not read the console session's input state")
+    return info[1]
+
+
+def _b14_check_input(tick: int) -> None:
+    if _b14_input_tick() != tick:
+        raise RunInvalid("console input interrupted the B14 run")
+
+
+def _b14_session(probe: Path) -> dict[str, Any]:
+    result = subprocess.run([str(probe), "--session-only"], capture_output=True, timeout=10, check=False)
+    report = json.loads(result.stdout)
+    if result.returncode or report.get("tool") != "s1_probe_validate" or report["session"]["valid"] is not True:
+        raise RunInvalid(f"interactive console precheck failed: {report}")
+    return report
+
+
+def _b14_witness(git: Path, work: Path, env: dict[str, str], trace: Path, expected: bytes) -> dict[str, Any]:
+    _b14_git(git, work, env, "fsmonitor--daemon", "status")
+    observed = _b14_git(git, work, dict(env, GIT_TRACE2_EVENT=str(trace)), *_B14_COMMAND)
+    events = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    if any(e.get("event") == "child_start" and e.get("child_class") == "fsmonitor" for e in events):
+        raise RunInvalid("fsmonitor restarted while checking its response")
+    sizes = [int(e["value"]) for e in events if e.get("category") == "fsm_client"
+             and e.get("key") == "query/response-length"]
+    counts = [int(e["value"]) for e in events if e.get("category") == "fsmonitor"
+              and e.get("key") == "apply_count"]
+    if observed != expected or len(sizes) != 1 or sizes[0] <= 0 or len(counts) != 1:
+        raise RunInvalid("Git did not apply an incremental built-in fsmonitor response to the pinned clean tree")
+    return {"traceSha256": _b14_digest(trace), "responseBytes": sizes[0], "appliedChanges": counts[0]}
+
+
+def _b14_sample(git: Path, work: Path, env: dict[str, str], tick: int, expected: bytes) -> float:
+    _b14_check_input(tick)
+    start = time.perf_counter()
+    with subprocess.Popen([str(git), *_B14_COMMAND], cwd=work, env=env, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
+        try:
+            while True:
+                _b14_check_input(tick)
+                try:
+                    stdout, stderr = proc.communicate(timeout=0.05)
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.perf_counter() - start >= 15:
+                        raise RunInvalid("timed Git status timed out")
+            elapsed = time.perf_counter() - start
+        finally:
+            if proc.poll() is None:
+                # Git for Windows' cmd/git.exe launcher starts the runtime git.exe as a child.
+                try:
+                    taskkill = Path(env["SYSTEMROOT"]) / "System32" / "taskkill.exe"
+                    subprocess.run([str(taskkill), "/PID", str(proc.pid), "/T", "/F"],
+                                   capture_output=True, timeout=5, check=False)
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+    _b14_check_input(tick)
+    if proc.returncode or stderr or stdout != expected:
+        raise RunInvalid("timed Git status did not return the expected pristine corpus state")
+    return elapsed
+
+
+def _b14_measure(git: Path, work: Path, sha: str, probe: Path, scratch: Path) -> dict[str, Any]:
+    _b14_admit(work, sha)
+    env = _b14_environment(scratch)
+    if _b14_git(git, work, env, "config", "--local", "--no-includes", "--get-all",
+                 "core.fsmonitor").strip() != b"true":
+        raise RunInvalid("fixture does not have exactly one built-in core.fsmonitor setting")
+    version = _b14_git(git, work, env, "--version").decode().strip()
+    match = re.fullmatch(r"git version (\d+)\.(\d+)\.\d+\.windows\.\d+", version)
+    if not match or tuple(map(int, match.groups())) < (2, 36):
+        raise RunInvalid("B14 requires Git for Windows 2.36 or newer with boolean fsmonitor support")
+    expected = f"# branch.oid {sha}\0# branch.head (detached)\0".encode()
+    # Independent full scan guards against stale monitor answers. It never enters the timing.
+    control = (*_B14_COMMAND[:5], "-c", "core.fsmonitor=false",
+               *("--ignored=matching" if arg == "--ignored=no" else arg for arg in _B14_COMMAND[5:]))
+    if _b14_git(git, work, env, *control) != expected:
+        raise RunInvalid("the R3 fixture must be a clean detached checkout at the pinned SHA")
+    index_records = _b14_git(git, work, env, "-c", "core.fsmonitor=false", "ls-files", "-v", "-z").split(b"\0")
+    if not index_records[0] or any(not row.startswith(b"H ") for row in index_records[:-1]):
+        raise RunInvalid("the R3 index includes nonstandard, skipped or assumed-unchanged files")
+    tick = _b14_input_tick()
+    before = _b14_session(probe)
+    exec_path = Path(_b14_git(git, work, env, "--exec-path").decode().strip())
+    runtime = exec_path.parents[1] / "bin" / "git.exe"
+    image_paths = {"gitSha256": git, "gitRuntimeSha256": runtime, "sessionProbeSha256": probe}
+    images = {key: _b14_digest(path) for key, path in image_paths.items()}
+    _b14_check_input(tick)
+    active = subprocess.run([str(git), "fsmonitor--daemon", "status"], cwd=work, env=env,
+                            capture_output=True, timeout=10, check=False)
+    if active.returncode != 1:
+        raise RunInvalid("the B14 fixture must start without an unrelated active daemon")
+    try:
+        _b14_git(git, work, env, "fsmonitor--daemon", "start")
+        # The VCS service uses optional-locks-off. Persist the initial FSM token on the private
+        # fixture before timing, then verify actual incremental IPC outside the measured region.
+        warm = dict(env, GIT_OPTIONAL_LOCKS="1")
+        for _ in range(2):
+            if _b14_git(git, work, warm, *_B14_COMMAND) != expected:
+                raise RunInvalid("the R3 worktree changed while priming its index")
+        first_witness = _b14_witness(git, work, env, scratch / "before.jsonl", expected)
+        index = work / ".git" / "index"
+        index_digest = _b14_digest(index)
+        samples = [_b14_sample(git, work, env, tick, expected) for _ in range(_B14_SAMPLES)]
+        final_witness = _b14_witness(git, work, env, scratch / "after.jsonl", expected)
+        if _b14_git(git, work, env, *control) != expected or index_digest != _b14_digest(index):
+            raise RunInvalid("the R3 worktree or index changed during the series")
+        _b14_admit(work, sha)
+        if images != {key: _b14_digest(path) for key, path in image_paths.items()}:
+            raise RunInvalid("Git or the session probe binary changed during capture")
+        after = _b14_session(probe)
+        _b14_check_input(tick)
+        return {"scope": "absolute-budget-only", "corpus": "R3", "corpusCommit": sha,
+                "workTree": str(work), "gitVersion": version, "gitCommand": list(_B14_COMMAND), **images,
+                "indexSha256": index_digest, "statusSha256": sha256(expected),
+                "sessionStart": before, "sessionEnd": after, "inputUnchanged": True,
+                "fsmonitorStart": first_witness, "fsmonitorEnd": final_witness,
+                "samplesMs": [value * 1000 for value in samples]}
+    finally:
+        _b14_git(git, work, env, "fsmonitor--daemon", "stop")
+
+
+def run_b14(args: argparse.Namespace, repo: Path, budget: Budget) -> int:
+    """Measure native Git process latency on an exclusively prepared Windows R3 fixture."""
+    if os.name != "nt" or not args.b14_fixture or not args.b14_git:
+        raise PerfError("B14 requires Windows, --b14-fixture and --b14-git")
+    if bool(args.b14_source) == bool(args.b14_session_probe):
+        raise PerfError("prepare with --b14-source or measure with --b14-session-probe")
+    if any(value is not None for value in (args.variant, args.runs, args.warmup, args.files, args.lock_record)):
+        raise PerfError("B14 uses a fixed 20-sample series")
+    if {(t.percentile, t.unit, t.variant) for t in budget.targets} != {("p50", "ms", None), ("p99", "ms", None)}:
+        raise PerfError("B14 expects p50 and p99 limits in ms")
+    try:
+        corpus_manifest = repo / "tests/corpus/manifest.json"
+        manifest = json.loads(corpus_manifest.read_text(encoding="utf-8"))
+        sha, = (row["sha"] for row in manifest["corpora"] if row["id"] == "R3")
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise RunInvalid("invalid R3 corpus pin")
+        git = Path(args.b14_git).resolve(strict=True)
+        if git.name.lower() != "git.exe":
+            raise RunInvalid("select the actual git.exe used by FrostIDE")
+        work = Path(args.b14_fixture).resolve(strict=not args.b14_source)
+        with tempfile.TemporaryDirectory(prefix="frost-perf-b14-") as temp:
+            scratch = Path(temp)
+            if args.b14_source:
+                _b14_prepare(git, Path(args.b14_source).resolve(strict=True), work, sha, scratch)
+                print(json.dumps({"budget": "B14", "state": "prepared", "fixture": str(work), "corpusCommit": sha}))
+                return EXIT_OK
+            probe = Path(args.b14_session_probe).resolve(strict=True)
+            if probe.name.lower() != "s1_probe_validate.exe":
+                raise RunInvalid("select s1_probe_validate.exe from the current build")
+            _b14_admit(work, sha)
+            lock = work / ".git" / "frost-perf-b14.lock"
+            with lock.open("x", encoding="ascii") as stream:
+                stream.write(str(os.getpid()))
+            try:
+                results = _b14_measure(git, work, sha, probe, scratch)
+            finally:
+                lock.unlink()
+        results.update(runnerSha256=_b14_digest(Path(__file__)),
+                       budgetManifestSha256=_b14_digest(repo / BUDGETS_FILE),
+                       corpusManifestSha256=_b14_digest(corpus_manifest))
+    except (OSError, ValueError, KeyError, RunInvalid, subprocess.TimeoutExpired) as error:
+        print(f"perf: B14 invalid: {error}", file=sys.stderr)
+        return EXIT_INVALID
+    stats = {name: percentile_value(results["samplesMs"], name) for name in ("p50", "p99")}
+    over = any(stats[target.percentile] > target.max for target in budget.targets)
+    print(json.dumps({"budget": budget.id, "state": "over" if over else "within", "statisticsMs": stats, **results}))
+    return EXIT_OVER if over else EXIT_OK
+
+
 HARNESSES: dict[str, type] = {"B28": B28Harness}
 
 
@@ -1399,7 +1632,8 @@ HARNESSES: dict[str, type] = {"B28": B28Harness}
 # ---------------------------------------------------------------------------------------------
 
 _OPTIONS = ("list", "budget", "variant", "runs", "warmup", "files", "label", "perf-root", "milestone",
-            "build-dir", "restore", "lock-record", "repo", "package-dir", "package-archive", "package-sha256")
+            "build-dir", "restore", "lock-record", "repo", "package-dir", "package-archive", "package-sha256",
+            "b14-fixture", "b14-source", "b14-git", "b14-session-probe")
 _FLAGS = {"list"}
 
 
@@ -1442,6 +1676,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--package-dir", help="existing expanded portable package root (B27)")
     parser.add_argument("--package-archive", help="original ZIP or tar.gz on the native platform (B27)")
     parser.add_argument("--package-sha256", help="independently verified SHA-256 of that archive (B27)")
+    parser.add_argument("--b14-fixture", help="private R3 fixture checkout (B14)")
+    parser.add_argument("--b14-source", help="pinned R3 source to prepare a new fixture; no timing (B14)")
+    parser.add_argument("--b14-git", help="actual native git.exe used by FrostIDE (B14)")
+    parser.add_argument("--b14-session-probe", help="built s1_probe_validate.exe for session checks (B14)")
     parser.add_argument("--repo", help=argparse.SUPPRESS)
     return parser.parse_args(_normalise(argv))
 
@@ -1466,7 +1704,7 @@ def cmd_list(budgets_json: Path) -> int:
     """Prints every budget: ID, metric, gate and whether a harness exists. Returns 0."""
     for entry in load_budgets(budgets_json):
         gate = ", ".join(str(g.get("milestone")) for g in entry.get("gate", []))
-        harness = "harness" if entry.get("id") in HARNESSES or entry.get("id") == "B27" else "no harness"
+        harness = "harness" if entry.get("id") in HARNESSES or entry.get("id") in {"B14", "B27"} else "no harness"
         print(f"{entry.get('id'):4} gate {gate:9} {harness:10}  {entry.get('metric')}")
     return EXIT_OK
 
@@ -1507,10 +1745,14 @@ def _run(args: argparse.Namespace, injected: Tools | None, hooks: Hooks) -> int:
         return cmd_restore(Path(args.restore))
 
     budget = load_budget(budgets_json, args.budget)
+    if budget.id != "B14" and any((args.b14_fixture, args.b14_source, args.b14_git, args.b14_session_probe)):
+        raise PerfError("B14 arguments require --budget B14")
     if budget.id == "B27":
         return cmd_installed_size(budget, args)
     if args.package_dir or args.package_archive or args.package_sha256:
         raise PerfError("package arguments require --budget B27")
+    if budget.id == "B14":
+        return run_b14(args, repo, budget)
     harness_type = HARNESSES.get(budget.id)
     if harness_type is None:
         raise PerfError(f"{budget.id} has no harness yet; harnessed budgets: {', '.join(sorted(HARNESSES))}")

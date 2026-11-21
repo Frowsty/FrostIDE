@@ -30,7 +30,7 @@
 //      other windows run by run either, so it does not show how disturbed the
 //      desktop was for them (ADR 0007, Decision 7). It never adjusts a verdict.
 //
-//   s1_probe_validate [--out report.json] [--trials N] [--diagnose]
+//   s1_probe_validate [--out report.json] [--trials N] [--diagnose|--session-only]
 // Exit status: 0 validated, 1 validation failed, 2 setup error, 3 invalid run
 // (locked, remote, monitor off, access lost or capture failure; neither pass nor fail).
 
@@ -82,7 +82,8 @@ constexpr double kMinStallsMeasured = 0.6;
 struct Options {
     std::wstring out;
     int trials = 48;
-    bool diagnose = false; // Print raw capture data for one second instead of validating.
+    bool diagnose = false;    // Print raw capture data for one second instead of validating.
+    bool sessionOnly = false; // Observe session state without creating a window.
 };
 
 // The test window: a topmost, non-activating tool window that never enters the
@@ -202,6 +203,8 @@ Options parseOptions() {
             options.trials = std::max(4, _wtoi(argv[++i]));
         } else if (arg == L"--diagnose") {
             options.diagnose = true;
+        } else if (arg == L"--session-only") {
+            options.sessionOnly = true;
         }
     }
     LocalFree(argv);
@@ -274,6 +277,31 @@ int run(const Options& options) {
     json.beginObject();
     json.field("tool", "s1_probe_validate");
 
+    if (options.sessionOnly) {
+        const auto facts = session.facts();
+        const SessionVerdict verdict =
+            facts ? evaluateSession(*facts) : SessionVerdict{false, {facts.error().describe()}};
+        json.key("session");
+        writeVerdict(json, verdict);
+        if (facts) {
+            json.field("inputDesktop", facts->inputDesktopName);
+            json.field("lockState", toString(facts->lock));
+            json.field("displayPower", toString(facts->consoleDisplay));
+            json.field("processSession", static_cast<std::uint64_t>(facts->processSession));
+            json.field("activeConsoleSession", static_cast<std::uint64_t>(facts->activeConsoleSession));
+            json.key("outputs").beginArray();
+            for (const OutputFacts& output : facts->outputs) {
+                json.beginObject();
+                json.field("device", output.deviceName).field("attached", output.attachedToDesktop);
+                json.field("width", output.width).field("height", output.height).field("refreshHz", output.refreshHz);
+                json.endObject();
+            }
+            json.endArray();
+        }
+        json.endObject();
+        std::puts(json.str().c_str());
+        return verdict.valid ? 0 : 3;
+    }
     const SessionVerdict before = precheck(session);
     if (!before.valid) {
         json.field("status", "invalid");
