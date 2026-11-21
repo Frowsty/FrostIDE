@@ -375,6 +375,12 @@ set_target_properties(frost PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreaded)
 # static imports, which are KERNEL32.dll alone (FrostProcess.LauncherImportsOnlyKernel32):
 # defence in depth, read back by the self-test (check "dependent-load-flags").
 target_link_options(frost PRIVATE /MANIFEST:NO /ENTRY:wmainCRTStartup /DEPENDENTLOADFLAG:0xA00)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+   AND CMAKE_LINKER_TYPE STREQUAL "LLD" AND NOT FROST_SANITIZE)
+    # /DEBUG keeps Release PDBs but disables LLD's default dead-code removal and identical COMDAT folding.
+    target_link_options(frost PRIVATE "$<$<CONFIG:Release>:/OPT:REF$<COMMA>ICF>")
+    target_link_options(frost_app_shared PRIVATE "$<$<CONFIG:Release>:/OPT:REF$<COMMA>ICF>")
+endif()
 if(FROST_ASAN_RUNTIME_DLL)
     # The launcher loads the ASan runtime before frost_app.dll, so it initialises before the
     # UCRT and Qt whatever order the linker gave frost_app.dll's imports.
