@@ -150,7 +150,8 @@ TEST_F(ProjectEditReal, PreMoveImportRulesCannotDropOrDuplicateTheNewItem) {
 
 TEST_F(ProjectEditReal, PreMoveImportConditionsAndPropertyFunctionsCannotChangeAfterTheMove) {
     for (const std::string source :
-         {"app.cpp", "renamed.cpp", "property-function", "property-reassigned", "instance-property"}) {
+         {"app.cpp", "renamed.cpp", "property-function", "property-reassigned", "property-initial", "instance-property",
+          "wildcard-import"}) {
         EditScratch scratch("r8 file-dependent import " + source);
         ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
         auto edit = fileEdit(scratch, ProjectEditKind::RenameFiles, "App/App.vcxproj");
@@ -174,10 +175,17 @@ TEST_F(ProjectEditReal, PreMoveImportConditionsAndPropertyFunctionsCannotChangeA
                   "Condition=\"Exists('$(RenameInput)')\">true"
                   "</UseRenameRule><RenameInput>unrelated.cpp</RenameInput></PropertyGroup>"
                   "<Import Project=\"RenameRule.props\" Condition=\"'$(UseRenameRule)'=='true'\"/>"
+            : source == "property-initial"
+                ? "<PropertyGroup><RenameInput Condition=\"'$(LateFlag)' == ''\">renamed.cpp</RenameInput>"
+                  "<UseRenameRule Condition=\"Exists('$(RenameInput)')\">true</UseRenameRule>"
+                  "<LateFlag>assigned</LateFlag><RenameInput>unrelated.cpp</RenameInput></PropertyGroup>"
+                  "<Import Project=\"RenameRule.props\" Condition=\"'$(UseRenameRule)'=='true'\"/>"
             : source == "property-function"
                 ? "<PropertyGroup><UseRenameRule>$([System.IO.File]::Exists('$(MSBuildProjectDirectory)\\app.cpp'))"
                   "</UseRenameRule></PropertyGroup><Import Project=\"RenameRule.props\" "
                   "Condition=\"'$(UseRenameRule)'=='true'\"/>"
+            : source == "wildcard-import"
+                ? "<Import Project=\"renamed*.cpp\"/>"
                 : "<Import Project=\"RenameRule.props\" Condition=\"Exists('" + source + "')\"/>";
         xml->insert(at, rule);
         writeFile(edit.definition, *xml);
@@ -186,10 +194,41 @@ TEST_F(ProjectEditReal, PreMoveImportConditionsAndPropertyFunctionsCannotChangeA
         auto plan =
             runProjectEditPlan(io::realProcessLauncher(), {.hostPath = hostPath(), .msbuildPath = m_msbuild}, edit);
         EXPECT_FALSE(plan) << source;
+        if (source == "property-initial" && !plan)
+            EXPECT_NE(plan.error().message().find("depends on the old or new source existing"), std::string_view::npos)
+                << plan.error().describe();
+        if (source == "wildcard-import" && !plan)
+            EXPECT_NE(plan.error().message().find("A wildcard import can change"), std::string_view::npos)
+                << plan.error().describe();
         EXPECT_EQ(io::realFileSystem().readFile(edit.definition).value_or("unreadable"), *xml);
         EXPECT_TRUE(exists(edit.files[0]));
         EXPECT_FALSE(exists(edit.renamedTo[0]));
     }
+}
+
+TEST_F(ProjectEditReal, PreMoveCyclicPropertyExpansionRefusesWithoutWriting) {
+    EditScratch scratch("cyclic pre-move property");
+    ASSERT_NO_FATAL_FAILURE(scratch.copyAndCommit(test::fixture("msvc_generated")));
+    auto edit = fileEdit(scratch, ProjectEditKind::RenameFiles, "App/App.vcxproj");
+    edit.files = {scratch.join("App/app.cpp")};
+    edit.renamedTo = {scratch.join("App/renamed.cpp")};
+    edit.commit = false;
+    edit.beforeFileMove = true;
+    edit.transactionId = test::newTransactionId();
+    auto xml = io::realFileSystem().readFile(edit.definition);
+    ASSERT_TRUE(xml);
+    const auto at = xml->rfind("</Project>");
+    ASSERT_NE(at, std::string::npos);
+    // Unescape preserves a literal property token in the evaluated value.
+    xml->insert(at, "<PropertyGroup><CycleValue>$([MSBuild]::Unescape('%24%28CycleValue%29'))</CycleValue>"
+                    "<Flag Condition=\"Exists('$(CycleValue)')\">true</Flag></PropertyGroup>");
+    writeFile(edit.definition, *xml);
+    auto plan = runProjectEditPlan(io::realProcessLauncher(), {.hostPath = hostPath(), .msbuildPath = m_msbuild}, edit);
+    ASSERT_FALSE(plan);
+    EXPECT_NE(plan.error().message().find("Cyclic property"), std::string_view::npos) << plan.error().describe();
+    EXPECT_EQ(io::realFileSystem().readFile(edit.definition).value_or("unreadable"), *xml);
+    EXPECT_TRUE(exists(edit.files[0]));
+    EXPECT_FALSE(exists(edit.renamedTo[0]));
 }
 
 TEST_F(ProjectEditReal, BinaryLogReplayPreservesStructuredBuildErrors) {
