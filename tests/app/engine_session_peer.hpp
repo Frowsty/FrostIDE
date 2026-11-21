@@ -138,6 +138,7 @@ public:
         return found == m_replied.end() ? 0 : found->second;
     }
     void enableDocumentTools() { m_documentTools = true; }
+    void enableAssetMoves() { m_assetMoves = true; }
     void setBeforeSchemaReply(std::function<void()> callback) {
         std::lock_guard lock(m_mutex);
         m_beforeSchemaReply = std::move(callback);
@@ -233,12 +234,17 @@ private:
         auto commands = Json::array();
         for (const std::string_view name :
              {"play.start", "play.stop", "play.state", "play.pause", "play.step", "play.simulate", "script.validate",
-              "test.run", "log.get", "editor.focus", "assets.recover-move-plan", "document.schemas",
-              "document.validate", "document.validate-content", "document.create-template", "document.table-schema"}) {
+              "test.run", "log.get", "editor.focus", "assets.recover-move-plan", "assets.plan-move",
+              "assets.validate-move-plan", "assets.finish-move-plan", "document.schemas", "document.validate",
+              "document.validate-content", "document.create-template", "document.table-schema"}) {
             if (name.starts_with("document.") && !m_documentTools.load())
                 continue;
+            const bool assetMove =
+                name == "assets.plan-move" || name == "assets.validate-move-plan" || name == "assets.finish-move-plan";
+            if (assetMove && !m_assetMoves.load())
+                continue;
             const bool mutation = (name.starts_with("play.") && name != "play.state") || name == "test.run" ||
-                                  name == "document.create-template" || name == "assets.recover-move-plan";
+                                  name == "document.create-template" || name == "assets.recover-move-plan" || assetMove;
             commands.push(Json::object()
                               .set("name", name)
                               .set("category", "Fixture")
@@ -517,6 +523,7 @@ private:
     std::jthread m_worker;
     std::uint16_t m_luaDebugPort = 0;
     std::atomic<bool> m_documentTools = false;
+    std::atomic<bool> m_assetMoves = false;
     mutable std::mutex m_mutex;
     std::function<void()> m_beforeSchemaReply;
     std::vector<Json> m_requests;

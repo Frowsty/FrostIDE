@@ -2352,52 +2352,51 @@ void clickOk(QDialog& dlg) {
     ok->click();
 }
 
-// A FrostEngine asset's metadata sidecar (<asset>.fmeta) moves with it on rename and on move; when
-// the target's sidecar name is taken, neither file moves.
-TEST(Workbench, RenamingOrMovingAnAssetMovesItsFmetaSidecar) {
+TEST(Workbench, UnpairedAssetMovesRefuseAndDeletionRemovesItsSidecar) {
     WorkDir dir("fmeta-sidecar");
     dir.write("game/Game.frostproj", "{}");
     dir.write("game/Assets/Click.wav", "RIFF");
     dir.write("game/Assets/Click.wav.fmeta", "guid: 1\n");
     dir.write("game/Assets/Taken.wav.fmeta", "guid: 2\n");
-    dir.write("game/Assets/Lone.png", "PNG");
+    dir.write("game/Readme.txt", "docs");
     WorkbenchRig rig(dir);
     rig.show();
+    ASSERT_TRUE(rig.trust->trust(dir.join("game")));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("game")).has_value());
     auto& fs = frost::io::realFileSystem();
     const auto exists = [&](const char* rel) { return fs.exists(dir.join(rel)).value_or(false); };
 
-    auto renamed = rig.workbench->renameItem(dir.join("game/Assets/Click.wav"), "Tap.wav");
-    ASSERT_TRUE(renamed.has_value()) << renamed.error().describe();
-    EXPECT_TRUE(exists("game/Assets/Tap.wav"));
-    EXPECT_TRUE(exists("game/Assets/Tap.wav.fmeta"));
-    EXPECT_FALSE(exists("game/Assets/Click.wav"));
-    EXPECT_FALSE(exists("game/Assets/Click.wav.fmeta"));
-    EXPECT_EQ(dir.read("game/Assets/Tap.wav.fmeta"), "guid: 1\n");
+    auto unpaired = rig.workbench->renameItem(dir.join("game/Assets/Click.wav"), "Tap.wav");
+    ASSERT_FALSE(unpaired);
+    EXPECT_EQ(unpaired.error().code(), frost::ErrorCode::Unsupported);
+    EXPECT_FALSE(exists("game/Assets/Tap.wav"));
+    EXPECT_FALSE(exists("game/Assets/Tap.wav.fmeta"));
+    EXPECT_EQ(dir.read("game/Assets/Click.wav"), "RIFF");
+    EXPECT_EQ(dir.read("game/Assets/Click.wav.fmeta"), "guid: 1\n");
 
     // The target's sidecar name belongs to another asset: refused, both files stay.
-    auto refused = rig.workbench->renameItem(dir.join("game/Assets/Tap.wav"), "Taken.wav");
+    auto refused = rig.workbench->renameItem(dir.join("game/Assets/Click.wav"), "Taken.wav");
     ASSERT_FALSE(refused.has_value());
     EXPECT_EQ(refused.error().code(), frost::ErrorCode::AlreadyExists);
-    EXPECT_TRUE(exists("game/Assets/Tap.wav"));
-    EXPECT_TRUE(exists("game/Assets/Tap.wav.fmeta"));
+    EXPECT_TRUE(exists("game/Assets/Click.wav"));
+    EXPECT_TRUE(exists("game/Assets/Click.wav.fmeta"));
     EXPECT_EQ(dir.read("game/Assets/Taken.wav.fmeta"), "guid: 2\n");
 
-    // An asset without a sidecar renames alone.
-    ASSERT_TRUE(rig.workbench->renameItem(dir.join("game/Assets/Lone.png"), "Alone.png").has_value());
-    EXPECT_TRUE(exists("game/Assets/Alone.png"));
-    EXPECT_FALSE(exists("game/Assets/Alone.png.fmeta"));
+    // A regular file outside Assets can still be renamed with the project trusted.
+    ASSERT_TRUE(rig.workbench->renameItem(dir.join("game/Readme.txt"), "Notes.txt"));
+    EXPECT_TRUE(exists("game/Notes.txt"));
+    EXPECT_FALSE(exists("game/Notes.txt.fmeta"));
 
-    // Moving to another folder carries the sidecar too.
+    // A move to another folder also requires a paired engine.
     ASSERT_TRUE(fs.createDirectories(dir.join("game/Assets/Audio")).has_value());
     auto* fsView = rig.nav().fileSystemView();
     ASSERT_NE(fsView, nullptr);
-    emit fsView->movePathsToDirectoryRequested({QString::fromStdString(dir.join("game/Assets/Tap.wav"))},
+    emit fsView->movePathsToDirectoryRequested({QString::fromStdString(dir.join("game/Assets/Click.wav"))},
                                                QString::fromStdString(dir.join("game/Assets/Audio")));
-    EXPECT_TRUE(exists("game/Assets/Audio/Tap.wav"));
-    EXPECT_TRUE(exists("game/Assets/Audio/Tap.wav.fmeta"));
-    EXPECT_FALSE(exists("game/Assets/Tap.wav"));
-    EXPECT_FALSE(exists("game/Assets/Tap.wav.fmeta"));
+    EXPECT_FALSE(exists("game/Assets/Audio/Click.wav"));
+    EXPECT_FALSE(exists("game/Assets/Audio/Click.wav.fmeta"));
+    EXPECT_TRUE(exists("game/Assets/Click.wav"));
+    EXPECT_TRUE(exists("game/Assets/Click.wav.fmeta"));
 
     // A move whose sidecar target is taken is refused with a notice; nothing moves.
     dir.write("game/Assets/Audio/Boom.wav.fmeta", "guid: 3\n");
@@ -2429,12 +2428,12 @@ TEST(Workbench, RenamingOrMovingAnAssetMovesItsFmetaSidecar) {
     EXPECT_TRUE(rig.window->notifications().log().back().notification.text.contains(QStringLiteral("asset itself")));
 
     // Deleting an asset removes its .fmeta sidecar alongside it and closes open tabs for both.
-    ASSERT_TRUE(rig.workbench->openPath(dir.join("game/Assets/Audio/Tap.wav.fmeta")).has_value());
+    ASSERT_TRUE(rig.workbench->openPath(dir.join("game/Assets/Click.wav.fmeta")).has_value());
     EXPECT_EQ(rig.window->tabs().count(), 1);
-    auto deleted = rig.workbench->deleteItem(dir.join("game/Assets/Audio/Tap.wav"));
+    auto deleted = rig.workbench->deleteItem(dir.join("game/Assets/Click.wav"));
     ASSERT_TRUE(deleted.has_value()) << deleted.error().describe();
-    EXPECT_FALSE(exists("game/Assets/Audio/Tap.wav"));
-    EXPECT_FALSE(exists("game/Assets/Audio/Tap.wav.fmeta"));
+    EXPECT_FALSE(exists("game/Assets/Click.wav"));
+    EXPECT_FALSE(exists("game/Assets/Click.wav.fmeta"));
     EXPECT_EQ(rig.window->tabs().count(), 0);
 }
 
@@ -2454,9 +2453,14 @@ TEST(Workbench, FrostEngineFindReferencesWarnsOnTrustedAssetOperationsOnly) {
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(dir.join("game")).has_value());
 
-    // Untrusted workspace: renaming an asset must NOT spawn FrostEditor.
+    // An untrusted workspace cannot open its refactoring journal or spawn FrostEditor.
     ASSERT_FALSE(rig.trust->isTrusted(dir.join("game")));
-    ASSERT_TRUE(rig.workbench->renameItem(dir.join("game/Assets/Scripts/Hud.lua"), "HudUntrusted.lua").has_value());
+    const auto refused = rig.workbench->renameItem(dir.join("game/Assets/Scripts/Hud.lua"), "HudUntrusted.lua");
+    ASSERT_FALSE(refused);
+    EXPECT_EQ(refused.error().code(), frost::ErrorCode::Untrusted);
+    EXPECT_EQ(dir.read("game/Assets/Scripts/Hud.lua"), "return {}\n");
+    EXPECT_EQ(dir.read("game/Assets/Scripts/Hud.lua.fmeta"), "Handle: 1\n");
+    EXPECT_FALSE(frost::io::realFileSystem().exists(dir.join("game/Assets/Scripts/HudUntrusted.lua")).value_or(true));
     EXPECT_TRUE(launcher.launches().empty());
     EXPECT_FALSE(rig.workbench->lastAssetReferenceReport().has_value());
 
@@ -2466,24 +2470,30 @@ TEST(Workbench, FrostEngineFindReferencesWarnsOnTrustedAssetOperationsOnly) {
     script.expectExecutable = dir.join("tools/FrostEditor.exe");
     script.exitCode = 0;
     script.stdoutBytes =
-        R"({"command":"assets.find-references","ok":true,"result":{"asset":"Assets/Scripts/HudUntrusted.lua","count":2,"references":[{"count":1,"path":"Assets/Prefabs/UI/Hud.fprefab","targets":["Assets/Scripts/HudUntrusted.lua"],"type":"Prefab","unsaved":false},{"count":1,"path":"Assets/Scenes/MiniMMO.fscene","targets":["Assets/Scripts/HudUntrusted.lua"],"type":"Scene","unsaved":false}],"targets":[{"path":"Assets/Scripts/HudUntrusted.lua","type":"Script"}],"unreadable":[]}})"
+        R"({"command":"assets.find-references","ok":true,"result":{"asset":"Assets/Scripts/Hud.lua","count":2,"references":[{"count":1,"path":"Assets/Prefabs/UI/Hud.fprefab","targets":["Assets/Scripts/Hud.lua"],"type":"Prefab","unsaved":false},{"count":1,"path":"Assets/Scenes/MiniMMO.fscene","targets":["Assets/Scripts/Hud.lua"],"type":"Scene","unsaved":false}],"targets":[{"path":"Assets/Scripts/Hud.lua","type":"Script"}],"unreadable":[]}})"
         "\n";
     launcher.expect(std::move(script));
 
     const auto noticesBefore = rig.window->notifications().log().size();
-    ASSERT_TRUE(
-        rig.workbench->renameItem(dir.join("game/Assets/Scripts/HudUntrusted.lua"), "HudTrusted.lua").has_value());
+    const auto unpaired = rig.workbench->renameItem(dir.join("game/Assets/Scripts/Hud.lua"), "HudTrusted.lua");
+    ASSERT_FALSE(unpaired);
+    EXPECT_EQ(unpaired.error().code(), frost::ErrorCode::Unsupported);
+    EXPECT_EQ(dir.read("game/Assets/Scripts/Hud.lua"), "return {}\n");
+    EXPECT_EQ(dir.read("game/Assets/Scripts/Hud.lua.fmeta"), "Handle: 1\n");
     ASSERT_EQ(launcher.launches().size(), 1u);
     EXPECT_EQ(launcher.launches()[0].spec.arguments,
               (std::vector<std::string>{"assets.find-references", "--project", dir.join("game"), "--asset",
-                                        "Scripts/HudUntrusted.lua"}));
+                                        "Scripts/Hud.lua"}));
     ASSERT_TRUE(rig.workbench->lastAssetReferenceReport().has_value());
     EXPECT_EQ(rig.workbench->lastAssetReferenceReport()->references.size(), 2u);
     ASSERT_GT(rig.window->notifications().log().size(), noticesBefore);
-    const auto& warning = rig.window->notifications().log().back().notification;
-    EXPECT_EQ(warning.kind, frost::ui::NotificationKind::Warning);
-    EXPECT_TRUE(warning.text.contains(QStringLiteral("Assets/Prefabs/UI/Hud.fprefab")));
-    EXPECT_TRUE(warning.text.contains(QStringLiteral("Assets/Scenes/MiniMMO.fscene")));
+    const auto& notices = rig.window->notifications().log();
+    EXPECT_TRUE(std::ranges::any_of(notices | std::views::drop(noticesBefore), [](const auto& entry) {
+        const auto& warning = entry.notification;
+        return warning.kind == frost::ui::NotificationKind::Warning &&
+               warning.text.contains(QStringLiteral("Assets/Prefabs/UI/Hud.fprefab")) &&
+               warning.text.contains(QStringLiteral("Assets/Scenes/MiniMMO.fscene"));
+    }));
 }
 
 // readProcProcesses over a synthetic /proc: kernel threads and this process are skipped, the

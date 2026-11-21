@@ -3,6 +3,7 @@
 // stay traceable where behavior remains; real-editor oracle cases live in mandatory corpus acceptance.
 #include "frost/build/cmake_service.hpp"
 #include "frost/debug/fake_debug_adapter.hpp"
+#include "frost/engine/asset_move_plan.hpp"
 #include "frost/io/scripted_process_launcher.hpp"
 #include "frost/lang/completion.hpp"
 #include "frost/lang/frost_engine_lua.hpp"
@@ -24,6 +25,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -241,8 +243,198 @@ bool runReservationReleased(WorkbenchRig& rig) {
            !rig.workbench->runController()->running();
 }
 
-// Labelled socket-peer regression: native restart journal replay is real; the scripted peer
-// supplies the retained disconnected-lease receipt only after observing the full settled state.
+// Serve only the CLI observations used to populate the index. The move authority comes from the
+// independently authenticated socket peer below.
+class AssetIndexCli final : public frost::io::IProcessLauncher {
+public:
+    AssetIndexCli(std::string project, std::string asset, std::string destination)
+        : m_project(std::move(project)), m_asset(std::move(asset)), m_destination(std::move(destination)) {}
+
+    frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
+        if (spec.arguments.empty())
+            return frost::fail(frost::ErrorCode::Unsupported, "No engine command");
+        const auto& command = spec.arguments.front();
+        Json result;
+        const auto path = [&](std::string_view relative) {
+            return frost::io::joinPath(m_project, relative).value_or("");
+        };
+        if (command == "project.info") {
+            result = Json::object()
+                         .set("name", "Game")
+                         .set("version", "0.1")
+                         .set("directory", m_project)
+                         .set("projectFile", path("Game.frostproj"))
+                         .set("assetsDirectory", path("Assets"))
+                         .set("assetCount", 2)
+                         .set("startScene", Json::object().set("handle", 19).set("path", "Assets/Main.fscene"));
+        } else if (command == "assets.list") {
+            const bool moved = frost::io::realFileSystem().exists(path(m_destination)).value_or(false);
+            result =
+                Json::object()
+                    .set("count", 2)
+                    .set("assets",
+                         Json::array({
+                             Json::object().set("handle", 19).set("path", "Assets/Main.fscene").set("type", "Scene"),
+                             Json::object()
+                                 .set("handle", 42)
+                                 .set("path", moved ? m_destination : m_asset)
+                                 .set("type", "Script"),
+                         }));
+        } else if (command == "assets.find-references") {
+            result = Json::object()
+                         .set("asset", m_asset)
+                         .set("count", 0)
+                         .set("references", Json::array())
+                         .set("targets", Json::array({Json::object().set("path", m_asset).set("type", "Script")}))
+                         .set("unreadable", Json::array());
+        } else {
+            return frost::fail(frost::ErrorCode::Unsupported, "No scripted result for " + command);
+        }
+        frost::io::ScriptedProcessLauncher process;
+        process.expect(frost::io::ScriptedProcess{
+            .stdoutBytes =
+                Json::object().set("command", command).set("ok", true).set("result", std::move(result)).dump() + "\n"});
+        return process.launch(spec);
+    }
+
+    frost::Result<std::unique_ptr<frost::io::IAsyncProcess>> launchAsync(const frost::io::ProcessSpec&,
+                                                                         const frost::io::AsyncContext&) override {
+        return frost::fail(frost::ErrorCode::Unsupported, "Fixture engine content CLI is synchronous");
+    }
+
+private:
+    std::string m_project, m_asset, m_destination;
+};
+
+TEST(Workbench, RenamingOrMovingAnAssetMovesItsFmetaSidecar) {
+    for (const bool move : {false, true}) {
+        SCOPED_TRACE(move);
+        WorkDir dir(move ? "paired-asset-move" : "paired-asset-rename");
+        const std::string project = dir.join("project");
+        const std::string before = "Assets/Old.lua";
+        const std::string after = move ? "Assets/Nested/Old.lua" : "Assets/New.lua";
+        const std::string source = "return 42\n";
+        const std::string sidecar = "Handle: 42\n";
+        dir.write("project/Game.frostproj", R"({"Version":1,"General":{"Name":"Game","StartScene":19}})");
+        dir.write("project/Assets/Main.fscene", "{}");
+        dir.write("project/" + before, source);
+        dir.write("project/" + before + ".fmeta", sidecar);
+        dir.write("project/Assets/Nested/.keep", "");
+        dir.write("project/Reference.json", before);
+        dir.write("tools/FrostEditor.exe", "fixture CLI");
+        auto guard = [](const std::string& path, const std::string& bytes) {
+            return Json::object()
+                .set("path", path)
+                .set("size", bytes.size())
+                .set("hash", frost::engine::assetMoveHash(bytes));
+        };
+        auto receipt = [&](std::string path, bool applied) {
+            return Json::object()
+                .set("lease", "fixture-lease")
+                .set("receipt", "fixture-receipt")
+                .set("handle", 42)
+                .set("path", std::move(path))
+                .set("verified", true)
+                .set("applied", applied)
+                .set("refreshed", applied);
+        };
+        EngineSessionPeer peer(project);
+        peer.enableAssetMoves();
+        advertise(dir, peer);
+        peer.result("assets.recover-move-plan", Json::object().set("recovered", false));
+        peer.result(
+            "assets.plan-move",
+            receipt(after, false)
+                .set("version", 1)
+                .set("oldPath", before)
+                .set("guards", Json::array({guard(before, source), guard(before + ".fmeta", sidecar),
+                                            guard("Reference.json", before)}))
+                .set("moves", Json::array({Json::object().set("from", before).set("to", after),
+                                           Json::object().set("from", before + ".fmeta").set("to", after + ".fmeta")}))
+                .set("files",
+                     Json::array(
+                         {Json::object().set("path", "Reference.json").set("before", before).set("after", after)})));
+        peer.result("assets.validate-move-plan", receipt(before, false));
+        peer.hold("assets.finish-move-plan");
+        AssetIndexCli launcher(project, before, after);
+        auto options = peerOptions(dir, &launcher);
+        options.workbench.frostEditorPath = dir.join("tools/FrostEditor.exe");
+        WorkbenchRig rig(dir, std::move(options));
+        rig.show();
+        ASSERT_TRUE(openTrusted(rig, project));
+        ASSERT_TRUE(pairPeer(rig, peer));
+        ASSERT_TRUE(waitFor(
+            [&] {
+                const auto state = rig.workbench->engineState();
+                const auto* content = state.find("engineProject");
+                return content && content->boolAt("available") == true && content->unsignedAt("assetCount") == 2;
+            },
+            5s));
+
+        std::atomic<bool> completeAtSettlement{false};
+        std::jthread settlement([&](std::stop_token stop) {
+            const auto deadline = std::chrono::steady_clock::now() + 60s;
+            while (!stop.stop_requested() && peer.requests("assets.finish-move-plan").empty() &&
+                   std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(5ms);
+            if (peer.requests("assets.finish-move-plan").empty())
+                return;
+            auto& fs = frost::io::realFileSystem();
+            completeAtSettlement = dir.read("project/" + after) == source &&
+                                   dir.read("project/" + after + ".fmeta") == sidecar &&
+                                   dir.read("project/Reference.json") == after &&
+                                   !fs.exists(dir.join("project/" + before)).value_or(true) &&
+                                   !fs.exists(dir.join("project/" + before + ".fmeta")).value_or(true);
+            peer.release("assets.finish-move-plan", receipt(after, true));
+        });
+        QTimer acceptPreview;
+        bool previewed = false;
+        QObject::connect(&acceptPreview, &QTimer::timeout, [&] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dialog || !dialog->windowTitle().startsWith(QStringLiteral("Move engine asset")))
+                return;
+            previewed = true;
+            EXPECT_EQ(dir.read("project/" + before), source);
+            EXPECT_EQ(dir.read("project/" + before + ".fmeta"), sidecar);
+            EXPECT_EQ(dir.read("project/Reference.json"), before);
+            auto* buttons = dialog->findChild<QDialogButtonBox*>();
+            if (!buttons || !buttons->button(QDialogButtonBox::Ok)) {
+                ADD_FAILURE() << "The asset preview did not expose an approval button";
+                dialog->reject();
+                return;
+            }
+            buttons->button(QDialogButtonBox::Ok)->click();
+        });
+        acceptPreview.start(10);
+        if (move) {
+            auto* fsView = rig.nav().fileSystemView();
+            ASSERT_NE(fsView, nullptr);
+            emit fsView->movePathsToDirectoryRequested({QString::fromStdString(dir.join("project/" + before))},
+                                                       QString::fromStdString(dir.join("project/Assets/Nested")));
+        } else {
+            auto renamed = rig.workbench->renameItem(dir.join("project/" + before), "New.lua");
+            ASSERT_TRUE(renamed) << renamed.error().describe();
+        }
+        acceptPreview.stop();
+        ASSERT_TRUE(previewed);
+        EXPECT_TRUE(completeAtSettlement);
+        EXPECT_EQ(dir.read("project/" + after), source);
+        EXPECT_EQ(dir.read("project/" + after + ".fmeta"), sidecar);
+        EXPECT_EQ(dir.read("project/" + before), "<unreadable>");
+        EXPECT_EQ(dir.read("project/" + before + ".fmeta"), "<unreadable>");
+        EXPECT_EQ(dir.read("project/Reference.json"), after);
+        ASSERT_EQ(peer.requests("assets.plan-move").size(), 1U);
+        EXPECT_GE(peer.requests("assets.validate-move-plan").size(), 1U);
+        const auto finished = peer.requests("assets.finish-move-plan");
+        ASSERT_EQ(finished.size(), 1U);
+        ASSERT_NE(finished.front().find("params"), nullptr);
+        EXPECT_EQ(finished.front().find("params")->boolAt("applied"), true);
+        EXPECT_FALSE(rig.workbench->refactoringPending());
+    }
+}
+
+// Native restart journal replay is real. The scripted peer supplies the disconnected-lease
+// receipt after observing the whole settled state.
 TEST(WorkbenchEngine, ExplicitRestartRecoverySettlesNativeJournalBeforeStrandedLeaseRequest) {
     WorkDir dir("engine-stranded-native-journal");
     dir.write("project/Game.frostproj", "{}");
