@@ -245,14 +245,17 @@ Result<TestResult> parseLuaFrameworkRun(LuaTestProfile profile, std::string_view
     auto f = integer(suite.attribute("failures").as_string());
     auto e = integer(suite.attribute("errors").as_string());
     auto s = integer(suite.attribute(profile == LuaTestProfile::Busted220 ? "skip" : "skipped").as_string());
-    if (!count || !f || !e || !s || *count != static_cast<int>(names.size()) || *f != failures || *e != errors ||
-        *s != skips || suite.child("error") || suite.child("failure") || names.empty())
+    // LuaUnit 3.5 reports runCount in tests, which excludes its emitted skipped cases.
+    const int caseCount = static_cast<int>(names.size());
+    const int expectedTests = profile == LuaTestProfile::LuaUnit35 ? caseCount - skips : caseCount;
+    if (!count || !f || !e || !s || *count != expectedTests || *f != failures || *e != errors || *s != skips ||
+        suite.child("error") || suite.child("failure") || names.empty())
         return fail(ErrorCode::Corrupt, "Incomplete Lua framework case/counter accounting");
     if (!selected.empty() && names != std::set<std::string>(selected.begin(), selected.end()))
         return fail(ErrorCode::Corrupt, "Lua framework report differs from exact case selection");
     if ((exitCode == 0) != (failures + errors == 0))
         return fail(ErrorCode::Corrupt, "Lua process exit disagrees with JUnit verdicts");
-    if (skips == static_cast<int>(names.size()))
+    if (skips == caseCount)
         result.outcome = TestOutcome::Skipped;
     return result;
 }

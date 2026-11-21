@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // LUA-12 protocol contracts. Authored sources; no framework execution is implied.
-#include "frost/run/lua_framework_parsers.hpp"
 #include "frost/io/path.hpp"
+#include "frost/run/lua_framework_parsers.hpp"
 #include "frost/run/run_manager.hpp"
 
 #include <gtest/gtest.h>
@@ -104,5 +104,22 @@ TEST(LuaFramework, GenuineSkippedAndFailureNodesArePreserved) {
     ASSERT_TRUE(report);
     EXPECT_EQ(report->cases[0].outcome, TestOutcome::Failed);
     EXPECT_FALSE(report->cases[0].failures.empty());
+}
+TEST(LuaFramework, LuaUnitTestsCounterExcludesEmittedSkippedCases) {
+    auto xml =
+        junit(R"(<testcase name="testOne" time="0.001"/><testcase name="testSkip" time="0"><skipped/></testcase>)");
+    xml.replace(xml.find("skipped=\"0\""), 11, "skipped=\"1\"");
+    auto report = parseLuaFrameworkRun(LuaTestProfile::LuaUnit35, "driver", xml, {}, 0, {});
+    ASSERT_TRUE(report);
+    ASSERT_EQ(report->cases.size(), 2U);
+    EXPECT_EQ(report->cases[0].outcome, TestOutcome::Passed);
+    EXPECT_EQ(report->cases[1].outcome, TestOutcome::Skipped);
+
+    auto badCount = xml;
+    badCount.replace(badCount.find("tests=\"1\""), 9, "tests=\"2\"");
+    EXPECT_FALSE(parseLuaFrameworkRun(LuaTestProfile::LuaUnit35, "driver", badCount, {}, 0, {}));
+    auto badSkips = xml;
+    badSkips.replace(badSkips.find("skipped=\"1\""), 11, "skipped=\"0\"");
+    EXPECT_FALSE(parseLuaFrameworkRun(LuaTestProfile::LuaUnit35, "driver", badSkips, {}, 0, {}));
 }
 } // namespace
