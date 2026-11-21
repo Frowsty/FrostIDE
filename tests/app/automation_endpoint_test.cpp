@@ -167,26 +167,44 @@ TEST(AutomationEndpoint, RefusesAFirstRequestOtherThanHelloAndAWrongToken) {
 }
 
 TEST(AutomationEndpoint, ReportsDxcAndLiveProblemsAsDistinctSources) {
+    using frost::ui::DiagnosticSource;
     WorkDir dir("endpoint-problem-sources");
     WorkbenchRig rig(dir);
     auto* problems = rig.workbench->problems();
     ASSERT_NE(problems, nullptr);
-    problems->model()->setProblems(frost::ui::DiagnosticSource::Live, {frost::build::BuildDiagnostic{}});
-    problems->model()->setProblems(frost::ui::DiagnosticSource::Dxc, {frost::build::BuildDiagnostic{}});
 
     auto endpoint = AutomationEndpoint::start(*rig.workbench, dir.join("automation.json"));
     ASSERT_TRUE(endpoint);
     EndpointClient client((*endpoint)->serverName());
     ASSERT_TRUE(client.connected());
     result(client.request("hello", Json::object().set("token", (*endpoint)->token())), "hello");
+
+    // Initial registry publication rebuilds Live problems from its producers. Apply the empty
+    // registry through the workbench before seeding rows for this endpoint serialization test.
+    ASSERT_TRUE(rig.workbench->setLanguageServerRegistry(R"({"version":1,"servers":[]})"));
+    const frost::build::BuildDiagnostic diagnostic{
+        .diagnostic = {.code = "X3004", .message = "use of undeclared identifier 'missing'"}};
+    problems->model()->setProblems(DiagnosticSource::Live, {diagnostic});
+    problems->model()->setProblems(DiagnosticSource::Dxc, {diagnostic});
+
     const Json reply = result(client.request("problems"), "problems");
     const Json* rows = reply.find("problems");
     ASSERT_NE(rows, nullptr);
     ASSERT_EQ(rows->items().size(), 2U);
     std::set<std::string> sources;
-    for (const Json& row : rows->items())
+    for (const Json& row : rows->items()) {
         sources.emplace(row.stringAt("source"));
+        EXPECT_EQ(row.stringAt("code"), diagnostic.diagnostic.code);
+        EXPECT_EQ(row.stringAt("message"), diagnostic.diagnostic.message);
+    }
     EXPECT_EQ(sources, (std::set<std::string>{"dxc", "live"}));
+
+    problems->model()->clear(DiagnosticSource::Dxc);
+    const Json remaining = result(client.request("problems"), "problems");
+    const auto* liveRows = remaining.find("problems");
+    ASSERT_NE(liveRows, nullptr);
+    ASSERT_EQ(liveRows->items().size(), 1U);
+    EXPECT_EQ(liveRows->items().front().stringAt("source"), "live");
 }
 
 /*
