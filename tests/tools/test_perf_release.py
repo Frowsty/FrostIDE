@@ -7,7 +7,12 @@ from itertools import combinations
 import json
 from pathlib import Path
 import shutil
+import signal
+import sys
+import tempfile
+import time
 import unittest
+from unittest.mock import Mock, patch
 
 from tools_test_support import REPO, TempDirTestCase, git, run_tool
 import frost_perf
@@ -180,6 +185,90 @@ class FullPerformanceTest(TempDirTestCase):
         self.assertEqual(outcome["native"]["limitBytes"], 400_000_000)
 
 
+
+    def b28_native(self, old=False, tamper=None):
+        label = "baseline" if old else "candidate"
+        envelope = self.receipt(old=old, kind="B28-native")
+        probe = envelope["native"]["sessionStart"]
+        release = {"kind": "B28-release", "inputUnchanged": True, "sessionStart": probe, "sessionEnd": probe,
+                   "initialCpuPct": 1.0, "finalCpuPct": 1.0,
+                   "startUtc": envelope["startUtc"], "endUtc": envelope["endUtc"],
+                   "toolsSha256": {name: "a" * 64 for name in perf_release._B28_TOOLS},
+                   "toolsPath": {name: f"E:/perf-fixture/tools/{name}.exe" for name in perf_release._B28_TOOLS},
+                   "runnerSha256": self.runner_sha, "sessionProbeSha256": "b" * 64}
+        repo = "E:/perf-fixture/frost-source"
+        build = repo + "/build/win-clangcl"
+        command = [release["toolsPath"]["powershell"], "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                   repo + "/tools/verify.ps1", "-Quick", "-Jobs", "4", "-Base", "HEAD"]
+        build_command = [release["toolsPath"]["cmake"], "--build", build, "--config", "Debug"]
+        conditions = {"schemaVersion": 1, "budget": "B28", "variants": ["rebuild", "verify"],
+                      "runs": 20, "warmup": 1, "files": frost_perf.B28_PROBE_FILES,
+                      "git": {"sha": envelope["identity"]["commit"], "status_porcelain": ""},
+                      "repo": repo, "build_dir": build, "verify_base_head": True, "release": release,
+                      "commands": {"settle": build_command, "rebuild_all": build_command,
+                                   "rebuild_frost": build_command + ["--target", "frost"], "verify": command}}
+        rows = []
+
+        def append(index, key, target, variant, value):
+            execution = {"probe": len(rows) + 1, "sccache": {"misses": 1, "errors": 0, "fails": 0},
+                         "settle": {"exit": 0}, "target": target, "command": command,
+                         "ninja_log_edges": [{"output": perf_release._B28_OBJECTS[key]},
+                                             {"output": "frost.exe"}]}
+            rows.append({"schemaVersion": 1, "budget": "B28", "variant": variant, "file": key, "unit": "s",
+                         "run": index if variant == "verify" else None,
+                         "round": index if variant == "rebuild" else None,
+                         "valid": True, "exit": 0, "counted": bool(index), "value": value, "wall_s": value,
+                         "summary_line": "Verified: win & WSL", "b28": execution})
+
+        for index in range(21):
+            for key, target in frost_perf._REBUILD_ROUND:
+                append(index, key, target, "rebuild", 10 if old or key != "sched" else 11)
+        for index in range(21):
+            append(index, ("core", "main")[index % 2], "verify", "verify", 100)
+
+        summary = {"schemaVersion": 1, "budget": "B28", "valid": True,
+                   "invalid_reason": None, "variants": {"rebuild": {}, "verify": {}}}
+        if tamper:
+            tamper(conditions, rows, summary)
+        runs = self.tmp / f"{label}-b28-runs.jsonl"
+        runs.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        envelope["native"] = {"conditions": self.write(f"{label}-b28-conditions.json", conditions),
+                              "summary": self.write(f"{label}-b28-summary.json", summary),
+                              "runs": {"file": runs.name, "sha256": digest(runs.read_bytes())}}
+        return self.write(f"{label}-b28-envelope.json", envelope)
+
+    def test_b28_compares_each_native_probe_series_without_pooling(self):
+        self.plan["budgets"]["B28"] = {"current": self.b28_native(), "baseline": self.b28_native(old=True)}
+        result = self.cli()["budgets"]["B28"]
+        self.assertEqual(result["state"], "over")
+        self.assertEqual(set(result["series"]), {"core/all", "main/all", "sched/all", "verify"})
+        self.assertTrue(result["series"]["sched/all"]["comparativeExceeded"])
+        self.assertFalse(result["series"]["sched/all"]["absoluteExceeded"])
+        self.assertEqual(result["series"]["verify"]["pValue"], 1.0)
+        (self.tmp / "candidate-b28-runs.jsonl").write_text("{}\n", encoding="utf-8")
+        self.assertIn("SHA-256", self.cli()["budgets"]["B28"]["reason"])
+
+    def test_b28_rejects_short_invalid_or_unwitnessed_runs(self):
+        mutations = (
+            (lambda conditions, rows, summary: rows.pop(), "every warmup"),
+            (lambda conditions, rows, summary: rows[1]["b28"]["sccache"].update(misses=0), "sccache miss"),
+            (lambda conditions, rows, summary: rows[1]["b28"]["ninja_log_edges"].pop(), "compilation and linking"),
+            (lambda conditions, rows, summary: conditions["release"].update(initialCpuPct=12), "idle checkpoint"),
+            (lambda conditions, rows, summary: conditions["release"].update(inputUnchanged=False), "input"),
+            (lambda conditions, rows, summary: conditions["commands"]["verify"].append("-WindowsOnly"),
+             "Quick workload"),
+            (lambda conditions, rows, summary: conditions["commands"]["verify"].__setitem__(0, "C:/other/powershell.exe"),
+             "Quick workload"),
+        )
+        predecessor = self.b28_native(old=True)
+        for mutation, reason in mutations:
+            with self.subTest(reason=reason):
+                self.plan["budgets"]["B28"] = {"current": self.b28_native(tamper=mutation), "baseline": predecessor}
+                result = self.cli()["budgets"]["B28"]
+                self.assertEqual(result["state"], "invalid")
+                self.assertIn(reason, result["reason"])
+
+
 class MannWhitneyTest(unittest.TestCase):
     def test_exact_midrank_distribution_matches_brute_force(self):
         pooled = [1, 2, 2, 3, 5, 5]
@@ -195,6 +284,78 @@ class MannWhitneyTest(unittest.TestCase):
         p = sum(abs(u(set(pair)) - 4.5) >= distance for pair in pairs) / len(pairs)
         self.assertEqual(perf_release.mann_whitney(pooled[:3], pooled[3:]), (expected, p))
         self.assertEqual(perf_release.mann_whitney([2] * 20, [2] * 20), (200.0, 1.0))
+
+
+class B28InputTest(unittest.TestCase):
+    def test_rewritten_ninja_log_is_invalid_even_if_new_log_is_larger(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / ".ninja_log"
+            log.write_text("# ninja log v7\n1\t2\t0\ta.obj\tde\n", encoding="utf-8")
+            offset = frost_perf.ninja_log_size(log)
+            tail = frost_perf.ninja_log_tail(log, offset)
+            log.write_text("# ninja log v7\n3\t4\t0\ta.obj\tde\n4\t5\t0\ta.exe\tab\n", encoding="utf-8")
+            with self.assertRaisesRegex(frost_perf.RunInvalid, "compacted or replaced"):
+                frost_perf.timed_ninja_edges(log, offset, tail)
+
+    def test_input_during_owned_command_prevents_timing_and_further_launches(self):
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp)
+            def owned(log, **kwargs):
+                log.write_text("test output\n", encoding="utf-8")
+                return frost_perf.Streamed(0, [], 1.0)
+
+            launch = Mock(side_effect=lambda command, **kwargs: owned(**kwargs))
+            ctx = frost_perf.RunContext(
+                repo=out, build_dir=out, run_dir=out,
+                tools=frost_perf.Tools(["cmake"], None, None, None, None, None),
+                hooks=frost_perf.Hooks(), journal=None, files=None, runs=20, warmup=1,
+                budget=frost_perf.load_budget(REPO / frost_perf.BUDGETS_FILE, "B28"), release_input_tick=123,
+            )
+            runner = frost_perf.B28Harness()
+            with (patch.object(frost_perf, "_b14_input_tick", side_effect=[123, 124, 124]),
+                  patch.object(frost_perf, "run_streamed", launch)):
+                with self.assertRaisesRegex(frost_perf.RunInvalid, "input interrupted the B28 run"):
+                    runner._build(ctx, None, "owned")
+                self.assertTrue(ctx.log("owned").is_file())
+                with self.assertRaisesRegex(frost_perf.RunInvalid, "input interrupted the B28 run"):
+                    runner._build(ctx, None, "never-launched")
+            launch.assert_called_once()
+
+    def test_timeout_waits_for_native_child_and_grandchild_to_finish(self):
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp)
+            marker = out / "grandchild-finished"
+            grandchild = "import pathlib,sys,time; time.sleep(0.2); pathlib.Path(sys.argv[1]).touch()"
+            child = ("import subprocess,sys; subprocess.run([sys.executable, '-c', sys.argv[1], sys.argv[2]], "
+                     "check=True); print('child-finished', flush=True)")
+            result = frost_perf.run_streamed([sys.executable, "-c", child, grandchild, str(marker)],
+                                            log=out / "owned.log", clock=time.perf_counter, timeout=0.05,
+                                            drain_on_abort=True)
+            self.assertTrue(result.timed_out)
+            self.assertIsNone(result.exit)
+            self.assertTrue(marker.is_file())
+            self.assertIn("child-finished", (out / "owned.log").read_text(encoding="utf-8"))
+
+    def test_interrupt_drains_grandchild_before_returning(self):
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp)
+            marker = out / "grandchild-finished"
+            grandchild = "import pathlib,sys,time; time.sleep(0.1); pathlib.Path(sys.argv[1]).touch()"
+            child = ("import subprocess,sys; print('started', flush=True); "
+                     "subprocess.run([sys.executable, '-c', sys.argv[1], sys.argv[2]], check=True)")
+            reads = 0
+
+            def clock():
+                nonlocal reads
+                reads += 1
+                if reads == 2:
+                    signal.raise_signal(signal.SIGINT)  # Owned child just emitted its first line.
+                return time.perf_counter()
+
+            with self.assertRaisesRegex(frost_perf.RunInvalid, "interrupted and drained"):
+                frost_perf.run_streamed([sys.executable, "-c", child, grandchild, str(marker)],
+                                        log=out / "owned.log", clock=clock, timeout=10, drain_on_abort=True)
+            self.assertTrue(marker.is_file())
 
 
 if __name__ == "__main__":

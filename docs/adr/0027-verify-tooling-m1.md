@@ -40,14 +40,43 @@ and its lowercase hexadecimal `sha256`. The identity contains the full
   native collector verifies the complete archive expansion and reads actual
   on-disk allocation. The review binds the archive to the source revision.
   This storage measurement is independent of timing baselines.
+- **B28** accepts `current` and `baseline` references to `B28-native` envelopes
+  with the same identity, environment and timing fields as B14. The `native`
+  member contains references named `conditions`, `summary`, and `runs` to the
+  original `conditions.json`, `summary.json`, and `runs.jsonl`. Collect them
+  on a quiet REF-W1 console with:
+
+  ```powershell
+  tools\perf.ps1 -Budget B28 -B28ReleaseProbe $sessionProbeExe
+  ```
+
+  Use a clean E: source checkout and its configured default Ninja Multi-Config
+  build tree with the pinned sccache. This mode keeps the normal Debug rebuild
+  and `verify -Quick -Jobs 4 -Base HEAD` commands, with one warmup and twenty
+  counted runs per series. It records the native input desktop, monitor and
+  console sessions before and after, checks for at most 5% system CPU use at
+  both idle checkpoints, and hashes
+  the executable tools. An input change invalidates the series and stops
+  further launches. An already-running command drains before the probe journal
+  restores files, including when verify has entered WSL. An interrupt or sample
+  deadline also invalidates the series and drains the active command. A wedged
+  child can extend the wait beyond the sample deadline.
+  Independently review quiet conditions throughout before anchoring receipts.
+  The adapter checks native compilation/link edges and sccache misses, preserves
+  separate rebuild series for core, main, and sched, and compares the prescribed
+  alternating verify series. Use the same candidate runner for both measurements.
+  To measure the prior source revision with that runner, pass `-Repo` pointing to
+  its own clean E: worktree and configured default build tree. The adapter checks
+  both source revisions and binds the collector bytes to the candidate commit.
+  Historic standalone B28 receipts lack these release-mode observations.
 
 Exit 3 means incomplete or invalid. Per-budget detail retains available
 failures. A complete run with an exceeded budget would exit 1, and a complete
-run within all limits would exit 0. All rows outside B14 and B27 remain blocked
-in this implementation. B1 and B7 currently produce component evidence. B28
-has its standalone runner. Full-run adapters for these budgets and instruments
-for the other rows remain open. Performance history and the 14-day release
-streak are outside this entry point.
+run within all limits would exit 0. All rows outside B14, B27 and B28 remain
+blocked in this implementation. B1 and B7 currently produce component
+evidence. Full-run adapters for these budgets and instruments for the other
+rows remain open. Performance history and the 14-day release streak are
+outside this entry point.
 
 ## Context
 B28 (ADR 0010) found the dev loop dominated by two avoidable costs: the Windows tests ran one at a time, and

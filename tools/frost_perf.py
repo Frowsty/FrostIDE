@@ -52,6 +52,7 @@ import math
 import os
 import platform
 import re
+import signal
 import shutil
 import stat
 import statistics
@@ -64,6 +65,7 @@ import time
 import zipfile
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -442,6 +444,23 @@ def ninja_log_size(path: Path) -> int:
         return 0
 
 
+def ninja_log_tail(path: Path, end: int) -> bytes:
+    with path.open("rb") as stream:
+        start = max(0, end - 4096)
+        stream.seek(start)
+        return stream.read(end - start)
+
+
+def timed_ninja_edges(path: Path, offset: int, previous_tail: bytes | None) -> list[dict[str, Any]]:
+    if previous_tail is not None and ninja_log_tail(path, offset) != previous_tail:
+        raise RunInvalid("Ninja compacted or replaced its log during a B28 sample")
+    try:
+        edges, _ = parse_ninja_log(path, offset)
+    except ValueError:
+        edges = []
+    return edges
+
+
 def phase_split(markers: Sequence[tuple[float, str]], wall: float) -> dict[str, float]:
     """
     Turns timestamped markers [(seconds since start, name), ...] into phase durations: "startup"
@@ -489,48 +508,95 @@ class Streamed:
 
 
 def run_streamed(cmd: list[str], *, log: Path, clock: Callable[[], float], timeout: float,
-                 cwd: Path | None = None, env: dict[str, str] | None = None, header: str = "") -> Streamed:
+                 cwd: Path | None = None, env: dict[str, str] | None = None, header: str = "",
+                 drain_on_abort: bool = False) -> Streamed:
     """
     Runs `cmd` (absolute executable, no shell) with stdout and stderr merged, timestamping each
-    line as it arrives with `clock`, and writes "<seconds> <line>" to `log`. Kills the child after
-    `timeout` seconds (its own children may outlive it). Lines are decoded as UTF-8 with errors
-    replaced and a leading BOM dropped.
+    line as it arrives with `clock`, and writes "<seconds> <line>" to `log`. In release drain mode
+    an interrupt or deadline invalidates the sample while the isolated command chain finishes.
+    Otherwise the immediate child is killed on timeout. Lines are decoded as UTF-8 with replacement.
     """
     log.parent.mkdir(parents=True, exist_ok=True)
-    lines: list[tuple[float, str]] = []
     with log.open("w", encoding="utf-8", newline="\n") as out:
         out.write(f"# {_iso_now()} {subprocess.list2cmdline(cmd)}\n")
         if header:
             out.write(f"# {header}\n")
         t0 = clock()
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT)
-        killed = threading.Event()
+        group = {}
+        if drain_on_abort:
+            group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+                     } if os.name == "nt" else {"start_new_session": True}
+        interrupted = threading.Event()
+        abort_signals = [signal.SIGINT]
+        if os.name == "nt":
+            abort_signals.append(signal.SIGBREAK)
+        previous_handlers = {}
+        try:
+            if drain_on_abort:
+                for event in abort_signals:
+                    previous_handlers[event] = signal.signal(event, lambda *_: interrupted.set())
+            return _capture_stream(cmd, out, t0, clock, timeout, cwd, env, group, drain_on_abort, interrupted)
+        finally:
+            for event, handler in previous_handlers.items():
+                signal.signal(event, handler)
 
-        def kill() -> None:
-            killed.set()
+
+def _capture_stream(cmd, out, t0, clock, timeout, cwd, env, group, drain_on_abort, interrupted):
+    lines: list[tuple[float, str]] = []
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, **group)
+    killed = threading.Event()
+    log_error = None
+
+    def expire() -> None:
+        killed.set()
+        if not drain_on_abort:
             proc.kill()
 
-        timer = threading.Timer(timeout, kill)
-        timer.daemon = True
-        timer.start()
-        try:
-            assert proc.stdout is not None
-            for raw in proc.stdout:
-                stamp = clock() - t0
-                text = raw.decode("utf-8", "replace").rstrip("\r\n").lstrip("\ufeff")
-                lines.append((stamp, text))
-                out.write(f"{stamp:9.3f} {text}\n")
-            code = proc.wait()
-        finally:
-            timer.cancel()
-        wall = clock() - t0
-        out.write(f"# exit {code}, wall {wall:.3f} s{' (killed on timeout)' if killed.is_set() else ''}\n")
+    timer = threading.Timer(timeout, expire)
+    timer.daemon = True
+    timer.start()
+    try:
+        assert proc.stdout is not None
+        while True:
+            try:
+                for raw in proc.stdout:
+                    stamp = clock() - t0
+                    text = raw.decode("utf-8", "replace").rstrip("\r\n").lstrip("\ufeff")
+                    lines.append((stamp, text))
+                    if log_error is None:
+                        try:
+                            out.write(f"{stamp:9.3f} {text}\n")
+                        except OSError as error:
+                            if not drain_on_abort:
+                                raise
+                            log_error = error
+                code = proc.wait()
+                break
+            except KeyboardInterrupt:
+                if not drain_on_abort:
+                    raise
+                # Quick can be in WSL. Let its synchronous chain finish before restoring the probe.
+                interrupted.set()
+    finally:
+        timer.cancel()
+        proc.stdout.close()
+    wall = clock() - t0
+    expiry = " (timed out, drained)" if drain_on_abort else " (killed on timeout)"
+    if log_error is not None:
+        raise log_error
+    out.write(f"# exit {code}, wall {wall:.3f} s{expiry if killed.is_set() else ''}\n")
+    if interrupted.is_set():
+        raise RunInvalid("performance command interrupted and drained")
     return Streamed(None if killed.is_set() else code, lines, wall, killed.is_set())
 
 
 def _iso_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------------------------
@@ -780,7 +846,12 @@ class RunContext:
     warmup: int | None
     budget: Budget
     verify_base: bool = False
+    release_input_tick: int | None = None
     probe_values: ProbeValues = field(default_factory=ProbeValues)
+
+    def check_release_input(self) -> None:
+        if self.release_input_tick is not None:
+            _b14_check_input(self.release_input_tick, "B28")
 
     def log(self, tag: str) -> Path:
         """The raw-output log for run `tag`."""
@@ -909,20 +980,26 @@ class B28Harness:
             cmd += ["--target", target]
         ninja_log = ctx.build_dir / ".ninja_log"
         offset = ninja_log_size(ninja_log)
+        tail = ninja_log_tail(ninja_log, offset) if offset and ctx.release_input_tick is not None else None
         log = ctx.log(tag)
         log.parent.mkdir(parents=True, exist_ok=True)
-        t0 = ctx.hooks.clock()
-        code, raw = ctx.hooks.run_build(cmd, BUILD_TIMEOUT_S)
-        wall = ctx.hooks.clock() - t0
-        out = raw.decode("utf-8", "replace")
-        with log.open("w", encoding="utf-8", newline="\n") as handle:
-            handle.write(f"# {_iso_now()} {subprocess.list2cmdline(cmd)}\n# exit {code}, wall {wall:.3f} s\n")
-            handle.write(out.replace("\r\n", "\n"))
+        ctx.check_release_input()
+        if ctx.release_input_tick is not None:
+            streamed = run_streamed(cmd, log=log, clock=ctx.hooks.clock, timeout=BUILD_TIMEOUT_S,
+                                    drain_on_abort=True)
+            code, wall = streamed.exit, streamed.wall
+            out = "\n".join(line for _, line in streamed.lines)
+        else:
+            t0 = ctx.hooks.clock()
+            code, raw = ctx.hooks.run_build(cmd, BUILD_TIMEOUT_S)
+            wall = ctx.hooks.clock() - t0
+            out = raw.decode("utf-8", "replace")
+            with log.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(f"# {_iso_now()} {subprocess.list2cmdline(cmd)}\n# exit {code}, wall {wall:.3f} s\n")
+                handle.write(out.replace("\r\n", "\n"))
+        ctx.check_release_input()
         edges = sum(1 for line in out.splitlines() if _EDGE_LINE.match(line))
-        try:
-            log_edges, _ = parse_ninja_log(ninja_log, offset)
-        except ValueError:
-            log_edges = []
+        log_edges = timed_ninja_edges(ninja_log, offset, tail)
         return {"wall_s": round(wall, 3), "exit": code, "edges": edges, "ninja_log_edges": log_edges,
                 "no_work": "ninja: no work to do" in out}
 
@@ -1028,8 +1105,15 @@ class B28Harness:
             before = self._sccache(ctx)
             n = ctx.write_probe(key)
             start = _iso_now()
+            ninja_log = ctx.build_dir / ".ninja_log"
+            offset = ninja_log_size(ninja_log)
+            tail = ninja_log_tail(ninja_log, offset) if offset and ctx.release_input_tick is not None else None
+            ctx.check_release_input()
             streamed = run_streamed(cmd, log=ctx.log(tag), clock=ctx.hooks.clock, timeout=VERIFY_TIMEOUT_S,
-                                    cwd=ctx.repo, header=f"probe {key} = {n}; elapsed seconds prefix each line")
+                                    cwd=ctx.repo, header=f"probe {key} = {n}; elapsed seconds prefix each line",
+                                    drain_on_abort=ctx.release_input_tick is not None)
+            ctx.check_release_input()
+            edges = timed_ninja_edges(ninja_log, offset, tail)
             after = self._sccache(ctx)
             markers = [(t, self._marker_name(text)) for t, text in streamed.lines if text.startswith("=== ")]
             verified = [text for _, text in streamed.lines if text.startswith(("Verified:", "FAILED: Verified:"))]
@@ -1040,7 +1124,7 @@ class B28Harness:
                          phases=phase_split(markers, streamed.wall), summary_line=verified[-1] if verified else None,
                          b28={"probe": n, "markers": [[round(t, 3), name] for t, name in markers],
                               "sccache": self._delta(before, after), "settle": settle, "restored": restored,
-                              "command": cmd})
+                              "command": cmd, "ninja_log_edges": edges})
             if not ok:
                 why = "timed out" if streamed.timed_out else f"exit {streamed.exit}"
                 raise RunInvalid(f"verify run {tag} failed ({why})")
@@ -1456,9 +1540,9 @@ def _b14_input_tick() -> int:
     return info[1]
 
 
-def _b14_check_input(tick: int) -> None:
+def _b14_check_input(tick: int, budget: str = "B14") -> None:
     if _b14_input_tick() != tick:
-        raise RunInvalid("console input interrupted the B14 run")
+        raise RunInvalid(f"console input interrupted the {budget} run")
 
 
 def _b14_session(probe: Path) -> dict[str, Any]:
@@ -1634,7 +1718,7 @@ HARNESSES: dict[str, type] = {"B28": B28Harness}
 _OPTIONS = ("list", "budget", "variant", "runs", "warmup", "files", "label", "perf-root", "milestone",
             "build-dir", "restore", "lock-record", "repo", "package-dir", "package-archive", "package-sha256",
             "b14-fixture", "b14-source", "b14-git", "b14-session-probe",
-            "full", "full-manifest", "full-manifest-sha256")
+            "full", "full-manifest", "full-manifest-sha256", "b28-release-probe")
 _FLAGS = {"list"}
 
 
@@ -1667,6 +1751,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--full", action="store_true", help="validate the REF-W1 full performance work")
     parser.add_argument("--full-manifest", help="independently reviewed full measurement manifest")
     parser.add_argument("--full-manifest-sha256", help="independently obtained SHA-256 of that manifest")
+    parser.add_argument("--b28-release-probe", help="native session probe for the fixed release B28 workload")
     parser.add_argument("--variant", action="append", help="variants to run, comma-separated (default: all)")
     parser.add_argument("--runs", type=int, help="counted runs (rounds for rebuild) per variant")
     parser.add_argument("--warmup", type=int, help="warm-up runs per variant")
@@ -1750,7 +1835,8 @@ def cmd_full(repo: Path, args: argparse.Namespace) -> int:
         value is not None for value in (args.variant, args.runs, args.warmup, args.files, args.label,
                                        args.perf_root, args.milestone, args.build_dir, args.lock_record,
                                        args.package_dir, args.package_archive, args.package_sha256,
-                                       args.b14_fixture, args.b14_source, args.b14_git, args.b14_session_probe)
+                                       args.b14_fixture, args.b14_source, args.b14_git, args.b14_session_probe,
+                                       args.b28_release_probe)
     ):
         raise PerfError("-Full cannot be combined with a single-budget operation")
     if bool(args.full_manifest) != bool(args.full_manifest_sha256):
@@ -1770,7 +1856,7 @@ def cmd_full(repo: Path, args: argparse.Namespace) -> int:
         corpus = json.loads((repo / "tests/corpus/manifest.json").read_text(encoding="utf-8"))
         pin, = (item["sha"] for item in corpus["corpora"] if item["id"] == "R3")
 
-        def verify_revision(revision: str, digest: str) -> None:
+        def verify_revision(revision: str, digest: str, runner_revision: str | None = None) -> None:
             git = shutil.which("git")
             if not git:
                 raise ValueError("Git is required to verify the B14 source revision")
@@ -1782,10 +1868,11 @@ def cmd_full(repo: Path, args: argparse.Namespace) -> int:
                      str(BUDGETS_FILE.as_posix()): identity["budgetsSha256"],
                      "tests/corpus/manifest.json": identity["corporaSha256"]}
             for path, expected_digest in paths.items():
-                source = subprocess.run([git, "show", f"{revision}:{path}"],
+                origin = (runner_revision or revision) if path == "tools/frost_perf.py" else revision
+                source = subprocess.run([git, "show", f"{origin}:{path}"],
                                         cwd=repo, capture_output=True, check=False)
                 if source.returncode or sha256(source.stdout) != expected_digest:
-                    raise ValueError(f"B14 {path} bytes do not match its declared source revision")
+                    raise ValueError(f"{path} bytes do not match its declared source revision")
 
         def measure_b27(root: Path, entry: dict[str, Any], expected: dict[str, str]) -> dict[str, Any]:
             if entry.get("identity") != expected:
@@ -1829,6 +1916,74 @@ def cmd_full(repo: Path, args: argparse.Namespace) -> int:
     return EXIT_INVALID if incomplete else EXIT_OVER if state == "over" else EXIT_OK
 
 
+def _b28_release_start(ctx: RunContext, probe: Path) -> dict[str, Any]:
+    if ctx.repo.drive.upper() != "E:" or ctx.build_dir.resolve() != ctx.repo / B28_DEFAULT_BUILD_DIR:
+        raise RunInvalid("release B28 requires its own default build tree on the REF-W1 E: volume")
+    if probe.name.lower() != "s1_probe_validate.exe" or not ctx.verify_base:
+        raise RunInvalid("release B28 requires the native session probe and verify -Base HEAD support")
+    cache = (ctx.build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+    cache_home = re.search(r"^CMAKE_HOME_DIRECTORY:INTERNAL=(.+)$", cache, re.MULTILINE)
+    if not cache_home or Path(cache_home[1]).resolve() != ctx.repo or (
+        "CMAKE_GENERATOR:INTERNAL=Ninja Multi-Config" not in cache.splitlines()
+    ):
+        raise RunInvalid("release B28 requires a coherent Ninja Multi-Config build of its source checkout")
+    if "FROST_SCCACHE:BOOL=ON" not in cache.splitlines():
+        raise RunInvalid("release B28 needs the pinned sccache configured in the measured build")
+    for name, field_name in (("cmake", "CMAKE_COMMAND:INTERNAL"), ("ninja", "CMAKE_MAKE_PROGRAM:FILEPATH"),
+                             ("sccache", "FROST_SCCACHE_EXECUTABLE:FILEPATH")):
+        configured = re.search(rf"^{field_name}=(.+)$", cache, re.MULTILINE)
+        command = getattr(ctx.tools, name)
+        if not configured or not command or Path(configured[1]).resolve() != Path(command[0]).resolve():
+            raise RunInvalid(f"release B28 {name} differs from the measured build configuration")
+    tools = {}
+    tool_paths = {}
+    for name in ("cmake", "ninja", "sccache", "clang_cl", "powershell", "wsl"):
+        command = getattr(ctx.tools, name)
+        if not command or len(command) != 1:
+            raise RunInvalid(f"release B28 requires the native {name} executable")
+        tool_path = Path(command[0])
+        if not tool_path.is_absolute():
+            raise RunInvalid(f"release B28 requires an absolute {name} path")
+        tools[name] = _b14_digest(tool_path)
+        tool_paths[name] = str(tool_path)
+    ctx.release_input_tick = _b14_input_tick()
+    before = _b28_release_session(probe)
+    cpu = _system_cpu_percent(ctx.hooks.cpu_sample_s, ctx.hooks.sleep)
+    ctx.check_release_input()
+    if cpu is None or cpu < 0 or cpu > 5:
+        raise RunInvalid("Windows was not quiet before B28")
+    return {"kind": "B28-release", "startUtc": _utc_now(), "sessionStart": before, "initialCpuPct": cpu,
+            "runnerSha256": _b14_digest(Path(__file__)), "sessionProbeSha256": _b14_digest(probe),
+            "toolsSha256": tools, "toolsPath": tool_paths}
+
+
+def _b28_release_session(probe: Path) -> dict[str, Any]:
+    try:
+        report = _b14_session(probe)
+        if report["displayPower"] != "on" or not any(
+            item.get("attached") is True and (item.get("width"), item.get("height"), item.get("refreshHz")) ==
+            (5120, 1440, 144) for item in report["outputs"]
+        ):
+            raise RunInvalid("release B28 needs the powered REF-W1 display mode")
+        return report
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        raise RunInvalid("malformed B28 native console precheck") from error
+
+
+def _b28_release_end(ctx: RunContext, probe: Path, receipt: dict[str, Any]) -> None:
+    after = _b28_release_session(probe)
+    cpu = _system_cpu_percent(ctx.hooks.cpu_sample_s, ctx.hooks.sleep)
+    ctx.check_release_input()
+    if cpu is None or cpu < 0 or cpu > 5:
+        raise RunInvalid("Windows was not quiet after B28")
+    if receipt["sessionProbeSha256"] != _b14_digest(probe) or (
+        receipt["runnerSha256"] != _b14_digest(Path(__file__))
+    ) or any(_b14_digest(Path(getattr(ctx.tools, name)[0])) != digest
+             for name, digest in receipt["toolsSha256"].items()):
+        raise RunInvalid("B28 runner or tool binaries changed")
+    receipt.update(endUtc=_utc_now(), sessionEnd=after, finalCpuPct=cpu, inputUnchanged=True)
+
+
 def _run(args: argparse.Namespace, injected: Tools | None, hooks: Hooks) -> int:
     repo = Path(args.repo).resolve() if args.repo else REPO
     budgets_json = repo / BUDGETS_FILE
@@ -1837,11 +1992,21 @@ def _run(args: argparse.Namespace, injected: Tools | None, hooks: Hooks) -> int:
     if args.full_manifest is not None or args.full_manifest_sha256 is not None:
         raise PerfError("full manifest options require -Full")
     if args.list:
+        if args.b28_release_probe:
+            raise PerfError("-B28ReleaseProbe cannot be combined with -List")
         return cmd_list(budgets_json)
     if args.restore:
+        if args.b28_release_probe:
+            raise PerfError("-B28ReleaseProbe cannot be combined with -Restore")
         return cmd_restore(Path(args.restore))
 
     budget = load_budget(budgets_json, args.budget or "B28")
+    if args.b28_release_probe:
+        if budget.id != "B28" or sys.platform != "win32":
+            raise PerfError("-B28ReleaseProbe requires B28 on Windows")
+        if any(value is not None for value in (args.variant, args.runs, args.warmup, args.files, args.build_dir)):
+            raise PerfError("release B28 fixes its variants, sample counts, probe files and default build directory")
+        args.variant, args.runs, args.warmup = ["rebuild", "verify"], 20, 1
     if budget.id != "B14" and any((args.b14_fixture, args.b14_source, args.b14_git, args.b14_session_probe)):
         raise PerfError("B14 arguments require --budget B14")
     if budget.id == "B27":
@@ -1948,8 +2113,11 @@ def _run(args: argparse.Namespace, injected: Tools | None, hooks: Hooks) -> int:
 
     records: dict[str, list[dict[str, Any]]] = {v.name: [] for v in variants}
     invalid: str | None = None
+    release_probe = Path(args.b28_release_probe).resolve() if args.b28_release_probe else None
     journal.begin()
     try:
+        if release_probe:
+            conditions["release"] = _b28_release_start(ctx, release_probe)
         if harness.needs_session_precheck:
             ctx.precheck()
         with (run_dir / "runs.jsonl").open("a", encoding="utf-8", newline="\n") as runs_out:
@@ -1960,9 +2128,11 @@ def _run(args: argparse.Namespace, injected: Tools | None, hooks: Hooks) -> int:
                     runs_out.flush()
                     print(f"perf: {variant.name} {rec.get('file') or ''} round={rec.get('round')} run={rec.get('run')} "
                           f"{rec['wall_s']} s exit {rec['exit']}{'' if rec['counted'] else ' (warm-up)'}", flush=True)
+        if release_probe:
+            _b28_release_end(ctx, release_probe, conditions["release"])
         if harness.needs_session_precheck:
             ctx.precheck()
-    except RunInvalid as error:
+    except (RunInvalid, OSError, subprocess.TimeoutExpired) as error:
         invalid = str(error)
     except KeyboardInterrupt:
         invalid = "interrupted"
@@ -1972,8 +2142,17 @@ def _run(args: argparse.Namespace, injected: Tools | None, hooks: Hooks) -> int:
             for problem in problems:
                 print(f"perf: {problem}", file=sys.stderr)
             invalid = (invalid + "; " if invalid else "") + "restoring the probe files failed"
+    if release_probe and invalid is None:
+        try:
+            if _git(repo, "rev-parse", "HEAD").strip() != sha or _git(repo, "status", "--porcelain").strip():
+                raise RunInvalid("the B28 source revision or worktree changed during collection")
+            ctx.check_release_input()
+        except (RunInvalid, PerfError) as error:
+            invalid = str(error)
     if invalid:
         print(f"perf: the run is invalid: {invalid}", file=sys.stderr)
+    if release_probe:
+        write_json_atomic(run_dir / "conditions.json", conditions)
 
     summaries = {}
     clauses = []
