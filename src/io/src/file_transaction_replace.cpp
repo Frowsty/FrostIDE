@@ -76,7 +76,7 @@ struct Metadata {
 };
 
 Result<Native> openNative(std::string_view path, bool writable = false, bool directory = false,
-                          bool followDirectory = false) {
+                          bool followDirectory = false, bool restoreSecurity = false) {
 #ifdef _WIN32
     auto wide = toWin32Path(path);
     if (!wide)
@@ -86,12 +86,15 @@ Result<Native> openNative(std::string_view path, bool writable = false, bool dir
         access |= DELETE;
     if (writable)
         access |= GENERIC_WRITE | WRITE_DAC | FILE_WRITE_ATTRIBUTES;
+    if (restoreSecurity)
+        access |= WRITE_DAC;
     Native file(CreateFileW(
         wide->c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | (directory && followDirectory ? 0 : FILE_FLAG_OPEN_REPARSE_POINT), nullptr));
     if (!file.valid())
         return std::unexpected(lastWin32Error("replacement: open native object", path));
 #else
+    static_cast<void>(restoreSecurity);
     int flags =
         (writable ? O_RDWR : O_RDONLY) | O_CLOEXEC | O_NONBLOCK | (directory && followDirectory ? 0 : O_NOFOLLOW);
     if (directory)
@@ -336,6 +339,86 @@ bool sameSupportedMetadata(const Metadata& a, const Metadata& b, bool includeSec
 #endif
 }
 
+#ifdef _WIN32
+constexpr auto kSecurityControlOffset = offsetof(SECURITY_DESCRIPTOR_RELATIVE, Control);
+
+bool publishedSecurityWasConverted(const std::vector<unsigned char>& actual, const Metadata& expected) {
+    if (actual.size() != expected.security.size() || actual.size() < kSecurityControlOffset + sizeof(WORD))
+        return false;
+    SECURITY_DESCRIPTOR_CONTROL control{};
+    std::memcpy(&control, expected.security.data() + kSecurityControlOffset, sizeof(control));
+    if ((control & SE_DACL_AUTO_INHERITED) != 0)
+        return false;
+    auto converted = expected.security;
+    const auto convertedControl = static_cast<SECURITY_DESCRIPTOR_CONTROL>(control | SE_DACL_AUTO_INHERITED);
+    std::memcpy(converted.data() + kSecurityControlOffset, &convertedControl, sizeof(convertedControl));
+    return converted == actual;
+}
+
+// The protected journal can cause NTFS to make inherited ACEs explicit. Compare the exact
+// projection of the public descriptor, preserving all owner/group/SID, mask and other flag bytes.
+bool retainedSecurityMatches(const Metadata& actual, const Metadata& expected) {
+    if (actual.security == expected.security)
+        return true;
+    if (actual.security.size() != expected.security.size())
+        return false;
+    // Parse only the descriptor freshly obtained from Windows, never offsets supplied by a receipt.
+    auto* descriptor = const_cast<unsigned char*>(actual.security.data());
+    SECURITY_DESCRIPTOR_CONTROL capturedControl{};
+    std::memcpy(&capturedControl, expected.security.data() + kSecurityControlOffset, sizeof(capturedControl));
+    if ((capturedControl & SE_DACL_PROTECTED) != 0)
+        return false;
+    PACL acl = nullptr;
+    BOOL present = FALSE, defaulted = FALSE;
+    if (!GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted) || !present || !acl)
+        return false;
+    auto projection = expected.security;
+    const auto protectedControl = static_cast<SECURITY_DESCRIPTOR_CONTROL>(capturedControl | SE_DACL_PROTECTED);
+    std::memcpy(projection.data() + kSecurityControlOffset, &protectedControl, sizeof(protectedControl));
+    for (DWORD index = 0; index < acl->AceCount; ++index) {
+        void* ace = nullptr;
+        if (!GetAce(acl, index, &ace))
+            return false;
+        const auto offset =
+            static_cast<std::size_t>(static_cast<unsigned char*>(ace) - descriptor) + offsetof(ACE_HEADER, AceFlags);
+        projection[offset] = static_cast<unsigned char>(projection[offset] & ~INHERITED_ACE);
+    }
+    return projection == actual.security;
+}
+
+Result<void> publishCapturedDacl(const Native& file, const Metadata& expected, std::string_view path) {
+    auto* descriptor = const_cast<unsigned char*>(expected.security.data());
+    SECURITY_DESCRIPTOR_CONTROL control{};
+    DWORD revision = 0;
+    PACL acl = nullptr;
+    BOOL present = FALSE, defaulted = FALSE;
+    if (!GetSecurityDescriptorControl(descriptor, &control, &revision) ||
+        !GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted))
+        return std::unexpected(lastWin32Error("replacement: decode captured DACL", path));
+    if (!present)
+        return fail(ErrorCode::Unsupported, "replacement: captured DACL is absent");
+    const DWORD security =
+        DACL_SECURITY_INFORMATION |
+        ((control & SE_DACL_PROTECTED) ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION);
+    const auto applied = SetSecurityInfo(file.get(), SE_FILE_OBJECT, security, nullptr, nullptr, acl, nullptr);
+    if (applied != ERROR_SUCCESS)
+        return std::unexpected(win32Error(applied, "replacement: install captured DACL", path));
+    auto observed = securityOf(file.get(), path);
+    if (!observed)
+        return std::unexpected(observed.error());
+    if (*observed == expected.security)
+        return {};
+    // SetSecurityInfo can add this conversion status bit on a legacy descriptor. The held
+    // regular NTFS file can restore that exact descriptor once the normal inheritance step has
+    // proved every other byte. The caller verifies the entire descriptor again after the setter.
+    if (!publishedSecurityWasConverted(*observed, expected))
+        return fail(ErrorCode::IoError, "replacement: published DACL differs from its exact captured security");
+    if (!SetKernelObjectSecurity(file.get(), security, descriptor))
+        return std::unexpected(lastWin32Error("replacement: restore captured DACL control state", path));
+    return {};
+}
+#endif
+
 Result<void> absentEndpoint(std::string_view path) {
     auto file = openNative(path);
     if (file)
@@ -548,14 +631,24 @@ std::string metadataDigest(const Metadata& metadata) {
 }
 
 Result<Native> checkedObjectAt(std::string_view path, const Metadata& expected, std::string_view bytes,
-                               bool includeSecurity, bool privateObject) {
-    auto file = openNative(path);
+                               bool includeSecurity, bool privateObject, bool restoreSecurity = false,
+                               bool justPublished = false) {
+    auto file = openNative(path, false, false, false, restoreSecurity);
     if (!file)
         return std::unexpected(file.error());
     auto actual = metadataOf(*file, path, privateObject);
     if (!actual)
         return std::unexpected(actual.error());
-    if (!sameObject(*actual, expected) || !sameSupportedMetadata(*actual, expected, includeSecurity))
+    bool metadataMatches = sameSupportedMetadata(*actual, expected, includeSecurity);
+#ifdef _WIN32
+    if (!metadataMatches && includeSecurity && (privateObject || justPublished))
+        metadataMatches = sameSupportedMetadata(*actual, expected, false) &&
+                          (retainedSecurityMatches(*actual, expected) ||
+                           (justPublished && publishedSecurityWasConverted(actual->security, expected)));
+#else
+    static_cast<void>(justPublished);
+#endif
+    if (!sameObject(*actual, expected) || !metadataMatches)
         return fail(ErrorCode::Busy,
                     "replacement: object or supported metadata changed at '" + std::string(path) + "'");
     auto current = readNative(*file, bytes.size(), path);
@@ -570,6 +663,27 @@ Result<void> objectAt(std::string_view path, const Metadata& expected, std::stri
                       bool includeSecurity = true, bool privateObject = false) {
     auto checked = checkedObjectAt(path, expected, bytes, includeSecurity, privateObject);
     return checked ? Result<void>{} : std::unexpected(checked.error());
+}
+
+Result<void> publishedOriginalAt(const Native& file, std::string_view path, const Metadata& expected,
+                                 std::string_view bytes) {
+#ifdef _WIN32
+    if (auto checked = checkedObjectAt(path, expected, bytes, true, false, false, true); !checked)
+        return std::unexpected(checked.error());
+    auto actual = metadataOf(file, path);
+    if (!actual)
+        return std::unexpected(actual.error());
+    if (!sameObject(*actual, expected) || !sameSupportedMetadata(*actual, expected, false) ||
+        (!retainedSecurityMatches(*actual, expected) && !publishedSecurityWasConverted(actual->security, expected)))
+        return fail(ErrorCode::Busy, "replacement: original changed before restoring its public DACL");
+    if (actual->security != expected.security) {
+        if (auto restored = publishCapturedDacl(file, expected, path); !restored)
+            return restored;
+    }
+#else
+    static_cast<void>(file);
+#endif
+    return objectAt(path, expected, bytes);
 }
 
 Result<void> releasePublicMutationHandle(Native& file, Native& identity, std::string_view path) {
@@ -597,7 +711,7 @@ Result<void> retainPublicObject(Native& file, const Metadata& expected, std::str
     if (!file.valid()) {
         // Revalidate the acquired native object itself, then rename that same handle without replacing an endpoint.
         // On refusal, the local mutation handle closes before returning to the live workspace.
-        auto reopened = checkedObjectAt(from, expected, bytes, true, false);
+        auto reopened = checkedObjectAt(from, expected, bytes, true, false, true);
         if (!reopened)
             return std::unexpected(reopened.error());
         if (auto moved = renameNoReplace(*reopened, fromParent, from, toParent, to); !moved)
@@ -769,7 +883,7 @@ Result<PreparedFileReplacement> prepareFileReplacement(std::string_view target, 
                                                        std::size_t maxAfterBytes) {
     if (after.size() > maxAfterBytes)
         return fail(ErrorCode::OutOfRange, "replacement: After exceeds limit before native preparation");
-    auto original = openNative(target);
+    auto original = openNative(target, false, false, false, true);
     if (!original)
         return std::unexpected(original.error());
     auto before = metadataOf(*original, target);
@@ -798,6 +912,9 @@ Result<PreparedFileReplacement> prepareFileReplacement(std::string_view target, 
     state->store = std::move(*store);
     state->before = std::move(*before);
     state->receipt.beforeMetadataSha256 = metadataDigest(state->before);
+#ifdef _WIN32
+    state->receipt.beforePublicSecurity.assign(state->before.security.begin(), state->before.security.end());
+#endif
     state->parentPath = std::string(parentPath(state->receipt.images.targetPath));
     state->storePath = std::string(privateStorePath);
     const auto retainedError = [&](Error error) -> std::unexpected<Error> {
@@ -956,32 +1073,15 @@ FileReplacementOutcome PreparedFileReplacement::installAfter() {
         auto securityState = metadataOf(state.replacement, state.receipt.images.targetPath);
         if (!securityState)
             return failed(securityState.error());
-        if (securityState->security != state.after.security && securityState->security != state.before.security)
+        if (!retainedSecurityMatches(*securityState, state.after) &&
+            !retainedSecurityMatches(*securityState, state.before) &&
+            !publishedSecurityWasConverted(securityState->security, state.before))
             return failed(Error(ErrorCode::Busy, "published After security changed outside the frozen transition"));
         if (securityState->security != state.before.security) {
             // Stage permissions stay owner-private until the file is at the intended workspace endpoint.
-            PSID owner = nullptr, group = nullptr;
-            PACL acl = nullptr;
-            BOOL defaulted = FALSE, present = FALSE;
-            auto* descriptor = reinterpret_cast<PSECURITY_DESCRIPTOR>(state.before.security.data());
-            if (!GetSecurityDescriptorOwner(descriptor, &owner, &defaulted) ||
-                !GetSecurityDescriptorGroup(descriptor, &group, &defaulted) ||
-                !GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted) || !present)
-                return failed(
-                    lastWin32Error("replacement: decode captured owner/group/DACL", state.receipt.images.targetPath));
-            SECURITY_DESCRIPTOR_CONTROL control{};
-            DWORD revision = 0;
-            if (!GetSecurityDescriptorControl(descriptor, &control, &revision))
-                return failed(
-                    lastWin32Error("replacement: decode captured DACL control", state.receipt.images.targetPath));
-            const auto error = SetSecurityInfo(
-                state.replacement.get(), SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | ((control & SE_DACL_PROTECTED) ? PROTECTED_DACL_SECURITY_INFORMATION
-                                                                           : UNPROTECTED_DACL_SECURITY_INFORMATION),
-                nullptr, nullptr, acl, nullptr);
-            if (error != ERROR_SUCCESS)
-                return failed(win32Error(error, "replacement: install supported DACL; publication already occurred",
-                                         state.receipt.images.targetPath));
+            if (auto security = publishCapturedDacl(state.replacement, state.before, state.receipt.images.targetPath);
+                !security)
+                return failed(security.error());
         }
         auto installed = metadataOf(state.replacement, state.receipt.images.targetPath);
         if (!installed)
@@ -1084,7 +1184,9 @@ FileReplacementOutcome PreparedFileReplacement::restoreBefore() {
         return failed(parent.error());
     if (auto store = directoryAt(state.storePath, state.store, true); !store)
         return failed(store.error());
-    if (auto restored = objectAt(state.receipt.images.targetPath, state.before, state.beforePayload); !restored)
+    if (auto restored =
+            publishedOriginalAt(state.original, state.receipt.images.targetPath, state.before, state.beforePayload);
+        !restored)
         return failed(restored.error());
     if (auto released =
             releasePublicMutationHandle(state.original, state.originalIdentity, state.receipt.images.targetPath);
@@ -1141,8 +1243,10 @@ FileReplacementOutcome PreparedFileReplacement::settle() {
     if (state.receipt.phase == FileReplacementPhase::AfterRetained)
         return restoreBefore();
     if (state.receipt.phase == FileReplacementPhase::BeforeRestoredUnverified) {
-        if (auto error = verify(state.receipt.images.targetPath, state.before, state.beforePayload, false))
-            return {state.receipt, std::move(error)};
+        if (auto restored =
+                publishedOriginalAt(state.original, state.receipt.images.targetPath, state.before, state.beforePayload);
+            !restored)
+            return {state.receipt, restored.error()};
         if (auto released =
                 releasePublicMutationHandle(state.original, state.originalIdentity, state.receipt.images.targetPath);
             !released)
@@ -1284,7 +1388,12 @@ FileReplacementOutcome PreparedFileReplacement::moveOriginalTo(std::string_view 
     if (state.receipt.phase != FileReplacementPhase::OriginalMovedUnverified &&
         state.receipt.phase != FileReplacementPhase::OriginalMoved)
         return failWith(Error(ErrorCode::Busy, "move participant is in another operation"));
-    if (auto current = objectAt(state.receipt.moveDestination, state.before, state.beforePayload); !current)
+    if (state.receipt.phase == FileReplacementPhase::OriginalMovedUnverified) {
+        if (auto published =
+                publishedOriginalAt(state.original, state.receipt.moveDestination, state.before, state.beforePayload);
+            !published)
+            return failWith(published.error());
+    } else if (auto current = objectAt(state.receipt.moveDestination, state.before, state.beforePayload); !current)
         return failWith(current.error());
     if (auto released =
             releasePublicMutationHandle(state.original, state.originalIdentity, state.receipt.moveDestination);
@@ -1305,7 +1414,14 @@ FileReplacementOutcome PreparedFileReplacement::restoreMove() {
         return failWith(parent.error());
     if (auto store = directoryAt(state.storePath, state.store, true); !store)
         return failWith(store.error());
-    if (state.receipt.phase == FileReplacementPhase::OriginalMoved) {
+    if (state.receipt.phase == FileReplacementPhase::OriginalMoved ||
+        state.receipt.phase == FileReplacementPhase::OriginalMovedUnverified) {
+        if (state.receipt.phase == FileReplacementPhase::OriginalMovedUnverified) {
+            if (auto published = publishedOriginalAt(state.original, state.receipt.moveDestination, state.before,
+                                                     state.beforePayload);
+                !published)
+                return failWith(published.error());
+        }
         if (auto current = objectAt(state.receipt.moveDestination, state.before, state.beforePayload); !current)
             return failWith(current.error());
         if (auto moved =
@@ -1327,8 +1443,10 @@ FileReplacementOutcome PreparedFileReplacement::restoreMove() {
     }
     if (state.receipt.phase != FileReplacementPhase::MoveRestoredUnverified)
         return failWith(Error(ErrorCode::Busy, "inverse move requires the exact moved object"));
-    if (auto current = objectAt(state.receipt.images.targetPath, state.before, state.beforePayload); !current)
-        return failWith(current.error());
+    if (auto published =
+            publishedOriginalAt(state.original, state.receipt.images.targetPath, state.before, state.beforePayload);
+        !published)
+        return failWith(published.error());
     if (auto released =
             releasePublicMutationHandle(state.original, state.originalIdentity, state.receipt.images.targetPath);
         !released)
@@ -1552,10 +1670,12 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
                                                        std::string_view after, bool desiredBefore,
                                                        std::size_t maxBytes) {
     const bool creation = saved.images.beforeSha256.empty();
-    if (creation &&
-        (!before.empty() || saved.images.target != FileImageObservation{} || !saved.moveDestination.empty() ||
-         !saved.beforeMetadataSha256.empty() || !saved.metadataProfile.starts_with("CREATE LIMITED:")))
+    if (creation && (!before.empty() || saved.images.target != FileImageObservation{} ||
+                     !saved.moveDestination.empty() || !saved.beforeMetadataSha256.empty() ||
+                     !saved.beforePublicSecurity.empty() || !saved.metadataProfile.starts_with("CREATE LIMITED:")))
         return fail(ErrorCode::Corrupt, "invalid absent-Before creation receipt");
+    if (saved.beforePublicSecurity.size() > 65536)
+        return fail(ErrorCode::Corrupt, "recovery public security capture exceeds its bound");
     if (before.size() > maxBytes || after.size() > maxBytes ||
         (!creation && io::sha256Hex(before) != saved.images.beforeSha256) ||
         io::sha256Hex(after) != saved.images.afterSha256)
@@ -1599,12 +1719,13 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
     if (auto checked = parentMatches(state->store, saved.images.store); !checked)
         return std::unexpected(checked.error());
     std::string beforeLocation, afterLocation;
+    bool beforeRequiringPublicSecurity = false;
     if (!creation)
         for (const auto& path :
              std::array<std::string, 3>{saved.retainedBeforePath, saved.moveDestination, saved.images.targetPath}) {
             if (path.empty())
                 continue;
-            auto file = openNative(path);
+            auto file = openNative(path, false, false, false, true);
             if (!file)
                 continue;
             auto spelling = actualLeafSpelling(*file, path);
@@ -1618,7 +1739,33 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
             if (meta->volume != saved.images.target.volume || meta->object != saved.images.target.object)
                 continue;
             auto bytes = readNative(*file, maxBytes, path);
-            if (!bytes || *bytes != before || metadataDigest(*meta) != saved.beforeMetadataSha256)
+            bool matched = metadataDigest(*meta) == saved.beforeMetadataSha256;
+#ifdef _WIN32
+            using Phase = FileReplacementPhase;
+            const bool sourcePublicationPending =
+                saved.phase == Phase::Prepared || saved.phase == Phase::AfterRetained ||
+                saved.phase == Phase::BeforeRestoredUnverified || saved.phase == Phase::MoveRetainedForInverse ||
+                saved.phase == Phase::MoveRestoredUnverified;
+            const bool movePublicationPending = saved.phase == Phase::Prepared ||
+                                                saved.phase == Phase::OriginalRetained ||
+                                                saved.phase == Phase::OriginalMovedUnverified;
+            if (!matched && !saved.beforePublicSecurity.empty() &&
+                (path == saved.retainedBeforePath ||
+                 (desiredBefore && sourcePublicationPending && path == saved.images.targetPath) ||
+                 (!desiredBefore && movePublicationPending && path == saved.moveDestination))) {
+                auto publicBefore = *meta;
+                publicBefore.security.assign(saved.beforePublicSecurity.begin(), saved.beforePublicSecurity.end());
+                if (metadataDigest(publicBefore) == saved.beforeMetadataSha256 &&
+                    (retainedSecurityMatches(*meta, publicBefore) ||
+                     (path != saved.retainedBeforePath &&
+                      publishedSecurityWasConverted(meta->security, publicBefore)))) {
+                    beforeRequiringPublicSecurity = path != saved.retainedBeforePath;
+                    *meta = std::move(publicBefore);
+                    matched = true;
+                }
+            }
+#endif
+            if (!bytes || *bytes != before || !matched)
                 return fail(ErrorCode::Busy,
                             "retained Before data/metadata changed; recovery refuses inverse authority");
             state->original = std::move(*file);
@@ -1641,9 +1788,22 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
             continue;
         auto bytes = readNative(*file, maxBytes, path);
         const auto digest = metadataDigest(*meta);
-        if (!bytes || *bytes != after ||
-            (digest != saved.privateAfterMetadataSha256 && digest != saved.beforeMetadataSha256 &&
-             (saved.installedAfterMetadataSha256.empty() || digest != saved.installedAfterMetadataSha256)))
+        bool matched = digest == saved.privateAfterMetadataSha256 || digest == saved.beforeMetadataSha256 ||
+                       digest == saved.installedAfterMetadataSha256;
+#ifdef _WIN32
+        if (!creation && path == saved.images.targetPath &&
+            (saved.phase == FileReplacementPhase::AfterInstalled ||
+             (desiredBefore && !saved.beforePublicSecurity.empty())))
+            matched = digest == saved.beforeMetadataSha256;
+        if (!matched && !creation && !desiredBefore && path == saved.images.targetPath &&
+            saved.phase != FileReplacementPhase::AfterInstalled)
+            matched = sameSupportedMetadata(*meta, state->before, false) &&
+                      publishedSecurityWasConverted(meta->security, state->before);
+        if (!matched && !creation && path == saved.replacementPath)
+            matched =
+                sameSupportedMetadata(*meta, state->before, false) && retainedSecurityMatches(*meta, state->before);
+#endif
+        if (!bytes || *bytes != after || !matched)
             return fail(ErrorCode::Busy, "frozen After object was tampered; preserve conflict");
         state->replacement = std::move(*file);
         state->after = std::move(*meta);
@@ -1680,18 +1840,22 @@ Result<PreparedFileReplacement> recoverFileReplacement(const FileReplacementRece
         if (auto checked = parentMatches(state->moveParent, saved.moveParent); !checked)
             return std::unexpected(checked.error());
         if (beforeLocation == saved.moveDestination)
-            state->receipt.phase = FileReplacementPhase::OriginalMoved;
+            state->receipt.phase = beforeRequiringPublicSecurity ? FileReplacementPhase::OriginalMovedUnverified
+                                                                 : FileReplacementPhase::OriginalMoved;
         else if (beforeLocation == saved.retainedBeforePath)
             state->receipt.phase =
                 desiredBefore ? FileReplacementPhase::MoveRetainedForInverse : FileReplacementPhase::OriginalRetained;
         else
-            state->receipt.phase = desiredBefore ? FileReplacementPhase::MoveRestored : FileReplacementPhase::Prepared;
+            state->receipt.phase = !desiredBefore                  ? FileReplacementPhase::Prepared
+                                   : beforeRequiringPublicSecurity ? FileReplacementPhase::MoveRestoredUnverified
+                                                                   : FileReplacementPhase::MoveRestored;
     } else {
         if (afterLocation.empty())
             return fail(ErrorCode::Busy, "frozen After object unavailable; preserve recovery material");
         if (beforeLocation == saved.images.targetPath && afterLocation == saved.replacementPath)
-            state->receipt.phase =
-                desiredBefore ? FileReplacementPhase::BeforeRestored : FileReplacementPhase::Prepared;
+            state->receipt.phase = !desiredBefore                  ? FileReplacementPhase::Prepared
+                                   : beforeRequiringPublicSecurity ? FileReplacementPhase::BeforeRestoredUnverified
+                                                                   : FileReplacementPhase::BeforeRestored;
         else if (beforeLocation == saved.retainedBeforePath && afterLocation == saved.images.targetPath)
             state->receipt.phase = metadataDigest(state->after) == saved.beforeMetadataSha256
                                        ? FileReplacementPhase::AfterInstalled

@@ -40,6 +40,7 @@ struct FileReplacementReceipt {
     // Empty images.beforeSha256 denotes an ABSENT Before for prepareFileCreation only; unlike
     // sha256(empty file), it is not an existing zero-length file or a replaceable placeholder.
     std::string beforeMetadataSha256;
+    std::string beforePublicSecurity; // Bounded self-relative owner/group/DACL capture for NTFS recovery.
     std::string privateAfterMetadataSha256;
     std::string installedAfterMetadataSha256;
     FileReplacementPhase phase = FileReplacementPhase::Prepared;

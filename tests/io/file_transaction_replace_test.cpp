@@ -157,6 +157,31 @@ frost::Result<std::string> supportedSnapshot(std::string_view path) {
 #endif
 }
 
+#ifdef _WIN32
+frost::Result<void> makeInheritedDaclExplicit(std::string_view path, std::string descriptor) {
+    auto wide = toWin32Path(path);
+    if (!wide)
+        return std::unexpected(wide.error());
+    PACL acl = nullptr;
+    BOOL present = FALSE, defaulted = FALSE;
+    if (!GetSecurityDescriptorDacl(descriptor.data(), &present, &acl, &defaulted) || !present || !acl)
+        return std::unexpected(lastWin32Error("test: read inherited ACL", path));
+    for (DWORD index = 0; index < acl->AceCount; ++index) {
+        void* ace = nullptr;
+        if (!GetAce(acl, index, &ace))
+            return std::unexpected(lastWin32Error("test: read inherited ACE", path));
+        auto& flags = static_cast<ACE_HEADER*>(ace)->AceFlags;
+        flags = static_cast<BYTE>(flags & ~INHERITED_ACE);
+    }
+    const DWORD changed = SetNamedSecurityInfoW(wide->data(), SE_FILE_OBJECT,
+                                                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                                nullptr, nullptr, acl, nullptr);
+    if (changed != ERROR_SUCCESS)
+        return std::unexpected(win32Error(changed, "test: apply exact private DACL projection", path));
+    return {};
+}
+#endif
+
 class FileTransactionReplace : public ::testing::Test {
 protected:
     frost::test::ScratchDir scratch{"native-replace"};
@@ -630,6 +655,74 @@ TEST_F(FileTransactionReplace, ReversibleMoveAndRedoPreserveExactSourceAndForeig
     ASSERT_TRUE(value->reapplyMove().complete());
     expectBytes(destination, before);
 }
+
+#ifdef _WIN32
+TEST_F(FileTransactionReplace, InheritedSourceSecurityRoundTripsFromPrivateStoreAcrossRecovery) {
+    const auto source = scratch.join("inherited.cpp");
+    const auto destination = scratch.join("moved.cpp");
+    const auto path = toWin32Path(source);
+    ASSERT_TRUE(path);
+    HANDLE file = CreateFileW(path->c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(file, INVALID_HANDLE_VALUE);
+    ASSERT_TRUE(CloseHandle(file));
+    ASSERT_TRUE(overwriteNative(source, before));
+    auto expected = supportedSnapshot(source);
+    ASSERT_TRUE(expected);
+    FileReplacementReceipt saved;
+    {
+        auto value = prepareFileReplacement(source, store, after, 65536, 65536);
+        ASSERT_TRUE(value) << value.error().describe();
+        ASSERT_TRUE(value->prepareMoveDestination(destination));
+        saved = *value->receipt();
+        auto* descriptor = static_cast<void*>(saved.beforePublicSecurity.data());
+        SECURITY_DESCRIPTOR_CONTROL control{};
+        DWORD revision = 0;
+        ASSERT_TRUE(GetSecurityDescriptorControl(descriptor, &control, &revision));
+        ASSERT_EQ(control & SE_DACL_PROTECTED, 0);
+        PACL acl = nullptr;
+        BOOL present = FALSE, defaulted = FALSE;
+        ASSERT_TRUE(GetSecurityDescriptorDacl(descriptor, &present, &acl, &defaulted));
+        ASSERT_TRUE(present);
+        ASSERT_NE(acl, nullptr);
+        bool inherited = false;
+        for (DWORD index = 0; index < acl->AceCount; ++index) {
+            void* ace = nullptr;
+            ASSERT_TRUE(GetAce(acl, index, &ace));
+            inherited |= (static_cast<ACE_HEADER*>(ace)->AceFlags & INHERITED_ACE) != 0;
+        }
+        ASSERT_TRUE(inherited);
+        const auto retired = value->retireOriginal();
+        ASSERT_TRUE(retired.complete()) << retired.error->describe();
+    }
+    // Windows may already project the DACL during retirement, depending on the fixture volume's
+    // directory inheritance. Establish that exact native state for deterministic recovery coverage.
+    auto projected = makeInheritedDaclExplicit(saved.retainedBeforePath, saved.beforePublicSecurity);
+    ASSERT_TRUE(projected) << projected.error().describe();
+    ASSERT_NE(supportedSnapshot(saved.retainedBeforePath), expected);
+    auto recovered = recoverFileReplacement(saved, before, after, false, 65536);
+    ASSERT_TRUE(recovered) << recovered.error().describe();
+    const auto moved = recovered->moveOriginalTo(destination);
+    ASSERT_TRUE(moved.complete()) << moved.error->describe();
+    EXPECT_EQ(supportedSnapshot(destination), expected);
+    const auto undone = recovered->restoreMove();
+    ASSERT_TRUE(undone.complete()) << undone.error->describe();
+    EXPECT_EQ(supportedSnapshot(source), expected);
+    const auto settled = *recovered->receipt();
+    auto replacement = prepareFileReplacement(source, store, after, 65536, 65536);
+    ASSERT_TRUE(replacement) << replacement.error().describe();
+    const auto installed = replacement->settle();
+    ASSERT_TRUE(installed.complete()) << installed.error->describe();
+    ASSERT_TRUE(replacement->validateCurrent(true));
+    const auto inverse = replacement->restoreBefore();
+    ASSERT_TRUE(inverse.complete()) << inverse.error->describe();
+    EXPECT_EQ(supportedSnapshot(source), expected);
+    auto changed = makeInheritedDaclExplicit(source, settled.beforePublicSecurity);
+    ASSERT_TRUE(changed) << changed.error().describe();
+    EXPECT_FALSE(recoverFileReplacement(settled, before, after, true, 65536));
+}
+#endif
+
 TEST_F(FileTransactionReplace, PrivateStoreProvisioningReusesOnlyRestrictedOwnedDirectories) {
     const auto requested = scratch.join("new-private");
     auto created = ensurePrivateTransactionStore(target, requested, scratch.path());

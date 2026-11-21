@@ -82,7 +82,7 @@ Result<bool> sameAbsentLeaf(std::string_view left, std::string_view right) {
 #endif
 }
 struct Writer {
-    std::string data = "FROST-REF1-1\n";
+    std::string data = "FROST-REF1-2\n";
     void number(std::uint64_t value) {
         for (unsigned i = 0; i < 8; ++i)
             data += static_cast<char>((value >> (i * 8)) & 255);
@@ -97,9 +97,10 @@ struct Reader {
     std::string_view data;
     std::size_t position = 0;
     bool good = true;
+    bool capturesPublicSecurity = false;
     explicit Reader(std::string_view value) {
-        constexpr std::string_view magic = "FROST-REF1-1\n";
-        if (value.size() < magic.size() + 64 || !value.starts_with(magic)) {
+        constexpr std::string_view oldMagic = "FROST-REF1-1\n", magic = "FROST-REF1-2\n";
+        if (value.size() < magic.size() + 64 || (!value.starts_with(magic) && !value.starts_with(oldMagic))) {
             good = false;
             return;
         }
@@ -109,6 +110,7 @@ struct Reader {
             return;
         }
         position = magic.size();
+        capturesPublicSecurity = value.starts_with(magic);
     }
     std::uint64_t number() {
         if (!good || data.size() - position < 8) {
@@ -189,6 +191,8 @@ io::FileReplacementReceipt readReceipt(Reader& in) {
     r.retainedBeforePath = in.text(65536);
     r.metadataProfile = in.text(65536);
     r.beforeMetadataSha256 = in.text(64);
+    if (in.capturesPublicSecurity)
+        r.beforePublicSecurity = in.text(65536);
     r.privateAfterMetadataSha256 = in.text(64);
     r.installedAfterMetadataSha256 = in.text(64);
     r.moveDestination = in.text(65536);
@@ -197,13 +201,11 @@ io::FileReplacementReceipt readReceipt(Reader& in) {
     if (phase > static_cast<unsigned>(io::FileReplacementPhase::MoveRestored))
         in.good = false;
     r.phase = static_cast<io::FileReplacementPhase>(phase);
-    // Backward-compatible field layout. Valid older replacement receipts always contain the
-    // 64-byte hash of an existing Before, including empty files. New creations use a disjoint
-    // absent hash + profile marker; older readers refuse them at their frozen hash validation.
+    // Older replacement receipts still carry the hash of an existing Before, including empty files.
     const bool absent = r.images.beforeSha256.empty();
     if (absent != r.metadataProfile.starts_with("CREATE LIMITED:") ||
         (absent && (r.images.target != io::FileImageObservation{} || !r.beforeMetadataSha256.empty() ||
-                    !r.moveDestination.empty())))
+                    !r.beforePublicSecurity.empty() || !r.moveDestination.empty())))
         in.good = false;
     return r;
 }
@@ -227,6 +229,7 @@ void receipt(Writer& out, const io::FileReplacementReceipt& value) {
     out.text(value.retainedBeforePath);
     out.text(value.metadataProfile);
     out.text(value.beforeMetadataSha256);
+    out.text(value.beforePublicSecurity);
     out.text(value.privateAfterMetadataSha256);
     out.text(value.installedAfterMetadataSha256);
     out.text(value.moveDestination);
@@ -1078,6 +1081,32 @@ struct RefactoringCoordinator::State {
         }
         if (settled.error().code() != ErrorCode::NotFound)
             return std::unexpected(settled.error());
+        // A persisted completion prevents treating a later public ACL edit as the residue of an
+        // interrupted native rename. The manifest still supplies all identity and ACL authority.
+        auto checkpoint = readRecord(r->directory, "progress-" + std::to_string(latest));
+        if (checkpoint) {
+            Reader progress(*checkpoint);
+            if (progress.text(32) != identityText(id) || progress.number() != latest)
+                return fail(ErrorCode::Corrupt, "transaction progress does not match its decision");
+            for (auto& captured : receipts) {
+                const auto current = readReceipt(progress);
+                if (current.images.targetPath != captured.images.targetPath ||
+                    current.replacementPath != captured.replacementPath ||
+                    current.moveDestination != captured.moveDestination ||
+                    current.images.target != captured.images.target || current.images.stage != captured.images.stage)
+                    return fail(ErrorCode::Corrupt, "transaction progress does not match its manifest");
+                using Phase = io::FileReplacementPhase;
+                if ((r->action == Action::Undo &&
+                     (current.phase == Phase::BeforeRestored || current.phase == Phase::MoveRestored)) ||
+                    (r->action != Action::Undo &&
+                     (current.phase == Phase::AfterInstalled || current.phase == Phase::OriginalMoved)))
+                    captured.phase = current.phase;
+            }
+            if (!progress.done())
+                return fail(ErrorCode::Corrupt, "corrupt transaction progress record");
+        } else if (checkpoint.error().code() != ErrorCode::NotFound) {
+            return std::unexpected(checkpoint.error());
+        }
         r->pending = true;
         r->recovering = true;
         for (std::size_t i = 0; i < r->files.size(); ++i) {
