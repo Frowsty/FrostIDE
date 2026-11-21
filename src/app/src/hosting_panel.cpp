@@ -174,6 +174,14 @@ HostingPanel::~HostingPanel() {
         m_worker.request_stop();
     // jthread drains the contained process before the borrowed launcher can be destroyed.
 }
+void HostingPanel::showTrustChanged() {
+    ++m_epoch;
+    clearReviewData();
+    m_status->setText(QStringLiteral("Project/trust changed. An outgoing request may already have reached the "
+                                     "provider; refresh comments before retrying."));
+    refreshButtons();
+}
+
 void HostingPanel::invalidate() {
     ++m_epoch;
     if (m_current)
@@ -443,10 +451,7 @@ void HostingPanel::start(HostingOperation operation) {
             current->store(false);
             if (m_worker.joinable())
                 m_worker.request_stop();
-            ++m_epoch;
-            clearReviewData();
-            m_status->setText(QStringLiteral("Project/trust changed. An outgoing request may already have reached the "
-                                             "provider; refresh comments before retrying."));
+            showTrustChanged();
             watch->stop();
             watch->deleteLater();
         }
@@ -492,11 +497,16 @@ void HostingPanel::start(HostingOperation operation) {
                 }
                 owner->m_busy = false;
                 owner->refreshButtons();
-                if (!current->load() || !owner->m_environment.root || owner->m_environment.root() != request.root ||
-                    !owner->m_environment.trusted(request.root) ||
-                    (owner->m_environment.trustRevision &&
-                     owner->m_environment.trustRevision(request.root) != revision))
+                if (!current->load() || !owner->m_environment.root || owner->m_environment.root() != request.root)
                     return;
+                if (!owner->m_environment.trusted(request.root) ||
+                    (owner->m_environment.trustRevision &&
+                     owner->m_environment.trustRevision(request.root) != revision)) {
+                    // The worker can finish before the timer gets its next tick.
+                    current->store(false);
+                    owner->showTrustChanged();
+                    return;
+                }
                 if (!result) {
                     owner->m_status->setText(QString::fromStdString(result.error().message()));
 

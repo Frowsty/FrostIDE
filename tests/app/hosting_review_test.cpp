@@ -353,7 +353,7 @@ TEST(HostedReviewPanel, NormalDiffRowPostsExactAnchorThenRefreshesAndRepliesToAc
 TEST(HostedReviewPanel, AnchorChangeAfterPostDispatchRequiresRefreshBeforeAnyRetry) {
     io::ScriptedProcessLauncher launcher;
     const auto selected = request();
-    HostingPanel panel({&launcher, [selected] { return selected.root; }, [](const auto&) { return true; }});
+    HostingPanel panel({&launcher, [selected] { return selected.root; }, [](const auto&) { return true; }, {}});
     configure(panel, selected);
     launcher.expect({.stdoutBytes = "[" + details(selected.provider) + "]"});
     button(panel, "Load Page")->click();
@@ -385,36 +385,75 @@ TEST(HostedReviewPanel, AnchorChangeAfterPostDispatchRequiresRefreshBeforeAnyRet
     EXPECT_EQ(launcher.launches().size(), 7u);
 }
 
+// A hung ScriptedProcess normally advances the entire synchronous timeout immediately.
+// Keep this test's second request in flight until the owner actually cancels its process.
+class ProviderWaitingForCancellation final : public io::IProcess {
+public:
+    explicit ProviderWaitingForCancellation(std::unique_ptr<io::IProcess> child) : m_child(std::move(child)) {}
+    io::ProcessId pid() const noexcept override { return m_child->pid(); }
+    Result<void> writeStdin(std::string_view bytes) override { return m_child->writeStdin(bytes); }
+    void closeStdin() noexcept override { m_child->closeStdin(); }
+    Result<std::size_t> readStdout(std::span<char> bytes) override { return m_child->readStdout(bytes); }
+    Result<std::size_t> readStderr(std::span<char> bytes) override { return m_child->readStderr(bytes); }
+    Result<io::ExitStatus> wait(std::optional<IClock::Duration> timeout) override { return m_child->wait(timeout); }
+    Result<void> terminate() override { return m_child->terminate(); }
+    Result<io::ProcessResult> communicate(std::string_view bytes, IClock::Duration) override {
+        return m_child->communicateUntil(bytes, std::nullopt);
+    }
+
+private:
+    std::unique_ptr<io::IProcess> m_child;
+};
+
+class ProviderCancellationLauncher final : public io::IProcessLauncher {
+public:
+    io::ScriptedProcessLauncher scripts;
+    std::atomic<bool> waitForCancellation = false;
+
+    Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& spec) override {
+        auto child = scripts.launch(spec);
+        if (!child || !waitForCancellation.exchange(false))
+            return child;
+        return std::make_unique<ProviderWaitingForCancellation>(std::move(*child));
+    }
+    Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
+                                                          const io::AsyncContext& context) override {
+        return scripts.launchAsync(spec, context);
+    }
+};
+
 TEST(HostedReviewPanel, RevokedAndRegrantedTrustCannotContinueAnOldProviderRequest) {
-    io::ScriptedProcessLauncher launcher;
+    ProviderCancellationLauncher launcher;
     const auto selected = request();
     std::atomic<std::uint64_t> revision = 1;
     HostingPanel panel({&launcher, [selected] { return selected.root; }, [](const auto&) { return true; },
                         [&](const auto&) { return revision.load(); }});
     configure(panel, selected);
-    launcher.expect({.stdoutBytes = "[" + details(selected.provider) + "]"});
+    launcher.scripts.expect({.stdoutBytes = "[" + details(selected.provider) + "]"});
     button(panel, "Load Page")->click();
     auto* reviews = panel.findChild<QTreeWidget*>("hostingReviews");
     ASSERT_TRUE(waitFor([&] { return reviews->topLevelItemCount() == 1; }));
     reviews->setCurrentItem(reviews->topLevelItem(0));
-    launcher.expect({.neverExits = true});
+    launcher.scripts.expect({.neverExits = true});
+    launcher.waitForCancellation = true;
     button(panel, "Load Review Lines")->click();
-    ASSERT_TRUE(waitFor([&] { return launcher.launches().size() == 2; }));
+    ASSERT_TRUE(waitFor([&] { return launcher.scripts.launches().size() == 2; }));
     // Current trust remains true, but revoke/regrant changed the immutable admission revision.
     revision.store(2);
     ASSERT_TRUE(waitFor([&] {
-        const auto children = launcher.launches();
+        const auto children = launcher.scripts.launches();
         return children.size() == 2 && children.back().terminated && button(panel, "Load Review Lines")->isEnabled();
     }));
-    EXPECT_EQ(launcher.launches().size(), 2u);
+    EXPECT_EQ(launcher.scripts.launches().size(), 2u);
     EXPECT_EQ(panel.findChild<QTreeWidget*>("hostingDiffLines")->topLevelItemCount(), 0);
-    EXPECT_TRUE(panel.findChild<QLabel*>("hostingStatus")->text().contains("trust changed"));
+    const QString status = panel.findChild<QLabel*>("hostingStatus")->text();
+    EXPECT_TRUE(status.contains("trust changed")) << status.toStdString();
 }
 
 TEST(HostedReviewPanel, ReviewSelectionChangedInsideConfirmationCannotSendOldLineComment) {
     io::ScriptedProcessLauncher launcher;
     const auto selected = request();
-    HostingPanel panel({&launcher, [selected] { return selected.root; }, [](const auto&) { return true; }});
+    HostingPanel panel({&launcher, [selected] { return selected.root; }, [](const auto&) { return true; }, {}});
     configure(panel, selected);
     auto other = QJsonDocument::fromJson(QByteArray::fromStdString(details(selected.provider))).object();
     other.insert("number", 43);

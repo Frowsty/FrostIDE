@@ -36,6 +36,7 @@ private:
     void start(HostingOperation operation);
     void refreshButtons();
     void clearReviewData();
+    void showTrustChanged();
     void reviewSelectionChanged();
     void anchorChanged();
     void showDiff(std::shared_ptr<const HostedDiffSnapshot> diff);

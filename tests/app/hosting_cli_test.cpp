@@ -151,7 +151,7 @@ TEST(HostingCli, CheckoutSuccessRequiresActualLocalGitHeadToEqualCapturedCommit)
 TEST(HostingCli, PanelCreationAndContextInvalidationNeverContactAProvider) {
     io::ScriptedProcessLauncher launcher;
     const auto selected = request();
-    HostingPanel panel({&launcher, [selected] { return selected.root; }, [](const std::string&) { return true; }});
+    HostingPanel panel({&launcher, [selected] { return selected.root; }, [](const std::string&) { return true; }, {}});
     panel.findChild<QLineEdit*>(QStringLiteral("hostingExecutable"))
         ->setText(QString::fromStdString(selected.executable));
     panel.findChild<QLineEdit*>(QStringLiteral("hostingRepository"))
