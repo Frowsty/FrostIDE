@@ -8505,7 +8505,9 @@ Added normal DXC HLSL Diagnostics and Cancel actions: explicit installed compile
 
 ### Windows preview for GitHub Releases (2026-11-21)
 
-Windows x64 build 25 uses commit `b77ccbdbd4c3f16edf98577a3f98b56cf843414a` and version `2026.11.21.0-beta`. The release target branch is `codex/prerelease-2026.11.21.0-beta`. The public download is `FrostIDE-2026.11.21.0-beta-windows-x64.zip`, 213,387,772 bytes, SHA-256 `54bd53b8424d507042360fda93128ff6390fff2c87fbe204347a5800fb4fff1c`. It is prepared locally for manual installation as a GitHub prerelease. Publishing and a signed update are separate owner actions.
+Windows x64 build 25 uses commit `b77ccbdbd4c3f16edf98577a3f98b56cf843414a` and version `2026.11.21.0-beta`. The release target branch is `codex/prerelease-2026.11.21.0-beta`. The public download is `FrostIDE-2026.11.21.0-beta-windows-x64.zip`, 213,387,772 bytes, SHA-256 `54bd53b8424d507042360fda93128ff6390fff2c87fbe204347a5800fb4fff1c`.
+
+At the owner's request the Windows upload set includes a signed Stable manifest and detached signature. The key embedded in published build 24 verified the exact manifest with OpenSSL. The signed version is `2026.11.21.0`, build 25, with tag `v2026.11.21.0-beta`. A regular published GitHub release with this tag is eligible for Stable discovery. The owner controls publication. In a disposable installation build 24's in-place handoff installed all 1,163 build 25 files and restarted the updated Workbench. Its overlay retained 935 older files absent from the new ZIP, including older managed components. A fresh side-by-side installation gives users the public package's exact contents.
 
 All 1,163 archive files matched the public stage. An extracted copy passed launch and self-test, clangd, LLDB, Lua, validator and Workbench LuaLS checks. Solution Explorer in both .sln and .slnx showed nested, imported and wildcard header items in exact agreement with the MSBuild evaluation of the synthetic projects. The public package omits the local managed runtime payloads and carries refreshed source archives and notices. The separate private package passed a real local update, rollback, relaunch and uninstall.
 
