@@ -221,6 +221,16 @@ std::optional<SemanticCommand> semanticCommand(const llvm::json::Object& request
     std::vector<std::string> arguments{pinned.str().str()};
     for (std::size_t index = 1; index < command.CommandLine.size(); ++index) {
         const llvm::StringRef argument(command.CommandLine[index]);
+        if (clMode && argument == "/c") {
+            arguments.emplace_back("-c"); // The syntax-only action adjuster recognizes this spelling.
+            continue;
+        }
+        if (clMode && (argument == "/Zc:preprocessor" || argument == "-Zc:preprocessor"))
+            continue; // Conforming preprocessing is already Clang's default.
+        if (clMode && (argument == "/Zc:preprocessor-" || argument == "-Zc:preprocessor-")) {
+            error = "MSVC's traditional preprocessor mode cannot be reproduced by Clang";
+            return {};
+        }
         if (argument.starts_with("@") || argument == "-Xclang" || argument.starts_with("-Xclang=") ||
             argument.starts_with("-fplugin") || argument.starts_with("-fmodule") || argument.starts_with("/clang:") ||
             argument.starts_with("-save-temps") || argument.starts_with("-ftime-trace") ||

@@ -3,6 +3,7 @@
 #include "frost/io/file_system.hpp"
 #include "frost/io/path.hpp"
 #include "frost/io/process.hpp"
+#include "frost/io/spawn_log.hpp"
 #include "frost/lang/inspection.hpp"
 #include "frost/rpc/json.hpp"
 
@@ -21,7 +22,7 @@ protected:
     std::string file = scratch.join("input.cpp");
     std::string compiler = frost::io::normalizePath(FROST_TEST_CXX_COMPILER).value();
     Json run(const std::string& bytes, std::string rule, std::string mode = "--analyze-unit",
-             Json overlays = Json::array()) {
+             Json overlays = Json::array(), std::vector<std::string> extraArguments = {}, int expectedExit = 0) {
         auto& fs = frost::io::realFileSystem();
         EXPECT_TRUE(fs.writeFileAtomic(file, bytes));
         auto arguments = Json::array({Json(compiler)});
@@ -39,6 +40,8 @@ protected:
         for (const auto& arg : std::vector<std::string>{"-std=c++20", "-c", file, "-o", scratch.join("forbidden.o")})
             arguments.push(arg);
 #endif
+        for (auto& arg : extraArguments)
+            arguments.push(std::move(arg));
         auto database = Json::array({Json::object()
                                          .set("directory", scratch.path())
                                          .set("file", file)
@@ -67,7 +70,9 @@ protected:
         }
         auto result = frost::rpc::parseJson(output->stdoutBytes);
         EXPECT_TRUE(result) << output->stdoutBytes << output->stderrBytes;
-        EXPECT_EQ(output->exitCode, 0) << output->stdoutBytes << output->stderrBytes;
+        EXPECT_EQ(output->exitCode, expectedExit) << output->stdoutBytes << output->stderrBytes;
+        if (result && mode == "--analyze-unit" && expectedExit == 0)
+            EXPECT_EQ(result->stringAt("compilationDatabaseSha256"), frost::io::sha256Hex(database));
         EXPECT_EQ(fs.readFile(file).value_or("missing"), bytes);
         EXPECT_FALSE(fs.exists(scratch.join("forbidden.obj")).value_or(true));
         EXPECT_FALSE(fs.exists(scratch.join("forbidden.o")).value_or(true));
@@ -93,6 +98,28 @@ TEST_F(Analyzer, EveryRegisteredRuleHasActualPositiveAndNegativeCppFixtures) {
                 std::ranges::any_of(analyzerCases, [&](const auto& test) { return row.stringAt("id") == test.rule; }));
     }
 }
+#ifdef _WIN32
+TEST_F(Analyzer, AcceptsTheConformingMsvcPreprocessorWithWarningsAsErrors) {
+    for (const std::string option : {"/Zc:preprocessor", "-Zc:preprocessor"}) {
+        const auto native = run("int fixture_value(){return 7;}\n", "frost-null-dereference", "--analyze-unit",
+                                Json::array(), {"/WX", option});
+        EXPECT_EQ(native.stringAt("status"), "ready");
+    }
+}
+
+TEST_F(Analyzer, RefusesTheTraditionalMsvcPreprocessor) {
+    for (const std::string option : {"/Zc:preprocessor-", "-Zc:preprocessor-"}) {
+        const auto native = run("int fixture_value(){return 7;}\n", "frost-null-dereference", "--analyze-unit",
+                                Json::array(), {"/WX", option}, 1);
+        EXPECT_EQ(native.stringAt("status"), "invalid-input");
+        const auto* diagnostics = native.find("diagnostics");
+        ASSERT_NE(diagnostics, nullptr);
+        ASSERT_EQ(diagnostics->items().size(), 1U);
+        EXPECT_EQ(diagnostics->items().front().dump(),
+                  "\"MSVC's traditional preprocessor mode cannot be reproduced by Clang\"");
+    }
+}
+#endif
 TEST_F(Analyzer, ActualNativeSarifUsesSourceRulesAndStandardRegions) {
     auto report = run("int f(int* p){if(!p)return *p;return 0;}\n", "frost-null-dereference", "--sarif");
     ASSERT_TRUE(frost::lang::validateSarifSchema(report));
