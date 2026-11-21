@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // LUA-12 protocol contracts. Authored sources; no framework execution is implied.
 #include "frost/run/lua_framework_parsers.hpp"
+#include "frost/io/path.hpp"
 #include "frost/run/run_manager.hpp"
 
 #include <gtest/gtest.h>
@@ -48,7 +49,9 @@ TEST(LuaFramework, PlannerKeepsActualInterpreterArgumentsAndModuleEnvironment) {
     EXPECT_EQ(planned->interpreterArguments.back(), "--");
     auto launch = launchPlanFor(*planned);
     ASSERT_TRUE(launch);
-    EXPECT_EQ(launch->program, c.program);
+    const auto nativeProgram = io::normalizePath(c.program);
+    ASSERT_TRUE(nativeProgram);
+    EXPECT_EQ(launch->program, *nativeProgram);
     EXPECT_NE(std::ranges::find(launch->arguments, c.target), launch->arguments.end());
 }
 TEST(LuaFramework, BustedSelectionEscapesLuaPatternsAndDisablesRuntimeSwitch) {

@@ -27,7 +27,9 @@ TEST(VisualStudioImport, LocalLaunchPreservesExactArgvEnvironmentAndCollisionFre
     EXPECT_TRUE(result->skipped.empty());
     const auto& config = result->configurations.front();
     EXPECT_NE(config.id, existing.id);
-    EXPECT_EQ(config.program, io::joinPath(root, "bin/game").value());
+    const auto expectedProgram = io::normalizePath(root + "/bin/game");
+    ASSERT_TRUE(expectedProgram);
+    EXPECT_EQ(config.program, *expectedProgram);
     EXPECT_EQ(config.arguments, (std::vector<std::string>{"--name", "two words", "$(never-executed)", ""}));
     EXPECT_EQ(config.environment[0], (EnvironmentEntry{"MODE", "debug"}));
     EXPECT_EQ(config.environment[1], (EnvironmentEntry{"OLD", std::nullopt}));

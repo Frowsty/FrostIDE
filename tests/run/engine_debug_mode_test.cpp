@@ -29,7 +29,9 @@ TEST(EngineDebugMode, ExplicitMixedIntentRequiresVersionFourWhileLuaKeepsVersion
     EXPECT_EQ(mixed->integerAt("version"), 4);
     auto downgraded = *mixed;
     downgraded.set("version", 3);
-    EXPECT_EQ(parseRunConfigurations(downgraded.dump()).error().code(), ErrorCode::Corrupt);
+    const auto rejected = parseRunConfigurations(downgraded.dump());
+    ASSERT_FALSE(rejected);
+    EXPECT_EQ(rejected.error().code(), ErrorCode::Corrupt);
     auto parsed = parseRunConfigurations(text);
     ASSERT_TRUE(parsed);
     ASSERT_EQ(parsed->size(), 1u);
@@ -45,13 +47,19 @@ TEST(EngineDebugMode, InvalidOrNonEngineDebugModeIsRefusedAndFutureVersionStillU
     c = config();
     c.engineDebugMode = static_cast<EngineDebugMode>(255);
     EXPECT_FALSE(validateRunConfiguration(c));
-    EXPECT_EQ(parseRunConfigurations(R"({"version":5,"configurations":[]})").error().code(), ErrorCode::Unsupported);
     auto mixed = rpc::parseJson(serializeRunConfigurations(std::vector<RunConfiguration>{config()}));
     ASSERT_TRUE(mixed);
+    auto future = *mixed;
+    future.set("version", kRunConfigurationsVersion + 1);
+    const auto unsupported = parseRunConfigurations(future.dump());
+    ASSERT_FALSE(unsupported);
+    EXPECT_EQ(unsupported.error().code(), ErrorCode::Unsupported);
     auto entries = mixed->find("configurations")->items();
     entries.front().set("engineDebugMode", "unknown");
     mixed->set("configurations", rpc::Json::array(entries));
-    EXPECT_EQ(parseRunConfigurations(mixed->dump()).error().code(), ErrorCode::Corrupt);
+    const auto invalid = parseRunConfigurations(mixed->dump());
+    ASSERT_FALSE(invalid);
+    EXPECT_EQ(invalid.error().code(), ErrorCode::Corrupt);
 }
 } // namespace
 } // namespace frost::run
