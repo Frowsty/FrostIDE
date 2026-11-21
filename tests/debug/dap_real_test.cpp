@@ -250,6 +250,20 @@ protected:
         ASSERT_EQ(m_session->state(), DebugState::Running);
     }
 
+    testing::AssertionResult continueAndObserveSpin() {
+        auto mark = eval("g_report_resume = 1");
+        if (!mark)
+            return testing::AssertionFailure() << mark.error().describe();
+        auto resume = m_session->continueRun();
+        if (!resume)
+            return testing::AssertionFailure() << resume.error().describe();
+        // Running is set optimistically. Wait for the inferior to execute after
+        // the continue, including on Windows after its break-in thread.
+        if (!waitOutput("resumed=1"))
+            return testing::AssertionFailure() << "The inferior did not report execution after continue";
+        return testing::AssertionSuccess();
+    }
+
     // Attaches to `pid` as the workbench does (workbench_run.cpp, Attach to Process).
     void attach(std::int64_t pid, std::vector<BreakpointLine> lines = {}) {
         DebugSessionOptions options = lldbDapSessionOptions(DebugTargetMode::Attach);
@@ -1476,11 +1490,7 @@ TEST_F(DapReal, PauseThenContinueThenPauseAgain) {
     launchSpinning();
     ASSERT_TRUE(m_session->pause());
     ASSERT_TRUE(waitStop(1));
-    ASSERT_TRUE(eval("g_report_resume = 1")) << report();
-    ASSERT_TRUE(m_session->continueRun());
-    // Running is also set optimistically by continueRun. Require the inferior to
-    // execute between the two pauses, including on Windows after its break-in thread.
-    ASSERT_TRUE(waitOutput("resumed=1")) << report();
+    ASSERT_TRUE(continueAndObserveSpin()) << report();
     ASSERT_TRUE(m_session->pause());
     const auto stop = waitStop(2);
     ASSERT_TRUE(stop);
@@ -1517,10 +1527,12 @@ TEST_F(DapReal, ExplicitPidBoundTerminationAfterRealPauseAndContinueEndsTheObser
     ASSERT_TRUE(waitStop(1)) << report();
     EXPECT_EQ(m_session->state(), DebugState::Stopped);
     EXPECT_EQ(m_session->processId(), pid);
-    ASSERT_TRUE(m_session->continueRun()) << report();
-    ASSERT_TRUE(test::waitUntil([&] { return m_session->state() == DebugState::Running; }, kWait)) << report();
+    ASSERT_TRUE(continueAndObserveSpin()) << report();
     ASSERT_TRUE(m_session->pause()) << report();
-    ASSERT_TRUE(waitStop(2)) << report();
+    const auto secondStop = waitStop(2);
+    ASSERT_TRUE(secondStop) << report();
+    EXPECT_EQ(secondStop->reason, "pause") << report();
+    EXPECT_EQ(m_session->processId(), pid);
     ASSERT_TRUE(m_session->canTerminateDebuggee()) << report();
     ASSERT_TRUE(m_session->terminateDebuggee(pid)) << report();
     const auto outcome = waitEnd();
