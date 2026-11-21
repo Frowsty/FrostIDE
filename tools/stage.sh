@@ -131,10 +131,9 @@ for name in bin/lldb-dap bin/lldb-argdumper; do
 done
 liblldb=("$sdk_root/$lldb_rel"/lib/liblldb.so*)
 [[ -e "${liblldb[0]}" ]] || fail "missing bundled lldb-dap file: $sdk_root/$lldb_rel/lib/liblldb.so"
-for name in bin/lua-language-server main.lua LICENSE; do
-    [[ -f "$sdk_root/$luals_rel/$name" ]] ||
-        fail "missing bundled LuaLS file: $sdk_root/$luals_rel/$name (tools/bootstrap-wsl.sh)"
-done
+luals_args=(--repo "$REPO" --sdk "$sdk_root" --platform linux)
+python3 -I "$REPO/tools/stage_luals.py" "${luals_args[@]}" ||
+    fail "cannot verify bundled LuaLS archive (tools/bootstrap-wsl.sh --only luals)"
 
 for name in lua54/lua lua54/liblua54.so licenses/Lua/lua.h; do
     [[ -f "$bin_dir/$name" ]] || fail "missing standalone Lua runtime: $name"
@@ -191,16 +190,16 @@ cp -R -- "$clang_lib" "$dest/$llvm_rel/lib/" || fail "cannot copy the clangd res
 cp -- "$sdk_root/$lldb_rel/bin/lldb-dap" "$sdk_root/$lldb_rel/bin/lldb-argdumper" "$dest/$lldb_rel/bin/" ||
     fail "cannot copy lldb-dap"
 cp -P -- "${liblldb[@]}" "$dest/$lldb_rel/lib/" || fail "cannot copy liblldb" # -P keeps the soname links.
-# LuaLS as installed, without the install marker or a log a run left behind (as stage.ps1 does).
-cp -R -- "$sdk_root/$luals_rel" "$dest/$luals_rel" || fail "cannot copy LuaLS"
-rm -rf -- "$dest/$luals_rel/.frost-installed" "$dest/$luals_rel/log"
-cp -- "$sdk_root/$luals_rel/LICENSE" "$dest/licenses/luals-LICENSE.txt"
+# Extract every vendor file from the pinned archive, independent of generated SDK files.
+python3 -I "$REPO/tools/stage_luals.py" "${luals_args[@]}" --destination "$dest/$luals_rel" ||
+    fail "cannot stage the pinned LuaLS archive"
+cp -- "$dest/$luals_rel/LICENSE" "$dest/licenses/luals-LICENSE.txt"
+[[ -x "$dest/$luals_rel/bin/lua-language-server" ]] || fail "the staged LuaLS is not executable"
 
 # 6. The checks: every staged executable is its source's bytes, and frost's libraries resolve.
 for pair in "frost_held_read:$bin_dir/frost_held_read" "frostide-mcp:$bin_dir/frostide-mcp" "frost-snapshot-validator:$bin_dir/frost-snapshot-validator" "frost:$bin_dir/frost" "crashpad_handler:$bin_dir/crashpad_handler" "frost-extension-sandbox:$bin_dir/frost-extension-sandbox" \
             "$llvm_rel/bin/llvm-cov:$sdk_root/$llvm_rel/bin/llvm-cov" "$llvm_rel/bin/llvm-profdata:$sdk_root/$llvm_rel/bin/llvm-profdata" \
-            "$llvm_rel/bin/clang-scan-deps:$scan_deps" "$llvm_rel/bin/clangd:$clangd" "$lldb_rel/bin/lldb-dap:$sdk_root/$lldb_rel/bin/lldb-dap" \
-            "$luals_rel/bin/lua-language-server:$sdk_root/$luals_rel/bin/lua-language-server"; do
+            "$llvm_rel/bin/clang-scan-deps:$scan_deps" "$llvm_rel/bin/clangd:$clangd" "$lldb_rel/bin/lldb-dap:$sdk_root/$lldb_rel/bin/lldb-dap"; do
     staged="$dest/${pair%%:*}"
     [[ -x "$staged" ]] || fail "the staged $staged is missing or not executable"
     cmp -s -- "$staged" "${pair#*:}" || fail "the staged ${pair%%:*} differs from ${pair#*:}"

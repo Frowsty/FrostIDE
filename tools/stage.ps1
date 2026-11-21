@@ -208,7 +208,11 @@ $lldbRel = "lldb-$($lock.windows.lldb.version)"
 $lldbSourceDir = Join-Path $SdkRoot "$lldbRel\bin"
 $lldbFiles = @('lldb-dap.exe', 'liblldb.dll', 'lldb-argdumper.exe')
 $lualsRel = "luals-$($lock.windows.luals.version)"
-$lualsSource = Join-Path $SdkRoot $lualsRel
+if (-not $Python) { $Python = Join-Path $SdkRoot 'py\Scripts\python.exe' }
+if (-not [System.IO.Path]::IsPathRooted($Python) -or -not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    Fail "no Python at $Python for staging (-Python)"
+}
+$lualsStage = Join-Path $PSScriptRoot 'stage_luals.py'
 if ($bundle) {
     if (-not (Test-Path -LiteralPath $scanDepsSource -PathType Leaf)) { Fail "missing bundled clang-scan-deps: $scanDepsSource" }
     foreach ($tool in $coverageTools) {
@@ -223,10 +227,8 @@ if ($bundle) {
         $path = Join-Path $lldbSourceDir $lldbFile
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "missing bundled lldb-dap file: $path" }
     }
-    foreach ($name in @('bin\lua-language-server.exe', 'main.lua', 'LICENSE')) {
-        $path = Join-Path $lualsSource $name
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "missing bundled LuaLS file: $path (tools\bootstrap.ps1 -Only luals)" }
-    }
+    & $Python -I $lualsStage --repo $repoRoot --sdk $SdkRoot --platform windows
+    if ($LASTEXITCODE -ne 0) { Fail "cannot verify bundled LuaLS archive (tools\bootstrap.ps1 -Only luals)" }
     if (-not $ManagedServerDir -or -not (Test-Path -LiteralPath (Join-Path $ManagedServerDir 'FrostRoslynHost.dll') -PathType Leaf)) {
         Fail "missing bundled managed language server: no FrostRoslynHost.dll in '$ManagedServerDir'"
     }
@@ -236,10 +238,6 @@ if ($bundle) {
 }
 
 # The symbol archive goes next to the stage (FND-13), written by tools/symbolize.py.
-if (-not $Python) { $Python = Join-Path $SdkRoot 'py\Scripts\python.exe' }
-if (-not [System.IO.Path]::IsPathRooted($Python) -or -not (Test-Path -LiteralPath $Python -PathType Leaf)) {
-    Fail "no Python at $Python for the symbol archive (-Python)"
-}
 $symbolArchive = $Destination.TrimEnd('\', '/') + '-symbols.zip'
 
 # The PDB identities, before the destination is touched: the staged IDE images are
@@ -336,15 +334,10 @@ if ($bundle) {
     foreach ($lldbFile in $lldbFiles) {
         Copy-Item -LiteralPath (Join-Path $lldbSourceDir $lldbFile) -Destination $lldbBinDest -Force
     }
-    # LuaLS (ADR 0079) as installed, without the install marker or a log a run left behind. The
-    # locator looks for <exe dir>\luals-<version>\bin first, and FrostIDE points LuaLS's own log and
-    # meta output under the user profile, so the staged folder stays read-only at run time.
+    # Preserve every vendor file in the pinned archive, independent of generated SDK runtime files.
     $lualsDest = Join-Path $Destination $lualsRel
-    Copy-Item -LiteralPath $lualsSource -Destination $lualsDest -Recurse -Force
-    foreach ($generated in @('.frost-installed', 'log')) {
-        $path = Join-Path $lualsDest $generated
-        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
-    }
+    & $Python -I $lualsStage --repo $repoRoot --sdk $SdkRoot --platform windows --destination $lualsDest
+    if ($LASTEXITCODE -ne 0) { Fail "cannot stage the pinned LuaLS archive" }
     $managedDest = Join-Path $Destination 'roslyn'
     New-Item -ItemType Directory -Force -Path $managedDest | Out-Null
     Copy-Item -Path (Join-Path $ManagedServerDir '*') -Destination $managedDest -Recurse -Force
@@ -396,7 +389,7 @@ foreach ($file in @(Get-ChildItem -LiteralPath $thirdParty -Recurse -File -Filte
     Copy-Item -LiteralPath $file.FullName -Destination $target
 }
 # LuaLS's MIT licence beside FrostIDE's notices too (it also stays in the LuaLS folder).
-if ($bundle) { Copy-Item -LiteralPath (Join-Path $lualsSource 'LICENSE') -Destination (Join-Path $licenses 'luals-LICENSE.txt') }
+if ($bundle) { Copy-Item -LiteralPath (Join-Path $lualsDest 'LICENSE') -Destination (Join-Path $licenses 'luals-LICENSE.txt') }
 
 # 6. The checks.
 $plugin = if ($Config -eq 'Debug') { 'platforms\qwindowsd.dll' } else { 'platforms\qwindows.dll' }

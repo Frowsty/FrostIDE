@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import hashlib
 import json
 import ntpath
 import os
@@ -193,6 +194,10 @@ exit /b 0
 
 @unittest.skipUnless(sys.platform == "win32", "Windows PowerShell scripts")
 class StageScriptTest(TempDirTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.stage_script = TOOLS / "stage.ps1"
+
     def _fake_build(self) -> Path:
         """A build tree with the files the Debug frost target leaves in src/app/Debug."""
         build = self.tmp / "build"
@@ -240,13 +245,14 @@ class StageScriptTest(TempDirTestCase):
     def _stage(self, build: Path, destination: Path, *extra: str) -> subprocess.CompletedProcess:
         deploy = self.tmp / "windeployqt.cmd"
         deploy.write_text(_FAKE_WINDEPLOYQT, encoding="ascii", newline="\r\n")
-        return run_powershell(TOOLS / "stage.ps1", "-Destination", str(destination), "-Config", "Debug",
+        return run_powershell(self.stage_script, "-Destination", str(destination), "-Config", "Debug",
                               "-BuildDir", str(build), "-WinDeployQt", str(deploy), "-Python", sys.executable,
                               "-SkipBuild", *extra)
 
     def _fake_tools(self) -> list[str]:
         """An SDK root and managed folders holding every bundled tool; the -BundleTools arguments."""
-        lock = json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(encoding="utf-8"))["windows"]
+        lock_document = json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(encoding="utf-8"))
+        lock = lock_document["windows"]
         sdk = self.tmp / "sdk"
         llvm = f"llvm-{lock['llvm']['version']}"
         llvm_major = lock["llvm"]["version"].split(".")[0]
@@ -260,10 +266,39 @@ class StageScriptTest(TempDirTestCase):
                  f"luals-{lock['luals']['version']}/LICENSE",
                  f"luals-{lock['luals']['version']}/meta/template/basic.lua",
                  f"luals-{lock['luals']['version']}/.frost-installed",
-                 f"luals-{lock['luals']['version']}/log/service.log"]
+                 f"luals-{lock['luals']['version']}/log/service.log",
+                 f"luals-{lock['luals']['version']}/meta/Lua 5.4 en-us utf8/generated.lua"]
         for name in files:
             (sdk / name).parent.mkdir(parents=True, exist_ok=True)
             (sdk / name).write_bytes(b"fixture " + name.encode())
+        pin = lock["luals"]
+        lua_root = sdk / f"luals-{pin['version']}"
+        archive = sdk / "_downloads" / pin["file"]
+        archive.parent.mkdir(exist_ok=True)
+        with zipfile.ZipFile(archive, "w") as bundle:
+            for name in ("bin/lua-language-server.exe", "main.lua", "LICENSE", "meta/template/basic.lua"):
+                bundle.write(lua_root / name, name)
+        pin["sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (lua_root / "main.lua").write_bytes(b"locally modified entrypoint")
+
+        # Exercise the real staging script with a lock whose LuaLS digest names the fixture ZIP.
+        repository = self.tmp / "repository"
+        tools = repository / "tools"
+        if not tools.exists():
+            tools.mkdir(parents=True)
+            for name in ("stage.ps1", "stage_luals.py", "symbolize.py"):
+                shutil.copyfile(TOOLS / name, tools / name)
+            for name in ("LICENSE", "NOTICE"):
+                shutil.copyfile(TOOLS.parent / name, repository / name)
+            vendor = repository / "third_party/tree-sitter"
+            vendor.mkdir(parents=True)
+            shutil.copyfile(TOOLS.parent / "third_party/tree-sitter/LICENSE", vendor / "LICENSE")
+            package = "integrations/unity/com.frostide.editor"
+            shutil.copytree(TOOLS.parent / package, repository / package)
+            (repository / "sdk").mkdir()
+        (repository / "sdk/sdk.lock.json").write_text(json.dumps(lock_document), encoding="utf-8")
+        self.stage_script = tools / "stage.ps1"
+
         managed, debug = self.tmp / "managed-server", self.tmp / "managed-debug"
         managed.mkdir(exist_ok=True)
         (managed / "FrostRoslynHost.dll").write_bytes(b"MZ-managed-host")
@@ -359,6 +394,10 @@ class StageScriptTest(TempDirTestCase):
             self.assertTrue((destination / name).is_file(), name)
         self.assertFalse((destination / luals / ".frost-installed").exists(), "the SDK's install marker")
         self.assertFalse((destination / luals / "log").exists(), "a log a run left in the SDK")
+        self.assertFalse((destination / luals / "meta/Lua 5.4 en-us utf8").exists(), "SDK-generated meta")
+        self.assertEqual((destination / luals / "main.lua").read_bytes(), f"fixture {luals}/main.lua".encode())
+        self.assertEqual((destination / "licenses/luals-LICENSE.txt").read_bytes(),
+                         (destination / luals / "LICENSE").read_bytes())
 
     def test_the_managed_folders_default_to_their_environment_variables(self) -> None:
         build = self._fake_build()
@@ -371,7 +410,7 @@ class StageScriptTest(TempDirTestCase):
         destination = self.tmp / "from-env"
         result = subprocess.run(
             [_powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-             str(TOOLS / "stage.ps1"), "-Destination", str(destination), "-Config", "Debug", "-BuildDir", str(build),
+             str(self.stage_script), "-Destination", str(destination), "-Config", "Debug", "-BuildDir", str(build),
              "-WinDeployQt", str(deploy), "-Python", sys.executable, "-SkipBuild", *arguments],
             capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
             env=clean_env(FROST_MANAGED_SERVER_DIR=str(self.tmp / "managed-server"),
@@ -387,7 +426,6 @@ class StageScriptTest(TempDirTestCase):
                  "clang-scan-deps": f"sdk/llvm-{lock['llvm']['version']}/bin/clang-scan-deps.exe",
                  "LLVM coverage tool": f"sdk/llvm-{lock['llvm']['version']}/bin/llvm-cov.exe",
                  "lldb-dap": f"sdk/lldb-{lock['lldb']['version']}/bin/liblldb.dll",
-                 "LuaLS": f"sdk/luals-{lock['luals']['version']}/bin/lua-language-server.exe",
                  "managed language server": "managed-server/FrostRoslynHost.dll",
                  "managed debugger": "managed-debug/adapter/netcoredbg.exe"}
         for tool, missing in cases.items():
@@ -400,6 +438,16 @@ class StageScriptTest(TempDirTestCase):
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(f"stage: FAIL missing bundled {tool}", result.stdout)
                 self.assertFalse(destination.exists(), "nothing is staged without the tool")
+
+        build = self._fake_build()
+        arguments = self._fake_tools()
+        (self.tmp / "sdk/_downloads" / lock["luals"]["file"]).unlink()
+        destination = self.tmp / "missing-luals"
+        result = self._stage(build, destination, *arguments)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("cannot verify bundled LuaLS archive", result.stdout)
+        self.assertIn("missing bundled LuaLS archive", result.stderr)
+        self.assertFalse(destination.exists())
 
         build = self._fake_build()
         arguments = self._fake_tools()
@@ -500,11 +548,11 @@ class StageScriptTest(TempDirTestCase):
         # An input held open without sharing makes Copy-Item fail with a terminating error after the
         # destination exists (steps 3 and 3b; the preflight only tests that these files exist, while
         # the PDB check reads the images, so none of them is locked here). The trap must clean up.
-        luals = "sdk/luals-" + json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(
-            encoding="utf-8"))["windows"]["luals"]["version"] + "/main.lua"
+        llvm = json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(encoding="utf-8"))["windows"]["llvm"]
+        clangd = f"sdk/llvm-{llvm['version']}/bin/clangd.exe"
         for locked, existed in (("build/src/app/Debug/project-host/ProjectHostVsProbe.exe.config", False),
                                 ("build/src/app/Debug/resources/themes/dark.json", False),
-                                (luals, False),
+                                (clangd, False),
                                 ("build/src/app/Debug/resources/themes/dark.json", True)):
             with self.subTest(locked=locked, existing_destination=existed):
                 build = self._fake_build()

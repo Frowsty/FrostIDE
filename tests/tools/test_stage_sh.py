@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +33,22 @@ LUALS = f"luals-{_LOCK['luals']['version']}"
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "tools/stage.sh stages Linux builds")
 class StageShTest(TempDirTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.stage_repository = self.tmp / "repository"
+        tools = self.stage_repository / "tools"
+        tools.mkdir(parents=True)
+        for name in ("stage.sh", "stage_linux_qt.py", "package_notices.py", "stage_luals.py", "install_desktop.py",
+                     "licensecheck.py", "asset_fetch.py", "frost_lint.py"):
+            shutil.copyfile(TOOLS / name, tools / name)
+        for name in ("LICENSE", "NOTICE"):
+            shutil.copyfile(TOOLS.parent / name, self.stage_repository / name)
+        vendor = self.stage_repository / "third_party/tree-sitter"
+        vendor.mkdir(parents=True)
+        shutil.copyfile(TOOLS.parent / "third_party/tree-sitter/LICENSE", vendor / "LICENSE")
+        (self.stage_repository / "integrations").symlink_to(TOOLS.parent / "integrations", target_is_directory=True)
+        (self.stage_repository / "sdk").mkdir()
+
     def _executable(self, path: Path, content: bytes) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
@@ -65,13 +82,24 @@ class StageShTest(TempDirTestCase):
         for name in (f"{LLVM}/bin/llvm-cov", f"{LLVM}/bin/llvm-profdata", f"{LLVM}/bin/clangd", f"{LLVM}/bin/clang-scan-deps", f"{LLDB}/bin/lldb-dap", f"{LLDB}/bin/lldb-argdumper",
                      f"{LUALS}/bin/lua-language-server"):
             self._executable(sdk / name, b"fixture " + name.encode())
-        for name in (f"{LLVM}/lib/clang/23/include/stddef.h", f"{LLDB}/lib/liblldb.so.23.1.4", f"{LUALS}/main.lua",
-                     f"{LUALS}/LICENSE", f"{LUALS}/script/files.lua", f"{LUALS}/.frost-installed",
-                     f"{LUALS}/log/service.log"):
+        vendor_members = ("bin/lua-language-server", "LICENSE", "main.lua", "script/files.lua", "meta/template/math.lua")
+        for name in (f"{LLVM}/lib/clang/23/include/stddef.h", f"{LLDB}/lib/liblldb.so.23.1.4",
+                     *(f"{LUALS}/{name}" for name in vendor_members[1:]), f"{LUALS}/.frost-installed",
+                     f"{LUALS}/log/service.log", f"{LUALS}/meta/Lua 5.4 en-us utf8/generated.lua"):
             (sdk / name).parent.mkdir(parents=True, exist_ok=True)
             (sdk / name).write_bytes(b"fixture " + name.encode())
         (sdk / LLDB / "lib" / "liblldb.so").symlink_to("liblldb.so.23.1.4")
-        qt_version = json.loads((TOOLS.parent / 'sdk/sdk.lock.json').read_text())['qt']['version']
+        lock = json.loads((TOOLS.parent / "sdk/sdk.lock.json").read_text(encoding="utf-8"))
+        pin = lock["linux"]["luals"]
+        archive = sdk / "_downloads" / pin["file"]
+        archive.parent.mkdir()
+        with tarfile.open(archive, "w:gz") as bundle:
+            for name in vendor_members:
+                bundle.add(sdk / LUALS / name, arcname=name)
+        pin["sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (self.stage_repository / "sdk/sdk.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+        (sdk / LUALS / "script/files.lua").write_bytes(b"modified installed script")
+        qt_version = lock["qt"]["version"]
         for name in ('lib/libQt6Core.so.6', 'plugins/platforms/libqxcb.so', 'plugins/platforms/libqoffscreen.so', 'plugins/tls/libqopensslbackend.so'):
             path = sdk / 'qt' / qt_version / 'gcc_64' / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +109,7 @@ class StageShTest(TempDirTestCase):
     def _stage(self, build: Path, sdk: Path, destination: Path, *extra: str) -> subprocess.CompletedProcess:
         env = clean_env()
         env.pop("FROST_SDK", None)
-        return subprocess.run(["bash", str(TOOLS / "stage.sh"), "--dest", str(destination), "--config", "Debug",
+        return subprocess.run(["bash", str(self.stage_repository / "tools/stage.sh"), "--dest", str(destination), "--config", "Debug",
                                "--build-dir", str(build), "--sdk-root", str(sdk), "--skip-build", *extra],
                               capture_output=True, text=True, env=env, check=False)
 
@@ -114,6 +142,13 @@ class StageShTest(TempDirTestCase):
         self.assertTrue((destination / LLDB / "lib" / "liblldb.so").is_symlink(), "the soname link is kept")
         self.assertFalse((destination / LUALS / ".frost-installed").exists(), "the SDK's install marker")
         self.assertFalse((destination / LUALS / "log").exists(), "a log a run left in the SDK")
+        self.assertFalse((destination / LUALS / "meta/Lua 5.4 en-us utf8").exists(), "SDK-generated meta")
+        self.assertEqual((destination / LUALS / "meta/template/math.lua").read_bytes(),
+                         (sdk / LUALS / "meta/template/math.lua").read_bytes())
+        self.assertEqual((destination / LUALS / "script/files.lua").read_bytes(),
+                         f"fixture {LUALS}/script/files.lua".encode())
+        self.assertEqual((destination / "licenses/luals-LICENSE.txt").read_bytes(),
+                         (destination / LUALS / "LICENSE").read_bytes())
 
     def test_unverified_icu_notice_fails_before_staging(self) -> None:
         build, sdk = self._fake_build(), self._fake_sdk()
@@ -155,7 +190,7 @@ class StageShTest(TempDirTestCase):
 
     def test_a_missing_bundled_tool_fails_before_staging(self) -> None:
         cases = {"clang-scan-deps": f"{LLVM}/bin/clang-scan-deps", "LLVM coverage tool": f"{LLVM}/bin/llvm-cov", "clangd": f"{LLVM}/bin/clangd", "clangd resource directory": f"{LLVM}/lib/clang",
-                 "lldb-dap file": f"{LLDB}/bin/lldb-dap", "LuaLS file": f"{LUALS}/bin/lua-language-server"}
+                 "lldb-dap file": f"{LLDB}/bin/lldb-dap"}
         for tool, missing in cases.items():
             with self.subTest(tool=tool), tempfile.TemporaryDirectory(dir=self.tmp) as scratch:
                 root = Path(scratch)
@@ -167,6 +202,22 @@ class StageShTest(TempDirTestCase):
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(f"stage: FAIL missing bundled {tool}", result.stdout)
                 self.assertFalse(destination.exists(), "nothing is staged without the tool")
+
+    def test_missing_or_changed_luals_archive_fails_before_staging(self) -> None:
+        build, sdk = self._fake_build(), self._fake_sdk()
+        archive = sdk / "_downloads" / _LOCK["luals"]["file"]
+        archive.write_bytes(archive.read_bytes() + b"changed archive")
+        destination = self.tmp / "changed-luals"
+        result = self._stage(build, sdk, destination)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("archive SHA-256 does not match", result.stderr)
+        self.assertFalse(destination.exists())
+
+        archive.unlink()
+        result = self._stage(build, sdk, destination)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("missing bundled LuaLS archive", result.stderr)
+        self.assertFalse(destination.exists())
 
     def test_no_sdk_root_is_guessed(self) -> None:
         build = self._fake_build()
@@ -180,35 +231,37 @@ class StageShTest(TempDirTestCase):
         self.assertFalse((self.tmp / "x").exists())
 
     def test_a_late_failure_removes_the_partial_stage(self) -> None:
-        # One of LuaLS's scripts is unreadable, so the copy fails part-way through step 5, after
+        # A clangd resource is unreadable, so the copy fails part-way through step 5, after
         # FrostIDE's own files are already in the destination.
         build, sdk = self._fake_build(), self._fake_sdk()
-        (sdk / LUALS / "script" / "files.lua").chmod(0o000)
+        resource = sdk / LLVM / "lib/clang/23/include/stddef.h"
+        resource.chmod(0o000)
         destination = self.tmp / "late"
         try:
             result = self._stage(build, sdk, destination)
         finally:
-            (sdk / LUALS / "script" / "files.lua").chmod(0o644)
+            resource.chmod(0o644)
         if os.geteuid() == 0:
             self.skipTest("root reads unreadable files; the copy cannot fail this way")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("cannot copy LuaLS", result.stdout)
+        self.assertIn("cannot copy the clangd resource directory", result.stdout)
         self.assertIn(f"removed the partial {destination}", result.stdout)
         self.assertFalse(destination.exists(), "no partial stage is left behind")
 
     def test_a_late_failure_empties_an_existing_empty_destination(self) -> None:
         build, sdk = self._fake_build(), self._fake_sdk()
-        (sdk / LUALS / "script" / "files.lua").chmod(0o000)
+        resource = sdk / LLVM / "lib/clang/23/include/stddef.h"
+        resource.chmod(0o000)
         destination = self.tmp / "given"
         destination.mkdir()
         try:
             result = self._stage(build, sdk, destination)
         finally:
-            (sdk / LUALS / "script" / "files.lua").chmod(0o644)
+            resource.chmod(0o644)
         if os.geteuid() == 0:
             self.skipTest("root reads unreadable files; the copy cannot fail this way")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("cannot copy LuaLS", result.stdout)
+        self.assertIn("cannot copy the clangd resource directory", result.stdout)
         self.assertTrue(destination.is_dir(), "a folder the caller made stays")
         self.assertEqual(list(destination.iterdir()), [], "but holds nothing of the failed stage")
 
