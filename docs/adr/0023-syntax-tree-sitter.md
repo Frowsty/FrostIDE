@@ -38,7 +38,10 @@ parsed incrementally from piece-tree snapshots within 2 ms per edit, off above 5
 3. **Build.** `tree_sitter_runtime` is `lib/src/lib.c` in one C11 translation unit (`src/syntax/src/c/
    frost_tree_sitter.c`) with upstream diagnostics suppressed around the include; our C compiles with `-Werror`.
    Each grammar is its own static library with warnings off, `TREE_SITTER_HIDE_SYMBOLS` (no dllexport) and
-   `TREE_SITTER_REUSE_ALLOCATOR`. WebAssembly is off.
+   `TREE_SITTER_REUSE_ALLOCATOR`. The build predeclares each external scanner constructor with the runtime's
+   `void *(void)` prototype before compiling the scanner. This gives legacy C11 definitions spelled
+   `create()` the same function type as the generated parser and leaves all upstream files intact.
+   WebAssembly is off.
 4. **Unicode (D2).** `lib/src/unicode.h` needs ICU headers, whose licence is not on the allowlist, so they are not
    vendored: `frost_ts_unicode.h` defines that header's guard and supplies `ts_decode_utf8` (Unicode Table 3-7,
    maximal-subpart errors) and the UTF-16 decoders, written for FrostIDE.
