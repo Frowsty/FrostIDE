@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <format>
 #include <limits>
 #include <optional>
@@ -207,6 +208,40 @@ Result<rpc::Json> ModelStore::evaluate(std::string_view text, FrameContext frame
     return result;
 }
 
+namespace {
+bool hasCanonicalVisualizer(const ComPtr<IDataModelManager>& manager, IDebugHostType* type) {
+    ComPtr<IDataModelManager2> manager2;
+    ComPtr<IModelObject> model;
+    return type && manager && SUCCEEDED(manager.query(manager2)) &&
+           SUCCEEDED(manager2->GetModelForType(type, model.put(), nullptr, nullptr)) && model;
+}
+
+// MSVC's tuple Natvis has an address view for interactive editing. When the debugger
+// supplies a pointer to the declared element type, take one level off for display.
+void projectTupleElement(IDebugHostType* parent, std::string_view name, ComPtr<IModelObject>& child) {
+    if (name.size() < 3 || name.front() != '[' || name.back() != ']')
+        return;
+    ULONG64 ordinal = 0;
+    const auto end = name.data() + name.size() - 1;
+    const auto parsed = std::from_chars(name.data() + 1, end, ordinal);
+    if (parsed.ec != std::errc{} || parsed.ptr != end)
+        return;
+    ComPtr<IDebugHostSymbol> argument;
+    ComPtr<IDebugHostType> argumentType, childType, pointedTo;
+    TypeKind kind{};
+    bool same = false;
+    if (FAILED(parent->GetGenericArgumentAt(ordinal, argument.put())) || !argument ||
+        FAILED(argument.query(argumentType)) || FAILED(child->GetTypeInfo(childType.put())) || !childType ||
+        FAILED(childType->GetTypeKind(&kind)) || kind != TypePointer ||
+        FAILED(childType->GetBaseType(pointedTo.put())) || !pointedTo ||
+        FAILED(pointedTo->CompareAgainst(argumentType.get(), 0, &same)) || !same)
+        return;
+    ComPtr<IModelObject> value;
+    if (SUCCEEDED(child->Dereference(value.put())) && value)
+        child = std::move(value);
+}
+} // namespace
+
 Result<rpc::Json> ModelStore::children(std::int64_t reference, std::size_t start, std::size_t count,
                                        std::string_view filter, bool raw) {
     if (m_basic.contains(reference))
@@ -232,12 +267,74 @@ Result<rpc::Json> ModelStore::children(std::int64_t reference, std::size_t start
         variables.push(std::move(*item));
         return {};
     };
-    bool anyNamed = false;
+    constexpr std::size_t maxVisits = 65536 + 4096;
     std::size_t visited = 0;
-    if (filter != "indexed") {
+    const auto wantAnother = [&] { return variables.size() < limit && visited < maxVisits; };
+    const auto enumerateRaw = [&](IModelObject* source) -> Result<void> {
+        ComPtr<IRawEnumerator> fields;
+        if (FAILED(source->EnumerateRawValues(SymbolField, 0, fields.put())) || !fields)
+            return {};
+        while (wantAnother()) {
+            ++visited;
+            Bstr name;
+            ComPtr<IModelObject> child;
+            SymbolKind kind{};
+            const HRESULT status = fields->GetNext(name.put(), &kind, child.put());
+            if (status == E_BOUNDS)
+                break;
+            if (FAILED(status) || !child)
+                return std::unexpected(engineError("enumerate native fields", status));
+            auto converted = utf8(name.view());
+            if (!converted)
+                return std::unexpected(std::move(converted.error()));
+            if (auto added = add(std::move(*converted), std::move(child), {}); !added)
+                return added;
+        }
+        return {};
+    };
+    const auto enumerateIndexed = [&](IModelObject* source, IIterableConcept* iterable) -> Result<void> {
+        ULONG64 dimensions = 0;
+        HRESULT status = iterable->GetDefaultIndexDimensionality(source, &dimensions);
+        if (FAILED(status) || dimensions > 1)
+            return fail(ErrorCode::Unsupported, "Natvis multidimensional indexing is unavailable in this slice");
+        ComPtr<IModelIterator> iterator;
+        status = iterable->GetIterator(source, iterator.put());
+        if (FAILED(status) || !iterator)
+            return std::unexpected(engineError("Natvis iterator", status));
+        for (std::size_t index = 0; wantAnother(); ++index) {
+            ++visited;
+            ComPtr<IModelObject> child;
+            ComPtr<IModelObject> indexObject;
+            ComPtr<IKeyStore> metadata;
+            status =
+                iterator->GetNext(child.put(), dimensions, dimensions ? indexObject.put() : nullptr, metadata.put());
+            if (status == E_BOUNDS)
+                break;
+            if (FAILED(status) || !child)
+                return std::unexpected(engineError("Natvis iterator element", status));
+            std::string name = std::format("[{}]", index);
+            if (indexObject) {
+                if (auto indexText = display(indexObject.get(), nullptr); indexText)
+                    name = std::format("[{}]", *indexText);
+            }
+            if (auto added = add(std::move(name), std::move(child), std::move(metadata)); !added)
+                return added;
+        }
+        return {};
+    };
+    const auto enumerateProjected = [&](const auto& self, IModelObject* source, unsigned depth) -> Result<void> {
+        if (depth == 16)
+            return fail(ErrorCode::OutOfRange, "Natvis expanded item nesting exceeds budget");
+        ComPtr<IDebugHostType> type;
+        (void)source->GetTypeInfo(type.put());
+        Bstr typeName;
+        const bool tuple =
+            type && SUCCEEDED(type->GetName(typeName.put())) && typeName.view().starts_with(L"std::tuple<");
+        bool anyNamed = false;
         ComPtr<IKeyEnumerator> keys;
-        if (!raw && SUCCEEDED(parent->EnumerateKeyValues(keys.put())) && keys) {
-            while (variables.size() < limit && visited++ < 65536 + 4096) {
+        if (SUCCEEDED(source->EnumerateKeyValues(keys.put())) && keys) {
+            while (wantAnother()) {
+                ++visited;
                 Bstr name;
                 ComPtr<IModelObject> child;
                 ComPtr<IKeyStore> metadata;
@@ -249,70 +346,45 @@ Result<rpc::Json> ModelStore::children(std::int64_t reference, std::size_t start
                 ModelObjectKind kind{};
                 if (SUCCEEDED(child->GetKind(&kind)) && (kind == ObjectMethod || kind == ObjectNoValue))
                     continue;
+                // DbgEng models a Natvis ExpandedItem as a wrapper. Project its children in place.
+                if (name.view() == L"[+]" && metadata) {
+                    if (auto expanded = self(self, child.get(), depth + 1); !expanded)
+                        return expanded;
+                    continue;
+                }
                 anyNamed = true;
+                if (filter == "indexed")
+                    continue;
                 auto converted = utf8(name.view());
                 if (!converted)
                     return std::unexpected(std::move(converted.error()));
+                if (tuple)
+                    projectTupleElement(type.get(), *converted, child);
                 if (auto added = add(std::move(*converted), std::move(child), std::move(metadata)); !added)
-                    return std::unexpected(std::move(added.error()));
+                    return added;
             }
         }
-        // Unvisualized native objects expose their actual fields, not guessed offsets.
-        if (!anyNamed && variables.size() < limit) {
-            ComPtr<IRawEnumerator> fields;
-            if (SUCCEEDED(parent->EnumerateRawValues(SymbolField, 0, fields.put())) && fields) {
-                while (variables.size() < limit && visited++ < 65536 + 4096) {
-                    Bstr name;
-                    ComPtr<IModelObject> child;
-                    SymbolKind kind{};
-                    const HRESULT status = fields->GetNext(name.put(), &kind, child.put());
-                    if (status == E_BOUNDS)
-                        break;
-                    if (FAILED(status) || !child)
-                        return std::unexpected(engineError("enumerate native fields", status));
-                    auto converted = utf8(name.view());
-                    if (!converted)
-                        return std::unexpected(std::move(converted.error()));
-                    if (auto added = add(std::move(*converted), std::move(child), {}); !added)
-                        return std::unexpected(std::move(added.error()));
-                }
-            }
-        }
-    }
-    if (!raw && filter != "named" && variables.size() < limit) {
+        if (!wantAnother())
+            return {};
         ComPtr<IUnknown> iterableConcept;
-        if (SUCCEEDED(parent->GetConcept(__uuidof(IIterableConcept), iterableConcept.put(), nullptr)) &&
+        if (SUCCEEDED(source->GetConcept(__uuidof(IIterableConcept), iterableConcept.put(), nullptr)) &&
             iterableConcept) {
-            auto* iterable = static_cast<IIterableConcept*>(iterableConcept.get());
-            ULONG64 dimensions = 0;
-            HRESULT status = iterable->GetDefaultIndexDimensionality(parent, &dimensions);
-            if (FAILED(status) || dimensions > 1)
-                return fail(ErrorCode::Unsupported, "Natvis multidimensional indexing is unavailable in this slice");
-            ComPtr<IModelIterator> iterator;
-            status = iterable->GetIterator(parent, iterator.put());
-            if (FAILED(status))
-                return std::unexpected(engineError("Natvis iterator", status));
-            for (std::size_t index = 0; variables.size() < limit && visited++ < 65536 + 4096; ++index) {
-                ComPtr<IModelObject> child;
-                ComPtr<IModelObject> indexObject;
-                ComPtr<IKeyStore> metadata;
-                status = iterator->GetNext(child.put(), dimensions, dimensions ? indexObject.put() : nullptr,
-                                           metadata.put());
-                if (status == E_BOUNDS)
-                    break;
-                if (FAILED(status) || !child)
-                    return std::unexpected(engineError("Natvis iterator element", status));
-                std::string name = std::format("[{}]", index);
-                if (indexObject) {
-                    if (auto indexText = display(indexObject.get(), nullptr); indexText)
-                        name = std::format("[{}]", *indexText);
-                }
-                if (auto added = add(std::move(name), std::move(child), std::move(metadata)); !added)
-                    return std::unexpected(std::move(added.error()));
-            }
+            if (filter != "named")
+                return enumerateIndexed(source, static_cast<IIterableConcept*>(iterableConcept.get()));
+        } else if (filter != "indexed" && !anyNamed && !hasCanonicalVisualizer(m_manager, type.get())) {
+            return enumerateRaw(source);
         }
+        return {};
+    };
+    if (raw) {
+        if (filter != "indexed") {
+            if (auto fields = enumerateRaw(parent); !fields)
+                return std::unexpected(std::move(fields.error()));
+        }
+    } else if (auto projected = enumerateProjected(enumerateProjected, parent, 0); !projected) {
+        return std::unexpected(std::move(projected.error()));
     }
-    if (visited >= 65536 + 4096 && variables.size() < limit)
+    if (visited >= maxVisits && variables.size() < limit)
         return fail(ErrorCode::OutOfRange, "debugger variable traversal budget exhausted");
     return rpc::Json::object().set("variables", std::move(variables));
 }
