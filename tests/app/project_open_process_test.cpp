@@ -27,6 +27,7 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <system_error>
 #include <thread>
 
@@ -35,6 +36,34 @@ using namespace std::chrono_literals;
 using frost::app::test::waitFor;
 using frost::app::test::WorkbenchRig;
 using frost::app::test::WorkDir;
+
+void stopProjectProcess(std::unique_ptr<frost::io::IProcess>& process) {
+    ASSERT_TRUE(process->terminate());
+    ASSERT_TRUE(process->wait(5s));
+    // wait() only observes the leader. Drain its containment group before removing the private project.
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto processes = process->containedProcesses();
+            return processes && processes->empty();
+        },
+        5s));
+    process.reset();
+}
+
+void removeProjectWorkDir(const WorkDir& dir) {
+    auto& fs = frost::io::realFileSystem();
+    // A directory can still be temporarily busy after the tracked processes have all exited.
+    ASSERT_TRUE(waitFor(
+        [&] {
+            if (frost::test::removeTree(fs, dir.path()))
+                return true;
+            std::this_thread::sleep_for(10ms);
+            return false;
+        },
+        5s))
+        << dir.path();
+}
+
 TEST(ProjectOpenProcess, RetriesOnlyWhenOwnerDeclaresOpenWasNotDispatched) {
     WorkDir dir("external-open-retry");
     dir.write("message.txt", "original\n");
@@ -374,19 +403,12 @@ TEST(ProjectOpenProcess, TwoRealProcessesReuseProjectAndReleaseOnCrash) {
     auto forwarded = frost::io::runToCompletion(frost::io::realProcessLauncher(), second, {}, 12s);
     ASSERT_TRUE(forwarded.has_value()) << forwarded.error().describe();
     EXPECT_EQ(forwarded->exitCode, 0) << forwarded->stderrBytes;
-    ASSERT_TRUE((*primary)->terminate());
-    ASSERT_TRUE((*primary)->wait(5s));
-    // wait() observes the leader only. Its contained processes must also release
-    // the private project/profile before WorkDir attempts directory cleanup.
-    ASSERT_TRUE(waitFor(
-        [&] {
-            const auto processes = (*primary)->containedProcesses();
-            return processes && processes->empty();
-        },
-        5s));
-    primary->reset();
-    auto recovered = frost::io::LocalIpcOwner::claim(id);
-    ASSERT_TRUE(recovered.has_value()) << recovered.error().describe();
+    ASSERT_NO_FATAL_FAILURE(stopProjectProcess(*primary));
+    {
+        auto recovered = frost::io::LocalIpcOwner::claim(id);
+        ASSERT_TRUE(recovered.has_value()) << recovered.error().describe();
+    }
+    ASSERT_NO_FATAL_FAILURE(removeProjectWorkDir(dir));
 }
 
 TEST(ProjectOpenProcess, OrdinaryAliasStartupClaimsRealProjectEndpoint) {
@@ -422,8 +444,8 @@ TEST(ProjectOpenProcess, OrdinaryAliasStartupClaimsRealProjectEndpoint) {
     while (!ready && std::chrono::steady_clock::now() < deadline)
         ready = frost::io::requestLocalIpc(frost::app::externalProjectKey(*canonical), payload, 500ms).has_value();
     EXPECT_TRUE(ready) << "ordinary alias project did not publish the canonical endpoint";
-    ASSERT_TRUE((*primary)->terminate());
-    ASSERT_TRUE((*primary)->wait(5s));
+    ASSERT_NO_FATAL_FAILURE(stopProjectProcess(*primary));
+    ASSERT_NO_FATAL_FAILURE(removeProjectWorkDir(dir));
 }
 
 TEST(ProjectOpenProcess, Utf16ColumnsUseDirtyBufferAndClampSurrogates) {
