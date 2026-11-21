@@ -103,8 +103,10 @@ TEST(CorpusFrostEngine, TheUnitTestsWindowListsWhatCTestPresetDashNPrints) {
     rig.window->toolWindows().show(frost::app::kUnitTestsToolWindow, false);
     QWidget* window = rig.window->toolWindows().content(frost::app::kUnitTestsToolWindow);
     ASSERT_NE(window, nullptr);
-    auto* tree = window->findChild<frost::ui::TestResultsTree*>(QStringLiteral("unitTestsTreeWidget"));
-    auto* summary = window->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
+    auto* ctestProvider = window->findChild<QWidget*>(QStringLiteral("unitTestsToolWindow"));
+    ASSERT_NE(ctestProvider, nullptr);
+    auto* tree = ctestProvider->findChild<frost::ui::TestResultsTree*>(QStringLiteral("unitTestsTreeWidget"));
+    auto* summary = ctestProvider->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
     ASSERT_NE(tree, nullptr);
     ASSERT_NE(summary, nullptr);
     ASSERT_TRUE(waitFor([&] { return summary->text().contains(QStringLiteral("listed by ctest")); }, 5min))
