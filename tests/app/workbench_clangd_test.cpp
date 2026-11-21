@@ -193,16 +193,24 @@ TEST(WorkbenchClangd, LiveDiagnosticsAppearAndClearAfterTheFix) {
     options.workbench.clangd = true;
     options.workbench.clangdJobs = 1;
     WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value()); // The folder is the project.
-    ASSERT_NE(rig.workbench->clangd(), nullptr);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto* clangd = rig.workbench->clangd();
+            return clangd && clangd->state() == frost::lang::ClangdState::Running;
+        },
+        kPatience));
     ASSERT_TRUE(rig.workbench->openPath(main).has_value());
     frost::app::DocumentEditorView* view = rig.view();
     ASSERT_NE(view, nullptr);
     ASSERT_TRUE(waitFor([&] { return !view->editor().semanticTokens().empty(); }, kPatience));
     ASSERT_TRUE(waitFor([&] { return !view->editor().inactiveRanges().empty(); }, kPatience));
 
-    ASSERT_TRUE(waitFor([&] { return !liveErrors(*rig.workbench).empty(); }, kPatience))
-        << "no live diagnostic; clangd state " << static_cast<int>(rig.workbench->clangd()->state());
+    const bool gotLiveErrors = waitFor([&] { return !liveErrors(*rig.workbench).empty(); }, kPatience);
+    const auto* clangd = rig.workbench->clangd();
+    ASSERT_TRUE(gotLiveErrors)
+        << "no live diagnostic; clangd state " << (clangd ? static_cast<int>(clangd->state()) : -1);
     const std::vector<frost::ui::Problem> errors = liveErrors(*rig.workbench);
     EXPECT_EQ(errors.front().diagnostic.diagnostic.line, 2);
     EXPECT_NE(errors.front().diagnostic.diagnostic.message.find("missing_value"), std::string::npos);
@@ -242,6 +250,7 @@ TEST(WorkbenchClangd, FindReplaceUpdatesLiveDiagnostics) {
     options.workbench.clangd = true;
     options.workbench.clangdJobs = 1;
     WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("main.cpp")));
     rig.show();
@@ -299,6 +308,7 @@ TEST(WorkbenchClangd, ConfigurationSwitchRestartsInsightForOpenEditors) {
     options.workbench.clangd = true;
     options.workbench.clangdJobs = 1;
     WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.join("Tiny.sln")).has_value());
     ASSERT_TRUE(rig.workbench->openPath(dir.join("App/main.cpp")).has_value());
     auto* view = rig.view();
@@ -821,9 +831,15 @@ TEST(WorkbenchClangd, CtrlBOpensTheDeclarationAndFindUsagesShowsItsWindow) {
     options.workbench.clangd = true;
     options.workbench.clangdJobs = 1;
     WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
-    ASSERT_NE(rig.workbench->clangd(), nullptr);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto* clangd = rig.workbench->clangd();
+            return clangd && clangd->state() == frost::lang::ClangdState::Running;
+        },
+        kPatience));
     ASSERT_NE(rig.workbench->language(), nullptr);
 
     // The caret inside "answer" (line 2, byte column 21 is its first letter).
@@ -1087,6 +1103,7 @@ TEST(WorkbenchClangd, ReadinessFollowsCompileCommandsAndIndexing) {
     WorkbenchRig rig(dir, std::move(options));
     rig.show();
     EXPECT_EQ(rig.workbench->languageReadiness(dir.join("listed.cpp")), Readiness::NotRunning);
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
     ASSERT_TRUE(waitFor(
         [&] {
@@ -1175,6 +1192,7 @@ TEST(WorkbenchClangd, FallbackFlagsFollowClangdsOwnDatabaseSearch) {
     options.workbench.clangd = true;
     options.workbench.clangdJobs = 1;
     WorkbenchRig rig(dir, std::move(options));
+    ASSERT_TRUE(rig.trust->trust(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
     ASSERT_TRUE(waitFor(
         [&] {
