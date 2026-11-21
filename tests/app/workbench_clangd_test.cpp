@@ -986,21 +986,25 @@ private:
     std::shared_ptr<ProgressWire> m_wire;
 };
 
-// The real launcher; clangd's stdout is teed to `wire`.
+// Tee the selected language provider; stdout travels through `wire`.
 class TeeLauncher final : public frost::io::IProcessLauncher {
 public:
+    explicit TeeLauncher(std::string executable) : m_executable(std::move(executable)) {}
+
     frost::Result<std::unique_ptr<frost::io::IProcess>> launch(const frost::io::ProcessSpec& spec) override {
         return frost::io::realProcessLauncher().launch(spec);
     }
     frost::Result<std::unique_ptr<frost::io::IAsyncProcess>>
     launchAsync(const frost::io::ProcessSpec& spec, const frost::io::AsyncContext& context) override {
         auto process = frost::io::realProcessLauncher().launchAsync(spec, context);
-        const std::string_view name = frost::io::fileName(spec.executable);
-        if (!process || (name != "clangd" && name != "clangd.exe"))
+        if (!process || spec.executable != m_executable)
             return process;
         return std::make_unique<TeeProcess>(std::move(*process), wire);
     }
     std::shared_ptr<ProgressWire> wire = std::make_shared<ProgressWire>();
+
+private:
+    const std::string m_executable;
 };
 
 /*
@@ -1095,7 +1099,8 @@ TEST(WorkbenchClangd, ReadinessFollowsCompileCommandsAndIndexing) {
     }
     ASSERT_TRUE(frost::lang::writeCompileCommands(frost::io::realFileSystem(), dir.join("build"), commands));
 
-    TeeLauncher launcher;
+    SCOPED_TRACE(found->path);
+    TeeLauncher launcher(found->path);
     RigOptions options;
     options.workbench.clangd = true;
     options.workbench.clangdJobs = 1;
