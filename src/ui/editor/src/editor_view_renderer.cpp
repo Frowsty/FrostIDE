@@ -8,6 +8,7 @@
 #include "frost/ui/editor/editor_view.hpp"
 #include "frost/ui/editor/rhi_renderer.hpp"
 
+#include <QLabel>
 #include <QMetaObject>
 #include <QScrollBar>
 
@@ -24,11 +25,14 @@ void EditorView::configureViewport() {
 }
 
 void EditorView::installViewport(QWidget* surface) {
-    // QAbstractScrollArea deletes the previous viewport; nothing may still point into it.
+    // Keep the overlay alive when QAbstractScrollArea deletes the previous viewport.
+    if (m_stickyScope)
+        m_stickyScope->setParent(surface);
     setViewport(surface);
     configureViewport();
     updateOverlayGeometry();
     updateScrollBars();
+    refreshStickyScope();
     viewport()->update();
 }
 

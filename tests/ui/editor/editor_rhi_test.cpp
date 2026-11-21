@@ -24,6 +24,8 @@
 #include "editor/rhi_compare.hpp"
 #include <QElapsedTimer>
 #include <QImage>
+#include <QLabel>
+#include <QPointer>
 #include <QRawFont>
 #include <rhi/qrhi.h>
 
@@ -402,6 +404,8 @@ TEST(EditorRenderer, ForcedCreationFailureFallsBackAndKeepsTheModel) {
     EXPECT_EQ(h.view->rendererState().active, EditorBackend::Rhi);
     EXPECT_FALSE(h.view->rendererState().pending);
     EXPECT_EQ(h.view->rendererState().reason, "auto: QRhi (Direct3D 11)");
+    const QPointer<QLabel> stickyScope(h.view->viewport()->findChild<QLabel*>(QStringLiteral("editorStickyScope")));
+    ASSERT_TRUE(stickyScope);
 
     selectRange(*h.view, 11, 17); // "second"
     const text::EditorState before = h.view->editor().state();
@@ -418,6 +422,8 @@ TEST(EditorRenderer, ForcedCreationFailureFallsBackAndKeepsTheModel) {
     EXPECT_EQ(h.view->rendererState().reason.rfind("fallback: forced QRhi creation failure", 0), 0U)
         << h.view->rendererState().reason;
     EXPECT_EQ(qobject_cast<RhiEditorViewport*>(h.view->viewport()), nullptr);
+    ASSERT_TRUE(stickyScope);
+    EXPECT_EQ(stickyScope->parentWidget(), h.view->viewport());
     EXPECT_EQ(h.text(), text);
     EXPECT_EQ(h.view->editor().state(), before);
 
