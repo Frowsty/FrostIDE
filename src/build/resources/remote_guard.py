@@ -278,4 +278,6 @@ except BaseException as error:
     clean = cleanup_tree() if child is not None else True
     emit("error", message=str(error), cleanup=clean)
     result = 125
-sys.exit(result)
+# The child tree has been retired and terminal frames flushed. The control thread may still
+# block on the IDE-owned stdin; Python finalization would try to lock that buffered stream.
+os._exit(result)

@@ -130,7 +130,8 @@ public:
                         "Remote cleanup acknowledgement unavailable; remote lease expiry may still be pending");
         if (m_transportCode != 0)
             return fail(ErrorCode::IoError,
-                        "Remote transport failed after guardian acknowledgement: " + std::to_string(m_transportCode));
+                        "Remote transport failed after guardian acknowledgement: " + std::to_string(m_transportCode) +
+                            (m_transportError.empty() ? "" : "\n" + m_transportError));
         return io::ExitStatus{m_exitCode, 0};
     }
     Result<void> terminate() override {
