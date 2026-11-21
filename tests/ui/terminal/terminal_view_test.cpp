@@ -62,7 +62,7 @@ constexpr const char* kRoot = "/work/project";
 TerminalEnvironment fakeEnvironment(FakePtyLauncher& launcher, std::optional<TerminalContext> context = {}) {
     TerminalEnvironment env;
     env.launcher = &launcher;
-    env.settings = [] { return frost::term::TerminalSettings{kShell, 1000}; };
+    env.settings = [] { return frost::term::TerminalSettings{kShell, 1000, {}}; };
     env.probe.environment = [](std::string_view name) -> std::optional<std::string> {
         if (name == "HOME" || name == "USERPROFILE") {
             return std::string(kHome);

@@ -6,15 +6,24 @@
 #include <QToolButton>
 #include <gtest/gtest.h>
 namespace frost::ui {
+namespace {
+ToolWindowSpec toolWindow(std::string id, QString title, std::function<QWidget*()> createContent = {}) {
+    ToolWindowSpec spec;
+    spec.id = std::move(id);
+    spec.title = std::move(title);
+    spec.createContent = std::move(createContent);
+    return spec;
+}
+} // namespace
+
 TEST(DockingV2, FloatingRetainsContentAndCoexistsWithDockedSide) {
     InMemoryShellSettings settings;
     QWidget host;
     auto* center = new QWidget;
     ToolWindowManager manager(host, *center, settings);
-    ASSERT_TRUE(manager.add({.id = "first", .title = QStringLiteral("First"), .createContent = [] {
-                                 return new QLabel(QStringLiteral("actual content"));
-                             }}));
-    ASSERT_TRUE(manager.add({.id = "second", .title = QStringLiteral("Second")}));
+    ASSERT_TRUE(manager.add(
+        toolWindow("first", QStringLiteral("First"), [] { return new QLabel(QStringLiteral("actual content")); })));
+    ASSERT_TRUE(manager.add(toolWindow("second", QStringLiteral("Second"))));
     manager.show("first", false);
     auto* content = manager.content("first");
     manager.setFloating("first", true);
@@ -34,7 +43,7 @@ TEST(DockingV2, SideModeVisibilityAndGeometryRestoreFromSameSettings) {
         QWidget host;
         auto* center = new QWidget;
         ToolWindowManager manager(host, *center, settings);
-        ASSERT_TRUE(manager.add({.id = "services", .title = QStringLiteral("Services")}));
+        ASSERT_TRUE(manager.add(toolWindow("services", QStringLiteral("Services"))));
         manager.moveToSide("services", ToolWindowSide::Right);
         manager.show("services", false);
         manager.setFloating("services", true);
@@ -48,7 +57,7 @@ TEST(DockingV2, SideModeVisibilityAndGeometryRestoreFromSameSettings) {
     QWidget host;
     auto* center = new QWidget;
     ToolWindowManager restored(host, *center, settings);
-    ASSERT_TRUE(restored.add({.id = "services", .title = QStringLiteral("Services"), .side = ToolWindowSide::Left}));
+    ASSERT_TRUE(restored.add(toolWindow("services", QStringLiteral("Services"))));
     EXPECT_TRUE(restored.isFloating("services"));
     EXPECT_FALSE(restored.isVisible("services"));
     restored.show("services", false);
@@ -67,7 +76,7 @@ TEST(DockingV2, HiddenRestoreDoesNotOverwriteSavedModeSizeOrPin) {
     QWidget host;
     auto* center = new QWidget;
     ToolWindowManager manager(host, *center, settings);
-    ASSERT_TRUE(manager.add({.id = "services", .title = QStringLiteral("Services"), .side = ToolWindowSide::Left}));
+    ASSERT_TRUE(manager.add(toolWindow("services", QStringLiteral("Services"))));
     EXPECT_EQ(settings.storeCount(), 0U);
     EXPECT_EQ(settings.current(), initial);
     EXPECT_TRUE(manager.isFloating("services"));
@@ -90,7 +99,7 @@ TEST(DockingV2, ShowingUnpinnedFloatingWindowRestoresItsStripe) {
     QWidget host;
     auto* center = new QWidget;
     ToolWindowManager manager(host, *center, settings);
-    ASSERT_TRUE(manager.add({.id = "services", .title = QStringLiteral("Services")}));
+    ASSERT_TRUE(manager.add(toolWindow("services", QStringLiteral("Services"))));
     host.show();
     auto* button = manager.stripeButton("services");
     ASSERT_NE(button, nullptr);

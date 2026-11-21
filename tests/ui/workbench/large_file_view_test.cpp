@@ -2,6 +2,7 @@
 // Deferred UI tests for actual paged view state, byte/line seeking and close/cancel generations.
 #include "frost/core/clock.hpp"
 #include "frost/document/save_manager.hpp"
+#include "frost/io/path.hpp"
 #include "frost/ui/nav/document_registry.hpp"
 #include "frost/ui/workbench/document_editor.hpp"
 #include "frost/ui/workbench/large_file_view.hpp"
@@ -113,8 +114,10 @@ TEST_F(LargeFileViewTest, NativeLargeFixtureReachesProductFactoryWithoutEditable
     const std::string firstPage = header + std::string(io::IRandomAccessReader::kMaximumReadBytes - header.size(), 'a');
     ASSERT_EQ(firstPage.size(), 65536U);
     ASSERT_TRUE(fs.writeFileAtomic(path, firstPage));
+    const auto nativePath = io::toStdPath(path);
+    ASSERT_TRUE(nativePath);
     std::error_code error;
-    std::filesystem::resize_file(std::filesystem::u8path(path), std::uint64_t{128} << 20, error);
+    std::filesystem::resize_file(*nativePath, std::uint64_t{128} << 20, error);
     ASSERT_FALSE(error);
     ManualClock clock;
     document::SaveManagerServices services;
