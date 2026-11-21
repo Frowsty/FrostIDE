@@ -193,7 +193,8 @@ frost_add_test(app_workbench_git_tests QT
     DEPS frost::app frost::ui_vcs frost::vcs frost::io
     LABELS integration git)
 target_include_directories(app_workbench_git_tests PRIVATE ${FROST_SOURCE_DIR}/tests ${FROST_SOURCE_DIR}/src/app/src)
-target_compile_definitions(app_workbench_git_tests PRIVATE ${_frost_workbench_definitions} FROST_VCS_GIT="${_frost_app_git}")
+target_compile_definitions(app_workbench_git_tests PRIVATE ${_frost_workbench_definitions}
+    FROST_VCS_GIT="${_frost_app_git}" FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
 
 if(WIN32)
     frost_add_test(app_workbench_msbuild_tests QT

@@ -128,6 +128,17 @@ TEST(WorkbenchGit, ThreeWayResultUsesMainEditorHistoryAndStagesOnlyTheChosenOutp
     EXPECT_EQ(repo.read("conflict.cpp"), "int value = 4;\n");
     EXPECT_EQ(repo.git({"show", ":conflict.cpp"}).stdoutBytes, "int value = 4;\n");
     EXPECT_TRUE(repo.git({"ls-files", "--unmerged"}).stdoutBytes.empty());
+    const std::string output = TempRepo::join(repo.root(), "merged.obj");
+    io::ProcessSpec compile;
+    compile.executable = FROST_TEST_CXX_COMPILER;
+    compile.workingDirectory = repo.work();
+    compile.arguments = {"--driver-mode=g++", "-c", repo.path("conflict.cpp"), "-o", output};
+    const auto built = io::runToCompletion(io::realProcessLauncher(), compile, {}, 30s);
+    ASSERT_TRUE(built) << built.error().describe();
+    ASSERT_EQ(built->exitCode, 0) << built->stdoutBytes << built->stderrBytes;
+    const auto artifact = io::realFileSystem().status(output);
+    ASSERT_TRUE(artifact);
+    EXPECT_GT(artifact->size, 0U);
 }
 
 TEST(WorkbenchGit, ThreeWayApplyRefusesDiskChangesSinceDialogOpened) {
