@@ -421,7 +421,7 @@ public:
         return std::make_unique<ProviderWaitingForCancellation>(std::move(*child));
     }
     Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& spec,
-                                                          const io::AsyncContext& context) override {
+                                                           const io::AsyncContext& context) override {
         return scripts.launchAsync(spec, context);
     }
 };

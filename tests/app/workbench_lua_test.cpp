@@ -16,8 +16,8 @@
 
 #include "workbench_rig.hpp"
 #include <QByteArray>
-#include <QFile>
 #include <QDialog>
+#include <QFile>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -1066,8 +1066,7 @@ TEST(WorkbenchLuaModuleReal, PinnedServiceResolvedRequireEditAndFileSidecarMoveS
                 ADD_FAILURE() << line;
         }
         for (const auto& entry : rig.window->notifications().log())
-            ADD_FAILURE() << entry.notification.title.toStdString() << ": "
-                          << entry.notification.text.toStdString();
+            ADD_FAILURE() << entry.notification.title.toStdString() << ": " << entry.notification.text.toStdString();
     }
     ASSERT_TRUE(started) << "the pinned LuaLS did not start: " << *pinned;
     bool preview = false;

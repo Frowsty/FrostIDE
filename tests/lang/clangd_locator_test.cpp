@@ -74,10 +74,8 @@ TEST(FindClangd, BundledFrostPrecedesStockWhileExplicitOverrideRemainsAuthoritat
     ASSERT_TRUE(fs.createDirectories(dir("application")));
     const auto bundled = frost::io::joinPath(dir("application"), kWindows ? "frost-clang.exe" : "frost-clang").value();
     ASSERT_TRUE(fs.writeFileAtomic(bundled, "isolated-engine"));
-    ClangdSearch search{.configuredPath = {},
-                        .sdkDirectories = {dir("sdk")},
-                        .pathVariable = {},
-                        .bundledFrostPath = bundled};
+    ClangdSearch search{
+        .configuredPath = {}, .sdkDirectories = {dir("sdk")}, .pathVariable = {}, .bundledFrostPath = bundled};
     auto found = findClangd(fs, search);
     ASSERT_TRUE(found);
     EXPECT_EQ(found->path, bundled);
@@ -107,16 +105,20 @@ TEST(FindClangd, ReportsWhatIsWrong) {
     MemFs fs(frost::systemClock());
     place(fs, "sdk");
     // A configured path that does not exist has no fallback.
-    auto missing = findClangd(
-        fs, ClangdSearch{.configuredPath = exeIn("nowhere"), .sdkDirectories = {dir("sdk")}, .pathVariable = {}, .bundledFrostPath = {}});
+    auto missing = findClangd(fs, ClangdSearch{.configuredPath = exeIn("nowhere"),
+                                               .sdkDirectories = {dir("sdk")},
+                                               .pathVariable = {},
+                                               .bundledFrostPath = {}});
     ASSERT_FALSE(missing.has_value());
     EXPECT_EQ(missing.error().code(), ErrorCode::NotFound);
-    auto relative =
-        findClangd(fs, ClangdSearch{.configuredPath = "bin/clangd", .sdkDirectories = {}, .pathVariable = {}, .bundledFrostPath = {}});
+    auto relative = findClangd(
+        fs,
+        ClangdSearch{.configuredPath = "bin/clangd", .sdkDirectories = {}, .pathVariable = {}, .bundledFrostPath = {}});
     ASSERT_FALSE(relative.has_value());
     EXPECT_EQ(relative.error().code(), ErrorCode::InvalidArgument);
-    auto none =
-        findClangd(fs, ClangdSearch{.configuredPath = {}, .sdkDirectories = {dir("other")}, .pathVariable = {}, .bundledFrostPath = {}});
+    auto none = findClangd(
+        fs, ClangdSearch{
+                .configuredPath = {}, .sdkDirectories = {dir("other")}, .pathVariable = {}, .bundledFrostPath = {}});
     ASSERT_FALSE(none.has_value());
     EXPECT_EQ(none.error().code(), ErrorCode::NotFound);
     EXPECT_NE(none.error().message().find(exeIn("other")), std::string::npos);
