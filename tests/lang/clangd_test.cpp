@@ -1194,6 +1194,9 @@ TEST(ClangdE2E, TweaksAndIncludeCleanerProduceCompilingEdits) {
     namespace fl = frost::lang;
     frost::test::ScratchDir scratch("lang-clangd-tweaks");
     auto& fs = frost::io::realFileSystem();
+    // Clangd still reads .clang-format in restricted mode. Pin the style used by the exact
+    // edit oracles so a config above the host temporary directory cannot change the result.
+    ASSERT_TRUE(fs.writeFileAtomic(scratch.join(".clang-format"), "BasedOnStyle: LLVM\n"));
     ASSERT_TRUE(fs.writeFileAtomic(scratch.join("a.h"), "#pragma once\nint helper(int x);\n").has_value());
     ASSERT_TRUE(fs.writeFileAtomic(scratch.join("b.h"), "#pragma once\nint other(int x);\n").has_value());
     const std::string source = scratch.join("tweaks.cpp");
