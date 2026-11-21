@@ -76,10 +76,17 @@ int checkSemanticCommand(std::string_view resourceDirectory) {
         auto selected = request({"clang++", "-c", root + "/unit.cpp"});
         selected["compilationDatabase"] = orderedBytes;
         selected["commandIndex"] = index;
+        error.clear();
         auto command = semanticCommand(selected, resourceDirectory, error);
-        if (!command || command->command.Filename != root + "/" + names[index] ||
-            std::ranges::find(command->command.CommandLine, "-DROW=" + std::to_string(index)) ==
-                command->command.CommandLine.end())
+        if (!command)
+            return fail(error);
+        // The fixture stores portable separators, while the admitted command returns a native path.
+        llvm::SmallString<128> expectedSource(root + "/" + names[index]);
+        llvm::sys::path::native(expectedSource);
+        if (command->command.Filename != expectedSource.str())
+            return fail("Captured JSON command selected the wrong source file");
+        if (std::ranges::find(command->command.CommandLine, "-DROW=" + std::to_string(index)) ==
+            command->command.CommandLine.end())
             return fail("Captured JSON command row order was not preserved");
     }
     llvm::outs() << "semantic command admission checks passed\n";
