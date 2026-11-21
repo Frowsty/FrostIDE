@@ -34,6 +34,7 @@ import test_symbolize as symbol_fixtures
 _FROST_GUID = bytes(range(16, 32))
 _APP_GUID = bytes(range(32, 48))
 _DBGENG_GUID = bytes(range(48, 64))
+_STAGED_HELPERS = ("frost-clang.exe", "frost-analyzer.exe", "frost-snapshot-validator.exe", "frost_held_read.exe")
 
 
 @contextlib.contextmanager
@@ -212,6 +213,11 @@ class StageScriptTest(TempDirTestCase):
         (bin_dir / "project-host" / "ProjectHostVsProbe.exe.config").write_text("<configuration/>", encoding="utf-8")
         for name in ("frostide-mcp.exe", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe"):
             (bin_dir / name).write_bytes(b"MZ")
+        for name in _STAGED_HELPERS:
+            (bin_dir / name).write_bytes(b"MZ-fixture:" + name.encode("ascii"))
+        (bin_dir / "visualizers").mkdir(exist_ok=True)
+        shutil.copyfile(TOOLS.parent / "assets/visualizers/FrostCommon.natvis",
+                        bin_dir / "visualizers/FrostCommon.natvis")
         # frost.exe and frost_app.dll name their PDBs, whose GUID and age match (the symbol archive).
         (bin_dir / "frost.exe").write_bytes(symbol_fixtures.pe_bytes(_FROST_GUID, 1, "frost.pdb"))
         (bin_dir / "frost.pdb").write_bytes(symbol_fixtures.msf_bytes(_FROST_GUID))
@@ -225,7 +231,7 @@ class StageScriptTest(TempDirTestCase):
         (bin_dir / "dbgmodel.dll").write_bytes(b"MZ-NOT-FOR-REDISTRIBUTION")
         (bin_dir / "platforms" / "qoffscreend.dll").write_bytes(b"MZ")
         (bin_dir / "resources" / "themes" / "dark.json").write_text("{}", encoding="utf-8")
-        for name in ('lua54/lua.exe', 'lua54/lua54.dll', 'licenses/Lua/lua.h'):
+        for name in ('lua54/lua.exe', 'lua54/lua54.dll', 'licenses/Lua/lua.h', 'licenses/Lua-FrostIDE/NOTICE.txt'):
             path = bin_dir / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b'Lua fixture')
@@ -242,8 +248,10 @@ class StageScriptTest(TempDirTestCase):
         """An SDK root and managed folders holding every bundled tool; the -BundleTools arguments."""
         lock = json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(encoding="utf-8"))["windows"]
         sdk = self.tmp / "sdk"
-        files = [f"llvm-{lock['llvm']['version']}/bin/clangd.exe",
-                 f"llvm-{lock['llvm']['version']}/lib/clang/23/include/stddef.h",
+        llvm = f"llvm-{lock['llvm']['version']}"
+        llvm_major = lock["llvm"]["version"].split(".")[0]
+        files = [f"{llvm}/bin/{tool}.exe" for tool in ("clangd", "clang-scan-deps", "llvm-cov", "llvm-profdata")]
+        files += [f"{llvm}/lib/clang/{llvm_major}/include/stddef.h",
                  f"lldb-{lock['lldb']['version']}/bin/lldb-dap.exe",
                  f"lldb-{lock['lldb']['version']}/bin/liblldb.dll",
                  f"lldb-{lock['lldb']['version']}/bin/lldb-argdumper.exe",
@@ -258,7 +266,7 @@ class StageScriptTest(TempDirTestCase):
             (sdk / name).write_bytes(b"fixture " + name.encode())
         managed, debug = self.tmp / "managed-server", self.tmp / "managed-debug"
         managed.mkdir(exist_ok=True)
-        (managed / "CSharpLanguageServer.dll").write_bytes(b"MZ")
+        (managed / "FrostRoslynHost.dll").write_bytes(b"MZ-managed-host")
         (debug / "adapter").mkdir(parents=True, exist_ok=True)
         (debug / "adapter" / "netcoredbg.exe").write_bytes(b"MZ")
         return ["-BundleTools", "-SdkRoot", str(sdk), "-ManagedServerDir", str(managed),
@@ -338,13 +346,16 @@ class StageScriptTest(TempDirTestCase):
         destination = self.tmp / "bundled"
         lock = json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(encoding="utf-8"))["windows"]
         luals = f"luals-{lock['luals']['version']}"
+        llvm = f"llvm-{lock['llvm']['version']}"
+        llvm_major = lock["llvm"]["version"].split(".")[0]
         result = self._stage(build, destination, *self._fake_tools())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for name in (f"llvm-{lock['llvm']['version']}/bin/clangd.exe",
-                     f"llvm-{lock['llvm']['version']}/lib/clang/23/include/stddef.h",
+        for name in (f"{llvm}/bin/clangd.exe", f"{llvm}/bin/clang-scan-deps.exe",
+                     f"{llvm}/bin/llvm-cov.exe", f"{llvm}/bin/llvm-profdata.exe",
+                     f"{llvm}/lib/clang/{llvm_major}/include/stddef.h",
                      f"lldb-{lock['lldb']['version']}/bin/liblldb.dll", f"{luals}/bin/lua-language-server.exe",
                      f"{luals}/main.lua", f"{luals}/meta/template/basic.lua", "licenses/luals-LICENSE.txt",
-                     "managed/CSharpLanguageServer.dll", "FrostManagedDebug/adapter/netcoredbg.exe"):
+                     "roslyn/FrostRoslynHost.dll", "FrostManagedDebug/adapter/netcoredbg.exe"):
             self.assertTrue((destination / name).is_file(), name)
         self.assertFalse((destination / luals / ".frost-installed").exists(), "the SDK's install marker")
         self.assertFalse((destination / luals / "log").exists(), "a log a run left in the SDK")
@@ -366,16 +377,18 @@ class StageScriptTest(TempDirTestCase):
             env=clean_env(FROST_MANAGED_SERVER_DIR=str(self.tmp / "managed-server"),
                           FROST_MANAGED_DEBUG_DIR=str(self.tmp / "managed-debug")))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual((destination / "managed/CSharpLanguageServer.dll").read_bytes(),
-                         (self.tmp / "managed-server/CSharpLanguageServer.dll").read_bytes())
+        self.assertEqual((destination / "roslyn/FrostRoslynHost.dll").read_bytes(),
+                         (self.tmp / "managed-server/FrostRoslynHost.dll").read_bytes())
         self.assertTrue((destination / "FrostManagedDebug/adapter/netcoredbg.exe").is_file())
 
     def test_a_missing_bundled_tool_fails_before_staging(self) -> None:
         lock = json.loads((TOOLS.parent / "sdk" / "sdk.lock.json").read_text(encoding="utf-8"))["windows"]
         cases = {"clangd": f"sdk/llvm-{lock['llvm']['version']}/bin/clangd.exe",
+                 "clang-scan-deps": f"sdk/llvm-{lock['llvm']['version']}/bin/clang-scan-deps.exe",
+                 "LLVM coverage tool": f"sdk/llvm-{lock['llvm']['version']}/bin/llvm-cov.exe",
                  "lldb-dap": f"sdk/lldb-{lock['lldb']['version']}/bin/liblldb.dll",
                  "LuaLS": f"sdk/luals-{lock['luals']['version']}/bin/lua-language-server.exe",
-                 "managed language server": "managed-server/CSharpLanguageServer.dll",
+                 "managed language server": "managed-server/FrostRoslynHost.dll",
                  "managed debugger": "managed-debug/adapter/netcoredbg.exe"}
         for tool, missing in cases.items():
             with self.subTest(tool=tool):
@@ -509,8 +522,10 @@ class StageScriptTest(TempDirTestCase):
                  "no frost-dbgeng-dap.exe": "build/src/app/Debug/frost-dbgeng-dap.exe",
                  "no resources": "build/src/app/Debug/resources",
                  "no HTTPS backend": "build/src/app/Debug/tls/qschannelbackendd.dll",
+                 "the built visualizer pack is missing": "build/src/app/Debug/visualizers/FrostCommon.natvis",
                  "missing upstream libsodium copyright notice": "installed/x64-fixture/share/libsodium/copyright",
                  "no CMake cache": "build/CMakeCache.txt"}
+        cases.update({f"no {name}": "build/src/app/Debug/" + name for name in _STAGED_HELPERS})
         for message, missing in cases.items():
             with self.subTest(missing=missing):
                 self._fake_build()
@@ -527,9 +542,9 @@ class StageScriptTest(TempDirTestCase):
         build = self._fake_build()
         destination = self.tmp / "out" / "preview"
         result = self._stage(build, destination)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((destination / "unity" / "com.frostide.editor" / "package.json").is_file())
         self.assertTrue((destination / "unity" / "com.frostide.editor" / "Editor" / "FrostEditor.cs").is_file())
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("stage: ok", result.stdout)
         for name in ("frost.exe", "frost_app.dll", "crashpad_handler.exe", "conpty.dll", "OpenConsole.exe", "frost.pdb", "Qt6Cored.dll",
                      "frost-dbgeng-dap.exe", "frost-dbgeng-dap.pdb",
@@ -547,6 +562,9 @@ class StageScriptTest(TempDirTestCase):
                          (build / "src/app/Debug/frost-dbgeng-dap.exe").read_bytes())
         self.assertEqual((destination / "licenses/libsodium-copyright.txt").read_bytes(),
                          b"Upstream ISC copyright fixture\n")
+        for name in (*_STAGED_HELPERS, "visualizers/FrostCommon.natvis", "lua54/lua.exe", "lua54/lua54.dll",
+                     "licenses/Lua/lua.h", "licenses/Lua-FrostIDE/NOTICE.txt"):
+            self.assertEqual((destination / name).read_bytes(), (build / "src/app/Debug" / name).read_bytes(), name)
 
     def test_missing_upstream_sodium_notice_fails(self) -> None:
         build = self._fake_build()
@@ -603,7 +621,8 @@ class StageScriptTest(TempDirTestCase):
                     "exit /b 0", f'echo changed>"%DEST%\\{name}"\nexit /b 0'),
                     encoding="ascii", newline="\r\n")
                 result = run_powershell(TOOLS / "stage.ps1", "-Destination", str(self.tmp / "corrupt-out"),
-                                        "-Config", "Debug", "-BuildDir", str(build), "-WinDeployQt", str(deploy), "-SkipBuild")
+                                        "-Config", "Debug", "-BuildDir", str(build), "-WinDeployQt", str(deploy),
+                                        "-Python", sys.executable, "-SkipBuild")
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(f"staged {name} differs", result.stdout)
 
