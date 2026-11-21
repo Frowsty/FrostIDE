@@ -106,6 +106,7 @@ private:
 // What the window shows, found by object name.
 struct Window {
     QWidget* root = nullptr;
+    QWidget* ctest = nullptr;
     frost::ui::TestResultsTree* tree = nullptr;
     QLabel* summary = nullptr;
     QPlainTextEdit* details = nullptr;
@@ -121,13 +122,16 @@ Window showWindow(WorkbenchRig& rig) {
     w.root = rig.window->toolWindows().content(frost::app::kUnitTestsToolWindow);
     if (!w.root)
         return w;
-    w.tree = w.root->findChild<frost::ui::TestResultsTree*>(QStringLiteral("unitTestsTreeWidget"));
-    w.summary = w.root->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
-    w.details = w.root->findChild<QPlainTextEdit*>(QStringLiteral("unitTestsOutputView"));
-    w.runAll = w.root->findChild<QPushButton*>(QStringLiteral("unitTestsRunAllButton"));
-    w.runFailed = w.root->findChild<QPushButton*>(QStringLiteral("unitTestsRunFailedButton"));
-    w.refresh = w.root->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"));
-    w.debug = w.root->findChild<QPushButton*>(QStringLiteral("unitTestsDebugSelectedButton"));
+    w.ctest = w.root->findChild<QWidget*>(QStringLiteral("unitTestsToolWindow"));
+    if (!w.ctest)
+        return w;
+    w.tree = w.ctest->findChild<frost::ui::TestResultsTree*>(QStringLiteral("unitTestsTreeWidget"));
+    w.summary = w.ctest->findChild<QLabel*>(QStringLiteral("unitTestsSummaryLabel"));
+    w.details = w.ctest->findChild<QPlainTextEdit*>(QStringLiteral("unitTestsOutputView"));
+    w.runAll = w.ctest->findChild<QPushButton*>(QStringLiteral("unitTestsRunAllButton"));
+    w.runFailed = w.ctest->findChild<QPushButton*>(QStringLiteral("unitTestsRunFailedButton"));
+    w.refresh = w.ctest->findChild<QPushButton*>(QStringLiteral("unitTestsRefreshButton"));
+    w.debug = w.ctest->findChild<QPushButton*>(QStringLiteral("unitTestsDebugSelectedButton"));
     return w;
 }
 
@@ -312,10 +316,13 @@ TEST(UnitTestsWindow, GutterRunsExactlyOneRealGoogleTestCaseAndDebugStopsAtItsBr
 
     auto* providers = qobject_cast<QTabWidget*>(w.root);
     ASSERT_NE(providers, nullptr);
-    ASSERT_EQ(providers->count(), 2);
-    QWidget* ctest = providers->widget(0);
-    ASSERT_NE(ctest, nullptr);
-    providers->setCurrentIndex(1); // CTest routing must not depend on the visible engine tab.
+    QWidget* ctest = w.ctest;
+    const int ctestIndex = providers->indexOf(ctest);
+    ASSERT_GE(ctestIndex, 0);
+    auto* engine = providers->findChild<QWidget*>(QStringLiteral("engineUnitTestsProvider"));
+    ASSERT_NE(engine, nullptr);
+    ASSERT_GE(providers->indexOf(engine), 0);
+    providers->setCurrentWidget(engine); // Routing is independent of the visible provider.
     const auto directCases = frost::app::unitTestsGutterCasesForFile(ctest, sourcePath, sourceText.str());
     ASSERT_EQ(directCases.size(), cases.size());
     for (std::size_t index = 0; index < cases.size(); ++index) {
@@ -338,7 +345,7 @@ TEST(UnitTestsWindow, GutterRunsExactlyOneRealGoogleTestCaseAndDebugStopsAtItsBr
         EXPECT_EQ(debug.error().code(), frost::ErrorCode::NotFound);
     }
 
-    providers->removeTab(0);
+    providers->removeTab(ctestIndex);
     EXPECT_TRUE(frost::app::unitTestsGutterCasesForFile(providers, sourcePath, sourceText.str()).empty());
     const auto retiredRun = frost::app::runGutterTestCase(providers, *testCase);
     ASSERT_FALSE(retiredRun);
@@ -346,8 +353,8 @@ TEST(UnitTestsWindow, GutterRunsExactlyOneRealGoogleTestCaseAndDebugStopsAtItsBr
     const auto retiredDebug = frost::app::debugGutterTestCase(providers, *testCase);
     ASSERT_FALSE(retiredDebug);
     EXPECT_EQ(retiredDebug.error().code(), frost::ErrorCode::NotFound);
-    providers->insertTab(0, ctest, QStringLiteral("CTest"));
-    providers->setCurrentIndex(1);
+    providers->insertTab(ctestIndex, ctest, QStringLiteral("CTest"));
+    providers->setCurrentWidget(engine);
 
     ASSERT_TRUE(frost::app::runGutterTestCase(ctest, *testCase).has_value());
     ASSERT_TRUE(waitFor([&] { return w.runAll->isEnabled(); }, 60s)) << w.summary->text().toStdString();
