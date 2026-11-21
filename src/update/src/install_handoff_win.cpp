@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Copy only receipt-owned Windows updater binaries into the private handoff directory.
 #include "install_ownership_win.hpp"
 #include <frost/update/install_handoff.hpp>
 

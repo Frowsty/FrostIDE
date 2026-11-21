@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Native Windows updater handoff lifecycle using a disposable install and retained parent process.
 """Exercise the real Windows updater and parent-exit barrier with disposable installs."""
 import ctypes
 from ctypes import wintypes

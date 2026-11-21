@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Workbench Windows update button and close-path integration over a local signed offer.
 """Drive the normal Workbench update dialog with an isolated local signed offer."""
 import os
 from pathlib import Path

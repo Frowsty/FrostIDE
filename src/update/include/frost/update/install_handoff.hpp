@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// Admission and staging of the private Windows updater helper.
 #pragma once
 
 #include <frost/core/error.hpp>
