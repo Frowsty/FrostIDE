@@ -63,6 +63,7 @@ struct EngineRunAdmission {
     std::shared_ptr<std::atomic<bool>> physicalAdmission;
     std::mutex resolutionMutex;
     std::optional<std::string> resolvedProject;
+    QString startupFailure; // Workbench thread only.
 };
 
 struct EngineCommandReply {

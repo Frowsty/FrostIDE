@@ -33,7 +33,9 @@ Result<engine::EngineEndpoint> endpointOf(const EngineInstanceRecord& record) {
     const auto generation = record.record.stringAt("generation");
     const auto secret = record.record.stringAt("token");
     if (record.instanceId.empty() || generation.empty() || secret.empty())
-        return fail(ErrorCode::Unsupported, "This editor does not advertise authenticated contract v2 pairing");
+        return fail(ErrorCode::Unsupported,
+                    "FrostIDE requires FrostEngine automation contract v2. Select a compatible installation or "
+                    "open FrostEditor directly.");
     // The signed wire path must stay byte-identical to the engine's discovery document. Its
     // physical projectRoot was independently checked; native separators must not replace it.
     return engine::EngineEndpoint{record.port, std::string(record.record.stringAt("projectPath")), record.instanceId,

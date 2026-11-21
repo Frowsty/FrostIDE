@@ -1230,6 +1230,53 @@ TEST(WorkbenchEngine, MalformedOwnedEndpointStopsItsRunAndAllowsFreshLaunch) {
     EXPECT_TRUE(waitFor([&] { return runReservationReleased(rig); }, 5s));
     EXPECT_EQ(launcher.runs.launches().size(), 2U);
 }
+TEST(WorkbenchEngine, LegacyOwnedEditorReportsCompatibilityAfterExitAndAllowsV2Relaunch) {
+    WorkDir dir("engine-legacy-owned-editor");
+    dir.write("project/Game.frostproj", "{}");
+    const auto project = dir.join("project");
+    EngineSessionPeer peer(project);
+    ASSERT_NE(peer.port(), 0U);
+    const auto program = editorProgram(dir);
+    EngineRunLauncher launcher;
+    WorkbenchRig rig(dir, runOptions(dir, launcher, program));
+    ASSERT_TRUE(openTrusted(rig, project));
+    ASSERT_TRUE(waitForConfiguration(rig));
+    rig.window->toolWindows().show("frostEngine");
+    auto* panel = rig.window->toolWindows().content("frostEngine");
+    ASSERT_NE(panel, nullptr);
+    auto* status = panel->findChild<QLabel*>(QStringLiteral("engineStatusLabel"));
+    ASSERT_NE(status, nullptr);
+    const auto legacy = Json::object()
+                            .set("host", "127.0.0.1")
+                            .set("port", peer.port())
+                            .set("projectPath", project)
+                            .set("contractVersion", 1)
+                            .set("token", "legacy-token");
+    const auto editorOutput = [](const Json& record) {
+        return Json::object().set("ok", true).set("command", "editor").set("result", record).dump() + "\n";
+    };
+    launcher.runs.expect(frost::io::ScriptedProcess{
+        .expectExecutable = program, .stdoutBytes = editorOutput(legacy), .neverExits = true});
+    const auto first = rig.workbench->startEngineEditor();
+    ASSERT_TRUE(first);
+    ASSERT_TRUE(waitFor([&] { return runReservationReleased(rig); }, 5s));
+    ASSERT_EQ(launcher.runs.launches().size(), 1U);
+    EXPECT_TRUE(launcher.runs.launches().front().terminated);
+    EXPECT_TRUE(peer.requests("auth.challenge").empty());
+    EXPECT_EQ(status->text(), QStringLiteral("FrostIDE requires FrostEngine automation contract v2. "
+                                             "Select a compatible installation or open FrostEditor directly."));
+
+    launcher.runs.expect(frost::io::ScriptedProcess{
+        .expectExecutable = program, .stdoutBytes = editorOutput(peer.record()), .neverExits = true});
+    const auto second = rig.workbench->startEngineEditor();
+    ASSERT_TRUE(second);
+    EXPECT_NE(*second, *first);
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->engineState().stringAt("state") == "Edit"; }, 5s))
+        << rig.workbench->engineState().dump() << " Handshake replies " << peer.replies("auth.challenge") << " "
+        << peer.replies("auth.prove");
+    EXPECT_FALSE(status->text().contains(QStringLiteral("requires FrostEngine automation contract v2")));
+    EXPECT_EQ(peer.authenticated.load(), 1U);
+}
 TEST(WorkbenchEngine, OwnedAuthenticationDeadlineIncludesAStalledChallengeAndReleasesTheRun) {
     WorkDir dir("engine-owned-auth-deadline");
     dir.write("project/Game.frostproj", "{}");

@@ -513,7 +513,12 @@ void EngineIntegration::Impl::endpointFromOutput() {
                     auto connected =
                         instance ? impl.connectInstance(*instance) : Result<void>(std::unexpected(instance.error()));
                     if (!connected) {
-                        impl.setStatus(qs(connected.error().message()));
+                        const auto message = qs(connected.error().message());
+                        if (impl.runAdmission)
+                            impl.runAdmission->startupFailure = message;
+                        impl.awaitingOwnedAuthentication = false;
+                        impl.startupWatch->stop();
+                        impl.setStatus(message);
                         impl.stopOwnedHost();
                     }
                 },
@@ -543,6 +548,7 @@ void EngineIntegration::processFinished(const run::RunResult& result) {
     if ((!impl.ownedRun || *impl.ownedRun != result.id) &&
         !(result.id == 0 && impl.runAdmission && impl.runAdmission->id == result.configurationId))
         return;
+    auto startupFailure = impl.runAdmission ? impl.runAdmission->startupFailure : QString{};
     const auto crashLease = impl.crashSessions->snapshot();
     const bool preserveCrash = preserveEngineCrashObservation(crashLease, static_cast<std::int64_t>(impl.ownedPid),
                                                               result.stopped, result.exitCode);
@@ -563,7 +569,9 @@ void EngineIntegration::processFinished(const run::RunResult& result) {
     impl.awaitingOwnedAuthentication = false;
     impl.startupWatch->stop();
     impl.clearSession(false, preserveCrash);
-    impl.setStatus(result.error ? qs(result.error->message()) : QStringLiteral("Owned engine process exited"));
+    if (startupFailure.isEmpty())
+        startupFailure = result.error ? qs(result.error->message()) : QStringLiteral("Owned engine process exited");
+    impl.setStatus(startupFailure);
     impl.updateControls();
 }
 
