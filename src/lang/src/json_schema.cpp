@@ -436,12 +436,12 @@ std::optional<text::ByteRange> dataColumnDeclaration(const text::Snapshot& snaps
         if (!columns && depth)
             if (const auto* element = owner->find("Element")) {
                 owner = element;
-                path.push_back("Element");
+                path.emplace_back("Element");
                 columns = owner->find("Fields");
             }
         if (!columns || !columns->isArray())
             return {};
-        path.push_back(depth ? "Fields" : "Columns");
+        path.emplace_back(depth ? "Fields" : "Columns");
         const Json* match = nullptr;
         std::size_t index = 0;
         for (std::size_t i = 0; i < columns->size(); ++i)
@@ -456,7 +456,7 @@ std::optional<text::ByteRange> dataColumnDeclaration(const text::Snapshot& snaps
         owner = match;
         path.push_back(std::to_string(index));
     }
-    path.push_back("Name");
+    path.emplace_back("Name");
     Scanner scan{source};
     scan.value();
     const auto found = std::ranges::find(scan.nodes, path, &Node::path);
@@ -619,24 +619,24 @@ void validate(const Json& schema, const Json& value, const std::vector<std::stri
                                                      })
                                : typeMatches(value, *type->asString());
         if (!valid) {
-            errors.push_back({path, "Expected " + type->dump()});
+            errors.emplace_back(path, "Expected " + type->dump());
             return;
         }
     }
     if (const auto* choices = schema.find("enum");
         choices && std::ranges::find(choices->items(), value) == choices->items().end())
-        errors.push_back({path, "Value is outside the bundled schema enum"});
+        errors.emplace_back(path, "Value is outside the bundled schema enum");
     if (const auto* minimum = schema.find("minimum");
         minimum && value.isNumber() && *value.asDouble() < *minimum->asDouble())
-        errors.push_back({path, "Value is below the schema minimum " + minimum->dump()});
+        errors.emplace_back(path, "Value is below the schema minimum " + minimum->dump());
     if (const auto* maximum = schema.find("maximum");
         maximum && value.isNumber() && *value.asDouble() > *maximum->asDouble())
-        errors.push_back({path, "Value is above the schema maximum " + maximum->dump()});
+        errors.emplace_back(path, "Value is above the schema maximum " + maximum->dump());
     if (value.isObject()) {
         if (const auto* required = schema.find("required"))
             for (const auto& key : required->items())
                 if (errors.size() < kSnapshotValidationMaxIssues && !value.find(*key.asString()))
-                    errors.push_back({path, "Missing required property " + *key.asString()});
+                    errors.emplace_back(path, "Missing required property " + *key.asString());
         if (const auto* properties = schema.find("properties"))
             for (std::size_t i = 0; i < value.size(); ++i)
                 if (const auto* childSchema = properties->find(value.keys()[i])) {
