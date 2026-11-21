@@ -34,6 +34,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QTimer>
@@ -454,10 +455,19 @@ TEST(WorkbenchMsBuild, DebugUsesTheDebuggingPagesArgumentsAndWorkingDirectory) {
     EXPECT_EQ(rig.workbench->solution()->project(*rig.workbench->runService()->startupProject()).name, "App");
 
     // The Debugging page: new arguments and a working directory the fixture's user file does not have.
+    const auto projectPath = dir.join("App/App.vcxproj");
+    const auto projectBefore = dir.read("App/App.vcxproj");
     bool edited = false;
+    bool saved = false;
+    QString warningText;
     QTimer::singleShot(0, rig.window.get(), [&] {
         auto* dlg = rig.window->findChild<QDialog*>(QStringLiteral("projectPropertiesDialog"));
-        ASSERT_NE(dlg, nullptr);
+        if (!dlg) {
+            ADD_FAILURE() << "Debugging properties dialog not found";
+            if (auto* modal = qobject_cast<QDialog*>(QApplication::activeModalWidget()))
+                modal->reject();
+            return;
+        }
         const auto closeOnExit = qScopeGuard([dlg] {
             if (dlg->isVisible())
                 dlg->reject();
@@ -471,11 +481,26 @@ TEST(WorkbenchMsBuild, DebugUsesTheDebuggingPagesArgumentsAndWorkingDirectory) {
         auto* buttons = dlg->findChild<QDialogButtonBox*>();
         QPushButton* ok = buttons != nullptr ? buttons->button(QDialogButtonBox::Ok) : nullptr;
         ASSERT_NE(ok, nullptr);
+        QTimer::singleShot(0, dlg, [dlg, &warningText] {
+            if (auto* warning = dlg->findChild<QMessageBox*>()) {
+                warningText = warning->text();
+                warning->accept();
+            }
+        });
         ok->click();
         edited = true;
     });
-    frost::app::showProjectPropertiesDialog(rig.window.get(), fs, dir.join("App/App.vcxproj"), "Debug|x64", {});
+    frost::app::showProjectPropertiesDialog(
+        rig.window.get(), fs, projectPath, "Debug|x64", [&] { saved = true; },
+        [&](std::string_view configuration, const frost::app::ProjectPropertyMap& changes) -> frost::Result<void> {
+            if (configuration != "Debug|x64" || !changes.empty() || !rig.trust->isTrusted(projectPath))
+                return frost::fail(frost::ErrorCode::PermissionDenied,
+                                   "Fixture admits only trusted Debug|x64 user settings");
+            return rig.workbench->solution()->requireProjectMutation();
+        });
     ASSERT_TRUE(edited);
+    ASSERT_TRUE(saved) << warningText.toStdString();
+    EXPECT_EQ(dir.read("App/App.vcxproj"), projectBefore);
     ASSERT_TRUE(dir.read("App/App.vcxproj.user").contains("--from-the-debugging-page second"));
 
     auto* debug = rig.workbench->debugController();
