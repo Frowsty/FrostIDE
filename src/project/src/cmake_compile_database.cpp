@@ -184,7 +184,13 @@ CMakeShell nativeCMakeShell() noexcept {
     return io::kNativePathStyle == io::PathStyle::Windows ? CMakeShell::Windows : CMakeShell::Posix;
 }
 
-std::vector<std::string> splitCompileCommandFragment(std::string_view fragment, CMakeShell shell) {
+namespace {
+Result<std::vector<std::string>> splitCompileCommand(std::string_view fragment, CMakeShell shell, bool strict) {
+    const auto unsupported = [] {
+        return fail(ErrorCode::Unsupported, "Compilation command contains shell syntax or incomplete quoting");
+    };
+    if (strict && fragment.find_first_of(std::string_view("\r\n\0", 3)) != fragment.npos)
+        return unsupported();
     std::vector<std::string> words;
     std::string word;
     bool inWord = false;
@@ -199,6 +205,8 @@ std::vector<std::string> splitCompileCommandFragment(std::string_view fragment, 
         bool quoted = false;
         for (std::size_t i = 0; i < fragment.size();) {
             const char c = fragment[i];
+            if (strict && (c == '%' || c == '!' || (!quoted && std::string_view("&|<>^()").find(c) != fragment.npos)))
+                return unsupported();
             if (c == '\\') {
                 std::size_t slashes = 0;
                 while (i < fragment.size() && fragment[i] == '\\') {
@@ -237,6 +245,8 @@ std::vector<std::string> splitCompileCommandFragment(std::string_view fragment, 
             inWord = true;
             ++i;
         }
+        if (strict && quoted)
+            return unsupported();
         finish();
         return words;
     }
@@ -248,6 +258,8 @@ std::vector<std::string> splitCompileCommandFragment(std::string_view fragment, 
             inWord = true;
             for (++i; i < fragment.size() && fragment[i] != '\''; ++i)
                 word += fragment[i];
+            if (strict && i == fragment.size())
+                return unsupported();
         } else if (c == '"') {
             inWord = true;
             for (++i; i < fragment.size() && fragment[i] != '"'; ++i) {
@@ -256,21 +268,37 @@ std::vector<std::string> splitCompileCommandFragment(std::string_view fragment, 
                     ++i;
                     if (fragment[i] == '\n')
                         continue;
+                } else if (strict && (fragment[i] == '$' || fragment[i] == '`')) {
+                    return unsupported();
                 }
                 word += fragment[i];
             }
+            if (strict && i == fragment.size())
+                return unsupported();
         } else if (c == '\\' && i + 1 < fragment.size()) {
             inWord = true;
             ++i;
             if (fragment[i] != '\n')
                 word += fragment[i];
         } else {
+            if (strict &&
+                (std::string_view("&|;<>()[*?{}$`\\").find(c) != fragment.npos || (!inWord && (c == '~' || c == '#'))))
+                return unsupported();
             inWord = true;
             word += c;
         }
     }
     finish();
     return words;
+}
+} // namespace
+
+std::vector<std::string> splitCompileCommandFragment(std::string_view fragment, CMakeShell shell) {
+    return *splitCompileCommand(fragment, shell, false);
+}
+
+Result<std::vector<std::string>> parseCompileCommandInvocation(std::string_view command, CMakeShell shell) {
+    return splitCompileCommand(command, shell, true);
 }
 
 std::vector<CMakeCompileCommand> synthesizeCMakeCompileCommands(const CMakeProject& project,

@@ -268,7 +268,10 @@ frost_add_test(lang_cpp_modules_real_tests
     DEPS frost::lang frost::io frost::core
     LABELS integration)
 target_include_directories(lang_cpp_modules_real_tests PRIVATE ${FROST_SOURCE_DIR}/tests)
-target_compile_definitions(lang_cpp_modules_real_tests PRIVATE FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}")
+target_compile_definitions(lang_cpp_modules_real_tests PRIVATE
+    FROST_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+    FROST_TEST_CMAKE="${CMAKE_COMMAND}"
+    FROST_TEST_NINJA="${CMAKE_MAKE_PROGRAM}")
 
 # R16 CMK-9 actual configure/File API target-dependency oracle (authored, not executed in source phase).
 frost_add_test(lang_cmake_target_rename_real_tests

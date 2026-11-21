@@ -6,6 +6,80 @@
 #include "support/scratch_dir.hpp"
 #include <gtest/gtest.h>
 namespace frost::lang {
+TEST(CppModulesReal, ScannerAcceptsCMakeGeneratedCommandWithAndWithoutExplicitOutput) {
+    frost::test::ScratchDir scratch("cpp modules cmake");
+    auto& fs = io::realFileSystem();
+    const auto root = scratch.path();
+    const auto compilerDir = std::string(io::parentPath(FROST_TEST_CXX_COMPILER));
+#ifdef _WIN32
+    const auto compiler = io::joinPath(compilerDir, "clang-cl.exe").value();
+    const auto scanner = io::joinPath(compilerDir, "clang-scan-deps.exe").value();
+#else
+    const auto compiler = io::joinPath(compilerDir, "clang++").value();
+    const auto scanner = io::joinPath(compilerDir, "clang-scan-deps").value();
+#endif
+    ASSERT_TRUE(fs.writeFileAtomic(scratch.join("source file.cpp"), "int value() { return 42; }\n"));
+    ASSERT_TRUE(fs.writeFileAtomic(scratch.join("CMakeLists.txt"), R"cmake(
+cmake_minimum_required(VERSION 3.25)
+project(ScannerCommands LANGUAGES CXX)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+add_library(scanner_commands OBJECT "source file.cpp")
+target_compile_definitions(scanner_commands PRIVATE LABEL="quoted value")
+)cmake"));
+    const auto build = scratch.join("cmake build");
+    io::ProcessSpec configure;
+    configure.executable = FROST_TEST_CMAKE;
+    configure.workingDirectory = root;
+    configure.arguments = {"-S",
+                           root,
+                           "-B",
+                           build,
+                           "-G",
+                           "Ninja",
+                           "-DCMAKE_MAKE_PROGRAM=" FROST_TEST_NINJA,
+                           "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                           "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
+                           "-DCMAKE_CXX_COMPILER=" + compiler};
+    const auto configured = io::runToCompletion(io::realProcessLauncher(), configure, "", std::chrono::seconds(60));
+    ASSERT_TRUE(configured) << configured.error().describe();
+    ASSERT_EQ(configured->exitCode, 0) << configured->stdoutBytes << configured->stderrBytes;
+    const auto captured = fs.readFile(io::joinPath(build, "compile_commands.json").value());
+    ASSERT_TRUE(captured);
+    const auto original = parseJson(*captured);
+    ASSERT_TRUE(original);
+    ASSERT_TRUE(original->isArray());
+    ASSERT_EQ(original->size(), 1U);
+    const auto& command = original->items().front();
+    ASSERT_FALSE(command.stringAt("command").empty());
+    ASSERT_FALSE(command.stringAt("output").empty());
+
+    const auto privateDir = scratch.join("private");
+    ASSERT_TRUE(fs.createDirectories(privateDir));
+    CppModuleScanRequest request;
+    request.scanner = scanner;
+    request.privateDatabasePath = io::joinPath(privateDir, "compile_commands.json").value();
+    request.workingDirectory = root;
+    request.trusted = true;
+    request.validateCurrent = [] -> Result<void> { return {}; };
+    request.databaseBytes = *captured;
+    ASSERT_TRUE(fs.writeFileAtomic(request.privateDatabasePath, request.databaseBytes));
+    const auto explicitGraph = scanCppModules(io::realProcessLauncher(), fs, request);
+    ASSERT_TRUE(explicitGraph) << explicitGraph.error().describe();
+    ASSERT_EQ(explicitGraph->rules.size(), 1U);
+
+    auto omitted = Json::array({Json::object()
+                                    .set("directory", command.stringAt("directory"))
+                                    .set("file", command.stringAt("file"))
+                                    .set("command", command.stringAt("command"))});
+    request.databaseBytes = omitted.dump();
+    ASSERT_TRUE(fs.writeFileAtomic(request.privateDatabasePath, request.databaseBytes));
+    const auto inferredGraph = scanCppModules(io::realProcessLauncher(), fs, request);
+    ASSERT_TRUE(inferredGraph) << inferredGraph.error().describe();
+    ASSERT_EQ(inferredGraph->rules.size(), 1U);
+    EXPECT_EQ(inferredGraph->rules.front().primaryOutput, explicitGraph->rules.front().primaryOutput);
+    EXPECT_EQ(fs.readFile(request.privateDatabasePath).value_or(""), request.databaseBytes);
+}
+
 TEST(CppModulesReal, ScannerGraphMatchesBuiltModuleFixture) {
     frost::test::ScratchDir scratch("cpp-modules");
     auto& fs = io::realFileSystem();

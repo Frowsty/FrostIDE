@@ -36,7 +36,9 @@ struct CppModuleGraph {
 [[nodiscard]] Result<void> validateCppModuleScannerVersion(std::string_view banner);
 struct CppModuleScanRequest {
     std::string scanner;             // Absolute pinned clang-scan-deps, from the application toolchain.
-    std::string privateDatabasePath; // Captured arguments-form CDB in an owned directory.
+    // Captured CDB in a scratch directory exclusive to this scan. The scanner's derived
+    // arguments-form database is created and removed beside it.
+    std::string privateDatabasePath;
     std::string databaseBytes;
     std::string workingDirectory;
     bool trusted = false;
@@ -49,6 +51,7 @@ struct CppModuleScanRequest {
 // Blocking worker-only API; executes no compiler/build command. The scanner may execute
 // project compiler inputs, so explicit current trust is mandatory. Caller owns captured CDB
 // lifetime and validates disk bytes/source snapshots in validateCurrent. Child trees are joined.
+// Entries supply an explicit JSON output or use the separate GNU -o or clang-cl /Fo output forms.
 [[nodiscard]] Result<CppModuleGraph> scanCppModules(io::IProcessLauncher& launcher, io::IFileSystem& fs,
                                                     const CppModuleScanRequest& request);
 } // namespace frost::lang

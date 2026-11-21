@@ -68,6 +68,11 @@ enum class CMakeShell : std::uint8_t { Windows, Posix };
  */
 [[nodiscard]] std::vector<std::string> splitCompileCommandFragment(std::string_view fragment, CMakeShell shell);
 
+// An entire compilation database command must be a single literal invocation. Refuses shell
+// expansion, operators and incomplete quoting before the caller consumes the resulting argv.
+[[nodiscard]] Result<std::vector<std::string>> parseCompileCommandInvocation(std::string_view command,
+                                                                             CMakeShell shell);
+
 // One synthesized compile command.
 struct CMakeCompileCommand {
     std::string directory{};              // The top-level build directory, '/' separators (as CMake writes it).

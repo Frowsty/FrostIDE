@@ -7,9 +7,12 @@
 
 #include "support/crash_dialogs.hpp"
 #include "workbench_rig.hpp"
+#include <QApplication>
 #include <QDialog>
 #include <QLabel>
+#include <QMessageBox>
 #include <QTableWidget>
+#include <QTimer>
 
 #include <chrono>
 namespace {
@@ -61,14 +64,25 @@ void moduleActionJourney(Mutation mutation) {
         90s));
     const auto action = rig.workbench->registry().find("cpp.index.modules");
     ASSERT_TRUE(action);
+    bool failed = false;
+    QTimer dismissFailure;
+    QObject::connect(&dismissFailure, &QTimer::timeout, [&] {
+        if (auto* warning = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+            ADD_FAILURE() << warning->windowTitle().toStdString() << ": " << warning->text().toStdString();
+            failed = true;
+            warning->reject();
+        }
+    });
+    dismissFailure.start(1);
     EXPECT_EQ(rig.workbench->registry().tryInvoke(*action, {}), frost::input::InvokeResult::Ran);
     QTableWidget* relationships = nullptr;
     ASSERT_TRUE(waitFor(
         [&] {
             relationships = rig.window->findChild<QTableWidget*>(QStringLiteral("cppModuleRelationships"));
-            return relationships != nullptr;
+            return relationships != nullptr || failed;
         },
         120s));
+    ASSERT_NE(relationships, nullptr);
     int importRow = -1;
     for (int row = 0; row < relationships->rowCount(); ++row)
         if (relationships->item(row, 0)->text().contains(QStringLiteral(" -> action_fixture")) &&
