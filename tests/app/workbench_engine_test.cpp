@@ -1361,7 +1361,17 @@ TEST(WorkbenchEngine, UnexpectedDisconnectClearsMeasuredLensesAndPendingRequestB
     ASSERT_TRUE(rig.workbench->refreshEnginePerformance());
     ASSERT_TRUE(waitFor([&] { return first.requests("stats.get").size() >= 2; }, 3s));
     first.stop(); // Unexpected transport loss, rather than the explicit Disconnect action.
-    ASSERT_TRUE(waitFor([&] { return rig.workbench->engineState().boolAt("connected") == false; }, 5s));
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto snapshot = rig.workbench->engineState();
+            const auto* events = snapshot.find("events");
+            // The worker's connection bit can change before the queued GUI cleanup.
+            return events && std::ranges::any_of(events->items(), [](const Json& event) {
+                       return event.stringAt("topic") == "disconnected";
+                   });
+        },
+        5s));
+    EXPECT_EQ(rig.workbench->engineState().boolAt("connected"), false);
     EXPECT_FALSE(hasLens());
     EXPECT_EQ(tree->topLevelItemCount(), 0);
     EXPECT_FALSE(automatic->isChecked());
@@ -1481,6 +1491,14 @@ TEST(WorkbenchEngine, NativeDapStopSurvivesHeartbeatLossButReplacementGeneration
         ASSERT_TRUE(waitFor([&] { return rig.workbench->engineState().boolAt("debuggerPaused") == true; }, 3s));
         const auto authenticatedDebugGeneration = controller->sessionGeneration();
         peer.heartbeats = false; // Model a native all-stop suspending the engine's network thread.
+        const auto heartbeatTimeout = rig.workbench->engineState().unsignedAt("heartbeatTimeoutMs");
+        ASSERT_TRUE(heartbeatTimeout);
+        ASSERT_GT(*heartbeatTimeout, 0u);
+        ASSERT_LE(*heartbeatTimeout, 5000u);
+        ASSERT_FALSE(waitFor([&] { return rig.workbench->engineState().boolAt("connected") != true; },
+                             std::chrono::milliseconds(*heartbeatTimeout) + 250ms));
+        // Actual EOF still takes effect while native Stopped evidence suspends heartbeat expiry.
+        peer.stop();
         ASSERT_TRUE(waitFor(
             [&] {
                 const auto state = rig.workbench->engineState();
