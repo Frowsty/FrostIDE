@@ -26,6 +26,7 @@
 #include "frost/lang/clangd.hpp"
 #include "frost/lang/uri.hpp"
 #include "frost/project/trust_store.hpp"
+#include "frost/rpc/json.hpp"
 #include "frost/ui/lang/resolve_context.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
@@ -659,8 +660,10 @@ TEST(WorkbenchClangdSpawn, AHeaderResolveContextChoiceChangesItsDiagnostics) {
     for (const char* target : {"beta", "alpha"}) {
         SCOPED_TRACE(target);
         const std::string expected = std::string("compiled for ") + target;
-        const std::string other =
-            std::string("compiled for ") + (std::string_view(target) == "beta" ? "alpha" : "beta");
+        const bool beta = std::string_view(target) == "beta";
+        const std::string other = std::string("compiled for ") + (beta ? "alpha" : "beta");
+        const std::string define = beta ? "CONTEXT_BETA=1" : "CONTEXT_ALPHA=1";
+        const std::string otherDefine = beta ? "CONTEXT_ALPHA=1" : "CONTEXT_BETA=1";
         QAction* action = nullptr;
         for (QAction* candidate : selector->menu()->actions())
             if (candidate->text() == QString::fromUtf8(target))
@@ -671,20 +674,41 @@ TEST(WorkbenchClangdSpawn, AHeaderResolveContextChoiceChangesItsDiagnostics) {
             << "the header's diagnostics never named " << target;
         EXPECT_FALSE(liveDiagnosticsMention(rig, header, other));
         EXPECT_EQ(selector->text(), QStringLiteral("Context: ") + QString::fromUtf8(target));
-        // The oracle: clangd itself on the owned database the choice rewrote.
+        // The live overlay can reparse before the background writer publishes the selected command.
+        // Wait for the current target's actual command before starting a second clangd on the owned database.
         ASSERT_TRUE(waitFor(
             [&] {
                 const auto text = frost::io::realFileSystem().readFile(owned + "/compile_commands.json");
-                const std::size_t at = text ? text->find("shared.h") : std::string::npos;
-                return at != std::string::npos && at < text->find("alpha.cpp") && at < text->find("beta.cpp");
+                if (!text)
+                    return false;
+                const auto database = frost::rpc::parseJson(*text);
+                if (!database || !database->isArray() || database->items().empty())
+                    return false;
+                const auto& command = database->items().front();
+                if (frost::lang::documentKey(command.stringAt("file")) != frost::lang::documentKey(header))
+                    return false;
+                const auto* arguments = command.find("arguments");
+                if (!arguments || !arguments->isArray())
+                    return false;
+                const auto defines = [&](std::string_view value) {
+                    return std::ranges::any_of(arguments->items(), [&](const auto& item) {
+                        const auto* argument = item.asString();
+                        return argument && (argument->starts_with("-D") || argument->starts_with("/D")) &&
+                               std::string_view(*argument).substr(2) == value;
+                    });
+                };
+                return defines(define) && !defines(otherDefine);
             },
             60s))
-            << "the owned database does not lead with the chosen context";
+            << "the owned database does not lead with the command for " << target;
         auto check = frost::test::runClangdCheck(found->path, header, owned);
         ASSERT_TRUE(check.has_value()) << check.error().describe();
         EXPECT_EQ(check->origin, "from CDB") << check->log;
         EXPECT_TRUE(std::ranges::any_of(check->errors, [&](const std::string& e) {
             return e.find(expected) != std::string::npos;
+        })) << check->log;
+        EXPECT_FALSE(std::ranges::any_of(check->errors, [&](const std::string& e) {
+            return e.find(other) != std::string::npos;
         })) << check->log;
     }
     EXPECT_EQ(launcher.clangdStarts(), 1) << "a resolve-context choice restarted clangd";
