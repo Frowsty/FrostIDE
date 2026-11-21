@@ -26,13 +26,18 @@ TEST(FileSnapshot, RealAndMemFsEnforceTheCapBeforeCopyingAndRejectNonRegularFile
     EXPECT_FALSE(fs.readFileSnapshot(scratch.path(), 100));
     ManualClock clock;
     MemFs memory(clock);
-    ASSERT_TRUE(memory.createDirectories(scratch.path()));
-    ASSERT_TRUE(memory.writeFileAtomic(scratch.join("data"), "abcdef"));
-    EXPECT_EQ(memory.readFileSnapshot(scratch.join("data"), 6).value_or(""), "abcdef");
-    EXPECT_EQ(memory.readFileSnapshot(scratch.join("data"), 5).error().code(), ErrorCode::OutOfRange);
+    // The virtual filesystem starts with its own default root, independent of the host temp drive.
+    constexpr auto memoryDirectory = kNativePathStyle == PathStyle::Windows ? "C:\\snapshot" : "/snapshot";
+    const auto memoryFile = joinPath(memoryDirectory, "data");
+    ASSERT_TRUE(memoryFile);
+    ASSERT_TRUE(memory.createDirectories(memoryDirectory));
+    ASSERT_TRUE(memory.writeFileAtomic(*memoryFile, "abcdef"));
+    EXPECT_EQ(memory.readFileSnapshot(*memoryFile, 6).value_or(""), "abcdef");
+    EXPECT_EQ(memory.readFileSnapshot(*memoryFile, 5).error().code(), ErrorCode::OutOfRange);
+    EXPECT_FALSE(memory.readFileSnapshot(memoryDirectory, 100));
     // Explicitly select the base implementation: unsupported implementations never silently
     // fall back to an unbounded readFile(), even when that file is otherwise readable.
-    EXPECT_EQ(memory.IFileSystem::readFileSnapshot(scratch.join("data"), 6).error().code(), ErrorCode::Unsupported);
+    EXPECT_EQ(memory.IFileSystem::readFileSnapshot(*memoryFile, 6).error().code(), ErrorCode::Unsupported);
 }
 TEST(FileSnapshot, RealHardLinksAndPosixSymbolicLinksAreRefused) {
     test::ScratchDir scratch("snapshot-links");
