@@ -3,6 +3,7 @@
 #include "frost/io/process.hpp"
 #include "frost/lang/managed_service.hpp"
 #include "frost/ui/lang/language_controller.hpp"
+#include "frost/ui/shell/notifications.hpp"
 #include "frost/ui/toolwindows/trust_dialog.hpp"
 
 #include "../../src/app/src/managed_source_snapshot.hpp"
@@ -49,10 +50,11 @@ TEST(WorkbenchManaged, ActualSdkFrameworkItemsAndLaunchProfilesRetainReceipts) {
     dir.write("NuGet.Config", "<configuration><packageSources><clear/></packageSources></configuration>");
     dir.write(
         "Web.csproj",
-        R"(<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>)");
+        R"(<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><RazorComponent Include="Components/Explicit.razor" /></ItemGroup></Project>)");
     dir.write("Program.cs",
               "var app = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder(args).Build(); app.Run();");
     dir.write("Components/Real.razor", "<h1>Actual component</h1>");
+    dir.write("Components/Explicit.razor", "<h1>Explicit component</h1>");
     dir.write(
         "Properties/launchSettings.json",
         R"({"profiles":{"local":{"commandName":"Project","applicationUrl":"http://localhost:5142","environmentVariables":{"ASPNETCORE_ENVIRONMENT":"Development"},"commandLineArgs":"--profile-evidence actual"},"iis":{"commandName":"IISExpress"}}})");
@@ -70,6 +72,11 @@ TEST(WorkbenchManaged, ActualSdkFrameworkItemsAndLaunchProfilesRetainReceipts) {
     EXPECT_EQ(model->properties.at("UsingMicrosoftNETSdkWeb"), "true");
     ASSERT_TRUE(model->items.contains("RazorComponent"));
     EXPECT_TRUE(std::ranges::any_of(model->items.at("RazorComponent"),
+                                    [](const auto& item) { return item.identity.ends_with("Explicit.razor"); }));
+    // The default Razor SDK resolves implicit components later in a build target. The evaluated
+    // inventory reports this file through Content, without running the target or guessing a type.
+    ASSERT_TRUE(model->items.contains("Content"));
+    EXPECT_TRUE(std::ranges::any_of(model->items.at("Content"),
                                     [](const auto& item) { return item.identity.ends_with("Real.razor"); }));
     ASSERT_EQ(model->launchProfiles.size(), 2u);
     EXPECT_FALSE(model->launchProfiles[1].unavailable.empty());
@@ -182,7 +189,11 @@ TEST(WorkbenchManaged, RealConsoleProjectBuildsAndDebugsWithVerifiedSource) {
     frost::input::ActionContext context;
     context.trusted = true;
     EXPECT_EQ(rig.workbench->registry().tryInvoke(*action, context), frost::input::InvokeResult::Ran);
-    ASSERT_TRUE(waitFor([&] { return debugger->paused() && debugger->selectedFrame().has_value(); }, 60s));
+    const bool paused = waitFor([&] { return debugger->paused() && debugger->selectedFrame().has_value(); }, 60s);
+    std::string debuggerState = debugger->statusText().toStdString();
+    for (const auto& entry : rig.window->notifications().log())
+        debuggerState += "\n" + entry.notification.title.toStdString() + " " + entry.notification.text.toStdString();
+    ASSERT_TRUE(paused) << debuggerState;
     EXPECT_FALSE(rig.workbench->currentView()->document().dirty());
     EXPECT_EQ(debugger->selectedFrame()->path, dir.join("Program.cs"));
     EXPECT_EQ(debugger->selectedFrame()->line, 5);
@@ -241,6 +252,7 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     ASSERT_FALSE(dotnet.empty()) << "Required managed fixture lacks FROST_TEST_CSHARP_DOTNET";
     ASSERT_FALSE(assembly.empty()) << "Required managed fixture lacks FROST_TEST_CSHARP_SERVER";
     WorkDir dir("managed-workbench");
+    WorkDir profile("managed-workbench-profile");
     const std::vector<QByteArray> profileVariables = {"FROST_DOTNET_CLI_HOME",
                                                       "LOCALAPPDATA",
                                                       "APPDATA",
@@ -256,9 +268,9 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     std::vector<QByteArray> previousValues;
     for (const auto& name : profileVariables) {
         previousValues.push_back(qgetenv(name.constData()));
-        qputenv(name.constData(), QByteArray::fromStdString(dir.join("profile/" + name.toStdString())));
+        qputenv(name.constData(), QByteArray::fromStdString(profile.join(name.toStdString())));
     }
-    qputenv("FROST_SDK", QByteArray::fromStdString(dir.path()));
+    qputenv("FROST_SDK", QByteArray::fromStdString(profile.path()));
     qputenv("DOTNET_ROOT", QByteArray::fromStdString(std::string(frost::io::parentPath(dotnet))));
     const auto restoreEnvironment = qScopeGuard([profileVariables, previousValues] {
         for (std::size_t i = 0; i < profileVariables.size(); ++i) {
@@ -269,6 +281,7 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
         }
     });
     dir.write("Probe.slnx", R"(<Solution><Project Path="Lib/Lib.csproj"/><Project Path="App/App.csproj"/></Solution>)");
+    dir.write("NuGet.Config", "<configuration><packageSources><clear/></packageSources></configuration>");
     dir.write(
         "Lib/Lib.csproj",
         R"(<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>)");
@@ -283,7 +296,7 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
         "Call()=>Add(1,2); } public class Detached {}\n";
     dir.write("Lib/Operations.cs", semanticSource);
     auto options = frost::lang::managedServiceOptions(dotnet, assembly, dir.path(), true);
-    options.environment.emplace_back("DOTNET_CLI_HOME", dir.join(".dotnet-home"));
+    options.environment.emplace_back("DOTNET_CLI_HOME", profile.join(".dotnet-home"));
     for (const auto& name : profileVariables)
         if (name != "FROST_DOTNET_CLI_HOME" && name != "FROST_SDK" && name != "DOTNET_ROOT")
             options.environment.emplace_back(name.toStdString(), qgetenv(name.constData()).toStdString());
@@ -298,7 +311,7 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     frost::app::test::RigOptions config;
     config.workbench.clangd = false;
     ASSERT_TRUE(frost::app::test::copyTree(frost::io::realFileSystem(), std::string(frost::io::parentPath(assembly)),
-                                           dir.join("roslyn")));
+                                           profile.join("roslyn")));
     WorkbenchRig rig(dir, config);
     rig.show();
     ASSERT_TRUE(rig.workbench->openPath(dir.path()));
@@ -309,15 +322,14 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     auto* description = dialog->findChild<QLabel*>(QStringLiteral("trustDescription"));
     ASSERT_NE(description, nullptr);
     EXPECT_TRUE(description->text().contains(QStringLiteral("project"), Qt::CaseInsensitive));
-    dialog->trustButton()->click();
-    ASSERT_TRUE(waitFor(
-        [&] { return rig.workbench->managed() && rig.workbench->managed()->state() == frost::lang::LuaState::Running; },
-        30s));
-    auto* editor = &rig.workbench->currentView()->editor();
-    ASSERT_TRUE(waitFor([&] { return !editor->diagnostics().empty(); }, 30s)) << [&] {
+    const auto describeManaged = [&] {
         const auto* service = rig.workbench->managed();
-        if (!service)
-            return std::string("managed service stopped while waiting for diagnostics");
+        if (!service) {
+            std::string details = "managed service unavailable";
+            for (const auto& entry : rig.window->notifications().log())
+                details += '\n' + entry.notification.text.toStdString();
+            return details;
+        }
         std::string details = "managed state=" + std::to_string(static_cast<int>(service->state())) +
                               ", restarts=" + std::to_string(service->restarts());
         const auto version = service->documentVersion(dir.join("App/Example.cs"));
@@ -327,7 +339,14 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
         for (const auto& line : service->recentStderr())
             details += "\n" + line;
         return details;
-    }();
+    };
+    dialog->trustButton()->click();
+    ASSERT_TRUE(waitFor(
+        [&] { return rig.workbench->managed() && rig.workbench->managed()->state() == frost::lang::LuaState::Running; },
+        65s))
+        << describeManaged();
+    auto* editor = &rig.workbench->currentView()->editor();
+    ASSERT_TRUE(waitFor([&] { return !editor->diagnostics().empty(); }, 30s)) << describeManaged();
     editor->goToLine(6, 14);
     bool hover = waitFor(
         [&] {
@@ -369,13 +388,30 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     auto* semanticView = rig.workbench->currentView();
     const auto choose = [&](std::size_t offset, QString title, std::function<void()> duringPreview = {},
                             std::function<void()> beforeChoose = {}) {
+        const bool ready = waitFor(
+            [&] {
+                const auto* service = rig.workbench->managed();
+                return service && service->state() == frost::lang::LuaState::Running &&
+                       service->documentVersion(semanticView->path()).has_value();
+            },
+            30s);
+        EXPECT_TRUE(ready) << describeManaged();
+        if (!ready)
+            return false;
         semanticView->editor().editor().setState(frost::text::EditorState::caretAt(frost::ByteOffset{offset}));
+        rig.window->activateWindow();
         semanticView->widget()->setFocus();
+        if (!waitFor([&] { return semanticView->widget()->hasFocus(); }, 5s)) {
+            ADD_FAILURE() << "Managed editor did not regain focus after the previous action";
+            return false;
+        }
         frost::app::test::sendKey(semanticView->widget(), Qt::Key_Return, Qt::AltModifier);
         auto& choices = rig.workbench->language()->choicePopup();
         int index = -1;
-        EXPECT_TRUE(waitFor(
+        const bool offered = waitFor(
             [&] {
+                if (!choices.isVisible())
+                    return false;
                 for (int row = 0; row < choices.list()->count(); ++row)
                     if (choices.list()->item(row)->text().contains(title, Qt::CaseInsensitive)) {
                         index = row;
@@ -383,7 +419,11 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
                     }
                 return false;
             },
-            30s));
+            30s);
+        QStringList observedTitles;
+        for (int row = 0; row < choices.list()->count(); ++row)
+            observedTitles << choices.list()->item(row)->text();
+        EXPECT_TRUE(offered) << observedTitles.join(QStringLiteral("\n")).toStdString();
         if (index < 0)
             return false;
         bool observed = false;
@@ -413,6 +453,10 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
         return observed;
     };
     const auto buildLibrary = [&] {
+        ASSERT_TRUE(rig.workbench->save(*semanticView));
+        auto contents = frost::io::realFileSystem().readFileSnapshot(semanticView->path(), 65536U);
+        ASSERT_TRUE(contents) << contents.error().describe();
+        EXPECT_EQ(*contents, semanticView->editor().editor().text().text());
         auto build = restore;
         build.arguments = {"build", dir.join("Lib/Lib.csproj"), "--no-restore", "--nologo"};
         auto result = frost::io::runToCompletion(frost::io::realProcessLauncher(), build, {}, 45s);
@@ -430,23 +474,35 @@ TEST(WorkbenchManaged, TrustAndUnsavedCrossProjectRenameReachEditors) {
     ASSERT_TRUE(rig.workbench->redoRefactoring());
     EXPECT_EQ(semanticView->editor().editor().text().text(), reordered);
     ASSERT_TRUE(rig.workbench->undoRefactoring());
-    const auto projectBefore = frost::io::realFileSystem().readFileSnapshot(dir.join("Lib/Lib.csproj"), 65536U);
-    ASSERT_TRUE(projectBefore);
+    const auto readLibraryProject = [&] {
+        const auto path = dir.join("Lib/Lib.csproj");
+        auto& fs = frost::io::realFileSystem();
+        auto bytes = fs.readFileSnapshot(path, 65536U);
+        if (!bytes)
+            (void)waitFor([&] { return (bytes = fs.readFileSnapshot(path, 65536U)).has_value(); }, 5s);
+        return bytes;
+    };
+    const auto projectBefore = readLibraryProject();
+    ASSERT_TRUE(projectBefore) << projectBefore.error().describe();
     ASSERT_TRUE(choose(semanticSource.find("Detached {}"), QStringLiteral("Detached.cs")));
     EXPECT_TRUE(frost::io::realFileSystem().exists(dir.join("Lib/Detached.cs")).value_or(false));
-    auto projectAfter = frost::io::realFileSystem().readFileSnapshot(dir.join("Lib/Lib.csproj"), 65536U);
-    ASSERT_TRUE(projectAfter);
+    auto projectAfter = readLibraryProject();
+    ASSERT_TRUE(projectAfter) << projectAfter.error().describe();
     EXPECT_NE(projectAfter->find("Detached.cs"), std::string::npos);
     buildLibrary();
     ASSERT_TRUE(rig.workbench->undoRefactoring());
     EXPECT_FALSE(frost::io::realFileSystem().exists(dir.join("Lib/Detached.cs")).value_or(true));
-    EXPECT_EQ(frost::io::realFileSystem().readFileSnapshot(dir.join("Lib/Lib.csproj"), 65536U).value(), *projectBefore);
+    const auto projectRestored = readLibraryProject();
+    ASSERT_TRUE(projectRestored) << projectRestored.error().describe();
+    EXPECT_EQ(*projectRestored, *projectBefore);
     EXPECT_EQ(semanticView->editor().editor().text().text(), semanticSource);
     // Occupied endpoint at adoption must refuse the complete group, preserving both source and project.
     ASSERT_TRUE(choose(semanticSource.find("Detached {}"), QStringLiteral("Detached.cs"),
                        [&] { dir.write("Lib/Detached.cs", "// occupied during preview\n"); }));
     EXPECT_EQ(semanticView->editor().editor().text().text(), semanticSource);
-    EXPECT_EQ(frost::io::realFileSystem().readFileSnapshot(dir.join("Lib/Lib.csproj"), 65536U).value(), *projectBefore);
+    const auto projectAfterRefusedMove = readLibraryProject();
+    ASSERT_TRUE(projectAfterRefusedMove) << projectAfterRefusedMove.error().describe();
+    EXPECT_EQ(*projectAfterRefusedMove, *projectBefore);
     EXPECT_FALSE(choose(semanticSource.find("int first"), QStringLiteral("Swap first two parameters"), {}, [&] {
         EXPECT_TRUE(rig.trust->untrust(dir.path()));
         EXPECT_TRUE(waitFor([&] { return rig.workbench->managed() == nullptr; }, 5s));
