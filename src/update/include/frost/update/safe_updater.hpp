@@ -18,6 +18,10 @@
 
 namespace frost::update {
 
+namespace detail {
+struct InstallOwnership;
+}
+
 inline constexpr std::string_view kDefaultExecutableName =
 #ifdef _WIN32
     "frost.exe";
@@ -86,11 +90,13 @@ public:
 
 private:
     [[nodiscard]] Result<void> stagePayload(const SafeUpdateSpec& spec, std::string_view stageDir,
-                                            std::optional<bool> compressed) const;
+                                            std::optional<bool> compressed, bool requireVerifiedArchive) const;
     [[nodiscard]] Result<void> extractZipArchive(std::string_view zipPath, std::string_view destDir,
                                                  IClock::Duration timeout) const;
     [[nodiscard]] Result<void> copyDirectoryTree(std::string_view srcDir, std::string_view dstDir) const;
-    [[nodiscard]] Result<void> moveOrCopyTree(std::string_view srcDir, std::string_view dstDir) const;
+    [[nodiscard]] Result<void> moveOrCopyTree(std::string_view srcDir, std::string_view dstDir,
+                                              bool replaceDestination = true,
+                                              const detail::InstallOwnership* ownership = nullptr) const;
 
     io::IFileSystem& m_fs;
     io::IProcessLauncher& m_launcher;

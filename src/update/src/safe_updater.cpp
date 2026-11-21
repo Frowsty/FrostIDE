@@ -11,6 +11,8 @@
 #include <span>
 
 #ifdef _WIN32
+#include "install_ownership_win.hpp"
+
 #include <windows.h>
 
 #include <winioctl.h>
@@ -138,6 +140,28 @@ Result<void> createUpdateDirectory(io::IFileSystem& fs, std::string_view path, s
     return {};
 }
 
+#ifdef _WIN32
+Result<void> createExclusiveUpdateDirectory(std::string_view path, std::optional<bool> compressed) {
+    auto wide = io::toWin32Path(path);
+    if (!wide)
+        return std::unexpected(wide.error());
+    if (!CreateDirectoryW(wide->c_str(), nullptr)) {
+        const auto error = GetLastError();
+        if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS)
+            return fail(ErrorCode::Busy, "The update destination already exists: " + std::string(path));
+        return std::unexpected(io::win32Error(error, "create private update directory", path));
+    }
+    if (compressed) {
+        auto changed = setDirectoryCompression(path, *compressed);
+        if (!changed) {
+            (void)RemoveDirectoryW(wide->c_str());
+            return changed;
+        }
+    }
+    return {};
+}
+#endif
+
 } // namespace
 
 Result<void> SafeUpdater::verifyPayloadFile(std::string_view payloadPath, const Release& release) const {
@@ -175,21 +199,45 @@ Result<void> SafeUpdater::copyDirectoryTree(std::string_view srcDir, std::string
     return {};
 }
 
-Result<void> SafeUpdater::moveOrCopyTree(std::string_view srcDir, std::string_view dstDir) const {
-    if (auto removed = m_fs.removeAll(dstDir); !removed && removed.error().code() != ErrorCode::NotFound)
-        return std::unexpected(removed.error());
+Result<void> SafeUpdater::moveOrCopyTree(std::string_view srcDir, std::string_view dstDir,
+                                        bool replaceDestination, const detail::InstallOwnership* ownership) const {
+    if (replaceDestination) {
+        if (auto removed = m_fs.removeAll(dstDir); !removed && removed.error().code() != ErrorCode::NotFound)
+            return std::unexpected(removed.error());
+    }
     if (auto renamed = m_fs.rename(srcDir, dstDir); renamed)
         return {};
 #ifdef _WIN32
+    if (!replaceDestination) {
+        auto occupied = m_fs.exists(dstDir);
+        if (!occupied)
+            return std::unexpected(occupied.error());
+        if (*occupied)
+            return fail(ErrorCode::Busy, "The update destination already exists: " + std::string(dstDir));
+    }
     // Across volumes a new directory does not inherit the source root's policy.
     auto compressed = directoryCompression(srcDir);
     if (!compressed)
         return std::unexpected(compressed.error());
-    if (auto created = createUpdateDirectory(m_fs, dstDir, *compressed); !created)
+    auto created = replaceDestination ? createUpdateDirectory(m_fs, dstDir, *compressed)
+                                      : createExclusiveUpdateDirectory(dstDir, *compressed);
+    if (!created)
         return created;
 #endif
     if (auto copied = copyDirectoryTree(srcDir, dstDir); !copied)
         return std::unexpected(copied.error());
+#ifdef _WIN32
+    if (ownership) {
+        // A cross-volume move is copy-and-remove. Preserve both trees if either stopped matching
+        // its receipt during the copy instead of deleting unowned source bytes.
+        if (auto copied = detail::validateInstallOwnership(m_fs, dstDir, *ownership); !copied)
+            return copied;
+        if (auto source = detail::validateInstallOwnership(m_fs, srcDir, *ownership); !source)
+            return source;
+    }
+#else
+    (void)ownership;
+#endif
     if (auto cleaned = m_fs.removeAll(srcDir); !cleaned)
         return std::unexpected(cleaned.error());
     return {};
@@ -245,15 +293,19 @@ Result<void> SafeUpdater::extractZipArchive(std::string_view zipPath, std::strin
 }
 
 Result<void> SafeUpdater::stagePayload(const SafeUpdateSpec& spec, std::string_view stageDir,
-                                       std::optional<bool> compressed) const {
-    if (auto removed = m_fs.removeAll(stageDir); !removed && removed.error().code() != ErrorCode::NotFound)
-        return std::unexpected(removed.error());
-    if (auto created = createUpdateDirectory(m_fs, stageDir, compressed); !created)
-        return std::unexpected(created.error());
+                                       std::optional<bool> compressed, bool requireVerifiedArchive) const {
+    if (!requireVerifiedArchive) {
+        if (auto removed = m_fs.removeAll(stageDir); !removed && removed.error().code() != ErrorCode::NotFound)
+            return std::unexpected(removed.error());
+        if (auto created = createUpdateDirectory(m_fs, stageDir, compressed); !created)
+            return std::unexpected(created.error());
+    }
 
     auto st = m_fs.status(spec.payloadPath);
     if (!st)
         return std::unexpected(st.error());
+    if (requireVerifiedArchive && (!spec.expectedRelease || st->type != io::FileType::Regular))
+        return fail(ErrorCode::Unsupported, "A per-user install requires a verified update ZIP");
 
     if (st->type == io::FileType::Directory) {
         if (spec.expectedRelease) {
@@ -283,14 +335,31 @@ Result<void> SafeUpdater::stagePayload(const SafeUpdateSpec& spec, std::string_v
     }
 
     if (hasZipMagicOrSuffix(spec.payloadPath, *rawBytes)) {
+        std::string archivePath = spec.payloadPath;
+        if (requireVerifiedArchive) {
+            // Extract the verified bytes, even if the original download is subsequently replaced.
+            auto snapshot = io::joinPath(stageDir, ".verified-update-input.zip");
+            if (!snapshot)
+                return std::unexpected(snapshot.error());
+            if (auto written = m_fs.writeFileAtomic(*snapshot, *rawBytes); !written)
+                return written;
+            archivePath = std::move(*snapshot);
+        }
         const std::string rawExtractDir = std::string(stageDir) + ".extract";
-        if (auto removed = m_fs.removeAll(rawExtractDir); !removed && removed.error().code() != ErrorCode::NotFound)
-            return std::unexpected(removed.error());
-        if (auto created = createUpdateDirectory(m_fs, rawExtractDir, compressed); !created) {
-            (void)m_fs.removeAll(rawExtractDir);
+        if (!requireVerifiedArchive) {
+            if (auto removed = m_fs.removeAll(rawExtractDir); !removed && removed.error().code() != ErrorCode::NotFound)
+                return std::unexpected(removed.error());
+            if (auto created = createUpdateDirectory(m_fs, rawExtractDir, compressed); !created) {
+                (void)m_fs.removeAll(rawExtractDir);
+                return created;
+            }
+        }
+#ifdef _WIN32
+        else if (auto created = createExclusiveUpdateDirectory(rawExtractDir, compressed); !created) {
             return created;
         }
-        auto extracted = extractZipArchive(spec.payloadPath, rawExtractDir, spec.extractTimeout);
+#endif
+        auto extracted = extractZipArchive(archivePath, rawExtractDir, spec.extractTimeout);
         if (!extracted) {
             (void)m_fs.removeAll(rawExtractDir);
             return std::unexpected(extracted.error());
@@ -320,6 +389,9 @@ Result<void> SafeUpdater::stagePayload(const SafeUpdateSpec& spec, std::string_v
         (void)m_fs.removeAll(rawExtractDir);
         return moved;
     }
+
+    if (requireVerifiedArchive)
+        return fail(ErrorCode::Unsupported, "A per-user install requires a verified update ZIP");
 
     // Single-binary payload: place at <stageDir>/<executableRelativePath>.
     auto stagedExe = io::joinPath(stageDir, spec.executableRelativePath);
@@ -351,7 +423,15 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
         return fail(ErrorCode::InvalidArgument, "installDir and backupDir must be distinct directories");
 
     std::optional<bool> compressed;
+    bool requireVerifiedArchive = false;
+    const detail::InstallOwnership* originalOwnership = nullptr;
+    const detail::InstallOwnership* candidateOwnership = nullptr;
 #ifdef _WIN32
+    std::optional<detail::InstallOwnership> ownership;
+    std::optional<detail::InstallOwnership> stagedOwnership;
+    auto receiptPath = io::joinPath(*normInstall, detail::kInstallReceipt);
+    if (!receiptPath)
+        return std::unexpected(receiptPath.error());
     auto originalExists = m_fs.exists(*normInstall);
     if (!originalExists)
         return std::unexpected(originalExists.error());
@@ -360,11 +440,38 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
         if (!previous)
             return std::unexpected(previous.error());
         compressed = *previous;
+        auto hasReceipt = m_fs.exists(*receiptPath);
+        if (!hasReceipt)
+            return std::unexpected(hasReceipt.error());
+        if (*hasReceipt) {
+            auto receipt = m_fs.readFileSnapshot(*receiptPath, detail::kInstallReceiptLimit);
+            if (!receipt)
+                return std::unexpected(receipt.error());
+            auto parsed = detail::parseInstallOwnership(std::move(*receipt));
+            if (!parsed)
+                return std::unexpected(parsed.error());
+            ownership = std::move(*parsed);
+            originalOwnership = &*ownership;
+            requireVerifiedArchive = true;
+        }
     }
 #endif
     // Apply the existing directory's policy before creating any payload entries.
     const std::string stageDir = *normBackup + ".stage";
-    if (auto staged = stagePayload(spec, stageDir, compressed); !staged) {
+    if (requireVerifiedArchive) {
+        for (const auto& path : {*normBackup, stageDir, stageDir + ".extract", stageDir + ".failed"}) {
+            auto occupied = m_fs.exists(path);
+            if (!occupied)
+                return std::unexpected(occupied.error());
+            if (*occupied)
+                return fail(ErrorCode::Busy, "An update workspace path already exists: " + path);
+        }
+#ifdef _WIN32
+        if (auto created = createExclusiveUpdateDirectory(stageDir, compressed); !created)
+            return std::unexpected(created.error());
+#endif
+    }
+    if (auto staged = stagePayload(spec, stageDir, compressed, requireVerifiedArchive); !staged) {
         (void)m_fs.removeAll(stageDir);
         return std::unexpected(staged.error());
     }
@@ -377,6 +484,25 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
     }
     const bool hadPreviousInstall = *hadPreviousInstallResult;
 #ifdef _WIN32
+    if (ownership) {
+        const ReleaseFloor floor{
+            .version = spec.expectedRelease->version,
+            .build = spec.expectedRelease->build,
+            .digest = hexEncodeSha256(spec.expectedRelease->digest),
+        };
+        auto encoded = encodeReleaseFloor(floor);
+        if (!encoded) {
+            (void)m_fs.removeAll(stageDir);
+            return std::unexpected(encoded.error());
+        }
+        auto recorded = detail::writeInstallOwnership(m_fs, stageDir, *ownership, *encoded);
+        if (!recorded) {
+            (void)m_fs.removeAll(stageDir);
+            return std::unexpected(recorded.error());
+        }
+        stagedOwnership = std::move(*recorded);
+        candidateOwnership = &*stagedOwnership;
+    }
     if (hadPreviousInstall != *originalExists) {
         (void)m_fs.removeAll(stageDir);
         return fail(ErrorCode::Busy, "Update installation appeared or disappeared while staging");
@@ -389,20 +515,65 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
                 return std::unexpected(current.error());
             return fail(ErrorCode::Busy, "Update installation compression changed while staging");
         }
+        auto hasReceipt = m_fs.exists(*receiptPath);
+        if (!hasReceipt || *hasReceipt != ownership.has_value()) {
+            (void)m_fs.removeAll(stageDir);
+            if (!hasReceipt)
+                return std::unexpected(hasReceipt.error());
+            return fail(ErrorCode::Busy, "The per-user install receipt appeared or disappeared during the update");
+        }
+        if (ownership) {
+            if (auto validated = detail::validateInstallOwnership(m_fs, *normInstall, *ownership); !validated) {
+                (void)m_fs.removeAll(stageDir);
+                return std::unexpected(validated.error());
+            }
+        }
     }
 #endif
     if (hadPreviousInstall) {
-        if (auto backedUp = moveOrCopyTree(*normInstall, *normBackup); !backedUp) {
+        if (auto backedUp = moveOrCopyTree(*normInstall, *normBackup, !requireVerifiedArchive, originalOwnership);
+            !backedUp) {
             (void)m_fs.removeAll(stageDir);
             return std::unexpected(backedUp.error());
         }
     }
+#ifdef _WIN32
+    if (ownership) {
+        if (auto verified = detail::validateInstallOwnership(m_fs, *normBackup, *ownership); !verified) {
+            (void)m_fs.removeAll(stageDir);
+            auto restored = moveOrCopyTree(*normBackup, *normInstall, false);
+            if (!restored)
+                return fail(ErrorCode::Busy, "The installation changed while moving to backup; the backup was retained: " +
+                                                 restored.error().message());
+            return std::unexpected(verified.error());
+        }
+    }
+#endif
 
     // Move staged update into installDir.
-    if (auto installed = moveOrCopyTree(stageDir, *normInstall); !installed) {
-        (void)m_fs.removeAll(stageDir);
-        if (hadPreviousInstall)
-            (void)moveOrCopyTree(*normBackup, *normInstall);
+    if (auto installed = moveOrCopyTree(stageDir, *normInstall, !requireVerifiedArchive, candidateOwnership);
+        !installed) {
+        bool removeStage = !requireVerifiedArchive;
+#ifdef _WIN32
+        if (stagedOwnership)
+            removeStage = detail::validateInstallOwnership(m_fs, stageDir, *stagedOwnership).has_value();
+#endif
+        if (removeStage)
+            (void)m_fs.removeAll(stageDir);
+#ifdef _WIN32
+        if (ownership) {
+            auto safeBackup = detail::validateInstallOwnership(m_fs, *normBackup, *ownership);
+            if (!safeBackup)
+                return fail(ErrorCode::Busy, "Update publication failed; the changed backup was preserved: " +
+                                                 safeBackup.error().message());
+        }
+#endif
+        if (hadPreviousInstall) {
+            auto restored = moveOrCopyTree(*normBackup, *normInstall, !requireVerifiedArchive, originalOwnership);
+            if (!restored && requireVerifiedArchive)
+                return fail(ErrorCode::IoError, "Update publication failed; the backup was retained: " +
+                                                    restored.error().message());
+        }
         return std::unexpected(installed.error());
     }
 
@@ -445,13 +616,20 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
                 .build = spec.expectedRelease->build,
                 .digest = hexEncodeSha256(spec.expectedRelease->digest),
             };
-            if (auto encoded = encodeReleaseFloor(floor)) {
-                if (auto markerPath = io::joinPath(*normInstall, "installed-release.json"))
-                    (void)m_fs.writeFileAtomic(*markerPath, *encoded);
+            if (!requireVerifiedArchive) {
+                if (auto encoded = encodeReleaseFloor(floor)) {
+                    if (auto markerPath = io::joinPath(*normInstall, "installed-release.json"))
+                        (void)m_fs.writeFileAtomic(*markerPath, *encoded);
+                }
             }
         }
 
-        if (!spec.keepBackupOnSuccess && hadPreviousInstall)
+        bool removeBackup = !spec.keepBackupOnSuccess && hadPreviousInstall;
+#ifdef _WIN32
+        if (removeBackup && ownership)
+            removeBackup = detail::validateInstallOwnership(m_fs, *normBackup, *ownership).has_value();
+#endif
+        if (removeBackup)
             (void)m_fs.removeAll(*normBackup);
 
         if (spec.launchDetachedAfterInstall) {
@@ -487,10 +665,32 @@ Result<UpdateOutcome> SafeUpdater::applyUpdate(const SafeUpdateSpec& spec) const
         return fail(ErrorCode::Corrupt, outcome.failureReason + " (no previous installation to roll back to)");
     }
 
-    if (auto restored = moveOrCopyTree(*normBackup, *normInstall); !restored) {
+#ifdef _WIN32
+    std::string failedInstall;
+    if (stagedOwnership) {
+        auto previous = detail::validateInstallOwnership(m_fs, *normBackup, *ownership);
+        if (!previous)
+            return fail(ErrorCode::Busy, outcome.failureReason + "; rollback retained the changed backup: " +
+                                             previous.error().message());
+        auto current = detail::validateInstallOwnership(m_fs, *normInstall, *stagedOwnership);
+        if (!current)
+            return fail(ErrorCode::Busy, outcome.failureReason + "; rollback preserved both directories: " +
+                                             current.error().message());
+        failedInstall = stageDir + ".failed";
+        if (auto moved = moveOrCopyTree(*normInstall, failedInstall, false, candidateOwnership); !moved)
+            return fail(ErrorCode::IoError, outcome.failureReason + "; could not preserve the failed installation: " +
+                                                moved.error().message());
+    }
+#endif
+    if (auto restored = moveOrCopyTree(*normBackup, *normInstall, !requireVerifiedArchive, originalOwnership);
+        !restored) {
         return fail(ErrorCode::IoError,
                     outcome.failureReason + "; rollback restore failed: " + restored.error().message());
     }
+#ifdef _WIN32
+    if (stagedOwnership && detail::validateInstallOwnership(m_fs, failedInstall, *stagedOwnership))
+        (void)m_fs.removeAll(failedInstall);
+#endif
     ensureExecutablePermission(installedExe);
     outcome.rolledBack = true;
 

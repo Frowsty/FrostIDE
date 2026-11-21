@@ -2,6 +2,7 @@
 // Real-process integration tests for SafeUpdater with health check and automatic rollback (FND-11).
 
 #include <frost/io/file_system.hpp>
+#include <frost/io/async_process.hpp>
 #include <frost/io/path.hpp>
 #include <frost/io/process.hpp>
 #include <frost/update/safe_updater.hpp>
@@ -9,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -179,6 +181,148 @@ TEST_F(SafeUpdaterTest, SideBySidePreservesExistingDirectoryCompression) {
         expectCompression(install / "data/resource.txt", compressed);
         expectCompression(cache / "backup", compressed);
         expectCompression(cache, !compressed);
+    }
+}
+
+TEST_F(SafeUpdaterTest, PerUserReceiptTracksVerifiedZipAndSurvivesRollback) {
+    const auto installDir = *io::fromStdPath(m_root / "install");
+    const auto backupDir = *io::fromStdPath(m_root / "backup");
+    const auto sourceDir = *io::fromStdPath(m_root / "source");
+    const auto archive = *io::fromStdPath(m_root / "payload.zip");
+    const auto marker = mustJoin(installDir, ".frost-install.json");
+    const auto oldImage = makeHelperBinary("1.0.0", 0);
+    const auto digest = [](std::string_view bytes) {
+        const auto release = makeReleaseForBytes(bytes, {}, 0);
+        std::array<char, 65> hex{};
+        sodium_bin2hex(hex.data(), hex.size(), release.digest.data(), release.digest.size());
+        return std::string(hex.data());
+    };
+    const auto seed = [&](std::string_view dir, std::string_view image) {
+        writeExecutable(mustJoin(dir, "frost.exe"), image);
+        writeFileWithParents(mustJoin(dir, "frost_app.dll"), "fixture");
+        writeFileWithParents(mustJoin(dir, "LICENSE"), "fixture");
+        writeFileWithParents(mustJoin(dir, "NOTICE"), "fixture");
+    };
+    seed(installDir, oldImage);
+    const auto constantHash = digest("fixture");
+    const auto oldMarker = "{\"schema\":1,\"associated\":true,\"associationReceipt\":{\"owned\":[]},\"files\":"
+                           "{\"frost.exe\":\"" + digest(oldImage) + "\",\"frost_app.dll\":\"" + constantHash +
+                           "\",\"LICENSE\":\"" + constantHash + "\",\"NOTICE\":\"" + constantHash + "\"}}";
+    writeFileWithParents(marker, oldMarker);
+
+    wchar_t systemDirectory[MAX_PATH]{};
+    const UINT written = GetSystemDirectoryW(systemDirectory, MAX_PATH);
+    ASSERT_GT(written, 0U);
+    ASSERT_LT(written, static_cast<UINT>(MAX_PATH));
+    const auto tar = io::fromStdPath(std::filesystem::path(systemDirectory) / L"tar.exe");
+    ASSERT_TRUE(tar) << tar.error().describe();
+    io::ProcessSpec pack;
+    pack.executable = *tar;
+    pack.arguments = {"-a", "-c", "-f", archive, "-C", sourceDir, "frost.exe", "frost_app.dll", "LICENSE", "NOTICE"};
+    SafeUpdateSpec spec;
+    spec.installDir = installDir;
+    spec.backupDir = backupDir;
+    spec.payloadPath = archive;
+    spec.launchDetachedAfterInstall = false;
+    SafeUpdater updater(m_fs, m_launcher);
+
+    const auto retained = mustJoin(backupDir, "user-notes.txt");
+    writeFileWithParents(retained, "older retained backup");
+    const auto occupied = updater.applyUpdate(spec);
+    ASSERT_FALSE(occupied);
+    EXPECT_EQ(occupied.error().code(), ErrorCode::Busy);
+    EXPECT_EQ(m_fs.readFile(retained), Result<std::string>("older retained backup"));
+    EXPECT_EQ(m_fs.readFile(marker), Result<std::string>(oldMarker));
+    ASSERT_TRUE(m_fs.removeAll(backupDir));
+
+    for (const bool healthy : {false, true}) {
+        SCOPED_TRACE(healthy);
+        const auto image = makeHelperBinary("2.0.0", healthy ? 0 : 17);
+        seed(sourceDir, image);
+        auto packed = io::runToCompletion(m_launcher, pack, {}, std::chrono::seconds{10});
+        ASSERT_TRUE(packed) << packed.error().describe();
+        ASSERT_EQ(packed->exitCode, 0) << packed->stderrBytes;
+        const auto rawZip = m_fs.readFile(archive);
+        ASSERT_TRUE(rawZip) << rawZip.error().describe();
+        spec.expectedRelease = makeReleaseForBytes(*rawZip, "2.0.0", 200);
+        if (healthy) {
+            const auto foreign = mustJoin(installDir, "user-notes.txt");
+            writeFileWithParents(foreign, "unowned");
+            const auto refused = updater.applyUpdate(spec);
+            ASSERT_FALSE(refused);
+            EXPECT_EQ(refused.error().code(), ErrorCode::Busy);
+            EXPECT_EQ(m_fs.readFile(foreign), Result<std::string>("unowned"));
+            EXPECT_EQ(m_fs.readFile(marker), Result<std::string>(oldMarker));
+            ASSERT_TRUE(m_fs.removeFile(foreign));
+        }
+        const auto outcome = updater.applyUpdate(spec);
+        ASSERT_TRUE(outcome) << outcome.error().describe();
+        EXPECT_EQ(outcome->applied, healthy);
+        EXPECT_EQ(outcome->rolledBack, !healthy);
+        const auto receipt = m_fs.readFile(marker);
+        ASSERT_TRUE(receipt) << receipt.error().describe();
+        if (healthy) {
+            EXPECT_NE(receipt->find("\"associationReceipt\":{\"owned\":[]}"), std::string::npos);
+            EXPECT_NE(receipt->find("\"frost.exe\":\"" + digest(image) + "\""), std::string::npos);
+            const auto floor = m_fs.readFile(mustJoin(installDir, "installed-release.json"));
+            ASSERT_TRUE(floor) << floor.error().describe();
+            EXPECT_NE(receipt->find("\"installed-release.json\":\"" + digest(*floor) + "\""), std::string::npos);
+            EXPECT_FALSE(*m_fs.exists(backupDir));
+        } else {
+            EXPECT_EQ(*receipt, oldMarker);
+        }
+        EXPECT_EQ(m_fs.readFile(mustJoin(installDir, "frost.exe")), Result<std::string>(healthy ? image : oldImage));
+    }
+
+    class PublishObserver final : public io::IProcessLauncher {
+    public:
+        PublishObserver(std::string dir, std::string changedDir)
+            : m_dir(std::move(dir)), m_changedDir(std::move(changedDir)) {}
+
+        Result<std::unique_ptr<io::IProcess>> launch(const io::ProcessSpec& request) override {
+            if (request.workingDirectory == m_dir) {
+                ++healthStarts;
+                auto writtenFile =
+                    io::realFileSystem().writeFileAtomic(mustJoin(m_changedDir, "late-user-note"), "keep me");
+                if (!writtenFile)
+                    return std::unexpected(writtenFile.error());
+            }
+            return io::realProcessLauncher().launch(request);
+        }
+
+        Result<std::unique_ptr<io::IAsyncProcess>> launchAsync(const io::ProcessSpec& request,
+                                                               const io::AsyncContext& context) override {
+            return io::realProcessLauncher().launchAsync(request, context);
+        }
+
+        int healthStarts = 0;
+
+    private:
+        std::string m_dir;
+        std::string m_changedDir;
+    };
+    const auto previousMarker = m_fs.readFile(marker);
+    ASSERT_TRUE(previousMarker);
+    seed(sourceDir, makeHelperBinary("3.0.0", 17));
+    const auto packed = io::runToCompletion(m_launcher, pack, {}, std::chrono::seconds{10});
+    ASSERT_TRUE(packed);
+    ASSERT_EQ(packed->exitCode, 0) << packed->stderrBytes;
+    const auto badZip = m_fs.readFile(archive);
+    ASSERT_TRUE(badZip);
+    spec.expectedRelease = makeReleaseForBytes(*badZip, "3.0.0", 300);
+    for (const auto& changed : {installDir, backupDir}) {
+        SCOPED_TRACE(changed);
+        PublishObserver observer(installDir, changed);
+        const auto conflict = SafeUpdater(m_fs, observer).applyUpdate(spec);
+        ASSERT_FALSE(conflict);
+        EXPECT_EQ(conflict.error().code(), ErrorCode::Busy);
+        EXPECT_EQ(observer.healthStarts, 1);
+        EXPECT_EQ(m_fs.readFile(mustJoin(changed, "late-user-note")), Result<std::string>("keep me"));
+        EXPECT_EQ(m_fs.readFile(mustJoin(backupDir, ".frost-install.json")), previousMarker);
+        if (changed == installDir) {
+            ASSERT_TRUE(m_fs.removeAll(installDir));
+            ASSERT_TRUE(m_fs.rename(backupDir, installDir));
+        }
     }
 }
 #endif
