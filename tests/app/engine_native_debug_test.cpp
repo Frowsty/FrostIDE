@@ -195,7 +195,8 @@ TEST_F(EngineNativeDebugRegistryTest, SelectionNeverRebindsAndTerminateUsesTheEx
     process(9999);
     auto peer = launch(4321);
     ASSERT_TRUE(peer);
-    ASSERT_TRUE(overlay->binding());
+    // The transport publishes the PID before its queued GUI notification binds the overlay.
+    ASSERT_TRUE(eventsUntil([&] { return overlay->binding().has_value(); }));
     const auto bound = *overlay->binding();
     EXPECT_EQ(bound.registrySessionId, peer->id);
     ASSERT_TRUE(registry->select(registry->primaryId()));
