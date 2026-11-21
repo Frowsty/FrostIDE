@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Round-trip and rollback tests for split Linux ELF symbols."""
+# Verify round trips and rollback when staging split Linux ELF symbols.
 
 import os
 from pathlib import Path
