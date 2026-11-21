@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -204,6 +205,35 @@ TEST(ClangdE2E, RequiredDatabaseFailureOrAbsenceHasZeroClangdLaunches) {
         ClangdService service(launcher, env.context(), std::move(options));
         ASSERT_TRUE(service.start());
         ASSERT_TRUE(waitFor([&] { return service.state() == ClangdState::Failed; }, 5s));
+        EXPECT_TRUE(launcher.launches().empty());
+        env.run(service.stop());
+    }
+}
+
+TEST(ClangdE2E, RevokedLaunchAdmissionChecksBeforeLookupAndAgainBeforeSpawn) {
+    class ObservedCommands final : public frost::lang::ICompileCommandsProvider {
+    public:
+        frost::Result<std::optional<frost::lang::CompileCommandsLocation>> locate() override {
+            ++lookups;
+            return std::optional<frost::lang::CompileCommandsLocation>{};
+        }
+        std::atomic<unsigned> lookups{0};
+    };
+    for (const bool allowLookup : {false, true}) {
+        SCOPED_TRACE(allowLookup);
+        frost::io::ScriptedProcessLauncher launcher;
+        Env env;
+        ASSERT_TRUE(env.ok());
+        const auto provider = std::make_shared<ObservedCommands>();
+        ClangdServiceOptions options;
+        options.clangdPath = fixture("dummy-clangd");
+        options.workspaceRoot = fixture(".");
+        options.compileCommands = provider;
+        options.launchAllowed = [provider, allowLookup] { return allowLookup && provider->lookups.load() == 0; };
+        ClangdService service(launcher, env.context(), std::move(options));
+        ASSERT_TRUE(service.start());
+        ASSERT_TRUE(waitFor([&] { return service.state() == ClangdState::Failed; }, 5s));
+        EXPECT_EQ(provider->lookups.load(), allowLookup ? 1U : 0U);
         EXPECT_TRUE(launcher.launches().empty());
         env.run(service.stop());
     }

@@ -643,6 +643,11 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
         const std::stop_token stop = self->stop.get_token();
         unsigned consecutive = 0;
         while (!stop.stop_requested()) {
+            if (self->options.launchAllowed && !self->options.launchAllowed()) {
+                self->recordError(Error(ErrorCode::Untrusted, "clangd launch requires workspace trust"),
+                                  ClangdState::Failed);
+                co_return;
+            }
             self->setState(ClangdState::Starting);
             {
                 LockGuard lock(self->mutex);
@@ -672,6 +677,11 @@ struct ClangdService::Shared : std::enable_shared_from_this<ClangdService::Share
                 log::info(kLogCategory, "compile commands ({}): {}", toString(location->source), location->file);
             }
             const io::ProcessSpec launchSpec = self->processSpec(location);
+            if (self->options.launchAllowed && !self->options.launchAllowed()) {
+                self->recordError(Error(ErrorCode::Untrusted, "clangd launch requires workspace trust"),
+                                  ClangdState::Failed);
+                co_return;
+            }
             auto launched = self->launcher.launchAsync(launchSpec, self->context);
             if (!launched) {
                 self->recordError(std::move(launched.error().withContext("starting clangd")), ClangdState::Failed);
@@ -941,6 +951,10 @@ sched::Task<void> ClangdService::finishStop() {
 ClangdState ClangdService::state() const {
     LockGuard lock(m_shared->mutex);
     return m_shared->state;
+}
+bool ClangdService::launchOwnerCurrent() const {
+    const auto& allowed = m_shared->options.launchAllowed;
+    return !allowed || allowed();
 }
 
 unsigned ClangdService::restarts() const {

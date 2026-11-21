@@ -6,11 +6,10 @@
 // trusted folder whose configure-on-open writes the first database (clangd waits for it), the
 // reopen of the configured folder (clangd starts at once and the configure's model does not
 // restart it), a later profile switch, which moves the database and must restart clangd exactly
-// once (R0 follow-up 10), a trust grant on an untrusted configured folder, which must restart the
-// restricted clangd (--enable-config=false) once in full mode, and its revocation, which restricts
-// it again; a grant made straight in the trust store, which configures a never-configured folder
+// once (R0 follow-up 10), a trust grant on a configured folder, which starts clangd once, and
+// revocation, which stops it; a grant made straight in the trust store, which configures a folder
 // as the prompt does, a trusted parent folder that the watch never saves as a root of the project's
-// own, and a revocation during a long build, which restricts clangd at once (R0 follow-up 15).
+// own, and a revocation during a long build, which stops clangd (R0 follow-up 15).
 // CPP-3: clangd reads the IDE's own directory for each configuration (a copy of CMake's database,
 // under the profile's cache), so a preset switch restarts it once onto the other directory and a
 // switch back finds that configuration's background-index shards there (clangd's verbose log
@@ -302,7 +301,7 @@ TEST(WorkbenchClangdSpawn, AProfileSwitchWithABusyServiceThreadRestartsClangdOnc
     EXPECT_FALSE(fs.guiThreadReadAReply()) << "a File API reply was read on the GUI thread";
 }
 
-TEST(WorkbenchClangdSpawn, TrustingAConfiguredFolderRestartsTheRestrictedClangdOnceInFullModeAndRevokingRestrictsIt) {
+TEST(WorkbenchClangdSpawn, TrustingAConfiguredFolderStartsClangdOnceAndRevokingStopsIt) {
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
     ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
     WorkDir dir("cmake-clangd-trust");
@@ -321,30 +320,27 @@ TEST(WorkbenchClangdSpawn, TrustingAConfiguredFolderRestartsTheRestrictedClangdO
     WorkbenchRig rig(dir, clangdOptions(launcher));
     ASSERT_FALSE(rig.trust->isTrusted(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
-    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "clangd never ran on the existing database untrusted";
-    ASSERT_EQ(launcher.clangdStarts(), 1);
-    EXPECT_TRUE(restricted(launcher.lastClangdArguments())) << "an untrusted folder's clangd must be restricted";
+    (void)waitFor([] { return false; }, 2s);
+    ASSERT_EQ(launcher.clangdStarts(), 0);
+    EXPECT_EQ(rig.workbench->clangd(), nullptr);
 
     auto* dialog = rig.window->findChild<frost::ui::TrustDialog*>(QStringLiteral("trustDialog"));
     ASSERT_NE(dialog, nullptr) << "opening an untrusted folder offers trust";
     dialog->trustButton()->click();
     ASSERT_TRUE(rig.trust->isTrusted(dir.path()));
-    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() >= 2; }, 60s)) << "the trust grant did not restart clangd";
-    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "the restarted clangd never ran";
-    EXPECT_EQ(launcher.clangdStarts(), 2) << "the trust grant restarted clangd more than once";
+    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "the trust grant did not start clangd";
+    EXPECT_EQ(launcher.clangdStarts(), 1);
     EXPECT_FALSE(restricted(launcher.lastClangdArguments())) << "the restarted clangd is still restricted";
 
-    // Revoking the trust (outside the dialog) restarts clangd once more, restricted again.
+    // Revocation through the store stops the service without opening the old database again.
     ASSERT_TRUE(rig.trust->untrust(dir.path()).has_value());
-    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() >= 3; }, 60s)) << "revoking trust did not restart clangd";
-    ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "the clangd restarted after revocation never ran";
-    EXPECT_EQ(launcher.clangdStarts(), 3) << "the revocation restarted clangd more than once";
-    EXPECT_TRUE(restricted(launcher.lastClangdArguments())) << "an untrusted folder's clangd must be restricted again";
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->clangd() == nullptr; }, 60s));
+    (void)waitFor([] { return false; }, 2s);
+    EXPECT_EQ(launcher.clangdStarts(), 1);
 }
 
-// An untrusted CMake folder that was never configured: clangd starts restricted without a
-// database, and the trust grant's configure writes the first one. The configure's publication
-// restarts clangd once, trusted, on that database; the 1 s trust watch must not add a restart
+// An untrusted CMake folder runs no clangd. The trust grant's configure writes the first
+// database and its publication starts clangd once on that database. The trust watch cannot start it
 // while the configure runs (FND-9a).
 TEST(WorkbenchClangdSpawn, TrustingAnUnconfiguredFolderRestartsClangdOnceOnTheNewDatabase) {
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
@@ -356,10 +352,8 @@ TEST(WorkbenchClangdSpawn, TrustingAnUnconfiguredFolderRestartsClangdOnceOnTheNe
     WorkbenchRig rig(dir, clangdOptions(launcher));
     ASSERT_FALSE(rig.trust->isTrusted(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
-    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() >= 1; }, 60s)) << "no clangd for the untrusted folder";
     (void)waitFor([] { return false; }, 2s); // No configure may run before trust.
-    ASSERT_EQ(launcher.clangdStarts(), 1);
-    EXPECT_TRUE(restricted(launcher.lastClangdArguments()));
+    ASSERT_EQ(launcher.clangdStarts(), 0);
 
     auto* dialog = rig.window->findChild<frost::ui::TrustDialog*>(QStringLiteral("trustDialog"));
     ASSERT_NE(dialog, nullptr) << "opening an untrusted folder offers trust";
@@ -367,14 +361,14 @@ TEST(WorkbenchClangdSpawn, TrustingAnUnconfiguredFolderRestartsClangdOnceOnTheNe
     ASSERT_TRUE(rig.trust->isTrusted(dir.path()));
     ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "clangd never ran on the database the configure wrote";
     (void)waitFor([] { return false; }, 2s); // Two more trust-watch ticks: no late restart.
-    EXPECT_EQ(launcher.clangdStarts(), 2) << "the trust grant and its configure restarted clangd more than once";
+    EXPECT_EQ(launcher.clangdStarts(), 1) << "the trust grant and its configure started clangd more than once";
     EXPECT_FALSE(restricted(launcher.lastClangdArguments()));
 }
 
 // R0 follow-up 15: trust granted straight to the trust store (Settings, another instance) for a
 // never-configured CMake folder gets the configure-on-open the trust prompt gets: the trust
 // watch asks CMakeService::trustChanged, the configure writes the first database, and its publication
-// restarts the restricted clangd once, trusted, on it.
+// starts the trusted clangd once on it.
 TEST(WorkbenchClangdSpawn, TrustGrantedInTheStoreConfiguresAndRestartsClangdOnce) {
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
     ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
@@ -385,10 +379,8 @@ TEST(WorkbenchClangdSpawn, TrustGrantedInTheStoreConfiguresAndRestartsClangdOnce
     WorkbenchRig rig(dir, clangdOptions(launcher));
     ASSERT_FALSE(rig.trust->isTrusted(dir.path()));
     ASSERT_TRUE(rig.workbench->openPath(dir.path()).has_value());
-    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() >= 1; }, 60s)) << "no clangd for the untrusted folder";
     (void)waitFor([] { return false; }, 2s); // No configure may run before trust.
-    ASSERT_EQ(launcher.clangdStarts(), 1);
-    EXPECT_TRUE(restricted(launcher.lastClangdArguments()));
+    ASSERT_EQ(launcher.clangdStarts(), 0);
     auto* service = rig.workbench->cmakeService();
     ASSERT_NE(service, nullptr);
     EXPECT_EQ(service->model(), nullptr);
@@ -398,14 +390,14 @@ TEST(WorkbenchClangdSpawn, TrustGrantedInTheStoreConfiguresAndRestartsClangdOnce
     ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "the grant did not configure the folder for clangd";
     (void)waitFor([] { return false; }, 2s); // Two more trust-watch ticks: no late restart.
     EXPECT_NE(service->model(), nullptr) << "the configure-on-open did not run";
-    EXPECT_EQ(launcher.clangdStarts(), 2) << "the grant and its configure restarted clangd more than once";
+    EXPECT_EQ(launcher.clangdStarts(), 1) << "the grant and its configure started clangd more than once";
     EXPECT_FALSE(restricted(launcher.lastClangdArguments()));
 }
 
 /* R0 follow-up 15: a parent folder trusted in the store (Settings) while a CMake folder below it
  * is open configures the folder and restarts clangd trusted, but the watch saves nothing: the
  * parent stays the only trusted root (in this store and in the file a new instance reads), so
- * revoking the parent untrusts the project and clangd restarts restricted. */
+ * revoking the parent untrusts the project and stops clangd. */
 TEST(WorkbenchClangdSpawn, RevokingATrustedParentUntrustsTheOpenProject) {
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
     ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
@@ -417,8 +409,8 @@ TEST(WorkbenchClangdSpawn, RevokingATrustedParentUntrustsTheOpenProject) {
     CountingLauncher launcher;
     WorkbenchRig rig(dir, clangdOptions(launcher));
     ASSERT_TRUE(rig.workbench->openPath(project).has_value());
-    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() >= 1; }, 60s)) << "no clangd for the untrusted folder";
-    ASSERT_TRUE(restricted(launcher.lastClangdArguments()));
+    (void)waitFor([] { return false; }, 2s);
+    ASSERT_EQ(launcher.clangdStarts(), 0);
 
     ASSERT_TRUE(rig.trust->trust(parent).has_value()); // The Settings route: the store only.
     ASSERT_TRUE(clangdSettledOn(rig, debugDir)) << "the parent grant did not configure the folder";
@@ -438,22 +430,18 @@ TEST(WorkbenchClangdSpawn, RevokingATrustedParentUntrustsTheOpenProject) {
     const int startsBefore = launcher.clangdStarts();
     ASSERT_TRUE(rig.trust->untrust(parent).has_value());
     EXPECT_FALSE(rig.trust->isTrusted(project)) << "revoking the parent left the project trusted";
-    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() > startsBefore; }, 60s))
-        << "revoking the parent did not restart clangd";
-    EXPECT_TRUE(restricted(launcher.lastClangdArguments()));
-    ASSERT_TRUE(clangdSettledOn(rig, debugDir));
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->clangd() == nullptr; }, 60s))
+        << "revoking the parent did not stop clangd";
+    EXPECT_EQ(launcher.clangdStarts(), startsBefore);
     EXPECT_FALSE(rig.trust->isTrusted(project)) << "the project became trusted again";
     EXPECT_TRUE(rig.trust->roots().empty());
     auto reopened = frost::project::TrustStore::open(frost::io::realFileSystem(), rig.trust->storePath());
     ASSERT_TRUE(reopened.has_value()) << reopened.error().describe();
     EXPECT_TRUE((*reopened)->roots().empty()) << "the store file still trusts something";
-    EXPECT_TRUE(restricted(launcher.lastClangdArguments()));
 }
 
-// R0 follow-up 15: revoking trust while a long CMake build runs restricts clangd at once (it used
-// to keep .clangd and --query-driver until the service was idle), and the build's end adds no
-// further restart.
-TEST(WorkbenchClangdSpawn, RevokingTrustDuringALongBuildRestrictsClangdAtOnce) {
+// Revoking trust stops clangd during a build, and the build's end must not restart it.
+TEST(WorkbenchClangdSpawn, RevokingTrustDuringALongBuildStopsClangdAtOnce) {
     auto found = frost::lang::findClangd(frost::io::realFileSystem(), frost::lang::defaultClangdSearch());
     ASSERT_TRUE(found.has_value()) << "the pinned clangd is required: " << found.error().describe();
     WorkDir dir("cmake-clangd-revoke-build");
@@ -479,17 +467,15 @@ TEST(WorkbenchClangdSpawn, RevokingTrustDuringALongBuildRestrictsClangdAtOnce) {
     });
     ASSERT_TRUE(waitFor([&] { return service->state() == frost::build::BuildState::Running; }, 120s));
     ASSERT_TRUE(rig.trust->untrust(dir.path()).has_value());
-    ASSERT_TRUE(waitFor([&] { return launcher.clangdStarts() >= 2; }, 30s))
-        << "revoking trust during the build did not restart clangd";
+    ASSERT_TRUE(waitFor([&] { return rig.workbench->clangd() == nullptr; }, 30s))
+        << "revoking trust during the build did not stop clangd";
     EXPECT_NE(service->state(), frost::build::BuildState::Idle) << "the build ended before the check";
-    EXPECT_TRUE(restricted(launcher.lastClangdArguments())) << "the restarted clangd is not restricted";
 
     service->cancel();
     ASSERT_TRUE(waitFor([&] { return service->state() == frost::build::BuildState::Idle; }, 120s));
-    ASSERT_TRUE(clangdSettledOn(rig, debugDir));
     (void)waitFor([] { return false; }, 2s); // The build's end and two watch ticks: no late restart.
-    EXPECT_EQ(launcher.clangdStarts(), 2) << "clangd restarted again after the build";
-    EXPECT_TRUE(restricted(launcher.lastClangdArguments()));
+    EXPECT_EQ(launcher.clangdStarts(), 1) << "clangd restarted after the build";
+    EXPECT_EQ(rig.workbench->clangd(), nullptr);
 }
 
 // Every clangd log line the workbench passes on (WorkbenchOptions::clangdLog), thread-safe.

@@ -24,12 +24,12 @@
 #   3. open the solution before trust, and the C++ file again (now in the solution);
 #   4. from the first open until the observation window ends (OBSERVE_SECONDS after the last request,
 #      the CMake service idle), every spawn-log record is a launch PLAN.md section 3.5's restricted mode
-#      allows (read-only git with fsmonitor and hooks off, clangd with --enable-config=false, each at an
+#      allows (read-only git with fsmonitor and hooks off, at an
 #      absolute path outside the repository, no plugin flag; restricted_launch_violation), with no
 #      launch failure, and no planted program left a marker (*.ran) anywhere in the repository. Both
 #      are the oracle: the spawn log is every launch of the process (frost/io/spawn_log.hpp), and a
 #      canary marks every run of a planted copy, also one that bypassed the launcher. The R3 exit's
-#      literal "the spawn log is empty" would also forbid restricted mode's git and clangd; that is a
+#      literal "the spawn log is empty" would also forbid restricted mode's git; that is a
 #      question for the user (the slice's report), not something this test decides;
 #   5. trusting the root through the trust dialog's grant starts tools (the spawn log records at
 #      least one start, so the log is known to see launches), and none of them is a binary planted in
@@ -114,8 +114,8 @@ PLUGIN_FLAGS = ("-fplugin", "-fpass-plugin", "-load", "--load", "--query-driver"
 
 def restricted_launch_violation(record: dict, root: Path) -> str:
     """Why a spawn-log record is not a launch PLAN.md section 3.5 allows before trust, or "" when it
-    is: restricted mode may start only git (read-only, with fsmonitor and hooks off) and clangd (with
-    --enable-config=false, no --query-driver), each at an absolute path outside the repository, with
+    is: restricted mode may start only git (read-only, with fsmonitor and hooks off), at an
+    absolute path outside the repository, with
     no argument loading a plugin. Anything else (another tool, a launch failure, a path in the root,
     a writing git command) is a violation."""
     event = record.get("event")
@@ -148,10 +148,6 @@ def restricted_launch_violation(record: dict, root: Path) -> str:
         if command not in READ_ONLY_GIT or (command == "hash-object" and "-w" in argv[i:]) or \
                 (command == "config" and not {"--get", "--get-regexp", "--list", "-l"} & set(argv[i:])):
             return f"git {command} is not a read-only command"
-        return ""
-    if name == "clangd":
-        if "--enable-config=false" not in argv:
-            return "clangd without --enable-config=false"
         return ""
     return f"{Path(executable).name} is not a restricted-mode tool"
 

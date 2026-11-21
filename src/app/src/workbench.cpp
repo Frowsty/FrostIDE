@@ -328,7 +328,7 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
                 }
             } else if (m_managed)
                 startManaged(m_projectRoot);
-            if (m_clangd)
+            if (m_options.clangd)
                 restartClangd();
         }
         /* Trust granted straight to the store (Settings, another instance) gets the same
@@ -343,9 +343,8 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
          * the Attach prompt, revocation); its launch flags depend on it (FND-3). While a CMake
          * configure runs, its model publication compares the trust too and restarts clangd once
          * with the database it writes, so a grant waits (FND-9a: no second restart); if the
-         * configure fails, the next idle tick restarts it. A revocation restarts clangd restricted
-         * at once, even during a long build: .clangd and --query-driver must stop applying now (R0
-         * follow-up 15); a configure that then writes a first database restarts it once more.
+         * configure fails, the next idle tick starts it. Revocation stops clangd even during a
+         * build, and later model publication cannot start it without trust.
          * Once the service is idle, the watch also restarts a clangd whose compile commands moved
          * without a publication saying so (a profile's configure that failed, R0 follow-up 10). A
          * job held in NeedsTrust runs nothing until the user answers, so it does not count as busy.
@@ -356,13 +355,20 @@ Workbench::Workbench(WorkbenchServices services, WorkbenchOptions options, QObje
         const build::BuildState cmakeState = m_cmake ? m_cmake->service().state() : build::BuildState::Idle;
         const bool cmakeBusy =
             cmakeLoading || (cmakeState != build::BuildState::Idle && cmakeState != build::BuildState::NeedsTrust);
-        if (!m_solution && m_clangd) {
-            if (trusted != m_clangdTrusted && (!trusted || !cmakeBusy)) {
-                if (m_cmake)
+        if (!m_solution && m_options.clangd) {
+            if (m_clangd && !m_clangd->launchOwnerCurrent()) {
+                if (!trusted || cmakeBusy)
+                    stopClangd();
+                else
+                    restartClangd();
+            } else if (trusted != m_clangdTrusted && (!trusted || !cmakeBusy)) {
+                if (!trusted)
+                    stopClangd();
+                else if (m_cmake)
                     restartClangdIfCMakeStateChanged();
                 else
                     restartClangd();
-            } else if (m_cmake && !cmakeBusy && trusted == m_clangdTrusted &&
+            } else if (m_cmake && m_clangd && !cmakeBusy && trusted == m_clangdTrusted &&
                        clangdCMakeStateNow() != m_clangdCMakeState) {
                 restartClangdIfCMakeStateChanged();
             }

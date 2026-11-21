@@ -202,6 +202,8 @@ struct ClangdServiceOptions {
     // thread, before it is kept in recentStderr(); null: ignored. Must stay callable until stop()
     // finished and must be quick.
     std::function<void(std::string_view line)> onLog;
+    // Optional live owner admission, checked before reading build inputs and before each process launch.
+    std::function<bool()> launchAllowed;
 };
 
 // An explicit temporary document owner. Copies identify the same lease and release is idempotent.
@@ -238,6 +240,7 @@ public:
     [[nodiscard]] sched::Task<void> stop();
 
     [[nodiscard]] ClangdState state() const;
+    [[nodiscard]] bool launchOwnerCurrent() const;
     // Restarts after crashes so far.
     [[nodiscard]] unsigned restarts() const;
     [[nodiscard]] std::optional<io::ProcessId> serverPid() const;

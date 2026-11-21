@@ -264,6 +264,13 @@ QString Workbench::solutionEvaluationBanner() const {
 void Workbench::startClangd(const std::string& root) {
     if (m_shutDown)
         return;
+    const auto clangdAdmission = m_services.trust.snapshot(root);
+    if (!clangdAdmission.trusted) {
+        // The current database providers can forward workspace-controlled compile commands.
+        // Keep syntax support without starting a compiler tool until the workspace is trusted.
+        stopClangd();
+        return;
+    }
     if (m_buildService->projectEditInProgress()) {
         m_projectEvaluationDeferred = true;
         return;
@@ -272,6 +279,7 @@ void Workbench::startClangd(const std::string& root) {
     if (!m_options.clangd) {
         return;
     }
+    m_clangdTrusted = true;
     const auto snapshot = m_services.settings.snapshot();
     Result<lang::ClangdLocation> found =
         lang::findClangd(m_services.fs, lang::defaultClangdSearch(lang::configuredClangdPath(*snapshot)));
@@ -411,9 +419,11 @@ void Workbench::startClangd(const std::string& root) {
     if (!m_options.clangdLogLevel.empty())
         options.launch.logLevel = m_options.clangdLogLevel;
     options.onLog = m_options.clangdLog;
-    // Restricted mode (no project config, default limits) unless the root is trusted (clangd.hpp).
-    options.launch.trusted = m_services.trust.isTrusted(root);
-    m_clangdTrusted = options.launch.trusted;
+    options.launch.trusted = true;
+    options.launchAllowed = [trust = &m_services.trust, root, revision = clangdAdmission.revision] {
+        const auto current = trust->snapshot(root);
+        return current.trusted && current.revision == revision;
+    };
     options.compileCommands = m_compileCommands;
     options.requireCompileCommands = m_unreal != nullptr;
     const auto generation = m_clangdGeneration;
@@ -493,10 +503,15 @@ void Workbench::restartClangd() {
 }
 
 void Workbench::restartClangdIfCMakeStateChanged() {
-    if (!m_cmake || !m_clangd)
+    if (!m_cmake || !m_options.clangd)
         return;
-    const std::string state = cmakeClangdState(m_services.fs, m_cmake->service());
     const bool trusted = m_services.trust.isTrusted(m_projectRoot);
+    if (!m_clangd) {
+        if (trusted && !m_clangdTrusted && m_clangdDeferredRoot.empty())
+            restartClangd();
+        return;
+    }
+    const std::string state = cmakeClangdState(m_services.fs, m_cmake->service());
     if (state == m_clangdCMakeState && trusted == m_clangdTrusted) {
         // Same build directory, database present or absent as before, same trust: clangd already
         // reads it with the right launch flags.

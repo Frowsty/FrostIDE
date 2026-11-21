@@ -521,7 +521,7 @@ void Workbench::offerProjectTrust() {
         }
         if (m_solution) {
             startProjectEvaluation(root);
-            if (m_clangd) {
+            if (m_options.clangd && !m_clangdTrusted) {
                 restartClangd();
             }
         } else if (m_cmake) {
@@ -534,8 +534,7 @@ void Workbench::offerProjectTrust() {
                     // The configure's model publication restarts clangd if the database or trust moved.
                     (void)m_cmake->service().configure();
                 } else {
-                    // A clangd started restricted on an existing database restarts trusted (.clangd,
-                    // --query-driver); without a running clangd this does nothing.
+                    // An existing database needs no configure before the now-trusted clangd starts.
                     restartClangdIfCMakeStateChanged();
                 }
             }
