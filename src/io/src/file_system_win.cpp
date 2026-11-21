@@ -345,6 +345,18 @@ Result<void> replaceWithTemp(const std::string& target, const std::wstring& wide
     }
 }
 
+Result<std::vector<unsigned char>> capturedDacl(HANDLE file, std::string_view path) {
+    DWORD size = 0;
+    GetKernelObjectSecurity(file, DACL_SECURITY_INFORMATION, nullptr, 0, &size);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+        return std::unexpected(lastWin32Error("safeWrite: size security of", path));
+    std::vector<unsigned char> security(size);
+    if (!GetKernelObjectSecurity(file, DACL_SECURITY_INFORMATION, security.data(), size, &size))
+        return std::unexpected(lastWin32Error("safeWrite: read security of", path));
+    security.resize(size);
+    return security;
+}
+
 // Candidate local-NTFS save path: all metadata work is done on an owned temp
 // before a single same-volume handle rename. Unsupported identity metadata is
 // refused before the target or any temp is changed.
@@ -392,13 +404,9 @@ Result<std::optional<Error>> replaceWithCopy(const std::string& target, const st
     FILETIME creation{};
     if (!GetFileTime(original.get(), &creation, nullptr, nullptr))
         return std::unexpected(lastWin32Error("safeWrite: read creation time of", path));
-    DWORD securitySize = 0;
-    GetFileSecurityW(wideTarget.c_str(), DACL_SECURITY_INFORMATION, nullptr, 0, &securitySize);
-    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
-        return std::unexpected(lastWin32Error("safeWrite: size security of", path));
-    std::vector<unsigned char> security(securitySize);
-    if (!GetFileSecurityW(wideTarget.c_str(), DACL_SECURITY_INFORMATION, security.data(), securitySize, &securitySize))
-        return std::unexpected(lastWin32Error("safeWrite: read security of", path));
+    auto security = capturedDacl(original.get(), path);
+    if (!security)
+        return std::unexpected(std::move(security.error()));
     USHORT compression = COMPRESSION_FORMAT_NONE;
     DWORD compressionBytes = 0;
     if ((attributes & FILE_ATTRIBUTE_COMPRESSED) != 0 &&
@@ -465,17 +473,11 @@ Result<std::optional<Error>> replaceWithCopy(const std::string& target, const st
         return abandon(win32Error(error, "safeWrite: write copied temp for", path));
     if (!SetFileTime(temp->handle.get(), &creation, nullptr, nullptr))
         return abandon(lastWin32Error("safeWrite: preserve creation time for", path));
-    auto sameDacl = [&]() {
-        DWORD size = 0;
-        GetFileSecurityW(temp->widePath.c_str(), DACL_SECURITY_INFORMATION, nullptr, 0, &size);
-        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
-            return false;
-        std::vector<unsigned char> actual(size);
-        return GetFileSecurityW(temp->widePath.c_str(), DACL_SECURITY_INFORMATION, actual.data(), size, &size) &&
-               actual == security;
-    };
-    if (!sameDacl()) {
-        auto* descriptor = reinterpret_cast<PSECURITY_DESCRIPTOR>(security.data());
+    auto observedDacl = capturedDacl(temp->handle.get(), path);
+    if (!observedDacl)
+        return abandon(std::move(observedDacl.error()));
+    if (*observedDacl != *security) {
+        auto* descriptor = reinterpret_cast<PSECURITY_DESCRIPTOR>(security->data());
         SECURITY_DESCRIPTOR_CONTROL control{};
         DWORD revision = 0;
         BOOL present = FALSE, defaulted = FALSE;
@@ -490,7 +492,22 @@ Result<std::optional<Error>> replaceWithCopy(const std::string& target, const st
                                 nullptr, present ? dacl : nullptr, nullptr);
             error != ERROR_SUCCESS)
             return abandon(win32Error(error, "safeWrite: preserve DACL for", path));
-        if (!sameDacl())
+        observedDacl = capturedDacl(temp->handle.get(), path);
+        if (!observedDacl)
+            return abandon(std::move(observedDacl.error()));
+        if (save_metadata::onlyDaclAutoInheritanceAdded(*security, *observedDacl)) {
+            // After the normal setter proved every other byte, restore the captured control bit
+            // on the same held candidate. Require exact bytes before allowing publication.
+            const SECURITY_INFORMATION flags =
+                DACL_SECURITY_INFORMATION |
+                (protection ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION);
+            if (!SetKernelObjectSecurity(temp->handle.get(), flags, descriptor))
+                return abandon(lastWin32Error("safeWrite: restore captured DACL control state for", path));
+            observedDacl = capturedDacl(temp->handle.get(), path);
+            if (!observedDacl)
+                return abandon(std::move(observedDacl.error()));
+        }
+        if (*observedDacl != *security)
             return abandon(
                 Error(ErrorCode::IoError,
                       std::format("safeWrite '{}': DACL cannot be preserved; the file was left unchanged", path)));

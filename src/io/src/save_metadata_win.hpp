@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Scratch candidate for guarded save metadata; caller owns all handles and exclusion.
 #pragma once
+#include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstring>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,6 +15,21 @@
 #include <winioctl.h>
 
 namespace frost::io::save_metadata {
+// Windows can set the auto-inheritance status bit while leaving the DACL itself unchanged.
+// This is an exact transition check, including all remaining descriptor and ACE bytes.
+inline bool onlyDaclAutoInheritanceAdded(std::span<const unsigned char> before, std::span<const unsigned char> after) {
+    constexpr auto offset = offsetof(SECURITY_DESCRIPTOR_RELATIVE, Control);
+    constexpr auto tail = offset + sizeof(SECURITY_DESCRIPTOR_CONTROL);
+    if (before.size() != after.size() || before.size() < tail)
+        return false;
+    SECURITY_DESCRIPTOR_CONTROL oldControl{}, newControl{};
+    std::memcpy(&oldControl, before.data() + offset, sizeof(oldControl));
+    std::memcpy(&newControl, after.data() + offset, sizeof(newControl));
+    return (oldControl & SE_DACL_AUTO_INHERITED) == 0 && newControl == (oldControl | SE_DACL_AUTO_INHERITED) &&
+           std::ranges::equal(before.first(offset), after.first(offset)) &&
+           std::ranges::equal(before.subspan(tail), after.subspan(tail));
+}
+
 struct Metadata {
     bool hasObjectId = false;
     std::array<unsigned char, sizeof(FILE_OBJECTID_BUFFER)> objectId{};

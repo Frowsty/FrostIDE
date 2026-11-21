@@ -908,7 +908,10 @@ TEST(WorkbenchCMake, ConfiguredMembershipEditsRequirePreviewAndPreserveDirtySour
             [&] { return rig.workbench->cmakeTargetsCurrent() && service->state() == frost::build::BuildState::Idle; },
             std::chrono::seconds(60));
     };
-    ASSERT_TRUE(waitForModel());
+    ASSERT_TRUE(waitForModel()) << [service] {
+        const auto configure = service->lastConfigure();
+        return configure && configure->error ? configure->error->describe() : "No ready CMake model";
+    }();
     const std::string mainCpp = dir.join("CMakeRenameDemo/main.cpp");
     const std::string entryCpp = dir.join("CMakeRenameDemo/entry.cpp");
     ASSERT_NE(rig.workbench->currentView(), nullptr);
@@ -936,7 +939,8 @@ TEST(WorkbenchCMake, ConfiguredMembershipEditsRequirePreviewAndPreserveDirtySour
     // CMakeLists.txt.
     auto helper = rig.workbench->createNewFile("", "helper.cpp");
     ASSERT_TRUE(helper.has_value()) << helper.error().describe();
-    ASSERT_TRUE(rig.workbench->addSourceToCMakeLists(*helper).has_value());
+    const auto added = rig.workbench->addSourceToCMakeLists(*helper);
+    ASSERT_TRUE(added) << added.error().describe();
     EXPECT_TRUE(dir.read("CMakeRenameDemo/CMakeLists.txt").contains("helper.cpp"));
     ASSERT_TRUE(rig.workbench->currentView()->editor().typeText("// unsaved helper\n"));
     const int discardBefore = rig.prompts.discardCalls;

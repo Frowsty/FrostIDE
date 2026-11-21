@@ -317,6 +317,81 @@ TEST(SafeWrite, CopyCandidatePreservesProtectedDacl) {
     EXPECT_EQ(security(), before);
     EXPECT_EQ(read(file), "new");
 }
+
+TEST(SafeWrite, CopyCandidatePreservesLegacyDaclControlState) {
+    const ScratchDir dir("safe-write-legacy-dacl");
+    const std::string file = dir.join("v.txt");
+    ASSERT_TRUE(fs().writeFileAtomic(file, "old"));
+    const auto wide = frost::io::toWin32Path(file).value();
+    const auto security = [&] {
+        DWORD size = 0;
+        GetFileSecurityW(wide.c_str(), DACL_SECURITY_INFORMATION, nullptr, 0, &size);
+        std::vector<unsigned char> result(size);
+        if (!size || !GetFileSecurityW(wide.c_str(), DACL_SECURITY_INFORMATION, result.data(), size, &size))
+            result.clear();
+        return result;
+    };
+    auto legacy = security();
+    ASSERT_GE(legacy.size(), sizeof(SECURITY_DESCRIPTOR_RELATIVE));
+    SECURITY_DESCRIPTOR_CONTROL control{};
+    DWORD revision = 0;
+    ASSERT_TRUE(GetSecurityDescriptorControl(legacy.data(), &control, &revision));
+    control = static_cast<SECURITY_DESCRIPTOR_CONTROL>(control & ~SE_DACL_AUTO_INHERITED);
+    std::memcpy(legacy.data() + offsetof(SECURITY_DESCRIPTOR_RELATIVE, Control), &control, sizeof(control));
+    frost::io::detail::UniqueHandle fileHandle(CreateFileW(wide.c_str(), READ_CONTROL | WRITE_DAC,
+                                                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                                           nullptr, OPEN_EXISTING, 0, nullptr));
+    ASSERT_TRUE(fileHandle.valid()) << GetLastError();
+    ASSERT_TRUE(SetKernelObjectSecurity(fileHandle.get(), DACL_SECURITY_INFORMATION, legacy.data())) << GetLastError();
+    fileHandle.reset();
+    ASSERT_EQ(security(), legacy);
+
+    auto saved = fs().safeWrite(file, "new", {});
+    ASSERT_TRUE(saved) << saved.error().describe();
+    EXPECT_EQ(saved->method, SafeWriteMethod::Replaced);
+    EXPECT_EQ(security(), legacy);
+    EXPECT_EQ(read(file), "new");
+    EXPECT_FALSE(tempLeft(dir.path()));
+}
+
+TEST(SafeWrite, DaclAutoInheritanceTransitionRefusesOtherSecurityDifferences) {
+    const ScratchDir dir("safe-write-dacl-transition");
+    const std::string file = dir.join("v.txt");
+    ASSERT_TRUE(fs().writeFileAtomic(file, "old"));
+    const auto wide = frost::io::toWin32Path(file).value();
+    DWORD size = 0;
+    GetFileSecurityW(wide.c_str(), DACL_SECURITY_INFORMATION, nullptr, 0, &size);
+    ASSERT_GE(size, sizeof(SECURITY_DESCRIPTOR_RELATIVE));
+    std::vector<unsigned char> before(size);
+    ASSERT_TRUE(GetFileSecurityW(wide.c_str(), DACL_SECURITY_INFORMATION, before.data(), size, &size));
+    constexpr auto offset = offsetof(SECURITY_DESCRIPTOR_RELATIVE, Control);
+    SECURITY_DESCRIPTOR_CONTROL control{};
+    DWORD revision = 0;
+    ASSERT_TRUE(GetSecurityDescriptorControl(before.data(), &control, &revision));
+    control = static_cast<SECURITY_DESCRIPTOR_CONTROL>(control & ~SE_DACL_AUTO_INHERITED);
+    std::memcpy(before.data() + offset, &control, sizeof(control));
+    auto after = before;
+    const auto autoInherited = static_cast<SECURITY_DESCRIPTOR_CONTROL>(control | SE_DACL_AUTO_INHERITED);
+    std::memcpy(after.data() + offset, &autoInherited, sizeof(autoInherited));
+    using frost::io::save_metadata::onlyDaclAutoInheritanceAdded;
+    EXPECT_TRUE(onlyDaclAutoInheritanceAdded(before, after));
+    EXPECT_FALSE(onlyDaclAutoInheritanceAdded(after, before));
+
+    const auto protectedDacl = static_cast<SECURITY_DESCRIPTOR_CONTROL>(autoInherited ^ SE_DACL_PROTECTED);
+    std::memcpy(after.data() + offset, &protectedDacl, sizeof(protectedDacl));
+    EXPECT_FALSE(onlyDaclAutoInheritanceAdded(before, after));
+    std::memcpy(after.data() + offset, &autoInherited, sizeof(autoInherited));
+    PACL dacl = nullptr;
+    BOOL present = FALSE, defaulted = FALSE;
+    ASSERT_TRUE(GetSecurityDescriptorDacl(after.data(), &present, &dacl, &defaulted));
+    ASSERT_TRUE(present && dacl);
+    void* entry = nullptr;
+    ASSERT_TRUE(GetAce(dacl, 0, &entry));
+    ASSERT_EQ(static_cast<ACE_HEADER*>(entry)->AceType, ACCESS_ALLOWED_ACE_TYPE);
+    static_cast<ACCESS_ALLOWED_ACE*>(entry)->Mask ^= FILE_WRITE_DATA;
+    EXPECT_FALSE(onlyDaclAutoInheritanceAdded(before, after));
+}
+
 TEST(SafeWrite, PreservesObjectIdInPlace) {
     const ScratchDir dir("safe-write-object-id");
     const std::string file = dir.join("v.txt");
