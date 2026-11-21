@@ -11,7 +11,9 @@
 #include <fstream>
 #include <thread>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
 #endif
 
@@ -55,6 +57,56 @@ TEST(FileSnapshot, RealHardLinksAndPosixSymbolicLinksAreRefused) {
     EXPECT_EQ(fs.readFileSnapshot(symbolic, 100).error().code(), ErrorCode::PermissionDenied);
 #endif
 }
+#ifdef _WIN32
+TEST(FileSnapshot, WindowsRecorderExceptionIsLimitedToItsSystemImage) {
+    wchar_t directory[MAX_PATH];
+    const UINT length = GetSystemDirectoryW(directory, MAX_PATH);
+    ASSERT_GT(length, 0U);
+    ASSERT_LT(length, MAX_PATH);
+    auto system = fromStdPath(std::filesystem::path(std::wstring_view(directory, length)) / "wpr.exe");
+    ASSERT_TRUE(system);
+    auto original = readWindowsSystemRecorderSnapshot(*system, 16U * 1024U * 1024U);
+    ASSERT_TRUE(original);
+    const auto tooSmall = readWindowsSystemRecorderSnapshot(*system, original->size() - 1);
+    ASSERT_FALSE(tooSmall);
+    EXPECT_EQ(tooSmall.error().code(), ErrorCode::OutOfRange);
+
+    const auto systemPath = toStdPath(*system);
+    ASSERT_TRUE(systemPath);
+    std::wstring linkName(32768, L'\0');
+    DWORD linkLength = static_cast<DWORD>(linkName.size());
+    HANDLE links = FindFirstFileNameW(systemPath->c_str(), 0, &linkLength, linkName.data());
+    if (links != INVALID_HANDLE_VALUE) {
+        do {
+            auto alias = systemPath->root_name() / linkName.c_str();
+            if (CompareStringOrdinal(alias.c_str(), -1, systemPath->c_str(), -1, TRUE) != CSTR_EQUAL) {
+                auto aliasPath = fromStdPath(alias);
+                EXPECT_TRUE(aliasPath);
+                if (aliasPath) {
+                    const auto refused = readWindowsSystemRecorderSnapshot(*aliasPath, original->size());
+                    EXPECT_FALSE(refused);
+                    if (!refused)
+                        EXPECT_EQ(refused.error().code(), ErrorCode::PermissionDenied);
+                }
+            }
+            linkLength = static_cast<DWORD>(linkName.size());
+        } while (FindNextFileNameW(links, &linkLength, linkName.data()));
+        EXPECT_EQ(GetLastError(), ERROR_HANDLE_EOF);
+        FindClose(links);
+    }
+
+    test::ScratchDir scratch("snapshot-system-recorder-copy");
+    auto& fs = realFileSystem();
+    const auto copy = scratch.join("wpr.exe"), alias = scratch.join("alias.exe");
+    ASSERT_TRUE(fs.writeFileAtomic(copy, *original));
+    std::error_code error;
+    std::filesystem::create_hard_link(toStdPath(copy).value(), toStdPath(alias).value(), error);
+    ASSERT_FALSE(error) << error.message();
+    EXPECT_EQ(fs.readFileSnapshot(copy, original->size()).error().code(), ErrorCode::PermissionDenied);
+    EXPECT_EQ(readWindowsSystemRecorderSnapshot(copy, original->size()).error().code(), ErrorCode::PermissionDenied);
+    EXPECT_EQ(readWindowsSystemRecorderSnapshot(alias, original->size()).error().code(), ErrorCode::PermissionDenied);
+}
+#endif
 TEST(FileSnapshot, ConcurrentGrowthCannotTurnTheBoundedReaderIntoAnUnboundedReadToEof) {
     test::ScratchDir scratch("snapshot-growth");
     auto& fs = realFileSystem();

@@ -8,7 +8,11 @@
 #include <atomic>
 #include <mutex>
 namespace frost::run {
-Result<AnalysisFileIdentity> captureAnalysisIdentity(io::IFileSystem& fs, std::string_view path, std::size_t cap) {
+namespace {
+using SnapshotReader = Result<std::string> (*)(io::IFileSystem&, std::string_view, std::size_t);
+
+Result<AnalysisFileIdentity> captureIdentity(io::IFileSystem& fs, std::string_view path, std::size_t cap,
+                                             SnapshotReader snapshot) {
     auto physical = fs.physicalPath(path);
     if (!physical)
         return std::unexpected(physical.error());
@@ -17,7 +21,7 @@ Result<AnalysisFileIdentity> captureAnalysisIdentity(io::IFileSystem& fs, std::s
         return std::unexpected(before.error());
     if (before->type != io::FileType::Regular)
         return fail(ErrorCode::InvalidArgument, "Analysis input is not a regular file");
-    auto bytes = fs.readFileSnapshot(path, cap);
+    auto bytes = snapshot(fs, path, cap);
     if (!bytes)
         return std::unexpected(bytes.error());
     auto after = fs.status(path);
@@ -26,6 +30,23 @@ Result<AnalysisFileIdentity> captureAnalysisIdentity(io::IFileSystem& fs, std::s
         return fail(ErrorCode::Busy, "Analysis input changed while capturing identity");
     return AnalysisFileIdentity{std::string(path), *physical, io::sha256Hex(*bytes), *after};
 }
+} // namespace
+
+Result<AnalysisFileIdentity> captureAnalysisIdentity(io::IFileSystem& fs, std::string_view path, std::size_t cap) {
+    return captureIdentity(fs, path, cap, [](io::IFileSystem& input, std::string_view name, std::size_t limit) {
+        return input.readFileSnapshot(name, limit);
+    });
+}
+
+#ifdef _WIN32
+Result<AnalysisFileIdentity> captureWindowsSystemRecorderIdentity(std::string_view path) {
+    return captureIdentity(io::realFileSystem(), path, 64U * 1024U * 1024U,
+                           [](io::IFileSystem&, std::string_view name, std::size_t limit) {
+                               return io::readWindowsSystemRecorderSnapshot(name, limit);
+                           });
+}
+#endif
+
 Result<void> validateAnalysisIdentity(io::IFileSystem& fs, const AnalysisFileIdentity& identity) {
     auto now = captureAnalysisIdentity(fs, identity.path);
     if (!now)

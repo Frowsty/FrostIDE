@@ -650,6 +650,11 @@ public:
     }
 
     Result<std::string> readFileSnapshot(std::string_view path, std::size_t maxBytes) override {
+        return readStableSnapshot(path, maxBytes, {});
+    }
+
+    static Result<std::string> readStableSnapshot(std::string_view path, std::size_t maxBytes,
+                                                  std::string_view systemRecorder) {
         auto wide = toWin32Path(path);
         if (!wide)
             return std::unexpected(wide.error());
@@ -661,8 +666,15 @@ public:
         if (GetFileType(file.get()) != FILE_TYPE_DISK || !GetFileInformationByHandle(file.get(), &before))
             return fail(ErrorCode::InvalidArgument, "snapshot is not a regular disk file");
         if (before.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY) ||
-            before.nNumberOfLinks != 1)
+            (systemRecorder.empty() && before.nNumberOfLinks != 1))
             return fail(ErrorCode::PermissionDenied, "snapshot cannot follow links or reparse points");
+        if (!systemRecorder.empty()) {
+            const auto physical = finalPathOfHandle(file.get(), "readWindowsSystemRecorderSnapshot", path);
+            if (!physical)
+                return std::unexpected(physical.error());
+            if (!equalIgnoringAsciiCase(*physical, systemRecorder))
+                return fail(ErrorCode::PermissionDenied, "Windows recorder must be the physical System32 image");
+        }
         const std::uint64_t size = (std::uint64_t(before.nFileSizeHigh) << 32) | before.nFileSizeLow;
         if (size > maxBytes)
             return fail(ErrorCode::OutOfRange, "snapshot exceeds its byte limit");
@@ -1266,5 +1278,20 @@ constinit WindowsFileSystem g_realFileSystem;
 } // namespace
 
 IFileSystem& realFileSystem() noexcept { return g_realFileSystem; }
+
+Result<std::string> readWindowsSystemRecorderSnapshot(std::string_view path, std::size_t maxBytes) {
+    wchar_t directory[MAX_PATH];
+    const UINT length = GetSystemDirectoryW(directory, MAX_PATH);
+    if (!length || length >= MAX_PATH)
+        return fail(ErrorCode::IoError, "GetSystemDirectoryW failed for the Windows recorder");
+    const auto utf8 = fromWide(std::wstring_view(directory, length));
+    if (!utf8)
+        return std::unexpected(utf8.error());
+    const auto required = joinPath(*utf8, "wpr.exe", PathStyle::Windows);
+    const auto normalized = normalizePath(path, PathStyle::Windows);
+    if (!required || !normalized || !equalIgnoringAsciiCase(*normalized, *required))
+        return fail(ErrorCode::PermissionDenied, "Windows recorder must be requested through its System32 path");
+    return WindowsFileSystem::readStableSnapshot(*required, maxBytes, *required);
+}
 
 } // namespace frost::io

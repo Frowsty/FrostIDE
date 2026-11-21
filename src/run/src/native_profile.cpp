@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // RUN-13 genuine perf reports and uniquely owned WPR ETW CPU recordings plus xperf symbol reports.
+#include "frost/build/run_target.hpp"
 #include "frost/io/path.hpp"
 #include "frost/run/native_analysis.hpp"
 
@@ -91,17 +92,39 @@ Result<NativeProfileReport> collectNativeProfile(io::IFileSystem& fs, io::IProce
     if (!trace)
         return std::unexpected(trace.error());
     if (etw) {
-        auto recorder = captureAnalysisIdentity(fs, request.wpr);
+        const auto captureRecorder = [&]() -> Result<AnalysisFileIdentity> {
+#ifdef _WIN32
+            if (&fs == &io::realFileSystem()) {
+                const auto commandProcessor = build::systemCommandProcessor();
+                if (commandProcessor) {
+                    const auto systemRecorder = io::joinPath(io::parentPath(*commandProcessor), "wpr.exe");
+                    const auto requested = io::normalizePath(request.wpr);
+                    if (systemRecorder && requested && *requested == *systemRecorder)
+                        return captureWindowsSystemRecorderIdentity(*systemRecorder);
+                }
+            }
+#endif
+            return captureAnalysisIdentity(fs, request.wpr);
+        };
+        auto recorder = captureRecorder();
         if (!recorder)
             return std::unexpected(recorder.error());
+        const auto verifyRecorder = [&]() -> Result<void> {
+            auto current = captureRecorder();
+            if (!current)
+                return std::unexpected(current.error());
+            if (*current != *recorder)
+                return fail(ErrorCode::Busy, "ETW recorder image changed");
+            return {};
+        };
         const auto retire = [&](bool save) -> Result<void> {
             // OS recording retirement is independent of revoked project execution authority.
             // The recorder image is re-admitted; no arbitrary project tool is run on cleanup.
-            if (auto same = validateAnalysisIdentity(fs, *recorder); !same)
+            if (auto same = verifyRecorder(); !same)
                 return fail(same.error().code(),
                             "Cannot retire owned ETW instance " + request.sessionName + ": " + same.error().message());
             io::ProcessSpec spec;
-            spec.executable = request.wpr;
+            spec.executable = recorder->path;
             spec.workingDirectory = request.outputDirectory;
             spec.arguments = save ? std::vector<std::string>{"-stop", *trace, "-instancename", request.sessionName}
                                   : std::vector<std::string>{"-cancel", "-instancename", request.sessionName};
@@ -117,10 +140,18 @@ Result<NativeProfileReport> collectNativeProfile(io::IFileSystem& fs, io::IProce
         // if project cancellation arrives, so a successful recorder start cannot be forgotten.
         // https://learn.microsoft.com/windows-hardware/test/wpt/wpr-command-line-options
         io::ProcessSpec start;
-        start.executable = request.wpr;
+        start.executable = recorder->path;
         start.workingDirectory = request.outputDirectory;
         start.arguments = {"-start", "CPU", "-filemode", "-instancename", request.sessionName};
-        auto started = runAnalysisCommand(launcher, std::move(start), {}, guarded, std::chrono::minutes(1));
+        auto started = runAnalysisCommand(
+            launcher, std::move(start), {},
+            [&]() -> Result<void> {
+                auto admitted = guarded();
+                if (!admitted)
+                    return admitted;
+                return verifyRecorder();
+            },
+            std::chrono::minutes(1));
         if (!started || started->exitCode != 0) {
             // A failed/timed-out start may have already created its uniquely owned OS instance.
             auto cancelled = retire(false);

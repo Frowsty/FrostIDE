@@ -15,6 +15,9 @@ struct AnalysisFileIdentity {
 };
 [[nodiscard]] Result<AnalysisFileIdentity> captureAnalysisIdentity(io::IFileSystem& fs, std::string_view path,
                                                                    std::size_t cap = 256 * 1024 * 1024);
+#ifdef _WIN32
+[[nodiscard]] Result<AnalysisFileIdentity> captureWindowsSystemRecorderIdentity(std::string_view path);
+#endif
 [[nodiscard]] Result<void> validateAnalysisIdentity(io::IFileSystem& fs, const AnalysisFileIdentity& identity);
 using AnalysisAdmission = std::function<Result<void>()>;
 struct AnalysisCommandResult {

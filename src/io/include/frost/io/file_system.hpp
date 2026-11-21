@@ -330,6 +330,11 @@ protected:
 // Stateless and thread-safe.
 [[nodiscard]] IFileSystem& realFileSystem() noexcept;
 
+#ifdef _WIN32
+// Snapshot only the Windows-installed System32 WPR image, whose WinSxS hard link is normal.
+[[nodiscard]] Result<std::string> readWindowsSystemRecorderSnapshot(std::string_view path, std::size_t maxBytes);
+#endif
+
 // The parts of a writeFileAtomic / safeWrite temp-file name ".<name>.frost-tmp-<pid>-<n>".
 struct AtomicTempName {
     std::uint32_t processId = 0;
