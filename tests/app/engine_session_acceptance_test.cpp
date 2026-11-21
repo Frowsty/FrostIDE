@@ -635,8 +635,16 @@ TEST_F(RealEngineWorkbench, EngineViewMatchesRealCliAssetsAndPickerSelectsExactR
     ASSERT_NE(start, nullptr);
     const std::string scenePath(start->stringAt("path"));
     ASSERT_FALSE(scenePath.empty());
+    const auto sceneHandle = frost::engine::engineHandleAt(*start, "handle");
+    ASSERT_TRUE(sceneHandle);
     auto usages = build.cli("assets.find-references", project, Json::object().set("asset", scenePath));
     ASSERT_TRUE(usages);
+    auto usagesByHandle =
+        build.cli("assets.find-references", project, Json::object().set("asset", std::to_string(sceneHandle->value)));
+    ASSERT_TRUE(usagesByHandle) << usagesByHandle.error().describe();
+    ASSERT_NE(usages->find("references"), nullptr);
+    ASSERT_GT(usages->find("references")->size(), 0u);
+    EXPECT_EQ(usagesByHandle->dump(), usages->dump());
     auto& windows = rig.window->toolWindows();
     windows.show("engineProject");
     auto* view = qobject_cast<frost::ui::EngineView*>(windows.content("engineProject"));
@@ -650,6 +658,10 @@ TEST_F(RealEngineWorkbench, EngineViewMatchesRealCliAssetsAndPickerSelectsExactR
     view->tree()->setCurrentItem(target);
     auto* find = view->findChild<QPushButton*>(QStringLiteral("engineFindAssetUsages"));
     ASSERT_NE(find, nullptr);
+    // Queue an authenticated read-only command before the reference query. Neither reply may
+    // discard the other's evidence while the GUI is processing their completions.
+    auto read = rig.workbench->sendEngineCommand("log.get", Json::object().set("limit", 1));
+    ASSERT_TRUE(read) << read.error().describe();
     find->click();
     auto* rows = view->findChild<QTreeWidget*>(QStringLiteral("engineAssetUsages"));
     ASSERT_NE(rows, nullptr);
@@ -669,6 +681,27 @@ TEST_F(RealEngineWorkbench, EngineViewMatchesRealCliAssetsAndPickerSelectsExactR
         },
         30s));
     EXPECT_EQ(rig.workbench->projectRoot(), rootBefore);
+    const std::string createdPath = "Assets/Scripts/UsageInvalidationProbe.lua";
+    auto mutation = rig.workbench->sendEngineCommand("document.create-template",
+                                                     Json::object().set("kind", "Behaviour").set("path", createdPath));
+    ASSERT_TRUE(mutation) << mutation.error().describe();
+    // Queue a fresh query while the mutation reply is pending. Its completion must be discarded.
+    find->click();
+    const auto query = rig.workbench->engineState().unsignedAt("lastRequestId");
+    ASSERT_TRUE(query && *query > *mutation);
+    ASSERT_TRUE(waitFor(
+        [&] {
+            const auto snapshot = rig.workbench->engineState();
+            return snapshot.unsignedAt("lastCompletedRequestId") == query &&
+                   snapshot.unsignedAt("pendingRequestCount") == 0;
+        },
+        30s));
+    ASSERT_TRUE(frost::io::realFileSystem().exists(project + "/" + createdPath).value_or(false));
+    const auto invalidated = rig.workbench->engineState();
+    const auto* queryReply = invalidated.find("lastReply");
+    ASSERT_NE(queryReply, nullptr);
+    EXPECT_EQ(queryReply->unsignedAt("count"), usages->unsignedAt("count"));
+    EXPECT_EQ(rows->topLevelItemCount(), 0);
     rig.workbench->disconnectEngineSession();
     // Disconnecting an externally paired editor does not grant ownership of its process.
     frost::engine::EngineSessionOptions check;

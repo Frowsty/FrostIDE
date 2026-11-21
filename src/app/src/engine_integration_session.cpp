@@ -403,6 +403,7 @@ Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Js
         return fail(ErrorCode::Busy, "Pair an editor before sending commands");
     if (nativeDebug && nativeDebug->paused() && method == "play.stop")
         return fail(ErrorCode::Unsupported, "Stop a native debugger through its Debug Stop action");
+    bool mayChangeAssets = true;
     {
         std::scoped_lock lock(policy->mutex);
         auto observation = policy->context;
@@ -416,6 +417,11 @@ Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Js
             lastError = allowed.error().message();
             return std::unexpected(allowed.error());
         }
+        const auto& commands = policy->policy->schema().commands;
+        const auto command = std::ranges::find(commands, method, &engine::SchemaCommand::name);
+        if (command != commands.end() && command->idePolicy && command->idePolicy->allowed)
+            mayChangeAssets = command->idePolicy->requiresMutationPermission ||
+                              std::ranges::find(command->flags, "Mutating") != command->flags.end();
     }
     auto observed = *identity;
     observed.schema = lang::Json{};
@@ -432,7 +438,8 @@ Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Js
     auto started = session->request(
         method, std::move(params),
         [self, fs, originalKey, admission, observed, currentEpoch, expectedRoot, revision, exactSession, requestId,
-         method, completed = std::move(completed), workerCompletion](Result<lang::Json> result) mutable {
+         method, mayChangeAssets, completed = std::move(completed),
+         workerCompletion](Result<lang::Json> result) mutable {
             if (!self || !retainEngineProjectIdentity(*fs, expectedRoot, originalKey, admission))
                 return;
             // The native transaction owner cannot pump GUI events during final admission.
@@ -443,7 +450,7 @@ Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Js
             }
             QMetaObject::invokeMethod(
                 self.data(),
-                [self, observed, currentEpoch, expectedRoot, revision, exactSession, requestId, method,
+                [self, observed, currentEpoch, expectedRoot, revision, exactSession, requestId, method, mayChangeAssets,
                  result = std::move(result), completed = std::move(completed)]() mutable {
                     if (!self)
                         return;
@@ -470,10 +477,9 @@ Result<std::uint64_t> EngineIntegration::Impl::send(std::string method, lang::Js
                         if (impl.pushSink)
                             impl.pushSink(std::move(reply));
                         impl.setStatus(result ? QStringLiteral("Command completed") : qs(result.error().message()));
-                        // Other engine operations may change content; retain no complete usage
-                        // snapshot across them. External edits have no content event in contract v2,
-                        // so retained counts are explicitly labelled query snapshots, not live values.
-                        if (result && method != "assets.find-references")
+                        // Invalidate on possible content changes. Read-only queries can finish
+                        // while an asset reference query is pending or its snapshot is displayed.
+                        if (result && mayChangeAssets)
                             impl.clearAssetUsages();
                     }
                     // Command replies never change the toolbar's play/paused/frame state.

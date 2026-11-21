@@ -46,7 +46,7 @@ Result<void> EngineIntegration::Impl::findAssetUsages(std::string relative, engi
                 view->editor().setCodeVisionLensesForProvider("engine.asset", {});
     const QPointer<EngineIntegration> self(&owner);
     auto sent = send(
-        "assets.find-references", lang::Json::object().set("asset", engine::toJson(handle)),
+        "assets.find-references", lang::Json::object().set("asset", std::to_string(handle.value)),
         [self, index, generation, invalidation, handle](Result<lang::Json> reply) {
             if (!self)
                 return;
