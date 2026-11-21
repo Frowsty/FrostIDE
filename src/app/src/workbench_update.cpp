@@ -417,6 +417,17 @@ void Workbench::applyVerifiedUpdate() {
     sideBySideBtn->setDefault(true);
     auto* inPlaceBtn = new QPushButton(tr("Update Current Folder In-Place && Restart"), &dialog);
     inPlaceBtn->setObjectName(QStringLiteral("installInPlaceButton"));
+    const auto currentInstallReceipt = [] {
+        return QFileInfo(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral(".frost-install.json")));
+    };
+    const auto inPlaceUnavailable =
+        tr("This per-user installation tracks the files it owns for uninstall. Install the update in a separate Build "
+           "Folder to keep that information intact.");
+    if (const auto receipt = currentInstallReceipt(); receipt.exists() || receipt.isSymLink()) {
+        inPlaceBtn->setEnabled(false);
+        inPlaceBtn->setToolTip(inPlaceUnavailable);
+        descLabel->setText(descLabel->text() + QStringLiteral("\n\n") + inPlaceUnavailable);
+    }
     auto* laterBtn = new QPushButton(tr("Later"), &dialog);
     btnRow->addWidget(sideBySideBtn);
     btnRow->addWidget(inPlaceBtn);
@@ -438,6 +449,11 @@ void Workbench::applyVerifiedUpdate() {
     ui::installDialogChrome(&dialog, false);
     if (dialog.exec() != QDialog::Accepted || installMode == 0)
         return;
+
+    if (const auto receipt = currentInstallReceipt(); installMode == 2 && (receipt.exists() || receipt.isSymLink())) {
+        QMessageBox::warning(parentWin, tr("In-Place Update Unavailable"), inPlaceUnavailable);
+        return;
+    }
 
     const QString localData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
     if (localData.isEmpty())
