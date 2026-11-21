@@ -88,6 +88,48 @@ TEST(DockingV2, HiddenRestoreDoesNotOverwriteSavedModeSizeOrPin) {
     EXPECT_EQ(restored->size, 417);
     EXPECT_EQ(restored->pinned, false);
 }
+TEST(DockingV2, AutomaticRevealKeepsSavedLayoutUntilAnExplicitToggle) {
+    ShellLayout initial;
+    auto& existing = initial.entry("existing");
+    existing.side = 1;
+    existing.visible = true;
+    auto& automatic = initial.entry("automatic");
+    automatic.side = 1;
+    automatic.size = 417;
+    automatic.visible = false;
+    automatic.pinned = false;
+    InMemoryShellSettings settings(initial);
+    {
+        QWidget host;
+        auto* center = new QWidget;
+        ToolWindowManager manager(host, *center, settings);
+        ASSERT_TRUE(manager.add(toolWindow("existing", QStringLiteral("Existing"))));
+        ASSERT_TRUE(manager.add(toolWindow("automatic", QStringLiteral("Automatic"))));
+
+        manager.showTransient("automatic");
+        EXPECT_TRUE(manager.isVisible("automatic"));
+        EXPECT_FALSE(manager.isVisible("existing"));
+        EXPECT_EQ(manager.size("automatic"), 417);
+        EXPECT_EQ(settings.current(), initial);
+        EXPECT_EQ(settings.storeCount(), 0U);
+    }
+    QWidget host;
+    auto* center = new QWidget;
+    ToolWindowManager restored(host, *center, settings);
+    ASSERT_TRUE(restored.add(toolWindow("existing", QStringLiteral("Existing"))));
+    ASSERT_TRUE(restored.add(toolWindow("automatic", QStringLiteral("Automatic"))));
+    EXPECT_TRUE(restored.isVisible("existing"));
+    EXPECT_FALSE(restored.isVisible("automatic"));
+    EXPECT_EQ(restored.size("automatic"), 417);
+    EXPECT_EQ(settings.storeCount(), 0U);
+    restored.toggle("automatic");
+    ASSERT_EQ(settings.storeCount(), 1U);
+    const auto* saved = settings.current().find("automatic");
+    ASSERT_NE(saved, nullptr);
+    EXPECT_TRUE(saved->visible);
+    EXPECT_EQ(saved->side, 1);
+    EXPECT_EQ(saved->pinned, false);
+}
 TEST(DockingV2, ShowingUnpinnedFloatingWindowRestoresItsStripe) {
     ShellLayout initial;
     auto& saved = initial.entry("services");

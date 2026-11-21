@@ -36,6 +36,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QScopedValueRollback>
 #include <QSplitter>
 #include <QSplitterHandle>
 #include <QStackedWidget>
@@ -605,7 +606,7 @@ bool ToolWindowManager::eventFilter(QObject* watched, QEvent* event) {
                 return true;
             }
             if ((event->type() == QEvent::Move || event->type() == QEvent::Resize) &&
-                window.floatingHost->isVisible()) {
+                window.floatingHost->isVisible() && !m_restoringLayout) {
                 window.geometry = window.floatingHost->saveGeometry().toBase64().toStdString();
                 if (!m_floatStoreQueued) {
                     m_floatStoreQueued = true;
@@ -889,6 +890,11 @@ void ToolWindowManager::show(std::string_view id, bool focus) {
     if (Window* window = find(id); window != nullptr) {
         setVisible(*window, true, focus);
     }
+}
+
+void ToolWindowManager::showTransient(std::string_view id) {
+    const QScopedValueRollback quiet(m_restoringLayout, true);
+    show(id, false);
 }
 
 void ToolWindowManager::hide(std::string_view id) {

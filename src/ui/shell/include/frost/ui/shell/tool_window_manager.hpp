@@ -113,6 +113,8 @@ public:
 
     // Shows `id` (hiding the other window on its side) and, with `focus`, focuses its content.
     void show(std::string_view id, bool focus = true);
+    // Reveals a pane for the current operation without recording a user layout change.
+    void showTransient(std::string_view id);
     void hide(std::string_view id);
     // The stripe click: visible windows hide, hidden ones show and take focus.
     void toggle(std::string_view id);

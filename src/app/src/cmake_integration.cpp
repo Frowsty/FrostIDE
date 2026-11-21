@@ -1118,8 +1118,8 @@ Result<void> CMakeIntegration::open(const std::string& folder) {
     if (opened) {
         refreshRunTarget();
         m_build.setBackend(m_buildBackend.get());
-        m_window.toolWindows().show(kTargets, false);
-        m_window.toolWindows().show(kCMake, false);
+        m_window.toolWindows().showTransient(kTargets);
+        m_window.toolWindows().showTransient(kCMake);
     }
     return opened;
 }
