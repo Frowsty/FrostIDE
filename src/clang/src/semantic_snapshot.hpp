@@ -188,6 +188,7 @@ public:
                 result.push_back(path);
         return result;
     }
+    std::string inputPath(llvm::StringRef path) { return keyFor(path); }
     std::map<std::string, FrozenInput> inputs;
     std::string error;
     bool frozen = false;

@@ -65,7 +65,7 @@ TEST(SemanticIndex, RealConfigurationsKeepDifferentSymbolsAndCanonicalOverrideRe
         ASSERT_TRUE(output);
         ASSERT_EQ(output->exitCode, 0) << output->stdoutBytes << output->stderrBytes;
         auto unit = frost::lang::parseCppIndexUnit(output->stdoutBytes);
-        ASSERT_TRUE(unit) << output->stdoutBytes;
+        ASSERT_TRUE(unit) << unit.error().message() << '\n' << output->stdoutBytes;
         const auto present = [&](std::string_view name) {
             for (const auto& symbol : unit->data.find("symbols")->items())
                 if (symbol.stringAt("name") == name)

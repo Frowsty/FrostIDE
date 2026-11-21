@@ -30,6 +30,21 @@ char entryKind(io::FileType type) {
     }
     return 'o';
 }
+Result<std::string> readIndexInput(io::IFileSystem& fs, std::string_view path) {
+    constexpr auto maximum = 64U * 1024U * 1024U;
+    auto bytes = fs.readFileSnapshot(path, maximum);
+    if (bytes || bytes.error().code() != ErrorCode::PermissionDenied)
+        return bytes;
+    // The frontend can follow SDK symlinks. Recheck the resolved target around the strict snapshot read.
+    const auto target = fs.physicalPath(path);
+    if (!target || *target == path)
+        return bytes;
+    auto resolved = fs.readFileSnapshot(*target, maximum);
+    const auto after = fs.physicalPath(path);
+    if (!resolved || !after || *after != *target)
+        return fail(ErrorCode::Busy, "Index dependency target changed while reading");
+    return resolved;
+}
 } // namespace
 Result<CppIndexUnit> parseCppIndexUnit(std::string_view bytes) {
     if (bytes.size() > 64 * 1024 * 1024)
@@ -182,11 +197,12 @@ Result<void> validateCppIndexInputs(io::IFileSystem& fs, const CppIndexUnit& uni
     for (const auto& dependency : unit.data.find("dependencies")->items()) {
         if (stop.stop_requested())
             return fail(ErrorCode::Cancelled, "Index input validation cancelled");
-        const auto path = io::normalizePath(dependency.stringAt("path"));
+        const auto lookupPath = dependency.stringAt("path");
+        const auto path = io::normalizePath(lookupPath);
         if (!path)
             return std::unexpected(path.error());
         const auto found = buffers.find(*path);
-        const auto disk = found == buffers.end() ? fs.readFileSnapshot(*path, 64U * 1024U * 1024U)
+        const auto disk = found == buffers.end() ? readIndexInput(fs, lookupPath)
                                                  : Result<std::string>{std::string(found->second)};
         if (!disk || disk->size() != *dependency.find("bytes")->asUnsigned() ||
             io::sha256Hex(*disk) != dependency.stringAt("sha256"))

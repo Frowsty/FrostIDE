@@ -14,7 +14,14 @@ TEST(SemanticPreprocessor, ExpandedSourceEqualsPinnedClangEAndRetainsActualEvent
     frost::test::ScratchDir scratch("semantic-preprocess");
     auto& fs = frost::io::realFileSystem();
     const auto source = scratch.join("unit.cpp"), header = scratch.join("settings.hpp");
-    ASSERT_TRUE(fs.writeFileAtomic(header, "#define ADD(x,y) ((x)+(y))\n"));
+    auto backingHeader = header;
+#ifndef _WIN32
+    backingHeader = scratch.join("settings-source.hpp");
+    std::error_code linkError;
+    std::filesystem::create_symlink(backingHeader, header, linkError);
+    ASSERT_FALSE(linkError) << linkError.message();
+#endif
+    ASSERT_TRUE(fs.writeFileAtomic(backingHeader, "#define ADD(x,y) ((x)+(y))\n"));
     ASSERT_TRUE(
         fs.writeFileAtomic(source, "#include \"settings.hpp\"\n#define TWICE(x) ADD(x,x)\nint value=TWICE(MODE);\n"));
     const auto compiler = frost::io::normalizePath(FROST_TEST_CXX_COMPILER).value();
@@ -61,8 +68,9 @@ TEST(SemanticPreprocessor, ExpandedSourceEqualsPinnedClangEAndRetainsActualEvent
         expanded |= event.stringAt("name") == "TWICE";
     EXPECT_TRUE(included);
     EXPECT_TRUE(expanded);
-    EXPECT_TRUE(frost::lang::validateCppIndexInputs(fs, result->receipt, {}));
-    ASSERT_TRUE(fs.writeFileAtomic(header, "#define ADD(x,y) 0\n"));
+    const auto fresh = frost::lang::validateCppIndexInputs(fs, result->receipt, {});
+    EXPECT_TRUE(fresh) << fresh.error().message();
+    ASSERT_TRUE(fs.writeFileAtomic(backingHeader, "#define ADD(x,y) 0\n"));
     EXPECT_FALSE(frost::lang::validateCppIndexInputs(fs, result->receipt, {}));
 
     request.set("commandIndex", 1);

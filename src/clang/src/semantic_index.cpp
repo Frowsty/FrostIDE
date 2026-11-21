@@ -23,6 +23,7 @@ public:
     clang::ASTContext* context = nullptr;
     llvm::json::Array symbols, occurrences, relations;
     std::set<std::string> known;
+    std::map<std::string, std::string> sourceAliases;
     std::size_t stringBytes = 0;
     std::string error;
     explicit Consumer(const SemanticCommand& command) : command(command) {}
@@ -66,7 +67,8 @@ public:
         const auto expanded = sm.getExpansionLoc(location);
         if (!expanded.isFileID() || sm.getFilename(expanded).empty())
             return true;
-        const auto path = semantic::absolute(sm.getFilename(expanded), command.command.Directory);
+        const auto inputPath = command.files->inputPath(sm.getFilename(expanded));
+        const auto path = semantic::absolute(inputPath, command.command.Directory);
         const auto root = llvm::StringRef(command.root);
         if (!(path == root ||
               (llvm::StringRef(path).starts_with(root) && path.size() > root.size() &&
@@ -77,11 +79,14 @@ public:
             return false;
         if (usr.empty())
             return true; // Clang has no stable USR, so no invented identity is published.
+        const auto aliasBytes = inputPath != path ? inputPath.size() : 0;
         if (occurrences.size() >= 250000 ||
-            !semantic::addWithin(stringBytes, path.size() + usr.size(), 32 * 1024 * 1024)) {
+            !semantic::addWithin(stringBytes, aliasBytes + path.size() + usr.size(), 32 * 1024 * 1024)) {
             error = "Semantic occurrence budget exceeded";
             return false;
         }
+        if (inputPath != path)
+            sourceAliases.emplace(inputPath, path);
         const auto spelling = sm.getSpellingLoc(location);
         const auto ordinal = occurrences.size();
         occurrences.push_back(llvm::json::Object{
@@ -155,6 +160,17 @@ llvm::json::Object index(const llvm::json::Object& request, llvm::StringRef reso
                                                        : "Compilation configuration did not complete successfully");
     if (!command->files->capturePositiveProbes())
         return refuse(command->files->error);
+    // Keep the original compiler lookup and add the canonical occurrence path only when it
+    // proves the same frozen input. Lexical parent traversal can resolve differently through a symlink.
+    for (const auto& [lookup, path] : consumer->sourceAliases) {
+        const auto original = command->files->inputs.find(lookup);
+        if (original == command->files->inputs.end() || !command->files->openFileForRead(path))
+            return refuse("Could not resolve the captured occurrence input");
+        const auto& canonical = command->files->inputs.at(path);
+        if (original->second.status.getUniqueID() != canonical.status.getUniqueID() ||
+            *original->second.bytes != *canonical.bytes)
+            return refuse("Canonical occurrence path resolves to a different input");
+    }
     auto result = semanticUnitReceipt(*command, "frost-semantic-index");
     result["symbols"] = std::move(consumer->symbols);
     result["occurrences"] = std::move(consumer->occurrences);
